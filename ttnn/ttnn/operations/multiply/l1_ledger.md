@@ -26,10 +26,10 @@ bounds is `block_cols`, through a closed-form clamp.
 | `C` | 1 | `THREAD_PLAN = (1, 1, 1)`; host asserts C = 1 for `row_bcast_strips` |
 | `stream_depth` | 4 (constant) | host constant |
 | `b_window_depth` | 2 (constant, ≥ 2 required) | host constant + assert |
-| `block_cols` | `1 ≤ block_cols ≤ min(Wt, max_units_per_core, block_cols_cap)` | host derivation, single source; `block_cols_cap = floor(min(DFB_RING_MAX_BYTES, budget − 3·stream_depth·tile_bytes) / (b_window_depth · tile_bytes))`; `DFB_RING_MAX_BYTES` = 1,048,560 (target page) → 255 bf16 tiles here |
+| `block_cols` | `1 ≤ block_cols ≤ min(Wt, max_units_per_core, block_cols_cap)` | host derivation, single source; `block_cols_cap = floor(min(DFB_RING_MAX_BYTES, budget − stream_depth·C·(a_tile_bytes + out_tile_bytes)) / (b_window_depth · C · b_tile_bytes))` (each ring with its own page size; verifier fix — it used the output's page size for all three); `DFB_RING_MAX_BYTES` = 1,048,560 (target page) → 255 bf16 tiles here |
 | `block_rows` | ≤ `ceil(Ht / G)` | derived from `G`; no buffer scales with it (a streams) |
 | `G` | `1 ≤ G ≤ Ht` | `clamp(ceil(num_cores / (N_out · Wt)), 1, Ht)`, `num_cores` from `device.compute_with_storage_grid_size()` |
-| `tile_bytes` | 2,048 (bf16) | `tensor.buffer_page_size()` |
+| `tile_bytes` (`a_`, `b_`, `out_`) | 2,048 each (bf16) in Phase 0; 4,096 for a float32 tensor | `tensor.buffer_page_size()` of that ring's tensor |
 | `budget` | 3,963,328 B on this target | `ttnn.get_max_worker_l1_unreserved_size() - l1_reserve_bytes`, `l1_reserve_bytes = 0` |
 
 ## Footprint

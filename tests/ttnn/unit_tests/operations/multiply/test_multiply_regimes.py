@@ -154,3 +154,36 @@ def test_refusals(device):
     a, b = _put(ta, device), _put(tb, device)
     with pytest.raises(NotImplementedError):  # R2
         multiply(a, b, dtype=ttnn.float32, compute_kernel_config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=False))
+
+
+@pytest.mark.parametrize(
+    "fidelity,approx,full_sync",
+    [(ttnn.MathFidelity.HiFi4, True, True), (ttnn.MathFidelity.LoFi, False, False)],
+    ids=["HiFi4-approx-fullsync", "LoFi"],
+)
+def test_compute_config_passed_through(device, fidelity, approx, full_sync):
+    """R4: any math_fidelity / math_approx_mode is accepted, and the whole config reaches the compute kernel
+    (math_approx_mode -> sfpu_precision_mode, dst_full_sync_en -> single-buffered DEST)."""
+    cfg = ttnn.ComputeConfigDescriptor(
+        math_fidelity=fidelity, fp32_dest_acc_en=True, math_approx_mode=approx, dst_full_sync_en=full_sync
+    )
+    for a_shape, b_shape in (((1, 1, 64, 128), (1, 1, 64, 128)), ((1, 4, 400), (1, 1, 400))):
+        ta, tb = _pair(a_shape, b_shape)
+        a, b = _put(ta, device), _put(tb, device)
+        axes = validate(a, b, compute_kernel_config=cfg)
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.TensorSpec(ttnn.Shape(list(a.shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.BufferType.DRAM), device
+        )
+        spec, _, _, _ = create_program_artifacts(a, b, out, broadcast=axes["broadcast"], compute_kernel_config=cfg)
+        hw = spec.kernels[1].hw_config
+        assert hw.fpu_math_fidelity == fidelity
+        assert hw.double_buffer_dest == (not full_sync)
+        assert hw.sfpu_precision_mode == (
+            ttnn.experimental.Precision.Approximate if approx else ttnn.experimental.Precision.Precise
+        )
+        got = ttnn.to_torch(multiply(a, b, compute_kernel_config=cfg))
+        if fidelity == ttnn.MathFidelity.HiFi4:
+            _expect_exact(got, ta, tb)
+        else:  # LoFi drops multiplier passes: close, not exact
+            expected = ta.float() * tb.float()
+            assert torch.corrcoef(torch.stack([got.float().flatten(), expected.flatten()]))[0, 1] > 0.99

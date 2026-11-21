@@ -112,10 +112,23 @@ def row_groups(num_cores, geo: Geometry) -> int:
     return max(1, min(math.ceil(num_cores / (geo.n_out * geo.wt)), geo.ht))
 
 
-def block_cols_cap(tile_bytes, C) -> int:
+def block_cols_cap(a_tile_bytes, b_tile_bytes, out_tile_bytes, C) -> int:
+    """Largest b window (in b tiles) whose ring fits one DFB ring and, beside the a and out streams, the L1
+    budget. Each ring is sized with its own page size (a, b and out may differ in dtype)."""
     budget = ttnn.get_max_worker_l1_unreserved_size() - L1_RESERVE_BYTES
-    stream_bytes = 3 * STREAM_DEPTH * C * tile_bytes
-    return max(1, min(DFB_RING_MAX_BYTES, budget - stream_bytes) // (B_WINDOW_DEPTH * C * tile_bytes))
+    stream_bytes = STREAM_DEPTH * C * (a_tile_bytes + out_tile_bytes)
+    return max(1, min(DFB_RING_MAX_BYTES, budget - stream_bytes) // (B_WINDOW_DEPTH * C * b_tile_bytes))
+
+
+def compute_hardware_config(cfg):
+    """The caller's compute config, passed through whole (GUIDANCE: `config=compute_kernel_config`); validate()
+    gates only fp32_dest_acc_en, and math_fidelity / math_approx_mode are taken as given (R4)."""
+    return E.ComputeHardwareConfig(
+        fpu_math_fidelity=cfg.math_fidelity,
+        sfpu_precision_mode=E.Precision.Approximate if cfg.math_approx_mode else E.Precision.Precise,
+        enable_32_bit_dest=bool(cfg.fp32_dest_acc_en),
+        double_buffer_dest=not bool(cfg.dst_full_sync_en),
+    )
 
 
 @dataclass
@@ -154,7 +167,8 @@ def make_plan(a, b, out, broadcast: str, threads=THREAD_PLAN) -> Plan:
         num_units = geo.n_out * G * geo.wt
         core_set, counts, starts = split_units(num_units, grid)
         max_units_per_core = max(counts.values())
-        block_cols = min(geo.wt, max_units_per_core, block_cols_cap(out.buffer_page_size(), C))
+        cap = block_cols_cap(a.buffer_page_size(), b.buffer_page_size(), out.buffer_page_size(), C)
+        block_cols = min(geo.wt, max_units_per_core, cap)
     return Plan(regime, threads, geo, G, num_units, block_cols, core_set, counts, starts)
 
 
@@ -215,10 +229,7 @@ def create_program_artifacts(a, b, out, *, broadcast: str, compute_kernel_config
     compute = E.KernelSpec(
         unique_id="compute",
         source=str(KERNEL_DIR / "multiply_compute.cpp"),
-        hw_config=E.ComputeHardwareConfig(
-            fpu_math_fidelity=compute_kernel_config.math_fidelity,
-            enable_32_bit_dest=bool(compute_kernel_config.fp32_dest_acc_en),
-        ),
+        hw_config=compute_hardware_config(compute_kernel_config),
         num_threads=C,
         dfb_bindings=[E.consumer_of("in_a", "in_a"), E.consumer_of("in_b", "in_b"), E.producer_of("out", "out")],
         compile_time_args=ct,
