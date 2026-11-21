@@ -25,6 +25,7 @@ FORCE_INLINE void read_activation_stick(Noc noc, uint32_t l1_write_addr, uint32_
 
 // conv1D reader kernel
 void kernel_main() {
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(1);
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(3);
     // need to have these as compile-time, they are inner loop bounds / unroll loops / constexpr conditionals based on
@@ -57,9 +58,10 @@ void kernel_main() {
     for (uint32_t channel_stick_h = 0; channel_stick_h < weight_size_h; channel_stick_h++) {
         uint32_t reader_offset_row = reader_offset;
         for (uint32_t channel_stick_w = 0; channel_stick_w < weight_size_w; channel_stick_w++) {
-            reader_offsets[reader_offset_idx++] = reader_offset_row++;
+            reader_offsets[reader_offset_idx++] = reader_offset_row;
+            reader_offset_row += dilation_w;
         }
-        // -1 to go back to previous reader_offset
+        // Advance to the same column offset in the next filter row.
         reader_offset += conv_act_size_w_padded;
     }
 
