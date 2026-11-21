@@ -234,6 +234,18 @@ def test_embedding_tiled_input(
     assert_equal(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize("index_shape", [(2, 1, 32), (2, 1, 1, 32), (3, 1, 64)], ids=["rank3", "rank4", "rank3_batch3"])
+def test_embedding_tiled_input_higher_rank(device, index_shape):
+    torch.manual_seed(1234)
+    torch_input_tensor = torch.randint(0, 511, index_shape)
+    torch_weights = torch_random((512, 64), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.embedding(input_tensor, weights, layout=ttnn.ROW_MAJOR_LAYOUT))
+    assert_equal(torch_output_tensor.reshape(index_shape[0], index_shape[-1], -1), output_tensor)
+
+
 @pytest.mark.parametrize("batch_size", [2])
 @pytest.mark.parametrize("sentence_size", [640])
 @pytest.mark.parametrize("hidden_embedding_dim", [1792])
