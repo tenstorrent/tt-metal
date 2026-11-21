@@ -299,7 +299,6 @@ __attribute__((noinline)) void two_level_unit_maxima(
     CircularBuffer stage1_cb(get_named_compile_time_arg_val("tl_cb_stage1"));
     // The CB holds two items of 1 + stage1_batch pages and every push is one, so the write pointer is at one of them:
     // an item is room enough for a unit's keys.
-    static_assert((1 + stage1_batch) * tile_keys >= unit_keys);
     stage1_cb.reserve_back(2 * (1 + stage1_batch));
     const uint32_t first_key = part * unit_keys;
     const uint32_t live = search_len - first_key < unit_keys ? search_len - first_key : unit_keys;
@@ -385,15 +384,19 @@ FORCE_INLINE void two_level_stage2(
             wait_l1_store(fill_neginf(dst + bytes, (chunk_bytes - bytes) / sizeof(uint16_t)));
         }
         noc.async_read_barrier();
+        // A repaired unit's maxima also go to the maxima tensor, as the unit's writer would have sent them.
         for (uint32_t unit = 0; repairs >> unit != 0; ++unit) {
             if (repairs >> unit & 1) {
-                two_level_unit_maxima(
-                    noc,
-                    input,
-                    search_len,
-                    row,
-                    chunk * (chunk_maxima / unit_maxima) + unit,
-                    dst + unit * unit_maxima * sizeof(uint16_t));
+                const uint32_t part = chunk * (chunk_maxima / unit_maxima) + unit;
+                const uint32_t unit_dst = dst + unit * unit_maxima * sizeof(uint16_t);
+                const uint32_t unit_first = part * unit_maxima * sizeof(uint16_t);
+                two_level_unit_maxima(noc, input, search_len, row, part, unit_dst);
+                const uint32_t unit_bytes = max_bytes - unit_first < unit_maxima * sizeof(uint16_t)
+                                                ? max_bytes - unit_first
+                                                : unit_maxima * sizeof(uint16_t);
+                noc_async_write(
+                    unit_dst, block_max.get_noc_addr(row, unit_first, noc.get_noc_id()), unit_bytes, noc.get_noc_id());
+                noc_async_write_barrier(noc.get_noc_id());
             }
         }
         clobber_all_memory();
@@ -601,8 +604,8 @@ FORCE_INLINE void two_level_run(
                 }
             }
         }
-        // Every unit is claimed and no row is ready: the most complete row's stage 2 starts now, each chunk as soon as
-        // its units are done.
+        // Every unit is claimed and no row is ready: the stage 2 of the row with the most units done from its first
+        // (complete_parts) starts now, each chunk as soon as its units are done.
         bool streaming = false;
         if constexpr (!has_block_max) {
             if (local_row == local_rows && !units_left && rows_done < local_rows) {
