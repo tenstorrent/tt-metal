@@ -2786,10 +2786,13 @@ class MiniMaxH3Pipeline:
             # (the audio length warm has hung on this mesh). An audio capture needs the eager warm of every
             # length it captures (it prepares the trace's CCL buffers), so with audio traced that warm stays.
             skip_decode_warm = _skip_decode_warm()
+            # TT_DIT_WARM_BUILD_ONLY=1: these two only compile programs, so they build and cache them
+            # without running them on the device (a failure reruns that stage eagerly). The forced
+            # generations above stay eager: they read device values on the host.
             if not skip_decode_warm and self.vae_output_type == "yuv420":
-                self._warm_vae_decode()
+                cache.warm_stage(self._warm_vae_decode, self._warm_vae_decode, name="vae decode")
             if not skip_decode_warm or trace_audio:
-                self._warm_audio_decode()
+                cache.warm_stage(self._warm_audio_decode, self._warm_audio_decode, name="audio decode")
             self._warm_prompt_encoder()
             # Every program is compiled by now; traces are captured last.
             self._capture_traces(prompt, fitted, overrides, trace_audio)

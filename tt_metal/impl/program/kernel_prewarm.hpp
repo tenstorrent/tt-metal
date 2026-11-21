@@ -60,6 +60,15 @@ bool capture_only();
 // pass, disable before the batch compile and the real run.
 void set_capture_only(bool enabled);
 
+// Build-only warm-up: EnqueueMeshWorkload still compiles (a kernel-cache hit costs no gcc), allocates and
+// uploads the program's binaries and generates its dispatch commands, so the program is built and cached
+// exactly as in an eager warm-up, but it skips the enqueue itself, so nothing runs on the device and the
+// outputs stay undefined. Programs already built (cache hits) do nothing. Fast dispatch only, and ignored
+// while a trace is being captured. Initial value is TT_METAL_PROGRAM_BUILD_ONLY; set_program_build_only()
+// flips it at runtime and returns the previous value so callers can nest and restore.
+bool program_build_only();
+bool set_program_build_only(bool enabled);
+
 // True iff capture_only() AND |kernel_base_name| (Kernel::name()) is NOT a device-init (cq_/fabric)
 // kernel. Device-init kernels always compile for real (the device can't come up otherwise); only
 // model kernels are captured-not-compiled. Use this to gate the gcc skip in ProgramImpl::compile.

@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <tt-metalium/program.hpp>
 #include <tt_stl/unique_any.hpp>
@@ -162,6 +163,16 @@ struct ProgramCache {
     void clear() { this->cache_.clear(); }
 
     std::size_t num_entries() const { return this->cache_.size(); }
+
+    // Hashes of every cached key, in no particular order (test hook: compares two warm-ups' key sets).
+    std::vector<uint64_t> key_hashes() const {
+        std::vector<uint64_t> hashes;
+        hashes.reserve(this->cache_.size());
+        for (const auto& entry : this->cache_) {
+            hashes.push_back(entry.first.hash);
+        }
+        return hashes;
+    }
 
 private:
     bool is_enabled_ = true;

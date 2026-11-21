@@ -79,6 +79,9 @@ bool prewarm_globally_disabled() { return !env_truthy("TT_METAL_KERNEL_PREWARM")
 // with the same truthy spelling as TT_METAL_KERNEL_PREWARM so 0/false/off disables it.
 std::atomic<bool> g_capture_only{env_truthy("TT_METAL_KERNEL_CAPTURE_ONLY")};
 
+// Build-only warm-up flag (see program_build_only() in the header).
+std::atomic<bool> g_program_build_only{env_truthy("TT_METAL_PROGRAM_BUILD_ONLY")};
+
 // out_kernel_root is "<cache_root>/<build_key>/kernels/"; the manifest lives at the cache root so a
 // single file serves every build_key (arch + compile config) on this machine -- entries are
 // build_key-tagged and filtered on read. The cache root already moves with TT_METAL_CACHE, so this is
@@ -1087,6 +1090,10 @@ bool capture_needed(std::uint64_t build_key, const std::string& kernel_name) {
 bool capture_only() { return g_capture_only.load(std::memory_order_acquire); }
 
 void set_capture_only(bool enabled) { g_capture_only.store(enabled, std::memory_order_release); }
+
+bool program_build_only() { return g_program_build_only.load(std::memory_order_acquire); }
+
+bool set_program_build_only(bool enabled) { return g_program_build_only.exchange(enabled, std::memory_order_acq_rel); }
 
 bool capture_only_skip_gcc(const std::string& kernel_base_name) {
     // Device-init (cq_/fabric) kernels are compiled + loaded during CreateDevice/fabric bring-up via

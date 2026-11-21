@@ -137,8 +137,19 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         if (kernel_prewarm::capture_only()) {
             return;
         }
+        // Build-only warm-up: a program already built (binaries uploaded, in flight or committed) is a hit and
+        // does nothing; a new one is built below and not enqueued, so nothing runs on the device. Never while
+        // recording a trace: a skipped node would be missing from it.
+        const bool build_only = kernel_prewarm::program_build_only() && !mesh_cq.trace_id().has_value();
+        if (build_only &&
+            mesh_workload.impl().get_program_binary_status(mesh_cq.device()->id()) != ProgramBinaryStatus::NotSent) {
+            return;
+        }
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
+        if (build_only) {
+            return;
+        }
     } else if (env.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         // Slow dispatch normally JIT-compiles inside LaunchProgram, but the SD mesh CQ
         // short-circuits for mock devices (no hardware to dispatch to). Compile here so

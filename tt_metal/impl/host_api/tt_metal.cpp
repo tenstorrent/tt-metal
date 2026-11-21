@@ -522,6 +522,8 @@ void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_roo
 
 void KernelPrewarmSetCaptureOnly(bool enabled) { kernel_prewarm::set_capture_only(enabled); }
 
+bool SetProgramBuildOnly(bool enabled) { return kernel_prewarm::set_program_build_only(enabled); }
+
 bool KernelPrewarmColdStartNeeded() { return kernel_prewarm::cold_start_needed(); }
 
 std::size_t KernelPrewarmOfflineCompile() {

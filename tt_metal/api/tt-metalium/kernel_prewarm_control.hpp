@@ -18,6 +18,11 @@ namespace tt::tt_metal {
 // Flip capture-only mode at runtime (genfiles + manifest capture, skip model gcc and dispatch).
 void KernelPrewarmSetCaptureOnly(bool enabled);
 
+// Flip build-only warm-up at runtime: programs are compiled, their binaries uploaded and cached, but no
+// program is enqueued, so outputs are undefined. Returns the previous setting. See
+// kernel_prewarm::program_build_only().
+bool SetProgramBuildOnly(bool enabled);
+
 // True iff the in-process cold-start is worth running for the current build_key (cold cache / new
 // build_key with capture armed and no in-run batch launched). Query after device init, before warmup.
 bool KernelPrewarmColdStartNeeded();

@@ -159,13 +159,66 @@ def _forget_capture_only_builds(mesh_device) -> None:
         mesh_device.clear_program_cache()
 
 
+def warm_build_only_enabled() -> bool:
+    """True when warm-ups may run build-only (env TT_DIT_WARM_BUILD_ONLY=1; off by default)."""
+    return os.environ.get("TT_DIT_WARM_BUILD_ONLY", "") == "1"
+
+
+def set_program_build_only(enabled: bool) -> bool:
+    """Set tt-metal's build-only mode and return the previous value (False if the runtime lacks it).
+
+    Build-only: a program-cache miss creates, compiles, allocates and uploads its binaries and caches
+    the program, but skips the enqueue; a hit does nothing. Every output is undefined, so nothing may
+    read one. Ignored by the runtime while a trace is being captured.
+    """
+    setter = getattr(ttnn._ttnn.device, "set_program_build_only", None)
+    return bool(setter(enabled)) if setter is not None else False
+
+
+@contextmanager
+def program_build_only(enabled: bool = True):
+    """Run the body with build-only on (or off) and restore the previous mode, so it nests."""
+    previous = set_program_build_only(enabled)
+    try:
+        yield
+    finally:
+        set_program_build_only(previous)
+
+
+def warm_stage(build_only_fn, eager_fn, *, name: str = "stage"):
+    """Run a warm-up stage build-only when TT_DIT_WARM_BUILD_ONLY=1, else eagerly.
+
+    `build_only_fn` and `eager_fn` are zero-argument callables (usually the same one). A stage that
+    reads device values on the host to decide what to run must pass `build_only_fn=None` and stays
+    eager. Any exception in the build-only attempt falls back to the eager run of that stage: the
+    programs it cached have real binaries, so the eager run reuses them.
+    """
+    t0 = time.perf_counter()
+    if build_only_fn is None or not warm_build_only_enabled() or not hasattr(ttnn._ttnn.device, "set_program_build_only"):
+        out = eager_fn()
+        logger.info(f"WARMSTAGE|{name}|eager|{time.perf_counter() - t0:.2f}s")
+        return out
+    try:
+        with program_build_only(True):
+            build_only_fn()
+    except Exception as exc:  # noqa: BLE001 - any failure means this stage warms eagerly
+        logger.warning(f"build-only warm-up of {name} failed ({type(exc).__name__}: {exc}); running it eagerly")
+        out = eager_fn()
+        logger.info(f"WARMSTAGE|{name}|fallback-eager|{time.perf_counter() - t0:.2f}s")
+        return out
+    logger.info(f"WARMSTAGE|{name}|build-only|{time.perf_counter() - t0:.2f}s")
+    return None
+
+
 def _dispatch_during_capture(fn):
-    """Run a weight load with dispatch on when a runtime capture pass has it off, then restore it."""
+    """Run a weight load with dispatch on when a runtime capture pass or build-only has it off, then restore it."""
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         if not _runtime_capture_only:
-            return fn(*args, **kwargs)
+            # Build-only programs hold real binaries, so a weight load only needs the mode lifted.
+            with program_build_only(False):
+                return fn(*args, **kwargs)
         logger.info("kernel capture-only pass: loading weights with dispatch on")
         set_kernel_capture_only(False)
         _forget_capture_only_builds(kwargs.get("mesh_device"))

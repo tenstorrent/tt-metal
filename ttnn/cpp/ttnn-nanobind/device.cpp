@@ -380,6 +380,18 @@ void device_module(nb::module_& m_device) {
         )doc");
 
     m_device.def(
+        "set_program_build_only",
+        &tt::tt_metal::SetProgramBuildOnly,
+        nb::arg("enabled"),
+        R"doc(
+            Build-only warm-up. While enabled, a program-cache miss compiles the program (a kernel-cache
+            hit costs no gcc), allocates and uploads its binaries and caches it, but no program is
+            enqueued; cache hits do nothing. Outputs are undefined, so nothing may read them. Ignored
+            while a trace is being captured. Returns the previous setting so callers can restore it.
+            Weight loads that run device ops must switch it off first.
+        )doc");
+
+    m_device.def(
         "kernel_prewarm_cold_start_needed",
         &tt::tt_metal::KernelPrewarmColdStartNeeded,
         R"doc(

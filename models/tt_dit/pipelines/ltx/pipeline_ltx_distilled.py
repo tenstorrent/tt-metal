@@ -26,6 +26,7 @@ from ...models.transformers.ltx.transformer_ltx import (
 )
 from ...models.vae.vae_ltx import upsample_latent
 from ...utils import timing_tree, walltime
+from ...utils.cache import warm_stage
 from ...utils.ltx_euler import EulerTail
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
@@ -549,6 +550,13 @@ class LTXDistilledPipeline(LTXPipeline):
             denoise_mask=torch.ones(B, video_N_real, 1), clean_latent=None, pin_rows=None, video_N_real_ext=video_N_real
         )
 
+    def _warm(self, fn, /, *args, **kwargs):
+        """Run one warm-up stage build-only when TT_DIT_WARM_BUILD_ONLY=1 (programs built and cached, nothing
+        run on the device), else eagerly. Any build-only failure reruns the stage eagerly. Only stages whose
+        host side never reads a device value to decide what to run go through here."""
+        name = getattr(fn, "__name__", "stage")
+        return warm_stage(lambda: fn(*args, **kwargs), lambda: fn(*args, **kwargs), name=name)
+
     @cap_torch_threads_to_half_the_cpus()
     def warmup_buffers(
         self,
@@ -793,7 +801,7 @@ class LTXDistilledPipeline(LTXPipeline):
             # slice of warmup wall time.
             if not skip_scalar:
                 with walltime.timed("warmup", "stage1 build"):
-                    self._denoise_no_guidance(
+                    self._warm(self._denoise_no_guidance,
                         v_p,
                         a_p,
                         num_frames=num_frames,
@@ -808,7 +816,7 @@ class LTXDistilledPipeline(LTXPipeline):
             if i2v_families:
                 logger.info(f"warmup stage 1 (per-token family): {s1_h}x{s1_w}, frame-0 pin")
                 with walltime.timed("warmup", "stage1_i2v build"):
-                    self._denoise_no_guidance(
+                    self._warm(self._denoise_no_guidance,
                         v_p,
                         a_p,
                         num_frames=num_frames,
@@ -833,7 +841,7 @@ class LTXDistilledPipeline(LTXPipeline):
             dummy_ref_s1 = torch.zeros(1, self.in_channels, ref_lf, s1_lh, s1_lw)
             logger.info(f"warmup stage 1 (ref): {s1_h}x{s1_w} +{ref_lf} ref frames, σ={s1_sigmas}")
             with walltime.timed("warmup", "stage1_ref build"):
-                self._denoise_no_guidance(
+                self._warm(self._denoise_no_guidance,
                     v_p,
                     a_p,
                     num_frames=num_frames,
@@ -855,7 +863,7 @@ class LTXDistilledPipeline(LTXPipeline):
             # Upsample runs between stage 1 and stage 2; compile its kernels here.
             if not iter_fast:
                 logger.info(f"warmup upsample → {height}x{width}")
-                self._warmup_upsample(num_frames, height, width)
+                self._warm(self._warmup_upsample, num_frames, height, width)
 
             # Zero-dummies at the exact shapes the real stage-2 call uses.
             latent_frames, full_lh, full_lw = latent_grid(num_frames, height, width)
@@ -873,7 +881,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 # warmup slice.
                 if not skip_scalar:
                     with walltime.timed("warmup", "stage2 build"):
-                        self._denoise_no_guidance(
+                        self._warm(self._denoise_no_guidance,
                             v_p,
                             a_p,
                             num_frames=num_frames,
@@ -890,7 +898,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 if i2v_families:
                     logger.info(f"warmup stage 2 (per-token family): {height}x{width}, frame-0 pin")
                     with walltime.timed("warmup", "stage2_i2v build"):
-                        self._denoise_no_guidance(
+                        self._warm(self._denoise_no_guidance,
                             v_p,
                             a_p,
                             num_frames=num_frames,
@@ -917,7 +925,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 dummy_ref_full = torch.zeros(1, self.in_channels, ref_lf, full_lh, full_lw)
                 logger.info(f"warmup stage 2 (ref): {height}x{width} +{ref_lf} ref frames, σ={s2_sigmas}")
                 with walltime.timed("warmup", "stage2_ref build"):
-                    self._denoise_no_guidance(
+                    self._warm(self._denoise_no_guidance,
                         v_p,
                         a_p,
                         num_frames=num_frames,
@@ -938,7 +946,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 self._prepare_upsampler()
                 logger.info("warmup stage transition (traced, device-resident)")
                 with walltime.timed("warmup", "stage transition build"):
-                    self._run_stage_transition(
+                    self._warm(self._run_stage_transition,
                         self._trace_state[self._trace_variant_key("s1", kf_per_token)].tt_video_lat,
                         num_frames=num_frames,
                         s1_height=height // 2,
@@ -951,7 +959,7 @@ class LTXDistilledPipeline(LTXPipeline):
 
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
             if not iter_fast and not denoise_only:
-                self._warmup_decode(num_frames, height, width)
+                self._warm(self._warmup_decode, num_frames, height, width)
 
             # Warm the on-device audio decode eagerly at the exact latent shape generate() produces:
             # it compiles kernels (cold ~64s otherwise), inits the lazy device state, and frees back
@@ -973,11 +981,17 @@ class LTXDistilledPipeline(LTXPipeline):
                 logger.info("warmup audio decode (on-device, eager)")
                 # Bounded: a stall with no kernel-build progress ends the worker for a restart instead of
                 # holding it forever (exabox job 137104); a raised fault is retried once in-process.
-                run_with_stall_watchdog(
-                    lambda: self._warmup_audio_decode(torch.zeros(1, als.frames, self.in_channels), num_frames),
-                    name="warmup audio decode",
-                    stall_s=float(os.environ.get("LTX_AUDIO_WARMUP_STALL_S", "600")),
-                )
+                def _audio_warm():
+                    run_with_stall_watchdog(
+                        lambda: self._warmup_audio_decode(torch.zeros(1, als.frames, self.in_channels), num_frames),
+                        name="warmup audio decode",
+                        stall_s=float(os.environ.get("LTX_AUDIO_WARMUP_STALL_S", "600")),
+                    )
+
+                # Under TT_DIT_WARM_BUILD_ONLY=1 audio stays eager: its mel-VAE/BWE state (gather grid, window indices,
+                # device to_layout constants) is built by this pass and reused by the trace capture; a build-only
+                # pass leaves those buffers unwritten and the replayed audio comes out as clipped noise.
+                warm_stage(None, _audio_warm, name="audio decode")
                 if self._traced and not getattr(self, "_defer_audio_capture", False):
                     logger.info("warmup audio decode (capture pass)")
                     self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=self.fps)

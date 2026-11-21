@@ -6,6 +6,7 @@
 
 #include <tt-metalium/tt_metal.hpp>
 #include <nanobind/stl/map.h>
+#include <tt-metalium/program_cache.hpp>
 
 #include <tt_stl/reflection.hpp>
 #include <cstddef>
@@ -532,6 +533,10 @@ void py_module(nb::module_& mod) {
             "num_program_cache_entries",
             &MeshDevice::num_program_cache_entries,
             "Number of entries in the program cache for this device")
+        .def(
+            "program_cache_key_hashes",
+            [](MeshDevice& device) { return device.get_program_cache().key_hashes(); },
+            "Hashes of every program-cache key on this device (unordered; compares two warm-ups' key sets)")
         .def(
             "sfpu_eps",
             [](MeshDevice* /*device*/) { return tt::tt_metal::hal::get_eps(); },

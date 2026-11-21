@@ -730,9 +730,11 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
         TT_FATAL(
             program_binary_status_.contains(mesh_device->id()),
             "Reusing MeshWorkloads across MeshDevices is currently not supported.");
+        // InFlight: a build-only warm-up uploaded the binaries and skipped the enqueue; the next real enqueue
+        // commits them (the dispatch stream orders it after the upload).
         TT_FATAL(
-            program_binary_status_.at(mesh_device->id()) == ProgramBinaryStatus::Committed,
-            "Expected Program Binaries to be committed to DRAM.");
+            program_binary_status_.at(mesh_device->id()) != ProgramBinaryStatus::NotSent,
+            "Expected Program Binaries to be uploaded to DRAM.");
     } else {
         // Allocate kernel binary buffers of max size across all devices, to ensure we have lock step allocation.
         uint32_t max_kernel_bin_buf_size = 0;
