@@ -485,3 +485,35 @@
   budget_type: e2e
   sp_config: sc4
   release_ready: false
+
+# ============================================================================
+# Teardown sanity, multi-host (plan tt-metal #56902, lane L1c): a fault on a
+# remote host. Needs more than one host, so it cannot run in the single-host
+# lane; here on SC4.
+# ============================================================================
+- name: "SC4 MPI Teardown tests"
+  cmd: |
+    set -o pipefail
+    # the hosts come from the hostfile SC4 provisions for this job (/etc/ttop/hostfile, as every other entry in this
+    # lane reads it); nothing in CI writes a generated/ttrun/hostfile before this entry runs
+    HOSTFILE=/etc/ttop/hostfile
+    RESOLVED_HOSTS=$(awk 'NF {print $1}' "${HOSTFILE}" 2>/dev/null | awk '!seen[$0]++' | paste -sd, -)
+    if [ -z "$RESOLVED_HOSTS" ]; then
+      echo "::error::could not resolve the hosts from ${HOSTFILE}"; exit 1
+    fi
+    echo "hosts: $RESOLVED_HOSTS"
+    # the setup action provisions passwordless ssh for the 'user' account and syncs the workspace with `ssh -l user`;
+    # reach the peers as the same account for staging, census and cleanup
+    export TEARDOWN_REMOTE_USER=user
+    # the PR's tt-run, as every other entry runs it: the image's tt-run on PATH is an older copy
+    export TEARDOWN_TTRUN="python3 ${TTRUN_PY}"
+    ./tests/scripts/multihost/run_teardown_multihost_tests.sh --hosts "$RESOLVED_HOSTS" 2>&1 \
+      | tee "${PIPELINE_DIR}/teardown_multihost.log"
+  skus:
+    bh_sc4:
+      timeout: 15  # 4 cross-host cases; ~1-2 min of work plus SC4 setup/network overhead
+  owner_id: U08RRAU5E15 # Ridvan Song
+  team: scaleout
+  budget_type: e2e
+  sp_config: sc4
+  release_ready: false

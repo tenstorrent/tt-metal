@@ -174,3 +174,25 @@
   budget_type: profiler
   arch: wormhole_b0
   owner_id: U03BJ1L3LUQ # Mo Memarian
+
+- id: fabric-cpu-teardown-sanity-mpi
+  name: teardown sanity — tt-run launcher, MPI (CPU) (#56902)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group teardown-sanity-mpi
+  skus:
+    cpu_medium:
+      timeout: 10
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-teardown-sanity-ttmetal
+  name: teardown sanity — tt-metal job stop (CPU) (#56902)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group teardown-sanity-ttmetal
+  skus:
+    cpu_medium:
+      timeout: 10  # 5 rows of two ttnn ranks on the mock galaxy; the two that hang wait out their 45 s deadline
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song

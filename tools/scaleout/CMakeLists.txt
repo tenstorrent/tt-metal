@@ -326,6 +326,64 @@ if(ENABLE_DISTRIBUTED)
 
     target_link_libraries(run_mpi_stress_test PRIVATE OpenMPI::MPI)
 
+    # tt-run-rank: the wrapper tt-run starts each rank in (it stops the job when its rank dies), the guard tt-run starts
+    # next to the launcher (it stops the job when tt-run itself is killed), and the PMIx tool tt-run signals every rank
+    # with (PRRTE job control). Always built; the graceful parts need PMIx from the MPI install (the ULFM Open MPI 5 /
+    # PRRTE install first, else the distribution's libpmix). Without PMIx it still wraps and guards, and tt-run forces
+    # a stop through the launcher instead of a graceful one.
+    # The ULFM install tt_metal/distributed links (its ULFM_PREFIX); OpenMPI::MPI is not defined yet at this point
+    # of the configure, so its properties cannot be read here.
+    set(_tt_run_rank_ulfm_prefix /opt/openmpi-v5.0.7-ulfm)
+    find_path(
+        TT_RUN_RANK_PMIX_INCLUDE
+        pmix_tool.h
+        PATHS
+            ${_tt_run_rank_ulfm_prefix}/include
+            /usr/lib/x86_64-linux-gnu/pmix2/include
+        NO_DEFAULT_PATH
+    )
+    find_library(
+        TT_RUN_RANK_PMIX_LIB
+        pmix
+        PATHS
+            ${_tt_run_rank_ulfm_prefix}/lib
+            /usr/lib/x86_64-linux-gnu/pmix2/lib
+        NO_DEFAULT_PATH
+    )
+    add_executable(tt-run-rank)
+    target_sources(tt-run-rank PRIVATE src/tt_run_rank.cpp)
+    set_target_properties(
+        tt-run-rank
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${Metalium_BINARY_DIR}/tools/scaleout
+    )
+    if(TT_RUN_RANK_PMIX_INCLUDE AND TT_RUN_RANK_PMIX_LIB)
+        get_filename_component(_tt_run_rank_pmix_dir ${TT_RUN_RANK_PMIX_LIB} DIRECTORY)
+        target_compile_definitions(tt-run-rank PRIVATE TT_RUN_RANK_HAS_PMIX)
+        target_include_directories(tt-run-rank SYSTEM PRIVATE ${TT_RUN_RANK_PMIX_INCLUDE})
+        target_link_libraries(tt-run-rank PRIVATE ${TT_RUN_RANK_PMIX_LIB})
+        set_target_properties(
+            tt-run-rank
+            PROPERTIES
+                BUILD_RPATH
+                    "${_tt_run_rank_pmix_dir}"
+                INSTALL_RPATH
+                    "${_tt_run_rank_pmix_dir}"
+        )
+    else()
+        message(STATUS "tt-run-rank built without PMIx: no PMIx in the MPI install (tt-run will force a stop)")
+    endif()
+    if(TT_INSTALL)
+        install(
+            TARGETS
+                tt-run-rank
+            RUNTIME
+                DESTINATION ${CMAKE_INSTALL_BINDIR}
+                COMPONENT metalium-runtime
+        )
+    endif()
+
     # Generate rank bindings tool
     add_executable(generate_rank_bindings)
     target_sources(generate_rank_bindings PRIVATE ${GENERATE_RANK_BINDINGS_SRCS})
