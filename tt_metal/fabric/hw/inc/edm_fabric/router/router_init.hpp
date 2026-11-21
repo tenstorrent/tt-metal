@@ -187,6 +187,7 @@ __attribute__((noinline)) void init_telemetry_block() {
     telemetry->static_info.direction = static_cast<uint8_t>(my_direction);
     telemetry->static_info.version = FABRIC_TELEMETRY_VERSION;
     telemetry->static_info.fabric_config = 0;
+    telemetry->static_info.channel_in_use = 1;  // routers are built only on the control plane's fabric channels
     telemetry->static_info.neighbor_mesh_id = 0xFFFF;  // set at the handshake
     telemetry->static_info.neighbor_device_id = 0xFF;
     telemetry->static_info.supported_stats = static_cast<DynamicStatistics>(
