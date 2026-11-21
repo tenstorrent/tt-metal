@@ -156,6 +156,10 @@ LORA_PATH_ENV = "MINIMAX_H3_LORA_PATH"
 LORA_STRENGTH_ENV = "MINIMAX_H3_LORA_STRENGTH"
 VIDEO_SHIFT_ENV = "MINIMAX_H3_VIDEO_SHIFT"
 AUDIO_SHIFT_ENV = "MINIMAX_H3_AUDIO_SHIFT"
+# MINIMAX_H3_LORA_SIDE=1 (default off): the base pipeline runs the adapter at MINIMAX_H3_LORA_PATH (strength
+# MINIMAX_H3_LORA_STRENGTH) unmerged over the base checkpoint: the DiT blocks' q/k/v/out/ff targets as a side branch
+# `W x + B (A x)`, every other target merged on host (fp32, stochastic bf16 rounding).
+LORA_SIDE_ENV = "MINIMAX_H3_LORA_SIDE"
 
 
 @dataclass(frozen=True)
@@ -201,3 +205,20 @@ def resolve_adapter_settings(
         video_shift=video,
         audio_shift=audio,
     )
+
+
+def resolve_side_adapter() -> tuple[Path, float] | None:
+    """`(adapter path, strength)` when MINIMAX_H3_LORA_SIDE=1, else None."""
+    env = os.environ
+    value = env.get(LORA_SIDE_ENV, "0").strip()
+    if value not in ("", "0", "1"):
+        raise ValueError(f"{LORA_SIDE_ENV}={value!r}: expected 0 or 1")
+    if value != "1":
+        return None
+    path = env.get(LORA_PATH_ENV) or None
+    if path is None:
+        raise ValueError(f"{LORA_SIDE_ENV}=1 needs the adapter path in {LORA_PATH_ENV}")
+    strength = float(env.get(LORA_STRENGTH_ENV, 1.0))
+    if strength <= 0:
+        raise ValueError(f"lora_strength must be positive, got {strength}")
+    return Path(path), strength

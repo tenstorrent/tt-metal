@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import json
 import os
 import time
@@ -998,6 +999,8 @@ def _block_setup(
         token_tags=token_tags,
         adaln_indices=adaln_indices,
         temb_input=temb_input,
+        spatial_input=spatial_input,
+        rotary_emb=(rope_cos, rope_sin),
         torch_model=torch_model,
         torch_out=torch_out,
         sp_factor=sp_factor,
@@ -1052,6 +1055,71 @@ def test_minimax_h3_transformer_block(
     tt_out = fixture.run(tt_model)
 
     assert_quality(fixture.torch_out, tt_out, pcc=MIN_PCC)
+
+
+LORA_SIDE_LINEARS = ("attn.to_q", "attn.to_k", "attn.to_v", "attn.to_out.0", "ff.net.0.proj", "ff.net.2")
+
+
+def _random_side_adapter(model: TorchMiniMaxH3Block, rank: int, ratio: float = 0.2) -> dict[str, torch.Tensor]:
+    """bf16 lora_A / lora_B for the side-branch linears, `B A x` about `ratio` of `W x` for a unit-variance `x`."""
+    adapter = {}
+    for name in LORA_SIDE_LINEARS:
+        weight = model.get_submodule(name).weight
+        out_features, in_features = weight.shape
+        a = torch.randn(rank, in_features) / in_features**0.5
+        b = torch.randn(out_features, rank) * (ratio * weight.std().item() * (in_features / rank) ** 0.5)
+        adapter[f"{name}.lora_A.weight"] = a.to(torch.bfloat16)
+        adapter[f"{name}.lora_B.weight"] = b.to(torch.bfloat16)
+    return adapter
+
+
+@GALAXY_RING
+def test_minimax_h3_transformer_block_lora_side(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+    reset_seeds,
+) -> None:
+    """The unmerged LoRA side branch (rank 128) on one block against the fp32 `W + B @ A` reference: the whole
+    output, and the adapter's own contribution (side-branch block minus base block) against the reference's."""
+    rank = 128
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
+    base = TorchMiniMaxH3Block(**REAL_BLOCK_CONFIG).to(torch.float32)
+    randomize_norm_weights(base)
+    base.eval()
+    adapter = _random_side_adapter(base, rank)
+    merged = copy.deepcopy(base)
+    with torch.no_grad():
+        for name in LORA_SIDE_LINEARS:
+            delta = adapter[f"{name}.lora_B.weight"].float() @ adapter[f"{name}.lora_A.weight"].float()
+            merged.get_submodule(name).weight += delta
+
+    fixture = _block_setup(
+        mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 256, 1280, torch_model=merged
+    )
+    with torch.no_grad():
+        torch_base = base(
+            hidden_states=fixture.spatial_input,
+            temb=fixture.temb_input,
+            adaln_indices=fixture.adaln_indices,
+            rotary_emb=fixture.rotary_emb,
+            attention_mask=None,
+        )
+
+    tt_side = MiniMaxH3TransformerBlock(**fixture.block_kwargs, lora_rank=rank)
+    tt_side.load_torch_state_dict({**base.state_dict(), **adapter})
+    side_out = fixture.run(tt_side)
+    tt_side.deallocate_weights()
+    tt_base = MiniMaxH3TransformerBlock(**fixture.block_kwargs)
+    tt_base.load_torch_state_dict(base.state_dict())
+    base_out = fixture.run(tt_base)
+
+    assert_quality(fixture.torch_out, side_out, pcc=0.9995)
+    assert_quality(fixture.torch_out - torch_base, side_out - base_out, pcc=0.99)
 
 
 @GALAXY_RING

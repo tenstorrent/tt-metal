@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import ttnn
 
 from ....layers.feedforward import ParallelFeedForward
-from ....layers.linear import ColParallelLinear
+from ....layers.linear import ColParallelLinear, RowParallelLinear
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
@@ -24,6 +24,15 @@ from . import defaults  # noqa: F401  (the best switch values, before any switch
 from . import ff_bf8, lofi
 from .agmm_config import agmm_kwargs, agmm_pins
 from .attention_minimax_h3 import MiniMaxH3Attention
+from .lora_side import (
+    LowRankDown,
+    agmm_side_kwargs,
+    augment_col_weight,
+    augment_row_weight,
+    col_suffix_cols,
+    mmrs_side_config,
+    rank_columns,
+)
 from .mmrs_config import has_mmrs_config, mmrs_blocking_override, pinned_mmrs_config, register_mmrs_config
 
 # Number of modalities the AdaLN table is indexed by: video (0), text (1), audio (2).
@@ -104,9 +113,11 @@ class MiniMaxH3TransformerBlock(Module):
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
+        lora_rank: int | None = None,
     ) -> None:
         """`dynamic_length` freezes the ff1 / ff2 blockings and the one-hot gathers' blocking at construction, so
-        no per-block program depends on the length; `norm_row_capacity` (per-device rows) sizes the fused norms."""
+        no per-block program depends on the length; `norm_row_capacity` (per-device rows) sizes the fused norms.
+        `lora_rank`: q/k/v, to_out, ff1 and ff2 carry an unmerged LoRA of this rank as a side branch (`lora_side`)."""
         super().__init__()
 
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
@@ -151,6 +162,7 @@ class MiniMaxH3TransformerBlock(Module):
             dynamic_length=dynamic_length,
             norm_row_capacity=norm_row_capacity,
             fused_qk_norm_rope=True,  # every DiT-block call: fused [1, 1, N, K] path with RoPE
+            lora_rank=lora_rank,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -173,6 +185,27 @@ class MiniMaxH3TransformerBlock(Module):
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
+        self.lora_rank = lora_rank
+        self._ff1_side_cols = 0
+        if lora_rank is not None:
+            # Same layers with the side-branch input widths (see `lora_side`).
+            self._ff1_side_cols = col_suffix_cols(self.hidden_local, lora_rank, self.tp_factor)
+            linear_kwargs = dict(
+                mesh_device=mesh_device, mesh_axis=self.tp_mesh_axis, fsdp_mesh_axis=None, ccl_manager=ccl_manager
+            )
+            self.ff.ff1 = ColParallelLinear(
+                hidden_size + self.tp_factor * self._ff1_side_cols,
+                ffn_dim,
+                bias=False,
+                activation_fn="swiglu",
+                **linear_kwargs,
+            )
+            self.ff.ff2 = RowParallelLinear(
+                ffn_dim + self.tp_factor * lora_rank, hidden_size, bias=False, **linear_kwargs
+            )
+            down_kwargs = dict(mesh_device=mesh_device, mesh_axis=self.tp_mesh_axis, ccl_manager=ccl_manager)
+            self.ff1_down = LowRankDown(hidden_size, self.tp_factor * self._ff1_side_cols, reduce=True, **down_kwargs)
+            self.ff2_down = LowRankDown(ffn_dim, lora_rank, reduce=False, **down_kwargs)
         self.adaln_proj = ColParallelLinear(
             time_embed_dim,
             NUM_MODULATION_PARAMS * hidden_size * MODALITY_NUM,
@@ -237,6 +270,18 @@ class MiniMaxH3TransformerBlock(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "ff.net.0.proj", "ff.ff1")
         rename_substate(state, "ff.net.2", "ff.ff2")
+        if self.lora_rank is not None:
+            width = self.tp_factor * self._ff1_side_cols
+            for name, down in (("ff1", "ff1_down"), ("ff2", "ff2_down")):
+                a, b = state.pop(f"ff.{name}.lora_A.weight"), state.pop(f"ff.{name}.lora_B.weight")
+                state[f"{down}.weight"] = a
+                weight = state.get(f"ff.{name}.weight")
+                if weight is not None:
+                    state[f"ff.{name}.weight"] = (
+                        augment_col_weight(weight, rank_columns(b, 0, width), self.tp_factor)
+                        if name == "ff1"
+                        else augment_row_weight(weight, b, self.tp_factor)
+                    )
         for name, section in (("ff.ff1.weight", "ff1"), ("ff.ff2.weight", "ff2")):
             if name in state:
                 state[name] = lofi.round_weight(section, state[name])
@@ -497,6 +542,12 @@ class MiniMaxH3TransformerBlock(Module):
         )
         # ff1 gathers the TP-fractured input inside its matmul (all_gather_minimal_matmul_async) when
         # parallel_config is passed; ff2 is row-parallel and reduce-scatters back to TP-fractured.
+        rows = normed.padded_shape[-2]
+        side = {}
+        if self.lora_rank is not None:
+            u = self.ff1_down(normed, dtype=normed.dtype, use_persistent_buffer=self.use_persistent_ccl_buffers)
+            normed = ttnn.concat([normed, u], dim=-1)
+            side["ff2_suffix"] = lambda h: self.ff2_down(h, dtype=h.dtype)
         if not self.use_fused_agmm and self.tp_factor > 1:
             normed = self.ccl_manager.all_gather(normed, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
         # ff2's reduce-scatter and the gated residual after it fuse into a single
@@ -527,6 +578,10 @@ class MiniMaxH3TransformerBlock(Module):
                 # registered at the point of use rather than at construction. Idempotent and cheap.
                 register_mmrs_config(*ff2_shape, core_grid)
                 mmrs_config = mmrs_blocking_override(*ff2_shape, core_grid)
+        if fused and self.lora_rank is not None:
+            ff2_k = self.ffn_dim // self.tp_factor
+            core_grid = self.mesh_device.compute_with_storage_grid_size()
+            mmrs_config = mmrs_side_config(mmrs_config, rows, ff2_k, self.hidden_size, core_grid, self.lora_rank)
         if fused:
             _log_gate_map_once(to_out=attn_gate_map is not None, ff2=gate_map_on)
             return self.ff.forward_fused_addcmul(
@@ -543,6 +598,7 @@ class MiniMaxH3TransformerBlock(Module):
                 **({"addcmul_b_tile_row_map": tile_map} if gate_map_on else {}),
                 **({"addcmul_b_col_offset_tiles": _GATE_MLP * h_tiles} if gate_map_on and s2l else {}),
                 **ff_bf8.ff_kwargs(),
+                **side,
             )
         _log_gate_map_once(to_out=attn_gate_map is not None, ff2=False)
         ff_out = self.ff(
@@ -554,6 +610,7 @@ class MiniMaxH3TransformerBlock(Module):
             use_persistent_buffer=self.use_persistent_ccl_buffers,
             **self._ff1_kwargs(normed),
             **ff_bf8.ff_kwargs(),
+            **side,
         )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
 
@@ -562,4 +619,7 @@ class MiniMaxH3TransformerBlock(Module):
         none on the unfused path, whose matmul overruns L1 with the swept blockings at long sequence lengths."""
         if not self.use_fused_agmm:
             return {}
-        return agmm_kwargs(self._ff1_pins, *self._ff1_kn, normed.padded_shape[-2])
+        kwargs = agmm_kwargs(self._ff1_pins, *self._ff1_kn, normed.padded_shape[-2])
+        if self.lora_rank is not None:
+            kwargs = agmm_side_kwargs(kwargs, normed.padded_shape[-1] // ttnn.TILE_SIZE)
+        return kwargs

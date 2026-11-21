@@ -11,7 +11,7 @@ import pytest
 import torch
 
 from ....experimental.lora.h3_adapter_loader import _collect_pairs, _file_alpha, _register_fused, _scale_of
-from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import _round_bf16_stochastic
+from ....experimental.lora.h3_adapter_loader import round_bf16_stochastic as _round_bf16_stochastic
 
 NUM_HEADS = 4
 HEAD_DIM = 8

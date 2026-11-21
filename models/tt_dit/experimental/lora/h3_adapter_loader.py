@@ -13,8 +13,9 @@ else 1 -- never assume ``alpha == rank``. Unmapped keys and ``.diff`` deltas rai
 """
 from __future__ import annotations
 
+import hashlib
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 
 import torch
@@ -30,6 +31,9 @@ _STRIP_PREFIXES = ("model.diffusion_model.", "diffusion_model.", "transformer.",
 # PEFT (``.lora_A.default.weight``) and kohya (``lora_down``/``lora_up``) spellings.
 _LOW_RANK_RE = re.compile(r"^(?P<base>.*)\.lora_(?P<slot>A|B|down|up)(?:\.[^.]+)?\.weight$")
 _SLOT_MAP = {"A": "A", "down": "A", "B": "B", "up": "B"}
+
+# Side-branch targets (`MINIMAX_H3_LORA_SIDE`): the DiT blocks' q/k/v/out/ff linears; every other target merges on host.
+_SIDE_RE = re.compile(r"^transformer_blocks\.\d+\.(attn\.to_[qkv]|attn\.to_out\.0|ff\.net\.0\.proj|ff\.net\.2)$")
 
 _BLOCK_RE = re.compile(r"^(?P<stack>transformer_blocks|token_refiner\.refiner_blocks)\.(?P<idx>\d+)\.(?P<rest>.+)$")
 
@@ -145,16 +149,67 @@ def h3_host_deltas(path: str, prefixes: tuple[str, ...], *, scale: float = 1.0) 
 
 
 def iter_h3_host_deltas(
-    path: str, prefixes: tuple[str, ...], *, scale: float = 1.0
+    path: str, prefixes: tuple[str, ...], *, scale: float = 1.0, keep: Callable[[str], bool] | None = None
 ) -> Iterator[tuple[str, torch.Tensor]]:
-    """`h3_host_deltas` one target at a time, so only one dense delta is alive."""
+    """`h3_host_deltas` one target at a time, so only one dense delta is alive; `keep(module)` filters targets."""
     with safe_open(path, framework="pt", device="cpu") as handle:
         metadata = dict(handle.metadata() or {})
-        raw = {key: handle.get_tensor(key) for key in handle.keys() if _strip_prefixes(key).startswith(prefixes)}
+        raw = {
+            key: handle.get_tensor(key)
+            for key in handle.keys()
+            if _strip_prefixes(key).startswith(prefixes) and (keep is None or keep(_module_of(key)))
+        }
     pairs, alphas = _collect_pairs(raw)
     file_alpha = _file_alpha(metadata)
     for base, ab in sorted(pairs.items()):
         yield f"{base}.weight", scale * _scale_of(base, ab, alphas, file_alpha) * (ab["B"].float() @ ab["A"].float())
+
+
+def is_side_target(module: str) -> bool:
+    """Whether `module` runs as a side branch (not merged) under `MINIMAX_H3_LORA_SIDE`."""
+    return _SIDE_RE.match(module) is not None
+
+
+def h3_side_rank(path: str) -> int:
+    """The one rank of the side-branch targets, from the file header; a multiple of the tile width."""
+    with safe_open(path, framework="pt", device="cpu") as handle:
+        ranks = set()
+        for key in handle.keys():
+            match = _LOW_RANK_RE.match(_strip_prefixes(key))
+            if match and _SLOT_MAP[match.group("slot")] == "A" and is_side_target(match.group("base")):
+                ranks.add(handle.get_slice(key).get_shape()[0])
+    if len(ranks) != 1 or next(iter(ranks)) % 32:
+        raise ValueError(f"{path}: side-branch targets need one rank that is a multiple of 32, got {sorted(ranks)}")
+    return ranks.pop()
+
+
+def h3_side_tensors(path: str, *, scale: float = 1.0) -> dict[str, torch.Tensor]:
+    """The side-branch targets as `<module>.lora_A.weight` / `<module>.lora_B.weight`, B scaled by
+    `scale * alpha / rank` (so the model applies `y = W x + B (A x)` with no further scale)."""
+    with safe_open(path, framework="pt", device="cpu") as handle:
+        metadata = dict(handle.metadata() or {})
+        raw = {key: handle.get_tensor(key) for key in handle.keys() if is_side_target(_module_of(key))}
+    pairs, alphas = _collect_pairs(raw)
+    file_alpha = _file_alpha(metadata)
+    out = {}
+    for base, ab in sorted(pairs.items()):
+        out[f"{base}.lora_A.weight"] = ab["A"]
+        out[f"{base}.lora_B.weight"] = scale * _scale_of(base, ab, alphas, file_alpha) * ab["B"].float()
+    return out
+
+
+def round_bf16_stochastic(tensor: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
+    bits = tensor.float().contiguous().view(torch.int32)
+    noise = torch.randint(0, 1 << 16, bits.shape, dtype=torch.int32, generator=generator)
+    return ((bits + noise) & ~0xFFFF).view(torch.float32).to(torch.bfloat16)
+
+
+def file_digest(path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while chunk := handle.read(1 << 24):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _read(path: str) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
@@ -189,6 +244,15 @@ def _collect_pairs(raw: dict[str, torch.Tensor]):
     if incomplete:
         raise RuntimeError(f"{len(incomplete)} half pair(s), e.g. {incomplete[0]}")
     return pairs, alphas
+
+
+def _module_of(key: str) -> str:
+    """The target module a file key belongs to (the stripped key itself when it follows no convention)."""
+    stripped = _strip_prefixes(key)
+    match = _LOW_RANK_RE.match(stripped)
+    if match:
+        return match.group("base")
+    return stripped[: -len(".alpha")] if stripped.endswith(".alpha") else stripped
 
 
 def _strip_prefixes(key: str) -> str:

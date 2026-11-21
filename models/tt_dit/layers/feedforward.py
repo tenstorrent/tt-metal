@@ -126,6 +126,7 @@ class ParallelFeedForward(Module):
         transpose_core_grid: bool | None = None,
         ff1_output_dtype=None,
         ff2_output_dtype=None,
+        ff2_suffix=None,
     ) -> ttnn.Tensor:
         """
         Expects x to be replicated.
@@ -136,6 +137,8 @@ class ParallelFeedForward(Module):
         ff1 shape; ff2 keeps the generic path.
         `ff2_compute_kernel_config` (default: `compute_kernel_config`) lets ff2 run another config than ff1.
         `ff1_output_dtype` / `ff2_output_dtype` (default None: each op's own choice) set ff1's / ff2's output dtype.
+        `ff2_suffix` (optional): ff1's output -> a tensor ff2 reads as extra K columns (fused concat), for a ff2 weight
+        that stacks its rows under the ff1 output's.
         """
         ff1_out = self.ff1(
             x,
@@ -152,7 +155,7 @@ class ParallelFeedForward(Module):
         ff2_config = compute_kernel_config if ff2_compute_kernel_config is None else ff2_compute_kernel_config
         ff2_extra = {} if ff2_output_dtype is None else {"dtype": ff2_output_dtype}
         return self.ff2(
-            ff1_out,
+            ff1_out if ff2_suffix is None else [ff1_out, ff2_suffix(ff1_out)],
             compute_kernel_config=ff2_config,
             use_persistent_buffer=use_persistent_buffer,
             **ff2_extra,
@@ -179,6 +182,7 @@ class ParallelFeedForward(Module):
         addcmul_b_col_offset_tiles: int = 0,
         ff1_output_dtype=None,
         ff2_output_dtype=None,
+        ff2_suffix=None,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
@@ -191,6 +195,7 @@ class ParallelFeedForward(Module):
         ff2's frozen fused MM+RS blocking.
         `addcmul_b_tile_row_map`: see `RowParallelLinear.forward_fused_addcmul` (forwarded only when given).
         `ff1_output_dtype` / `ff2_output_dtype` (default None: each op's own choice) set ff1's / ff2's output dtype.
+        `ff2_suffix`: as in `forward`.
         """
         map_kwargs = {} if addcmul_b_tile_row_map is None else {"addcmul_b_tile_row_map": addcmul_b_tile_row_map}
         if addcmul_b_col_offset_tiles:
@@ -211,7 +216,7 @@ class ParallelFeedForward(Module):
         ff2_config = compute_kernel_config if ff2_compute_kernel_config is None else ff2_compute_kernel_config
         ff2_extra = {} if ff2_output_dtype is None else {"dtype": ff2_output_dtype}
         return self.ff2.forward_fused_addcmul(
-            ff1_out,
+            ff1_out if ff2_suffix is None else [ff1_out, ff2_suffix(ff1_out)],
             addcmul_a,
             addcmul_b,
             scalar=scalar,

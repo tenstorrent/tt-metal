@@ -71,6 +71,14 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
 from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp
 from ...encoders.vision import vision_cu_seqlens
+from ...experimental.lora.h3_adapter_loader import (
+    file_digest,
+    h3_side_rank,
+    h3_side_tensors,
+    is_side_target,
+    iter_h3_host_deltas,
+    round_bf16_stochastic,
+)
 from ...layers.audio_ops import weights_variant
 from ...layers.module import Module
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
@@ -143,7 +151,7 @@ from .policy import (
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
-from .weights_minimax_h3 import resolve_weights_dir
+from .weights_minimax_h3 import resolve_side_adapter, resolve_weights_dir
 
 # ImageNet statistics; the video VAE emits normalized RGB and the pipeline reverts it. Imported from
 # `conditioning` rather than restated: the keyframe path normalizes *into* the VAE with these and the
@@ -765,6 +773,11 @@ class MiniMaxH3Pipeline:
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
         self.task = task
         self.transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
+        # MINIMAX_H3_LORA_SIDE: an adapter run unmerged over the base checkpoint (see `_apply_side_adapter`).
+        side = resolve_side_adapter()
+        self.lora_side_path, self.lora_side_strength = side if side is not None else (None, 1.0)
+        self.lora_side_rank = None if side is None else h3_side_rank(str(self.lora_side_path))
+        self._lora_side_digest = None if side is None else file_digest(self.lora_side_path)
         self.tp_axis, self.sp_axis = tp_axis, sp_axis
         shape = tuple(mesh_device.shape)
         if tp_axis == sp_axis:
@@ -921,7 +934,9 @@ class MiniMaxH3Pipeline:
                 f"SP{self.encoder_parallel_config.sequence_parallel.factor} on swapped mesh axes and resident weights "
                 "(MINIMAX_H3_ENCODER_TP8, no FSDP)"
                 if self.encoder_tp_swap
-                else " with resident weights (MINIMAX_H3_ENCODER_RESIDENT, no FSDP)" if self.encoder_resident else ""
+                else " with resident weights (MINIMAX_H3_ENCODER_RESIDENT, no FSDP)"
+                if self.encoder_resident
+                else ""
             )
         )
         self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
@@ -1085,7 +1100,37 @@ class MiniMaxH3Pipeline:
             if not single.is_file():
                 raise FileNotFoundError(f"no safetensors (sharded or single) under {directory}")
             state.update(load_file(str(single)))
+        if self.lora_side_path is not None and subfolder == self.transformer_subfolder:
+            self._apply_side_adapter(state)
         return state
+
+    def _apply_side_adapter(self, state: dict[str, torch.Tensor]) -> None:
+        """MINIMAX_H3_LORA_SIDE: the blocks' q/k/v/out/ff targets go in as `lora_A` / `lora_B` tensors next to their
+        weights (the blocks run them as a side branch); every other target is merged here in float32 and rounded to
+        bfloat16 stochastically, as the Turbo pipeline merges."""
+        path, strength = str(self.lora_side_path), self.lora_side_strength
+        side = h3_side_tensors(path, scale=strength)
+        missing = [key for key in side if key.rsplit(".", 2)[0] + ".weight" not in state]
+        if missing:
+            raise KeyError(f"side adapter targets {missing[:3]} are not in the {self.transformer_subfolder} checkpoint")
+        state.update(side)
+        generator = torch.Generator().manual_seed(0)
+        merged = 0
+        for key, delta in iter_h3_host_deltas(path, ("",), scale=strength, keep=lambda base: not is_side_target(base)):
+            weight = state.get(key)
+            if weight is None:
+                raise KeyError(f"side adapter target {key} is not in the {self.transformer_subfolder} checkpoint")
+            if weight.shape != delta.shape:
+                raise ValueError(f"side adapter target {key}: delta {tuple(delta.shape)} != {tuple(weight.shape)}")
+            if weight.dtype == torch.bfloat16:
+                state[key] = round_bf16_stochastic(weight.float() + delta, generator)
+            else:
+                state[key] = weight + delta.to(weight.dtype)
+            merged += 1
+        self._host_log(
+            f"side adapter {self.lora_side_path.name}: {len(side) // 2} side-branch targets (rank "
+            f"{self.lora_side_rank}), {merged} merged on host, strength {strength:g}"
+        )
 
     # ------------------------------------------------------------------ residency
 
@@ -1629,6 +1674,8 @@ class MiniMaxH3Pipeline:
 
     def _dit_weight_mode(self) -> str:
         mode = "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
+        if self.lora_side_path is not None:
+            mode += f"_loraside_{self.lora_side_path.stem}_{self._lora_side_digest[:12]}_x{self.lora_side_strength!r}"
         return mode + to_out_weight_tag() + lofi_weight_cache_tag()
 
     def _build_transformer(self) -> MiniMaxH3Transformer3DModel:
@@ -1648,6 +1695,7 @@ class MiniMaxH3Pipeline:
             # Bucketed rungs each pin their own K/V gather pair; size one at the longest length for all.
             kv_gather_capacity=self.kv_gather_capacity,
             dynamic_length=self.dynamic_length,
+            lora_rank=self.lora_side_rank,
         )
 
     @property

@@ -24,6 +24,15 @@ from ....utils.tensor import bf16_tensor
 from . import defaults, lofi  # noqa: F401  (defaults: the best switch values)
 from .agmm_config import AGMM_BLOCK_SIZES, AGMM_PINNED_BLOCKING, agmm_kwargs, agmm_pins
 from .length_classes import LENGTH_CLASSES, length_class
+from .lora_side import (
+    LowRankDown,
+    agmm_side_kwargs,
+    augment_col_weight,
+    augment_row_weight,
+    col_suffix_cols,
+    mmrs_side_config,
+    rank_columns,
+)
 from .mmrs_config import has_row_parallel_mmrs_config, mmrs_blocking_override
 from .sol_prepass import BLOCK as SOL_BLOCK
 from .sol_prepass import SolGeometry, SolPrepass, sink_block_mask
@@ -248,11 +257,14 @@ class MiniMaxH3Attention(Module):
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
         fused_qk_norm_rope: bool = False,
+        lora_rank: int | None = None,
     ) -> None:
         """`dynamic_length` freezes every length-keyed choice at construction (one program per op for every
         length); `norm_row_capacity` (per-device rows) sizes the fused QK norms' program on that path.
         `fused_qk_norm_rope`: every call of this attention takes the fused [1, 1, N, K] path with RoPE (the DiT
-        blocks), so MINIMAX_H3_MK_E2B_QK_NORM may apply to it; other users (the token refiner) never take it."""
+        blocks), so MINIMAX_H3_MK_E2B_QK_NORM may apply to it; other users (the token refiner) never take it.
+        `lora_rank`: q/k/v and to_out carry an unmerged LoRA of this rank as a side branch (see `lora_side`); the
+        state dict then holds `to_{q,k,v,out.0}.lora_{A,B}.weight` next to each weight."""
         super().__init__()
 
         self.sol_attn = sol_attn
@@ -313,11 +325,26 @@ class MiniMaxH3Attention(Module):
 
         fsdp_mesh_axis = self.sp_mesh_axis if is_fsdp else None
 
+        self.lora_rank = lora_rank
+        self._qkv_side_cols = 0
+        if lora_rank is not None:
+            self._qkv_side_cols = col_suffix_cols(hidden_size // tp_factor, 3 * lora_rank, tp_factor)
+            if is_fsdp or not is_sequence_parallel:
+                raise ValueError("the LoRA side branch needs the sequence-parallel DiT attention without FSDP")
+            self.to_qkv_down = LowRankDown(
+                hidden_size,
+                tp_factor * self._qkv_side_cols,
+                reduce=True,
+                mesh_device=mesh_device,
+                mesh_axis=self.tp_mesh_axis,
+                ccl_manager=ccl_manager,
+            )
+
         # Fused QKV: one matmul, output split into three. The state dict is rearranged in
         # `_prepare_torch_state` so that column-parallel fracturing hands each device the same
         # 14 heads of q, k and v.
         self.to_qkv = ColParallelLinear(
-            hidden_size,
+            hidden_size + tp_factor * self._qkv_side_cols,
             3 * self.inner_dim,
             chunks=3,
             bias=False,
@@ -327,9 +354,22 @@ class MiniMaxH3Attention(Module):
             ccl_manager=ccl_manager,
         )
         self.to_out_row_parallel = _TO_OUT_ROW_PARALLEL and tp_factor > 1 and is_sequence_parallel
+        if lora_rank is not None:
+            if not self.to_out_row_parallel:
+                raise ValueError(
+                    "the LoRA side branch needs the row-parallel to_out (MINIMAX_H3_TO_OUT_ROW_PARALLEL=1)"
+                )
+            self.to_out_down = LowRankDown(
+                self.inner_dim,
+                lora_rank,
+                reduce=False,
+                mesh_device=mesh_device,
+                mesh_axis=self.tp_mesh_axis,
+                ccl_manager=ccl_manager,
+            )
         if self.to_out_row_parallel:
             self.to_out = RowParallelLinear(
-                self.inner_dim,
+                self.inner_dim + (0 if lora_rank is None else tp_factor * lora_rank),
                 hidden_size,
                 bias=False,
                 dtype=ttnn.bfloat8_b if _TO_OUT_BFP8_WEIGHT else ttnn.bfloat16,
@@ -475,6 +515,8 @@ class MiniMaxH3Attention(Module):
         q_state = pop_substate(state, "to_q")
         k_state = pop_substate(state, "to_k")
         v_state = pop_substate(state, "to_v")
+        if self.lora_rank is not None:
+            self._augment_lora_state(state, [q_state, k_state, v_state])
 
         # Relayout Q and K into the interleaved rotary channel order the fused RoPE consumes. Shared
         # between Q and K and absent from V, so Q.K is unchanged (see `rope_channel_permutation`).
@@ -499,6 +541,28 @@ class MiniMaxH3Attention(Module):
             sub = pop_substate(state, name)
             if "weight" in sub:
                 state[f"{name}.weight"] = sub["weight"][perm].repeat(self.num_heads)
+
+    def _augment_lora_state(self, state: dict[str, torch.Tensor], qkv_states: list[dict[str, torch.Tensor]]) -> None:
+        """Stack each projection's B under its weight in the side-branch input layout and move the A's to the
+        down projections (see `lora_side`)."""
+        tp = self.parallel_config.tensor_parallel.factor
+        width = tp * self._qkv_side_cols
+        a_list = []
+        for position, sub in enumerate(qkv_states):
+            a, b = sub.pop("lora_A.weight"), sub.pop("lora_B.weight")
+            a_list.append(a)
+            if "weight" in sub:
+                sub["weight"] = augment_col_weight(sub["weight"], rank_columns(b, position * a.shape[0], width), tp)
+        state["to_qkv_down.weight"] = torch.cat(a_list)
+        a, b = state.pop("to_out.lora_A.weight"), state.pop("to_out.lora_B.weight")
+        state["to_out_down.weight"] = a
+        if "to_out.weight" in state:
+            state["to_out.weight"] = augment_row_weight(state["to_out.weight"], b, tp)
+
+    def _lora_side_input(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """`[x_d, u_d]`: the K-fractured qkv input with this device's slice of `A x` appended."""
+        u = self.to_qkv_down(x, dtype=x.dtype, use_persistent_buffer=self.use_persistent_ccl_buffers)
+        return ttnn.concat([x, u], dim=-1)
 
     # ------------------------------------------------------------------ helpers
 
@@ -1331,6 +1395,7 @@ class MiniMaxH3Attention(Module):
         block, so a block's input, its to_out output and its ff2 output never share a buffer.
         """
         x = maybe_cast_activation(spatial_1BND, self.to_out.activation_dtype)
+        x_in = x if self.lora_rank is None else [x, self.to_out_down(x, dtype=x.dtype)]
         if addcmul_residual is not None:
             m, k = x.padded_shape[-2], x.padded_shape[-1]
             core_grid = self.mesh_device.compute_with_storage_grid_size()
@@ -1340,21 +1405,24 @@ class MiniMaxH3Attention(Module):
                 )
                 if addcmul_gate_col_offset:
                     map_kwargs["addcmul_b_col_offset_tiles"] = addcmul_gate_col_offset
+                mmrs_config = mmrs_blocking_override(m, k, self.hidden_size, core_grid)
+                if self.lora_rank is not None:
+                    mmrs_config = mmrs_side_config(mmrs_config, m, k, self.hidden_size, core_grid, self.lora_rank)
                 return self.to_out.forward_fused_addcmul(
-                    x,
+                    x_in,
                     addcmul_residual,
                     addcmul_gate,
                     compute_kernel_config=lofi.compute_config("to_out", self.mm_compute_kernel_config),
                     dtype=ttnn.bfloat16,
                     use_persistent_buffer=self.use_persistent_ccl_buffers,
-                    mmrs_config=mmrs_blocking_override(m, k, self.hidden_size, core_grid),
+                    mmrs_config=mmrs_config,
                     **map_kwargs,
                 )
         if addcmul_gate_tile_row_map is not None:
             # The gate is a tile-row table here, not a per-token tensor: only the fused op can read it.
             raise ValueError("a tile-row-mapped gate needs the fused row-parallel to_out (row_parallel_gate_fusable)")
         out = self.to_out(
-            x,
+            x_in,
             compute_kernel_config=lofi.compute_config("to_out", self.mm_compute_kernel_config),
             dtype=ttnn.bfloat16,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
@@ -1421,6 +1489,9 @@ class MiniMaxH3Attention(Module):
         # which is the same condition WanAttention uses.
         # Swept block sizes fit the fused op's CBs; the unfused matmul overruns L1 with them at long seq.
         matmul_parallel_config = self.parallel_config if self.use_fused_agmm else None
+        if self.lora_rank is not None:
+            spatial_1BND = self._lora_side_input(spatial_1BND)
+        k_tiles = spatial_1BND.padded_shape[-1] // ttnn.TILE_SIZE
         if not self.use_fused_agmm and tp_factor > 1:
             spatial_1BND = self.ccl_manager.all_gather(
                 spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False
@@ -1437,6 +1508,8 @@ class MiniMaxH3Attention(Module):
         )
         qkv_n = 3 * self.inner_dim // tp_factor
         agmm_kw = self._agmm_kwargs(self._qkv_pins, self.hidden_size, qkv_n, spatial_1BND)
+        if self.lora_rank is not None:
+            agmm_kw = agmm_side_kwargs(agmm_kw, k_tiles)
         if self._e2b_mode != "0" and self.use_fused_agmm:
             agmm_kw = self._qkv_non_transposed_kwargs(agmm_kw, spatial_1BND, qkv_n)
         bf8_native = self._bf8_native_path(spatial_1BND.shape[2])
