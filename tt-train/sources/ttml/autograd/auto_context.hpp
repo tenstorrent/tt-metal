@@ -107,7 +107,8 @@ public:
 
     void open_device(
         const tt::tt_metal::distributed::MeshShape& mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1),
-        const std::vector<int>& device_ids = std::vector<int>{});
+        const std::vector<int>& device_ids = std::vector<int>{},
+        std::size_t num_command_queues = 1);
 
     void close_device();
 
