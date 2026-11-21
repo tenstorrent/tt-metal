@@ -43,6 +43,11 @@ void ProdNcDeviceOperation::validate_on_program_cache_miss(
         input.dtype(),
         output.dtype());
 
+    TT_FATAL(
+        output.layout() == tt::tt_metal::Layout::TILE,
+        "Error - prod requires the preallocated output to be TILE layout, got output: {}.",
+        output.layout());
+
     const auto& out_memory_config = output.memory_config();
     ReduceOpDeviceGridValidationOptions prod_nc_grid_opts;
     prod_nc_grid_opts.shard_grid_contained_in_device_grid = &out_memory_config;
