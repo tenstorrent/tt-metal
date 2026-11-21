@@ -13,6 +13,7 @@
 #include <tt-metalium/circular_buffer_constants.h>
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/core_coord.hpp"
+#include <tt-metalium/hal.hpp>
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
@@ -339,6 +340,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const bool is_conv_1d_depthwise_conv =
         is_1d_depthwise_conv(groups, ashape[3], output_channels, filter_h, ashape[1], has_bias);
     const uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
+    // The height-sharded readers fetch each stick with a single-packet NoC read.
+    TT_FATAL(
+        !height_sharded || conv_act_c_read_bytes <= tt::tt_metal::hal::get_noc_max_burst_size_bytes(),
+        "Height-sharded conv2d reads {} bytes of input channels per stick, more than one {} byte NoC burst; use "
+        "block sharding or fewer input channels",
+        conv_act_c_read_bytes,
+        tt::tt_metal::hal::get_noc_max_burst_size_bytes());
     const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
         is_conv_1d_depthwise_conv,
         a.memory_config().memory_layout(),
