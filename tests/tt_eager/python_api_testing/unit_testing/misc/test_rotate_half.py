@@ -75,3 +75,13 @@ def test_rotate_half_dtypes(dtype, device):
     tt_got_back = ttnn.to_torch(ttnn.experimental.rotate_half(xt)).float()
 
     torch.testing.assert_close(tt_got_back, rotate_half(x), rtol=1e-2, atol=1e-2)
+
+
+@pytest.mark.parametrize("head_dim", [48, 100])
+def test_rotate_half_rejects_sub_tile_head_dim(head_dim, device, expect_error):
+    """A head dim with implicit tile padding would be split at the padded midpoint (32 / 64)."""
+    x = torch.randn([1, 1, 64, head_dim]).bfloat16()
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    assert xt.padded_shape[-1] != head_dim
+    with expect_error(RuntimeError, "implicit tile padding"):
+        ttnn.experimental.rotate_half(xt)
