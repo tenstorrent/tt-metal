@@ -1,0 +1,11 @@
+{
+  "eval/golden_tests/scatter/test_golden.py::test_op_loose[70x512_dim0_64x512-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]": {
+    "index": "zeros"
+  },
+  "eval/golden_tests/scatter/test_golden.py::test_op_loose[64x128_dim-2_32x128-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]": {
+    "index": "random"
+  },
+  "eval/golden_tests/scatter/test_golden.py::test_op_loose[128x512_dim0_17x512-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]": {
+    "index": "slices"
+  }
+}

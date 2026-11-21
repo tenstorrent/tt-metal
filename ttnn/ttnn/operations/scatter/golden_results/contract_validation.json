@@ -1,0 +1,50 @@
+{
+  "op": "scatter",
+  "spec": "/localdev/iwrosz/tt-metal-q6/eval/specs/scatter/spec.py",
+  "sha256": "b563e355fde681466e6192ede49cc57aacb3011c795c92f50e917c5ccd9a23cf",
+  "status": "passed",
+  "errors": 0,
+  "unresolved": 6,
+  "findings": [
+    {
+      "check": "numeric_resolved",
+      "level": "unresolved",
+      "message": "NUMERIC['list_keys']['modes'] gives the cells {'dtype': 'FLOAT32'} no entry of the numeric list: they are graded by legacy tolerances"
+    },
+    {
+      "check": "phase0_input_variety",
+      "level": "info",
+      "message": "`dim` takes 2 value(s) in the 9 first-phase INPUTS (0 x6, -2 x3); no other value in INPUTS stays in the first phase, so PHASE0's axes pin it"
+    },
+    {
+      "check": "cell_count",
+      "level": "info",
+      "message": "232 cells = 29 INPUTS x 8 combinations; 0 skipped by INVALID; 9 in PHASE0; 3 loose, 0 numeric, 4 rejection test(s)"
+    },
+    {
+      "check": "open_items",
+      "level": "unresolved",
+      "message": "DEFINITION['tt_regen_spec']['governs'] is UNRESOLVED"
+    },
+    {
+      "check": "open_items",
+      "level": "unresolved",
+      "message": "NUMERIC['special_values'] is UNRESOLVED"
+    },
+    {
+      "check": "open_items",
+      "level": "unresolved",
+      "message": "NUMERIC['freedoms'] is UNRESOLVED"
+    },
+    {
+      "check": "open_items",
+      "level": "unresolved",
+      "message": "PERFORMANCE['bar'] is UNRESOLVED"
+    },
+    {
+      "check": "open_items",
+      "level": "unresolved",
+      "message": "PERFORMANCE['measure'] is UNRESOLVED"
+    }
+  ]
+}

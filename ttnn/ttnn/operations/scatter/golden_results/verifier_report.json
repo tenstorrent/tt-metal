@@ -1,0 +1,3342 @@
+{
+  "summary": {
+    "total": 239,
+    "supported_pass": 12,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 223,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 4,
+    "queue_gaps": 0
+  },
+  "by_category": {
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x8x32x64_dim1_2x4x32x64-alignment=tile_aligned-dim=-3-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x256_dim1_32x64-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x128_dim-1_17x32-alignment=h_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x4096_dim0_16x4096-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x64x128_dim2_1x1x32x128-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x32x4096_dim1_1x8x4096-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim0_17x512-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x8x32x64_dim1_2x4x32x64-alignment=tile_aligned-dim=-3-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x256_dim1_32x64-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x64x128_dim2_1x1x32x128-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x64x128_dim1_1x32x128-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim0_17x512-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x4096_dim0_16x4096-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x32x4096_dim1_1x8x4096-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[70x512_dim0_64x512-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x256_dim1_32x64-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x8x32x64_dim1_2x4x32x64-alignment=tile_aligned-dim=-3-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x64x128_dim1_1x32x128-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x64x128_dim2_1x1x32x128-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim0_17x512-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x32x4096_dim1_1x8x4096-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x4096_dim0_16x4096-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[70x512_dim0_64x512-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x8x32x64_dim1_2x4x32x64-alignment=tile_aligned-dim=-3-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x256_dim1_32x64-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x64x128_dim1_1x32x128-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x64x128_dim2_1x1x32x128-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim2_4x32x16-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x4096_dim0_16x4096-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[70x512_dim0_64x512-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x8x32x64_dim1_2x4x32x64-alignment=tile_aligned-dim=-3-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x256_dim1_32x64-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x64x128_dim1_1x32x128-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x64x128_dim2_1x1x32x128-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim2_4x32x16-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[70x512_dim0_64x512-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x4096_dim0_16x4096-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[50x64_dim-2_50x64-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x256_dim1_32x64-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x8x32x64_dim1_2x4x32x64-alignment=tile_aligned-dim=-3-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x64x128_dim1_1x32x128-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x50x64_dim-2_2x4x25x64-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim2_4x32x16-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[70x512_dim0_64x512-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[50x64_dim-2_50x64-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x8x32x64_dim1_2x4x32x64-alignment=tile_aligned-dim=-3-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x256_dim1_32x64-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x64x128_dim1_1x32x128-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x50x64_dim-2_2x4x25x64-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim2_4x32x16-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[50x64_dim-2_50x64-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[70x512_dim0_64x512-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x2x32x64_dim0_2x2x32x64-alignment=tile_aligned-dim=-4-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim-1_128x512-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x64x128_dim1_1x32x128-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x50x64_dim-2_2x4x25x64-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim2_4x32x16-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[50x64_dim-2_50x64-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[70x512_dim0_64x512-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x8192_dim-2_32x8192-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim-1_128x512-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x2x32x64_dim0_2x2x32x64-alignment=tile_aligned-dim=-4-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x64x128_dim1_1x32x128-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x50x64_dim-2_2x4x25x64-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim2_4x32x16-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[50x64_dim-2_50x64-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x2x32x64_dim0_2x2x32x64-alignment=tile_aligned-dim=-4-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x8192_dim-2_32x8192-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim-1_128x512-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x128x512_dim-2_4x64x512-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x50x64_dim-2_2x4x25x64-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim2_4x32x16-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[50x64_dim-2_50x64-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x64_dim0_32x64-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x2x32x64_dim0_2x2x32x64-alignment=tile_aligned-dim=-4-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim-1_128x512-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x8192_dim-2_32x8192-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x128x512_dim-2_4x64x512-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x50x64_dim-2_2x4x25x64-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim2_4x32x16-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[50x64_dim-2_50x64-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x64_dim0_32x64-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x2x32x64_dim0_2x2x32x64-alignment=tile_aligned-dim=-4-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim-1_128x512-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x8192_dim-2_32x8192-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x100x47_dim-1_2x100x20-alignment=w_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x128x512_dim-2_4x64x512-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x50x64_dim-2_2x4x25x64-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x64_dim0_32x64-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x2x32x64_dim0_2x2x32x64-alignment=tile_aligned-dim=-4-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim-1_128x512-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x8192_dim-2_32x8192-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x50x64_dim-2_2x4x25x64-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x100x47_dim-1_2x100x20-alignment=w_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x128x512_dim-2_4x64x512-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x64_dim0_5x64-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x64_dim0_32x64-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x2x32x64_dim0_2x2x32x64-alignment=tile_aligned-dim=-4-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim-1_128x512-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x32x64_dim3_2x4x32x32-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x8192_dim-2_32x8192-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x100x47_dim-1_2x100x20-alignment=w_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x64_dim0_5x64-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x128x512_dim-2_4x64x512-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x64_dim0_32x64-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x2x32x64_dim0_2x2x32x64-alignment=tile_aligned-dim=-4-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim-1_128x512-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x32x64_dim3_2x4x32x32-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x100x47_dim-1_2x100x20-alignment=w_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x64_dim0_5x64-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x8192_dim-2_32x8192-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x128x512_dim-2_4x64x512-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x64_dim0_32x64-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x3x32x47_dim-4_1x3x32x47-alignment=w_non_aligned-dim=-4-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x17_dim1_32x9-alignment=w_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x32x64_dim3_2x4x32x32-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x100x47_dim-1_2x100x20-alignment=w_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x64_dim0_5x64-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x50_dim0_16x50-alignment=w_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x64_dim0_32x64-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x128x512_dim-2_4x64x512-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x3x32x47_dim-4_1x3x32x47-alignment=w_non_aligned-dim=-4-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x17_dim1_32x9-alignment=w_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x32x64_dim3_2x4x32x32-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x100x47_dim-1_2x100x20-alignment=w_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x64_dim0_5x64-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x50_dim0_16x50-alignment=w_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x128x512_dim-2_4x64x512-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x3x32x47_dim-4_1x3x32x47-alignment=w_non_aligned-dim=-4-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x17_dim1_32x9-alignment=w_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x32x64_dim3_2x4x32x32-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x100x47_dim-1_2x100x20-alignment=w_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x64_dim0_5x64-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x50_dim0_16x50-alignment=w_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x17x128_dim1_2x17x128-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x3x32x47_dim-4_1x3x32x47-alignment=w_non_aligned-dim=-4-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x17_dim1_32x9-alignment=w_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x32x64_dim3_2x4x32x32-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x100x47_dim-1_2x100x20-alignment=w_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x50_dim0_16x50-alignment=w_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x64_dim0_5x64-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x17x128_dim1_2x17x128-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x3x32x47_dim-4_1x3x32x47-alignment=w_non_aligned-dim=-4-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x17_dim1_32x9-alignment=w_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x32x64_dim3_2x4x32x32-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim0_2x32x64-alignment=tile_aligned-dim=-3-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x50_dim0_16x50-alignment=w_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x17x128_dim1_2x17x128-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x17_dim1_32x9-alignment=w_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x3x32x47_dim-4_1x3x32x47-alignment=w_non_aligned-dim=-4-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x4x32x64_dim3_2x4x32x32-alignment=tile_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim0_2x32x64-alignment=tile_aligned-dim=-3-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x50_dim0_16x50-alignment=w_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x17x128_dim1_2x17x128-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x128_dim-2_32x128-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x3x32x47_dim-4_1x3x32x47-alignment=w_non_aligned-dim=-4-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x17_dim1_32x9-alignment=w_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x17x50_dim-1_1x1x17x50-alignment=w_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim0_2x32x64-alignment=tile_aligned-dim=-3-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x50_dim0_16x50-alignment=w_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1024x64_dim0_512x64-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x17x128_dim1_2x17x128-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x128_dim-2_32x128-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x3x32x47_dim-4_1x3x32x47-alignment=w_non_aligned-dim=-4-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -4,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x17_dim1_32x9-alignment=w_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x17x50_dim-1_1x1x17x50-alignment=w_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim0_2x32x64-alignment=tile_aligned-dim=-3-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x50_dim0_16x50-alignment=w_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x17x128_dim1_2x17x128-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1024x64_dim0_512x64-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x128_dim-2_32x128-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x128_dim-1_17x32-alignment=h_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x17x50_dim-1_1x1x17x50-alignment=w_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim0_2x32x64-alignment=tile_aligned-dim=-3-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x100_dim-2_64x100-alignment=w_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x17x128_dim1_2x17x128-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1024x64_dim0_512x64-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x128_dim-1_17x32-alignment=h_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x128_dim-2_32x128-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x17x50_dim-1_1x1x17x50-alignment=w_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim0_2x32x64-alignment=tile_aligned-dim=-3-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x100_dim-2_64x100-alignment=w_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x17x128_dim1_2x17x128-alignment=h_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x128_dim-2_32x128-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x128_dim-1_17x32-alignment=h_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1024x64_dim0_512x64-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x17x50_dim-1_1x1x17x50-alignment=w_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim0_2x32x64-alignment=tile_aligned-dim=-3-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x100_dim-2_64x100-alignment=w_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x32x4096_dim1_1x8x4096-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x128_dim-2_32x128-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x128_dim-1_17x32-alignment=h_non_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1024x64_dim0_512x64-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x17x50_dim-1_1x1x17x50-alignment=w_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[4x32x64_dim0_2x32x64-alignment=tile_aligned-dim=-3-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x100_dim-2_64x100-alignment=w_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x32x4096_dim1_1x8x4096-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x128_dim-2_32x128-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x128_dim-1_17x32-alignment=h_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1024x64_dim0_512x64-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x17x50_dim-1_1x1x17x50-alignment=w_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x64x128_dim2_1x1x32x128-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x100_dim-2_64x100-alignment=w_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x32x4096_dim1_1x8x4096-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x128_dim-1_17x32-alignment=h_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1024x64_dim0_512x64-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x64x128_dim2_1x1x32x128-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x17x50_dim-1_1x1x17x50-alignment=w_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x100_dim-2_64x100-alignment=w_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x32x4096_dim1_1x8x4096-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x128_dim-1_17x32-alignment=h_non_aligned-dim=-1-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim0_17x512-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x1x64x128_dim2_1x1x32x128-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[2x8x32x64_dim1_2x4x32x64-alignment=tile_aligned-dim=-3-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=4-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -3,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x100_dim-2_64x100-alignment=w_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1x32x4096_dim1_1x8x4096-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=3-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim0_17x512-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim0_17x512-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x100_dim-2_64x100-alignment=w_non_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=ROW_MAJOR-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "ROW_MAJOR",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "w_non_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x4096_dim0_16x4096-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=ROW_MAJOR-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim0_17x512-alignment=tile_aligned-dim=-2-dtype=FLOAT32-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x256_dim1_32x64-alignment=tile_aligned-dim=-1-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -1,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x4096_dim0_16x4096-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=L1-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "xfail"
+      }
+    ],
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[70x512_dim0_64x512-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[50x64_dim-2_50x64-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x8192_dim-2_32x8192-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x64_dim0_32x64-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[17x64_dim0_5x64-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[64x128_dim-2_32x128-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[1024x64_dim0_512x64-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op_loose[70x512_dim0_64x512-alignment=h_non_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "h_non_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op_loose[64x128_dim-2_32x128-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op_loose[128x512_dim0_17x512-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[128x512_dim0_17x512-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_op[32x4096_dim0_16x4096-alignment=tile_aligned-dim=-2-dtype=BFLOAT16-index_form=lines-layout=TILE-memory_config=DRAM-rank=2-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "dim": -2,
+          "index_form": "lines",
+          "alignment": "tile_aligned",
+          "rank": 2
+        },
+        "status": "passed"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_rejection[X1]",
+        "test_name": "test_rejection[X1]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_rejection[X2]",
+        "test_name": "test_rejection[X2]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_rejection[X3]",
+        "test_name": "test_rejection[X3]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/scatter/test_golden.py::test_rejection[X4]",
+        "test_name": "test_rejection[X4]",
+        "status": "passed"
+      }
+    ]
+  },
+  "queue_coverage": {
+    "queue": "ttnn/ttnn/operations/scatter/op_requirements.md",
+    "missing_from_supported": 9,
+    "gaps": []
+  }
+}
