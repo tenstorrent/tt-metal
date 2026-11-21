@@ -20,6 +20,7 @@ import ttnn
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
 DEST_REUSE_PARAM = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/dest_reuse_param.cpp"
+DEST_REUSE_FORMAT = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/dest_reuse_format.cpp"
 MISC_ELEMENTS = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/misc_elements.cpp"
 UNARY_BCAST = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/unary_bcast.cpp"
 
@@ -99,6 +100,67 @@ def test_dest_reuse_matrix(device, reuse, op):
     golden = fn(dest, c) if reuse == 0 else fn(c, dest)  # SRCA: DEST op C ; SRCB: C op DEST
     out = ttnn.to_torch(output).to(torch.float32)
     lib.assert_close(golden, out, f"DestReuse {_REUSE[reuse]} {_OP[op][0]}")
+
+
+@pytest.mark.parametrize("reuse", [0, 1], ids=["SRCA", "SRCB"])
+@pytest.mark.parametrize("dest_format", [0, 1], ids=["inherit", "from_input"])
+def test_dest_reuse_operand_format(device, reuse, dest_format):
+    """DestOperandFormat: on fp32 DEST, D0 = A + B (bf16 A/B) needs ~10 mantissa bits, then D0 + C
+    with an fp32 C of zeros. FromInput programs the DEST-fed side with C's format (Tf32), so the sum
+    survives the DEST -> src move exactly; Inherit leaves that side at the bf16 format the first Add
+    programmed, so the sum is cut to bf16. An Add keeps math fidelity out of the measurement (a Mul
+    additionally drops SrcA's last mantissa bit on WH at every fidelity)."""
+    n = 4
+    shape = [1, 1, 32, 32 * n]
+    core_grid = lib.single_core_grid()
+    torch.manual_seed(1401)
+    # A in [1, 1.5) with bf16's 7-bit mantissa; B = k * 2^-10 (k = 1..7). A + B lies on the 2^-10 grid
+    # in [1, 2): exact in Tf32 (10-bit mantissa) and generally not representable in bf16.
+    ta = (1.0 + torch.randint(0, 64, shape) / 128.0).to(torch.bfloat16)
+    tb = (torch.randint(1, 8, shape) / 1024.0).to(torch.bfloat16)
+    tc = torch.zeros(shape)
+
+    def to_dev(t, dt):
+        return ttnn.from_torch(
+            t, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    tt_a, tt_b, tt_c = to_dev(ta, ttnn.bfloat16), to_dev(tb, ttnn.bfloat16), to_dev(tc, ttnn.float32)
+    tt_out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), ttnn.float32, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    cbs = [
+        lib.cb_descriptor(0, ttnn.bfloat16, 2, core_grid),
+        lib.cb_descriptor(1, ttnn.bfloat16, 2, core_grid),
+        lib.cb_descriptor(2, ttnn.float32, 2, core_grid),
+        lib.cb_descriptor(16, ttnn.float32, 2, core_grid),
+    ]
+    program = ttnn.ProgramDescriptor(
+        kernels=[
+            lib.build_reader_kernel([tt_a, tt_b, tt_c], n, core_grid),
+            lib.build_writer_1out_kernel(tt_out, n, core_grid),
+            lib.build_compute_kernel(
+                DEST_REUSE_FORMAT,
+                [n, reuse, dest_format, 0],
+                core_grid,
+                fp32_dest_acc_en=True,
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+            ),
+        ],
+        semaphores=[],
+        cbs=cbs,
+    )
+    out = ttnn.to_torch(ttnn.generic_op([tt_a, tt_b, tt_c, tt_out], program)).float()
+    golden = ta.float() + tb.float()
+    max_err = (golden - out).abs().max().item()
+    label = f"DestReuse {_REUSE[reuse]} dest_format={dest_format}"
+    if dest_format == 1:
+        lib.assert_close(golden, out, label, rtol=0.0, atol=0.0)
+    else:
+        # Documents the legacy truncation this option fixes; if it ever passes exactly, Inherit has
+        # started keeping precision on its own and the option may be redundant.
+        lib.assert_close(golden, out, label, rtol=2.0**-7, atol=0.0)
+        assert max_err > 0.0, f"{label}: expected bf16 truncation of the DEST operand, got exact output"
 
 
 def test_ternary_where(device):
