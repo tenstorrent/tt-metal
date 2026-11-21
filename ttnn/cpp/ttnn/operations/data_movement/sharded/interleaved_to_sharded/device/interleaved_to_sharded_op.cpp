@@ -4,6 +4,7 @@
 
 #include "interleaved_to_sharded_op.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/overpadded_tile.hpp"
 #include <tt-metalium/hal.hpp>
 #include <ttnn/operation.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -114,6 +115,8 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
 
 void InterleavedToShardedDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    ttnn::device_operation::detail::validate_no_overpadded_tile_input(
+        tensor_args.input_tensor, "interleaved_to_sharded");
     auto [valid, msg] = validate_inputs(operation_attributes, tensor_args);
     TT_FATAL(valid, "{}", msg);
 }
