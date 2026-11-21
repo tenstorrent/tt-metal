@@ -1,0 +1,374 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+import gc
+import itertools
+import math
+import random
+import sys
+import traceback
+from abc import ABC, abstractmethod
+from contextlib import contextmanager
+from typing import Any, ClassVar, Iterable, Iterator, Optional
+
+import numpy as np
+from tqdm import tqdm
+
+from ..callbacks.callback import CallbackHandler
+from ..configs import TrainerConfig
+from ..managers.logging import TrainingLogger
+
+
+class Trainer(ABC):
+    """The training loop: callbacks, gradient accumulation and clipping, validation scheduling and the run lifecycle.
+
+    Holds no tensors and imports no framework; everything that does is an abstract method a subclass
+    implements. A host builds the trainer once with its callbacks and runs any number of jobs on it::
+
+        trainer = MyTrainer(callbacks=[...])
+        for config in jobs:
+            try:
+                trainer.setup(config)
+                trainer.train()
+            finally:
+                trainer.cleanup()
+    """
+
+    # The config the trainer takes; `python -m ttml.experimental.trainer` validates a recipe as it.
+    config_class: ClassVar[type[TrainerConfig]] = TrainerConfig
+
+    def __init__(self, callbacks: Any = None) -> None:
+        self.callback_handler = CallbackHandler(self, callbacks)
+        self._reset_run_state()
+
+    def _reset_run_state(self) -> None:
+        self.config: Optional[TrainerConfig] = None
+        self.logger: Optional[TrainingLogger] = None
+        self.global_step = 0
+        self.epoch = 0
+        # Sum of the scaled losses of the current accumulation window, as `_accumulate_loss` keeps it.
+        self.step_loss: Any = None
+
+    def setup(self, config: TrainerConfig) -> None:
+        """Validate ``config`` and build what a run needs: data, device, model and optimizer.
+
+        Fails on an untrainable config before the device is opened or any weights are downloaded. Any
+        exception goes to every callback's ``on_setup_error`` and is re-raised; ``cleanup`` still frees what
+        was built.
+        """
+        try:
+            self._host_attributes()
+            if self.config is not None:
+                self.cleanup()
+            self.config = config
+            self.logger = TrainingLogger(config.logging, run_config=config.model_dump(mode="json"))
+            self._check_config()
+            self._seed()
+            self.train_dataloader, self.val_dataloader = self._load_dataloaders()
+            self._check_train_data()
+            self._check_val_data()
+            self.device_manager = self._create_device_manager()
+            self.model = self._load_model()
+            self.optimizer = self._load_optimizer()
+        except Exception as exception:
+            self.callback_handler("on_setup_error", exception)
+            raise
+
+    # ------------------------------------------------------------------ the loop
+
+    @contextmanager
+    def _train_lifecycle(self) -> Iterator[None]:
+        """``on_train_start`` before the loop and ``on_train_end`` after it.
+
+        Any exception, also from ``on_train_start`` or ``on_train_end``, goes to every callback's ``on_train_error``
+        and is re-raised, so ``on_train_end`` never sees a half-trained model.
+        """
+        try:
+            self.callback_handler("on_train_start")
+            yield
+            self.callback_handler("on_train_end")
+        except Exception as exception:
+            self.callback_handler("on_train_error", exception)
+            raise
+        finally:
+            # After the callbacks, which may still log.
+            self.logger.finish()
+
+    def train(self) -> None:
+        if self.config is None:
+            raise RuntimeError("Trainer.setup(config) must be called before train()")
+
+        accumulation_steps = self.config.gradient_accumulation_steps
+        total_batches = self._total_batches()
+        total_steps = self.total_steps()
+        with self._train_lifecycle():
+            self.step_loss = None
+            if self.validation_enabled:
+                self.validate()
+
+            self._train_mode()
+            self._zero_grad()
+            # The batches of the current accumulation window: one optimizer step's worth.
+            window_start, window = 0, min(accumulation_steps, total_batches)
+            epoch = None
+            batches = itertools.islice(self._batch_stream(), total_batches)
+            for index, (batch_epoch, batch) in enumerate(tqdm(batches, total=total_batches, desc="Training")):
+                if batch_epoch != epoch:
+                    if epoch is not None:
+                        self.callback_handler("on_train_epoch_end")
+                    epoch = self.epoch = batch_epoch
+                    self.callback_handler("on_train_epoch_start")
+
+                self.callback_handler("on_train_batch_start", batch)
+                batch = self._prepare_batch(batch)
+
+                self.callback_handler("on_forward_start", batch)
+                loss = self._forward(batch)
+                self.callback_handler("on_forward_end", loss)
+
+                # Scaled here, so `_forward` is shared with validation. By the window's own size: the last
+                # window of a run may be shorter than `gradient_accumulation_steps`.
+                scaled_loss = self._scale_loss(loss, window)
+                self.callback_handler("on_backward_start", loss)
+                self._backward(scaled_loss)
+                self.step_loss = self._accumulate_loss(self.step_loss, scaled_loss)
+                self.callback_handler("on_backward_end", loss)
+                self._clean_graph_state()
+
+                if index + 1 - window_start == window:
+                    window_loss, self.step_loss = self.step_loss, None
+                    self.callback_handler("on_optimizer_step_start")
+                    # On the gradients of the whole window, which the hook above still sees unclipped.
+                    if self.config.max_grad_norm > 0:
+                        self._clip_gradients(self.config.max_grad_norm)
+                    self._optimizer_step()
+                    self.callback_handler("on_optimizer_step_end", window_loss)
+
+                    window_start = index + 1
+                    window = min(accumulation_steps, total_batches - window_start)
+                    self.global_step += 1
+                    # Also on the last step, so the final checkpoint carries the loss of the weights it holds.
+                    if self.validation_enabled and (
+                        self.global_step % self._validation_frequency() == 0 or self.global_step == total_steps
+                    ):
+                        self.validate()
+                    self.callback_handler("on_step_end", self.global_step)
+
+                self.callback_handler("on_train_batch_end")
+
+            if epoch is not None:
+                self.callback_handler("on_train_epoch_end")
+
+    def validate(self) -> None:
+        self._eval_mode()
+        self.callback_handler("on_validation_start")
+
+        total_loss, num_batches = None, 0
+        with self._no_grad():
+            for batch in tqdm(self.val_dataloader, desc="Validation"):
+                self.callback_handler("on_validation_batch_start", batch)
+                batch = self._prepare_batch(batch)
+                loss = self._forward(batch)
+                total_loss = self._accumulate_loss(total_loss, loss)
+                num_batches += 1
+                self.callback_handler("on_validation_batch_end", batch, loss)
+                self._clean_graph_state()
+
+        # `_check_val_data` rejected a validation split without a full batch.
+        val_loss = total_loss / num_batches
+        self.callback_handler("on_validation_end", val_loss)
+        self._train_mode()
+
+    @property
+    def validation_enabled(self) -> bool:
+        """Whether the run validates: ``metrics.validation.frequency`` is set. ``setup`` rejects a run that sets it
+        without a validation batch to run."""
+        return self.val_dataloader is not None and self._validation_frequency() > 0
+
+    def _validation_frequency(self) -> int:
+        return self.config.metrics.validation.frequency
+
+    def total_steps(self) -> int:
+        """The optimizer steps the run makes, as the stopping criterion sets them; the last one is
+        ``global_step == total_steps()``."""
+        return math.ceil(self._total_batches() / self.config.gradient_accumulation_steps)
+
+    def _total_batches(self) -> int:
+        """The batches the run trains on, as the stopping criterion sets them: ``limit`` epochs of
+        ``len(train_dataloader)`` batches, or ``limit`` optimizer steps of ``gradient_accumulation_steps`` batches.
+
+        Accumulation windows run across epoch boundaries, so no batch is left out of an optimizer step; only the
+        run's last window may be shorter, with an epoch limit.
+        """
+        stopping = self.config.stopping_criteria
+        if stopping.type == "epoch":
+            return stopping.limit * len(self.train_dataloader)
+        return stopping.limit * self.config.gradient_accumulation_steps
+
+    def _check_train_data(self) -> None:
+        """Raise if the train data has no batch: the batch stream would never yield one."""
+        if len(self.train_dataloader) == 0:
+            raise ValueError("dataset: the train split has no full batch")
+
+    def _check_val_data(self) -> None:
+        """Raise if validation is asked for but there is no validation batch to run."""
+        frequency = self._validation_frequency()
+        if frequency == 0:
+            return
+        if self.val_dataloader is None:
+            reason = "the dataset has no validation split"
+        elif len(self.val_dataloader) == 0:
+            reason = "the validation split has no full batch"
+        else:
+            return
+        raise ValueError(f"metrics.validation.frequency: it is {frequency}, but {reason}; set it to 0 to not validate")
+
+    def _batch_stream(self) -> Iterator[tuple[int, Any]]:
+        """``(epoch, batch)`` for every batch of every epoch, from epoch 0, without end; the loop takes as many as
+        ``_total_batches``.
+
+        Takes every pass over ``train_dataloader`` to yield the same batches; a subclass whose dataloader orders
+        each epoch differently overrides it.
+        """
+        for epoch in itertools.count():
+            for batch in self.train_dataloader:
+                yield epoch, batch
+
+    # ------------------------------------------------------------------ run setup
+
+    def _check_config(self) -> None:
+        """Raise if ``self.config`` can't be trained. Runs before anything is loaded or opened."""
+
+    def _seed(self) -> None:
+        random.seed(self.config.seed)
+        np.random.seed(self.config.seed)
+
+    @abstractmethod
+    def _load_dataloaders(self) -> tuple[Iterable, Optional[Iterable]]:
+        """Return ``(train_dataloader, val_dataloader)``; ``val_dataloader`` is ``None`` without validation data.
+
+        ``len(train_dataloader)`` is the batches of an epoch.
+        """
+
+    @abstractmethod
+    def _create_device_manager(self) -> Any:
+        """Open the device. The returned object's ``close()`` releases it, and must be safe to call twice."""
+
+    @abstractmethod
+    def _load_model(self) -> Any:
+        """Build the model to train, with the weights the run starts from."""
+
+    @abstractmethod
+    def _load_optimizer(self) -> Any:
+        """Build the optimizer over the model's trainable parameters."""
+
+    # ------------------------------------------------------------------ steps
+
+    @abstractmethod
+    def _prepare_batch(self, batch: Any) -> Any:
+        """Move a host batch from the dataloader to the device."""
+
+    @abstractmethod
+    def _forward(self, batch: Any) -> Any:
+        """Return the loss of one batch, unscaled. Shared by training and validation."""
+
+    def _scale_loss(self, loss: Any, divisor: int) -> Any:
+        """Scale a micro-batch loss by ``1 / divisor`` for gradient accumulation."""
+        return loss / divisor
+
+    @abstractmethod
+    def _backward(self, loss: Any) -> None:
+        pass
+
+    @abstractmethod
+    def _accumulate_loss(self, running: Any, loss: Any) -> Any:
+        """Add ``loss`` to ``running`` (``None`` for the first loss of a window), detached from the graph.
+
+        Its result is what callbacks get as ``window_loss`` and ``val_loss``, and pass to ``loss_to_float``.
+        """
+
+    def _clean_graph_state(self) -> None:
+        """Release per-batch graph state, after a training batch's backward and after each validation batch."""
+
+    @abstractmethod
+    def _clip_gradients(self, max_norm: float) -> None:
+        """Scale the gradients of the trainable weights so that their global L2 norm is at most ``max_norm``.
+
+        Runs before ``_optimizer_step``, on the gradients a window accumulated, if ``config.max_grad_norm`` is set.
+        """
+
+    @abstractmethod
+    def _optimizer_step(self) -> None:
+        """Step the optimizer and zero the gradients. The gradients are already clipped."""
+
+    @abstractmethod
+    def _zero_grad(self) -> None:
+        pass
+
+    @abstractmethod
+    def _train_mode(self) -> None:
+        pass
+
+    @abstractmethod
+    def _eval_mode(self) -> None:
+        pass
+
+    @abstractmethod
+    def _no_grad(self) -> Any:
+        """Return a context manager that disables gradient tracking."""
+
+    # ------------------------------------------------------------------ for callbacks and hosts
+
+    @abstractmethod
+    def loss_to_float(self, loss: Any) -> float:
+        """Read a loss from ``_accumulate_loss`` as a float."""
+
+    @abstractmethod
+    def parameter_counts(self) -> tuple[int, int]:
+        """Return ``(total_params, trainable_params)``."""
+
+    @abstractmethod
+    def current_learning_rate(self) -> list[float]:
+        """The LR of each optimizer, in ``config.optimizer`` order."""
+
+    @abstractmethod
+    def save_checkpoint(self, path: str, metadata: Optional[dict] = None) -> None:
+        """Save the model's weights as a directory at ``path``, replacing one that is there.
+
+        ``metadata`` (step, epoch, metrics) is stored alongside.
+        """
+
+    # ------------------------------------------------------------------ teardown
+
+    def _host_attributes(self) -> frozenset[str]:
+        """What the trainer held before its first run, such as its callbacks: kept by every ``cleanup``."""
+        return self.__dict__.setdefault("_host_attrs", frozenset(self.__dict__) | {"_host_attrs"})
+
+    def cleanup(self) -> None:
+        """Release everything the run created, so the next ``setup`` starts clean.
+
+        Safe to call more than once, and after a failure anywhere in ``setup`` or ``train``. Drops all run
+        state (what the trainer held before its first run is kept), frees it while the device is still
+        open, and closes the device last.
+        """
+        device_manager = self.__dict__.get("device_manager")
+        host_attributes = self._host_attributes()
+        try:
+            if self.logger is not None:
+                self.logger.finish()
+        finally:
+            # From a host's `finally`, the run's exception is still in flight, and its traceback keeps the
+            # failed step's frames alive, and with them device tensors.
+            exception = sys.exc_info()[1]
+            if exception is not None:
+                traceback.clear_frames(exception.__traceback__)
+            for attr in list(self.__dict__):
+                if attr not in host_attributes:
+                    delattr(self, attr)
+            self._reset_run_state()
+            gc.collect()
+            if device_manager is not None:
+                device_manager.close()

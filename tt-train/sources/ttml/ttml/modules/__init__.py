@@ -11,7 +11,7 @@ from _ttml.modules import InferenceMode, ModuleBase, RunMode
 # Python implementations
 from .embedding import Embedding, FeatureParallelEmbedding, VocabParallelEmbedding
 from .linear import LinearLayer, ColumnParallelLinear, RowParallelLinear
-from .lora import LoraConfig, LoraLinear, LoraColumnParallelLinear, LoraRowParallelLinear, LoraModel
+from .lora import LoraBlocks, LoraConfig, LoraLinear, LoraColumnParallelLinear, LoraRowParallelLinear, LoraModel
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Buffer, Parameter, TensorMetadata
 
@@ -28,6 +28,7 @@ __all__ = [
     "Embedding",
     "FeatureParallelEmbedding",
     "LinearLayer",
+    "LoraBlocks",
     "LoraColumnParallelLinear",
     "LoraConfig",
     "LoraLinear",

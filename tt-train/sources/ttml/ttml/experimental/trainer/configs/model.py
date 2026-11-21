@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from .lora import LoraConfig
+
+
+class ModelConfig(BaseModel):
+    """The model a run trains: the pretrained model it builds and how, and what of it trains."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # The HF hub id of a model with a registered provider (``ttml.experimental.models.provider``).
+    name: str = Field(min_length=1)
+    # The LoRA adapters to train. Unset trains every weight.
+    lora: Optional[LoraConfig] = None
+    # Build the model to recompute activations in the backward pass instead of keeping them.
+    gradient_checkpointing: bool = False

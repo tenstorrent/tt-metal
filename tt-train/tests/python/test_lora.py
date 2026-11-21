@@ -19,6 +19,7 @@ Covers:
 - Full training step (forward + backward + optimizer)
 - Frozen params unchanged after training
 - Train/eval mode propagation
+- Per-block adapters on fused layers (LoraBlocks)
 
 Tests exercise both NanoGPT (nanogpt config) and Llama (nanollama config).
 """
@@ -27,6 +28,7 @@ import math
 import sys
 from pathlib import Path
 
+import ml_dtypes
 import numpy as np
 import pytest
 
@@ -35,7 +37,7 @@ import ttml
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.models.nanogpt import NanoGPTConfig, create_nanogpt
-from ttml.modules import LinearLayer, LoraConfig, LoraLinear, LoraModel, RunMode
+from ttml.modules import LinearLayer, LoraBlocks, LoraConfig, LoraLinear, LoraModel, RunMode
 
 
 # =============================================================================
@@ -785,6 +787,152 @@ class TestLoraTrainingStep:
                 any_changed = True
                 break
         assert any_changed, "At least some LoRA params should change after training"
+
+
+# =============================================================================
+# Per-block LoRA on fused layers (LoraBlocks)
+# =============================================================================
+
+# The q, k and v rows of toy_llama_config's qkv_linear: 2 query heads and 1 kv head, of 32.
+QKV_ROWS = (64, 32, 32)
+Q_AND_V = LoraBlocks(rows=QKV_ROWS, adapted=(True, False, True))
+
+
+def _block_rows(blocks: LoraBlocks) -> list[slice]:
+    """The rows of each block of a fused layer."""
+    ends = np.cumsum(blocks.rows)
+    return [slice(end - rows, end) for end, rows in zip(ends, blocks.rows)]
+
+
+def _read_2d(tensor) -> np.ndarray:
+    values = tensor.to_numpy(ttnn.DataType.FLOAT32)
+    return values.reshape(values.shape[-2:])
+
+
+def _bf16_values(rng, shape) -> np.ndarray:
+    """Random float32 values that bf16 holds exactly, so the device sees the same inputs as numpy."""
+    return rng.standard_normal(shape).astype(ml_dtypes.bfloat16).astype(np.float32)
+
+
+def _q_and_v_llama(config) -> LoraModel:
+    lora_config = LoraConfig(
+        rank=4, alpha=8.0, target_modules=["qkv_linear", "out_linear"], target_blocks={"qkv_linear": Q_AND_V}
+    )
+    return LoraModel(Llama(config), lora_config)
+
+
+class TestLoraBlocks:
+    def test_needs_a_flag_per_block(self, expect_error):
+        with expect_error(ValueError, "3 blocks of rows, 2 adapted flags"):
+            LoraBlocks(rows=QKV_ROWS, adapted=(True, False))
+
+    def test_needs_an_adapted_block(self, expect_error):
+        with expect_error(ValueError, "no block is adapted"):
+            LoraBlocks(rows=QKV_ROWS, adapted=(False, False, False))
+
+    def test_the_blocks_must_cover_the_layer(self, expect_error):
+        with expect_error(ValueError, "LoraBlocks of 128 rows for a layer of 96"):
+            LoraLinear(LinearLayer(64, 96), LoraConfig(rank=4), Q_AND_V)
+
+    def test_each_adapted_block_gets_an_adapter_of_its_own(self):
+        rank = 4
+        layer = LoraLinear(LinearLayer(64, sum(QKV_ROWS)), LoraConfig(rank=rank), Q_AND_V)
+
+        assert tuple(layer.lora_A.tensor.shape()) == (1, 1, 2 * rank, 64), "one A per adapted block, stacked"
+        assert tuple(layer.lora_B.tensor.shape()) == (1, 1, sum(QKV_ROWS), rank)
+        np.testing.assert_array_equal(_read_2d(layer.lora_expand.tensor), np.tile(np.eye(rank), (2, 1)))
+        q, _, v = _block_rows(Q_AND_V)
+        mask = np.zeros((sum(QKV_ROWS), 2 * rank))
+        mask[q, :rank] = 1.0
+        mask[v, rank:] = 1.0
+        np.testing.assert_array_equal(_read_2d(layer.lora_mask.tensor), mask)
+
+    def test_the_layout_constants_are_not_parameters(self):
+        """They'd otherwise be trained, and saved with the adapters."""
+        layer = LoraLinear(LinearLayer(64, sum(QKV_ROWS)), LoraConfig(rank=4), Q_AND_V)
+        names = {name.rsplit("/", 1)[-1] for name in layer.parameters()}
+        assert names == {"weight", "bias", "lora_A", "lora_B"}
+        assert not layer.lora_expand.tensor.get_requires_grad()
+        assert not layer.lora_mask.tensor.get_requires_grad()
+
+    def test_each_block_sees_only_its_own_adapter(self):
+        """Block i's rows get ``B_i @ A_i @ x``, and the rows of a block that isn't adapted get no update, whatever
+        lora_B holds there."""
+        rank, in_features, out_features, tokens = 4, 64, sum(QKV_ROWS), 32
+        layer = LoraLinear(LinearLayer(in_features, out_features, has_bias=False), LoraConfig(rank=rank), Q_AND_V)
+        rng = np.random.default_rng(0)
+        a = _bf16_values(rng, (2 * rank, in_features))
+        # The k rows are not zero, as no training would leave them, so masking them out shows.
+        b = _bf16_values(rng, (out_features, rank))
+        x = _bf16_values(rng, (1, 1, tokens, in_features))
+        # A zero base weight leaves the output to the update alone.
+        ttml.autograd.assign_numpy(layer.weight.tensor, np.zeros((out_features, in_features), np.float32))
+        ttml.autograd.assign_numpy(layer.lora_A.tensor, a)
+        ttml.autograd.assign_numpy(layer.lora_B.tensor, b)
+        layer.eval()
+
+        output = layer(ttml.autograd.Tensor.from_numpy(x, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16))
+        got = _read_2d(output)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+
+        q, k, v = _block_rows(Q_AND_V)
+        h = x.reshape(tokens, in_features) @ a.T
+        expected = np.zeros((tokens, out_features), np.float32)
+        expected[:, q] = layer.scaling * h[:, :rank] @ b[q].T
+        expected[:, v] = layer.scaling * h[:, rank:] @ b[v].T
+        assert not got[:, k].any(), "the rows of k, which has no adapter, were updated"
+        np.testing.assert_allclose(got, expected, rtol=0.05, atol=0.02 * np.abs(expected).max())
+
+    def test_target_blocks_pick_the_layers_they_apply_to(self, toy_llama_config):
+        lora_model = _q_and_v_llama(toy_llama_config)
+        for block in lora_model.model.blocks:
+            qkv, out = block.attention.qkv_linear, block.attention.out_linear
+            assert qkv.blocks == Q_AND_V and tuple(qkv.lora_A.tensor.shape()) == (1, 1, 8, qkv.in_features)
+            assert out.blocks is None and tuple(out.lora_A.tensor.shape()) == (1, 1, 4, out.in_features)
+
+    def test_the_layers_of_a_model_share_the_layout_constants(self, toy_llama_config):
+        first, second = (block.attention.qkv_linear for block in _q_and_v_llama(toy_llama_config).model.blocks)
+        assert first.lora_mask.tensor is second.lora_mask.tensor
+        assert first.lora_expand.tensor is second.lora_expand.tensor
+
+    def test_rejects_target_blocks_that_match_no_adapted_layer(self, toy_llama_config, expect_error):
+        lora_config = LoraConfig(rank=4, target_modules=["qkv_linear"], target_blocks={"w_gate_up": Q_AND_V})
+        with expect_error(ValueError, r"target_blocks pattern\(s\) matched no layer .*w_gate_up"):
+            LoraModel(Llama(toy_llama_config), lora_config)
+
+    def test_the_lora_b_rows_of_a_block_that_is_not_adapted_stay_zero(self, toy_llama_config):
+        """k gets no gradient, so its rows of lora_B keep their initial zeros through training, while q's and v's
+        train."""
+        lora_model = _q_and_v_llama(toy_llama_config)
+        lora_model.train()
+        optimizer = ttml.optimizers.AdamW(
+            lora_model.parameters(), ttml.optimizers.AdamWConfig.make(0.01, 0.9, 0.999, 1e-8, 0.01)
+        )
+        batch_size, seq_len = 2, toy_llama_config.max_position_embeddings
+        rng = np.random.default_rng(0)
+        tokens = rng.integers(0, toy_llama_config.vocab_size, (batch_size, 1, 1, seq_len)).astype(np.uint32)
+        targets = rng.integers(0, toy_llama_config.vocab_size, (batch_size, seq_len)).astype(np.uint32)
+        q, k, v = _block_rows(Q_AND_V)
+
+        for _ in range(2):
+            optimizer.zero_grad()
+            logits = lora_model(
+                ttml.autograd.Tensor.from_numpy(tokens, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32), None
+            )
+            target_tensor = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+            loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
+            loss.backward(False)
+            for i, block in enumerate(lora_model.model.blocks):
+                grad = _read_2d(block.attention.qkv_linear.lora_B.tensor.get_grad_tensor())
+                assert not grad[k].any(), f"block {i}: the k rows of lora_B got a gradient"
+                assert grad[q].any() and grad[v].any(), f"block {i}: the q or v rows of lora_B got no gradient"
+            ttml.autograd.AutoContext.get_instance().reset_graph()
+            optimizer.step()
+
+        for i, block in enumerate(lora_model.model.blocks):
+            lora_b = _read_2d(block.attention.qkv_linear.lora_B.tensor)
+            assert not lora_b[k].any(), f"block {i}: the k rows of lora_B moved off zero"
+            assert lora_b[q].any() and lora_b[v].any(), f"block {i}: the q or v rows of lora_B did not train"
 
 
 # =============================================================================
