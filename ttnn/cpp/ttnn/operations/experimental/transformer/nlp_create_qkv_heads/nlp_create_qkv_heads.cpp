@@ -232,6 +232,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads(
             kv_tied,
             memory_config);
     }
+    TT_FATAL(
+        head_dim % tt::constants::TILE_WIDTH == 0,
+        "nlp_create_qkv_heads requires head_dim to be a multiple of {}, got {}",
+        tt::constants::TILE_WIDTH,
+        head_dim);
 
     return ttnn::prim::nlp_create_qkv_heads(
         input_tensor_q,
