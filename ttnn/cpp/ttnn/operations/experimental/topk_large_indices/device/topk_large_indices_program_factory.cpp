@@ -8,7 +8,6 @@
 
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -95,8 +94,7 @@ void set_runtime_args(
         runtime_args.search_len;
     // The row assignment depends on the row count and, through the column split, on the searched chunk count. A
     // two-level program picks its mode on device, so both modes share an assignment cut from the physical width.
-    const uint32_t assignment_len =
-        shared.two_level ? runtime_args.input_row_bytes / input.element_size() : runtime_args.search_len;
+    const uint32_t assignment_len = shared.two_level ? input.logical_shape()[-1] : runtime_args.search_len;
     const uint32_t num_chunks = tt::div_up(assignment_len, shared.llk_k);
     if (shared.num_rows == runtime_args.num_rows && shared.num_chunks == num_chunks) {
         return;
@@ -117,15 +115,25 @@ void set_runtime_args(
             assignment.core,
             shared.cores[i],
             i);
-        if (!shared.row_split && !shared.two_level) {
-            tt::tt_metal::SetRuntimeArgs(
-                program, shared.reader_kernel_id, assignment.core, {assignment.start_row, assignment.num_rows});
+        if (!shared.row_split) {
+            // Without row_split the kernels read no split slots. A two-level reader keeps them (zero), since its
+            // core index follows them.
+            if (shared.two_level) {
+                tt::tt_metal::SetRuntimeArgs(
+                    program,
+                    shared.reader_kernel_id,
+                    assignment.core,
+                    {assignment.start_row, assignment.num_rows, 0, 0, 0, i});
+            } else {
+                tt::tt_metal::SetRuntimeArgs(
+                    program, shared.reader_kernel_id, assignment.core, {assignment.start_row, assignment.num_rows});
+            }
             tt::tt_metal::SetRuntimeArgs(program, shared.compute_kernel_id, assignment.core, {assignment.num_rows});
             tt::tt_metal::SetRuntimeArgs(
                 program, shared.writer_kernel_id, assignment.core, {assignment.start_row, assignment.num_rows});
             continue;
         }
-        // A two-level program always takes the split layout (zero without a split row), then its own slots.
+        // A two-level reader adds its own slots after the split layout.
         const uint32_t has_split = assignment.has_split ? 1u : 0u;
         const uint32_t second_half = assignment.second_half ? 1u : 0u;
         const auto partner = assignment.has_split
@@ -189,7 +197,8 @@ void set_two_level_common_args(
     reader_args[topk_common_args::two_level_num_input_rows] = num_rows;
     reader_args[topk_common_args::two_level_num_cores] = num_cores;
     // The rows the single-level assignment halves across core pairs; stage 3 of each runs in halves on its pair.
-    const uint32_t split_rows = shared.row_split && row_split_possible(num_rows, num_cores) ? num_rows % num_cores : 0;
+    // row_split implies row_split_possible: the row count and the grid are in a two-level program's hash.
+    const uint32_t split_rows = shared.row_split ? num_rows % num_cores : 0;
     reader_args[topk_common_args::two_level_split_rows] = split_rows;
     auto& compute_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.compute_kernel_id);
     compute_args[topk_common_args::compute_two_level_num_input_rows] = num_rows;
@@ -218,8 +227,6 @@ bool two_level_enabled(const operation_attributes_t& attrs, uint32_t input_last_
            input_last_dim % two_level_block_keys == 0 && input_last_dim >= two_level_min_width &&
            input_last_dim <= two_level_max_width;
 }
-
-static_assert(two_level_max_rows_per_core == topk_two_level::max_local_rows);
 
 ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim) {
     const uint32_t llk_k = to_uint32(snap_to_llk_target_k(k));
@@ -346,6 +353,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     auto& indices = tensor_return_value;
 
     const uint32_t k = operation_attributes.k;
+    const uint32_t input_width = input.logical_shape()[-1];
+    const uint32_t num_rows = flattened_rows_excluding_last_dim(input.logical_shape());
+    const bool two_level = two_level_enabled(operation_attributes, input_width);
     const auto llk_target_k = snap_to_llk_target_k(k);
     const uint32_t llk_k = to_uint32(llk_target_k);
     const uint32_t tiles_per_sequence = (llk_k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
@@ -380,7 +390,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
 
     const uint32_t cb_depth = 2;
     // A two-level program gathers its candidate chunks block by block; deeper buffering hides the read latency.
-    const uint32_t input_cb_depth = two_level_enabled(operation_attributes, input.logical_shape()[-1]) ? 4 : cb_depth;
+    const uint32_t input_cb_depth = two_level ? 4 : cb_depth;
     const auto input_cb_config =
         tt::tt_metal::CircularBufferConfig(
             input_cb_depth * tiles_per_sequence * input_tile_bytes, {{cb_in, tt::DataFormat::Float16_b}})
@@ -403,8 +413,6 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     }
 
     const bool has_meta = tensor_args.has_valid_length_metadata();
-    const uint32_t input_width = input.logical_shape()[-1];
-    const bool two_level = two_level_enabled(operation_attributes, input_width);
     // A two-level program's compute reads its bounds and mode from the reader's mailbox in scalar mode too.
     const bool compute_mailbox = has_meta || two_level;
     if (compute_mailbox) {
@@ -415,18 +423,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
 
     // A row of one chunk cannot be halved, so its program carries no transfer code (multi_chunk_rows and
     // row_split_possible are both in the program hash).
-    const uint32_t row_split = row_split_enabled(
-                                   k,
-                                   flattened_rows_excluding_last_dim(input.logical_shape()),
-                                   input.logical_shape()[-1],
-                                   static_cast<uint32_t>(cores.size()))
-                                   ? 1u
-                                   : 0u;
-    // A two-level program with split rows and the segmented split body sorts each split row's halves of stage 3 as
-    // soon as they can run, not after the end (see topk_two_level::split_rows_first).
-    const bool early_halves = two_level_enabled(operation_attributes, input.logical_shape()[-1]) && row_split != 0 &&
-                              llk_k == to_uint32(LlkTargetK::K2048) && long_rows(k, input.logical_shape()[-1]) &&
-                              compute_body_mode(k, input.logical_shape()[-1]) == ComputeBodyMode::FusedSegmented;
+    const uint32_t row_split =
+        row_split_enabled(k, num_rows, input_width, static_cast<uint32_t>(cores.size())) ? 1u : 0u;
+    // A two-level program with split rows sorts each split row's halves of stage 3 as soon as they can run, not
+    // after the end (see topk_two_level::split_rows_first). Two-level implies k = 2048, so the K' 2048 segmented body.
+    const bool early_halves = two_level && row_split != 0 && long_rows(k, input_width);
     uint32_t credit_semaphore_id = 0;
     uint32_t data_semaphore_id = 0;
     if (row_split) {
@@ -470,7 +471,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
                 tt::tt_metal::CircularBufferConfig(pages * page_bytes, {{cb, format}}).set_page_size(cb, page_bytes);
             tt::tt_metal::CreateCircularBuffer(program, all_cores, config);
         };
-        const uint32_t table_bytes = 2048 * sizeof(uint32_t);
+        const uint32_t table_bytes = topk_two_level::selected_blocks * sizeof(uint32_t);
         // Two units, each a header page (the unit's number) and its tiles.
         create_cb(cb_stage1, 2 * (1 + stage1_batch), input_tile_bytes, tt::DataFormat::Float16_b);
         create_cb(cb_tiled, stage1_batch, input_tile_bytes, tt::DataFormat::Float16_b);
@@ -539,17 +540,14 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         {"tl_early_halves", early_halves ? 1u : 0u},
         {"tl_stage1_batch", stage1_batch},
         {"tl_block_max_input", tensor_args.block_max_tensor.has_value() ? 1u : 0u},
-        {"tl_mode_output", tensor_args.mode_output.has_value() ? 1u : 0u},
-        {"tl_page_bytes", input_tile_bytes},
-        {"tl_chunk_keys", llk_k}};
-    // The kernels compile their two-level code only under this define, so single-level binaries are unchanged.
+        {"tl_mode_output", tensor_args.mode_output.has_value() ? 1u : 0u}};
+    // The kernels compile their two-level code only under this define, so single-level binaries carry none of it.
     const std::map<std::string, std::string> two_level_defines =
         two_level ? std::map<std::string, std::string>{{"TOPK_TWO_LEVEL", "1"}} : std::map<std::string, std::string>{};
     // The split LLK's stamp offset (split-row halves stamped as their row) exists only in two-level compute builds.
-    std::map<std::string, std::string> compute_defines = two_level_defines;
-    if (two_level) {
-        compute_defines["TOPK_XL_SPLIT_STAMP_OFFSET"] = "1";
-    }
+    const std::map<std::string, std::string> compute_defines =
+        two_level ? std::map<std::string, std::string>{{"TOPK_TWO_LEVEL", "1"}, {"TOPK_XL_SPLIT_STAMP_OFFSET", "1"}}
+                  : std::map<std::string, std::string>{};
     const auto with_two_level = [&](std::unordered_map<std::string, uint32_t> named) {
         if (two_level) {
             for (const auto& [name, value] : two_level_named_args) {
@@ -592,19 +590,15 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             .defines = two_level_defines,
             .named_compile_args = with_two_level({{"row_split", row_split}})});
 
-    const auto body_mode = compute_body_mode(k, input.logical_shape()[-1]);
-    const bool rows_are_multi_chunk = multi_chunk_rows(k, input.logical_shape()[-1]);
+    const auto body_mode = compute_body_mode(k, input_width);
+    const bool rows_are_multi_chunk = multi_chunk_rows(k, input_width);
     // A two-level program runs its stages on the whole-row split body, so it always carries it.
-    const bool whole_rows_split = two_level || split_whole_rows(
-                                                   k,
-                                                   flattened_rows_excluding_last_dim(input.logical_shape()),
-                                                   input.logical_shape()[-1],
-                                                   static_cast<uint32_t>(cores.size()));
+    const bool whole_rows_split =
+        two_level || split_whole_rows(k, num_rows, input_width, static_cast<uint32_t>(cores.size()));
     // The K' 2048 segmented body holds its unfused accumulator in L1 while a later segment is split across the
     // threads: two sequences of raw 32-bit words, packed out of Dst and unpacked back. Whole rows and
     // block-aligned halves both take it, but only past one segment -- a shorter row never touches the CB.
-    const bool has_acc =
-        llk_k == to_uint32(LlkTargetK::K2048) && whole_rows_split && long_rows(k, input.logical_shape()[-1]);
+    const bool has_acc = llk_k == to_uint32(LlkTargetK::K2048) && whole_rows_split && long_rows(k, input_width);
     if (has_acc) {
         // Same shape as a survivor: two sequences of raw 32-bit words.
         const auto acc_cb_config =
@@ -636,7 +630,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             .named_compile_args = with_two_level(
                 {{"row_split", row_split},
                  {"split_whole_rows", whole_rows_split ? 1u : 0u},
-                 {"long_rows", long_rows(k, input.logical_shape()[-1]) ? 1u : 0u}})});
+                 {"long_rows", long_rows(k, input_width) ? 1u : 0u}})});
 
     std::vector<uint32_t> writer_compile_args = {
         cb_indices,
@@ -654,7 +648,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     writer_compile_args.push_back(survivor_bytes);
     std::unordered_map<std::string, uint32_t> writer_named = {{"row_split", row_split}};
     if (two_level) {
-        // Test outputs; the indices are the placeholder when absent.
+        // The phase-1 maxima output (always DRAM interleaved), then the mode test output (the indices are the
+        // placeholder when absent).
         writer_named["tl_max_out_args_offset"] = static_cast<uint32_t>(writer_compile_args.size());
         tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(writer_compile_args);
         writer_named["tl_mode_args_offset"] = static_cast<uint32_t>(writer_compile_args.size());
@@ -731,7 +726,7 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
 
     // The cache key fixes k, dtype, grid and compute body mode. Shape and valid_length
     // are runtime controls: update their common arguments when either changes, and
-    // rebuild the per-core row assignment only when the flattened row count changes.
+    // rebuild the per-core row assignment only when the flattened row count or the chunk count changes.
     if (shared.input_shape == input.logical_shape() && shared.valid_length == operation_attributes.valid_length) {
         return;
     }

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "kernels/topk_large_indices_compute_body_mode.hpp"
+#include "kernels/topk_large_indices_two_level.hpp"
 #include "topk_large_indices_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -95,14 +96,13 @@ bool split_whole_rows(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, ui
 
 // Two-level selection (see kernels/topk_large_indices_two_level.hpp). A program carries the two-level path only when
 // the caller asks for it and the physical width is in the supported range; the mode is chosen at run time.
-constexpr uint32_t two_level_block_keys = 32;
+constexpr uint32_t two_level_block_keys = topk_two_level::block_keys;
 constexpr uint32_t two_level_min_width = 65'536;
 constexpr uint32_t two_level_max_width = 2'097'152;
 // A core tracks the readiness of up to this many rows (see topk_two_level::row_owner).
-constexpr uint32_t two_level_max_rows_per_core = 4;
+constexpr uint32_t two_level_max_rows_per_core = topk_two_level::max_local_rows;
 bool two_level_enabled(const operation_attributes_t& attrs, uint32_t input_last_dim);
-// The search length from which a two-level program runs two-level by default: where two-level gets faster for 160
-// rows on p150b, on 108 and on 99 cores.
+// The search length from which a two-level program runs two-level by default.
 constexpr uint32_t two_level_default_cutover = 98'304;
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program

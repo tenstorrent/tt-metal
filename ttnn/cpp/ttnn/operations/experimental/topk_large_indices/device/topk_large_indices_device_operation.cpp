@@ -54,12 +54,13 @@ void validate_two_level_tensor(
         "topk_large_indices {} must be DRAM interleaved",
         name);
     const auto& shape = t.logical_shape();
+    const uint32_t rows = width == 1 ? 1u : flattened_rows_excluding_last_dim(input.logical_shape());
     TT_FATAL(
-        shape[-1] == width && flattened_rows_excluding_last_dim(shape) ==
-                                  (width == 1 ? 1u : flattened_rows_excluding_last_dim(input.logical_shape())),
-        "topk_large_indices {} has shape {}, expected last dimension {}",
+        shape[-1] == width && flattened_rows_excluding_last_dim(shape) == rows,
+        "topk_large_indices {} has shape {}, expected {} rows of last dimension {}",
         name,
         shape,
+        rows,
         width);
     // The kernels address rows by a packed pitch of `width` elements.
     TT_FATAL(
@@ -190,7 +191,7 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
             *attrs.block_select);
     }
     // Width-dependent, so checked on every call: a block_select program runs two-level only for these widths and
-    // is today's program otherwise.
+    // runs the single-level program otherwise.
     const bool two_level = program::two_level_enabled(attrs, n);
     if (!two_level) {
         TT_FATAL(
@@ -299,7 +300,7 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
     if (!program::two_level_enabled(attrs, input_last_dim)) {
         return base;
     }
-    // Two-level programs add their own kernels' structure; single-level keys are unchanged.
+    // Two-level programs add their own kernels' structure; single-level keys take only the base.
     return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
         base,
         *attrs.block_select,
