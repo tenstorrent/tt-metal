@@ -72,6 +72,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
     }
 
     const bool is_bfloat16 = input_tensor.dtype() == DataType::BFLOAT16;
+    const bool is_float32 = input_tensor.dtype() == DataType::FLOAT32;
     uint32_t fill_value_bits;
     if (is_bfloat16) {
         fill_value_bits = float_to_bfloat16(operation_attributes.fill);
@@ -297,7 +298,9 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
         compute_desc.defines = std::move(compute_defines);
         compute_desc.config = ComputeConfigDescriptor{
             .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
+            .fp32_dest_acc_en = is_float32,
+            // fp32 half-sync DEST holds 4 tiles; full sync keeps 8, which the chunk and page sizes assume.
+            .dst_full_sync_en = is_float32,
             .math_approx_mode = false,
         };
         return compute_desc;
