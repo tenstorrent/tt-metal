@@ -2901,3 +2901,12 @@ program builds after its own warm-up declares ``BATCH_COLD = True``: core/batch 
 resident runner's fresh request, as the determinism check) and first in its batch after the determinism check, so no
 other run's traffic warms what it must find cold. Selftest: selftest/test_cold_runs.py. Every no-rebuild PASS that ran
 in a held process after an earlier run of the same draws is suspect until re-run cold.
+
+## F298 (2026-11-21, DeepSeek-V4.1 PB.T): a test declares the positions its load must reach (BATCH_MAX_SEQ)
+The PB.T isolation tiers drive the serving runtime on the gate's accuracy load. Its warm-up (runtime.compile ->
+warm_glued_chunks) needs slots of >= ~112k positions, but the accuracy load's tables reached only 64512: target.seq
+56320 + chunk, from whichever test loads first, here the determinism check. Below 112k the warm-up raises (DS41-372).
+A model test file may now declare ``BATCH_MAX_SEQ = <int>``. core/batch.hints loads the plan's model for at least that
+(never past deploy.seq), so the determinism check, whichever unit loads first, loads it once at that length (F283's one
+load). Selftest: selftest/test_resident_gate.py::test_a_plans_model_is_loaded_for_a_declared_max_seq. Cost: RoPE tables
+of 114688 positions instead of 64512 on the accuracy load of a gate that holds such a test.

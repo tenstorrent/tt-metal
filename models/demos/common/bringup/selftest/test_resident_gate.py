@@ -388,3 +388,29 @@ def test_a_plans_model_is_loaded_for_its_furthest_declared_position(tmp_path, mo
         {"env": {"SKIP_POS": "145408,1024000,2000000"}, "args": ["models/x/tests/test_pts.py"]},  # (past deploy)
     ]
     assert B.hints(runs, spec)[B.MAX_SEQ_ENV] == str(1024000 + 5120)
+
+
+def test_a_plans_model_is_loaded_for_a_declared_max_seq(tmp_path, monkeypatch):
+    """PB.T: a test declaring BATCH_MAX_SEQ gets a load covering it (a test without position variables too), never past
+    deploy.seq; a plan without such a test gets no hint from it."""
+    from types import SimpleNamespace
+
+    for name, body in (
+        ("test_iso.py", "BATCH_SHARED = True\nBATCH_MAX_SEQ = 114688\n"),
+        ("test_plain.py", "BATCH_SHARED = True\n"),
+    ):
+        t = tmp_path / "models/x/tests" / name
+        t.parent.mkdir(parents=True, exist_ok=True)
+        t.write_text(body)
+    monkeypatch.setattr(B, "_REPO", tmp_path)
+    spec = SimpleNamespace(
+        get=lambda k, d=None: {"target.chunk": 8192, "target.seq": 56320, "deploy.seq": 1044480}.get(k, d)
+    )
+    iso = {"env": {}, "args": ["models/x/tests/test_iso.py"]}
+    plain = {"env": {}, "args": ["models/x/tests/test_plain.py"]}
+    assert B.declared_max_seq("models/x/tests/test_iso.py") == 114688
+    assert B.hints([plain, iso], spec)[B.MAX_SEQ_ENV] == "114688"
+    assert B.hints([iso], spec)[B.MAX_SEQ_ENV] == "114688"
+    assert B.hints([plain, plain], spec)[B.MAX_SEQ_ENV] == "56320"
+    small = SimpleNamespace(get=lambda k, d=None: {"target.chunk": 8192, "deploy.seq": 65536}.get(k, d))
+    assert B.MAX_SEQ_ENV not in B.hints([iso], small)

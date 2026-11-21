@@ -107,6 +107,10 @@ ITEM_MARK = re.compile(r"^BATCH_ITEM_VARS\s*=\s*\(([^)]*)\)", re.M)
 # the chunk starts it measures (comma-separated) with ``BATCH_POS_VARS = ("SKIP_POS",)``; a plan's model is loaded
 # for the furthest of them (``hints``), never past deploy.seq (where such a test stops itself)
 POS_MARK = re.compile(r"^BATCH_POS_VARS\s*=\s*\(([^)]*)\)", re.M)
+# PB.T (2026-11-21, DeepSeek-V4.1: the serving runtime's warm-up, runtime.compile, needs slots of >= 112k positions and
+# the accuracy load's tables reached 64512): a model test file names the positions its own load-time tables must reach
+# with ``BATCH_MAX_SEQ = <int>``; a plan's model is loaded for at least that (``hints``), never past deploy.seq
+SEQ_MARK = re.compile(r"^BATCH_MAX_SEQ\s*=\s*(\d+)\b", re.M)
 # F297 (2026-11-21, DeepSeek-V4.1 PB.9C: test_no_rebuild FAILED with 153 / 16 builds in a fresh process, then PASSED in 18 s
 # in the held resident process on the same code: the earlier run's programs were still cached): a test that counts
 # program builds after its own warm-up declares ``BATCH_COLD = True``; it runs in a fresh process (a cold program cache)
@@ -159,6 +163,15 @@ def declared_pos_vars(test: str, repo: Path | None = None) -> set:
     except OSError:
         return set()
     return set(re.findall(r"[\"']([A-Z0-9_]+)[\"']", m.group(1))) if m else set()
+
+
+def declared_max_seq(test: str, repo: Path | None = None) -> int:
+    """PB.T: the positions a model test file needs its load to cover (``BATCH_MAX_SEQ = <int>``; 0 = none declared)."""
+    try:
+        m = SEQ_MARK.search(((repo or _REPO) / test.split("::")[0]).read_text(errors="replace"))
+    except OSError:
+        return 0
+    return int(m.group(1)) if m else 0
 
 
 def declared_item_vars(test: str, repo: Path | None = None) -> set:
@@ -245,6 +258,8 @@ def hints(runs: list[dict], spec) -> dict:
     need = pos or starts or any(t.endswith("test_positions.py") for t in tests)
     chunk = int(spec.get("target.chunk")) if need else 0  # (only then: FIX.25's determinism run needs no hint)
     seqs = [p + chunk for p in pos] + [p + chunk for p in starts if deploy is None or p + chunk <= deploy]
+    # PB.T: what a test declares its load must cover (BATCH_MAX_SEQ), at most the deployment's length
+    seqs += [n for r in runs for t in r["args"] for n in [declared_max_seq(t)] if n and (deploy is None or n <= deploy)]
     if len(runs) > 1:  # (a process of one run loads what it needs)
         seqs += [int(spec.get("target.seq", 0) or 0)]
         seqs += [int(r.get("seq", 0) or 0) for key in ("ladder", "scaled.ladder") for r in (spec.get(key) or [])]
