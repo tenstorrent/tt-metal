@@ -399,6 +399,10 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferBoundLater) {
                 .buffer_index = 0, .data_format = cb_config.data_format, .page_size = cb_config.page_size}}},
             .globally_allocated_bound_later = true,
         };
+        EXPECT_NE(
+            CircularBufferConfig(descriptor),
+            CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                .set_page_size(0, cb_config.page_size));
         auto cb = CreateCircularBuffer(program_, core0, CircularBufferConfig(descriptor));
 
         auto l1_buffer = distributed::MeshBuffer::create(

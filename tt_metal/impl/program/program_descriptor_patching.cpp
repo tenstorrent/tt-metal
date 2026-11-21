@@ -46,6 +46,13 @@ ResolvedBindings resolve_bindings(
     bool allow_inplace_output_tensor_alias) {
     ResolvedBindings result;
 
+    // A CB bound later has no buffer to bind to a tensor; bail to the slow path, which binds it from the descriptor.
+    if (std::any_of(desc.cbs.begin(), desc.cbs.end(), [](const CBDescriptor& cb) {
+            return cb.globally_allocated_bound_later && !cb.buffer && !cb.tensor;
+        })) {
+        return result;
+    }
+
     // If the same Buffer* appears more than once, every binding for that buffer maps to the
     // first occurrence via std::find below; at cache hit all of those bindings get patched with
     // current_buffers[first_slot].address().  Whether that's safe depends on WHY it aliases:

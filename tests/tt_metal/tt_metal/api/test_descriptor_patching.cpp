@@ -611,6 +611,32 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_DuplicateBuffer_Retu
     EXPECT_TRUE(resolved.cbs.empty());
 }
 
+// A CB bound later has no binding, so the fast path could not bind it on a cache hit.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbBoundLater_ReturnsEmpty) {
+    auto buf_a = MakeDramBuffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_runtime_args({0, 0}, {buf_a.get(), 42u});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2048,
+        .core_ranges = CoreRangeSet{CoreRange{{0, 0}}},
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = 0,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = 2048,
+        }}},
+        .globally_allocated_bound_later = true,
+    });
+
+    Program program{*get_mesh_device(), desc};
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get()});
+
+    EXPECT_TRUE(resolved.empty());
+}
+
 // #48928: an OUTPUT buffer that aliases an INPUT (in-place op writing back into its input) is a
 // same-buffer-by-construction alias, not the ambiguous matmul(X, X) case.  With num_input_buffers
 // marking the input/output boundary, resolve_bindings must KEEP the fast path (non-empty bindings).
