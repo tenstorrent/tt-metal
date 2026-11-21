@@ -125,14 +125,77 @@ def _check_crc(plan: KeyPlan, chunk_index: int, crc: int, path: str) -> None:
         )
 
 
+# A rank reads a chunk with one pread, and checks it against the CRC32 save recorded for it, when its destination
+# shards need at least this share of the chunk; otherwise it reads only the runs they need, which the checksum cannot
+# cover. On one host the destination shards together cover every chunk, and of two ranks one needs at least half.
+WHOLE_READ_SHARE = 0.5
+
+
+def _needed_bytes(plan: KeyPlan) -> dict[int, int]:
+    """Per chunk of the entry, the bytes this rank's destination shards need of it."""
+    needed: dict[int, int] = {}
+    for item in plan.reads:
+        needed[item.chunk] = needed.get(item.chunk, 0) + item.src.volume * plan.info.itemsize
+    return needed
+
+
+def chunk_reads(plan: LoadPlan) -> tuple[list[list], list[list]]:
+    """``(read in part, read whole although only part is needed)`` over this rank's plan, as ``[key, chunk]`` pairs.
+    A chunk split over three or more loading ranks can be read in part by every one of them, and then no rank checks
+    its CRC32; ``elect_checkers`` uses both lists to pick one reader of each such chunk to read it whole."""
+    in_part: list[list] = []
+    whole_of_part: list[list] = []
+    for kplan in plan.keys.values():
+        for chunk, needed in sorted(_needed_bytes(kplan).items()):
+            nbytes = kplan.entry.chunks[chunk].nbytes
+            if needed < WHOLE_READ_SHARE * nbytes:
+                in_part.append([kplan.entry.key, chunk])
+            elif needed < nbytes:
+                whole_of_part.append([kplan.entry.key, chunk])
+    return in_part, whole_of_part
+
+
+def elect_checkers(index: Index, reports: list[tuple[list[list], list[list]]]) -> list[list[list]]:
+    """Rank 0's pick, over every rank's ``chunk_reads``: for each chunk read only in part, by every rank that reads it,
+    the reader that reads it whole and checks its CRC32, so no chunk the load reads goes unchecked. Largest chunks
+    first, each to the reader with the fewest such bytes so far (ties to the lower rank). Returns per rank the
+    ``[key, chunk]`` pairs it reads whole."""
+    readers: dict[tuple[str, int], list[int]] = {}
+    for rank, (in_part, _) in enumerate(reports):
+        for key, chunk in in_part:
+            readers.setdefault((key, int(chunk)), []).append(rank)
+    for _, whole_of_part in reports:
+        for key, chunk in whole_of_part:
+            readers.pop((key, int(chunk)), None)  # another rank reads it whole and checks it
+
+    def size(pair: tuple[str, int]) -> int:
+        return index.entries[pair[0]].chunks[pair[1]].nbytes
+
+    extra = [0] * len(reports)
+    checkers: list[list[list]] = [[] for _ in reports]
+    for pair in sorted(readers, key=lambda p: (-size(p), p)):
+        rank = min(readers[pair], key=lambda r: (extra[r], r))
+        checkers[rank].append(list(pair))
+        extra[rank] += size(pair)
+    return checkers
+
+
 def _read_chunk(
-    fd: int, data_start: int, plan: KeyPlan, items: list[ReadItem], itemsize: int, carrier, arrays: dict, path: str
+    fd: int,
+    data_start: int,
+    plan: KeyPlan,
+    items: list[ReadItem],
+    itemsize: int,
+    carrier,
+    arrays: dict,
+    path: str,
+    whole: bool = False,
 ) -> int:
-    """The reads of one chunk: one ``pread`` of the whole chunk, sliced in memory, when the items need at least half
-    of it (on a single host the destination shards together cover every chunk), else one read per contiguous run. A
-    chunk that is its one destination shard, as in a same-world load, is read into the shard's array itself. A whole
-    chunk is checked against the CRC32 that save recorded for it; a partial read cannot be, since the checksum covers
-    the whole chunk. Returns bytes read."""
+    """The reads of one chunk: one ``pread`` of the whole chunk, sliced in memory, when the items need at least
+    ``WHOLE_READ_SHARE`` of it or ``whole`` says so (this rank was elected to check it), else one read per contiguous
+    run. A chunk that is its one destination shard, as in a same-world load, is read into the shard's array itself. A
+    whole chunk is checked against the CRC32 that save recorded for it; a partial read cannot be, since the checksum
+    covers the whole chunk. Returns bytes read."""
     record = plan.entry.chunks[items[0].chunk]
     sizes = tuple(record.box.sizes)
     dest = arrays[items[0].group]
@@ -141,7 +204,7 @@ def _read_chunk(
         _check_crc(plan, items[0].chunk, zlib.crc32(dest), path)
         return record.nbytes
     needed = sum(it.src.volume for it in items) * itemsize
-    if 2 * needed >= record.nbytes:
+    if whole or needed >= WHOLE_READ_SHARE * record.nbytes:
         raw = pread_all(fd, record.nbytes, data_start + record.data_offset)
         _check_crc(plan, items[0].chunk, zlib.crc32(raw), path)
         chunk = np.frombuffer(raw, dtype=carrier).reshape(record.box.sizes)
@@ -249,11 +312,13 @@ def _read_and_place(
     threads: int | None,
     local: set[tuple[int, ...]],
     placed: list[str],
+    check: set[tuple[str, int]],
 ) -> tuple[int, int, float, float]:
     """Read every planned key into host arrays and place the shards of the coordinates in ``local`` on the device,
-    appending each key placed to ``placed``; returns the bytes read, the number of reads and the seconds spent waiting
-    for reads and placing. A failure once a tensor was placed raises a ``CheckpointError`` that says the live state is
-    partly restored."""
+    appending each key placed to ``placed``; the ``(key, chunk)`` pairs in ``check`` are read whole and checked
+    (``elect_checkers``). Returns the bytes read, the number of reads and the seconds spent waiting for reads and
+    placing. A failure once a tensor was placed raises a ``CheckpointError`` that says the live state is partly
+    restored."""
     fds, data_start, paths = files.fds, files.data_start, files.paths
     device = mesh_device()
     bytes_read = 0
@@ -281,6 +346,7 @@ def _read_and_place(
                     carrier,
                     arrays,
                     paths[its[0].file],
+                    (kplan.entry.key, its[0].chunk) in check,
                 )
                 for its in by_chunk.values()
             ]
@@ -430,9 +496,12 @@ def load(
     def plan_and_report() -> tuple[LoadPlan, bytes]:
         plan = plan_locally()
         files.open(ckpt_dir, index, plan)  # before any rank places anything
+        in_part, whole_of_part = chunk_reads(plan)
         report = {
             "keys": sorted({kp.entry.key for kp in plan.keys.values()}),
             "members": live_group_members(optimizer) if optimizer is not None else {},
+            "in_part": in_part,
+            "whole_of_part": whole_of_part,
         }
         return plan, checked_payload(json.dumps(report).encode(), "this rank's planned keys")
 
@@ -447,11 +516,13 @@ def load(
             union_used = {key for report in reports for key in report["keys"]}
             if strict and optimizer is not None:
                 check_member_union(index.scalars, [report["members"] for report in reports])
-            return checked_payload(
-                json.dumps(unexpected_keys(index, union_used, roles)).encode(), "the unexpected keys"
-            )
+            checkers = elect_checkers(index, [(report["in_part"], report["whole_of_part"]) for report in reports])
+            verdict = {"unexpected": unexpected_keys(index, union_used, roles), "checkers": checkers}
+            return checked_payload(json.dumps(verdict).encode(), "the unexpected keys and the elected checkers")
 
-        plan.unexpected = json.loads(group.broadcast(group.phase("judging the unexpected entries", judge)))
+        verdict = json.loads(group.broadcast(group.phase("judging the unexpected entries", judge)))
+        plan.unexpected = verdict["unexpected"]
+        check = {(key, int(chunk)) for key, chunk in verdict["checkers"][group.rank]}
         if strict and plan.unexpected:
             raise UnexpectedKeyError(
                 f"{len(plan.unexpected)} checkpoint entr(ies) have no live tensor: {plan.unexpected[:5]}"
@@ -462,7 +533,8 @@ def load(
         placed: list[str] = []
         try:
             bytes_read, reads, read_s, place_s = group.phase(
-                "reading and placing the shards", lambda: _read_and_place(plan, files, by_key, threads, local, placed)
+                "reading and placing the shards",
+                lambda: _read_and_place(plan, files, by_key, threads, local, placed, check),
             )
         except CheckpointError as err:
             if placed and err.__cause__ is None:

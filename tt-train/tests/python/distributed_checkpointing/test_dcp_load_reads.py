@@ -12,12 +12,13 @@ import struct
 from types import SimpleNamespace
 
 import numpy as np
-from dcp_oracle import R, S, FakeCheckpoint, arange, assert_shards_equal, expected_shards, world
+from dcp_oracle import R, S, FakeCheckpoint, arange, assert_shards_equal, expected_shards, info, world
 
 from ttml.distributed_checkpointing import _load
 from ttml.distributed_checkpointing._errors import CheckpointError, IncompleteCheckpointError
 from ttml.distributed_checkpointing._layouts import Identity
-from ttml.distributed_checkpointing._load import _read_chunk
+from ttml.distributed_checkpointing._load import _read_chunk, chunk_reads, elect_checkers
+from ttml.distributed_checkpointing._planner import create_load_plan
 from ttml.distributed_checkpointing._safetensors import ITEMSIZE, create_file
 
 TP2_COLS = world([R(), S(3)], (1, 2))  # a row-parallel weight: columns split over two devices
@@ -46,6 +47,60 @@ def _by_chunk(kplan):
     for read in kplan.reads:
         groups.setdefault(read.chunk, []).append(read)
     return groups
+
+
+def _rank_plans(ckpt, loaded, coords):
+    """One load plan per rank, each rank holding one of ``coords``, as a multi-rank load plans."""
+    return [create_load_plan(ckpt.index, [info("w", loaded, SHAPE, Identity())], local_coords={c}) for c in coords]
+
+
+def test_a_chunk_split_over_four_ranks_is_read_whole_and_checked_by_one_of_them(tmp_path, expect_error):
+    """Two column-half chunks loaded as four row quarters, one per rank: every rank needs a quarter of each chunk and
+    reads it in part, which the chunk's CRC32 cannot cover. One reader of each chunk is elected to read it whole and
+    check it, the two chunks going to different ranks; a flipped byte then fails that rank's read."""
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (arange(SHAPE), TP2_COLS, Identity())})
+    coords = [(r, 0) for r in range(4)]
+    plans = _rank_plans(ckpt, FSDP4_ROWS, coords)
+    reports = [chunk_reads(plan) for plan in plans]
+    assert all(r == ([["w", 0], ["w", 1]], []) for r in reports), "every rank reads both chunks in part"
+    checkers = elect_checkers(ckpt.index, reports)
+    assert sorted(pair for pairs in checkers for pair in pairs) == [["w", 0], ["w", 1]], "each chunk once"
+    assert sum(1 for pairs in checkers if pairs) == 2, "the two chunks go to two ranks"
+
+    record = ckpt.index.entries["w"].chunks[0]
+    ckpt.files[record.file][record.data_offset + record.nbytes - 1] ^= 0xFF
+    fds = {}
+    for index, buf in ckpt.files.items():
+        path = tmp_path / f"file{index}"
+        path.write_bytes(bytes(buf))
+        fds[index] = os.open(path, os.O_RDONLY)
+    try:
+        for rank, plan in enumerate(plans):
+            kplan = plan.keys["w"]
+            arrays = {group: np.zeros(box.sizes, np.float32) for group, box in kplan.boxes.items()}
+            for chunk, items in sorted(_by_chunk(kplan).items()):
+
+                def read(whole, items=items):
+                    _read_chunk(fds[items[0].file], 0, kplan, items, ITEMSIZE["F32"], np.float32, arrays, "file", whole)
+
+                if chunk == 0 and ["w", 0] in checkers[rank]:
+                    with expect_error(CheckpointError, "chunk 0 .* fails its CRC32 check"):
+                        read(True)
+                read(False)  # read in part, the flipped byte goes unnoticed: what the election is for
+    finally:
+        for fd in fds.values():
+            os.close(fd)
+
+
+def test_a_chunk_another_rank_reads_whole_gets_no_checker():
+    """A chunk split unevenly: a rank needing at least half of it reads it whole and checks it, so the ranks reading
+    it in part are not asked to read it again."""
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (arange(SHAPE), FSDP2_ROWS, Identity())})
+    reports = [([["w", 0]], []), ([["w", 0]], []), ([], [["w", 0]])]
+    assert elect_checkers(ckpt.index, reports) == [[], [], []]
+    assert elect_checkers(ckpt.index, reports[:2]) == [[["w", 0]], []]
 
 
 def test_whole_chunk_reads_and_per_run_reads_agree(tmp_path, monkeypatch):
