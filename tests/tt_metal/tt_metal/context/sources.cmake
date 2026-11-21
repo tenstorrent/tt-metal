@@ -15,6 +15,7 @@ if(TT_UMD_BUILD_GRENDEL_JTAG)
         test_mimir_emu.cpp
         test_keraunos_emu.cpp
         test_keraunos_cce1.cpp
+        test_keraunos_api.cpp
         test_mimir_backend.cpp
     )
 endif()
