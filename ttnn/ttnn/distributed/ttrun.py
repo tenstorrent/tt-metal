@@ -1221,11 +1221,139 @@ def validate_network_interface(interface: str, verbose: bool = False) -> None:
         logger.info(f"{TT_RUN_PREFIX} Network interface '{interface}' found on local host")
 
 
+# RoCE transport (Open MPI UCX PML over RC verbs). The default source is the installed Open MPI itself:
+# dockerfile/scripts/install-openmpi.sh builds it with pml/ucx (opt-in, default pml=ob1) into
+# /opt/openmpi-<tag>-ulfm, with UCX from dockerfile/scripts/install-ucx.sh in /opt/ucx-<version>.
+# ``TT_RUN_ROCE_HOME`` / ``--roce-home`` instead name a separate install (``ompi-ucx/`` + ``ucx/`` inside it).
+ROCE_HOME_ENV = "TT_RUN_ROCE_HOME"
+UCX_PREFIX_GLOB = "/opt/ucx-*"
+ROCE_ENV_VARS = ("PATH", "LD_LIBRARY_PATH", "OMPI_MCA_pml", "UCX_TLS")
+
+
+def roce_active() -> bool:
+    """True when the UCX PML is selected in the environment (set by :func:`configure_transport` or the user)."""
+    return os.environ.get("OMPI_MCA_pml") == "ucx"
+
+
+def detect_rdma_nic(sysfs: Path = Path("/sys/class/infiniband")) -> Optional[str]:
+    """Return ``"<dev>:<port> (<link layer>)"`` for the first ACTIVE RDMA port on the local host, else ``None``."""
+    try:
+        for state_file in sorted(sysfs.glob("*/ports/*/state")):
+            if "ACTIVE" not in state_file.read_text():
+                continue
+            port_dir = state_file.parent
+            layer = (port_dir / "link_layer").read_text().strip() if (port_dir / "link_layer").exists() else "?"
+            return f"{port_dir.parent.parent.name}:{port_dir.name} ({layer})"
+    except OSError:
+        pass
+    return None
+
+
+def _ucx_lib_dir() -> Optional[Path]:
+    """Newest ``/opt/ucx-*/lib`` (where install-ucx.sh puts libucp), else ``None``."""
+    libs = sorted(Path("/").glob(UCX_PREFIX_GLOB.lstrip("/") + "/lib"))
+    return libs[-1] if libs else None
+
+
+def launcher_has_ucx_pml() -> bool:
+    """True if the Open MPI beside the launcher on PATH was built with the UCX PML (``ompi_info``)."""
+    launcher = shutil.which("mpirun-ulfm") or shutil.which("mpirun")
+    if not launcher:
+        return False
+    root = Path(launcher).resolve().parent
+    ompi_info = root / "ompi_info"
+    if not ompi_info.exists():
+        return False
+    env = dict(os.environ)
+    env["LD_LIBRARY_PATH"] = f"{root.parent / 'lib'}:{env.get('LD_LIBRARY_PATH', '')}"
+    try:
+        out = subprocess.run([str(ompi_info), "--parsable"], capture_output=True, text=True, timeout=30, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "mca:pml:ucx:" in out.stdout
+
+
+def mpi_args_request_ulfm(mpi_args: Optional[List[str]]) -> bool:
+    """True if ``mpi_args`` asks for fault tolerance (``--with-ft``); pml/ucx segfaults under ULFM."""
+    return any(a == "--with-ft" or a.startswith("--with-ft=") for a in (mpi_args or []))
+
+
+def configure_transport(transport: str, roce_home: Optional[Path] = None, mpi_args: Optional[List[str]] = None) -> str:
+    """Pick the MPI transport and export its environment. Returns ``"roce"`` or ``"tcp"``.
+
+    ``auto`` uses RoCE when the launch host has an ACTIVE RDMA port and a UCX-capable Open MPI is available: the
+    installed one (``ompi_info`` lists pml/ucx, as built by install-openmpi.sh), or a separate install named by
+    ``--roce-home`` / :data:`ROCE_HOME_ENV`. Otherwise TCP. ``roce`` fails instead of falling back. ``tcp`` keeps
+    tt-run's TCP defaults. ``--with-ft`` in ``mpi_args`` keeps TCP (ULFM is not supported over UCX). A user who
+    already exported ``OMPI_MCA_pml=ucx`` is left as is. The UCX PML has no fallback, so a rank whose UCX cannot
+    start fails in MPI_Init rather than silently using TCP.
+    """
+    if transport == "tcp":
+        logger.info(f"{TT_RUN_PREFIX} MPI transport: tcp (--transport tcp)")
+        return "tcp"
+    if roce_active():
+        logger.info(
+            f"{TT_RUN_PREFIX} MPI transport: roce (OMPI_MCA_pml=ucx already set; "
+            f"UCX_TLS={os.environ.get('UCX_TLS', 'default')})"
+        )
+        return "roce"
+
+    problems = []
+    nic = detect_rdma_nic()
+    if nic is None:
+        problems.append("no ACTIVE RDMA port in /sys/class/infiniband on the launch host")
+    if mpi_args_request_ulfm(mpi_args):
+        problems.append("--with-ft (ULFM) is not supported over the UCX PML")
+
+    home: Optional[Path] = roce_home or (Path(os.environ[ROCE_HOME_ENV]) if os.environ.get(ROCE_HOME_ENV) else None)
+    if home is not None:
+        if not any((home / "ompi-ucx" / "bin" / n).exists() for n in ("mpirun-ulfm", "mpirun")):
+            problems.append(f"{home}/ompi-ucx/bin has no mpirun")
+    elif nic is not None and not launcher_has_ucx_pml():  # ompi_info only runs when a port exists
+        problems.append(
+            f"the installed Open MPI has no pml/ucx (build it with dockerfile/scripts/install-openmpi.sh, "
+            f"or set {ROCE_HOME_ENV} / --roce-home)"
+        )
+
+    if problems:
+        if transport == "roce":
+            raise click.ClickException(f"--transport roce: {'; '.join(problems)}.")
+        logger.info(f"{TT_RUN_PREFIX} MPI transport: tcp (RoCE not available: {'; '.join(problems)})")
+        return "tcp"
+
+    if home is not None:
+        os.environ["PATH"] = f"{home}/ompi-ucx/bin:{os.environ.get('PATH', '')}"
+        libs = [f"{home}/ucx/lib", f"{home}/ompi-ucx/lib"]
+        source = f"install {home}"
+    else:
+        ucx_lib = _ucx_lib_dir()
+        libs = [str(ucx_lib)] if ucx_lib else []
+        source = f"installed Open MPI (UCX libs {ucx_lib or 'from the system path'})"
+    if libs:
+        os.environ["LD_LIBRARY_PATH"] = ":".join(libs + [os.environ.get("LD_LIBRARY_PATH", "")])
+    os.environ["OMPI_MCA_pml"] = "ucx"
+    os.environ.setdefault("UCX_TLS", "rc,sm,self")
+    logger.info(f"{TT_RUN_PREFIX} MPI transport: roce (port {nic}, {source}, UCX_TLS={os.environ['UCX_TLS']})")
+    return "roce"
+
+
+def roce_mpi_args() -> List[str]:
+    """``-x`` forwards so every rank loads the same MPI and UCX libraries and selects the UCX PML."""
+    args: List[str] = []
+    for var in ROCE_ENV_VARS:
+        if var in os.environ:
+            args.extend(["-x", var])
+    return args
+
+
 def default_multihost_mpi_args(tcp_interface: Optional[str]) -> List[str]:
     """OpenMPI MCA arguments for multi-host TCP (used by Phase 1 and legacy flow unless --bare).
 
     When ``tcp_interface`` is set, uses ``btl_tcp_if_include``; otherwise excludes ``docker0,lo``.
+    With RoCE active (:func:`roce_active`) the BTL arguments are dropped: ``pml=ucx`` bypasses the BTL layer.
     """
+    if roce_active():
+        return roce_mpi_args()
     if tcp_interface:
         return [
             "--mca",
@@ -2588,6 +2716,11 @@ def legacy_flow(
         # process discovery issues if selected. For specific interface control,
         # use --tcp-interface.
         multihost_args = []
+        if roce_active():
+            # UCX PML: no BTL / TCP interface args; forward the RoCE environment to the ranks.
+            multihost_args.extend(roce_mpi_args())
+            tcp_interface = None
+            user_has_btl_setting = user_has_tcp_include = user_has_tcp_exclude = True
         if not user_has_btl_setting:
             multihost_args.extend(["--mca", "btl", "self,tcp"])
 
@@ -3125,6 +3258,21 @@ def new_mode_flow(
     help="Network interface for MPI TCP communication (e.g., 'eth0', 'cnx1'). Uses btl_tcp_if_include instead of default exclusions.",
 )
 @click.option(
+    "--transport",
+    type=click.Choice(["auto", "roce", "tcp"]),
+    default="auto",
+    help="MPI transport between hosts. 'auto' (default) uses RoCE (Open MPI UCX PML over RC verbs) when the launch "
+    "host has an ACTIVE RDMA port and a UCX-capable Open MPI is available, else TCP; 'roce' fails if it cannot; "
+    "'tcp' keeps the TCP defaults. Ignored with --bare.",
+)
+@click.option(
+    "--roce-home",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=f"Directory of a separate RoCE Open MPI install (holds ompi-ucx/ and ucx/). Default: ${ROCE_HOME_ENV}; "
+    "if unset, the installed Open MPI is used when it was built with the UCX PML.",
+)
+@click.option(
     "--rankfile-syntax",
     type=click.Choice(["auto", "rankfile", "map-by", "mca"]),
     default="auto",
@@ -3171,6 +3319,8 @@ def main(
     skip_mgd_check: bool,
     bare: bool,
     tcp_interface: Optional[str],
+    transport: str,
+    roce_home: Optional[Path],
     rankfile_syntax: str,
     force_rediscovery: bool,
     tracy_args: Optional[str],
@@ -3201,6 +3351,10 @@ def main(
     if not verbose:
         logger.remove()
         logger.add(sys.stderr, level="INFO")
+
+    # Before any launcher lookup: the RoCE Open MPI must be first on PATH.
+    if not bare:
+        configure_transport(transport, roce_home, mpi_args)
 
     if rank_binding is not None and rank_bindings_mapping is not None:
         raise click.ClickException("Specify at most one of --rank-binding and --rank-bindings-mapping (not both).")

@@ -1333,3 +1333,109 @@ class TestRankFailurePropagation:
     def test_all_ranks_succeed_passes(self, runner, sample_rank_binding_yaml):
         result = self._run(runner, sample_rank_binding_yaml, "pass")
         assert result.exit_code == 0, result.output
+
+
+class TestRoceTransport:
+    """``configure_transport``: RoCE (Open MPI UCX PML) is chosen only when the NIC and a UCX-capable MPI exist."""
+
+    ENV_VARS = ("OMPI_MCA_pml", "UCX_TLS", "TT_RUN_ROCE_HOME")
+
+    @pytest.fixture(autouse=True)
+    def clean_env(self, monkeypatch):
+        for var in self.ENV_VARS:
+            # setenv then delenv: registers the variable so a value set by configure_transport is undone.
+            monkeypatch.setenv(var, "")
+            monkeypatch.delenv(var)
+        monkeypatch.setenv("PATH", "/usr/bin")
+        monkeypatch.setenv("LD_LIBRARY_PATH", "")
+
+    @staticmethod
+    def _fake_roce_home(tmp_path):
+        mpirun = tmp_path / "ompi-ucx" / "bin" / "mpirun"
+        mpirun.parent.mkdir(parents=True)
+        mpirun.touch()
+        return tmp_path
+
+    def test_tcp_forced_leaves_environment_alone(self):
+        from ttnn.distributed import ttrun
+
+        assert ttrun.configure_transport("tcp") == "tcp"
+        assert not ttrun.roce_active()
+        assert "btl" in ttrun.default_multihost_mpi_args(None)
+
+    def test_auto_without_nic_uses_tcp(self, tmp_path):
+        from ttnn.distributed import ttrun
+
+        home = self._fake_roce_home(tmp_path)
+        with patch.object(ttrun, "detect_rdma_nic", return_value=None):
+            assert ttrun.configure_transport("auto", home) == "tcp"
+        assert not ttrun.roce_active()
+
+    def test_auto_without_ucx_mpi_uses_tcp(self):
+        from ttnn.distributed import ttrun
+
+        with patch.object(ttrun, "detect_rdma_nic", return_value="mlx5_0:1 (Ethernet)"), patch.object(
+            ttrun, "launcher_has_ucx_pml", return_value=False
+        ):
+            assert ttrun.configure_transport("auto") == "tcp"
+
+    def test_roce_forced_errors_when_unavailable(self, expect_error):
+        import click
+        from ttnn.distributed import ttrun
+
+        with patch.object(ttrun, "detect_rdma_nic", return_value=None), patch.object(
+            ttrun, "launcher_has_ucx_pml", return_value=False
+        ):
+            with expect_error(click.ClickException, "no ACTIVE RDMA port"):
+                ttrun.configure_transport("roce")
+
+    def test_auto_with_nic_and_roce_home_enables_roce(self, tmp_path):
+        from ttnn.distributed import ttrun
+
+        home = self._fake_roce_home(tmp_path)
+        with patch.object(ttrun, "detect_rdma_nic", return_value="mlx5_0:1 (Ethernet)"):
+            assert ttrun.configure_transport("auto", home) == "roce"
+        assert ttrun.roce_active()
+        assert os.environ["PATH"].startswith(f"{home}/ompi-ucx/bin:")
+        assert os.environ["UCX_TLS"] == "rc,sm,self"
+        args = ttrun.default_multihost_mpi_args(None)
+        assert "btl" not in args
+        assert args == ["-x", "PATH", "-x", "LD_LIBRARY_PATH", "-x", "OMPI_MCA_pml", "-x", "UCX_TLS"]
+
+    def test_auto_uses_installed_mpi_with_ucx_pml(self):
+        from ttnn.distributed import ttrun
+
+        with patch.object(ttrun, "detect_rdma_nic", return_value="mlx5_0:1 (Ethernet)"), patch.object(
+            ttrun, "launcher_has_ucx_pml", return_value=True
+        ):
+            assert ttrun.configure_transport("auto") == "roce"
+        assert os.environ["OMPI_MCA_pml"] == "ucx"
+
+    def test_with_ft_keeps_tcp_and_errors_when_forced(self, expect_error):
+        import click
+        from ttnn.distributed import ttrun
+
+        with patch.object(ttrun, "detect_rdma_nic", return_value="mlx5_0:1 (Ethernet)"), patch.object(
+            ttrun, "launcher_has_ucx_pml", return_value=True
+        ):
+            assert ttrun.configure_transport("auto", None, ["--with-ft", "ulfm"]) == "tcp"
+            with expect_error(click.ClickException, "ULFM"):
+                ttrun.configure_transport("roce", None, ["--with-ft", "ulfm"])
+
+    def test_user_exported_ucx_pml_is_respected(self, monkeypatch):
+        from ttnn.distributed import ttrun
+
+        monkeypatch.setenv("OMPI_MCA_pml", "ucx")
+        assert ttrun.configure_transport("auto") == "roce"
+        assert ttrun.roce_active()
+
+    def test_detect_rdma_nic_reads_sysfs(self, tmp_path):
+        from ttnn.distributed import ttrun
+
+        port = tmp_path / "mlx5_0" / "ports" / "1"
+        port.mkdir(parents=True)
+        (port / "state").write_text("4: ACTIVE\n")
+        (port / "link_layer").write_text("Ethernet\n")
+        assert ttrun.detect_rdma_nic(tmp_path) == "mlx5_0:1 (Ethernet)"
+        (port / "state").write_text("1: DOWN\n")
+        assert ttrun.detect_rdma_nic(tmp_path) is None
