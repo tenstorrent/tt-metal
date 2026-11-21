@@ -479,7 +479,10 @@
 <li><p><cite>FastLut</cite>: 6-segment piecewise-linear lookup table. Fastest and least accurate; over the
 normal BF16 range the absolute error reaches 0.024 near zero, and every input at or below
 -3 returns exactly 0.</p></li>
-<li><p><cite>Tanh</cite>: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))) evaluated in FP32.</p></li>
+<li><p><cite>Tanh</cite>: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))), evaluated in FP32 on Wormhole and with FP32
+DEST accumulation. On Blackhole with BF16 DEST a fitted BF16 kernel computes it, below 1 BF16 ULP
+of the exact value except 0 at inputs at or below -10.0625 and results within 2^-12 above the
+smallest normal, so Wormhole and Blackhole give different bits there.</p></li>
 </ul>
 </span></p></li>
 </ul>

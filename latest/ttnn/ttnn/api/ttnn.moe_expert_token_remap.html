@@ -375,39 +375,105 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.moe_expert_token_remap">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">moe_expert_token_remap</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">topk_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">expert_mapping_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">expert_metadata_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_mapping_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_reduced_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reduction_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">Tuple</span></span></span><a class="headerlink" href="#ttnn.moe_expert_token_remap" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">moe_expert_token_remap</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">topk_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">expert_mapping_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">expert_metadata_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">optional_output_mapping_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">optional_output_reduced_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reduction_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">16</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn.Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#ttnn.moe_expert_token_remap" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Remap MoE CCL Metadata from global experts to local device experts</p>
+<p>Remaps MoE routing weights from all experts to the experts of each device. A device’s local experts are the
+experts that <cite>expert_mapping_tensor</cite> places on it, in increasing index order. For each token, the first output
+holds the <cite>topk_tensor</cite> weight of each local expert that the token selects in <cite>expert_metadata_tensor</cite>, and 0
+for the other local experts. The second output flags, for each group of <cite>reduction_size</cite> consecutive tokens,
+the local experts that a token of the group selects. Tokens are in <code class="docutils literal notranslate"><span class="pre">(batch,</span> <span class="pre">seq)</span></code> row-major order.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>topk_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">tensor of MoE topk scores, <cite>[devices/devices, batch, seq, experts]</cite></span></p></li>
-<li><p><span class="tt-api-param-name"><strong>expert_mapping_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">tensor that maps MoE experts to devices, <cite>[1, 1, experts, devices]</cite></span></p></li>
-<li><p><span class="tt-api-param-name"><strong>expert_metadata_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">tensor that maps tokens to global experts <cite>[devices/devices, batch, seq, select_experts_k]`</cite></span></p></li>
+<li><p><span class="tt-api-param-name"><strong>topk_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the routing weights, of shape <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">batch,</span> <span class="pre">seq,</span> <span class="pre">experts]</span></code> on each device: a weight for every expert, for each token.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>expert_mapping_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the placement of experts on devices, of shape <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">1,</span> <span class="pre">experts,</span> <span class="pre">devices]</span></code>, where <code class="docutils literal notranslate"><span class="pre">devices</span></code> is the number of devices in the mesh. Element <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">0,</span> <span class="pre">e,</span> <span class="pre">d]</span></code> is 1 when expert <code class="docutils literal notranslate"><span class="pre">e</span></code> is on device <code class="docutils literal notranslate"><span class="pre">d</span></code>, counting devices in row-major mesh order, and 0 otherwise. Each device must hold <code class="docutils literal notranslate"><span class="pre">experts</span> <span class="pre">/</span> <span class="pre">devices</span></code> experts, so on a single device every element is 1.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>expert_metadata_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the selected experts, of shape <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">batch,</span> <span class="pre">seq,</span> <span class="pre">k]</span></code> on each device: the indices of the <code class="docutils literal notranslate"><span class="pre">k</span></code> experts that each token selects.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>output_mapping_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated output mapping tensor. Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>output_reduced_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated output reduced tensor. Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>reduction_size</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">reduction chunk size. Must be positive, and must divide
-<cite>batch * seq</cite> exactly - the writer emits one reduced page per chunk and does not flush a
-partial trailing group.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration of the outputs that are not preallocated. It must be interleaved. Defaults to <cite>None</cite>, which uses DRAM.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>optional_output_mapping_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated tensor for the first output. It must have that output’s shape, dtype and layout, and be interleaved. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>optional_output_reduced_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated tensor for the second output. It must have that output’s shape, dtype and layout, and be interleaved. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>reduction_size</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The number of consecutive tokens in each group of the second output. Must be greater than 0 and divide <code class="docutils literal notranslate"><span class="pre">batch</span> <span class="pre">*</span> <span class="pre">seq</span></code>. Defaults to <cite>16</cite>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><span class="tt-api-param-name"><em>Tuple</em></span><span class="tt-api-param-desc">ttnn.Tensor: Tensor that maps batch tokens to local experts, <cite>[devices/devices, batch, seq, experts_per_device]</cite>
-ttnn.Tensor: Bool Tensor that reduces the mapping tensor by chunks of <cite>reduction_size</cite>, <cite>[devices/devices, batch*seq/reduction_size, experts_per_device]</cite></span></p>
+<p><span class="tt-api-param-name"><em>List[ttnn.Tensor]</em></span><span class="tt-api-param-desc">two ROW_MAJOR tensors on each device. The first, of shape <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">batch,</span> <span class="pre">seq,</span> <span class="pre">experts</span> <span class="pre">/</span> <span class="pre">devices]</span></code> with the dtype of <cite>topk_tensor</cite>, holds the weights of the local experts. The second, a UINT16 tensor of shape <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">1,</span> <span class="pre">batch</span> <span class="pre">*</span> <span class="pre">seq</span> <span class="pre">/</span> <span class="pre">reduction_size,</span> <span class="pre">experts</span> <span class="pre">/</span> <span class="pre">devices]</span></code>, holds in row <code class="docutils literal notranslate"><span class="pre">g</span></code> a 1 for each local expert that a token of group <code class="docutils literal notranslate"><span class="pre">g</span></code> selects and 0 for the others.</span></p>
 </dd>
 </dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported dtypes and layouts for <cite>topk_tensor</cite>:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, INT32, UINT32, UINT16</p></td>
+<td><p>ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<p>Supported dtypes and layouts for <cite>expert_mapping_tensor</cite> and <cite>expert_metadata_tensor</cite>:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>UINT16</p></td>
+<td><p>ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<p>A <cite>topk_tensor</cite> in DRAM needs <code class="docutils literal notranslate"><span class="pre">experts</span></code> times its element size to be a multiple of 64 bytes.</p>
+</div>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+</ul>
+</dd>
+</dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Routing weights of 4 tokens (batch 4, seq 1) for 32 experts</span>
+<span class="n">batch</span><span class="p">,</span> <span class="n">seq</span><span class="p">,</span> <span class="n">experts</span> <span class="o">=</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span>
+<span class="n">weights</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="n">batch</span><span class="p">,</span> <span class="n">seq</span><span class="p">,</span> <span class="n">experts</span><span class="p">))</span>
+<span class="n">topk</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">weights</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Place every expert on this single device</span>
+<span class="n">mapping</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">experts</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+<span class="n">expert_mapping</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">mapping</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">uint16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Each token selects 2 experts</span>
+<span class="n">selected</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">5</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">],</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">31</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">batch</span><span class="p">,</span> <span class="n">seq</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+<span class="n">expert_metadata</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">selected</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">uint16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Keep the weights of the selected experts, and flag the experts that each pair of tokens selects</span>
+<span class="n">local_weights</span><span class="p">,</span> <span class="n">flags</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">moe_expert_token_remap</span><span class="p">(</span><span class="n">topk</span><span class="p">,</span> <span class="n">expert_mapping</span><span class="p">,</span> <span class="n">expert_metadata</span><span class="p">,</span> <span class="n">reduction_size</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Local Weights Shape: </span><span class="si">{</span><span class="n">local_weights</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 4, 1, 32])</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Flags Shape: </span><span class="si">{</span><span class="n">flags</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 2, 32])</span>
+</pre></div>
+</div>
+</div>
 </dd>
 </dl>
 

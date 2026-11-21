@@ -353,9 +353,43 @@ MeshProgramDescriptor for explicit per-device control.</span></p></li>
 <dt class="field-even">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">Handle to the output tensor.</span></p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">Handle to the output tensor, the last entry of io_tensors. When the tensors are not all on
+the same devices, it holds only its parts on the devices of the tensor in io_tensors that is on the
+fewest devices.</span></p>
 </dd>
 </dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The output’s tensor topology is a label of how its data is placed across the mesh: its mesh placements and
+distribution shape. As for most ops, each generic_op call merges this label from the labels of all the
+tensors in io_tensors, the output’s own included, so a tensor sharded along a mesh axis usually makes the
+output sharded along it. Other tensors in io_tensors keep their labels. The label changes before the program
+is compiled and before some of generic_op’s checks, so a call that raises can still change it.</p>
+<p>After a call that raises, or a <code class="docutils literal notranslate"><span class="pre">ttnn.experimental.prepare_generic_op</span></code> call, the label may have changed but
+the program has not run, so give back the label the output had before the call with
+<code class="docutils literal notranslate"><span class="pre">output.update_tensor_topology(topology)</span></code>, which moves no data. Save that label first with
+<code class="docutils literal notranslate"><span class="pre">output.tensor_topology()</span></code>, which returns a copy.</p>
+<p>If the program places the output’s data otherwise, such as the same data on every device from a sharded
+input, or different data on each device from replicated inputs, fix the label the same way after each call
+that runs it. When every tensor in io_tensors is on every device of the mesh, build the label that ttnn
+gives its own tensors with that placement, from the output’s devices:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">coords</span> <span class="o">=</span> <span class="n">output</span><span class="o">.</span><span class="n">tensor_topology</span><span class="p">()</span><span class="o">.</span><span class="n">mesh_coords</span><span class="p">()</span>
+<span class="n">shape</span> <span class="o">=</span> <span class="n">output</span><span class="o">.</span><span class="n">device</span><span class="p">()</span><span class="o">.</span><span class="n">shape</span>
+<span class="c1"># The same data on every device, as ttnn.allocate_tensor_on_device labels a tensor</span>
+<span class="c1"># (ttnn.from_torch gives it the 1-D form, MeshShape([len(coords)]) with one Replicate):</span>
+<span class="n">same</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TensorTopology</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="p">[</span><span class="n">ttnn</span><span class="o">.</span><span class="n">PlacementReplicate</span><span class="p">()]</span> <span class="o">*</span> <span class="n">shape</span><span class="o">.</span><span class="n">dims</span><span class="p">(),</span> <span class="n">coords</span><span class="p">)</span>
+<span class="c1"># Split along tensor dimension dim, device by device, as ttnn.shard_tensor_to_mesh_mapper does:</span>
+<span class="n">split</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TensorTopology</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">MeshShape</span><span class="p">([</span><span class="nb">len</span><span class="p">(</span><span class="n">coords</span><span class="p">)]),</span> <span class="p">[</span><span class="n">ttnn</span><span class="o">.</span><span class="n">PlacementShard</span><span class="p">(</span><span class="n">dim</span><span class="p">)],</span> <span class="n">coords</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>A label can also give each mesh axis its own placement: <code class="docutils literal notranslate"><span class="pre">shape</span></code> with one placement for each of its
+axes, as <code class="docutils literal notranslate"><span class="pre">ttnn.create_mesh_mapper</span></code> labels a tensor for a <code class="docutils literal notranslate"><span class="pre">ttnn.MeshMapperConfig</span></code> that does not
+override the mesh shape. Split each tensor dimension across one mesh axis at most: ttnn’s ops relabel any
+other axis it is split across as replicated. Tensors on part of the mesh, and data that no label
+describes, such as a partial sum on each device, are not covered here. Fix another tensor’s label the
+same way if the program changes how its data is placed.</p>
+</div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <p>Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples</p>

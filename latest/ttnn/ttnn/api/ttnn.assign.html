@@ -375,23 +375,86 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.assign">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">assign</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_a</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_b</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.assign" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">assign</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.assign" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Returns a new tensor which is a new copy of input tensor. Alternatively, copies input tensor <code class="docutils literal notranslate"><span class="pre">input_a</span></code> to <code class="docutils literal notranslate"><span class="pre">input_b</span></code> if their shapes and memory layouts match, and returns input_b tensor.</p>
-<p>Input tensor must have BFLOAT16 data type.
-Output tensor will have BFLOAT16 data type.</p>
+<p>Copies <cite>input_tensor</cite> into a new tensor with the memory configuration <cite>memory_config</cite>, or into
+<cite>output_tensor</cite> when one is given.</p>
+<p>A second overload, <code class="docutils literal notranslate"><span class="pre">ttnn.assign(input_a,</span> <span class="pre">input_b)</span></code>, copies <cite>input_a</cite> into <cite>input_b</cite> and returns <cite>input_b</cite>,
+as <code class="docutils literal notranslate"><span class="pre">ttnn.copy</span></code> does. <cite>input_b</cite> must be on the device of <cite>input_a</cite>, with the same shape and layout, and it
+sets the output’s dtype and memory configuration.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
+<p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor, on device.</span></p>
+</dd>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Tensor assign is applied to. Tensor of shape [W, Z, Y, X]. Used by the overload that takes <code class="docutils literal notranslate"><span class="pre">memory_config</span></code> (keyword-only, required), <code class="docutils literal notranslate"><span class="pre">dtype</span></code> and <code class="docutils literal notranslate"><span class="pre">output_tensor</span></code>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>input_a</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Tensor to copy from. Tensor of shape [W, Z, Y, X]. Used by the overload that copies <code class="docutils literal notranslate"><span class="pre">input_a</span></code> to <code class="docutils literal notranslate"><span class="pre">input_b</span></code>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>input_b</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Tensor to copy to. Tensor of shape [W, Z, Y, X]. Only if performing assign from <code class="docutils literal notranslate"><span class="pre">input_a</span></code>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em>)</span><span class="tt-api-param-desc">Memory configuration of the output.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Data type of the output. Defaults to <cite>None</cite>, which keeps the input’s dtype.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated tensor for the output, on the input’s device, with the input’s shape and layout, the memory configuration <cite>memory_config</cite> and the output’s dtype. Defaults to <cite>None</cite>, which allocates a new tensor.</span></p></li>
+</ul>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor, holding the input’s values with the input’s shape and layout. It is <cite>output_tensor</cite> when one is given.</span></p>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported dtypes and layouts:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>BFLOAT8_B, BFLOAT4_B</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<p>TILE tensors must have 32x32 tiles, with the last two dimensions padded only up to the next multiple
+of 32.</p>
+<p>An output dtype other than the input’s needs a TILE input: a <code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> or <code class="docutils literal notranslate"><span class="pre">BFLOAT4_B</span></code> input can
+give a <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code> or <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> output, and a <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> input a <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code> output when its
+values are not NaN.</p>
+<p>On Blackhole, the input and the output can also be <code class="docutils literal notranslate"><span class="pre">FP8_E4M3</span></code> tensors in ROW_MAJOR layout.</p>
+</div>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1</p></li>
+<li><p>ND sharded: L1 and DRAM</p></li>
+<li><p>The output can have a memory configuration other than the input’s</p></li>
 </ul>
 </dd>
 </dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a tensor in DRAM</span>
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Copy the tensor into a new tensor in L1</span>
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Assigned Tensor Shape: </span><span class="si">{</span><span class="n">output_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 64, 32])</span>
+</pre></div>
+</div>
+</div>
 </dd>
 </dl>
 

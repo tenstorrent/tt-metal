@@ -2078,7 +2078,7 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 <div class="tt-api-card-list docutils container">
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.assign.html#ttnn.assign" title="ttnn.assign"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.assign</span></code></a></p>
-<p class="tt-api-card-desc">Returns a new tensor which is a new copy of input tensor.</p>
+<p class="tt-api-card-desc">Copies <cite>input_tensor</cite> into a new tensor with the memory configuration <cite>memory_config</cite>, or into <cite>output_tensor</cite> when one is given.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.bcast.html#ttnn.bcast" title="ttnn.bcast"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.bcast</span></code></a></p>
@@ -2102,7 +2102,7 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.fill_implicit_tile_padding.html#ttnn.fill_implicit_tile_padding" title="ttnn.fill_implicit_tile_padding"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.fill_implicit_tile_padding</span></code></a></p>
-<p class="tt-api-card-desc">Fills the implicit padding of a tiled input tensor with the specified value.</p>
+<p class="tt-api-card-desc">Writes <cite>fill_value</cite> into the tile padding of a TILE tensor: the elements past the tensor's shape in its last two dimensions, up to the next multiple of 32.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.fill_ones_rm.html#ttnn.fill_ones_rm" title="ttnn.fill_ones_rm"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.fill_ones_rm</span></code></a></p>
@@ -2134,7 +2134,7 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.moe_expert_token_remap.html#ttnn.moe_expert_token_remap" title="ttnn.moe_expert_token_remap"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.moe_expert_token_remap</span></code></a></p>
-<p class="tt-api-card-desc">Remap MoE CCL Metadata from global experts to local device experts</p>
+<p class="tt-api-card-desc">Remaps MoE routing weights from all experts to the experts of each device.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.moe_routing_remap.html#ttnn.moe_routing_remap" title="ttnn.moe_routing_remap"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.moe_routing_remap</span></code></a></p>
