@@ -94,7 +94,7 @@ def _build() -> str:
 
 
 def live_buffers(device: ttnn.MeshDevice) -> list[tuple[int, int, int, int]]:
-    trace_type = int(ttnn.BufferType.TRACE)
+    trace_type = ttnn.BufferType.TRACE.value
     return [tuple(b) for b in ttnn.allocated_buffers(device) if b[0] != trace_type]
 
 
