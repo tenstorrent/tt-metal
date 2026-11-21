@@ -1,1 +1,2 @@
 {"event":"test_run","status":"pass","test":"probe_001","detail":"6 placements incl. RM ragged DRAM<->L1, interleaved->height","ts":"2026-11-21T09:47:41+00:00"}
+{"event":"test_run","status":"pass","test":"golden + regimes","detail":"acceptance 55/55, regimes 47/47, golden 560 passed 0 failed","ts":"2026-11-21T09:52:34+00:00"}
