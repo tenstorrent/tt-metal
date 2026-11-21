@@ -123,6 +123,30 @@ def test_host_slices_of_a_column_split_tensor(tmp_path):
         assert torch.equal(stacked, columns[c]), f"column {c}"
 
 
+def test_split_load_runs_under_the_host_weight_cache(tmp_path, monkeypatch):
+    """With TT_DIT_HOST_WEIGHT_CACHE=1 (every LTX worker) a parameter still loads through the active split
+    load, and keeps the host copy its later reloads push from."""
+    import types
+
+    from models.tt_dit.layers import module
+
+    t = torch.randn(1, 1, 64, 64).to(torch.bfloat16)
+    path = tmp_path / "t.tensorbin"
+    ttnn.dump_tensor(str(path), ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
+    monkeypatch.setattr(module, "_HOST_WEIGHT_CACHE", True)
+    calls = []
+    loader = types.SimpleNamespace(load=lambda param, p: calls.append(p) or True)
+    param = object.__new__(module.Parameter)  # no device: the split loader stands in for the upload
+    param.on_host, param._host_data, param.mesh_axes, param.durable_mesh_axes = False, None, (None,) * 4, (None,) * 4
+    token = split_load._active.set(loader)
+    try:
+        module.Parameter.load(param, path)
+    finally:
+        split_load._active.reset(token)
+    assert calls == [path]
+    assert torch.equal(ttnn.to_torch(param._host_data), t)
+
+
 def test_ltx_pipeline_loads_pass_a_ccl_manager():
     """Every load_model call in the LTX pipelines hands over a ccl_manager, so split load can run there."""
     import ast

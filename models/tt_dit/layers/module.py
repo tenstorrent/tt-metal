@@ -595,14 +595,23 @@ class Parameter:
     def save(self, path: str | Path, /) -> None:
         ttnn.dump_tensor(path, self.data, mode=ttnn.DumpTensorMode.LOCAL)
 
+    @staticmethod
+    def _load_host(path: str | Path):
+        try:
+            return ttnn.load_tensor(path, device=None)
+        except RuntimeError as err:
+            raise LoadingError(f"TT-NN error «{err}»") from err
+
     def load(self, path: str | Path, /) -> None:
         if self.is_transiently_sharded():
             self.deallocate()
-        if not (self.on_host or _HOST_WEIGHT_CACHE):
+        if not self.on_host:
             from ..utils import split_load
 
             active = split_load.current()
             if active is not None and active.load(self, Path(path)):
+                if _HOST_WEIGHT_CACHE and self._host_data is None:
+                    self._host_data = self._load_host(path)
                 return
         if _HOST_WEIGHT_CACHE and not self.on_host:
             # Materialize the host weights once and keep them; a dynamic_load reload then only
@@ -611,10 +620,7 @@ class Parameter:
             # host copy survives the eviction. memory_config is passed so the pushed tensor matches
             # the parameter's declared config (to_device's default would fail the _check_data guard).
             if self._host_data is None:
-                try:
-                    self._host_data = ttnn.load_tensor(path, device=None)
-                except RuntimeError as err:
-                    raise LoadingError(f"TT-NN error «{err}»") from err
+                self._host_data = self._load_host(path)
             self.data = ttnn.to_device(self._host_data, self.device, memory_config=self.memory_config)
             return
         try:
