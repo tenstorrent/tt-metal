@@ -5,7 +5,7 @@ even when another test file declares BRINGUP_CHUNK a per-run variable (test_no_r
 from models.demos.common.bringup.core import batch as B
 
 R = "scripts/run_safe_pytest.sh --run-all --no-precompile"
-ORACLE = "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py"
+ORACLE = "models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py"  # BATCH_SHARED, no BATCH_ITEM_VARS (on every branch)
 
 
 def test_the_added_determinism_check_keeps_the_gates_chunk(monkeypatch):
