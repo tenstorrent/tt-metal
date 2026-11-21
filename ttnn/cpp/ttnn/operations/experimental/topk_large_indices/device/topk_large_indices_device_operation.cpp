@@ -415,6 +415,36 @@ Tensor topk_large_indices(
     std::optional<tt::tt_metal::NOC> dram_read_noc,
     std::optional<uint32_t> block_select,
     std::optional<uint32_t> two_level_cutover,
+    const std::optional<Tensor>& block_max_tensor) {
+    return topk_large_indices_with_test_outputs(
+        input_tensor,
+        k,
+        valid_length,
+        valid_length_tensor,
+        valid_length_offset,
+        subdevice_id,
+        sub_core_grid,
+        valid_end_tensor,
+        dram_read_noc,
+        block_select,
+        two_level_cutover,
+        block_max_tensor,
+        std::nullopt,
+        std::nullopt);
+}
+
+Tensor topk_large_indices_with_test_outputs(
+    const Tensor& input_tensor,
+    uint32_t k,
+    std::optional<uint32_t> valid_length,
+    const std::optional<Tensor>& valid_length_tensor,
+    uint32_t valid_length_offset,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<Tensor>& valid_end_tensor,
+    std::optional<tt::tt_metal::NOC> dram_read_noc,
+    std::optional<uint32_t> block_select,
+    std::optional<uint32_t> two_level_cutover,
     const std::optional<Tensor>& block_max_tensor,
     const std::optional<Tensor>& block_max_output,
     const std::optional<Tensor>& mode_output) {

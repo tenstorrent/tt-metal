@@ -108,7 +108,7 @@ def test_two_level_matches_oracle(device, n, width, rows, columns):
     mode = _scalar(device, 0)
     blocks = (width + BLOCK - 1) // BLOCK
     maxima = _dev(torch.zeros(1, 1, rows, blocks, dtype=torch.bfloat16), device)
-    out = ttnn.experimental.topk_large_indices(
+    out = ttnn.experimental.topk_large_indices_with_test_outputs(
         _dev(torch_input.reshape(1, 1, rows, width), device),
         k=K,
         valid_length=n,
@@ -132,7 +132,7 @@ def test_two_level_generators(device, kind, n):
     torch_input = generate(kind, rows, width, 5, n=n)
     blocks = width // BLOCK
     maxima = _dev(torch.zeros(1, 1, rows, blocks, dtype=torch.bfloat16), device)
-    out = ttnn.experimental.topk_large_indices(
+    out = ttnn.experimental.topk_large_indices_with_test_outputs(
         _dev(torch_input.reshape(1, 1, rows, width), device),
         k=K,
         valid_length=n,
@@ -203,7 +203,7 @@ def test_two_level_split_row_ties_order_as_a_whole_row(device, pattern):
     results = []
     for rows in (1, 2):  # one row on two cores is a split row; two rows on two cores are whole rows
         mode = _scalar(device, 0)
-        out = ttnn.experimental.topk_large_indices(
+        out = ttnn.experimental.topk_large_indices_with_test_outputs(
             _dev(row.repeat(rows, 1).reshape(1, 1, rows, width), device),
             k=K,
             valid_length=n,
@@ -300,7 +300,7 @@ def test_supplied_block_maxima_many_rows_on_one_core(device, cutover, expected_m
     torch_input = generate("iid", rows, width, 23, n=n)
     maxima = torch.stack([block_maxima(torch_input[row], n) for row in range(rows)])
     mode = _scalar(device, 7)
-    out = ttnn.experimental.topk_large_indices(
+    out = ttnn.experimental.topk_large_indices_with_test_outputs(
         _dev(torch_input.reshape(1, 1, rows, width), device),
         k=K,
         valid_length=n,
@@ -319,7 +319,7 @@ def test_two_level_cutover_selects_mode(device, n, cutover, expected_mode):
     rows, width = 2, 262_144
     torch_input = generate("iid", rows, width, 1, n=n)
     mode = _scalar(device, 7)
-    out = ttnn.experimental.topk_large_indices(
+    out = ttnn.experimental.topk_large_indices_with_test_outputs(
         _dev(torch_input.reshape(1, 1, rows, width), device),
         k=K,
         valid_length=n,
@@ -380,7 +380,7 @@ def test_two_level_trace_crosses_cutover(device):
     mode = _scalar(device, 7)
 
     def run():
-        return ttnn.experimental.topk_large_indices(
+        return ttnn.experimental.topk_large_indices_with_test_outputs(
             tt_input,
             k=K,
             valid_length_tensor=length,
@@ -489,7 +489,9 @@ def test_two_level_falls_back_outside_its_range(device, expect_error, k, width):
     for row in range(rows):
         assert_topk_exact(torch_input[row], indices[row], width, k)
     with expect_error(RuntimeError, "need a two-level program"):
-        ttnn.experimental.topk_large_indices(tt_input, k=k, block_select=32, mode_output=_scalar(device, 0))
+        ttnn.experimental.topk_large_indices_with_test_outputs(
+            tt_input, k=k, block_select=32, mode_output=_scalar(device, 0)
+        )
 
 
 def test_two_level_rejects_other_block_sizes(device, expect_error):
@@ -529,7 +531,7 @@ def test_two_level_rejects_maxima_input_with_maxima_output(device, expect_error)
     tt_input = _dev(torch.zeros(1, 1, rows, width, dtype=torch.bfloat16), device)
     maxima = lambda: _dev(torch.zeros(1, 1, rows, width // 32, dtype=torch.bfloat16), device)
     with expect_error(RuntimeError, "with block_max_tensor none are computed"):
-        ttnn.experimental.topk_large_indices(
+        ttnn.experimental.topk_large_indices_with_test_outputs(
             tt_input, k=K, block_select=32, block_max_tensor=maxima(), block_max_output=maxima()
         )
 
@@ -542,7 +544,7 @@ def test_two_level_cores_with_several_rows(device, rows):
     width, n = 131_072, 120_000
     torch_input = generate("iid", rows, width, 17, n=n)
     mode = _scalar(device, 7)
-    out = ttnn.experimental.topk_large_indices(
+    out = ttnn.experimental.topk_large_indices_with_test_outputs(
         _dev(torch_input.reshape(1, 1, rows, width), device),
         k=K,
         valid_length=n,
@@ -574,7 +576,7 @@ def test_two_level_rejects_bad_block_max_tensor(device, expect_error):
         )
     with expect_error(RuntimeError, "mode_output must not share a buffer"):
         shared = _scalar(device, 70_000)
-        ttnn.experimental.topk_large_indices(
+        ttnn.experimental.topk_large_indices_with_test_outputs(
             tt_input, k=K, block_select=32, valid_length_tensor=shared, mode_output=shared
         )
 
@@ -589,7 +591,7 @@ def test_two_level_width_changes_on_cache_hits(device):
         blocks = width // BLOCK
         maxima = _dev(torch.zeros(1, 1, rows, blocks, dtype=torch.bfloat16), device)
         mode = _scalar(device, 0)
-        out = ttnn.experimental.topk_large_indices(
+        out = ttnn.experimental.topk_large_indices_with_test_outputs(
             _dev(torch_input.reshape(1, 1, rows, width), device),
             k=K,
             valid_length=n,
@@ -671,7 +673,7 @@ def test_two_level_default_cutover(device, columns, offset):
     results = []
     for length in ({"valid_length": n}, {"valid_length_tensor": _scalar(device, n)}):
         mode = _scalar(device, 7)
-        out = ttnn.experimental.topk_large_indices(
+        out = ttnn.experimental.topk_large_indices_with_test_outputs(
             tt_input,
             k=K,
             **length,
@@ -693,7 +695,7 @@ def test_two_level_default_long_rows(device, columns):
     torch_input = generate("iid", rows, width, 16, n=n)
     mode = _scalar(device, 0)
     maxima = _dev(torch.zeros(1, 1, rows, (width + BLOCK - 1) // BLOCK, dtype=torch.bfloat16), device)
-    out = ttnn.experimental.topk_large_indices(
+    out = ttnn.experimental.topk_large_indices_with_test_outputs(
         _dev(torch_input.reshape(1, 1, rows, width), device),
         k=K,
         valid_length_tensor=_scalar(device, n),

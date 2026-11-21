@@ -83,7 +83,7 @@ void bind_topk_large_indices(nb::module_& mod) {
                 k = 2048 and a last dimension in [65536, 2097152] that is a multiple of 32; other inputs run the
                 single-level program. The program decides at run time, from the search length, whether to run
                 two-level. A two-level program takes at most 4 rows per core (unless block_max_tensor is given)
-                and, unless the caller supplies block_max_tensor or block_max_output, holds its own
+                and, unless the caller supplies block_max_tensor, holds its own
                 [rows, ceil(n/32)] BFLOAT16 DRAM maxima tensor for as long as it is cached (a captured trace
                 that runs it needs the program kept in the cache).
             two_level_cutover: search length from which a two-level program runs two-level (default: 98304).
@@ -91,12 +91,34 @@ void bind_topk_large_indices(nb::module_& mod) {
                 runs two-level, which returns sentinels).
             block_max_tensor: optional [rows, ceil(n/32)] BFLOAT16 DRAM tensor of block maxima; skips the program's
                 own block-max stage. Only the first ceil(search_length/32) entries of each row are read.
-            block_max_output: optional [rows, ceil(n/32)] BFLOAT16 DRAM tensor that receives the computed block
-                maxima (testing); not with block_max_tensor.
-            mode_output: optional 1-element UINT32 DRAM tensor that receives 1 when the program ran two-level
-                (testing).
         )doc",
         &ttnn::experimental::topk_large_indices,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("k"),
+        nb::arg("valid_length") = std::nullopt,
+        nb::arg("valid_length_tensor") = nb::none(),
+        nb::arg("valid_length_offset") = 0,
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("valid_end_tensor") = nb::none(),
+        nb::arg("dram_read_noc") = nb::none(),
+        nb::arg("block_select") = nb::none(),
+        nb::arg("two_level_cutover") = nb::none(),
+        nb::arg("block_max_tensor") = nb::none());
+
+    ttnn::bind_function<"topk_large_indices_with_test_outputs", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Testing only: ``topk_large_indices`` with two extra outputs of a two-level program.
+
+        Args (in addition to ``topk_large_indices``'s):
+            block_max_output: optional [rows, ceil(n/32)] BFLOAT16 DRAM tensor that receives the computed block
+                maxima; not with block_max_tensor. A two-level program writes its block maxima there instead of
+                into its own tensor.
+            mode_output: optional 1-element UINT32 DRAM tensor that receives 1 when the program ran two-level.
+        )doc",
+        &ttnn::experimental::topk_large_indices_with_test_outputs,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("k"),

@@ -77,12 +77,27 @@ Tensor topk_large_indices(
     // Two-level selection for long rows: 32 picks the top 2048 of the 32-key block maxima first, then the exact
     // top k among the keys of those blocks. Requires k = 2048 and a last dimension in [65536, 2097152] that is
     // a multiple of 32. two_level_cutover is the search length from which the program runs two-level (default:
-    // 98304). block_max_tensor supplies the block maxima (skips stage 1); block_max_output and
-    // mode_output are test outputs.
+    // 98304). block_max_tensor supplies the block maxima (skips stage 1).
     std::optional<uint32_t> block_select = std::nullopt,
     std::optional<uint32_t> two_level_cutover = std::nullopt,
-    const std::optional<Tensor>& block_max_tensor = std::nullopt,
-    const std::optional<Tensor>& block_max_output = std::nullopt,
-    const std::optional<Tensor>& mode_output = std::nullopt);
+    const std::optional<Tensor>& block_max_tensor = std::nullopt);
+
+// Testing only: topk_large_indices that also writes the two-level program's block maxima to block_max_output and
+// 1 to mode_output when it ran two-level.
+Tensor topk_large_indices_with_test_outputs(
+    const Tensor& input_tensor,
+    uint32_t k,
+    std::optional<uint32_t> valid_length,
+    const std::optional<Tensor>& valid_length_tensor,
+    uint32_t valid_length_offset,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<Tensor>& valid_end_tensor,
+    std::optional<tt::tt_metal::NOC> dram_read_noc,
+    std::optional<uint32_t> block_select,
+    std::optional<uint32_t> two_level_cutover,
+    const std::optional<Tensor>& block_max_tensor,
+    const std::optional<Tensor>& block_max_output,
+    const std::optional<Tensor>& mode_output);
 
 }  // namespace ttnn::experimental
