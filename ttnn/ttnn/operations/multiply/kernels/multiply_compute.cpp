@@ -49,7 +49,7 @@ void kernel_main() {
             ckl::input(dfb::in_b, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::InputTileMapping::Scalar),
             ckl::output(dfb::out)>(ckl::IterationShape::tiles(my_tiles), dfb_a, dfb_b, dfb_out);
     } else {
-        static_assert(C == 1, "row_bcast_strips deals whole blocks: one compute thread");
+        static_assert(regime == 0 || C == 1, "row_bcast_strips deals whole blocks: one compute thread");
         const uint32_t G = get_arg(args::G);
         const uint32_t Ht = get_arg(args::Ht);
         const uint32_t Wt = get_arg(args::Wt);

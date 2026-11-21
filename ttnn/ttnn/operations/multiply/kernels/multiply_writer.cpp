@@ -36,7 +36,7 @@ void kernel_main() {
             noc.async_write<NocOptions::TXN_ID>(dfb_out, acc_out, {}, {.page_id = start + i});
         }
     } else {
-        static_assert(W == 1, "row_bcast_strips deals whole blocks: one writer hart");
+        static_assert(regime == 0 || W == 1, "row_bcast_strips deals whole blocks: one writer hart");
         const uint32_t G = get_arg(args::G);
         const uint32_t Ht = get_arg(args::Ht);
         const uint32_t Wt = get_arg(args::Wt);

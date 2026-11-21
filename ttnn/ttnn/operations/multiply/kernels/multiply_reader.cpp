@@ -48,7 +48,7 @@ void kernel_main() {
             noc.async_read<NocOptions::TXN_ID>(acc_b, dfb_b, {.page_id = start + i}, {});
         }
     } else {
-        static_assert(R == 1, "row_bcast_strips deals whole blocks: one reader hart");
+        static_assert(regime == 0 || R == 1, "row_bcast_strips deals whole blocks: one reader hart");
         const uint32_t G = get_arg(args::G);
         const uint32_t Ht = get_arg(args::Ht);
         const uint32_t Wt = get_arg(args::Wt);

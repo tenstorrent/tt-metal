@@ -1,1 +1,2 @@
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/multiply/test_multiply.py","detail":"13/13, both regimes, first run","ts":"2026-11-21T07:02:48+00:00"}
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/multiply/ + golden PHASE0 slice","detail":"30/30 unit; 99/99 golden PHASE0; 40/40 sampled non-PHASE0 xfail","ts":"2026-11-21T07:07:24+00:00"}
