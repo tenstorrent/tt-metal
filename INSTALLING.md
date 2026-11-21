@@ -158,7 +158,7 @@ After entering the container:
    ls /dev/tenstorrent
    ```
 
-- You are all set to explore the packaged environment. Try some [TT-NN Basic Examples](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) next.
+- You are all set to explore the packaged environment. Try some [TT-NN Tutorials](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/tutorials.html) next.
 
 If you plan to run models or edit code from a local source checkout instead of staying inside the packaged container environment, continue with the source-based environment setup for model-specific dependencies and environment variables.
 

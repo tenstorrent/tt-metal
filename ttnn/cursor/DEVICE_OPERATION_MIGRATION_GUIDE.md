@@ -251,7 +251,9 @@ If your operation supports `mesh_coords` filtering (i.e., only executing on spec
 
 **Pattern**: Create a separate factory that only implements `MeshWorkloadFactoryConcept` (not `ProgramFactoryConcept`), following the dropout example.
 
-**Example - Dropout Pattern:**
+**Historical example - Dropout factory pattern:**
+
+This guide describes the legacy `CachedProgram` migration, not the current Dropout factory API. Current [Dropout factories](../cpp/ttnn/operations/experimental/dropout/device/dropout_program_factory.hpp) use `create_program_artifacts` / `create_mesh_workload_artifacts` from `ttnn/metal_v2_artifacts.hpp`; their runtime overrides return `ProgramRunArgs`. The example below is retained as historical context.
 
 ```cpp
 // In program factory header:

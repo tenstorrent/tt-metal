@@ -24,15 +24,15 @@ Instructions on using the performance report with `TT-NN Visualizer <https://git
 
 **IMPORTANT NOTES**:
 
-- If this is the first time you are running ``profile_this.py``, it requires `developer dependencies <https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md#step-4-installing-developer-dependencies>`_ to be installed.
+- If this is the first time you are running ``profile_this.py``, it requires `developer dependencies <https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md#source>`_ to be installed.
 - If you have done a reset on your GS device with ``tt_smi`` or ``tensix_reset.sh``, profiling results are not valid due to tensix cores' skewed timer starts. You need to perform a full reboot with ``sudo reboot`` on your host machine to align the timer starts. WH does not have this issue and profiling can be performed after ``tt_smi`` resets.
 
 - In order to populate program cache, tests should run their inference layer at least twice and should run it in the same process. If pytest is being used, that would be running in
   the same pytest run. Only the host times for the second run of the layer should be analyzed as the first run was populating the cache and will have much higher times for host side.
 
 - The first 1000 ops for each device is automatically collected by pytest fixtures at the end of your test.
-  If your test has more than 1000 ops, ``ttl.device.ReadDeviceProfiler(device)`` should be called at every n number of layers that total to less than 1000 ops in order to avoid dropping profiling data of new ops.
-  For example for a model with around 120 ops for a single inference layer, if the test calls the layer more than 8 times, ``ttl.device.ReadDeviceProfiler(device)`` should be called at least every eighth layer run.
+  If your test has more than 1000 ops, ``ttnn.ReadDeviceProfiler(device)`` should be called at every n number of layers that total to less than 1000 ops in order to avoid dropping profiling data of new ops.
+  For example for a model with around 120 ops for a single inference layer, if the test calls the layer more than 8 times, ``ttnn.ReadDeviceProfiler(device)`` should be called at least every eighth layer run.
   If profiling data is dropped, you will receive warning messages in the execution log mentioning which RISC of what core of what device dropped profiling data. Note that dispatch
   cores fill up their profiling buffers faster and if only those cores are giving warnings your OP analysis is not affected.
 
