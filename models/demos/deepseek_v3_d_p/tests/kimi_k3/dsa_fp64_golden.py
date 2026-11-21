@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""FP64 CPU golden of Kimi-K3.1 DSA layer 92 on the teacher-fed input, and the GPU / device / fp32 errors against it.
+"""FP64 CPU golden of a Kimi-K3.1 DSA layer (the one the teacher-fed input names: 92 for the device test) and the GPU /
+device / fp32 errors against it.
 
 Runs on CPU only and never imports ttnn. Reads the bf16 input that ``dsa_teacher_feed.py input`` wrote: the same rows
 the device test ran on. Three steps, each resumable by segment with a ``manifest.json`` (the KDA long-context golden's
@@ -44,7 +45,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import torch
-from safetensors import safe_open
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor, pcc
@@ -57,8 +57,8 @@ from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.dsa_teacher_feed import (
     EPS,
-    LAYER,
     Trace,
+    checkpoint_tensors,
     chunk_path,
     load_input,
     missed_keys,
@@ -103,24 +103,10 @@ class Dims:
     eps: float = EPS
 
 
-def layer_weights(checkpoint: Path, layer: int = LAYER) -> dict[str, torch.Tensor]:
-    """The layer's attention weights in FP64, read through the checkpoint's safetensors index (the K3 golden's
-    loader imports the device adapters)."""
-    weight_map = json.loads((checkpoint / "model.safetensors.index.json").read_text())["weight_map"]
-    roots = [
-        r for r in ("model.", "language_model.model.") if f"{r}layers.{layer}.self_attn.o_proj.weight" in weight_map
-    ]
-    if not roots:
-        raise ValueError(f"{checkpoint} has no layer {layer} attention weights")
-    names = {f"{roots[0]}layers.{layer}.self_attn.{n}": n for n in WEIGHTS}
-    by_shard: dict[str, list[str]] = {}
-    for full in names:
-        by_shard.setdefault(weight_map[full], []).append(full)
-    out = {}
-    for shard, fulls in by_shard.items():
-        with safe_open(str(checkpoint / shard), framework="pt") as handle:
-            out.update({names[f]: handle.get_tensor(f).double() for f in fulls})
-    return out
+def layer_weights(checkpoint: Path, layer: int) -> dict[str, torch.Tensor]:
+    """The layer's attention weights in FP64."""
+    tensors = checkpoint_tensors(checkpoint, layer, [f"self_attn.{n}" for n in WEIGHTS])
+    return {n: tensors[f"self_attn.{n}"].double() for n in WEIGHTS}
 
 
 def rms64(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
@@ -222,7 +208,7 @@ def build_keys(
     run = out / "keys"
     run.mkdir(parents=True, exist_ok=True)
     source = input_identity(input_dir)
-    count = source["count"]
+    count, layer = source["count"], source["layer"]
     expected = {
         "step": "keys",
         "input": str(input_dir),
@@ -235,18 +221,18 @@ def build_keys(
     }
     segments = -(-count // segment)
     manifest = resume_manifest(run, expected, segments)
-    w = layer_weights(checkpoint)
+    w = layer_weights(checkpoint, layer)
     for index in range(len(manifest["segments"]), segments):
         start, end = index * segment, min((index + 1) * segment, count)
         began = time.perf_counter()
         keys = layer_keys(load_input(input_dir, start, end), w)
         check = {}
         if trace is not None:
-            kv = trace.rows(f"kv_post_transform_layer_{LAYER}", start, end)
+            kv = trace.rows(f"kv_post_transform_layer_{layer}", start, end)
             check = {
                 "latent_pcc": pcc(kv[:, : C.KV_LORA_RANK], keys["latent"]),
                 "kpe_pcc": pcc(kv[:, C.KV_LORA_RANK :], keys["kpe"]),
-                "index_key_pcc": pcc(trace.rows(f"indexer_k_layer_{LAYER}", start, end), keys["index_key"]),
+                "index_key_pcc": pcc(trace.rows(f"indexer_k_layer_{layer}", start, end), keys["index_key"]),
             }
             if min(check.values()) < KEY_CHECK_PCC:
                 raise ValueError(f"rows [{start}, {end}): FP64 keys fail their check {check} (< {KEY_CHECK_PCC})")
@@ -336,7 +322,7 @@ def build_queries(*, out: Path, checkpoint: Path, name: str, rows: list[int], se
     if len(manifest["segments"]) == segments:
         return manifest
     input_dir = Path(keys_manifest["input"])
-    w = layer_weights(checkpoint)
+    w = layer_weights(checkpoint, keys_manifest["input_identity"]["layer"])
     keys = load_keys(out, max(rows) + 1)
     inputs = dict(zip(rows, input_rows(input_dir, rows)))
     _, keys_fp8 = index_fp8(keys["index_key"][:1], keys["index_key"])
@@ -414,13 +400,16 @@ def compare(*, out: Path, name: str, trace: Trace, device: Path | None, checkpoi
     input_dir = Path(keys_manifest["input"])
     rows = golden["rows"].tolist()
     keys = load_keys(out, max(rows) + 1)
-    w = layer_weights(checkpoint)
+    layer = keys_manifest["input_identity"]["layer"]
+    w = layer_weights(checkpoint, layer)
     w32 = {k: v.float() for k, v in w.items()}
     dev_manifest = json.loads((device / MANIFEST).read_text()) if device else None
     if dev_manifest is not None and not dev_manifest.get("complete"):
         raise ValueError(f"{device} holds no complete device run")
+    if dev_manifest is not None and dev_manifest["layer"] != layer:
+        raise ValueError(f"{device} ran layer {dev_manifest['layer']}, the golden is layer {layer}")
     inputs = input_rows(input_dir, rows)
-    kv_all = trace.rows(f"kv_post_transform_layer_{LAYER}", 0, max(rows) + 1)
+    kv_all = trace.rows(f"kv_post_transform_layer_{layer}", 0, max(rows) + 1)
     lora = C.KV_LORA_RANK
     # Each path's own cache contents: the trace's bf16 kv_post_transform as the ue8m0 FP8 cache the GPU's attention
     # matches best (report), and the device's saved cache (its own projection, FP8-quantized, read back).
@@ -440,8 +429,8 @@ def compare(*, out: Path, name: str, trace: Trace, device: Path | None, checkpoi
         selected = min(C.INDEX_TOPK, r + 1)
         order = golden["order"][i]
         g = ref[i]
-        sel = {"trace": trace.rows(f"dsa_topk_indices_layer_{LAYER}", r, r + 1)[0].long()}
-        prod = {"trace": trace.rows(f"attn_output_layer_{LAYER}", r, r + 1)[0]}
+        sel = {"trace": trace.rows(f"dsa_topk_indices_layer_{layer}", r, r + 1)[0].long()}
+        prod = {"trace": trace.rows(f"attn_output_layer_{layer}", r, r + 1)[0]}
         if dev_manifest is not None:
             payload = torch.load(chunk_path(device, r // dev_manifest["chunk"]), weights_only=True)
             sel["device"] = payload["topk"][r - payload["start"]].long()
@@ -470,7 +459,7 @@ def compare(*, out: Path, name: str, trace: Trace, device: Path | None, checkpoi
         for k, v in rank_agreement(golden["sel_idx_fp8"][i], order, selected).items():
             rec[f"idx_fp8_{k}"] = v
         # convention pin: the golden's score of the trace's keys against the trace's own scores
-        tscore = trace.rows(f"dsa_topk_scores_layer_{LAYER}", r, r + 1)[0][sel["trace"] >= 0].double()
+        tscore = trace.rows(f"dsa_topk_scores_layer_{layer}", r, r + 1)[0][sel["trace"] >= 0].double()
         gscore = index_scores(q["index_q"][0], q["index_w"][0], keys["index_key"][tsel])
         rec["trace_score_pcc"] = pcc(gscore, tscore) if tsel.numel() > 1 else float("nan")
         rec["trace_score_ratio"] = float(tscore.norm() / gscore.norm())

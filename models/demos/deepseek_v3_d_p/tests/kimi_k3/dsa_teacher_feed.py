@@ -145,11 +145,27 @@ def rms_norm(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     return weight.to(torch.bfloat16) * normed
 
 
+def checkpoint_tensors(checkpoint: Path, layer: int, names: list[str]) -> dict[str, torch.Tensor]:
+    """Tensors ``layers.<layer>.<name>`` of a K3.1 checkpoint (either key root), keyed by ``name``, read through its
+    safetensors index opening each shard once. Imports no device code (the K3 golden's loader imports the device
+    adapters, and so ttnn)."""
+    weight_map = json.loads((checkpoint / "model.safetensors.index.json").read_text())["weight_map"]
+    roots = [r for r in ("model.", "language_model.model.") if f"{r}layers.{layer}.{names[0]}" in weight_map]
+    if not roots:
+        raise ValueError(f"{checkpoint} has no layers.{layer}.{names[0]}")
+    full = {f"{roots[0]}layers.{layer}.{n}": n for n in names}
+    by_shard: dict[str, list[str]] = {}
+    for key in full:
+        by_shard.setdefault(weight_map[key], []).append(key)
+    out = {}
+    for shard, keys in by_shard.items():
+        with safe_open(str(checkpoint / shard), framework="pt") as handle:
+            out.update({full[k]: handle.get_tensor(k) for k in keys})
+    return out
+
+
 def layer_weights(checkpoint: Path, layer: int = LAYER) -> dict[str, torch.Tensor]:
     """The host weights the input and its check need: AttnRes query, input_layernorm, KV-A and indexer key."""
-    from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import checkpoint_prefix, load_checkpoint_tensors
-
-    root = f"{checkpoint_prefix(checkpoint)}layers.{layer}."
     names = [
         "self_attention_res_norm.weight",
         "self_attention_res_proj.weight",
@@ -160,8 +176,7 @@ def layer_weights(checkpoint: Path, layer: int = LAYER) -> dict[str, torch.Tenso
         "self_attn.indexer.k_norm.weight",
         "self_attn.indexer.k_norm.bias",
     ]
-    tensors = load_checkpoint_tensors(checkpoint, [root + n for n in names])
-    return {n: tensors[root + n] for n in names}
+    return checkpoint_tensors(checkpoint, layer, names)
 
 
 def check_input(normed: torch.Tensor, trace: Trace, start: int, w: dict, layer: int = LAYER) -> dict[str, float]:
@@ -185,21 +200,29 @@ def check_input(normed: torch.Tensor, trace: Trace, start: int, w: dict, layer: 
 
 
 def build_input(
-    *, trace: Trace, checkpoint: Path, count: int, out: Path, segment: int, input_stream: str | None = None
+    *,
+    trace: Trace,
+    checkpoint: Path,
+    count: int,
+    out: Path,
+    segment: int,
+    input_stream: str | None = None,
+    layer: int = LAYER,
 ) -> dict:
-    """Write (or resume) the teacher-fed input ``normed = input_layernorm(read)`` for rows ``[0, count)``."""
+    """Write (or resume) the teacher-fed input ``normed = input_layernorm(read)`` of DSA layer ``layer`` (92, the
+    device test's, by default) for rows ``[0, count)``."""
     out.mkdir(parents=True, exist_ok=True)
     if input_stream is None:
-        missing = replay_missing(trace)
+        missing = replay_missing(trace, layer)
         if missing:
             raise ValueError(
-                f"{trace.path.name} cannot rebuild layer {LAYER}'s attention input: no attn_output/decoder_output "
-                f"for {len(missing)} of {LAYER} layers ({missing[:8]}...); pass --input-stream with a captured read"
+                f"{trace.path.name} cannot rebuild layer {layer}'s attention input: no attn_output/decoder_output "
+                f"for {len(missing)} of {layer} layers ({missing[:8]}...); pass --input-stream with a captured read"
             )
     elif not trace.has(input_stream):
         raise ValueError(f"{trace.path.name} has no stream {input_stream}")
     expected = {
-        "layer": LAYER,
+        "layer": layer,
         "trace": str(trace.path),
         "trace_commit": trace.metadata.get("trace_commit"),
         "input": f"stream {input_stream}" if input_stream else "attn_res replay (bf16, tracer order)",
@@ -210,19 +233,19 @@ def build_input(
     }
     segments = -(-count // segment)
     manifest = resume_manifest(out, expected, segments)
-    w = layer_weights(checkpoint)
+    w = layer_weights(checkpoint, layer)
     for index in range(len(manifest["segments"]), segments):
         start, end = index * segment, min((index + 1) * segment, count)
         began = time.perf_counter()
         if input_stream is None:
-            live, sealed = replay_live_and_sealed(trace, start, end)
+            live, sealed = replay_live_and_sealed(trace, start, end, layer)
             read = hf_attn_res(
                 live, sealed, w["self_attention_res_norm.weight"], w["self_attention_res_proj.weight"], EPS
             )
         else:
             read = trace.rows(input_stream, start, end)
         normed = rms_norm(read, w["input_layernorm.weight"])
-        check = check_input(normed, trace, start, w)
+        check = check_input(normed, trace, start, w, layer)
         if min(check.values()) < INPUT_CHECK_PCC:
             raise ValueError(f"rows [{start}, {end}): rebuilt input fails its check {check} (< {INPUT_CHECK_PCC})")
         atomic_save({"start": start, "end": end, "normed": normed}, segment_path(out, index))
@@ -436,6 +459,7 @@ def main() -> None:
     build.add_argument("--out", type=Path, required=True)
     build.add_argument("--segment", type=int, default=4096)
     build.add_argument("--input-stream", help="a captured stream holding the layer's AttnRes read output")
+    build.add_argument("--layer", type=int, default=LAYER, help="DSA layer (0-based); the device test runs 92")
     rate = sub.add_parser("score", help="score a device run against the trace")
     rate.add_argument("--trace", type=Path, required=True)
     rate.add_argument("--out", type=Path, required=True)
@@ -450,6 +474,7 @@ def main() -> None:
             out=args.out,
             segment=args.segment,
             input_stream=args.input_stream,
+            layer=args.layer,
         )
     else:
         result = score(trace=trace, out=args.out, window=args.window)

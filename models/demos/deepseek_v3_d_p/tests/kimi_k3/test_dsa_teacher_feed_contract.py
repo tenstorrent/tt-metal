@@ -379,7 +379,7 @@ def test_fp64_compare_on_a_trace_built_from_the_golden(tmp_path: Path):
     sampled = golden.sample_rows(rows, 4, 0)
     golden.build_queries(out=out, checkpoint=checkpoint, name="t", rows=sampled, segment=4, threads=1)
     keys = golden.load_keys(out)
-    w = golden.layer_weights(checkpoint)
+    w = golden.layer_weights(checkpoint, 92)
     topk = golden.C.INDEX_TOPK
     indices = torch.full((rows, topk), -1, dtype=torch.int32)
     scores = torch.zeros(rows, topk, dtype=torch.float32)
