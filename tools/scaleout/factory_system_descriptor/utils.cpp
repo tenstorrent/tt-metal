@@ -13,8 +13,10 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/base.h>
@@ -25,6 +27,7 @@
 #include <tt-umd/types/arch.hpp>
 #include <board/board.hpp>
 #include <cabling_generator/cabling_generator.hpp>
+#include <node/node.hpp>
 
 // Add protobuf includes
 #include "protobuf/factory_system_descriptor.pb.h"
@@ -673,6 +676,58 @@ std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(
     return validate_fsd_against_gsd_impl(generated_fsd, gsd_yaml_node, strict_validation, assert_on_connection_mismatch, log_output);
 }
 
+namespace {
+
+BoardRevision fsd_node_type_board_revision(std::string node_type) {
+    // Older FSDs use torus-suffixed names, e.g. BH_GALAXY_REV_C_XY_TORUS.
+    for (std::string_view suffix : {"_XY_TORUS", "_X_TORUS", "_Y_TORUS"}) {
+        if (node_type.ends_with(suffix)) {
+            node_type.resize(node_type.size() - suffix.size());
+            break;
+        }
+    }
+    const auto parsed = try_get_node_type_from_string(node_type);
+    return parsed.has_value() ? get_node_type_board_revision(*parsed) : BoardRevision::UNSPECIFIED;
+}
+
+// Board id bits [35:32]; 0 reads as BH Galaxy rev A/B.
+uint64_t board_id_revision_bits(const std::string& node_type) {
+    switch (fsd_node_type_board_revision(node_type)) {
+        case BoardRevision::WH_GALAXY:
+        case BoardRevision::BH_GALAXY_REV_AB: return 1;
+        case BoardRevision::BH_GALAXY_REV_C: return 3;
+        case BoardRevision::UNSPECIFIED: return 0;
+    }
+    return 0;
+}
+
+}  // namespace
+
+bool is_bh_galaxy_rev_c_node_type(const std::string& node_type) {
+    return fsd_node_type_board_revision(node_type) == BoardRevision::BH_GALAXY_REV_C;
+}
+
+std::map<FsdAsicKey, ChipId> fsd_local_chip_ids(const fsd::proto::FactorySystemDescriptor& fsd) {
+    std::map<BoardType, std::unordered_set<uint32_t>> asic_locations_by_board_type;
+    std::set<FsdAsicKey> asics;
+    for (const auto& board_location : fsd.board_types().board_locations()) {
+        const BoardType board_type = get_board_type_from_string(board_location.board_type());
+        auto it = asic_locations_by_board_type.find(board_type);
+        if (it == asic_locations_by_board_type.end()) {
+            it = asic_locations_by_board_type.emplace(board_type, create_board(board_type).get_asic_locations()).first;
+        }
+        for (uint32_t asic_location : it->second) {
+            asics.emplace(board_location.host_id(), board_location.tray_id(), asic_location);
+        }
+    }
+    std::map<FsdAsicKey, ChipId> chip_ids;
+    std::map<uint32_t, ChipId> next_chip_id_by_host;
+    for (const auto& asic : asics) {
+        chip_ids[asic] = next_chip_id_by_host[std::get<0>(asic)]++;
+    }
+    return chip_ids;
+}
+
 std::string generate_cluster_descriptor_from_fsd(
     const std::string& fsd_filename, const std::string& output_dir, const std::string& base_filename) {
     // Read the FSD using protobuf
@@ -800,25 +855,31 @@ std::string generate_cluster_descriptor_from_fsd(
     std::filesystem::path output_path = std::filesystem::path(output_dir);
 
     // Generate cluster descriptor for each host
+    const auto local_chip_ids = fsd_local_chip_ids(fsd);
     uint64_t unique_board_id = 0;
     for (uint32_t host_idx = 0; host_idx < num_hosts; ++host_idx) {
         // Map unique chip IDs to local chip IDs for this host
         HostId host_id{host_idx};
         std::unordered_map<uint64_t, ChipId> unique_to_local_chip_id;
         std::unordered_map<ChipId, uint64_t> local_to_unique_chip_id;
-        ChipId next_local_chip_id = 0;
         for (const auto& [key, unique_chip_id] : asic_to_unique_chip_id) {
             auto [h_id, t_id, asic_loc] = key;
             if (h_id == host_id) {
-                unique_to_local_chip_id[unique_chip_id] = next_local_chip_id;
-                local_to_unique_chip_id[next_local_chip_id] = unique_chip_id;
-                next_local_chip_id++;
+                const ChipId local_chip_id = local_chip_ids.at({h_id.get(), t_id.get(), asic_loc});
+                unique_to_local_chip_id[unique_chip_id] = local_chip_id;
+                local_to_unique_chip_id[local_chip_id] = unique_chip_id;
             }
         }
-        ChipId total_local_chips = next_local_chip_id;
+        const auto total_local_chips = static_cast<ChipId>(local_to_unique_chip_id.size());
 
         // Build cluster descriptor for this host
         YAML::Node cluster_desc;
+        // Discovery names the host after cluster_id, and the FSD host filter joins on that name.
+        const std::string& hostname = fsd.hosts(host_idx).hostname();
+        if (!hostname.empty()) {
+            cluster_desc["cluster_id"] = hostname;
+        }
+        const uint64_t board_revision = board_id_revision_bits(fsd.hosts(host_idx).node_type());
         cluster_desc["arch"] = YAML::Node(YAML::NodeType::Map);
         for (ChipId local_chip_id = 0; local_chip_id < total_local_chips; ++local_chip_id) {
             cluster_desc["arch"][local_chip_id] = arch_str;
@@ -971,7 +1032,7 @@ std::string generate_cluster_descriptor_from_fsd(
                 throw std::runtime_error("No UPI found for board type: " + board_location.board_type());
             }
 
-            uint64_t encoded_board_id = (upi << 36) | unique_board_id;
+            uint64_t encoded_board_id = (upi << 36) | (board_revision << 32) | unique_board_id;
             unique_board_id++;
 
             std::vector<ChipId> chips_on_board;

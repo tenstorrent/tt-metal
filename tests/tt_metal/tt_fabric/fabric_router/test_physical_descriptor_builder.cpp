@@ -194,6 +194,87 @@ TEST(PhysicalDescriptorBuilder, BuildFromFileReturnsCppDescriptor) {
     std::filesystem::remove(path);
 }
 
+// hostA's unlinked ASIC 0 is not in the descriptor but still takes chip id 0.
+TEST(PhysicalDescriptorBuilder, BuildFromFileNumbersChipsAsGeneratedDescriptors) {
+    FSD fsd = make_two_host_fsd();
+    fsd.mutable_eth_connections()->clear_connection();
+    auto* conn = fsd.mutable_eth_connections()->add_connection();
+    conn->mutable_endpoint_a()->set_host_id(0);
+    conn->mutable_endpoint_a()->set_tray_id(0);
+    conn->mutable_endpoint_a()->set_asic_location(1);
+    conn->mutable_endpoint_a()->set_chan_id(0);
+    conn->mutable_endpoint_b()->set_host_id(1);
+    conn->mutable_endpoint_b()->set_tray_id(0);
+    conn->mutable_endpoint_b()->set_asic_location(0);
+    conn->mutable_endpoint_b()->set_chan_id(0);
+    fsd.mutable_hosts(0)->set_node_type("BH_GALAXY_REV_C_XY_TORUS");
+
+    std::string text;
+    ASSERT_TRUE(google::protobuf::TextFormat::PrintToString(fsd, &text));
+    const auto path = std::filesystem::temp_directory_path() / "pdb_offline_build_test.textproto";
+    {
+        std::ofstream out(path);
+        out << text;
+    }
+
+    auto psd = build_physical_descriptor_from_file(path.string());
+    std::map<std::pair<std::string, uint32_t>, ChipId> chip_ids;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        chip_ids[{descriptor.host_name, *descriptor.asic_location}] = descriptor.umd_unique_id;
+    }
+    const std::map<std::pair<std::string, uint32_t>, ChipId> expected = {{{"hostA", 1}, 1}, {{"hostB", 0}, 0}};
+    EXPECT_EQ(chip_ids, expected);
+    EXPECT_EQ(psd.my_host_name(), "hostA");
+    EXPECT_EQ(psd.get_local_mpi_rank(), 0u);
+    EXPECT_TRUE(psd.is_bh_galaxy_rev_c());
+
+    std::filesystem::remove(path);
+}
+
+TEST(PhysicalDescriptorBuilder, BuildFromFileLeavesChipsOfUndefinedBoardsUnnumbered) {
+    FSD fsd = make_two_host_fsd();
+    for (auto& loc : *fsd.mutable_board_types()->mutable_board_locations()) {
+        loc.set_board_type("GALAXY");
+    }
+    std::string text;
+    ASSERT_TRUE(google::protobuf::TextFormat::PrintToString(fsd, &text));
+    const auto path = std::filesystem::temp_directory_path() / "pdb_undefined_board_test.textproto";
+    {
+        std::ofstream out(path);
+        out << text;
+    }
+
+    auto psd = build_physical_descriptor_from_file(path.string());
+    EXPECT_EQ(psd.get_asic_descriptors().size(), 3u);
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        EXPECT_EQ(descriptor.umd_unique_id, -1) << *asic_id;
+    }
+
+    std::filesystem::remove(path);
+}
+
+TEST(PhysicalDescriptorBuilder, BuildFromFileTakesRevCFromNodeType) {
+    const auto path = std::filesystem::temp_directory_path() / "pdb_rev_c_test.textproto";
+    const std::vector<std::pair<std::string, bool>> cases = {
+        {"BH_GALAXY_REV_C", true},
+        {"BH_GALAXY_REV_C_Y_TORUS", true},
+        {"BH_GALAXY_REV_AB", false},
+        {"BH_GALAXY_REV_AB_XY_TORUS", false},
+        {"", false}};
+    for (const auto& [node_type, rev_c] : cases) {
+        FSD fsd = make_two_host_fsd();
+        fsd.mutable_hosts(0)->set_node_type(node_type);
+        std::string text;
+        ASSERT_TRUE(google::protobuf::TextFormat::PrintToString(fsd, &text));
+        {
+            std::ofstream out(path);
+            out << text;
+        }
+        EXPECT_EQ(build_physical_descriptor_from_file(path.string()).is_bh_galaxy_rev_c(), rev_c) << node_type;
+    }
+    std::filesystem::remove(path);
+}
+
 TEST(PhysicalDescriptorBuilder, FilterFactoryDescriptorRestrictsHosts) {
     // Carve hostA out of the two-host FSD. Its intra-host link survives; the cross-host link (to hostB) is dropped.
     const FSD filtered = filter_factory_descriptor(make_two_host_fsd(), {"hostA"});

@@ -32,11 +32,14 @@
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/physical_descriptor_builder.hpp>
+#include <yaml-cpp/yaml.h>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 
 #include "generate_rank_bindings_helpers.hpp"
+#include <factory_system_descriptor/utils.hpp>
 
 #ifdef OPEN_MPI
 #include <mpi.h>
@@ -98,6 +101,28 @@ PhysicalSystemDescriptor run_psd_discovery() {
 }
 
 /**
+ * @brief Write one mock cluster descriptor per FSD host into `output_dir`/mock_cluster_desc.
+ *
+ * @return FSD host index -> descriptor path.
+ */
+std::map<int, std::string> write_offline_mock_cluster_descriptors(
+    const std::string& fsd_path, const std::filesystem::path& output_dir) {
+    const std::filesystem::path desc_dir = std::filesystem::absolute(output_dir / "mock_cluster_desc");
+    const std::string written =
+        tt::scaleout_tools::generate_cluster_descriptor_from_fsd(fsd_path, desc_dir.string(), "mock_cluster_desc");
+    // A single-host FSD gets just the descriptor; a multi-host one gets a rank mapping.
+    const YAML::Node mapping = YAML::LoadFile(written)["rank_to_cluster_mock_cluster_desc"];
+    if (!mapping) {
+        return {{0, written}};
+    }
+    std::map<int, std::string> rank_to_desc;
+    for (const auto& entry : mapping) {
+        rank_to_desc[entry.first.as<int>()] = entry.second.as<std::string>();
+    }
+    return rank_to_desc;
+}
+
+/**
  * @brief Build the shared MultiMeshSolutionEnumerator for single- and multi-solution mapping.
  *
  * Configures topology mapping (validation modes, MGD + galaxy-corner pinnings, mesh-rank bindings)
@@ -109,7 +134,8 @@ MultiMeshSolutionEnumerator make_topology_mapping_enumerator(
     const PhysicalGroupingDescriptor* pgd,
     const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
     const std::vector<std::filesystem::path>& mgd_paths_in_order,
-    bool unique_shapes) {
+    bool unique_shapes,
+    int world_size) {
     if (mesh_graph_descriptors.size() != mgd_paths_in_order.size() || mesh_graph_descriptors.empty()) {
         throw std::invalid_argument(
             "make_topology_mapping_enumerator: mesh_graph_descriptors and mgd_paths_in_order size must match and be "
@@ -137,8 +163,6 @@ MultiMeshSolutionEnumerator make_topology_mapping_enumerator(
     }
 
     std::vector<MultiMeshMappingPart> parts(mesh_graph_descriptors.size());
-    const int world_size =
-        static_cast<int>(*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size());
     for (std::size_t mgi = 0; mgi < mesh_graph_descriptors.size(); ++mgi) {
         parts[mgi].mesh_graph_descriptor = &mesh_graph_descriptors[mgi];
         PinningsByMesh local_pins = mesh_graph_descriptors[mgi].get_pinnings();
@@ -219,10 +243,11 @@ TopologyMappingParts run_topology_mapping(
     const PhysicalSystemDescriptor& psd,
     const PhysicalGroupingDescriptor* pgd,
     const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
-    const std::vector<std::filesystem::path>& mgd_paths_in_order) {
+    const std::vector<std::filesystem::path>& mgd_paths_in_order,
+    int world_size) {
     log_info(tt::LogFabric, "Running topology mapping with mesh graph rank bindings...");
-    MultiMeshSolutionEnumerator enumerator =
-        make_topology_mapping_enumerator(psd, pgd, mesh_graph_descriptors, mgd_paths_in_order, /*unique_shapes=*/false);
+    MultiMeshSolutionEnumerator enumerator = make_topology_mapping_enumerator(
+        psd, pgd, mesh_graph_descriptors, mgd_paths_in_order, /*unique_shapes=*/false, world_size);
     TopologyMappingParts out;
     out.parts = enumerator.next();
     return out;
@@ -245,9 +270,15 @@ TopologyMappingParts run_topology_mapping(
  * within this output). `binding.mesh_host_rank` always reflects the MGD/MeshGraph value for `(local mesh id, chip)`.
  *
  * `mapping_result` already uses this MeshGraph's local MeshIds.
+ *
+ * `offline`: the PSD comes from the FSD and only the first host's descriptor is open, so other hosts' chips
+ * may be unknown to the cluster. Every chip in a generated descriptor is its own MMIO device.
  */
 std::vector<RankBindingConfig> extract_rank_bindings(
-    const PhysicalSystemDescriptor& psd, const TopologyMappingResult& mapping_result, const MeshGraph& mesh_graph) {
+    const PhysicalSystemDescriptor& psd,
+    const TopologyMappingResult& mapping_result,
+    const MeshGraph& mesh_graph,
+    bool offline) {
     struct AsicGrouping {
         std::vector<tt::tt_metal::experimental::PhysicalNodeId> physical_node_ids;
         std::vector<tt::ChipId> chip_ids;
@@ -355,8 +386,7 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         const auto& cluster = MetalContext::instance().get_cluster();
         std::set<tt::ChipId> mmio_device_ids;
         for (tt::ChipId chip_id : chip_ids) {
-            tt::ChipId mmio_id = cluster.get_associated_mmio_device(chip_id);
-            mmio_device_ids.insert(mmio_id);
+            mmio_device_ids.insert(offline ? chip_id : cluster.get_associated_mmio_device(chip_id));
         }
         std::string visible_devices;
         for (auto it = mmio_device_ids.begin(); it != mmio_device_ids.end(); ++it) {
@@ -464,6 +494,8 @@ struct ProgramArgs {
     std::size_t max_solutions = 0;    // --max-solutions/-n: cap (0 = all up to solver cap); implies --all-solutions
     bool distinct_host_sets = false;  // --distinct-host-sets/-d: one solution per unique host set
     bool allow_shape_permutations = false;  // hidden: disable the solver's unique_shapes dedup
+    // --offline: map on this FSD instead of a discovered cluster
+    std::optional<std::string> offline_fsd;
 };
 
 /**
@@ -504,7 +536,14 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         "d,distinct-host-sets",
         "Keep only one solution per unique set of HOSTS: after enumeration, solutions that occupy the same hosts "
         "(even if they wire/assign the meshes differently) are collapsed to the first. Only meaningful with "
-        "--all-solutions.")("h,help", "Print usage information");
+        "--all-solutions.")(
+        "offline",
+        "Map on --factory-system-descriptor without a cluster: write one mock cluster descriptor per FSD host into "
+        "<output-dir>/mock_cluster_desc, then the usual outputs, with phase2_mock_mapping.yaml pointing at those "
+        "descriptors. Runs as a single process; do not launch it under mpirun with more than one rank.")(
+        "factory-system-descriptor",
+        "Factory System Descriptor (.textproto) for --offline",
+        cxxopts::value<std::string>())("h,help", "Print usage information");
 
     // Hidden/advanced options (in a separate group so they do NOT appear in --help).
     options.add_options("hidden")(
@@ -538,6 +577,12 @@ ProgramArgs parse_arguments(int argc, char** argv) {
                 load_subcontext_id_to_mesh_graph_descriptor_mapping(std::filesystem::path(yaml_path));
         }
 
+        if (result.contains("offline") != result.contains("factory-system-descriptor")) {
+            throw std::invalid_argument("--offline and --factory-system-descriptor must be given together");
+        }
+        if (result.contains("offline")) {
+            args.offline_fsd = result["factory-system-descriptor"].as<std::string>();
+        }
         if (result.contains("physical-grouping-descriptor")) {
             args.physical_grouping_descriptor_path = result["physical-grouping-descriptor"].as<std::string>();
         }
@@ -580,19 +625,39 @@ int main(int argc, char** argv) {
     // Parse arguments first (before MPI initialization)
     ProgramArgs args = parse_arguments(argc, argv);
 
+    // --offline: FSD host index -> generated mock cluster descriptor.
+    std::map<int, std::string> offline_rank_to_desc;
+    if (args.offline_fsd.has_value()) {
+        try {
+            offline_rank_to_desc =
+                write_offline_mock_cluster_descriptors(*args.offline_fsd, args.output_dir.value_or("generated/ttrun"));
+        } catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << std::endl;
+            return 1;
+        }
+        // MetalContext opens the first FSD host's descriptor, as Phase 1 rank 0 would.
+        setenv("TT_METAL_MOCK_CLUSTER_DESC_PATH", offline_rank_to_desc.at(0).c_str(), 1);
+    }
+
     tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
 
     const auto& context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     try {
         log_info(tt::LogFabric, "Generating rank bindings...");
+        if (args.offline_fsd.has_value() && *context->size() != 1) {
+            throw std::runtime_error("--offline runs as a single process, not under mpirun with several ranks");
+        }
+        // Ranks the outputs are for: one per FSD host offline, else the MPI world.
+        const int world_size = args.offline_fsd.has_value() ? static_cast<int>(offline_rank_to_desc.size())
+                                                            : static_cast<int>(*context->size());
 
         // Factory System Descriptor (FSD) path comes from RTOptions, populated from the
         // TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH environment variable (set by tt-run and propagated to this
         // MPI worker). NOTE: FSD-driven mapping is not yet implemented; today we always fall back to live PSD
         // discovery below. See issue #52859 for the follow-up that consumes this.
         const auto& fsd_path = tt::tt_metal::MetalContext::instance().rtoptions().get_factory_system_descriptor_path();
-        if (!fsd_path.empty()) {
+        if (!fsd_path.empty() && !args.offline_fsd.has_value()) {
             log_info(
                 tt::LogFabric,
                 "Factory System Descriptor provided via TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH ({}); FSD-driven "
@@ -602,12 +667,15 @@ int main(int argc, char** argv) {
 
         // Stage: Run PSD discovery
         log_info(tt::LogFabric, "Stage: Running Physical System Descriptor discovery...");
-        PhysicalSystemDescriptor psd = run_psd_discovery();
+        PhysicalSystemDescriptor psd =
+            args.offline_fsd.has_value() ? build_physical_descriptor_from_file(*args.offline_fsd) : run_psd_discovery();
         log_info(tt::LogFabric, "PSD discovery complete");
 
         // Gather mock cluster descriptor paths from all ranks (when TT_METAL_MOCK_CLUSTER_DESC_PATH is set)
-        std::map<int, std::string> mpi_rank_to_cluster_desc_path;
-        gather_mock_cluster_desc_paths(context, mpi_rank_to_cluster_desc_path);
+        std::map<int, std::string> mpi_rank_to_cluster_desc_path = offline_rank_to_desc;
+        if (!args.offline_fsd.has_value()) {
+            gather_mock_cluster_desc_paths(context, mpi_rank_to_cluster_desc_path);
+        }
 
         // Stage: Load Mesh Graph Descriptor (single MGD: either -m, or -M with one sub-context)
         std::vector<MeshGraphDescriptor> mgds;
@@ -706,7 +774,7 @@ int main(int argc, char** argv) {
                 // Same enumerator as the single-solution path, built once. Each next() yields one mapping
                 // from the live SAT session; this loop is the only extra work for --all-solutions.
                 MultiMeshSolutionEnumerator enumerator =
-                    make_topology_mapping_enumerator(psd, pgd_ptr, mgds, mgd_paths_in_order, unique_shapes);
+                    make_topology_mapping_enumerator(psd, pgd_ptr, mgds, mgd_paths_in_order, unique_shapes, world_size);
 
                 std::vector<SolutionIndexEntry> index_entries;
 
@@ -740,8 +808,8 @@ int main(int argc, char** argv) {
                     }
                     ++emitted;
 
-                    std::vector<RankBindingConfig> rank_bindings =
-                        extract_rank_bindings(psd, parts.front(), mesh_graphs_for_extract.front());
+                    std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(
+                        psd, parts.front(), mesh_graphs_for_extract.front(), args.offline_fsd.has_value());
 
                     const std::set<std::string> hosts = solution_host_set(rank_bindings);
                     if (args.distinct_host_sets && !seen_host_sets.insert(hosts).second) {
@@ -829,7 +897,8 @@ int main(int argc, char** argv) {
                 // Stage: Run topology mapping
                 log_info(tt::LogFabric, "Stage: Running topology mapping...");
 
-                TopologyMappingParts topology = run_topology_mapping(psd, pgd_ptr, mgds, mgd_paths_in_order);
+                TopologyMappingParts topology =
+                    run_topology_mapping(psd, pgd_ptr, mgds, mgd_paths_in_order, world_size);
 
                 if (topology.parts.empty() || !topology.parts.front().success) {
                     log_error(
@@ -882,8 +951,8 @@ int main(int argc, char** argv) {
                             tt::LogFabric, "Sub-context {}: no local mapping part from the enumerator", subctx_id);
                         return 1;
                     }
-                    std::vector<RankBindingConfig> rank_bindings =
-                        extract_rank_bindings(psd, topology.parts[mgi], mesh_graphs_for_extract[mgi]);
+                    std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(
+                        psd, topology.parts[mgi], mesh_graphs_for_extract[mgi], args.offline_fsd.has_value());
 
                     if (rank_bindings.empty()) {
                         if (multi_mgd) {

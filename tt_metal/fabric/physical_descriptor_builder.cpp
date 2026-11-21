@@ -33,6 +33,7 @@
 #include <protobuf/factory_system_descriptor.pb.h>   // tt::scaleout_tools::fsd::proto (from scaleout_tools)
 #include <protobuf/physical_system_descriptor.pb.h>  // tt::fabric::proto (compiled into this lib)
 #include "board/board.hpp"                           // tt::scaleout_tools::get_board_type_from_string
+#include "factory_system_descriptor/utils.hpp"       // tt::scaleout_tools::fsd_local_chip_ids
 
 namespace tt::tt_metal::experimental::tt_fabric {
 
@@ -229,6 +230,16 @@ std::vector<uint32_t> select_host_filter(
     return member_host_ids;
 }
 
+// Empty when a board type has no board definition.
+std::map<::tt::scaleout_tools::FsdAsicKey, ::tt::ChipId> generated_descriptor_chip_ids(
+    const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd) {
+    try {
+        return ::tt::scaleout_tools::fsd_local_chip_ids(fsd);
+    } catch (const std::runtime_error&) {
+        return {};
+    }
+}
+
 }  // namespace
 
 void validate_host_filter(
@@ -338,7 +349,27 @@ void validate_host_filter(
         report->dropped_connection_count = 0;
     }
     fsd = filter_factory_descriptor_to_allocation(fsd, allocation, report);
-    return ::tt::tt_metal::PhysicalSystemDescriptor(build_physical_descriptor(fsd));
+    ::tt::tt_metal::PhysicalSystemDescriptor psd(build_physical_descriptor(fsd));
+    if (fsd.hosts_size() == 0) {
+        return psd;
+    }
+
+    std::map<std::string, uint32_t> host_ids;
+    for (int host_id = 0; host_id < fsd.hosts_size(); ++host_id) {
+        host_ids.emplace(fsd.hosts(host_id).hostname(), static_cast<uint32_t>(host_id));
+    }
+    const auto chip_ids = generated_descriptor_chip_ids(fsd);
+    for (auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        (void)asic_id;
+        const auto chip_id =
+            chip_ids.find({host_ids.at(descriptor.host_name), *descriptor.tray_id, *descriptor.asic_location});
+        if (chip_id != chip_ids.end()) {
+            descriptor.umd_unique_id = chip_id->second;
+        }
+    }
+    psd.set_discovery_data(fsd.hosts(0).hostname(), 0);
+    psd.set_is_bh_galaxy_rev_c(::tt::scaleout_tools::is_bh_galaxy_rev_c_node_type(fsd.hosts(0).node_type()));
+    return psd;
 }
 
 ::tt::fabric::proto::PhysicalSystemDescriptor build_physical_descriptor(
