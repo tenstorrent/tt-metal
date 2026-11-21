@@ -1,1 +1,2 @@
 {"event":"test_run","status":"pass","what":"probe_002: (1,1,32,64) DRAM, (1,80,400) L1, (1,1,17,50) DRAM","detail":"0 bf16 ULP vs rounded float64 reference; L1 input -> L1 output","ts":"2026-11-21T05:19:58+00:00"}
+{"event":"test_run","status":"pass","what":"golden suite + test_sigmoid_threads.py","detail":"golden 80 passed/0 failed/518 xfail; threads 18/18 after replacing ttnn.add (Metal 1, refused on Quasar) with to_layout tilize in the session test","ts":"2026-11-21T05:24:46+00:00"}
