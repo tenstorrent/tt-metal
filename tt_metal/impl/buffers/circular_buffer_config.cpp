@@ -393,7 +393,7 @@ void CircularBufferConfig::set_config(const std::map<uint8_t, tt::DataFormat>& d
 }
 
 bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs) {
-    return lhs.total_size() == rhs.total_size() &&
+    return lhs.total_size() == rhs.total_size() && lhs.dynamic_cb() == rhs.dynamic_cb() &&
            lhs.globally_allocated_address() == rhs.globally_allocated_address() &&
            lhs.data_formats() == rhs.data_formats() && lhs.page_sizes() == rhs.page_sizes() &&
            lhs.tiles() == rhs.tiles() && lhs.unpack_face_geometry() == rhs.unpack_face_geometry() &&
