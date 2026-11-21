@@ -107,11 +107,19 @@ void kernel_main() {
     }
 
     uint32_t mask = ~0u;
+    uint32_t tp_of[kUsers];  // (kLeadPipelined: the users' complete KV tiles, for the row-max senders below)
     if constexpr (rows_mode) {
         const uint32_t tok_addr = get_arg_val<uint32_t>(children_base + 2 + 2 * children);
         noc_async_read(get_noc_addr_from_bank_id<true>(0, tok_addr), stage, kTokHeadBytes);
+        if constexpr (kLeadPipelined) {
+            noc_async_read(
+                get_noc_addr_from_bank_id<true>(0, tok_addr + tok_pos_off), stage + 64, (4 * kUsers + 31) & ~31u);
+        }
         noc_async_read_barrier();
         mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage)[kTokActive];
+        for (uint32_t u = 0; kLeadPipelined && u < kUsers; u++) {
+            tp_of[u] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + 64)[u] / 32;
+        }
         volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
         for (uint32_t w = 0; w < groups * heads * Dt * kRowTile / 4; w++) {
             p[w] = 0;
@@ -120,6 +128,21 @@ void kernel_main() {
     // (row groups: global rows; the stage holds one heads x Dt block per group, written to o_in block g)
     const ActiveRows<kUsers> act(mask);
     const uint32_t n_act = act.n;
+    // (kLeadPipelined: per active user the workers with KV tiles — the chunk workers with a chunk, the tail taking it;
+    // the others send -inf, which the row max leaves out)
+    uint32_t senders[kUsers];
+    for (uint32_t k = 0; kLeadPipelined && k < n_act; k++) {
+        const uint32_t u = act.row[k];
+        uint32_t m = 0;
+        for (uint32_t w = 0; w < kChunkWorkers; w++) {
+            m |= (chunk_of(w, tp_of[u]).n > 0 ? 1u : 0u) << w;
+        }
+        for (uint32_t t = 0; t < kTails; t++) {
+            m |= (tail_takes(2 + t, k) ? 1u : 0u) << (workers - 1 - t);
+        }
+        senders[u] = m;
+    }
+    static_assert(!kLeadPipelined || workers <= 32, "a sender bit per worker");
     // row groups: only the groups with an active row go out (the streamers skip the others' out-projection)
     const ActiveGroups ag(rows_mode ? mask : 0, batch);
 
@@ -216,11 +239,20 @@ void kernel_main() {
         mark_it(i, 1);
         invalidate_l1_cache();  // the slots are written by other cores
         {
+            // (over this user's senders only; the tail always is one)
+            const uint32_t sm = senders[act.row[k]];
+            uint32_t w0 = 0;
+            while (!((sm >> w0) & 1)) {
+                w0++;
+            }
             volatile tt_l1_ptr uint16_t* out = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(M_addr);
             for (uint32_t h = 0; h < qrows; h++) {
                 const uint32_t at = h < 16 ? h * 16 : 256 + (h - 16) * 16;
-                uint16_t best = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(m_slots)[at];
-                for (uint32_t w = 1; w < active; w++) {
+                uint16_t best = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(m_slots + w0 * kMSlot)[at];
+                for (uint32_t w = w0 + 1; w < active; w++) {
+                    if (!((sm >> w) & 1)) {
+                        continue;
+                    }
                     const uint16_t v = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(m_slots + w * kMSlot)[at];
                     if (key(v) > key(best)) {
                         best = v;
