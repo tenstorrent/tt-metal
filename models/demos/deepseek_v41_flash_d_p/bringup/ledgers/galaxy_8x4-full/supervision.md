@@ -1221,3 +1221,10 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   noted for a follow-up. Fork change: sdpa kv_lane_map_runtime (option, default off). The report's ladder tables came
   out empty (a gate check deletes results/<task>_*.md written before it; numbers in PB.9G.json / BREADCRUMBS).
 - 10:48 PB.9G gate PASS -> 5c274f18959. Stopping point: switching to model_bringup for MB.4 (the long-history slowdown).
+- 12:30 back on the batching branch (model_bringup ready to push at 1c7552de67b, MB.4 32d12f46bda). Owner Q&A: the
+  served cache is bf16 (decode reads it); every chunk re-packs each chip's whole history bf16 -> 320 B bfp4 records;
+  MB.4 = that conversion in one fused prepared op (ckv_bfp4_rows) instead of 4 ops a 2048 rows; removing the repack
+  needs the slot to keep 4-bit served records (decode / tt-d-gen contract). The 8.6 ms chip-aligned vs fixed-lane gap
+  (device +3.3, host +5.3) is NOT yet attributed (owner rejected the "mesh launches" story): first step of PB.9H.
+  QUEUED PB.MB4 (before PB.T): MB.4 into this branch (path-limited apply), oracles 0, ladder single 8192 + aligned 4x2k
+  at 139264 / 524288 / 1024000 steady + resumed, cold strict no-rebuild. Launched --until PB.9H.

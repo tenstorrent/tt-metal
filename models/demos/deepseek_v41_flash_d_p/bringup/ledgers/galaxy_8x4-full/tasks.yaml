@@ -6840,6 +6840,70 @@ tasks:
       ladder_lanes4x2k_steady_wall_ms_p139264*: '> 0'
       ladder_lanes4x2k_resumed_wall_ms_p139264*: <= 150
       ladder_lanes4x1600s_tok_s_p*: '> 0'
+- id: PB.MB4
+  title: 'OWNER 2026-11-21: bring model_bringup''s MB.4 (the history pack bf16 -> 4-bit records in ONE fused prepared op,
+    ttnn.bringup.ckv_bfp4_rows) into the batching branch; measure the gain on single and packed chunks at long histories'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - PB.9G
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/drafts
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9G_ladder.md
+  - models/demos/deepseek_v41_flash_d_p/reference
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.MB4_ladder.md
+  brief:
+    prior_work: 'dnijemcevic/model_bringup MB.4 = 32d12f46bda: tt/history_gather._pack_rows replaces MB.2''s _pack_fixed (2048-row
+      pieces: page copy + tilize + ckv_bfp4 each) with one ttnn.bringup.ckv_bfp4_rows call (reads the served bf16 slab rows,
+      tilizes on the core, rounds, writes the 320 B records; source row / count / dest row as value slots); fork ckv_bfp4
+      (+ rows reader, CKV_ROWS_IN define) and prepared_program changes; tests test_ckv_bfp4_rows.py (fork unit + model). model_bringup
+      5120 ladder: 1024000 92.8 -> 86.9 ms, 524288 83.2 -> 79.7. The batching branch''s history_gather has PB.9X''s COMMON_VALUE_SLOTS
+      (_dyn_row0) and PB.9G''s chip-aligned use of the same pack.'
+    details: 'Take MB.4 as is: `git show 32d12f46bda -- models/demos/deepseek_v41_flash_d_p/tt models/demos/deepseek_v41_flash_d_p/tests
+      ttnn/ttnn/bringup models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+      > $TMPDIR/mb4.patch && git apply --3way $TMPDIR/mb4.patch` (path-limited; never the other branch''s ledger or framework),
+      resolve conflicts so every pack (single-request and every packed segment''s history) goes through ckv_bfp4_rows with
+      POS_DYNAMIC=on, keeping this branch''s fork options (common value slots, dynamic_row0) where they still apply (one implementation,
+      no dead path). Bit-identical (oracles 0). Ladder (PB.9C''s method, harness wall + device + exposed host) at 139264 /
+      524288 / 1024000 for single 8192 and chip-aligned 4x2k, steady and resumed, next to PB.9C / PB.9G; cold strict no-rebuild.
+      Report in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.MB4_ladder.md (write it after
+      the last gate check). Read models/demos/deepseek_v41_flash_d_p/bringup/PACKED_RULES.md and rule 20 of models/demos/common/bringup/agents/bringup-engineer.md.'
+  gate:
+    cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode SKIP_POS=139264,524288,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode LADDER_POS=139264,524288,1024000
+      LADDER_CASES=4x2k scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
+      && NO_REBUILD_PACKED_STRICT=1 BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on
+      DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on
+      DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    metrics:
+      packed_alone_vs_today_max_abs_diff: == 0
+      packed_lane_equiv_max_abs_diff: == 0
+      packed_slot_digest_mismatches: == 0
+      packed_determinism_max_abs_diff: == 0
+      no_rebuild_pass_*: == 1
+      program_builds_after_warmup_*: == 0
+      ids_uploads_per_chunk*: == 0
+      packed_fallback_chunks*: == 0
+      steady_tok_s_p*: '> 0'
+      ladder_lanes4x2k_tok_s_p*: '> 0'
 - id: PB.T
   title: 'OWNER 2026-11-20: adversarial batching tests: no cross-request leakage, bit-exact vs prompt-by-prompt at the same
     chunk boundaries; FAST tier in every accept gate (<= ~5 min, hard cap) + DEEP sweep (~20-30 min, path-triggered)'
@@ -6847,7 +6911,7 @@ tasks:
   role: perf
   device: true
   deps:
-  - PB.9G
+  - PB.MB4
   paths:
   - models/demos/deepseek_v41_flash_d_p/tests/
   - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
@@ -6925,10 +6989,14 @@ tasks:
       (one program a segment a layer), 72 page copies x 0.074 ms, an unattributed ~13 ms fresh-vs-repeated gap with 0 builds;
       the adapter''s host +5-7 ms a chunk vs run_chunk (PB.MB / MB.2). Misaligned segments cost ~4-5 ms more a segment than
       aligned (PB.9X_fresh_walls.md overhead column).'
-    details: 'OWNER GOAL (binding since 2026-11-19): 4 x 2k each over ~139k history >= 67k new tok/s on the chip-aligned lanes
-      (PB.9G), judged on the ladder (ladder_lanes4x2k_tok_s_p139264) with the cold no-rebuild check PASS on the same code,
-      steady and resumed reported. Cut host enqueue below device time (the 84 per-layer D2H acks of a 4-segment chunk: 16.7
-      ms of host on glued, PB.9C; the sparse_sdpa table call; per-segment sends). Bit-identical. Report in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9H_ladder.md.
+    details: 'FIRST (owner 2026-11-21): ATTRIBUTE every ms of the chip-aligned 4x2k steady gap vs the old fixed lanes at 139264
+      (123.4 vs 114.8 ms; device 105.2 vs 101.9, exposed host 18.2 vs 12.9): per device section (BRINGUP_PROFILE_OPS) and
+      per host item (the PB.9C host split), the fixed-lane side run from 21de88e33ad (the commit before PB.9G; a temporary
+      worktree, removed after) at the same history and harness; no story without numbers. THEN: OWNER GOAL (binding since
+      2026-11-19): 4 x 2k each over ~139k history >= 67k new tok/s on the chip-aligned lanes (PB.9G), judged on the ladder
+      (ladder_lanes4x2k_tok_s_p139264) with the cold no-rebuild check PASS on the same code, steady and resumed reported.
+      Cut host enqueue below device time (the 84 per-layer D2H acks of a 4-segment chunk: 16.7 ms of host on glued, PB.9C;
+      the sparse_sdpa table call; per-segment sends). Bit-identical. Report in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9H_ladder.md.
       Read models/demos/deepseek_v41_flash_d_p/bringup/PACKED_RULES.md and rule 20 of models/demos/common/bringup/agents/bringup-engineer.md
       first.'
   gate:
