@@ -736,7 +736,7 @@ tests/ttnn/unit_tests/base_functionality/test_kv_chunk_table_strided_bindings.py
 # Bindings and tests for code other teams own.
 tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_graph_report_device_tensors_unit.py @razorback3 @dongjin-na @bbradelTT
-ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.* @nsextonTT @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
+ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.* @nsextonTT @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT @tenstorrent/metalium-developers-metal-distributed
 ttnn/cpp/ttnn-nanobind/mcast_host.* @nsextonTT
 tests/ttnn/unit_tests/base_functionality/test_mcast_host_bindings.py @razorback3 @dongjin-na @bbradelTT
 ttnn/cpp/ttnn-nanobind/profiler.* @nsextonTT
