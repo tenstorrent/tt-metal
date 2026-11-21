@@ -1642,6 +1642,28 @@ PERF_TEST_SCHEMAS = {
         },
         "test_name_aliases": {"perf_sfpu_reduce_sdpa": "perf_sfpu_reduce_sdpa"},
     },
+    "perf_sfpu_sampling": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "sampling_op",
+            "tile_cnt",
+            "unpack_to_dest",
+            "value_bits",
+            "vector_mode",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_sfpu_sampling": "perf_sfpu_sampling"},
+    },
     "perf_sfpu_sdpa_fw": {
         "version": 1,
         "columns": [

@@ -172,6 +172,7 @@ DB_SCHEMA = [
     Column("rmsnorm_num_faces", "int64", True, "configuration"),
     Column("rmsnorm_num_tiles", "int64", True, "configuration"),
     Column("rmsnorm_preserve_src_zero_flag", "bool", True, "configuration"),
+    Column("sampling_op", "string", True, "configuration"),
     Column("scale_bf16", "int64", True, "configuration"),
     Column("scale_en", "bool", True, "configuration"),
     Column("sdpa_bcast_num_tiles", "int64", True, "configuration"),
