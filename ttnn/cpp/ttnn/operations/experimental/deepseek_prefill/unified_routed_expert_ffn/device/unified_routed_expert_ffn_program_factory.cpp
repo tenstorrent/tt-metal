@@ -271,18 +271,15 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     // Expert groups (weights_from_pages: gpt-oss's 32 narrow tensor-parallel experts per chip): the grid is NG
     // stacked groups of GRID_X x GRID_Y cores, group g running experts g, g + NG, ... at the same time. One such
-    // expert takes ~45 us on any grid from 12x2 to 12x8 (its K-block handshake rounds, not its cores, bound it),
-    // so 12x8 ran the 32 experts one after another at a quarter of the grid's worth of work each.
+    // expert takes ~45 us on any grid from 12x2 to 12x8 at light loads (its K-block handshake rounds, not its cores,
+    // bound it), so 12x8 ran the 32 experts one after another. Light loads take more, shorter groups; heavy loads
+    // fewer, taller ones (gpt-oss-20b traced TTFT, 1K: 12x8 78.2 ms, 2 x 12x4 67.4, 5 x 12x2 62.8; untraced 8K:
+    // 207.4 / 201.0 / 208.8 ms). m_tiles is the call's tokens / 32; a chip's 32 experts then average
+    // tokens * 4 / 32 of them (top-4), so m_tiles >= 128 (4K tokens) is >= 512 per expert.
     uint32_t NG = 1;
     if (from_pages) {
-        GRID_Y = kGroupRowsFromPages;
-        if (const char* e = std::getenv("TT_UREF_GROUP_ROWS")) {  // (experiments)
-            GRID_Y = static_cast<uint32_t>(std::atoi(e));
-        }
+        GRID_Y = M_tiles_full >= kGroupTallFromMTiles ? 4 : 2;
         NG = std::max<uint32_t>(1, std::min<uint32_t>(grid_size.y / GRID_Y, experts_per_chip));
-        if (const char* e = std::getenv("TT_UREF_GROUPS")) {  // (experiments)
-            NG = std::min<uint32_t>(static_cast<uint32_t>(std::atoi(e)), grid_size.y / GRID_Y);
-        }
     }
     const uint32_t kMaxChunkMTiles = 4 * GRID_Y;  // per_core_M <= 4 (see above)
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
