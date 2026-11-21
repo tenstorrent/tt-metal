@@ -413,6 +413,37 @@ def test_grid_sample_float32_input_fp32_dest_acc(device, grid_kind, align_corner
     torch.testing.assert_close(ttnn.to_torch(output), expected, atol=0.02, rtol=0.02)
 
 
+@pytest.mark.parametrize("align_corners, width", [(False, 8), (True, 9)])
+def test_grid_sample_nearest_rounds_half_to_even(device, align_corners, width):
+    # x is picked so every sample lands exactly on a pixel boundary (image x = j + 0.5). torch rounds these half to
+    # even, so with input value = column index the expected columns are 0, 2, 2, 4, 4, ...
+    if align_corners:
+        xs = [(2 * j + 1) / (width - 1) - 1 for j in range(width - 1)]
+    else:
+        xs = [(2 * j + 2) / width - 1 for j in range(width - 1)]
+    grid = torch.tensor([[[[x, 0.0] for x in xs]]], dtype=torch.float32)
+    input_tensor = torch.arange(width, dtype=torch.float32).view(1, 1, width, 1).expand(1, 3, width, 32).contiguous()
+    expected = torch.nn.functional.grid_sample(
+        input_tensor.permute(0, 3, 1, 2), grid, mode="nearest", padding_mode="zeros", align_corners=align_corners
+    ).permute(0, 2, 3, 1)
+
+    grid_host = ttnn.prepare_grid_sample_grid(
+        ttnn.from_torch(grid, dtype=ttnn.float32),
+        list(input_tensor.shape),
+        mode="nearest",
+        align_corners=align_corners,
+        output_dtype=ttnn.bfloat16,
+    )
+    output = ttnn.grid_sample(
+        ttnn.from_torch(input_tensor.to(torch.bfloat16), device=device, memory_config=ttnn.L1_MEMORY_CONFIG),
+        ttnn.to_device(grid_host, device),
+        mode="nearest",
+        align_corners=align_corners,
+        use_precomputed_grid=True,
+    )
+    torch.testing.assert_close(ttnn.to_torch(output).float(), expected, atol=0, rtol=0)
+
+
 @pytest.mark.parametrize("input_dtype", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("batch_output_channels", [False, True])
 @pytest.mark.parametrize(
