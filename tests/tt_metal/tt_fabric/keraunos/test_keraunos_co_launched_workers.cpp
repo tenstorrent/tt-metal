@@ -13,11 +13,13 @@
 #include <gtest/gtest.h>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <mutex>
 #include <random>
 #include <string>
 #include <vector>
@@ -32,13 +34,17 @@
 #include "internal/tt-2xx/quasar/dev_mem_map.h"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
+#include "llrt/hal.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
+#include "tt_metal/fabric/fabric_init.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
 namespace tt::tt_fabric::fabric_router_tests {
 namespace {
 
 using tt::tt_metal::CoreCoord;
+using tt::tt_metal::HalL1MemAddrType;
+using tt::tt_metal::HalProgrammableCoreType;
 using tt::tt_metal::MetalContext;
 
 constexpr uint32_t kNumPackets = 5;
@@ -253,6 +259,7 @@ protected:
         if (!devices_.empty()) {
             DoTearDownTestSuite();
         }
+        set_fabric_program_extension({});
     }
 };
 
@@ -316,15 +323,6 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links) {
 
     // Fabric is up, so this run launched every router, and none has been told to terminate.
     const auto routers = get_routers(/*masters_only=*/false);
-    for (const auto& router : routers) {
-        EXPECT_NE(read_edm_status(router), static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED))
-            << "chip " << router.chip << " router " << router.logical.str() << " reads TERMINATED as fabric comes up";
-    }
-
-    // Fabric is up, so this run launched every router, and none has been told to terminate. A router's status word
-    // survives from the case before on the same server, so TERMINATED here is that case's, and without this check the
-    // TERMINATED after close below could be too.
-    const auto routers = all_routers();
     for (const auto& router : routers) {
         EXPECT_NE(read_edm_status(router), static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED))
             << "chip " << router.chip << " router " << router.logical.str() << " reads TERMINATED as fabric comes up";
