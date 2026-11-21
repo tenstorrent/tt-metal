@@ -30,7 +30,7 @@ mapfile -t FILES < <(cut -d: -f1 "$NODE_LIST" | sort -u)
 PYTEST_EXTRA=(-q --override-ini=log_cli=false -m "perf and not accuracy" --timeout=60 --node-list="$NODE_LIST")
 STATUS=0
 
-for SHIFT in 0 4 20 36 52; do
+for SHIFT in 0 4 24 44 60; do
   export LLK_CODE_SHIFT="$SHIFT"
   export RUNNER_TEMP="$TEMP_ROOT/placement-p$SHIFT"
   export PERF_RUN_TAG="p$SHIFT"

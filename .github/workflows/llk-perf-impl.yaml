@@ -60,7 +60,7 @@ on:
         default: ""
         type: string
       stage2-thresholds:
-        description: 'With stage2-baseline-ref: {"<arch>": {"threshold": ..., "module_thresholds": ...}}; only these arches run stage 2'
+        description: 'With stage2-baseline-ref: {"<arch>": {"threshold": ..., "min_cycles": ..., "module_thresholds": ...}}; only these arches run stage 2'
         required: false
         default: "{}"
         type: string
@@ -557,6 +557,7 @@ jobs:
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           THRESHOLD: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].threshold }}
           MODULE_THRESHOLDS: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].module_thresholds }}
+          MIN_CYCLES: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].min_cycles }}
         run: |
           # JOB_START_EPOCH is stamped after container init (up to ~3 min on a cold pull); 2 more stay for the uploads.
           export LLK_STAGE2_DEADLINE=$(( JOB_START_EPOCH + (TIMEOUT_MINUTES - 5) * 60 ))
@@ -792,9 +793,10 @@ jobs:
             case "$arch" in wormhole) label=N150 ;; blackhole) label=P150 ;; *) label=none ;; esac
             want=$(python3 -c 'import json, os, sys; print(sum(sys.argv[1] in t["runs_on"][0] for t in json.loads(os.environ["MATRIX"] or "[]")))' "$label")
             got=$(ls "$GITHUB_WORKSPACE"/perf-data/perf-data-"$arch"-*/leg-complete 2>/dev/null | wc -l)
-            if (( want == 0 || got < want )); then
-              echo "::warning::$arch: $got of $want legs completed; not published."
+            if [ "$want" -eq 0 ] || [ "$got" -lt "$want" ]; then
+              echo "::error::$arch: $got of $want legs completed; not published."
               rm "$f"
+              touch "$GITHUB_WORKSPACE/short-arch"
             fi
           done
           ls "$GITHUB_WORKSPACE"/generated/llk_perf/*.parquet || { echo "::error::No complete architecture to publish."; exit 1; }
@@ -809,3 +811,6 @@ jobs:
           sftp-batchfile: .github/actions/upload-data-via-sftp/llk_perf_batchfile.txt
           username: "llk-perf-run-writer"
           hostname: "s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com"
+      - name: Fail on a short architecture
+        if: always()
+        run: '[ ! -f "$GITHUB_WORKSPACE/short-arch" ]'
