@@ -160,6 +160,10 @@ def _parse_image_prompts(image_prompt, num_frames: int) -> list[ImagePrompt]:
 
 
 class WanPipelineI2V(WanPipeline):
+    # Wan2.2 I2V A14B sampler setting (both experts).
+    DEFAULT_GUIDANCE_SCALE = 3.5
+    DEFAULT_GUIDANCE_SCALE_2 = 3.5
+
     @classmethod
     def _config_overrides(cls) -> dict[str, object]:
         return {
