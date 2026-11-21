@@ -43,6 +43,8 @@ class GemmaConfig:
         rope_local_base_freq: float = 10000.0,
         rope_linear_scaling_factor: float = 8.0,
         sliding_window_pattern: int = 6,
+        sliding_window: int = 1024,
+        query_pre_attn_scalar: float = 256,
         max_position_embeddings: int = 8192,
         hidden_layer_index: int = -1,
     ):
@@ -61,6 +63,10 @@ class GemmaConfig:
         self.rope_local_base_freq = rope_local_base_freq
         self.rope_linear_scaling_factor = rope_linear_scaling_factor
         self.sliding_window_pattern = sliding_window_pattern
+        # Local layers attend only within the window. The encoder applies one causal mask to every
+        # layer, which matches only while the sequence fits in the window (checked in forward).
+        self.sliding_window = sliding_window
+        self.query_pre_attn_scalar = query_pre_attn_scalar
         self.max_position_embeddings = max_position_embeddings
         self.hidden_layer_index = hidden_layer_index
 
@@ -268,15 +274,15 @@ class GemmaAttention(Module):
 
         # SDPA — use is_causal when no mask, or explicit mask when padding present.
         # TTNN SDPA doesn't support both is_causal and attn_mask simultaneously.
-        # Gemma-3 scales by query_pre_attn_scalar**-0.5 = head_dim**-0.5 here; pass it
-        # explicitly rather than relying on the SDPA default.
+        # Gemma-3 scales by query_pre_attn_scalar**-0.5; pass it explicitly rather than relying
+        # on the SDPA default (head_dim**-0.5).
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
             is_causal=(attn_mask is None),
             attn_mask=attn_mask,
-            scale=1.0 / math.sqrt(self.head_dim),
+            scale=1.0 / math.sqrt(self.config.query_pre_attn_scalar),
             program_config=self.sdpa_config,
             compute_kernel_config=self.compute_config,
         )
@@ -515,10 +521,14 @@ class GemmaEncoder(Module):
         """Embed → 48 decoder layers → final norm. Returns [embed, L0..L47, final_norm] on device.
         Pure device graph (mask pre-built by build_attn_mask, RoPE cos/sin resident) so the whole
         forward replays as one ttnn trace."""
+        seq_len, window = token_ids.shape[-1], self.config.sliding_window
+        if seq_len > window:
+            msg = f"sequence length {seq_len} exceeds the sliding window {window}, which is not modeled"
+            raise ValueError(msg)
+
         hidden_states = self.embed_tokens(token_ids)
         hidden_states = ttnn.multiply(hidden_states, math.sqrt(self.config.hidden_size))
 
-        seq_len = token_ids.shape[-1]
         cos_g, sin_g = self.rotary_emb_global(seq_len)
         cos_l, sin_l = self.rotary_emb_local(seq_len)
 
