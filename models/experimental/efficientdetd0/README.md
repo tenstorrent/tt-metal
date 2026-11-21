@@ -194,10 +194,10 @@ Run the test suite to verify model correctness:
 pytest models/experimental/efficientdetd0/tests/ -v
 
 # Run specific test
-pytest models/experimental/efficientdetd0/tests/test_efficient_det.py -v
+pytest models/experimental/efficientdetd0/tests/pcc/test_efficient_det.py -v
 
 # Run with specific device parameters
-pytest models/experimental/efficientdetd0/tests/test_efficient_det.py \
+pytest models/experimental/efficientdetd0/tests/pcc/test_efficient_det.py \
     --device-params '{"l1_small_size": 16384}' -v
 ```
 
@@ -223,7 +223,7 @@ pip install pycocotools
 **Run Evaluation:**
 ```bash
 # Evaluate TTNN implementation
-python models/experimental/efficientdetd0/tests/evaluate_coco.py \
+python models/experimental/efficientdetd0/tests/pcc/evaluate_coco.py \
     --coco-annotations /path/to/coco/annotations/instances_val2017.json \
     --coco-images /path/to/coco/val2017 \
     --weights-path models/experimental/efficientdetd0/resources/efficientdet-d0.pth \
@@ -231,7 +231,7 @@ python models/experimental/efficientdetd0/tests/evaluate_coco.py \
     --num-samples 5000
 
 # Evaluate PyTorch reference (for comparison)
-python models/experimental/efficientdetd0/tests/evaluate_coco.py \
+python models/experimental/efficientdetd0/tests/pcc/evaluate_coco.py \
     --coco-annotations /path/to/coco/annotations/instances_val2017.json \
     --coco-images /path/to/coco/val2017 \
     --weights-path models/experimental/efficientdetd0/resources/efficientdet-d0.pth \
@@ -350,7 +350,7 @@ To get final detections:
    - Or manually download and place in the correct directory
 
 2. **Device initialization errors**
-   - Check device availability: `ttnn.list_devices()`
+   - Check device availability: `ttnn.GetNumAvailableDevices()`
    - Verify device parameters (l1_small_size, etc.)
 
 3. **Memory errors**

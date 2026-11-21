@@ -22,14 +22,9 @@ pytest --disable-warnings --input-path="<address_to_your_json_file.json>" models
 
 ```
 
-- If you would like to run an interactive demo which will prompt you for the input:
-```sh
-pytest models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_interactive_demo
-```
-
 - Our second demo is designed to run poloclub/diffusiondb dataset, run this with:
 ```sh
-pytest --disable-warnings models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo_diffusiondb
+pytest --disable-warnings models/demos/vision/generative/stable_diffusion/wormhole/tests/test_demo.py::test_demo_sd_db
 ```
 
 - If you wish to run for `num_prompts` samples and `num_inference_steps` denoising steps:

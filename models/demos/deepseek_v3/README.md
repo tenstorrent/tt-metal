@@ -79,7 +79,7 @@ Many unit tests and submodule tests can run on a single Galaxy without requiring
 ```bash
 # Run tests directly (no launch script needed)
 pytest models/demos/deepseek_v3/tests/test_mlp.py
-pytest models/demos/deepseek_v3/tests/test_attention.py
+pytest models/demos/deepseek_v3/tests/test_mla.py
 ```
 
 The demo can also run on a single Galaxy in data parallel mode with a reduced number of layers (5 layers instead of the full model):
