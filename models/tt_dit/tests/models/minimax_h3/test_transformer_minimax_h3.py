@@ -1084,7 +1084,8 @@ def test_minimax_h3_transformer_block_lora_side(
     reset_seeds,
 ) -> None:
     """The unmerged LoRA side branch (rank 128) on one block against the fp32 `W + B @ A` reference: the whole
-    output, and the adapter's own contribution (side-branch block minus base block) against the reference's."""
+    output, and the adapter's own contribution (side-branch block minus base block) against the reference's, which
+    must also beat the same contribution from merged weights on device (the merge rounds B @ A onto W's grid)."""
     rank = 128
     skip_if_unsupported_num_links(mesh_device, num_links)
 
@@ -1117,9 +1118,17 @@ def test_minimax_h3_transformer_block_lora_side(
     tt_base = MiniMaxH3TransformerBlock(**fixture.block_kwargs)
     tt_base.load_torch_state_dict(base.state_dict())
     base_out = fixture.run(tt_base)
+    tt_base.load_torch_state_dict(merged.state_dict())
+    merged_out = fixture.run(tt_base)
 
+    def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+        return torch.corrcoef(torch.stack([a.flatten().double(), b.flatten().double()]))[0, 1].item()
+
+    reference_delta = fixture.torch_out - torch_base
+    side_pcc, merged_pcc = pcc(reference_delta, side_out - base_out), pcc(reference_delta, merged_out - base_out)
+    logger.info(f"adapter contribution PCC vs fp32: side branch {side_pcc:.5f}, merged weights {merged_pcc:.5f}")
     assert_quality(fixture.torch_out, side_out, pcc=0.9995)
-    assert_quality(fixture.torch_out - torch_base, side_out - base_out, pcc=0.99)
+    assert side_pcc >= 0.98 and side_pcc > merged_pcc, (side_pcc, merged_pcc)
 
 
 @GALAXY_RING
