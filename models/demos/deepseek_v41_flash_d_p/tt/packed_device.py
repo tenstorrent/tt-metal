@@ -429,9 +429,11 @@ def warm_glued_chunks(chunk: int, slots: list, max_seq: int, mesh=None, replay: 
         for k in range(n):
             a = {"fresh": 64 * k, "cont": 2 * chunk * (k + 1) + 64 * k, "replay": 2 * chunk * (k + 1) + 64 * k}
             a = a.get(h, far - 64 * 300 * k)
+            if a < 0 or a + chunk > max_seq:  # DS41-372: the fits-check before the Segment (it refuses a start < 0)
+                break
             ws = a + 128 if h == "replay" else None
             segs.append(Segment(int(slots[k]), a, a + L - (17 if odd and k == n - 1 else 0), ws))
-        if all(0 <= sg.start and sg.start + chunk <= max_seq for sg in segs):
+        if len(segs) == n:
             out.append(GluedChunk(chunk, tuple(segs), align=align))
     if n_max >= 3:
         out.append(
@@ -441,6 +443,17 @@ def warm_glued_chunks(chunk: int, slots: list, max_seq: int, mesh=None, replay: 
                 align=align,
             )
         )
+    h = (chunk // 2 // align * align) if align else (chunk // 2 // 64 * 64)
+    if settings.get("PACKED_WARM_CONT1") == "on" and slots and 0 < h and h + chunk <= max_seq:
+        # PB.FX (DS41-373): a lone segment runs today's single path (PackedChunk.trivial); at a continuing start after
+        # a partial (non-whole) chunk of its slot its window carry is read from the slot's ring
+        # (attention._ring_carry_pages: to_layout, the owner gather, page copies, untilize, slice_write into the kept
+        # tail), a kind no chunk above reaches (their lone segments start fresh or past an unwritten history). Its
+        # programs depend on no position (fixed 128-row carry, page-copy offsets / counts as values): one pair, the
+        # second chunk at a non-chunk-aligned start, warms it for every start, owner chip and previous layout.
+        s = int(slots[0])
+        out.append(GluedChunk(chunk, (Segment(s, 0, h),), align=align))
+        out.append(GluedChunk(chunk, (Segment(s, h, chunk),), align=align))
     return out
 
 

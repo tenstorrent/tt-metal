@@ -1408,6 +1408,7 @@ def batch_call_settings(env=None) -> tuple:
     # slices; batch_call_apply refreshes it in a load-time snapshot); PACKED_CHIPS (PB.9G: chip-aligned lanes, or PB.9X's
     # back-to-back glued layout) likewise, refreshed like POS_DYNAMIC; COMMON_VALUE_SLOTS (PB.9X) likewise; MHC_POST_V2
     # (PB.8R: tt/mhc.py reads it per mhc_post call; the fork keeps both programs) likewise, refreshed like POS_DYNAMIC
+    # PACKED_WARM_CONT1 (PB.FX: runtime.compile's packed warm-up set, read per compile call) likewise
     return (
         "PREFILL_END",
         "ENGRAM_DEVICE",
@@ -1424,6 +1425,7 @@ def batch_call_settings(env=None) -> tuple:
         "PACKED_GLUED_DYNAMIC",
         "POS_DYNAMIC",
         "PACKED_CHIPS",
+        "PACKED_WARM_CONT1",
         "COMMON_VALUE_SLOTS",
         "MHC_POST_V2",
     ) + (() if skip == "replay128" else ("DECODER_SKIP",))

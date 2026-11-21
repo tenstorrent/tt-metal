@@ -1,0 +1,78 @@
+{
+ "used": [
+  {
+   "id": "DS41-373",
+   "how": "started from its probe (to_layout @ attention.py:1138 _ring_carry_pages ... slice_write @ _put_rows) and the alone A[4096,8192) case; warmed that kind in warm_glued_chunks",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-351",
+   "how": "kept the fix inside the finite warm-up set (warm_glued_chunks, adapter.compile) rather than a per-request warm",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-372",
+   "how": "moved the fits-check before Segment() in warm_glued_chunks (no raise below ~112k positions)",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-361",
+   "how": "kept test_no_rebuild cold (BATCH_COLD) and added the new paths to its strict packed set",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-373",
+   "evidence": "the cause is not the non-chunk-aligned start: a lone segment is PackedChunk.trivial (tt/packed_device.py:212) and runs today's single path; after a PARTIAL (non-whole) chunk of its slot rtail_end != start, so cache.carry() reads the ring (attention.py:1342 -> _ring_carry_pages owner gather). Programs are position-free (page_copy offsets are values); the warm-up never ran a trivial chunk continuing a partial one. Fix landed: PACKED_WARM_CONT1 pair in warm_glued_chunks.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "a lone packed segment (PackedChunk.trivial) runs the single-request path: its warm-up kinds are the single path's, including the ones only packing reaches (a continuing chunk after a partial, non-last chunk)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: two extra warm-up chunks at startup only"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; no owner decision was needed"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "no new test file and no load-time env; test_no_rebuild keeps its geometry (BRINGUP_CHUNK=8192, one load)"
+  }
+ ],
+ "cited_only": [
+  "DS41-374"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.FX",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T15:02:24",
+  "head": "bc0ccaafdd8",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.FX.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.FX.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

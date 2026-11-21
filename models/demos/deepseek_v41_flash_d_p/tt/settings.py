@@ -1467,6 +1467,17 @@ TABLE = {
         "off = PB.7B's per-pass ring calls. Bit-identical to off (tests/packed/test_glued_oracle.py). Default off (the "
         "task's: on = the change; the gate sets it)",
     ),
+    "PACKED_WARM_CONT1": Setting(
+        "on",
+        ("on", "off"),
+        "PB.FX (OWNER 2026-11-21, DS41-373), read per runtime.compile call (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings). on = the engine's packed warm-up (tt/packed_device.warm_glued_chunks) also runs a "
+        "one-segment request split in two chunks of one slot, the second at a continuing, non-chunk-aligned start "
+        "after a partial (non-whole) chunk: a lone segment runs today's single path (PackedChunk.trivial), whose window "
+        "carry is then read from the slot's ring (attention._ring_carry_pages: to_layout, the owner gather, page "
+        "copies, untilize, slice_write into the kept tail); no other kind reached it, so its 6 programs were built on "
+        "the request path. off = the warm-up before PB.FX (the A/B's previous side). Warm-up only: no forward changes",
+    ),
     "PACKED_CHIPS": Setting(
         "on",
         ("on", "off"),

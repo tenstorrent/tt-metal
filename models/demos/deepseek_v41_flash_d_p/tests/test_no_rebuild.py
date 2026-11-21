@@ -35,6 +35,11 @@ stays steady):
     lanes4x2k     four 2048-token segments (8 chips each)
     lanes4x1600s  four 1600-token segments (7 chips each) + a 1024-row split piece (4 chips)
     lanes6mix     segments of 200 (1 chip), 1 (1 token, its chip idle), 2048, 777, 40 (cap <= start: acks only), 1500
+    one4k         PB.FX (DS41-373): ONE 4096-token segment (a lone segment runs today's single path in prefill_packed)
+                  at a continuing, non-chunk-aligned start after a partial chunk of its slot: the window carry read
+                  from the slot's ring (attention._ring_carry_pages)
+    one1600       the same, 1600 tokens (a partial chunk end)
+    lanes2x3k     the sibling kind: two 3072-token segments (12 chips each) at such starts
 Metrics: no_rebuild_pass_<path> (1 / 0; also single<chunk> for the single-request check above) and
 program_builds_after_warmup_<path> (program-cache entries + prepare_program calls in the path's fresh chunks),
 packed_ids_uploads_<path>, no_rebuild_rows_<path>, no_rebuild_probe_<path> (the ops that built).
@@ -94,6 +99,12 @@ PACKED_PATHS = (
     ("lanes4x2k", (2048,) * 4),  # four 2048-token requests, 8 chips each
     ("lanes4x1600s", (1600,) * 4 + (1024,)),  # four 1600 (7 chips each) + a 1024-row split piece (4 chips)
     ("lanes6mix", (200, 1, 2048, 777, 40, 1500)),  # 1-chip, 1-token, idle (cap <= start) and padded segments
+    # PB.FX (DS41-373): one segment at a continuing, non-chunk-aligned start after a partial chunk of its slot (today's
+    # single path inside prefill_packed, its window carry from the slot's ring), whole and partial; and the sibling
+    # two-segment kind at such starts
+    ("one4k", (4096,)),
+    ("one1600", (1600,)),
+    ("lanes2x3k", (3072, 3072)),
 )
 PACKED_KINDS = ("steady", "resumed", "steady")
 

@@ -1051,3 +1051,101 @@
   models/demos/deepseek_v41_flash_d_p/tests/perf/test_mb4_history_probe.py"` (MB4_POS, MB4_SIDES); the op test:
   `resident submit --cmd "scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/test_ckv_bfp4_rows.py"`; C++: ./build_metal.sh (prepared_program).
+
+## PB.T perf (attempt 1): slot isolation at chip boundaries, FAST tier + DEEP sweep (tests only)
+- Expected saving per chunk (perf_guide, before any run): 0 ms device, 0 ms host: no model code changes (tt/ is
+  outside this step's paths); the step adds the isolation oracle on the serving entry.
+- Load reason: "needs the gate's accuracy load (40 layers, 8192, seq 64512) because the tier runs in that one load
+  with the determinism check (OV-61); the served mode DECODER_SKIP=decode is a call-time switch on it".
+- What (tests + one framework hint; no model code):
+  - tests/packed/isolation_common.py (new): the harness. Bench = the serving runtime over the held model
+    (adapter.build_runtime, all 40 layers, DECODER_SKIP=decode call-time), the engine KV cache, the host ack sink,
+    runtime.compile. Every chunk goes through runtime.prefill_packed under a BuildProbe. Two worlds: packed (multi-segment
+    chunks, slots reused, junk warm-up slots 0-5 used) and alone (each request one segment a chunk, same boundaries,
+    a never-used slot; reference aliases share one alone run). Compared bit-exact: outputs (digest of every segment's
+    rows, streams + pre, at layers 0, 1, 2, 3, 14 and the last computed one, 19), served records over [0, cap(end))
+    at every layer (window ring natural rows, the 128-row snapshot of all 32 chips, compressed KV / index-key bytes,
+    host engram tails), acks (layer range, start, end in order; none for a slot outside the chunk), bystander slots'
+    whole slabs (every layer / config / chip). Path counters: GluedCall._index_dynamic layers (one ring),
+    gather_hide regions, packed_device fallback. Host reads in ONE ttnn.to_torch a tensor (ConcatMeshToTensor, its
+    chip order checked against get_device_tensors once): per-chip reads made a packed chunk 15-23 s, now 5-7 s.
+  - test_packed_fast_tier.py: 4 packed chunks (8 requests: steady, replay, split in 2 chunks, 1 chip, 1 token,
+    acks only, 12 empty chips, two slot reuses, a parked request, a canary slot), 18 segment checks.
+  - test_packed_deep_sweep.py: (1) 6 kinds x all 24 orders of 4 of them (48 chunks, a 12-slot pool rotated);
+    (2) seeded fuzz (SEED 20261121): 19 chunks, 29 requests, slots reused, a long request L to history 55296,
+    6 idle-slot windows + canary. 373 segment checks.
+  - core/batch.py: BATCH_MAX_SEQ (F298, dev/BREADCRUMBS): the tiers' slots are 114688 (DS41-372: runtime.compile's
+    packed warm-up raises below ~112k), so the gate's accuracy load is made at 114688 instead of 64512.
+- DECIDED (OV-58): replay segments are built as tt-d-gen sends a resumed request: start P - 128, write_start P,
+  [0, P) written. My first schedule (write_start start + 128, as test_no_rebuild draws it) replays rows nobody wrote:
+  they hold the slot's own leftovers, which legitimately differ between a reused (warm-up junk) slot and a fresh one.
+  That gave 18 output / 84 served mismatches that were test artifacts. Likewise served records are compared over
+  [0, cap(end)) (what decode receives), not [0, ceil32(end)).
+- DECIDED (OV-58): outputs captured at 6 layers, not all 20 (the 20-layer capture made the tier ~3x over budget); a
+  bit-exact difference at any layer reaches layer 19, and the served records of every layer locate it.
+- Measured (resident, same code as the gate check):
+  - FAST tier: 18 segments, outputs 0 / max |diff| 0.0, served 0, acks 0, bystanders 0; one-ring layers
+    [2, 8, 14]; hide regions 12; fallback 0. Wall 260 s, of which 117 s is the model load inside the test (the
+    gate's process has it loaded already: ~145 s there). FAIL: packed_fast_program_builds_after_warmup = 6. All 6
+    come from the alone A[4096,8192) (a 1-segment packed chunk at a continuing, non-aligned start:
+    attention._ring_carry_pages + 5 more, first call at each site). DS41-373, a model gap (tt/ is outside this step):
+    a FIX task.
+  - DEEP sweep: PASSED. 373 segments, every count 0, max |diff| 0.0; hide regions 42; the same 6 builds (recorded
+    there, not gated). Wall 1092 s with a 112 s load: ~16.5 min in the gate.
+  - packed_fast_long_pool_layers = 0: under DECODER_SKIP=decode the candidate indexer (layer 20) runs only its KV head,
+    so the long-pool path is not on the served path at all. Recorded only.
+- Rule 20: no per-chunk value touched (tests only). The tests feed the serving entry only what tt-d-gen sends
+  (make_packed_input: the ids + the chunk header, made outside the build count).
+- Gotchas: warm_glued_chunks raises on slots below ~112k (DS41-372); a test-file edit restarts the resident process
+  (the released model's DRAM does not come back): one load an iteration.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.T --spec $BRINGUP_SPEC --check` (devjob); one
+  tier: `resident submit --cmd "<the gate's env> scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_fast_tier.py"` (or test_packed_deep_sweep.py).
+- Gate check `gate PB.T --check` (devjob pbt_gate1, after the last code edit; hooks clean): FAIL on
+  packed_fast_program_builds_after_warmup = 6 (DS41-373) only. Every isolation metric is 0; one_ring_layers 3; hide
+  regions 12; packed_fast_tier_s 104.0 (the model already loaded by the determinism check; compile 9.6 s warm);
+  test_no_rebuild cold strict ok (program_builds_after_warmup_serving 0, ids_uploads_per_chunk 0); determinism 0.0.
+  packed_deep_* MISSING: the batch stopped at the fast tier's failure. The resident run of the same code PASSED
+  (above); it was not repeated through the gate (~20 device-min for an answer already in hand).
+- DECIDED (OV-58): `orchestrator measure --task PB.T` not run. It is the quick A/B of a model switch, and this step
+  has neither a switch nor a model change (as PB.9C / PB.NR).
+- Reports: results/PB.T_fast_tier.md, results/PB.T_deep_sweep.md (written after the gate check).
+- FIX task for the owner / orchestrator: DS41-373 (warm a 1-segment continued packed kind at a 64-aligned start in
+  warm_glued_chunks; consider a 1-segment path in test_no_rebuild). DS41-372 (warm_glued_chunks' far kinds raise
+  below ~112k positions).
+
+## PB.FX perf (attempt 1): no program build after warm-up for a 1-segment packed chunk at a continuing start (PACKED_WARM_CONT1 on | off)
+- Expected saving per chunk (perf_guide, before any run): steady state 0 ms device, 0 ms host (warm-up only, the forward
+  is unchanged); on the request path it removes 6 program builds (~0.7-1 ms host each for the Python-built ones, more
+  for the kernel compiles: seconds the first time) from the first lone-segment continuing chunk after startup.
+- Load reason: "needs the gate's two loads only (the 40-layer accuracy load for oracle + fast tier, the cold layers-0-20
+  load for test_no_rebuild) because a build count is only honest in a fresh process after runtime.compile (F297)".
+- Probe (PB.T's fast-tier log, the BuildProbe there; no extra load): the 6 builds are all "first call at this site", no
+  attribute changed: to_layout @ attention.py:1138 `_ring_carry_pages`, experimental.high_bw_all_gather (`_gather_all`),
+  page_copy's prepare_program + run_prepared (TILE pages gat -> mine), untilize (`to_rm`), bringup.slice_write @
+  attention.py:1901 `_put_rows` (the carry into the kept tail `rtail`).
+- Cause (DS41-374; DS41-373's "non-aligned start" was not it): a lone segment is `PackedChunk.trivial`
+  (packed_device.py:212) and runs today's single path. After a PARTIAL (non-whole) chunk of its slot `rtail_end !=
+  start`, so `_window_region` -> `cache.carry(start)` -> ring -> `_ring_carry_pages` with owned blocks (the owner
+  gather). runtime.compile's single chunks always continue a whole chunk (rtail) and its packed lone segments start fresh
+  or past an unwritten history (truncated carry), so nothing warmed this kind. In serving it is reachable: a request
+  split over packed chunks then alone in a chunk.
+- Fix (warm-up, rule 20 "cover the kind in the finite warm-up"): every program there is position-free (fixed 128-row
+  carry, page-copy offsets / counts are value slots, the owner chip only an offset), so warm_glued_chunks adds ONE pair
+  in slot 0: [0, c/2) then [c/2, c) (c/2 chip-aligned; PACKED_WARM_CONT1 on | off, call-time, in batch_call_settings).
+  Also DS41-372: the fits-check runs before Segment() (no raise below ~112k positions; those kinds are still skipped).
+- tests/test_no_rebuild.py: packed paths one4k (4096,), one1600 (1600,) (the layout, whole-to-c/2 and partial end) and
+  lanes2x3k (3072, 3072) (the sibling 2-segment kind at continuing non-aligned starts); each steady / resumed / steady,
+  previous chunk partial in the same slot, cold, strict.
+- Per-chunk values touched (rule 20): none on the forward. The carry's start / ring slot / owner chip already reach the
+  device as page-copy value slots (page_copy.PageCopy run_prepared values); the change only adds two startup chunks.
+- Gate check `gate PB.FX --check` (devjob pbfx_gate1, after the last code edit, hooks clean): PASS PB.FX. test_no_rebuild
+  cold strict: every path 0 builds (lanes4x2k, lanes4x1600s, lanes6mix, one4k, one1600, lanes2x3k, single8192),
+  ids_uploads_per_chunk 0, on/off 0.0; fast tier: packed_fast_program_builds_after_warmup 0 (was 6), every isolation
+  metric 0, one-ring layers 3, hide regions 12, packed_fast_tier_s 102.6; oracle: packed_alone_vs_today_max_abs_diff 0.0,
+  digest mismatches 0; determinism 0.0.
+- `orchestrator measure --task PB.FX` (devjob pbfx_measure): rc 0, min layer PCC 0.7321 (L39; = PB.MB4 / PB.9G),
+  chunk_wall_ms 219.8 (spread 25.3; PB.9G 221.9: noise, as expected), host_transfers_per_layer 0.
+- Not run: test_no_rebuild with PACKED_WARM_CONT1=off (a second cold load) to show the new paths fail without the fix;
+  the orchestrator's off side of the A/B runs it.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.FX --spec $BRINGUP_SPEC --check` (devjob).
