@@ -401,6 +401,8 @@ def run_test_exp_ring_joint_sdpa(
         # 32*sp alignment cannot produce a >= one-chunk tail at sp=8.
         ((4, 8), 2, 56, 7680, 1, 8, 0, 4, 96, 512, 8192, None),
         ((1, 4), 2, 10, 8960, 1, 4, 0, 1, 224, 512, None, None),
+        # One Galaxy row: a single ring of 8 (TP=1 submesh), the per-device problem of 4x8.
+        ((4, 8), 2, 10, 18944, 1, 8, 0, 1, 224, 512, None, None),
     ],
     ids=[
         "4x32",
@@ -412,6 +414,7 @@ def run_test_exp_ring_joint_sdpa(
         "4x8_kv_capacity",
         "4x8_chunkskip",
         "1x4",
+        "4x8_ring8",
     ],
     indirect=["mesh_device"],
 )
