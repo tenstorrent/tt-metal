@@ -8,7 +8,11 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <map>
+#include <mutex>
+#include <tuple>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
 
@@ -1021,7 +1025,8 @@ ProgramRunArgs build_program_run_args(
     const TernaryDeviceOperation::operation_attributes_t& operation_attributes,
     const TernaryDeviceOperation::tensor_args_t& tensor_args,
     TernaryDeviceOperation::tensor_return_value_t& output,
-    const TernaryPerCoreArgs& per_core) {
+    const TernaryPerCoreArgs& per_core,
+    bool with_kernel_args = true) {
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
     const TernaryVariant variant = operation_attributes.ternary_variant;
 
@@ -1054,11 +1059,85 @@ ProgramRunArgs build_program_run_args(
             }
             run_args.kernel_run_args.push_back(std::move(kernel_run_args));
         };
+    if (!with_kernel_args) {
+        return run_args;
+    }
     add_kernel_run_args(READER_KERNEL, kReaderArgNames, per_core.reader);
     add_kernel_run_args(WRITER_KERNEL, kWriterArgNames, per_core.writer);
     add_kernel_run_args(COMPUTE_KERNEL, kComputeArgNames, per_core.compute);
 
     return run_args;
+}
+
+// The per-core rows each cached program holds, keyed by (mesh device, program hash folded with the tensor coordinates
+// as the program cache keys it, dispatch coordinate). The empty coordinate stands for every program of the workload,
+// which a miss builds with the same rows.
+using AppliedRowsKey = std::tuple<uint32_t, ttsl::hash::hash_t, std::vector<uint32_t>>;
+
+std::mutex& applied_rows_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::map<AppliedRowsKey, TernaryPerCoreArgs>& applied_rows() {
+    static std::map<AppliedRowsKey, TernaryPerCoreArgs> rows;
+    return rows;
+}
+
+AppliedRowsKey applied_rows_key(
+    const TernaryDeviceOperation::operation_attributes_t& operation_attributes,
+    const TernaryDeviceOperation::tensor_args_t& tensor_args,
+    const std::optional<ttnn::MeshCoordinate>& coordinate) {
+    std::vector<uint32_t> coords;
+    if (coordinate.has_value()) {
+        coords.assign(coordinate->coords().begin(), coordinate->coords().end());
+    }
+    auto* mesh_device = tensor_args.input_tensor_a.device();
+    auto hash = TernaryDeviceOperation::compute_program_hash(operation_attributes, tensor_args);
+    for (const auto& tensor_coord :
+         ttnn::device_operation::mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
+        hash = ttsl::hash::hash_objects(hash, tensor_coord);
+    }
+    return {static_cast<uint32_t>(mesh_device->id()), hash, std::move(coords)};
+}
+
+bool same_rows(const TernaryPerCoreArgs& a, const TernaryPerCoreArgs& b) {
+    return a.cores == b.cores && a.reader == b.reader && a.writer == b.writer && a.compute == b.compute;
+}
+
+// Cache miss: every program of the new workload holds `rows`. What an evicted program with this key held is gone.
+void record_rows_on_miss(
+    const TernaryDeviceOperation::operation_attributes_t& operation_attributes,
+    const TernaryDeviceOperation::tensor_args_t& tensor_args,
+    const TernaryPerCoreArgs& rows) {
+    auto key = applied_rows_key(operation_attributes, tensor_args, std::nullopt);
+    std::lock_guard lock(applied_rows_mutex());
+    auto& all = applied_rows();
+    for (auto it = all.lower_bound(key);
+         it != all.end() && std::get<0>(it->first) == std::get<0>(key) && std::get<1>(it->first) == std::get<1>(key);) {
+        it = all.erase(it);
+    }
+    all.emplace(std::move(key), rows);
+}
+
+// Cache hit: true when `rows` equal the rows this program holds. Otherwise records them; the caller applies them.
+bool rows_held_on_hit(
+    const TernaryDeviceOperation::operation_attributes_t& operation_attributes,
+    const TernaryDeviceOperation::tensor_args_t& tensor_args,
+    const std::optional<ttnn::MeshCoordinate>& coordinate,
+    const TernaryPerCoreArgs& rows) {
+    auto key = applied_rows_key(operation_attributes, tensor_args, coordinate);
+    std::lock_guard lock(applied_rows_mutex());
+    auto& all = applied_rows();
+    auto held = all.find(key);
+    if (held == all.end()) {
+        held = all.find({std::get<0>(key), std::get<1>(key), {}});
+    }
+    if (held != all.end() && same_rows(held->second, rows)) {
+        return true;
+    }
+    all.insert_or_assign(std::move(key), rows);
+    return false;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -1690,6 +1769,7 @@ ttnn::device_operation::ProgramArtifacts TernaryDeviceOperation::TernaryProgramF
     // here) and override_runtime_arguments() (cache hit) stay byte-identical.
     auto per_core = build_per_core_runtime_args(operation_attributes, tensor_args, output, broadcast_type);
     auto run_args = build_program_run_args(operation_attributes, tensor_args, output, per_core);
+    record_rows_on_miss(operation_attributes, tensor_args, per_core);
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),
@@ -1701,7 +1781,7 @@ ProgramRunArgs TernaryDeviceOperation::TernaryProgramFactory::override_runtime_a
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     // Re-apply ALL per-dispatch state to the cached program on a program-cache hit.  No program
     // rebuild and no kernel recompile -- but every per-core arg IS re-derived. We re-derive them from the SAME
     // shared builder create_program_artifacts() uses, so the two paths stay byte-identical by construction.
@@ -1728,7 +1808,10 @@ ProgramRunArgs TernaryDeviceOperation::TernaryProgramFactory::override_runtime_a
         per_core.cores.size(),
         operation_attributes.worker_grid.num_cores());
 
-    return build_program_run_args(operation_attributes, tensor_args, output, per_core);
+    // Rows equal to the ones this program holds need no re-apply: UpdateProgramRunArgs keeps every arg it is not
+    // given, so only the tensor arguments go.
+    const bool held = rows_held_on_hit(operation_attributes, tensor_args, mesh_dispatch_coordinate, per_core);
+    return build_program_run_args(operation_attributes, tensor_args, output, per_core, !held);
 }
 
 }  // namespace ttnn::operations::ternary
