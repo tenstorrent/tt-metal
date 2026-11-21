@@ -1117,3 +1117,4 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   80 snapshot sends, page copies, the ~13 ms fresh-vs-repeated gap, the adapter's +5-7 ms), gate 4x2k fresh >= 67000.
 - tasks.yaml: test_no_rebuild units in PB.8R / PB.8RP / PB.T now carry each gate's own model configuration (validate
   flagged F283: one load per class; PB.8R 5120 only, PB.8RP / PB.T 8192 with MHC_POST_V2=on).
+- 03:15 PB.9X accept recorded (a brief edit detaches the A/B report from decide: reverted the brief note, kept only the metric change). Resumed.
