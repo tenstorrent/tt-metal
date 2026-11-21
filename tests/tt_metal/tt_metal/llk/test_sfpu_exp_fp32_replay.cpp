@@ -39,7 +39,7 @@
 // form (DISABLE_SFPLOADMACRO), bit for bit, over fp32 inputs that cover every exponent with both signs (zeros,
 // subnormals, infinities and NaNs included), the Juffa breakpoints with their ulp neighbours and the rounding ties
 // of round(a / ln2), unscaled and with a runtime input scale (scale_en). The sfpi form is also held against the host:
-// within 2e-6 relative on [-87, 88], +Inf above the overflow threshold, +0 below the underflow threshold and for
+// within kFp32ExpRelTol on [-87, 88], +Inf above the overflow threshold, +0 below the underflow threshold and for
 // -Inf, NaN for NaN.
 //
 // One core runs reader_unary -> eltwise_sfpu (exp_tile_init(); exp_tile(0);) -> writer_unary with Float32 CBs; the
@@ -63,6 +63,10 @@ constexpr uint32_t kPerCoreBlockDim = 1;  // eltwise_sfpu compile arg 1: tiles p
 // Runtime input scales of the scale_en cases, as fp16b: 1.5 and -0.5.
 constexpr uint16_t kScalePos = 0x3FC0;
 constexpr uint16_t kScaleNeg = 0xBF00;
+// Relative bounds on exp against the host. The fp32 body is the accurate exp, within 2e-6 on [-87, 88]. The bf16
+// body's exp_21f polynomial plus the rounding to bf16 is within 1 %, the bound test_sfpu_compute.cpp holds it to.
+constexpr double kFp32ExpRelTol = 2e-6;
+constexpr double kBf16ExpRelTol = 1e-2;
 
 constexpr float kLn2 = std::numbers::ln2_v<float>;
 constexpr float kExpOverflow = 88.72283905f;     // ln(FLT_MAX)
@@ -247,7 +251,7 @@ size_t count_host_mismatches(
             ok = output[i] == 0u;
         } else if (x >= -87.0f && x <= 88.0f) {
             const double ref = std::exp(static_cast<double>(x));
-            ok = std::fabs(static_cast<double>(y) - ref) <= 2e-6 * ref;
+            ok = std::fabs(static_cast<double>(y) - ref) <= kFp32ExpRelTol * ref;
         }
         if (!ok) {
             if (mismatches < kMaxReportedMismatches) {
@@ -298,12 +302,15 @@ void check_replay_against_sfpi(
     EXPECT_EQ(count_host_mismatches(input, plain, scale), 0u);
 }
 
-// matmul_exp_matmul.cpp on one core; returns its two output tiles.
+// matmul_exp_matmul.cpp on one core; returns its two output tiles. With a scale, the exp between the products is
+// exp_tile<false, true> with that fp16b scale. The CBs stay Float32 in either DEST mode; the inputs are exact in bf16.
 std::vector<uint32_t> run_matmul_exp_matmul(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::vector<uint32_t>& a,
     const std::vector<uint32_t>& b,
-    bool exp_between) {
+    bool exp_between,
+    bool fp32_dest_acc_en,
+    std::optional<uint16_t> scale) {
     auto& cq = mesh_device->mesh_command_queue();
     const auto zero_coord = distributed::MeshCoordinate(0, 0);
     const auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -343,6 +350,9 @@ std::vector<uint32_t> run_matmul_exp_matmul(
     std::map<std::string, std::string> defines;
     if (exp_between) {
         defines["EXP_BETWEEN"] = "1";
+        if (scale) {
+            defines["EXP_SCALE"] = fmt::format("0x{:04x}", *scale);
+        }
     }
     CreateKernel(
         program_,
@@ -350,7 +360,7 @@ std::vector<uint32_t> run_matmul_exp_matmul(
         core,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = false,
             .defines = defines});
 
@@ -383,7 +393,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixSfpuExpFp32ReplayBitExact) {
     if (MetalContext::instance().rtoptions().get_disable_sfploadmacro()) {
         GTEST_SKIP() << "TT_METAL_DISABLE_SFPLOADMACRO builds both forms as sfpi; the A/B comparison would be vacuous";
     }
-    check_replay_against_sfpi(this->devices_.at(0), std::nullopt);
+    check_replay_against_sfpi(this->devices_.at(0), /*scale=*/std::nullopt);
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, TensixSfpuExpFp32ReplayBitExactScaled) {
@@ -395,9 +405,15 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixSfpuExpFp32ReplayBitExactScaled) {
     check_replay_against_sfpi(this->devices_.at(0), kScaleNeg);
 }
 
-TEST_F(LLKBlackholeSingleCardFixture, TensixSfpuExpFp32MatmulAfterExp) {
-    using namespace unit_tests::compute::sfpu::exp_fp32_replay;
-    // Entries k / 8 with k in [-2, 2]: every product and every 32-term sum is exact in fp32, at any fidelity.
+namespace unit_tests::compute::sfpu::exp_fp32_replay {
+
+// matmul -> exp -> matmul under one matmul_init, against the same run without the exp. The second product must be
+// bit-identical to the first; the exp'd first tile is held against the host within exp_rel_tol of exp(scale * p).
+void check_matmul_after_exp(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    bool fp32_dest_acc_en,
+    std::optional<uint16_t> scale,
+    double exp_rel_tol) {
     std::mt19937 rng(20261021);
     std::uniform_int_distribution<int> k(-2, 2);
     std::vector<uint32_t> a(kTileHW);
@@ -407,11 +423,12 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixSfpuExpFp32MatmulAfterExp) {
             w = std::bit_cast<uint32_t>(static_cast<float>(k(rng)) / 8.0f);
         }
     }
-    const auto reference = run_matmul_exp_matmul(this->devices_.at(0), a, b, /*exp_between=*/false);
-    const auto with_exp = run_matmul_exp_matmul(this->devices_.at(0), a, b, /*exp_between=*/true);
+    const auto reference = run_matmul_exp_matmul(mesh_device, a, b, /*exp_between=*/false, fp32_dest_acc_en, scale);
+    const auto with_exp = run_matmul_exp_matmul(mesh_device, a, b, /*exp_between=*/true, fp32_dest_acc_en, scale);
     ASSERT_EQ(reference.size(), 2 * kTileHW);
     ASSERT_EQ(with_exp.size(), 2 * kTileHW);
 
+    const double s = scale ? static_cast<double>(std::bit_cast<float>(static_cast<uint32_t>(*scale) << 16)) : 1.0;
     size_t nonzero = 0;
     size_t product_mismatches = 0;
     size_t exp_mismatches = 0;
@@ -430,20 +447,44 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixSfpuExpFp32MatmulAfterExp) {
             }
             ++product_mismatches;
         }
-        const double e = std::exp(static_cast<double>(p));
-        if (std::fabs(static_cast<double>(std::bit_cast<float>(with_exp[i])) - e) > 2e-6 * e) {
+        const double e = std::exp(s * static_cast<double>(p));
+        if (std::fabs(static_cast<double>(std::bit_cast<float>(with_exp[i])) - e) > exp_rel_tol * e) {
             ++exp_mismatches;
         }
     }
     log_info(
         tt::LogTest,
-        "matmul -> exp -> matmul: {} product mismatches, {} exp mismatches ({} nonzero products)",
+        "matmul -> exp -> matmul ({} DEST, scale {}): {} product mismatches, {} exp mismatches ({} nonzero products)",
+        fp32_dest_acc_en ? "fp32" : "bf16",
+        scale ? fmt::format("0x{:04x}", *scale) : std::string("none"),
         product_mismatches,
         exp_mismatches,
         nonzero);
     EXPECT_GT(nonzero, kTileHW / 2);
     EXPECT_EQ(product_mismatches, 0u);
     EXPECT_EQ(exp_mismatches, 0u);
+}
+
+}  // namespace unit_tests::compute::sfpu::exp_fp32_replay
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixSfpuExpFp32MatmulAfterExp) {
+    using namespace unit_tests::compute::sfpu::exp_fp32_replay;
+    check_matmul_after_exp(
+        this->devices_.at(0), /*fp32_dest_acc_en=*/true, /*scale=*/std::nullopt, /*exp_rel_tol=*/kFp32ExpRelTol);
+}
+
+// bf16 DEST: the unscaled bf16 body is 16 words and fills the SFPU's replay slots exactly.
+TEST_F(LLKBlackholeSingleCardFixture, TensixSfpuExpBf16MatmulAfterExp) {
+    using namespace unit_tests::compute::sfpu::exp_fp32_replay;
+    check_matmul_after_exp(
+        this->devices_.at(0), /*fp32_dest_acc_en=*/false, /*scale=*/std::nullopt, /*exp_rel_tol=*/kBf16ExpRelTol);
+}
+
+// bf16 DEST with an input scale: the body is 17 words, one more than the SFPU's replay slots.
+TEST_F(LLKBlackholeSingleCardFixture, TensixSfpuExpBf16ScaledMatmulAfterExp) {
+    using namespace unit_tests::compute::sfpu::exp_fp32_replay;
+    check_matmul_after_exp(
+        this->devices_.at(0), /*fp32_dest_acc_en=*/false, /*scale=*/kScalePos, /*exp_rel_tol=*/kBf16ExpRelTol);
 }
 
 }  // namespace tt::tt_metal
