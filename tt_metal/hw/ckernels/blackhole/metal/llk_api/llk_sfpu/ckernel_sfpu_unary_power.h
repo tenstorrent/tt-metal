@@ -75,6 +75,17 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;
     v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
     v_endif;
+    // addexp below is SFPDIVP2, which adds to the 8-bit exponent field modulo 256 and
+    // does not saturate: once z_f32 >= 2**106 (biased exponent >= 233) the +23 wraps the
+    // field to a tiny value, the overflow guard in _float_to_int32_positive_ never
+    // fires, and the result comes out as ~1.0 instead of +inf. Any z_f32 >= 128 already
+    // overflows the fp32 result, so clamp from above: 128 * 2**23 + bias is 0x7f800000,
+    // whose exponent-255 pattern the final bf16 rounding maps to +inf. min lowers to
+    // SFPLOADI + SFPSWAP, two instructions against six for the predicated form. Blackhole's
+    // SFPMAD only emits the canonical +NaN, which SFPSWAP sorts above every number, so a
+    // NaN z is clamped to 128 and rounds to +inf (Wormhole can carry a -NaN, which its
+    // sign-test clamp above sends to -127 and 0 instead).
+    z_f32 = sfpi::min(z_f32, 128.0f);
 
     // The paper relies on the following formula (c.f. Sections 1 and 5):
     // z = (bias + x * log2(a)) * N_m; where:
