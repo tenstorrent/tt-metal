@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include <api/dataflow/dataflow_api.h>
-#include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
@@ -22,8 +21,11 @@ void kernel_main() {
     constexpr auto output_height = get_arg(args::output_height);                   // Output H
     constexpr auto output_width = get_arg(args::output_width);                     // Output W
     constexpr auto num_pages_per_width = get_arg(args::num_pages_across_width);    // Number of pages across width
-    constexpr int32_t reciprocal_scale_h_fixed = get_arg(args::reciprocal_scale_h_fixed);  // input_h/output_h Q16.16
-    constexpr int32_t reciprocal_scale_w_fixed = get_arg(args::reciprocal_scale_w_fixed);  // input_w/output_w Q16.16
+    constexpr uint32_t reciprocal_scale_h_bits = get_arg(args::reciprocal_scale_h_bits);  // float32 bits of 1/scale_h
+    constexpr uint32_t reciprocal_scale_w_bits = get_arg(args::reciprocal_scale_w_bits);  // float32 bits of 1/scale_w
+
+    const float reciprocal_scale_h = __builtin_bit_cast(float, reciprocal_scale_h_bits);
+    const float reciprocal_scale_w = __builtin_bit_cast(float, reciprocal_scale_w_bits);
 
     const auto input_tensor_accessor = TensorAccessor(tensor::input);
 
@@ -45,10 +47,9 @@ void kernel_main() {
         // Map output coordinates to input coordinates using fixed-point arithmetic
         // src_y = floor(y_out * reciprocal_scale_h) = floor(y_out / scale_h)
         // src_x = floor(x_out * reciprocal_scale_w) = floor(x_out / scale_w)
-        const uint32_t src_y =
-            static_cast<uint32_t>(fixed_point_arithmetic::fixed_mul(y_out, reciprocal_scale_h_fixed));
-        const uint32_t src_x =
-            static_cast<uint32_t>(fixed_point_arithmetic::fixed_mul(x_out, reciprocal_scale_w_fixed));
+        // Same float32 arithmetic as torch's nearest index: floor((float)dst * (float)(1 / scale)).
+        const uint32_t src_y = static_cast<uint32_t>(static_cast<float>(y_out) * reciprocal_scale_h);
+        const uint32_t src_x = static_cast<uint32_t>(static_cast<float>(x_out) * reciprocal_scale_w);
 
         // Clamp source coordinates to valid range
         const uint32_t clamped_src_y = (src_y < input_height) ? src_y : (input_height - 1);

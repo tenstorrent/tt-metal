@@ -14,6 +14,13 @@ namespace ttnn::operations::pool::upsample {
 
 bool is_integer_scale(float scale);
 
+// Output extent for a float scale, as torch computes it: floor(in * scale) in double. A float32 scale that is the
+// rounded ratio out/in (e.g. 384.0f / 17) is snapped back to that ratio so the floor lands on out.
+double compute_upsample_output_extent(uint32_t in_extent, float scale);
+
+// float32 reciprocal torch uses for nearest indexing: (float)(1.0 / scale) with the same snapped scale.
+float compute_upsample_nearest_reciprocal(uint32_t in_extent, float scale);
+
 uint32_t compute_num_cores_nhw(const tt::tt_metal::ShardSpec& shard_spec, tt::tt_metal::TensorMemoryLayout mem_layout);
 
 enum class UpsamplePath { INTEGER_OPTIMIZED, FLOAT_GENERAL, UNSUPPORTED };

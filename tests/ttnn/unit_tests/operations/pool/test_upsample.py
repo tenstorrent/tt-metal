@@ -602,6 +602,48 @@ def test_upsample_nearest_float_interleaved(device, input_shape, scale_factor_h,
         assert pcc_passed, f"PCC check failed: {pcc_message}"
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "h, w, scale_h, scale_w",
+    [
+        (17, 17, 384 / 17, 384 / 17),
+        (29, 29, 384 / 29, 384 / 29),
+        (23, 23, 224 / 23, 224 / 23),
+        (1, 100000, 1.0, 0.75),
+        (1, 7000, 1.0, 1.75),
+        (1, 1000, 1.0, 3.3),
+        (100000, 1, 0.75, 1.0),
+        (7000, 1, 1.75, 1.0),
+        (1000, 1, 3.3, 1.0),
+        (18, 18, 384 / 18, 384 / 18),
+        (996, 1, 3.3, 1.0),
+        (1000, 1, 1.5, 1.0),
+        (16, 16, 24.0, 24.0),
+    ],
+)
+def test_upsample_nearest_float_matches_torch_index_and_shape(device, dtype, h, w, scale_h, scale_w):
+    """Float-scale nearest upsample picks torch's source index and torch's output size."""
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    channels = 16
+    # Every stick holds its own flat position so a wrong source row or column is exact-visible.
+    flat = torch.arange(h * w, dtype=torch.float32).reshape(1, h, w, 1)
+    input_nhwc = (flat + torch.arange(channels, dtype=torch.float32) / 64).to(torch_dtype)
+    if dtype == ttnn.bfloat16:
+        # bf16 cannot hold large positions, use a per-axis code instead: still exact on index mismatch
+        input_nhwc = torch.randn(1, h, w, channels, dtype=torch.bfloat16)
+
+    torch_result = nn.functional.interpolate(
+        input_nhwc.permute(0, 3, 1, 2), scale_factor=(scale_h, scale_w), mode="nearest"
+    ).permute(0, 2, 3, 1)
+
+    input_tensor = ttnn.from_torch(input_nhwc, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.upsample(input_tensor, [scale_h, scale_w], mode="nearest")
+    output_torch = ttnn.to_torch(output_tensor)
+
+    assert list(output_torch.shape) == list(torch_result.shape)
+    assert torch.equal(output_torch, torch_result)
+
+
 @pytest.mark.parametrize(
     "input_memory_config, output_memory_config",
     [
