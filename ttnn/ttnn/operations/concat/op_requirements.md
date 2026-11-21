@@ -28,7 +28,7 @@
 - **Compute config**: none (pure data movement; CONVENTIONS §2.2 exemption)
 - **Golden baseline**: 56 / 56 in-SUPPORTED cells passing, 0 supported_fail / xpass_drift / xfail_wrong_mode (`verifier_report.json`)
 
-### [ ] Refinement 1 — ROW_MAJOR layout (native stick kernels)
+### [x] Refinement 1 — ROW_MAJOR layout (native stick kernels)
 
 **Goal**: add `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["layout"]` for every tensor of the list (they share one layout) with a native row-major path in the kernels — the design's deferred `row_major_runs` regime: page = stick. `dim=-1`: each output stick is one sub-page run per piece (byte runs at element offsets; Quasar's NoC has 1-B transfer alignment). `dim=-2`: each output stick is one whole input stick (the `page_copy` shape in the stick domain). Output is ROW_MAJOR, DRAM interleaved (R5). Covers the PHASE0 rectangle in RM: bfloat16, dim ∈ {-1, -2}, count ∈ {2, 3}, rank ∈ {3, 4}, every alignment, DRAM and L1 inputs.
 
@@ -42,6 +42,8 @@
 - The INVALID entry `bfloat8_b × ROW_MAJOR` already covers the impossible cell.
 
 **Done when**: every golden cell with `layout=ROW_MAJOR` inside the new SUPPORTED passes exactly; regime-pinned RM tests (dim -1 with a non-16-aligned seam, dim -2) assert the host's regime choice; the session test covers the RM path; all TILE cells still pass.
+
+**Result** (implementer): SUPPORTED["layout"] = [TILE, ROW_MAJOR]. Regimes `row_major_copy` (dim -2, implicit whole-stick reads) and `row_major_runs` (dim -1, `count` tagged sub-page reads per stick, one barrier per block of sticks) in the existing reader; writer and ring unchanged. Golden slice: 58/58 in-SUPPORTED ROW_MAJOR cells exact, TILE representatives green; unit dir 147/147.
 
 ### [ ] Refinement 10 — Height-sharded tensors in L1 (the YOLOv8 neck join)
 

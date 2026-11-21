@@ -3,9 +3,10 @@
 
 """concat: `torch.cat(tensors, dim)` as one Metal 2.0 `ttnn.ProgramSpec` dispatch.
 
-The op moves values and computes nothing: a reader gathers each output tile from the input pages (whole pages
-when every seam sits on a tile boundary, byte runs otherwise) into one ring, and a writer stores the ring's
-entries to the output. The output is always DRAM interleaved (spec R5). Elements of the output's tile padding
+The op moves values and computes nothing: a reader gathers each output page from the input pages (whole pages
+when every seam sits on a page boundary, byte runs otherwise) into one ring, and a writer stores the ring's
+entries to the output. A page is a tile in TILE layout and a stick (one row) in ROW_MAJOR layout; the output has
+the tensors' layout and no layout conversion happens anywhere. The output is always DRAM interleaved (spec R5). Elements of the output's tile padding
 are not written; their values are undefined (they are not part of the output's data).
 
 Registry model: INPUT_TAGGERS (the specification's AXES), SUPPORTED, EXCLUSIONS, validate(). The specification
@@ -21,7 +22,7 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 from eval.memory import memory_axes
 from eval.specs.concat.spec import AXES  # noqa: E402
 
-from .concat_program_artifacts import BLOCK_TILES, create_program_artifacts, select_regime
+from .concat_program_artifacts import create_program_artifacts, select_regime
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +38,7 @@ INPUT_TAGGERS = AXES
 
 SUPPORTED = {
     "dtype":         [ttnn.bfloat16],
-    "layout":        [ttnn.TILE_LAYOUT],
+    "layout":        [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "memory_config": ["DRAM", "L1"],
     "sharding":      ["interleaved"],
     "dim":           [-1, -2],
@@ -111,7 +112,7 @@ def validate(tensors, dim=0):
 # ---------------------------------------------------------------------------
 
 
-def _dispatch(tensors, dim, *, block_tiles=BLOCK_TILES):
+def _dispatch(tensors, dim, *, block_tiles=None):
     """Allocate the output and run the one program. `dim` is canonical (negative)."""
     first = tensors[0]
     out_shape = list(first.shape)
@@ -124,8 +125,9 @@ def _dispatch(tensors, dim, *, block_tiles=BLOCK_TILES):
     return ttnn.generic_op([*tensors, output], spec, run_args, tensor_indices)
 
 
-def concat_with_block_tiles(tensors, dim=0, *, block_tiles=BLOCK_TILES):
-    """The op with its block knob turned (tests only; the public entry point keeps BLOCK_TILES)."""
+def concat_with_block_tiles(tensors, dim=0, *, block_tiles=None):
+    """The op with its block knob (output pages per block: tiles or sticks) turned (tests only; the public entry
+    point keeps the layout's default, concat_program_artifacts.default_block_pages)."""
     axes = validate(tensors, dim)
     return _dispatch(tensors, axes["dim"], block_tiles=block_tiles)
 
