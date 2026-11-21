@@ -39,7 +39,10 @@ enum class DataType {
     MXINT8 = 15,
     MXINT4 = 16,
     MXINT2 = 17,
-    INVALID = 18,
+    // 2-bit block float (Bfp2_b): a sign and one magnitude bit per element, sharing an 8-bit exponent
+    // per 16-element face row. Exact for {-1, 0, +1} times a power of two. TILE layout only.
+    BFLOAT2_B = 18,
+    INVALID = 19,
 };
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);

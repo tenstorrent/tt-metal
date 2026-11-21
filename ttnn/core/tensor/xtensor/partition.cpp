@@ -257,6 +257,7 @@ ttnn::Tensor concat(const std::vector<ttnn::Tensor>& tensors, int dim) {
     TT_FATAL(!tensors.empty(), "Cannot concatenate an empty list of tensors");
     const auto& reference_layout = tensors.front().tensor_spec().tensor_layout();
     switch (reference_layout.get_data_type()) {
+        case tt::tt_metal::DataType::BFLOAT2_B:
         case tt::tt_metal::DataType::BFLOAT4_B:
         case tt::tt_metal::DataType::BFLOAT8_B:
         case tt::tt_metal::DataType::MXFP8_E4M3:

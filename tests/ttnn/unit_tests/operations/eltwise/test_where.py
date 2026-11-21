@@ -1266,7 +1266,7 @@ def test_where_scalar_row_major_both_sharded_broadcast(device):
     assert torch.equal(ttnn.to_torch(out), expected)
 
 
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bfp8", "bfp4"])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat2_b], ids=["bfp8", "bfp4", "bfp2"])
 @pytest.mark.parametrize(
     "c_shape, t_shape, f_shape, condition",
     [
@@ -1295,6 +1295,26 @@ def test_where_block_float_subtile_broadcast(device, ttnn_dtype, c_shape, t_shap
     result = ttnn.to_torch(ttnn.where(tt_c, tt_t, tt_f))
     # Every 16-element block of the output comes from a single operand, so block-float rounding is exact.
     assert torch.equal(result, torch.where(torch_c.bool(), torch_t, torch_f))
+
+
+@pytest.mark.parametrize("predicate_dtype", [ttnn.int32, ttnn.uint32, ttnn.uint16], ids=["int32", "uint32", "uint16"])
+def test_where_integer_predicate_bfloat2_b_values(device, predicate_dtype):
+    """An integer predicate is cast before the kernel reads it; casting it to BFLOAT2_B would zero small nonzeros.
+
+    BFLOAT2_B keeps one nonzero magnitude per 16-element face row, so in the row [2, 1, 4, 1, ...] every 1 would
+    cast to 0 and pick the false value. Each nonzero must still pick the true value.
+    """
+    torch_pred = torch.zeros((1, 1, 32, 32), dtype=torch.int32)
+    torch_pred[..., 0, :4] = torch.tensor([2, 1, 4, 1], dtype=torch.int32)
+    torch_pred[..., 1, 16:18] = torch.tensor([3, 1], dtype=torch.int32)
+    ones = torch.ones((1, 1, 32, 32))
+
+    tt_pred = ttnn.from_torch(torch_pred, dtype=predicate_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_true = ttnn.from_torch(ones, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_false = ttnn.from_torch(-ones, dtype=ttnn.bfloat2_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.to_torch(ttnn.where(tt_pred, tt_true, tt_false)).float()
+    assert torch.equal(result, torch.where(torch_pred.bool(), ones, -ones))
 
 
 @pytest.mark.parametrize(

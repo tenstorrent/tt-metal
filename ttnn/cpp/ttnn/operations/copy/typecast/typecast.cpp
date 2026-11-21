@@ -15,7 +15,7 @@ namespace ttnn::operations::copy::detail {
 
 namespace {
 
-// A BFLOAT8_B / BFLOAT4_B pack derives one shared exponent per 16-lane block (one face row) of
+// A BFLOAT8_B / BFLOAT4_B / BFLOAT2_B pack derives one shared exponent per 16-lane block (one face row) of
 // the tile it packs. When the logical width is not a multiple of that block, the implicit width
 // padding shares the last 16-lane block with real lanes, so stale padding (an inf left by
 // reciprocal/rsqrt/log of zeroed padding, or any large value) collapses those real lanes.
@@ -23,7 +23,8 @@ bool needs_zeroed_tile_padding(const Tensor& input_tensor, const DataType& outpu
     if (input_tensor.layout() != Layout::TILE) {
         return false;
     }
-    if (output_dtype != DataType::BFLOAT8_B && output_dtype != DataType::BFLOAT4_B) {
+    if (output_dtype != DataType::BFLOAT8_B && output_dtype != DataType::BFLOAT4_B &&
+        output_dtype != DataType::BFLOAT2_B) {
         return false;
     }
     const DataType input_dtype = input_tensor.dtype();
@@ -67,7 +68,7 @@ inline Tensor typecast_impl(
     bool preserve_fp32_precision =
         (input_dtype == DataType::FLOAT32) or
         (is_8_bit_int(output_dtype) and (input_dtype == DataType::BFLOAT16 or input_dtype == DataType::BFLOAT8_B or
-                                         input_dtype == DataType::BFLOAT4_B)) or
+                                         input_dtype == DataType::BFLOAT4_B or input_dtype == DataType::BFLOAT2_B)) or
         (input_dtype == DataType::UINT16 and is_8_bit_int(output_dtype)) or is_8_bit_int(input_dtype);
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
