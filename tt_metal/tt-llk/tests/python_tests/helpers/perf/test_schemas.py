@@ -1069,6 +1069,27 @@ PERF_TEST_SCHEMAS = {
             "perf_sdpa_bcast_col_srcb_reuse": "perf_sdpa_bcast_col_srcb_reuse"
         },
     },
+    "perf_sfpu_zero_pad": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "tile_cnt",
+            "unpack_to_dest",
+            "zero_pad_total_rows",
+            "zero_pad_valid_rows",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_sfpu_zero_pad": "perf_sfpu_zero_pad"},
+    },
     "perf_top32_rm": {
         "version": 1,
         "columns": [

@@ -218,6 +218,8 @@ DB_SCHEMA = [
     Column("use_runtime", "bool", True, "configuration"),
     Column("value_bits", "int64", True, "configuration"),
     Column("zero_point_bits", "int64", True, "configuration"),
+    Column("zero_pad_total_rows", "int64", True, "configuration"),
+    Column("zero_pad_valid_rows", "int64", True, "configuration"),
     Column("dest_layout", "string", True, "configuration"),
     Column("num_calls", "int64", True, "configuration"),
     Column("preserve", "bool", True, "configuration"),
