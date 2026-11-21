@@ -82,6 +82,28 @@ def test_load_malformed_tensor_raises(tmp_path, expect_error, malformation):
     torch.testing.assert_close(ttnn.to_torch(ttnn.load_tensor(file_name)), expected, rtol=0, atol=0)
 
 
+def test_load_tensor_without_tensor_spec_raises(tmp_path, expect_error):
+    """A file whose root Tensor has no tensor_spec field is corrupt, not a null tensor."""
+    file_name = tmp_path / "missing_tensor_spec.tensorbin"
+    expected = torch.full((32, 32), 11, dtype=torch.bfloat16)
+    tensor = ttnn.from_torch(expected, layout=ttnn.TILE_LAYOUT)
+    ttnn.dump_tensor(file_name, tensor, mode=ttnn.DumpTensorMode.LOCAL)
+    original = file_name.read_bytes()
+    data = bytearray(original)
+
+    # tensor.fbs: Tensor.tensor_spec is field 0. Zero its vtable slot to mark the field absent.
+    root = 8 + struct.unpack_from("<I", data, 8)[0]
+    vtable = root - struct.unpack_from("<i", data, root)[0]
+    struct.pack_into("<H", data, vtable + 4, 0)
+    file_name.write_bytes(data)
+
+    with expect_error(RuntimeError, "tensor_spec is required for tensor"):
+        ttnn.load_tensor(file_name)
+
+    file_name.write_bytes(original)
+    torch.testing.assert_close(ttnn.to_torch(ttnn.load_tensor(file_name)), expected, rtol=0, atol=0)
+
+
 def _mislabelled_replicate_tensor():
     """A 1x2 host tensor sharded along dim 1 whose topology was relabelled as fully replicated.
 
