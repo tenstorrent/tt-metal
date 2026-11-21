@@ -1,0 +1,293 @@
+# Per-op power and energy breakdown of a transformer decoder block
+
+Measures every op of a Llama-style decoder block separately and reports, per op, its dynamic
+power, its energy per activation, and its energy per FLOP.
+
+`LONG_MATMUL_MODE` (see `tools/tt-ember/README.md`) picks the op list:
+
+* `updated` (default): the full SwiGLU block — `matmul_ffn_gate` and `matmul_ffn_up`,
+  `silu`, `gate_mul` on two distinct tensors, and both residual adds (14 ops);
+* `legacy`: the 12 ops the published p100a results measured. That list has no gate projection
+  and no second residual add, and `residual_add` and `gate_mul` use one tensor as both
+  operands, so its sum is not a full block. Use it to reproduce the published numbers.
+
+Updated mode also sizes every op's batch before the first interval, so the idle gaps, where
+`parser.py` measures the baseline, hold only one allocation and one warm-up call. Legacy sizes
+each op in the gap before it, as the published run did.
+
+**tt-ember itself is not modified.** `auto.py` drives any executable given as `--app-exe` and
+parses its stdout, so `ttnn_ops_workload.py` is just a workload that happens to print the
+summary rows `parser.py` expects. `preview_op_breakdown.py` only reads tt-ember's output.
+
+"The paper" here is the Wormhole n300 vs Blackhole p100a energy paper by Turkmanović and
+Cvetković (not yet published). Its Blackhole **p100a** results are not committed here. This document is written so the
+same measurement can be reproduced, on p100a or on Wormhole **n150**, and the two compared.
+
+---
+
+## 1. Prerequisites
+
+### Exact versions the p100a results were produced with
+
+Check these out rather than tracking `main`, so any difference between the two boards is the
+board and not a four-month drift in the software. This is the information that was missing from
+the earlier Wormhole runs and cost real time to reconstruct.
+
+| component | pin |
+|---|---|
+| **tt-metal** | `e0c2360bb6ce706f801cd728b46e20b28f5b42d8` (upstream `main`, 2026-09-02) |
+| **tt-umd** (submodule of the above) | `169f35494e4d7e7aabefb0da0da3c44500dddeb0` (2026-08-27) |
+
+That tt-metal commit predates `tools/tt-ember/`, so build it as below but run the scripts from a
+checkout that has this directory.
+
+`tt-umd` is pinned by the submodule commit recorded in that tt-metal commit, so
+`git submodule update --init --recursive` on it lands on this one automatically. Verify with:
+
+```bash
+git -C tt_metal/third_party/umd rev-parse HEAD   # expect 169f35494e4d...
+```
+
+Host-side environment on the p100a machine, for reference. None of it is believed to be
+load-bearing, but record yours when reporting so the two runs can be compared:
+
+```
+TT-KMD 2.9.0 · tt-smi 5.2.0 · tt_umd (host) 0.9.5 · pyluwen 0.8.5
+firmware bundle 19.12.0 · Ubuntu 22.04.5 · venv python 3.10.19 · torch 2.11.0+cpu
+```
+
+### tt-metal
+
+```bash
+git clone https://github.com/tenstorrent/tt-metal.git
+cd tt-metal
+git checkout e0c2360bb6ce706f801cd728b46e20b28f5b42d8
+git submodule update --init --recursive
+./build_metal.sh --build-type Release --enable-ccache
+export TT_METAL_HOME=$PWD
+```
+
+Python bindings are on by default; this workload needs them. The build takes roughly 20 minutes
+cold. Nothing beyond a stock build is required -- in particular the `long_matmul`
+programming example and its `POWER_CASE` knobs are **not** used here. This workload needs only
+`ttnn` and `build_Release/tools/umd/telemetry`.
+
+### The tt-metal python venv
+
+`ttnn` needs tt-metal's own dependency set; a bare venv with numpy will not import it. Build it
+with the script tt-metal ships:
+
+```bash
+cd $TT_METAL_HOME
+./create_venv.sh --env-dir /path/to/ttnn_venv
+source /path/to/ttnn_venv/bin/activate
+python3 -c "import ttnn; print(len(dir(ttnn)))"   # expect several hundred attributes
+```
+
+That venv also carries numpy/matplotlib, so it can serve as tt-ember's `--tt-venv-activate`
+too. `auto.py` sources it before it starts the workload, so the workload gets `python3` from that
+venv. **Activate it in your shell as well**: the parser and `preview_op_breakdown.py` run with
+the calling shell's Python and need its numpy and matplotlib.
+
+---
+
+## 2. Run it
+
+```bash
+export TT_METAL_HOME=/path/to/tt-metal       # the build from §1
+export TT_EMBER_DIR=/path/to/tt-metal-with-tt-ember/tools/tt-ember   # $TT_METAL_HOME/tools/tt-ember on a current tt-metal
+cd "$TT_EMBER_DIR"
+source /path/to/ttnn_venv/bin/activate
+export LONG_MATMUL_MODE=legacy                # to reproduce the published op list
+
+tt-smi -r && sleep 15          # clean thermal/electrical baseline
+
+python3 auto.py \
+  --telemetry-exe "$TT_METAL_HOME"/build_Release/tools/umd/telemetry \
+  --telemetry-freq 10000 \
+  --app-exe ./op_power_breakdown/ttnn_ops_workload.py \
+  --parser-script ./parser.py \
+  --tt-venv-activate /path/to/ttnn_venv/bin/activate \
+  --tt-metal-root "$TT_METAL_HOME" \
+  --output-root ./out_ops --subdir block_n150 \
+  --slot-ms 1 --device-id 0 --trim-ms 1.0 \
+  --app-args --seq 1024 --hidden 2048 --ffn 8192 --heads 16 \
+             --target-call-ms 1.5 --max-batch 96 \
+             --target-seconds 4.0 --pause-seconds 5.0
+```
+
+`--app-args` **must be last** — `auto.py` uses `argparse.REMAINDER` and will otherwise swallow
+every following argument. The workload always runs on device 0, so keep `--device-id 0`.
+
+`--telemetry-freq 10000` asks for a 100 us polling period. That is what the p100a capture used:
+before `auto.py` converted Hz to the period telemetry's `-f` expects, it was run as
+`--telemetry-freq 100`, which telemetry read as 100 us. At a lower rate the short calls below are
+not resolved (see the accuracy notes).
+
+Runtime is roughly 3 minutes: 12 or 14 ops x (4 s window + 5 s idle gap) plus device init and
+kernel JIT on the first run.
+
+Then render the breakdown:
+
+```bash
+python3 ./op_power_breakdown/preview_op_breakdown.py ./out_ops/block_n150 --board "Wormhole n150"
+```
+
+That prints the table and writes three figures into `out_ops/block_n150/Figures/`:
+
+| file | what it shows |
+|---|---|
+| `op_energy_breakdown.png` | energy per op per activation, split into dynamic and idle-floor share |
+| `op_power_breakdown.png` | three panels over one op axis: pJ/FLOP (log scale), dynamic mJ per activation, dynamic W |
+| `op_energy_normalised.png` | two panels: energy per FLOP and energy per byte touched (log scale), with each op's arithmetic intensity |
+
+tt-ember's own 13 figures are written alongside. Most of them plot against *core count*, which
+this workload repurposes as an op index, so only `telemetry_overview.png` is meaningful from
+that set — it shows the ops as plateaus separated by idle gaps, which is a good sanity check
+that the run is well formed.
+
+The table's `us/batched call` is one call at the op's batch; `us/activ` and the per-activation
+energies divide it by the batch, and `us@batch 1` is the workload's own unbatched timing.
+`--mode` sets the time base (whole interval in `updated`, the trimmed window in `legacy`, as
+the published figures used); it defaults to `$LONG_MATMUL_MODE`.
+
+---
+
+## 3. Wormhole n150 notes
+
+The workload adapts itself, but two differences matter.
+
+**Less DRAM.** n150 has 12 GB against p100a's 28 GB. Batch sizes are chosen at runtime and the
+script halves the batch and retries on allocation failure, printing `# NOTE <op>: retrying at
+batch=N`. A few of those lines are expected and fine. If an op ends up at `batch=1` and its
+call is still well under 1 ms, see the accuracy note below. If the run fails outright, lower
+`--max-batch` (try 32) or shrink the shape, e.g. `--seq 512 --hidden 2048 --ffn 4096`.
+
+**Fewer cores.** n150 exposes an 8x8 compute grid against p100a's 11x10, so absolute power and
+throughput will be lower. That is the thing being measured, not a problem.
+
+**Keep the shape identical to the p100a run** if you want a like-for-like comparison —
+`--seq 1024 --hidden 2048 --ffn 8192 --heads 16`. Only drop it if memory forces you to, and say
+so when reporting.
+
+**Batches differ between boards.** Each op's batch is sized from its timing on that board. That
+leaves FLOPs per activation unchanged, but the projection weights are shared across the batch,
+so bytes per activation (and pJ/byte) of the projection matmuls (four in legacy, five with the
+gate projection in updated mode) fall as the batch grows.
+For identical batches on both boards, pass `--batch N` in `--app-args`; the run stops if an op
+does not fit at that batch, rather than running it at a smaller one.
+
+---
+
+## 4. Reading the results
+
+From the p100a run, for orientation:
+
+These are sums over the 12 legacy ops, per activation amortised over each op's batch, so they
+are not the energy or latency of a real unbatched block pass.
+
+| | p100a |
+|---|---|
+| energy, summed over the ops | **234 mJ** (110 mJ dynamic + 124 mJ idle floor) |
+| time, summed over the ops | 2081 us |
+| idle floor | ~60 W |
+| dense projections (qkv/out/ffn_up/ffn_dn) | 0.8-0.9 pJ/FLOP, 60% of total energy |
+| elementwise and norms | 50-270 pJ/FLOP, ~4% of total energy |
+
+Three things worth checking on n150:
+
+1. **The idle floor was 53% of the summed energy on p100a.** n150's floor is far lower in absolute
+   terms (~28 W versus ~60 W), so this fraction should differ substantially. It is probably the
+   single most interesting number to compare.
+2. **`attn_av` was the anomaly on p100a** — third-largest total energy consumer (15%) despite
+   modest dynamic power, because it is the slowest op in the block (470 us) at low utilisation.
+   Worth seeing whether that reproduces.
+3. **The pJ/FLOP panel is log-scaled**, because the values span more than two orders of magnitude -- on a linear axis
+   the matmul bars are about a pixel tall and read as missing. Every bar is labelled with its
+   value. **pJ/FLOP for elementwise ops is 50-300x worse than for matmuls**, because they do ~1 FLOP
+   per element while streaming the whole tensor. This is expected, not a defect, and those ops
+   are a negligible share of energy — the two panels deliberately tell opposite stories.
+
+---
+
+## 5. Accuracy notes
+
+Read these before treating any number as precise.
+
+**Telemetry time resolution is ~103 us** at best — the tool tops out around 9.7 kHz, so asking
+for more than `--telemetry-freq 10000` gains nothing. An op call shorter than that is never
+resolved, and its measured power is diluted by whatever host dispatch gap follows it. Measured
+on p100a: a 41 us call reads about 24% low, and the effect vanishes once a call spans roughly
+ten samples. This is exactly why the script batches each op to about 1.5 ms per call; the cap
+(`--max-batch`) and device memory can keep it shorter. **Check the `# DONE` lines: any op well
+under ~1 ms per call is probably reading low.** On the p100a run (legacy mode, where the batch
+is extrapolated once from a batch-1 timing) `rms_norm_in` (batch 32), `rms_norm_post` (35) and
+`residual_add` (21) only reached ~700 us, so they may still be slightly understated; they are
+under 1% of the energy, so it does not matter there. Updated mode re-sizes the batch from the
+timing at the chosen batch, and stops at the last batch that fit once one runs out of memory.
+
+**Current is quantised to 1 A**, but this is not a limitation: averaged over ~30,000 samples
+per interval the standard error is about 0.002 A. Quantisation is not what limits accuracy.
+
+**Baseline drift is what limits accuracy.** The idle floor climbs as the board warms — about
+9 A across a p100a run. `parser.py` takes one fixed baseline per run, from the pause after the
+first op, so any drift after that is counted as dynamic current for the later ops. That barely
+moves a 130 A matmul, but it is a large share of a 15 A elementwise op.
+
+**FLOP counts are exact only for matmuls** (`2*M*N*K`). Elementwise and normalisation ops use
+per-element conventions declared in `FLOPS_PER_ELEM` at the top of `ttnn_ops_workload.py`
+(add/mul 1, silu 4, rms_norm 4, softmax 5). Hatched bars in the pJ/FLOP panel mark these. The
+50-300x gap survives any reasonable choice of convention; the precise ratios do not.
+
+**Idle-floor attribution.** Each op is charged the full idle floor for its duration, which
+answers "what did this op cost in a serial block pass" — amortised over its batch. It does
+**not** mean removing the op would recover that energy — the floor is there regardless. Only the dynamic column is
+recoverable.
+
+**One measurement per op, single board.** No error bars. Re-run to gauge repeatability before
+relying on any difference smaller than a few percent.
+
+---
+
+## 6. How it fits together
+
+`parser.py`'s `RE_PROGRAM_ROW` only understands a compute grid, so the workload borrows those
+fields:
+
+* the `grid` field carries the op index as `<idx>x1`, making every op a distinct interval;
+* the `cores` field carries the same index, so tt-ember's own figures separate the points;
+* op names are printed as `# OP <idx> <name> iters=... flops_per_iter=... batch=...` lines,
+  which `RE_PROGRAM_ROW` does not match and `parser.py` therefore ignores.
+
+`preview_op_breakdown.py` reads those `# OP` lines back out of `summary.txt` and joins them to
+`program_intervals.csv` on the index. That is the whole mechanism — no tt-ember change.
+
+Each op is run repeatedly for ~4 s so the interval is long enough to measure, and separated by
+a 5 s idle gap so `parser.py` has an idle stretch to measure the baseline in. Both are
+configurable via `--target-seconds` and `--pause-seconds`.
+
+---
+
+## 7. Probes
+
+Two helper scripts back numbers quoted above. Run them with the same environment as the
+workload.
+
+`ttnn_dutycycle_probe.py` checks whether measured power depends on call duration (the 41 us /
+24% figure in §5): it runs `add` and `matmul` at growing sizes, as a tt-ember workload.
+
+```bash
+python3 auto.py --telemetry-exe "$TT_METAL_HOME"/build_Release/tools/umd/telemetry \
+  --telemetry-freq 10000 --app-exe ./op_power_breakdown/ttnn_dutycycle_probe.py \
+  --parser-script ./parser.py --tt-venv-activate /path/to/ttnn_venv/bin/activate \
+  --tt-metal-root "$TT_METAL_HOME" --output-root ./out_ops --subdir dutycycle \
+  --slot-ms 1 --device-id 0 --trim-ms 1.0 --app-args --target-seconds 4.0
+```
+
+`probe_op_core_grids.py` counts how many Tensix cores each op occupies, from the device
+profiler, outside a power run (see its docstring for the batches of the published run):
+
+```bash
+TT_METAL_DEVICE_PROFILER=1 python3 op_power_breakdown/probe_op_core_grids.py \
+  --seq 1024 --hidden 2048 --ffn 8192 --heads 16
+```
