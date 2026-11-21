@@ -143,6 +143,11 @@ autograd::TensorPtr scaled_dot_product_attention_composite(
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask) {
     validate_qkv_shapes(query, key, value);
+    if (!mask.has_value() || !mask.value()) {
+        throw std::invalid_argument(
+            "scaled_dot_product_attention_composite requires a mask: unlike scaled_dot_product_attention, it does not "
+            "generate a causal one. Pass an all-ones mask for full (non-causal) attention.");
+    }
 
     auto [batch_num, heads, seq_len, embedding_dim] = query->get_value().logical_shape().to_array_4D();
     auto groups = value->get_value().logical_shape().to_array_4D()[1];
@@ -156,27 +161,25 @@ autograd::TensorPtr scaled_dot_product_attention_composite(
     // σQ @ K
     ttnn::Tensor qk_scaled = group_shared_matmul(q_scaled, key_tensor, /*transpose_a=*/false, /*transpose_b=*/true);
 
-    if (mask.has_value() && mask.value()) {
-        auto mask_tensor = mask.value()->get_value();
-        // ttnn::where when mask is not of the same shape as qk_scaled
-        qk_scaled = ttnn::add(
-            ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none),
-            ttnn::multiply(
-                ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none),
-                1e9F,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                none,
-                none,
-                none),
+    auto mask_tensor = mask.value()->get_value();
+    // ttnn::where when mask is not of the same shape as qk_scaled
+    qk_scaled = ttnn::add(
+        ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none),
+        ttnn::multiply(
+            ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none),
+            1e9F,
             std::nullopt,
             std::nullopt,
             std::nullopt,
             none,
             none,
-            none);
-    }
+            none),
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        none,
+        none,
+        none);
     // (B, H, S, S)
     auto attention_weights = ttml::metal::softmax(qk_scaled, /* axis */ 3);
     // TODO: add dropout here

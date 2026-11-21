@@ -77,7 +77,12 @@ TEST_P(OptimalDramWorkers, ReturnsOneValidWorkerPerDramBank) {
         const size_t expected_banks = static_cast<size_t>(dram_grid.x) * dram_grid.y;
 
         for (NOC noc : {NOC::NOC_0, NOC::NOC_1}) {
-            const auto cores = dev->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+            const auto bank_to_core = dev->get_optimal_dram_bank_to_logical_worker_assignment(
+                noc, distributed::MeshCoordinate::zero_coordinate(dev->shape().dims()));
+            std::vector<CoreCoord> cores(bank_to_core.size());
+            for (const auto& [bank, core] : bank_to_core) {
+                cores.at(bank) = core;
+            }
 
             EXPECT_EQ(cores.size(), expected_banks)
                 << "Device " << chip_id << ", NOC " << static_cast<int>(noc) << ": expected " << expected_banks

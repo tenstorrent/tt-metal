@@ -9,6 +9,7 @@
 
 #include <tt-metalium/math.hpp>
 #include <utility>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.
@@ -26,7 +27,7 @@ void validate_pool2d(
     const Layout& output_layout) {
     // check the input tensor
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Pool2D input must be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Pool2D input must be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Pool2D input must be allocated in buffers on device!");
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now. Tracked by issue #23338");
 
@@ -146,7 +147,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             output_dtype, op_attr.output_layout_, mem_config, output_shape, padded_output_shape));
 }
 
@@ -158,7 +159,7 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
             op_attr.sliding_window_config_.input_hw.first, op_attr.sliding_window_config_.input_hw.second);
 
         // the index output spec is the same as the input spec just with a different data type
-        tt::tt_metal::TensorLayout output_layout_ind(
+        tt::tt_metal::TensorLayout output_layout_ind = tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             index_dtype,
             output_spec_data.page_config(),
             output_spec_data.memory_config(),
@@ -172,8 +173,6 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
 }
 
 ttsl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
-    auto input_mem_config = tensor.input_tensor_.memory_config();
-    auto in_dtype = tensor.input_tensor_.dtype();
     auto out_dtype = op_attr.output_dtype_;
     return tt::tt_metal::operation::hash_operation<Pool2D>(
         op_attr.sliding_window_config_.get_hash(),
@@ -185,8 +184,7 @@ ttsl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op
         op_attr.count_include_pad_,
         op_attr.return_indices_,
         op_attr.config_tensor_in_dram,
-        input_mem_config,
-        in_dtype,
+        tensor.input_tensor_.tensor_spec(),
         out_dtype);
 }
 

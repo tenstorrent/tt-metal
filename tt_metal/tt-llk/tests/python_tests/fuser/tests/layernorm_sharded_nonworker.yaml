@@ -64,7 +64,7 @@ operations:
         unpacker: ReduceUnpacker
         reduce_dim: REDUCE_ROW
         reduce_pool: AVG
-        math_fidelity: HiFi2
+        math_fidelity: HiFi3
         block_size: [32, 32]
         in0: input_sum
         in1: scaler
@@ -112,7 +112,7 @@ operations:
         unpacker: ReduceUnpacker
         reduce_dim: REDUCE_ROW
         reduce_pool: AVG
-        math_fidelity: HiFi2
+        math_fidelity: HiFi3
         block_size: [32, 32]
         in0: xmm2
         in1: scaler
