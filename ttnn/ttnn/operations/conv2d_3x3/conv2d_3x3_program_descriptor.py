@@ -4124,7 +4124,10 @@ def create_program_descriptor(
     # tilizes (tap-direct), multiplies, bias-adds and packs only its valid tile-rows rounded up to whole subblocks, and
     # the writer drains only those row groups; kh reuse's band order ends at the core's valid tile-rows. RAGGED_ARG is
     # the compute runtime arg holding the core's valid tile-rows (after the TILE ring's per-M-block args). The row
-    # stream runs only valid tile-rows by construction (its own arg 3).
+    # stream runs only valid tile-rows by construction (its own arg 3). Not where the output stream outruns DRAM
+    # (output_stream_bound), except under kh reuse (its band order needs it): there the store paces the walk and a
+    # shorter last block bunches the cores' stores (Blackhole p150b, TILE 256x256 32->512: 314.6 -> 351.7 us, BRISC span
+    # max / p50 1.25 -> 1.40; 1026x2048 / 514x1024 32->128, ROW_MAJOR and TILE, flat).
     ragged = (
         not rs
         and not kwf
@@ -4135,6 +4138,7 @@ def create_program_descriptor(
         and not g.sharded_output
         and not g.remote_output
         and b.in0_stream_rows >= bm
+        and (khr or not output_stream_bound(g, b, compute_kernel_config.math_fidelity))
     )
     assert ragged or not khr, "kh reuse's band order needs the ragged tail"
     ragged_arg = None
