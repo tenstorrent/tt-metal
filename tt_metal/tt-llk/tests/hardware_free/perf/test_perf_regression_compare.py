@@ -26,6 +26,8 @@ from regression_compare import (  # noqa: E402
     DEFAULT_THRESHOLD,
     _medians,
     compare_runs,
+    coverage_gap,
+    main,
     render_report,
 )
 
@@ -44,17 +46,19 @@ def _csv(
     run_type="MATH_ISOLATE",
     tile_cnt=4,
     module="perf_x",
+    extra=None,
 ):
     # The real layout: <run>/<module>/<module>.csv, one directory per run here.
     path = tmp_path / name.removesuffix(".csv") / f"{module}.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(
-        {
-            "marker": ["INIT", "TILE_LOOP"],
-            "tile_cnt": [tile_cnt, tile_cnt],  # a config column -> part of the key
-            f"mean({run_type})": [init, tile_loop],
-        }
-    ).to_csv(path, index=False)
+    columns = {
+        "marker": ["INIT", "TILE_LOOP"],
+        "tile_cnt": [tile_cnt, tile_cnt],  # a config column -> part of the key
+        f"mean({run_type})": [init, tile_loop],
+    }
+    for key, value in (extra or {}).items():
+        columns[key] = [value, value]
+    pd.DataFrame(columns).to_csv(path, index=False)
     return str(path)
 
 
@@ -236,6 +240,129 @@ def test_new_config_is_reported_not_flagged(tmp_path):
     assert len(result["new_points"]) == 2
     assert not result["regressions"]
     assert not result["records"]  # nothing was actually compared
+
+
+def test_baseline_point_this_run_did_not_measure_is_counted(tmp_path):
+    baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, tile_cnt=4)]
+    current = [_csv(tmp_path, "c.csv", _INIT, _TILE_LOOP, tile_cnt=8)]
+
+    result = compare_runs(current, baseline)
+
+    assert len(result["missing_points"]) == 2
+    assert len(result["new_points"]) == 2
+    assert not result["records"]
+
+
+def test_full_coverage_leaves_missing_points_empty(tmp_path):
+    baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, tile_cnt=4)]
+    current = [_csv(tmp_path, "c.csv", _INIT, _TILE_LOOP, tile_cnt=4)]
+
+    result = compare_runs(current, baseline)
+
+    assert not result["missing_points"]
+    assert not result["new_points"]
+    assert len(result["records"]) == 2
+
+
+def test_a_column_one_side_added_keeps_the_other_points_comparable(tmp_path):
+    baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP)]
+    current = [_csv(tmp_path, "c.csv", _INIT, _TILE_LOOP, extra={"new_knob": "on"})]
+
+    result = compare_runs(current, baseline)
+
+    assert len(result["records"]) == 2
+    assert not result["new_points"] and not result["missing_points"]
+
+
+def test_a_column_another_module_has_is_still_one_sided_here(tmp_path):
+    baseline = [
+        _csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, module="perf_x"),
+        _csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, module="perf_y", extra={"knob": 1}),
+    ]
+    current = [
+        _csv(tmp_path, "c.csv", _INIT, _TILE_LOOP, module="perf_x", extra={"knob": 1}),
+        _csv(tmp_path, "c.csv", _INIT, _TILE_LOOP, module="perf_y", extra={"knob": 1}),
+    ]
+
+    result = compare_runs(current, baseline)
+
+    assert len(result["records"]) == 4
+    assert not result["new_points"] and not result["missing_points"]
+
+
+def test_a_new_module_is_the_suite_changing_not_a_gap(tmp_path):
+    baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, module="perf_x")]
+    current = [
+        _csv(tmp_path, "c.csv", _INIT, _TILE_LOOP, module="perf_x"),
+        _csv(tmp_path, "c.csv", _INIT, _TILE_LOOP, module="perf_new"),
+    ]
+
+    result = compare_runs(current, baseline)
+    gap_new, gap_missing, added, removed = coverage_gap(result)
+
+    assert added == ["perf_new"] and removed == []
+    assert not gap_new and not gap_missing
+
+
+def test_a_sweep_that_changed_shape_is_a_gap(tmp_path):
+    baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, tile_cnt=4)]
+    current = [_csv(tmp_path, "c.csv", _INIT, _TILE_LOOP, tile_cnt=8)]
+
+    result = compare_runs(current, baseline)
+    gap_new, gap_missing, added, removed = coverage_gap(result)
+
+    assert added == [] and removed == []
+    assert len(gap_new) == 2 and len(gap_missing) == 2
+
+
+def test_require_full_coverage_ignores_points_with_no_baseline(tmp_path):
+    _csv(tmp_path, "b3.csv", _INIT, _TILE_LOOP, tile_cnt=4)
+    _csv(tmp_path, "c3.csv", _INIT, _TILE_LOOP, tile_cnt=4)
+    _csv(tmp_path, "c4.csv", _INIT, _TILE_LOOP, tile_cnt=8)
+
+    with pytest.raises(
+        SystemExit
+    ) as exc:  # allow-pytest.raises: no expect_error in LLK suite
+        main(
+            [
+                "--current",
+                str(tmp_path / "c[34]" / "*.csv"),
+                "--baseline",
+                str(tmp_path / "b3" / "*.csv"),
+                "--report",
+                str(tmp_path / "r2.md"),
+                "--require-full-coverage",
+            ]
+        )
+    assert exc.value.code == 0
+
+
+def test_require_full_coverage_exits_two_on_a_short_run(tmp_path):
+    _csv(tmp_path, "b1.csv", _INIT, _TILE_LOOP, tile_cnt=4)
+    _csv(tmp_path, "b2.csv", _INIT, _TILE_LOOP, tile_cnt=8)
+    _csv(tmp_path, "c1.csv", _INIT, _TILE_LOOP, tile_cnt=4)
+
+    argv = [
+        "--current",
+        str(tmp_path / "c1" / "*.csv"),
+        "--baseline",
+        str(tmp_path / "b*" / "*.csv"),
+        "--report",
+        str(tmp_path / "report.md"),
+        "--require-full-coverage",
+    ]
+
+    with pytest.raises(
+        SystemExit
+    ) as exc:  # allow-pytest.raises: no expect_error in LLK suite
+        main(argv)
+    assert exc.value.code == 2
+
+    with pytest.raises(
+        SystemExit
+    ) as exc:  # allow-pytest.raises: no expect_error in LLK suite
+        main(argv[:-1])
+    assert exc.value.code == 0
 
 
 def test_run_type_filter_keeps_only_what_was_asked_for(tmp_path):

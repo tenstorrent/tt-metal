@@ -86,6 +86,13 @@ on:
         required: false
         default: true
         type: boolean
+      require_full_coverage:
+        description: >-
+          Fail the job when a generated point has no baseline, or a baseline point
+          was not measured.
+        required: false
+        default: false
+        type: boolean
       fail_without_baseline:
         description: >-
           Fail the job when no baseline is found, because the gate then compares nothing.
@@ -446,6 +453,7 @@ jobs:
           THRESHOLD: ${{ inputs.threshold }}
           MIN_CYCLES: ${{ inputs.min_cycles }}
           MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
+          REQUIRE_FULL_COVERAGE: ${{ inputs.require_full_coverage }}
           BASELINE_LABEL: >-
             ${{ inputs.baseline_artifact_pattern && 'branch point on main'
                 || inputs.baseline_pipeline == 'merge_baseline' && 'merge baseline'
@@ -457,7 +465,10 @@ jobs:
             BASELINE_LABEL="${BASELINE_LABEL}, stale"
           fi
 
+          COVERAGE_ARG=()
+          [ "$REQUIRE_FULL_COVERAGE" = "true" ] && COVERAGE_ARG=(--require-full-coverage)
           python3 ${{ env.LLK_PATH }}/perf/regression_compare.py \
+            "${COVERAGE_ARG[@]}" \
             --current 'current_perf/**/*.csv' \
             --baseline 'baseline_perf/**/*.csv' \
             --run-types "$RUN_TYPES" \
@@ -740,6 +751,13 @@ jobs:
           if [ "$COMPARISON_FINISHED" != "true" ]; then
             echo "::error::The comparison did not finish, so the gate has no verdict."
             echo "This is an infrastructure fault, not a performance result."
+            exit 1
+          fi
+
+          if [ "$EXIT_CODE" = "2" ]; then
+            KIND=incomplete
+            echo "::error::The gate did not compare every point, so its verdict covers only part of the run."
+            cat perf_gate_report.md
             exit 1
           fi
 

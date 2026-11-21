@@ -57,6 +57,20 @@ def test_regression_is_reported():
     )
 
 
+def test_a_coverage_miss_alone_is_skipped():
+    status, reason = verdict(exit_code=2, have_baseline=True, report_written=True)
+    assert status == "skipped"
+    assert "every point" in reason
+
+
+def test_a_coverage_miss_with_regressions_still_reports_them():
+    status, reason = verdict(
+        exit_code=2, have_baseline=True, report_written=True, regressions=3
+    )
+    assert status == "regressed"
+    assert "every point" in reason
+
+
 def test_pass_needs_a_baseline_and_a_report():
     assert verdict(exit_code=0, have_baseline=True, report_written=True)[0] == "clean"
 

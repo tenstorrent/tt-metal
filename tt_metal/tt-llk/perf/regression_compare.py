@@ -216,6 +216,48 @@ def _read_frames(paths):
     return frames
 
 
+def _module_values(frames):
+    """{(module, config column): the distinct values it takes in that module}."""
+    values = {}
+    for frame in frames:
+        for module, rows in frame.groupby(MODULE_COL, sort=False):
+            for col in _config_cols(rows.columns):
+                if col == MODULE_COL:
+                    continue
+                present = rows[col].dropna()
+                if not present.empty:
+                    values.setdefault((module, col), set()).update(present.unique())
+    return values
+
+
+def _one_sided_constants(mine, theirs):
+    """{module: columns only I have there, holding one value, so they cannot tell its points apart}."""
+    # A column that is present but empty is a column they do not have: _medians
+    # drops all-null columns from the key. The rule is per module, because a
+    # column another module already has says nothing about this one.
+    theirs_values = _module_values(theirs)
+    drop = {}
+    for (module, col), values in _module_values(mine).items():
+        if len(values) > 1 or (module, col) in theirs_values:
+            continue
+        drop.setdefault(module, set()).add(col)
+    return drop
+
+
+def _drop_one_sided_constants(cur_frames, base_frames):
+    """A column one side added with a single value keeps the other points comparable.
+
+    Without this a new parameter rewrites the identity of every row of its test,
+    so nothing matches and a whole module reads as new and missing at once.
+    """
+    for mine, theirs in ((cur_frames, base_frames), (base_frames, cur_frames)):
+        for module, cols in _one_sided_constants(mine, theirs).items():
+            for frame in mine:
+                rows = frame[MODULE_COL] == module
+                for col in cols & set(frame.columns):
+                    frame[col] = frame[col].astype(object).mask(rows)
+
+
 def compare_runs(
     current_csvs,
     baseline_csvs,
@@ -227,7 +269,7 @@ def compare_runs(
 ):
     """Median-vs-median comparison.
 
-    Returns ``{records, regressions, improvements, new_points, noise_filtered}``.
+    Returns ``{records, regressions, improvements, new_points, missing_points, noise_filtered}``.
     ``delta`` is the fractional change vs baseline (0.12 = 12% slower, -0.12 = 12%
     faster) and ``abs_delta`` is the same change in cycles. A regression needs
     ``delta > threshold`` AND ``abs_delta > min_cycles``; an improvement is the
@@ -239,8 +281,10 @@ def compare_runs(
     If ``run_types`` is specified (comma-separated, e.g. "L1_TO_L1,MATH_ISOLATE"),
     only compare metrics for those run types.
     """
-    cur = _medians(_read_frames(current_csvs))
-    base = _medians(_read_frames(baseline_csvs))
+    cur_frames, base_frames = _read_frames(current_csvs), _read_frames(baseline_csvs)
+    _drop_one_sided_constants(cur_frames, base_frames)
+    cur = _medians(cur_frames)
+    base = _medians(base_frames)
 
     if run_types:
         allowed = set()
@@ -284,13 +328,46 @@ def compare_runs(
             regressions.append(record)
         elif record["improvement"]:
             improvements.append(record)
+    missing_points = []
+    for key, mean_col in base:
+        if (key, mean_col) in cur:
+            continue
+        marker, config = key
+        missing_points.append(
+            {
+                "marker": marker,
+                "run_type": _run_type_of(mean_col),
+                "config": config,
+                MODULE_COL: dict(config).get(MODULE_COL, ""),
+            }
+        )
     return {
         "records": records,
         "regressions": regressions,
         "improvements": improvements,
         "new_points": new_points,
+        "missing_points": missing_points,
         "noise_filtered": noise_filtered,
     }
+
+
+def coverage_gap(result):
+    """``(unmatched current, unmatched baseline, added modules, removed modules)``.
+
+    A module on one side only is the suite changing: a test added or removed.
+    A module on both sides with points that did not match is a gap the gate
+    cannot vouch for, whether a leg was lost or a sweep changed shape.
+    """
+    compared = {r[MODULE_COL] for r in result["records"]}
+    current = compared | {p[MODULE_COL] for p in result["new_points"]}
+    baseline = compared | {p[MODULE_COL] for p in result["missing_points"]}
+    shared = current & baseline
+    return (
+        [p for p in result["new_points"] if p[MODULE_COL] in shared],
+        [p for p in result["missing_points"] if p[MODULE_COL] in shared],
+        sorted(current - baseline),
+        sorted(baseline - current),
+    )
 
 
 _TOP_N = 25
@@ -425,7 +502,8 @@ def render_report(
         f"- {len(result['records'])} points compared, "
         f"**{len(regs)} regressed point(s) in {len(reg_groups)} finding(s)**, "
         f"{len(imps)} improved point(s) in {len(imp_groups)} finding(s), "
-        f"{len(result['new_points'])} new point(s)",
+        f"{len(result['new_points'])} new point(s), "
+        f"{len(result['missing_points'])} point(s) the baseline has and this run does not",
     ]
     filtered = result.get("noise_filtered", 0)
     if filtered:
@@ -541,6 +619,11 @@ def main(argv=None):
         default="",
         help="per-module thresholds, e.g. perf_matmul=0.25,perf_math_matmul=0.25",
     )
+    ap.add_argument(
+        "--require-full-coverage",
+        action="store_true",
+        help="fail when a point on either side was not compared",
+    )
     ap.add_argument("--report", default="regression_report.md")
     ap.add_argument("--test", default="?")
     ap.add_argument("--arch", help="named in the title and the verdict")
@@ -615,9 +698,29 @@ def main(argv=None):
                 "status": "regressed" if result["regressions"] else "clean",
                 "regressions": len(result["regressions"]),
                 "points": len(result["records"]),
+                "new_points": len(result["new_points"]),
+                "missing_points": len(result["missing_points"]),
             },
             fh,
         )
+    gap_new, gap_missing, added, removed = coverage_gap(result)
+    if added or removed:
+        print(
+            f"Suite changed: {len(added)} module(s) added {added}, "
+            f"{len(removed)} removed {removed}. Their points are reported, not compared."
+        )
+    if gap_new:
+        print(
+            f"{len(gap_new)} point(s) have no baseline, so they are reported and not "
+            "compared. A point measured for the first time cannot be a regression, and "
+            "the next merge baseline holds it."
+        )
+    if a.require_full_coverage and gap_missing:
+        print(
+            f"\u274c {len(gap_missing)} baseline point(s) were not measured, in modules "
+            f"both sides ran. {len(result['records'])} point(s) compared."
+        )
+        raise SystemExit(2)
     # exit non-zero if regressions, so the skill/CI can gate on it
     raise SystemExit(1 if result["regressions"] else 0)
 
