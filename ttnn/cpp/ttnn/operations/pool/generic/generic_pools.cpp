@@ -342,7 +342,7 @@ static std::vector<Tensor> pool2d_L1(
         input_tensor_sharded,
         sliding_window_config,
         resolved_compute_kernel_config,
-        get_bf16_pool_init_value(pool_type),  // pad_val
+        get_bf16_pool_init_value(pool_type, return_indices),  // pad_val
         false,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         is_out_tiled,
