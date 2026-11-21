@@ -167,7 +167,18 @@ def test_device_compute_kernel_config(device):
 
 @pytest.mark.parametrize("dim", [0, 1, -3, -4])
 def test_rejects_non_reducible_dim(device, dim):
-    with pytest.raises((NotImplementedError, ValueError, RuntimeError)):
+    """X1: an in-range dim that canonicalises outside {-1, -2} is refused with the registry's typed refusal (a
+    NotImplementedError, one of the types X1 allows): tt-metal's translated tests call dim=-3 / dim=0 and the
+    harness counts anything else as a wrong-mode failure."""
+    from ttnn.operations._op_contract import SupportRefusal
+
+    with pytest.raises(SupportRefusal):
+        softmax(_put(torch.zeros((1, 1, 32, 64), dtype=torch.bfloat16), device), dim=dim)
+
+
+@pytest.mark.parametrize("dim", [4, -5])
+def test_rejects_out_of_range_dim(device, dim):
+    with pytest.raises(ValueError):
         softmax(_put(torch.zeros((1, 1, 32, 64), dtype=torch.bfloat16), device), dim=dim)
 
 

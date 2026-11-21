@@ -19,6 +19,7 @@ import math
 from pathlib import Path
 
 import ttnn
+from ttnn.operations._op_contract import SupportRefusal
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 E = ttnn.experimental
@@ -26,7 +27,6 @@ E = ttnn.experimental
 # Thread plan (R readers, C compute NEOs, W writers) per cluster: compute-bound, every input tile read once.
 THREAD_PLAN = (2, 4, 2)
 FREE_DM_HARTS = 6  # target page, cluster model: DM0 serves ring interrupts, DM1 is the remapper
-NEOS = 4
 
 # Ring cap on the compute side (target page, cluster model). No run-time query exists.
 DFB_RING_MAX_BYTES = 1_048_560
@@ -88,7 +88,7 @@ def select_regime(x, threads=None):
     Ht, _, _, _ = _geometry(x)
     tile_in = x.buffer_page_size()
     if not _fits(1, 1, Ht, tile_in, C, _budget()):
-        raise NotImplementedError(
+        raise SupportRefusal(
             f"softmax: a column of {Ht} tiles does not stay resident on one cluster "
             "(column_streaming is a later refinement)"
         )
@@ -105,7 +105,7 @@ def select_blocking(max_rounds, Ht, tile_in, C):
         for bc in range(cap, 0, -1):
             if _fits(bc, depth, Ht, tile_in, C, budget):
                 return bc, depth
-    raise NotImplementedError("softmax: no block of one column fits (column_streaming is a later refinement)")
+    raise SupportRefusal("softmax: no block of one column fits (column_streaming is a later refinement)")
 
 
 def split_columns(num_cols, grid_size, C):

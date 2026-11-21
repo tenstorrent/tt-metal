@@ -84,7 +84,9 @@ def validate(input_tensor, dim=-1, *, compute_kernel_config=None):
         raise ValueError(f"softmax: dim={dim!r} is out of range for a rank-{ndim} tensor")
     cdim = canonical_dim(dim, ndim)
     if cdim not in _REDUCIBLE_DIMS:
-        raise ValueError(f"softmax: dim={dim} canonicalises to {cdim}; only -1 and -2 are reducible axes")
+        # Rejection X1. NotImplementedError is one of the types X1 allows, and the typed refusal is what the
+        # registry harness recognises for a call outside SUPPORTED (tt-metal's callers do pass dim=-3 / dim=0).
+        raise UnsupportedAxisValue(f"softmax: dim={dim} canonicalises to {cdim}; only -1 and -2 are reducible axes")
 
     config = resolve_compute_kernel_config(compute_kernel_config)
     axes = {
