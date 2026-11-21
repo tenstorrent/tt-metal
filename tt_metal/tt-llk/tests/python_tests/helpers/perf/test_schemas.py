@@ -1556,6 +1556,28 @@ PERF_TEST_SCHEMAS = {
         },
         "test_name_aliases": {"perf_sfpu_binop_scalar": "perf_sfpu_binop_scalar"},
     },
+    "perf_sfpu_clamped_silu": {
+        "version": 1,
+        "columns": [
+            "clamped_silu_op",
+            "clamped_silu_scalar0",
+            "clamped_silu_scalar1",
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_sfpu_clamped_silu": "perf_sfpu_clamped_silu"},
+    },
     "perf_sfpu_ema": {
         "version": 2,
         "columns": [
