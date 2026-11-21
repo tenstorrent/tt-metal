@@ -5,7 +5,8 @@
 """Ops on TILE tensors whose padded shape has whole tiles past the tile-rounded logical shape
 (https://github.com/tenstorrent/tt-metal/issues/65486). tilize_with_val_padding makes one when
 asked for a larger padded shape. Each op must give bit-identical results to the same op on a
-tensor made from the same logical values with the default padding.
+tensor made from the same logical values with the default padding. The eltwise ops are covered in
+tests/ttnn/unit_tests/operations/eltwise/test_eltwise_whole_padding_tiles.py.
 """
 
 import pytest
@@ -39,15 +40,11 @@ def _copy_into(t):
 
 
 _OPS = {
-    "typecast": lambda t: ttnn.typecast(t, ttnn.float32),
     "to_l1": lambda t: ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG),
     "to_l1_and_back": lambda t: ttnn.to_memory_config(
         ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG), ttnn.DRAM_MEMORY_CONFIG
     ),
     "copy": _copy_into,
-    "add_scalar": lambda t: ttnn.add(t, 1.0),
-    "rsub_scalar": lambda t: ttnn.rsub(t, 2.0),
-    "where_scalar": lambda t: ttnn.where(ttnn.gtz(t), t, 0.0),
     "reshape_same": lambda t: ttnn.reshape(t, t.shape),
     "reshape_flatten": lambda t: ttnn.reshape(t, [1, 1, -1, list(t.shape)[-1]]),
     "reshape_split_last": lambda t: ttnn.reshape(t, list(t.shape)[:-1] + [2, list(t.shape)[-1] // 2]),
@@ -69,13 +66,13 @@ def test_whole_padding_tiles(device, op, logical_shape, padded_shape):
     assert_equal(expected, result)
 
 
-def test_copy_rejects_output_with_other_padded_shape(device):
+def test_copy_rejects_output_with_other_padded_shape(device, expect_error):
     """Interleaved tiles are copied in order, so a preallocated output has to share the input's padded shape."""
     torch_input = torch.randn([1, 1, 64, 96]).bfloat16()
     row_major = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     padded = ttnn.tilize_with_val_padding(row_major, ttnn.Shape([1, 1, 64, 128]), _PAD_VALUE)
     plain = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
-    with pytest.raises(RuntimeError, match="padded shape"):
+    with expect_error(RuntimeError, "must equal the input tensor's padded shape"):
         ttnn.copy(padded, plain)
 
 
@@ -107,3 +104,14 @@ def test_reshape_keeps_requested_padding(device):
     result = ttnn.reshape(padded, ttnn.Shape([2, 1, 64, 96]), ttnn.Shape([2, 1, 64, 128]))
     assert list(result.padded_shape) == [2, 1, 64, 128]
     assert_equal(torch_input.reshape([2, 1, 64, 96]), ttnn.to_torch(result))
+
+
+@pytest.mark.parametrize("logical_shape, new_shape", [([], [1]), ([], [1, 1]), ([2], [1, 2]), ([1, 2], [2])], ids=str)
+def test_reshape_rank_0_and_1(device, logical_shape, new_shape):
+    """TILE lays out ranks 0 and 1 as one 32x32 tile, which is their default padding, not whole padding tiles."""
+    torch_input = torch.randn(logical_shape).bfloat16()
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.reshape(tt_input, new_shape)
+    assert list(result.shape) == new_shape
+    assert_equal(torch_input.reshape(new_shape), ttnn.to_torch(result))

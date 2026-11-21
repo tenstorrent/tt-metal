@@ -720,17 +720,26 @@ ttnn::Tensor reshape_dispatch(
     // shape. Whole padding tiles past it (e.g. from tilize_with_val_padding) shift every later tile off that
     // grid, so such an input is first rebuilt on it. A caller asking for a non-default output padding manages
     // the padding itself, so its request is left as it was.
-    const auto& tile = tensor.tensor_spec().tile();
-    const bool default_output_padding =
-        padded_shape == logical_shape || padded_shape == operations::data_movement::compute_padded_shape(
-                                                             logical_shape, tile.get_height(), tile.get_width());
-    if (layout == ttnn::TILE_LAYOUT && !tensor.is_sharded() && !same_logical_and_padded && default_output_padding) {
-        const auto default_padded_shape =
-            operations::data_movement::compute_padded_shape(tensor_shape, tile.get_height(), tile.get_width());
-        if (tensor.padded_shape() != default_padded_shape) {
-            const Tensor widened = tensor.dtype() == DataType::BFLOAT4_B
-                                       ? ttnn::typecast(tensor, DataType::BFLOAT16, std::nullopt, std::nullopt, sub_core_grid)
-                                       : tensor;
+    if (layout == ttnn::TILE_LAYOUT && !tensor.is_sharded() && !same_logical_and_padded) {
+        // The padded shape a tensor of this layout gets by default. TensorLayout lays out ranks 0 and 1 as one
+        // 2D tile row, which compute_padded_shape does not model.
+        const auto default_tile_padded_shape = [&](const ttnn::Shape& shape) {
+            return tt::tt_metal::TensorSpec(
+                       shape,
+                       tt::tt_metal::TensorLayout(tensor.dtype(), tensor.tensor_spec().page_config(), MemoryConfig{}))
+                .padded_shape();
+        };
+        const auto& tile = tensor.tensor_spec().tile();
+        const bool default_output_padding = padded_shape == logical_shape ||
+                                            padded_shape == operations::data_movement::compute_padded_shape(
+                                                                logical_shape, tile.get_height(), tile.get_width()) ||
+                                            padded_shape == default_tile_padded_shape(logical_shape);
+        const auto default_padded_shape = default_tile_padded_shape(tensor_shape);
+        if (default_output_padding && tensor.padded_shape() != default_padded_shape) {
+            const Tensor widened =
+                tensor.dtype() == DataType::BFLOAT4_B
+                    ? ttnn::typecast(tensor, DataType::BFLOAT16, std::nullopt, std::nullopt, sub_core_grid)
+                    : tensor;
             const Tensor row_major = untilize_whole_padding_tiles(widened, sub_core_grid);
             const Tensor retiled = ttnn::tilize_with_val_padding(
                 row_major,
