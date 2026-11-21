@@ -6,12 +6,68 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
 
 namespace ttnn {
+
+namespace {
+
+// Sum a gradient over the axes along which its operand was broadcast, so it comes back in the operand's own
+// shape, as torch.autograd returns it (binary backward's reduce_grad_to_operand_shape does the same).
+Tensor reduce_to_operand(const Tensor& grad, const Tensor& operand, const std::optional<MemoryConfig>& memory_config) {
+    const auto& grad_shape = grad.logical_shape();
+    const auto& operand_shape = operand.logical_shape();
+    if (grad_shape == operand_shape) {
+        return grad;
+    }
+    TT_FATAL(
+        operand_shape.rank() <= grad_shape.rank(),
+        "Operand shape {} is not broadcastable to gradient shape {}",
+        operand_shape,
+        grad_shape);
+    const auto mc = memory_config.value_or(operand.memory_config());
+    const size_t rank_diff = grad_shape.rank() - operand_shape.rank();
+    ttsl::SmallVector<int> axes;
+    for (size_t i = 0; i < grad_shape.rank(); ++i) {
+        const uint32_t operand_dim = i < rank_diff ? 1u : operand_shape[i - rank_diff];
+        TT_FATAL(
+            operand_dim == 1u || operand_dim == grad_shape[i],
+            "Operand shape {} is not broadcastable to gradient shape {}",
+            operand_shape,
+            grad_shape);
+        if (operand_dim == 1u && grad_shape[i] != 1u) {
+            axes.push_back(static_cast<int>(i));
+        }
+    }
+    Tensor reduced = grad;
+    if (!axes.empty()) {
+        reduced = ttnn::sum(grad, std::variant<int, int64_t, ttsl::SmallVector<int>>{axes}, /*keepdim=*/true, mc);
+    }
+    if (reduced.logical_shape() != operand_shape) {
+        reduced = ttnn::reshape(reduced, operand_shape, mc);
+    }
+    return reduced;
+}
+
+// Reduces grads[i] (when it was requested) to the shape of operands[i].
+void reduce_to_operands(
+    std::vector<std::optional<Tensor>>& grads,
+    const std::vector<const Tensor*>& operands,
+    const std::optional<MemoryConfig>& memory_config) {
+    for (size_t i = 0; i < grads.size(); ++i) {
+        if (grads[i].has_value()) {
+            grads[i] = reduce_to_operand(grads[i].value(), *operands[i], memory_config);
+        }
+    }
+}
+
+}  // namespace
 
 std::vector<std::optional<Tensor>> addcmul_bw(
     const Tensor& grad,
@@ -42,6 +98,7 @@ std::vector<std::optional<Tensor>> addcmul_bw(
     } else {
         grad_tensor.emplace_back(std::nullopt);
     }
+    reduce_to_operands(grad_tensor, {&input_a, &tensor1, &tensor2}, memory_config);
     return grad_tensor;
 }
 
@@ -106,36 +163,51 @@ std::vector<std::optional<Tensor>> addcdiv_bw(
     if (recip_tensor2.has_value()) {
         recip_tensor2->deallocate();
     }
+    reduce_to_operands(grad_tensor, {&input_a, &tensor1, &tensor2}, memory_config);
     return grad_tensor;
 }
 
 std::vector<std::optional<Tensor>> where_bw(
     const Tensor& grad,
     const Tensor& condition,
-    const Tensor& /*input*/,
-    const Tensor& /*other*/,
+    const Tensor& input,
+    const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::vector<bool>& are_required_outputs,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> result;
     result.reserve(2);
-    if (are_required_outputs.at(0)) {
-        if (input_grad.has_value()) {
-            ttnn::where(condition, grad, 0.0f, output_mem_config, input_grad);
-        } else {
-            input_grad = ttnn::where(condition, grad, 0.0f, output_mem_config);
+    // A broadcast operand's gradient is computed at grad's shape, reduced to the operand's shape, then
+    // copied into the preallocated output if there is one.
+    auto finish = [&](const Tensor& operand, std::optional<Tensor>& preallocated, const auto& compute) {
+        if (operand.logical_shape() == grad.logical_shape()) {
+            if (preallocated.has_value()) {
+                compute(preallocated);
+            } else {
+                preallocated = compute(std::nullopt);
+            }
+            return;
         }
+        Tensor reduced = reduce_to_operand(compute(std::nullopt), operand, output_mem_config);
+        if (preallocated.has_value()) {
+            ttnn::assign(reduced, preallocated.value());
+        } else {
+            preallocated = std::move(reduced);
+        }
+    };
+    if (are_required_outputs.at(0)) {
+        finish(input, input_grad, [&](const std::optional<Tensor>& out) {
+            return ttnn::where(condition, grad, 0.0f, output_mem_config, out);
+        });
         result.emplace_back(std::move(input_grad));
     } else {
         result.emplace_back(std::nullopt);
     }
     if (are_required_outputs.at(1)) {
-        if (other_grad.has_value()) {
-            ttnn::where(condition, 0.0f, grad, output_mem_config, other_grad);
-        } else {
-            other_grad = ttnn::where(condition, 0.0f, grad, output_mem_config);
-        }
+        finish(other, other_grad, [&](const std::optional<Tensor>& out) {
+            return ttnn::where(condition, 0.0f, grad, output_mem_config, out);
+        });
         result.emplace_back(std::move(other_grad));
     } else {
         result.emplace_back(std::nullopt);
@@ -176,13 +248,14 @@ std::vector<std::optional<Tensor>> lerp_bw(
     } else {
         grad_tensor.emplace_back(std::nullopt);
     }
+    reduce_to_operands(grad_tensor, {&input, &end, &weight}, output_mem_config);
     return grad_tensor;
 }
 
 std::vector<std::optional<Tensor>> lerp_bw(
     const Tensor& grad,
-    const Tensor& /*input*/,
-    const Tensor& /*end*/,
+    const Tensor& input,
+    const Tensor& end,
     float weight,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::vector<bool>& are_required_outputs) {
@@ -202,6 +275,7 @@ std::vector<std::optional<Tensor>> lerp_bw(
     } else {
         grad_tensor.emplace_back(std::nullopt);
     }
+    reduce_to_operands(grad_tensor, {&input, &end}, output_mem_config);
     return grad_tensor;
 }
 
