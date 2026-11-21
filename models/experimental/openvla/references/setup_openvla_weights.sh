@@ -37,6 +37,7 @@ print("")
 
 path = snapshot_download(
     repo_id="openvla/openvla-7b",
+    revision="47a0ec7fc4ec123775a391911046cf33cf9ed83f",
     local_dir=save_path,
     allow_patterns=["*.safetensors", "*.json", "*.txt", "*.py"],
     ignore_patterns=["*.bin", "*.msgpack"],
