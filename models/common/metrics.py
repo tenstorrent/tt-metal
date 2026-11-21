@@ -233,6 +233,18 @@ def comp_allclose(impl, ref, rtol=1e-05, atol=1e-08):
             if impl_torch.dtype != ref_torch.dtype:
                 ref_torch = ref_torch.to(impl_torch.dtype)
 
+            # A zero-volume tensor has no element to reduce over, so torch.max on the delta
+            # raises and the outer handler turns a genuine match into a failure. torch.equal
+            # reports equal empties as True and a shape mismatch as False, which is the same
+            # verdict torch.allclose reaches, so report that instead of an error string.
+            if impl_torch.numel() == 0 or ref_torch.numel() == 0:
+                if torch.equal(impl_torch, ref_torch):
+                    return True, "Both tensors are empty"
+                return (
+                    False,
+                    f"Zero-volume mismatch: {tuple(impl_torch.shape)} vs {tuple(ref_torch.shape)}, Allclose check failed",
+                )
+
             atol_delta = torch.max(torch.abs(impl_torch - ref_torch)).item()
             # May produce inf where ref == 0; this mirrors comparison_funcs.py behavior
             rtol_delta = torch.max(torch.abs(impl_torch - ref_torch) / torch.abs(ref_torch)).item()
