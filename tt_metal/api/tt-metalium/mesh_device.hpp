@@ -200,6 +200,8 @@ public:
         size_t worker_l1_size,
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
+    // Closes the submeshes that are still open first, since they share this mesh's devices. With fast dispatch, call
+    // quiesce_devices() first if a submesh ran work.
     bool close() override;
     void enable_program_cache() override;
     void clear_program_cache() override;
