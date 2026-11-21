@@ -442,6 +442,120 @@ def test_binary_pow_fp32_base_zero(base, device):
         ), f"pow({base}, {exponent}): got {got.item()}, expected {want.item()}"
 
 
+INF_BASE_EXPONENTS = [
+    -3.0,
+    -2.0,
+    -1.5,
+    -1.0,
+    -0.5,
+    -0.1,
+    -0.0,
+    0.0,
+    0.1,
+    0.5,
+    1.0,
+    1.5,
+    2.0,
+    3.0,
+    float("inf"),
+    float("-inf"),
+    float("nan"),
+    -float("nan"),
+    torch.finfo(torch.float32).tiny,
+    -torch.finfo(torch.float32).tiny,
+]
+
+
+@pytest.mark.parametrize("base", [float("inf"), float("-inf")])
+def test_binary_pow_fp32_base_inf(base, device):
+    # setexp/exexp decode an infinite base as mantissa 1 with exponent 128, so
+    # pow(inf, 0.5) used to come back as 2**64 instead of inf.
+    torch_input_tensor_a = torch.full((len(INF_BASE_EXPONENTS),), base, dtype=torch.float32)
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor(INF_BASE_EXPONENTS, dtype=torch.float32)
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+
+    output_tensor = ttnn.pow(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    for exponent, got, want in zip(INF_BASE_EXPONENTS, output_tensor.flatten(), torch_output_tensor.flatten()):
+        assert pow_result_matches(
+            got.item(), want.item()
+        ), f"pow({base}, {exponent}): got {got.item()}, expected {want.item()}"
+
+
+@pytest.mark.parametrize("exponent", [-0.5, 0.5, 3.0])
+def test_rpow_fp32_base_inf(exponent, device):
+    exponent_tensor = torch.full((32, 32), exponent, dtype=torch.float32)
+    tt_exponent = ttnn.from_torch(
+        exponent_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_output_tensor = torch.pow(torch.tensor(float("inf")), exponent_tensor)
+    output_tensor = ttnn.to_torch(ttnn.rpow(tt_exponent, float("inf")))
+
+    assert pow_result_matches(
+        output_tensor.flatten()[0].item(), torch_output_tensor.flatten()[0].item()
+    ), f"rpow({exponent}, inf): got {output_tensor.flatten()[0].item()}, expected {torch_output_tensor.flatten()[0].item()}"
+
+
+NAN = float("nan")
+# (base, exponent): a NaN operand gives NaN, except pow(NaN, +-0) = pow(1, NaN) = 1.
+NAN_OPERAND_CASES = [
+    (NAN, 2.0),
+    (NAN, 0.5),
+    (NAN, -1.5),
+    (NAN, 3.0),
+    (NAN, 0.0),
+    (NAN, -0.0),
+    (NAN, float("inf")),
+    (NAN, NAN),
+    (2.0, NAN),
+    (0.5, NAN),
+    (-2.0, NAN),
+    (1.0, NAN),
+    (0.0, NAN),
+    (float("inf"), NAN),
+    (1.0, 2.0),
+]
+
+
+def test_binary_pow_fp32_nan_operands(device):
+    # setexp turns a NaN base or exponent into a finite value in the log2 step; pow(NaN, 2) used to be finite.
+    dtype, torch_dtype = ttnn.float32, torch.float32
+    torch_base = torch.tensor([b for b, _ in NAN_OPERAND_CASES], dtype=torch_dtype)
+    torch_exponent = torch.tensor([e for _, e in NAN_OPERAND_CASES], dtype=torch_dtype)
+
+    def to_device(tensor):
+        return ttnn.from_torch(tensor, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+
+    got = ttnn.to_torch(ttnn.pow(to_device(torch_base), to_device(torch_exponent))).flatten()
+    want = torch.pow(torch_base, torch_exponent)
+
+    for (base, exponent), g, w in zip(NAN_OPERAND_CASES, got, want):
+        assert pow_result_matches(g.item(), w.item()), f"pow({base}, {exponent}): got {g.item()}, expected {w.item()}"
+
+
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
 def test_pow_determinism(device, dtype):
     torch.manual_seed(0)
