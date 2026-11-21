@@ -24,20 +24,8 @@ def test_selu_bf16_unflushed_zero_and_subnormal_inputs(device):
 
 
 def test_selu_bf16_bfloat8_b(device):
-    """bfloat8_b in and out: PCC 0.999 against torch, and each output within one bfloat8_b step of the BF16 call's
-    packed to bfloat8_b (two in a block holding an infinity or NaN)."""
-    torch.manual_seed(0)
-    x = torch.empty(1, 1, 64, 64).uniform_(-10.0, 10.0).to(torch.bfloat16)
-    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-    stored = ttnn.to_torch(tt_x).to(torch.float64).flatten()
-    output = ttnn.selu(tt_x, scale=1.0507009873554805, alpha=1.6732632423543772)
-    assert output.dtype == ttnn.bfloat8_b
-    actual = ttnn.to_torch(output).to(torch.float64).flatten()
-    golden = ttnn.get_golden_function(ttnn.selu)(stored, scale=1.0507009873554805, alpha=1.6732632423543772).to(
-        torch.float64
-    )
-    pcc = torch.corrcoef(torch.stack([actual, golden]))[0, 1].item()
-    assert pcc >= 0.999, f"PCC {pcc:.6f} against torch"
+    """bfloat8_b in and out: each output within one bfloat8_b step of the BF16 call's packed to bfloat8_b (two in a
+    block holding an infinity or NaN). The exhaustive case holds the BF16 call to torch on every input."""
     # Every finite BF16 exponent and +-0, one exponent per 16-value face row.
     words = torch.arange(1 << 16, dtype=torch.int32)
     exponent = (words >> 7) & 0xFF
@@ -47,9 +35,9 @@ def test_selu_bf16_bfloat8_b(device):
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     stored = ttnn.to_torch(tt_x).to(torch.bfloat16)
     tt_stored = ttnn.from_torch(stored, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    actual = (
-        ttnn.to_torch(ttnn.selu(tt_x, scale=1.0507009873554805, alpha=1.6732632423543772)).to(torch.float32).flatten()
-    )
+    output = ttnn.selu(tt_x, scale=1.0507009873554805, alpha=1.6732632423543772)
+    assert output.dtype == ttnn.bfloat8_b
+    actual = ttnn.to_torch(output).to(torch.float32).flatten()
     expected = (
         ttnn.to_torch(
             ttnn.typecast(ttnn.selu(tt_stored, scale=1.0507009873554805, alpha=1.6732632423543772), ttnn.bfloat8_b)
@@ -121,11 +109,10 @@ def test_selu_bf16_nonfinite_inputs(device):
 
 
 def test_selu_bf16_exhaustive_inputs(device):
-    """All 65,536 BF16 inputs: torch's result as stored, within STEPS BF16 steps, or STOCK's word per board.
+    """All 65,536 BF16 inputs: torch's result as stored, within STEPS BF16 steps, or STOCK's word.
 
     SKIP lists inputs the LLK sweep judges instead.
     """
-    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     STOCK = {0xBFE1: [(0xFF81, 0xFFFF)]}
     STEPS = 0
     SKIP = [(0x0002, 0x007F), (0x8001, 0x807F)]
