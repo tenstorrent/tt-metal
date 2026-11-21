@@ -11,6 +11,12 @@ the prefix in order, eager, with the chunk's real-token span as the runtime pass
 checkpoint ids, and their bf16 weights) are saved to ``$TT_MOE_TF_OUT``; nothing is scored while the device is held
 (``moe_teacher_feed.py score``). Skips unless ``$TT_MOE_TF_INPUT`` and ``$TT_MOE_TF_OUT`` are set;
 ``$TT_MOE_TF_REVERSE=1`` runs the chunks in reverse order (``moe_teacher_feed.py same`` then compares two runs).
+``$TT_MOE_TF_ROUTED_BFP8=<dir>`` runs the routed experts in bfloat8_b instead of production's bfloat4_b, read from that
+private cache (``moe_teacher_feed.py routed-cache``), everything else unchanged: the weight format's share of the
+device's error is the difference between the two runs' scores on the same input. ``$TT_MOE_TF_HEAD_WEIGHTS=<ttnn dtype
+name>`` / ``$TT_MOE_TF_HEAD_FIDELITY=<MathFidelity name>`` set the MoE head's weight format (shared expert and latent
+down projection, bfloat8_b in production) / matmul fidelity (HiFi2) the same way; ``$TT_MOE_TF_TAIL_WEIGHTS`` the latent
+up projection's (moe_tail's W_up, bfloat8_b); ``$TT_MOE_TF_COMBINE_SNAP`` the combine's snap (MoEBlockFfnOptions; 0 off).
 
     TT_MOE_TF_INPUT=/mnt/.../k31-l49-moe-input-128k-v2 TT_MOE_TF_OUT=/mnt/.../k31-l49-moe-dev-128k \\
     models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- \\
@@ -42,6 +48,9 @@ SOURCE, OUT = os.environ.get("TT_MOE_TF_INPUT"), os.environ.get("TT_MOE_TF_OUT")
 # TT_MOE_TF_REVERSE=1 runs the chunks last to first: the MoE carries no state from one chunk to the next, so its
 # per-row outputs must equal a forward run's bit for bit, and any trend over position is the inputs'.
 REVERSE = os.environ.get("TT_MOE_TF_REVERSE") == "1"
+ROUTED_BFP8 = os.environ.get("TT_MOE_TF_ROUTED_BFP8")
+HEAD_WEIGHTS, HEAD_FIDELITY = os.environ.get("TT_MOE_TF_HEAD_WEIGHTS"), os.environ.get("TT_MOE_TF_HEAD_FIDELITY")
+TAIL_WEIGHTS, COMBINE_SNAP = os.environ.get("TT_MOE_TF_TAIL_WEIGHTS"), os.environ.get("TT_MOE_TF_COMBINE_SNAP")
 
 
 def device_routing(ffn, block, rows: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -99,6 +108,10 @@ def test_k31_moe_layer_teacher_fed(mesh_device, device_params):
     layout = k31_stage.STAGE_LAYOUTS[mesh_shape]
     chunk = layout.chunk
     weight_cache = k31_stage.weight_cache_path(mesh_shape)
+    routed_cache, routed_dtype = weight_cache, None  # (production: bfp4 routed experts from the stage's cache)
+    if ROUTED_BFP8:
+        routed_cache, routed_dtype = Path(ROUTED_BFP8).resolve(), ttnn.bfloat8_b
+        assert routed_cache != weight_cache, "the bfp8 routed experts come from their own cache, not the stage's"
     adapter = k31_stage.ADAPTER
     assert moe_impl_of(adapter) == "block", "the production K3.1 MoE is the MoE block"
     manifest = {
@@ -112,12 +125,30 @@ def test_k31_moe_layer_teacher_fed(mesh_device, device_params):
         "moe_impl": "block",
         "order": "reverse" if REVERSE else "forward",
         "weight_cache": str(weight_cache),
+        # (what the run asked for; "default": the knob unset, production's value as MoEDtypes / moe_tail define it)
+        "routed_weights": "BFLOAT8_B" if routed_dtype is not None else "default",
+        "routed_cache": str(routed_cache),
+        "head_weights": HEAD_WEIGHTS or "default",
+        "head_fidelity": HEAD_FIDELITY or "default",
+        "tail_weights": TAIL_WEIGHTS or "default",
+        "combine_snap": float(COMBINE_SNAP) if COMBINE_SNAP else "default",
         **provenance(),
     }
     start_run(out, manifest)
 
     ffn = TtMoEBlockFfn(
-        mesh_device, KimiK31Config, layer, cache_path=weight_cache, options=MoEBlockFfnOptions(sp_axis=layout.sp_axis)
+        mesh_device,
+        KimiK31Config,
+        layer,
+        cache_path=routed_cache,
+        options=MoEBlockFfnOptions(
+            sp_axis=layout.sp_axis,
+            routed_weights=routed_dtype,
+            head_weights=getattr(ttnn.DataType, HEAD_WEIGHTS) if HEAD_WEIGHTS else None,
+            head_fidelity=getattr(ttnn.MathFidelity, HEAD_FIDELITY) if HEAD_FIDELITY else None,
+            tail_weights=getattr(ttnn.DataType, TAIL_WEIGHTS) if TAIL_WEIGHTS else None,
+            combine_snap=float(COMBINE_SNAP) if COMBINE_SNAP else None,
+        ),
     )
     dims = [None, None]
     dims[layout.sp_axis], dims[layout.tp_axis] = -2, -1

@@ -25,6 +25,15 @@ The three steps of ``teacher_feed.py`` for one MoE layer (latent MoE, 896 routed
     python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed score --trace T --out OUT
     python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed host --trace T --out OUT
     python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed same OUT OUT_REVERSED
+
+An attribution run swaps the routed experts' weight format (bfloat4_b in production) for bfloat8_b: ``routed-cache``
+writes a layer's bfp8 routed experts into a private cache (on a mock mesh, no device), and the device test reads them
+with ``TT_MOE_TF_ROUTED_BFP8``:
+
+    TT_METAL_MOCK_CLUSTER_DESC_PATH=.../blackhole_galaxy.yaml python -m ...moe_teacher_feed routed-cache --layer L \\
+        --cache PRIVATE
+    TT_MOE_TF_ROUTED_BFP8=PRIVATE TT_MOE_TF_INPUT=IN TT_MOE_TF_OUT=OUT8 scripts/run_safe_pytest.sh ...
+    TT_METAL_MOCK_CLUSTER_DESC_PATH=.../blackhole_galaxy.yaml python -m ...moe_teacher_feed emulate --out OUT
 """
 
 from __future__ import annotations
@@ -182,6 +191,69 @@ def build_moe_input(
     )
 
 
+ROUTED_CACHE_MANIFEST = "routed-cache.json"
+
+
+def build_routed_cache(*, checkpoint: Path, layer: int, cache: Path, dtype_name: str) -> dict:
+    """Write layer ``layer``'s routed experts at ``dtype_name`` (e.g. ``BFLOAT8_B``) into a private cache ``cache`` for
+    the 4x4-sp1 stage, with the production writer (``TtRoutedExpert.build_ttnn_cache``: the same expert placement,
+    W^T orientation and tensorbin names as the stage's shared cache, only the dtype differs), on a MOCK 4x4 mesh
+    (``$TT_METAL_MOCK_CLUSTER_DESC_PATH``: no device is opened). The device test reads it with
+    ``TT_MOE_TF_ROUTED_BFP8``. Refuses the production cache roots and any directory holding a layer marker (a stage
+    cache): the shared caches are read-only. Records the layer in ``routed-cache.json``."""
+    import ttnn
+    from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import provenance
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import _DEFAULT_CACHE, load_routed_expert_weights
+    from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+
+    assert os.environ.get("TT_METAL_MOCK_CLUSTER_DESC_PATH"), "routed-cache writes on a mock mesh only"
+    dtype = getattr(ttnn.DataType, dtype_name)
+    cache = cache.resolve()
+    adapter = k31_stage.ADAPTER
+    for root in (os.environ.get(adapter.ttnn_cache_env) or adapter.ttnn_cache_default, _DEFAULT_CACHE):
+        root = Path(root).resolve()
+        assert cache != root and root not in cache.parents, f"{cache} is inside the shared cache {root}"
+    cache.mkdir(parents=True, exist_ok=True)
+    assert not any(cache.glob(".layer_*.complete")), f"{cache} holds a stage cache's layer markers"
+    shape = k31_stage.MESH_4X4
+    sp_axis = k31_stage.STAGE_LAYOUTS[shape].sp_axis
+    began = time.perf_counter()
+    weights = load_routed_expert_weights(checkpoint, layer, NUM_EXPERTS)
+    loaded = time.perf_counter()
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(*shape))
+    try:
+        TtRoutedExpert.build_ttnn_cache(
+            weights,
+            NUM_EXPERTS // (shape[0] * shape[1]),
+            mesh,
+            dtype,
+            cache,
+            f"layer_{layer}.routed_expert",
+            sp_axis=sp_axis,
+        )
+    finally:
+        ttnn.close_mesh_device(mesh)
+    files = sorted(cache.glob(f"layer_{layer}.routed_expert.local_*_dtype_{dtype_name}_layout_TILE.tensorbin"))
+    entry = {
+        "layer": layer,
+        "dtype": dtype_name,
+        "mesh": list(shape),
+        "sp_axis": sp_axis,
+        "checkpoint": str(checkpoint),
+        "files": len(files),
+        "bytes": sum(f.stat().st_size for f in files),
+        "load_seconds": round(loaded - began, 1),
+        "write_seconds": round(time.perf_counter() - loaded, 1),
+        **provenance(),
+    }
+    record = cache / ROUTED_CACHE_MANIFEST
+    layers = json.loads(record.read_text()) if record.is_file() else {}
+    layers[str(layer)] = entry
+    record.write_text(json.dumps(layers, indent=1))
+    return entry
+
+
 def owner_positions(
     sp_row: int, tp_col: int, *, rows_per_sp_row: int, pad_rows: int, row_blocks: int, tp: int
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -316,14 +388,47 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
 # --- fp32 host recompute on sampled rows ------------------------------------------------------------------------
 
 
+# The device MoE block's weight formats by tensor family: the routed experts at MoEDtypes.routed_weights (bfloat4_b);
+# the shared expert and the latent down projection are the MoE head's weights (MoEDtypes.shared_weights, bfloat8_b);
+# the latent up projection is moe_tail's W_up (prepare_moe_tail_weights' default, bfloat8_b). Host emulation only.
+DEVICE_WEIGHT_FORMATS = {
+    "routed": "BFLOAT4_B",
+    "shared": "BFLOAT8_B",
+    "latent_down": "BFLOAT8_B",
+    "latent_up": "BFLOAT8_B",
+}
+WEIGHT_FAMILIES = {
+    "shared": ("shared_experts.gate_proj.weight", "shared_experts.up_proj.weight", "shared_experts.down_proj.weight"),
+    "latent_down": ("routed_expert_down_proj.weight",),
+    "latent_up": ("routed_expert_up_proj.weight",),
+}
+
+
+def block_float(w: torch.Tensor, dtype_name: str) -> torch.Tensor:
+    """A Linear weight ``w`` [out, in] as the device holds it: W^T [in, out] in ttnn's block-float TILE format
+    (``dtype_name``, e.g. ``BFLOAT4_B``: 16 elements of a face row share an exponent), round-tripped by ttnn on the
+    host, back as [out, in] fp32. Run with ``$TT_METAL_MOCK_CLUSTER_DESC_PATH``: the conversion otherwise opens the
+    real cluster to learn its arch."""
+    import ttnn
+
+    t = ttnn.from_torch(w.T.contiguous().float(), dtype=getattr(ttnn.DataType, dtype_name), layout=ttnn.TILE_LAYOUT)
+    return ttnn.to_torch(t).float().T.contiguous()
+
+
 class HostMoE:
     """The model reference's MoE layer (`modeling_kimi_moe.KimiSparseMoeBlock`, latent: down-project to 3584, the
     top-16 SiTU experts and their weighted sum there, ``routed_expert_norm``, up-project, plus the shared experts on
     the full hidden) in fp32 for a few rows. ``w``: the non-routed weights by their checkpoint names under
-    ``block_sparse_moe.``; ``expert(e)``: routed expert e's (w1 gate, w3 up, w2 down), read when a row picks it."""
+    ``block_sparse_moe.``; ``expert(e)``: routed expert e's (w1 gate, w3 up, w2 down), read when a row picks it.
+    ``formats``: weight families (``routed`` or a ``WEIGHT_FAMILIES`` key) held in a device block-float format
+    (``block_float``) instead of the checkpoint's values - the math stays fp32, so the distance to the plain fp32
+    MoE is that weight format's error alone."""
 
-    def __init__(self, w: dict[str, torch.Tensor], expert, top_k: int = TOP_K):
-        self.w = {n: t.float() for n, t in w.items()}
+    def __init__(self, w: dict[str, torch.Tensor], expert, top_k: int = TOP_K, formats: dict[str, str] | None = None):
+        self.raw, self.formats = w, dict(formats or {})
+        assert set(self.formats) <= {"routed", *WEIGHT_FAMILIES}, f"unknown weight families {self.formats}"
+        held = {n: f for k, f in self.formats.items() for n in WEIGHT_FAMILIES.get(k, ())}
+        self.w = {n: block_float(t, held[n]) if n in held else t.float() for n, t in w.items()}
         self.load_expert, self.top_k = expert, top_k
         self.experts: dict[int, tuple[torch.Tensor, ...]] = {}
 
@@ -360,8 +465,13 @@ class HostMoE:
 
     def expert(self, e: int) -> tuple[torch.Tensor, ...]:
         if e not in self.experts:
-            self.experts[e] = tuple(t.float() for t in self.load_expert(e))
+            fmt = self.formats.get("routed")
+            self.experts[e] = tuple(block_float(t, fmt) if fmt else t.float() for t in self.load_expert(e))
         return self.experts[e]
+
+    def with_formats(self, formats: dict[str, str]) -> "HostMoE":
+        """This MoE (its checkpoint weights, sharing the expert loader) with ``formats``."""
+        return HostMoE(self.raw, self.load_expert, self.top_k, formats)
 
     def __call__(self, x: torch.Tensor, ids: torch.Tensor | None = None, weights: torch.Tensor | None = None):
         """MoE output fp32 ``[n, hidden]`` for rows ``x``, routed by the fp32 router, or by ``ids`` / ``weights``
@@ -389,20 +499,32 @@ def nrmse_rows(got: torch.Tensor, want: torch.Tensor, floor: float) -> torch.Ten
     return (got.float() - want.float()).norm(dim=-1) / want.float().norm(dim=-1).clamp_min(floor)
 
 
+def _stats(v: torch.Tensor) -> dict[str, float]:
+    return {"median": float(v.median()), "p90": _q(v, 0.9), "max": float(v.max())}
+
+
+def _sampled_rows(out: Path, rows: int) -> tuple[dict, list[int], torch.Tensor, torch.Tensor]:
+    """The scored run in ``out``: (its metrics.json, ``rows`` positions spread over the run, their MoE inputs, their
+    device outputs) - the rows ``host`` and ``emulate`` measure."""
+    metrics = json.loads((out / "metrics.json").read_text())
+    manifest = metrics["run"]
+    source, chunk = Path(manifest["input"]), manifest["chunk"]
+    picks = torch.linspace(0, manifest["count"] - 1, rows).long().tolist()
+    x = torch.cat([load_input(source, r, r + 1) for r in picks])
+    dev = torch.stack([torch.load(chunk_path(out, r // chunk), weights_only=True)["moe_out"][r % chunk] for r in picks])
+    return metrics, picks, x, dev
+
+
 def host_check(*, trace: Trace, out: Path, checkpoint: Path, rows: int) -> dict:
     """fp32 host MoE on ``rows`` rows spread over the scored run in ``out``: per-row NRMSE (floored as the scorer
     floors) of device vs trace, device vs fp32, trace vs fp32 (fp32 routed by itself) and trace vs fp32 routed by
     the trace's own top-16 (the experts' numerics without routing differences). Writes host.json."""
-    metrics = json.loads((out / "metrics.json").read_text())
+    metrics, picks, x, dev = _sampled_rows(out, rows)
     manifest, layer, floor = metrics["run"], metrics["layer"], metrics["moe_nrmse_floor"]
-    source, chunk = Path(manifest["input"]), manifest["chunk"]
-    picks = torch.linspace(0, manifest["count"] - 1, rows).long().tolist()
     host = HostMoE.from_checkpoint(checkpoint, layer)
-    x = torch.cat([load_input(source, r, r + 1) for r in picks])
     want = torch.cat([trace.rows(f"decoder_output_layer_{layer}", r, r + 1) for r in picks])
     ids = torch.cat([trace.rows(f"expert_ids_layer_{layer}", r, r + 1) for r in picks]).long()
     ws = torch.cat([trace.rows(f"expert_weights_layer_{layer}", r, r + 1) for r in picks])
-    dev = torch.stack([torch.load(chunk_path(out, r // chunk), weights_only=True)["moe_out"][r % chunk] for r in picks])
     began = time.perf_counter()
     fp32 = host(x)
     fp32_trace_routing = host(x, ids, ws)
@@ -419,9 +541,63 @@ def host_check(*, trace: Trace, out: Path, checkpoint: Path, rows: int) -> dict:
         "rows": picks,
         "seconds": round(time.perf_counter() - began, 1),
         "experts_read": len(host.experts),
-        **{k: {"median": float(v.median()), "p90": _q(v, 0.9), "max": float(v.max())} for k, v in distances.items()},
+        **{k: _stats(v) for k, v in distances.items()},
     }
     (out / "host.json").write_text(json.dumps(result, indent=1))
+    return result
+
+
+# Host emulations of the device's weight formats, one family at a time and all together (DEVICE_WEIGHT_FORMATS, and
+# the same with bfloat8_b routed experts: the attribution run's formats).
+EMULATIONS = {
+    "routed_bfp4": {"routed": "BFLOAT4_B"},
+    "routed_bfp8": {"routed": "BFLOAT8_B"},
+    "shared_bfp8": {"shared": "BFLOAT8_B"},
+    "latent_down_bfp8": {"latent_down": "BFLOAT8_B"},
+    "latent_up_bfp8": {"latent_up": "BFLOAT8_B"},
+    "device_weights": DEVICE_WEIGHT_FORMATS,
+    "device_weights_routed_bfp8": {**DEVICE_WEIGHT_FORMATS, "routed": "BFLOAT8_B"},
+}
+
+
+def emulate(*, out: Path, checkpoint: Path, rows: int, names: list[str]) -> dict:
+    """On ``rows`` rows of the scored device run in ``out`` (host_check's rows), the fp32 MoE with each ``EMULATIONS``
+    entry's weights in its device format, every one routed by the fp32 router's selection on the unchanged gate (the
+    weight formats alone, no routing difference): per-row NRMSE of each emulation vs fp32 and vs the device run, and
+    of the device vs fp32 (floored as the scorer floors). Distances are measured, never combined. Writes
+    emulate.json. Needs ``$TT_METAL_MOCK_CLUSTER_DESC_PATH`` (``block_float``'s conversions otherwise open the real
+    cluster, outside the device lock)."""
+    assert os.environ.get("TT_METAL_MOCK_CLUSTER_DESC_PATH"), "emulate converts on a mock cluster only"
+    metrics, picks, x, dev = _sampled_rows(out, rows)
+    manifest, layer, floor = metrics["run"], metrics["layer"], metrics["moe_nrmse_floor"]
+    base = HostMoE.from_checkpoint(checkpoint, layer)
+    raw: dict[int, tuple[torch.Tensor, ...]] = {}  # (each expert read once for every emulation)
+    load = base.load_expert
+    base.load_expert = lambda e: raw[e] if e in raw else raw.setdefault(e, load(e))
+    ids, weights, _ = route(x, base.w["gate.weight"], base.w["gate.e_score_correction_bias"], base.top_k)
+    began = time.perf_counter()
+    fp32 = base(x, ids, weights)
+    result = {
+        "layer": layer,
+        "run_code_revision": manifest.get("code_revision"),
+        "run_routed_weights": manifest.get("routed_weights", "default"),
+        "rows": picks,
+        "device_vs_fp32": _stats(nrmse_rows(dev, fp32, floor)),
+        "emulations": {},
+    }
+    base.experts.clear()
+    for name in names:
+        moe = base.with_formats(EMULATIONS[name])
+        y = moe(x, ids, weights)
+        result["emulations"][name] = {
+            "formats": EMULATIONS[name],
+            "vs_fp32": _stats(nrmse_rows(y, fp32, floor)),
+            "device_vs_emulation": _stats(nrmse_rows(dev, y, floor)),
+        }
+        del moe, y
+    result["seconds"] = round(time.perf_counter() - began, 1)
+    result["experts_read"] = len(raw)
+    (out / "emulate.json").write_text(json.dumps(result, indent=1))
     return result
 
 
@@ -465,7 +641,29 @@ def main() -> None:
     hostp.add_argument("--checkpoint", type=Path, default=checkpoint)
     samep = sub.add_parser("same", help="are two device runs of one input bit-identical chunk by chunk")
     samep.add_argument("runs", type=Path, nargs=2)
+    emup = sub.add_parser("emulate", help="fp32 host MoE with the device's weight formats, one family at a time")
+    emup.add_argument("--out", type=Path, required=True)
+    emup.add_argument("--rows", type=int, default=32)
+    emup.add_argument("--only", nargs="*", default=list(EMULATIONS), choices=list(EMULATIONS))
+    emup.add_argument("--checkpoint", type=Path, default=checkpoint)
+    cachep = sub.add_parser("routed-cache", help="a layer's routed experts at another dtype into a private cache")
+    cachep.add_argument("--layer", type=int, required=True)
+    cachep.add_argument("--cache", type=Path, required=True)
+    cachep.add_argument("--dtype", default="BFLOAT8_B", help="ttnn.DataType name")
+    cachep.add_argument("--checkpoint", type=Path, default=checkpoint)
     args = parser.parse_args()
+    if args.command == "emulate":
+        print(json.dumps(emulate(out=args.out, checkpoint=args.checkpoint, rows=args.rows, names=args.only), indent=1))
+        return
+    if args.command == "routed-cache":
+        print(
+            json.dumps(
+                build_routed_cache(
+                    checkpoint=args.checkpoint, layer=args.layer, cache=args.cache, dtype_name=args.dtype
+                )
+            )
+        )
+        return
     if args.command == "same":
         result = same_rows(*args.runs)
         print(json.dumps(result))
