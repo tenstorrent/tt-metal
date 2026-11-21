@@ -254,7 +254,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
             out_channels,  // explicit out_channels for grouped convolutions
             bias_tensor.has_value(),
             false,  // enable_kernel_stride_folding
-            false,  // full_inner_dim
+            conv_config.full_inner_dim,
             false,  // enable_activation_reuse
             coalesce_1d_depthwise_kw_reads,
             ConvTranspose2dDimensions::CONV2D_STRIDE);  // stride (always {1,1} for transposed conv2d)
@@ -349,7 +349,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
             compute_config,
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,
-            false,  // full_inner_dim
+            conv_config.full_inner_dim,
             false,  // enable_activation_reuse
             conv_config.config_tensors_in_dram,
             conv_config.force_split_reader);

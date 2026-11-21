@@ -18,6 +18,7 @@ from tests.ttnn.nightly.unit_tests.operations.conv.test_conv_transpose2d import 
     SliceWidth,
     L1Full,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
@@ -103,6 +104,71 @@ def test_simple_conv_t2d(
         mirror_kernel=mirror_kernel,
         preprocess_weights_bias=preprocess_weights,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape, output_channels, kernel_size, stride, padding",
+    [
+        ((1, 64, 16, 16), 64, (3, 3), (1, 1), (1, 1)),
+        ((1, 48, 28, 56), 64, (3, 3), (2, 1), (1, 0)),
+        ((2, 32, 32, 13), 32, (7, 7), (2, 1), (5, 3)),
+    ],
+)
+@pytest.mark.parametrize("shard_layout", [ttnn.TensorMemoryLayout.BLOCK_SHARDED, None])
+@pytest.mark.parametrize("full_inner_dim", [True, False])
+@pytest.mark.parametrize("prepare_weights", [False, True])
+def test_conv_transpose2d_full_inner_dim(
+    device, input_shape, output_channels, kernel_size, stride, padding, shard_layout, full_inner_dim, prepare_weights
+):
+    # full_inner_dim used to size the activation blocks while the weights and the conv op still used the
+    # kernel-height slicing, so block sharded outputs came out wrong
+    torch.manual_seed(0)
+    batch_size, in_channels, input_height, input_width = input_shape
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16).float()
+    torch_weight = torch.randn((in_channels, output_channels, *kernel_size), dtype=torch.bfloat16).float()
+    torch_weight = (torch_weight / (in_channels * kernel_size[0] * kernel_size[1]) ** 0.5).bfloat16().float()
+    torch_output = torch.nn.functional.conv_transpose2d(torch_input, torch_weight, stride=stride, padding=padding)
+
+    conv_config = ttnn.Conv2dConfig(
+        shard_layout=shard_layout, full_inner_dim=full_inner_dim, weights_dtype=ttnn.bfloat16
+    )
+    tt_input = ttnn.from_torch(torch_input.permute(0, 2, 3, 1), ttnn.bfloat16, device=device)
+    tt_weight = ttnn.from_torch(torch_weight, ttnn.bfloat16)
+    conv_args = dict(
+        in_channels=in_channels,
+        out_channels=output_channels,
+        device=device,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=(1, 1),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        groups=1,
+    )
+    if prepare_weights:
+        tt_weight = ttnn.prepare_conv_transpose2d_weights(
+            weight_tensor=tt_weight,
+            input_memory_config=tt_input.memory_config(),
+            input_layout=tt_input.layout,
+            weights_format="IOHW",
+            has_bias=False,
+            input_dtype=ttnn.bfloat16,
+            conv_config=conv_config,
+            **conv_args,
+        )
+    tt_output, [out_height, out_width] = ttnn.conv_transpose2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        output_padding=(0, 0),
+        conv_config=conv_config,
+        return_output_dim=True,
+        **conv_args,
+    )
+    tt_output = ttnn.to_torch(tt_output).reshape(batch_size, out_height, out_width, -1)[..., :output_channels]
+    assert_with_pcc(torch_output, tt_output.permute(0, 3, 1, 2).float(), pcc=0.999)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
