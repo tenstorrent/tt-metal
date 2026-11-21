@@ -25,7 +25,7 @@ import logging
 import os
 import struct
 import traceback
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from ttnn import distributed_context_recv_bytes as _mpi_recv_bytes
 from ttnn import distributed_context_send_bytes as _mpi_send_bytes
@@ -161,8 +161,11 @@ class MPIRolloutClient:
         self._shut_down = False
         atexit.register(self.shutdown)
 
-    def remote_generate(self, prompts: List[List[int]]) -> Tuple[List[List[int]], List[List[float]], int]:
-        """Generate on the ttt rank. Returns ``(completions, per-token log-probs, weight_version)``.
+    def remote_generate(
+        self, prompts: List[List[int]]
+    ) -> Tuple[List[List[int]], List[List[float]], int, Optional[List[List[float]]]]:
+        """Generate on the ttt rank. Returns ``(completions, per-token log-probs, weight_version, per-token loss masks
+        or None)``.
 
         The ttt rank's sampler expands each prompt into its own number of completions, prompt-major.
         """
@@ -174,7 +177,7 @@ class MPIRolloutClient:
         payload = json.loads(self._recv_response().decode("utf-8"))
         completions = [[int(t) for t in c] for c in payload["completions"]]
         logprobs = [[float(x) for x in lp] for lp in payload["logprobs"]]
-        return completions, logprobs, int(payload["weight_version"])
+        return completions, logprobs, int(payload["weight_version"]), payload.get("loss_mask")
 
     def send_weights(self, hf_dict: dict[str, "ttnn.Tensor"], *, version: int) -> None:
         """Push a fresh HF-keyed weight dict to the ttt rank as weight version ``version``.

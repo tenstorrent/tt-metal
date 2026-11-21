@@ -120,6 +120,7 @@ def _decode(body: bytes) -> ScoredRolloutBatch:
             prompts=d["prompts"],
             completions=d["completions"],
             logprobs=pad_logprobs(d["completions"], d["logprobs"], d["logprobs_width"]),
+            loss_mask=pad_logprobs(d["completions"], d["loss_mask"], d["logprobs_width"]) if "loss_mask" in d else None,
         ),
         rewards=np.asarray(d["rewards"], dtype=np.float32),
         reward_components={k: np.asarray(v, dtype=np.float32) for k, v in d["reward_components"].items()},
