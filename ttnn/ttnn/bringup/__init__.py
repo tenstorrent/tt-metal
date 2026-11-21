@@ -22,6 +22,9 @@ PYTHON_OPS = {
     "ckv_bfp4": ("ckv_bfp4_ttnn", "ckv_bfp4"),
     # bf16 TILE -> bfloat4_b / bfloat8_b TILE rounded to nearest even (deepseek_v41_flash_d_p index keys / query)
     "bfp_round": ("ckv_bfp4_ttnn", "bfp_round"),
+    # a ROW_MAJOR bf16 row tensor's rows (a served cache slab) -> bfloat4_b row records, tilized on the core, source row /
+    # record row / row count runtime values (deepseek_v41_flash_d_p MB.4, the history pack)
+    "ckv_bfp4_rows": ("ckv_bfp4_ttnn", "ckv_bfp4_rows"),
     # [kv | gate] row pairs -> softmax-gated pair pool, fp32 (deepseek_v41_flash_d_p compressor, P.24 TINY_KERNELS)
     "pair_pool": ("pair_pool_ttnn", "pair_pool"),
     # per_token_cast_to_fp8's e4m3 rows + fp32 scales -> Blaze decode's 192 B indexer key cache rows (deepseek_v41_flash_d_p

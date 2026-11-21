@@ -25,6 +25,9 @@ the descriptor's.
   the option, same cache key): runtime arg `arg` of kernel `kernel` on every core of every mesh program that has it
   takes a per-run value (slot = position in the list); such a slot is never matched to an io address and is left out
   of the cache key. `PreparedProgram.n_values` is the slot count.
+- A value slot `(kernel, 0x80000000 | i)` (bit 31 set) names common runtime arg i of the kernel instead: one word a
+  kernel a chip (deepseek_v41_flash_d_p MB.4, ckv_bfp4_rows: per-core values on 110 cores cost 0.31 ms host a call on
+  32 chips).
 - `run_prepared(prepared, io_tensors, values=[])`: `values` one per value slot (written on every run, cache miss and
   hit); the output is the last io tensor, as `generic_op`.
 - Contract (prepared_program.hpp): every per-call tensor a kernel addresses (a runtime arg holding it, or a CB on it) is

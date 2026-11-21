@@ -1413,3 +1413,55 @@
 - `orchestrator measure --task MB.3` (devjob mb3measure): rc 0 (determinism 0.0, quick rc 0, host_transfers_per_layer 0).
 - Repo map: fixed the test_no_rebuild row's path (knowledge.check flagged it), added the ladder row.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate MB.3 --spec $BRINGUP_SPEC --check` (devjob).
+
+## MB.4 perf (attempt 1): the long-history slowdown (POS_DYNAMIC off | on), explained and fixed at the cause
+- Read first: OV-57, rule 20, perf_guide, MB.3's ladder (DS41-324). Load reason: "needs the gate's ladder load (layers
+  0-20, decode, 5120, resident engram table, position tables to 1,044,480) because the gap only exists at 524k-1M
+  histories through every executed layer; one probe (tests/perf/test_mb4_history_probe.py) measures on and off in that
+  one load at 4 points".
+- Measurement (probe, before any code change; harness steady chunk, its real previous chunk first; on / off ms):
+  51200 74.15 / 74.52, 524288 83.25 / 81.66, 786432 89.40 / 84.79, 1024000 92.59 / 86.81 (11-19: 74.1 / 79.5 / 84.9
+  / 87.4): POS_DYNAMIC=off IS 11-19 (the harness adds nothing); on vs off output 0.0 at every point. The whole gap is
+  history_gather.prefetch (the history pack at the chunk's first engram wait, 3 sources): at 1024000 device 6.08 vs
+  4.13 ms (page_copy 4 cores a chip 1.99 ms vs slice + concat 0.51; ckv_bfp4 in 2048-row pieces 0.67 vs 0.28; tilize
+  0.33 vs 0.23) and HOST 6.85 vs 1.40 ms (_pack_fixed: per 2048-row piece a tensor alloc + page copy + tilize +
+  ckv_bfp4, ~4 pieces a source at 1M). Both grow with the history (pieces = history / 2048).
+- Expected saving per chunk (written before the code change): one fork call per pack (ttnn.bringup.ckv_bfp4_rows:
+  the slab's ROW_MAJOR rows read, tilized and packed in one program; source row, destination row and band count are
+  value slots): at 1024000 device -2.0 to -2.4 ms vs on (prefetch ~3.7-4.0 ms: the gather stays), host -5 to -5.5 ms
+  vs on (one dispatch a source instead of ~12); wall ~86-87 ms (<= off). At 51200 ~0.
+- What (POS_DYNAMIC=on; off unchanged = the slices): tt/history_gather._pack_rows replaces MB.2's _pack_fixed: ONE
+  ttnn.bringup.ckv_bfp4_rows(slab, loc, slab.batch R + a, ceil32(hi) - a, a) per pack (the prefetch's whole history
+  and the tail's chunk periods), straight from the served slab: no page copy, no tilize op, no PACK_BUCKET pieces.
+  Fork ckv_bfp4_ttnn: new entry ckv_bfp4_rows (reader kernels/ckv_bfp4_rows_reader.cpp; compute / writer behind
+  CKV_ROWS_IN: tilize_block into cb 18 on the core, then the existing round + record pack). Fork prepared_program:
+  value slots on COMMON runtime args ((k, 0x80000000 | i)); ckv_bfp4_rows passes its 3 values (src row, band count,
+  record row) as common args: per-core values cost 0.31 ms host a call on 110 cores x 32 chips (DS41-326), common
+  0.06 ms (tests/perf/test_ckv_rows_host.py). Built with ./build_metal.sh (rc 0).
+- Gotcha (DS41-327): hw_startup(cb_in, cb_rows) leaves the packer at bfloat4_b; tilize_init does not reconfigure it
+  (records garbage), and pack_reconfig_data_format AFTER tilize_init broke rows 16-31: reconfigure BEFORE the init.
+  BH's DEST remap is switched off around the tilize (the row pack needs it on; untested whether the tilize does).
+- Op test (tests/test_ckv_bfp4_rows.py -> the fork's tests/unit/test_ckv_bfp4_rows.py, resident runner, held mesh):
+  4 passed: byte-exact vs the host rule and vs ckv_bfp4(to_layout(slice)) on interleaved and ND-sharded sources,
+  several bands a core, one prepared program for 4 value sets, deterministic, refusals. The fork's single-device
+  unit suites (test_ckv_bfp4.py, test_bfp_round.py, prepared_program's 2x2 cases) were not run: rule 19 (no
+  single-card job on the Galaxy); the default paths' code is unchanged (new define / new slot kind only).
+- Cores (rule 18): ckv_bfp4_rows on max_grid (110 a Galaxy chip; no matmul). Removed: MB.2's 4-core page copies of
+  the history pack.
+- Rule 20, per-chunk values this change touches: the pack's source row (slab.batch x R + a: slot, layer, start), its
+  row count (the history length: ceil32(hi) - a) and the record row a: prepared value slots (common args), the same
+  program for every chunk, slot and history length (one prepare per slab / record-buffer geometry: the served slab's
+  and a state's own slab). Nothing new from the host per chunk.
+- Measured after (probe, on / off ms): 51200 74.95 / 74.10, 524288 79.77 / 79.31, 786432 83.90 / 84.74, 1024000
+  85.98 / 86.96; prefetch at 1M device 3.55 / 4.12 ms, host 0.52 / 1.43 ms (was 6.08 / 6.85 on); 0.0 apart. vs the
+  estimate: device -2.5 ms vs on (estimate -2.0 to -2.4), host -6.3 ms (estimate -5 to -5.5).
+- Gate `gate MB.4 --check` (after the last code edit, hooks clean): PASS, 7 units, 891 s. Ladder steady ms: 51200 72.1,
+  131072 75.4, 139264 77.2, 262144 75.7, 524288 79.7, 786432 85.9, 1024000 86.9 (<= 88.5; MB.3 92.8, 11-19 87.4); cold
+  no-rebuild PASS (0 builds / prepares / ids uploads, on vs off 0.0). `orchestrator measure --task MB.4`: rc 0.
+  Report: ledgers/galaxy_8x4-full/results/MB.4_slowdown.md.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate MB.4 --spec $BRINGUP_SPEC --check` (devjob); the
+  probe: `resident submit --cmd "BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc
+  DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_mb4_history_probe.py"` (MB4_POS, MB4_SIDES); the op test:
+  `resident submit --cmd "scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_ckv_bfp4_rows.py"`; C++: ./build_metal.sh (prepared_program).

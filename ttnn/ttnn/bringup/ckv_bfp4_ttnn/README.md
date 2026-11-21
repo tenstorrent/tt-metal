@@ -38,6 +38,11 @@ rounded values as a new bf16 TILE tensor (`rounded=True`).
 - `compact` (ckv_bfp4 and bfp_round, default False): merged core ranges and no per-core runtime args (the kernels
   split the work by their core index, `kernels/ckv_share.hpp`); row0 / page0 is frozen in the program (with
   `prepared`, one prepared program per row0: for call sites with a fixed row0). Same records and values.
+- `ttnn.bringup.ckv_bfp4_rows(src, rows, src_row0, n, row0, max_grid=None)` (deepseek_v41_flash_d_p MB.4): the records of
+  rows [src_row0, src_row0 + n) of a bf16 ROW_MAJOR [.., 512] row tensor (one row a page, interleaved or ND-sharded:
+  a served cache slab) at [row0, row0 + n) of `rows`; each core reads its bands' 32 rows, tilizes them on the core
+  (cb 18) and packs as ckv_bfp4. Always prepared, one program per (mesh, src / rows geometry, max_grid): src_row0, n and
+  row0 are per-run values (no program a row count or offset); every core of the grid, idle past the band count.
 - The SFPU round: the group max exponent (two loads, three lane rotations), then |x| + M - M with M = 2^23 x the
   group's LSB (the SFPU adder rounds to nearest even), clamped at the largest code. Equal to the host rule for bf16
   inputs (its alignment shift drops only zero bits).
@@ -63,6 +68,10 @@ rounded values as a new bf16 TILE tensor (`rounded=True`).
   window blocks 0.207 ms x 80 -> 0.123 ms x 40 a chunk, bfp_round 0.419 -> 0.182 ms x 12.
 - A block page's gap bytes (between its exponent sections and values) are never written: they hold stale L1 and differ
   between programs; compare pages with `tests/reference.encode_blocks`' mask (DS41-144).
+
+- ckv_bfp4_rows (MB.4, 8x4, deepseek_v41_flash_d_p's history pack, 3 KV sources a chunk, ~8000 rows a chip at a
+  1,024,000-token history): see the model's BREADCRUMBS MB.4 for the per-chunk device / host numbers vs the page copy
+  + tilize + ckv_bfp4 pieces it replaces.
 
 ## Consider it instead of
 - `ttnn.typecast(x, ttnn.bfloat4_b)` / any op with a bfloat4_b output where round-to-nearest matters (they truncate in
@@ -94,7 +103,13 @@ rule on the defined bytes. test_ckv_bfp4_compact_rounded: compact + rounded on b
 the rest untouched, deterministic, the refusals; compact == the default path (new and in place).
 The device rounding facts: `models/demos/deepseek_v41_flash_d_p/tests/test_bfp_packer_rounding.py`.
 
+`tests/unit/test_ckv_bfp4_rows.py` (the bring-up mesh, BATCH_SHARED; run through
+`models/demos/deepseek_v41_flash_d_p/tests/test_ckv_bfp4_rows.py` on the resident runner): ckv_bfp4_rows == the host
+rule and == the tile path, interleaved and ND-sharded sources, one prepared program, deterministic, refusals.
+
 ## Used by
+deepseek_v41_flash_d_p MB.4 (POS_DYNAMIC=on): tt/history_gather._pack_rows, the history pack and tail pack of the
+4-bit history gather (HISTORY_FORMAT=bfp4), straight from the served slab.
 deepseek_v41_flash_d_p (CKV_FORMAT=bfp4_rows: the compressed-KV attention table; prepared=True under
 CKV_BFP4_PREPARED=on, P.7; lowbit phase 1, not wired yet: WINDOW_KV_FORMAT=bfp8_rows (bfloat8_b records),
 INDEX_K_FORMAT / INDEX_Q_FORMAT=bfp4 (bfp_round)). Under LOWBIT_HOST=on (P.12): the window blocks' carry + chunk in

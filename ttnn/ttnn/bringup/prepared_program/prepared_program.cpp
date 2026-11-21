@@ -28,7 +28,8 @@ int Prepared::program_of(const ttnn::MeshCoordinate& coord) const {
 size_t Prepared::patch_count() const {
     size_t n = 0;
     for (size_t i = 0; i < rt.size(); ++i) {
-        n += rt[i].size() + crt[i].size() + cbs[i].size() + (i < val.size() ? val[i].size() : 0);
+        n += rt[i].size() + crt[i].size() + cbs[i].size() + (i < val.size() ? val[i].size() : 0) +
+             (i < cval.size() ? cval[i].size() : 0);
     }
     return n;
 }
@@ -89,6 +90,7 @@ std::shared_ptr<const Prepared> prepare(
     p->crt.resize(np);
     p->cbs.resize(np);
     p->val.resize(np);
+    p->cval.resize(np);
     for (size_t pi = 0; pi < np; ++pi) {
         const auto& pd = desc.mesh_programs[pi].second;
         for (uint32_t k = 0; k < pd.kernels.size(); ++k) {
@@ -117,6 +119,10 @@ std::shared_ptr<const Prepared> prepare(
                 }
             }
             for (uint32_t i = 0; i < kd.common_runtime_args.size(); ++i) {
+                if (const int s = value_slot_of(k, i | COMMON_ARG); s >= 0) {  // (a common value slot)
+                    p->cval[pi].push_back(CommonValPatch{.kernel = k, .arg = i, .slot = static_cast<uint32_t>(s)});
+                    continue;
+                }
                 const int j =
                     io_at(kd.common_runtime_args[i], [&] { return fmt::format("kernel {} common arg {}", k, i); });
                 if (j >= 0) {
@@ -179,6 +185,11 @@ std::shared_ptr<const Prepared> prepare(
             }
             ttsl::hash::hash_combine(h, pd.kernels[k].common_runtime_args.size());
             for (uint32_t i = 0; i < pd.kernels[k].common_runtime_args.size(); ++i) {
+                if (const int s = value_slot_of(k, i | COMMON_ARG); s >= 0) {  // (its marker, never its value)
+                    ttsl::hash::hash_combine(h, 3u);
+                    ttsl::hash::hash_combine(h, static_cast<uint32_t>(s));
+                    continue;
+                }
                 const CommonRtPatch* cp = nullptr;
                 for (const auto& c : p->crt[pi]) {
                     if (c.kernel == k && c.arg == i) {
@@ -207,6 +218,9 @@ std::shared_ptr<const Prepared> prepare(
         ttsl::hash::hash_combine(h, p->n_values);
         size_t nv = 0;
         for (const auto& v : p->val) {
+            nv += v.size();
+        }
+        for (const auto& v : p->cval) {
             nv += v.size();
         }
         TT_FATAL(nv > 0, "prepared_program: value_slots match no runtime arg");

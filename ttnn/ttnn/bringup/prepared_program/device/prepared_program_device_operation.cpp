@@ -57,6 +57,11 @@ tt::tt_metal::ProgramDescriptor PreparedProgramFactory::create_descriptor(
             }
         }
     }
+    if (static_cast<size_t>(pi) < p.cval.size()) {
+        for (const auto& v : p.cval[pi]) {
+            desc.kernels[v.kernel].common_runtime_args[v.arg] = attributes.values[v.slot];
+        }
+    }
     return desc;
 }
 
@@ -101,6 +106,11 @@ void PreparedProgramFactory::override_runtime_arguments(
     }
     for (const auto& v : p.val[pi]) {  // (value_slots option: every run)
         tt::tt_metal::GetRuntimeArgs(program, v.kernel, CoreCoord(v.x, v.y))[v.arg] = attributes.values[v.slot];
+    }
+    if (static_cast<size_t>(pi) < p.cval.size()) {
+        for (const auto& v : p.cval[pi]) {  // (value_slots on common args: every run, once a kernel)
+            tt::tt_metal::GetCommonRuntimeArgs(program, v.kernel)[v.arg] = attributes.values[v.slot];
+        }
     }
     if (!p.cbs[pi].empty()) {
         const auto program_cbs = program.circular_buffers();

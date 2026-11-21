@@ -21,6 +21,9 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
+#ifdef CKV_ROWS_IN
+#include "api/compute/tilize.h"
+#endif
 #include "ckv_round_bfp4.hpp"
 #include "ckv_share.hpp"
 
@@ -42,7 +45,7 @@ namespace ckv_rows_pack {
 using namespace ckernel;
 using namespace ckernel::packer;
 
-constexpr uint32_t TILES = 16;       // a band: 512 columns
+constexpr uint32_t TILES = 16;                 // a band: 512 columns
 constexpr uint32_t ROW_BYTES = CKV_ROW_BYTES;  // a record
 
 // the packer reads one tile row per PACR (two interfaces: face halves) stepping Z over the band's tiles; the row's
@@ -173,7 +176,13 @@ inline void uninit(uint32_t src_bytes) {
 #endif
 
 void kernel_main() {
-#ifdef CKV_COMMON_GX  // (option compact: common [per, extra])
+#if defined(CKV_ROWS_IN)  // (ckv_bfp4_rows, MB.4: common [nb], a per-run value; the split as ckv_share)
+    uint32_t band0, n_bands;
+    {
+        const uint32_t nb = get_common_arg_val<uint32_t>(0);
+        ckv_share(nb / CKV_ROWS_NC, nb % CKV_ROWS_NC, CKV_ROWS_GX, band0, n_bands);
+    }
+#elif defined(CKV_COMMON_GX)  // (option compact: common [per, extra])
     uint32_t band0, n_bands;
     ckv_share(get_common_arg_val<uint32_t>(0), get_common_arg_val<uint32_t>(1), CKV_COMMON_GX, band0, n_bands);
 #else
@@ -185,22 +194,44 @@ void kernel_main() {
     constexpr uint32_t cb_rounded = get_compile_time_arg_val(2);
 #endif
     constexpr uint32_t TILES = 16;
+#ifdef CKV_ROWS_IN
+    // (ckv_bfp4_rows: cb_in holds a band's 32 rows row-major; they are tilized into cb_tiled, which the round reads)
+    constexpr uint32_t cb_tiled = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_src = cb_tiled;
+#else
+    constexpr uint32_t cb_src = cb_in;
+#endif
 
     compute_kernel_hw_startup(cb_in, cb_rows);
     // BH: the strided (row) DEST read the rows pack uses needs the DEST address remap, as pack untilize sets it
     MATH((llk_math_reconfig_remap(true)));
     MATH((ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>()));
     for (uint32_t b = 0; b < n_bands; ++b) {
+#ifdef CKV_ROWS_IN
+        MATH((llk_math_reconfig_remap(false)));  // (the tile path's DEST addressing for the tilize)
+        pack_reconfig_data_format(cb_tiled);  // (the packer was left at cb_rows' bfloat4_b: the tilized tiles are bf16)
+        tilize_init(cb_in, TILES, cb_tiled);
         cb_wait_front(cb_in, TILES);
-        copy_init(cb_in);
+        cb_reserve_back(cb_tiled, TILES);
+        tilize_block(cb_in, TILES, cb_tiled);
+        cb_push_back(cb_tiled, TILES);
+        cb_pop_front(cb_in, TILES);
+        tilize_uninit(cb_in, cb_tiled);
+        MATH((llk_math_reconfig_remap(true)));
+#endif
+        cb_wait_front(cb_src, TILES);
+        copy_init(cb_src);
+#ifdef CKV_ROWS_IN
+        MATH((ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>()));
+#endif
         tile_regs_acquire();
         for (uint32_t t = 0; t < TILES; ++t) {
-            copy_tile(cb_in, t, t);
+            copy_tile(cb_src, t, t);
             MATH((
                 _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::ckv_round_bfp_face<CKV_MBITS>, t, VectorMode::RC)));
         }
         tile_regs_commit();
-        cb_pop_front(cb_in, TILES);
+        cb_pop_front(cb_src, TILES);
         tile_regs_wait();
 #ifdef CKV_ROUNDED_OUT
         cb_reserve_back(cb_rounded, TILES);

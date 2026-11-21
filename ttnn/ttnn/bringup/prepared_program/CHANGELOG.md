@@ -36,3 +36,21 @@ fork_op.py markers (a new op, not a fork), as on Marko's branch.
   generic_op). The option-off regression (tests/test_prepared_program.py) has only 2x2 cases: skipped on the 8x4
   Galaxy (2 skipped, as before); the option-off users (fabric_reduce_scatter prepared, TailA2A prepared) run in the
   model's ladder.
+
+### value_slots on common runtime args (deepseek_v41_flash_d_p MB.4, 2026-11-21)
+- What: a value slot whose runtime-arg index has bit 31 set (`(kernel, 0x80000000 | i)`) names common runtime arg i of
+  the kernel: written from the run's values once a kernel a mesh program (create_descriptor and
+  override_runtime_arguments), never matched to an io address, its marker (3, slot) hashed instead of its value. New
+  `CommonValPatch` / `Prepared::cval`; patch_count includes them. Default (no such slot): the old programs, patches and
+  cache key (the hash walk adds nothing when no common value slot is named).
+- Why: ttnn.bringup.ckv_bfp4_rows takes three per-run values on every core; as per-core value slots on 110 cores x 32
+  chips one call cost 0.31 ms host in run_prepared alone (8x4, tests/perf/test_ckv_rows_host.py in
+  deepseek_v41_flash_d_p), more than the slice + tilize + ckv_bfp4 it replaces (0.18 ms). Common args: one word a
+  kernel a chip.
+- Needed by: deepseek_v41_flash_d_p MB.4
+- Files: prepared_program.hpp, prepared_program.cpp, prepared_program_nanobind.cpp,
+  device/prepared_program_device_operation.cpp, README.md
+- Tests: ckv_bfp4_ttnn/tests/unit/test_ckv_bfp4_rows.py (common value slots, moved values across 4 calls on one
+  prepared program, byte-exact). The option-off regression (tests/test_prepared_program.py) has 2x2 cases only
+  (skipped on the 8x4); the option-off users (ckv_bfp4 prepared, page copies, fabric_reduce_scatter, TailA2A) run in
+  MB.4's ladder and no-rebuild check.

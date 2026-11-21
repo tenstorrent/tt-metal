@@ -665,3 +665,6 @@
   POS_DYNAMIC off/on): measure on vs off at 51200 / 524288 / 786432 / 1024000 with per-section device ms + host split,
   separate the harness change (MB.3) from the model, name every ms; fix at the cause with 0 builds and bit-identity;
   gate = the 5120 accept units + ladder + cold no-rebuild, steady 1024000 <= 88.5 ms (11-19: 87.4).
+- 11:10 heartbeat: MB.4 agent active; watch armed.
+- 11:40 heartbeat: MB.4 agent active; watch armed.
+- 11:51 MB.4 finding (agent, KNOWLEDGE CONTRADICTED DS41-324): at 1024000 POS_DYNAMIC on 92.59 vs off 86.81 ms; the history prefetch: device 6.08 vs 4.13 ms, host 6.85 vs 1.40 ms; the harness adds nothing (off == 11-19). The orchestrator now runs the on/off A/B.

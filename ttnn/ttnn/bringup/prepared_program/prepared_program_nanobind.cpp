@@ -161,7 +161,8 @@ void bind_prepared_program(nb::module_& mod) {
         nb::arg("value_slots") = std::vector<std::tuple<uint32_t, uint32_t>>{},
         "Prepare a MeshProgramDescriptor for patched dispatch (copies it once; records the patch slots). "
         "value_slots: [(kernel index, runtime-arg index)], one per-run value each (run_prepared values=, in this "
-        "order), patched on every core of that kernel, left out of the cache key; default none.");
+        "order), patched on every core of that kernel, left out of the cache key; default none. A runtime-arg index "
+        "with bit 31 set (0x80000000 | i) names common runtime arg i of the kernel instead (written once a chip).");
     mod.def(
         "run_prepared",
         [](const std::shared_ptr<Prepared>& p,

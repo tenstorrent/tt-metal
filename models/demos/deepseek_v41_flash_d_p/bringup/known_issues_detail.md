@@ -1685,3 +1685,21 @@ clean wall 79.5 ms vs device busy 65.3 ms. With HOST_HIDE the engram worker's ha
 and upload (1.0-2.5 ms) a layer mostly hide behind layer 0 / layers 2-13; running the jobs before the clock gave
 78.4 vs 80.0 ms (alternating, median of 7), so ~1.6 ms is exposed. Tool: `tests/perf/test_host_idle_map.py`
 (`_clean_replay`, DS41-309). P.87 measured the on-device table: steady wall -1.2 ms on the harness path.
+
+## DS41-324's long-history slowdown was MB.2's piecewise history pack, not the harness
+
+tests/perf/test_mb4_history_probe.py, one load, harness steady chunk (its real previous chunk first), POS_DYNAMIC on /
+off at each point, before the fix (wall ms; history_gather.prefetch device ms / host ms on the main thread):
+
+| history | on wall | off wall | 11-19 | prefetch device on / off | prefetch host on / off |
+|---|---|---|---|---|---|
+| 51200 | 74.15 | 74.52 | 74.1 | 0.51 / 0.45 | 1.20 / 1.46 |
+| 524288 | 83.25 | 81.66 | 79.5 | 3.06 / 2.06 | 3.85 / 1.07 |
+| 786432 | 89.40 | 84.79 | 84.9 | 4.61 / 3.02 | 5.38 / 1.02 |
+| 1024000 | 92.59 | 86.81 | 87.4 | 6.08 / 4.13 | 6.85 / 1.40 |
+
+The op rows that move at 1024000 (section engram_rows: the prefetch runs at the first engram wait): page copies 1.99 ms
+("(other)": 4 data-movement cores a chip, ~8 MB a chip a source) vs slice + concat 0.51; ckv_bfp4 in pieces 0.67 vs
+0.28; tilize 0.33 vs 0.23. Host: a 2048-row piece = alloc + page copy + tilize + ckv_bfp4 (~0.45 ms), ~4 pieces a
+source at 1M, 3 sources. POS_DYNAMIC=off equals 11-19 within noise at every point: the harness (the serving runtime's
+load, the real previous chunk) adds nothing. The fix's numbers: BREADCRUMBS MB.4 and results/MB.4_slowdown.md.
