@@ -20,16 +20,14 @@ def test_boot_modes(
     boot_mode,
 ):
     math_fidelity = MathFidelity.LoFi
-    format_dest_acc_and_dims = (
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-        DestAccumulation.No,
-        ([32, 32], [32, 32]),
-    )
-
     HardwareController().reset_card()
 
     run_matmul(
         math_fidelity,
-        format_dest_acc_and_dims,
-        boot_mode[0],
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        1,
+        1,
+        1,
+        boot_mode=boot_mode[0],
     )
