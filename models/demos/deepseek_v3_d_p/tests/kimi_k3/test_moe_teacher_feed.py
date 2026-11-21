@@ -9,7 +9,8 @@ the prefix in order, eager, with the chunk's real-token span as the runtime pass
 ``post_attention_layernorm`` output, so every chunk is teacher-fed. Each chunk's MoE output and the device's routing
 (read from the block's routing rows: per token the top-16 expert ids in the block's expert order, mapped back to
 checkpoint ids, and their bf16 weights) are saved to ``$TT_MOE_TF_OUT``; nothing is scored while the device is held
-(``moe_teacher_feed.py score``). Skips unless ``$TT_MOE_TF_INPUT`` and ``$TT_MOE_TF_OUT`` are set.
+(``moe_teacher_feed.py score``). Skips unless ``$TT_MOE_TF_INPUT`` and ``$TT_MOE_TF_OUT`` are set;
+``$TT_MOE_TF_REVERSE=1`` runs the chunks in reverse order (``moe_teacher_feed.py same`` then compares two runs).
 
     TT_MOE_TF_INPUT=/mnt/.../k31-l49-moe-input-128k-v2 TT_MOE_TF_OUT=/mnt/.../k31-l49-moe-dev-128k \\
     models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- \\
@@ -38,6 +39,9 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import chunk_path, 
 
 PLACEMENT_4X4 = [p for p in k31_stage.PLACEMENT if p.id == "4x4-sp1"]
 SOURCE, OUT = os.environ.get("TT_MOE_TF_INPUT"), os.environ.get("TT_MOE_TF_OUT")
+# TT_MOE_TF_REVERSE=1 runs the chunks last to first: the MoE carries no state from one chunk to the next, so its
+# per-row outputs must equal a forward run's bit for bit, and any trend over position is the inputs'.
+REVERSE = os.environ.get("TT_MOE_TF_REVERSE") == "1"
 
 
 def device_routing(ffn, block, rows: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -106,6 +110,7 @@ def test_k31_moe_layer_teacher_fed(mesh_device, device_params):
         "mesh": list(mesh_shape),
         "sp_axis": layout.sp_axis,
         "moe_impl": "block",
+        "order": "reverse" if REVERSE else "forward",
         "weight_cache": str(weight_cache),
         **provenance(),
     }
@@ -120,7 +125,7 @@ def test_k31_moe_layer_teacher_fed(mesh_device, device_params):
     num_chunks = -(-count // chunk)
     began = time.perf_counter()
     try:
-        for c in range(num_chunks):
+        for c in reversed(range(num_chunks)) if REVERSE else range(num_chunks):
             lo, hi = c * chunk, min((c + 1) * chunk, count)
             rows = torch.zeros(chunk, KimiK31Config.EMB_SIZE, dtype=torch.bfloat16)
             rows[: hi - lo] = load_input(source, lo, hi)

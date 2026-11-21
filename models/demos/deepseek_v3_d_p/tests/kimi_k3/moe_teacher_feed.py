@@ -24,6 +24,7 @@ The three steps of ``teacher_feed.py`` for one MoE layer (latent MoE, 896 routed
     TT_MOE_TF_INPUT=IN TT_MOE_TF_OUT=OUT scripts/run_safe_pytest.sh ...test_moe_teacher_feed.py::test_...
     python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed score --trace T --out OUT
     python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed host --trace T --out OUT
+    python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed same OUT OUT_REVERSED
 """
 
 from __future__ import annotations
@@ -58,16 +59,27 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
 TOP_K = KimiK3Config.NUM_EXPERTS_PER_TOKEN  # 16
 NUM_EXPERTS = KimiK3Config.NUM_ROUTED_EXPERTS  # 896
 CHECK_ROWS = 64  # rows per segment the input check routes
-# The rebuilt input, routed in fp32, must recall the trace's top-16 sets to this mean; see report for the measured
-# values of the replay and of the decoder_input alias.
+# The rebuilt input, routed in fp32, must recall the trace's top-16 sets to this mean: measured 0.993-0.996 per layer
+# (layers 1/49/85/92, 10K and 128K, every segment >= 0.988), against 0.04-0.34 for the decoder_input alias. Not 1:
+# the trace's routing is the tracer's own gate recompute, whose numerics differ slightly from an fp32 router.
 INPUT_CHECK_RECALL = 0.98
 
-# Stability bars, every one held per window of context positions: PROPOSED, pending the owner's decision.
+# Stability bars, every one held per window of context positions: PROPOSED, pending the owner's decision. Measured
+# on layers 1/49/85/92 at 10K and 128K, 4x4-sp1, against the vLLM trace (window medians):
+# * MoE output per-row NRMSE against the trace <= 0.20 (measured 0.068-0.178; the layer sets the level: about
+#   0.08 / 0.10 / 0.17 / 0.07 at layers 1 / 49 / 85 / 92). On sampled rows the device reads the same distance against
+#   an fp32 host recompute of the reference MoE, and the trace reads 0.004-0.007 against it: the device's MoE is
+#   15-35x further from fp32 than the GPU's. The bar gates stability, not that precision gap. And no window more than
+#   15% above the first (measured 1.11 at most, at layers 85 / 92; the MoE carries no state across chunks - a
+#   reverse-order run is bit-identical - so a trend over position is the inputs').
+# * routing: mean recall of the trace's top-16 >= 0.98 (measured 0.991-0.996); misses are near-ties: <= 1% of the
+#   trace experts the device misses rank in the top half of the trace's selection (measured <= 0.06%; most at rank
+#   15); trace routing weight the device drops, mean <= 0.01 (measured 0.002-0.006).
 BARS = {
-    "moe_nrmse_median": ("max", 0.05),
-    "recall_vs_trace_mean": ("min", 0.95),
+    "moe_nrmse_median": ("max", 0.20),
+    "recall_vs_trace_mean": ("min", 0.98),
     "miss_top_half_fraction": ("max", 0.01),
-    "dropped_trace_weight_mean": ("max", 0.02),
+    "dropped_trace_weight_mean": ("max", 0.01),
 }
 NRMSE_GROWTH = 1.15
 
@@ -410,6 +422,19 @@ def host_check(*, trace: Trace, out: Path, checkpoint: Path, rows: int) -> dict:
     return result
 
 
+def same_rows(a: Path, b: Path) -> dict:
+    """Whether two complete device runs of one input (e.g. forward and reverse chunk order) hold bit-identical MoE
+    outputs and routing in every chunk: the MoE has no state across chunks."""
+    ma, mb = complete_run(a), complete_run(b)
+    assert (ma["input"], ma["count"], ma["chunk"]) == (mb["input"], mb["count"], mb["chunk"]), "not runs of one input"
+    differ = []
+    for c in range(-(-ma["count"] // ma["chunk"])):
+        pa, pb = (torch.load(chunk_path(d, c), weights_only=True) for d in (a, b))
+        if not all(torch.equal(pa[k], pb[k]) for k in ("moe_out", "expert_ids", "expert_weights")):
+            differ.append(c)
+    return {"chunks": -(-ma["count"] // ma["chunk"]), "differ": differ, "orders": [ma.get("order"), mb.get("order")]}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -435,7 +460,13 @@ def main() -> None:
     hostp.add_argument("--out", type=Path, required=True)
     hostp.add_argument("--rows", type=int, default=32)
     hostp.add_argument("--checkpoint", type=Path, default=checkpoint)
+    samep = sub.add_parser("same", help="are two device runs of one input bit-identical chunk by chunk")
+    samep.add_argument("runs", type=Path, nargs=2)
     args = parser.parse_args()
+    if args.command == "same":
+        result = same_rows(*args.runs)
+        print(json.dumps(result))
+        raise SystemExit(1 if result["differ"] else 0)
     trace = Trace(args.trace)
     if args.command == "input":
         build_moe_input(

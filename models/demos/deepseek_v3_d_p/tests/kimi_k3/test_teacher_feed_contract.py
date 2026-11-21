@@ -16,7 +16,13 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import HfSt
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.dsa_teacher_feed import BARS, NRMSE_GROWTH, score
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed import HostMoE, owner_positions, route, routing_window
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed import (
+    HostMoE,
+    owner_positions,
+    route,
+    routing_window,
+    same_rows,
+)
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     FFN,
     Trace,
@@ -247,3 +253,24 @@ def test_owner_positions_by_hand():
             [owner_positions(r, p, pad_rows=pad, row_blocks=blocks, **kw)[1] for r in range(3) for p in range(2)]
         )
         assert sorted(rows.tolist()) == list(range(24)), (pad, blocks)
+
+
+def test_same_rows_names_the_chunks_that_differ(tmp_path: Path):
+    """Two complete runs of one input agree chunk by chunk, or `same_rows` names each chunk where any of the MoE
+    output, expert ids or weights differs (here one bf16 ulp of one output element in chunk 1)."""
+    run = {"layer": 1, "input": "in", "count": 3, "chunk": 2}
+    chunks = [
+        {"moe_out": torch.ones(2, 4, dtype=torch.bfloat16), "expert_ids": torch.zeros(2, 16, dtype=torch.int16),
+         "expert_weights": torch.full((2, 16), 1 / 16, dtype=torch.bfloat16)}
+        for _ in range(2)
+    ]  # fmt: skip
+    for name, order in (("a", "forward"), ("b", "reverse")):
+        start_run(tmp_path / name, {**run, "order": order})
+        for c, payload in enumerate(chunks):
+            torch.save(payload, chunk_path(tmp_path / name, c))
+        finish_run(tmp_path / name, {**run, "order": order}, 1.0)
+    assert same_rows(tmp_path / "a", tmp_path / "b") == {"chunks": 2, "differ": [], "orders": ["forward", "reverse"]}
+    bumped = {**chunks[1], "moe_out": chunks[1]["moe_out"].clone()}
+    bumped["moe_out"][1, 3] = 1.0078125  # (1 + 2^-7: the next bf16 above 1)
+    torch.save(bumped, chunk_path(tmp_path / "b", 1))
+    assert same_rows(tmp_path / "a", tmp_path / "b")["differ"] == [1]
