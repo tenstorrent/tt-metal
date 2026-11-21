@@ -373,8 +373,26 @@ inline void relu_max(uint uint_threshold) {
 
 inline void lrelu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+}  // namespace sfpu
+}  // namespace ckernel
+
+#include "ckernel_sfpu_leaky_relu_bf16.h"
+
+namespace ckernel {
+namespace sfpu {
+
+// The slope the generated leaky_relu kernel is fitted for, as FP32 bits; any other slope runs the stock kernel.
+inline constexpr std::uint32_t leaky_relu_bf16_slope_bits = 0x3c23d70au;
+// Whether BF16 DEST runs the generated leaky_relu kernel as one call over the whole tile.
+inline constexpr bool leaky_relu_bf16_whole_tile = true;
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void calculate_lrelu(uint slope) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_leaky_relu() && slope == ckernel::sfpu::leaky_relu_bf16_slope_bits) {
+            calculate_leaky_relu_bf16<ITERATIONS>();
+            return;
+        }
+    }
     _calculate_lrelu_<APPROXIMATION_MODE>(ITERATIONS, slope);
 }
 
