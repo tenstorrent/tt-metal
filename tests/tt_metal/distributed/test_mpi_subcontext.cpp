@@ -166,7 +166,7 @@ SubcontextLocalBinding world_rank_to_subcontext_local(
 TEST(MpiSubContext, CurrentWorldIsSplitSubcommunicator) {
     const auto& rtoptions = MetalContext::instance().rtoptions();
     const auto& cluster = MetalContext::instance().get_cluster();
-    if (!rtoptions.get_mock_enabled() && !cluster.is_ubb_galaxy()) {
+    if (!rtoptions.has_mock_cluster_desc() && !cluster.is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test runs on mock cluster or UBB Galaxy");
         GTEST_SKIP();
     }
@@ -280,7 +280,7 @@ TEST(MpiSubContext, CurrentWorldIsSplitSubcommunicator) {
 TEST(MpiSubContext, LauncherMetadataAndTranslationInSplitLaunch) {
     const auto& rtoptions = MetalContext::instance().rtoptions();
     const auto& cluster = MetalContext::instance().get_cluster();
-    if (!rtoptions.get_mock_enabled() && !cluster.is_ubb_galaxy()) {
+    if (!rtoptions.has_mock_cluster_desc() && !cluster.is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test runs on mock cluster or UBB Galaxy");
         GTEST_SKIP();
     }
@@ -352,7 +352,7 @@ TEST(MpiSubContext, LauncherMetadataAndTranslationInSplitLaunch) {
 TEST(MpiSubContext, SingleGalaxySplitContext) {
     const auto& rtoptions = MetalContext::instance().rtoptions();
     const auto& cluster = MetalContext::instance().get_cluster();
-    if (!rtoptions.get_mock_enabled() && !cluster.is_ubb_galaxy()) {
+    if (!rtoptions.has_mock_cluster_desc() && !cluster.is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test runs on mock cluster or UBB Galaxy");
         GTEST_SKIP();
     }
