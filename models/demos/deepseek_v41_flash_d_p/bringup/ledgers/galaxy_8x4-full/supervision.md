@@ -652,3 +652,11 @@
   the 5120 ladder at 51200 / 131072 / 139264 / 262144 / 524288 / 786432 / 1024000 + test_no_rebuild cold;
   report results/ladder_5120_20261121.md (11-19 numbers beside). Then the owner gets the branch to push.
 - 07:45 heartbeat: MB.3 agent active; heartbeat re-created for the branch switch; watch armed.
+- 08:00 MB.3 gate PASS -> 3e23381c932 (tests only; checked). COLD no-rebuild on this branch: single5120 PASS (0 builds,
+  0 prepares, 0 ids uploads over aligned / steady / resumed / partial / pulled-back / acks-only chunks; on vs off 0.0):
+  MB.2's fix confirmed. 5120 ladder (steady ms / tok/s): 51200 73.8 / 69.4k; 131072 76.6 / 66.8k; 139264 79.8 / 64.2k;
+  262144 77.5 / 66.1k; 524288 83.2 / 61.5k; 786432 89.9 / 57.0k; 1024000 92.8 / 55.2k. vs 11-19: same to 256k, slower
+  at 512k+ (+3.7 / +5.0 / +5.4 ms: device +1.1 / +1.6 / +2.1, exposed host +2.6 / +3.4 / +3.3): to explain (not queued).
+  Serving entry at 139264: +0.4 ms (80.2 vs 79.8); host split in results/ladder_5120_20261121.md.
+  BRANCH READY for the owner to push (not pushed). Local commits on top of origin: the MB.1 / MB.2 / MB.3 work, framework
+  parity, supervision. Dashboards uncommitted (> 500 KB hook).
