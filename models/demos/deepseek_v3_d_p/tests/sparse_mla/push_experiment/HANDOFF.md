@@ -1,0 +1,337 @@
+# Hand-off: sparse MLA full-layer KV push + two-level top-k (GLM-5.3, Kimi K3.1)
+
+Status as of 2026-11-21. This is an **experiment branch**, not for merge. It holds measurement-only switches and CI
+tweaks. Read the whole document before running anything on a Galaxy.
+
+## 1. TL;DR
+
+- **Goal.** Make the sparse-MLA layers of GLM-5.3 and Kimi K3.1 cheaper at long context (target: 1M tokens) on a
+  Blackhole Galaxy, by changing what a *full* (indexer-owning) layer does after its indexer.
+- **Today (main).** A full layer runs its indexer, then the top-k (`topk_large_indices`, single-level) on a
+  restricted core grid **in parallel with** an all-gather of the whole KV prefix ("overlap"). Then sparse SDPA runs.
+  GLM's shared layers (no indexer) reuse the full layer's top-k. Instead of gathering, they *push* only the rows they
+  reference (`sparse_push_plan` + `sparse_kv_push`).
+- **Experiment, on 1M real-weights CI with the cutoff (§6.3).**
+  - Full layers get a cutoff. Below it, nothing changes: top-k runs beside the prefix gather. From it upward, the
+    layer pushes only the rows its top-k selected, as shared layers do.
+  - The indexer also writes 32-key block maxima. Top-k takes them as `block_max_tensor`: two-level selection with no
+    maxima pass of its own.
+  - **GLM-5.3:** +10.5% throughput at 1020k, −3.0% TTFT for the 1M request. KV accuracy is unchanged. Contexts up to
+    ~255k are about 1.3% slower.
+  - **K3.1:** roughly break-even (−0.5…−1.1% up to 510k, +0.3% at 1M). KV accuracy is unchanged.
+- **Main open questions.**
+  1. Why K3.1 gains so little: about 0.12 ms per DSA layer, against about 2.35 ms per GLM full layer. The leading
+     hypothesis is the push plan: GLM already pays for it in the baseline, K3.1 doesn't. **Needs a per-op Galaxy
+     profile.**
+  2. Remove the remaining ~1% short-context overhead (§8).
+  3. One unexplained determinism failure (§7).
+
+## 2. Branches
+
+| Branch | Content |
+|---|---|
+| `pjosipovic/two-level-topk-impl` (head `1b8632fbd5b`) | The two-level `topk_large_indices` work. Reviewed and pushed; the base of both experiment branches. |
+| `pjosipovic/topk-push-experiment` | Experiment: switches **on** by default, plus the cutoff, the indexer gate, CI tweaks and this document. |
+| `pjosipovic/topk-push-baseline` | The same code with both switches **off** by default, plus the same CI tweaks and the same merged PRs. It's the A/B baseline. It lacks the two newest experiment commits (cutoff and indexer gate); both are inert with the switches off. |
+
+Merged into both experiment branches (both open PRs from Iva Potkonjak, both merged cleanly):
+
+- **#64501** (`pr-64501` = `ac3800278e2`): `sparse_kv_push` runs on every 2D fabric, not only `FABRIC_2D_TORUS_XY`.
+  This is what makes the push run on LoudBox (2x4, `FABRIC_2D`) and on the 4x4 stage.
+- **#63972** (`pr-63972` = `0dc08a77610`): dense mode. Chunks starting below a threshold gather the prefix densely
+  instead of pushing, with the mode decided on device so one trace covers both. Shared layers use 6 slabs (30,720
+  tokens on GLM).
+
+Experiment commits, first-parent from `1b8632fbd5b`:
+
+```
+dadb9e9be15 WIP: indexer block maxima output; temporary model switches
+946192ffef3 Merge pr-64501
+5189f972209 EXPERIMENT: full layers push their KV rows; indexer block maxima feed top-k (defaults on)
+3a158397eb8 EXPERIMENT CI: topk_push_long selects GLM-5.3 1M SC1 + K3.1 SC1 runner legs; K3.1 requests 1M
+104ca5c0a52 EXPERIMENT CI: topk_push_det leg (determinism repro on 8x4)
+b39003e609e EXPERIMENT CI: K3.1 runner L1_SMALL 3072
+1f8c03eb847 Merge pr-63972
+46d8c0b424a EXPERIMENT: full layers push only from a cutoff (~300k); below it top-k runs beside a threshold-gated gather
+f8ca421af83 EXPERIMENT: indexer writes block maxima only from top-k's two-level cutover
+```
+
+## 3. Background: two-level top-k (`topk_large_indices`)
+
+- **API.**
+  - `ttnn.experimental.topk_large_indices(..., block_select=32, two_level_cutover=None, block_max_tensor=None)`.
+  - Two-level applies only to k = 2048 and a last dimension in [65536, 2097152] that is a multiple of 32. Other
+    inputs fall back to single-level. `two_level_cutover` or `block_max_tensor` on such an input raises.
+  - The program decides at **run time** from the search length whether to run two-level. The default cutover is
+    98,304.
+  - At most 4 rows per core, unless `block_max_tensor` is given.
+  - Without `block_max_tensor`, the program allocates its own `[rows, ceil(n/32)]` bf16 DRAM maxima tensor and keeps
+    it while cached.
+- **Standalone timing, 160 rows, Blackhole, 108 / 99 cores.**
+
+  | Search length | Single-level | Two-level, computes maxima | Two-level, maxima supplied |
+  |---|---|---|---|
+  | 1M | ~4.57 ms (in model, LoudBox) | 1285 / 1348 µs | 814 / 846 µs |
+  | 512k | | 856 / 887 µs | 634 / 690 µs |
+
+- **In the K3.1 layer at 1M on LoudBox** (device profile): top-k is 4567 µs single-level, 1354 µs two-level, and
+  610 µs with indexer maxima. The indexer goes from 5808 to 5944 µs (+136 µs) when it writes the maxima.
+- **Tie choice.** Two-level returns the same value multiset as single-level, but may pick different keys among ties.
+  On random-weight data with bf16 logits that moves layer output PCC to about 0.996 against single-level. That's
+  expected, not a bug.
+
+## 4. What the experiment changes (code map)
+
+### 4.1 Indexer block-maxima output (`ttnn/cpp/ttnn/operations/experimental/indexer_score/`)
+
+- **API.** `ring_indexer_score_dsa(..., block_max_output=None, block_max_from_length=0)`.
+  - `block_max_output` is a `[B, 1, Sq, T/32]` bf16 row-major interleaved DRAM tensor that receives each score row's
+    32-key block maxima.
+  - It's fused-ring only, needs `num_groups == 1` and `block_size == 0`, and `kv_len % 32 == 0` on the scalar path.
+  - Entries past `ceil(kv_len/32)` are not written.
+- **Kernels.** All new code is behind the `INDEXER_BLOCK_MAX` define, which only the ring factory sets, so other
+  programs are unchanged.
+  - **Reader:** builds the 1.0 reduce scaler.
+  - **Compute** (`unit_block_maxima`): before untilizing each masked unit, row-max reduces each k-tile
+    (`reduce_block_max_row<1>`) into a new CB `block_max_cb`. The maxima land in column 0.
+  - **Writer** (`write_block_maxima`): reads column 0 of each pooled tile. It writes runs through the same
+    physical→logical tile fragments as the logits, staging each row at its destination's offset mod 16 (the BH NoC
+    write alignment).
+- **Gate.** `block_max_from_length` is passed as the compile-time arg `block_max_from_tiles`. Below it, compute and
+  writer skip all maxima work, decided from the runtime `kv_len_tiles`, so it's trace-safe. The model passes 98,304,
+  top-k's default cutover.
+- **Verified.** Maxima equal the block max of the indexer's own logits exactly, on all 8 LoudBox chips, on both the
+  scalar and metadata paths. Top-k with them passes the exact-top-k oracle.
+
+### 4.2 Model wiring (`models/demos/deepseek_v3_d_p/tt/mla/`)
+
+- **`indexer.py`.**
+  - Env `SPARSE_MLA_INDEXER_BLOCK_MAX` (module default `_BLOCK_MAX_DEFAULT`: `"1"` on experiment, `"0"` on baseline).
+    It's eligible when `index_topk_capacity == 2048`, `65536 <= width <= 2097152`, `width % 32 == 0`, and
+    (traced path or `valid_pos % 32 == 0`).
+  - It allocates the maxima tensor per call and stores it in `IndexerSelectionState.block_max`. `select_local` then
+    passes `block_select=32, block_max_tensor=...`.
+- **`mla.py`.**
+  - Env `SPARSE_MLA_FULL_PUSH` (module default `_FULL_PUSH_DEFAULT`: `"1"` / `"0"`). A full layer with a push planner
+    (`self._push`) takes the push path.
+  - **Traced path** (metadata, overlap resources present, cutoff > 0): `_sparse_full_push_overlapped`.
+    1. In the overlap sub-device manager, top-k runs on the top-k grid beside
+       `high_bw_all_gather(gathered_active_below=cutoff)` into the layer's compact buffer.
+    2. `finalize_distribution`.
+    3. `sparse_push_plan(dense_below=cutoff)`.
+    4. `sparse_kv_push(part=ALL)`, a no-op in dense mode.
+    5. When the next layer is a shared layer, a second plan with the shared layers' threshold, used only for the next
+       layer's prefix push (`_next_layer_prefetch`).
+    6. Sparse SDPA over the compact buffer with `plan.compact_indices`.
+  - **Eager path** (no metadata): serial full push, always pushing, top-k on the full grid. Dense mode needs device
+    metadata, as in #63972.
+  - **Cutoff:** `SPARSE_MLA_FULL_PUSH_DENSE_BELOW`, default 300,000. It's rounded up to whole slabs and capped so
+    that cutoff + 1 slab fits the layer's buffer (`self._full_push_dense_below`).
+
+### 4.3 CI tweaks (experiment and baseline branches only)
+
+- **`test_sparse_mla_perf.py`:** `PERF_TARGETS_MS = {}` makes the sparse-MLA gate report-only, because it's two-sided
+  and the jobs stop at the first failure. The traced-vs-untraced correctness check is still active.
+- **`.github/workflows/blaze-models-prefill-tests.yaml`:** checkbox `llama31` → `topk_push_long`, and `mistral4` →
+  `topk_push_det` (experiment only).
+- **`tests/pipeline_reorg/blaze_models_prefill_tests.yaml`.**
+  - Tag `topk_push_long` on "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1" and on
+    "(Kimi-K3.1) disaggregated prefill L24 ... SC1". The K3.1 leg's timeout is 90 min.
+  - New leg "EXPERIMENT sparse MLA full-layer push determinism repro, 8x4" (`topk_push_det`, experiment only).
+- **`models/demos/common/prefill/runners/ci/run_multirank_pcc.sh`, K3.1 case:** `REQUEST_LEN=1049600` (was
+  2 × 5120). It also exports `PREFILL_L1_SMALL_SIZE=3072`; at 2048 the full-layer push OOMed in the compact-buffer
+  sparse SDPA.
+
+## 5. How to run on Galaxy
+
+### 5.1 Through CI (what I used)
+
+```
+gh workflow run blaze-models-prefill-tests.yaml --ref pjosipovic/topk-push-experiment -f topk_push_long=true
+gh workflow run blaze-models-prefill-tests.yaml --ref pjosipovic/topk-push-baseline  -f topk_push_long=true
+gh workflow run blaze-models-prefill-tests.yaml --ref pjosipovic/topk-push-experiment -f topk_push_det=true
+# the two perf legs (sparse MLA gate + real-weights GLM 55k chunked) used earlier:
+gh workflow run blaze-models-prefill-tests.yaml --ref <branch> -f k3_mla_perf=true -f glm_chunked_perf_suite=true
+```
+
+- **Selection.** Ticked checkbox ids are matched against each leg's `test_type`, `test_group` and `test_tags`, and the
+  workflow file is read from `--ref`. Check a selection with
+  `python3 .github/scripts/utils/validate_test_type_selection.py tests/pipeline_reorg/blaze_models_prefill_tests.yaml <token>`.
+- **Logs.** `gh run view --log` refuses while any job is still running. Use the API:
+  ```
+  gh api --allow-escape-sequences repos/tenstorrent/tt-metal/actions/jobs/<job_id>/logs | sed 's/\x1b\[[0-9;]*m//g'
+  ```
+- **What to grep.**
+  - Runner legs: `throughput +@`, `TPS GATE`, `TTFT GATE`, `CHUNK TIME`, `KV PCC: nope=`.
+  - Sparse-MLA gate: `sparse MLA Galaxy .* (un)?traced:`.
+  - Chunked GLM test: `Chunk timing` tables.
+- **Runner legs fail when faster than the baseline** (two-sided TPS/TTFT gate). A "FAIL (faster)" is a pass for us.
+- **Runtimes.** A 1M runner leg takes about 30–40 min end to end; the K3.1 L24 bring-up is about 6 min after the build.
+
+### 5.2 Directly on a Galaxy
+
+- **Sparse-MLA gate, 8x4:**
+  `python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k kimi_k3_1`
+  (or `-k glm_5_3`). For the 4x4 stage:
+  `models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- <same pytest args>`.
+  Use `TT_METAL_SHM_TRACKING_DISABLED=1 LOGURU_LEVEL=ERROR`.
+- **Determinism:** `DS_PREFILL_REUSE_MODEL=1 python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_determinism.py -k "kimi_k3_1"`.
+- **Real-weights runner:** `bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1` (or
+  `kimi_k3_1 sc1`). See the CI legs in the YAML for the environment.
+- **A/B in one checkout:** use the environment switches, `SPARSE_MLA_FULL_PUSH=0|1`,
+  `SPARSE_MLA_INDEXER_BLOCK_MAX=0|1` and `SPARSE_MLA_FULL_PUSH_DENSE_BELOW=<tokens>`. Note that `tt-run` does
+  **not** forward `PREFILL_*` or other variables to ranks; the runner script passes what it needs through
+  `RUNNER_ENV`.
+
+### 5.3 Scratch tests in this folder (all run by path)
+
+- **`exp_long_full.py`:** times one sparse-MLA layer (both models) untraced and traced, at any context.
+  - `LONGFULL_CACHE`: buffer/cache tokens. The push needs **(cache + chunk) % 512 == 0**, e.g. on LoudBox 510720,
+    1022720, 14080 or 49920; on Galaxy (5120 chunk) 51200 and 512000 work.
+  - `LONGFULL_START`: chunk start (≤ cache).
+  - `LONGFULL_FILL=1`: fills the prefix with real chunk forwards of random inputs (realistic-ish indices; zero caches
+    massively flatter the push).
+  - `LONGFULL_META=1`: drives the forward with device metadata, as the runner does. **This is required for the
+    cutoff and dense paths.** The perf/determinism harness traces with host scalars, so it never reaches them.
+  - `LONGFULL_SAVE=<prefix>`: saves outputs, for bit-exact A/B checks.
+Committed with `--no-verify`: `exp_block_maxima.py` imports the top-k oracle from `tests/ttnn/...`, which the repo's
+"models must not import tests" hook forbids. Move it under `tests/` if it's kept.
+
+- **`exp_block_maxima.py`:** checks the indexer maxima against the logits' block max, and top-k with supplied maxima
+  against the exact oracle, on every chip. Supports `BMAX_CACHE`, `BMAX_START` and `BMAX_META=1`.
+- **`exp_determinism.py`:** the determinism test's on-device check at any cache size (`DET_CACHE`), run count
+  (`DET_RUNS`) and prefixes (`DET_PREFIXES=zero,filled`).
+- **`op_summary.py`:** per-op device-time medians from a Tracy `ops_perf_results*.csv`
+  (`scripts/run_safe_pytest.sh --profile "<node id>"`; `-k` with spaces breaks under the tracy wrapper). It also
+  matches each top-k with the following `HighBwAllGather`, i.e. the overlapped gather.
+
+## 6. Results
+
+### 6.1 LoudBox (2x4, Fabric2D)
+
+- **Indexer maxima + two-level top-k only, overlap kept, K3.1 at 1M** (device profile):
+
+  | Op | Single-level | With indexer maxima |
+  |---|---|---|
+  | Top-k | 4567 µs | 610 µs |
+  | Indexer | 5808 µs | 5944 µs |
+  | Overlapped KV gather | 6660 µs | 6465 µs |
+
+  End to end is unchanged, because on LoudBox the gather (about 6.5 ms) is the long branch.
+- **Push path, zero caches:** −30…−41% at 512k–1M. **Misleading:** with zero caches every key ties, so almost
+  nothing is pushed.
+- **Push path, filled prefix (random weights), 512k:** slower than the overlap. Each random query picks different
+  keys, so about 240k rows per chip are pushed. Random weights are not representative; only real weights decide.
+- **Push correctness:** given the same top-k, the push path is bit-identical to the gather path. The cutoff path
+  (dense below, push above) is bit-identical to the baseline on the metadata path, eager and traced, both models.
+- **Determinism stress, push on:** 45 checks (3 rounds × caches 14080 / 49920 / 510720 × K3.1, GLM, GLM no-indexer ×
+  zero/filled), each with 50 eager runs, 50 replays and traced-vs-eager: all identical.
+
+### 6.2 Galaxy, CI sparse-MLA gate (zero caches; push without cutoff; traced ms)
+
+| Case | Baseline | Experiment |
+|---|---|---|
+| GLM long, 8x4 | 6.047 | 4.921 (−19%) |
+| GLM long, 4x4 | 6.646 | 5.106 (−23%) |
+| K3.1 long, 8x4 | 7.767 | 6.307 (−19%) |
+| GLM warm, 8x4 | 2.537 | 2.986 (+18%) |
+| GLM warm, 4x4 | 2.791 | 3.104 (+11%) |
+| K3.1 warm, 8x4 | 3.023 | 3.244 (+7%) |
+
+GLM no-indexer layers: unchanged.
+
+### 6.3 Galaxy, real weights
+
+- **GLM-5.3, 78 layers, 55k@5k chunked** (push without cutoff; top-k single-level, since the width is < 65536):
+  traced +2.4% slower, untraced +1.6% (+6 → +11 ms per chunk as the context grows).
+- **GLM-5.3, 1M request, SC1 runner** (throughput in tok/s; the latest baseline includes #63972):
+
+  | Context | Baseline | Push, no cutoff | Push with cutoff (300k) + indexer maxima |
+  |---|---|---|---|
+  | 5k | 15,294 | −1.7% | 15,094 (−1.3%) |
+  | 50k | 14,855 | −3.1% | 14,673 (−1.2%) |
+  | 100k | 14,011 | −4.2% | 13,783 (−1.6%) |
+  | 255k | 13,283 | −0.9% | 13,110 (−1.3%) |
+  | 510k | 11,510 | +2.3% | 11,654 (+1.3%) |
+  | 1020k | 9,877 | +11.8% | 10,917 (+10.5%) |
+  | TTFT, 1M | 88.30 s | −3.7% | 85.61 s (−3.0%) |
+
+  KV PCC minimum (nope) is about 0.843–0.846 in all runs (threshold 0.82; known run-to-run variance).
+- **K3.1, 24 layers (6 DSA), 1M request, SC1 runner, L1_SMALL 3072:**
+
+  | Context | Baseline | Push with cutoff + maxima |
+  |---|---|---|
+  | 5k | 26,805 | −0.8% |
+  | 100k | 26,015 | −0.7% |
+  | 255k | 24,904 | −0.5% |
+  | 510k | 22,960 | −1.1% |
+  | 1M | 20,597 | +0.3% |
+
+  KV PCC minimum is 0.99667 in both. The no-cutoff run was −1.6…−3.4% up to 510k and +0.5% at 1M.
+
+  The cutoff run above predates commit `f8ca421af83` (the indexer only writes maxima from 98k), so it still paid for
+  maxima nothing read below 98k. **That commit hasn't been measured on Galaxy yet.**
+
+### 6.4 Per-layer view at 1M
+
+| | GLM-5.3 | K3.1 |
+|---|---|---|
+| Chunk time, baseline → experiment | 518.4 → 469.0 ms | 248.6 → 247.9 ms |
+| Changed layers | 21 full | 6 DSA |
+| Saving per changed layer | ≈ 2.35 ms | ≈ 0.12 ms |
+
+The difference per layer is the open question (§8.1).
+
+## 7. Known issues and gotchas
+
+- **Unexplained determinism failure.** One CI run had K3.1 warm on 8x4, push on, fail the traced-vs-untraced check:
+  PCC 0.999893, with eager vs eager 0.999966 and replay vs replay 0.999906.
+  - Not reproduced since: 3× the same perf gate, 3× determinism with push on, 1× push off, 1× GLM, all on a Galaxy
+    (`topk_push_det` leg), plus about 4,500 LoudBox forwards.
+  - Code review found no race. The push has a start fence and an in-order done handshake. The plan-table all-gather
+    has a downstream-started fence. Owners push only their own rows, after their KV write.
+  - Treat it as open; a longer Galaxy soak is a cheap next step.
+- **The push needs** a buffer row count that's a multiple of 512 (`plan_fits`); stripe chunk % 32 == 0; and
+  `is_sparse_kv_push_supported` (which, with #64501, means a 2D fabric with routable links).
+- **Dense / cutoff mode needs device metadata.** Host-scalar traces (the perf/determinism harness) always push. Use
+  `LONGFULL_META=1` or the real runner.
+- **K3.1 L1_SMALL.** At the default 2048 B per bank it OOMs on the first push-path sparse SDPA. 3072 works. The cause
+  is an extra global semaphore in the compact-buffer path.
+- **Two-sided perf gates** everywhere: the sparse-MLA gate (±5% untraced / ±3% traced), the runner TPS/TTFT gates
+  (±1.5%), and the GLM chunked per-chunk gate (±3%). Faster fails too.
+- **`high_bw_all_gather` without external semaphores** allocates its own pair in L1_SMALL on every program cache miss.
+  #63972's dense gather therefore uses the model's shared gather semaphores; the full-layer overlap gather uses the
+  overlap resources' semaphores.
+- **Tie choice:** two-level vs single-level top-k changes which tied keys are chosen. Expect PCC ~0.996 between them
+  on random data; it is not a bug.
+
+## 8. Next steps (suggested order)
+
+1. **Profile K3.1 DSA vs GLM full layer in the real runner on Galaxy.**
+   - The workflow builds with Tracy only when `gemma4_d_p_layer_perf` is ticked (`tracy:` input of `build-artifact`).
+     On this branch, make that also true for `topk_push_long`, and run the runner legs with the device profiler.
+   - Compare per-op times for `sparse_push_plan`, the plan-table `high_bw_all_gather`, `sparse_kv_push`, the overlap
+     `high_bw_all_gather`, `topk_large_indices`, `ring_indexer_score_dsa` and sparse SDPA, baseline vs experiment.
+   - Count distinct pushed rows per chip, from the plan table or by instrumenting.
+   - This tells whether K3.1 loses to the plan (fix: cheaper or skipped plan) or to the push volume.
+2. **Skip the full layer's own plan below its cutoff.**
+   - It's dead work there; only the dense gather matters.
+   - Options: a device-side guard in `sparse_push_plan` (like `gathered_active_below`), or a single plan that serves
+     both thresholds.
+   - On GLM, avoid building two plans per full layer (its own + the shared layers').
+3. **Measure `f8ca421af83`** (indexer maxima gated at 98k) with the `topk_push_long` A/B.
+4. **Tune `SPARSE_MLA_FULL_PUSH_DENSE_BELOW` per model** on the GLM and K3.1 1M legs (try 400k and 500k). The GLM
+   crossover appears to sit between 255k and 510k.
+5. **Hide the full layer's push.**
+   - Top-k is available before the Q/KV stems, so the plan and the PREFIX part of the push could run on the push
+     sub-device beside the Q and KV stems, as `_next_layer_prefetch` already does for shared layers.
+   - That leaves only the REST (current chunk) push serial.
+   - This should lower the crossover, and it's the most promising structural win.
+6. **Productionize what pays off.**
+   - Replace the environment switches with model-config flags.
+   - Add indexer unit tests for `block_max_output` / `block_max_from_length` (scalar and metadata paths, block-cyclic
+     ring), and model tests for the cutoff path.
+   - Revert the CI hacks: report-only gate, repurposed checkboxes, K3.1 request length.
+   - Re-center the perf baselines.
+   - Get reviews.
+7. **Longer-term target:** fusing the indexer, top-k and the KV fetch into one op.
