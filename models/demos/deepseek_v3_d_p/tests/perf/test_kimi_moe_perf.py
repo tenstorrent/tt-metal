@@ -61,9 +61,10 @@ class MoEPerfCase:
         return f"{self.model}-{self.mesh}-{self.chunk}"
 
 
+# Targets: CI run 44900949382 (bh-glx-120-d09u02, 14 kW, 2026-11-21).
 CASES = [
-    MoEPerfCase("kimi_k3", "8x4", 5120),
-    MoEPerfCase("kimi_k3_1", "4x4-sp1", 2560),
+    MoEPerfCase("kimi_k3", "8x4", 5120, targets_ms=(2.42, 2.26)),
+    MoEPerfCase("kimi_k3_1", "4x4-sp1", 2560, targets_ms=(3.64, 3.57)),
 ]
 PERF_TARGETS_MS = {(c.id, mode): ms for c in CASES if c.targets_ms is not None for mode, ms in zip(MODES, c.targets_ms)}
 
