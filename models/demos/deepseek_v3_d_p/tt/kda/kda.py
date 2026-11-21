@@ -688,6 +688,11 @@ class ttKDA:
         self._validate_forward(hidden_states, state, actual_start)
         if actual_end is not None:
             self._validate_runtime_bound(actual_end, "actual_end")
+        return self._forward_projected(self._prepare_inputs(hidden_states), state, actual_start, actual_end)
+
+    def _prepare_inputs(self, hidden_states: ttnn.Tensor) -> _ProjectedInputs:
+        """The layer's first programs, which read no state: the TP gather and input projection, then the relay
+        landing buffer's reservation."""
         hidden_states, gathered = self._gather_tp_input(hidden_states)
         inputs = self._project_inputs(hidden_states)
         # The SP predecessor's relay can write into this rank's landing buffer before its own recurrence starts. The
@@ -697,6 +702,12 @@ class ttKDA:
         # With SP the relay reads the gathered input for the output gate: it is freed after the relay.
         if gathered and not self.recurrence.applies_output_norm:
             ttnn.deallocate(hidden_states)
+        return inputs
+
+    def _forward_projected(
+        self, inputs: _ProjectedInputs, state: KdaState, actual_start: ttnn.Tensor, actual_end: ttnn.Tensor | None
+    ) -> tuple[ttnn.Tensor, KdaState]:
+        """``forward`` after ``_prepare_inputs``: everything that reads or replaces the state."""
         convolution, convolution_slab = state.convolution, {}
         if isinstance(convolution, SlabEntry):
             convolution, convolution_slab = convolution.slab, convolution.op_kwargs()
@@ -782,8 +793,16 @@ class ttKDA:
         replay. ``actual_start`` also marks a request head: where it reads 0 the layer's ops start from zeros instead
         of the imported carry (the slab-entry contract), so the import itself needs no zero fill. Returns the layer
         output.
+
+        The import follows the input projection, the first program that reads no state: untraced, the device runs the
+        projection while the host dispatches the import, instead of idling until the import is enqueued.
         """
+        scratch = states.scratch_entry()
+        self._validate_forward(hidden_states, scratch, actual_start)
+        if actual_end is not None:
+            self._validate_runtime_bound(actual_end, "actual_end")
+        inputs = self._prepare_inputs(hidden_states)
         states.import_layer(states.scratch, slot, layer_idx)
-        output, _ = self.forward(hidden_states, states.scratch_entry(), actual_start, actual_end)
+        output, _ = self._forward_projected(inputs, scratch, actual_start, actual_end)
         states.export_layer(states.scratch, slot, layer_idx)
         return output
