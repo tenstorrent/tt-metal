@@ -11,6 +11,9 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#ifdef ROW_PATCH_BFP8
+#include "ttnn/operations/experimental/paged_cache/device/kernels/dataflow/row_patch_bfp8.hpp"
+#endif
 
 // Whether the page table lives in DRAM. When it does not, its buffer is built on the tensor's own
 // resident shard and holds one stick per batch entry, addressed by offsetting the read pointer.
@@ -133,6 +136,23 @@ void kernel_main() {
     }
 #endif
 
+#ifdef ROW_PATCH_BFP8
+    // Row patch (row_patch_bfp8.hpp): patch the token's row of every head's cache tiles in place.
+    dfb_cache.wait_front(Wt);  // packed input heads, cache format
+    if (!skip_update) {
+        row_patch_bfp8::patch_heads<Wt, head_offset_t>(
+            noc,
+            s0,
+            dfb_cache.get_read_ptr(),
+            cache_tile_bytes,
+            row_patch_bfp8::align_scratch(dfb_untilized_cache.get_read_ptr()),
+            cache_id,
+            cache_tile_offset_B / Wbytes,
+            0,
+            num_heads);
+    }
+    dfb_cache.pop_front(Wt);
+#else
     dfb_untilized_input.wait_front(Wt);  // input tensor
     const uint8_t noc_id = noc.get_noc_id();
     const uint32_t my_noc_x = my_x[noc_id];
@@ -181,6 +201,7 @@ void kernel_main() {
     }
 
     dfb_untilized_input.pop_front(Wt);
+#endif
 
     if (send_signal) {
         // send signal to receiver core that we are done using the input buffer
