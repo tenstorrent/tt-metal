@@ -251,7 +251,14 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 json.dumps({"env": {"PREFILL_MAX_SEQ_LEN": max_seq_len, "PREFILL_NUM_USERS": num_users}})
             )
         # Kimi-K3's, Kimi-K3.1's and GLM-5.3's layouts are their manifests', so the harness reads the real ones.
-        for name in ("kimi_k3.json", "kimi_k3_1.json", "glm53.json", "glm53_4x4.json", "glm53_mtp_kv_share.json"):
+        for name in (
+            "kimi_k3.json",
+            "kimi_k3_1.json",
+            "glm53.json",
+            "glm53_4x4.json",
+            "glm53_4x4_packed.json",
+            "glm53_mtp_kv_share.json",
+        ):
             shutil.copyfile(REPO / MANIFESTS / name, manifest_dir / name)
         checkpoint = root / "checkpoint"
         checkpoint.mkdir()
@@ -431,6 +438,15 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("TPS: 17,000 tok/s @55k", result.stdout)
         self.assertIn("reporting, not gating", result.stdout)
+
+    def test_perf_gate_off_gates_on_pcc_only(self):
+        # A run below its expected throughput, or with none measured, still passes on PCC alone.
+        for extra in ({"TEST_TPS": "10000", "PREFILL_EXPECTED_TPS": "17000"}, {"PREFILL_REQUIRE_TPS": "1"}):
+            with self.subTest(extra=extra):
+                result, _ = self.run_harness("mistral4", extra_env={**extra, "PREFILL_PERF_GATE": "0"})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn("TPS GATE", result.stdout + result.stderr)
+                self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_perf_knobs_absent_leaves_pcc_gating_untouched(self):
         result, _ = self.run_harness("mistral4")
@@ -744,6 +760,21 @@ class MultirankPccHarnessTests(unittest.TestCase):
         producer = self.one_record(records, "producer")["env"]
         self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
         self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_glm53_4x4_packed_runs_two_2560_token_chunks_per_forward(self):
+        for config, hosts, ranks in (("sc4_4x4", self.SC4_HOSTS, "8"), ("sc1_4x4", self.SC4_HOSTS[:1], "2")):
+            with self.subTest(config=config):
+                result, records = self.run_harness("glm53", config=config, hosts=hosts, args=["--variant", "packed"])
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
+                self.assertEqual(producer_mpi[0]["args"][producer_mpi[0]["args"].index("-np") + 1], ranks)
+                runner = self.one_record(records, "runner")["env"]
+                producer = self.one_record(records, "producer")["env"]
+                self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53_4x4_packed.json"))
+                self.assertTrue(producer["PREFILL_PRODUCER_MANIFEST"].endswith("manifests/glm53_4x4_packed.json"))
+                self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
+                self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1044480 // 2560))
+                self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_glm53_4x4_missing_cache_names_the_glm_dir(self):
         result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True)
