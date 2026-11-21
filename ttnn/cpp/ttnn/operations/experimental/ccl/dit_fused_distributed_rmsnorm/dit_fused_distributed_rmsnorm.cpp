@@ -87,8 +87,10 @@ std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
     // fp32_dest_acc=true to MATCH the op's default — the chunk clamp's streaming
     // decision depends on the intermediate-CB tile size (fp32 vs bf16).
-    auto kernel_config_val =
-        init_device_compute_kernel_config(arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, true, false);
+    // HiFi3 on Wormhole, as in the op's default (hardware bug #38306 with HiFi4 + fp32_dest_acc_en).
+    const auto math_fidelity =
+        arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+    auto kernel_config_val = init_device_compute_kernel_config(arch, std::nullopt, math_fidelity, true, true, false);
 
     auto params = ttnn::experimental::prim::DitFusedDistributedRmsnormParams(
         /*epsilon=*/0.0f,

@@ -33,10 +33,16 @@ std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc_fused(
             input_tensor, reduce_dim, split_size, output_memory_config, compute_kernel_config);
     }
 
+    const auto arch = input_tensor.device()->arch();
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
+    const auto math_fidelity =
+        arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(init_device_compute_kernel_config(
-        input_tensor.device()->arch(),
+        arch,
         std::nullopt,
-        tt::tt_metal::MathFidelity::HiFi4,
+        math_fidelity,
         /* default_approx_mode */ false,
         /* default_fp32_acc */ true));
 
