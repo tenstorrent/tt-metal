@@ -21,17 +21,40 @@ constexpr uint32_t kFinal = 48;       // TRISC loop index to stop at, agreed by 
 constexpr uint32_t kFpuRecord = 64;   // [elapsed_lo, elapsed_hi, loops_lo, loops_hi]
 constexpr uint32_t kDramRecord = 80;  // [elapsed_lo, elapsed_hi, xfers_lo, xfers_hi]
 constexpr uint32_t kNocRecord = 96;   // [elapsed_lo, elapsed_hi, xfers_lo, xfers_hi]
-constexpr uint32_t kControlBytes = 128;
+// Per-domain determinism error records (32 B each):
+//   [mismatches, checks, first_iter, first_word, first_expected, first_actual, 0, 0]
+constexpr uint32_t kFpuErrRecord = 128;   // written by TRISC2 (PACK)
+constexpr uint32_t kDramErrRecord = 160;  // written by BRISC
+constexpr uint32_t kNocErrRecord = 192;   // written by NCRISC
+constexpr uint32_t kControlBytes = 256;
 
 constexpr uint32_t kFinalUnset = 0xFFFFFFFFu;
+constexpr uint32_t kSentinel = 0xDEADBEEFu;
 
 // -- Active-ETH L1 layout of the link kernel (offsets from unreserved base) ---
 constexpr uint32_t kEthHandshake = 0;  // written by peer
-constexpr uint32_t kEthTiming = 16;    // timing staging, persisted to DRAM at the end
 constexpr uint32_t kEthFinIn = 32;     // written by peer: [magic, peer_sent]
 constexpr uint32_t kEthFinOut = 48;    // staging for our FIN
 constexpr uint32_t kEthStop = 64;      // host writes 1 to stop
+// Timing + determinism record staging (48 B), persisted to DRAM at the end:
+//   [elapsed_lo, elapsed_hi, sent, received, mismatches, checks, first_iter, first_word, first_expected, first_actual]
+constexpr uint32_t kEthTiming = 80;
+constexpr uint32_t kEthTimingBytes = 48;
 constexpr uint32_t kEthHeaderBytes = 128;
+
+// DRAM read pattern: toggles every bit between adjacent words while varying by
+// word index (never equals kSentinel).
+inline uint32_t dram_expected_word(uint32_t w) {
+    const uint32_t base = 0x5A5A5A5Au ^ ((w >> 1) * 0x01010101u);
+    return (w & 1u) ? ~base : base;
+}
+
+// ETH payload pattern: toggles every bit between adjacent words and varies by
+// slot and word index (never equals kSentinel for power-of-two slot counts <= 8).
+inline uint32_t eth_expected_word(uint32_t slot_idx, uint32_t w) {
+    const uint32_t base = (0x5A5A5A5Au ^ ((w >> 1) * 0x01010101u)) + (slot_idx * 0x10203040u);
+    return (w & 1u) ? ~base : base;
+}
 
 // Throttle time unit, in wall-clock ticks.
 constexpr uint32_t kIdleUnitTicks = 512;
@@ -103,6 +126,38 @@ struct Throttle {
         } else {
             return 0;
         }
+    }
+};
+
+// Per-domain determinism error accumulator, flushed once on kernel exit.
+struct ErrTracker {
+    uint32_t mismatches = 0;
+    uint32_t checks = 0;
+    uint32_t first_iter = 0;
+    uint32_t first_word = 0;
+    uint32_t first_expected = 0;
+    uint32_t first_actual = 0;
+
+    inline __attribute__((always_inline)) void record_mismatch(
+        uint32_t iter, uint32_t word, uint32_t expected, uint32_t actual) {
+        if (mismatches == 0) {
+            first_iter = iter;
+            first_word = word;
+            first_expected = expected;
+            first_actual = actual;
+        }
+        if (mismatches != 0xFFFFFFFFu) {
+            ++mismatches;
+        }
+    }
+
+    inline void store(volatile tt_l1_ptr uint32_t* dst) const {
+        dst[0] = mismatches;
+        dst[1] = checks;
+        dst[2] = first_iter;
+        dst[3] = first_word;
+        dst[4] = first_expected;
+        dst[5] = first_actual;
     }
 };
 

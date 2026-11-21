@@ -30,6 +30,7 @@ Run knobs:
 |---|---|---|
 | `PV_DURATION_S` | Run time in seconds; 0 runs until Ctrl-C | 10 (Smoke: 2) |
 | `PV_SUPER_SYNC` | 1 starts every Tensix generator on a chip in the same window | 0 (Smoke: 1) |
+| `PV_DETERMINISM` | 1 enables continuous in-kernel + end-of-run bit-exact checking on all enabled domains; 0 disables it | 1 |
 | `PV_DUTY_CYCLE_PCT` | Chip-wide hot/quiet duty cycle over every generator | 100 (off) |
 | `PV_DUTY_PERIOD_512` | Duty-cycle period in units of 512 AICLK ticks, a power of two | 4096 (~1.6 ms at 1.35 GHz) |
 
@@ -53,7 +54,12 @@ At 100% the FPU runs at about 93% utilization, which is the maximum for this loo
 The test fails if:
 - any enabled generator does no work on some core;
 - the FPU output on a core is missing, non-finite or all zero;
-- an Ethernet link does not shut down cleanly.
+- an Ethernet link does not shut down cleanly;
+- determinism checking (`PV_DETERMINISM=1`, on by default) finds any bit mismatch:
+  - TRISC: UNPACK alternates two A-input buffers (`in0_a`/`in0_b`) so every loop produces new output; PACK verifies a rolling 64-word slice against captured golden buffers on every loop, and at end-of-run the host verifies `out` against golden and checks cross-core/cross-device consensus across all chips.
+  - DRAM: BRISC verifies a rolling 64-word slice of L1 staging after read barriers (poisoning a sentinel before the next batch) and the host checks every core's final staging buffer and the source DRAM buffer.
+  - NOC: NCRISC writes to a separate sentinel-initialized destination buffer; destination cores continuously verify rolling slices in-kernel and the host checks every destination buffer at end-of-run.
+  - Ethernet: ERISC periodically checks rolling slices of incoming RX slots (with sentinel poisoning) and verifies all RX and TX slots in full before exit.
 
 When a Tensix generator runs without the other Tensix generators, the test also checks it against what its knobs should give:
 - FPU utilization within ±4 points of the expected value;

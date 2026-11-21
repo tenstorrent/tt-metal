@@ -21,20 +21,32 @@
 // fixed number of NOPs. Phase, burst and the duty cycle gate UNPACK; MATH and
 // PACK stall behind it. Burst counts loops of num_tiles tiles.
 //
+// Determinism check (check_det == 1): UNPACK alternates between two A-input
+// buffers (in0_a on even loops, in0_b on odd loops) so output changes every
+// loop. PACK waits for each pack to land in L1 (hidden in MATH's shadow while
+// MATH computes the other DST half), captures golden_a/golden_b across a
+// rolling 64-word slice over the first 128 loops, then compares the rolling
+// slice against golden_a/golden_b on every subsequent loop.
+//
 // Compile-time args:
-//   0: l1_buffer0_addr  – pre-filled input A (8 float16_b tiles)
-//   1: l1_buffer1_addr  – pre-filled input B (8 float16_b tiles)
-//   2: l1_buffer2_addr  – output (8 float16_b tiles)
-//   3: num_tiles        – tiles per loop (8)
-//   4: ctrl_base        – L1 control block (pv_common.hpp)
-//   5: super_sync       – wait for GO from the BRISC barrier
-//   6: mode             – pv::kMode*
-//   7: a                – smooth: NOPs per tile; phase: period; burst: loops
-//   8: b                – phase: active units; burst: idle units
-//   9: duty_period      – 0 = no duty cycle
-//  10: duty_active
+//   0: l1_in0_a_addr    – pre-filled input A0 (8 float16_b tiles)
+//   1: l1_in0_b_addr    – pre-filled input A1 (8 float16_b tiles)
+//   2: l1_in1_addr      – pre-filled input B (8 float16_b tiles)
+//   3: l1_out_addr      – output (8 float16_b tiles)
+//   4: l1_golden_a_addr – golden output for A0 (8 float16_b tiles)
+//   5: l1_golden_b_addr – golden output for A1 (8 float16_b tiles)
+//   6: num_tiles        – tiles per loop (8)
+//   7: ctrl_base        – L1 control block (pv_common.hpp)
+//   8: super_sync       – wait for GO from the BRISC barrier
+//   9: mode             – pv::kMode*
+//  10: a                – smooth: NOPs per tile; phase: period; burst: loops
+//  11: b                – phase: active units; burst: idle units
+//  12: duty_period      – 0 = no duty cycle
+//  13: duty_active
+//  14: check_det        – 1 = continuous determinism check
 
 constexpr uint32_t kCheckLoops = 16;
+constexpr uint32_t kDetSliceWords = 64;
 
 ALWI volatile tt_l1_ptr uint32_t* ctrl_word(uint32_t ctrl_base, uint32_t offset) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_base + offset);
@@ -61,8 +73,10 @@ template <
     uint32_t a,
     uint32_t b,
     uint32_t duty_period,
-    uint32_t duty_active>
-ALWI void pv_unpack(uint32_t l1_buffer0_addr, uint32_t l1_buffer1_addr, uint32_t ctrl_base) {
+    uint32_t duty_active,
+    bool check_det>
+ALWI void pv_unpack(
+    uint32_t l1_in0_a_addr, uint32_t l1_in0_b_addr, uint32_t l1_in1_addr, uint32_t ctrl_base) {
     // init
     constexpr bool is_fp32_dest_acc_en = false;
     constexpr uint32_t face_r_dim = 16;
@@ -79,6 +93,10 @@ ALWI void pv_unpack(uint32_t l1_buffer0_addr, uint32_t l1_buffer1_addr, uint32_t
         num_faces_B,
         128 /* tile size for float16_b >> 4 */,
         128 /* tile size for float16_b >> 4 */);
+
+    // Clear unpacker transpose and stochastic rounding that a prior workload may have left set.
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
+    _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);  // set address counters for z and w dimensions for all channels
     TT_SETADCXX(p_setadc::UNP_A, 1024 - 1, 0x0);
@@ -193,9 +211,10 @@ ALWI void pv_unpack(uint32_t l1_buffer0_addr, uint32_t l1_buffer1_addr, uint32_t
             }
         }
         loops++;
+        const uint32_t cur_in0 = (check_det && (i & 1u)) ? l1_in0_b_addr : l1_in0_a_addr;
         for (uint32_t j = 0; j < num_tiles; j++) {
-            uint32_t address_a = L1_ADDRESS(l1_buffer0_addr);
-            uint32_t address_b = L1_ADDRESS(l1_buffer1_addr + j * 2048);
+            uint32_t address_a = L1_ADDRESS(cur_in0);
+            uint32_t address_b = L1_ADDRESS(l1_in1_addr + j * 2048);
 
             // Wait for free context
             wait_for_next_context(2);
@@ -362,6 +381,7 @@ ALWI void pv_math(uint32_t ctrl_base) {
     tmp.program();
 
     math::reset_counters(p_setrwc::SET_ABD_F);
+    math::_configure_default_zero_flag_state_();
 
     // compute loop
     for (uint32_t i = 0; !reached_final(i, final_ptr); i++) {
@@ -383,13 +403,18 @@ ALWI void pv_math(uint32_t ctrl_base) {
 #ifdef TRISC_PACK
 // PACK stage from max_util_pack_common.hpp: the MOP drains all num_tiles
 // tiles from DST to the fixed L1 output in one run.
-template <uint32_t num_tiles>
-ALWI void pv_pack(uint32_t l1_output_addr, uint32_t ctrl_base) {
+template <uint32_t num_tiles, bool check_det>
+ALWI void pv_pack(
+    uint32_t l1_output_addr, uint32_t l1_golden_a_addr, uint32_t l1_golden_b_addr, uint32_t ctrl_base) {
     volatile tt_l1_ptr uint32_t* final_ptr = ctrl_word(ctrl_base, pv::kFinal);
     constexpr bool is_fp32_dest_acc_en = false;
     _llk_pack_hw_configure_<is_fp32_dest_acc_en>(
         (uint32_t)DataFormat::Float16_b, (uint32_t)DataFormat::Float16_b, 128 /* tile size for float16_b >> 4 */);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    set_packer_strides<PackMode::Default>((uint32_t)DataFormat::Float16_b, TILE_C_DIM);
+    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b1111);
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1111);
 
     addr_mod_pack_t{
         .y_src = {.incr = 4},
@@ -454,34 +479,87 @@ ALWI void pv_pack(uint32_t l1_output_addr, uint32_t ctrl_base) {
     set_dst_write_addr(0);
     program_packer_destination(L1_ADDRESS(l1_output_addr));
 
+    constexpr uint32_t kOutWords = num_tiles * 512;  // float16_b: 32*32*2 / 4 = 512 words/tile
+    constexpr uint32_t kNumSlices = kOutWords / kDetSliceWords;
+    static_assert(kOutWords % kDetSliceWords == 0 && (kNumSlices & (kNumSlices - 1)) == 0);
+
+    volatile tt_l1_ptr uint32_t* out_base = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_output_addr);
+    volatile tt_l1_ptr uint32_t* gold_a_base = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_golden_a_addr);
+    volatile tt_l1_ptr uint32_t* gold_b_base = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_golden_b_addr);
+    pv::ErrTracker err;
+
     for (uint32_t i = 0; !reached_final(i, final_ptr); i++) {
         _llk_packer_wait_for_math_done_();
         ckernel::ckernel_template::run();
         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        if constexpr (check_det) {
+            // Drain PACK L1 writes before reading l1_output_addr.
+            TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);
+            TTI_DMANOP;
+            tensix_sync();
+            invalidate_l1_cache();
+
+            const uint32_t pair_idx = i >> 1;
+            const uint32_t off = (pair_idx & (kNumSlices - 1)) * kDetSliceWords;
+            volatile tt_l1_ptr uint32_t* out_p = out_base + off;
+            volatile tt_l1_ptr uint32_t* gold_p = ((i & 1u) ? gold_b_base : gold_a_base) + off;
+            if (pair_idx < kNumSlices) {
+                for (uint32_t w = 0; w < kDetSliceWords; w++) {
+                    gold_p[w] = out_p[w];
+                }
+            } else {
+                uint32_t diff = 0;
+                for (uint32_t w = 0; w < kDetSliceWords; w += 4) {
+                    diff |= out_p[w] ^ gold_p[w];
+                    diff |= out_p[w + 1] ^ gold_p[w + 1];
+                    diff |= out_p[w + 2] ^ gold_p[w + 2];
+                    diff |= out_p[w + 3] ^ gold_p[w + 3];
+                }
+                err.checks++;
+                if (__builtin_expect(diff != 0, 0)) {
+                    for (uint32_t w = 0; w < kDetSliceWords; w++) {
+                        const uint32_t act = out_p[w];
+                        const uint32_t exp = gold_p[w];
+                        if (act != exp) {
+                            err.record_mismatch(i, off + w, exp, act);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if constexpr (check_det) {
+        err.store(ctrl_word(ctrl_base, pv::kFpuErrRecord));
+        asm volatile("fence" ::: "memory");
     }
 }
 #endif
 
 void kernel_main() {
-    constexpr uint32_t l1_buffer0_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t l1_buffer1_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t l1_buffer2_addr = get_compile_time_arg_val(2);
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t ctrl_base = get_compile_time_arg_val(4);
-    constexpr bool super_sync = get_compile_time_arg_val(5) != 0;
-    constexpr uint32_t mode = get_compile_time_arg_val(6);
-    constexpr uint32_t a = get_compile_time_arg_val(7);
-    constexpr uint32_t b = get_compile_time_arg_val(8);
-    constexpr uint32_t duty_period = get_compile_time_arg_val(9);
-    constexpr uint32_t duty_active = get_compile_time_arg_val(10);
+    constexpr uint32_t l1_in0_a_addr = get_compile_time_arg_val(0);
+    constexpr uint32_t l1_in0_b_addr = get_compile_time_arg_val(1);
+    constexpr uint32_t l1_in1_addr = get_compile_time_arg_val(2);
+    constexpr uint32_t l1_out_addr = get_compile_time_arg_val(3);
+    constexpr uint32_t l1_golden_a_addr = get_compile_time_arg_val(4);
+    constexpr uint32_t l1_golden_b_addr = get_compile_time_arg_val(5);
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t ctrl_base = get_compile_time_arg_val(7);
+    constexpr bool super_sync = get_compile_time_arg_val(8) != 0;
+    constexpr uint32_t mode = get_compile_time_arg_val(9);
+    constexpr uint32_t a = get_compile_time_arg_val(10);
+    constexpr uint32_t b = get_compile_time_arg_val(11);
+    constexpr uint32_t duty_period = get_compile_time_arg_val(12);
+    constexpr uint32_t duty_active = get_compile_time_arg_val(13);
+    constexpr bool check_det = get_compile_time_arg_val(14) != 0;
 
     // TRISC0: unpack A and B (float16_b) to SRC_A and SRC_B
-    UNPACK((pv_unpack<num_tiles, super_sync, mode, a, b, duty_period, duty_active>(
-        l1_buffer0_addr, l1_buffer1_addr, ctrl_base)));
+    UNPACK((pv_unpack<num_tiles, super_sync, mode, a, b, duty_period, duty_active, check_det>(
+        l1_in0_a_addr, l1_in0_b_addr, l1_in1_addr, ctrl_base)));
 
     // TRISC1: MVMUL to DST
     MATH((pv_math < num_tiles, mode == pv::kModeSmooth ? a : 0 > (ctrl_base)));
 
     // TRISC2: pack results to the output L1 address
-    PACK((pv_pack<num_tiles>(l1_buffer2_addr, ctrl_base)));
+    PACK((pv_pack<num_tiles, check_det>(l1_out_addr, l1_golden_a_addr, l1_golden_b_addr, ctrl_base)));
 }

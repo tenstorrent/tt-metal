@@ -32,6 +32,7 @@
 //  11: b
 //  12: duty_period      – 0 = no duty cycle
 //  13: duty_active
+//  14: check_det        – 1 = continuous determinism check
 //
 // Runtime args:
 //   0: is_sender
@@ -130,10 +131,15 @@ template <
     uint32_t a,
     uint32_t b,
     uint32_t duty_period,
-    uint32_t duty_active>
+    uint32_t duty_active,
+    bool check_det>
 void dram_reads(uint32_t ctrl_base) {
     using T = pv::Throttle<mode, a, b, duty_period, duty_active>;
     static_assert(num_banks > 0 && num_banks <= kMaxBanks, "unsupported DRAM bank count");
+    constexpr uint32_t xfer_words = xfer_bytes / sizeof(uint32_t);
+    constexpr uint32_t kSliceWords = xfer_words < 64 ? xfer_words : 64;
+    static_assert(xfer_words >= 4 && (xfer_words & (xfer_words - 1)) == 0, "xfer_words must be pow2 >= 4");
+    constexpr uint32_t kCheckBarrierStride = (mode == pv::kModePhase) ? 16 : 1;
     // Phase-locked and rate modes issue one read at a time, so traffic follows
     // the gate closely; smooth mode uses short batches so the load stays even.
     constexpr uint32_t batch = mode == pv::kModeFull     ? kBarrierInterval
@@ -155,12 +161,41 @@ void dram_reads(uint32_t ctrl_base) {
     }
 
     volatile tt_l1_ptr uint32_t* stop = ctrl_word(ctrl_base, pv::kStop);
+    volatile tt_l1_ptr uint32_t* staging = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_staging_addr);
     uint32_t bank = start_bank % num_banks;
     uint32_t page = 0;
     uint64_t xfers = 0;
     uint32_t since_barrier = 0;
+    uint32_t barrier_count = 0;
+    uint32_t check_off = 0;
+    bool need_poison = false;  // host pre-fills staging with kSentinel
+    pv::ErrTracker err;
     uint32_t prev_clk = wall_clock_l();
     uint64_t elapsed = 0;
+
+    auto check_slice = [&](uint32_t iter) {
+        invalidate_l1_cache();
+        uint32_t diff = 0;
+        for (uint32_t w = 0; w < kSliceWords; w += 4) {
+            diff |= staging[check_off + w] ^ pv::dram_expected_word(check_off + w);
+            diff |= staging[check_off + w + 1] ^ pv::dram_expected_word(check_off + w + 1);
+            diff |= staging[check_off + w + 2] ^ pv::dram_expected_word(check_off + w + 2);
+            diff |= staging[check_off + w + 3] ^ pv::dram_expected_word(check_off + w + 3);
+        }
+        err.checks++;
+        if (__builtin_expect(diff != 0, 0)) {
+            for (uint32_t w = 0; w < kSliceWords; w++) {
+                const uint32_t idx = check_off + w;
+                const uint32_t act = staging[idx];
+                const uint32_t exp = pv::dram_expected_word(idx);
+                if (act != exp) {
+                    err.record_mismatch(iter, idx, exp, act);
+                }
+            }
+        }
+        check_off = (check_off + kSliceWords) & (xfer_words - 1);
+        need_poison = true;
+    };
 
     while (true) {
         invalidate_l1_cache();
@@ -172,8 +207,10 @@ void dram_reads(uint32_t ctrl_base) {
         prev_clk = now;
         if constexpr (T::kGated) {
             if (!T::open(now)) {
-                noc_async_read_barrier();
-                since_barrier = 0;
+                if (since_barrier != 0) {
+                    noc_async_read_barrier();
+                    since_barrier = 0;
+                }
                 continue;
             }
         }
@@ -186,6 +223,13 @@ void dram_reads(uint32_t ctrl_base) {
             next_issue = (next_issue > floor ? next_issue : floor) + a;
         }
         for (uint32_t i = 0; i < batch; i++) {
+            if constexpr (check_det) {
+                if (since_barrier == 0 && need_poison) {
+                    staging[check_off] = pv::kSentinel;
+                    asm volatile("fence" ::: "memory");
+                    need_poison = false;
+                }
+            }
             noc_async_read_one_packet(bank_base[bank] + page * xfer_bytes, l1_staging_addr, xfer_bytes);
             if (++bank == num_banks) {
                 bank = 0;
@@ -196,13 +240,27 @@ void dram_reads(uint32_t ctrl_base) {
             if (++since_barrier == barrier_interval) {
                 noc_async_read_barrier();
                 since_barrier = 0;
+                if constexpr (check_det) {
+                    if (++barrier_count == kCheckBarrierStride) {
+                        barrier_count = 0;
+                        check_slice(static_cast<uint32_t>(xfers + i + 1));
+                    }
+                }
             }
         }
         xfers += batch;
 
         if constexpr (pace) {
-            noc_async_read_barrier();
-            since_barrier = 0;
+            if (since_barrier != 0) {
+                noc_async_read_barrier();
+                since_barrier = 0;
+                if constexpr (check_det) {
+                    if (++barrier_count >= kCheckBarrierStride) {
+                        barrier_count = 0;
+                        check_slice(static_cast<uint32_t>(xfers));
+                    }
+                }
+            }
             const uint32_t idle_start = wall_clock_l();
             const uint32_t pause = T::pause_after(idle_start - now);
             while (wall_clock_l() - idle_start < pause) {
@@ -211,6 +269,14 @@ void dram_reads(uint32_t ctrl_base) {
     }
     noc_async_read_barrier();
     elapsed += wall_clock_l() - prev_clk;
+
+    if constexpr (check_det) {
+        if (xfers > 0 && err.checks == 0) {
+            check_slice(static_cast<uint32_t>(xfers));
+        }
+        err.store(ctrl_word(ctrl_base, pv::kDramErrRecord));
+        asm volatile("fence" ::: "memory");
+    }
 
     volatile tt_l1_ptr uint32_t* record = ctrl_word(ctrl_base, pv::kDramRecord);
     record[0] = static_cast<uint32_t>(elapsed);
@@ -241,6 +307,7 @@ void kernel_main() {
             get_compile_time_arg_val(10),
             get_compile_time_arg_val(11),
             get_compile_time_arg_val(12),
-            get_compile_time_arg_val(13)>(ctrl_base);
+            get_compile_time_arg_val(13),
+            get_compile_time_arg_val(14) != 0>(ctrl_base);
     }
 }

@@ -83,6 +83,8 @@ constexpr double kDramBankGBps = 64.0;             // Blackhole GDDR6 per bank
 constexpr double kEthLinkGBps = 48.0;              // per direction, measured on p150b
 constexpr uint32_t kOutputSentinel = 0xFFFFFFFFu;  // PACK must overwrite every output word
 constexpr uint32_t kMaxIdleUnits = 1u << 20;
+constexpr uint32_t kTriscDetSliceWords = 64;       // matches kDetSliceWords in pv_compute.cpp
+constexpr uint32_t kTriscDetGoldenLoops = 2 * (kNumTiles * (kTileBytes / sizeof(uint32_t)) / kTriscDetSliceWords);
 
 // ---------------------------------------------------------------------------
 // Knobs
@@ -113,6 +115,15 @@ std::optional<uint32_t> env_u32(const std::string& name, uint32_t lo, uint32_t h
 }
 
 bool is_pow2(uint32_t v) { return v != 0 && (v & (v - 1)) == 0; }
+
+bool env_bool(const char* name, bool default_val) {
+    const char* s = std::getenv(name);
+    if (s == nullptr) {
+        return default_val;
+    }
+    const std::string v(s);
+    return !v.empty() && v != "0" && v != "false";
+}
 
 /// Chip-wide hot/quiet duty cycle on top of every generator's own throttle.
 struct Duty {
@@ -292,6 +303,7 @@ struct PvDefaults {
 struct PvConfig {
     uint32_t duration_s = 10;  // 0 = until Ctrl-C
     bool super_sync = false;
+    bool determinism = true;
     Throttle trisc;
     Throttle dram;
     Throttle noc;
@@ -303,11 +315,8 @@ struct PvConfig {
 PvConfig read_config(const PvDefaults& defaults) {
     PvConfig cfg;
     cfg.duration_s = env_u32("PV_DURATION_S", 0, 1u << 30).value_or(defaults.duration_s);
-    cfg.super_sync = defaults.super_sync;
-    if (const char* s = std::getenv("PV_SUPER_SYNC")) {
-        const std::string v(s);
-        cfg.super_sync = !v.empty() && v != "0" && v != "false";
-    }
+    cfg.super_sync = env_bool("PV_SUPER_SYNC", defaults.super_sync);
+    cfg.determinism = env_bool("PV_DETERMINISM", true);
     cfg.trisc = read_throttle("PV_TRISC", defaults.trisc, 0, 0, 0);
     cfg.dram = read_throttle("PV_DRAM", defaults.dram, 8192, 64, kDramMaxXferBytes);
     cfg.noc = read_throttle("PV_NOC", defaults.noc, kNocMaxXferBytes, 64, kNocMaxXferBytes);
@@ -347,15 +356,21 @@ struct DeviceRun {
 
     // Tensix L1 layout
     uint32_t ctrl = 0;
-    uint32_t in0 = 0;
+    uint32_t in0_a = 0;
+    uint32_t in0_b = 0;
     uint32_t in1 = 0;
     uint32_t out = 0;
+    uint32_t golden_a = 0;
+    uint32_t golden_b = 0;
     uint32_t dram_staging = 0;
-    uint32_t noc_buffer = 0;
+    uint32_t noc_src_buffer = 0;
+    uint32_t noc_dst_buffer = 0;
 
     uint32_t num_banks = 0;
     shared_ptr<Buffer> dram_buffer;
     std::map<CoreCoord, NocRoute> routes;  // source core -> route
+    std::set<CoreCoord> noc_dst_cores;     // destination cores receiving NOC writes
+    std::vector<uint32_t> noc_pattern;     // expected NOC payload words
 
     std::vector<EthLink> links;
     uint32_t eth_l1_base = 0;
@@ -373,7 +388,7 @@ std::vector<uint32_t> random_bf16_tiles(uint32_t num_tiles, int seed) {
     return tt::test_utils::pack_vector<uint32_t, bfloat16>(values);
 }
 
-/// xorshift pattern for the NOC buffer, so transfers toggle data.
+/// xorshift pattern for the NOC buffer, so transfers toggle data (never equals pv::kSentinel).
 std::vector<uint32_t> xorshift_words(uint32_t num_words, uint32_t seed) {
     std::vector<uint32_t> words(num_words);
     uint32_t rng = seed;
@@ -381,7 +396,7 @@ std::vector<uint32_t> xorshift_words(uint32_t num_words, uint32_t seed) {
         rng ^= rng << 13;
         rng ^= rng >> 17;
         rng ^= rng << 5;
-        w = rng;
+        w = (rng == pv::kSentinel) ? (rng ^ 1u) : rng;
     }
     return words;
 }
@@ -394,12 +409,18 @@ void layout_l1(DeviceRun& run, const PvConfig& cfg) {
     uint32_t addr = align(base);
     run.ctrl = addr;
     addr += pv::kControlBytes;
-    run.in0 = align(addr);
-    run.in1 = run.in0 + kNumTiles * kTileBytes;
-    run.out = run.in1 + kNumTiles * kTileBytes;
-    run.dram_staging = align(run.out + kNumTiles * kTileBytes);
-    run.noc_buffer = align(run.dram_staging + kDramMaxXferBytes);
-    const uint32_t end = run.noc_buffer + std::max<uint32_t>(cfg.noc.xfer_bytes, 64);
+    const uint32_t tile_buf = kNumTiles * kTileBytes;
+    run.in0_a = align(addr);
+    run.in0_b = run.in0_a + tile_buf;
+    run.in1 = run.in0_b + tile_buf;
+    run.out = run.in1 + tile_buf;
+    run.golden_a = run.out + tile_buf;
+    run.golden_b = run.golden_a + tile_buf;
+    run.dram_staging = align(run.golden_b + tile_buf);
+    run.noc_src_buffer = align(run.dram_staging + kDramMaxXferBytes);
+    const uint32_t noc_bytes = std::max<uint32_t>(cfg.noc.xfer_bytes, 64);
+    run.noc_dst_buffer = cfg.determinism ? align(run.noc_src_buffer + noc_bytes) : run.noc_src_buffer;
+    const uint32_t end = run.noc_dst_buffer + noc_bytes;
     TT_FATAL(end <= base + size, "Power-virus L1 layout ({} B) exceeds unreserved L1 ({} B)", end - base, size);
 }
 
@@ -409,21 +430,41 @@ void init_tensix_l1(DeviceRun& run, const PvConfig& cfg) {
     ctrl[pv::kGo / 4] = cfg.super_sync ? 0 : 1;
     ctrl[pv::kFinal / 4] = pv::kFinalUnset;
 
-    std::vector<uint32_t> inputs = random_bf16_tiles(kNumTiles, 42);
-    const auto in1 = random_bf16_tiles(kNumTiles, 43);
-    inputs.insert(inputs.end(), in1.begin(), in1.end());
-    // in0, in1 and out are contiguous; out starts as a sentinel PACK must overwrite.
-    inputs.insert(inputs.end(), kNumTiles * kTileBytes / sizeof(uint32_t), kOutputSentinel);
-    const auto noc_words = cfg.noc.on ? xorshift_words(cfg.noc.xfer_bytes / 4, 0xaaaaaaaau) : std::vector<uint32_t>{};
+    std::vector<uint32_t> trisc_l1;
+    if (cfg.trisc.on) {
+        trisc_l1 = random_bf16_tiles(kNumTiles, 42);
+        const auto in0_b = random_bf16_tiles(kNumTiles, 44);
+        const auto in1 = random_bf16_tiles(kNumTiles, 43);
+        trisc_l1.insert(trisc_l1.end(), in0_b.begin(), in0_b.end());
+        trisc_l1.insert(trisc_l1.end(), in1.begin(), in1.end());
+        // out, golden_a and golden_b are contiguous; all start as kOutputSentinel.
+        trisc_l1.insert(trisc_l1.end(), 3 * kNumTiles * kTileBytes / sizeof(uint32_t), kOutputSentinel);
+    }
+    std::vector<uint32_t> dram_sentinel =
+        (cfg.dram.on && cfg.determinism)
+            ? std::vector<uint32_t>(cfg.dram.xfer_bytes / sizeof(uint32_t), pv::kSentinel)
+            : std::vector<uint32_t>{};
+    if (cfg.noc.on) {
+        run.noc_pattern = xorshift_words(cfg.noc.xfer_bytes / sizeof(uint32_t), 0xaaaaaaaau);
+    }
+    std::vector<uint32_t> noc_sentinel =
+        (cfg.noc.on && cfg.determinism)
+            ? std::vector<uint32_t>(cfg.noc.xfer_bytes / sizeof(uint32_t), pv::kSentinel)
+            : std::vector<uint32_t>{};
 
     for (const auto& core : run.grid) {
         detail::WriteToDeviceL1(run.device, core, run.ctrl, ctrl);
         if (cfg.trisc.on) {
-            detail::WriteToDeviceL1(run.device, core, run.in0, inputs);
+            detail::WriteToDeviceL1(run.device, core, run.in0_a, trisc_l1);
+        }
+        if (!dram_sentinel.empty()) {
+            detail::WriteToDeviceL1(run.device, core, run.dram_staging, dram_sentinel);
         }
         if (cfg.noc.on) {
-            auto words = noc_words;
-            detail::WriteToDeviceL1(run.device, core, run.noc_buffer, words);
+            detail::WriteToDeviceL1(run.device, core, run.noc_src_buffer, run.noc_pattern);
+            if (!noc_sentinel.empty()) {
+                detail::WriteToDeviceL1(run.device, core, run.noc_dst_buffer, noc_sentinel);
+            }
         }
     }
 }
@@ -434,10 +475,11 @@ void setup_dram(DeviceRun& run, const PvConfig& cfg) {
     }
     run.num_banks = run.device->allocator()->get_num_banks(BufferType::DRAM);
     const uint32_t xfer = cfg.dram.xfer_bytes;
+    const uint32_t xfer_words = xfer / sizeof(uint32_t);
     run.dram_buffer = BufferImpl::create(run.device, run.num_banks * kDramPagesPerBank * xfer, xfer, BufferType::DRAM);
     std::vector<uint32_t> pattern(run.dram_buffer->size() / sizeof(uint32_t));
     for (size_t i = 0; i < pattern.size(); ++i) {
-        pattern[i] = (i & 1) ? 0xA5A5A5A5u : 0x5A5A5A5Au;  // toggles every bit
+        pattern[i] = pv::dram_expected_word(static_cast<uint32_t>(i % xfer_words));
     }
     detail::WriteToBuffer(run.dram_buffer, pattern);
 }
@@ -471,6 +513,7 @@ void setup_noc_routes(DeviceRun& run, const PvConfig& cfg) {
             continue;
         }
         run.routes[core] = {r.noc, dst->second};
+        run.noc_dst_cores.insert(dst->second);
         per_noc[r.noc]++;
     }
     log_info(
@@ -579,9 +622,20 @@ void build_program(DeviceRun& run, const PvConfig& cfg) {
     const CoreRangeSet all_cores(run.grid);
 
     if (cfg.trisc.on) {
-        std::vector<uint32_t> args = {run.in0, run.in1, run.out, kNumTiles, run.ctrl, cfg.super_sync ? 1u : 0u};
+        std::vector<uint32_t> args = {
+            run.in0_a,
+            run.in0_b,
+            run.in1,
+            run.out,
+            run.golden_a,
+            run.golden_b,
+            kNumTiles,
+            run.ctrl,
+            cfg.super_sync ? 1u : 0u,
+        };
         const auto t = throttle_args(cfg.trisc, cfg.duty);
         args.insert(args.end(), t.begin(), t.end());
+        args.push_back(cfg.determinism ? 1u : 0u);
         CreateKernel(
             program,
             std::string(kKernelDir) + "pv_compute.cpp",
@@ -594,7 +648,9 @@ void build_program(DeviceRun& run, const PvConfig& cfg) {
     }
 
     // NOC per core: NCRISC follows its route; BRISC takes the other NOC. Cores
-    // without a route split BRISC across NOCs in a checkerboard.
+    // without a route split BRISC across NOCs in a checkerboard. When
+    // determinism checking is on, destination-only cores also run NCRISC on the
+    // NOC opposite BRISC to verify incoming writes.
     std::set<CoreRange> brisc_cores[2];
     std::set<CoreRange> ncrisc_cores[2];
     std::map<CoreCoord, uint32_t> brisc_noc;
@@ -604,6 +660,8 @@ void build_program(DeviceRun& run, const PvConfig& cfg) {
         if (route != run.routes.end()) {
             ncrisc_cores[route->second.noc].insert(CoreRange(core, core));
             b = 1 - route->second.noc;
+        } else if (cfg.noc.on && cfg.determinism && run.noc_dst_cores.contains(core)) {
+            ncrisc_cores[1 - b].insert(CoreRange(core, core));
         }
         brisc_noc[core] = b;
         brisc_cores[b].insert(CoreRange(core, core));
@@ -632,6 +690,7 @@ void build_program(DeviceRun& run, const PvConfig& cfg) {
         const double per_core_gbps = kDramBankGBps * std::max<uint32_t>(run.num_banks, 1) / run.grid.size();
         const auto t = rate_throttle_args(cfg.dram, cfg.duty, per_core_gbps);
         args.insert(args.end(), t.begin(), t.end());
+        args.push_back(cfg.determinism ? 1u : 0u);
 
         const CoreCoord sender = run.grid.start_coord;
         const CoreCoord sender_v = device->worker_core_from_logical_core(sender);
@@ -681,11 +740,12 @@ void build_program(DeviceRun& run, const PvConfig& cfg) {
         }
     }
 
-    // NCRISC: NOC virus on cores with a route.
+    // NCRISC: NOC virus on cores with a route (plus destination-only checkers).
     if (cfg.noc.on) {
         std::vector<uint32_t> args = {run.ctrl, cfg.super_sync ? 1u : 0u, cfg.noc.xfer_bytes};
         const auto t = throttle_args(cfg.noc, cfg.duty);
         args.insert(args.end(), t.begin(), t.end());
+        args.push_back(cfg.determinism ? 1u : 0u);
         for (uint32_t noc = 0; noc < 2; ++noc) {
             if (ncrisc_cores[noc].empty()) {
                 continue;
@@ -700,12 +760,22 @@ void build_program(DeviceRun& run, const PvConfig& cfg) {
                     .compile_args = args,
                 });
             for (const auto& range : ncrisc_cores[noc]) {
-                const CoreCoord dst = device->worker_core_from_logical_core(run.routes.at(range.start_coord).dst);
+                const CoreCoord core = range.start_coord;
+                const auto route_it = run.routes.find(core);
+                const bool is_src = route_it != run.routes.end();
+                const bool is_dst = run.noc_dst_cores.contains(core);
+                const CoreCoord dst =
+                    is_src ? device->worker_core_from_logical_core(route_it->second.dst) : CoreCoord{0, 0};
                 SetRuntimeArgs(
                     program,
                     kernel,
-                    range.start_coord,
-                    {run.noc_buffer, static_cast<uint32_t>(dst.x), static_cast<uint32_t>(dst.y)});
+                    core,
+                    {run.noc_src_buffer,
+                     run.noc_dst_buffer,
+                     static_cast<uint32_t>(dst.x),
+                     static_cast<uint32_t>(dst.y),
+                     is_src ? 1u : 0u,
+                     is_dst ? 1u : 0u});
             }
         }
     }
@@ -719,6 +789,7 @@ void build_program(DeviceRun& run, const PvConfig& cfg) {
         std::vector<uint32_t> args = {run.eth_num_slots, cfg.eth.xfer_bytes, cfg.eth_startup_delay_ticks};
         const auto t = rate_throttle_args(cfg.eth, cfg.duty, kEthLinkGBps);
         args.insert(args.end(), t.begin(), t.end());
+        args.push_back(cfg.determinism ? 1u : 0u);
         EthernetConfig eth_cfg{
             .eth_mode = Eth::SENDER,
             .noc = NOC::NOC_0,
@@ -825,40 +896,435 @@ bool check_floor(const DeviceRun& run, const char* what, double measured, double
     return false;
 }
 
-/// Checks PACK output on every core, as MaxUtil does: some words written (the
-/// MOP does not cover every word), none non-finite, and not all zero.
-bool validate_compute_output(const DeviceRun& run) {
-    uint32_t bad_cores = 0;
-    for (const auto& core : run.grid) {
-        std::vector<uint32_t> out;
-        detail::ReadFromDeviceL1(run.device, core, run.out, kNumTiles * kTileBytes, out, CoreType::WORKER);
-        size_t written = 0;
-        size_t non_finite = 0;
-        bool any_nonzero = false;
-        for (uint32_t word : out) {
-            if (word == kOutputSentinel) {
-                continue;
+struct ErrRecord {
+    uint32_t mismatches = 0;
+    uint32_t checks = 0;
+    uint32_t first_iter = 0;
+    uint32_t first_word = 0;
+    uint32_t first_expected = 0;
+    uint32_t first_actual = 0;
+};
+
+ErrRecord read_err_record(IDevice* device, const CoreCoord& core, uint32_t addr) {
+    std::vector<uint32_t> rec;
+    detail::ReadFromDeviceL1(device, core, addr, 32, rec, CoreType::WORKER);
+    if (rec.size() < 6) {
+        return {};
+    }
+    return {rec[0], rec[1], rec[2], rec[3], rec[4], rec[5]};
+}
+
+bool check_bf16_output_liveness(const std::vector<uint32_t>& buf) {
+    size_t written = 0;
+    size_t non_finite = 0;
+    bool any_nonzero = false;
+    for (uint32_t word : buf) {
+        if (word == kOutputSentinel) {
+            continue;
+        }
+        ++written;
+        for (uint32_t half : {word & 0xFFFFu, word >> 16}) {
+            any_nonzero |= (half & 0x7FFFu) != 0;
+            non_finite += (half & 0x7F80u) == 0x7F80u;
+        }
+    }
+    return written != 0 && non_finite == 0 && any_nonzero;
+}
+
+struct WordDiff {
+    size_t count = 0;
+    size_t first_word = 0;
+    uint32_t first_expected = 0;
+    uint32_t first_actual = 0;
+};
+
+WordDiff compare_words(const std::vector<uint32_t>& expected, const std::vector<uint32_t>& actual) {
+    WordDiff d;
+    const size_t n = std::min(expected.size(), actual.size());
+    for (size_t i = 0; i < n; ++i) {
+        if (expected[i] != actual[i]) {
+            if (d.count == 0) {
+                d.first_word = i;
+                d.first_expected = expected[i];
+                d.first_actual = actual[i];
             }
-            ++written;
-            for (uint32_t half : {word & 0xFFFFu, word >> 16}) {
-                any_nonzero |= (half & 0x7FFFu) != 0;
-                non_finite += (half & 0x7F80u) == 0x7F80u;
+            ++d.count;
+        }
+    }
+    d.count += expected.size() > actual.size() ? expected.size() - actual.size() : actual.size() - expected.size();
+    return d;
+}
+
+/// Tracks distinct (golden_a, golden_b) pairs across all cores on all devices
+/// to detect cross-core and cross-chip mismatches against majority consensus.
+struct TriscConsensus {
+    struct CoreLoc {
+        ChipId chip = 0;
+        CoreCoord logical{0, 0};
+        CoreCoord virt{0, 0};
+    };
+    struct Group {
+        std::vector<uint32_t> golden_a;
+        std::vector<uint32_t> golden_b;
+        std::vector<CoreLoc> cores;
+    };
+    std::vector<Group> groups;
+    uint64_t total_checks = 0;
+    uint64_t total_cores = 0;
+
+    void add(const CoreLoc& loc, std::vector<uint32_t>&& ga, std::vector<uint32_t>&& gb) {
+        ++total_cores;
+        for (auto& g : groups) {
+            if (g.golden_a == ga && g.golden_b == gb) {
+                g.cores.push_back(loc);
+                return;
             }
         }
-        if (written == 0 || non_finite != 0 || !any_nonzero) {
+        groups.push_back({std::move(ga), std::move(gb), {loc}});
+    }
+
+    bool verify(size_t num_devices) const {
+        if (groups.empty()) {
+            return true;
+        }
+        if (groups.size() == 1) {
+            log_info(
+                LogTest,
+                "TRISC determinism: PASSED – all {} core(s) across {} device(s) bit-exact ({} in-kernel slice checks)",
+                total_cores,
+                num_devices,
+                total_checks);
+            return true;
+        }
+        const auto best = std::max_element(
+            groups.begin(), groups.end(), [](const Group& a, const Group& b) { return a.cores.size() < b.cores.size(); });
+        log_error(
+            LogTest,
+            "TRISC determinism: FAILED – {} distinct golden outputs across {} core(s) (consensus has {} core(s))",
+            groups.size(),
+            total_cores,
+            best->cores.size());
+        for (auto it = groups.begin(); it != groups.end(); ++it) {
+            if (it == best) {
+                continue;
+            }
+            const WordDiff da = compare_words(best->golden_a, it->golden_a);
+            const WordDiff db = compare_words(best->golden_b, it->golden_b);
+            for (const auto& loc : it->cores) {
+                log_error(
+                    LogTest,
+                    "Device {} core ({},{}) [virtual ({},{})]: TRISC golden differs from consensus "
+                    "(A: {} word(s), first@{}: exp=0x{:08x} act=0x{:08x}; B: {} word(s), first@{}: exp=0x{:08x} act=0x{:08x})",
+                    loc.chip,
+                    loc.logical.x,
+                    loc.logical.y,
+                    loc.virt.x,
+                    loc.virt.y,
+                    da.count,
+                    da.first_word,
+                    da.first_expected,
+                    da.first_actual,
+                    db.count,
+                    db.first_word,
+                    db.first_expected,
+                    db.first_actual);
+            }
+        }
+        return false;
+    }
+};
+
+/// Checks PACK output on every core: liveness (written, finite, non-zero) plus,
+/// when determinism is on, continuous in-kernel mismatch counts, end-of-run
+/// out == golden parity match, distinct A/B outputs and consensus registration.
+bool validate_compute_output(
+    const DeviceRun& run,
+    const PvConfig& cfg,
+    const std::vector<CoreCoord>& cores,
+    const std::vector<uint64_t>& core_loops,
+    TriscConsensus& consensus) {
+    bool ok = true;
+    uint32_t liveness_bad = 0;
+    uint32_t kernel_bad = 0;
+    uint32_t final_bad = 0;
+    uint64_t device_checks = 0;
+    constexpr uint32_t kBufBytes = kNumTiles * kTileBytes;
+
+    for (size_t idx = 0; idx < cores.size(); ++idx) {
+        const CoreCoord& core = cores[idx];
+        const uint64_t loops = core_loops[idx];
+        std::vector<uint32_t> out;
+        detail::ReadFromDeviceL1(run.device, core, run.out, kBufBytes, out, CoreType::WORKER);
+        if (!check_bf16_output_liveness(out)) {
+            ++liveness_bad;
+        }
+        if (!cfg.determinism) {
+            continue;
+        }
+
+        const ErrRecord err = read_err_record(run.device, core, run.ctrl + pv::kFpuErrRecord);
+        device_checks += err.checks;
+        if (err.mismatches != 0) {
+            ++kernel_bad;
+            const CoreCoord v = run.device->worker_core_from_logical_core(core);
+            log_error(
+                LogTest,
+                "Device {} core ({},{}) [virtual ({},{})]: TRISC in-kernel nondeterminism – "
+                "{} mismatch(es) in {} checks (first at loop {}, word {}: exp=0x{:08x}, act=0x{:08x})",
+                run.device->id(),
+                core.x,
+                core.y,
+                v.x,
+                v.y,
+                err.mismatches,
+                err.checks,
+                err.first_iter,
+                err.first_word,
+                err.first_expected,
+                err.first_actual);
+        }
+        if (loops >= kTriscDetGoldenLoops) {
+            if (err.checks == 0) {
+                ++kernel_bad;
+                log_error(
+                    LogTest,
+                    "Device {} core ({},{}): TRISC determinism ran 0 in-kernel checks despite {} loops",
+                    run.device->id(),
+                    core.x,
+                    core.y,
+                    loops);
+            }
+            std::vector<uint32_t> ga;
+            std::vector<uint32_t> gb;
+            detail::ReadFromDeviceL1(run.device, core, run.golden_a, kBufBytes, ga, CoreType::WORKER);
+            detail::ReadFromDeviceL1(run.device, core, run.golden_b, kBufBytes, gb, CoreType::WORKER);
+            if (!check_bf16_output_liveness(ga) || !check_bf16_output_liveness(gb)) {
+                ++liveness_bad;
+            }
+            if (ga == gb) {
+                ++final_bad;
+                log_error(
+                    LogTest,
+                    "Device {} core ({},{}): TRISC golden_a == golden_b (alternating inputs produced identical output)",
+                    run.device->id(),
+                    core.x,
+                    core.y);
+            }
+            const auto& expected_final = ((loops - 1) & 1u) ? gb : ga;
+            const WordDiff d = compare_words(expected_final, out);
+            if (d.count != 0) {
+                ++final_bad;
+                const CoreCoord v = run.device->worker_core_from_logical_core(core);
+                log_error(
+                    LogTest,
+                    "Device {} core ({},{}) [virtual ({},{})]: TRISC final output differs from golden_{} – "
+                    "{} word(s) (first@{}: exp=0x{:08x}, act=0x{:08x})",
+                    run.device->id(),
+                    core.x,
+                    core.y,
+                    v.x,
+                    v.y,
+                    ((loops - 1) & 1u) ? "b" : "a",
+                    d.count,
+                    d.first_word,
+                    d.first_expected,
+                    d.first_actual);
+            }
+            const CoreCoord v = run.device->worker_core_from_logical_core(core);
+            consensus.add({run.device->id(), core, v}, std::move(ga), std::move(gb));
+        }
+    }
+    consensus.total_checks += device_checks;
+    if (liveness_bad != 0) {
+        log_error(LogTest, "Device {}: TRISC – {} core(s) have missing or invalid output", run.device->id(), liveness_bad);
+        ok = false;
+    }
+    if (kernel_bad != 0 || final_bad != 0) {
+        ok = false;
+    }
+    return ok;
+}
+
+bool validate_dram_determinism(const DeviceRun& run, const PvConfig& cfg, const std::vector<CoreCoord>& cores) {
+    bool ok = true;
+    uint32_t bad_cores = 0;
+    uint64_t total_checks = 0;
+    const uint32_t xfer_bytes = cfg.dram.xfer_bytes;
+    const uint32_t xfer_words = xfer_bytes / sizeof(uint32_t);
+    std::vector<uint32_t> expected(xfer_words);
+    for (uint32_t w = 0; w < xfer_words; ++w) {
+        expected[w] = pv::dram_expected_word(w);
+    }
+
+    for (const auto& core : cores) {
+        const ErrRecord err = read_err_record(run.device, core, run.ctrl + pv::kDramErrRecord);
+        total_checks += err.checks;
+        bool core_ok = true;
+        if (err.mismatches != 0) {
+            core_ok = false;
+            const CoreCoord v = run.device->worker_core_from_logical_core(core);
+            log_error(
+                LogTest,
+                "Device {} core ({},{}) [virtual ({},{})]: DRAM in-kernel data mismatch – "
+                "{} mismatch(es) in {} checks (first at xfer {}, word {}: exp=0x{:08x}, act=0x{:08x})",
+                run.device->id(),
+                core.x,
+                core.y,
+                v.x,
+                v.y,
+                err.mismatches,
+                err.checks,
+                err.first_iter,
+                err.first_word,
+                err.first_expected,
+                err.first_actual);
+        }
+        if (err.checks == 0) {
+            core_ok = false;
+            log_error(
+                LogTest, "Device {} core ({},{}): DRAM determinism ran 0 in-kernel checks", run.device->id(), core.x, core.y);
+        }
+        std::vector<uint32_t> staging;
+        detail::ReadFromDeviceL1(run.device, core, run.dram_staging, xfer_bytes, staging, CoreType::WORKER);
+        const WordDiff d = compare_words(expected, staging);
+        if (d.count != 0) {
+            core_ok = false;
+            const CoreCoord v = run.device->worker_core_from_logical_core(core);
+            log_error(
+                LogTest,
+                "Device {} core ({},{}) [virtual ({},{})]: DRAM final L1 staging mismatch – "
+                "{} word(s) (first@{}: exp=0x{:08x}, act=0x{:08x})",
+                run.device->id(),
+                core.x,
+                core.y,
+                v.x,
+                v.y,
+                d.count,
+                d.first_word,
+                d.first_expected,
+                d.first_actual);
+        }
+        if (!core_ok) {
             ++bad_cores;
         }
     }
-    if (bad_cores != 0) {
-        log_error(LogTest, "Device {}: TRISC – {} core(s) have missing or invalid output", run.device->id(), bad_cores);
+
+    // Also verify the source DRAM buffer itself remained intact.
+    std::vector<uint32_t> dram_readback;
+    detail::ReadFromBuffer(run.dram_buffer, dram_readback);
+    size_t dram_diffs = 0;
+    size_t dram_first = 0;
+    uint32_t dram_exp = 0, dram_act = 0;
+    for (size_t i = 0; i < dram_readback.size(); ++i) {
+        const uint32_t exp = expected[i % xfer_words];
+        if (dram_readback[i] != exp) {
+            if (dram_diffs == 0) {
+                dram_first = i;
+                dram_exp = exp;
+                dram_act = dram_readback[i];
+            }
+            ++dram_diffs;
+        }
     }
-    return bad_cores == 0;
+    if (dram_diffs != 0) {
+        ok = false;
+        log_error(
+            LogTest,
+            "Device {}: DRAM source buffer corrupted – {} word(s) (first@{}: exp=0x{:08x}, act=0x{:08x})",
+            run.device->id(),
+            dram_diffs,
+            dram_first,
+            dram_exp,
+            dram_act);
+    }
+
+    ok &= (bad_cores == 0);
+    if (ok) {
+        log_info(
+            LogTest,
+            "Device {}: DRAM determinism – PASSED ({} cores, {} in-kernel slice checks)",
+            run.device->id(),
+            cores.size(),
+            total_checks);
+    }
+    return ok;
+}
+
+bool validate_noc_determinism(const DeviceRun& run, const PvConfig& cfg) {
+    bool ok = true;
+    uint32_t bad_cores = 0;
+    uint64_t total_checks = 0;
+    const uint32_t xfer_bytes = cfg.noc.xfer_bytes;
+
+    for (const auto& core : run.noc_dst_cores) {
+        const ErrRecord err = read_err_record(run.device, core, run.ctrl + pv::kNocErrRecord);
+        total_checks += err.checks;
+        bool core_ok = true;
+        if (err.mismatches != 0) {
+            core_ok = false;
+            const CoreCoord v = run.device->worker_core_from_logical_core(core);
+            log_error(
+                LogTest,
+                "Device {} core ({},{}) [virtual ({},{})]: NOC in-kernel data mismatch – "
+                "{} mismatch(es) in {} checks (first at check {}, word {}: exp=0x{:08x}, act=0x{:08x})",
+                run.device->id(),
+                core.x,
+                core.y,
+                v.x,
+                v.y,
+                err.mismatches,
+                err.checks,
+                err.first_iter,
+                err.first_word,
+                err.first_expected,
+                err.first_actual);
+        }
+        if (err.checks == 0) {
+            core_ok = false;
+            log_error(
+                LogTest, "Device {} core ({},{}): NOC determinism ran 0 in-kernel checks", run.device->id(), core.x, core.y);
+        }
+        std::vector<uint32_t> rx_buf;
+        detail::ReadFromDeviceL1(run.device, core, run.noc_dst_buffer, xfer_bytes, rx_buf, CoreType::WORKER);
+        const WordDiff d = compare_words(run.noc_pattern, rx_buf);
+        if (d.count != 0) {
+            core_ok = false;
+            const CoreCoord v = run.device->worker_core_from_logical_core(core);
+            log_error(
+                LogTest,
+                "Device {} core ({},{}) [virtual ({},{})]: NOC final dst buffer mismatch – "
+                "{} word(s) (first@{}: exp=0x{:08x}, act=0x{:08x})",
+                run.device->id(),
+                core.x,
+                core.y,
+                v.x,
+                v.y,
+                d.count,
+                d.first_word,
+                d.first_expected,
+                d.first_actual);
+        }
+        if (!core_ok) {
+            ++bad_cores;
+        }
+    }
+
+    ok &= (bad_cores == 0) && !run.noc_dst_cores.empty();
+    if (ok) {
+        log_info(
+            LogTest,
+            "Device {}: NOC determinism – PASSED ({} dst cores, {} in-kernel slice checks)",
+            run.device->id(),
+            run.noc_dst_cores.size(),
+            total_checks);
+    }
+    return ok;
 }
 
 /// Reports every generator and checks it. Utilization and bandwidth are only
 /// checked against expectations when the generator runs without the other
 /// Tensix generators, since they share L1, the NOC and the power budget.
-bool report(const DeviceRun& run, const PvConfig& cfg, double seconds) {
+bool report(const DeviceRun& run, const PvConfig& cfg, double seconds, TriscConsensus& trisc_consensus) {
     bool ok = true;
     std::vector<CoreCoord> all_cores;
     for (const auto& core : run.grid) {
@@ -870,8 +1336,10 @@ bool report(const DeviceRun& run, const PvConfig& cfg, double seconds) {
         double min_pct = 1e9, max_pct = 0, sum_pct = 0;
         uint64_t max_elapsed = 0;
         uint32_t idle_cores = 0;
-        for (const auto& core : all_cores) {
-            const Record r = read_record(run.device, core, run.ctrl + pv::kFpuRecord);
+        std::vector<uint64_t> core_loops(all_cores.size(), 0);
+        for (size_t i = 0; i < all_cores.size(); ++i) {
+            const Record r = read_record(run.device, all_cores[i], run.ctrl + pv::kFpuRecord);
+            core_loops[i] = r.count;
             if (r.count == 0 || r.elapsed == 0) {
                 ++idle_cores;
                 continue;
@@ -898,7 +1366,7 @@ bool report(const DeviceRun& run, const PvConfig& cfg, double seconds) {
             log_error(LogTest, "Device {}: TRISC – {} core(s) reported no loops", run.device->id(), idle_cores);
             ok = false;
         }
-        ok &= validate_compute_output(run);
+        ok &= validate_compute_output(run, cfg, all_cores, core_loops, trisc_consensus);
         const double expected = kFpuFullPct * cfg.trisc.expected_fraction() * duty;
         if (expected > 0 && !cfg.dram.on && !cfg.noc.on) {
             if (std::abs(avg_pct - expected) > kFpuTolerancePct) {
@@ -916,6 +1384,9 @@ bool report(const DeviceRun& run, const PvConfig& cfg, double seconds) {
     if (cfg.dram.on) {
         const auto r = report_movers(run, "DRAM reads", pv::kDramRecord, cfg.dram.xfer_bytes, all_cores, seconds);
         ok &= r.all_cores_moved;
+        if (cfg.determinism) {
+            ok &= validate_dram_determinism(run, cfg, all_cores);
+        }
         const double expected = kDramBankGBps * run.num_banks * cfg.dram.expected_fraction() * duty;
         if (expected > 0 && !cfg.trisc.on && !cfg.noc.on) {
             ok &= check_floor(run, "DRAM GB/s", r.total_gbps, kFloorFraction * expected);
@@ -928,6 +1399,9 @@ bool report(const DeviceRun& run, const PvConfig& cfg, double seconds) {
         }
         const auto r = report_movers(run, "NOC writes", pv::kNocRecord, cfg.noc.xfer_bytes, sources, seconds);
         ok &= r.all_cores_moved && !sources.empty();
+        if (cfg.determinism) {
+            ok &= validate_noc_determinism(run, cfg);
+        }
         const double expected = kNocRouteGBps * cfg.noc.expected_fraction() * duty;
         if (expected > 0 && !cfg.trisc.on && !cfg.dram.on) {
             ok &= check_floor(run, "NOC GB/s per route", r.per_core_gbps, kFloorFraction * expected);
@@ -939,6 +1413,8 @@ bool report(const DeviceRun& run, const PvConfig& cfg, double seconds) {
         constexpr size_t words_per_page = kEthTimingPageBytes / sizeof(uint32_t);
         const double link_floor = kFloorFraction * kEthLinkGBps * cfg.eth.expected_fraction() * duty;
         double total = 0;
+        uint64_t eth_checks = 0;
+        uint32_t eth_det_bad = 0;
         for (size_t i = 0; i < run.links.size(); ++i) {
             const auto& link = run.links[i];
             const size_t off = i * words_per_page;
@@ -961,6 +1437,47 @@ bool report(const DeviceRun& run, const PvConfig& cfg, double seconds) {
                 sent,
                 received,
                 complete ? "" : "  INCOMPLETE");
+            if (cfg.determinism) {
+                const ErrRecord err =
+                    readback.size() >= off + 10
+                        ? ErrRecord{
+                              readback[off + 4],
+                              readback[off + 5],
+                              readback[off + 6],
+                              readback[off + 7],
+                              readback[off + 8],
+                              readback[off + 9]}
+                        : ErrRecord{};
+                eth_checks += err.checks;
+                if (err.mismatches != 0) {
+                    ++eth_det_bad;
+                    log_error(
+                        LogTest,
+                        "Device {} ETH ({},{}) ↔ chip {} ({},{}): payload mismatch – "
+                        "{} mismatch(es) in {} checks (first at rx #{}, word {}: exp=0x{:08x}, act=0x{:08x})",
+                        run.device->id(),
+                        link.core.x,
+                        link.core.y,
+                        link.peer_chip,
+                        link.peer_core.x,
+                        link.peer_core.y,
+                        err.mismatches,
+                        err.checks,
+                        err.first_iter,
+                        err.first_word,
+                        err.first_expected,
+                        err.first_actual);
+                } else if (received != 0 && err.checks == 0) {
+                    ++eth_det_bad;
+                    log_error(
+                        LogTest,
+                        "Device {} ETH ({},{}): determinism ran 0 checks despite {} received packets",
+                        run.device->id(),
+                        link.core.x,
+                        link.core.y,
+                        received);
+                }
+            }
             if (link_floor > 0) {
                 ok &= check_floor(run, "ETH link TX GB/s", gbps, link_floor);
             }
@@ -971,6 +1488,18 @@ bool report(const DeviceRun& run, const PvConfig& cfg, double seconds) {
             run.device->id(),
             total,
             run.links.size());
+        if (cfg.determinism) {
+            if (eth_det_bad != 0) {
+                ok = false;
+            } else {
+                log_info(
+                    LogTest,
+                    "Device {}: ETH determinism – PASSED ({} links, {} checks)",
+                    run.device->id(),
+                    run.links.size(),
+                    eth_checks);
+            }
+        }
     }
     return ok;
 }
@@ -980,10 +1509,12 @@ bool run_power_virus(
     const PvConfig cfg = read_config(defaults);
     log_info(
         LogTest,
-        "Power virus: duration={}, super_sync={}, duty cycle={}\n  TRISC: {}\n  DRAM:  {}\n  NOC:   {}\n  ETH:   {}",
+        "Power virus: duration={}, super_sync={}, duty cycle={}, determinism={}\n"
+        "  TRISC: {}\n  DRAM:  {}\n  NOC:   {}\n  ETH:   {}",
         cfg.duration_s == 0 ? std::string("until Ctrl-C") : fmt::format("{} s", cfg.duration_s),
         cfg.super_sync,
         cfg.duty.describe(),
+        cfg.determinism,
         cfg.trisc.describe(),
         cfg.dram.describe(),
         cfg.noc.describe(),
@@ -1053,8 +1584,12 @@ bool run_power_virus(
     log_info(LogTest, "All generators stopped");
 
     bool ok = true;
+    TriscConsensus trisc_consensus;
     for (const auto& run : runs) {
-        ok &= report(run, cfg, seconds);
+        ok &= report(run, cfg, seconds, trisc_consensus);
+    }
+    if (cfg.trisc.on && cfg.determinism) {
+        ok &= trisc_consensus.verify(runs.size());
     }
     return ok;
 }

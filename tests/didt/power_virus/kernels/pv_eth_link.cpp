@@ -21,10 +21,10 @@
 //
 // L1 layout from runtime arg l1_base (unreserved ETH L1), see pv_common.hpp:
 //   [0, 16)   handshake word (written by peer)
-//   [16, 32)  timing record staging, persisted to DRAM at the end
 //   [32, 48)  FIN word (written by peer): [magic, peer_sent, 0, 0]
 //   [48, 64)  FIN staging (sent to the peer's FIN word)
 //   [64, 80)  STOP word (written by the host)
+//   [80, 128) timing + determinism record staging, persisted to DRAM at the end
 //   [128, ...) region A: num_slots × (xfer_bytes + 16 B sync)
 //   [...]     region B: same size
 // Role 0 sends from region A and receives into region B; role 1 is mirrored,
@@ -39,14 +39,16 @@
 //   5: b
 //   6: duty_period   – 0 = no duty cycle
 //   7: duty_active
+//   8: check_det     – 1 = periodic RX check + full RX/TX verification on exit
 //
 // Runtime args:
 //   0: l1_base
 //   1: role          – 0 or 1 (opposite on the peer)
 //   2: dram_timing_bank_id
-//   3: dram_timing_addr – DRAM address (in bank) for the 16 B timing record
+//   3: dram_timing_addr – DRAM address (in bank) for the 48 B timing+err record
 //
-// Timing record: [elapsed_lo, elapsed_hi, sent, received]
+// Timing+err record:
+//   [elapsed_lo, elapsed_hi, sent, received, mismatches, checks, first_iter, first_word, first_expected, first_actual]
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -69,6 +71,7 @@ constexpr uint32_t kHeaderBytes = pv::kEthHeaderBytes;
 constexpr uint32_t kStopCheckInterval = 256;
 constexpr uint32_t kRoutingInterval = 4096;
 constexpr uint32_t kFinMagic = 0xF1F1F1F1u;
+constexpr uint32_t kEthCheckEvery = 509;  // prime (coprime to power-of-two num_slots), <2% BW overhead
 
 constexpr uint32_t num_slots = get_compile_time_arg_val(0);
 constexpr uint32_t xfer_bytes = get_compile_time_arg_val(1);
@@ -82,9 +85,12 @@ using T = pv::Throttle<
     throttle_b,
     get_compile_time_arg_val(6),   // duty_period
     get_compile_time_arg_val(7)>;  // duty_active
+constexpr bool check_det = get_compile_time_arg_val(8) != 0;
+constexpr uint32_t xfer_words = xfer_bytes / sizeof(uint32_t);
+constexpr uint32_t kEthSliceWords = xfer_words < 32 ? xfer_words : 32;
 constexpr uint32_t slot_stride = xfer_bytes + sizeof(slot_sync_t);
 static_assert((num_slots & (num_slots - 1)) == 0 && num_slots >= 2, "num_slots must be a power of two >= 2");
-static_assert(xfer_bytes % 16 == 0, "xfer_bytes must be a multiple of 16");
+static_assert(xfer_bytes % 16 == 0 && (xfer_words & (xfer_words - 1)) == 0, "xfer_bytes must be pow2 >= 16");
 
 FORCE_INLINE uint32_t next(uint32_t p) { return (p + 1) & (num_slots - 1); }
 
@@ -119,13 +125,18 @@ void kernel_main() {
     // a fresh slot is free, so mark them all acked (0). RX slots start empty.
     for (uint32_t i = 0; i < num_slots; i++) {
         const uint32_t tx_slot = tx_base + i * slot_stride;
-        volatile tt_l1_ptr uint32_t* payload = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tx_slot);
-        for (uint32_t w = 0; w < xfer_bytes / sizeof(uint32_t); w++) {
-            // Alternating pattern toggles SerDes lanes.
-            payload[w] = (w & 1) ? 0xA5A5A5A5u : 0x5A5A5A5Au;
+        const uint32_t rx_slot = rx_base + i * slot_stride;
+        volatile tt_l1_ptr uint32_t* tx_payload = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tx_slot);
+        volatile tt_l1_ptr uint32_t* rx_payload = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rx_slot);
+        for (uint32_t w = 0; w < xfer_words; w++) {
+            // Alternating bit-toggling pattern varies by slot and word index.
+            tx_payload[w] = pv::eth_expected_word(i, w);
+            if constexpr (check_det) {
+                rx_payload[w] = pv::kSentinel;
+            }
         }
         sync_of(tx_slot)->bytes_sent = 0;
-        sync_of(rx_base + i * slot_stride)->bytes_sent = 0;
+        sync_of(rx_slot)->bytes_sent = 0;
     }
     // The peer only sends FIN after the handshake, so clearing it here is safe.
     for (uint32_t w = 0; w < 4; w++) {
@@ -164,6 +175,10 @@ void kernel_main() {
     uint64_t next_send = 0;  // rate mode: elapsed tick of the next payload
     uint32_t iter = 0;
     uint32_t stop_check = 0;
+    uint32_t rx_check_countdown = 0;
+    uint32_t rx_check_off = 0;
+    uint32_t poisoned_mask = 0;
+    pv::ErrTracker err;
 
     while (true) {
         const uint32_t now = wall_clock_l();
@@ -231,6 +246,50 @@ void kernel_main() {
         invalidate_l1_cache();
         volatile slot_sync_t* rx_sync = sync_of(rx_base + rx_rd * slot_stride);
         if (rx_sync->bytes_sent != 0 && !eth_txq_is_busy()) {
+            if constexpr (check_det) {
+                const bool was_poisoned = ((poisoned_mask >> rx_rd) & 1u) != 0;
+                const bool hit_interval = (++rx_check_countdown == kEthCheckEvery);
+                if (hit_interval || was_poisoned) {
+                    if (hit_interval) {
+                        rx_check_countdown = 0;
+                    }
+                    invalidate_l1_cache();
+                    volatile tt_l1_ptr uint32_t* rx_payload =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rx_base + rx_rd * slot_stride);
+                    if (was_poisoned) {
+                        const uint32_t act0 = rx_payload[0];
+                        const uint32_t exp0 = pv::eth_expected_word(rx_rd, 0);
+                        if (__builtin_expect(act0 != exp0, 0)) {
+                            err.record_mismatch(received, rx_rd * xfer_words, exp0, act0);
+                        }
+                        poisoned_mask &= ~(1u << rx_rd);
+                    }
+                    uint32_t diff = 0;
+                    for (uint32_t w = 0; w < kEthSliceWords; w += 4) {
+                        diff |= rx_payload[rx_check_off + w] ^ pv::eth_expected_word(rx_rd, rx_check_off + w);
+                        diff |= rx_payload[rx_check_off + w + 1] ^ pv::eth_expected_word(rx_rd, rx_check_off + w + 1);
+                        diff |= rx_payload[rx_check_off + w + 2] ^ pv::eth_expected_word(rx_rd, rx_check_off + w + 2);
+                        diff |= rx_payload[rx_check_off + w + 3] ^ pv::eth_expected_word(rx_rd, rx_check_off + w + 3);
+                    }
+                    err.checks++;
+                    if (__builtin_expect(diff != 0, 0)) {
+                        for (uint32_t w = 0; w < kEthSliceWords; w++) {
+                            const uint32_t idx = rx_check_off + w;
+                            const uint32_t act = rx_payload[idx];
+                            const uint32_t exp = pv::eth_expected_word(rx_rd, idx);
+                            if (act != exp) {
+                                err.record_mismatch(received, rx_rd * xfer_words + idx, exp, act);
+                            }
+                        }
+                    }
+                    rx_check_off = (rx_check_off + kEthSliceWords) & (xfer_words - 1);
+                    if (hit_interval) {
+                        rx_payload[0] = pv::kSentinel;
+                        asm volatile("fence" ::: "memory");
+                        poisoned_mask |= (1u << rx_rd);
+                    }
+                }
+            }
             rx_sync->bytes_sent = 0;
             const uint32_t sync_addr = reinterpret_cast<uint32_t>(rx_sync);
             eth_send_bytes_over_channel_payload_only_unsafe_one_packet(sync_addr, sync_addr, sizeof(slot_sync_t));
@@ -253,12 +312,46 @@ void kernel_main() {
     while (eth_txq_is_busy()) {
     }
 
-    // Persist timing in DRAM; active-ETH L1 is reclaimed after the kernel exits.
+    if constexpr (check_det) {
+        invalidate_l1_cache();
+        // Full end-of-run check of every received RX slot and every TX slot.
+        const uint32_t filled_slots = received < num_slots ? received : num_slots;
+        for (uint32_t s = 0; s < filled_slots; s++) {
+            volatile tt_l1_ptr uint32_t* rx_payload =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rx_base + s * slot_stride);
+            const uint32_t w_start = ((poisoned_mask >> s) & 1u) ? 1u : 0u;
+            for (uint32_t w = w_start; w < xfer_words; w++) {
+                const uint32_t act = rx_payload[w];
+                const uint32_t exp = pv::eth_expected_word(s, w);
+                if (act != exp) {
+                    err.record_mismatch(received, s * xfer_words + w, exp, act);
+                }
+            }
+            err.checks++;
+        }
+        for (uint32_t s = 0; s < num_slots; s++) {
+            volatile tt_l1_ptr uint32_t* tx_payload =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tx_base + s * slot_stride);
+            for (uint32_t w = 0; w < xfer_words; w++) {
+                const uint32_t act = tx_payload[w];
+                const uint32_t exp = pv::eth_expected_word(s, w);
+                if (act != exp) {
+                    err.record_mismatch(0xFFFFFFFFu, s * xfer_words + w, exp, act);
+                }
+            }
+        }
+    }
+
+    // Persist timing + error record in DRAM; active-ETH L1 is reclaimed on exit.
+    for (uint32_t w = 0; w < pv::kEthTimingBytes / sizeof(uint32_t); w++) {
+        timing[w] = 0;
+    }
     timing[0] = static_cast<uint32_t>(elapsed);
     timing[1] = static_cast<uint32_t>(elapsed >> 32);
     timing[2] = sent;
     timing[3] = received;
+    err.store(timing + 4);
     const uint64_t dst = get_noc_addr_from_bank_id<true>(dram_timing_bank_id, dram_timing_addr);
-    noc_async_write(reinterpret_cast<uint32_t>(timing), dst, 16);
+    noc_async_write(reinterpret_cast<uint32_t>(timing), dst, pv::kEthTimingBytes);
     eth_noc_async_write_barrier();
 }
