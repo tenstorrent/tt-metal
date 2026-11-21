@@ -401,7 +401,7 @@ class TtXttsGptBlock(LightweightModule):
                 x.shape[-2],
                 x.shape[-1],
                 self.mlp_c_fc_weight.shape[-1],
-                fused_activation=(ttnn.UnaryOpType.GELU, False),
+                fused_activation=(ttnn.UnaryOpType.GELU_TANH, False),
             ),
             compute_kernel_config=matmul_compute_config(self.device),
             memory_config=L1,
