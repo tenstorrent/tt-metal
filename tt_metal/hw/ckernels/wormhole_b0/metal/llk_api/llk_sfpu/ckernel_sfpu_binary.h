@@ -8,6 +8,7 @@
 #include <limits>
 
 #include "ckernel.h"
+#include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
@@ -291,6 +292,71 @@ inline void calculate_sfpu_binary(
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_mul(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    if constexpr (ITERATIONS == 8) {
+        {
+            const std::uint32_t a0 = dst_index_in0 * 64, a1 = dst_index_in1 * 64, ao = dst_index_out * 64;
+            if constexpr (!is_fp32_dest_acc_en) {
+                TTI_SFPLOADI(5, 0, 65535);
+                TTI_SFPLOADI(6, 2, 1);
+                TTI_SFPLOADI(7, 2, 32767);
+                TTI_REPLAY(0, 15, 1, 1);
+                TT_SFPLOAD(3, 0, 3, a0);
+                TT_SFPLOAD(2, 0, 3, a1);
+                TTI_SFPMUL(3, 2, 9, 0, 0);
+                TTI_SFPSETCC(0, 3, 0, 2);
+                TTI_SFPSETCC(0, 2, 0, 2);
+                TTI_SFPCOMPC(0, 0, 0, 0);
+                TTI_SFPMOV(0, 9, 0, 0);
+                TTI_SFPENCC(3, 0, 0, 10);
+                TTI_SFPMOV(0, 0, 1, 2);
+                TTI_SFPSHFT(4080, 0, 1, 1);
+                TTI_SFPAND(0, 6, 1, 0);
+                TTI_SFPIADD(0, 7, 0, 4);
+                TTI_SFPIADD(0, 1, 0, 4);
+                TTI_SFPAND(0, 5, 0, 0);
+                TT_SFPSTORE(0, 0, 2, ao);
+#pragma GCC unroll 1
+                for (int d = 1; d < ITERATIONS; d++) {
+                    TTI_REPLAY(0, 15, 0, 0);
+                }
+                return;
+            }
+            if constexpr (is_fp32_dest_acc_en) {
+#ifndef DISABLE_SFPLOADMACRO
+                if (dst_index_out == dst_index_in0) {
+                    TTI_SFPCONFIG(0x030, 8, 1);
+                    TTI_SFPNOP;
+                    TTI_SFPNOP;
+                    TTI_REPLAY(0, 4, 1, 1);
+                    TT_SFPLOAD(1, 0, 3, a1);
+                    TT_SFPLOADMACRO((0 << 2) | 0, 0, 2, a0);
+                    TT_SFPLOAD(1, 0, 3, a1);
+                    TT_SFPLOADMACRO((0 << 2) | 3, 0, 2, a0);
+                    TTI_REPLAY(0, 4, 0, 0);
+                    TTI_REPLAY(0, 4, 0, 0);
+                    TTI_REPLAY(0, 4, 0, 0);
+                    TTI_SFPCONFIG(0, 8, 1);
+                    TTI_SFPNOP;
+                    TTI_SFPNOP;
+                    return;
+                }
+#endif
+                TTI_REPLAY(0, 8, 1, 1);
+                TT_SFPLOAD(0, 0, 3, a0 + 0);
+                TT_SFPLOAD(1, 0, 3, a1 + 0);
+                TT_SFPLOAD(2, 0, 3, a0 + 2);
+                TT_SFPLOAD(3, 0, 3, a1 + 2);
+                TTI_SFPMUL(0, 1, 9, 0, 0);
+                TTI_SFPMUL(2, 3, 9, 2, 0);
+                TT_SFPSTORE(0, 0, 2, ao);
+                TT_SFPSTORE(2, 0, 2, ao);
+                TTI_REPLAY(0, 8, 0, 0);
+                TTI_REPLAY(0, 8, 0, 0);
+                TTI_REPLAY(0, 8, 0, 0);
+                return;
+            }
+        }
+    }
     // A 16-bit Dest rounds the product to bf16 in software and stores x * 0 as +0, so it keeps the
     // one-row body.
     if constexpr (use_two_row_binary<BinaryOp::MUL, ITERATIONS, !is_fp32_dest_acc_en>) {
@@ -405,6 +471,14 @@ inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW) {
         // Initialisation for use of sfpu_reciprocal_iter<2> in DIV or POW.
         sfpu_reciprocal_init<false>();
+    } else if constexpr (BINOP == BinaryOp::MUL) {
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+#ifndef DISABLE_SFPLOADMACRO
+        TTI_SFPMUL(p_sfpu::LREG1, 0, p_sfpu::LCONST_0, 12, 0);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, 0x8400);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x1b00);
+        TTI_SFPCONFIG(0, 4 + 0, 0);
+#endif
     } else if constexpr (BINOP == BinaryOp::XLOGY) {
         _init_log_<APPROXIMATION_MODE>();
     }
