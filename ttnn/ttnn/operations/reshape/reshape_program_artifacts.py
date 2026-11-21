@@ -46,9 +46,12 @@ L1_RESERVE_BYTES = 1024 * 1024  # headroom for L1-resident input/output tensors 
 DFB_RING_MAX_BYTES = 1_048_560  # target page, Cluster model: one ring <= 1 MiB - 16 B
 NOC_MAX_BURST_SIZE = 64 * 1024  # one NoC transaction (quasar noc_parameters.h): a row-major page must fit
 
-TILE_ROWS = 32  # tile geometry: 32 x 32, four 16 x 16 faces (validated against the tensor's tile on the host)
+# Tile geometry: 32 x 32, four 16 x 16 faces (validated against the tensor's tile on the host). The single source:
+# the relayout kernel receives `tile_rows` / `face_rows` as compile-time arguments.
+TILE_ROWS = 32
+FACE_ROWS = TILE_ROWS // 2
 FACES_PER_TILE = 4
-FACE_ROWS_PER_TILE = 64  # 4 faces x 16 rows
+FACE_ROWS_PER_TILE = FACES_PER_TILE * FACE_ROWS
 
 REGIME_PAGE_IDENTITY = "page_identity"
 REGIME_TILE_ROW_REGROUP = "tile_row_regroup"
@@ -405,6 +408,8 @@ def _tile_row_regroup_artifacts(input_tensor, output_tensor, p: TileRowRegroupPl
         **common_ct,
         "h_in": p.h_in,
         "h_out": p.h_out,
+        "tile_rows": TILE_ROWS,
+        "face_rows": FACE_ROWS,
         "face_row_bytes": p.page_bytes // FACE_ROWS_PER_TILE,
         "face_bytes": p.page_bytes // FACES_PER_TILE,
     }

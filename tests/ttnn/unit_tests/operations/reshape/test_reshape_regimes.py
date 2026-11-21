@@ -191,3 +191,16 @@ def test_rejections_and_shape_forms(device):
         reshape(x, (1, 400, 64))  # changes = w: outside PHASE0
     _check(reshape(x, [1, 4, -1, 400]), t, (1, 4, 16, 400), TILE, L1)  # list with -1 (R2, R3)
     assert math.prod(resolve_shape((2, 4, 17, 50), (-1, 17, 50))) == 2 * 4 * 17 * 50
+
+
+@pytest.mark.parametrize("strategy", [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH], ids=["height", "width"])
+def test_sharded_input_refused_by_name(device, strategy):
+    """R8: the op derives `memory_config` / `sharding` with eval.memory.memory_axes and gates on them, so a sharded
+    input is refused by name (the generic runner builds interleaved tensors only, so the op carries this test)."""
+    shape = (1, 1, 256, 256)
+    grid = ttnn.CoreGrid(y=1, x=8)
+    mc = ttnn.create_sharded_memory_config(shape, core_grid=grid, strategy=strategy)
+    x = ttnn.from_torch(torch.randn(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=TILE, device=device,
+                        memory_config=mc)
+    with pytest.raises(NotImplementedError, match="sharding"):
+        reshape(x, (1, 4, 64, 256))

@@ -34,8 +34,9 @@
 
 namespace {
 
-constexpr uint32_t TILE_ROWS = 32;
-constexpr uint32_t FACE_ROWS = 16;
+// Tile geometry comes from the host (reshape_program_artifacts.py TILE_ROWS / FACE_ROWS): one source of truth.
+constexpr uint32_t TILE_ROWS = get_arg(args::tile_rows);
+constexpr uint32_t FACE_ROWS = get_arg(args::face_rows);
 
 struct Run {
     uint32_t src_tile_row;  // input tile-row, relative to the window's first
