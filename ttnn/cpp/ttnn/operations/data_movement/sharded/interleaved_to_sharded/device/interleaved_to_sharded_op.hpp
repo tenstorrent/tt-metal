@@ -31,6 +31,14 @@ struct InterleavedToShardedDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+    // A zero-volume output has nothing to write, and the program factory divides by its empty dims. Invalid inputs
+    // (a zero width) still launch, so that validation rejects them.
+    static bool skip_launch(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        const tensor_return_value_t& output) {
+        return output.logical_shape().volume() == 0 && validate_inputs(operation_attributes, tensor_args).first;
+    }
 
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

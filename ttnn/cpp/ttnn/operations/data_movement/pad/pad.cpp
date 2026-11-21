@@ -10,6 +10,7 @@
 #include "ttnn/operations/data_movement/pad/codegen/pad_codegen_supported.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_device_operation.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operation.hpp"
@@ -659,6 +660,38 @@ ttnn::Tensor pad_with_route(
             return p.before_elements == 0 && p.after_elements == 0;
         })) {
         return input_tensor;
+    }
+
+    // An empty input has no pages to read, so the output is all padding. The pad programs read input pages that do
+    // not exist in that case.
+    if (input_tensor.storage_type() == StorageType::DEVICE && input_tensor.logical_volume() == 0) {
+        const auto output_shape = compute_padded_logical_shape(input_tensor.logical_shape(), working_padding);
+        const auto& requested_config = memory_config_arg.value_or(input_tensor.memory_config());
+        // Allocated and filled on the device, keeping the input's mesh topology: a host upload fails inside trace
+        // capture.
+        const tt::tt_metal::TensorSpec output_spec(
+            output_shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor.dtype(),
+                tt::tt_metal::PageConfig(input_tensor.layout(), input_tensor.tensor_spec().tile()),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, requested_config.buffer_type()}));
+        ttnn::Tensor output_tensor =
+            create_device_tensor(output_spec, input_tensor.device(), input_tensor.tensor_topology());
+        if (output_shape.volume() == 0) {
+            return output_tensor;
+        }
+        if (input_tensor.dtype() == DataType::INT32) {
+            output_tensor = ttnn::fill(output_tensor, static_cast<int32_t>(value), std::nullopt, output_tensor);
+        } else if (input_tensor.dtype() == DataType::UINT32) {
+            output_tensor = ttnn::fill(output_tensor, static_cast<uint32_t>(value), std::nullopt, output_tensor);
+        } else {
+            output_tensor = ttnn::fill(output_tensor, value, std::nullopt, output_tensor);
+        }
+        if (requested_config.is_sharded()) {
+            // Without a memory_config, the output keeps the input's shard spec.
+            return ttnn::to_memory_config(output_tensor, requested_config, std::nullopt);
+        }
+        return output_tensor;
     }
 
     ttnn::Tensor working_tensor = input_tensor;
