@@ -10,6 +10,7 @@ from .conv2d_3x3 import (
     default_compute_kernel_config,
     prepare_conv2d_bias,
     prepare_conv2d_weights,
+    prepare_conv2d_weights_host,
     validate,
 )
 
@@ -22,5 +23,6 @@ __all__ = [
     "default_compute_kernel_config",
     "prepare_conv2d_bias",
     "prepare_conv2d_weights",
+    "prepare_conv2d_weights_host",
     "validate",
 ]

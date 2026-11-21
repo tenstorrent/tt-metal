@@ -271,6 +271,40 @@ def prepare_conv2d_weights(
     """[C_out, C_in, 3, 3] -> TILE [1, 1, K_p, C_out]; rows (slice, kh, kw, c), c fastest, each kh block
     of 3*C_in_p rows zero-padded to a multiple of 32. A BLOCK-sharded input has one slice per shard
     column (C_in_p = shard width); every other placement has one. DRAM placement: weight_memory_config."""
+    w = prepare_conv2d_weights_host(
+        torch_weight,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        input_dtype=input_dtype,
+        input_layout=input_layout,
+        weight_dtype=weight_dtype,
+        input_memory_config=input_memory_config,
+    )
+    c_out, c_in = int(torch_weight.shape[0]), int(torch_weight.shape[1])
+    return ttnn.from_torch(
+        w,
+        dtype=weight_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=weight_memory_config(c_out, input_memory_config, device, c_in=c_in, input_layout=input_layout),
+    )
+
+
+def prepare_conv2d_weights_host(
+    torch_weight,
+    *,
+    stride=1,
+    padding=0,
+    dilation=1,
+    input_dtype,
+    input_layout,
+    weight_dtype,
+    input_memory_config,
+):
+    """prepare_conv2d_weights' checks and row layout as a torch [1, 1, K_p, C_out] tensor, not yet on a device.
+    For callers that place it themselves, e.g. one channel shard per device of a mesh. On an interleaved input
+    the prepared weights go to ttnn.DRAM_MEMORY_CONFIG (weight_memory_config)."""
     if torch_weight.dim() != 4 or tuple(torch_weight.shape[2:]) != (3, 3):
         raise ValueError(f"conv2d_3x3: weight must be [C_out, C_in, 3, 3], got {list(torch_weight.shape)}")
     c_out, c_in = int(torch_weight.shape[0]), int(torch_weight.shape[1])
@@ -297,14 +331,7 @@ def prepare_conv2d_weights(
     w = w.reshape(3, 3, slices, c_in_p, c_out).permute(2, 0, 1, 3, 4)  # [slice, kh, kw, c, C_out]
     w = w.reshape(slices, 3, 3 * c_in_p, c_out)
     w = torch.nn.functional.pad(w, (0, 0, 0, kh_rows - 3 * c_in_p))
-    w = w.reshape(1, 1, slices * 3 * kh_rows, c_out)
-    return ttnn.from_torch(
-        w,
-        dtype=weight_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=weight_memory_config(c_out, input_memory_config, device, c_in=c_in, input_layout=input_layout),
-    )
+    return w.reshape(1, 1, slices * 3 * kh_rows, c_out)
 
 
 def weight_memory_config(c_out, input_memory_config, device, c_in=None, input_layout=None):
@@ -606,6 +633,7 @@ def conv2d_3x3(
         has_bias=bias is not None,
         sharded_output=input_memory_config.is_sharded(),
         k_cols=channel_slices(c_in, input_tensor.layout, input_memory_config),
+        l1_small_bytes=ttnn.device.get_memory_view(device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank,
         bank_run_input=(
             input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
             and input_memory_config.memory_layout == _ML.INTERLEAVED
@@ -643,7 +671,9 @@ def conv2d_3x3(
                 spare_geometry = dataclasses.replace(geometry, remote_output=True, block_rows=rows)
                 try:
                     spare_blocking = select_blocking(
-                        spare_geometry, (rows + spare, 1), l1_cb_budget_bytes(resident_shard_bytes)
+                        spare_geometry,
+                        (rows + spare, 1),
+                        l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes),
                     )
                 except ValueError:
                     spare_blocking = None
@@ -659,7 +689,7 @@ def conv2d_3x3(
                 geometry,
                 groups,
                 tuple(_core_m_ranges(geometry.tensor_m_tiles, core_m_tiles)),
-                l1_cb_budget_bytes(resident_shard_bytes),
+                l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes),
             )
             if balanced is not None:
                 ranges, remote = balanced
@@ -675,12 +705,14 @@ def conv2d_3x3(
         work_grid = (grid.x, grid.y)
         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
         resident_shard_bytes = 0
-    blocking = select_blocking(geometry, work_grid, l1_cb_budget_bytes(resident_shard_bytes))
+    blocking = select_blocking(geometry, work_grid, l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes))
     if cout_fold_capable(geometry):
         # C_out fold (COUT_FOLD): kw in the N lanes, on the ROW_MAJOR ring walk with resident weights.
         fold_geometry = dataclasses.replace(geometry, fold=True)
         try:
-            fold_blocking = select_blocking(fold_geometry, work_grid, l1_cb_budget_bytes(resident_shard_bytes))
+            fold_blocking = select_blocking(
+                fold_geometry, work_grid, l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes)
+            )
         except ValueError:
             fold_blocking = None
         if (
