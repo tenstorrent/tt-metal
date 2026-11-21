@@ -1580,4 +1580,86 @@ TEST_F(DispatchContextFixture, SDFDTransitionLaunchWorkload) {
     run_blank_workload();
 }
 
+// initialize_fast_dispatch must wait for an SD workload that is still running before it rewrites the worker
+// mailboxes. Otherwise the workload finishes against an FD launch message and the drain sees its cleared go as done.
+TEST_F(DispatchContextFixture, SDFDTransitionDrainsInFlightWorkload) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
+    }
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
+
+    auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.is_mock_or_emulated()) {
+        GTEST_SKIP() << "This test requires real hardware.";
+    }
+    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP()
+            << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
+    }
+
+    const CoreCoord core{0, 0};
+    // A single-core shard keeps the marker off the dispatch column, which fast dispatch refuses to claim while
+    // it holds L1.
+    const uint32_t page_size = ::tt::tile_size(DataFormat::UInt32);
+    ShardSpecBuffer shard_spec(
+        CoreRangeSet(CoreRange(core, core)), {page_size, 1}, ShardOrientation::ROW_MAJOR, {page_size, 1}, {1, 1});
+    auto marker_buf = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = page_size},
+        DeviceLocalBufferConfig{
+            .page_size = page_size,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+            .bottom_up = false},
+        mesh_device_.get());
+    const uint32_t marker_addr = marker_buf->address();
+    EnqueueWriteMeshBuffer(
+        mesh_device_->mesh_command_queue(), marker_buf, std::vector<uint32_t>(page_size / sizeof(uint32_t), 0));
+    Finish(mesh_device_->mesh_command_queue());
+
+    constexpr uint32_t kDoneValue = 0xd0e0d0e0;
+    // About a second on BH, longer than bringing up the dispatch firmware.
+    constexpr uint32_t kDelayCycles = 1'500'000'000;
+
+    Program program = CreateProgram();
+    auto kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/delayed_l1_write_rt_args.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    SetRuntimeArgs(program, kernel, core, {marker_addr, kDoneValue, kDelayCycles});
+    MeshWorkload workload;
+    workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program));
+
+    experimental::DispatchContext::get().enable_asynchronous_slow_dispatch(mesh_device_.get());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+
+    // Read straight from L1 so the check does not depend on the FD queues working.
+    for (IDevice* device : mesh_device_->get_devices()) {
+        const CoreCoord virtual_core = device->worker_core_from_logical_core(core);
+        uint32_t marker = 0;
+        cluster.read_core(&marker, sizeof(marker), tt_cxy_pair(device->id(), virtual_core), marker_addr);
+        EXPECT_EQ(marker, kDoneValue) << "SD workload was still running when FD came up on device " << device->id();
+    }
+
+    // The drained workload must leave no stale state behind: FD and then SD must still run workloads.
+    auto run_blank_workload = [&]() {
+        Program blank = CreateProgram();
+        CreateKernel(
+            blank,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        MeshWorkload blank_workload;
+        blank_workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(blank));
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), blank_workload, true);
+        Finish(mesh_device_->mesh_command_queue());
+    };
+    run_blank_workload();
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+    run_blank_workload();
+}
+
 }  // namespace tt::tt_metal::distributed::test

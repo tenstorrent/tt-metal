@@ -330,6 +330,13 @@ void DispatchContext::initialize_fast_dispatch(
 
     uint8_t num_hw_cqs = active_devices[0]->num_hw_cqs();
 
+    // Drain pending SD work while the SD queues still own the workers. Bringing up the dispatch firmware rewrites
+    // every worker's mailboxes, so a workload still running then would finish against an FD launch message, and
+    // its cleared go would also read as done to this drain.
+    for (auto& cq : mesh_device_impl.mesh_command_queues_) {
+        cq->finish();
+    }
+
     // Enable Fast Dispatch and reinitialize dispatch managers to pick up FD core descriptor before allocating cores
     metal_context.set_fast_dispatch_mode(true);
 
@@ -366,10 +373,7 @@ void DispatchContext::initialize_fast_dispatch(
     // Query the number of command queues requested
     device_manager->initialize_dispatch_firmware(/*force_recreate_topology=*/true);
 
-    // Drain pending SD work and stash the SD queues for restoration on terminate
-    for (auto& cq : mesh_device_impl.mesh_command_queues_) {
-        cq->finish();
-    }
+    // Stash the SD queues for restoration on terminate
     for (const auto& dev : active_devices) {
         dev->set_smc_dispatch_telemetry_slow_dispatch_enabled(false);
     }
