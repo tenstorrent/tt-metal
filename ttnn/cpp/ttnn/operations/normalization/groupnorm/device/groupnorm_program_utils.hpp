@@ -122,9 +122,10 @@ struct GroupNormInterleavedCbFootprint {
     std::uint64_t partial_stats = 0;
     std::uint64_t global_stats = 0;
     std::uint64_t normalisation_stats = 0;
+    std::uint64_t row_stats = 0;
     constexpr std::uint64_t total_with_input(std::uint64_t input) const {
         return input + output + input_staging + untilize_output + epsilon + gamma + beta + input_mask + repack + x +
-               xmm + xmm3 + partial_stats + global_stats + normalisation_stats;
+               xmm + xmm3 + partial_stats + global_stats + normalisation_stats + row_stats;
     }
 };
 
