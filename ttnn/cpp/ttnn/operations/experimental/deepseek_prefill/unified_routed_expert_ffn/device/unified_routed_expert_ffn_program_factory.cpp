@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <string>
 #include <initializer_list>
 #include <limits>
 #include <tuple>
@@ -267,12 +268,27 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     //
     // Keep this a POWER OF TWO * kCoreGridY: per_core_M_for_chunk() quantizes tail
     // chunks to divisors of per_core_M_max.
-    constexpr uint32_t kMaxChunkMTiles = 4 * kCoreGridY;  // per_core_M <= 4 (see above)
+    const auto grid_size = t.x.device()->compute_with_storage_grid_size();
+    // Expert groups (weights_from_pages: gpt-oss's 32 narrow tensor-parallel experts per chip): the grid is NG
+    // stacked groups of GRID_X x GRID_Y cores, group g running experts g, g + NG, ... at the same time. One such
+    // expert takes ~45 us on any grid from 12x2 to 12x8 (its K-block handshake rounds, not its cores, bound it),
+    // so 12x8 ran the 32 experts one after another at a quarter of the grid's worth of work each.
+    uint32_t NG = 1;
+    if (from_pages) {
+        GRID_Y = kGroupRowsFromPages;
+        if (const char* e = std::getenv("TT_UREF_GROUP_ROWS")) {  // (experiments)
+            GRID_Y = static_cast<uint32_t>(std::atoi(e));
+        }
+        NG = std::max<uint32_t>(1, std::min<uint32_t>(grid_size.y / GRID_Y, experts_per_chip));
+        if (const char* e = std::getenv("TT_UREF_GROUPS")) {  // (experiments)
+            NG = std::min<uint32_t>(static_cast<uint32_t>(std::atoi(e)), grid_size.y / GRID_Y);
+        }
+    }
+    const uint32_t kMaxChunkMTiles = 4 * GRID_Y;  // per_core_M <= 4 (see above)
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
     uint32_t in0_block_w_gu = 16;
-    const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
-        grid_size.x >= kCoreGridX && grid_size.y >= kCoreGridY,
+        grid_size.x >= kCoreGridX && grid_size.y >= GRID_Y * NG,
         "unified_routed_expert_ffn: expected at least {}x{} compute grid, got {}x{}",
         kCoreGridX,
         kCoreGridY,
@@ -673,7 +689,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     const uint32_t d_out_block_num_tiles = per_core_M * per_core_N_d;
 
     // -------------------------- compute grid ------------------------------
-    const CoreRange core_range({0, 0}, {GRID_X - 1, GRID_Y - 1});
+    const CoreRange core_range({0, 0}, {GRID_X - 1, NG * GRID_Y - 1});
     const CoreRangeSet core_range_set{core_range};
 
     // Representative expert-0 buffers: one TensorAccessorArgs layout descriptor
@@ -1363,10 +1379,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // M-row groups (rotating sender per phase-4 K-block) using
     // act_{ready,valid}_sem. No global cross-grid barrier is needed.
     std::vector<CoreCoord> cores;
-    cores.reserve(GRID_X * GRID_Y);
-    for (uint32_t gy = 0; gy < GRID_Y; ++gy) {
+    uint32_t reader_group_rt = 0, writer_group_rt = 0;
+    cores.reserve(GRID_X * GRID_Y * NG);
+    for (uint32_t y = 0; y < NG * GRID_Y; ++y) {
         for (uint32_t gx = 0; gx < GRID_X; ++gx) {
-            cores.push_back(CoreCoord{gx, gy});
+            cores.push_back(CoreCoord{gx, y});
         }
     }
 
@@ -1374,7 +1391,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
 
     for (uint32_t idx = 0; idx < cores.size(); ++idx) {
         const auto& core = cores[idx];
-        const uint32_t gy = idx / GRID_X;
+        // Expert group of the core and its row within the group: every multicast below stays in the group.
+        const uint32_t group = idx / (GRID_X * GRID_Y);
+        const uint32_t y0 = group * GRID_Y;
+        const uint32_t gy = (idx / GRID_X) % GRID_Y;
         const uint32_t gx = idx % GRID_X;
         const uint32_t my_mt = gy;
         const uint32_t my_nt_gu = gx;
@@ -1407,14 +1427,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
             gy);
 
         const bool is_in1_sender = (gy == in1_sender_row);
-        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, in1_sender_row});
+        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, y0 + in1_sender_row});
         // The rectangle spans the WHOLE column, sender included: a multicast rectangle
         // must be contiguous and the sender is no longer on an edge row, so "everything
         // but the sender" is not expressible as one rectangle. The non-loopback
         // multicast drops the sender's own copy (it already holds the block), so
         // num_dests stays GRID_Y - 1.
-        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, 0});
-        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, GRID_Y - 1});
+        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, y0});
+        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, y0 + GRID_Y - 1});
         const uint32_t in1_num_receivers = GRID_Y - 1;
         const uint32_t in1_mcast_nx_start = first_recv_noc.x;
         const uint32_t in1_mcast_ny_start = first_recv_noc.y;
@@ -1426,9 +1446,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // x (in0) multicast: per M-row, sender at in0_sender_col; the rectangle spans
         // the whole row for the same reason as the weight column above.
         const bool is_in0_sender = (gx == in0_sender_col);
-        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{in0_sender_col, gy});
-        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{0, gy});
-        const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, gy});
+        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{in0_sender_col, y0 + gy});
+        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{0, y0 + gy});
+        const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, y0 + gy});
         const uint32_t in0_num_receivers = GRID_X - 1;
         const uint32_t in0_mcast_nx_start = in0_first_recv_noc.x;
         const uint32_t in0_mcast_ny_start = in0_first_recv_noc.y;
@@ -1477,14 +1497,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // own copy, so num_dests is one less than the grid.
         {
             const auto grid_first = device->worker_core_from_logical_core(CoreCoord{0, 0});
-            const auto grid_last = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, GRID_Y - 1});
-            reader_args.push_back(static_cast<uint32_t>(gx == 0 && gy == 0));  // is_counts_reader
+            const auto grid_last = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, NG * GRID_Y - 1});
+            reader_args.push_back(static_cast<uint32_t>(idx == 0));  // is_counts_reader
             reader_args.push_back(static_cast<uint32_t>(grid_first.x));
             reader_args.push_back(static_cast<uint32_t>(grid_first.y));
             reader_args.push_back(static_cast<uint32_t>(grid_last.x));
             reader_args.push_back(static_cast<uint32_t>(grid_last.y));
             reader_args.push_back(counts_valid_sem_id);
-            reader_args.push_back(GRID_X * GRID_Y - 1);
+            reader_args.push_back(NG * GRID_X * GRID_Y - 1);
         }
         // DOWN_SPLIT go/done sems (dedicated; see down_go_sem_id).
         reader_args.push_back(down_go_sem_id);
@@ -1497,10 +1517,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // phase-4 K-block (kb=0..K_down_tiles_padded-1) to find the sender's
         // NoC addr and to build the M-row mcast rectangle.
         for (uint32_t gxi = 0; gxi < GRID_X; ++gxi) {
-            const auto noc = device->worker_core_from_logical_core(CoreCoord{gxi, gy});
+            const auto noc = device->worker_core_from_logical_core(CoreCoord{gxi, y0 + gy});
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
+        reader_group_rt = reader_args.size();  // EXPERT_GROUP_RT: this core's expert group
+        reader_args.push_back(group);
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
         reader_rt_args.append(reader_args);
         reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
@@ -1522,6 +1544,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         writer_args.push_back(in1_valid_sem_id);
         writer_args.push_back(mcast_go_sem_id);
         writer_args.push_back(mcast_done_sem_id);
+        writer_group_rt = writer_args.size();
+        writer_args.push_back(group);
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
         writer_rt_args.append(writer_args);
         writer_kernel_desc.emplace_runtime_args(core, writer_rt_args);
@@ -1546,10 +1570,22 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
             gx,                                                        // 2 tilize-once: own column
             GRID_X,                                                    // 3 tilize-once: M-row width
             gy,                                                        // 4 tilize-once: own row
+            group,                                                     // 5 expert group (EXPERT_GROUPS)
         };
         tt::tt_metal::KernelDescriptor::RTArgList compute_rt_args;
         compute_rt_args.append(compute_args);
         compute_kernel_desc.emplace_runtime_args(core, compute_rt_args);
+    }
+
+    if (NG > 1) {
+        // EXPERT_GROUPS: the kernels run experts group, group + NG, ... (the group is a per-core runtime arg)
+        const auto ng = std::to_string(NG);
+        reader_kernel_desc.defines.emplace_back("EXPERT_GROUPS", ng);
+        reader_kernel_desc.defines.emplace_back("EXPERT_GROUP_RT", std::to_string(reader_group_rt));
+        writer_kernel_desc.defines.emplace_back("EXPERT_GROUPS", ng);
+        writer_kernel_desc.defines.emplace_back("EXPERT_GROUP_RT", std::to_string(writer_group_rt));
+        compute_kernel_desc.defines.emplace_back("EXPERT_GROUPS", ng);
+        compute_kernel_desc.defines.emplace_back("EXPERT_GROUP_RT", "5");
     }
 
     // Reader: x, counts, index table, region offsets, gate/up/down weights, optional biases.

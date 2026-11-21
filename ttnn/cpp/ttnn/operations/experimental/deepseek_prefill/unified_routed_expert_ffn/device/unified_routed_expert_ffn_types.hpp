@@ -27,6 +27,8 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 // measured token-count crossover between them stops applying. Read it, do not restate it.
 inline constexpr uint32_t kCoreGridX = 11;
 inline constexpr uint32_t kCoreGridY = 8;
+// Rows per expert group with weights_from_pages (program factory: EXPERT_GROUPS).
+inline constexpr uint32_t kGroupRowsFromPages = 2;
 
 // Maximum number of global experts the op supports.
 //

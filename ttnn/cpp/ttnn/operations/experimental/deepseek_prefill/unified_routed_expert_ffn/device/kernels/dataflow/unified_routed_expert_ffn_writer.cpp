@@ -44,7 +44,19 @@
 
 constexpr uint32_t TILE_HEIGHT = 32;
 
+// EXPERT_GROUPS (program factory): this core's group runs local experts kExpertFirst, kExpertFirst + kExpertStride, ...
+#ifdef EXPERT_GROUPS
+#define EXPERT_LOOP_SETUP                     \
+    constexpr uint32_t kExpertStride = EXPERT_GROUPS; \
+    const uint32_t kExpertFirst = get_arg_val<uint32_t>(EXPERT_GROUP_RT);
+#else
+#define EXPERT_LOOP_SETUP                     \
+    constexpr uint32_t kExpertStride = 1;     \
+    constexpr uint32_t kExpertFirst = 0;
+#endif
+
 void kernel_main() {
+    EXPERT_LOOP_SETUP
     Noc noc;
 
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
@@ -283,7 +295,8 @@ void kernel_main() {
     // cores, feed its `up` weights) into the shared output buffer at the
     // expert's region offset. The chunk-loop body below is unchanged from the
     // single-expert kernel — only the per-expert bindings differ.
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+    for (uint32_t local_expert_id = kExpertFirst; local_expert_id < experts_per_chip;
+         local_expert_id += kExpertStride) {
 #ifdef WEIGHT_PAGES
         // This expert's table row (this RISC's own copy): only the up / down sender cores read weights here. The
         // previous expert's reads were all barriered before the row is overwritten.

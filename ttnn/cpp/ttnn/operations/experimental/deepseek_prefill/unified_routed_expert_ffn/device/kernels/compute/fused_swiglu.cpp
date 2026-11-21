@@ -1029,7 +1029,19 @@ constexpr bool kOutRowMajor = true;
 constexpr bool kOutRowMajor = false;
 #endif
 
+// EXPERT_GROUPS (program factory): this core's group runs local experts kExpertFirst, kExpertFirst + kExpertStride, ...
+#ifdef EXPERT_GROUPS
+#define EXPERT_LOOP_SETUP                     \
+    constexpr uint32_t kExpertStride = EXPERT_GROUPS; \
+    const uint32_t kExpertFirst = get_arg_val<uint32_t>(EXPERT_GROUP_RT);
+#else
+#define EXPERT_LOOP_SETUP                     \
+    constexpr uint32_t kExpertStride = 1;     \
+    constexpr uint32_t kExpertFirst = 0;
+#endif
+
 void kernel_main() {
+    EXPERT_LOOP_SETUP
     // Per-core valid N-subblock counts. per_core_N is the GRID-ceil'd width, so the
     // highest-gx cores own phantom output columns whose weights were never fetched;
     // these bound the MAC to the subblocks holding real columns. Runtime (not
@@ -1169,7 +1181,8 @@ void kernel_main() {
 
     // ======================= per-local-expert loop =======================
     // Run the full gate/up/down FFN for every local expert in this program.
-    for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+    for (uint32_t local_expert_id = kExpertFirst; local_expert_id < experts_per_chip;
+         local_expert_id += kExpertStride) {
         // This expert's token count via the UNPACK→{MATH,PACK} mailbox (MATH/PACK
         // cannot read the counts/idx L1 via the CB interface).
         // count -> effective_chunks bounds this expert's chunk loop; count=0 => the
