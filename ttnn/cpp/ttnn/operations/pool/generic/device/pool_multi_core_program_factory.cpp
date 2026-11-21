@@ -911,15 +911,17 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     // Get device arch for compute kernel config initialization
     auto device_arch = input.device()->arch();
 
+    const bool default_fp32_acc = (params.is_avg_pool && params.is_large_kernel) || indexes_32_bit;
+
     // Initialize device compute kernel config with user-provided config or defaults
-    auto device_compute_kernel_config = init_device_compute_kernel_config(
+    auto device_compute_kernel_config = init_default_compute_kernel_config(
         device_arch,
         compute_kernel_config,
         tt::tt_metal::MathFidelity::HiFi4,
-        false,                                                             // math_approx_mode
-        (params.is_avg_pool && params.is_large_kernel) || indexes_32_bit,  // fp32_dest_acc_en
-        false,                                                             // packer_l1_acc
-        (params.is_large_kernel && return_indices) || indexes_32_bit       // dst_full_sync_en
+        false,                                                        // math_approx_mode
+        default_fp32_acc,                                             // fp32_dest_acc_en
+        false,                                                        // packer_l1_acc
+        (params.is_large_kernel && return_indices) || indexes_32_bit  // dst_full_sync_en
     );
 
     const auto pool_defines_map = get_defines(pool_type);

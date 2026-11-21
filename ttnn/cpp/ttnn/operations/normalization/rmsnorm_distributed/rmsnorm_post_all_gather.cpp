@@ -23,6 +23,7 @@ ttnn::Tensor rms_norm_post_all_gather(
     const std::optional<bool>& use_2d_core_grid) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
     if (input_tensor.is_sharded()) {

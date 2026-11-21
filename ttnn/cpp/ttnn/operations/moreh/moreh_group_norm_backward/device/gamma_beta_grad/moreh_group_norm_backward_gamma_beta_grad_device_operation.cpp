@@ -174,13 +174,15 @@ moreh_group_norm_backward_gamma_beta_grad(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType =
         ttnn::operations::moreh::moreh_group_norm_backward::MorehGroupNormBackwardGammaBetaGradOperation;
+    const auto arch = input.device()->arch();
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     OperationType::operation_attributes_t operation_attributes{
         num_groups,
         are_required_outputs,
         gamma_grad_memory_config.value_or(output_grad.memory_config()),
         beta_grad_memory_config.value_or(output_grad.memory_config()),
-        init_device_compute_kernel_config(
-            input.device()->arch(),
+        init_default_compute_kernel_config(
+            arch,
             compute_kernel_config,
             tt::tt_metal::MathFidelity::HiFi4,
             /*default_approx_mode=*/true,

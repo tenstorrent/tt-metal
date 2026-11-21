@@ -99,6 +99,7 @@ Result conv2d_L1(
 
     // Use weights_dtype from config if set, otherwise use weight tensor's dtype
     DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor_.dtype());
+    ttnn::verify_numerical_configuration(device->arch(), compute_config_);
     DeviceComputeKernelConfig compute_config =
         compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor_.dtype(), weight_dtype));
 

@@ -390,13 +390,13 @@ Tensor group_norm(
             "ROW_MAJOR output is supported only for sharded inputs, or on Wormhole.");
     }
 
-    const auto math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     const auto approx_mode = true;
     // fp32 input accumulates in the fp32 DEST (like LayerNorm); welford already forces it. A
     // user-supplied compute_kernel_config still overrides this default.
     const auto fp32_acc = use_welford || (input_tensor.dtype() == DataType::FLOAT32);
-    auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
+    auto kernel_config_val = init_default_compute_kernel_config(
+        arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, approx_mode, fp32_acc);
 
     const bool core_grid_auto_selected = !core_grid.has_value();
 

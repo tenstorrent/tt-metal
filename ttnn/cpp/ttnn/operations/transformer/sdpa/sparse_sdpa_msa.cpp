@@ -61,6 +61,7 @@ ttnn::Tensor sparse_sdpa_msa(
 
     // fp8 Q needs 32-bit DEST for tilize; bf16 Q uses the default DEST width.
     const bool q_is_fp8 = (q.dtype() == ttnn::DataType::FP8_E4M3);
+    ttnn::verify_numerical_configuration(q.device()->arch(), compute_kernel_config);
     auto kernel_config = init_device_compute_kernel_config(
         q.device()->arch(),
         compute_kernel_config,
