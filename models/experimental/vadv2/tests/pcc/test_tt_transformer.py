@@ -5,6 +5,7 @@
 import pytest
 import torch
 import copy
+from types import SimpleNamespace
 import ttnn
 import numpy as np
 import torch.nn as nn
@@ -363,7 +364,18 @@ def test_vadv2_transformer(
         decoder=True,
         map_decoder=True,
         embed_dims=256,
-        params_branches=None,
+        params_branches=SimpleNamespace(
+            map_reg_branches={
+                str(lid): {
+                    str(i): SimpleNamespace(
+                        weight=ttnn.to_device(preprocess_linear_weight(linear.weight, dtype=ttnn.bfloat16), device),
+                        bias=ttnn.to_device(preprocess_linear_bias(linear.bias, dtype=ttnn.bfloat16), device),
+                    )
+                    for i, linear in enumerate(m for m in branch if isinstance(m, nn.Linear))
+                }
+                for lid, branch in enumerate(map_reg_branches)
+            }
+        ),
     )
     shift = ttnn.from_torch(shift, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     can_bus = bev_queries.new_tensor([each["can_bus"] for each in img_metas])  # [:, :]
@@ -389,7 +401,7 @@ def test_vadv2_transformer(
         grid_length=grid_length,
         bev_pos=bev_pos,
         reg_branches=None,
-        map_reg_branches=None,
+        map_reg_branches=True,
         img_metas=img_metas,
         shift=shift,
         can_bus=can_bus,
