@@ -201,6 +201,7 @@ def ckv_bfp4(
     prefix: ttnn.Tensor | None = None,
     compact: bool = False,
     max_grid=None,
+    dynamic_row0: bool = False,
 ) -> ttnn.Tensor | None:
     """ckv [1, 1, n, 512] bf16 TILE (n % 32 == 0; on a mesh, the same program on every chip) -> rows [row0, row0 + n)
     of ``rows`` ([1, 1, R, 320] uint8 ROW_MAJOR, written in place). ``rounded``: also return the rounded values as a new
@@ -215,7 +216,12 @@ def ckv_bfp4(
     ``compact`` (option, default False): the program's cores as merged rectangles instead of one range per core (the
     same cores, kernels and runtime args; less host dispatch work a call). ``max_grid`` (option, default None = the
     device's whole compute grid; deepseek_v41_flash_d_p FIX.15): a ttnn.CoreCoord or (x, y); the program's cores are
-    taken from the rectangle (0, 0) .. (max_grid - 1) of the grid (a Galaxy's 110-core cap)."""
+    taken from the rectangle (0, 0) .. (max_grid - 1) of the grid (a Galaxy's 110-core cap). ``dynamic_row0`` (option,
+    default False; with ``prepared`` and ``compact``): row0 (the writer's common arg) is a per-run COMMON value slot
+    (prepare_program's common value slots) instead of frozen in the compact program: one program for every row0 with
+    the compact form's host cost (deepseek_v41_flash_d_p PB.9X). The same bytes."""
+    if dynamic_row0:
+        assert prepared and compact, "dynamic_row0: with prepared=True and compact=True"
     if prefix is not None:
         assert not rounded, "prefix: no rounded output"
         assert prefix.dtype == ttnn.bfloat16 and prefix.layout == ttnn.TILE_LAYOUT, (prefix.dtype, prefix.layout)
@@ -243,10 +249,14 @@ def ckv_bfp4(
             memory_config or ttnn.DRAM_MEMORY_CONFIG,
         )
     io = ([prefix] if prefix is not None else []) + [ckv, rows] + ([out] if out is not None else [])
-    pp = _prepared(ckv, rows, out, row0, io, dtype, blocks, prefix, compact, max_grid) if prepared else None
+    pp = (
+        _prepared(ckv, rows, out, row0, io, dtype, blocks, prefix, compact, max_grid, dynamic_row0)
+        if prepared
+        else None
+    )
     if pp is not None:
         # (looked up on ttnn.bringup at each call: the bring-up capture wraps run_prepared, F201)
-        ttnn.bringup.run_prepared(pp, io, [] if compact else [row0])
+        ttnn.bringup.run_prepared(pp, io, [] if compact and not dynamic_row0 else [row0])
     else:
         ttnn.generic_op(io, program(ckv, rows, row0, out, dtype, blocks, prefix, compact, max_grid))
     return out
@@ -408,7 +418,13 @@ def _prepared_round(x, out, page0, io, compact=False, max_grid=None):
     return entry[1]
 
 
-def _prepared(ckv, rows, out, row0, io, dtype=None, blocks=False, prefix=None, compact=False, max_grid=None):
+COMMON_ARG = 1 << 31  # (prepare_program: a runtime-arg index with bit 31 names a COMMON runtime arg)
+WR_ROW0_COMMON = 3  # (program(), compact: row0's index among the writer's common args)
+
+
+def _prepared(
+    ckv, rows, out, row0, io, dtype=None, blocks=False, prefix=None, compact=False, max_grid=None, dynamic_row0=False
+):
     """prepared=True: the program for this (mesh, n, rounded, dtype, blocks, memory configs), built and prepared once (row0 a
     value slot, every tensor address patched), or None when it cannot be prepared (a frozen runtime arg equal to an io
     address: the patch count says so) - the caller then takes the plain generic_op path."""
@@ -424,9 +440,10 @@ def _prepared(ckv, rows, out, row0, io, dtype=None, blocks=False, prefix=None, c
         str(out.memory_config()) if out is not None else None,
         prefix.shape[-2] if prefix is not None else None,
         str(prefix.memory_config()) if prefix is not None else None,
-        row0 if compact else None,  # (compact: row0 is frozen in the program)
+        row0 if compact and not dynamic_row0 else None,  # (compact: row0 is frozen in the program)
         compact,
         _mg_key(max_grid),
+        dynamic_row0,
     )
     hit = _PREPARED.get(key)
     if hit is not None:
@@ -436,13 +453,18 @@ def _prepared(ckv, rows, out, row0, io, dtype=None, blocks=False, prefix=None, c
     shape = mesh.shape
     md = ttnn.MeshProgramDescriptor()
     md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(shape[0] - 1, shape[1] - 1))] = desc
-    pp = ttnn.bringup.prepare_program(md, io, [] if compact else [(K_WRITER, WR_ROW0)])
+    if compact:
+        slots = [(K_WRITER, COMMON_ARG | WR_ROW0_COMMON)] if dynamic_row0 else []
+    else:
+        slots = [(K_WRITER, WR_ROW0)]
+    pp = ttnn.bringup.prepare_program(md, io, slots)
     npre = prefix.shape[-2] if prefix is not None else 0
     cores = len(_cores(mesh, (npre + ckv.shape[-2]) // 32, max_grid))
     # reader: ckv [, prefix]; writer: rows [, out], row0 - one slot each a core (compact: the tensors one common slot
     # each, row0 frozen); anything else matched a frozen value
     nio = 2 + (out is not None) + (prefix is not None)
-    entry = (mesh, pp if pp.patch_count == (nio if compact else cores * (nio + 1)) else None)
+    entry = (mesh, pp if pp.patch_count == (nio + int(dynamic_row0) if compact else cores * (nio + 1)) else None)
+    assert entry[1] is not None or not dynamic_row0, f"ckv_bfp4 dynamic_row0: {pp.patch_count} patched slots"
     if len(_PREPARED) >= _PREPARED_CAP:
         _PREPARED.popitem(last=False)
     _PREPARED[key] = entry

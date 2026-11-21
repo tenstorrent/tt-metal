@@ -49,15 +49,33 @@ def glued_on() -> bool:
     return settings.get("PACKED_GLUED") == "on"
 
 
+def route_glued() -> bool:
+    """PB.9X PACKED_ROUTE=glued (call-time): with PACKED=on and PACKED_GLUED=on every packed chunk runs the glued path."""
+    return packed_on() and glued_on() and settings.get("PACKED_ROUTE") == "glued"
+
+
 def as_run_desc(desc):
-    """PB.7: the descriptor a chunk runs as. A glued chunk that is a lane chunk (GluedChunk.as_lanes: every segment
-    at model row k L, <= L rows; the same model rows and per-chip segments) runs the accepted lane path
-    (ChunkDescriptor); any other glued chunk runs as itself (PackedChunk's glued moves)."""
+    """The descriptor a chunk runs as. PB.9X (PACKED_ROUTE=glued): every packed chunk is glued: a glued chunk runs as
+    itself (a lane-shaped one too), a fixed-lane header with more than one lane as the glued chunk of its live
+    segments (ChunkDescriptor.as_glued; its engine input is the glued one, make_input). PACKED_ROUTE=lanes (PB.7's
+    routing): a glued chunk that is a lane chunk (GluedChunk.as_lanes: every segment at model row k L, <= L rows; the
+    same model rows and per-chip segments) runs the fixed-lane path (ChunkDescriptor); any other glued chunk runs as
+    itself (PackedChunk's glued moves); a ChunkDescriptor runs the fixed-lane path."""
     if getattr(desc, "glued", False):
         assert glued_on(), "a glued chunk needs PACKED_GLUED=on"
+        if route_glued():
+            return desc
         lanes = desc.as_lanes()
         return desc if lanes is None else lanes
+    if route_glued() and desc.lanes > 1:
+        g = desc.as_glued(settings.get("PREFILL_END"))
+        return desc if g is None else g
     return desc
+
+
+def routed(desc, run_desc) -> bool:
+    """PB.9X: a fixed-lane header sent as a glued chunk (its tokens / states / input re-laid: run_chunk, make_input)."""
+    return run_desc is not desc and not getattr(desc, "glued", False) and getattr(run_desc, "glued", False)
 
 
 @dataclass
@@ -600,6 +618,70 @@ class PackedChunk:
             dealloc(g)
 
 
+def warm_glued_chunks(chunk: int, slots: list, max_seq: int) -> list:
+    """PB.9X (rule 20 / OV-68: warm-up is a finite, enumerable set): the glued chunks whose programs cover every glued
+    layout. What a glued layout's programs still depend on (PB.9X probe, tests/packed/test_glued_build_probe.py) is
+    bounded: the number of segments that write compressed rows (TtServedRows.write_lanes: one row gather of n W rows,
+    per-segment slices j < n; n <= GLUED_MAX), a fresh request's window (cap < 128: the snapshot send's geometry) and a
+    continued one's history (prefetch + fixed-size tails; PB.6L's range-gather pieces of the longest histories: the
+    range start's presence and the pack grid are keyed). So: for every segment count n, a chunk of fresh requests
+    (starts 0, 64, ..) and one of continued requests (histories of 2 (k + 1) chunks), the last segment 17 rows short
+    (misaligned); lane-shaped exact ones (2 x 4096, 4 x 2048: fresh, continued, near the slot's end); misaligned ones
+    near the slot's end (1, 3 and the most segments); a chunk with a 1-token and an idle segment. ``slots``: distinct serving slots (as many as GLUED_MAX, else fewer
+    counts). Each chunk's segments fit ``max_seq`` (else the chunk is skipped)."""
+    from .packed import GLUED_MAX, GluedChunk, Segment
+
+    out = []
+    n_max = min(GLUED_MAX, len(slots))
+    far = (max_seq - 2 * chunk) // 64 * 64  # (the longest histories: PB.6L's range-gather pieces start there)
+    kinds = [(n, h, odd) for n in range(1, n_max + 1) for h in ("fresh", "cont") for odd in (True,)]
+    kinds += [(n, h, False) for n in (2, 4) if n <= n_max for h in ("fresh", "cont", "far")]  # (lane-shaped: exact)
+    kinds += [(n, "far", True) for n in (1, 3, n_max)]
+    for n, h, odd in kinds:
+        L = (chunk // n) // 64 * 64
+        segs = []
+        for k in range(n):
+            a = {"fresh": 64 * k, "cont": 2 * chunk * (k + 1) + 64 * k, "far": far - 64 * 300 * k}[h]
+            segs.append(Segment(int(slots[k]), a, a + L - (17 if odd and k == n - 1 else 0)))
+        if all(0 <= sg.start and sg.start + chunk <= max_seq for sg in segs):
+            out.append(GluedChunk(chunk, tuple(segs)))
+    if n_max >= 3:
+        out.append(
+            GluedChunk(
+                chunk, (Segment(int(slots[0]), 128, 129), Segment(int(slots[1]), 64, 764), Segment(int(slots[2]), 0, 1))
+            )
+        )
+    return out
+
+
+_GLUED_IDS: dict = {}  # id(mesh) -> (mesh, GluedIdsReorder)
+
+
+def glued_dev_ids(model, desc, inp):
+    """PB.9X (OV-69, POS_DYNAMIC=on): a glued chunk's model-row embedding ids made ON THE DEVICE from the engine input
+    that carries its header (tt/page_copy.GluedIdsReorder: one SP all_gather + a one-core kernel deriving every
+    segment's engine / model offsets from the header); None when the input has no header (tests driving run_chunk with
+    host ids) or POS_DYNAMIC=off: the host ids are uploaded then. A new tensor (``model.embed(dev_ids=)`` consumes it).
+    """
+    from .glued_derive import HDR_WORDS
+    from .packed import KV_BLOCK
+    from .page_copy import GluedIdsReorder
+    from .page_copy import on as pos_dynamic
+
+    if inp is None or not getattr(desc, "glued", False) or not pos_dynamic():
+        return None
+    sp = int(model.mesh.shape[SP_AXIS])
+    if int(inp.shape[-1]) != int(model.chunk) // sp + HDR_WORDS:
+        return None
+    hit = _GLUED_IDS.get(id(model.mesh))
+    if hit is None or hit[0] is not model.mesh:
+        hit = _GLUED_IDS[id(model.mesh)] = (
+            model.mesh,
+            GluedIdsReorder(model.mesh, model.chunk, model.vocab, HDR_WORDS, KV_BLOCK),
+        )
+    return hit[1](inp, desc.prefill_end == "cap")
+
+
 def run_chunk(model, desc, tokens, states: list, layers: list, last=None, on_layer=None, inp=None):
     """Harness (tests): one chunk of ``desc`` through ``layers`` as PACKED says (read per chunk). on: begin_packed and
     the packed layers; off: today's single-request chunk, which needs exactly one live segment, in lane 0 (the rows of
@@ -610,7 +692,12 @@ def run_chunk(model, desc, tokens, states: list, layers: list, last=None, on_lay
     from .model import SKIPPED
 
     ids = tokens.reshape(-1).long().clone()
-    desc = as_run_desc(desc)  # PB.7: a glued chunk (model-order ids, PAD past the used rows) or its lane form
+    rd = as_run_desc(desc)  # PB.7: a glued chunk (model-order ids, PAD past the used rows) or its lane form
+    if routed(desc, rd):  # PB.9X: a fixed-lane header as its glued chunk: lane-natural ids -> model rows, states in
+        # segment order (the glued chunk's "lane" k = its k-th segment)
+        ids = rd.pack_ids(desc.lane_seg_ids(ids), pad=PAD)
+        states = [states[lane] for lane, _ in desc.live()]
+    desc = rd
     if getattr(desc, "glued", False):
         ids[desc.used_rows() :] = PAD
     else:
@@ -620,7 +707,8 @@ def run_chunk(model, desc, tokens, states: list, layers: list, last=None, on_lay
     if packed_on():
         model.begin_packed(desc, ids, states, last=last, inp=inp)
         try:
-            h = model.embed(ids) if model._packed.segs else SKIPPED
+            dev_ids = glued_dev_ids(model, desc, inp) if model._packed.segs and layers and layers[0] == 0 else None
+            h = model.embed(ids, dev_ids=dev_ids) if model._packed.segs else SKIPPED  # (PB.9X: device ids, OV-69)
             for i in layers:
                 h2 = model.layer(i, h, 0, None)
                 if h2 is not h:
@@ -668,6 +756,14 @@ def ids_from_input(mesh, inp, desc):
         got = torch.cat([ttnn.to_torch(h).reshape(-1)[:w].to(torch.int64) & 0xFFFFFFFF for h in hs])
     else:
         got = torch.cat([ttnn.to_torch(dev[r * tp]).reshape(-1)[:w].to(torch.int64) & 0xFFFFFFFF for r in range(sp)])
+    rd = as_run_desc(desc)
+    if routed(desc, rd):  # PB.9X: a fixed-lane header's input is its glued chunk's: model rows -> lane-natural ids
+        nat = torch.full((desc.chunk,), PAD, dtype=torch.int64)
+        mid = rd.model_ids(got, pad=PAD)
+        for k, (lane, _) in enumerate(desc.live()):
+            n = rd.rows(k)
+            nat[desc.lane_off(lane) : desc.lane_off(lane) + n] = mid[rd.lane_off(k) : rd.lane_off(k) + n]
+        return nat
     if getattr(desc, "glued", False):  # PB.7: engine rows back to back -> model rows (each segment's computed rows)
         return desc.model_ids(got, pad=PAD)
     nat = torch.full((desc.chunk,), PAD, dtype=torch.int64)
@@ -684,6 +780,10 @@ def make_input(mesh, desc, ids_per_lane):
     import torch
 
     sp = int(mesh.shape[SP_AXIS])
+    rd = as_run_desc(desc)
+    if routed(desc, rd):  # PB.9X: a fixed-lane header is sent as its glued chunk (what tt-d-gen sends)
+        ids_per_lane = [ids_per_lane[lane] for lane, _ in desc.live()]
+        desc = rd
     glued = getattr(desc, "glued", False)
     if glued:  # PB.7: engine order, segments back to back (drafts/tt_d_gen_packed_ask.md)
         nat = desc.engine_ids(ids_per_lane, pad=PAD)

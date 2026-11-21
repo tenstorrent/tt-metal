@@ -359,10 +359,17 @@ def _pack_fixed(ckv_cache, loc: HistoryBuffer, a: int, b: int) -> ttnn.Tensor:
         tl = to_tile(rows, memory_config=DRAM)
         if tl is not rows:
             dealloc(rows)
-        ttnn.bringup.ckv_bfp4(tl, loc.tensor, a0, prepared=True, compact=False, max_grid=max_grid())
+        ttnn.bringup.ckv_bfp4(tl, loc.tensor, a0, prepared=True, max_grid=max_grid(), **_dyn_row0())
         dealloc(tl)
     loc.tensor.update_tensor_topology(slab.tensor.tensor_topology())
     return loc.tensor
+
+
+def _dyn_row0() -> dict:
+    """PB.9X (COMMON_VALUE_SLOTS=on): ckv_bfp4 compact with row0 a common value slot (one program for every row0,
+    compact's host cost) when the fork has the option; else MB.2's per-core row0 slot (compact=False)."""
+    on = settings.get("COMMON_VALUE_SLOTS") == "on" and "dynamic_row0" in (ttnn.bringup.ckv_bfp4.__doc__ or "")
+    return {"compact": True, "dynamic_row0": True} if on else {"compact": False}
 
 
 def _tail(ckv_cache, buf: HistoryBuffer, h: int, local_rows: int, owners: int, axis) -> None:
@@ -544,9 +551,18 @@ def tail_prepare(ckv_cache, start: int, local_rows: int, loc: HistoryBuffer | No
     ):
         return None
     owners, axis = owners_and_axis(ckv_cache.mesh, ckv_cache.tp_axis is not None)
+    h = pre[3]
+    from .page_copy import dyn
+
+    tails = tuple(getattr(ckv_cache, "_history_tails", ()) or ())
+    if dyn("hist") and tails and local_rows - h < max(tails) <= local_rows:
+        # PB.9X (as _tail, MB.2): always the largest tail (h moved down; rows the prefetch gathered already, the same
+        # bytes again): the tails' copy / slice_write shapes do not follow the history length (PB.9X probe: a build at
+        # history 8192, tails_finish's slice_write input [1, 32, 128, 320] -> [1, 32, 256, 320])
+        h = local_rows - max(tails)
     with _Traced("pack", ckv_cache):
-        part = _tail_part(ckv_cache, buf, pre[3], local_rows, loc)
-    return (ckv_cache, buf, part, pre[3], int(local_rows), owners, axis, int(start))
+        part = _tail_part(ckv_cache, buf, h, local_rows, loc)
+    return (ckv_cache, buf, part, h, int(local_rows), owners, axis, int(start))
 
 
 def tail_gather(plan, small: HistoryBuffer, sub: dict | None = None) -> None:

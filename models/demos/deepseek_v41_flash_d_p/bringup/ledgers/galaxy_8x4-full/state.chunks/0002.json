@@ -1,4 +1,74 @@
 {
+ "PB.9X": {
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "628f0d7f358fe3d2f590d08789272f6c76673794",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "150e4315-f262-4c23-add5-9a22464474ef"
+  },
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 1537.7,
+  "history": [
+   {
+    "s": 670.0,
+    "status": "FAIL",
+    "t": "2026-11-21T03:18:00"
+   },
+   {
+    "reused": [
+     "PB.9X#test_determinism"
+    ],
+    "s": 1537.7,
+    "status": "PASS",
+    "t": "2026-11-21T03:48:30"
+   }
+  ],
+  "last_run": "2026-11-21T03:48:27",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/PB.9X.log",
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "stamp": {
+   "reused": [
+    "PB.9X#test_determinism"
+   ],
+   "units": {
+    "PB.9X#test_determinism": "b04ac8b645827fb3",
+    "PB.9X#test_glued_oracle": "182d3de205c90c64",
+    "PB.9X#test_glued_reference": "c998da8769a57e7a",
+    "PB.9X#test_glued_walls": "9f5986d203aece25",
+    "PB.9X#test_no_rebuild": "665720acd965fd01",
+    "PB.9X#test_packed_oracle": "3baa410b863c2d1f",
+    "PB.9X#test_packed_walls": "246dd27acd983fad"
+   }
+  },
+  "started": "2026-11-21T03:22:49",
+  "status": "PASS",
+  "units": {
+   "PB.9X#test_determinism": "PASS",
+   "PB.9X#test_glued_oracle": "PASS",
+   "PB.9X#test_glued_reference": "PASS",
+   "PB.9X#test_glued_walls": "PASS",
+   "PB.9X#test_no_rebuild": "PASS",
+   "PB.9X#test_packed_oracle": "PASS",
+   "PB.9X#test_packed_walls": "PASS"
+  },
+  "waiting": null
+ },
  "PB.MB5": {
   "attempts": 0,
   "duration_s": 765.5,

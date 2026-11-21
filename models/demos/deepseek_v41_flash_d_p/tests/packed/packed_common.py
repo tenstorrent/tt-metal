@@ -63,7 +63,12 @@ def boundary_rows(model, h, desc, lane: int, n: int) -> torch.Tensor:
     """A layer boundary (DevH) -> lane ``lane``'s first ``n`` rows as the reference packs them [n, 4H + 4] (the
     streams, then the 4 used columns of the pre: TtDS41Model.to_host)."""
     from models.demos.deepseek_v41_flash_d_p.tt.layout import HC
+    from models.demos.deepseek_v41_flash_d_p.tt.packed_device import as_run_desc, routed
 
+    rd = as_run_desc(desc)
+    if routed(desc, rd):  # PB.9X (PACKED_ROUTE=glued): the header ran as its glued chunk: the lane's segment's rows
+        k = [ln for ln, _ in desc.live()].index(lane)
+        return glued_boundary_rows(model, h, rd.lane_off(k), n)
     return torch.cat([lane_rows(model, h.streams, desc, lane, n), lane_rows(model, h.pre, desc, lane, n, HC)], dim=-1)
 
 

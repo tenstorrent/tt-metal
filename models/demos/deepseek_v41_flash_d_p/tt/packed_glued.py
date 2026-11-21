@@ -33,7 +33,8 @@ a per-ROW one:
 
 Every row computes exactly the bytes path (b) computes for it (same keys in the same order, same scores, same top-k
 inputs and valid lengths, same served rows): the oracle (tests/packed/test_glued_oracle.py) with the switch on is
-bit-identical. Lane chunks (GluedChunk.as_lanes) keep the lane path; a chunk this path does not take (a replay segment,
+bit-identical. PB.9X (PACKED_ROUTE=glued, the shipped value): lane-shaped chunks and fixed-lane headers run here too
+(PACKED_ROUTE=lanes: they keep the lane path, GluedChunk.as_lanes); a chunk this path does not take (a replay segment,
 PREFILL_END=end, a box with fewer than 128 rows a chip, more than GLUED_SEGS segments) keeps path (b)
 (``glued_call_ok``).
 

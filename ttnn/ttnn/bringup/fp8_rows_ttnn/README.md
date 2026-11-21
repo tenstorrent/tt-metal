@@ -26,6 +26,10 @@ shape, memory configs and grid; the three addresses patched a call, OV-23).
 - `memory_config` (default None = DRAM interleaved): the allocated output's memory config.
 - `max_grid` (ttnn.CoreCoord or (x, y), default None = the whole compute grid): the cores inside (0, 0) ..
   (max_grid - 1) (a Galaxy's 110-core cap, agent rule 18).
+- unpack_fp8_rows `whole_grid` (default False): every call on the whole grid, one program for every row count (MB.2).
+- unpack_fp8_rows `common_values` (default False): the per-run values as common runtime args (prepare_program's
+  common value slots): five patched words a program, not five a core (PB.9X; ~0.33 ms of host a whole-grid call on
+  the 8x4 before).
 Realistic (use by default): every option (no arithmetic).
 
 ## Measured

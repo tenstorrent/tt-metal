@@ -102,3 +102,17 @@ Source: none (new op), deepseek_v41_flash_d_p 4-bit compressed KV (owner 2026-10
 - Measured: 8x4 Galaxy, one 5120-token chunk (ckv_bfp4 / bfp_round): 120 -> 110 cores a chip (tests/perf/test_core_audit.py in deepseek_v41_flash_d_p); per-op device time in that model's BREADCRUMBS FIX.15.
 - Needed by: deepseek_v41_flash_d_p FIX.15
 - Files: ckv_bfp4.py
+
+### ckv_bfp4 `dynamic_row0` (2026-11-21)
+- What: `ckv_bfp4(..., prepared=True, compact=True, dynamic_row0=True)`: the compact program's row0 (the writer's
+  common arg 3) is a per-run COMMON value slot (prepare_program's common value slots, same date) instead of frozen:
+  one program for every row0 with compact's host cost. Default False: the behaviour (and programs) before. The same
+  bytes (compact's cores / splits, row0 written as before).
+- Why: deepseek_v41_flash_d_p PB.9X: the history pack (tt/history_gather._pack_fixed, POS_DYNAMIC) packs fixed-size
+  pieces at a per-chunk row0; prepared non-compact cost ~0.10-0.12 ms of host a call (36 calls a packed glued chunk),
+  compact froze row0 (a program per row0: a build on fresh traffic).
+- Tests: tests/unit/test_ckv_bfp4.py::test_ckv_bfp4_dynamic_row0 (single device: not run on the 8x4 Galaxy, agent rule
+  19); on the 8x4 mesh: models/demos/deepseek_v41_flash_d_p/tests/packed/test_common_values_ops.py (bytes equal to
+  the default prepared path at several row0, one program).
+- Needed by: deepseek_v41_flash_d_p PB.9X (tt/history_gather._pack_fixed, setting COMMON_VALUE_SLOTS)
+- Files: ckv_bfp4.py, tests/unit/test_ckv_bfp4.py, README.md, ../INDEX.md

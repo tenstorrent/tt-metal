@@ -46,6 +46,10 @@ NEW serving slots (the contract's caches; warm-up, timed and probe draws: warm-u
 timed run again right after (the warm-repeated number), WALLS_FRESH_PROF timed runs' repeats profiled chunk by chunk
 (device ms), WALLS_FRESH_PROBE more draws under the build probe (the ops that built); program-cache misses allowed and
 counted (program_builds_after_warmup_<side>_<case>: the fresh runs' entries).
+PB.9X: serving's glued warm-up first (tt/packed_device.warm_glued_chunks, adapter.compile's set); + fresh cases
+4x2k_p139264 (four 2048-token requests at 139264 + 64 j, |j| <= 256: one lane-shaped glued chunk; its fresh tok/s is
+glued_serving_tok_s_4x2k_p139264) and 6x1344 (six requests at AgentX histories); the lanes side's 4-lane chunks run as
+glued chunks under PACKED_ROUTE=glued (shipped), the fixed-lane path under PACKED_ROUTE=lanes.
 """
 
 from __future__ import annotations
@@ -95,20 +99,28 @@ AGENTX_HIST = [(0.0, 4096), (0.25, 61440), (0.5, 139264), (0.75, 307200), (0.9, 
 AGENTX_MIXES = 3
 AGENTX_TOKENS = 20000  # new tokens a mix (~2.5 chunks)
 WARM_MIXES = 4  # PB.7C: fresh warm-up mixes before the timed fresh ones (GLUED_WARM_MIXES)
+FRESH_FIXED = ["4x2k_p139264", "5x1600_p139264", "6x1344"]  # PB.9F / PB.9X: the fresh fixed-shape cases (glued)
 
 
 def _fresh_seeds(case: str) -> tuple:
     """PB.7C: (warm-up seeds, timed seeds) of an agentx case: every run a new mix (no layout repeats). PB.9F
     (WALLS_FRESH=1): also 5x1600 (k = 0)."""
-    k = int(case[len("agentx_m") :]) if case.startswith("agentx_m") else 0
+    k = _case_k(case)
     runs = int(os.environ.get("GLUED_WALL_RUNS", "") or min(WALL_RUNS, 5))
     warm = int(os.environ.get("GLUED_WARM_MIXES", "") or WARM_MIXES)
     return [1000 * k + 900 + w for w in range(warm)], [1000 * k + r for r in range(runs)]
 
 
+def _case_k(case: str) -> int:
+    """A fresh case's seed block: agentx_m<k> k; 5x1600 0 (PB.9F's seeds); PB.9X's cases 7, 8."""
+    if case.startswith("agentx_m"):
+        return int(case[len("agentx_m") :])
+    return {"4x2k_p139264": 7, "6x1344": 8}.get(case, 0)
+
+
 def _probe_seeds(case: str) -> list:
     """PB.9F: the build probe's draws (new mixes, never timed)."""
-    k = int(case[len("agentx_m") :]) if case.startswith("agentx_m") else 0
+    k = _case_k(case)
     return [1000 * k + 500 + j for j in range(_fc.knob("WALLS_FRESH_PROBE", 3))]
 
 
@@ -119,6 +131,13 @@ def _fresh_mix(case: str, seed: int) -> list:
     if case == "5x1600_p139264":
         d = _fc.Draw(seed)
         return [(d.history(), 1600) for _ in range(5)]
+    if case == "4x2k_p139264":  # PB.9X: four 2048-token requests near 139264 (139264 + 64 j, |j| <= 256: new
+        # positions every draw), one lane-shaped glued chunk (segments on chip boundaries)
+        rnd = random.Random(seed)
+        return [(P139 + 64 * rnd.randrange(-256, 257), 2048) for _ in range(4)]
+    if case == "6x1344":  # PB.9X: six 1344-token requests at AgentX history draws (6 segments, misaligned)
+        d = _fc.Draw(seed)
+        return [(d.history(), 1344) for _ in range(6)]
     raise KeyError(case)
 
 
@@ -131,8 +150,8 @@ def _cases() -> list:
     v = os.environ.get("GLUED_WALL_CASES", "").strip()
     if v:
         return [c for c in v.split(",") if c]
-    if _fc.on():  # PB.9F: the fresh cases only
-        return _fc.cases(["5x1600_p139264"] + [f"agentx_m{k}" for k in range(1, AGENTX_MIXES + 1)])
+    if _fc.on():  # PB.9F: the fresh cases only (PB.9X: + 4 x 2k near 139264 and 6 segments)
+        return _fc.cases(FRESH_FIXED + [f"agentx_m{k}" for k in range(1, AGENTX_MIXES + 1)])
     return (
         ["4x2k_p139264", "5x1600_p139264"]
         + [f"n{k}" for k in range(1, 7)]
@@ -234,9 +253,9 @@ def test_glued_walls(mesh_device, monkeypatch):
     fresh_on = _fc.on()
     plans, fresh = {}, {}
     for c in cases:
-        if c.startswith("agentx_m") or (fresh_on and c == "5x1600_p139264"):
+        if c.startswith("agentx_m") or (fresh_on and c in FRESH_FIXED):
             warm_seeds, timed_seeds = _fresh_seeds(c)
-            k = int(c[len("agentx_m") :]) if c.startswith("agentx_m") else 0
+            k = _case_k(c)
             more = (_probe_seeds(c) + [1000 * k + 99]) if fresh_on else []
             fresh[c] = {sd: _fresh_mix(c, sd) for sd in warm_seeds + timed_seeds + more}
             plans[c] = fresh[c][timed_seeds[0]]
@@ -251,6 +270,8 @@ def test_glued_walls(mesh_device, monkeypatch):
     rows = []
     slots = _fc.Slots(model, mesh_device, cap) if fresh_on else None  # PB.9F: serving's slots
     try:
+        if fresh_on:  # PB.9X: serving's warm-up of the glued layouts (adapter.compile's set), before any timed chunk
+            _warm_glued(model, mesh_device, layers, slots, cap)
         for c in cases:
             sides = ("glued", "lanes") if c.startswith("agentx_m") or c in ("5x1600_p139264",) else ("glued",)
             if fresh_on and not c.startswith("agentx_m"):
@@ -288,6 +309,32 @@ def test_glued_walls(mesh_device, monkeypatch):
     except OSError as e:
         print(f"walls table not written ({out}): {e}")
     print("\n" + table)
+
+
+def _warm_glued(model, mesh, layers, slots, cap: int) -> None:
+    """PB.9X: the finite glued warm-up serving runs at startup (tt/packed_device.warm_glued_chunks, as
+    adapter.compile), in warm-pool slots 0.. of ``slots``, through run_chunk with the engine input."""
+    import torch
+
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.packed_device import (
+        ids_from_input,
+        make_input,
+        run_chunk,
+        warm_glued_chunks,
+    )
+
+    t0 = time.time()
+    chunks = warm_glued_chunks(CHUNK, list(range(min(6, slots.warm))), cap)
+    with packed("on"), glued("on"):
+        for desc in chunks:
+            ids = [torch.zeros(s.length, dtype=torch.int64) for s in desc.segments]
+            inp = make_input(mesh, desc, ids)
+            nat = ids_from_input(mesh, inp, desc)
+            run_chunk(model, desc, nat, [slots.state(s.slot) for s in desc.segments], layers, last=False, inp=inp)
+            ttnn.deallocate(inp)
+    model.sync()
+    print(f"PB.9X glued warm-up: {len(chunks)} chunks in {time.time() - t0:.1f} s", flush=True)
 
 
 def _plan_chunks(plan: list, text, side: str, slots: list | None = None):
@@ -418,7 +465,10 @@ def _measure(
     from models.demos.common.bringup.testing.profile import cache_entries
 
     extra = {}
-    with packed("on"), glued("on" if side == "glued" else "off"):
+    # PB.9X: the lanes side packs lane-wise (<= 2048 a piece, 4 a chunk); under PACKED_ROUTE=glued (the shipped value)
+    # those headers run the glued path (PACKED_GLUED=on), under PACKED_ROUTE=lanes the fixed-lane path (PB.7's row)
+    route = settings.get("PACKED_ROUTE")
+    with packed("on"), glued("on" if side == "glued" or route == "glued" else "off"):
         if fresh is not None:  # PB.7C: every timed run a new mix; the builds the timed runs add are the metric
             warm_seeds, timed_seeds = _fresh_seeds(case)
             print(f"CASE {case} [{side}] fresh layouts: warm-up seeds {warm_seeds}, timed seeds {timed_seeds}")
@@ -478,6 +528,9 @@ def _measure(
                 per_mix.append((sd, len(ch), round(sum(ws), 1), nw))
             e1 = cache_entries(mesh)
             builds = -1 if e0 is None or e1 is None else e1 - e0
+            if slots is not None:  # PB.9X: PB.9F's definition (the fresh timed chunks' entries only: never the repeats
+                # or the profiled passes, whose profiler programs build once in a fresh process)
+                builds = fr_builds
             diffs = [a - b for a, b in zip(walls_all, reps)]
             extra = dict(
                 builds=builds,
@@ -498,7 +551,13 @@ def _measure(
                         one_pass(chunks=ch, toks=tk)
                         pchunks += len(ch)
                 pb.print(f"{side} {case}")
-                path = "glued (PACKED_GLUED=on)" if side == "glued" else "fixed 4 x 2048 lanes (PACKED_GLUED=off)"
+                path = (
+                    "glued (PACKED_GLUED=on)"
+                    if side == "glued"
+                    else "4-lane packing sent as glued chunks (PACKED_ROUTE=glued)"
+                    if route == "glued"
+                    else "fixed 4 x 2048 lanes (PACKED_ROUTE=lanes, PACKED_GLUED=off)"
+                )
                 extra["fresh_row"] = _fc.summarize(
                     f"{side}_{case.replace('_p139264', '')}",
                     path,
@@ -515,7 +574,7 @@ def _measure(
                     tuple(fr_preps),
                 )
             # (the paths / profile below: a new mix's chunks, chunk 0 profiled on a layout not seen before)
-            k99 = 1000 * (int(case[len("agentx_m") :]) if case.startswith("agentx_m") else 0) + 99
+            k99 = 1000 * _case_k(case) + 99
             mix99 = fresh[k99] if k99 in fresh else agentx_mix(k99)
             _, toks, chunks, _ = _plan_chunks(mix99, text, side, slot_of(k99, "timed") if k99 in fresh else None)
         else:
@@ -541,7 +600,9 @@ def _measure(
         peak = None
         if dram is not None and case == "6x_p1m":
             peak = W._peak_run(dram, lambda on_layer: one_pass(on_chunk=on_layer, chunks=chunks, toks=toks))
-    paths = ["lanes" if not getattr(d, "glued", False) or d.as_lanes() is not None else "glued" for d in chunks]
+        from models.demos.deepseek_v41_flash_d_p.tt.packed_device import as_run_desc
+
+        paths = ["glued" if getattr(as_run_desc(d), "glued", False) else "lanes" for d in chunks]
     pre = "glued" if side == "glued" else "lanes"
     sfx = f"_{case}"
     tok_s = new / (wall / 1e3)

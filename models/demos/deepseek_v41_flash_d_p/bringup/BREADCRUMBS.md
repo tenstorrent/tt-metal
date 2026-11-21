@@ -613,3 +613,81 @@
 - Follow-ups: the 8192 adapter walls' host +5-7 ms vs PB.9F's run_chunk walls (same device ms) is the adapter's
   per-chunk host path (MB.2 saw the same at 5120): a host-path pick; fixed lanes still rebuild (PB.9X).
 - Final check `orchestrator measure --task PB.MB` (quick, POS_DYNAMIC on): rc 0, chunk_wall_ms 247.7 (spread 25.4; PB.7C 240.0 spread 27.7, PB.7B 216.8 on the same path), min layer PCC 0.732 (L39, as before), host_transfers_per_layer 0.
+
+## PB.9X perf (attempt 1): every packed chunk through the glued path (PACKED_ROUTE glued | lanes)
+
+- Read first: OV-3 / OV-58 / OV-61 / OV-67 / OV-68 / OV-69, PACKED_RULES.md, rule 20, perf_guide.
+- Expected saving per chunk (written before any code change, perf_guide s2): FRESH lane-shaped chunks (4 x 2k at new
+  slots / positions): host -20 to -25 ms a chunk (PB.9F lanes4x2k fresh host 38.3 ms vs repeated 14.8: the ~45 slice
+  builds a fresh chunk -> 0 through glued's runtime-value parts); device +0 to +10 ms a chunk (the glued one-call path
+  on a lane-shaped layout vs the lane path's 109 ms: PB.7C n2 / n3 112.6 / 122.2 ms walls suggest ~+5 ms); net fresh
+  4x2k ~59.0k -> ~63-68k tok/s; warm-repeated 4x2k ~0 to -5 % (67.8k lanes -> maybe 63-67k glued). Padded lanes /
+  AgentX lane mixes: fresh 23-29k -> glued's 45-52k (they become glued back-to-back chunks: fewer chunks, no pad rows).
+  Glued's remaining fresh builds (agentx_m1 1, 5x1600 0-2): host ~-1 to -3 ms on the chunks that hit them.
+- Premise check (DISAGREE noted): PB.7C's "glued 4x2k 72.6k" was the LANE path (PB.7C.json glued_path_4x2k_p139264 =
+  "lanes": GluedChunk.as_lanes sent it there) at a repeated position; no 4 x 2k chunk has ever run the glued path.
+- Load reason (1): test_packed_oracle at DS41_PACKED_LAYERS=0,1,2,3,14,20,21,24 on the gate's 40-layer 8192 accuracy
+  load (OV-61; computes only the characteristic layers): "the lane headers now run as glued chunks: bit-identity of
+  alone / lane equivalence / slot digests needs the device path; the characteristic layers cover every layer role".
+- Oracle rung (characteristic layers, resident request 20261121-012516): alone vs today 0.0, lane equivalence 0.0,
+  slot digests 0, determinism 0.0 with every lane header run as its glued chunk (packed1 2 passes a chip).
+- Load reason (2): test_packed_walls + test_glued_walls fresh (smoke: 3 timed draws a case, 6 probe draws) on the gate's
+  perf load (layers 0-20, decode, resident engram table): "the builds after warm-up and the fresh walls are whole-chunk
+  numbers through every executed layer at AgentX positions to ~1M; no smaller piece shows a program key of a layer".
+- Load reason (3): a fresh resident process (the C++ rebuild restarts it: an empty program cache, so builds after the
+  warm-up are honest) on the perf load: walls smoke + build probe + host probe: "the builds after serving's warm-up
+  and the host enqueue of a glued chunk need every executed layer; nothing smaller shows a layer's program key".
+- What (PACKED_ROUTE=glued, default; lanes = PB.7's routing for the A/B row only; call-time, hooks.batch_call_settings,
+  refreshed in batch_call_apply like POS_DYNAMIC, DS41-314):
+  - tt/packed_device.as_run_desc: every packed chunk runs glued (a lane-shaped GluedChunk as itself; a ChunkDescriptor
+    with > 1 lane as ChunkDescriptor.as_glued: its live segments in lane order, back to back, no pad rows). run_chunk /
+    make_input / ids_from_input re-lay a routed lane header (tokens, states in segment order, the engine input = the
+    glued one with the header); tests' packed_common.boundary_rows reads the routed segment's glued rows.
+  - adapter.prefill_packed: the routed descriptor end to end; embedding ids made ON THE DEVICE from the engine input's
+    header (OV-69: page_copy.GluedIdsReorder via packed_device.glued_dev_ids: one SP all_gather + a one-core kernel
+    deriving every segment's engine / model offsets from the header; no host value), the readback stays for the engram
+    hash. Checked: tests/packed/test_glued_ids_ops.py, 25 layouts (lane headers, padded, empty lanes, 1-token / idle
+    segments, AgentX fills) 0 mismatches vs the host ids, 0 builds after the first.
+  - Builds after warm-up (probe tests/packed/test_glued_build_probe.py, DS41-351): history_gather.tail_prepare takes the
+    largest tail (as MB.2's _tail); adapter.compile (and the glued walls' warm-up) runs packed_device.warm_glued_chunks
+    (22 chunks, ~4 s: every segment count fresh / continued, lane-shaped exact, near the slot's end, 1-token + idle).
+    Fresh process after warm-up: every probe layout (histories 0 .. 1,032,192, 1-6 segments, padded / empty lanes) 0.
+  - Host (glued 4 x 2k was host-bound: enqueue 126-136 ms vs device ~104; lane path 101-118): prepare_program COMMON
+    value slots (C++ fork change, arg index | 1 << 31) used by unpack_fp8_rows(common_values) 0.344 -> 0.055 ms a call
+    (24 a chunk), GluedRows pieces 0.404 -> 0.201 ms (8 a chunk), ckv_bfp4(dynamic_row0) in the history pack 0.068 ->
+    0.049 ms (36 a chunk); setting COMMON_VALUE_SLOTS (default on), bytes equal (tests/packed/test_common_values_ops.py,
+    0 mismatches). Fork tests: fp8_rows test_unpack_fp8_rows_common_values + _whole_grid passed (safe runner directly: the
+    module opens its own mesh); ckv_bfp4 test_ckv_bfp4_dynamic_row0 written, not run (single card: rule 19).
+- Cores (rule 18): GluedIdsReorder 1 core a chip (data movement); no matmul changed; unpack / ckv_bfp4 grids unchanged.
+- DECIDED (OV-58): the fixed-lane path stays behind PACKED_ROUTE=lanes for the A/B row (not deleted); test_packed_walls'
+  fresh lane cases go through the adapter runtime (build_runtime -> allocate_kv_cache -> compile -> prefill_packed).
+- DECIDED (OV-58): warm-up = a finite enumerated set (rule 20 / OV-68 allow it); write_lanes keeps one program a
+  writing-segment count (padding its gather to 6 would move rows no segment needs, OV-3).
+- Rule 20, per-chunk values this change touches: segment starts / ends / slots of a lane header -> the glued header
+  words (make_input, one upload with the ids) -> on the device: Derive tables (PB.7C) and GluedIdsReorder offsets; tail
+  start h (history) -> page offsets / ckv_bfp4 row0 common value slot; unpack range -> common args; GluedRows pieces ->
+  common args. No program key, no host table; ids uploaded 0 times (device reorder).
+- Gate checks (after the last code edit; hooks clean): accuracy all ok: packed oracle (40 layers, every lane header
+  through glued) alone vs today 0.0, lane equivalence 0.0, slot digests 0; glued oracle every metric 0; glued reference
+  err_gseg* / top5_overlap_gseg* within their noise floors; determinism 0.0. Builds: every program_builds_after_warmup_*,
+  glued_program_builds_after_warmup*, lanes_program_builds_after_warmup* == 0; ids_uploads_per_chunk 0. FAIL (left for
+  the owner, never reverted): glued_serving_tok_s_4x2k_p139264 = 61.9k / 60.7k fresh (gate checks 1 / 3; need >= 67000;
+  repeated 68.9k / 67.3k). Fresh table and per-segment overhead: results/PB.9X_fresh_walls.md (summary section).
+  Lane header 4 x 2k through prefill_packed fresh 63.0k (PB.9F fixed lanes 59.0k fresh, 346 builds; 67.8k repeated);
+  AgentX lane packing 30.1 / 34.0 / 32.6k (PB.9F 23.3 / 26.5 / 28.9k); glued AgentX 49.1 / 53.8 / 53.5k (45.1 / 51.5
+  / 52.0k); 5 x 1.6k 51.9k (48.1k); 6 x 1344 47.9k; padded 4 x ~1.6k 43.2k.
+- Gotcha (test fix): test_glued_walls' fresh builds metric counted the cache entries of the whole timed section, the
+  profiled passes included; in a fresh process the profiler's own programs built there (2 entries, every draw's own
+  count 0). It now takes PB.9F's definition (the fresh timed chunks' entries only).
+- Gotcha: a gate check in a process started minutes before showed 200-280 ms host outliers on glued chunks with 0
+  builds (gate check 2); the same code in a held process: none.
+- Gotcha (F283, as PB.MB): test_determinism's 5120 load and the 8192 oracles cannot share a gate process; the second
+  --check ran the oracles.
+- Load reasons (4)-(6): the gate checks themselves (the units' loads), and test_common_values_ops / the host probe on
+  the perf load (the byte checks of the common value slots need the mesh only; the host probe needs every layer).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.9X --spec $BRINGUP_SPEC --check` (devjob);
+  probes: tests/packed/test_glued_build_probe.py, test_onecall_host.py (PB3A_PROBE_OPNAMES=1, DS41_PACKED_ROUTE=glued |
+  lanes), test_common_values_ops.py, test_glued_ids_ops.py with the walls env through `resident submit`.
+- Follow-ups for 67k on 4 x 2k: the glued sparse_sdpa call's host cost (kv_lane_rows, 6 padded lane tensors: 0.45 ms a
+  call vs 0.18 on the lane path), the 80 snapshot sends a chunk (one program a segment a layer), the ~13 ms fresh-vs-
+  repeat gap of the glued walls (0 builds; not attributed).

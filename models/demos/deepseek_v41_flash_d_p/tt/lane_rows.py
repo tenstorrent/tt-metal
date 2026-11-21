@@ -22,6 +22,7 @@ import torch
 import ttnn
 
 from .common import DRAM, SP_AXIS, TP_AXIS
+from .settings import settings
 
 NCORES = 4  # cores a chip (data movement; a [NCORES, 1] row from (0, 0))
 MAX_PIECES = 4
@@ -232,15 +233,21 @@ void kernel_main() {
     const uint32_t dst = get_arg_val<uint32_t>(1);
     const uint32_t k = get_arg_val<uint32_t>(2);   // this core's index of NC
     const uint32_t r = get_arg_val<uint32_t>(3);   // this chip's SP row (frozen: one program an SP row)
+#ifdef GR_COMMON  // (PB.9X, COMMON_VALUE_SLOTS=on: the pieces are common args, one patch a program)
+#define VAL(i) get_common_arg_val<uint32_t>(i)
+    const uint32_t w0 = r * GW;
+#else
+#define VAL(i) get_arg_val<uint32_t>(i)
     const uint32_t w0 = 4 + r * GW;                // this SP row's pieces (per-run values)
+#endif
     const auto S = TensorAccessor(s_args, src, PAGE);
     const auto D = TensorAccessor(d_args, dst, PAGE);
     cb_reserve_back(0, 1);
     const uint32_t buf = (get_write_ptr(0) + 63) & ~63u;
-    const uint32_t np = get_arg_val<uint32_t>(w0);
+    const uint32_t np = VAL(w0);
     uint32_t total = 0;
     for (uint32_t p = 0; p < np; ++p) {
-        total += (get_arg_val<uint32_t>(w0 + 2 + 2 * p) & 0xFFFFu) * PPU;
+        total += (VAL(w0 + 2 + 2 * p) & 0xFFFFu) * PPU;
     }
     const uint32_t lo = static_cast<uint32_t>((static_cast<uint64_t>(total) * k) / NC);
     const uint32_t hi = static_cast<uint32_t>((static_cast<uint64_t>(total) * (k + 1)) / NC);
@@ -251,8 +258,8 @@ void kernel_main() {
         for (; nb < B && g < hi; ++nb, ++g) {
             uint32_t sp = 0;
             for (uint32_t p = 0; p < np; ++p) {
-                const uint32_t s0 = get_arg_val<uint32_t>(w0 + 1 + 2 * p);
-                const uint32_t cd = get_arg_val<uint32_t>(w0 + 2 + 2 * p);
+                const uint32_t s0 = VAL(w0 + 1 + 2 * p);
+                const uint32_t cd = VAL(w0 + 2 + 2 * p);
                 const uint32_t cnt = cd & 0xFFFFu, dd = cd >> 16;
                 if (g >= dd * PPU && g < (dd + cnt) * PPU) {
                     sp = s0 * PPU + (g - dd * PPU);
@@ -322,7 +329,7 @@ class GluedRows:
             ttnn.Shape([1, 1, self.R, self.width]), self.dtype, self.layout, self.mesh, DRAM
         )
 
-    def _build(self, table, out):
+    def _build(self, table, out, common: bool = False):
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(NCORES - 1, 0))])
         ct = [self.page, self.ppu, self.batch, NCORES, GWORDS]
         for t in (table, out):
@@ -339,7 +346,7 @@ class GluedRows:
             ]
             rt = ttnn.RuntimeArgs()
             for k in range(NCORES):
-                rt[k][0] = addrs + [k, r] + [0] * (self.sp * GWORDS)
+                rt[k][0] = addrs + [k, r] + ([] if common else [0] * (self.sp * GWORDS))
             prog.kernels = [
                 ttnn.KernelDescriptor(
                     kernel_source=_GKERNEL,
@@ -347,6 +354,8 @@ class GluedRows:
                     core_ranges=crs,
                     compile_time_args=ct,
                     runtime_args=rt,
+                    common_runtime_args=[0] * (self.sp * GWORDS) if common else [],
+                    defines=[("GR_COMMON", "1")] if common else [],
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
                     ),
@@ -368,13 +377,29 @@ class GluedRows:
             vals += w + [0] * (GWORDS - len(w))
         out = self._out()
         io = [table, out]
-        if self._pp is None:
-            slots = [(0, 4 + i) for i in range(self.sp * GWORDS)]
-            self._pp = ttnn.bringup.prepare_program(self._build(table, out), io, slots)
-            want = self.sp * NCORES * (2 + self.sp * GWORDS)  # (table, out and the values a core)
-            assert self._pp.patch_count == want, f"GluedRows: {self._pp.patch_count} patched slots, {want} expected"
-        ttnn.bringup.run_prepared(self._pp, io, vals)
+        # PB.9X (COMMON_VALUE_SLOTS=on): the pieces as common value slots (one patch a program, not one a core a chip)
+        common = settings.get("COMMON_VALUE_SLOTS") == "on" and _common_slots()
+        pp = self._pp.get(common) if isinstance(self._pp, dict) else None
+        if pp is None:
+            nv = self.sp * GWORDS
+            slots = [(0, COMMON_ARG | i) for i in range(nv)] if common else [(0, 4 + i) for i in range(nv)]
+            pp = ttnn.bringup.prepare_program(self._build(table, out, common), io, slots)
+            # (table, out a core; the values a core, or once a program)
+            want = self.sp * NCORES * 2 + (self.sp * nv if common else self.sp * NCORES * nv)
+            assert pp.patch_count == want, f"GluedRows: {pp.patch_count} patched slots, {want} expected"
+            if not isinstance(self._pp, dict):
+                self._pp = {}
+            self._pp[common] = pp
+        ttnn.bringup.run_prepared(pp, io, vals)
         return out
+
+
+COMMON_ARG = 1 << 31  # (prepare_program: a runtime-arg index with bit 31 names a COMMON runtime arg)
+
+
+def _common_slots() -> bool:
+    """prepare_program's common value slots are built (its binding's docstring names them)."""
+    return "COMMON runtime arg" in (getattr(ttnn.bringup.prepare_program, "__doc__", "") or "")
 
 
 _GBY: dict = {}  # (id(mesh), table shape, dtype, layout, n) -> (mesh, GluedRows)

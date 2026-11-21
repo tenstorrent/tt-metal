@@ -68,6 +68,11 @@ every timed chunk four NEW requests (each its own AgentX history draw, 64-aligne
 segment at p - 2048) untimed first as the cases do, program-cache misses allowed and counted; WALLS_FRESH_WARM warm-up
 draws, WALLS_FRESH_RUNS timed (each run again right after: the warm-repeated number), WALLS_FRESH_PROF profiled,
 WALLS_FRESH_PROBE more under the build probe (the ops that built).
+PB.9X (PACKED_ROUTE): the fresh lane cases (lanes4x2k; lanes4x1600: four ~1.6k requests, padded lanes) go through THE
+SERVING ENTRY: the adapter's runtime (adapter.build_runtime through the model's one load path), the engine-owned KV
+cache, runtime.compile (serving's warm-up, the glued layout kinds included), then runtime.prefill_packed with the
+engine input made before the clock; under PACKED_ROUTE=glued (shipped) a lane header runs as its glued chunk, under
+PACKED_ROUTE=lanes the fixed-lane path (PACKED_GLUED=off, PB.9F's row).
 """
 
 from __future__ import annotations
@@ -847,30 +852,46 @@ def _case(model, mesh, layers, case: str, text, dram, cap: int, proj=None) -> di
 
 
 # ----------------------------------------------------------------------------------------------- PB.9F fresh walls
+FRESH_LANE_CASES = ("lanes4x2k", "lanes4x1600")  # PB.9X: + the padded 4 x ~1.6k lanes
+
+
 def _fresh_walls(mesh, layers, monkeypatch) -> None:
+    """PB.9F / PB.9X: the lane cases' fresh walls THROUGH THE SERVING ENTRY: the serving runtime exactly as
+    prefill_runner builds it (adapter.build_runtime through the model's one load path: the batch's held model), the
+    engine-owned KV cache (adapter.allocate_kv_cache, WALLS_FRESH_SLOTS slots at the deployment context),
+    runtime.compile, then every chunk through runtime.prefill_packed with the engine's input made before the clock
+    (adapter.make_packed_input). Under the shipped switches (PACKED_ROUTE=glued) a lane header runs the glued path."""
+    from models.demos.deepseek_v41_flash_d_p.tests import test_skip_positions as SP
     from models.demos.deepseek_v41_flash_d_p.tests.packed import fresh_common as F
 
     deploy = int(S.get("deploy.seq") or S.get("target.seq"))
     cap = _cap(deploy)
-    monkeypatch.setitem(S.data["target"], "seq", max(cap, int(S.data["target"]["seq"])))
-    model = batch.device_model(S, mesh, layers, lm_head=False)
+    want = max(cap, int(S.data["target"]["seq"]))
+    monkeypatch.setitem(S.data["target"], "seq", want)
+    rt = SP._runtime(mesh, layers, CHUNK, want)
+    runtime, adapter, hf, params = rt
+    model = runtime.model
     loaded = model.skip_mode
     if loaded != "decode":
         model.use_decoder_skip("decode")
     hi = min(cap, model.max_seq) - LANE_ROWS
     text = PositionGolden(S, 3 * SHIFT + hi, CHUNK).tokens()  # (lane k reads from k x SHIFT)
-    slots = F.Slots(model, mesh, cap)
+    t0 = time.time()
+    kv = adapter.allocate_kv_cache(mesh_device=mesh, hf_config=hf, params=params)  # (the engine-owned caches)
+    runtime.compile(kv)  # (the engine's warm-up at startup)
+    print(f"FRESH KV cache ({params.num_users} slots at {want}) + runtime.compile in {time.time() - t0:.1f} s")
+    slots = F.Slots(runtime, kv)
     try:
-        for case in F.cases(["lanes4x2k"]):
+        for case in F.cases(list(FRESH_LANE_CASES)):
             try:
-                row = _fresh_lanes(model, mesh, layers, case, hi, text, slots)
+                row = _fresh_lanes(runtime, kv, mesh, case, hi, text, slots)
             except Exception as e:  # (owner: a path that fails on fresh positions is recorded, not fixed)
                 if F.is_hang(e):
                     raise
                 import traceback
 
                 traceback.print_exc()
-                row = F.failed(case, "fixed 4 x 2048 lanes", e)
+                row = F.failed(case, _lane_path(), e)
             F.record(case, row)
     finally:
         slots.free()
@@ -878,20 +899,32 @@ def _fresh_walls(mesh, layers, monkeypatch) -> None:
             model.use_decoder_skip(loaded)
 
 
-def _fresh_lanes(model, mesh, layers, case: str, hi: int, text, slots) -> dict:
+def _lane_path() -> str:
+    route = settings.get("PACKED_ROUTE")
+    return (
+        "4 lanes sent as glued chunks (PACKED_ROUTE=glued, prefill_packed)"
+        if route == "glued"
+        else "fixed 4 x 2048 lanes (PACKED_ROUTE=lanes, PACKED_GLUED=off, prefill_packed)"
+    )
+
+
+def _fresh_lanes(runtime, kv, mesh, case: str, hi: int, text, slots) -> dict:
+    """One fresh lane case through runtime.prefill_packed. lanes4x2k: four 2048-token requests; lanes4x1600 (PB.9X):
+    four ~1.6k requests (1536..1664 new tokens, the lanes' pad rows), each at its own AgentX history draw in a new
+    serving slot, in a random lane order; the real previous chunk (each request at p - 2048) untimed first."""
     import ttnn
     from models.demos.deepseek_v41_flash_d_p.tests.packed import fresh_common as F
-    from models.demos.deepseek_v41_flash_d_p.tt.packed_device import ids_from_input, make_input, run_chunk
 
     nwarm, nrun = F.knob("WALLS_FRESH_WARM", 4), F.knob("WALLS_FRESH_RUNS", 8)
     nprobe, nprof = F.knob("WALLS_FRESH_PROBE", 3), F.knob("WALLS_FRESH_PROF", 3)
-    base = 400000 + CHUNK
+    base = 400000 + CHUNK + (0 if case == "lanes4x2k" else 50000)
     seeds = {
         "warm": [base + 900 + w for w in range(nwarm)],
         "timed": [base + r for r in range(nrun)],
         "probe": [base + 500 + j for j in range(nprobe)],
     }
     print(f"FRESH {case}: seeds {seeds}", flush=True)
+    route = settings.get("PACKED_ROUTE")
 
     def draw(seed: int, phase: str) -> dict:
         d = F.Draw(seed)
@@ -899,27 +932,27 @@ def _fresh_lanes(model, mesh, layers, case: str, hi: int, text, slots) -> dict:
         sl = slots.pick(4, phase, d.rnd)
         lanes = list(range(4))
         d.rnd.shuffle(lanes)  # lanes[k]: the lane of request k
-        return {"seed": seed, "pos": pos, "slots": sl, "lanes": lanes, "new": 4 * LANE_ROWS}
+        lens = [LANE_ROWS] * 4 if case == "lanes4x2k" else [1536 + d.rnd.randrange(129) for _ in range(4)]
+        return {"seed": seed, "pos": pos, "slots": sl, "lanes": lanes, "lens": lens, "new": sum(lens)}
 
     def run(dr: dict, prev: bool, prof: bool = False):
         segs, ids = [None] * 4, [None] * 4
         for k in range(4):
+            n = LANE_ROWS if prev else dr["lens"][k]  # (the previous chunk: a whole lane, ending at a kv block)
             s = dr["pos"][k] - (LANE_ROWS if prev else 0)
-            segs[dr["lanes"][k]] = Segment(dr["slots"][k], s, s + LANE_ROWS)
-            ids[dr["lanes"][k]] = text[k * SHIFT + s : k * SHIFT + s + LANE_ROWS].long()
+            segs[dr["lanes"][k]] = Segment(dr["slots"][k], s, s + n)
+            ids[dr["lanes"][k]] = text[k * SHIFT + s : k * SHIFT + s + n].long()
         desc = ChunkDescriptor.packed(CHUNK, segs)
-        sts = [slots.state(sg.slot) for sg in segs]
-        inp = make_input(mesh, desc, ids)  # (the engine's H2D: not timed)
-        model.sync()
+        inp = runtime.make_packed_input(desc, ids)  # (the engine's H2D: not timed)
+        runtime.model.sync()
         if prof:
             profiler.enable(mesh, rt=True)
             profiler.set_layer(None)
         t0 = time.time()
         dev = None
         try:
-            nat = ids_from_input(mesh, inp, desc)
-            run_chunk(model, desc, nat, sts, layers, last=False, inp=inp)
-            model.sync()
+            runtime.prefill_packed(inp, kv, desc)
+            runtime.model.sync()
             wall = (time.time() - t0) * 1e3
             if prof:
                 profiler.signpost("end")
@@ -931,7 +964,7 @@ def _fresh_lanes(model, mesh, layers, case: str, hi: int, text, slots) -> dict:
             ttnn.deallocate(inp)
         return wall, dev
 
-    with packed("on"), _pc.switch("PACKED_GLUED", "off"):
+    with packed("on"), _pc.switch("PACKED_GLUED", "on" if route == "glued" else "off"):
         for sd in seeds["warm"]:
             dr = draw(sd, "warm")
             run(dr, True)
@@ -978,6 +1011,4 @@ def _fresh_lanes(model, mesh, layers, case: str, hi: int, text, slots) -> dict:
                 run(dr, False)
         pb.print(case)
     extra = {"seeds": seeds, "draws": draws, "probe_chunks": 2 * len(seeds["probe"])}
-    return F.summarize(
-        case, "fixed 4 x 2048 lanes (PACKED=on, GLUED=off)", fresh, repeat, prof, builds, pb, extra, tuple(preps)
-    )
+    return F.summarize(case, _lane_path(), fresh, repeat, prof, builds, pb, extra, tuple(preps))

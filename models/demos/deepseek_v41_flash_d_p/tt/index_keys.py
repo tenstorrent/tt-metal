@@ -124,9 +124,25 @@ def _decode(cache, buf: KeyBuffer, lo: int, hi: int) -> None:
     if settings.get("PACKED_HOST_FAST") == "on" and not wide and not whole:  # (every box's grid holds 4 x 4)
         gx, gy = (grid.x, grid.y) if grid is not None else DECODE_GRID
         grid = ttnn.CoreCoord(min(gx, DECODE_GRID[0]), min(gy, DECODE_GRID[1]))
+    # PB.9X (COMMON_VALUE_SLOTS=on): the whole grid's per-run values as common runtime args (one patch a program,
+    # not one a core: 0.335 -> 0.063 ms of host a call on the 8x4, 24 calls a packed chunk); the same bytes
+    cv = whole and settings.get("COMMON_VALUE_SLOTS") == "on" and _has_common_values()
     ttnn.bringup.unpack_fp8_rows(
-        s.tensor, buf.tensor, row_lo=lo, row_hi=hi, batch=s.batch, max_grid=grid, whole_grid=whole
+        s.tensor,
+        buf.tensor,
+        row_lo=lo,
+        row_hi=hi,
+        batch=s.batch,
+        max_grid=grid,
+        whole_grid=whole,
+        **({"common_values": True} if cv else {}),
     )
+
+
+def _has_common_values() -> bool:
+    """The fp8_rows fork's common_values option (and prepare_program's common value slots) is built (its docstring
+    names it: the registered op's wrapper hides the signature)."""
+    return "common_values" in (getattr(ttnn.bringup.unpack_fp8_rows, "__doc__", "") or "")
 
 
 def prefetch(cache, start: int) -> bool:

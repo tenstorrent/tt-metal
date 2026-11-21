@@ -35,6 +35,8 @@ rounded values as a new bf16 TILE tensor (`rounded=True`).
   its flattened rows (a key table appended per chunk). Every core, blocks of up to 16 tiles.
 - `prefix` (ckv_bfp4, default None; not with `rounded`): a second bf16 TILE input `[1, 1, m, 512]` (m % 32 == 0)
   whose rows go first: one call writes `[prefix | ckv]` at `[row0, row0 + m + n)`, the same records as two calls.
+- `dynamic_row0` (ckv_bfp4, default False; with prepared and compact, 2026-11-21): row0 a per-run common value slot
+  (prepare_program's common value slots): compact's host cost without a program per row0 (deepseek_v41_flash_d_p PB.9X).
 - `compact` (ckv_bfp4 and bfp_round, default False): merged core ranges and no per-core runtime args (the kernels
   split the work by their core index, `kernels/ckv_share.hpp`); row0 / page0 is frozen in the program (with
   `prepared`, one prepared program per row0: for call sites with a fixed row0). Same records and values.
@@ -72,7 +74,7 @@ rounded values as a new bf16 TILE tensor (`rounded=True`).
 - A 16-value group whose max is below 2^-124 comes out 0 (the host rule would keep it).
 - ckv must be bf16 TILE `[1, 1, n, 512]` with n % 32 == 0; rows uint8 ROW_MAJOR `[1, 1, R, 320]`, row0 + n <= R. On a
   mesh the same program runs on every chip (row0 is the same everywhere).
-- `compact=True`: row0 / page0 is part of the program; a call site whose row0 changes every call builds a new program
+- `compact=True`: row0 / page0 is part of the program (ckv_bfp4: unless `dynamic_row0`); a call site whose row0 changes every call builds a new program
   each time (keep compact off there, e.g. a growing table).
 - `prepared=True`: the program cache is keyed on (mesh.id(), n, rounded, memory configs), LRU 64 entries; any other
   change (a new shape) builds and prepares a new program (~ms, once).

@@ -151,8 +151,12 @@ void bind_prepared_program(nb::module_& mod) {
            const std::vector<std::tuple<uint32_t, uint32_t>>& value_slots) {
             std::vector<ValueSlot> vs;
             for (uint32_t s = 0; s < value_slots.size(); ++s) {
-                vs.push_back(
-                    ValueSlot{.kernel = std::get<0>(value_slots[s]), .arg = std::get<1>(value_slots[s]), .slot = s});
+                const uint32_t a = std::get<1>(value_slots[s]);
+                vs.push_back(ValueSlot{
+                    .kernel = std::get<0>(value_slots[s]),
+                    .arg = a & 0x7FFFFFFFu,
+                    .slot = s,
+                    .common = (a & 0x80000000u) != 0});
             }
             return std::const_pointer_cast<Prepared>(prepare(desc, io_tensors, vs));
         },
@@ -161,7 +165,8 @@ void bind_prepared_program(nb::module_& mod) {
         nb::arg("value_slots") = std::vector<std::tuple<uint32_t, uint32_t>>{},
         "Prepare a MeshProgramDescriptor for patched dispatch (copies it once; records the patch slots). "
         "value_slots: [(kernel index, runtime-arg index)], one per-run value each (run_prepared values=, in this "
-        "order), patched on every core of that kernel, left out of the cache key; default none.");
+        "order), patched on every core of that kernel, left out of the cache key; default none. A runtime-arg index "
+        "with bit 31 set (1 << 31 | i) names COMMON runtime arg i of that kernel instead (one write a program).");
     mod.def(
         "run_prepared",
         [](const std::shared_ptr<Prepared>& p,

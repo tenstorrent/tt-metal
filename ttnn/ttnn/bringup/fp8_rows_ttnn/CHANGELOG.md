@@ -49,3 +49,17 @@ layout), deepseek_v41_flash_d_p P.39 (INDEX_K_SERVED=fp8_row192, owner 2026-11-0
   off) 10 passed as before; the new case passed (its first version counted the precompile pass's mesh too: fixed).
 - Needed by: deepseek_v41_flash_d_p MB.2 (tt/index_keys.py `_decode`, under POS_DYNAMIC=on)
 - Files: fp8_rows.py, tests/unit/test_unpack_fp8_rows.py, README.md, ../INDEX.md
+
+### unpack_fp8_rows `common_values` (2026-11-21)
+- What: `unpack_fp8_rows(..., common_values=False)`: True passes the per-run values (first row page, bands, out page)
+  as COMMON runtime args (reader / writer args 1, 2; compute arg 0; kernel define UNPACK_COMMON_VALUES, no per-core
+  args) through prepare_program's new common value slots, so a run patches five words a program instead of five a
+  core. Default False keeps the behaviour (and the program) before. The same bytes.
+- Why: deepseek_v41_flash_d_p PB.9X: under POS_DYNAMIC the index-key decodes run on the whole grid (whole_grid, MB.2);
+  110 cores x 5 value slots x 32 chips cost ~0.33-0.36 ms of host a call (24 calls a packed chunk: ~8 ms of a
+  host-bound glued chunk's enqueue, tests/packed/test_onecall_host.py PB3A_PROBE_OPNAMES).
+- Tests: tests/unit/test_unpack_fp8_rows.py::test_unpack_fp8_rows_common_values (1 / 3 / 37 / 300 bands, bytes equal
+  to the default's, one program; host ms a call printed).
+- Needed by: deepseek_v41_flash_d_p PB.9X (tt/index_keys.py `_decode`, setting COMMON_VALUE_SLOTS)
+- Files: fp8_rows.py, kernels/unpack_fp8_rows_{reader,writer,compute}.cpp, tests/unit/test_unpack_fp8_rows.py,
+  README.md, ../INDEX.md; needs ../prepared_program's common value slots (same date)

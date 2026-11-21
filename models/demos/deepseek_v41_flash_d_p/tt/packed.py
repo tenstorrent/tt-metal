@@ -131,6 +131,17 @@ class ChunkDescriptor:
     def new_tokens(self) -> int:
         return sum(s.length for _, s in self.live())
 
+    def as_glued(self, prefill_end: str = "cap", block: int = KV_BLOCK) -> "GluedChunk | None":
+        """PB.9X (PACKED_ROUTE=glued): the glued chunk tt-d-gen sends for this header: the live segments in lane order,
+        back to back (an empty lane or a lane's pad rows take no rows). None when no lane is live."""
+        live = [s for _, s in self.live()]
+        return GluedChunk(self.chunk, tuple(live), prefill_end, block) if live else None
+
+    def lane_seg_ids(self, tokens: torch.Tensor) -> list:
+        """Lane-natural ids [chunk] (pack_ids' layout) -> each live segment's [length] ids, in lane order."""
+        t = tokens.reshape(-1)
+        return [t[self.lane_off(lane) : self.lane_off(lane) + s.length] for lane, s in self.live()]
+
     # ---------------------------------------------------------------- per row
     def row_positions(self) -> torch.Tensor:
         """[chunk] int64: each row's position (RoPE, compressor groups, causal masks). Pad rows continue their lane."""

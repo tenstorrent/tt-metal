@@ -1455,6 +1455,30 @@ TABLE = {
         "off = PB.7B's per-pass ring calls. Bit-identical to off (tests/packed/test_glued_oracle.py). Default off (the "
         "task's: on = the change; the gate sets it)",
     ),
+    "PACKED_ROUTE": Setting(
+        "glued",
+        ("glued", "lanes"),
+        "PB.9X (overseer for the owner 2026-11-20 night), read per chunk (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings). With PACKED=on and PACKED_GLUED=on: glued = EVERY packed chunk runs the glued path "
+        "(tt/packed_glued.py, PB.7B / PB.7C: per-chunk tables derived on the device, no program build for a new "
+        "layout): a glued chunk that is lane-shaped (4 x 2048 aligned) stays glued, and a fixed-lane header "
+        "(tt/packed.ChunkDescriptor, padded or empty lanes included) is sent as the glued chunk of its live segments in "
+        "lane order (ChunkDescriptor.as_glued: back to back, no pad rows between them; its engine input is the glued "
+        "one, tt/packed_device.make_input). lanes = PB.7's routing (a lane-shaped glued chunk and every ChunkDescriptor "
+        "run the fixed-lane path, which builds programs for fresh slots / positions, DS41-346): kept for the A/B row "
+        "only. Default glued",
+    ),
+    "COMMON_VALUE_SLOTS": Setting(
+        "on",
+        ("on", "off"),
+        "PB.9X, read per call (CALL-TIME, listed in bringup/hooks.py batch_call_settings). With POS_DYNAMIC=on: on = two "
+        "whole-grid prepared programs take their per-run values as COMMON runtime args (prepare_program's common value "
+        "slots: one patch a program instead of one a core a chip): ttnn.bringup.unpack_fp8_rows (fork option "
+        "common_values: the index-key decodes, ~0.33 -> ~0.06 ms of host a call on the 8x4, 24 calls a packed chunk) "
+        "the history pack's ttnn.bringup.ckv_bfp4 (option dynamic_row0: compact cores, row0 a common value slot) and the "
+        "glued RoPE rows' program (tt/lane_rows.GluedRows: the pieces, ~0.39 ms of host a call before). "
+        "The same bytes. off = per-core value slots (MB.2's)",
+    ),
     "MOE_HEAD_ORDER": Setting(
         "free",
         ("free", "source"),
