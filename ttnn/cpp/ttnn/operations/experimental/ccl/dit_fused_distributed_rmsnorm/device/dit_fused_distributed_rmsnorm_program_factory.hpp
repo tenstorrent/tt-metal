@@ -97,7 +97,8 @@ struct DitFusedDistributedRmsnormMeshWorkloadFactory {
     // DitFusedDistributedRmsnormDeviceOperation::compute_program_hash excludes from the key, and every tensor
     // address by role. Buffer* bindings alone are not enough: when two tensor arguments share a buffer (for
     // example weight and bias, or rope_cos and rope_sin), binding resolution yields no bindings, and the
-    // workload path has no rebuild fallback.
+    // workload path has no rebuild fallback. Since every bound slot is rewritten here, a hit skips the adapter's
+    // binding re-apply.
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
         const DitFusedDistributedRmsnormParams& operation_attributes,
