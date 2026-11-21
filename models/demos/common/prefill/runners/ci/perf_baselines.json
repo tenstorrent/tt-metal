@@ -99,33 +99,33 @@
         },
         "8kw": {
           "@2k": {
-            "throughput_tok_s": 28411,
-            "chunk_time_ms": 540
+            "throughput_tok_s": 29340,
+            "chunk_time_ms": 523
           },
           "@50k": {
-            "throughput_tok_s": 19315,
-            "ttft_s": 2.6,
-            "chunk_time_ms": 850
+            "throughput_tok_s": 20221,
+            "ttft_s": 2.5,
+            "chunk_time_ms": 835
           },
           "@100k": {
-            "throughput_tok_s": 14563,
-            "ttft_s": 5.73,
-            "chunk_time_ms": 1204
+            "throughput_tok_s": 14717,
+            "ttft_s": 5.56,
+            "chunk_time_ms": 1181
           },
           "@252k": {
-            "throughput_tok_s": 8819,
-            "ttft_s": 20.01,
-            "chunk_time_ms": 2114
+            "throughput_tok_s": 8923,
+            "ttft_s": 19.63,
+            "chunk_time_ms": 2104
           },
           "@512k": {
-            "throughput_tok_s": 5285,
-            "ttft_s": 60.2,
-            "chunk_time_ms": 3595
+            "throughput_tok_s": 5326,
+            "ttft_s": 59.48,
+            "chunk_time_ms": 3624
           },
           "@1M": {
-            "throughput_tok_s": 2969,
-            "ttft_s": 198.56,
-            "chunk_time_ms": 6545
+            "throughput_tok_s": 2981,
+            "ttft_s": 197.14,
+            "chunk_time_ms": 6640
           }
         }
       },
