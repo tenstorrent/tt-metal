@@ -73,11 +73,12 @@ Tensor moreh_clip_grad_norm(
     const auto total_num_inputs = static_cast<uint32_t>(inputs.size());
     const auto num_iter = (total_num_inputs + max_num_inputs - 1) / max_num_inputs;
     // Store intermediate reduction of Sum[|e|^p]
+    // Use FLOAT32 for accumulator to prevent precision loss when input is bf16
     auto tmp_pow_sum = create_device_tensor(
         tt::tt_metal::TensorSpec(
             Shape{static_cast<uint32_t>(inputs.size()), 1, 1},
             tt::tt_metal::TensorLayout(
-                inputs.at(0).dtype(),
+                DataType::FLOAT32,
                 tt::tt_metal::PageConfig(Layout::TILE),
                 memory_config.value_or(inputs.at(0).memory_config()))),
         device);
@@ -105,16 +106,24 @@ Tensor moreh_clip_grad_norm(
 
     // Run Step 2
     // Sum[Sum[|e|^p]]^(1/p)
-    auto output_total_norm = ttnn::prim::moreh_clip_grad_norm_step2(
+    auto output_total_norm_fp32 = ttnn::prim::moreh_clip_grad_norm_step2(
         tmp_pow_sum,
         norm_type,
         total_norm,
         memory_config,
         init_device_compute_kernel_config(inputs.at(0).device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4));
 
+    // Convert back to input dtype for consistency with step3
+    auto output_total_norm = ttnn::typecast(output_total_norm_fp32, inputs.at(0).dtype(), memory_config);
+    output_total_norm_fp32.deallocate();
+
     if (error_if_nonfinite) {
-        const auto fp32_total_norm =
-            cast_vec<float>(tt::tt_metal::host_buffer::get_as<bfloat16>(output_total_norm.cpu())).at(0);
+        float fp32_total_norm;
+        if (output_total_norm.dtype() == DataType::BFLOAT16) {
+            fp32_total_norm = cast_vec<float>(tt::tt_metal::host_buffer::get_as<bfloat16>(output_total_norm.cpu())).at(0);
+        } else {
+            fp32_total_norm = cast_vec<float>(tt::tt_metal::host_buffer::get_as<float>(output_total_norm.cpu())).at(0);
+        }
         TT_FATAL(
             std::isfinite(fp32_total_norm),
             "The total norm of order {} for gradients from `parameters` is non-finite, so it cannot be "
