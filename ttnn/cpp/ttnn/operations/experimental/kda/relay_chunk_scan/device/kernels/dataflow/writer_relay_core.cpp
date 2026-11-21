@@ -73,7 +73,6 @@ void kernel_main() {
                 1 + (carry ? (senders & 1) + (senders >> 1) : 0));
         }
         cb_wait_front(cb_eout, relay_heads * state_tiles);
-        cb_pop_front(cb_eout, relay_heads * state_tiles);
     };
     // Each head's carry (stored column-major by tile at `source`, slot after slot) into this rank's row-major carry
     // output.
@@ -93,14 +92,15 @@ void kernel_main() {
     };
     hand_on(false);
     release(false);
+    cb_pop_front(cb_eout, relay_heads * state_tiles);
 
     if (position == 0) {
-        // The final carries: hand their columns to the senders, then write them out.
+        // The final carries: hand their columns to the senders, then, once they have read them (the relay's release,
+        // then each carrying sender's), write them out, off the DRAM the output gate still reads meanwhile.
         hand_on(true);
-        cb_wait_front(cb_eout, heads * state_tiles);
-        write_carry(get_read_ptr(cb_eout));
-        // The relay's release, then each carry sender's.
         release(true);
+        write_carry(get_read_ptr(cb_eout));
+        cb_pop_front(cb_eout, relay_heads * state_tiles);
     } else {
         // Each carry column out as it lands; the call ends once the whole carry has arrived, which separates
         // consecutive calls across the SP line.
