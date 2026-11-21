@@ -354,9 +354,9 @@ class Flux3KleinPipeline:
 
         t0 = time.time()
         image_cond = None
+        if size == max(SIZES):
+            self._free_other_plans(math.prod(latent_shape(size, size)), ref_bucket)
         if canvases:
-            if size == max(SIZES):
-                self._free_other_plans(math.prod(latent_shape(size, size)), ref_bucket)
             tokens, ids = [], []
             for index, canvas in enumerate(canvases):
                 tokens.append(self._vae.encode(canvas))
@@ -398,7 +398,8 @@ class Flux3KleinPipeline:
         return Flux3KleinResult(image=image, prompt=prompt, seed=seed, timings=timings, cached_steps=cached_steps)
 
     def _free_other_plans(self, image_rows: int, cond_rows: int) -> None:
-        """Frees the cached plans of every other layout: at the largest size, the reference encoder needs their DRAM."""
+        """Frees the cached plans of every other layout: at the largest size, the reference encoder and the denoise need
+        their DRAM (a TP2 group holds twice the DiT weights)."""
         for key in list(self._plan_cache):
             lengths = dict(key[3])
             if (lengths["image"], lengths["image_cond"]) != (image_rows, cond_rows):
