@@ -167,6 +167,22 @@ ttnn::Tensor reshape_per_channel_vector_args(
 // The caller picks out_dtype because the two ops want different things: quantize casts the
 // zero-point to the input's (floating-point) dtype, while dequantize must never cast a scale to
 // the input's dtype, which is integral there.
+void check_axis_bounds(const int32_t axis, const int32_t rank) {
+    TT_FATAL(axis >= -rank && axis < rank, "Axis {} is outside the range [{}, {}]", axis, -rank, rank - 1);
+}
+
+bool is_per_channel_tensor(
+    const ttnn::Tensor* tensor_p, const ttnn::Shape& input_shape, const std::optional<int32_t> axis) {
+    if (!axis.has_value() || tensor_p == nullptr) {
+        return false;
+    }
+    const uint32_t axis_dim = input_shape[axis.value()];
+    if (tensor_p->logical_volume() == 1u) {
+        return axis_dim == 1u && tensor_p->logical_shape().rank() == 1;
+    }
+    return true;
+}
+
 template <typename T>
 std::variant<ttnn::Tensor, T> reshape_per_channel_arg(
     const std::variant<ttnn::Tensor, T>& arg,
@@ -174,7 +190,7 @@ std::variant<ttnn::Tensor, T> reshape_per_channel_arg(
     const std::optional<int32_t> axis,
     const ttnn::DataType out_dtype) {
     const ttnn::Tensor* tensor_p = axis.has_value() ? std::get_if<ttnn::Tensor>(&arg) : nullptr;
-    if (tensor_p == nullptr) {
+    if (!is_per_channel_tensor(tensor_p, input_shape, axis)) {
         return arg;
     }
     return reshape_per_channel_vector_args(*tensor_p, input_shape, axis.value(), out_dtype);
@@ -246,18 +262,28 @@ Tensor quantize(
     const bool is_per_channel = axis.has_value();
     const ttnn::Shape& input_shape = input_a.logical_shape();
 
+    const Tensor* scale_p = std::get_if<Tensor>(&scale);
+    const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point);
+
     if (is_per_channel) {
         const int32_t rank = static_cast<int32_t>(input_shape.rank());
-        TT_FATAL(std::holds_alternative<Tensor>(scale), "Per-channel quantization expects 1D scale tensors");
-        check_scale_tensor_args(input_a, std::get_if<Tensor>(&scale), axis.value(), rank, /*is_per_channel=*/true);
-        if (const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point)) {
-            check_zero_point_tensor_args(input_a, zero_point_p, axis.value(), rank, /*is_per_channel=*/true);
+        check_axis_bounds(axis.value(), rank);
+        const bool scale_is_per_channel = is_per_channel_tensor(scale_p, input_shape, axis);
+        const bool zero_point_is_per_channel = is_per_channel_tensor(zero_point_p, input_shape, axis);
+        TT_FATAL(
+            scale_p != nullptr || zero_point_p != nullptr,
+            "Per-channel quantization expects 1D scale or zero-point tensors");
+        if (scale_p != nullptr) {
+            check_scale_tensor_args(input_a, scale_p, axis.value(), rank, scale_is_per_channel);
+        }
+        if (zero_point_p != nullptr) {
+            check_zero_point_tensor_args(input_a, zero_point_p, axis.value(), rank, zero_point_is_per_channel);
         }
     } else {
-        if (const Tensor* scale_p = std::get_if<Tensor>(&scale)) {
+        if (scale_p != nullptr) {
             check_per_tensor_scale(*scale_p);
         }
-        if (const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point)) {
+        if (zero_point_p != nullptr) {
             check_per_tensor_zero_point(*zero_point_p);
         }
     }
@@ -394,6 +420,11 @@ Tensor requantize(
     constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 
     const bool has_axis = axis.has_value();
+    const ttnn::Shape& input_shape = input_tensor.logical_shape();
+    const int32_t rank = static_cast<int32_t>(input_shape.rank());
+    if (has_axis) {
+        check_axis_bounds(axis.value(), rank);
+    }
 
     const Tensor* in_scale_p = std::get_if<Tensor>(&in_scale);
     const Tensor* in_zero_point_p = std::get_if<Tensor>(&in_zero_point);
@@ -408,13 +439,11 @@ Tensor requantize(
 
     if (has_axis && all_params_are_tensors) {
         const int32_t axis_v = axis.value();
-        const ttnn::Shape& input_shape = input_tensor.logical_shape();
-        const int32_t rank = input_shape.rank();
 
-        const bool in_scale_is_full_size = in_scale_p->logical_volume() == input_shape[axis_v];
-        const bool in_zero_point_is_full_size = in_zero_point_p->logical_volume() == input_shape[axis_v];
-        const bool out_scale_is_full_size = out_scale_p->logical_volume() == input_shape[axis_v];
-        const bool out_zero_point_is_full_size = out_zero_point_p->logical_volume() == input_shape[axis_v];
+        const bool in_scale_is_full_size = is_per_channel_tensor(in_scale_p, input_shape, axis);
+        const bool in_zero_point_is_full_size = is_per_channel_tensor(in_zero_point_p, input_shape, axis);
+        const bool out_scale_is_full_size = is_per_channel_tensor(out_scale_p, input_shape, axis);
+        const bool out_zero_point_is_full_size = is_per_channel_tensor(out_zero_point_p, input_shape, axis);
 
         TT_FATAL(
             in_scale_is_full_size == in_zero_point_is_full_size,
@@ -464,10 +493,12 @@ Tensor requantize(
             none,
             none,
             none);
-        return ttnn::typecast(
+        return narrow_composite_result(
             ttnn::add(
-                input_scaled, zero_point_full, std::nullopt, memory_config, optional_output_tensor, none, none, none),
-            c_dtype);
+                input_scaled, zero_point_full, DataType::FLOAT32, std::nullopt, std::nullopt, none, none, none),
+            c_dtype,
+            memory_config,
+            std::move(optional_output_tensor));
     }
 
     return std::visit(
@@ -505,15 +536,14 @@ Tensor requantize(
                     std::nullopt);
             },
             [&](const auto& in_scale, const auto& in_zero_point, const auto& out_scale, const auto& out_zero_point) {
-                // Pass axis only to operations that have tensor parameters.
-                constexpr bool has_tensor_in_scale = std::is_same_v<std::decay_t<decltype(in_scale)>, Tensor>;
-                constexpr bool has_tensor_out_scale = std::is_same_v<std::decay_t<decltype(out_scale)>, Tensor>;
-
-                const std::optional<int> dequant_axis = has_tensor_in_scale ? axis : std::nullopt;
-                const std::optional<int> quant_axis = has_tensor_out_scale ? axis : std::nullopt;
+                // Forward axis only to sides whose scale or zero-point tensor is per-channel along axis.
+                const std::optional<int> dequant_axis =
+                    (is_per_channel_tensor(in_scale_p, input_shape, axis) || is_per_channel_tensor(in_zero_point_p, input_shape, axis)) ? axis : std::nullopt;
+                const std::optional<int> quant_axis =
+                    (is_per_channel_tensor(out_scale_p, input_shape, axis) || is_per_channel_tensor(out_zero_point_p, input_shape, axis)) ? axis : std::nullopt;
 
                 const Tensor dequantized = dequantize(
-                    input_tensor, in_scale, in_zero_point, dequant_axis, std::nullopt, std::nullopt, std::nullopt);
+                    input_tensor, in_scale, in_zero_point, dequant_axis, DataType::FLOAT32, std::nullopt, std::nullopt);
                 return quantize(
                     dequantized, out_scale, out_zero_point, quant_axis, c_dtype, memory_config, optional_output_tensor);
             }},
@@ -547,18 +577,28 @@ Tensor dequantize(
     const bool is_per_channel = axis.has_value();
     const ttnn::Shape& input_shape = input_tensor.logical_shape();
 
+    const Tensor* scale_p = std::get_if<Tensor>(&scale);
+    const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point);
+
     if (is_per_channel) {
         const int32_t rank = static_cast<int32_t>(input_shape.rank());
-        TT_FATAL(std::holds_alternative<Tensor>(scale), "Per-channel quantization expects 1D scale tensors");
-        check_scale_tensor_args(input_tensor, std::get_if<Tensor>(&scale), axis.value(), rank, /*is_per_channel=*/true);
-        if (const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point)) {
-            check_zero_point_tensor_args(input_tensor, zero_point_p, axis.value(), rank, /*is_per_channel=*/true);
+        check_axis_bounds(axis.value(), rank);
+        const bool scale_is_per_channel = is_per_channel_tensor(scale_p, input_shape, axis);
+        const bool zero_point_is_per_channel = is_per_channel_tensor(zero_point_p, input_shape, axis);
+        TT_FATAL(
+            scale_p != nullptr || zero_point_p != nullptr,
+            "Per-channel quantization expects 1D scale or zero-point tensors");
+        if (scale_p != nullptr) {
+            check_scale_tensor_args(input_tensor, scale_p, axis.value(), rank, scale_is_per_channel);
+        }
+        if (zero_point_p != nullptr) {
+            check_zero_point_tensor_args(input_tensor, zero_point_p, axis.value(), rank, zero_point_is_per_channel);
         }
     } else {
-        if (const Tensor* scale_p = std::get_if<Tensor>(&scale)) {
+        if (scale_p != nullptr) {
             check_per_tensor_scale(*scale_p);
         }
-        if (const Tensor* zero_point_p = std::get_if<Tensor>(&zero_point)) {
+        if (zero_point_p != nullptr) {
             check_per_tensor_zero_point(*zero_point_p);
         }
     }
