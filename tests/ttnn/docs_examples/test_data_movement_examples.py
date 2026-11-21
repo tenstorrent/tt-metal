@@ -59,6 +59,16 @@ def test_pad(device):
     logger.debug(f"Padded Tensor Shape: {padded_tensor.shape}")  # Shape([1, 1, 16, 16])
 
 
+def test_chunk(device):
+    # Create a tensor to split
+    input_tensor = ttnn.rand((1, 1, 64, 96), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Split the last dimension into 3 chunks; the output is a list of tensors
+    chunks = ttnn.chunk(input_tensor, 3, dim=-1)
+    logger.debug(f"Number of chunks: {len(chunks)}")  # 3
+    logger.debug(f"Chunk Shape: {chunks[0].shape}")  # Shape([1, 1, 64, 32])
+
+
 def test_permute(device):
     # Create a tensor to permute
     input_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, device=device)
