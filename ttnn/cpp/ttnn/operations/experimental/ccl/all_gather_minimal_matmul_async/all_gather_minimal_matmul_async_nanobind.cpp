@@ -158,9 +158,11 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             core-to-core relay. Independent of the fabric config; not supported with FSDP.
 
         gather_rows : bool, default: False
-            Gather the activation's rows instead of its K: each rank holds input [M, K] (the whole K), the op gathers
-            the ring's rows in rank order into persistent_output_buffer [M * ring_size, K] and returns that times this
-            rank's weight, [M * ring_size, N]. Fabric2D Ring only; no bias, ternary, SwiGLU, FSDP or output chunks.
+            Gather the activation's rows instead of its K: each rank holds input [M, K] (the whole K, M a multiple of
+            32) and the op returns the ring's rows in rank order times this rank's weight, [M * ring_size, N].
+            persistent_output_buffer (interleaved DRAM, the input's dtype, >= [M * ring_size, K]) is the op's
+            scratch for the other ranks' rows, in a permuted page order. Fabric2D Ring of 3 or 4 Blackhole devices;
+            no bias, ternary, SwiGLU, FSDP or output chunks.
 
         num_workers_per_link : Optional[int], default: 1
             The number of worker cores per link to use for the all gather portion of the operation.  More than 1 typically

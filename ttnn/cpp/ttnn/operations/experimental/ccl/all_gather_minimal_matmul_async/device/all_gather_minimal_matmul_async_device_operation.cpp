@@ -78,6 +78,13 @@ void validate_rows(
         M,
         TILE_HEIGHT);
     if (attributes.gather_rows) {
+        // The output stacks the ranks' logical rows; the kernels stack whole tiles, so the two must agree.
+        const auto& act_shape = act_tensor.logical_shape();
+        TT_FATAL(
+            act_shape[-2] == folded_rows(act_tensor) && act_shape.volume() / act_shape[-1] == act_shape[-2],
+            "all_gather_minimal_matmul_async gather_rows needs input [1, .., 1, M, K] with M ({}) a multiple of {}",
+            act_shape[-2],
+            TILE_HEIGHT);
         // A core's M block then spans at most two ranks' rows, which the in0 relay holds per block.
         const uint32_t rank_rows = folded_rows(act_tensor);
         TT_FATAL(
@@ -97,6 +104,12 @@ void validate_rows(
             "DRAM bank count ({})",
             segments,
             banks);
+        const auto& ag = tensor_args.persistent_output_buffer.value();
+        TT_FATAL(
+            ag.memory_config().buffer_type() == BufferType::DRAM && !ag.memory_config().is_sharded() &&
+                ag.dtype() == act_tensor.dtype() && ag.layout() == Layout::TILE,
+            "all_gather_minimal_matmul_async gather_rows needs an interleaved DRAM TILE persistent_output_buffer of "
+            "the input's dtype");
     }
     if (tensor_args.persistent_output_buffer.has_value()) {
         const auto& ag = tensor_args.persistent_output_buffer.value();
@@ -233,9 +246,9 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
     if (attributes.gather_rows) {
         TT_FATAL(
             tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*act_tensor.device())) &&
-                attributes.topology == ttnn::ccl::Topology::Ring && attributes.ring_size > 1 &&
-                attributes.ring_size <= 4,
-            "all_gather_minimal_matmul_async gather_rows needs a Fabric2D Ring of 2 to 4 devices");
+                attributes.topology == ttnn::ccl::Topology::Ring && attributes.ring_size >= 3 &&
+                attributes.ring_size <= 4 && act_tensor.device()->arch() == tt::ARCH::BLACKHOLE,
+            "all_gather_minimal_matmul_async gather_rows needs a Fabric2D Ring of 3 or 4 Blackhole devices");
         TT_FATAL(
             !attributes.fsdp_cluster_axis.has_value() && !tensor_args.bias_tensor.has_value() &&
                 !attributes.fused_ternary_scalar.has_value() && !attributes.fuse_swiglu && attributes.chunks == 1 &&

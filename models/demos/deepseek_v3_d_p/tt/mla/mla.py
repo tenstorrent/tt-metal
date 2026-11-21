@@ -2010,7 +2010,7 @@ class ttMLA:
         """On the row path (_q_a_rows_for_indexer), fuse the TP gather of the normalized q rows into q_b_proj
         (all_gather_minimal_matmul_async with gather_rows) when a tuned MLA_AGMM_CONFIG entry applies, on a Fabric2D TP
         ring with a column beside the grid free for the fabric muxes. Else the row path gathers, then runs q_b_proj."""
-        if self.tp_factor == 1 or not self._has_indexer or self._merge_qkv_a or self._llama4_beta is not None:
+        if self.tp_factor not in (3, 4) or not self._has_indexer or self._merge_qkv_a or self._llama4_beta is not None:
             return
         if not self._is_blackhole:
             return

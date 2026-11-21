@@ -65,7 +65,51 @@ FORCE_INLINE uint32_t row_gather_page(uint32_t i, uint32_t j, uint32_t K_tiles_,
 struct Segment {
     uint32_t row, s, e, k, band;
 };
-constexpr uint32_t kMaxSegments = 64;
+
+// Walks for_each_band_segment's segments one at a time (no list: any M fits).
+struct SegmentCursor {
+    uint32_t M_tiles, band, first_row, row_stride, k_step, m_blocks, m_block = 0, k, row;
+    SegmentCursor(uint32_t M_tiles_, uint32_t band_, bool odd_only, uint32_t first_row_, uint32_t row_stride_) :
+        M_tiles(M_tiles_),
+        band(band_),
+        first_row(first_row_),
+        row_stride(row_stride_),
+        k_step(odd_only ? 2 : 1),
+        m_blocks(ttnn::runtime_length::uniform_split(M_tiles_, in0_parallel_axis_cores, first_row_, M_block_tiles)
+                     .blocks_per_core),
+        k(odd_only ? 1 : 0),
+        row(first_row_) {
+        if (k >= K_super_blocks) {  // no odd K super-block
+            m_block = m_blocks;
+        }
+    }
+    bool next(Segment& seg) {
+        const uint32_t M_dev_tiles = M_tiles / m_ring;
+        while (m_block < m_blocks) {
+            const uint32_t r = row, kk = k, mb = m_block;
+            row += row_stride;  // advance: core row, then K super-block, then M block
+            if (row >= in0_parallel_axis_cores) {
+                row = first_row;
+                k += k_step;
+                if (k >= K_super_blocks) {
+                    k = k_step - 1;
+                    m_block++;
+                }
+            }
+            const auto [t, b, p, m_start, m_end] =
+                ttnn::runtime_length::uniform_split(M_tiles, in0_parallel_axis_cores, r, M_block_tiles);
+            const uint32_t m_tile = m_start + mb * M_block_tiles;
+            const uint32_t s = std::max(m_tile, band * M_dev_tiles);
+            const uint32_t e =
+                std::min(std::min(std::min(m_tile + M_block_tiles, m_end), M_tiles), (band + 1) * M_dev_tiles);
+            if (s < e) {
+                seg = {r, s, e, kk, band};
+                return true;
+            }
+        }
+        return false;
+    }
+};
 
 // Rank `band`'s rows [s, e) of K super-block k of core row `row`, for each of this mover's core rows (all K blocks, or
 // only the odd ones), in the matmul's block order (M block, K super-block, core row).
@@ -120,11 +164,14 @@ void kernel_main() {
     const uint32_t antipode_mesh = get_arg_val<uint32_t>(arg++);
     const uint32_t antipode_chip = get_arg_val<uint32_t>(arg++);
     // [10] on odd K blocks, tell the next rank's mover at the relay target [11, 12] to pass this rank's rows on (the
-    // antipode's other way round, balancing the two directions) [13] pass the upstream rank's odd K blocks on.
+    // antipode's other way round, balancing the two directions) [13] pass the upstream rank's odd K blocks on
+    // [14, 15] (with [7]) fence target at the antipode: its mover sending to this rank.
     const bool notify_relay = get_arg_val<uint32_t>(arg++) != 0;
     const uint32_t relay_x = get_arg_val<uint32_t>(arg++);
     const uint32_t relay_y = get_arg_val<uint32_t>(arg++);
     const bool relay_upstream = get_arg_val<uint32_t>(arg++) != 0;
+    const uint32_t antipode_fence_x = get_arg_val<uint32_t>(arg++);
+    const uint32_t antipode_fence_y = get_arg_val<uint32_t>(arg++);
     const uint32_t upstream = down ? (my_rank + 1) % m_ring : (my_rank + m_ring - 1) % m_ring;
     // This core counts the upstream's relay notices on the counter of its own direction.
     const uint32_t counter = down ? forward_counter : backward_counter;
@@ -136,21 +183,20 @@ void kernel_main() {
 #ifdef MOVER_READER
     (void)injector_x, (void)dst_mesh, (void)dst_chip, (void)fence_x, (void)fence_y, (void)to_antipode;
     (void)antipode_mesh, (void)antipode_chip, (void)notify_relay, (void)relay_x, (void)relay_y, (void)fence_counter;
+    (void)antipode_fence_x, (void)antipode_fence_y;
     // Own rows wait for nothing; the upstream's rows to pass on wait for their notice. A relay goes next as soon as it
     // has landed, never behind this mover's remaining own rows (a chain round the ring). Each kind keeps its order.
-    Segment own[kMaxSegments], passing[kMaxSegments];
+    SegmentCursor own(M_tiles, my_rank, false, first_row, row_stride);
+    SegmentCursor passing(M_tiles, upstream, true, first_row, row_stride);
     uint32_t num_own = 0, num_passing = 0;
     for_each_band_segment(
-        M_tiles, my_rank, false, first_row, row_stride, [&](uint32_t row, uint32_t s, uint32_t e, uint32_t k) {
-            own[num_own++] = {row, s, e, k, my_rank};
-        });
+        M_tiles, my_rank, false, first_row, row_stride, [&](uint32_t, uint32_t, uint32_t, uint32_t) { num_own++; });
     if (relay_upstream) {
         for_each_band_segment(
-            M_tiles, upstream, true, first_row, row_stride, [&](uint32_t row, uint32_t s, uint32_t e, uint32_t k) {
-                passing[num_passing++] = {row, s, e, k, upstream};
+            M_tiles, upstream, true, first_row, row_stride, [&](uint32_t, uint32_t, uint32_t, uint32_t) {
+                num_passing++;
             });
     }
-    ASSERT(num_own <= kMaxSegments && num_passing <= kMaxSegments);
     const auto input = TensorAccessor(input_args, input_addr, tile_bytes);
     const auto gather = TensorAccessor(gather_args, gather_addr, tile_bytes);
     CircularBuffer meta(meta_cb_id);
@@ -165,7 +211,9 @@ void kernel_main() {
                 noc_semaphore_wait_min(landed, next_passing + 1);
             }
         }
-        const Segment seg = relay ? passing[next_passing++] : own[next_own++];
+        Segment seg;
+        (relay ? passing : own).next(seg);
+        (relay ? next_passing : next_own)++;
         cb.reserve_back(kSegmentTiles);
         meta.reserve_back(1);
         uint32_t ptr = cb.get_write_ptr();
@@ -229,14 +277,22 @@ void kernel_main() {
     };
     connection.open();
 
-    // Fence: this rank has started (its previous call's reads of the gather buffer are done); wait for downstream's.
+    // Fence: this rank has started (its previous call's reads of the gather buffer are done); wait for the same from
+    // every rank this mover writes into: downstream and, if it sends there directly, the antipode.
     {
         auto* header = free_header(0);
         header->to_noc_unicast_atomic_inc(
             NocUnicastAtomicIncCommandHeader{get_noc_addr(fence_x, fence_y, fence_counter), 1, true});
         send_header(header);
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fence_counter), 1);
-        noc_semaphore_inc(get_noc_addr(fence_counter), 0u - 1u);
+        if (to_antipode) {
+            header = free_header(1);
+            header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+                get_noc_addr(antipode_fence_x, antipode_fence_y, fence_counter), 1, true});
+            send_header(header);
+        }
+        const uint32_t starts = to_antipode ? 2 : 1;
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fence_counter), starts);
+        noc_semaphore_inc(get_noc_addr(fence_counter), 0u - starts);
         noc.async_atomic_barrier();
     }
 

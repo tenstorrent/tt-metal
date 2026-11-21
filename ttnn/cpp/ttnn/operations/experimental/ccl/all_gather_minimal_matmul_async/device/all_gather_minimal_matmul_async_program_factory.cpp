@@ -649,6 +649,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     };
     std::vector<tt::tt_metal::CoreRange> mover_core_of;           // [2 * link + direction] on this chip
     std::vector<tt::tt_metal::CoreCoord> down_movers, up_movers;  // on the neighbours
+    std::vector<tt::tt_metal::CoreCoord> antipode_movers;         // on the antipode (ring of 4)
     if (gather_rows) {
         const auto self = sender_device_coord;
         for (const auto& core : place_movers(self, backward_coord.value(), forward_coord.value())) {
@@ -657,11 +658,15 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         // The down neighbour's neighbours: the rank two down and this one; the up neighbour's: this one and two up.
         down_movers = place_movers(backward_coord.value(), minus_two_coord.value(), self);
         up_movers = place_movers(forward_coord.value(), self, linear_far_end_coord.value());
+        if (ring_size == 4) {  // the antipode's neighbours: the rank up from this one and the one down
+            antipode_movers = place_movers(linear_far_end_coord.value(), forward_coord.value(), backward_coord.value());
+        }
     }
     // gather_rows, ring of 4: the antipode is two hops either way; the fabric's routing table picks the way. This chip
     // sends its rows there from the mover facing that way, and the antipode's rows reach this chip from the neighbour
     // its route passes (the injectors count them on that neighbour's counter).
     bool antipode_via_up = false, antipode_from_higher = false, relay_from_up = false, relay_from_down = false;
+    bool antipode_sends_up = false;  // the antipode's own way to this chip, from its point of view
     tt::tt_fabric::FabricNodeId antipode_node = device->get_fabric_node_id(sender_device_coord);
     if (gather_rows && ring_size == 4) {
         const auto self_node = device->get_fabric_node_id(sender_device_coord);
@@ -678,6 +683,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
                         tt::tt_fabric::pipeline_get_forwarding_direction(*device, up_node, self_node);
         relay_from_down = tt::tt_fabric::pipeline_get_forwarding_direction(*device, down_node, up_node) !=
                           tt::tt_fabric::pipeline_get_forwarding_direction(*device, down_node, self_node);
+        // The antipode's up neighbour is this chip's down one.
+        antipode_sends_up = tt::tt_fabric::pipeline_get_forwarding_direction(*device, antipode_node, self_node) ==
+                            tt::tt_fabric::pipeline_get_forwarding_direction(*device, antipode_node, down_node);
     }
     const uint32_t num_dram_banks = device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     const uint32_t mover_tiles_per_packet = std::max<uint32_t>(
@@ -1011,10 +1019,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
     in0_defines["IS_IN0"] = "1";
     in0_fabric_defines = in0_defines;
-    if (gather_rows) {
-        in0_fabric_defines.erase("USE_MUX");
+    if (!gather_rows) {  // gather_rows: the movers carry the rows, the in0 edge cores connect to nothing
+        in0_fabric_defines["USE_MUX"] = "1";
     }
-    in0_fabric_defines["USE_MUX"] = "1";
     auto in1_defines = defines;
     if (persistent_weight_buffer.has_value()) {
         in1_defines["FSDP_FUSED"] = "1";
@@ -1310,14 +1317,18 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         K_block_tail_tiles,
         in0_parallel_axis_cores,
     };
-    fabric_mux_connection_ct_args(
-        num_workers_per_link,
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-        mux_kernel_config,
-        in0_receiver_fabric_compile_time_args);
-    // Unused slots: the unicast routes are common runtime args (they differ per device).
-    in0_receiver_fabric_compile_time_args.insert(
-        in0_receiver_fabric_compile_time_args.end(), unicast_forward_args.size() + unicast_backward_args.size(), 0u);
+    if (!gather_rows) {  // with USE_MUX only (in0_fabric_defines)
+        fabric_mux_connection_ct_args(
+            num_workers_per_link,
+            tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+            mux_kernel_config,
+            in0_receiver_fabric_compile_time_args);
+        // Unused slots: the unicast routes are common runtime args (they differ per device).
+        in0_receiver_fabric_compile_time_args.insert(
+            in0_receiver_fabric_compile_time_args.end(),
+            unicast_forward_args.size() + unicast_backward_args.size(),
+            0u);
+    }
     append_accessors(
         in0_receiver_fabric_compile_time_args,
         ag_output_tensor,
@@ -1606,6 +1617,11 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
                 const auto relay_noc =
                     device->worker_core_from_logical_core(dir == 0 ? down_movers[2 * link] : up_movers[2 * link + 1]);
                 const auto dst_node = device->get_fabric_node_id(*downstream);
+                // The antipode's mover sending straight to this chip fences with the one sending straight there.
+                const auto antipode_fence_noc =
+                    ring_size == 4
+                        ? device->worker_core_from_logical_core(antipode_movers[2 * link + (antipode_sends_up ? 1 : 0)])
+                        : tt::tt_metal::CoreCoord(0, 0);
                 std::vector<uint32_t> args = {
                     dir,
                     link,       // first core row: the links interleave core rows
@@ -1622,7 +1638,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
                     static_cast<uint32_t>(relay_noc.x),
                     static_cast<uint32_t>(relay_noc.y),
                     // pass the upstream neighbour's odd K blocks on (down mover: from up; up mover: from down)
-                    (dir == 0 ? relay_from_up : relay_from_down) ? 1u : 0u};
+                    (dir == 0 ? relay_from_up : relay_from_down) ? 1u : 0u,
+                    static_cast<uint32_t>(antipode_fence_noc.x),
+                    static_cast<uint32_t>(antipode_fence_noc.y)};
                 desc.kernels[kFsdpMuxKernelIdx].emplace_runtime_args(core, as_runtime_args(args));
                 tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
                     *device, src_node, dst_node, link_index(sender_device_coord, *downstream, link), desc, core, args);
