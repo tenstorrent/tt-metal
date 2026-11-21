@@ -55,45 +55,109 @@ void kernel_main() {
     const auto addr_mask = TensorAccessor(tensor::mask);
 #endif
 
-#if defined(CAUSAL_MASK) && !defined(SHARDED_CAUSAL_MASK)
-
-    constexpr std::uint32_t fused_head = get_arg(args::fused_head);
-    constexpr std::uint32_t mask_block_ht = get_arg(args::mask_block_ht);
-
-    for (std::uint32_t f = 0; f < fused_head; f++) {
-        mask_id = mask_start_tile_id;
-
-        for (std::uint32_t h = 0; h < mask_block_ht; h++) {
-            dfb_attn_obj.reserve_back(block_wt);
-            std::uint32_t write_offset = 0;
-            for (std::uint32_t w = 0; w < block_wt; w++) {
-                noc.async_read(
-                    addr_mask, dfb_attn_obj, mask_tile_bytes, {.page_id = mask_id}, {.offset_bytes = write_offset});
-                write_offset += mask_tile_bytes;
-                ++mask_id;
-            }
-            noc.async_read_barrier();
-            dfb_attn_obj.push_back(block_wt);
-
-            if (f == 0 && h == 0) {
-                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                    dfb_max_scaler,
-                    ckernel::PoolType::MAX,
-                    ckernel::ReduceDim::REDUCE_ROW>(dfb_max_scaler_obj);
-                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                    dfb_sum_scaler,
-                    ckernel::PoolType::SUM,
-                    ckernel::ReduceDim::REDUCE_ROW>(dfb_sum_scaler_obj);
-            }
-        }
-    }
-#elif defined(CAUSAL_MASK) && defined(SHARDED_CAUSAL_MASK)
+#if defined(SHARDED_CAUSAL_MASK)
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(
             dfb_max_scaler_obj);
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
             dfb_sum_scaler_obj);
+#elif defined(CAUSAL_MASK)
+
+    constexpr std::uint32_t block_ht = get_arg(args::block_ht);
+    constexpr std::uint32_t head_ht = get_arg(args::head_ht);
+    constexpr std::uint32_t mask_block_ht = get_arg(args::mask_block_ht);
+    constexpr std::uint32_t rows_per_batch = get_arg(args::rows_per_batch);
+    constexpr std::uint32_t mask_batch_stride = get_arg(args::mask_batch_stride);
+    constexpr std::uint32_t mask_max_batch_offset = get_arg(args::mask_max_batch_offset);
+    std::uint32_t mask_ht = get_arg(args::mask_start_ht);
+    std::uint32_t ht = get_arg(args::mask_start_head_ht);
+    std::uint32_t rows_left_in_batch = get_arg(args::mask_rows_left_in_batch);
+    std::uint32_t curr_batch_offset = mask_start_tile_id;
+
+    for (std::uint32_t h = 0; h < block_ht; h++) {
+        mask_id = curr_batch_offset + mask_ht * block_wt;
+        dfb_attn_obj.reserve_back(block_wt);
+        std::uint32_t write_offset = 0;
+        for (std::uint32_t w = 0; w < block_wt; w++) {
+            noc.async_read(
+                addr_mask, dfb_attn_obj, mask_tile_bytes, {.page_id = mask_id}, {.offset_bytes = write_offset});
+            write_offset += mask_tile_bytes;
+            ++mask_id;
+        }
+        noc.async_read_barrier();
+        dfb_attn_obj.push_back(block_wt);
+
+        if (h == 0) {
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                dfb_max_scaler,
+                ckernel::PoolType::MAX,
+                ckernel::ReduceDim::REDUCE_ROW>(dfb_max_scaler_obj);
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                dfb_sum_scaler,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW>(dfb_sum_scaler_obj);
+        }
+
+        --rows_left_in_batch;
+        if (rows_left_in_batch == 0) {
+            rows_left_in_batch = rows_per_batch;
+            ht = 0;
+            mask_ht = 0;
+            if (curr_batch_offset < mask_max_batch_offset) {
+                curr_batch_offset += mask_batch_stride;
+            }
+        } else {
+            ++ht;
+            ++mask_ht;
+            if (ht == head_ht) {
+                ht = 0;
+                mask_ht = 0;
+            } else if (mask_ht == mask_block_ht) {
+                mask_ht = 0;
+            }
+        }
+    }
+#elif defined(MASK_PER_ROW)
+    constexpr std::uint32_t block_ht = get_arg(args::block_ht);
+    constexpr std::uint32_t rows_per_batch = get_arg(args::rows_per_batch);
+    constexpr std::uint32_t mask_batch_stride = get_arg(args::mask_batch_stride);
+    constexpr std::uint32_t mask_max_batch_offset = get_arg(args::mask_max_batch_offset);
+    std::uint32_t rows_left_in_batch = get_arg(args::mask_rows_left_in_batch);
+    std::uint32_t curr_batch_offset = mask_start_tile_id;
+
+    for (std::uint32_t h = 0; h < block_ht; h++) {
+        mask_id = curr_batch_offset;
+        dfb_attn_obj.reserve_back(block_wt);
+        std::uint32_t write_offset = 0;
+        for (std::uint32_t w = 0; w < block_wt; w++) {
+            noc.async_read(
+                addr_mask, dfb_attn_obj, mask_tile_bytes, {.page_id = mask_id}, {.offset_bytes = write_offset});
+            write_offset += mask_tile_bytes;
+            ++mask_id;
+        }
+        noc.async_read_barrier();
+        dfb_attn_obj.push_back(block_wt);
+
+        if (h == 0) {
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                dfb_max_scaler,
+                ckernel::PoolType::MAX,
+                ckernel::ReduceDim::REDUCE_ROW>(dfb_max_scaler_obj);
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                dfb_sum_scaler,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW>(dfb_sum_scaler_obj);
+        }
+
+        --rows_left_in_batch;
+        if (rows_left_in_batch == 0) {
+            rows_left_in_batch = rows_per_batch;
+            if (curr_batch_offset < mask_max_batch_offset) {
+                curr_batch_offset += mask_batch_stride;
+            }
+        }
+    }
 #else
     dfb_attn_obj.reserve_back(block_wt);
     std::uint32_t write_offset = 0;
