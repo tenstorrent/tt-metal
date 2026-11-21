@@ -441,8 +441,17 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         return std::pair{distribution->shard_shape_in_pages(), distribution->cores()};
     };
 
+    // Parameters the compute kernel takes as runtime args leave the key; the renamed source stays in it.
+    const auto* runtime_scalars = utils::get_runtime_scalar_defines_cached(attributes.op_chain, input_tensor.dtype());
+    std::optional<operation_attributes_t> keyed_attributes;
+    if (runtime_scalars != nullptr) {
+        keyed_attributes.emplace(attributes);
+        keyed_attributes->op_chain = {unary::EltwiseUnaryWithParam(attributes.op_chain[0].type())};
+    }
+
     return operation::hash_operation<UnaryDeviceOperation>(
-        attributes,
+        keyed_attributes.has_value() ? *keyed_attributes : attributes,
+        runtime_scalars != nullptr ? std::optional{runtime_scalars->key} : std::nullopt,
         input_tensor.tensor_spec().tensor_layout(),
         output_spec.tensor_layout(),
         // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
@@ -457,7 +466,15 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         src_shard_vol,
         dst_shard_vol,
         // The DRAM read flow selects kernel defines, dataflow buffers and semaphores.
-        get_dram_read_plan(attributes.op_chain, input_tensor, output_spec, attributes.worker_grid).flow);
+        get_dram_read_plan(attributes.op_chain, input_tensor, output_spec, attributes.worker_grid).flow,
+        // The packer route bakes its threshold into PACK_RELU_CONFIG instead of taking it as a runtime scalar, so
+        // it has to stay in the key (relu_max(x, 6) must not share a program with relu_max(x, 4)).
+        utils::get_pack_relu_config(
+            attributes.op_chain,
+            input_tensor.dtype(),
+            output_spec.data_type(),
+            attributes.fp32_dest_acc_en,
+            shard_specs.has_value() && input_tensor.is_sharded() && output_spec.memory_config().is_sharded()));
 }
 
 bool UnaryDeviceOperation::skip_launch(

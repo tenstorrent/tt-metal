@@ -412,6 +412,11 @@ tt::tt_metal::ProgramRunArgs make_run_args(
 
     uint32_t packed_scalar1 = 0, packed_scalar2 = 0;
     pack_first_op_scalars(operation_attributes.op_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
+    const auto* runtime_scalars = get_runtime_scalar_defines_cached(operation_attributes.op_chain, input.dtype());
+    if (runtime_scalars != nullptr) {
+        packed_scalar1 = runtime_scalars->scalars[0];
+        packed_scalar2 = runtime_scalars->scalars[1];
+    }
 
     KernelRunArgs reader_run_args{.kernel = READER};
     KernelRunArgs writer_run_args{.kernel = WRITER};
@@ -446,6 +451,9 @@ tt::tt_metal::ProgramRunArgs make_run_args(
     }
     compute_run_args.common_runtime_arg_values["packed_scalar1"] = packed_scalar1;
     compute_run_args.common_runtime_arg_values["packed_scalar2"] = packed_scalar2;
+    if (runtime_scalars != nullptr) {
+        compute_run_args.common_runtime_arg_values["packed_scalar3"] = runtime_scalars->scalars[2];
+    }
 
     for (const auto& [name, value] : dram_read_args(plan, input, operation_attributes.worker_grid)) {
         reader_run_args.common_runtime_arg_values[name] = value;
@@ -537,6 +545,10 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
 
     const bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
+    auto runtime_scalars = get_runtime_scalar_defines(ops_chain, input.dtype());
+    if (runtime_scalars.has_value()) {
+        unary_defines = std::move(runtime_scalars->defines);
+    }
     if (bf16_kernel_defines) {
         unary_defines = *bf16_kernel_defines;
     }
@@ -801,8 +813,12 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             },
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args = std::move(compute_compile_time_args),
+        // packed_scalar3 is declared only when the kernel reads it, so other unary programs set no extra arg.
         .runtime_arg_schema =
-            {.runtime_arg_names = {"num_tiles"}, .common_runtime_arg_names = {"packed_scalar1", "packed_scalar2"}},
+            {.runtime_arg_names = {"num_tiles"},
+             .common_runtime_arg_names = runtime_scalars.has_value()
+                                             ? Group<std::string>{"packed_scalar1", "packed_scalar2", "packed_scalar3"}
+                                             : Group<std::string>{"packed_scalar1", "packed_scalar2"}},
         .hw_config = std::move(compute_hw_config),
     };
 
