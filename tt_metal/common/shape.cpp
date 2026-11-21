@@ -107,7 +107,8 @@ std::string ttsl::fmt_detail::to_string(const tt::tt_metal::Shape& shape) {
 }
 
 nlohmann::json ttsl::json::to_json_t<tt::tt_metal::Shape>::operator()(const tt::tt_metal::Shape& shape) const {
-    return ttsl::json::to_json(shape.view());
+    // view() is a span, which has no to_json overload; serialize an owning container.
+    return ttsl::json::to_json(tt::tt_metal::ShapeBase::Container(shape.view().begin(), shape.view().end()));
 }
 
 tt::tt_metal::Shape ttsl::json::from_json_t<tt::tt_metal::Shape>::operator()(const nlohmann::json& json_object) const {
