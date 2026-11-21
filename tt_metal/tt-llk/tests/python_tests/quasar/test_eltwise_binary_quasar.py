@@ -38,7 +38,6 @@ from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
     ENABLE_DIRECT_INDEXING,
-    INPUT_TILE_CNT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -317,7 +316,6 @@ def test_eltwise_binary(
                 input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
             ),
             TILE_COUNT(tile_cnt_A),
-            INPUT_TILE_CNT(tile_cnt_A),
             OUTPUT_TILE_CNT(tile_cnt_res),
             NUM_FACES(num_faces, num_faces, num_faces),
             TEST_FACE_DIMS(tile_shape.face_r_dim),
