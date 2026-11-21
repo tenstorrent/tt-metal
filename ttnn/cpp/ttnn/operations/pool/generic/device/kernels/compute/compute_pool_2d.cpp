@@ -243,10 +243,16 @@ void kernel_main() {
                         pre_tilize_cb_id);
                 }
             } else {
-                // ROW_MAJOR output: pack directly to output CB
+                // ROW_MAJOR output: pack directly to output CB. The packer keeps the width from the
+                // last pack_untilize_dest_init, and the last channel block is narrower than the rest,
+                // so every block must pair its init with its own pack width. Without the partial
+                // init the last block packs max_tiles_per_iter tiles into partial_iter_output_tiles
+                // worth of space, overwriting the tensor allocated after the output.
                 if (last_c_block) {
+                    pack_untilize_dest_init<partial_iter_output_tiles>(out_cb_id);
                     pack_untilize_dest<partial_iter_output_tiles>(out_cb_id, 1, 0);
                 } else {
+                    pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id);
                     pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0);
                 }
                 out_dfb.push_back(output_faces);
