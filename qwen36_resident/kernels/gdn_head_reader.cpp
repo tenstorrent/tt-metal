@@ -111,7 +111,10 @@ void push_pages(uint32_t cb, const AddrGen& src, uint32_t first, uint32_t n, uin
 }  // namespace
 
 void kernel_main() {
-    const uint32_t rows = get_arg_val<uint32_t>(0);
+    // (row groups: the row buffer is this core's CB kCbRows, active_rows.hpp)
+    const uint32_t rows = groups > 1
+                              ? get_local_cb_interface(kCbRows).fifo_limit - get_local_cb_interface(kCbRows).fifo_size
+                              : get_arg_val<uint32_t>(0);
     const uint32_t state = get_arg_val<uint32_t>(1);
     const uint32_t norm_w = get_arg_val<uint32_t>(2);
     const uint32_t q_tile = get_arg_val<uint32_t>(3);

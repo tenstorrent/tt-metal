@@ -87,7 +87,8 @@ KV_BLOCK = 8  # KV position tiles per streamed block of an attention worker
     SEM_ADDR,
     SEM_LOCAL,
     SEM_GROUP,
-) = range(13)
+    SEM_RADDR,  # row groups: the mixers' row buffer address, leader -> streamers
+) = range(14)
 HEAD_FP32_CBS = (5, 6, 7, 15, 30, 31)
 # the chunked verify's head cores (gdn_chunk_compute.cpp): fp32 CBs unpacked straight to DEST, and every CB
 CHUNK_FP32_CBS = (5, 6, 11, 16, 25, 28)
@@ -858,7 +859,9 @@ class ResidentModel:
 
         # ---- mixer rows (GDN heads, attention leader and tail core)
         row_w = max(d.g_cols, d.a_cols)
-        rows_t = l1(torch.zeros((len(heads) + 2) * LR, row_w), mixer_grid, [LR, row_w])
+        # (row groups, E4.2: a CB on the mixer cores instead, kernels/active_rows.hpp kCbRows)
+        rows_t = l1(torch.zeros((len(heads) + 2) * LR, row_w), mixer_grid, [LR, row_w]) if groups == 1 else None
+        rows_addr = rows_t.buffer_address() if rows_t is not None else 0
 
         # ---- GDN heads: state [copy][head][16] fp32 tiles (interleaved: a state's tiles spread over the
         # banks), norm weight [copy][4] row-0 tiles
@@ -1127,6 +1130,19 @@ class ResidentModel:
                     ],
                 )
 
+            def aliased_n(tiny_idxs, full_idxs, tiles):
+                """one memory of `tiles` batch x 32 tiles under several CB indices (tiny and full-tile views)"""
+                fds = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=i, data_format=ttnn.bfloat16, page_size=64 * B, tile=ttnn.TileDescriptor(B, TILE)
+                    )
+                    for i in tiny_idxs
+                ] + [
+                    ttnn.CBFormatDescriptor(buffer_index=i, data_format=ttnn.bfloat16, page_size=full_page)
+                    for i in full_idxs
+                ]
+                return ttnn.CBDescriptor(total_size=tiles * 64 * B, core_ranges=grid, format_descriptors=fds)
+
             T = ttnn.cb_descriptor_from_sharded_tensor
 
             def ring_cb(size):
@@ -1145,8 +1161,12 @@ class ResidentModel:
                 cb(8, grid, groups * d.It, page=64 * B, tiny_tile=True),
                 tiny_cb(9, groups * nd_max),
                 tiny_cb(10, groups * nd_max),
-                aliased(11, 12, groups * d.Ht),
-                aliased(13, 14, groups * d.Ht),
+                *(
+                    [aliased(11, 12, d.Ht), aliased(13, 14, d.Ht)]
+                    if groups == 1
+                    # row groups (E4.1, streamer_common.hpp kHInPlace): h is written over x, one memory for both
+                    else [aliased_n((11, 13), (12, 14), groups * d.Ht), tiny_cb(39, groups * nd_max)]
+                ),
                 aliased(15, 27, groups * blk_tiles),
                 aliased(26, 28, groups * blk_tiles),
                 aliased(16, 29, groups * blk_tiles),
@@ -1167,8 +1187,10 @@ class ResidentModel:
             cbs.append(cb(2, hub_grid, x_views))
             cbs.append(cb(1, hub_grid, 1, page=(hub_headers + 2 * self.feed) * 160 + 16))
             if groups > 1:
-                # the hub compute's sub-round count; the streamers' active-group mask (reader -> compute)
+                # the hub compute's sub-round count; the streamers' active-group mask (reader -> compute); the mixers'
+                # row buffer (E4.2, kernels/active_rows.hpp kCbRows)
                 cbs += [cb(3, hub_grid, 1, ttnn.uint32, 16), cb(37, grid, 1, ttnn.uint32, 16)]
+                cbs.append(cb(40, mixer_grid, groups * (row_w // TILE), page=64 * B, tiny_tile=True))
             if B > 1:
                 cbs += [cb(32, grid, 1), cb(33, grid, 1), cb(34, grid, 2, *f32), cb(35, grid, 1, *f32), cb(38, grid, 1)]
             if lm_head:
@@ -1315,6 +1337,8 @@ class ResidentModel:
                 for i in range(SEM_GROUP)
             ]
             sems.append(ttnn.SemaphoreDescriptor(id=SEM_GROUP, core_ranges=head_grid, initial_value=0))
+            if groups > 1:
+                sems.append(ttnn.SemaphoreDescriptor(id=SEM_RADDR, core_ranges=grid.merge(lead_grid), initial_value=0))
 
             # every kernel: multi-user rows mode (active_rows.hpp)
             # (row_tiles: batch x 32 tiles per row group in the mixers' row buffer, gdn_head_reader.cpp)
@@ -1325,6 +1349,7 @@ class ResidentModel:
                 ("row_tiles", row_w // TILE),
                 ("o_tiles", d.gv // TILE),  # the streamers' o_in tiles per row group (gdn_head_writer.cpp)
                 ("tok_pos_off", self.tok_pos_off),  # the rows' positions with row groups (active_rows.hpp)
+                ("sem_raddr", SEM_RADDR),
             ]
 
             def kernel(src, core_ranges, ct, rt, config, named=()):
@@ -1477,7 +1502,7 @@ class ResidentModel:
                     wr[c.x][c.y] = (
                         [ng, bank * it_bank + gfirst, nd, bank * ht_bank + dfirst, hub_p.x, hub_p.y]
                         + [int(i == 0), 0]
-                        + [nqg, bank * qg_bank + qgf, nqa, bank * qa_bank + qaf, rows_t.buffer_address(), n_conv]
+                        + [nqg, bank * qg_bank + qgf, nqa, bank * qa_bank + qaf, rows_addr, n_conv]
                         + [sub["hist"].buffer_address(), i * gdn_copies, gdn_copies, tok_addr]
                         + head_xy
                         + [lead_p.x, lead_p.y, tail_p.x, tail_p.y]
@@ -1539,7 +1564,7 @@ class ResidentModel:
                         ]
                     hr[c.x][c.y] = (
                         [
-                            rows_t.buffer_address(),
+                            rows_addr,
                             sub["state"].buffer_address(),
                             norm_t.buffer_address(),
                             kh * 4,
@@ -1582,7 +1607,7 @@ class ResidentModel:
                         [role, w_i]
                         + kv_addrs
                         + [kv_stride, len(ch), 0, tok_addr, self.rope_off]
-                        + ([rows_t.buffer_address(), kw_t.buffer_address()] if is_tail else [])
+                        + ([rows_addr, kw_t.buffer_address()] if is_tail else [])
                         + ([sub["pt"].buffer_address()] if self.kv_paged else [])
                     )
                     aw[c.x][c.y] = (
@@ -1594,7 +1619,7 @@ class ResidentModel:
                     )
                     ac[c.x][c.y] = [role, len(ch)]
                 lr, lw, lc = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-                lr[leader.x][leader.y] = [rows_t.buffer_address(), len(groups_), 0, tok_addr, self.rope_off]
+                lr[leader.x][leader.y] = [rows_addr, len(groups_), 0, tok_addr, self.rope_off]
                 lr[leader.x][leader.y].append(qw_t.buffer_address())
                 w0p, w1p = wphys[0], wphys[-1]
                 lw[leader.x][leader.y] = (
@@ -1670,7 +1695,11 @@ class ResidentModel:
                         else:
                             args.append(0)
                 mesh_pd[ttnn.MeshCoordinateRange(coord, coord)] = program
-            io = [sub["x"], self.o_in_t, rows_t, q_t, M_t, m_slots_t, one_t, mean_t]
+            io = (
+                [sub["x"], self.o_in_t]
+                + ([rows_t] if rows_t is not None else [])
+                + [q_t, M_t, m_slots_t, one_t, mean_t]
+            )
             io += [taps_t, sub["hist"], sub["state"], norm_t, qw_t, kw_t, sub["K"], sub["V"], sub["tok"]]
             io += self._keep
             if lm_head:

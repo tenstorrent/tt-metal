@@ -330,20 +330,47 @@ FORCE_INLINE void silu_mul(uint32_t ng) {
     cb_pop_front(cb_u, groups * kBlk);
 }
 
-// cb_pout = cb_dout + x[pout_off : pout_off + nd]
+// chip 0, h over x (kHInPlace): the residual columns x[pout_off : pout_off + nd] of every active group into cb_xres,
+// before rmsnorm overwrites x with h
+FORCE_INLINE void save_residual(uint32_t nd, uint32_t pout_off) {
+    cb_wait_front(cb_x, groups * Ht);
+    cb_reserve_back(cb_xres, groups * nd_max);
+    reconfig_full_operand(cb_x, cb_x);
+    pack_reconfig_data_format<true>(cb_xres);
+    pack_init(cb_xres);
+    copy_init(cb_x);
+    for (uint32_t k = 0; k < groups_on(); k++) {
+        const uint32_t gr = group_at(k);
+        for (uint32_t t = 0; t < nd; t++) {
+            tile_regs_acquire();
+            copy_tile(cb_x, gr * Ht + pout_off + t, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile<true>(0, cb_xres, gr * nd_max + t);
+            tile_regs_release();
+        }
+    }
+    cb_push_back(cb_xres, groups * nd_max);
+}
+
+// cb_pout = cb_dout + x[pout_off : pout_off + nd] (kHInPlace: from cb_xres)
 FORCE_INLINE void add_residual(uint32_t nd, uint32_t pout_off) {
+    constexpr uint32_t xcb = kHInPlace ? cb_xres : cb_x;
     cb_wait_front(cb_dout, groups * nd_max);
-    reconfig_full_operand(cb_dout, cb_x);
-    add_init(cb_dout, cb_x);
+    if constexpr (kHInPlace) {
+        cb_wait_front(cb_xres, groups * nd_max);
+    }
+    reconfig_full_operand(cb_dout, xcb);
+    add_init(cb_dout, xcb);
     pack_init(cb_pout);
     for (uint32_t gr = 0; gr < groups; gr++) {
         cb_reserve_back(cb_pout, nd_max);
-        const uint32_t din = gr * nd_max, xin = gr * Ht + pout_off;
+        const uint32_t din = gr * nd_max, xin = kHInPlace ? gr * nd_max : gr * Ht + pout_off;
         for (uint32_t t0 = 0; group_on(gr) && t0 < nd; t0 += kDst) {
             const uint32_t n = t0 + kDst <= nd ? kDst : nd - t0;
             tile_regs_acquire();
             for (uint32_t d = 0; d < n; d++) {
-                add_tiles(cb_dout, cb_x, din + t0 + d, xin + t0 + d, d);
+                add_tiles(cb_dout, xcb, din + t0 + d, xin + t0 + d, d);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -355,6 +382,9 @@ FORCE_INLINE void add_residual(uint32_t nd, uint32_t pout_off) {
         cb_push_back(cb_pout, nd_max);
     }
     cb_pop_front(cb_dout, groups * nd_max);
+    if constexpr (kHInPlace) {
+        cb_pop_front(cb_xres, groups * nd_max);
+    }
 }
 
 // q|k|v columns: cb_qkvz_out = silu(w0 * y[t-3] + w1 * y[t-2] + w2 * y[t-1] + w3 * y[t]) over the
@@ -568,6 +598,9 @@ void kernel_main() {
         const bool attn = is_attn(l);
         // mixer half
         mark(l, 0);
+        if constexpr (kHInPlace && chip == 0) {
+            save_residual(nd, pout_off);
+        }
         rmsnorm();
         mark(l, 1);
         if (attn) {
@@ -584,6 +617,9 @@ void kernel_main() {
         mark(l, 4);
         // mlp half
         mark(l, 5);
+        if constexpr (kHInPlace && chip == 0) {
+            save_residual(nd, pout_off);
+        }
         rmsnorm();
         mark(l, 6);
         matmul<kGateUp>(cb_h, cb_g, 2 * ng, kBlk, cb_u, ng);

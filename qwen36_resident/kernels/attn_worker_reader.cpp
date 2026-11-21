@@ -135,7 +135,8 @@ void kernel_main() {
         .page_size = kTile,
         .data_format = DataFormat::Float16_b};
     if (role == 2) {
-        rows = get_arg_val<uint32_t>(9);
+        rows = groups > 1 ? get_local_cb_interface(kCbRows).fifo_limit - get_local_cb_interface(kCbRows).fifo_size
+                          : get_arg_val<uint32_t>(9);
         for (uint32_t cb : {cb_kraw, cb_vraw}) {
             volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base(cb));
             for (uint32_t i = 0; i < Dt * kTile / 4; i++) {

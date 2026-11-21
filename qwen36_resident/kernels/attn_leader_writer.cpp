@@ -49,6 +49,20 @@ void kernel_main() {
     const uint32_t mc_dests = (x1 - x0 + 1) * (y1 - y0 + 1);
     auto& stage_iface = get_local_cb_interface(cb_stage);
     const uint32_t stage = stage_iface.fifo_limit - stage_iface.fifo_size;
+    if constexpr (groups > 1) {
+        // row groups: the mixers' row buffer (CB kCbRows, the same address on every mixer core) to every streamer
+        auto& rows_iface = get_local_cb_interface(kCbRows);
+        const uint32_t rows = rows_iface.fifo_limit - rows_iface.fifo_size;
+        for (uint32_t s = 0; s < num_streamers; s++) {
+            noc_inline_dw_write(
+                get_noc_addr(
+                    get_arg_val<uint32_t>(peers_base + 2 * s),
+                    get_arg_val<uint32_t>(peers_base + 2 * s + 1),
+                    get_semaphore(sem_raddr)),
+                rows);
+        }
+        noc_async_write_barrier();
+    }
     constexpr uint32_t children_base = peers_base + 2 * num_streamers;
     const uint32_t children = get_arg_val<uint32_t>(children_base);
     const uint32_t ts_addr = get_arg_val<uint32_t>(children_base + 1 + 2 * children);

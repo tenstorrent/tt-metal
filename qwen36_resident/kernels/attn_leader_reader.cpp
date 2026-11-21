@@ -46,7 +46,10 @@ FORCE_INLINE void push_resident(uint32_t cb, uint32_t n) {
 }  // namespace
 
 void kernel_main() {
-    const uint32_t rows_base = get_arg_val<uint32_t>(0);  // the row buffer (block g: row group g)
+    // the row buffer (block g: row group g; row groups: this core's CB kCbRows, active_rows.hpp)
+    const uint32_t rows_base =
+        groups > 1 ? get_local_cb_interface(kCbRows).fifo_limit - get_local_cb_interface(kCbRows).fifo_size
+                   : get_arg_val<uint32_t>(0);
     const uint32_t children = get_arg_val<uint32_t>(1);
     const uint32_t ts_addr = get_arg_val<uint32_t>(2);
     const uint32_t tok_addr = get_arg_val<uint32_t>(3);

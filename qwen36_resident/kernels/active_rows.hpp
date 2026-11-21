@@ -30,6 +30,10 @@ constexpr uint32_t tok_pos_off = get_named_compile_time_arg_val("tok_pos_off");
 // per row group: the mixers' row-buffer block (row_tiles batch x 32 tiles) and the streamers' o_in block (o_tiles)
 constexpr uint32_t row_tiles = get_named_compile_time_arg_val("row_tiles");
 constexpr uint32_t o_tiles = get_named_compile_time_arg_val("o_tiles");
+// row groups (E4.2): the mixers' row buffer is CB kCbRows on the mixer cores only (an L1 tensor would take its range on
+// every core); the attention leader hands its address to the streamers at launch (semaphore sem_raddr)
+constexpr uint32_t kCbRows = 40;
+constexpr uint32_t sem_raddr = get_named_compile_time_arg_val("sem_raddr");
 
 // the rows that run this step, in order (rows mode: the set bits of mask; otherwise all of them)
 template <uint32_t B>
