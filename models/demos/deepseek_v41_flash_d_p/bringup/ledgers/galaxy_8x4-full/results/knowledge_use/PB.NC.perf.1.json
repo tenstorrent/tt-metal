@@ -1,0 +1,60 @@
+{
+ "used": [
+  {
+   "id": "DS41-311",
+   "how": "the probe imports tt/history_gather through importlib.import_module (_hg()) so its monkeypatch hits the module the model calls after the resident runner's in-place reloads",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-314",
+   "how": "PACKED / PACKED_GLUED set per call through packed_common.switch (snap + env), never settings.refresh() on the held model",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a test that swaps history_gather._pack's output must also swap the local record buffers the PB.HG owned sends read (owned_prepare / owned_tails_prepare / _owned_one ignore _pack's return value); the stale loc bytes equal the new ones, so an A-vs-B output check cannot catch a missed swap (now DS41-377)",
+  "bringup/repo_map.md rows for tests/packed/test_packed_fast_tier.py, test_packed_deep_sweep.py, test_owned_send_ops.py: knowledge.check says the paths do not exist (the files are under tests/packed/; the row's path base is wrong)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "tests only; nothing padded or inflated (side B reads records the same size as today's)"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "DECIDED lines in BREADCRUMBS PB.NC: no Setting (the brief asks for tests only, never a serving switch); orchestrator measure not run (no model switch); worked without stopping"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "the probe uses the ladder's executed-layers load (BATCH_LAYERS executed, max_seq the deployment in whole chunks as test_packed_walls._ladder, BRINGUP_CHUNK=8192, no load-time env set in the test); run 2 reused the held model (49 s)"
+  }
+ ],
+ "cited_only": [
+  "DS41-368",
+  "DS41-377"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.NC",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T17:03:56",
+  "head": "fe7688f20c0",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.NC.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.NC_no_conversion.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.NC.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_no_conversion_probe.py"
+  ]
+ }
+}

@@ -3914,6 +3914,20 @@
   "top5_overlap": 1.0,
   "top5_overlap_limit": 0.994286
  },
+ "PB.NC": {
+  "noconv_4x2k_a_wall_ms_p1024000": 151.9,
+  "noconv_4x2k_a_wall_ms_p1024000_tagentic_cc": 151.9,
+  "noconv_4x2k_b_wall_ms_p1024000": 150.2,
+  "noconv_4x2k_b_wall_ms_p1024000_tagentic_cc": 150.2,
+  "noconv_4x2k_max_abs_diff_p1024000": 0.0,
+  "noconv_4x2k_max_abs_diff_p1024000_tagentic_cc": 0.0,
+  "noconv_single8192_a_wall_ms_p1024000": 131.7,
+  "noconv_single8192_a_wall_ms_p1024000_tagentic_cc": 131.7,
+  "noconv_single8192_b_wall_ms_p1024000": 130.7,
+  "noconv_single8192_b_wall_ms_p1024000_tagentic_cc": 130.7,
+  "noconv_single8192_max_abs_diff_p1024000": 0.0,
+  "noconv_single8192_max_abs_diff_p1024000_tagentic_cc": 0.0
+ },
  "PB.NR": {
   "ids_uploads_per_chunk": 0.0,
   "ids_uploads_per_chunk_tagentic_cc": 0.0,

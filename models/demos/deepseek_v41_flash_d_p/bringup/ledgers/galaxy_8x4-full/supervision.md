@@ -1258,3 +1258,8 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   values), a start fence; history buffers 4 -> 1 a source a chip. Chip-aligned 4x2k steady / resumed: 139264 112.6 /
   112.6 ms (72.8k; PB.MB4 116.8), 1024000 151.9 / 151.6 ms (53.9k; was 161.2; device 135.6 vs 146.7). 4x1600s: 139264
   116.7 (63.6k), 1M 159.9 (46.4k). History-gather device ms a chunk now 0.6-1.7. Single 8192 unchanged (100.1 / 127.6).
+- 16:43 PB.HG gate PASS -> fe7688f20c0. Next PB.NC.
+- 17:10 PB.NC ACCEPTED (tests-only probe, outputs A == B). NO-CONVERSION at 1M: single 8192 131.7 -> 130.7 ms (saving
+  -0.7..+1.0 ms, noise); chip-aligned 4x2k 151.9 -> 150.2 ms (-0.3..+1.7, noise). The conversion costs 0.5 ms device + 1 ms
+  host (single), 2 ms device + 2.5 ms host (4x2k) but runs hidden (engram wait / gather-hide regions); a 4-bit served cache
+  gains ~1% prefill at 1M. Next: model_bringup MB.5 (the same at 5120).

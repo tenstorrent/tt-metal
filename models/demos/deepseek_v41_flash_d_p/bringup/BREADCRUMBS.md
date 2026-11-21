@@ -1227,3 +1227,43 @@
   op test: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "BRINGUP_CHUNK=8192
   [PBHG_ROWS=64 PBHG_TIME_ROWS=16384] scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/packed/test_owned_send_ops.py"`.
+
+## PB.NC perf (attempt 1): ASSESSMENT, what not converting the history bf16 -> 4-bit every chunk would save at 1M (tests only)
+- Read first: OV-3, OV-58, OV-61, rule 20, perf_guide s1-4, PB.MB4 / PB.HG sections above.
+- Expected saving per chunk (written before any device run; perf_guide s1-4). Side B skips only
+  history_gather._pack (ttnn.bringup.ckv_bfp4_rows: read the served bf16 rows, tilize, round, write 320 B records);
+  the gathers / owned sends, attention and the rest are unchanged. Single 8192 at 1024000: 3 sources x (prefetch pack
+  of the whole history ~8-16k rows a chip + tail pack of 2 periods): device -0.5..-1.0 ms (MB.4: the fused pack at 1M
+  ~0.3-0.5 ms a source, part of it under the first engram wait, so the wall sees less), host -0.2..-0.4 ms
+  (~6 run_prepared calls x 0.06 ms). Chip-aligned 4 x 2k at 1024000: 4 segments x 3 sources = 12 prefetch packs + 12
+  tails: device -2..-4 ms of pack programs, but they run as compute steps of the gather-hide regions beside sdpa /
+  indexer (PB.MB4), so wall -1..-3 ms; host -0.7..-1.5 ms (~24 calls). Outputs A vs B identical (records are per row).
+- Load reason: "needs the ladder's executed-layers load (layers 0-20, decode, 8192, resident engram, max_seq the
+  deployment in whole chunks) because the pack's cost exists only at a 1M history through every source layer; ONE
+  load answers both paths and both sides".
+- What (tests only, no model change, no switch): tests/perf/test_no_conversion_probe.py (BATCH_SHARED, BATCH_LAYERS
+  executed, the ladder's load through test_skip_positions._runtime, 4 serving slots at the deployment context).
+  Path single8192: PACKED=off, slot 0, ChunkDescriptor.single, PD.run_chunk. Path 4x2k: PACKED=on, PACKED_GLUED=on,
+  ChunkDescriptor.packed of four 2048 segments at h (slot k, text from k x 4096), order rotated every run (as
+  ladder_common.packed_ladder). Side B: one untimed collect run (prev + timed chunk) records every cache _pack sees;
+  NoConv.prepack packs each slab [0, R) once (the original _pack_rows) into a HistoryBuffer of its own; then _pack
+  returns it (nothing launched) and _owned_send (PB.HG) swaps every local record buffer for the cache last "packed"
+  into it (locmap). Counter: owned-send entries read from an unfilled loc must be 0 (asserted; DS41-377).
+  DS41-311: history_gather is imported through importlib.import_module so the patch hits the live module; DS41-314:
+  PACKED / PACKED_GLUED set per call with packed_common.switch (snap + env), never settings.refresh().
+- DECIDED (OV-58): no Setting. The brief asks for an assessment, "tests only, never a serving switch"; side B is a
+  monkeypatch inside the probe. `orchestrator measure --task PB.NC` not run (as PB.9C / PB.T: no model switch).
+- Gotcha: the outputs A vs B alone would not prove side B's owned sends read the pre-packed records. The local
+  record buffers still hold the A side's identical bytes, so a missed swap reads stale-but-equal records. That is why
+  the substitution counter was added (run 2: 3400 swapped, 0 unmapped).
+- Measured (two runs, one load; report results/PB.NC_no_conversion.md). At 1024000, wall A / B ms: single 131.1 /
+  131.8 and 131.7 / 130.7; 4 x 2k 150.7 / 151.0 and 151.9 / 150.2. Device saved 0.26-0.49 (single), 1.6-3.0 (4x2k).
+  Pack host 0.95 ms (6 calls) / 2.55 ms (24 calls). Outputs A vs B 0.0 on both paths. vs the estimate: device as
+  expected, but the wall moves at most 1-2 ms, which is noise level. The packs are already hidden, and on 4x2k B's
+  device time saved turns into exposed host (the critical path is the host, not the packs).
+- Per-chunk values (rule 20): none touched (no model code changed).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.NC --spec $BRINGUP_SPEC --check --unit
+  "PB.NC#test_no_conversion_probe"` (devjob); knobs NOCONV_POS, NOCONV_RUNS, NOCONV_PATHS, NOCONV_OUT (JSON, default
+  /tmp/pb_nc_noconv.json).
+- Gate `gate PB.NC --check` (devjob pbnc_gate1, after the last test edit, hooks clean): PASS PB.NC. The probe unit was
+  reused (same code); determinism 0.0; fast tier passed; every noconv wall > 0; noconv max |diff| 0.0 on both paths.
