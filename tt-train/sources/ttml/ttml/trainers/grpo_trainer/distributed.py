@@ -84,8 +84,11 @@ def resolve_batch_layout() -> BatchLayout:
     )
 
 
-def init_distributed_training(config: "GRPOConfig") -> None:
-    """Check the process layout the rollout mode needs, and set it up for remote modes."""
+def init_distributed_training(config: "GRPOConfig", device_config: Any) -> None:
+    """Check the process layout the rollout mode needs, and set it up for remote modes.
+
+    Cross-rank traffic goes over MPI, so fabric is only enabled on a rank whose own mesh has more than one device.
+    """
     if config.backend.in_process:
         world = int(ttnn.distributed_context_get_size()) if ttnn.distributed_context_is_initialized() else 1
         if world != 1:
@@ -93,7 +96,6 @@ def init_distributed_training(config: "GRPOConfig") -> None:
                 f"rollout_backend={config.rollout_backend!r} runs in a single process, got world size {world}"
             )
         return
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
     world = int(ttnn.distributed_context_get_size())
@@ -101,6 +103,12 @@ def init_distributed_training(config: "GRPOConfig") -> None:
         raise ValueError(
             f"rollout_backend={config.rollout_backend!r} needs 2 ranks (tt-run with rank bindings), got world size {world}"
         )
+    if is_rollout_rank(config):
+        num_devices = math.prod(config.remote_rollout.mesh_shape)
+    else:
+        num_devices = device_config.total_devices()
+    if num_devices > 1:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 
 
 def is_rollout_rank(config: "GRPOConfig") -> bool:

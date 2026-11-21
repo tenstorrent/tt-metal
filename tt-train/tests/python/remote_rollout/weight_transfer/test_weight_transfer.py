@@ -171,9 +171,9 @@ def _ttt_side() -> None:
     """Host one TTTRolloutSampler over four [1, 1] submeshes + MPIRolloutServer."""
     from ttml.trainers.grpo_trainer.remote_rollout.mpi_rollout import MPIRolloutServer
     from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import HostWeightBridge
-    from ttml.trainers.grpo_trainer.remote_rollout.llama_ttt_presets import (
+    from ttml.trainers.grpo_trainer.remote_rollout.ttt_presets import (
         bf16_attn_bfp8_mlp_optimizations,
-        llama_stop_and_pad,
+        stop_and_pad,
     )
     from ttml.trainers.grpo_trainer.remote_rollout.ttt_rollout_sampler import TTTRolloutSampler
 
@@ -188,7 +188,7 @@ def _ttt_side() -> None:
     worker: Any = None
     server: Any = None
     try:
-        stop_token_ids, pad_token_id = llama_stop_and_pad(MODEL_ID)
+        stop_token_ids, pad_token_id = stop_and_pad(MODEL_ID)
         worker = TTTRolloutSampler(
             mesh_device=parent_mesh,
             model_source=MODEL_ID,
