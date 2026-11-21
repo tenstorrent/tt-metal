@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Keraunos Ethernet send ordering on one mmk package, set up like the KeraunosEmu cases (test_mimir_emu.cpp): a unit
-// MeshDevice, IDLE_ETH kernels on DM0 through EthernetConfig. The Ethernet loopback HSIO0.eth0 <-> HSIO1.eth0 joins
+// Keraunos Ethernet send ordering on one mmk package, on the Keraunos CCE fixture (keraunos_cce_fixture.hpp): IDLE_ETH
+// kernels on DM0 through EthernetConfig. The Ethernet loopback HSIO0.eth0 <-> HSIO1.eth0 joins
 // tile 0 CCE0 and tile 1 CCE0; the host writes each core's Ethernet-link slot before launch.
 //
 // KeraunosEthSend/Ordering.*: payload-then-credit on one TX queue, the credit through
@@ -45,6 +45,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "keraunos_cce_fixture.hpp"
 #include "mimir_contract.hpp"
 #include "tt_metal/tt_metal/test_kernels/misc/keraunos_eth_ordering.h"
 
@@ -59,108 +60,6 @@ constexpr const char* kReceiverKernel = "tests/tt_metal/tt_metal/test_kernels/mi
 // The loopback's ends.
 constexpr uint32_t kSenderHsio = 0;
 constexpr uint32_t kReceiverHsio = 1;
-// Global HSIO 0 CCE SRAM window; tile j is tile_stride above it (as in KeraunosEmu.EthernetKernelWritesOtherTileSram).
-constexpr uint64_t kHsioGlobalSramBase = 0x1206800000ULL;
-
-struct KeraunosCore {
-    CoreCoord logical;
-    uint32_t hsio = 0;
-};
-
-class Session {
-public:
-    Session() {
-        mesh_ = distributed::MeshDevice::create_unit_mesh(0);
-        device_ = &slow_dispatch::physical_device_from_unit_mesh(*mesh_);
-        const auto& hal = MetalContext::instance().hal();
-        sram_noc_base_ = hal.get_dev_noc_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BASE);
-        // Above the Ethernet-link slot, which sits inside IDLE_ETH's unreserved region.
-        base_ = (MEM_IERISC_ROUTER_UNRESERVED_BASE + 63) & ~63u;
-        TT_FATAL(
-            base_ >= hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED) &&
-                base_ + kPayloadOffset + kMaxPayloadBytes <= MEM_IERISC_L1_SIZE,
-            "Test base 0x{:x} does not fit the IDLE_ETH unreserved region",
-            base_);
-    }
-
-    uint32_t base() const { return base_; }
-
-    // CCE0 of HSIO tile @p hsio, or nullopt when the descriptor does not list it.
-    std::optional<KeraunosCore> core(uint32_t hsio) const {
-        const auto& chiplet = soc_desc_of(device_).get_arch_descriptor().get_keraunos();
-        for (const auto& c : chiplet.cores) {
-            if (c.hsio == hsio && c.eth_cce == 0) {
-                const CoreCoord logical =
-                    soc_desc_of(device_).get_logical_ethernet_core_from_physical({c.coord.x, c.coord.y});
-                if (!device_->ethernet_cores().contains(logical)) {
-                    return std::nullopt;
-                }
-                return KeraunosCore{logical, hsio};
-            }
-        }
-        return std::nullopt;
-    }
-
-    uint64_t tile_stride() const {
-        const auto& chiplet = soc_desc_of(device_).get_arch_descriptor().get_keraunos();
-        TT_FATAL(chiplet.tile_stride.has_value(), "mmk descriptor has no keraunos tile_stride");
-        return *chiplet.tile_stride;
-    }
-
-    void write(const KeraunosCore& core, uint32_t offset, const std::vector<uint32_t>& words) {
-        write_eth_sram(device_, core.logical, sram_noc_base_ + offset, words.data(), words.size() * sizeof(uint32_t));
-    }
-    std::vector<uint32_t> read(const KeraunosCore& core, uint32_t offset, uint32_t num_words) {
-        std::vector<uint32_t> words(num_words, 0);
-        read_eth_sram(device_, core.logical, sram_noc_base_ + offset, words.data(), num_words * sizeof(uint32_t));
-        return words;
-    }
-    template <typename T>
-    T read_struct(const KeraunosCore& core, uint32_t offset) {
-        T value{};
-        read_eth_sram(device_, core.logical, sram_noc_base_ + offset, &value, sizeof(value));
-        return value;
-    }
-
-    void write_eth_link(const KeraunosCore& core, const KeraunosCore& peer) {
-        const EthLink link{.peer_tile = peer.hsio, .valid = ETH_LINK_VALID};
-        write_eth_sram(device_, core.logical, sram_noc_base_ + MEM_IERISC_FABRIC_ETH_LINK_BASE, &link, sizeof(link));
-    }
-
-    // Launches without blocking, polls each core's status word until it leaves kStatusRunning or the host timeout
-    // passes, then waits for the program. On a host timeout the cores are hung, so @p dump prints what they recorded
-    // and the process exits: nothing after it could reach the device.
-    void run(Program& program, const std::vector<KeraunosCore>& watched, const std::function<void()>& dump) {
-        distributed::MeshWorkload workload;
-        workload.add_program(distributed::MeshCoordinateRange(mesh_->shape()), std::move(program));
-        distributed::EnqueueMeshWorkload(mesh_->mesh_command_queue(), workload, /*blocking=*/false);
-
-        const auto deadline = std::chrono::steady_clock::now() +
-                              std::chrono::seconds(tt::parse_env<uint32_t>("KERAUNOS_ETH_HOST_TIMEOUT_S", 1800));
-        for (const KeraunosCore& core : watched) {
-            for (uint32_t status = read(core, base_ + kResultOffset, 1)[0];
-                 status == kStatusRunning || status == 0;
-                 status = read(core, base_ + kResultOffset, 1)[0]) {
-                if (std::chrono::steady_clock::now() > deadline) {
-                    fmt::print(stderr, "Keraunos Ethernet send: host timeout; device state follows\n");
-                    dump();
-                    fmt::print(stderr, "Exiting: the kernels are stuck. Reset the emulator job before the next run.\n");
-                    std::fflush(stderr);
-                    std::_Exit(3);
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
-            }
-        }
-        distributed::Finish(mesh_->mesh_command_queue());
-    }
-
-private:
-    std::shared_ptr<distributed::MeshDevice> mesh_;
-    IDevice* device_ = nullptr;
-    uint64_t sram_noc_base_ = 0;
-    uint32_t base_ = 0;
-};
-
 #define skip_unless_keraunos_loopback()                                                              \
     do {                                                                                             \
         skip_unless_ethernet_package();                                                              \
@@ -189,20 +88,89 @@ std::string format_receiver(const ReceiverResult& r) {
         r.credit_skips, r.first_skip_from, r.first_skip_to, r.timeout_waiting_for);
 }
 
-class Ordering : public ::testing::TestWithParam<OrderingVariant> {};
+// The shared Keraunos CCE fixture with the test's blocks above the Ethernet-link slot, which sits inside IDLE_ETH's
+// unreserved region. Offsets passed to the fixture are from its unreserved base; the kernels take L1 addresses.
+class Ordering : public keraunos_test::KeraunosCceTest, public ::testing::WithParamInterface<OrderingVariant> {
+protected:
+    // Opening the device costs minutes on the emulator: not without the loopback.
+    static void SetUpTestSuite() {
+        if (std::getenv("KERAUNOS_ETH_LOOPBACK") != nullptr) {
+            KeraunosCceTest::SetUpTestSuite();
+        }
+    }
+
+    void SetUp() override {
+        skip_unless_keraunos_loopback();
+        KeraunosCceTest::SetUp();
+        if (IsSkipped() || HasFatalFailure()) {
+            return;
+        }
+        base_ = (MEM_IERISC_ROUTER_UNRESERVED_BASE + 63) & ~63u;
+        ASSERT_TRUE(base_ >= unreserved_ && base_ + kPayloadOffset + kMaxPayloadBytes <= MEM_IERISC_L1_SIZE)
+            << fmt::format("Test base 0x{:x} does not fit the IDLE_ETH unreserved region", base_);
+    }
+
+    // The fixture's offset of the test's block at @p offset.
+    uint32_t at(uint32_t offset) const { return base_ - unreserved_ + offset; }
+
+    template <typename T>
+    T read_struct(const keraunos_test::Hsio& core, uint32_t offset) {
+        T value{};
+        read_eth_sram(device_, core.logical, unreserved_noc_ + at(offset), &value, sizeof(value));
+        return value;
+    }
+
+    void write_eth_link(const keraunos_test::Hsio& core, const keraunos_test::Hsio& peer) {
+        const EthLink link{.peer_tile = peer.hsio, .valid = ETH_LINK_VALID};
+        write_eth_sram(
+            device_,
+            core.logical,
+            unreserved_noc_ + MEM_IERISC_FABRIC_ETH_LINK_BASE - unreserved_,
+            &link,
+            sizeof(link));
+    }
+
+    // Launches without blocking, polls each core's status word until it leaves kStatusRunning or the host timeout
+    // passes, then waits for the program. On a host timeout the cores are hung, so @p dump prints what they recorded
+    // and the process exits: nothing after it could reach the device.
+    void run(Program& program, const std::vector<keraunos_test::Hsio>& watched, const std::function<void()>& dump) {
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange(mesh_->shape()), std::move(program));
+        distributed::EnqueueMeshWorkload(mesh_->mesh_command_queue(), workload, /*blocking=*/false);
+
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(tt::parse_env<uint32_t>("KERAUNOS_ETH_HOST_TIMEOUT_S", 1800));
+        for (const keraunos_test::Hsio& core : watched) {
+            for (uint32_t status = read_words(core, at(kResultOffset), 1)[0]; status == kStatusRunning || status == 0;
+                 status = read_words(core, at(kResultOffset), 1)[0]) {
+                if (std::chrono::steady_clock::now() > deadline) {
+                    fmt::print(stderr, "Keraunos Ethernet send: host timeout; device state follows\n");
+                    dump();
+                    fmt::print(stderr, "Exiting: the kernels are stuck. Reset the emulator job before the next run.\n");
+                    std::fflush(stderr);
+                    std::_Exit(3);
+                }
+                // A device read takes seconds on the emulator; a shorter interval is back-to-back reads.
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
+        distributed::Finish(mesh_->mesh_command_queue());
+    }
+
+    uint32_t base_ = 0;  // L1 address of the test's blocks
+};
 
 TEST_P(Ordering, Run) {
-    skip_unless_keraunos_loopback();
     const OrderingVariant& variant = GetParam();
 
-    Session s;
-    const auto tx = s.core(kSenderHsio);
-    const auto rx = s.core(kReceiverHsio);
-    if (!tx || !rx) {
+    const auto tx = hsio_core(kSenderHsio);
+    const auto rx = hsio_core(kReceiverHsio);
+    if (!tx || !rx || !device_->ethernet_cores().contains(tx->logical) ||
+        !device_->ethernet_cores().contains(rx->logical)) {
         GTEST_SKIP() << "Descriptor does not list CCE0 of HSIO tiles 0 and 1.";
     }
 
-    const uint32_t base = s.base();
+    const uint32_t base = base_;
     const uint32_t iterations = tt::parse_env<uint32_t>("KERAUNOS_E6_ITERATIONS", 1000);
     const uint32_t payload_bytes = tt::parse_env<uint32_t>("KERAUNOS_E6_PAYLOAD_BYTES", 4096);
     const uint32_t txq = tt::parse_env<uint32_t>("KERAUNOS_ETH_TXQ", 0);
@@ -212,16 +180,15 @@ TEST_P(Ordering, Run) {
         << kMaxPayloadBytes;
 
     const std::vector<uint32_t> zero_result(kResultSize / sizeof(uint32_t), 0);
-    s.write_eth_link(*tx, *rx);
-    s.write_eth_link(*rx, *tx);
-    s.write(*tx, base + kResultOffset, zero_result);
-    s.write(*tx, base + kAckOffset, {0});
-    s.write(*rx, base + kResultOffset, zero_result);
-    s.write(*rx, base + kCreditOffset, {0, 0, 0, 0});
-    s.write(*rx, base + kPayloadOffset, std::vector<uint32_t>(payload_bytes / sizeof(uint32_t), kCanary));
+    write_eth_link(*tx, *rx);
+    write_eth_link(*rx, *tx);
+    write_words(*tx, at(kResultOffset), zero_result);
+    write_words(*tx, at(kAckOffset), {0});
+    write_words(*rx, at(kResultOffset), zero_result);
+    write_words(*rx, at(kCreditOffset), {0, 0, 0, 0});
+    write_words(*rx, at(kPayloadOffset), std::vector<uint32_t>(payload_bytes / sizeof(uint32_t), kCanary));
 
-    const uint64_t ack_global = kHsioGlobalSramBase + static_cast<uint64_t>(tx->hsio) * s.tile_stride() + base +
-                                kAckOffset;
+    const uint64_t ack_global = global_addr(*tx, at(kAckOffset));
 
     Program program = CreateProgram();
     const KernelHandle sender = CreateKernel(
@@ -244,13 +211,13 @@ TEST_P(Ordering, Run) {
          static_cast<uint32_t>(ack_global >> 32)});
 
     auto dump = [&] {
-        fmt::print(stderr, "{}\n", format_sender(s.read_struct<SenderResult>(*tx, base + kResultOffset)));
-        fmt::print(stderr, "{}\n", format_receiver(s.read_struct<ReceiverResult>(*rx, base + kResultOffset)));
+        fmt::print(stderr, "{}\n", format_sender(read_struct<SenderResult>(*tx, kResultOffset)));
+        fmt::print(stderr, "{}\n", format_receiver(read_struct<ReceiverResult>(*rx, kResultOffset)));
     };
-    s.run(program, {*tx, *rx}, dump);
+    run(program, {*tx, *rx}, dump);
 
-    const auto tx_result = s.read_struct<SenderResult>(*tx, base + kResultOffset);
-    const auto rx_result = s.read_struct<ReceiverResult>(*rx, base + kResultOffset);
+    const auto tx_result = read_struct<SenderResult>(*tx, kResultOffset);
+    const auto rx_result = read_struct<ReceiverResult>(*rx, kResultOffset);
     const std::string trace = format_sender(tx_result) + "\n" + format_receiver(rx_result);
     log_info(tt::LogTest, "Ordering {}: {}", variant.name, trace);
 
@@ -261,8 +228,8 @@ TEST_P(Ordering, Run) {
     EXPECT_EQ(rx_result.mismatch_count, 0u) << trace;
     EXPECT_EQ(rx_result.credit_skips, 0u) << trace;
     EXPECT_EQ(tx_result.idma_outstanding_at_end, 0u) << trace;
-    EXPECT_EQ(s.read(*rx, base + kCreditOffset, 1)[0], iterations) << trace;
-    const auto payload = s.read(*rx, base + kPayloadOffset, payload_bytes / sizeof(uint32_t));
+    EXPECT_EQ(read_words(*rx, at(kCreditOffset), 1)[0], iterations) << trace;
+    const auto payload = read_words(*rx, at(kPayloadOffset), payload_bytes / sizeof(uint32_t));
     uint32_t payload_errors = 0;
     for (uint32_t j = 0; j < payload.size(); j++) {
         payload_errors += payload[j] != payload_word(iterations, j);
