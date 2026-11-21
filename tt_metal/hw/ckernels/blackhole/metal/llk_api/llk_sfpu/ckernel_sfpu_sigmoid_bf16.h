@@ -560,6 +560,7 @@ inline void calculate_sigmoid_bf16_scheduled() {
 }
 
 // Each call records replay slots 0-15, below replay_buf_offset = 16.
+// The slots are the compiled call's, the SFPI compiler's own replay records included.
 template <int ITERATIONS = 32>
 __attribute__((noinline)) inline void calculate_sigmoid_bf16() {
     static_assert(ITERATIONS == 32, "the BF16 kernel runs as one whole-tile call");
