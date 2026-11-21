@@ -46,3 +46,10 @@ Totals per call: DRAM/L1-bank tier T·(page_a + page_b + page_out) (tensor) or T
 (L1-resident operands, `memory_config = L1`, cross the same NoC path from their L1 banks; the count is identical.)
 
 > Cheapest-traffic split considered: `flat_tile` split in whole rounds of C across the grid — the minimum (each input once, output once, no cross-core traffic). Implemented: `flat_tile` split in whole rounds of C across the grid. The implemented split **is** the cheapest; every alternative split (by `tile_row`, `leading`, `tile_col`) moves the same bytes with worse balance, and no dependent-axis split exists.
+
+## Implementation status (Phase 0)
+
+Implemented as inventoried: three rings `in_a`, `in_b` (tensor regime only), `out`, each
+`BUFFER_DEPTH * BLOCK_TILES * C` entries (host constants in `div_program_artifacts.py`), host-asserted
+against the 1,048,560 B ring cap. No buffer added, merged or deleted; the data-movement budget above is
+the implemented one (a, b, out each cross once; the number is the RT arg `divisor_bits`).
