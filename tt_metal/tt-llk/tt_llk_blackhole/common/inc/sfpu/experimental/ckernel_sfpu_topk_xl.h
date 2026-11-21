@@ -736,26 +736,15 @@ constexpr int pipelined_group_len = 12;
 //     unused" (`SFPLOAD.md:83`). So `VDHi` rides a bit that does not affect addressing: dropping the
 //     `| 1` gives `VDHi = 0`, which lets a macro load LREG0..3 without changing the address.
 //
-// Step 3 of `bitonic_sort_len_8` is `(VC,VD)` = (L1,L0) (L2,L3) (L5,L4) (L6,L7) ascending, and
-// (L0,L1) (L3,L2) (L4,L5) (L7,L6) descending, so all four pairs are hostable once both facts hold.
-template <bool ascending>
+// Step 3 of `bitonic_sort_len_8` in its ascending form (the direction is the swap state) is `(VC,VD)` =
+// (L1,L0) (L2,L3) (L5,L4) (L6,L7), so all four pairs are hostable once both facts hold.
 inline void stride2_len8_templates()
 {
     // Macro m's template supplies VC; the macro's own load supplies VD.
-    if constexpr (ascending)
-    {
-        TTI_SFPSWAP(0, p_sfpu::LREG1, 12, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG2, 13, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG5, 14, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG6, 15, p_sfpswap::ALL_ROWS_MAX);
-    }
-    else
-    {
-        TTI_SFPSWAP(0, p_sfpu::LREG0, 12, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG3, 13, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG4, 14, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG7, 15, p_sfpswap::ALL_ROWS_MAX);
-    }
+    TTI_SFPSWAP(0, p_sfpu::LREG1, 12, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG2, 13, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG5, 14, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG6, 15, p_sfpswap::ALL_ROWS_MAX);
 }
 
 // Restores what `configure()` leaves in place, so every later `step_group` still finds its own
@@ -782,31 +771,16 @@ constexpr int stride2_len8_loads_len = 13;
 // carry the last swap's second cycle, so the caller's leading SFPTRANSP reads settled registers.
 // The macros' scheduled stores write a mid-sort value back to the row each one loaded; the group's
 // own `store16_rows_x2` overwrites all eight afterwards, exactly as `len32_loads` relies on.
-template <bool ascending>
 inline void stride2_len8_loads()
 {
-    if constexpr (ascending)
-    {
-        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
-        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);
-        TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 6);
-        TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 10);
-        TTI_SFPLOADMACRO((0 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);      // VD = LREG0
-        TTI_SFPLOADMACRO((1 << 2) | 3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);     // VD = LREG3
-        TTI_SFPLOADMACRO((2 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, 2 | 1);  // VD = LREG4
-        TTI_SFPLOADMACRO((3 << 2) | 3, InstrModLoadStore::INT32, ADDR_MOD_7, 14 | 1); // VD = LREG7
-    }
-    else
-    {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);
-        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
-        TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, 14);
-        TTI_SFPLOADMACRO((0 << 2) | 1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);      // VD = LREG1
-        TTI_SFPLOADMACRO((1 << 2) | 2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);      // VD = LREG2
-        TTI_SFPLOADMACRO((2 << 2) | 1, InstrModLoadStore::INT32, ADDR_MOD_7, 6 | 1);  // VD = LREG5
-        TTI_SFPLOADMACRO((3 << 2) | 2, InstrModLoadStore::INT32, ADDR_MOD_7, 10 | 1); // VD = LREG6
-    }
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 6);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 10);
+    TTI_SFPLOADMACRO((0 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);      // VD = LREG0
+    TTI_SFPLOADMACRO((1 << 2) | 3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);     // VD = LREG3
+    TTI_SFPLOADMACRO((2 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, 2 | 1);  // VD = LREG4
+    TTI_SFPLOADMACRO((3 << 2) | 3, InstrModLoadStore::INT32, ADDR_MOD_7, 14 | 1); // VD = LREG7
     TTI_SFPNOP;
     TTI_SFPNOP;
     TTI_SFPNOP;
@@ -814,41 +788,23 @@ inline void stride2_len8_loads()
     TTI_SFPNOP;
 }
 
-inline NOINLINE void record_stride2_len8_loads(const bool ascending)
+inline NOINLINE void record_stride2_len8_loads()
 {
-    if (ascending)
-    {
-        load_replay_buf<Exec>(0, stride2_len8_loads_len, [] { stride2_len8_loads<true>(); });
-    }
-    else
-    {
-        load_replay_buf<Exec>(0, stride2_len8_loads_len, [] { stride2_len8_loads<false>(); });
-    }
+    load_replay_buf<Exec>(0, stride2_len8_loads_len, [] { stride2_len8_loads(); });
 }
 
 // The same trick for `sort_len == 16`, whose first layer is step 4 of `bitonic_sort_len_16_alt_swaps`:
-// (VC,VD) = (L2,L0) (L3,L1) (L6,L4) (L7,L5) ascending and (L0,L2) (L1,L3) (L4,L6) (L5,L7) descending.
+// (VC,VD) = (L2,L0) (L3,L1) (L6,L4) (L7,L5) in the ascending form.
 // `sort_len == 4` is absent: `_topk_xl_split_stride2_sort_<4>` issues an SFPTRANSP before
 // `bitonic_sort_len_4`, so the first thing after the load is a transpose. Scheduling that transpose
 // on a macro costs all four Sequence words (three suppressed, one re-delayed) to save one
 // instruction.
-template <bool ascending>
 inline void stride2_len16_templates()
 {
-    if constexpr (ascending)
-    {
-        TTI_SFPSWAP(0, p_sfpu::LREG2, 12, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG3, 13, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG6, 14, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG7, 15, p_sfpswap::ALL_ROWS_MAX);
-    }
-    else
-    {
-        TTI_SFPSWAP(0, p_sfpu::LREG0, 12, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG1, 13, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG4, 14, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG5, 15, p_sfpswap::ALL_ROWS_MAX);
-    }
+    TTI_SFPSWAP(0, p_sfpu::LREG2, 12, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG3, 13, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG6, 14, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG7, 15, p_sfpswap::ALL_ROWS_MAX);
 }
 
 constexpr int stride2_len16_loads_len = 13;
@@ -859,31 +815,16 @@ constexpr int stride2_len16_loads_len = 13;
 // with four, the tail's first explicit SFPSWAP would issue on the cycle right after macro 3's
 // scheduled swap, which the SFPLOADMACRO footnote forbids (Simple and Round must be idle there). A
 // future "the tail only needs L0/L1, drop a NOP" cleanup would break this silently.
-template <bool ascending>
 inline void stride2_len16_loads()
 {
-    if constexpr (ascending)
-    {
-        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);
-        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);
-        TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 10);
-        TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, 14);
-        TTI_SFPLOADMACRO((0 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);     // VD = LREG0
-        TTI_SFPLOADMACRO((1 << 2) | 1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);     // VD = LREG1
-        TTI_SFPLOADMACRO((2 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, 2 | 1); // VD = LREG4
-        TTI_SFPLOADMACRO((3 << 2) | 1, InstrModLoadStore::INT32, ADDR_MOD_7, 6 | 1); // VD = LREG5
-    }
-    else
-    {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
-        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
-        TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 6);
-        TTI_SFPLOADMACRO((0 << 2) | 2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);      // VD = LREG2
-        TTI_SFPLOADMACRO((1 << 2) | 3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);     // VD = LREG3
-        TTI_SFPLOADMACRO((2 << 2) | 2, InstrModLoadStore::INT32, ADDR_MOD_7, 10 | 1); // VD = LREG6
-        TTI_SFPLOADMACRO((3 << 2) | 3, InstrModLoadStore::INT32, ADDR_MOD_7, 14 | 1); // VD = LREG7
-    }
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 10);
+    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, 14);
+    TTI_SFPLOADMACRO((0 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);     // VD = LREG0
+    TTI_SFPLOADMACRO((1 << 2) | 1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);     // VD = LREG1
+    TTI_SFPLOADMACRO((2 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, 2 | 1); // VD = LREG4
+    TTI_SFPLOADMACRO((3 << 2) | 1, InstrModLoadStore::INT32, ADDR_MOD_7, 6 | 1); // VD = LREG5
     TTI_SFPNOP;
     TTI_SFPNOP;
     TTI_SFPNOP;
@@ -891,16 +832,9 @@ inline void stride2_len16_loads()
     TTI_SFPNOP;
 }
 
-inline NOINLINE void record_stride2_len16_loads(const bool ascending)
+inline NOINLINE void record_stride2_len16_loads()
 {
-    if (ascending)
-    {
-        load_replay_buf<Exec>(0, stride2_len16_loads_len, [] { stride2_len16_loads<true>(); });
-    }
-    else
-    {
-        load_replay_buf<Exec>(0, stride2_len16_loads_len, [] { stride2_len16_loads<false>(); });
-    }
+    load_replay_buf<Exec>(0, stride2_len16_loads_len, [] { stride2_len16_loads(); });
 }
 
 // The four plain loads `step_group_pipelined` expects to already have been issued, for the first group.
@@ -1314,6 +1248,15 @@ inline void set_swap_ascending(const bool ascending)
     }
 }
 
+// Flips EXCHANGE_SRCB_SRCC in the lanes of `lane_mask` only; the same call again flips them back.
+// `topk_xl_swap_inverted` is left alone: it tracks the lanes outside the mask.
+template <std::uint32_t lane_mask>
+TT_ALWAYS_INLINE void flip_lane_swap_directions()
+{
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
+    TTI_SFPCONFIG(lane_mask, 0xF, 14); // IMM16_IS_LANE_MASK | BITWISE_XOR: flip the masked lanes
+}
+
 // Sort length-2: pairwise compare-exchange of 4 lane pairs.
 //
 // Direction is the swap state's (`MAX` into the second operand when ascending):
@@ -1516,38 +1459,24 @@ inline void bitonic_sort_len_16_alt_swaps(bool ascending)
 }
 
 // `bitonic_sort_len_8` with step 3 removed, for callers whose loads host that layer through macros
-// (see `stride2_len8_loads`). The leading SFPTRANSP is step 3's trailing one.
-inline void bitonic_sort_len_8_tail(bool ascending)
+// (see `stride2_len8_loads`). The leading SFPTRANSP is step 3's trailing one. Ascending form: the
+// direction is the swap state.
+inline void bitonic_sort_len_8_tail()
 {
     TTI_SFPTRANSP(0, 0, 0, 0);
-    if (ascending)
-    {
-        // Step 2 — stride 2.
-        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, p_sfpswap::ROWS_01_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ROWS_01_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG4, p_sfpswap::ROWS_01_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG5, p_sfpswap::ROWS_01_MAX);
 
-        // Step 1 — stride 1.
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ROWS_01_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ROWS_01_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpswap::ROWS_01_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, p_sfpswap::ROWS_01_MAX);
-    }
-    else
-    {
-        // Step 2 — stride 2.
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_01_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, p_sfpswap::ROWS_01_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, p_sfpswap::ROWS_01_MAX);
+    // Step 2 — stride 2.
+    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG4, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG5, p_sfpswap::ROWS_01_MAX);
 
-        // Step 1 — stride 1.
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_01_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ROWS_01_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ROWS_01_MAX);
-    }
+    // Step 1 — stride 1.
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpswap::ROWS_01_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, p_sfpswap::ROWS_01_MAX);
+
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
 
@@ -1564,37 +1493,20 @@ inline void bitonic_sort_len_16_alt(bool ascending)
 }
 
 // `bitonic_sort_len_16_alt` with the first swaps call's step 4 removed, for callers whose loads host
-// that layer (see `stride2_len16_loads`).
+// that layer (see `stride2_len16_loads`). Ascending form: the direction is the swap state.
 template <bool fused = true>
-inline void bitonic_sort_len_16_alt_tail(bool ascending)
+inline void bitonic_sort_len_16_alt_tail()
 {
     // Unfused step 4 is only two swaps, but `stride2_len16_loads` unconditionally hosts four, so the
     // unfused form of this tail would strip a layer that was never hosted.
     static_assert(fused, "the macro-hosted tail exists only for the fused path");
-    if (ascending)
-    {
-        // Step 3 — stride 4.
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-        if constexpr (fused)
-        {
-            TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpswap::ALL_ROWS_MAX);
-            TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
-        }
-    }
-    else
-    {
-        // Step 3 — stride 4.
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-        if constexpr (fused)
-        {
-            TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
-            TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
-        }
-    }
+    // Step 3 — stride 4.
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPTRANSP(0, 0, 0, 0);
-    bitonic_sort_len_16_alt_swaps<fused>(ascending);
+    bitonic_sort_len_16_alt_swaps<fused>(true);
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
 
@@ -1691,12 +1603,11 @@ namespace topk_xl_fused_macro
 
 // Loads of a stride-16 sort_len_32 group, ordered so step 5's macro swaps run at the 4th, 6th, 8th and 10th
 // instruction, each after its LREG i load; len32_stores overwrites their scheduled store-backs.
-template <bool ascending>
 inline void len32_loads()
 {
-    constexpr int group_2_offset = 16;
-    constexpr int near           = ascending ? group_2_offset : 0;
-    constexpr int far            = ascending ? 0 : group_2_offset;
+    // Ascending form: the second strip loads into LREG0..3.
+    constexpr int near = 16;
+    constexpr int far  = 0;
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, near + 0);
     TTI_SFPLOADMACRO((3 << 2) | 3, InstrModLoadStore::INT32, ADDR_MOD_7, (far + 12) | 1);
     TTI_SFPLOADMACRO((0 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, (far + 0) | 1);
@@ -1710,12 +1621,11 @@ inline void len32_loads()
     TTI_SFPNOP;
 }
 
-template <bool ascending>
 inline void len32_stores()
 {
-    constexpr int group_2_offset = 16;
-    constexpr int near           = ascending ? group_2_offset : 0;
-    constexpr int far            = ascending ? 0 : group_2_offset;
+    // Ascending form: LREG0..3 hold the second strip.
+    constexpr int near = 16;
+    constexpr int far  = 0;
     TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, near + 0);
     TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, near + 4);
     TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, near + 8);
@@ -1738,9 +1648,9 @@ inline NOINLINE void bitonic_sort_len_32_tail()
 
 inline NOINLINE void record_len32_group()
 {
-    load_replay_buf<Exec>(0, len32_loads_len, [] { len32_loads<true>(); });
+    load_replay_buf<Exec>(0, len32_loads_len, [] { len32_loads(); });
     bitonic_sort_len_32_tail();
-    load_replay_buf<Exec>(len32_loads_len, len32_stores_len, [] { len32_stores<true>(); });
+    load_replay_buf<Exec>(len32_loads_len, len32_stores_len, [] { len32_stores(); });
 }
 
 inline NOINLINE void replay_len32_group()
@@ -2116,10 +2026,6 @@ inline void transpose_N_faces()
 //
 // `dir` is runtime so the sort calls stay inline (the conditional inside
 // them would not fold under replay anyway).
-//
-// Codegen note: with TOPK_XL_FUSED_MACRO == 0 and `row_scale_factor == 4` the
-// body below is bit-for-bit identical to the previous non-templated
-// `canonical_big_block_with_replay`.
 template <int row_scale_factor>
 inline void canonical_big_block_with_replay_body(bool dir)
 {
@@ -2154,9 +2060,8 @@ inline void canonical_big_block_with_replay_body(bool dir)
     {
         // ── Sub-block B: `row_scale_factor / 2` × paired (load<32> + sort_k + store<32, 16/48>) ──
         // The +48 store on the second of each pair uses ADDR_MOD_1 to fold
-        // the trailing +16 advance into the last SFPSTORE — saves one
-        // math-thread issue per inner iter compared to the original
-        // K!=2048 generic body which emitted `store<32, 32> + 2×INCRWC(+8)`.
+        // the trailing +16 advance into the last SFPSTORE, saving one
+        // math-thread issue per inner iter over `store<32, 32> + 2×INCRWC(+8)`.
 #if TOPK_XL_FUSED_MACRO
         // Pipelined like sub-block A. Its trailing SETRWC reset Dst, so A's final prefetch is stale and this prologue reloads; within B the groups chain.
         topk_xl_fused_macro::prologue_loads_rt<32>(dir);
@@ -2225,7 +2130,6 @@ inline void canonical_big_block_with_replay(bool dir)
 {
     if constexpr (row_scale_factor >= 4)
     {
-        // The K = 2048 callers set the direction as swap state and pass true.
         LLK_ASSERT(dir, "K = 2048 sorts take the direction as swap state: set_swap_ascending, then pass true");
         canonical_big_block_2048();
     }
@@ -2371,7 +2275,6 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         bitonic_sort_len_32(true);
         load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
         lltt::replay(0, 8);
-        set_swap_ascending(dir);
         bitonic_sort_len_32(true);
         lltt::replay(8, 8);
         dir = !dir;
@@ -2380,7 +2283,6 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         bitonic_sort_len_32(true);
         lltt::replay(8, 8);
         lltt::replay(0, 8);
-        set_swap_ascending(dir);
         bitonic_sort_len_32(true);
         lltt::replay(8, 8);
         dir = !dir;
@@ -2404,8 +2306,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     // Now the runs span across LREGs. We use SFPCONFIG to flip every SFPU
     // instance's swap direction, so a single load+sort_k+store body covers
     // both halves of the merge.
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x4444, 0xF, 14); // IMM16_IS_LANE_MASK | BITWISE_XOR: flip the masked lanes
+    flip_lane_swap_directions<0x4444>();
     // The direction stays put from here to the end of the sort.
     set_swap_ascending(dir);
 
@@ -2438,8 +2339,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         canonical_big_block_with_replay<4>(true);
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
     }
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x4444, 0xF, 14); // flip them back
+    flip_lane_swap_directions<0x4444>();
 
     // ── Phases 6–8 — build bitonic sequences of length 512 / 1024 / 2048 ──
     //
@@ -2474,16 +2374,14 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     transpose_8_faces<true, 256, /*manage_outer_cfg=*/false>();
 
     // Flip SFPU swap direction for every 2 lanes.
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x5050, 0xF, 14); // IMM16_IS_LANE_MASK | BITWISE_XOR: flip the masked lanes
+    flip_lane_swap_directions<0x5050>();
 #pragma GCC unroll 1
     for (int col = 0; col < 2; col++)
     {
         canonical_big_block_with_replay<4>(true);
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
     }
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x5050, 0xF, 14); // flip them back
+    flip_lane_swap_directions<0x5050>();
 
     // ── Phase 7 — length 1024 ──────────────────────────────────────────────
     transpose_8_faces<true, 256, /*manage_outer_cfg=*/false>();
@@ -2503,16 +2401,14 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
     transpose_8_faces<true, 256, /*manage_outer_cfg=*/false>();
 
     // Flip SFPU swap direction for every 4 lanes.
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x5500, 0xF, 14); // IMM16_IS_LANE_MASK | BITWISE_XOR: flip the masked lanes
+    flip_lane_swap_directions<0x5500>();
 #pragma GCC unroll 1
     for (int col = 0; col < 2; col++)
     {
         canonical_big_block_with_replay<4>(true);
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
     }
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x5500, 0xF, 14); // flip them back
+    flip_lane_swap_directions<0x5500>();
 
     // ── Phase 8 — length 2048 ──────────────────────────────────────────────
     transpose_8_faces<true, 256, /*manage_outer_cfg=*/false>();
@@ -2649,8 +2545,8 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
         {
             // ── build bitonic sequences of len=64 ──────────────────────────
             //
-            // Pair stores using ADDR_MOD_1 (+48) fold to drop the two
-            // trailing `TTI_INCRWC(+8)` issues PR #567's version had.
+            // The pair's second store uses ADDR_MOD_1 (+48), folding the
+            // trailing advance in instead of two `TTI_INCRWC(+8)` issues.
             for (int i = 0; i < (row_scale_factor >> 1); i++)
             {
 #if TOPK_XL_FUSED_MACRO
@@ -2663,9 +2559,9 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
                 fused_step_group<32, 16>(dir);
                 fused_step_group<32, 48>(dir);
 #endif
-                // Early-exit sorts each column in isolation, so it suppresses the
-                // inter-pair flip when there is only one pair; the full sort keeps
-                // its historical unconditional flip.
+                // With a single pair, early-exit (each column sorted in isolation) and the
+                // Blaze protocol skip the inter-pair flip; otherwise `dir` flips after
+                // every pair.
                 if constexpr ((!topk_xl_blaze_compat && !early_exit_K64) || (row_scale_factor >> 1) > 1)
                 {
                     dir = !dir;
@@ -2864,9 +2760,8 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
 //   n_iters        = fused ? row_scale_factor * 2 : row_scale_factor * 4
 //
 // where `num_tiles_per_sequence = (K == 2048) ? 2 : 1` and
-// `row_scale_factor = K / 512`. For K=2048 this evaluates to the legacy
-// values (`distance=128/256`, `n_iters=8/16`); with TOPK_XL_FUSED_MACRO == 0
-// the body below is bit-for-bit identical to the previous K=2048 fast path.
+// `row_scale_factor = K / 512`. For K=2048 this evaluates to
+// `distance=128/256`, `n_iters=8/16`.
 //
 // Body lengths fit in a single replay window:
 //
@@ -4607,7 +4502,6 @@ inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, cons
         bitonic_sort_len_32(true);
         load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
         lltt::replay(0, 8);
-        set_swap_ascending(dir);
         bitonic_sort_len_32(true);
         lltt::replay(8, 8);
         dir = !dir;
@@ -4616,7 +4510,6 @@ inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, cons
         bitonic_sort_len_32(true);
         lltt::replay(8, 8);
         lltt::replay(0, 8);
-        set_swap_ascending(dir);
         bitonic_sort_len_32(true);
         lltt::replay(8, 8);
         dir = !dir;
@@ -4629,8 +4522,7 @@ inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, cons
         dir = !dir;
     }
 
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x4444, 0xF, 14); // IMM16_IS_LANE_MASK | BITWISE_XOR: flip the masked lanes
+    flip_lane_swap_directions<0x4444>();
     // The direction stays put from here to the end of the head.
     set_swap_ascending(dir);
 #if TOPK_XL_FUSED_MACRO
@@ -4658,27 +4550,27 @@ inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, cons
         canonical_big_block_with_replay<4>(true);
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
     }
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-    TTI_SFPCONFIG(0x4444, 0xF, 14); // flip them back
+    flip_lane_swap_directions<0x4444>();
     set_swap_ascending(true);
 }
 
+// Ascending form: the direction is the swap state.
 template <int sort_len>
-inline void _topk_xl_split_stride2_sort_(const bool dir)
+inline void _topk_xl_split_stride2_sort_()
 {
     static_assert(sort_len == 4 || sort_len == 8 || sort_len == 16, "sort_len must be 4, 8 or 16");
     if constexpr (sort_len == 4)
     {
         TTI_SFPTRANSP(0, 0, 0, 0);
-        bitonic_sort_len_4(dir);
+        bitonic_sort_len_4(true);
     }
     else if constexpr (sort_len == 8)
     {
-        bitonic_sort_len_8(dir);
+        bitonic_sort_len_8(true);
     }
     else
     {
-        bitonic_sort_len_16_alt(dir);
+        bitonic_sort_len_16_alt(true);
     }
 }
 
@@ -4702,14 +4594,14 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
         // sort_len == 4 is deliberately absent: its dispatch issues an SFPTRANSP before the sort, so
         // the first thing after the load is a transpose and there is no swap for a macro to host.
         constexpr int stores_at = topk_xl_fused_macro::stride2_len16_loads_len;
-        topk_xl_fused_macro::stride2_len16_templates<true>();
-        topk_xl_fused_macro::record_stride2_len16_loads(true);
-        bitonic_sort_len_16_alt_tail(true);
+        topk_xl_fused_macro::stride2_len16_templates();
+        topk_xl_fused_macro::record_stride2_len16_loads();
+        bitonic_sort_len_16_alt_tail();
         load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, 16>(); });
         for (int i = 1; i < n_iters; i++)
         {
             lltt::replay(0, topk_xl_fused_macro::stride2_len16_loads_len);
-            bitonic_sort_len_16_alt_tail(true);
+            bitonic_sort_len_16_alt_tail();
             lltt::replay(stores_at, 8);
         }
         topk_xl_fused_macro::restore_step_group_templates();
@@ -4721,14 +4613,14 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
         // load left to attach a macro to. See `stride2_len8_loads` for the two encoding facts it
         // needs, and note the templates must be put back before the next `step_group` runs.
         constexpr int stores_at = topk_xl_fused_macro::stride2_len8_loads_len;
-        topk_xl_fused_macro::stride2_len8_templates<true>();
-        topk_xl_fused_macro::record_stride2_len8_loads(true);
-        bitonic_sort_len_8_tail(true);
+        topk_xl_fused_macro::stride2_len8_templates();
+        topk_xl_fused_macro::record_stride2_len8_loads();
+        bitonic_sort_len_8_tail();
         load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, 16>(); });
         for (int i = 1; i < n_iters; i++)
         {
             lltt::replay(0, topk_xl_fused_macro::stride2_len8_loads_len);
-            bitonic_sort_len_8_tail(true);
+            bitonic_sort_len_8_tail();
             lltt::replay(stores_at, 8);
         }
         topk_xl_fused_macro::restore_step_group_templates();
@@ -4737,12 +4629,12 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
 #endif
     {
         load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-        _topk_xl_split_stride2_sort_<sort_len>(true);
+        _topk_xl_split_stride2_sort_<sort_len>();
         load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
         for (int i = 1; i < n_iters; i++)
         {
             lltt::replay(0, 8);
-            _topk_xl_split_stride2_sort_<sort_len>(true);
+            _topk_xl_split_stride2_sort_<sort_len>();
             lltt::replay(8, 8);
         }
     }
@@ -4750,15 +4642,15 @@ inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool 
     set_swap_ascending(true);
 }
 
-// The per-column passes between two transposes; a non-zero lane_mask flips the swap direction of those lanes.
+// The per-column passes between two transposes, at every K through the swap state (`set_swap_ascending`); a
+// non-zero lane_mask flips the swap direction of those lanes.
 template <std::uint32_t K, std::uint32_t lane_mask>
 inline void _topk_xl_split_columns_(const std::uint32_t tile_offset, const bool dir)
 {
     _topk_xl_split_begin_(tile_offset);
     if constexpr (lane_mask != 0)
     {
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-        TTI_SFPCONFIG(lane_mask, 0xF, 14); // IMM16_IS_LANE_MASK | BITWISE_XOR: flip the masked lanes
+        flip_lane_swap_directions<lane_mask>();
     }
     set_swap_ascending(dir);
     for (int col = 0; col < 2; col++)
@@ -4768,8 +4660,7 @@ inline void _topk_xl_split_columns_(const std::uint32_t tile_offset, const bool 
     }
     if constexpr (lane_mask != 0)
     {
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
-        TTI_SFPCONFIG(lane_mask, 0xF, 14); // flip them back
+        flip_lane_swap_directions<lane_mask>();
     }
     set_swap_ascending(true);
 }
