@@ -20,7 +20,8 @@ Each op's PCC is against its own torch reference, on bands of output rows (top, 
 
 Per-call device time comes from tracy signposts `cmp|<case>|<op>|<i>`; run with `scripts/run_safe_pytest.sh
 --profile --run-all` and select cases with FLUX_CMP_CASES (indices) or FLUX_CMP_GROUP (1x1 / bh2x4).
-FLUX_CMP_SKIP_TTNN=1 / FLUX_CMP_SKIP_NEW=1 skip the ttnn.conv2d / conv2d_3x3 side.
+FLUX_CMP_SKIP_TTNN=1 / FLUX_CMP_SKIP_NEW=1 skip the ttnn.conv2d / conv2d_3x3 side. FLUX_CMP_LAYOUT=RM gives both ops
+ROW_MAJOR input (the single-device convs after the decoder's upsamplers get it in the model).
 """
 
 import itertools
@@ -253,9 +254,10 @@ def test_flux_conv3x3_compare(device, idx):
         else None
     )
     # On a mesh, VaeConv2d hands the conv the ROW_MAJOR output of its neighbor_pad halo exchange, so the per-device
-    # (bh2x4) convs run on ROW_MAJOR input; FLUX_CMP_BH_LAYOUT=TILE measures them on TILE instead.
+    # (bh2x4) convs run on ROW_MAJOR input; FLUX_CMP_BH_LAYOUT=TILE measures them on TILE instead. On one device the
+    # conv after each decoder upsampler gets the upsample's ROW_MAJOR output; FLUX_CMP_LAYOUT=RM measures that.
     bh_rm = case["group"] == "bh2x4" and os.environ.get("FLUX_CMP_BH_LAYOUT", "RM") == "RM"
-    rm_input = c_in < C_IN_GRANULE or bh_rm
+    rm_input = c_in < C_IN_GRANULE or bh_rm or os.environ.get("FLUX_CMP_LAYOUT") == "RM"
     record["input_layout"] = "ROW_MAJOR" if rm_input else "TILE"
     in_layout = ttnn.ROW_MAJOR_LAYOUT if rm_input else ttnn.TILE_LAYOUT
     tt_x = ttnn.from_torch(
