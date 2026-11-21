@@ -942,3 +942,20 @@ def test_prelu_scalar_honours_memory_config(input_shapes, device, weight, reques
 
     if requested_memcfg is not None:
         assert_equal(ttnn.to_torch(output), ttnn.to_torch(ttnn.prelu(input_tensor, weight)))
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("input_shape", [(8, 5), (2, 5, 33), (2, 5, 33, 40), (1, 3, 50, 70)])
+@pytest.mark.parametrize("num_weights", ["shared", "per_channel"])
+def test_binary_prelu_tensor_weight_count(input_shape, num_weights, dtype, device):
+    """A one-element weight is shared by all channels (torch PReLU default), a [C] weight is per channel."""
+    torch.manual_seed(0)
+    x = torch.randn(input_shape, dtype=dtype) * 3
+    weight = torch.rand((1,) if num_weights == "shared" else (input_shape[1],), dtype=dtype)
+    expected = torch.nn.functional.prelu(x, weight)
+    tt_dtype = ttnn.bfloat16 if dtype == torch.bfloat16 else ttnn.float32
+    tt_x = ttnn.from_torch(x, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_w = ttnn.from_torch(weight, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.prelu(tt_x, tt_w))
+    assert actual.shape == expected.shape
+    assert_with_pcc(expected.float(), actual.float(), 0.9999)
