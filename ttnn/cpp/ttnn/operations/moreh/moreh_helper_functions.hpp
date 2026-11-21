@@ -12,6 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations {
 
@@ -274,6 +275,16 @@ void initialize_dims_with_range(ttsl::SmallVector<int64_t>& dims, uint32_t input
 
 ttsl::SmallVector<int64_t> get_dim(
     const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim, uint32_t input_rank);
+
+// ttnn::sum with moreh_sum's output shape: with keepdim=false, reduced H/W dims stay as size 1 and other reduced dims
+// are removed. A preallocated output receives the result reshaped to its own shape.
+Tensor sum_with_moreh_shape(
+    const Tensor& input,
+    const ttsl::SmallVector<int64_t>& dims,
+    bool keepdim,
+    const std::optional<Tensor>& output,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
 std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Shape& shape);
 

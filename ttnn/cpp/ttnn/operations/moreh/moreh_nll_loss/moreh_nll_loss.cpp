@@ -8,7 +8,7 @@
 #include "moreh_nll_loss_helper.hpp"
 #include "moreh_nll_loss_step1/device/moreh_nll_loss_step1_device_operation.hpp"
 #include "moreh_nll_loss_step2/device/moreh_nll_loss_step2_device_operation.hpp"
-#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn {
 
@@ -39,7 +39,13 @@ Tensor moreh_nll_loss(
             memory_config,
             compute_kernel_config_val);
 
-        moreh_sum(step1_result, std::nullopt, false, divisor_tensor, memory_config, compute_kernel_config_val);
+        operations::sum_with_moreh_shape(
+            step1_result,
+            operations::get_dim(std::nullopt, step1_result.logical_shape().rank()),
+            false,
+            divisor_tensor,
+            memory_config,
+            compute_kernel_config_val);
 
         const Tensor& step2_result = prim::moreh_nll_loss_step2(
             input_tensor,
@@ -51,7 +57,13 @@ Tensor moreh_nll_loss(
             ignore_index,
             memory_config,
             compute_kernel_config_val);
-        return moreh_sum(step2_result, std::nullopt, false, output_tensor, memory_config, compute_kernel_config_val);
+        return operations::sum_with_moreh_shape(
+            step2_result,
+            operations::get_dim(std::nullopt, step2_result.logical_shape().rank()),
+            false,
+            output_tensor,
+            memory_config,
+            compute_kernel_config_val);
     }
     if (reduction == SUM) {
         const Tensor& step2_result = prim::moreh_nll_loss_step2(
@@ -64,7 +76,13 @@ Tensor moreh_nll_loss(
             ignore_index,
             memory_config,
             compute_kernel_config_val);
-        return moreh_sum(step2_result, std::nullopt, false, output_tensor, memory_config, compute_kernel_config_val);
+        return operations::sum_with_moreh_shape(
+            step2_result,
+            operations::get_dim(std::nullopt, step2_result.logical_shape().rank()),
+            false,
+            output_tensor,
+            memory_config,
+            compute_kernel_config_val);
     }
 
     return prim::moreh_nll_loss_step2(

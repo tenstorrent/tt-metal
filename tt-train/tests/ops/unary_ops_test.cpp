@@ -130,6 +130,29 @@ TEST_F(UnaryOpsTest, GlobalMean) {
     }
 }
 
+TEST_F(UnaryOpsTest, GlobalMeanLowerRank) {
+    std::vector<float> test_data = {1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F};
+
+    for (const auto& shape : {ttnn::Shape({2, 4}), ttnn::Shape({2, 1, 4})}) {
+        SCOPED_TRACE(shape.rank());
+        auto tensor = core::from_vector(test_data, shape, &autograd::ctx().get_device());
+        auto tensor_ptr = autograd::create_tensor(tensor, /* requires_grad */ true);
+
+        auto result = mean(tensor_ptr);
+        EXPECT_EQ(result->get_value().logical_shape(), ttnn::Shape({1, 1, 1, 1}));
+        auto result_data = core::to_vector(result->get_value());
+        ASSERT_EQ(result_data.size(), 1);
+        EXPECT_FLOAT_EQ(result_data[0], 2.5F);
+
+        result->backward();
+        auto tensor_grad = core::to_vector(tensor_ptr->get_grad());
+        ASSERT_EQ(tensor_grad.size(), test_data.size());
+        for (float it : tensor_grad) {
+            EXPECT_FLOAT_EQ(it, 0.125F);
+        }
+    }
+}
+
 TEST_F(UnaryOpsTest, LogSoftmax) {
     auto* device = &autograd::ctx().get_device();
     std::vector<float> test_data = {-0.1F, -0.2F, -0.3F, -0.4F, 0.F, -0.2F, -0.3F, -0.4F};

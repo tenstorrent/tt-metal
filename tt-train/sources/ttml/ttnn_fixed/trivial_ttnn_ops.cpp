@@ -15,8 +15,6 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
-#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -25,7 +23,7 @@
 namespace ttml::ttnn_fixed {
 
 ttnn::Tensor sum_over_dim(const ttnn::Tensor& t, uint32_t dim) {
-    return sum_moreh(t, dim, /* keepdim */ true);
+    return sum_ttnn(t, dim, /* keepdim */ true);
 }
 
 ttnn::Tensor sum_over_batch(const ttnn::Tensor& t) {
@@ -100,30 +98,10 @@ ttnn::Tensor divide(const ttnn::Tensor& a, const ttnn::Tensor& b) {
     return ttnn::multiply(a, inv_b);
 }
 
-ttnn::Tensor mean_moreh(const ttnn::Tensor& t, int dim, bool keep_dim) {
-    auto res = ttnn::moreh_mean(
-        t,
-        dim,
-        keep_dim,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
-    return res;
-}
 ttnn::Tensor mean_ttnn(const ttnn::Tensor& t, int dim, bool keep_dim) {
     return ttnn::mean(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());
 }
 
-ttnn::Tensor sum_moreh(const ttnn::Tensor& t, int dim, bool keep_dim) {
-    return ttnn::moreh_sum(
-        t,
-        dim,
-        keep_dim,
-        std::nullopt,
-        std::nullopt,
-        /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
-}
 ttnn::Tensor sum_ttnn(const ttnn::Tensor& t, int dim, bool keep_dim) {
     return ttnn::sum(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());
 }
