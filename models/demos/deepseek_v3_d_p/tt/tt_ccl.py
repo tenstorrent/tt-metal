@@ -121,21 +121,11 @@ class TT_CCL:
         self.rs_semaphores_idx = [0, 0, 0]
         self.rs_semaphore_handles = [[], [], []]
 
-        # cluster-axis-0, cluster-axis-1, no-cluster-axis
-        for i in range(3):
-            # double buffered semaphores
-            for _ in range(2):
-                self.barrier_semaphore_handles[i].append(
-                    ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
-                )
-
-                self.ag_semaphore_handles[i].append(
-                    [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(2)]
-                )
-
-                self.rs_semaphore_handles[i].append(
-                    [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
-                )
+        # cluster-axis-0 and cluster-axis-1 now; the no-cluster-axis set (index 2) when a caller first asks
+        # (ensure_no_axis_semaphores). Each semaphore is a 64 B block in every core's L1 for the model's lifetime, at
+        # the top of the heap under ring_mla's static CBs: the 12 of the unused no-axis set cost K3 768 B of headroom.
+        for i in range(2):
+            self._create_axis_semaphores(i)
 
         # Single, stable-address reduce_scatter INTERMEDIATE accumulator, shared by ALL layers'
         # shared experts. Giving the shared-expert reduce_scatter a persistent, fixed-address
@@ -653,20 +643,47 @@ class TT_CCL:
         latter would pin one RS input per layer for the model's lifetime, leaking DRAM every layer."""
         self.shared_rs_input_keepalive = input_tensor
 
+    def _create_axis_semaphores(self, i):
+        """The double-buffered barrier / all-gather / reduce-scatter semaphores of axis index i (0, 1 or 2 = none)."""
+        for _ in range(2):
+            self.barrier_semaphore_handles[i].append(
+                ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+            )
+            self.ag_semaphore_handles[i].append(
+                [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(2)]
+            )
+            self.rs_semaphore_handles[i].append(
+                [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
+            )
+
+    def ensure_no_axis_semaphores(self):
+        """Create the no-cluster-axis semaphores now (model construction), for a module that runs a CCL without a
+        cluster axis (the DSA indexer's snake all-gather). Left to the first call, they would be allocated mid-forward,
+        under whatever L1 activation is live."""
+        if not self.barrier_semaphore_handles[2]:
+            self._create_axis_semaphores(2)
+            ttnn.synchronize_device(self.mesh_device)
+
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
         semaphore_index = 2 if cluster_axis is None else cluster_axis
+        if semaphore_index == 2:
+            self.ensure_no_axis_semaphores()
         current_idx = self.barrier_semaphore_idx[semaphore_index]
         self.barrier_semaphore_idx[semaphore_index] = (current_idx + 1) % 2
         return self.barrier_semaphore_handles[semaphore_index][current_idx]
 
     def get_and_cycle_ag_semaphore_handles(self, cluster_axis=None):
         semaphore_index = 2 if cluster_axis is None else cluster_axis
+        if semaphore_index == 2:
+            self.ensure_no_axis_semaphores()
         current_idx = self.ag_semaphores_idx[semaphore_index]
         self.ag_semaphores_idx[semaphore_index] = (current_idx + 1) % 2
         return self.ag_semaphore_handles[semaphore_index][current_idx]
 
     def get_and_cycle_rs_semaphore_handles(self, cluster_axis=None):
         semaphore_index = 2 if cluster_axis is None else cluster_axis
+        if semaphore_index == 2:
+            self.ensure_no_axis_semaphores()
         current_idx = self.rs_semaphores_idx[semaphore_index]
         self.rs_semaphores_idx[semaphore_index] = (current_idx + 1) % 2
         return self.rs_semaphore_handles[semaphore_index][current_idx]

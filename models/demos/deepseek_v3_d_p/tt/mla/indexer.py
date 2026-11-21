@@ -361,6 +361,9 @@ class TtIndexerBase:
         # by both write_k and the fused ring indexer's in-kernel slot selection.
         self.layer_num = layer_num
         self.tt_ccl = tt_ccl
+        # (the fused ring's gather runs without a cluster axis: its semaphores are made now, not mid-forward)
+        if hasattr(tt_ccl, "ensure_no_axis_semaphores"):
+            tt_ccl.ensure_no_axis_semaphores()
         self.ccl_num_links = ccl_num_links
         # Per-axis topology: the TP collectives use tp_ccl_topology, while the fused ring indexer
         # gathers on the SP axis with sp_ccl_topology. Conflating them would deadlock the SP ring
@@ -1355,6 +1358,9 @@ class TtCsaIndexer(TtIndexerBase):
         self.layer_idx = layer_idx
         self.layer_num = layer_num
         self.tt_ccl = tt_ccl
+        # (the fused ring's gather runs without a cluster axis: its semaphores are made now, not mid-forward)
+        if hasattr(tt_ccl, "ensure_no_axis_semaphores"):
+            tt_ccl.ensure_no_axis_semaphores()
         self.ccl_num_links = ccl_num_links
         self.sp_ccl_topology = sp_ccl_topology
         self.tp_ccl_topology = tp_ccl_topology
