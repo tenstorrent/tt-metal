@@ -466,12 +466,8 @@ constexpr bool vc2_uses_counter_credits = NAMED_CT_ARG("VC2_USES_COUNTER_CREDITS
 
 // 0 on hardware without stream registers (the Keraunos CCE): every credit is a single-writer
 // free-running total in the consumer's L1 plus a processed count the consumer keeps privately, on
-// every VC. VCn_USES_COUNTER_CREDITS stay metal's per-VC choice where stream registers exist.
+// every VC, whatever VCn_USES_COUNTER_CREDITS say.
 constexpr bool stream_registers_available = NAMED_CT_ARG("STREAM_REGISTERS_AVAILABLE") != 0;
-static_assert(
-    stream_registers_available || !(vc0_uses_counter_credits || vc1_uses_counter_credits || vc2_uses_counter_credits),
-    "VC*_USES_COUNTER_CREDITS are metal's per-VC choice on stream-register hardware; leave them 0 when "
-    "STREAM_REGISTERS_AVAILABLE is 0");
 
 constexpr bool any_vc_uses_counter_credits =
     !stream_registers_available || vc0_uses_counter_credits || vc1_uses_counter_credits || vc2_uses_counter_credits;

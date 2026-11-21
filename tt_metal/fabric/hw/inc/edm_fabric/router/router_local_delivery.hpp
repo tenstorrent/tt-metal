@@ -132,7 +132,9 @@ template <size_t CH>
 FORCE_INLINE void deliver(
     tt_l1_ptr PACKET_HEADER_TYPE* header, uint16_t payload_size, tt::tt_fabric::NocSendType type, uint8_t trid) {
     using tt::tt_fabric::NocSendType;
-    const uint32_t payload = reinterpret_cast<uint32_t>(header) + sizeof(PACKET_HEADER_TYPE);
+    // The writes' source: a plain offset, though the header may be in the router's uncached view.
+    const uint32_t payload =
+        router_l1_offset(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(header)) + sizeof(PACKET_HEADER_TYPE));
     if (type == NocSendType::NOC_UNICAST_WRITE) {
         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
         local_write<counts_local_writes>(payload, header->command_fields.unicast_write.noc_address, payload_size, trid);

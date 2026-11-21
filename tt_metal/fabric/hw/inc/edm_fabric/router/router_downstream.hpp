@@ -13,6 +13,11 @@
 // increments as it frees slots. A forward decrements both (the downstream's is its doorbell); the known-free count is a
 // lower bound of the local copy, re-read only at zero, so an admit usually reads no register.
 //
+// Without stream registers (router_common.hpp) the two counts are software: this router publishes the packets it has
+// written into the downstream sender channel in that channel's producer-cursor block (the downstream's doorbell), and
+// the downstream writes the slots it has freed, in all, into a word of this router's L1 (downstream_read_count_addr),
+// given to it when the connection opens.
+//
 // Names: a downstream's name is its direction in 2D (so a packet's action bits are its downstreams), 0 for 1D's one
 // downstream; its entry is its index in the host's compact order, which the tables keep (downstream_entry maps a name
 // to its entry); its dense index is its index among the entries the runtime args list.
@@ -22,6 +27,7 @@
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_software_credit.hpp"
 
 #include "router_common.hpp"
 
@@ -84,7 +90,7 @@ struct DownstreamTraits {
     static constexpr size_t count = DOWNSTREAM_EDM_COUNT_BY_VC[VC];
     static constexpr uint32_t num_slots = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[VC];
     // The last slot's offset from the ring's base (the ring wraps after it).
-    static constexpr uint32_t last_slot_offset = (num_slots - 1) * channel_buffer_size;
+    static constexpr uint32_t last_slot_offset = static_cast<uint32_t>((num_slots - 1) * channel_buffer_size);
     static constexpr uint8_t data_cmd_buf = CommandBuffers::forward_data[VC];
     static constexpr uint8_t sync_cmd_buf = CommandBuffers::forward_credits[VC];
     static constexpr uint8_t noc = tt::tt_fabric::edm_to_downstream_noc;
@@ -108,6 +114,12 @@ struct DownstreamTraits {
     // That channel's free-slots register, on the downstream.
     template <size_t ENTRY>
     static constexpr uint32_t remote_credit_stream = sender_free_slots_streams[forwarding_position<ENTRY>()];
+    // Without stream registers: the word of this router's L1 where entry ENTRY's downstream writes the slots it has
+    // freed, in all (the host's block: VC0's entries, then VC1's). This router's own view.
+    template <size_t ENTRY>
+    static constexpr uint32_t downstream_read_count_addr =
+        local_downstream_read_counters_base_address +
+        ((VC == 0 ? 0 : VC0_DOWNSTREAM_EDM_SIZE) + ENTRY) * software_counter_slot_bytes;
 
     // Whether VC's forwards go to one destination for the whole run, which its forward buffer pair then keeps
     // (FullPresetForwards): the router picks no downstream at run time (not intermesh, not on a mesh's edge), and every
@@ -133,7 +145,9 @@ struct DownstreamTraits {
 struct DownstreamLink {
     uint32_t first_slot_addr;  // the downstream sender channel's first slot
     uint32_t noc_coord;        // the downstream's NoC coordinate (stateless and partially preset forwards)
-    uint64_t credit_noc_addr;  // the downstream's free-slots register (stateless credits)
+    // The downstream's free-slots register (stateless credits); without stream registers, the write count of the
+    // downstream sender channel's producer-cursor block.
+    uint64_t credit_noc_addr;
 
     // The NoC address of `addr` on the downstream.
     FORCE_INLINE uint64_t noc_addr(uint32_t addr) const {
@@ -153,14 +167,17 @@ struct DownstreamSenderChannelProgress {
 };
 
 // A stateless forward's two commands: the packet into `dst` on the node at `link`, tagged with `trid`, then -1 on the
-// node's free-slots register (its doorbell).
+// node's free-slots register (its doorbell). Without stream registers the caller rings the doorbell (its write count).
+// `src_addr` is in this router's L1, in either view.
 template <uint8_t NOC, uint8_t DATA_CMD_BUF>
 FORCE_INLINE void forward_stateless(
     const DownstreamLink& link, uint32_t dst, uint32_t src_addr, uint32_t size_bytes, uint8_t trid) {
     noc_async_write_one_packet_with_trid</*update_counter=*/is_blackhole_arch, /*posted=*/true>(
-        src_addr, link.noc_addr(dst), size_bytes, trid, DATA_CMD_BUF, NOC);
-    noc_inline_dw_write<InlineWriteDst::REG>(
-        link.credit_noc_addr, pack_value_for_inc_on_write_stream_reg_write(-1), INLINE_WRITE_ALL_BYTES, NOC);
+        router_l1_offset(src_addr), link.noc_addr(dst), size_bytes, trid, DATA_CMD_BUF, NOC);
+    if constexpr (stream_registers_available) {
+        noc_inline_dw_write<InlineWriteDst::REG>(
+            link.credit_noc_addr, pack_value_for_inc_on_write_stream_reg_write(-1), INLINE_WRITE_ALL_BYTES, NOC);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -169,7 +186,8 @@ FORCE_INLINE void forward_stateless(
 
 // The downstream connections of one VC as the runtime args describe them: which entries have a downstream (one bit
 // each), and for those, by dense index, first slot address, location-info and registration addresses on the
-// downstream, this router's teardown semaphore for it, and the NoC coordinates (packed, one byte per dense index).
+// downstream, this router's teardown semaphore for it, and the NoC coordinates (packed, one byte per dense index);
+// without stream registers also the downstream sender channel's producer-cursor block (null with them).
 struct DownstreamArgs {
     uint32_t entries;
     const uint32_t* first_slot_addrs;
@@ -178,6 +196,7 @@ struct DownstreamArgs {
     const size_t* teardown_sems;
     uint32_t noc_x_packed;
     uint32_t noc_y_packed;
+    const uint32_t* producer_cursor_addrs;
 };
 
 FORCE_INLINE uint32_t dense_noc_x(const DownstreamArgs& args, uint32_t dense) {
@@ -201,6 +220,7 @@ struct StatelessForwards {
     }
 };
 
+#if !defined(ARCH_QUASAR)  // the preset forms use the NoC API's extensions, which Quasar's does not have
 // One destination for the whole run: the buffers keep the downstream's coordinate and credit register, programmed
 // once at init; each forward sets its ring slot, length and go (and, where several VCs share the preset, its credit
 // register).
@@ -349,6 +369,11 @@ using ForwardCommands = std::conditional_t<
     !CommandBuffers::forward_presets,
     StatelessForwards<VC>,
     std::conditional_t<DownstreamTraits<VC>::one_destination, FullPresetForwards<VC>, PartialPresetForwards<VC>>>;
+#else
+static_assert(!CommandBuffers::forward_presets);
+template <size_t VC>
+using ForwardCommands = StatelessForwards<VC>;
+#endif
 
 // UDM's relay: a ring of LOCAL_RELAY_NUM_BUFFERS slots in the relay's L1 that takes the whole packet, and a free-slots
 // register the relay increments as it frees slots, of which this router keeps a local copy. Its forwards are stateless,
@@ -356,8 +381,9 @@ using ForwardCommands = std::conditional_t<
 struct Relay {
     static constexpr size_t vc = 0;  // UDM routers have VC0 only
     static constexpr uint32_t num_slots = LOCAL_RELAY_NUM_BUFFERS;
-    static constexpr uint32_t last_slot_offset = (num_slots - 1) * channel_buffer_size;
+    static constexpr uint32_t last_slot_offset = static_cast<uint32_t>((num_slots - 1) * channel_buffer_size);
     static constexpr uint32_t local_credit_stream = tensix_relay_local_free_slots_stream_id;
+    static_assert(stream_registers_available || !udm_mode, "the relay's credits are stream registers");
 
     DownstreamLink link;  // set at init
     DownstreamSenderChannelProgress progress;
@@ -393,6 +419,11 @@ struct Downstreams {
 
     std::array<DownstreamSenderChannelProgress, Traits::count> progress;  // by entry
     std::array<DownstreamLink, Traits::count> links;                      // by entry, set at init
+    // Without stream registers: the packets written into each downstream sender channel so far, by entry.
+    [[no_unique_address]] Present<!stream_registers_available, std::array<uint32_t, Traits::count>, 0> written;
+    static_assert(
+        stream_registers_available || !CommandBuffers::forward_presets,
+        "a preset forward's doorbell is a stream-register write");
 
     // Every downstream in `forward_to` (live names, one bit each) has a free slot. The known counts are tested first;
     // only when one the packet needs is used up are the live local credit registers re-read, as one group (measured
@@ -418,7 +449,11 @@ struct Downstreams {
         ForwardCommands<VC>::template forward<entry>(links[entry], dst, src_addr, size_bytes, trid);
         downstream.next_slot_addr = slot_after(dst, links[entry].first_slot_addr, Traits::last_slot_offset);
         downstream.free_slots--;
-        increment_local_update_ptr_val<Traits::template local_credit_stream<entry>>(-1);
+        if constexpr (stream_registers_available) {
+            increment_local_update_ptr_val<Traits::template local_credit_stream<entry>>(-1);
+        } else {
+            fabric_publish_producer_write_count(links[entry].credit_noc_addr, ++written[entry], Traits::noc);
+        }
     }
 
     // Forwards to every downstream in `forward_to` (live names), lowest name first.
@@ -443,12 +478,19 @@ private:
         }
     }
 
-    // The local credit registers of the downstreams in NAMES, into raw[] (by entry), lowest name first.
+    // The local credit registers of the downstreams in NAMES, into raw[] (by entry), lowest name first. Without stream
+    // registers: each downstream's slot count less the packets written into it that it has not yet freed.
     template <uint32_t NAMES>
-    FORCE_INLINE static void read_local_credits(uint32_t* raw) {
+    FORCE_INLINE void read_local_credits(uint32_t* raw) const {
         if constexpr (NAMES != 0) {
             constexpr size_t entry = downstream_entry(lowest_bit(NAMES));
-            raw[entry] = read_stream_raw<Traits::template local_credit_stream<entry>>();
+            if constexpr (stream_registers_available) {
+                raw[entry] = read_stream_raw<Traits::template local_credit_stream<entry>>();
+            } else {
+                const uint32_t freed =
+                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(Traits::template downstream_read_count_addr<entry>);
+                raw[entry] = Traits::num_slots - (written[entry] - freed);
+            }
             read_local_credits<without_lowest_bit(NAMES)>(raw);
         }
     }
@@ -498,8 +540,8 @@ struct DownstreamConnections {
 // Init (out of line, once)
 // ---------------------------------------------------------------------------------------------------------------------
 
-// Before the Ethernet handshake: zero the teardown semaphores, set the local credit copies to the ring size, fill the
-// links and the progress.
+// Before the Ethernet handshake: zero the teardown semaphores, set the local credit copies to the ring size (without
+// stream registers: zero the write counts and the downstreams' read counts), fill the links and the progress.
 template <size_t VC>
 __attribute__((noinline)) void init_downstreams(Downstreams<VC>& downstreams, const DownstreamArgs& args) {
     using Traits = DownstreamTraits<VC>;
@@ -510,13 +552,24 @@ __attribute__((noinline)) void init_downstreams(Downstreams<VC>& downstreams, co
         links[entry] = {0, 0, 0};
         if ((args.entries >> entry) & 1u) {
             *reinterpret_cast<volatile uint32_t*>(args.teardown_sems[dense]) = 0;
-            init_ptr_val<Traits::template local_credit_stream<entry>>(Traits::num_slots);
             const uint32_t x = dense_noc_x(args, dense);
             const uint32_t y = dense_noc_y(args, dense);
             links[entry].first_slot_addr = args.first_slot_addrs[dense];
             links[entry].noc_coord = static_cast<uint32_t>(get_noc_addr(x, y, 0) >> NOC_ADDR_COORD_SHIFT);
-            links[entry].credit_noc_addr = get_noc_addr(
-                x, y, get_stream_reg_write_addr(Traits::template remote_credit_stream<entry>), Traits::noc);
+            if constexpr (stream_registers_available) {
+                init_ptr_val<Traits::template local_credit_stream<entry>>(Traits::num_slots);
+                links[entry].credit_noc_addr = get_noc_addr(
+                    x, y, get_stream_reg_write_addr(Traits::template remote_credit_stream<entry>), Traits::noc);
+            } else {
+                downstreams.written[entry] = 0;
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(Traits::template downstream_read_count_addr<entry>) = 0;
+                links[entry].credit_noc_addr = get_noc_addr(
+                    x,
+                    y,
+                    args.producer_cursor_addrs[dense] +
+                        offsetof(tt::tt_fabric::SenderChannelProducerCursor, write_counter),
+                    Traits::noc);
+            }
             dense++;
         }
         downstreams.progress[entry] = {/*free_slots=*/0, /*next_slot_addr=*/links[entry].first_slot_addr};
@@ -524,8 +577,8 @@ __attribute__((noinline)) void init_downstreams(Downstreams<VC>& downstreams, co
 }
 
 // Opens the connection at dense index `dense` of `args`: registers this router with the downstream as its producer,
-// its credits to go to `credit_register` (this router's local copy of the downstream's free slots). One body for every
-// connection.
+// its credits to go to `credit_register` (this router's local copy of the downstream's free slots; without stream
+// registers, the plain offset of its word for the downstream's read count). One body for every connection.
 __attribute__((noinline)) void open_downstream(const DownstreamArgs& args, uint32_t dense, uint32_t credit_register) {
     // Blackhole opens router-to-router connections with non-posted writes.
     constexpr bool posted = !is_blackhole_arch;
@@ -545,7 +598,11 @@ __attribute__((noinline)) void open_downstreams(const DownstreamArgs& args) {
     for_each_index<Traits::count>([&](auto entry_constant) {
         constexpr size_t entry = decltype(entry_constant)::value;
         if ((args.entries >> entry) & 1u) {
-            open_downstream(args, dense, get_stream_reg_write_addr(Traits::template local_credit_stream<entry>));
+            if constexpr (stream_registers_available) {
+                open_downstream(args, dense, get_stream_reg_write_addr(Traits::template local_credit_stream<entry>));
+            } else {
+                open_downstream(args, dense, router_l1_offset(Traits::template downstream_read_count_addr<entry>));
+            }
             dense++;
         }
     });

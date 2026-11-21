@@ -135,7 +135,8 @@ __attribute__((noinline)) bool end_round(RoundCounters& counters, bool send_atte
             with_other_erisc_parked([] { run_routing_without_noc_sync(); });
             return true;
         }
-    } else {
+    } else if constexpr (stream_registers_available) {
+        // The context-switch register is a stream scratch register: without stream registers there is none to follow.
         follow_context_switch();
     }
     return false;
