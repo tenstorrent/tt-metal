@@ -232,7 +232,7 @@ class Gemma4Experts:
             out = ttnn.slice(out, [0, 0, 0, 0], [1, 1, rows, out.shape[-1]])
         return out
 
-    def __call__(self, hidden_states, dense_routing):
+    def __call__(self, hidden_states, dense_routing, prefill_traced=False):
         lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
         if isinstance(dense_routing, PackedRouting):
             return self._forward_packed(hidden_states, dense_routing, lane_sharded)
@@ -321,7 +321,7 @@ class Gemma4Experts:
                     # already the full sum on every chip
                     out = self.dispatch_experts.forward(hidden_owner, routing_owner)
                 else:
-                    out = self._forward(hidden_owner, routing_owner, combine=False)
+                    out = self._forward(hidden_owner, routing_owner, combine=False, prefill_traced=prefill_traced)
                     out = ccl_allreduce(
                         out, self.mesh_config, self.ccl_manager, axis=self.mesh_config.ep_axis, group_size=self.ep
                     )
@@ -338,7 +338,7 @@ class Gemma4Experts:
                     out = self.dispatch_experts.forward(hidden_states, dense_routing)
                 out = ttnn.mesh_partition(out, dim=2, cluster_axis=self.mesh_config.ep_axis)
             else:
-                out = self._forward(hidden_states, dense_routing, combine=False)
+                out = self._forward(hidden_states, dense_routing, combine=False, prefill_traced=prefill_traced)
                 out = ccl_lane_scatter_rows(out, self.mesh_config, ccl_manager=self.ccl_manager)
             if pad_rows:
                 out = ttnn.slice(out, [0, 0, 0, 0], [1, 1, rows, out.shape[-1]])
@@ -360,7 +360,7 @@ class Gemma4Experts:
             # dense matrix, or the router's (values, indices) with GEMMA4_MOE_DISPATCH_SPARSE_ROUTING=1
             return self.dispatch_experts.forward(hidden_states, dense_routing)
         assert not isinstance(dense_routing, tuple), "sparse routing only feeds the decode MoE kernel"
-        return self._forward(hidden_states, dense_routing, combine=True)
+        return self._forward(hidden_states, dense_routing, combine=True, prefill_traced=prefill_traced)
 
     def _use_decode_kernel(self, hidden_states):
         return self.moe_decode is not None and 1 < int(hidden_states.shape[2]) <= self.moe_decode.frame_rows
@@ -386,7 +386,7 @@ class Gemma4Experts:
             return False
         return self._use_dispatch(hidden_states)
 
-    def _forward(self, hidden_states, dense_routing, combine=True):
+    def _forward(self, hidden_states, dense_routing, combine=True, prefill_traced=False):
         """
         Expert forward — fully on-device.
 
@@ -416,6 +416,7 @@ class Gemma4Experts:
             return prefill_forward(
                 num_local_experts=self.num_local_experts,
                 combine=combine,
+                prefill_traced=prefill_traced,
                 hidden_states=hidden_states,
                 routing_weights=dense_routing,
                 weights=self.weights,

@@ -82,13 +82,14 @@ class MoEBlock:
             and RouterTopk.supports(self.router.num_experts, self.router.top_k, packed=True)
         )
 
-    def __call__(self, router_input, expert_input):
+    def __call__(self, router_input, expert_input, prefill_traced=False):
         """
         MoE forward — fully on device.
 
         Args:
             router_input: [1, 1, seq_len, hidden_size] on device (for router linear)
             expert_input: [1, 1, seq_len, hidden_size] on device (normed, for experts)
+            prefill_traced: this prefill runs under a device trace (routed prefill then uses its trace-safe capacity)
 
         Returns:
             output: [1, 1, seq_len, hidden_size] on device
@@ -106,4 +107,4 @@ class MoEBlock:
             # decode MoE kernel rows: top-k straight from the router (no dense scatter, no second top-k)
             return self.experts(expert_input, self.router(router_input, sparse=True))
         dense_routing = self.router(router_input)
-        return self.experts(expert_input, dense_routing)
+        return self.experts(expert_input, dense_routing, prefill_traced=prefill_traced)
