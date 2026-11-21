@@ -66,6 +66,16 @@ def _host(tensor: ttnn.Tensor) -> list[torch.Tensor]:
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="sp8tp4-torus-xy",
         ),
+        # One 4x4 prefill stage (a Galaxy tray half, run_4x4_stage_tests.sh): SP=4 on the axis-1 ring, TP=4 on
+        # the axis-0 line.
+        pytest.param(
+            (4, 4),
+            1,
+            0,
+            kda_device_params((4, 4)),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -74,8 +84,12 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
     sp = mesh_shape[sp_axis]
     local_rows = 256
     capacity = sp * local_rows
-    # head_dim 128, as Kimi-K3's, so the migration slabs' segment geometry applies and every commit exports.
-    config = KDAConfig(hidden_size=256, num_heads=8, head_k_dim=128, head_v_dim=128, conv_kernel_size=4, norm_eps=1e-5)
+    # head_dim 128, as Kimi-K3's, so the migration slabs' segment geometry applies and every commit exports. One head
+    # per chip: the slabs store each head once on the mesh, so the head count must divide over SP x TP.
+    num_heads = mesh_shape[sp_axis] * mesh_shape[tp_axis]
+    config = KDAConfig(
+        hidden_size=256, num_heads=num_heads, head_k_dim=128, head_v_dim=128, conv_kernel_size=4, norm_eps=1e-5
+    )
     weights = random_weights(config)
     layer = build_layer(
         mesh_device,

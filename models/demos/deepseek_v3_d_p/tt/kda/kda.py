@@ -640,8 +640,8 @@ class ttKDA:
 
         ``hidden_states`` is either TP-sharded, ``[B, T, H/TP]`` (the model's residual layout: the layer all-gathers
         it over TP for the column-parallel input projection, the counterpart of the output's reduce-scatter), or
-        already full width, ``[B, T, H]`` (no gather). ``state`` may also be a model's slab entry
-        (``KdaStates.entry``), read and replaced in place.
+        already full width, ``[B, T, H]`` (no gather). ``state`` may also be a slab entry
+        (``SlabEntry``, as ``forward_slot`` passes the scratch), read and replaced in place.
 
         ``actual_start`` is the absolute global position of this chunk's first
         token. It selects the chronological SP segment order for MLA's
@@ -666,14 +666,25 @@ class ttKDA:
         self._validate_forward(hidden_states, state, actual_start)
         if actual_end is not None:
             self._validate_runtime_bound(actual_end, "actual_end")
+        return self._forward_projected(self._prepare_inputs(hidden_states), state, actual_start, actual_end)
+
+    def _prepare_inputs(self, hidden_states: ttnn.Tensor) -> _ProjectedInputs:
+        """The layer's first programs, which read no state: the TP gather and input projection, then the relay
+        landing buffer's reservation."""
         hidden_states, gathered = self._gather_tp_input(hidden_states)
         inputs = self._project_inputs(hidden_states)
         # The SP predecessor's relay can write into this rank's landing buffer before its own recurrence starts. The
-        # convolution's history-exchange entry barrier below keeps every rank from relaying until all have reserved it:
-        # keep an SP barrier between this reservation and the recurrence.
+        # convolution's history-exchange entry barrier (in _forward_projected) keeps every rank from relaying until all
+        # have reserved it: keep an SP barrier between this reservation and the recurrence.
         self.recurrence.reserve_affine_relay()
         if gathered:
             ttnn.deallocate(hidden_states)
+        return inputs
+
+    def _forward_projected(
+        self, inputs: _ProjectedInputs, state: KdaState, actual_start: ttnn.Tensor, actual_end: ttnn.Tensor | None
+    ) -> tuple[ttnn.Tensor, KdaState]:
+        """``forward`` after ``_prepare_inputs``: everything that reads or replaces the state."""
         convolution, convolution_slab = state.convolution, {}
         if isinstance(convolution, SlabEntry):
             convolution, convolution_slab = convolution.slab, convolution.op_kwargs()
@@ -730,3 +741,36 @@ class ttKDA:
         ttnn.deallocate(inputs.projected)
         output = self._project_output(output)
         return output, KdaState(recurrent=result.final_state, convolution=new_convolution)
+
+    def forward_slot(
+        self,
+        hidden_states: ttnn.Tensor,
+        states,
+        slot: ttnn.Tensor,
+        layer_idx: int,
+        actual_start: ttnn.Tensor,
+        actual_end: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """One model layer per chunk, its carry kept in the model's state slabs: import -> forward -> export.
+
+        ``states`` is the model's ``KdaStates`` (``tt/kda/state_adapter.py``, typed loosely because that module
+        imports this one), which stores each head once on the mesh: the import copies this chip's heads out of the
+        slab and all-gathers them over SP into ``states.scratch``; the layer's ops read the scratch and replace it in
+        place with the new (SP-replicated) carry; the export stores each chip's heads of it. ``slot`` is a replicated
+        one-element UINT32 device scalar, read on device by the copies, so a captured trace follows the slot of the
+        replay. ``actual_start`` also marks a request head: where it reads 0 the layer's ops start from zeros instead
+        of the imported carry (the slab-entry contract), so the import itself needs no zero fill. Returns the layer
+        output.
+
+        The import follows the input projection, the first program that reads no state: untraced, the device runs the
+        projection while the host dispatches the import, instead of idling until the import is enqueued.
+        """
+        scratch = states.scratch_entry()
+        self._validate_forward(hidden_states, scratch, actual_start)
+        if actual_end is not None:
+            self._validate_runtime_bound(actual_end, "actual_end")
+        inputs = self._prepare_inputs(hidden_states)
+        states.import_layer(states.scratch, slot, layer_idx)
+        output, _ = self._forward_projected(inputs, scratch, actual_start, actual_end)
+        states.export_layer(states.scratch, slot, layer_idx)
+        return output

@@ -25,10 +25,12 @@ class KimiK31Config(KimiK3Config):
     INDEX_TOPK_FREQ = 1
     INDEX_SKIP_TOPK_OFFSET = 1
 
-    # K3's 1536 B/bank is spent by KDA's long-lived semaphores, MoE routing and dense MLA; a DSA layer's
-    # early-Q all-to-all then needs one more 16 B slot per bank (OOM at 1536 with KDA layers 1-2 and DSA
-    # layer 3 in one forward, test_kimi_k3_1_dsa_trace.py hybrid_L0_3 window).
-    L1_SMALL_SIZE = 2048
+    # K3's replicated-slab 1536 B/bank is spent by KDA's long-lived semaphores, MoE routing and dense MLA; a DSA
+    # layer's early-Q all-to-all then needs one more slot per bank (OOM at 1536 with KDA layers 1-2 and DSA layer 3
+    # in one forward, test_kimi_k3_1_dsa_trace.py hybrid_L0_3 window), hence 2048. The KDA layer's two SP
+    # all-gathers of its sharded carry add 256 B/bank, as on K3 (KimiK3Config.L1_SMALL_SIZE); a 4x4 stage left
+    # 128 B of 2048 free before them (L4, traced prefill) and ran out of L1_SMALL with them at 2048.
+    L1_SMALL_SIZE = 2304
 
     # 1-indexed as in the HF config; identical to the full-attention layers.
     DSA_LAYERS_1BASED = list(KimiK3Config.FULL_ATTN_LAYERS_1BASED)
