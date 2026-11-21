@@ -419,6 +419,45 @@ def test_matmul_reuse_config_partial_batch_blocks(device, batch_shape, m, k, n, 
     assert_with_pcc(torch_output, output, 0.999)
 
 
+@pytest.mark.parametrize(
+    "batch, m, k, n, per_core_M",
+    [
+        (4, 256, 256, 128, 16),
+        (4, 128, 256, 128, 16),
+        (4, 256, 128, 128, 16),
+    ],
+)
+@pytest.mark.parametrize("bias", [False, True])
+def test_matmul_reuse_config_batches_per_core_packer_l1_acc(device, batch, m, k, n, per_core_M, bias):
+    torch.manual_seed(0)
+    torch_a = torch.randn((batch, 1, m, k), dtype=torch.bfloat16)
+    torch_b = torch.randn((batch, 1, k, n), dtype=torch.bfloat16)
+    torch_output = torch_a.float() @ torch_b.float()
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        per_core_M=per_core_M,
+        per_core_N=n // 32,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, packer_l1_acc=True
+    )
+    if bias:
+        torch_bias = torch.randn((1, 1, m, n), dtype=torch.bfloat16)
+        torch_output = torch_output + torch_bias.float()
+        bias_tensor = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+        output = ttnn.linear(
+            a, b, bias=bias_tensor, program_config=program_config, compute_kernel_config=compute_kernel_config
+        )
+    else:
+        output = ttnn.matmul(a, b, program_config=program_config, compute_kernel_config=compute_kernel_config)
+    assert_with_pcc(torch_output, ttnn.to_torch(output).float(), 0.999)
+
+
 @pytest.mark.parametrize("b", [2])
 @pytest.mark.parametrize("h", [3])
 @pytest.mark.parametrize("m", [256])
