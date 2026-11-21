@@ -17,6 +17,7 @@ to FLUX_E2E_RESULTS (JSON lines).
 import json
 import os
 import statistics
+import sys
 import time
 
 import diffusers.models.autoencoders.autoencoder_kl_flux2 as reference
@@ -31,11 +32,19 @@ from ....parallel.config import Flux2VaeParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
-from .device_params import line_params_flux2, single_device_params_flux2
+from ....utils.tracing import Tracer
+from .device_params import TRACE_REGION_SIZE, line_params_flux2, single_device_params_flux2
 from .test_vae_flux2 import _torch_decode_reference, prep_data
 
 MEASURED_DECODES = 3
+TRACED_DECODES = 20
 RESULTS = os.environ.get("FLUX_E2E_RESULTS", "/tmp/flux_e2e_results.jsonl")
+
+
+def _in_collect_pass():
+    """True during run_safe_pytest's up-front collect pass, which runs test bodies to record programs."""
+    plugin = sys.modules.get("tests.plugins.up_front_collect")
+    return plugin is not None and getattr(plugin, "_PASS", "real") == "collect"
 
 
 def _conv_paths(module) -> tuple[int, int]:
@@ -67,20 +76,9 @@ def _auto_slice_strided(module, mesh_shape) -> None:
         _auto_slice_strided(child, mesh_shape)
 
 
-@pytest.mark.parametrize(
-    "mesh_device, device_params, tp_axis, h_axis",
-    [
-        [(1, 1), single_device_params_flux2, 0, 1],
-        [(2, 4), line_params_flux2, 1, 0],
-    ],
-    ids=["1x1", "bh2x4"],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize(("height", "width"), [(1024, 1024), (2048, 2048)], ids=["1024", "2048"])
-@pytest.mark.parametrize("conv", ["ttnn", "conv2d_3x3"])
-def test_vae_flux2_decoder_conv2d_3x3(
-    *, mesh_device: ttnn.MeshDevice, tp_axis: int, h_axis: int, height: int, width: int, conv: str
-) -> None:
+def _decoder_case(mesh_device, tp_axis, h_axis, height, width, conv):
+    """FLUX.2's VAE decoder with seeded random weights on `conv`, its torch reference output for a random latent,
+    and that latent prepared on device as pipeline_flux2.py hands it to the decoder."""
     torch.manual_seed(0)
     torch_model = reference.AutoencoderKLFlux2()
     torch_model.eval()
@@ -108,8 +106,25 @@ def test_vae_flux2_decoder_conv2d_3x3(
     f = vae_scale_factor * patch_size
     inp = torch.randn(1, z_channels * patch_size**2, height // f, width // f)
     torch_output = _torch_decode_reference(torch_model, inp)
-
     tt_inp = prep_data(vae_parallel_config, inp, mesh_device, tt_model=tt_model)
+    return tt_model, tt_inp, torch_output, ccl_manager
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, tp_axis, h_axis",
+    [
+        [(1, 1), single_device_params_flux2, 0, 1],
+        [(2, 4), line_params_flux2, 1, 0],
+    ],
+    ids=["1x1", "bh2x4"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("height", "width"), [(1024, 1024), (2048, 2048)], ids=["1024", "2048"])
+@pytest.mark.parametrize("conv", ["ttnn", "conv2d_3x3"])
+def test_vae_flux2_decoder_conv2d_3x3(
+    *, mesh_device: ttnn.MeshDevice, tp_axis: int, h_axis: int, height: int, width: int, conv: str
+) -> None:
+    tt_model, tt_inp, torch_output, _ccl_manager = _decoder_case(mesh_device, tp_axis, h_axis, height, width, conv)
     tt_out = tt_model.forward(tt_inp)
     ttnn.synchronize_device(mesh_device)
     tt_out_torch = tensor.to_torch(tt_out).permute(0, 3, 1, 2)
@@ -142,6 +157,72 @@ def test_vae_flux2_decoder_conv2d_3x3(
 
     # PCC only: test_vae_flux2.py's relative-RMSE bound is calibrated on the pretrained, pruned decoder; the
     # full-depth random-weight decoder reads RMSE/sigma ~6% on ttnn.conv2d itself.
+    assert_quality(torch_output, tt_out_torch, pcc=0.995)
+    if conv == "conv2d_3x3":
+        assert on_ttnn == 0, f"{on_ttnn} 3x3 convs ran on ttnn.conv2d"
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, tp_axis, h_axis",
+    [
+        # On one chip ttnn.conv2d DRAM-slices the 2048² decoder's convs, and its trace outgrows TRACE_REGION_SIZE.
+        [(1, 1), {**single_device_params_flux2, "trace_region_size": 4 * TRACE_REGION_SIZE}, 0, 1],
+        [(2, 4), {**line_params_flux2, "trace_region_size": TRACE_REGION_SIZE}, 1, 0],
+    ],
+    ids=["1x1", "bh2x4"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("height", "width"), [(1024, 1024), (2048, 2048)], ids=["1024", "2048"])
+@pytest.mark.parametrize("conv", ["ttnn", "conv2d_3x3"])
+def test_vae_flux2_decoder_conv2d_3x3_traced(
+    *, mesh_device: ttnn.MeshDevice, tp_axis: int, h_axis: int, height: int, width: int, conv: str
+) -> None:
+    """The production decode: pipeline_flux2.py replays a trace of the decoder's forward (Tracer). Latency is
+    TRACED_DECODES replays timed one at a time; throughput is the same replays issued back to back."""
+    tt_model, tt_inp, torch_output, _ccl_manager = _decoder_case(mesh_device, tp_axis, h_axis, height, width, conv)
+    # As in the pipeline, the size runs untraced before the capture: buffers the first run allocates and keeps (conv
+    # weights, CCL buffers) would otherwise be allocated after the capture and overwritten by its replays.
+    ttnn.deallocate(tt_model.forward(tt_inp))
+    ttnn.synchronize_device(mesh_device)
+    if _in_collect_pass():
+        return
+
+    tracer = Tracer(tt_model.forward, device=mesh_device, clone_prep_inputs=False)
+    tt_out = tracer(tt_inp)
+    ttnn.synchronize_device(mesh_device)
+    tt_out_torch = tensor.to_torch(tt_out).permute(0, 3, 1, 2)
+
+    latency_ms = []
+    for _ in range(TRACED_DECODES):
+        t0 = time.perf_counter()
+        tracer(tt_inp)
+        ttnn.synchronize_device(mesh_device)
+        latency_ms.append((time.perf_counter() - t0) * 1000)
+    t0 = time.perf_counter()
+    for _ in range(TRACED_DECODES):
+        tracer(tt_inp, tracer_blocking_execution=False)
+    ttnn.synchronize_device(mesh_device)
+    fps = TRACED_DECODES / (time.perf_counter() - t0)
+    tracer.release_trace()
+
+    on_3x3, on_ttnn = _conv_paths(tt_model)
+    pcc = torch.corrcoef(torch.stack([torch_output.flatten().double(), tt_out_torch.flatten().double()]))[0, 1].item()
+    record = {
+        "part": "decoder-traced",
+        "mesh": list(mesh_device.shape),
+        "image": [height, width],
+        "conv": conv,
+        "traced_ms_median": statistics.median(latency_ms),
+        "traced_ms": latency_ms,
+        "traced_fps": fps,
+        "pcc": pcc,
+        "convs_on_conv2d_3x3": on_3x3,
+        "convs_on_ttnn_conv2d": on_ttnn,
+    }
+    with open(RESULTS, "a") as fh:
+        fh.write(json.dumps(record) + "\n")
+    print("FLUX_E2E:", json.dumps(record))
+
     assert_quality(torch_output, tt_out_torch, pcc=0.995)
     if conv == "conv2d_3x3":
         assert on_ttnn == 0, f"{on_ttnn} 3x3 convs ran on ttnn.conv2d"
