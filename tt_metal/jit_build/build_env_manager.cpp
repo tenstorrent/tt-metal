@@ -55,21 +55,24 @@ namespace {
 std::map<std::string, std::string> initialize_device_kernel_defines(const JitDeviceConfig& config) {
     std::map<std::string, std::string> device_kernel_defines;
 
-    bool is_dram_pow2 = ceil(log2(config.num_dram_banks)) == log2(config.num_dram_banks);
-    bool is_l1_pow2 = ceil(log2(config.num_l1_banks)) == log2(config.num_l1_banks);
+    // A package with no Tensix cores has no L1 banks, and casting log2(0) = -inf to size_t is undefined.
+    // Interleaved address generation is the only consumer of the shift, and it needs banks to place a buffer.
+    auto log2_num_banks = [](size_t num_banks) { return num_banks == 0 ? 0 : static_cast<size_t>(log2(num_banks)); };
+    bool is_dram_pow2 = config.num_dram_banks == 0 || ceil(log2(config.num_dram_banks)) == log2(config.num_dram_banks);
+    bool is_l1_pow2 = config.num_l1_banks == 0 || ceil(log2(config.num_l1_banks)) == log2(config.num_l1_banks);
 
     device_kernel_defines.emplace("NUM_DRAM_BANKS", std::to_string(config.num_dram_banks));
     device_kernel_defines.emplace("NUM_L1_BANKS", std::to_string(config.num_l1_banks));
 
     if (is_dram_pow2) {
         device_kernel_defines.emplace(
-            "LOG_BASE_2_OF_NUM_DRAM_BANKS", std::to_string(static_cast<size_t>(log2(config.num_dram_banks))));
+            "LOG_BASE_2_OF_NUM_DRAM_BANKS", std::to_string(log2_num_banks(config.num_dram_banks)));
     } else {
         device_kernel_defines.emplace("IS_NOT_POW2_NUM_DRAM_BANKS", "1");
     }
     if (is_l1_pow2) {
         device_kernel_defines.emplace(
-            "LOG_BASE_2_OF_NUM_L1_BANKS", std::to_string(static_cast<size_t>(log2(config.num_l1_banks))));
+            "LOG_BASE_2_OF_NUM_L1_BANKS", std::to_string(log2_num_banks(config.num_l1_banks)));
     } else {
         device_kernel_defines.emplace("IS_NOT_POW2_NUM_L1_BANKS", "1");
     }

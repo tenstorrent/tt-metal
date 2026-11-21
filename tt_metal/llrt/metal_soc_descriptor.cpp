@@ -94,6 +94,23 @@ std::vector<tt::tt_metal::CoreCoord> metal_SocDescriptor::get_metal_dram_cores(t
         if (exclude_noc0_endpoints && is_noc0_dram_endpoint({translated.x, translated.y})) {
             continue;
         }
+        // A Quasar package may contain both ordinary GDDR endpoints and CCE-backed programmable
+        // views. Once any CCE view is declared, only those views are Metal DRAM programmable cores.
+        if (this->arch == tt::ARCH::QUASAR && has_programmable_dram_views()) {
+            bool is_programmable_core = false;
+            for (size_t view = 0; view < dram_bank_endpoint_coords.size(); ++view) {
+                if (dram_view_programmable[view] &&
+                    std::ranges::find(
+                        dram_bank_endpoint_coords[view], tt::tt_metal::CoreCoord{translated.x, translated.y}) !=
+                        dram_bank_endpoint_coords[view].end()) {
+                    is_programmable_core = true;
+                    break;
+                }
+            }
+            if (!is_programmable_core) {
+                continue;
+            }
+        }
         // UMD's LOGICAL DRAM coord is {channel, raw subchannel}, but Metal's logical DRAM space is
         // {dram_view, index into dram_bank_endpoint_coords}, which orders the NOC0 worker endpoint
         // first rather than by subchannel id. Handing back the UMD coord would make a caller that
@@ -159,6 +176,19 @@ size_t metal_SocDescriptor::get_address_offset(int dram_view) const {
         dram_view,
         this->dram_view_address_offsets.size());
     return this->dram_view_address_offsets.at(dram_view);
+}
+
+bool metal_SocDescriptor::is_dram_view_programmable(int dram_view) const {
+    TT_ASSERT(
+        dram_view < this->dram_view_programmable.size(),
+        "dram_view={} must be within range of dram_view_programmable.size={}",
+        dram_view,
+        this->dram_view_programmable.size());
+    return this->dram_view_programmable.at(dram_view);
+}
+
+bool metal_SocDescriptor::has_programmable_dram_views() const {
+    return std::ranges::find(this->dram_view_programmable, true) != this->dram_view_programmable.end();
 }
 
 size_t metal_SocDescriptor::get_physical_channel_for_dram_view(int dram_view) const {
@@ -377,11 +407,13 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor(
     this->dram_view_eth_cores.clear();
     this->dram_view_worker_cores.clear();
     this->dram_view_address_offsets.clear();
+    this->dram_view_programmable.clear();
     this->dram_bank_endpoint_coords.clear();
     this->dram_view_channels.reserve(num_dram_views_in_descriptor);
     this->dram_view_eth_cores.reserve(num_dram_views_in_descriptor);
     this->dram_view_worker_cores.reserve(num_dram_views_in_descriptor);
     this->dram_view_address_offsets.reserve(num_dram_views_in_descriptor);
+    this->dram_view_programmable.reserve(num_dram_views_in_descriptor);
     this->dram_bank_endpoint_coords.reserve(num_dram_views_in_descriptor);
 
     const uint32_t dram_harvesting_mask = this->harvesting_masks.dram_harvesting_mask;
@@ -396,6 +428,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor(
             break;
         }
         size_t address_offset = dram_view["address_offset"].as<size_t>();
+        const bool programmable = dram_view["programmable"] ? dram_view["programmable"].as<bool>() : false;
 
         TT_FATAL(
             dram_view[eth_endpoint_key] && dram_view[worker_endpoint_key],
@@ -444,6 +477,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor(
 
         this->dram_view_channels.push_back(channel);
         this->dram_view_address_offsets.push_back(address_offset);
+        this->dram_view_programmable.push_back(programmable);
         this->dram_view_eth_cores.push_back(std::move(eth_dram_cores));
         this->dram_view_worker_cores.push_back(std::move(worker_dram_cores));
 

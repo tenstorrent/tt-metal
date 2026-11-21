@@ -314,6 +314,12 @@ class RunTimeOptions {
     bool noc_att_specified_ = false;
 
     std::filesystem::path simulator_path = "";
+    std::string emu_server;
+    std::string emu_soc_desc_path;
+    std::string grendel_jtag_server;
+    std::string grendel_jtag_soc_desc_path;
+    std::string grendel_jtag_transport = "jtag2axi_v2";
+    uint32_t grendel_jtag_chiplet = 0;
 
     bool fast_dispatch = true;
 
@@ -861,6 +867,12 @@ public:
         return std::filesystem::path(simulator).filename().string();
     }
     bool is_qsr_s1_simulator() const { return get_simulator_name().starts_with("emu-qsr-s1"); }
+    const std::string& get_emu_server() const { return emu_server; }
+    const std::string& get_emu_soc_desc_path() const { return emu_soc_desc_path; }
+    const std::string& get_grendel_jtag_server() const { return grendel_jtag_server; }
+    const std::string& get_grendel_jtag_soc_desc_path() const { return grendel_jtag_soc_desc_path; }
+    const std::string& get_grendel_jtag_transport() const { return grendel_jtag_transport; }
+    uint32_t get_grendel_jtag_chiplet() const { return grendel_jtag_chiplet; }
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size

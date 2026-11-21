@@ -137,6 +137,17 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
     }
     if (rtoptions.get_target_device() == tt::TargetDevice::Simulator) {
         arch = get_simulator_architecture(rtoptions.get_simulator_path());
+    } else if (
+        rtoptions.get_target_device() == tt::TargetDevice::EmuAxi ||
+        rtoptions.get_target_device() == tt::TargetDevice::GrendelJtag) {
+        const std::string& soc_desc = rtoptions.get_target_device() == tt::TargetDevice::EmuAxi
+                                          ? rtoptions.get_emu_soc_desc_path()
+                                          : rtoptions.get_grendel_jtag_soc_desc_path();
+        arch = umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
+        // Grendel package descriptors report ARCH::GRENDEL; Metal runs them through the Quasar HAL.
+        if (arch == tt::ARCH::GRENDEL) {
+            arch = tt::ARCH::QUASAR;
+        }
     } else {
         arch = get_physical_architecture();
     }

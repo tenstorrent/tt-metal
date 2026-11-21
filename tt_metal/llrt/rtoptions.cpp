@@ -55,6 +55,12 @@ enum class EnvVarID {
     TT_METAL_KERNEL_PATH,                     // Path to kernel source files
     TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
+    TT_METAL_EMU_SERVER,                      // Chippy emu_axi endpoint (host:port)
+    TT_METAL_EMU_SOC_DESC,                    // SoC descriptor for the emulated package
+    TT_METAL_GRENDEL_JTAG_SERVER,             // OpenOCD TCL endpoint (host:port)
+    TT_METAL_GRENDEL_JTAG_SOC_DESC,           // SoC descriptor for the attached package
+    TT_METAL_GRENDEL_JTAG_TRANSPORT,          // jtag2axi_v1 or jtag2axi_v2
+    TT_METAL_GRENDEL_JTAG_CHIPLET,            // 0-based TAP/chiplet index
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
     TT_METAL_CLUSTER_ID,                      // Cluster id to stamp on the discovered cluster descriptor
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
@@ -537,6 +543,35 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->simulator_path = std::string(value);
             // Simulator takes precedence over Mock (will be set even if Mock was set first)
             this->runtime_target_device_ = tt::TargetDevice::Simulator;
+            break;
+
+        case EnvVarID::TT_METAL_EMU_SERVER:
+            this->emu_server = std::string(value);
+            this->runtime_target_device_ = tt::TargetDevice::EmuAxi;
+            break;
+
+        case EnvVarID::TT_METAL_EMU_SOC_DESC: this->emu_soc_desc_path = std::string(value); break;
+
+        case EnvVarID::TT_METAL_GRENDEL_JTAG_SERVER:
+            this->grendel_jtag_server = std::string(value);
+            this->runtime_target_device_ = tt::TargetDevice::GrendelJtag;
+            break;
+
+        case EnvVarID::TT_METAL_GRENDEL_JTAG_SOC_DESC: this->grendel_jtag_soc_desc_path = value; break;
+
+        case EnvVarID::TT_METAL_GRENDEL_JTAG_TRANSPORT:
+            if (std::strcmp(value, "jtag2axi_v1") != 0 && std::strcmp(value, "jtag2axi_v2") != 0) {
+                TT_THROW("TT_METAL_GRENDEL_JTAG_TRANSPORT must be 'jtag2axi_v1' or 'jtag2axi_v2', got '{}'", value);
+            }
+            this->grendel_jtag_transport = value;
+            break;
+
+        case EnvVarID::TT_METAL_GRENDEL_JTAG_CHIPLET:
+            try {
+                this->grendel_jtag_chiplet = static_cast<uint32_t>(std::stoul(value));
+            } catch (const std::exception& e) {
+                TT_THROW("Invalid TT_METAL_GRENDEL_JTAG_CHIPLET '{}': {}", value, e.what());
+            }
             break;
 
         // TT_METAL_MOCK_CLUSTER_DESC_PATH
@@ -2109,7 +2144,12 @@ void RunTimeOptions::InitializeFromEnvVars() {
     if (this->runtime_target_device_ == tt::TargetDevice::Emule && this->mock_cluster_desc_path.empty()) {
         TT_THROW("TT_METAL_EMULE_MODE=1 requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set");
     }
-
+    if (this->runtime_target_device_ == tt::TargetDevice::EmuAxi && this->emu_soc_desc_path.empty()) {
+        TT_THROW("TT_METAL_EMU_SERVER requires TT_METAL_EMU_SOC_DESC to be set");
+    }
+    if (this->runtime_target_device_ == tt::TargetDevice::GrendelJtag && this->grendel_jtag_soc_desc_path.empty()) {
+        TT_THROW("TT_METAL_GRENDEL_JTAG_SERVER requires TT_METAL_GRENDEL_JTAG_SOC_DESC to be set");
+    }
     // On a simulator TT_METAL_SIMULATOR_DRAM_UNCAPPED and the quasar_aether_2x3_uncapped map imply each
     // other: the option moves an ATT run of quasar_aether_2x3 to the map whose DRAM window covers the
     // descriptor's 1 GiB, and naming that map lifts the DRAM clamp.

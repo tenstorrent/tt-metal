@@ -66,6 +66,9 @@ int firmware_wait_timeout_ms(const llrt::RunTimeOptions& rtoptions) {
     constexpr int kDefaultTimeoutMs = 10'000;
     // Functional sim (.so) is slower than silicon; sometimes 10s is not enough, so use half a minute.
     constexpr int kFunctionalSimTimeoutMs = 30'000;
+    // SiVal AXI emulation reports firmware completion after the host has finished loading it.
+    // JTAG takes 15 to 20 ms per 32-bit access, so its completion polls are slower still.
+    constexpr int kEmulatorTimeoutMs = 60'000;
 
     if (rtoptions.get_simulator_enabled()) {
         // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
@@ -77,6 +80,10 @@ int firmware_wait_timeout_ms(const llrt::RunTimeOptions& rtoptions) {
                        : 0;
         }
         return kFunctionalSimTimeoutMs;
+    }
+    if (rtoptions.get_target_device() == tt::TargetDevice::EmuAxi ||
+        rtoptions.get_target_device() == tt::TargetDevice::GrendelJtag) {
+        return kEmulatorTimeoutMs;
     }
     return kDefaultTimeoutMs;
 }
@@ -1514,28 +1521,33 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     auto go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
-    for (uint32_t y = 0; y < logical_grid_size.y; y++) {
-        for (uint32_t x = 0; x < logical_grid_size.x; x++) {
-            CoreCoord logical_core(x, y);
-            CoreCoord worker_core =
-                cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
-            core_info.view().absolute_logical_x() = logical_core.x;
-            core_info.view().absolute_logical_y() = logical_core.y;
-            cluster_.write_core_immediate(
-                core_info.data(),
-                core_info.size(),
-                {static_cast<size_t>(device_id), worker_core},
-                hal_.get_dev_addr(
-                    llrt::get_core_type(descriptor_->env_impl(), device_id, worker_core), HalL1MemAddrType::CORE_INFO));
-            not_done_cores.insert(worker_core);
+    // A package with no Tensix cores (e.g. a standalone Mimir) has no worker grid: there is no
+    // logical (0, 0) to resolve to a virtual core, and no worker firmware to place.
+    if (logical_grid_size.x > 0 && logical_grid_size.y > 0) {
+        for (uint32_t y = 0; y < logical_grid_size.y; y++) {
+            for (uint32_t x = 0; x < logical_grid_size.x; x++) {
+                CoreCoord logical_core(x, y);
+                CoreCoord worker_core =
+                    cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
+                core_info.view().absolute_logical_x() = logical_core.x;
+                core_info.view().absolute_logical_y() = logical_core.y;
+                cluster_.write_core_immediate(
+                    core_info.data(),
+                    core_info.size(),
+                    {static_cast<size_t>(device_id), worker_core},
+                    hal_.get_dev_addr(
+                        llrt::get_core_type(descriptor_->env_impl(), device_id, worker_core),
+                        HalL1MemAddrType::CORE_INFO));
+                not_done_cores.insert(worker_core);
+            }
         }
+        CoreCoord start_core =
+            cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, CoreCoord(0, 0), CoreType::WORKER);
+        CoreCoord end_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
+            device_id, CoreCoord(logical_grid_size.x - 1, logical_grid_size.y - 1), CoreType::WORKER);
+        initialize_firmware(
+            device_id, HalProgrammableCoreType::TENSIX, start_core, launch_msg.view(), go_msg.view(), end_core);
     }
-    CoreCoord start_core =
-        cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, CoreCoord(0, 0), CoreType::WORKER);
-    CoreCoord end_core = cluster_.get_virtual_coordinate_from_logical_coordinates(
-        device_id, CoreCoord(logical_grid_size.x - 1, logical_grid_size.y - 1), CoreType::WORKER);
-    initialize_firmware(
-        device_id, HalProgrammableCoreType::TENSIX, start_core, launch_msg.view(), go_msg.view(), end_core);
 
     std::unordered_set<CoreCoord> dispatch_not_done_cores;
     if (hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH) &&
