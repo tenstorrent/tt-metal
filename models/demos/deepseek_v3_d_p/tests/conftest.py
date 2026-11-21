@@ -304,6 +304,14 @@ def pytest_collection_modifyitems(config, items):
         if mesh_shape is None or topology is None:
             continue
 
+        # get_num_devices counts the chips this process can open. A mesh that several hosts share has the
+        # chips of all of them, and a job that launches both such meshes and single-host ones (every rank of
+        # one launch runs the same tests) says how many hosts the largest mesh spans, so a mesh of any whole
+        # number of hosts up to that is as large as this process can see.
+        host_counts = range(1, int(os.getenv("PREFILL_HOSTS_PER_MESH", "1")) + 1)
+        if mesh_shape[0] * mesh_shape[1] in {num_devices * hosts for hosts in host_counts}:
+            num_devices = mesh_shape[0] * mesh_shape[1]
+
         # Unsupported fabric rings on QB/LB meshes
         allowed_fabric_cfgs = DEFAULT_ALLOWED_FABRICS
         if cluster_type in CI_ALLOWED_FABRICS.keys():

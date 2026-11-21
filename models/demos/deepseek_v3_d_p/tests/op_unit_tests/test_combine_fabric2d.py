@@ -39,6 +39,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tests.mesh_local import local_device_tensors
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config, get_gate_outputs
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -60,6 +61,7 @@ FWD_VC_PAGES = DeepSeekV3Config.MOE_FWD_VC_PAGES
 _MESH_IDS = (
     "fabric2d-torus-xy-8x4-2link",
     "fabric2d-torus-x-4x4-2link",
+    "fabric2d-torus-xy-4x4-2link",
     "fabric2d-torus-y-8x1-2link",
     "fabric2d-torus-x-1x8-2link",
 )
@@ -382,11 +384,11 @@ class _Fixture:
         """
         r = self.routing
         payload = self.delivered_payload(dtype)
-        got_all = ttnn.get_device_tensors(output)  # row-major over the mesh
-        assert len(got_all) == self.H * self.G, f"{label}: {len(got_all)} device tensors for {self.H * self.G} chips"
+        got_all = local_device_tensors(output, self.mesh_device)  # by row-major mesh index; only this process's chips
+        assert got_all, f"{label}: no device tensor held by this process"
         checked = 0
         bad = 0
-        for dev in range(self.H * self.G):
+        for dev in got_all:
             s, g = (dev // self.G, dev % self.G) if self.sp_axis == 0 else (dev % self.H, dev // self.H)
             mask = self.kept[g, s]
             if not mask.any():
