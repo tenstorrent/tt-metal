@@ -68,12 +68,12 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_phases = get_arg_val<uint32_t>(1);
     const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(2);
-    uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(3);
+    uint32_t chunk_start_t_phase_1 = get_arg_val<uint32_t>(3);
     const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(4);
-    uint32_t chunk_start_t_in_q_chunks_phase_2 = 0;
+    uint32_t chunk_start_t_phase_2 = 0;
     uint32_t write_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(5);
+        chunk_start_t_phase_2 = get_arg_val<uint32_t>(5);
         write_offset_phase_2 = get_arg_val<uint32_t>(6);
     }
 
@@ -196,22 +196,21 @@ void kernel_main() {
             auto chunk_start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_chunk_start.get_read_ptr());
             uint32_t chunk_start_idx = chunk_start_ptr[0];
             cb_chunk_start.pop_front(1);
-            const uint32_t q_chunk_size = Sq_chunk_t * tt::constants::TILE_HEIGHT;
-            chunk_start_t_in_q_chunks_phase_1 = chunk_start_idx / q_chunk_size;
+            chunk_start_t_phase_1 = chunk_start_idx / tt::constants::TILE_HEIGHT;
             if (num_phases == 2) {
-                chunk_start_t_in_q_chunks_phase_2 = chunk_start_t_in_q_chunks_phase_1;
+                chunk_start_t_phase_2 = chunk_start_t_phase_1;
             }
         }
     }
 
-    uint32_t chunk_start_t_in_q_chunks = 0;
+    uint32_t chunk_start_t = 0;
     uint32_t write_offset = 0;
     for (uint32_t phase = 0; phase < num_phases; ++phase) {
         if (phase == 0) {
-            chunk_start_t_in_q_chunks = chunk_start_t_in_q_chunks_phase_1;
+            chunk_start_t = chunk_start_t_phase_1;
             write_offset = write_offset_phase_1;
         } else {
-            chunk_start_t_in_q_chunks = chunk_start_t_in_q_chunks_phase_2;
+            chunk_start_t = chunk_start_t_phase_2;
             write_offset = write_offset_phase_2;
         }
         for (uint32_t global_q_iter = 0; global_q_iter < global_q_count; ++global_q_iter) {
@@ -226,16 +225,7 @@ void kernel_main() {
                 !use_provided_mask && !use_lightweight_mask &&
                 (is_causal || sliding_window_size > 0 || use_padded_mask)) {
                 generate_mask<is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
-                    noc,
-                    Sq_chunk_t,
-                    Sk_chunk_t,
-                    q_chunk,
-                    chunk_start_t_in_q_chunks,
-                    true,
-                    false,
-                    unpadded_Sk,
-                    0,
-                    is_causal);
+                    noc, Sq_chunk_t, Sk_chunk_t, q_chunk, chunk_start_t, true, false, unpadded_Sk, 0, is_causal);
             }
 
             // Windowed: synthesize this Q chunk's block-diagonal mask (all K chunks) before draining its
