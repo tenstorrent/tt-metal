@@ -122,12 +122,7 @@ std::vector<Finding> find_slot_findings(std::string_view router_path, const Rout
 // The states around a ring of `depth` slots: `pending` slots from `next_slot` on in `pending_state`, and `held` slots
 // before it in `held_state`, each at most `depth`. A slot in both ranges has both states.
 SlotRing make_slot_ring(
-    uint32_t depth,
-    uint32_t next_slot,
-    uint32_t pending,
-    uint32_t held,
-    SlotState pending_state,
-    SlotState held_state);
+    uint32_t depth, uint32_t next_slot, uint32_t pending, uint32_t held, SlotState pending_state, SlotState held_state);
 
 // A channel's analysis.slots: null, or why its states aren't known, or its progress, counts and states.
 nlohmann::ordered_json make_sender_slots_json(const std::optional<SenderSlots>& slots);

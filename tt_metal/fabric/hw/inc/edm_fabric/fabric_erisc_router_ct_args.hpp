@@ -147,15 +147,15 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_free_slots_stream
 // downstream entry (the host's compact order: VC<n>_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_<entry + 1>_STREAM_ID).
 constexpr std::array<std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS>, tt::tt_fabric::num_forwarding_vcs>
     local_downstream_credit_streams = {{
-    {vc_0_free_slots_from_downstream_edge_1_stream_id,
-     vc_0_free_slots_from_downstream_edge_2_stream_id,
-     vc_0_free_slots_from_downstream_edge_3_stream_id,
-     vc_0_free_slots_from_downstream_edge_4_stream_id},
-    {vc_1_free_slots_from_downstream_edge_1_stream_id,
-     vc_1_free_slots_from_downstream_edge_2_stream_id,
-     vc_1_free_slots_from_downstream_edge_3_stream_id,
-     vc_1_free_slots_from_downstream_edge_4_stream_id},
-}};
+        {vc_0_free_slots_from_downstream_edge_1_stream_id,
+         vc_0_free_slots_from_downstream_edge_2_stream_id,
+         vc_0_free_slots_from_downstream_edge_3_stream_id,
+         vc_0_free_slots_from_downstream_edge_4_stream_id},
+        {vc_1_free_slots_from_downstream_edge_1_stream_id,
+         vc_1_free_slots_from_downstream_edge_2_stream_id,
+         vc_1_free_slots_from_downstream_edge_3_stream_id,
+         vc_1_free_slots_from_downstream_edge_4_stream_id},
+    }};
 
 // Does this router service a channel at this fabric position?
 constexpr bool services_fabric_position(size_t position) {

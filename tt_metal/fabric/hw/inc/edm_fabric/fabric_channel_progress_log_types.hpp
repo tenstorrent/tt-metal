@@ -13,7 +13,7 @@
 // router leaves the records it doesn't use alone. The channel and VC counts are template arguments: the host passes
 // builder_config's maximums, and the kernel passes the same maximums as it receives them in its compile-time args
 // (MAX_NUM_SENDER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_VCS), so both see one layout.
-// 
+//
 // Types here partially mirror some of the types in router_sender.hpp and router_receiver.hpp, but are redefined here as
 // we only want to log these fields.
 

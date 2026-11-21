@@ -29,9 +29,9 @@ FORCE_INLINE void store_word(uint32_t value) {
 
 // Where sender channel CH's record is stored.
 template <size_t CH>
-constexpr uint32_t sender_record_addr = CHANNEL_PROGRESS_LOG_L1_ADDRESS +
-                                        offsetof(RouterChannelProgressLog, sender_channels) +
-                                        CH * sizeof(tt::tt_fabric::SenderChannelProgressRecord);
+constexpr uint32_t sender_record_addr =
+    CHANNEL_PROGRESS_LOG_L1_ADDRESS + offsetof(RouterChannelProgressLog, sender_channels) +
+    CH * sizeof(tt::tt_fabric::SenderChannelProgressRecord);
 
 // Sender channel CH's FIELD.
 template <size_t CH, uint32_t FIELD_OFFSET>
@@ -48,9 +48,9 @@ constexpr uint32_t remote_receiver_view_addr =
 
 // Where receiver channel RX's record is stored.
 template <size_t RX>
-constexpr uint32_t receiver_record_addr = CHANNEL_PROGRESS_LOG_L1_ADDRESS +
-                                          offsetof(RouterChannelProgressLog, receiver_channels) +
-                                          RX * sizeof(tt::tt_fabric::ReceiverChannelProgressRecord);
+constexpr uint32_t receiver_record_addr =
+    CHANNEL_PROGRESS_LOG_L1_ADDRESS + offsetof(RouterChannelProgressLog, receiver_channels) +
+    RX * sizeof(tt::tt_fabric::ReceiverChannelProgressRecord);
 
 // Receiver channel RX's FIELD.
 template <size_t RX, uint32_t FIELD_OFFSET>

@@ -252,8 +252,8 @@ std::vector<Finding> find_slot_findings(std::string_view router_path, const Rout
             findings.push_back(Finding{
                 .code = FindingCode::PROGRESS_LOG_NEXT_SLOT_OUTSIDE_RING,
                 .paths = {channel_path},
-                .message = fmt::format("The log's next slot, {:#x}, isn't a slot of the channel's ring buffer",
-                                       logged_next_slot)});
+                .message = fmt::format(
+                    "The log's next slot, {:#x}, isn't a slot of the channel's ring buffer", logged_next_slot)});
         } else if (!unknown.has_value() && ring.overlap > 0) {
             findings.push_back(Finding{
                 .code = FindingCode::SLOT_COUNTS_OVER_DEPTH,

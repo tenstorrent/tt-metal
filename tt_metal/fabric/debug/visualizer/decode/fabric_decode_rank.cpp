@@ -241,8 +241,7 @@ void place_router(
         };
         for (size_t vc = 0; vc < router.slots->senders.size(); ++vc) {
             for (size_t channel = 0; channel < router.slots->senders[vc].size(); ++channel) {
-                place_channel_slots(
-                    "senders", vc, channel, make_sender_slots_json(router.slots->senders[vc][channel]));
+                place_channel_slots("senders", vc, channel, make_sender_slots_json(router.slots->senders[vc][channel]));
             }
         }
         for (size_t vc = 0; vc < router.slots->receivers.size(); ++vc) {
