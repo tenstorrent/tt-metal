@@ -15,7 +15,7 @@ from __future__ import annotations
 import ttnn
 
 from eval.memory import memory_axes
-from eval.specs.upsample.spec import AXES
+from eval.specs.upsample.spec import AXES, canonical_memory
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .upsample_program_artifacts import create_program_artifacts, stick_stream_fits
@@ -29,14 +29,16 @@ INPUT_TAGGERS = AXES
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED: the first phase is the specification's PHASE0, axis for axis.
+# 2. SUPPORTED: the specification's PHASE0, widened by Refinement 0 (a height-sharded input in L1, and
+#    `memory_config=` the input's own config, rule R7).
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
     "dtype":             [ttnn.bfloat16],
     "layout":            [ttnn.ROW_MAJOR_LAYOUT],
     "memory_config":     ["DRAM", "L1"],
-    "sharding":          ["interleaved"],
+    "sharding":          ["interleaved", "height"],
+    "memory_argument":   [None, "input"],
     "mode":              ["nearest"],
     "channel_alignment": ["tile_aligned"],
     "scale":             ["uniform"],
@@ -72,7 +74,7 @@ def normalize_scale_factor(scale_factor):
     raise ValueError(f"upsample: scale_factor must be a whole number >= 1 or a pair of them, got {scale_factor!r}")
 
 
-def validate(input_tensor, scale_factor, mode="nearest"):
+def validate(input_tensor, scale_factor, mode="nearest", memory_config=None):
     # Malformed calls (REJECTIONS X1-X3) first: they are errors, not support refusals.
     shape = tuple(input_tensor.shape)
     if len(shape) != 4:
@@ -87,6 +89,8 @@ def validate(input_tensor, scale_factor, mode="nearest"):
         "dtype": input_tensor.dtype,
         "layout": input_tensor.layout,
         "mode": mode,
+        # Rule R7: None, "input" (the input's own config) or "other" (refused by name below).
+        "memory_argument": canonical_memory(memory_config, {"input_tensor": input_tensor}),
         **memory_axes(input_tensor),  # memory_config, sharding (rule R6)
     }
     inputs = (shape, scale_factor)
@@ -118,10 +122,27 @@ def upsample(
     input_tensor: ttnn.Tensor,
     scale_factor,
     mode: str = "nearest",
+    *,
+    memory_config: "ttnn.MemoryConfig" = None,
 ) -> ttnn.Tensor:
-    validate(input_tensor, scale_factor, mode)
+    # memory_config is None or the input's own config (validate() refuses any other): the result is placed
+    # by rule R5 either way, so it is not read past the gate.
+    validate(input_tensor, scale_factor, mode, memory_config)
     scale_h, scale_w = normalize_scale_factor(scale_factor)
     return _dispatch(input_tensor, scale_h, scale_w)
+
+
+def output_memory_config(input_memory, scale_h, scale_w):
+    """Rule R5: the output's placement. Interleaved input -> the same config (its buffer, interleaved).
+    Height-sharded input -> height-sharded in the same buffer over the input's cores and orientation, shard
+    shape [input shard height * sh * sw, C]: the output has sh*sw times the sticks over as many shards, so its
+    sticks are dealt to those cores as evenly as the input's."""
+    if input_memory.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        return input_memory
+    shard = input_memory.shard_spec
+    shard_h, shard_w = shard.shape
+    out_shard = ttnn.ShardSpec(shard.grid, [shard_h * scale_h * scale_w, shard_w], shard.orientation)
+    return ttnn.MemoryConfig(input_memory.memory_layout, input_memory.buffer_type, out_shard)
 
 
 def _dispatch(input_tensor, scale_h, scale_w, *, output=None, **probe):
@@ -130,8 +151,8 @@ def _dispatch(input_tensor, scale_h, scale_w, *, output=None, **probe):
     if output is None:
         n, h, w, c = tuple(input_tensor.shape)
         out_shape = ttnn.Shape([n, h * scale_h, w * scale_w, c])
-        # Rule R5: the output lives in the input's buffer, interleaved.
-        out_spec = ttnn.TensorSpec(out_shape, input_tensor.dtype, input_tensor.layout, input_tensor.memory_config())
+        out_memory = output_memory_config(input_tensor.memory_config(), scale_h, scale_w)
+        out_spec = ttnn.TensorSpec(out_shape, input_tensor.dtype, input_tensor.layout, out_memory)
         output = ttnn.allocate_tensor_on_device(out_spec, input_tensor.device())
     spec, run_args, tensor_indices = create_program_artifacts(input_tensor, output, scale_h, scale_w, **probe)
     return ttnn.generic_op([input_tensor, output], spec, run_args, tensor_indices)
