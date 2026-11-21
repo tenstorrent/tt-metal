@@ -324,3 +324,40 @@ def test_mesh_partition_tile(
         output_memory_config,
         scheme="random",
     )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("cluster_axis", [0, 1, None])
+@pytest.mark.parametrize(
+    "shape, dim",
+    [((1, 1, 64, 96), 3), ((1, 1, 96, 64), 2), ((2, 3, 40, 160), 3), ((256,), 0)],
+    ids=["part_tile_columns", "part_tile_rows", "padded_part_tile_columns", "rank_1"],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_mesh_partition_part_tiles(mesh_device, cluster_axis, shape, dim, dtype):
+    """Tiled shares that a tiled slice cannot cut, being parts of tiles or of a rank-1 tensor, are split in row-major
+    order. Each device must get its own elements, in the input's dtype."""
+    torch.manual_seed(0)
+    tt_input = ttnn.from_torch(
+        torch.randn(shape),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    torch_input = ttnn.to_torch(ttnn.get_device_tensors(tt_input)[0])
+
+    output = ttnn.mesh_partition(tt_input, dim, cluster_axis=cluster_axis)
+
+    assert output.layout == ttnn.TILE_LAYOUT and output.dtype == dtype
+    rows, cols = tuple(mesh_device.shape)
+    for index, shard in enumerate(ttnn.get_device_tensors(output)):
+        row, col = divmod(index, cols)
+        parts, part = {0: (rows, row), 1: (cols, col), None: (rows * cols, index)}[cluster_axis]
+        expected = torch_input.chunk(parts, dim)[part]
+        actual = ttnn.to_torch(shard)
+        if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            # Regrouping elements into new tiles can change their shared exponents.
+            assert_with_pcc(expected, actual, 0.999 if dtype == ttnn.bfloat8_b else 0.99)
+        else:
+            assert torch.equal(actual, expected), f"device {index}"
