@@ -57,6 +57,13 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     // Compute fmod = a - trunc(a/b) * b
     sfpi::vFloat result = a - trunc_div * b;
 
+    constexpr int32_t kInfBits = 0x7F800000;
+    v_if(sfpi::as<sfpi::vInt>(b_abs) == kInfBits) {
+        result = a - a;
+        result = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(result) | sfpi::as<sfpi::vInt>(a));
+    }
+    v_endif;
+
     // Post-correction - fmod result must satisfy |result| < |b|
     // If |result| >= |b|, the truncation was wrong by 1
     sfpi::vFloat result_abs = sfpi::abs(result);
@@ -94,12 +101,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     }
     v_endif;
 
-    // Handle special cases using conditional assignment (NOT early return!)
-    // When a == b, fmod(a, b) = 0
-    v_if(a == b) { result = sfpi::vFloat(0.0f); }
-    v_endif;
-
-    // Handle division by zero - return NaN
     v_if(b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN()); }
     v_endif;
 
@@ -123,6 +124,7 @@ sfpi_inline void calculate_fmod_int32(const uint dst_index_in0, const uint dst_i
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_fmod(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+#pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         constexpr uint dst_tile_size_sfpi = 32;
