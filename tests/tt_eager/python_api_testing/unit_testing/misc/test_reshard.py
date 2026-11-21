@@ -383,7 +383,14 @@ def test_reshard_with_program_cache(
     assert device.num_program_cache_entries() == 3
 
 
-@skip_for_blackhole("GH Issue #15234")
+def skip_if_dram_shard_grid_too_wide(device, *configs):
+    """Skip a DRAM-sharded case whose shard grid needs more DRAM banks than the device has (a P100 has 7)."""
+    num_dram_banks = device.dram_grid_size().x
+    for shard_grid, buffer_type in configs:
+        if buffer_type == ttnn.BufferType.DRAM and shard_grid.bounding_box().end.x >= num_dram_banks:
+            pytest.skip(f"DRAM shard grid needs more than the device's {num_dram_banks} DRAM banks")
+
+
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid, input_shard_shape, input_shard_orientation, input_sharding_scheme, input_buffer_type, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme, output_buffer_type",
     [
@@ -588,6 +595,9 @@ def test_dram_reshard(
     output_sharding_scheme,
     output_buffer_type,
 ):
+    skip_if_dram_shard_grid_too_wide(
+        device, (input_shard_grid, input_buffer_type), (output_shard_grid, output_buffer_type)
+    )
     input_shard_spec = ttnn.ShardSpec(input_shard_grid, input_shard_shape, input_shard_orientation)
     input_mem_config = ttnn.MemoryConfig(input_sharding_scheme, input_buffer_type, input_shard_spec)
     output_shard_spec = ttnn.ShardSpec(output_shard_grid, output_shard_shape, output_shard_orientation)
@@ -603,7 +613,6 @@ def test_dram_reshard(
     assert passing, output_log
 
 
-@skip_for_blackhole("GH Issue #15234")
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid, input_shard_shape, input_shard_orientation, input_sharding_scheme, input_buffer_type, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme, output_buffer_type",
     [
