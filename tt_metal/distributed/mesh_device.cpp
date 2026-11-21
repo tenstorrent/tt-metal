@@ -58,6 +58,8 @@
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/dram_sender_topology.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
+#include "impl/internal/service/service_core_manager_impl.hpp"
+#include <internal/service/service_core_manager.hpp>
 #include "impl/dispatch/kernel_config/tensor_prefetcher.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tools/profiler/tt_metal_tracy.hpp"
@@ -1027,8 +1029,19 @@ CoreCoord MeshDeviceImpl::compute_with_storage_grid_size() const {
     if (mesh_properties_.has_value()) {
         return mesh_properties_->compute_with_storage_grid_size;
     }
-    return validate_and_get_reference_value(
-        local_devices_, [](const auto* device) { return device->compute_with_storage_grid_size(); });
+    const auto& service_cores = metal_context().get_service_core_manager().impl();
+    if (!service_cores.has_any_claims() || local_devices_.empty()) {
+        return validate_and_get_reference_value(
+            local_devices_, [](const auto* device) { return device->compute_with_storage_grid_size(); });
+    }
+    // Service core claims shrink each chip's grid on their own, so chips can disagree. The mesh takes the smallest
+    // grid, which keeps a program sent to the whole mesh off every chip's service cores.
+    CoreCoord grid = local_devices_.front()->compute_with_storage_grid_size();
+    for (const auto* device : local_devices_) {
+        const CoreCoord device_grid = device->compute_with_storage_grid_size();
+        grid = CoreCoord(std::min(grid.x, device_grid.x), std::min(grid.y, device_grid.y));
+    }
+    return grid;
 }
 
 // Resolves every MeshProperties member. See MeshProperties for why these are worth establishing.

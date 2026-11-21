@@ -38,6 +38,9 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
+#include "impl/internal/service/service_core_manager_impl.hpp"
+#include <internal/service/service_core_manager.hpp>
 #include "llrt/tt_cluster.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"
 #include <tt-umd/types/arch.hpp>
@@ -1660,6 +1663,53 @@ TEST_F(DispatchContextFixture, SDFDTransitionDrainsInFlightWorkload) {
     run_blank_workload();
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
     run_blank_workload();
+}
+
+// A service core claimed on one chip of a multi-chip mesh shrinks only that chip's grid. Leaving fast dispatch must
+// still work, the mesh must take the smallest grid, and releasing the claim must give the mesh the full grid back.
+TEST_F(DispatchContextFixture, SDFDTransitionServiceClaimOnOneChip) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
+    }
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.is_mock_or_emulated()) {
+        GTEST_SKIP() << "This test requires real hardware.";
+    }
+    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP()
+            << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
+    }
+    if (mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "This test needs a mesh with more than one chip.";
+    }
+
+    auto expect_mesh_grid = [&](const CoreCoord& grid, const char* phase) {
+        EXPECT_EQ(mesh_device_->compute_with_storage_grid_size(), grid) << phase;
+        EXPECT_EQ(mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}), grid.x * grid.y)
+            << phase;
+    };
+    IDevice* claimed_device = mesh_device_->get_devices()[0];
+    const CoreCoord sd_grid = claimed_device->compute_with_storage_grid_size();
+
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+    const CoreCoord fd_grid = claimed_device->compute_with_storage_grid_size();
+    auto& service_cores = MetalContext::instance().get_service_core_manager();
+    if (MetalContext::instance().get_dispatch_core_manager().get_available_dispatch_cores(claimed_device->id()).empty()) {
+        experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+        GTEST_SKIP() << "Fast dispatch leaves no dispatch-column core free to claim on this grid.";
+    }
+    const std::vector<CoreCoord> claimed = {service_cores.get_claimable_cores(claimed_device).front()};
+    service_cores.claim(claimed_device, claimed);
+
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+    expect_mesh_grid(fd_grid, "SD with a service core claimed on one chip");
+
+    service_cores.release(claimed_device, claimed);
+    expect_mesh_grid(sd_grid, "SD after the service core is released");
 }
 
 }  // namespace tt::tt_metal::distributed::test
