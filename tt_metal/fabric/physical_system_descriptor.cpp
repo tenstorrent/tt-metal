@@ -9,6 +9,9 @@
 #include <unordered_set>
 #include <fstream>
 #include <climits>
+#include <string_view>
+
+#include <tt-logger/tt-logger.hpp>
 
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
@@ -30,6 +33,16 @@ struct EthEndpoint {
 
     auto operator<=>(const EthEndpoint&) const = default;
 };
+
+void log_pruned_links(std::size_t pruned_links, std::string_view source) {
+    if (pruned_links > 0) {
+        log_debug(
+            tt::LogMetal,
+            "PhysicalSystemDescriptor: pruned {} eth link(s) to ASIC(s) not described by {}",
+            pruned_links,
+            source);
+    }
+}
 
 }  // namespace
 
@@ -57,6 +70,7 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(const std::string& mock_proto
     ethernet_firmware_version_ = proto_desc.get_ethernet_firmware_version();
     pcie_devices_per_tray_ = std::move(proto_desc.get_pcie_devices_per_tray());
     pcie_id_to_asic_location_ = std::move(proto_desc.get_pcie_id_to_asic_location());
+    log_pruned_links(prune_unresolved_links(), mock_proto_desc_path);
 }
 
 PhysicalSystemDescriptor::PhysicalSystemDescriptor(const tt::fabric::proto::PhysicalSystemDescriptor& psd_proto) :
@@ -75,9 +89,40 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(const tt::fabric::proto::Phys
     ethernet_firmware_version_ = proto_desc.get_ethernet_firmware_version();
     pcie_devices_per_tray_ = std::move(proto_desc.get_pcie_devices_per_tray());
     pcie_id_to_asic_location_ = std::move(proto_desc.get_pcie_id_to_asic_location());
+    log_pruned_links(prune_unresolved_links(), "protobuf descriptor");
 }
 
 PhysicalSystemDescriptor::~PhysicalSystemDescriptor() = default;
+
+std::size_t PhysicalSystemDescriptor::prune_unresolved_links() {
+    auto described = [&](AsicID asic_id) { return asic_descriptors_.contains(asic_id); };
+    auto unresolved_exit = [&](const ExitNodeConnection& exit_node) {
+        return !described(exit_node.src_exit_node) || !described(exit_node.dst_exit_node);
+    };
+
+    std::size_t pruned_links = 0;
+    for (auto& [host_name, asic_topology] : system_graph_.asic_connectivity_graph) {
+        for (auto& [src_asic, edges] : asic_topology) {
+            std::erase_if(edges, [&](const AsicConnectionEdge& edge) {
+                if (described(edge.first)) {
+                    return false;
+                }
+                pruned_links += edge.second.size();
+                return true;
+            });
+        }
+    }
+    for (auto& [host_name, exit_nodes] : exit_node_connection_table_) {
+        std::erase_if(exit_nodes, unresolved_exit);
+    }
+    for (auto& [src_host, host_edges] : system_graph_.host_connectivity_graph) {
+        for (auto& [dst_host, exit_nodes] : host_edges) {
+            std::erase_if(exit_nodes, unresolved_exit);
+        }
+        std::erase_if(host_edges, [](const HostConnectionEdge& edge) { return edge.second.empty(); });
+    }
+    return pruned_links;
+}
 
 void PhysicalSystemDescriptor::set_discovery_data(
     const std::string& local_hostname, uint32_t local_rank, bool all_hostnames_unique) {
