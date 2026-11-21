@@ -15,8 +15,13 @@ changes the manifest format, so it goes with a change to `fabric_manifest_schema
 2. **Builds the facts.** `ManifestFacts` gets `run`, `fabric` and `arch` from the describe file
    ([DESCRIBE.md](DESCRIBE.md)), and `meshes` from the topology pass ([TOPOLOGY_PASS.md](TOPOLOGY_PASS.md)). The fabric
    routers must already be compiled, so the builder context exists.
+<<<<<<< HEAD
+3. **Makes the JSON** with `make_manifest_json`.
+4. **Writes the file** to this rank's path in the run's folder, `<logs_dir>/generated/fabric/runs/<run_id>/` (the path
+=======
 3. **Makes the JSON** with `make_manifest_json`, sharing fields blocks through `field_sets` (below).
 4. **Writes the file**, compactly, to this rank's path in the run's folder, `<logs_dir>/generated/fabric_debug/runs/<run_id>/` (the path
+>>>>>>> d56ed7845d6 (fixup! Add fabric run id for manifest)
    helpers are in `common/fabric_visualizer_files.hpp`), under a temporary name, `<path>.tmp.<pid>`, then renames it
    into place, so a reader never sees a partial file. On a failure it removes the temporary file.
 
@@ -38,25 +43,9 @@ Each run writes into a folder of its own, so a manifest on disk always belongs t
 | `fabric`           | `make_fabric_json`        | `ManifestFacts::fabric`                                                             |
 | `arch`             | `make_arch_json`          | `ManifestFacts::arch`                                                               |
 | `vocabulary`       | `make_vocabulary_json`    | `k_vocabulary_lists` (below)                                                        |
-| `field_sets`       | `FieldsWriter`            | Every fields block `meshes` holds, each distinct one once (below)                   |
 | `meshes`           | `make_mesh_json` per mesh | `ManifestFacts::meshes`                                                             |
 
 The JSON keeps keys in the order the writer adds them.
-
-## Fields layouts
-
-`make_manifest_json` takes a `FieldsLayout`, which says how each fields block (a router's, a channel's or an edge's,
-keyed by ERISC) is written:
-
-| Layout | Writes |
-| --- | --- |
-| `SHARED`, the default | Each distinct block once, in `field_sets`, keyed `F<n>` in the order it was first written, and the block's id where it was. Manifests are written this way |
-| `PER_ROUTER` | Each block in full where it is, and no `field_sets`. The decoded file embeds the manifest this way, since each of its field entries holds its own router's value |
-
-Most blocks repeat: a run's routers mostly have the same fields as each other, and so do their channels and edges.
-On a 32-chip galaxy, 1,008 blocks are 11 distinct ones. The model is the same either way: every router, channel and
-edge keeps its own `fields_by_erisc`, and `FieldsWriter` does the sharing as it writes them. Two blocks are shared only
-when their JSON is the same, key order included.
 
 Each model struct has a `make_<name>_json` that writes it, such as `make_router_json` and `make_sender_channel_json`.
 They follow a few conventions:
@@ -67,11 +56,10 @@ direction letter and routing plane, such as `E0`. Channels, edges and ERISCs are
 - **Enum values** are written as their enumerator's name in lower case (`lower_enum_name`), such as `"fabric_2d"`. A
 value with no enumerator name, such as a bitmask combination, is written as its number.
 - **A router another part refers to** is written as its path, such as `M0/C7/E0` ([TOPOLOGY_PASS.md](TOPOLOGY_PASS.md)).
-`fabric_manifest_paths.hpp` writes each kind of path and parses it back.
 - **Something that isn't there** is `null` rather than left out, such as a link with no peer or a field the builder
 didn't allocate. Keys are left out only where they don't apply, such as `torus` on a 1D mesh or a field the builder
 doesn't emit on this run.
-- **Values the builder gives each ERISC** are keyed `erisc<r>` (`make_by_erisc_json`): every fields block, a sender
+- **Values the builder gives each ERISC** are keyed `erisc<r>` (`make_by_erisc_json`): every `fields` object, a sender
 channel's `credits`, and a receiver channel's `forwards_on`.
 - **Two entries with one key** fail the writer, such as two fields keyed alike.
 - **Regions and registers are written as they are.** The writer copies what the passes worked out and computes nothing
@@ -87,12 +75,12 @@ writer has nothing to look up or check. It writes the name as a string, next to 
 
 | What | Written by | Keys |
 | --- | --- | --- |
-| An L1 region | `make_l1_json` | `address`, `num_elements`, `element_size`, `type`, `multi_sampled`, `active` |
-| A stream register | `make_stream_reg_json` | `stream_id`, `address`, `role`, `read_mask`, `type`, `multi_sampled`, `active` |
+| An L1 region | `make_l1_json` | `address`, `num_elements`, `element_size`, `type` |
+| A stream register | `make_stream_reg_json` | `stream_id`, `address`, `value_bits`, `type` |
 | A core register | `make_core_registers_json` | `name`, `address`, `type` |
 | The run's packet header | `make_fabric_json` | `fabric.packet_header`, the header type's name |
 
-A configuration enum field is different: no captured bytes hold it, so its type isn't registered. The field holds its
+A configuration enum field is different: no captured bytes hold it, so its type isn't registered. The writer writes its
 `value` and its enumerator's name in lower case (`value_name`), and leaves out the enum's own name.
 
 ## Vocabulary
@@ -102,16 +90,14 @@ every name each can hold, so a reader knows them all without the C++ enums.
 
 The lists are `k_vocabulary_lists` in `fabric_manifest_model.hpp`. Each entry names the list and the type whose names it
 holds. For an enum, the list is every enumerator in lower case. For the field kinds, it's every alternative of the
-`Content` variant, spelled as the `kind` key spells it (`kind_name`, such as `l1` or `stream_reg`). A stream
-register's `role` is a name from either `stream_role` or `scratch_role`, which share no names.
+`Content` variant, spelled as the `kind` key spells it (`kind_name`, such as `l1` or `stream_reg`).
 
 An enum field isn't a label key: it writes its enumerator's name next to its value (`value_name`), so its enum has no
 list here.
 
 ## Changing the format
 
-1. Change the writer and the reader beside it ([READER.md](READER.md)), and the names in `fabric_manifest_names.hpp` if
-   a key's spelling changes. Each fixture's `WriterParserRoundTrip` fails until they agree.
+1. Change the writer, and the names in `fabric_manifest_names.hpp` if a key's spelling changes.
 2. Update `fabric_manifest_schema.json` and [FORMAT.md](FORMAT.md).
 3. If readers can't take the new shape as it is, bump `k_manifest_version` in `common/fabric_visualizer_files.hpp`,
    and the schema's `manifest_version` with it.

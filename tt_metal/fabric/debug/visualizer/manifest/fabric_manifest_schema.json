@@ -10,12 +10,6 @@
     "fabric": { "$ref": "#/$defs/fabric" },
     "arch": { "$ref": "#/$defs/arch" },
     "vocabulary": { "$ref": "#/$defs/vocabulary" },
-    "field_sets": {
-      "description": "Each distinct fields block once, keyed by the id every fields key that holds it gives, in the order the writer first wrote each.",
-      "type": "object",
-      "propertyNames": { "$ref": "#/$defs/field_set_key" },
-      "additionalProperties": { "$ref": "#/$defs/fields_by_erisc" }
-    },
     "meshes": {
       "type": "object",
       "minProperties": 1,
@@ -23,7 +17,7 @@
       "additionalProperties": { "$ref": "#/$defs/mesh" }
     }
   },
-  "required": ["manifest_version", "file_kind", "run", "fabric", "arch", "vocabulary", "field_sets", "meshes"],
+  "required": ["manifest_version", "file_kind", "run", "fabric", "arch", "vocabulary", "meshes"],
   "additionalProperties": false,
 
   "$defs": {
@@ -41,15 +35,7 @@
     "field_category": { "enum": ["lifecycle", "kernel_params", "flow_control", "control_info", "diagnostics"] },
     "field_kind": { "enum": ["l1", "stream_reg", "number", "flag", "enum"] },
     "channel_status": { "enum": ["active", "vc_not_serviced", "mux", "trimmed"] },
-    "multi_sample_role": { "enum": ["loop_heartbeat", "fabric_telemetry"] },
-    "scratch_role": { "enum": ["multi_risc_teardown_sync", "eth_retrain_link_sync"] },
-    "multi_sampled": {
-      "description": "Null when capture reads the region once, in its full read. Otherwise the role of a region capture also reads in every round, which says what its change across the rounds means.",
-      "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/multi_sample_role" }]
-    },
     "z_port_role": { "enum": ["none", "intermesh_boundary", "express_chord"] },
-    "direction": { "enum": ["east", "west", "north", "south", "z"] },
-    "live_directions": { "type": "array", "items": { "$ref": "#/$defs/direction" }, "uniqueItems": true },
     "type_name": {
       "description": "A registered C++ type's name without its namespaces, as the build that wrote the manifest spells it (fabric_manifest_type_registry.hpp), such as HybridMeshPacketHeaderT<36> or unsigned int. Decode, built from the same commit, maps it back to the type.",
       "type": "string",
@@ -214,17 +200,13 @@
         "field_kind": { "type": "array", "items": { "$ref": "#/$defs/field_kind" }, "uniqueItems": true },
         "channel_status": { "type": "array", "items": { "$ref": "#/$defs/channel_status" }, "uniqueItems": true },
         "erisc_processor": { "$ref": "#/$defs/name_list" },
-        "kernel_opt_level": { "$ref": "#/$defs/name_list" },
-        "intermesh_vc_mode": { "$ref": "#/$defs/name_list" },
-        "multi_sample_role": { "type": "array", "items": { "$ref": "#/$defs/multi_sample_role" }, "uniqueItems": true },
-        "stream_role": { "$ref": "#/$defs/name_list" },
-        "scratch_role": { "type": "array", "items": { "$ref": "#/$defs/scratch_role" }, "uniqueItems": true }
+        "intermesh_vc_mode": { "$ref": "#/$defs/name_list" }
       },
       "required": [
         "arch", "fabric_config", "reliability_mode", "tensix_config", "udm_mode", "fabric_manager_mode",
         "fabric_topology", "credit_backing", "z_port_role", "edge_capability", "credit_counter_indexed_by",
-        "field_category", "field_kind", "channel_status", "erisc_processor", "kernel_opt_level",
-        "intermesh_vc_mode", "multi_sample_role", "stream_role", "scratch_role"
+        "field_category", "field_kind", "channel_status", "erisc_processor",
+        "intermesh_vc_mode"
       ],
       "additionalProperties": false
     },
@@ -236,51 +218,22 @@
         "address": { "$ref": "#/$defs/count" },
         "num_elements": { "type": "integer", "minimum": 1 },
         "element_size": { "type": "integer", "minimum": 1 },
-        "type": { "$ref": "#/$defs/type_name" },
-        "multi_sampled": { "$ref": "#/$defs/multi_sampled" },
-        "active": {
-          "description": "False when the run's options mean nothing writes the region, though it's allocated: its bytes are whatever the L1 held. A multi-sampled region is always active.",
-          "type": "boolean"
-        }
+        "type": { "$ref": "#/$defs/type_name" }
       },
-      "required": ["address", "num_elements", "element_size", "type", "multi_sampled", "active"],
-      "if": { "properties": { "multi_sampled": { "type": "string" } } },
-      "then": { "properties": { "active": { "const": true } } }
+      "required": ["address", "num_elements", "element_size", "type"]
     },
     "region": { "$ref": "#/$defs/region_keys", "unevaluatedProperties": false },
     "optional_region": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/region" }] },
-    "arch_area": {
-      "description": "An L1 area the architecture fixes. Every router core writes it, so it's always active.",
-      "$ref": "#/$defs/region",
-      "properties": { "active": { "const": true } }
-    },
-    "optional_arch_area": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/arch_area" }] },
     "stream_reg_keys": {
-      "description": "A stream register's word at address. Its value is the word under read_mask, read as type; bits outside the mask can hold other state the router doesn't read.",
+      "description": "A stream register's word at address. Its value is the word's low value_bits bits, read as type; the bits above can hold other state.",
       "type": "object",
       "properties": {
         "stream_id": { "$ref": "#/$defs/count" },
         "address": { "$ref": "#/$defs/count" },
-        "role": {
-          "description": "What the register is to the router: a stream_role (an increment-on-write count the stream assignment placed) or a scratch_role (a scratch register it pins).",
-          "$ref": "#/$defs/name"
-        },
-        "read_mask": {
-          "description": "The bits of the word the router reads.",
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 4294967295
-        },
-        "type": { "$ref": "#/$defs/type_name" },
-        "multi_sampled": { "$ref": "#/$defs/multi_sampled" },
-        "active": {
-          "description": "False when nothing writes the register in this run: its word is whatever the register held. A multi-sampled register is always active.",
-          "type": "boolean"
-        }
+        "value_bits": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "type": { "$ref": "#/$defs/type_name" }
       },
-      "required": ["stream_id", "address", "role", "read_mask", "type", "multi_sampled", "active"],
-      "if": { "properties": { "multi_sampled": { "type": "string" } } },
-      "then": { "properties": { "active": { "const": true } } }
+      "required": ["stream_id", "address", "value_bits", "type"]
     },
     "stream_reg": { "$ref": "#/$defs/stream_reg_keys", "unevaluatedProperties": false },
     "core_register_keys": {
@@ -312,37 +265,29 @@
           "type": "object",
           "properties": {
             "heartbeat": {
-              "$ref": "#/$defs/arch_area",
-              "properties": { "multi_sampled": { "const": "loop_heartbeat" } }
+              "$ref": "#/$defs/region_keys",
+              "properties": {
+                "magic": { "$ref": "#/$defs/count" },
+                "magic_mask": { "$ref": "#/$defs/count" },
+                "period_iters": { "$ref": "#/$defs/count" }
+              },
+              "required": ["magic", "magic_mask", "period_iters"],
+              "unevaluatedProperties": false
             },
-            "fabric_telemetry": {
-              "$ref": "#/$defs/arch_area",
-              "properties": { "multi_sampled": { "const": "fabric_telemetry" } }
-            },
-            "routing_table": { "$ref": "#/$defs/arch_area" },
-            "eth_fw_mailbox": { "$ref": "#/$defs/optional_arch_area" },
-            "base_fw_port_status": { "$ref": "#/$defs/optional_arch_area" },
-            "base_fw_train_status": { "$ref": "#/$defs/optional_arch_area" },
-            "base_fw_retrain_count": { "$ref": "#/$defs/optional_arch_area" },
-            "base_fw_rx_link_up": { "$ref": "#/$defs/optional_arch_area" },
-            "base_fw_postcode": { "$ref": "#/$defs/optional_arch_area" }
+            "fabric_telemetry": { "$ref": "#/$defs/region" },
+            "routing_table": { "$ref": "#/$defs/region" },
+            "eth_fw_mailbox": { "$ref": "#/$defs/optional_region" },
+            "base_fw_port_status": { "$ref": "#/$defs/optional_region" },
+            "base_fw_train_status": { "$ref": "#/$defs/optional_region" },
+            "base_fw_retrain_count": { "$ref": "#/$defs/optional_region" },
+            "base_fw_rx_link_up": { "$ref": "#/$defs/optional_region" },
+            "base_fw_postcode": { "$ref": "#/$defs/optional_region" }
           },
           "required": [
             "heartbeat", "fabric_telemetry", "routing_table",
             "eth_fw_mailbox", "base_fw_port_status", "base_fw_train_status", "base_fw_retrain_count",
             "base_fw_rx_link_up", "base_fw_postcode"
           ],
-          "additionalProperties": false
-        },
-        "heartbeat_protocol": {
-          "description": "How the router kernel writes its heartbeat word (l1_areas.heartbeat): magic | its 16-bit iteration count, every period_iters main-loop iterations.",
-          "type": "object",
-          "properties": {
-            "magic": { "$ref": "#/$defs/count" },
-            "magic_mask": { "$ref": "#/$defs/count" },
-            "period_iters": { "$ref": "#/$defs/count" }
-          },
-          "required": ["magic", "magic_mask", "period_iters"],
           "additionalProperties": false
         },
         "core_registers": {
@@ -372,16 +317,9 @@
           "minItems": 3,
           "items": false
         },
-        "fabric_telemetry_version": { "description": "FABRIC_TELEMETRY_VERSION: which layout of FabricTelemetry the fabric_telemetry area holds.", "$ref": "#/$defs/count" },
-        "noc_address": {
-          "description": "How a NOC address splits: y << (local_bits + node_id_bits) | x << local_bits | the address on the core (NOC_XY_ADDR).",
-          "type": "object",
-          "properties": { "local_bits": { "$ref": "#/$defs/count" }, "node_id_bits": { "$ref": "#/$defs/count" } },
-          "required": ["local_bits", "node_id_bits"],
-          "additionalProperties": false
-        }
+        "fabric_telemetry_version": { "description": "FABRIC_TELEMETRY_VERSION: which layout of FabricTelemetry the fabric_telemetry area holds.", "$ref": "#/$defs/count" }
       },
-      "required": ["name", "l1", "l1_areas", "heartbeat_protocol", "core_registers", "fabric_telemetry_version", "noc_address"],
+      "required": ["name", "l1", "l1_areas", "core_registers", "fabric_telemetry_version"],
       "additionalProperties": false
     },
 
@@ -396,10 +334,6 @@
           "additionalProperties": false
         },
         "express_routing": { "type": "boolean" },
-        "express_axis": {
-          "description": "The axis the express links run along. Null when express_routing is false.",
-          "enum": ["y", "x", null]
-        },
         "credit_transport": {
           "description": "Only for meshes on this host.",
           "type": "object",
@@ -419,7 +353,7 @@
           "additionalProperties": { "$ref": "#/$defs/chip" }
         }
       },
-      "required": ["shape", "express_routing", "express_axis", "chips"],
+      "required": ["shape", "express_routing", "chips"],
       "additionalProperties": false
     },
 
@@ -557,21 +491,6 @@
             "additionalProperties": { "$ref": "#/$defs/downstream_edge" }
           }
         },
-        "live_downstreams": {
-          "description": "Null in 1D. In 2D, VC0's and VC1's live downstreams: the directions the router forwards packets to on the VC, in enum order, empty when the VC's downstream array is. The router ignores a packet's other action bits. A live direction can have no edge behind it, and an edge can lead to a direction that isn't live.",
-          "anyOf": [
-            { "type": "null" },
-            {
-              "type": "object",
-              "properties": {
-                "vc0": { "$ref": "#/$defs/live_directions" },
-                "vc1": { "$ref": "#/$defs/live_directions" }
-              },
-              "required": ["vc0", "vc1"],
-              "additionalProperties": false
-            }
-          ]
-        },
         "fields": { "$ref": "#/$defs/fields" },
         "eriscs": {
           "type": "object",
@@ -581,18 +500,17 @@
             "type": "object",
             "properties": {
               "processor": { "$ref": "#/$defs/name" },
-              "physical_erisc": { "$ref": "#/$defs/count" },
-              "opt_level": { "$ref": "#/$defs/name" }
+              "physical_erisc": { "$ref": "#/$defs/count" }
             },
-            "required": ["processor", "physical_erisc", "opt_level"],
+            "required": ["processor", "physical_erisc"],
             "additionalProperties": false
           }
         },
         "leftover_l1": { "$ref": "#/$defs/optional_region" }
       },
       "required": [
-        "identity", "link", "shape", "credit_counters", "channels", "intra_chip_downstream_edges", "live_downstreams",
-        "fields", "eriscs", "leftover_l1"
+        "identity", "link", "shape", "credit_counters", "channels", "intra_chip_downstream_edges", "fields",
+        "eriscs", "leftover_l1"
       ],
       "additionalProperties": false
     },
@@ -607,17 +525,23 @@
     "serviced_by": { "type": "array", "items": { "type": "string", "pattern": "^erisc[0-9]+$" }, "uniqueItems": true },
 
     "credit_ref": {
-      "description": "An element of one of the router's credit counter arrays, where the router takes every VC's credits.",
-      "type": "object",
-      "properties": {
-        "array": {
-          "type": "string",
-          "pattern": "^credit_counters/(to_sender_ack|to_sender_completion|receiver_ack|receiver_completion)$"
-        },
-        "index": { "$ref": "#/$defs/count" }
-      },
-      "required": ["array", "index"],
-      "additionalProperties": false
+      "description": "A stream register, null when the builder did not allocate one, or an element of a credit counter array.",
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/stream_reg" },
+        {
+          "type": "object",
+          "properties": {
+            "array": {
+              "type": "string",
+              "pattern": "^credit_counters/(to_sender_ack|to_sender_completion|receiver_ack|receiver_completion)$"
+            },
+            "index": { "$ref": "#/$defs/count" }
+          },
+          "required": ["array", "index"],
+          "additionalProperties": false
+        }
+      ]
     },
 
     "sender_channel": {
@@ -687,14 +611,7 @@
       "additionalProperties": false
     },
 
-    "field_set_key": { "type": "string", "pattern": "^F(0|[1-9][0-9]*)$" },
-
     "fields": {
-      "description": "The id of this router's, channel's or edge's fields block in field_sets.",
-      "$ref": "#/$defs/field_set_key"
-    },
-
-    "fields_by_erisc": {
       "description": "Keyed by ERISC: each ERISC's fields, as its compile-time arguments give them.",
       "type": "object",
       "minProperties": 1,

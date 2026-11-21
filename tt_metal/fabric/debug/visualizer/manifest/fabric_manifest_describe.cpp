@@ -5,7 +5,9 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_describe.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
+#include <ctime>
 #include <limits>
 #include <optional>
 #include <string>
@@ -13,7 +15,6 @@
 #include <type_traits>
 #include <vector>
 
-#include <enchantum/enchantum.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
@@ -26,8 +27,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/packet_header_types.hpp"
-#include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_build_identity.hpp"
-#include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_time.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_build_identity.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
@@ -38,6 +38,16 @@ namespace {
 using tt::tt_metal::FWMailboxMsg;
 using tt::tt_metal::HalL1MemAddrType;
 using tt::tt_metal::HalProgrammableCoreType;
+
+// The time now in UTC, as ISO 8601.
+std::string get_utc_now_iso8601() {
+    const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm utc{};
+    gmtime_r(&now, &utc);
+    char buffer[32];
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &utc);
+    return buffer;
+}
 
 // The most routing planes fabric opens per link, or nullopt when it opens all the available ones.
 std::optional<uint8_t> get_num_routing_planes() {
@@ -80,12 +90,6 @@ content::L1 describe_hal_l1_area(const tt::tt_metal::Hal& hal, HalL1MemAddrType 
     return register_l1_region<T>(get_hal_l1_address(hal, area_id), area_size / sizeof(T));
 }
 
-// `region`, marked for capture to read in every round as well as in its full read.
-content::L1 mark_multi_sampled(content::L1 region, MultiSampleRole role) {
-    region.multi_sampled = role;
-    return region;
-}
-
 // A base firmware word, whose address the HAL keeps among its Ethernet firmware mailbox values; null when it is 0.
 std::optional<content::L1> describe_base_fw_word(const tt::tt_metal::Hal& hal, tt::tt_metal::FWMailboxMsg word) {
     const uint32_t address = hal.get_eth_fw_mailbox_val(word);
@@ -96,55 +100,15 @@ std::optional<content::L1> describe_base_fw_word(const tt::tt_metal::Hal& hal, t
 }
 
 // The kernel picks its heartbeat word's address by architecture: Blackhole's, or else Wormhole's.
-content::L1 describe_heartbeat_word(tt::ARCH arch) {
-    return register_l1_region<uint32_t>(
-        arch == tt::ARCH::BLACKHOLE ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE);
-}
-
-// How the kernel writes its heartbeat word, from fabric's heartbeat constants.
-HeartbeatProtocol describe_heartbeat_protocol() {
-    return HeartbeatProtocol{
+Heartbeat describe_heartbeat(tt::ARCH arch) {
+    return Heartbeat{
+        .word = register_l1_region<uint32_t>(
+            arch == tt::ARCH::BLACKHOLE ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE
+                                        : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE),
         .magic = FABRIC_KERNEL_HEARTBEAT_MAGIC,
         .magic_mask = FABRIC_KERNEL_HEARTBEAT_MAGIC_MASK,
         .period_iters = FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS,
     };
-}
-
-// The region `area` is on every router core of the HAL's architecture, or null when the architecture doesn't have it.
-std::optional<content::L1> describe_arch_area(const tt::tt_metal::Hal& hal, ArchArea area) {
-    switch (area) {
-        // The word moves every period_iters passes of the router's loop, stuck or not.
-        case ArchArea::HEARTBEAT:
-            return mark_multi_sampled(describe_heartbeat_word(hal.get_arch()), MultiSampleRole::LOOP_HEARTBEAT);
-        // Multi-sampled whole: every ERISC's heartbeats and router state, and the bandwidth counts, whatever each
-        // ERISC's telemetry options say it writes.
-        case ArchArea::FABRIC_TELEMETRY:
-            return mark_multi_sampled(
-                describe_hal_l1_area<FabricTelemetry>(hal, HalL1MemAddrType::FABRIC_TELEMETRY),
-                MultiSampleRole::FABRIC_TELEMETRY);
-        case ArchArea::ROUTING_TABLE:
-            return describe_hal_l1_area<routing_l1_info_t>(hal, HalL1MemAddrType::ROUTING_TABLE);
-        case ArchArea::ETH_FW_MAILBOX:
-            if (!hal.get_supports_eth_fw_mailbox()) {
-                return std::nullopt;
-            }
-            return describe_hal_l1_area<uint32_t>(hal, HalL1MemAddrType::ETH_FW_MAILBOX);
-        case ArchArea::BASE_FW_PORT_STATUS: return describe_base_fw_word(hal, FWMailboxMsg::PORT_STATUS);
-        case ArchArea::BASE_FW_TRAIN_STATUS: return describe_base_fw_word(hal, FWMailboxMsg::TRAIN_STATUS);
-        case ArchArea::BASE_FW_RETRAIN_COUNT: return describe_base_fw_word(hal, FWMailboxMsg::RETRAIN_COUNT);
-        case ArchArea::BASE_FW_RX_LINK_UP: return describe_base_fw_word(hal, FWMailboxMsg::RX_LINK_UP);
-        case ArchArea::BASE_FW_POSTCODE: return describe_base_fw_word(hal, FWMailboxMsg::POSTCODE);
-    }
-    TT_THROW("Fabric manifest: unknown arch area {}", static_cast<int>(area));
-}
-
-// Every ArchArea's region on the HAL's architecture.
-ArchAreas describe_arch_areas(const tt::tt_metal::Hal& hal) {
-    ArchAreas areas;
-    for (const ArchArea area : enchantum::values<ArchArea>) {
-        areas.get(area) = describe_arch_area(hal, area);
-    }
-    return areas;
 }
 
 CoreRegisters describe_core_registers(const tt::tt_metal::Hal& hal) {
@@ -177,10 +141,10 @@ CoreRegisters describe_core_registers(const tt::tt_metal::Hal& hal) {
 
 // The registered name of the packet header type the run's routers use: the one the routing mode and its template
 // argument pick.
-std::string describe_packet_header(const FabricContext& fabric_context) {
+std::string_view describe_packet_header(const FabricContext& fabric_context) {
     return visit_packet_header_type(
         fabric_context.get_packet_header_config(),
-        []<typename Header>(std::type_identity<Header>) { return std::string(get_manifest_type_name<Header>()); });
+        []<typename Header>(std::type_identity<Header>) { return get_manifest_type_name<Header>(); });
 }
 
 // What fabric init zeroes in every router's L1 before launch.
@@ -226,8 +190,8 @@ RunInfo describe_run(const ControlPlane& control_plane, const std::string& run_i
         .world_size = static_cast<uint32_t>(*world->size()),
         .subcontext = subcontext,
         .host_name = control_plane.get_physical_system_descriptor().my_host_name(),
-        .written_at = visualizer::get_utc_now_iso8601(),
-        .build = visualizer::get_build_identity(),
+        .written_at = get_utc_now_iso8601(),
+        .build = get_build_identity(),
     };
 }
 
@@ -283,15 +247,22 @@ Arch describe_arch(const tt::tt_metal::Hal& hal) {
     return Arch{
         .arch = hal.get_arch(),
         .l1 = describe_eth_core_l1(hal),
-        .areas = describe_arch_areas(hal),
-        .heartbeat_protocol = describe_heartbeat_protocol(),
+        .areas =
+            ArchAreas{
+                .heartbeat = describe_heartbeat(hal.get_arch()),
+                .fabric_telemetry = describe_hal_l1_area<FabricTelemetry>(hal, HalL1MemAddrType::FABRIC_TELEMETRY),
+                .routing_table = describe_hal_l1_area<routing_l1_info_t>(hal, HalL1MemAddrType::ROUTING_TABLE),
+                .eth_fw_mailbox = hal.get_supports_eth_fw_mailbox() ? std::optional(describe_hal_l1_area<uint32_t>(
+                                                                          hal, HalL1MemAddrType::ETH_FW_MAILBOX))
+                                                                    : std::nullopt,
+                .base_fw_port_status = describe_base_fw_word(hal, FWMailboxMsg::PORT_STATUS),
+                .base_fw_train_status = describe_base_fw_word(hal, FWMailboxMsg::TRAIN_STATUS),
+                .base_fw_retrain_count = describe_base_fw_word(hal, FWMailboxMsg::RETRAIN_COUNT),
+                .base_fw_rx_link_up = describe_base_fw_word(hal, FWMailboxMsg::RX_LINK_UP),
+                .base_fw_postcode = describe_base_fw_word(hal, FWMailboxMsg::POSTCODE),
+            },
         .core_registers = describe_core_registers(hal),
         .fabric_telemetry_version = FABRIC_TELEMETRY_VERSION,
-        .noc_address =
-            {
-                .local_bits = hal.get_noc_addr_local_bits(),
-                .node_id_bits = hal.get_noc_addr_node_id_bits(),
-            },
     };
 }
 

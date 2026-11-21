@@ -12,18 +12,14 @@ read, and how the tables make sure nothing the kernel is fed goes unaccounted fo
 ## A field in the manifest
 
 A field is keyed by name, and says what kind of value it holds. Each ERISC a router runs on has its own fields, since
-the builder gives each ERISC its own arguments, so a fields block is keyed by ERISC first. Each distinct block is
-written once, in the manifest's `field_sets`, and a router, channel or edge names its block there by id
-([FORMAT.md](FORMAT.md)). One field of each kind, from ERISC0 of router `E0` on a T3K's chip `C0`:
+the builder gives each ERISC its own arguments, so a `fields` object is keyed by ERISC first. One field of each kind,
+from ERISC0 of router `E0` on a T3K's chip `C0`:
 
 ```json
 "edm_status":                      { "category": "lifecycle", "kind": "l1", "address": 98624, "num_elements": 1,
-                                     "element_size": 4, "type": "EDMStatus", "multi_sampled": null,
-                                     "active": true },
+                                     "element_size": 4, "type": "EDMStatus" },
 "erisc_sync":                      { "category": "lifecycle", "kind": "stream_reg", "stream_id": 31,
-                                     "address": 4290113536, "role": "multi_risc_teardown_sync",
-                                     "read_mask": 8191, "type": "unsigned int", "multi_sampled": null,
-                                     "active": true },
+                                     "address": 4290113536, "value_bits": 24, "type": "unsigned int" },
 "handshake_sender":                { "category": "lifecycle", "kind": "flag", "value": true },
 "producer_credit_return_noc":      { "category": "flow_control", "kind": "number", "value": 0 },
 "producer_credit_return_cmd_buf":  { "category": "flow_control", "kind": "enum", "value": 3,
@@ -45,29 +41,27 @@ ERISC, from the arguments the builder gave that ERISC ([BUILDER_HOOKS.md](BUILDE
 recorded). Each ERISC's values are recorded as given: two ERISCs can differ, such as on which channels each runs, and
 nothing checks that they agree.
 
-Each table's fields make up the block that the `fields` id at its place names:
-
 | Table | Entries | Sits at |
 | --- | --- | --- |
-| `k_router_fields` | 44 | `routers.<key>.fields` |
-| `k_sender_channel_fields` | 8 | `routers.<key>.channels.senders.vc<v>.ch<c>.fields` |
-| `k_receiver_channel_fields` | 8 | `routers.<key>.channels.receivers.vc<v>.ch<c>.fields` |
-| `k_downstream_edge_fields` | 2 | `routers.<key>.intra_chip_downstream_edges.vc<v>.edge<e>.fields` |
+| `k_router_fields` | 37 | `routers.<key>.fields.erisc<r>` |
+| `k_sender_channel_fields` | 8 | `routers.<key>.channels.senders.vc<v>.ch<c>.fields.erisc<r>` |
+| `k_receiver_channel_fields` | 8 | `routers.<key>.channels.receivers.vc<v>.ch<c>.fields.erisc<r>` |
+| `k_downstream_edge_fields` | 2 | `routers.<key>.intra_chip_downstream_edges.vc<v>.edge<e>.fields.erisc<r>` |
 
 The router table includes what differs between a router's ERISCs by design, such as each one's role in the startup
 sync and which channels it services.
 
 ## An entry
 
-Each entry is a `RouterField`. Every member except `source` and `written_when` is wrapped in `Required`, which has no
-default, so an entry that leaves one out doesn't compile.
+Each entry is a `RouterField`. Every member except `source` is wrapped in `Required`, which has no default, so an entry
+that leaves one out doesn't compile.
 
 ```cpp
 RouterField{
     .key = "conn_info",
     .source = NamedArg{"LOCAL_SENDER_CH_{}_CONN_INFO_ADDR", ArgIndex::COMPACT},
     .category = CONTROL_INFO,
-    .content = register_l1_field<EDMChannelWorkerLocationInfo>(),
+    .content = register_l1_region<EDMChannelWorkerLocationInfo>(),
     .description = "Where the producer writes where it is, and the router its read counter.",
 },
 ```
@@ -79,7 +73,6 @@ RouterField{
 | `category` | What the field is for (below) |
 | `content` | The field's kind and, for an L1 region or stream register, the registered type it holds (below) |
 | `description` | One sentence for [FIELDS.md](FIELDS.md) and for readers of the manifest |
-| `written_when` | Optional, L1 fields only: the key of a flag or number field in the same table whose value, on the same ERISC, says whether the kernel writes the region (below) |
 
 ### Source
 
@@ -97,13 +90,12 @@ read. Its `ArgIndex` says which index:
 | --- | --- | --- |
 | `NONE` | Nothing: the name has no `{}` | `EDM_STATUS_PTR_ADDR` |
 | `COMPACT` | The channel's index over this router's own channel counts, as most per-channel arguments are indexed | `SENDER_CH_{}_IS_INJECTION` |
-| `VC` | The channel's VC, for an argument the builder emits once per VC | `DISABLE_RX_CH{}_FORWARDING` |
 | `FABRIC_POSITION` | The channel's index over the fabric's maximum counts, as the free-slots stream table is indexed | `SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID` |
 | `VC_AND_EDGE` | The edge's VC, then its edge number | `VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID` |
 
-A `NamedArg` also says when the builder emits it (`Emitted`): `ALWAYS`, `FABRIC_2D` (only with 2D routing on),
-`CHANNEL_TRIMMING_CAPTURE` (only with the channel trimming capture on), or `DEADLOCK_AVOIDANCE` (only with deadlock
-avoidance on). A field whose argument isn't emitted on this run is left out.
+A `NamedArg` also says when the builder emits it (`Emitted`): `ALWAYS`, `FABRIC_2D` (only with 2D routing on), or
+`CHANNEL_TRIMMING_CAPTURE` (only with the channel trimming capture on). A field whose argument isn't emitted on this
+run is left out.
 
 ### Category
 
@@ -123,8 +115,8 @@ The field's kind, in the JSON's `kind`:
 
 | Content | `kind` | The argument is | Notes |
 | --- | --- | --- | --- |
-| `register_l1_field<T>()` | `l1` | An L1 address holding a `T` | `null` when the address is 0. The router pass adds the address |
-| `register_stream_field<T>(role)` | `stream_reg` | A stream id. The entry names the register's role, a `StreamRole` or a `ScratchRole`, and the register holds a `T` | `null` for the unused stream id. The router pass checks the id against the stream assignment for the role, and adds the register's address (from the HAL), its read mask and whether it's active |
+| `register_l1_region<T>()` | `l1` | An L1 address holding a `T` | `null` when the address is 0. The router pass adds the address |
+| `register_stream_region<T>(register)` | `stream_reg` | A stream id. The entry says which of the stream's registers holds a `T` | `null` for the unused stream id. The router pass adds the register's address and how many of its bits hold the value, from the HAL |
 | `content::Number{}` | `number` | A plain value | |
 | `content::Flag{}` | `flag` | 0 or 1 | Any other value fails |
 | `enum_of<E>()` | `enum` | A value of enum `E` | Written with its enumerator's name. A value that isn't one of `E`'s enumerators fails |
@@ -150,20 +142,10 @@ per ERISC. For each entry:
 | Content | What the value becomes |
 | --- | --- |
 | L1 region | The region's address. An address of 0 makes the field `null` |
-| Stream register | The stream id, checked against the stream assignment for the entry's role. `describe_stream_register` works out the register's address from the HAL, its read mask from its role, and whether it's active. The unused stream id makes the field `null` |
+| Stream register | The stream id. `describe_stream_register` works out the register's address and value width from the HAL. The unused stream id makes the field `null` |
 | Number | The value as it is |
 | Flag | `true` or `false`. Anything other than 0 or 1 fails |
 | Enum | The value and its enumerator's name. A value that isn't one of the enum's enumerators fails |
-
-**Written when.** A region the builder allocates can still go unwritten, because the option that writes it is off. An L1
-entry with a `written_when` gate is `active` only when the gate's value on the same ERISC is nonzero (`is_written`); one
-without a gate is always active. So the router pass reads every entry's value first, then makes the fields. The gates:
-
-| Field | Gate | Why |
-| --- | --- | --- |
-| `perf_telemetry` | `perf_telemetry_mode` | Blackhole allocates the buffer even with bandwidth telemetry off, and the kernel writes it only with a recorder (`router_telemetry.hpp`'s `perf_recorder`) |
-| `code_profiling` | `code_profiling_timers` | The kernel clears and fills the buffer only with some timer on |
-| `channel_trimming_capture` | `channel_trimming_capture_enabled` | The kernel records usage only with the capture on. Its address is fed only then too, so the gate always holds where the field is present |
 
 ## Every kernel input is accounted for
 
@@ -189,14 +171,12 @@ name no table reads and `k_router_pass_args` doesn't list, so the lists stay tru
 - **A read argument must exist.** `RouterArgs` fails for one the builder didn't feed: "... reads ..., but ERISC<n>
 wasn't given it".
 - **At compile time** (`static_assert` in `fabric_manifest_fields.hpp`): an argument's `{}` count matches its
-`ArgIndex`, only per-channel and per-edge tables use indices or builder members, only an L1 field has a `written_when`
-gate and the gate names a flag or number field in the same table (`gates_name_flag_or_number_fields`), and nothing is
-both read and listed as unrecorded.
+`ArgIndex`, only per-channel and per-edge tables use indices or builder members, and nothing is both read and listed
+as unrecorded.
 
 ## Adding a field
 
-1. Add an entry to the table for where it sits, with its key, source, category, content and description. If it's an
-   L1 region an option can leave unwritten, give it the `written_when` gate that option's field is.
+1. Add an entry to the table for where it sits, with its key, source, category, content and description.
 2. If its content is an L1 region or stream register of a type that isn't registered yet, add the type to
    `RegisteredTypes` ([TYPE_REGISTRY.md](TYPE_REGISTRY.md)). The build fails until you do. A configuration enum needs
    nothing unless enchantum can't find its enumerators.
