@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,7 @@ import ttnn
 
 from ..parallel.config import vae_all_gather
 from ..parallel.manager import CCLManager
+from ..utils import tensor as tensor_utils
 from .module import Module, Parameter
 
 if TYPE_CHECKING:
@@ -38,6 +40,12 @@ class Conv2d(Module):
     # Keep each conv's halo/reader config tensors in DRAM instead of L1_SMALL. They stay allocated
     # with every cached program, so a model that runs many input sizes fills L1_SMALL without it.
     config_tensors_in_dram: bool = False
+
+    # Run eligible 3x3 convs with ttnn.operations.conv2d_3x3 instead of ttnn.conv2d. Set it before the
+    # weights are loaded (TT_DIT_CONV2D_3X3=1, or configure_conv2d(use_conv2d_3x3=True) ahead of
+    # load_torch_state_dict): the op prepares its weights from the torch state. A call conv2d_3x3 does not
+    # take (C_in not a multiple of 8, a refused placement) runs ttnn.conv2d.
+    use_conv2d_3x3: bool = False
 
     # Mesh shape -> (input height, input width, in channels, out channels) -> number of DRAM width
     # slices; 1 runs the conv on the whole input in L1. A shape missing here gets no slice config,
@@ -443,6 +451,14 @@ class Conv2d(Module):
         # (batch, height, width, num_slices) -> device (weight, bias) prepared for that input.
         self._prepared: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor | None]] = {}
 
+        if os.environ.get("TT_DIT_CONV2D_3X3") == "1":
+            self.use_conv2d_3x3 = True
+        # Full (unsharded) torch weight [C_out, C_in, kh, kw] and bias [C_out], kept only for conv2d_3x3.
+        self._torch_weight: torch.Tensor | None = None
+        self._torch_bias: torch.Tensor | None = None
+        # conv2d_3x3 keys it refused; those inputs stay on ttnn.conv2d.
+        self._conv2d_3x3_refused: set[tuple] = set()
+
     @classmethod
     def from_torch(
         cls,
@@ -481,6 +497,11 @@ class Conv2d(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         self._release_prepared()
+
+        if self.use_conv2d_3x3 and "weight" in state:
+            self._torch_weight = state["weight"].detach().clone()
+            torch_bias = state.get("bias")
+            self._torch_bias = None if torch_bias is None else torch_bias.detach().clone().reshape(-1)
 
         bias = state.pop("bias", None)
         if bias is not None:
@@ -543,6 +564,12 @@ class Conv2d(Module):
 
         in_channels = self.in_channels // self.in_mesh_axis_size
         out_channels = self.weight.data.shape[0]
+
+        if self.use_conv2d_3x3:
+            y = self._forward_conv2d_3x3(x, h=h, w=w, out_channels=out_channels)
+            if y is not None:
+                return self._reduce_scatter_in(y, use_persistent_buffer=use_persistent_buffer)
+
         conv_config = ttnn.Conv2dConfig(
             act_block_h_override=32,
             weights_dtype=self.weight.dtype,
@@ -625,12 +652,121 @@ class Conv2d(Module):
 
         x = ttnn.reshape(x, (b, out_height, out_width, -1))
 
+        return self._reduce_scatter_in(x, use_persistent_buffer=use_persistent_buffer)
+
+    def _reduce_scatter_in(self, x: ttnn.Tensor, *, use_persistent_buffer: bool) -> ttnn.Tensor:
+        """Input-channel parallelism: each device holds a partial sum over its C_in slice."""
         if self.in_mesh_axis is not None:
             x = self.ccl_manager.reduce_scatter(
                 x, dim=-1, mesh_axis=self.in_mesh_axis, use_persistent_buffer=use_persistent_buffer
             )
-
         return x
+
+    def _padding_sides(self) -> tuple[int, int, int, int]:
+        """(top, bottom, left, right); a 2-tuple is (height, width) padding."""
+        if len(self.padding) == 2:
+            ph, pw = self.padding
+            return (ph, ph, pw, pw)
+        return tuple(self.padding)
+
+    def _forward_conv2d_3x3(self, x: ttnn.Tensor, *, h: int, w: int, out_channels: int) -> ttnn.Tensor | None:
+        """The conv on ttnn.operations.conv2d_3x3, or None when this input stays on ttnn.conv2d.
+
+        conv2d_3x3 takes the channels-last image flattened to [1, 1, H*W, C]; with W a multiple of 32 the
+        TILE reshape both ways is a view."""
+        from ttnn.operations.conv2d_3x3 import conv2d_3x3
+
+        b, c = x.shape[0], x.shape[-1]
+        sides = self._padding_sides()
+        stride = self.stride[0]
+        key = ("conv2d_3x3", x.layout, x.dtype, b, h, w)
+        if (
+            self._torch_weight is None
+            or key in self._conv2d_3x3_refused
+            or self.kernel_size != (3, 3)
+            or self.dilation != (1, 1)
+            or self.stride[0] != self.stride[1]
+            or b != 1
+            or c % 8 != 0
+        ):
+            return None
+
+        x_flat = ttnn.reshape(x, (1, 1, h * w, c))
+        try:
+            prepared = self._prepared.get(key)
+            if prepared is None:
+                prepared = self._prepare_conv2d_3x3(x_flat, sides=sides, stride=stride)
+                self._prepared[key] = prepared
+            weight, bias = prepared
+            y = conv2d_3x3(
+                x_flat,
+                weight,
+                input_height=h,
+                input_width=w,
+                bias=bias,
+                padding=sides,
+                stride=stride,
+                compute_kernel_config=ttnn.ComputeConfigDescriptor(
+                    math_fidelity=self.compute_config.math_fidelity,
+                    fp32_dest_acc_en=self.compute_config.fp32_dest_acc_en,
+                    math_approx_mode=self.compute_config.math_approx_mode,
+                ),
+            )
+        except NotImplementedError:
+            self._conv2d_3x3_refused.add(key)
+            return None
+
+        top, bottom, left, right = sides
+        out_height = (h + top + bottom - 3) // stride + 1
+        out_width = (w + left + right - 3) // stride + 1
+        return ttnn.reshape(y, (1, out_height, out_width, out_channels))
+
+    def _prepare_conv2d_3x3(
+        self, x_flat: ttnn.Tensor, *, sides: tuple[int, int, int, int], stride: int
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        """Device weight and bias for conv2d_3x3, one channel shard per device along the TP mesh axis.
+
+        Input-channel parallelism splits C_in and keeps the bias on shard 0 only (the partial sums are
+        reduce-scattered); output-channel parallelism splits C_out and the bias with it."""
+        from ttnn.operations.conv2d_3x3 import prepare_conv2d_weights_host
+
+        weight, bias = self._torch_weight, self._torch_bias
+        if self.in_mesh_axis is not None:
+            n, axis = self.in_mesh_axis_size, self.in_mesh_axis
+            cs = weight.shape[1] // n
+            weight_shards = [weight[:, i * cs : (i + 1) * cs] for i in range(n)]
+            bias_shards = None if bias is None else [bias if i == 0 else torch.zeros_like(bias) for i in range(n)]
+        elif self.out_mesh_axis is not None:
+            n, axis = self.out_mesh_axis_size, self.out_mesh_axis
+            cs = weight.shape[0] // n
+            weight_shards = [weight[i * cs : (i + 1) * cs] for i in range(n)]
+            bias_shards = None if bias is None else [bias[i * cs : (i + 1) * cs] for i in range(n)]
+        else:
+            n, axis = 1, None
+            weight_shards = [weight]
+            bias_shards = None if bias is None else [bias]
+
+        prep = dict(
+            stride=stride,
+            padding=sides,
+            dilation=1,
+            input_dtype=x_flat.dtype,
+            input_layout=x_flat.layout,
+            weight_dtype=self.weight.dtype,
+            input_memory_config=x_flat.memory_config(),
+        )
+        prepared_weight = torch.cat([prepare_conv2d_weights_host(ws.float(), **prep) for ws in weight_shards])
+        mesh_axes = None if axis is None else [axis, None, None, None]
+        device_weight = tensor_utils.from_torch(
+            prepared_weight, device=self.mesh_device, dtype=self.weight.dtype, mesh_axes=mesh_axes
+        )
+        device_bias = None
+        if bias_shards is not None:
+            prepared_bias = torch.stack([bs.float().reshape(1, 1, -1) for bs in bias_shards])
+            device_bias = tensor_utils.from_torch(
+                prepared_bias, device=self.mesh_device, dtype=self.weight.dtype, mesh_axes=mesh_axes
+            )
+        return device_weight, device_bias
 
 
 def configure_conv2d(
@@ -638,12 +774,14 @@ def configure_conv2d(
     *,
     slice_params: dict[tuple[int, ...], dict[tuple[int, int, int, int], int]] | None = None,
     config_tensors_in_dram: bool | None = None,
+    use_conv2d_3x3: bool | None = None,
 ) -> None:
     """Configure every Conv2d in ``module``'s tree.
 
     ``slice_params`` (same layout as ``Conv2d.slice_params``) is added on top of the shared table for
     each mesh shape it names, for these instances only. ``config_tensors_in_dram`` overrides the
-    class default for them.
+    class default for them. ``use_conv2d_3x3`` (set before loading weights) routes eligible 3x3 convs to
+    ttnn.operations.conv2d_3x3.
     """
     if isinstance(module, Conv2d):
         if slice_params is not None:
@@ -653,5 +791,12 @@ def configure_conv2d(
             module.slice_params = table
         if config_tensors_in_dram is not None:
             module.config_tensors_in_dram = config_tensors_in_dram
+        if use_conv2d_3x3 is not None:
+            module.use_conv2d_3x3 = use_conv2d_3x3
     for _, child in module.named_children():
-        configure_conv2d(child, slice_params=slice_params, config_tensors_in_dram=config_tensors_in_dram)
+        configure_conv2d(
+            child,
+            slice_params=slice_params,
+            config_tensors_in_dram=config_tensors_in_dram,
+            use_conv2d_3x3=use_conv2d_3x3,
+        )

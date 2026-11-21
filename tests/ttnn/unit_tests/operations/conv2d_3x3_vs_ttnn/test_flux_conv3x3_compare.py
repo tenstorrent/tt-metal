@@ -252,7 +252,11 @@ def test_flux_conv3x3_compare(device, idx):
         if num_slices is not None
         else None
     )
-    rm_input = c_in < C_IN_GRANULE
+    # On a mesh, VaeConv2d hands the conv the ROW_MAJOR output of its neighbor_pad halo exchange, so the per-device
+    # (bh2x4) convs run on ROW_MAJOR input; FLUX_CMP_BH_LAYOUT=TILE measures them on TILE instead.
+    bh_rm = case["group"] == "bh2x4" and os.environ.get("FLUX_CMP_BH_LAYOUT", "RM") == "RM"
+    rm_input = c_in < C_IN_GRANULE or bh_rm
+    record["input_layout"] = "ROW_MAJOR" if rm_input else "TILE"
     in_layout = ttnn.ROW_MAJOR_LAYOUT if rm_input else ttnn.TILE_LAYOUT
     tt_x = ttnn.from_torch(
         x.reshape(1, H, W, c_in),
