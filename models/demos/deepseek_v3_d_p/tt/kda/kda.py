@@ -361,9 +361,8 @@ class ttKDA:
                 use_mcast=True,
             )
         decay_width = self.config.num_heads * self.config.head_k_dim
-        # The decay projection gathers nothing over the fabric, so it spans the whole worker grid, not the matmul grid.
         self.decay_program_config = decay_projection_program_config(
-            grid,
+            self._matmul_grid,
             self.active_seq_len_local,
             self.config.head_k_dim,
             decay_width,
