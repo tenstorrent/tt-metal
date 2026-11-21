@@ -218,9 +218,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     // there is no residual. That means this define is emitted only when the path is taken, and the
     // kernels gate on `#ifdef`. Emitting it always as "0" or "1" and testing it with `#if` would not
     // work: the text naming the unbound handle would still reach the compiler.
-    m2::KernelSpec::CompilerOptions::Defines fuse_defines;
+    //
+    // LAYERNORM_INIT_REDUCE initializes the reduce buffer in the reader kernel.
+    m2::KernelSpec::CompilerOptions::Defines kernel_defines{{"LAYERNORM_INIT_REDUCE", "1"}};
     if (fuse_pre_add) {
-        fuse_defines.emplace("FUSE_PRE_ADD", "1");
+        kernel_defines.emplace("FUSE_PRE_ADD", "1");
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -245,7 +247,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     m2::KernelSpec reader{
         .unique_id = PRE1D_READER,
         .source = PRE_READER_KERNEL,
-        .compiler_options = {.defines = fuse_defines},
+        .compiler_options = {.defines = kernel_defines},
         .dfb_bindings =
             {
                 m2::DFBBinding{
@@ -284,7 +286,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     m2::KernelSpec compute{
         .unique_id = PRE1D_COMPUTE,
         .source = compute_kernel_file,
-        .compiler_options = {.defines = fuse_defines, .opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.defines = kernel_defines, .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
                 m2::DFBBinding{
@@ -298,8 +300,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
                 m2::DFBBinding{
                     .dfb_spec_name = PRE1D_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
             },
-        .compile_time_args =
-            {{"Wt", Wt}, {"blk", block_size}, {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
+        .compile_time_args = {{"Wt", Wt}, {"blk", block_size}, {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
         .hw_config = compute_hw,
     };
