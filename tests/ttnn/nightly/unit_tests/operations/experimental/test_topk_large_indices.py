@@ -1465,9 +1465,9 @@ def test_topk_large_indices_one_core_segmented_rows(device, k, num_chunks, tail_
 @pytest.mark.parametrize(
     "num_rows,n,k",
     [
-        (None, 36 * 2048 - 7, 2048),  # a later segment of four chunks round-trips the accumulator through L1
+        ("cores", 36 * 2048 - 7, 2048),  # a later segment of four chunks round-trips the accumulator through L1
         (3, 102400, 2048),  # halves of a row merged over the NoC
-        (-1, 36 * 2048 - 7, 2048),  # one row more than cores: a whole row, then a held half, on the split body
+        ("cores+1", 36 * 2048 - 7, 2048),  # a whole row, then a held half, on the split body
     ],
     ids=["seg_36_acc", "split_3", "whole_then_half"],
 )
@@ -1476,10 +1476,7 @@ def test_topk_large_indices_leaves_the_next_op_intact(device, num_rows, n, k):
     # that a later program's init fails to reset.
     grid = device.compute_with_storage_grid_size()
     num_cores = grid.x * grid.y
-    if num_rows is None:
-        num_rows = num_cores
-    elif num_rows == -1:
-        num_rows = num_cores + 1
+    num_rows = {"cores": num_cores, "cores+1": num_cores + 1}.get(num_rows, num_rows)
     torch_input = _make_spread_large_index_input(n=n, k=k).repeat(num_rows, 1)
     tt_input = _to_device(torch_input, device)
     a = torch.randint(-8, 8, (1, 1, 32 * num_cores, 64)).to(torch.bfloat16)

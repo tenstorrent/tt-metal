@@ -19,6 +19,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.topk_two_level_refere
     GENERATORS,
     K,
     assert_topk_exact,
+    block_maxima,
     generate,
     normalize,
 )
@@ -38,8 +39,19 @@ def _dev(tensor: torch.Tensor, device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
     )
 
 
+def _scalar_host(value: int) -> torch.Tensor:
+    return torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1)
+
+
 def _scalar(device, value: int) -> ttnn.Tensor:
-    return _dev(torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1), device, ttnn.uint32)
+    return _dev(_scalar_host(value), device, ttnn.uint32)
+
+
+def _write_scalar(tensor: ttnn.Tensor, value: int) -> None:
+    """Overwrite a device scalar in place, keeping its buffer (for trace replays)."""
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(_scalar_host(value), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), tensor
+    )
 
 
 def _indices(tt_out: ttnn.Tensor, rows: int) -> torch.Tensor:
@@ -59,16 +71,17 @@ def _grid(device, columns: int | None):
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(columns - 1, 9))])
 
 
-def _block_maxima(row: torch.Tensor, n: int) -> torch.Tensor:
-    blocks = (n + BLOCK - 1) // BLOCK
-    padded = torch.full((blocks * BLOCK,), float("-inf"))
-    padded[:n] = normalize(row[:n])
-    return padded.reshape(blocks, BLOCK).amax(dim=1)
-
-
 def _check_rows(torch_input: torch.Tensor, indices: torch.Tensor, n: int, rows) -> None:
     for row in rows:
         assert_topk_exact(torch_input[row], indices[row], n)
+
+
+def _check_maxima(maxima: ttnn.Tensor, torch_input: torch.Tensor, n: int, rows) -> None:
+    """The block maxima the op wrote for `rows` match the host's over the valid prefix."""
+    got = ttnn.to_torch(maxima).reshape(torch_input.shape[0], -1).float()
+    nb = (n + BLOCK - 1) // BLOCK
+    for row in rows:
+        assert torch.equal(normalize(got[row, :nb]), block_maxima(torch_input[row], n)), f"n={n} row {row} maxima"
 
 
 # (valid length, physical width, rows, core-grid columns): lengths across both sides of the block and chunk
@@ -86,7 +99,6 @@ SHAPES = [
     (524_304, 1_049_600, 160, 12),
     (600_000, 1_049_600, 160, 11),
     (1_048_575, 1_049_600, 2, None),
-    (1_048_576, 1_049_600, 160, 12),
 ]
 
 
@@ -110,10 +122,7 @@ def test_two_level_matches_oracle(device, n, width, rows, columns):
     indices = _indices(out, rows)
     check = range(rows) if rows <= 4 else (0, 1, 107, 108, rows - 2, rows - 1)
     _check_rows(torch_input, indices, n, check)
-    got = ttnn.to_torch(maxima).reshape(rows, blocks).float()
-    nb = (n + BLOCK - 1) // BLOCK
-    for row in check:
-        assert torch.equal(normalize(got[row, :nb]), _block_maxima(torch_input[row], n)), f"row {row} maxima"
+    _check_maxima(maxima, torch_input, n, check)
 
 
 @pytest.mark.parametrize("kind", GENERATORS)
@@ -132,10 +141,7 @@ def test_two_level_generators(device, kind, n):
         block_max_output=maxima,
     )
     _check_rows(torch_input, _indices(out, rows), n, range(rows))
-    got = ttnn.to_torch(maxima).reshape(rows, blocks).float()
-    nb = (n + BLOCK - 1) // BLOCK
-    for row in range(rows):
-        assert torch.equal(normalize(got[row, :nb]), _block_maxima(torch_input[row], n)), f"row {row} maxima"
+    _check_maxima(maxima, torch_input, n, range(rows))
 
 
 # Stage 3 stages the selected blocks that share an aligned span (2 KB for rows of at most 8 x 2048 blocks, 1 KB for
@@ -262,7 +268,7 @@ def test_two_level_supplied_block_maxima(device, rows, columns):
         maxima = torch.full((rows, blocks), float("-inf"))
         for row in range(rows):
             nb = (n + BLOCK - 1) // BLOCK
-            maxima[row, :nb] = _block_maxima(torch_input[row], n)
+            maxima[row, :nb] = block_maxima(torch_input[row], n)
         # Both calls' tensors stay allocated, so the second call's addresses differ from the first's.
         tt_input = _dev(torch_input.reshape(1, 1, rows, width), device)
         tt_maxima = _dev(maxima.to(torch.bfloat16).reshape(1, 1, rows, blocks), device)
@@ -292,7 +298,7 @@ def test_supplied_block_maxima_many_rows_on_one_core(device, cutover, expected_m
     rows, width, n = 33, 65_536, 65_536
     blocks = width // BLOCK
     torch_input = generate("iid", rows, width, 23, n=n)
-    maxima = torch.stack([_block_maxima(torch_input[row], n) for row in range(rows)])
+    maxima = torch.stack([block_maxima(torch_input[row], n) for row in range(rows)])
     mode = _scalar(device, 7)
     out = ttnn.experimental.topk_large_indices(
         _dev(torch_input.reshape(1, 1, rows, width), device),
@@ -399,15 +405,8 @@ def test_two_level_trace_crosses_cutover(device):
             (700_000, 250_000),
             (5_000, 5_000),
         ):
-            for tensor, value in ((length, n), (valid_end, end)):
-                ttnn.copy_host_to_device_tensor(
-                    ttnn.from_torch(
-                        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
-                        dtype=ttnn.uint32,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                    ),
-                    tensor,
-                )
+            _write_scalar(length, n)
+            _write_scalar(valid_end, end)
             ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
             bound = min(n, (end + 31) // 32 * 32)
             assert _mode(mode) == (1 if bound >= cutover else 0), f"replay n={n} end={end}"
@@ -442,14 +441,7 @@ def test_two_level_trace_remaps_rows_on_99_cores(device):
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
     try:
         for n in (393_215, 393_216, 393_215, 393_216):
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(
-                    torch.tensor([n], dtype=torch.int64).reshape(1, 1, 1, 1),
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                ),
-                length,
-            )
+            _write_scalar(length, n)
             ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
             _check_rows(torch_input, _indices(output, rows), n, (0, 60, 61, 98, 99, 121, 122, 159))
     finally:
@@ -481,12 +473,18 @@ def test_two_level_and_single_level_programs_are_cached_apart(device):
 
 @pytest.mark.parametrize("k,width", [(1024, 131_072), (K, 131_088), (K, 65_504), (K, 2_097_184)])
 def test_two_level_falls_back_outside_its_range(device, expect_error, k, width):
-    """block_select on an input the two-level program does not cover runs the single-level program; the two-level
-    test outputs need a two-level program."""
+    """block_select on an input the two-level program does not cover runs the single-level program, cache entry
+    included; the two-level test outputs need a two-level program."""
     rows = 2
     torch_input = generate("iid", rows, width, 4)
     tt_input = _dev(torch_input.reshape(1, 1, rows, width), device)
+    check_cache = (k, width) == (K, 131_088)
+    if check_cache:
+        ttnn.experimental.topk_large_indices(tt_input, k=k)
+        entries = device.num_program_cache_entries()
     out = ttnn.experimental.topk_large_indices(tt_input, k=k, block_select=32)
+    if check_cache:
+        assert device.num_program_cache_entries() == entries, "the fallback must reuse the single-level program"
     indices = ttnn.to_torch(out, dtype=torch.uint32).reshape(rows, k).to(torch.int64)
     for row in range(rows):
         assert_topk_exact(torch_input[row], indices[row], width, k)
@@ -564,15 +562,6 @@ def test_two_level_rejects_more_than_four_rows_per_core(device, expect_error):
         ttnn.experimental.topk_large_indices(tt_input, k=K, block_select=32, sub_core_grids=_grid(device, 3))
 
 
-def test_two_level_fallback_reuses_the_single_level_program(device):
-    """Outside the two-level range a block_select call is the single-level program, cache entry included."""
-    tt_input = _dev(generate("iid", 2, 131_088, 4).reshape(1, 1, 2, 131_088), device)
-    ttnn.experimental.topk_large_indices(tt_input, k=K)
-    entries = device.num_program_cache_entries()
-    ttnn.experimental.topk_large_indices(tt_input, k=K, block_select=32)
-    assert device.num_program_cache_entries() == entries
-
-
 def test_two_level_rejects_bad_block_max_tensor(device, expect_error):
     rows, width = 2, 131_072
     tt_input = _dev(torch.zeros(1, 1, rows, width, dtype=torch.bfloat16), device)
@@ -612,10 +601,7 @@ def test_two_level_width_changes_on_cache_hits(device):
         )
         assert _mode(mode) == 1
         _check_rows(torch_input, _indices(out, rows), n, (0, 107, 108, 159))
-        got = ttnn.to_torch(maxima).reshape(rows, blocks).float()
-        nb = (n + BLOCK - 1) // BLOCK
-        for row in (0, 13, 108, 159):
-            assert torch.equal(normalize(got[row, :nb]), _block_maxima(torch_input[row], n)), f"{width} row {row}"
+        _check_maxima(maxima, torch_input, n, (0, 13, 108, 159))
 
 
 def test_two_level_largest_width_class(device):

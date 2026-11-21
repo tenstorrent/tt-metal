@@ -25,15 +25,21 @@ def normalize(values: torch.Tensor) -> torch.Tensor:
     return x
 
 
+def block_maxima(row: torch.Tensor, n: int, block: int = BLOCK) -> torch.Tensor:
+    """Maximum of each `block`-key block of row[:n] in the device's load order (float32); the last partial block is
+    padded with -inf."""
+    num_blocks = (n + block - 1) // block
+    padded = torch.full((num_blocks * block,), float("-inf"))
+    padded[:n] = normalize(row[:n])
+    return padded.reshape(num_blocks, block).amax(dim=1)
+
+
 def two_level_reference(row: torch.Tensor, n: int, k: int = K, block: int = BLOCK) -> torch.Tensor:
     """Indices chosen by the two-level algorithm for one row: block maxima over [0, n), top-k blocks, exact top-k of
     the keys in those blocks. Tie choice is not modelled; the result is checked by value only."""
     x = normalize(row[:n])
-    num_blocks = (n + block - 1) // block
-    padded = torch.full((num_blocks * block,), float("-inf"))
-    padded[:n] = x
-    maxima = padded.reshape(num_blocks, block).amax(dim=1)
-    take = min(k, num_blocks)
+    maxima = block_maxima(row, n, block)
+    take = min(k, maxima.numel())
     selected = torch.topk(maxima, take, sorted=False).indices
     selected = selected[maxima[selected] != float("-inf")]
     if selected.numel() == 0:
@@ -61,9 +67,8 @@ def assert_topk_exact(row: torch.Tensor, indices, n: int, k: int = K) -> None:
     assert idx.numel() == k, f"expected {k} indices, got {idx.numel()}"
     sentinel_mask = (idx & 0xFFFFFFFF) == SENTINEL
     num_sentinels = int(sentinel_mask.sum())
-    assert num_sentinels == expected_sentinels(
-        row, n, k
-    ), f"sentinel count {num_sentinels} != expected {expected_sentinels(row, n, k)}"
+    want_sentinels = expected_sentinels(row, n, k)
+    assert num_sentinels == want_sentinels, f"sentinel count {num_sentinels} != expected {want_sentinels}"
     if num_sentinels:
         assert bool(sentinel_mask[k - num_sentinels :].all()), "sentinels are not a contiguous tail"
     live_idx = idx[: k - num_sentinels]
@@ -119,7 +124,7 @@ def generate(kind: str, rows: int, width: int, seed: int, n: int | None = None) 
         return x.to(torch.bfloat16)
     if kind == "zeros_subnormal":
         # Mostly -1.0 with a sea of +-0 and subnormals and 1000 positive normals scattered, so the 2048th value
-        # sits inside the zero class (the v3 counterexample shape).
+        # sits inside the zero class.
         words = np.full((rows, width), 0xBF80, dtype=np.uint32)
         rng = np.random.default_rng(seed)
         zero_class = np.array([0x0000, 0x8000, 0x0001, 0x8001, 0x007F, 0x807F], dtype=np.uint32)

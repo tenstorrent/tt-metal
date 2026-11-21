@@ -584,6 +584,9 @@ tests/ttnn/nightly/unit_tests/operations/experimental/kda/ @tenstorrent/metalium
 tests/ttnn/nightly/unit_tests/operations/experimental/nomic_embed_text_v2_moe/ @avelickovTT @kgrujcic-tt @mbezuljTT
 tests/ttnn/nightly/unit_tests/operations/experimental/test_rgb_to_yuv.py @cglagovichTT @jonathansuTT
 tests/ttnn/nightly/unit_tests/operations/experimental/test_topk_large_indices.py @tenstorrent/metalium-developers-sdpa
+tests/ttnn/nightly/unit_tests/operations/experimental/test_topk_large_indices_two_level.py @tenstorrent/metalium-developers-sdpa
+tests/ttnn/nightly/unit_tests/operations/experimental/test_topk_two_level_reference.py @tenstorrent/metalium-developers-sdpa
+tests/ttnn/nightly/unit_tests/operations/experimental/topk_two_level_reference.py @tenstorrent/metalium-developers-sdpa
 tests/ttnn/nightly/unit_tests/operations/fused/ @tenstorrent/metalium-developers-mmfusedreduce
 tests/ttnn/nightly/unit_tests/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce
 tests/ttnn/nightly/unit_tests/operations/moreh/ @razorback3 @dongjin-na @ayerofieiev-tt @nmauriceTT @aczajkowskiTT @tenstorrent/metalium-developers-mmfusedreduce
