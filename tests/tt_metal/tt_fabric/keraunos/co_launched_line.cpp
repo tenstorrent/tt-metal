@@ -152,8 +152,7 @@ NocStage read_noc_stage(ChipId chip, const CoreCoord& virtual_core) {
 
 // Zeroes the NOC staging words of every fabric router of `chip`, sets the NOC kind in the record of each whose link is
 // in `noc_links`, and returns them all. Called from the extension under std::call_once, after device init wrote the
-// records and before any device is configured (PLAN-0008 § Where the Phase 1 test writes `kind`, hub
-// 62db7e799795-D8).
+// records and before any device is configured.
 std::vector<PreparedRouter> prepare_routers(ChipId chip, const NocLinks& noc_links) {
     const auto& control_plane = MetalContext::instance().get_control_plane();
     const auto& cluster = MetalContext::instance().get_cluster();
@@ -321,7 +320,7 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links, cons
     }
 
     // Each record the extension set was valid when it found it, so device init had written it, and still holds the NOC
-    // kind after launch. Every other record holds the Ethernet kind device init writes today. One router per end of
+    // kind after launch. Every other record holds the Ethernet kind device init writes. One router per end of
     // each chosen link: the mesh descriptors have one channel between neighbours.
     ASSERT_EQ(prepared.size(), routers.size()) << "the extension did not prepare every router";
     EXPECT_EQ(
@@ -358,7 +357,7 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links, cons
         EXPECT_EQ(bytes_of(results), expected_bytes) << role;
     }
 
-    // The path each link took (SPEC-0011 § The line test, 6): a router stages a word only in send_dword on a NOC link,
+    // The path each link took: a router stages a word only in send_dword on a NOC link,
     // for the packets-sent credit on its sender TX queue (word 0); the receiver returns credits by send_bytes, which
     // stages nothing. That holds for traffic one way along the line, as here: only the sender of a NOC link stages.
     for (const auto& router : routers) {

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The virtual-cluster manifest (SPEC-0011 § Manifest) and the checks that need only the manifest and facts about
-// the package (SPEC-0011 § Checks before the device is touched, stages A to C). No device access.
+// The virtual-cluster manifest and the checks that need only the manifest and facts about the package (stages A to
+// C). No device access.
 
 #pragma once
 
@@ -19,7 +19,7 @@
 
 namespace tt::tt_fabric::vcluster {
 
-// The row of SPEC-0011's check table a finding belongs to; the value is the row number. Rows 9 to 11 compare
+// The check a finding belongs to; the value is its row number. Rows 9 to 11 compare
 // against the capture (stage D) and are not checked here.
 enum class ManifestCheck : uint32_t {
     ReservedValue = 1,          // a router or worker on `cce` 1, a router on a hart other than 0, a region inside its
@@ -98,8 +98,8 @@ struct Manifest {
     std::vector<Link> links;
 };
 
-// A file that cannot be turned into a manifest (SPEC-0011 § Checks, load errors). errors() lists every load error
-// found, one line each; what() joins them.
+// A file that cannot be turned into a manifest. errors() lists every load error found, one line each; what() joins
+// them.
 class ManifestLoadError : public std::runtime_error {
 public:
     explicit ManifestLoadError(std::vector<std::string> errors);
@@ -114,7 +114,7 @@ private:
 struct PackageFacts {
     std::vector<CceId> cores;         // the SoC descriptor's keraunos.cores (row 2)
     uint32_t harts_per_cce = 0;       // harts of every CCE (row 3)
-    uint64_t sram_bytes_per_cce = 0;  // SRAM of every CCE; a Phase 2 region is exactly this (rows 1 and 4)
+    uint64_t sram_bytes_per_cce = 0;  // SRAM of every CCE; a region is exactly this (rows 1 and 4)
     // HSIO tile pairs the session's bring-up wired with Ethernet, in either order (row 8). On mmk 26ww45 with
     // chippy bringup_mmk.py KER_ETH_LINKS: {0, 1} and {2, 3}.
     std::vector<std::pair<uint32_t, uint32_t>> ethernet_tile_pairs;
@@ -135,7 +135,7 @@ Manifest parse_manifest(std::string_view yaml_text);
 // ManifestLoadError naming the path when the file cannot be opened or read, and as parse_manifest() otherwise.
 Manifest load_manifest(const std::filesystem::path& path);
 
-// Runs the check rows of SPEC-0011 in stages against `manifest` and `facts`: stage A (row 1); if it found nothing,
+// Runs the check rows in stages against `manifest` and `facts`: stage A (row 1); if it found nothing,
 // stage B (rows 2 and 12); if that found nothing, stage C (rows 3 to 8 and 13). Returns every failing instance of
 // every row the last stage run checked, in row order; empty means the manifest passes stages A to C. Stage D (rows
 // 9 to 11, against the capture) is not run. Reads no device. Throws std::runtime_error (TT_FATAL) only on a caller

@@ -4,7 +4,7 @@
 
 // Ordering sender, on a Keraunos CCE (IDLE_ETH, DM0). For iterations 1..N: wait for the receiver's ack of the previous
 // iteration, write iteration i's pattern into the payload buffer, send it with eth_send_packet, then send credit = i
-// with an inline remote update, both on one TX queue (CM-087). The receiver checks the payload when it sees the
+// with an inline remote update, both on one TX queue. The receiver checks the payload when it sees the
 // credit.
 //
 // Compile-time define (the host passes it):

@@ -44,7 +44,7 @@ namespace tt::tt_metal {
 namespace {
 
 // HSIO 0's global window is 0x1204000000 and CCE SRAM begins 0x02800000 above it
-// (KERAUNOS-HW-FINDINGS Q1, E100 Table 14). Same constant as test_mimir_emu.cpp.
+// (Keraunos-E100 Table 14). Same constant as test_mimir_emu.cpp.
 constexpr uint64_t kHsioGlobalSramBase = KERAUNOS_HSIO0_SYSTEM_BASE + 0x02800000ULL;
 
 constexpr uint32_t kCounterSem = 0;

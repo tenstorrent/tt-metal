@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The descriptor generator, from SPEC-0011 § Descriptors generated from the manifest, § Link kinds and § Verification
-// 1, without a device. VclusterGenerate.FromEnvironment is the generator's entry point for a run, also from that
-// section; it is skipped unless VCLUSTER_MANIFEST is set.
+// The descriptor generator, without a device. VclusterGenerate.FromEnvironment is the generator's entry point for a
+// run; it is skipped unless VCLUSTER_MANIFEST is set.
 
 #include <gtest/gtest.h>
 
@@ -38,7 +37,7 @@ namespace fs = std::filesystem;
 // The Keraunos fabric test directory, located from the source path, so the test runs from any working directory.
 const fs::path kKeraunosDir = fs::path(__FILE__).parent_path().parent_path();
 
-// SPEC-0011: the package descriptor is UMD descriptors/soc_descs/mmk.yaml. VCLUSTER_PACKAGE_SOC_DESC overrides it, for
+// The package descriptor is UMD descriptors/soc_descs/mmk.yaml. VCLUSTER_PACKAGE_SOC_DESC overrides it, for
 // a tree whose UMD checkout is elsewhere.
 fs::path package_soc_desc() {
     if (const char* path = std::getenv("VCLUSTER_PACKAGE_SOC_DESC"); path != nullptr && *path != '\0') {
@@ -138,7 +137,7 @@ std::string yaml_file_difference(const fs::path& a, const fs::path& b) {
 
 // Protobuf text format, enough for a mesh graph descriptor: `name: value`, `name: [ v, ... ]` and `name { ... }`,
 // comments from `#` to the end of the line. A message is its fields sorted by name then value, so field order is
-// ignored as SPEC-0011's "key order ignored" asks; repeated fields keep their values.
+// ignored; repeated fields keep their values.
 struct TextprotoMessage {
     std::vector<std::pair<std::string, std::string>> fields;  // nested messages rendered to text in canonical form
 };
@@ -211,7 +210,7 @@ std::string textproto_canonical(const fs::path& path) {
     return textproto_canonical(tokens, i);
 }
 
-// The line of SPEC-0011 § Manifest as text, A on tile 0, M on tiles 1 and 2, B on tile 3, both links on the NOC: the
+// The three-device line as text, A on tile 0, M on tiles 1 and 2, B on tile 3, both links on the NOC: the
 // base the refusal tests edit. It passes check_manifest with the package's facts.
 constexpr std::string_view kLine = R"yaml(
 version: 1
@@ -296,7 +295,7 @@ Manifest checked(std::string_view yaml, const fs::path& package = package_soc_de
 
 // --- package_facts -----------------------------------------------------------------------------------------------
 
-// SPEC-0011 § Design: the cores from keraunos.cores, 8 harts a CCE, the SRAM size from eth_l1_size, and the Ethernet
+// The package facts: the cores from keraunos.cores, 8 harts a CCE, the SRAM size from eth_l1_size, and the Ethernet
 // tile pairs (0, 1) and (2, 3) of 26ww45.eth-pcs-output-inter.
 TEST(VclusterDescriptors, PackageFacts) {
     const PackageFacts facts = package_facts(package_soc_desc());
@@ -321,7 +320,7 @@ TEST(VclusterDescriptors, ManifestsPassChecks) {
 
 // --- noc_links ---------------------------------------------------------------------------------------------------
 
-// § Link kinds: each pair is its ends' fabric_chip, lower first, in link order, and only noc links count.
+// Each pair is its ends' fabric_chip, lower first, in link order, and only noc links count.
 TEST(VclusterDescriptors, NocLinksLowerFirstInLinkOrder) {
     const Manifest m = parse_manifest(line_with(
         {{"  - {a: {device: A, port: 0}, b: {device: M, port: 0}, backend: noc}\n"
@@ -336,7 +335,7 @@ TEST(VclusterDescriptors, NocLinksLowerFirstInLinkOrder) {
 
 // --- generate_descriptors: the reference output ------------------------------------------------------------------
 
-// § Descriptors generated from the manifest, for the line of three: each device's eth and keraunos.cores are its
+// Each device's eth and keraunos.cores are its
 // routers' package entries in port order, the four DRAM views go 2, 1, 1 in list order, the cluster descriptor has one
 // connection a link and the mesh is [ 1, 3 ].
 TEST(VclusterDescriptors, Line3) {
@@ -380,7 +379,7 @@ TEST(VclusterDescriptors, Line3) {
         << textproto_canonical(g.mesh_graph_desc);
 }
 
-// § Descriptors: "Every other key is copied unchanged": a generated SoC descriptor differs from the package's only in
+// "Every other key is copied unchanged": a generated SoC descriptor differs from the package's only in
 // eth, keraunos.cores and dram_views.
 TEST(VclusterDescriptors, SocDescCopiesThePackage) {
     const TempDir out("copies");
@@ -397,7 +396,7 @@ TEST(VclusterDescriptors, SocDescCopiesThePackage) {
     }
 }
 
-// § Verification 1: a backend is in none of the files, so the line generates the same descriptors whatever its links'
+// A backend is in none of the files, so the line generates the same descriptors whatever its links'
 // backends.
 TEST(VclusterDescriptors, BackendInNoFile) {
     const TempDir noc("noc");
@@ -446,9 +445,9 @@ std::vector<std::string> env_lines(const fs::path& path) {
     return found;
 }
 
-// § Descriptors, `env.emu` and `env.mock`: three lines NAME=value with absolute paths, the SoC descriptors
+// Three lines NAME=value with absolute paths, the SoC descriptors
 // comma-separated in chip order; env.mock names the cluster descriptor TT_METAL_MOCK_CLUSTER_DESC_PATH where env.emu
-// names it TT_METAL_EMU_CLUSTER_DESC. SPEC-0014 § Contract, Phase 2's generator: TT_METAL_EMU_PACKAGE_SOC_DESC, the
+// names it TT_METAL_EMU_CLUSTER_DESC. TT_METAL_EMU_PACKAGE_SOC_DESC, the
 // absolute path of the package descriptor given, is the last line of both, after those three.
 TEST(VclusterDescriptors, EnvFiles) {
     const TempDir out("env");
@@ -482,7 +481,7 @@ TEST(VclusterDescriptors, EnvFiles) {
     EXPECT_EQ(env_lines(g.env_mock), mock_lines);
 }
 
-// SPEC-0014 § Contract, Phase 2's generator: the package line is absolute when the package descriptor is given by a
+// The package line is absolute when the package descriptor is given by a
 // relative path.
 TEST(VclusterDescriptors, EnvFilesPackagePathAbsolute) {
     const TempDir out("env_relative");
@@ -500,7 +499,7 @@ TEST(VclusterDescriptors, EnvFilesPackagePathAbsolute) {
     }
 }
 
-// § Descriptors: files are replaced if present.
+// Files are replaced if present.
 TEST(VclusterDescriptors, ReplacesExistingFiles) {
     const TempDir out("replace");
     write_text(out.path() / "cluster_desc.yaml", "stale: true\n");
@@ -510,7 +509,7 @@ TEST(VclusterDescriptors, ReplacesExistingFiles) {
     EXPECT_EQ(read_text(g.env_emu).find("STALE"), std::string::npos);
 }
 
-// § Verification 1: a two-device manifest generates a [ 1, 2 ] mesh and two SoC descriptors whose DRAM views are
+// A two-device manifest generates a [ 1, 2 ] mesh and two SoC descriptors whose DRAM views are
 // disjoint and together are the package's. With 4 programmable views and 2 devices, device 0 takes views 0 and 1 and
 // device 1 views 2 and 3: Metal takes a power of two of DRAM banks. Each device's idle slot is an Ethernet core of its
 // descriptor, after the router in port order, and is in no connection.
@@ -563,7 +562,7 @@ links:
     EXPECT_EQ(cluster["ethernet_connections"][0][1]["chip"].as<int>(), 1);
 }
 
-// § Descriptors, `eth`: a device's router cores in port order, and keraunos.cores in the same order, whatever the
+// A device's router cores in port order, and keraunos.cores in the same order, whatever the
 // order of its slots. M with its tile-2 router written first.
 TEST(VclusterDescriptors, EthInPortOrder) {
     const Manifest m = checked(line_with(
@@ -646,7 +645,7 @@ TEST(VclusterDescriptors, G5Capture) {
     EXPECT_EQ(refusals(checked(line_with({{"version: 1\n", "version: 1\ncapture: line3.capture\n"}}))), Refusals{5});
 }
 
-// § Descriptors: the generator runs check_manifest() itself and refuses on any row, reporting the rows. A worker on
+// The generator runs check_manifest() itself and refuses on any row, reporting the rows. A worker on
 // hart 8 of an 8-hart CCE is row 3 and touches no G refusal.
 TEST(VclusterDescriptors, RefusesOnARow) {
     const Manifest m = parse_manifest(
@@ -666,7 +665,7 @@ TEST(VclusterDescriptors, RefusesOnRowOneAlone) {
     EXPECT_EQ(found.g, Refusals{});
 }
 
-// § Descriptors, cluster_desc.yaml: each ethernet_connections entry puts the end with the lower chip first, whatever
+// Each ethernet_connections entry puts the end with the lower chip first, whatever
 // the manifest's order of the two ends.
 TEST(VclusterDescriptors, ConnectionLowerChipFirst) {
     const Manifest m = checked(line_with(
@@ -693,7 +692,7 @@ TEST(VclusterDescriptors, EveryRefusalListed) {
 
 // --- The generator's entry point for a run ------------------------------------------------------------------------
 
-// § Descriptors: reads VCLUSTER_MANIFEST, VCLUSTER_PACKAGE_SOC_DESC and VCLUSTER_OUT, and generates; skipped when
+// Reads VCLUSTER_MANIFEST, VCLUSTER_PACKAGE_SOC_DESC and VCLUSTER_OUT, and generates; skipped when
 // VCLUSTER_MANIFEST is unset. The generator runs check_manifest() itself; each row or refusal is a failure.
 TEST(VclusterGenerate, FromEnvironment) {
     const char* manifest_path = std::getenv("VCLUSTER_MANIFEST");

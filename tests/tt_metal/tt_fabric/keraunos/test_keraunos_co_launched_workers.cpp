@@ -8,8 +8,7 @@
 // MockChip reads and writes are no-ops.
 //
 // KeraunosCoLaunchedWorkersNocLinks runs the same line with chosen links backed by the NOC: the fabric program
-// extension sets the kind word of the link record on both ends of each chosen link (PLAN-0008 Phase 1b, 1c; decisions
-// 62db7e799795-D2 and -D3).
+// extension sets the kind word of the link record on both ends of each chosen link.
 
 #include <gtest/gtest.h>
 

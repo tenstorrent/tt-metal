@@ -48,7 +48,7 @@ constexpr uint64_t kFirstChipUniqueId = kQuasarBoardUpi << kBoardUpiShift;
 constexpr const char* kQuasar = "quasar";
 
 // The HSIO tile pairs the mmk 26ww45.eth-pcs-output-inter bring-up wires with Ethernet (chippy bringup_mmk.py
-// KER_ETH_LINKS; SPEC-0011 row 8).
+// KER_ETH_LINKS).
 const std::vector<std::pair<uint32_t, uint32_t>> kWiredEthernetTilePairs = {{0, 1}, {2, 3}};
 
 constexpr const char* kClusterDescFile = "cluster_desc.yaml";
@@ -247,7 +247,7 @@ std::string soc_desc(
     desc["eth"] = eth;
     desc["keraunos"]["cores"] = device_cores;
     // V views in list order, N devices: device k takes V / N consecutive views, one more for k < V % N, device 0
-    // from view 0 (SPEC-0011).
+    // from view 0.
     const std::size_t share = views.size() / num_devices;
     const std::size_t extra = views.size() % num_devices;
     const std::size_t first = device.fabric_chip * share + std::min<std::size_t>(device.fabric_chip, extra);

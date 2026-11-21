@@ -17,7 +17,7 @@
 
 #ifdef KERAUNOS_CCE
 // Send @p value into the peer's 16-byte slot at @p dest_addr on TX queue @p txq, after the sends before it on that
-// queue (on a NOC link, if an acked copy has landed or one VC delivers in order: CM-081, open), as an 8-byte write, on
+// queue (on a NOC link, if an acked copy has landed or one VC delivers in order: unproven), as an 8-byte write, on
 // an Ethernet link inline and snooped by the peer (compat cce_eth_send_counter); @p src_addr is not read. Assumes
 // !eth_txq_is_busy(txq).
 FORCE_INLINE void fabric_send_credit_word(uint32_t txq, uint32_t /*src_addr*/, uint32_t dest_addr, uint32_t value) {
@@ -26,7 +26,7 @@ FORCE_INLINE void fabric_send_credit_word(uint32_t txq, uint32_t /*src_addr*/, u
 }
 
 // Send @p num_bytes of credit totals from @p src_addr into the peer at @p dest_addr on TX queue @p txq, after the sends
-// before it on that queue (on a NOC link, if an acked copy has landed or one VC delivers in order: CM-081, open), as a
+// before it on that queue (on a NOC link, if an acked copy has landed or one VC delivers in order: unproven), as a
 // copy, on an Ethernet link snooped by the peer (compat cce_eth_send). Not inline writes: an inline value carries 52
 // bits, and the block packs 32-bit totals 4 bytes apart. Assumes !eth_txq_is_busy(txq).
 FORCE_INLINE void fabric_send_credit_block(uint32_t txq, uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {

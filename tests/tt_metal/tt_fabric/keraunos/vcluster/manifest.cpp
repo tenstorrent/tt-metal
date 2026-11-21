@@ -27,7 +27,7 @@ ManifestLoadError::ManifestLoadError(std::vector<std::string> errors) :
 namespace {
 
 constexpr uint32_t kManifestVersion = 1;
-// Phase 2 values (SPEC-0011 § Manifest): routers on hart 0 of CCE0. CCE1 takes idle slots only: a router is built for
+// Supported values: routers on hart 0 of CCE0. CCE1 takes idle slots only: a router is built for
 // CCE0, and a worker slot is a hart of a router's CCE.
 constexpr uint32_t kRouterHart = 0;
 constexpr uint32_t kIdleOnlyCce = 1;
@@ -52,8 +52,8 @@ void check_keys(
     }
 }
 
-// `text` as an unsigned T: decimal with no leading zero other than "0" itself, or hexadecimal after "0x" (SPEC-0011
-// § Checks). Empty for anything else, a sign included, or a value T cannot hold.
+// `text` as an unsigned T: decimal with no leading zero other than "0" itself, or hexadecimal after "0x".
+// Empty for anything else, a sign included, or a value T cannot hold.
 template <typename T>
 std::optional<T> parse_integer(std::string_view text) {
     static_assert(std::is_unsigned_v<T>);
@@ -335,7 +335,7 @@ void check_reserved_values(const Manifest& manifest, const PackageFacts& facts, 
                 findings.push_back(
                     {ManifestCheck::ReservedValue,
                      fmt::format(
-                         "{}: a router or idle slot on a hart other than {} is reserved for Phase 3",
+                         "{}: a router or idle slot on a hart other than {} is not supported",
                          slot_label(device, i),
                          kRouterHart)});
             }
@@ -347,7 +347,7 @@ void check_reserved_values(const Manifest& manifest, const PackageFacts& facts, 
                 findings.push_back(
                     {ManifestCheck::ReservedValue,
                      fmt::format(
-                         "{}: a part of a CCE (the whole is base 0, size {:#x}) is reserved for Phase 3",
+                         "{}: a part of a CCE (the whole is base 0, size {:#x}) is not supported",
                          region_label(device, i),
                          facts.sram_bytes_per_cce)});
             }
@@ -356,7 +356,7 @@ void check_reserved_values(const Manifest& manifest, const PackageFacts& facts, 
     for (std::size_t i = 0; i < manifest.links.size(); i++) {
         if (manifest.links[i].backend == LinkBackend::Local) {
             findings.push_back(
-                {ManifestCheck::ReservedValue, fmt::format("links[{}]: backend local is reserved for Phase 3", i)});
+                {ManifestCheck::ReservedValue, fmt::format("links[{}]: backend local is not supported", i)});
         }
     }
 }

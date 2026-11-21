@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The Keraunos line from a manifest, SPEC-0011 § The line test: the topology and the link kinds come from the manifest
+// The Keraunos line from a manifest: the topology and the link kinds come from the manifest
 // at VCLUSTER_MANIFEST, and the descriptors in the environment must be the ones generated from it (env.emu on the
 // emulator, env.mock on Mock). Run with TT_METAL_SLOW_DISPATCH_MODE=1; skipped when VCLUSTER_MANIFEST is unset. The
 // traffic, the verdict and the path proof (steps 5 and 6) are run_line_unicast()'s; this test adds steps 1 to 4.

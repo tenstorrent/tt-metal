@@ -1,4 +1,4 @@
-# The three-device line of PLAN-0006 on one mmk package, both links on the NOC (SPEC-0011 § Verification).
+# A three-device line on one mmk package, both links on the NOC.
 # A on HSIO tile 0, M on tiles 1 and 2, B on tile 3; the sender and receiver on CCE1 of the end routers' tiles.
 version: 1
 devices:

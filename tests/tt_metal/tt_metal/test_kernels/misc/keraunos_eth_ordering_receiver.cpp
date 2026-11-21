@@ -12,7 +12,7 @@
 // deliver it, as in eth_write_tile_sram.cpp).
 //
 // Ethernet RX writes are not snooped (no cmd_snoop on the send), so every read of them goes through the uncached
-// alias (KERAUNOS-HW-FINDINGS Q5).
+// alias.
 
 #include <cstdint>
 

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SPEC-0014, per-chip SoC descriptors inside metal: the refusals E0 to E7 of § Contract on Mock (§ Verification 3),
-// and that a chip's descriptor and the package's give a core one translated coordinate (§ Verification 4).
+// Per-chip SoC descriptors inside metal: the refusals E0 to E7 on Mock, and that a chip's descriptor and the package's
+// give a core one translated coordinate.
 //
 // Metal reads its environment once a process, so each Mock case opens metal in a child process of its own (a
 // threadsafe death test). The child generates the descriptors, changes one thing, exports the variables, opens, and
@@ -165,7 +165,7 @@ void renumber_chip(YAML::Node& cluster, uint32_t from, uint32_t to) {
 
 enum Outcome : int { kOpened = 0, kRefused = 3, kWrongView = 4, kSetupFailed = 5 };
 
-// The Mock environment of SPEC-0014 § Contract, Environment: no emulator server, the cluster descriptor in the Mock
+// The Mock environment: no emulator server, the cluster descriptor in the Mock
 // variable, the list when `files.socs` is not empty, and the package variable when `files.package` is not empty.
 void export_mock(const Files& files) {
     for (const char* unset :
@@ -251,8 +251,8 @@ std::string core_at(const tt::Cluster& cluster, uint32_t chip, uint32_t channel)
 
 // --- The generated files open, so each refusal below is the one change's -----------------------------------------
 
-// § Contract, Environment, and § Design: with the list and the package variable metal's view a chip is Phase 2's.
-// § Why it is sound: "chip 1's channel 0 is 4-1 to metal".
+// With the list and the package variable metal's view of a chip is the chip's file: chip 1's channel 0 is 4-1 to
+// metal.
 TEST_F(VclusterMetalDescDeathTest, GeneratedFilesOpen) {
     for (const std::string manifest : {"line3_eth.yaml", "line3_am.yaml", "line3_noc.yaml"}) {
         SCOPED_TRACE(manifest);
@@ -267,7 +267,7 @@ TEST_F(VclusterMetalDescDeathTest, GeneratedFilesOpen) {
     }
 }
 
-// § Contract, Environment: one entry and no package variable is the package descriptor for every chip.
+// One entry and no package variable is the package descriptor for every chip.
 TEST_F(VclusterMetalDescDeathTest, OneEntryNoPackageVariableOpens) {
     EXPECT_OPENS(
         [](Files& files) {
@@ -280,9 +280,9 @@ TEST_F(VclusterMetalDescDeathTest, OneEntryNoPackageVariableOpens) {
         });
 }
 
-// --- § Contract, Refusals, and § Verification 3 ------------------------------------------------------------------
+// --- Refusals ---------------------------------------------------------------------------------------------------
 
-// E0, first condition: Phase 2's environment, the list with no package variable.
+// E0, first condition: the list with no package variable.
 TEST_F(VclusterMetalDescDeathTest, E0ListWithoutPackageVariable) {
     EXPECT_REFUSED(
         [](Files& files) { files.package.clear(); },
@@ -371,7 +371,7 @@ TEST_F(VclusterMetalDescDeathTest, E5EthernetCoreNotThePackages) {
         "Chip 0 descriptor [^ ]*chip_0_soc_desc\\.yaml: Ethernet core 6-0 is not the package descriptor's");
 }
 
-// E5, § Verification 3: a chip's keraunos.cores entry with another hsio.
+// E5: a chip's keraunos.cores entry with another hsio.
 TEST_F(VclusterMetalDescDeathTest, E5KeraunosEntryWithAnotherHsio) {
     EXPECT_REFUSED(
         in_chip(
@@ -403,7 +403,7 @@ TEST_F(VclusterMetalDescDeathTest, E5DramViewNotThePackages) {
         "descriptor's");
 }
 
-// E6, § Verification 3: two chips list one Ethernet core, each with the package's keraunos.cores entry for it.
+// E6: two chips list one Ethernet core, each with the package's keraunos.cores entry for it.
 TEST_F(VclusterMetalDescDeathTest, E6EthernetCoreInTwoChips) {
     EXPECT_REFUSED(
         in_chip(
@@ -480,7 +480,7 @@ TEST_F(VclusterMetalDescDeathTest, E6NonProgrammableDramViewInTwoChipsOpens) {
     });
 }
 
-// --- § Contract, Refusals, "Further conditions, from the code review" ---------------------------------------------
+// --- Further refusals -------------------------------------------------------------------------------------------
 
 // E0 on Mock: the package variable set and the list unset.
 TEST_F(VclusterMetalDescDeathTest, E0PackageVariableWithoutTheList) {
@@ -596,7 +596,7 @@ TEST_F(VclusterMetalDescDeathTest, E6NoProgrammableDramView) {
         "would be its own");
 }
 
-// E7, § Verification 3: the package's and every chip's architecture changed alike to Blackhole.
+// E7: the package's and every chip's architecture changed alike to Blackhole.
 TEST_F(VclusterMetalDescDeathTest, E7ArchitectureNotQuasar) {
     EXPECT_REFUSED(
         [](Files& files) {
@@ -609,7 +609,7 @@ TEST_F(VclusterMetalDescDeathTest, E7ArchitectureNotQuasar) {
         "TT_METAL_EMU_SOC_DESC lists 3 descriptors on architecture [^;]*; a descriptor a chip is read on Quasar only");
 }
 
-// --- § Verification 4: the two views agree, no device --------------------------------------------------------------
+// --- The two views agree, no device -------------------------------------------------------------------------------
 
 tt::umd::SocDescriptor descriptor(const fs::path& file, const tt::ChipInfo& chip_info) {
     return tt::umd::SocDescriptor(std::make_shared<tt::umd::SocArchDescriptor>(file.string()), chip_info);
@@ -618,7 +618,7 @@ tt::umd::SocDescriptor descriptor(const fs::path& file, const tt::ChipInfo& chip
 std::string xy(const tt::umd::CoreCoord& core) { return std::to_string(core.x) + "-" + std::to_string(core.y); }
 
 // For each manifest's generated descriptors and each chip: UMD's descriptor of the chip is the package's, and metal's
-// is built from the chip's file as § Contract, `get_metal_desc_from_tt_desc` states, with `noc_translation_enabled`
+// is built from the chip's file, with `noc_translation_enabled`
 // and `harvesting_masks` from UMD's and `board_type` and `asic_location` from the cluster descriptor. Every core of
 // the chip's descriptor, and the core of every Ethernet channel, has the translated coordinate the package's
 // descriptor gives the same NOC0 core. `noc_translation` overrides the cluster descriptor's value when given.
@@ -678,8 +678,7 @@ void expect_views_agree(std::optional<bool> noc_translation) {
             }
         }
         // The comparison is of six distinct cores, the four routers' and CCE1 of the end routers' tiles, and the chips'
-        // channel numbers are not the package's: § Why it is sound, "chip 1's channel 0 is 4-1 to metal and 4-0 to
-        // UMD".
+        // channel numbers are not the package's: chip 1's channel 0 is 4-1 to metal and 4-0 to UMD.
         EXPECT_EQ(num_eth_cores, 6u);
         EXPECT_EQ(eth_cores_of_all_chips, (std::set<std::string>{"4-0", "4-1", "4-2", "4-3", "5-0", "5-3"}));
         fs::remove_all(dir);
@@ -688,11 +687,11 @@ void expect_views_agree(std::optional<bool> noc_translation) {
 
 TEST(VclusterMetalDesc, TwoViewsAgree) { expect_views_agree(std::nullopt); }
 
-// The same with NOC translation on, which the generated cluster descriptor does not ask for: § Why it is sound reads
+// The same with NOC translation on, which the generated cluster descriptor does not ask for: metal reads
 // an Ethernet core's translated coordinate on Quasar as its NOC0 coordinate whatever the chip reports.
 TEST(VclusterMetalDesc, TwoViewsAgreeWithNocTranslation) { expect_views_agree(true); }
 
-// § Why it is sound, "Channel numbers never cross": chip 1's channel 0 is 4-1 in its own descriptor and 4-0 in the
+// Chip 1's channel 0 is 4-1 in its own descriptor and 4-0 in the
 // package's, so a channel number taken to UMD's descriptor names another tile.
 TEST(VclusterMetalDesc, ChannelNumbersDifferBetweenTheViews) {
     const fs::path dir = temp_dir("channels");

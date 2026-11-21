@@ -6,7 +6,7 @@
 // MeshDevice, IDLE_ETH kernels on DM0 through EthernetConfig. The Ethernet loopback HSIO0.eth0 <-> HSIO1.eth0 joins
 // tile 0 CCE0 and tile 1 CCE0; the host writes each core's Ethernet-link slot before launch.
 //
-// KeraunosEthSend/Ordering.*: payload-then-credit on one TX queue (CM-087), the credit through
+// KeraunosEthSend/Ordering.*: payload-then-credit on one TX queue, the credit through
 // eth_write_remote_reg() (CmdBuf1) or cce_eth::send_dword() directly (Credit8).
 //
 // Run (after bringup_mmk.py has brought the loopback up in packet mode):

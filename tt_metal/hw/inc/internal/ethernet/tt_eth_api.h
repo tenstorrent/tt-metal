@@ -34,7 +34,7 @@ inline uint32_t eth_txq_reg_read(uint32_t qnum, uint32_t offset) {
 }
 #endif
 
-// Sets how many data packets TX queue @p qnum accepts ahead. Keraunos has no such setting (CM-061): no effect there.
+// Sets how many data packets TX queue @p qnum accepts ahead. Keraunos has no such setting: no effect there.
 inline void eth_txq_set_data_packet_accept_ahead(uint32_t qnum, uint32_t num_packets) {
 #if !defined(ARCH_QUASAR)
     eth_txq_reg_write(qnum, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, num_packets);

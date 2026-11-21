@@ -4,9 +4,8 @@
 
 // Fabric unicast on a Keraunos test line, with the sender and receiver on CCE1 of the end routers' HSIO tiles, launched
 // as ordinary programs once fabric is up, and chosen links backed by the NOC: the fabric program extension sets the
-// kind word of the link record on both ends of each chosen link (PLAN-0008 Phase 1b, 1c; decisions 62db7e799795-D2 and
-// -D3). Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock the run compiles the kernels and skips: UMD MockChip reads and
-// writes are no-ops.
+// kind word of the link record on both ends of each chosen link. Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock
+// the run compiles the kernels and skips: UMD MockChip reads and writes are no-ops.
 
 #pragma once
 

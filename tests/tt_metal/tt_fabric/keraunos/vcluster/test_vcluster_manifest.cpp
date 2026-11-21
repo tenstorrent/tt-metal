@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The virtual-cluster manifest's loader and its checks before the device is touched, from SPEC-0011 § Manifest and
-// § Checks before the device is touched, and its § Verification 1: one accepted manifest, one manifest
-// per row that trips that row and no other, one per kind of load error. No device. Rows 9 to 11 need a capture and
-// are not covered.
+// The virtual-cluster manifest's loader and its checks before the device is touched: one accepted manifest, one
+// manifest per row that trips that row and no other, one per kind of load error. No device. Rows 9 to 11 need a
+// capture and are not covered.
 //
 // Every rejected manifest is the accepted line with one edit, so the edit is the only thing that differs.
 
@@ -31,7 +30,7 @@ namespace {
 
 constexpr uint64_t kSram = 0x400000;
 
-// SPEC-0011 § Contract: the Phase 2 line, A on tile 0, M on tiles 1 and 2, B on tile 3, one link each backend. A to M
+// The line, A on tile 0, M on tiles 1 and 2, B on tile 3, one link each backend. A to M
 // is on tiles 0 and 1, M to B on tiles 2 and 3: both pairs are wired, so either backend is allowed on either link.
 constexpr std::string_view kLine = R"yaml(
 version: 1
@@ -63,7 +62,7 @@ links:
   - {a: {device: M, port: 1}, b: {device: B, port: 0}, backend: ethernet}
 )yaml";
 
-// mmk 26ww45 as SPEC-0011 describes it: one CCE0 on each of tiles 0 to 3, tiles 0-1 and 2-3 wired (row 8). The hart
+// mmk 26ww45: one CCE0 on each of tiles 0 to 3, tiles 0-1 and 2-3 wired (row 8). The hart
 // count is the test's choice; the rows read it from here.
 PackageFacts mmk() { return {{{0, 0}, {1, 0}, {2, 0}, {3, 0}}, 4, kSram, {{0, 1}, {2, 3}}}; }
 
@@ -87,7 +86,7 @@ std::string edit(std::initializer_list<std::pair<std::string_view, std::string_v
     return text;
 }
 
-// SPEC-0011 § Checks: "The loader fails, listing every load error it found, and reports no row." The loader throws
+// The loader fails, listing every load error it found, and reports no row. The loader throws
 // ManifestLoadError. Returns its errors; fails the test when `yaml` loads.
 std::vector<std::string> load_errors(std::string_view yaml) {
     try {
@@ -147,7 +146,7 @@ using Rows = std::set<uint32_t>;
 
 // --- Accepted ----------------------------------------------------------------------------------------------------
 
-// § Verification 1: the line loads as written and passes every row.
+// The line loads as written and passes every row.
 TEST(VclusterManifest, LineLoadsAsWritten) {
     const Manifest m = load(kLine);
     EXPECT_EQ(m.version, 1u);
@@ -177,7 +176,7 @@ TEST(VclusterManifest, LineLoadsAsWritten) {
 
 TEST(VclusterManifest, LinePasses) { EXPECT_EQ(rows(kLine), Rows{}); }
 
-// § Checks: "`capture` is optional." Named, it loads; rows 9 to 11 are not judged here.
+// "`capture` is optional." Named, it loads; rows 9 to 11 are not judged here.
 TEST(VclusterManifest, CaptureNamedLoads) {
     const Manifest m = load(edit({{"version: 1\n", "version: 1\ncapture: line3.capture\n"}}));
     EXPECT_EQ(m.capture, std::filesystem::path("line3.capture"));
@@ -217,7 +216,7 @@ TEST(VclusterManifest, NocLinksPass) {
         Rows{});
 }
 
-// § Checks: "A region on a CCE where its device has no slot is allowed."
+// "A region on a CCE where its device has no slot is allowed."
 TEST(VclusterManifest, RegionWithoutSlotPasses) {
     const std::string yaml = edit(
         {{"      - {tile: 0, cce: 0, base: 0x0, size: 0x400000}\n",
@@ -316,14 +315,14 @@ TEST(VclusterManifest, Row2SlotNotACore) {
         Rows{2});
 }
 
-// Row 2: `cce` 2 is not reserved for Phase 3, so it is row 2, not row 1.
+// Row 2: `cce` 2 is not an unsupported value, so it is row 2, not row 1.
 TEST(VclusterManifest, Row2Cce2) {
     EXPECT_EQ(
         rows(edit({{"{tile: 0, cce: 0, hart: 1, role: worker}", "{tile: 0, cce: 2, hart: 1, role: worker}"}})),
         Rows{2});
 }
 
-// Row 2: a region's (tile, cce) is not a core, and nothing else (§ Checks: row 2 only).
+// Row 2: a region's (tile, cce) is not a core, and nothing else.
 TEST(VclusterManifest, Row2RegionNotACore) {
     EXPECT_EQ(
         rows(edit(
@@ -413,8 +412,7 @@ TEST(VclusterManifest, Row4BeyondSram) {
     }
 }
 
-// Row 5: a slot on a CCE its device owns no region of; and § Checks: "A device with a router and no region fails row
-// 5."
+// Row 5: a slot on a CCE its device owns no region of; a device with a router and no region fails row 5.
 TEST(VclusterManifest, Row5SlotWithoutRegion) {
     EXPECT_EQ(rows(edit({{"      - {tile: 2, cce: 0, base: 0x0, size: 0x400000}\n", ""}})), Rows{5});
     EXPECT_EQ(
@@ -475,7 +473,7 @@ TEST(VclusterManifest, Row7OneDeviceBothEnds) {
         Rows{7});
 }
 
-// Row 7: a router port in no link; and § Checks: "With no links, every router port fails row 7."
+// Row 7: a router port in no link; with no links, every router port fails row 7.
 TEST(VclusterManifest, Row7RouterPortWithoutLink) {
     EXPECT_EQ(
         rows(edit({{"  - {a: {device: M, port: 1}, b: {device: B, port: 0}, backend: ethernet}\n", ""}})), Rows{7});
@@ -525,7 +523,7 @@ TEST(VclusterManifest, Row13DeviceWithoutRouter) {
     EXPECT_EQ(rows(workers_only, mmk_with_tile_4()), (Rows{6, 13}));
 }
 
-// § Checks: every stage C row that holds is reported. One manifest trips rows 3, 4, 5, 6, 7, 8 and 13.
+// Every stage C row that holds is reported. One manifest trips rows 3, 4, 5, 6, 7, 8 and 13.
 TEST(VclusterManifest, StageCReportsEveryRow) {
     const std::string yaml = edit({
         {"links:\n",
@@ -566,7 +564,7 @@ TEST(VclusterManifest, LoadErrorVersion) {
     expect_load_error(edit({{"version: 1\n", ""}}), "version");
 }
 
-// § Checks: "An unknown or missing `version` is reported alone and ends the load": an unknown key beside it is not
+// "An unknown or missing `version` is reported alone and ends the load": an unknown key beside it is not
 // reported.
 TEST(VclusterManifest, LoadErrorVersionAlone) {
     expect_load_error(edit({{"version: 1\n", "version: 2\ntopology: line\n"}}), "version");
@@ -591,7 +589,7 @@ TEST(VclusterManifest, LoadErrorMissingKey) {
     }
 }
 
-// § Checks: `links`, and each device's `slots` and `regions`, are required; an empty list is well formed.
+// `links`, and each device's `slots` and `regions`, are required; an empty list is well formed.
 TEST(VclusterManifest, LoadErrorMissingList) {
     expect_load_error(
         edit(
@@ -608,7 +606,7 @@ TEST(VclusterManifest, LoadErrorMissingList) {
     expect_load_error(edit({{"    regions:\n      - {tile: 3, cce: 0, base: 0x0, size: 0x400000}\n", ""}}), "regions");
 }
 
-// § Checks: an integer is decimal, or hexadecimal after a lowercase `0x`; `0` is accepted.
+// An integer is decimal, or hexadecimal after a lowercase `0x`; `0` is accepted.
 TEST(VclusterManifest, IntegersDecimalOrHex) {
     const Manifest m = load(edit(
         {{"{tile: 3, cce: 0, base: 0x0, size: 0x400000}", "{tile: 3, cce: 0, base: 0, size: 4194304}"},
@@ -622,7 +620,7 @@ TEST(VclusterManifest, IntegersDecimalOrHex) {
     EXPECT_EQ(b.slots[1].hart, 1u);
 }
 
-// § Checks: a value too large for its field is a load error, 32 bits for every number but a region's `base` and
+// A value too large for its field is a load error, 32 bits for every number but a region's `base` and
 // `size`, which are 64. The largest value of each width loads.
 TEST(VclusterManifest, IntegerWidths) {
     expect_load_error(
@@ -662,7 +660,7 @@ TEST(VclusterManifest, Row4RegionNearUint64Max) {
     }
 }
 
-// § Checks: these are load errors, not octal, hex, signed or string numbers.
+// These are load errors, not octal, hex, signed or string numbers.
 TEST(VclusterManifest, LoadErrorIntegerSyntax) {
     for (const auto& [from, to, needle] :
          std::initializer_list<std::tuple<std::string_view, std::string_view, std::string_view>>{
@@ -736,7 +734,7 @@ TEST(VclusterManifest, LoadErrorUnknownRoleOrBackend) {
     expect_load_error(edit({{"backend: ethernet", "backend: pcie"}}), "pcie");
 }
 
-// § Checks: "A slot with an unknown `role` is a load error whatever else it holds", a `port` included. Whether the
+// "A slot with an unknown `role` is a load error whatever else it holds", a `port` included. Whether the
 // port is a second error is not stated, so only the role's is required.
 TEST(VclusterManifest, LoadErrorUnknownRoleWithPort) {
     const auto errors = load_errors(
@@ -753,7 +751,7 @@ TEST(VclusterManifest, LoadErrorEmptyCapture) {
     expect_load_error(edit({{"version: 1\n", "version: 1\ncapture: \"\"\n"}}), "capture");
 }
 
-// § Checks: a key repeated in any map, a file of more than one YAML document, and a number with an explicit tag are
+// A key repeated in any map, a file of more than one YAML document, and a number with an explicit tag are
 // load errors.
 TEST(VclusterManifest, LoadErrorRepeatedKey) {
     expect_load_error(
@@ -771,7 +769,7 @@ TEST(VclusterManifest, LoadErrorTaggedScalar) {
         edit({{"{tile: 3, cce: 0, hart: 1, role: worker}", "{tile: !!int 3, cce: 0, hart: 1, role: worker}"}}), "tile");
 }
 
-// § Checks: the loader lists every load error it found. Two independent edits in different items give two errors.
+// The loader lists every load error it found. Two independent edits in different items give two errors.
 TEST(VclusterManifest, LoadErrorListsEvery) {
     const auto errors = load_errors(edit(
         {{"    fabric_chip: 1\n", "    fabric_chip: 1\n    color: red\n"},
@@ -785,7 +783,7 @@ TEST(VclusterManifest, LoadErrorListsEvery) {
     EXPECT_EQ(names("master"), 1) << joined(errors);
 }
 
-// § Checks: "The checker asserts that its package facts are usable: a hart count and an SRAM size above 0, and at
+// "The checker asserts that its package facts are usable: a hart count and an SRAM size above 0, and at
 // least one core. Unusable facts are a caller's bug, not a row." The spec names no exception type.
 TEST(VclusterManifest, UnusableFactsThrow) {
     const Manifest m = load(kLine);

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The cluster, SoC and mesh graph descriptors of a virtual cluster, generated from its manifest and the package's SoC
-// descriptor (SPEC-0011 § Descriptors generated from the manifest, § Link kinds). No device access.
+// descriptor. No device access.
 
 #pragma once
 
@@ -18,7 +18,7 @@
 
 namespace tt::tt_fabric::vcluster {
 
-// Why generate_descriptors() refused a manifest; the value is the row number of SPEC-0011's G table.
+// Why generate_descriptors() refused a manifest; the value is the G number its message cites.
 enum class GenerationRefusal : uint32_t {
     NotALine = 1,             // G1: fabric_chip values are not 0..N-1, or the links are not one between i and i+1
     RouterPortsNotDense = 2,  // G2: the ports of a device's router and idle slots are not 0..k-1
@@ -60,9 +60,8 @@ struct GeneratedDescriptors {
 };
 
 // Writes, into `out_dir` (created if missing, files replaced if present), chip_<fabric_chip>_soc_desc.yaml for each
-// device, cluster_desc.yaml, mesh_graph_descriptor.textproto, env.emu and env.mock, as SPEC-0011 § Descriptors
-// generated from the manifest specifies. `package_soc_desc` is the whole package's SoC descriptor (UMD
-// descriptors/soc_descs/mmk.yaml).
+// device, cluster_desc.yaml, mesh_graph_descriptor.textproto, env.emu and env.mock. `package_soc_desc` is the whole
+// package's SoC descriptor (UMD descriptors/soc_descs/mmk.yaml).
 //
 // Runs check_manifest(`manifest`, package_facts(`package_soc_desc`)) and the G1 to G6 refusals, and throws
 // DescriptorGenerationError, before creating or writing anything, when any row or refusal holds; it reports every

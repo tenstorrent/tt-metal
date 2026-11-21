@@ -30,7 +30,7 @@ constexpr uint32_t posted_addr(uint32_t id) {
 }
 
 // Sets this CCE's counter @p id (< kNumCounters) to capacity @p capacity and occupancy 0, with its error flag clear.
-// Capacity is written first because a capacity write may raise the error flag and RESET clears it (CM-077). An add
+// Capacity is written first because a capacity write may raise the error flag and RESET clears it. An add
 // that lands before the RESET is lost, so the counter's adders must not start before this returns; it fences, so the
 // RESET is ordered before this hart's later loads and stores. Never blocks.
 inline void reset(uint32_t id, uint32_t capacity) {

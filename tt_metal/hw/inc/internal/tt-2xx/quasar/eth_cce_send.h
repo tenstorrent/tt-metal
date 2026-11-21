@@ -29,8 +29,8 @@ constexpr uint32_t kTrid = CMDBUF_1_TRID_STATIC;
 // Request VCs 12-15 reach the Ethernet backends: TX queue q is VC 12 + q.
 constexpr uint32_t kFirstTxqReqVc = 12;
 constexpr uint32_t kNumTxqs = 4;
-// On a NOC link TX queue q is iDMA request VC 4 + q, acked on the write response VC, under transaction id 8 + q
-// (PLAN-0008 § NOC form of the three calls). cce_noc.h copies use VC 2, so a queue's order is its own.
+// On a NOC link TX queue q is iDMA request VC 4 + q, acked on the write response VC, under transaction id 8 + q.
+// cce_noc.h copies use VC 2, so a queue's order is its own.
 constexpr uint32_t kFirstNocReqVc = 4;
 constexpr uint32_t kNocRespVc = CMDBUF_WR_RESP_VC;
 constexpr uint32_t kFirstNocTrid = CMDBUF_1_TRID_START;
@@ -40,11 +40,11 @@ static_assert(MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE % sizeof(uint64_t) == 0);
 constexpr uint64_t kMaxBytesInPacket = 0x1000;
 // AXI_OPT_1.src_protocol of an inline write: the source register carries the data.
 constexpr uint8_t kInlineSrcProtocol = 4;
-// An inline Ethernet write lands 8 bytes at an 8-byte-aligned address and carries 52 significant bits (CM-092).
+// An inline Ethernet write lands 8 bytes at an 8-byte-aligned address and carries 52 significant bits.
 constexpr uint32_t kInlineValueBits = 52;
 
 // Keraunos local address of an HSIO tile's CCE SRAM: base + tile * stride + offset. The command buffer takes this
-// view for the source, and for the destination on an Ethernet link (chippy metal compat, CM-001). The Keraunos-E100
+// view for the source, and for the destination on an Ethernet link (chippy metal compat). The Keraunos-E100
 // spec (v1.0.9, ch. 12) says a CCE issues Grendel system addresses and the HSIO remap translates them; the two have not
 // been reconciled.
 constexpr uint64_t kHsioLocalBase = 0x20000000;
@@ -129,8 +129,7 @@ inline LinkCopy link_copy;
         halt(HaltCode::NocPeerOnOwnTile, peer_tile);
     }
     if (kind == ETH_LINK_KIND_NOC) {
-        // Not repeated per send: txq_busy reads each queue's ack count, and no document says a reset keeps it
-        // (PLAN-0008, hub 62db7e799795-D10).
+        // Not repeated per send: txq_busy reads each queue's ack count, and no document says a reset keeps it.
         reset_cmdbuf<kCmdBuf>();
     }
     link_copy = LinkCopy{.kind = kind, .peer_tile = peer_tile, .latched = true};
@@ -210,8 +209,7 @@ FORCE_INLINE void setup_send(uint32_t q_num, uint32_t dest, uint32_t peer_tile) 
 
 // send_bytes() on the latched NOC link to @p peer_tile, after its fence: a coupled copy on TX queue @p q_num, which
 // must be in range. The command buffer is not reset: the latch reset it once (latch_link()). Out of line, as is
-// noc_send_dword(), so that a send site pays a compare and a call for the NOC path, not its whole sequence (PLAN-0008,
-// hub 62db7e799795-D19).
+// noc_send_dword(), so that a send site pays a compare and a call for the NOC path, not its whole sequence.
 [[gnu::noinline]] inline void noc_send_bytes(
     uint32_t q_num, uint32_t src, uint32_t dest, uint32_t num_bytes, uint32_t peer_tile) {
     const uint32_t vc = noc_req_vc(q_num);
