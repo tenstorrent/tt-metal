@@ -2823,3 +2823,32 @@ def test_slice_rm_width_sharded_subaligned_input_into_preallocated(device):
     ttnn.slice(t, [0, 0, 16, 0], [1, 1, 48, 64], [1, 1, 1, 1], output_tensor=out)
 
     assert_equal(x[:, :, 16:48, :], ttnn.to_torch(out))
+
+
+@pytest.mark.parametrize(
+    "shape, ends",
+    [
+        ([1, 1, 32, 63], [1, 1, 18, 64]),
+        ([1, 1, 30, 64], [1, 1, 32, 64]),
+        ([1, 1, 32, 63], [1, 1, 18, 65]),
+    ],
+)
+def test_slice_rejects_ends_past_logical_shape(shape, ends, device, expect_error):
+    torch_input = torch.ones(shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, pad_value=7.0
+    )
+    with expect_error(RuntimeError, "Ends .* must be less than or equal to the shape of the tensor"):
+        ttnn.slice(tt_input, [0] * len(ends), ends)
+
+
+def test_getitem_clamps_stop_to_logical_shape(device):
+    torch.manual_seed(0)
+    torch_input = torch.randint(-100, 101, (1, 1, 32, 63), dtype=torch.int32).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, pad_value=7.0
+    )
+    got = ttnn.to_torch(tt_input[0:1, 0:1, 0:18, 0:64])
+    want = torch_input[0:1, 0:1, 0:18, 0:64]
+    assert list(got.shape) == list(want.shape)
+    assert torch.equal(got, want)
