@@ -14,6 +14,7 @@ void kernel_main() {
     auto num_tiles_per_core = get_arg(args::num_tiles_per_core);
     auto start_id = get_arg(args::start_id);
     auto Nt = get_arg(args::Nt);
+    auto C = get_arg(args::C);
     auto Ct = get_arg(args::Ct);
 
     // ublocks size defined in tiles
@@ -71,7 +72,7 @@ void kernel_main() {
 
                 uint16_t input_grad_val;
 
-                if (target_val != ignore_index && target_val == static_cast<int32_t>(c)) {
+                if (c < C && target_val != ignore_index && target_val == static_cast<int32_t>(c)) {
                     float output_grad_val = bf16_to_fp32(output_grad_l1_ptr[n]);
 #if defined(WEIGHT)
                     float weight_val = bf16_to_fp32(weight_l1_ptr[target_val]);
