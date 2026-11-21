@@ -18,9 +18,12 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input.is_sharded()) {
         return LayerNormShardedProgramFactory{};
+    }
+    if (LayerNormWidthSplitProgramFactory::select_width_split(operation_attributes, tensor_args)) {
+        return LayerNormWidthSplitProgramFactory{};
     }
     return LayerNormMultiCoreProgramFactory{};
 }
@@ -30,6 +33,16 @@ ttsl::hash::hash_t LayerNormDeviceOperation::compute_program_hash(
     if (tensor_args.input.is_sharded()) {
         return ttsl::hash::hash_objects_with_default_seed(
             ttsl::hash::type_hash<LayerNormDeviceOperation>, operation_attributes, tensor_args);
+    }
+    // Free L1 only decides whether the split is taken; the split itself is a function of the
+    // arguments and the device grid alone, and the program cache is per device, so the arguments
+    // identify its programme. The marker keeps it apart from the interleaved factory's.
+    if (LayerNormWidthSplitProgramFactory::select_width_split(operation_attributes, tensor_args)) {
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<LayerNormDeviceOperation>,
+            operation_attributes,
+            tensor_args,
+            ttsl::hash::type_hash<LayerNormWidthSplitProgramFactory>);
     }
     const auto plan = LayerNormMultiCoreProgramFactory::select_plan(operation_attributes, tensor_args);
     return ttsl::hash::hash_objects_with_default_seed(
