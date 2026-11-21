@@ -83,3 +83,18 @@ DRAM `2 × size`, cross-core 0.
 > split moves the same bytes, and the dependent split (`row_in_tile` across cores) adds one cross-core crossing
 > of the whole tensor. Within the cheapest class the choice is occupancy (step 4), then transfer size (step 1
 > floor).
+
+## Implementation notes (ttnn-implementer, Phase 0)
+
+- Ring ids (`DataflowBufferSpec.unique_id`) are the design's: `cb_row_block`, `cb_tile_block` (tilize),
+  `cb_tile_block_in`, `cb_row_block_out` (untilize), `cb_pages` (identity). Kernel-local binding names are
+  by role: the reader produces `staged_input`, the writer drains `staged_output`, compute consumes
+  `staged_input` and produces `staged_output` (in identity both names bind `cb_pages`). One kernel source
+  thus serves both stream regimes (`regime` compile-time arg); identity uses `to_layout_copy_{reader,writer}.cpp`.
+- Capacities are as in the ledger table: `BUFFER_DEPTH · BLOCK_HEIGHT_TILES · bw · C` entries per stream
+  ring, `BUFFER_DEPTH · COPY_BLOCK_PAGES` for `cb_pages`. No ring was added, merged or removed.
+- With `BLOCK_HEIGHT_TILES > 1` the last row band can be ragged; the reader reserves / the writer waits
+  `band_tile_rows · bw` entries for it. Positions stay multiples of `bw` inside a capacity that is a multiple
+  of `bw`, and ragged bands only follow full ones, so no tile-row straddles the ring end.
+- Data-movement budget unchanged: implemented exactly as in the table above (each stick chunk read once,
+  padding rows zeroed in L1; each tile written once; untilize writes only valid rows).
