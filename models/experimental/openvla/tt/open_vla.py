@@ -42,6 +42,7 @@ import ttnn
 from models.experimental.openvla.tt import tt_optimized_openvla_vision
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table
 from models.tt_transformers.tt.common import (
+    Mode,
     PagedAttentionConfig,
     get_block_size,
     get_padded_prefill_len,
@@ -175,7 +176,22 @@ class PerfCheckpoints:
 CHECKPOINTS = PerfCheckpoints()
 
 
-def map_openvla_hf_to_meta_keys(loaded_weights):
+def permute_hf_to_meta_qk(tensor, head_dim=128):
+    """Permute HuggingFace Q/K weights or biases to Meta format for RoPE compatibility.
+    Matches reverse_permute in models/ttt_compat/tt/load_checkpoints.py.
+    """
+    if tensor.dim() == 2:
+        dim1, dim2 = tensor.shape
+        n_heads = dim1 // head_dim
+        return tensor.view(n_heads, 2, dim1 // n_heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
+    elif tensor.dim() == 1:
+        dim1 = tensor.shape[0]
+        n_heads = dim1 // head_dim
+        return tensor.view(n_heads, 2, dim1 // n_heads // 2, 1).transpose(1, 2).reshape(dim1, 1).squeeze(-1)
+    return tensor
+
+
+def map_openvla_hf_to_meta_keys(loaded_weights, head_dim=128):
     hf_to_meta = {
         # Top level mappings
         "language_model.model.embed_tokens.weight": "tok_embeddings.weight",
@@ -225,6 +241,10 @@ def map_openvla_hf_to_meta_keys(loaded_weights):
 
     meta_state_dict = {}
     for key, tensor in loaded_weights.items():
+        # Apply Q/K weight permutation for RoPE layout
+        if any(qk in key for qk in ["q_proj.weight", "k_proj.weight", "q_proj.bias", "k_proj.bias"]):
+            tensor = permute_hf_to_meta_qk(tensor, head_dim=head_dim)
+
         if key in hf_to_meta:
             # Direct match for top-level keys
             meta_state_dict[hf_to_meta[key]] = tensor
@@ -597,7 +617,7 @@ class OpenVLALanguageModel(GenerationMixin):
     def set_decoder(self, decoder: nn.Module) -> None:
         pass
 
-    def tie_weights(self) -> None:
+    def tie_weights(self, *args, **kwargs) -> None:
         pass
 
     def resize_token_embeddings(
@@ -626,9 +646,7 @@ class OpenVLALanguageModel(GenerationMixin):
     ):
         assert input_ids is None, f"{self.__class__.__name__} does not accept input_ids"
         assert position_ids is None, f"{self.__class__.__name__} does not accept position_ids"
-        assert past_key_values is None, f"{self.__class__.__name__} does not accept past_key_values"
         assert labels is None, f"{self.__class__.__name__} does not accept labels"
-        assert not use_cache, f"{self.__class__.__name__} does not accept use_cache"
         assert not output_attentions, f"{self.__class__.__name__} does not accept output_attentions"
         assert not output_hidden_states, f"{self.__class__.__name__} does not accept output_hidden_states"
         assert return_dict, f"{self.__class__.__name__} does not accept return_dict=False"
@@ -651,8 +669,8 @@ class OpenVLALanguageModel(GenerationMixin):
             inputs_embeds = ttnn.pad(inputs_embeds, [(0, 0), (0, 0), (0, padding), (0, 0)], 0)
 
         tt_rot_mats_prefill_global = [
-            self.model[0].rope_setup.cos_matrix[:, :, : inputs_embeds.shape[2], :],
-            self.model[0].rope_setup.sin_matrix[:, :, : inputs_embeds.shape[2], :],
+            self.model[0].rope_setup.cos_matrix_prefill[:, :, : inputs_embeds.shape[2], :],
+            self.model[0].rope_setup.sin_matrix_prefill[:, :, : inputs_embeds.shape[2], :],
         ]
         page_table_user = self._get_prefill_user_page_table(self.page_table, self.tt_kv_cache[0], seq_len)
         tt_page_table = ttnn.from_torch(
@@ -667,7 +685,7 @@ class OpenVLALanguageModel(GenerationMixin):
             inputs_embeds,
             None,
             rot_mats_global=tt_rot_mats_prefill_global,
-            mode="prefill",
+            mode=Mode.PREFILL,
             page_table=tt_page_table,
             kv_cache=self.tt_kv_cache[0],
             get_last_token=((seq_len - 1) // 32) * 32,
@@ -688,12 +706,16 @@ class OpenVLALanguageModel(GenerationMixin):
         current_pos = torch.tensor([seq_len], dtype=torch.int32)
         # Convert prefilled_token to int32 for TT compatibility
         out_tok = prefilled_token.to(torch.int32).view(1)  # Ensure shape [1] and int32
-        output_toks = []
+        
+        # Action 0 is produced by prefill! Include it at index 0 of output_toks
+        prefill_logits = output_logits.view(1, 1, -1)
+        output_toks = [prefill_logits]
         CHECKPOINTS.checkpoint("end_PREFILL")
         decode_tokens = [prefilled_token.item()]
 
-        # Use cropped page_table_user for decode (same as prefill)
-        for i in range(self.num_actions):
+        # Generate the remaining (num_actions - 1) tokens via decode
+        num_decode_steps = max(0, self.num_actions - 1)
+        for i in range(num_decode_steps):
             # Run decode forward
             # CUse self.tt_kv_cache[0] to match what prefill write to
             # Prefill: model[0].forward(..., kv_cache=self.tt_kv_cache[0], ...)
@@ -718,8 +740,7 @@ class OpenVLALanguageModel(GenerationMixin):
             current_pos += 1
             output_toks.append(logits)
 
-            # FIX: Update out_tok for next decode step (autoregressive!)
-            # This is CRITICAL - each decode step must feed the previous token
+            # Update out_tok for next decode step (autoregressive)
             logits_cpu = logits.cpu().float()
             # logits shape is [1, 1, vocab] - take last position and argmax
             next_token = torch.argmax(logits_cpu[:, -1, :], dim=-1).to(torch.int32)  # [1] shape, int32
@@ -925,11 +946,32 @@ class PrismaticVisionBackbone(nn.Module):
                     custom_preprocessor=tt_optimized_openvla_vision.custom_preprocessor_siglip,
                 )
 
+                # Ensure pos_embed from fused_featurizer is properly converted to TTNN on device
+                pos_embed_tensor = getattr(self.fused_featurizer, "pos_embed", None)
+                if pos_embed_tensor is not None:
+                    pos_embed_tt = ttnn.from_torch(
+                        pos_embed_tensor.to(torch.bfloat16),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=ttnn_device,
+                    )
+                elif hasattr(self.featurize_parameters_2, "pos_embed"):
+                    pos_embed_tt = self.featurize_parameters_2.pos_embed
+                    if isinstance(pos_embed_tt, torch.Tensor):
+                        pos_embed_tt = ttnn.from_torch(
+                            pos_embed_tt, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=ttnn_device
+                        )
+                    elif ttnn.get_layout(pos_embed_tt) != ttnn.TILE_LAYOUT:
+                        pos_embed_tt = ttnn.to_layout(pos_embed_tt, layout=ttnn.TILE_LAYOUT)
+                else:
+                    pos_embed_tt = None
+
                 def siglip_forward_no_norm(x2):
                     output = tt_optimized_openvla_vision.ttnn_featurizer(
                         embedding=lambda x: tt_optimized_openvla_vision.siglip_patch_embeddings(
                             x,
                             parameters=self.featurize_parameters_2.patch_embed.patch_embeddings,
+                            pos_embed=pos_embed_tt,
                         ),
                         encoder=lambda x: tt_optimized_openvla_vision.siglip_encoder(
                             x,
@@ -1107,7 +1149,9 @@ class PrismaticPreTrainedModel(PreTrainedModel):
     @property
     def _supports_sdpa(self) -> bool:
         """Check LLM supports SDPA Attention"""
-        return self.language_model._supports_sdpa
+        if not hasattr(self, "language_model") or self.language_model is None:
+            return True
+        return getattr(self.language_model, "_supports_sdpa", True)
 
 
 class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
@@ -1117,11 +1161,19 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         if config.use_fused_vision_backbone is None:
             raise ValueError("Missing config field `use_fused_vision_backbone`")
 
-        if timm.__version__ not in {"0.9.10", "0.9.11", "0.9.12", "0.9.16", "1.0.22"}:
-            raise NotImplementedError(
-                "TIMM Version must be >= 0.9.10 and < 1.0.0 or == 1.0.22 (breaking); please raise a GitHub Issue "
-                "if you urgently need support for latest TIMM versions."
-            )
+        try:
+            from packaging.version import parse as parse_version
+            v = parse_version(timm.__version__)
+            if v < parse_version("0.9.10"):
+                raise NotImplementedError(
+                    f"TIMM Version must be >= 0.9.10; got {timm.__version__}."
+                )
+        except ImportError:
+            parts = [int(p) for p in timm.__version__.split(".")[:2]]
+            if parts[0] == 0 and parts[1] < 9:
+                raise NotImplementedError(
+                    f"TIMM Version must be >= 0.9.10; got {timm.__version__}."
+                )
 
         if (transformers.__version__ != "4.40.1") or (tokenizers.__version__ != "0.19.1"):
             logger.warning(
@@ -1203,8 +1255,9 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
     def set_decoder(self, decoder: nn.Module) -> None:
         self.language_model.set_decoder(decoder)
 
-    def tie_weights(self) -> None:
-        self.language_model.tie_weights()  # Note: `Llama-2` and `Mistral` don't tie weights (no-op)
+    def tie_weights(self, *args, **kwargs) -> None:
+        if hasattr(self, "language_model") and self.language_model is not None:
+            self.language_model.tie_weights(*args, **kwargs)
 
     def resize_token_embeddings(
         self, new_num_tokens: Optional[int] = None, pad_to_multiple_of: Optional[int] = None
@@ -1657,16 +1710,22 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
         return self.norm_stats[unnorm_key]["action"]
 
 
+def _get_openvla_device_params():
+    mesh_sku = os.environ.get("MESH_DEVICE", "N150")
+    is_multi = mesh_sku in ["N300", "N150x4", "T3K", "TG", "P300", "P150x4", "P150x8"]
+    params = {
+        "trace_region_size": 30000000,
+        "num_command_queues": 1,
+        "l1_small_size": 81920,
+    }
+    if is_multi:
+        params["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
+    return params
+
+
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 30000000,
-            "num_command_queues": 1,
-            "l1_small_size": 81920,
-        }
-    ],
+    [_get_openvla_device_params()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -1700,14 +1759,7 @@ def test_language_model(mesh_device, prompt):
 
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 30000000,
-            "num_command_queues": 1,
-            "l1_small_size": 81920,
-        }
-    ],
+    [_get_openvla_device_params()],
     indirect=True,
 )
 @pytest.mark.parametrize(
