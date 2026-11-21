@@ -824,11 +824,12 @@ struct SenderChannelStates {
     }
 };
 
-// The forwarding channels in MASK that hold a packet (their free-slots registers, `registers`) or have packets in
-// flight (`channels_in_flight`), lowest channel first. Both tests expect no work, so a channel without work is passed
-// by falling through and only the channel with work is reached by a taken branch (one per channel visited).
+// The forwarding channels in MASK that hold a packet (their free-slots registers, `registers`), lowest channel first,
+// each tested on its own register: no combined test first, so a channel's test needs only its own register (the pass's
+// later registers may still be landing) and a forwarded packet is reached by one branch off the idle pass's path (a
+// combined test first made it two: two mispredicts). Each test expects no packet, so the idle pass falls through.
 template <uint32_t MASK, typename Registers, typename Remote>
-FORCE_INLINE void visit_forwarding_channels(
+FORCE_INLINE void visit_forwarding_channels_holding(
     SenderChannelStates& states,
     const Registers& registers,
     uint32_t& channels_in_flight,
@@ -836,23 +837,40 @@ FORCE_INLINE void visit_forwarding_channels(
     bool& send_yielded) {
     if constexpr (MASK != 0) {
         constexpr size_t CH = lowest_bit(MASK);
-        SenderChannelState<CH>& state = states.forwarding.template get<CH>();
         if (__builtin_expect(registers.template holds_packet<CH>(), 0)) {
-            visit_channel_with_work<CH>(state, channels_in_flight, /*has_packet=*/true, remote, send_yielded);
-        } else if (__builtin_expect(((channels_in_flight >> CH) & 1u) != 0, 0)) {
-            visit_channel_with_work<CH>(state, channels_in_flight, /*has_packet=*/false, remote, send_yielded);
+            visit_channel_with_work<CH>(
+                states.forwarding.template get<CH>(), channels_in_flight, /*has_packet=*/true, remote, send_yielded);
         }
-        visit_forwarding_channels<without_lowest_bit(MASK)>(
+        visit_forwarding_channels_holding<without_lowest_bit(MASK)>(
             states, registers, channels_in_flight, remote, send_yielded);
     }
 }
 
+// The forwarding channels in MASK that held no packet but had packets in flight as the forwarding visits started
+// (`in_flight`): their completions (and acks). (A channel that held a packet took them in its visit.)
+template <uint32_t MASK, typename Registers, typename Remote>
+FORCE_INLINE void visit_forwarding_channels_in_flight(
+    SenderChannelStates& states,
+    const Registers& registers,
+    uint32_t in_flight,
+    uint32_t& channels_in_flight,
+    Remote& remote,
+    bool& send_yielded) {
+    if constexpr (MASK != 0) {
+        constexpr size_t CH = lowest_bit(MASK);
+        if (((in_flight >> CH) & 1u) != 0 && !registers.template holds_packet<CH>()) {
+            visit_channel_with_work<CH>(
+                states.forwarding.template get<CH>(), channels_in_flight, /*has_packet=*/false, remote, send_yielded);
+        }
+        visit_forwarding_channels_in_flight<without_lowest_bit(MASK)>(
+            states, registers, in_flight, channels_in_flight, remote, send_yielded);
+    }
+}
+
 // VC's channels against its remote receiver progress (`remote`), from their free-slots registers (`registers`): its
-// forwarding channels, skipped with one combined test when none holds a packet or has packets in flight, then its
 // worker channel (visited every pass where VC is the loop-local VC, otherwise when it holds a packet or has packets in
-// flight). Forwarding first: their test needs only their registers (read first), not the worker channel's register or
-// the connection semaphore, so a forwarded packet is reached without waiting on those reads or passing the worker
-// channel's tests; the worker channel's test then costs one predicted branch more.
+// flight), then its forwarding channels: those holding a packet, each on its own test, then (behind one test) those
+// with packets in flight only.
 template <size_t VC, typename Remote, typename Registers>
 FORCE_INLINE void visit_channels(
     SenderChannelStates& states,
@@ -872,8 +890,12 @@ FORCE_INLINE void visit_channels(
         }
     }
     if constexpr (forwarding != 0) {
-        if (__builtin_expect(registers.template any_with_work<forwarding>(channels_in_flight), 0)) {
-            visit_forwarding_channels<forwarding>(states, registers, channels_in_flight, remote, send_yielded);
+        // Packets in flight as the forwarding visits start (a visit that sends sets its channel's bit).
+        const uint32_t in_flight = channels_in_flight & forwarding;
+        visit_forwarding_channels_holding<forwarding>(states, registers, channels_in_flight, remote, send_yielded);
+        if (__builtin_expect(in_flight != 0, 0)) {
+            visit_forwarding_channels_in_flight<forwarding>(
+                states, registers, in_flight, channels_in_flight, remote, send_yielded);
         }
     }
 }
