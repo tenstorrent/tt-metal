@@ -85,6 +85,19 @@ def test_a_tt_metal_program_follows(device):
     _exact(ttnn.operations.slice.slice(x2, (0, 0, 0), (1, 64, 8400)), t2[:, 0:64, :])
 
 
+@pytest.mark.parametrize("threads", [(1, 1), (2, 2)], ids=lambda p: "R%dW%d" % p)
+def test_a_tt_metal_program_follows_explicit_sync(device, threads):
+    """The explicit-sync path (row-major pages over 8 KiB: YOLO's traced [1, 144, 8400] call) followed by
+    tt-metal's tilize and untilize in the same session: its user-trid transfers must leave nothing behind."""
+    torch.manual_seed(4)
+    t = torch.randn((1, 144, 8400), dtype=torch.bfloat16)
+    x = _to_device(device, t, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG)
+    assert uses_explicit_sync(x.buffer_aligned_page_size())
+    out = _slice(x, [0, 64, 0], [1, 144, 8400], threads=threads)
+    tiled = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+    _exact(ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT), t[:, 64:144, :])
+
+
 @pytest.mark.parametrize("mem", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 def test_output_in_the_inputs_buffer(device, mem):
     """R7: the output is interleaved in the input's buffer type."""

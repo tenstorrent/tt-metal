@@ -39,3 +39,12 @@ Tier = the input's buffer (DRAM, or L1 banks for an L1 input); the output is in 
 **Totals per tier:** read `num_out_pages × entry_bytes` + write `num_out_pages × entry_bytes` in the input's tier; 0 cross-core (no combine, no multicast). Above the logical minimum (`2 × output elements × elem_bytes`) only by RM row alignment pads (< 64 B per row in DRAM, < 16 B in L1) and by TILE padding inside the output's edge tiles, which the output must hold anyway. Example, `[1,144,8400]` RM DRAM rows 64–144: 80 × 16,832 = 1,346,560 B read + 1,346,560 B written.
 
 > Cheapest-traffic split considered: contiguous `out_page` ranges over the full grid — every candidate split (by plane, by page row, by tile-column) moves exactly the same bytes, since no operand is shared and there is no dependent axis to combine. Implemented: contiguous `out_page` ranges, which is the cheapest (tied) and the only one that fills the grid on every INPUTS shape. Nothing deferred on traffic grounds.
+
+## Verifier audit (Phase 0)
+
+- **Currency**: one DFB declared (`slice_pages`, `entry_size = input.buffer_aligned_page_size()`, `num_entries = RING_DEPTH_BLOCKS × block_pages`), one row here; expressions match `slice_program_artifacts.py`. The explicit-sync path adds no buffer; its per-hart batch `thread_block_pages = block_pages / max(R, W)` is derived from the same `block_pages` (single source).
+- **Capacity vs live set**: equal by construction. Over-direction finding, not fixed in place: `block_pages = ceil(max_core_pages / 2)` makes the ring span the busiest core's whole share (up to the 1 MiB cap), so the live set is chosen to be the core's share, not a fixed streaming window; on the implicit path the ISR credits half the ring per batch, so the writer starts only after half the core's pages have landed. Bounded (≤ 1 MiB, ≤ 1.7 % of the budget on INPUTS), so no OOM risk; folded into the first perf refinement (op_requirements.md Refinement 3: cap `block_pages` independently of the share). Under direction: none (one axis, spanned by a capacity that scales with it).
+- **Page format vs DEST**: n/a — payload is dataflow-only, never through DEST (confirmed: no compute kernel).
+- **Disjoint lifetimes**: n/a — one buffer.
+- **Bounds**: every symbol bounded (`entry_bytes ≤ 65,536` by validate, `block_pages ≤ block_pages_cap`), total closed-form.
+- **Traffic budget**: consistent with the implemented split (read once, write once, no cross-core); cheapest split implemented (all candidate splits tie on bytes).

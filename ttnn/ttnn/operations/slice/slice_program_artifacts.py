@@ -48,7 +48,7 @@ NOC_MAX_BURST_BYTES = 65_536
 # (tests/ttnn/unit_tests/operations/slice/probes/). Larger pages take the ring's explicit protocol.
 IMPLICIT_SYNC_MAX_ENTRY_BYTES = 8 * 1024
 
-RING = "slice_pages"
+RING = "slice_pages"  # the DFB's unique id and its kernel-side accessor name (`dfb::slice_pages`)
 PAGE_MAP_RANK = 4
 
 
@@ -193,7 +193,7 @@ def create_program_artifacts(input_tensor, output, start, *, threads=DM_THREAD_P
         source=str(KERNEL_DIR / "slice_reader.cpp"),
         hw_config=_dm_config(E.create_reader_datamovement_config, explicit_sync),
         num_threads=R,
-        dfb_bindings=[E.producer_of(RING, "slice_pages")],
+        dfb_bindings=[E.producer_of(RING, RING)],
         tensor_bindings=[E.TensorBinding(tensor_parameter_name="input", accessor_name="input")],
         compile_time_args={"reader_threads": R, "explicit_sync": int(explicit_sync)},
         runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(
@@ -210,7 +210,7 @@ def create_program_artifacts(input_tensor, output, start, *, threads=DM_THREAD_P
         source=str(KERNEL_DIR / "slice_writer.cpp"),
         hw_config=_dm_config(E.create_writer_datamovement_config, explicit_sync),
         num_threads=W,
-        dfb_bindings=[E.consumer_of(RING, "slice_pages")],
+        dfb_bindings=[E.consumer_of(RING, RING)],
         tensor_bindings=[E.TensorBinding(tensor_parameter_name="output", accessor_name="output")],
         compile_time_args={"writer_threads": W, "explicit_sync": int(explicit_sync)},
         runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(
