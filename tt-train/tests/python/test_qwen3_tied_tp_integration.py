@@ -210,6 +210,8 @@ def _run_leg(tie, state_dict, ids_torch, targets_np, mask):
 
     params = model.parameters()
     lm_name = next(n for n in params if n.endswith("lm_head/weight"))
+    # Every RMSNorm weight is replicated: one row per device, which must all be equal after the backward.
+    norm_grads = {n: _gather(params[n].get_grad_tensor(), 0) for n in params if "norm" in n}
     emb_name = next((n for n in params if n.endswith("embed_tokens/weight")), None)
 
     out = {
@@ -221,6 +223,9 @@ def _run_leg(tie, state_dict, ids_torch, targets_np, mask):
         "lm_weight": _gather(params[lm_name], 2)[0, 0],
         "lm_grad": _gather(params[lm_name].get_grad_tensor(), 2)[0, 0],
         "vocab_param_names": sorted(n for n in params if "embed_tokens" in n or "lm_head" in n),
+        "norm_grads": {
+            n: (float(np.abs(g - g[:1]).max()), float(np.abs(g).max())) for n, g in norm_grads.items()
+        },  # (largest difference between devices, largest gradient)
     }
     if emb_name is not None:
         # FeatureParallelEmbedding is sharded on dim 3 (hidden), not dim 2.
@@ -361,3 +366,15 @@ def test_tied_backward_matches_untied_reference(legs):
     )
 
     np.testing.assert_allclose(grad_tied, grad_embed + grad_head, rtol=2e-2, atol=1e-4)
+
+
+def test_replicated_norm_gradients_agree_across_tp(legs):
+    """A replicated parameter must end the backward with one gradient, equal on every device, or its copies train
+    apart. The QK-norm weights normalize only each device's own heads, so the attention has to sum their gradient
+    across TP (#65654); the layer and final norms see whole hidden states and agree without it."""
+    for leg in ("tied", "untied"):
+        grads = legs[leg]["norm_grads"]
+        q_norm = next(n for n in grads if n.endswith("self_attn/q_norm/weight"))
+        assert grads[q_norm][1] > 0, f"{leg}: the QK-norm weight received no gradient"
+        differ = {n: spread for n, (spread, _) in grads.items() if spread != 0.0}
+        assert not differ, f"{leg}: the devices hold different gradients for {differ}"

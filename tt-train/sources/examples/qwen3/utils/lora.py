@@ -33,6 +33,7 @@ import warnings
 import torch
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter
+from ttml.modules.lora import lora_b_layout
 
 from ttml.models.qwen3.weights import torch_to_ttml
 from .tensor_utils import (
@@ -120,6 +121,7 @@ class LoRALinearProjection(AbstractModuleBase):
         self.scaling = alpha / rank
         self.lora_A = Parameter(torch_to_ttml(torch.randn(1, 1, rank, in_features) * (1.0 / math.sqrt(rank))))
         self.lora_B = Parameter(torch_to_ttml(torch.zeros(1, 1, out_features, rank)))
+        self.lora_B.checkpoint_layout = lora_b_layout(base_layer.weight)
 
     def forward(self, x):
         base_out = self.base_layer(x)
@@ -150,6 +152,8 @@ class LoRAColumnParallelLinear(AbstractModuleBase):
         self.scaling = alpha / rank
         self.lora_A = Parameter(make_dist_replicated_weight((1, 1, rank, in_features), std=1.0 / math.sqrt(rank)))
         self.lora_B = Parameter(make_dist_sharded_zeros((1, 1, out_features, rank), 2, self.shard_dim))
+        # On a fused base layer (kv_proj) lora_B's rows follow the same per-shard order as the base output's.
+        self.lora_B.checkpoint_layout = lora_b_layout(base_layer.weight)
 
     def forward(self, x):
         x_b = ttml.ops.distributed.broadcast(x, self.shard_dim)
@@ -186,6 +190,7 @@ class LoRARowParallelLinear(AbstractModuleBase):
             make_dist_sharded_weight((1, 1, rank, in_features), 3, self.shard_dim, std=1.0 / math.sqrt(rank))
         )
         self.lora_B = Parameter(make_dist_replicated_zeros((1, 1, out_features, rank)))
+        self.lora_B.checkpoint_layout = lora_b_layout(base_layer.weight)
 
     def forward(self, x):
         base_out = self.base_layer(x)

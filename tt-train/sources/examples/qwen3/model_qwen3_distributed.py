@@ -17,7 +17,8 @@ TP strategy (Megatron-LM / C++ DistributedLlama):
                           vectors.  No weight all-gather; only hidden-dim
                           communication.  Shares the ColumnParallel LM-head
                           weight (see DistributedQwen3Model).
-  - Norms (QK, layer, final): Replicated
+  - Norms (QK, layer, final): Replicated (the QK norms see only each device's
+                          heads, so their grads are summed across TP)
   - LM head:             Always ColumnParallel with vocab-sharded output
                           (paired with vocab_parallel_cross_entropy_loss)
                           in both tied and untied modes
@@ -131,6 +132,7 @@ class ColumnParallelLinear(AbstractModuleBase):
         out_features,
         has_bias=False,
         shard_dim=None,
+        fused_segments=None,
     ):
         super().__init__()
         self.shard_dim = shard_dim
@@ -140,6 +142,14 @@ class ColumnParallelLinear(AbstractModuleBase):
             self.col_bias = Parameter(make_sharded_zeros((1, 1, 1, out_features), 3, shard_dim))
         else:
             self.col_bias = None
+        # A fused weight ([K | V]) is laid out per TP shard, so its global row order depends on the TP size; the
+        # global segment sizes let ttml.distributed_checkpointing reshard it across TP sizes (and check them when it
+        # plans a checkpoint).
+        if fused_segments is not None:
+            fused_segments = tuple(int(s) for s in fused_segments)
+            self.weight.checkpoint_layout = {"fused": (2, fused_segments)}
+            if self.col_bias is not None:
+                self.col_bias.checkpoint_layout = {"fused": (3, fused_segments)}
 
     def forward(self, x):
         x = ttml.ops.distributed.broadcast(x, self.shard_dim)
@@ -239,6 +249,7 @@ class DistributedQwen3Attention(AbstractModuleBase):
             2 * kv_out,
             has_bias=config.attention_bias,
             shard_dim=shard_dim,
+            fused_segments=(kv_out, kv_out),
         )
         self.o_proj = RowParallelLinear(
             q_out,
@@ -252,6 +263,13 @@ class DistributedQwen3Attention(AbstractModuleBase):
         self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
 
         self.rope_params = rope_params
+
+    def _qk_norm(self, norm, heads):
+        """``norm`` over this device's heads. Its weight is replicated, but each device normalizes only its own heads,
+        so the weight's gradient here is a partial sum over the local heads; ``broadcast`` is the identity forward
+        and all-reduces the gradient across TP backward, leaving every device the full gradient (#65654)."""
+        weight = ttml.ops.distributed.broadcast(norm.weight.tensor, self.shard_dim)
+        return ttml.ops.rmsnorm.rmsnorm(heads, weight, norm.eps)
 
     def forward(
         self,
@@ -270,8 +288,8 @@ class DistributedQwen3Attention(AbstractModuleBase):
         ) = ttml.ops.multi_head_utils.grouped_heads_creation(q, kvs, self.num_local_heads, self.num_local_kv_heads)
 
         # Per-head QK-Norm, before RoPE (matches HF Qwen3 ordering). V is left unnormed.
-        query_heads = self.q_norm(query_heads)
-        key_heads = self.k_norm(key_heads)
+        query_heads = self._qk_norm(self.q_norm, query_heads)
+        key_heads = self._qk_norm(self.k_norm, key_heads)
 
         query_heads = ttml.ops.rope.rope(query_heads, self.rope_params, position_offset)
         key_heads = ttml.ops.rope.rope(key_heads, self.rope_params, position_offset)
@@ -387,6 +405,8 @@ class DistributedQwen3Model(AbstractModuleBase):
                 weight_init=sharded_weight_init(3),
                 axis_name="tp",
             )
+            # Its rows are padded to a TP-dependent size; the logical row count lets checkpoints reshard across TP sizes.
+            self.embed_tokens.weight.checkpoint_layout = {"logical_extent": (2, config.vocab_size)}
         rope_params = build_rope_params_from_config(config, config.head_dim)
         self.layers = ModuleList(
             [DistributedQwen3DecoderLayer(config, i, rope_params, shard_dim) for i in range(config.num_hidden_layers)]
@@ -453,6 +473,10 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
             has_bias=False,
             shard_dim=shard_dim,
         )
+        # Tied to the embedding, the head is padded to a multiple of 32 * tp_size rows, so its padded extent depends on
+        # the TP size and the logical row count lets checkpoints reshard across it. Untied it is not padded, and the
+        # declaration is a no-op.
+        self.lm_head.weight.checkpoint_layout = {"logical_extent": (2, config.vocab_size)}
 
         self.model = DistributedQwen3Model(
             config,
