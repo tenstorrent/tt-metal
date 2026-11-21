@@ -56,6 +56,7 @@ void not_equal_zero_init();
 void power_init();
 void prelu_init();
 void relu_max_init();
+void relu_min_init();
 void reshuffle_rows_init();
 void right_shift_init();
 void selu_init();
@@ -204,6 +205,8 @@ inline void llk_math_eltwise_unary_sfpu_init() {
         sfpu::prelu_init();
     } else if constexpr (sfpu_op == SfpuType::relu_max) {
         sfpu::relu_max_init();
+    } else if constexpr (sfpu_op == SfpuType::relu_min) {
+        sfpu::relu_min_init();
     } else if constexpr (sfpu_op == SfpuType::reshuffle_rows) {
         sfpu::reshuffle_rows_init();
     } else if constexpr (sfpu_op == SfpuType::right_shift) {
