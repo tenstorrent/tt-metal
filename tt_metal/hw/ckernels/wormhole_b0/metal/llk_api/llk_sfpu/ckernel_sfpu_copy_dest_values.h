@@ -14,10 +14,19 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
+// SFPLOAD/SFPSTORE mode for a Dest-to-Dest copy: the opaque integer mode of the Dest word's width, so the bits move
+// unchanged. The format's own mode (GetSfpLoadStoreInstrMod) converts, and SFPSTORE flushes denormals to zero.
+template <DataFormat DATA_FORMAT, bool is_fp32_dest_acc_en>
+constexpr InstrModLoadStore GetSfpCopyInstrMod() {
+    constexpr bool is_32bit_format = DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Tf32 ||
+                                     DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32;
+    return (is_fp32_dest_acc_en || is_32bit_format) ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
+}
+
 // Generalized copy_dest_value that works with any DataFormat
-template <DataFormat DATA_FORMAT, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <DataFormat DATA_FORMAT, bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void copy_dest_value(const uint dst_index_in, const uint dst_index_out, const uint /* unused */) {
-    constexpr InstrModLoadStore instr_mod_index = GetSfpLoadStoreInstrMod<DATA_FORMAT>();
+    constexpr InstrModLoadStore instr_mod_index = GetSfpCopyInstrMod<DATA_FORMAT, is_fp32_dest_acc_en>();
     // size of each tile in Dest is 64 rows
     constexpr uint dst_tile_size = 64;
     for (int d = 0; d < ITERATIONS; d++) {

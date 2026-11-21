@@ -2612,7 +2612,7 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             copy_dest_value,
-            (copy_format, APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            (copy_format, APPROXIMATION_MODE, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
             dst_index_in1,
             dst_index_out,
             0 /*unused*/,
