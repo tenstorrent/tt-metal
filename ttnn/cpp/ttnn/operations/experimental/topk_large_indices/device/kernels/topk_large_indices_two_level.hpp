@@ -144,6 +144,14 @@ constexpr uint32_t ready_flags_bytes = max_local_rows * max_row_units * sizeof(u
 constexpr uint32_t ready_flag_offset(uint32_t local_row, uint32_t part) {
     return (local_row * max_row_units + part) * sizeof(uint32_t);
 }
+// After the done words, in the same CB: a word where the claim marks' atomics return (see the reader's claims), then on
+// the coordinator a bit per unit, set by the core that takes the unit's claim (as many bits as units, at most
+// max_local_rows * max_row_units per core).
+constexpr uint32_t mark_return_offset = ready_flags_bytes;
+constexpr uint32_t marks_offset = ready_flags_bytes + 64;
+constexpr uint32_t ready_cb_bytes(uint32_t num_cores) {
+    return marks_offset + div_up(num_cores * max_local_rows * max_row_units, 512) * 64;
+}
 struct RowOwner {
     uint32_t core;
     uint32_t local_row;

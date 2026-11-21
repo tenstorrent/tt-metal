@@ -494,8 +494,13 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         }
         // The mode and search length, then a header per item (see topk_two_level::header_row).
         create_cb(cb_writer_mailbox, 4, 64, tt::DataFormat::UInt32);
-        // A done word per phase-1 unit of this core's rows (see topk_two_level::ready_flag_offset).
-        create_cb(cb_ready_flags, 1, topk_two_level::ready_flags_bytes, tt::DataFormat::UInt32);
+        // A done word per phase-1 unit of this core's rows (see topk_two_level::ready_flag_offset), then the claim
+        // marks (see topk_two_level::marks_offset).
+        create_cb(
+            cb_ready_flags,
+            1,
+            topk_two_level::ready_cb_bytes(static_cast<uint32_t>(cores.size())),
+            tt::DataFormat::UInt32);
     }
     // unit: on the coordinator, the next phase-1 unit to claim. claim: where a core's claims return the counter; it
     // starts at 0xFFFFFFFF, which no claim returns.

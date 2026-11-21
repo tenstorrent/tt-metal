@@ -114,7 +114,7 @@ __attribute__((noinline)) void gather_read(uint32_t src, uint32_t dst, uint32_t 
 // A non-posted atomic add to `target` on command buffer `cmd_buf`, returning the old value to `return_word` (see
 // two_level_run on what that value is worth), and the wait for its acknowledgement. Out of line, like gather_read.
 __attribute__((noinline)) void atomic_add(
-    uint8_t noc_id, uint32_t cmd_buf, uint64_t target, uint32_t increment, uint32_t return_word) {
+    uint8_t noc_id, uint32_t cmd_buf, uint64_t target, uint32_t increment, uint32_t return_word, bool wait = true) {
     noc_fast_atomic_increment<noc_mode, true>(
         noc_id,
         cmd_buf,
@@ -125,7 +125,29 @@ __attribute__((noinline)) void atomic_add(
         false /*linked*/,
         false /*posted*/,
         return_word);
-    noc_async_atomic_barrier(noc_id);
+    if (wait) {
+        noc_async_atomic_barrier(noc_id);
+    }
+}
+
+// An atomic add on the register-write buffer, returning the old value (see the claims in two_level_run). Out of line:
+// the schedule calls it at several sites.
+__attribute__((noinline)) uint32_t aux_atomic_add(uint8_t noc_id, uint64_t target, uint32_t increment) {
+    const uint32_t rows_word = get_semaphore(get_named_compile_time_arg_val("tl_rows_return_sem"));
+    atomic_add(noc_id, write_reg_cmd_buf, target, increment, rows_word);
+    invalidate_l1_cache();
+    return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows_word);
+}
+
+// A word of another core's L1, read over the NoC through this core's scratch semaphore (a 16 B slot). A NoC read
+// keeps its source's offset within 16 B, so the read is of the word's aligned 16 B.
+__attribute__((noinline)) uint32_t read_word(uint8_t noc_id, uint64_t addr) {
+    auto* scratch =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_named_compile_time_arg_val("tl_scratch_sem")));
+    noc_async_read(addr & ~uint64_t{15}, reinterpret_cast<uint32_t>(scratch), 16, noc_id);
+    noc_async_read_barrier(noc_id);
+    invalidate_l1_cache();
+    return scratch[(addr >> 2) & 3];
 }
 
 // Stage 3's gather: the selected blocks table[0 .. 64 * num_chunks) of `row` into num_chunks 2048-key candidate
@@ -290,6 +312,9 @@ constexpr uint32_t repair_after = 200000;
 // Wall-clock ticks (about 10 us) between looks at the claimed count while a streamed stage 2 waits for a unit not yet
 // claimed (see two_level_stage2).
 constexpr uint32_t claim_poll = 13500;
+// Claims (about 200 us of them on 108 cores, longer on fewer) after which a unit of a core's rows still not done counts
+// as lost while units remain (see two_level_run).
+constexpr uint32_t lost_lag = 1024;
 
 // From this search length, on at least 3 * wave_rows cores, a row of the last phase-1 wave can stream its stage 2
 // while units are still unclaimed (see two_level_run). Below it the other cores may all be sorting rows meanwhile, and
@@ -364,6 +389,8 @@ FORCE_INLINE void two_level_stage2(
     uint32_t row,
     const volatile tt_l1_ptr uint32_t* done_words,
     const topk_two_level::Units& units,
+    uint32_t first_unit,
+    uint32_t unit_stride,
     const ClaimedCount& claimed_count) {
     using namespace topk_two_level;
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
@@ -390,7 +417,7 @@ FORCE_INLINE void two_level_stage2(
                 invalidate_l1_cache();
                 if (done_words[parts_seen] == 0) {
                     const uint32_t now = get_timestamp_32b();
-                    if (units.unit_of(row, parts_seen) >= claims) {
+                    if (first_unit + parts_seen * unit_stride >= claims) {
                         if (now - since > claim_poll) {
                             claims = claimed_count();
                             since = get_timestamp_32b();
@@ -399,6 +426,16 @@ FORCE_INLINE void two_level_stage2(
                     }
                     if (now - since <= repair_after) {
                         continue;
+                    }
+                    // Before the counter ran out other cores claim; once it has, their scan does a lost unit sooner
+                    // than here, so the wait starts again.
+                    if (claims < units.total) {
+                        const uint32_t count = claimed_count();
+                        if (count >= units.total) {
+                            claims = count;
+                            since = get_timestamp_32b();
+                            continue;
+                        }
                     }
                     repairs |= 1u << (parts_seen - chunk * (chunk_maxima / unit_maxima));
                 }
@@ -519,17 +556,40 @@ FORCE_INLINE void two_level_run(
         } while (get_timestamp_32b() - start < claim_timeout);
         return false;
     };
-    const uint32_t rows_word = get_semaphore(get_named_compile_time_arg_val("tl_rows_return_sem"));
-    const auto* rows_returned = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows_word);
     const uint32_t local_coordinate =
         static_cast<uint32_t>(NOC_XY_ADDR(my_x[noc.get_noc_id()], my_y[noc.get_noc_id()], 0) >> NOC_ADDR_COORD_SHIFT) &
         NOC_COORDINATE_MASK;
     const auto aux_add = [&](uint64_t target, uint32_t increment) {
-        atomic_add(noc.get_noc_id(), write_reg_cmd_buf, target, increment, rows_word);
-        invalidate_l1_cache();
-        return *rows_returned;
+        return aux_atomic_add(noc.get_noc_id(), target, increment);
     };
     const auto rows_add = [&](uint32_t increment) { return aux_add(rows_counter, increment); };
+    const uint64_t cleared_count = get_noc_addr(
+        get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_x),
+        get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_y),
+        get_semaphore(get_named_compile_time_arg_val("tl_cleared_sem")),
+        noc.get_noc_id());
+    // The claim marks: the core that takes a unit's claim sets its bit on the coordinator, once the coordinator has
+    // cleared them (counted in the cleared count). The atomic's value returns to mark_return, never read. A value
+    // delivered to two cores carries into the next unit's bit: that unit is done twice, and the next one, if lost, is
+    // left to its owner's repair.
+    const uint64_t marks = counter - get_semaphore(get_named_compile_time_arg_val("tl_unit_sem")) +
+                           reinterpret_cast<uint32_t>(flags) + marks_offset;
+    bool marks_cleared = false;
+    const auto mark = [&](uint32_t unit) {
+        if (unit >= units.total) {
+            return;
+        }
+        while (!marks_cleared) {
+            marks_cleared = read_word(noc.get_noc_id(), cleared_count) >= num_cores;
+        }
+        atomic_add(
+            noc.get_noc_id(),
+            write_reg_cmd_buf,
+            marks + unit / 32 * sizeof(uint32_t),
+            1u << (unit % 32),
+            reinterpret_cast<uint32_t>(flags) + mark_return_offset,
+            false);
+    };
     const bool capped = !has_block_max && row_cap < num_cores;
     if constexpr (!has_block_max) {
         // The atomic sets the return address's low word; the rest points it at this core.
@@ -537,17 +597,14 @@ FORCE_INLINE void two_level_run(
         NOC_CMD_BUF_WRITE_REG(noc.get_noc_id(), write_reg_cmd_buf, NOC_RET_ADDR_COORDINATE, local_coordinate);
         // Clear this run's done words, then count this core on the coordinator; no writer sends a done word before
         // every core is counted.
-        for (uint32_t word = 0; word < ready_flags_bytes / sizeof(uint32_t); ++word) {
+        // The coordinator (core 0) also clears the claim marks.
+        const uint32_t clear_words =
+            core_index == 0 ? marks_offset / sizeof(uint32_t) + div_up(units.total, 32) : ready_flags_bytes / 4;
+        for (uint32_t word = 0; word < clear_words; ++word) {
             flags[word] = 0;
         }
-        wait_l1_store(reinterpret_cast<uint32_t>(&flags[ready_flags_bytes / sizeof(uint32_t) - 1]));
-        aux_add(
-            get_noc_addr(
-                get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_x),
-                get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_y),
-                get_semaphore(get_named_compile_time_arg_val("tl_cleared_sem")),
-                noc.get_noc_id()),
-            1);
+        wait_l1_store(reinterpret_cast<uint32_t>(&flags[clear_words - 1]));
+        aux_add(cleared_count, 1);
     }
     // A local row is ready when its first per_row done words are nonzero; complete_parts[r] counts those seen so far.
     uint8_t complete_parts[max_local_rows] = {};
@@ -559,26 +616,53 @@ FORCE_INLINE void two_level_run(
         complete_parts[local_row] = part;
         return part == units.per_row;
     };
-    const auto local_row_index = [&](uint32_t local_row) {
+    const auto row_of = [&](uint32_t local_row) {
         return split_owner && local_row == local_whole_rows
                    ? split_row
                    : whole_row_of(
                          core_index, local_row, whole_rows, split_rows, num_cores, extra_rows_first(search_len));
     };
-    // The coordinator's counter, read over the NoC: the number of units claimed so far, or more.
-    const auto read_counter = [&]() {
-        auto* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            get_semaphore(get_named_compile_time_arg_val("tl_scratch_sem")));
-        noc_async_read(counter, reinterpret_cast<uint32_t>(scratch), sizeof(uint32_t), noc.get_noc_id());
-        noc_async_read_barrier(noc.get_noc_id());
-        invalidate_l1_cache();
-        return *scratch;
+    // This core's rows, by local row: at most max_local_rows with a phase 1, any number with the caller's maxima. With
+    // a phase 1, a row's units are row_unit[r] + part * unit_stride[r].
+    uint32_t row_index[max_local_rows];
+    uint32_t row_unit[max_local_rows];
+    uint32_t unit_stride[max_local_rows];
+    if constexpr (!has_block_max) {
+        for (uint32_t local_row = 0; local_row < local_rows; ++local_row) {
+            row_index[local_row] = row_of(local_row);
+            row_unit[local_row] = units.unit_of(row_index[local_row], 0);
+            unit_stride[local_row] = units.unit_of(row_index[local_row], 1) - row_unit[local_row];
+        }
+    }
+    const auto local_row_index = [&](uint32_t local_row) {
+        if constexpr (has_block_max) {
+            return row_of(local_row);
+        }
+        return row_index[local_row];
     };
+    // The coordinator's counter, read over the NoC: the number of units claimed so far, or more.
+    const auto read_counter = [&]() { return read_word(noc.get_noc_id(), counter); };
     // The idle time since this core last had work, for the repair.
     bool idle = false;
     uint32_t idle_since = 0;
     bool repairing = false;
     uint32_t repair_next = 0;
+    // The scan for lost units (see the claim marks): from claim_poll after a core sees the counter run out, it reads
+    // the marks of two slices of slice_words words, its own and the one of the core half the grid away, so another core
+    // scans the slices of a core still busy with its rows. A unit there without its mark was claimed with its value
+    // lost (or still landing), and is done here. Bits past the last unit read as units past it, which are skipped. A
+    // core with nothing else to do waits for its scan until repair_after.
+    uint32_t exhausted_at = 0;
+    const uint32_t slice_words = div_up(div_up(units.total, 32), num_cores);
+    const uint32_t scan_words = 2 * slice_words;
+    uint32_t scan_next = 0;
+    uint32_t scan_word = 0;
+    uint32_t scan_bits = 0;
+    // Without tl_early_halves nothing may come between the split row's stage 2 and the end header (the compute's split
+    // ends on a unit): from then on this core takes no unit.
+    bool closed = false;
+    // Per local row, the last part this core did as lost while units remained.
+    uint8_t early_part[max_local_rows] = {0xFF, 0xFF, 0xFF, 0xFF};
     CircularBuffer table_cb(get_named_compile_time_arg_val("tl_cb_table"));
     const auto* half_pages =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_named_compile_time_arg_val("tl_half_sem")));
@@ -661,9 +745,8 @@ FORCE_INLINE void two_level_run(
                     if ((done_rows >> candidate & 1) || (split && !early_halves)) {
                         continue;
                     }
-                    if (units_left &&
-                        (!stream_early || complete_parts[candidate] < chunk_units ||
-                         units.unit_of(local_row_index(candidate), 0) / (wave_rows * units.per_row) != last_wave)) {
+                    if (units_left && (!stream_early || complete_parts[candidate] < chunk_units ||
+                                       row_unit[candidate] / (wave_rows * units.per_row) != last_wave)) {
                         continue;
                     }
                     if (local_row == local_rows || complete_parts[candidate] > best_parts) {
@@ -696,6 +779,8 @@ FORCE_INLINE void two_level_run(
                 row,
                 streaming ? flags + local_row * max_row_units : nullptr,
                 units,
+                streaming ? row_unit[local_row] : 0,
+                streaming ? unit_stride[local_row] : 0,
                 read_counter);
             if (is_split_row && early_halves) {
                 two_level_push_stage1(two_level_announce(header_half, row));
@@ -727,6 +812,7 @@ FORCE_INLINE void two_level_run(
             }
             if constexpr (!has_block_max) {
                 done_rows |= 1u << local_row;
+                closed = is_split_row && !early_halves;
             }
             ++rows_done;
             idle = false;
@@ -734,22 +820,55 @@ FORCE_INLINE void two_level_run(
         }
         // The next phase-1 unit: a claimed one, or with `repairing` one of this core's rows' missing ones.
         uint32_t unit = units.total;
+        // Whether `unit` is a claim's value, which this core marks.
+        bool claimed_unit = false;
         if (units_left) {
-            if (claim(1, claim_word) && last_claimed < units.total) {
-                unit = last_claimed;
-            } else {
-                // Past the last unit, or no value came (its unit is then missing): the counter itself says whether
-                // units remain.
-                units_left = read_counter() < units.total;
-                continue;
+            // The first missing unit of each of this core's rows: one lost_lag claims behind the last is done here (a
+            // slow one is only done twice), once, so its row is not held to the end of phase 1.
+            for (uint32_t r = 0; r < local_rows && last_claimed < units.total; ++r) {
+                if (!(done_rows >> r & 1) && !row_ready(r) && complete_parts[r] != early_part[r] &&
+                    row_unit[r] + complete_parts[r] * unit_stride[r] + lost_lag < last_claimed) {
+                    early_part[r] = complete_parts[r];
+                    unit = row_unit[r] + complete_parts[r] * unit_stride[r];
+                }
+            }
+            if (unit >= units.total) {
+                if (claim(1, claim_word) && last_claimed < units.total) {
+                    unit = last_claimed;
+                    claimed_unit = true;
+                } else {
+                    // Past the last unit, or no value came (its unit is then missing): the counter itself says
+                    // whether units remain.
+                    units_left = read_counter() < units.total;
+                    exhausted_at = get_timestamp_32b();
+                    continue;
+                }
             }
         } else if constexpr (!has_block_max) {
+            if (closed) {
+                break;
+            }
             // A claim's value that came after its timeout.
             invalidate_l1_cache();
             const uint32_t value = *claimed;
             if (value != last_claimed) {
                 last_claimed = value;
                 unit = value;
+                claimed_unit = true;
+            }
+            const uint32_t waited = get_timestamp_32b() - exhausted_at;
+            if (unit >= units.total && waited > claim_poll) {
+                while (scan_bits == 0 && scan_next < scan_words) {
+                    const uint32_t slice =
+                        scan_next < slice_words ? core_index : (core_index + num_cores / 2) % num_cores;
+                    scan_word = slice * slice_words + scan_next % slice_words;
+                    ++scan_next;
+                    scan_bits = ~read_word(noc.get_noc_id(), marks + scan_word * sizeof(uint32_t));
+                }
+                if (scan_bits != 0) {
+                    unit = scan_word * 32 + __builtin_ctz(scan_bits);
+                    scan_bits &= scan_bits - 1;
+                }
             }
         }
         if (unit >= units.total && repairing) {
@@ -759,10 +878,15 @@ FORCE_INLINE void two_level_run(
                 const uint32_t local_row = repair_next / max_row_units;
                 const uint32_t part = repair_next % max_row_units;
                 if (part < units.per_row && !(done_rows >> local_row & 1) && flags[repair_next] == 0) {
-                    unit = units.unit_of(local_row_index(local_row), part);
+                    unit = row_unit[local_row] + part * unit_stride[local_row];
                 }
             }
             repairing = unit < units.total;
+        }
+        if constexpr (!has_block_max) {
+            if (claimed_unit) {
+                mark(unit);
+            }
         }
         if (unit < units.total) {
             two_level_unit(noc, input, search_len, units, unit);
@@ -770,6 +894,12 @@ FORCE_INLINE void two_level_run(
             continue;
         }
         if (rows_done == local_rows && !half_pending) {
+            if constexpr (!has_block_max) {
+                // Not before this core's scan, unless its time is over.
+                if ((scan_next < scan_words || scan_bits != 0) && get_timestamp_32b() - exhausted_at < repair_after) {
+                    continue;
+                }
+            }
             break;
         }
         // Nothing to do: every unit is claimed, and this core waits for its rows' units or its partner's table. After
