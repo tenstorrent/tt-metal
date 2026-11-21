@@ -57,3 +57,12 @@ Totals per tier, for a tensor of `B = num_pages * page_bytes` bytes:
 | Core-local | `B` of ring copies in R-in / R-out (the loopback side) |
 
 > Cheapest-traffic split considered: owner-aligned with a borrowed shard ring (R-borrow), plus L1-bank-owner ranges for interleaved-L1 sides (R-bank). Deltas: R-borrow saves `B` of core-local L1 copies, with DRAM and mesh unchanged. R-bank saves `B` of mesh bytes on L1-interleaved cells, with DRAM unchanged. Implemented: R-in / R-out / R-bal. Deferred because R-borrow moves the same mesh and DRAM bytes, and its shard-sized ring exceeds the implicit-sync entries-per-txn-id cap, so it needs a second (explicit) protocol. R-bank needs the allocator's L1 bank → core map, which no Python binding exposes. Both stay reachable: the core ranges are already shard-aligned, the kernels already take `page_stride`, and the ring is one named DFB whose spec can be swapped for a borrowed one.
+
+> Verifier disposition (Phase 0 verification, 2026-11-21). The two deferrals above are not both backed
+> by a sanctioned reason. R-borrow's reason ("same mesh and DRAM bytes; needs a second protocol") names
+> a cost, not unreachability or coverage by a built regime; it is queued as `op_requirements.md`
+> Refinement 1 (native height-shard side). R-bank is reachable without an allocator binding:
+> `MemoryView.num_banks` gives the bank count and a kernel can find its own bank from the accessor's NoC
+> coordinates. It is queued as Refinement 4 (perf, structural gate). The ring-slicing finding (a
+> depth-1 ring whose entry count has no factor in {2, 3, 4} gets one txn id, so reads and writes
+> serialize) is folded into Refinement 3 and touches this row's `block_pages` / `depth` only.
