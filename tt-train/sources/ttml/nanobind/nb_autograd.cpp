@@ -314,7 +314,11 @@ void py_module(nb::module_& m) {
             "Get distributed context");
         py_auto_context.def("get_profiler", &AutoContext::get_profiler, nb::rv_policy::reference, "Get profiler");
         py_auto_context.def("close_profiler", &AutoContext::close_profiler, "Close profiler");
-        py_auto_context.def("get_ccl_resources", &AutoContext::get_ccl_resources, "Get CCL resources");
+        py_auto_context.def(
+            "get_ccl_resources",
+            &AutoContext::get_ccl_resources,
+            nb::arg("cluster_axis") = nb::none(),
+            "Get CCL resources for a cluster axis");
 
         // Socket manager controls
         py_auto_context.def(
