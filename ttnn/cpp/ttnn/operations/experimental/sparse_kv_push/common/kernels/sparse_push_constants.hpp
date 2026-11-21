@@ -38,6 +38,7 @@ constexpr uint32_t kWordSplitBlock = 4;    // the block holding the chunk start;
 constexpr uint32_t kWordPagesPerPacket = 5;
 constexpr uint32_t kWordBanks = 6;
 constexpr uint32_t kWordHasSplit = 7;  // built with a chunk start; without one, every row is in the prefix
+constexpr uint32_t kWordDense = 8;     // the chunk start is below dense_below: no rows to push (owner counts are 0)
 
 // Word offsets of the sections.
 constexpr uint32_t kOwnerOff = 32;
