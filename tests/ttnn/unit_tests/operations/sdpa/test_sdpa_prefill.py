@@ -756,6 +756,63 @@ def test_sdpa_sliding_window_streaming_parity(
 
 
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_dest", "fp32_dest"])
+@pytest.mark.parametrize("pad_value", [0.0, 5.0], ids=["pad0", "pad5"])
+@pytest.mark.parametrize(
+    "s, sliding_window, chunk_size",
+    (
+        [48, 16, 32],  # s not a multiple of the tile size
+        [100, 64, 32],
+        [96, 16, 64],  # tile-aligned s that is not a multiple of k_chunk_size
+        [192, 16, 128],
+    ),
+)
+def test_sdpa_noncausal_sliding_window_padded_k(device, s, sliding_window, chunk_size, pad_value, fp32_dest_acc_en):
+    """A non-causal sliding window must not reach keys past the logical end of K.
+
+    The last sliding_window // 2 query rows have a window that extends past s. Keys in the padded
+    part of the last K chunk must stay masked, so the output must not depend on the padding value.
+    """
+    torch.manual_seed(0)
+    b, nh, nkv, d = 1, 4, 1, 64
+    Q, K, V = (torch.rand(b, n, s, d) * 2 - 1 for n in (nh, nkv, nkv))
+    tt_q, tt_k, tt_v = (
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, pad_value=pad_value)
+        for t in (Q, K, V)
+    )
+    out = ttnn.transformer.scaled_dot_product_attention(
+        tt_q,
+        tt_k,
+        tt_v,
+        is_causal=False,
+        sliding_window_size=sliding_window,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=chunk_size,
+            k_chunk_size=chunk_size,
+            exp_approx_mode=False,
+        ),
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=False,
+        ),
+    )
+    actual = ttnn.to_torch(out)[..., :s, :].float()
+
+    # Reference from the bfloat16 values held on device, with only the s logical keys.
+    q, k, v = (ttnn.to_torch(t)[..., :s, :].float() for t in (tt_q, tt_k, tt_v))
+    k, v = k.repeat_interleave(nh // nkv, dim=1), v.repeat_interleave(nh // nkv, dim=1)
+    mask = create_sliding_window_mask_prefill(b, nh, s, sliding_window, is_causal=False)
+    expected = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, is_causal=False)
+
+    row_err = (actual - expected).abs().amax(dim=(0, 1, 3))
+    bad_rows = (row_err > 0.03).nonzero().flatten().tolist()
+    assert not bad_rows, f"rows {bad_rows} differ from the reference (max abs err {row_err.max().item():.3f})"
+
+
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_dest", "fp32_dest"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("is_causal", [True, False], ids=["causal", "noncausal"])
 @pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])

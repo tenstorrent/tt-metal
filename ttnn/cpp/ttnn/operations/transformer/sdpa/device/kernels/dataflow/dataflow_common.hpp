@@ -665,7 +665,9 @@ inline void fill_custom_diagonal_tile_bfp4(
     uint32_t cb_id,
     uint32_t tile_id,
     int32_t leading_diagonal_offset,
-    int32_t trailing_diagonal_offset) {
+    int32_t trailing_diagonal_offset,
+    uint32_t col_limit = tt::constants::TILE_WIDTH) {
+    // col_limit: columns [col_limit, 32) are masked regardless of the diagonals (K padding inside the tile).
     // Assert that we're not in a case where the entire tile should be fully masked or fully allowed
     // Those cases should be handled before calling this function
     ASSERT(leading_diagonal_offset >= -32 && trailing_diagonal_offset >= -32);
@@ -685,7 +687,8 @@ inline void fill_custom_diagonal_tile_bfp4(
      * - trailing_diagonal_offset: positive enables lower triangle masking
      * - A position (row, col) is masked if:
      *   - col > row + leading_diagonal_offset (upper triangle), OR
-     *   - col < row - trailing_diagonal_offset (lower triangle)
+     *   - col < row - trailing_diagonal_offset (lower triangle), OR
+     *   - col >= col_limit (padded K columns)
      *
      * Tile face layout (32x32 tile divided into 4 16x16 faces):
      *   Face 0 (rows 0-15, cols 0-15)  | Face 1 (rows 0-15, cols 16-31)
@@ -744,7 +747,9 @@ inline void fill_custom_diagonal_tile_bfp4(
         bool fully_masked_lower = (trailing_diagonal_offset < 32) &&
                                   ((int32_t)face.col_end < (int32_t)face.row_start - trailing_diagonal_offset);
 
-        if (fully_masked_upper || fully_masked_lower) {
+        const bool fully_masked_cols = face.col_start >= col_limit;
+
+        if (fully_masked_upper || fully_masked_lower || fully_masked_cols) {
             // Fully masked: fill entire face with -inf
             for (uint32_t i = 0; i < uint32_datums_per_face; i++) {
                 uint32_ptr[face.offset + i] = NEG_INF_MANT;
@@ -759,7 +764,7 @@ inline void fill_custom_diagonal_tile_bfp4(
         bool fully_allowed_lower = (trailing_diagonal_offset >= 32) ||
                                    ((int32_t)face.col_start >= (int32_t)face.row_end - trailing_diagonal_offset);
 
-        if (fully_allowed_upper && fully_allowed_lower) {
+        if (fully_allowed_upper && fully_allowed_lower && face.col_end < col_limit) {
             // Fully allowed: leave as zeros (already cleared)
             continue;
         }
@@ -783,7 +788,7 @@ inline void fill_custom_diagonal_tile_bfp4(
                     bool masked_lower = (trailing_diagonal_offset < 32) &&
                                         ((int32_t)global_col < (int32_t)global_row - trailing_diagonal_offset);
 
-                    if (masked_upper || masked_lower) {
+                    if (masked_upper || masked_lower || global_col >= col_limit) {
                         mask_value |= 0xC << (i * 4);  // Set mantissa to 0xC (-inf)
                     }
                 }
@@ -899,7 +904,10 @@ void generate_causal_sliding_window_mask(
     uint32_t q_chunk,
     uint32_t k_chunk,
     bool is_causal = true,
-    uint32_t sliding_window_size = 0) {
+    uint32_t sliding_window_size = 0,
+    uint32_t unpadded_Sk = 0) {
+    // unpadded_Sk: logical K length, used by the non-causal sliding window whose trailing half reaches past
+    // the end of K. 0 disables the clamp (causal masks never allow a key beyond the query position).
     uint32_t mask_size_tiles = Sq_chunk_t * Sk_chunk_t;
     CircularBuffer cb(cb_mask_in);
     cb.reserve_back(mask_size_tiles);
@@ -954,6 +962,7 @@ void generate_causal_sliding_window_mask(
             MaskType mask_type = MaskType::FULLY_ALLOWED;
             int32_t leading_diagonal_offset = 0;
             int32_t trailing_diagonal_offset = 0;
+            uint32_t col_limit = tt::constants::TILE_WIDTH;
             if (sliding_window_size > 0) {
                 // Calculate tile boundaries in sequence positions
                 uint32_t k_tile_start = global_k_tile * tt::constants::TILE_HEIGHT;
@@ -963,8 +972,12 @@ void generate_causal_sliding_window_mask(
                     ((int32_t)k_tile_end < min_window_start) ||
                     ((int32_t)k_tile_start >=
                      max_window_end);  // outside the start (bottom left) or end of the window (top right)
-                if (k_tile_outside_window) {
-                    // K tile is completely outside all sliding windows
+                // Non-causal window: keys at or beyond the logical K length are padding and must stay masked.
+                const bool clamp_to_k = !is_causal && unpadded_Sk > 0;
+                const bool k_tile_is_padding = clamp_to_k && (k_tile_start >= unpadded_Sk);
+                const bool k_tile_has_padding = clamp_to_k && !k_tile_is_padding && (k_tile_end >= unpadded_Sk);
+                if (k_tile_outside_window || k_tile_is_padding) {
+                    // K tile is completely outside all sliding windows, or holds only padded keys
                     mask_type = MaskType::FULLY_MASKED;
                 } else {
                     // A tile needs no mask only when every query row can attend to every key.
@@ -972,9 +985,12 @@ void generate_causal_sliding_window_mask(
                     bool k_tile_fully_contained =
                         ((int32_t)k_tile_start >= max_window_start) &&
                         ((int32_t)k_tile_end < min_window_end);  // fully contained within the window
-                    if (k_tile_fully_contained) {
+                    if (k_tile_fully_contained && !k_tile_has_padding) {
                         mask_type = MaskType::FULLY_ALLOWED;
                     } else {
+                        if (k_tile_has_padding) {
+                            col_limit = unpadded_Sk - k_tile_start;
+                        }
                         leading_diagonal_offset = (min_window_end - 1) - k_tile_start;
                         trailing_diagonal_offset = k_tile_end - max_window_start;
                         mask_type = MaskType::PARTIAL_MASK;
@@ -1018,7 +1034,7 @@ void generate_causal_sliding_window_mask(
                     break;
                 case MaskType::PARTIAL_MASK:
                     fill_custom_diagonal_tile_bfp4<tile_bytes>(
-                        noc, cb_mask_in, in_mask_tile_id, leading_diagonal_offset, trailing_diagonal_offset);
+                        noc, cb_mask_in, in_mask_tile_id, leading_diagonal_offset, trailing_diagonal_offset, col_limit);
             }
         }
     }
@@ -1450,12 +1466,8 @@ struct PaddedAddrGenerator {
     }
 
     void issue_writes_no_padding(
-        Noc noc,
-        const Slice& slice,
-        uint32_t src_addr,
-        uint32_t outer_stride,
-        uint32_t inner_stride,
-        uint32_t trid = 0) const {
+        Noc noc, const Slice& slice, uint32_t src_addr, uint32_t outer_stride, uint32_t inner_stride, uint32_t trid = 0)
+        const {
         issue_block_writes(
             noc,
             reader,
@@ -1830,7 +1842,14 @@ void generate_mask(
                 // If no sliding window, only generate mask along diagonal
                 // Otherwise, generate mask for all chunks
                 generate_causal_sliding_window_mask<cb_mask_in>(
-                    noc, Sq_chunk_t, Sk_chunk_t, offset_q_chunk, k_chunk, is_causal, sliding_window_size);
+                    noc,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    offset_q_chunk,
+                    k_chunk,
+                    is_causal,
+                    sliding_window_size,
+                    unpadded_Sk_mask_0);
             }
         }
     } else if constexpr (padded_or_joint_masks) {
