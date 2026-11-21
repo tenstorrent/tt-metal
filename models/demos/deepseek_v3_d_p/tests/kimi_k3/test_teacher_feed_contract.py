@@ -999,3 +999,79 @@ def test_fp64_chain_refuses_a_different_run(tmp_path: Path, expect_error):
         fp64_chain.run_chain(run_dir=tmp_path, model=model, token_ids=ids, segment=4, sampled=[5], identity={})
         with expect_error(ValueError, "token_ids_sha256"):
             fp64_chain.run_chain(run_dir=tmp_path, model=model, token_ids=ids + 1, segment=4, sampled=[5], identity={})
+
+
+# --- GPU trace vs the FP64 chain (chain_vs_trace.py) ---------------------------------------------------------------
+
+
+def test_chain_vs_trace_scores_hand_made_differences_incrementally(tmp_path: Path, expect_error):
+    """A trace made from the chain's own products with three planted differences scores them exactly: row 2's
+    layer-1 set loses its FP64 rank-1 expert (recall 1/2, that expert's weight dropped, miss rank 1), the index key is
+    twice the FP64 one (PCC 1, NRMSE exactly 1), row 7's selection loses the FP64 best key (recall 5/6, miss rank 0,
+    spread share 1); everything else is exact (KV PCC 1, recall 1). Scoring with two of three segments landed and
+    then all three reuses the cached segments; a score directory of another chain is refused."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import chain_vs_trace, fp64_chain
+
+    model, _ = _tiny_chain()
+    rows, chain = 10, tmp_path / "chain"
+    ids = torch.randint(0, 50, (rows,), generator=torch.Generator().manual_seed(4))
+    with torch.no_grad():
+        fp64_chain.run_chain(run_dir=chain, model=model, token_ids=ids, segment=4, sampled=[3, 9], identity={})
+    p = fp64_chain.load_products(
+        chain, ["routing_ids_1", "routing_weights_1", "routing_ids_2", "latent", "kpe", "index_key", "topk_indices_3"]
+    )
+    r1 = p["routing_ids_1"].clone()
+    spare = next(e for e in range(6) if e not in r1[2].tolist())
+    r1[2, 1] = spare
+    topk = p["topk_indices_3"].clone()
+    topk[7, 0] = 9
+    _write_trace(
+        tmp_path / "trace",
+        {
+            "expert_ids_layer_1": r1,
+            "expert_ids_layer_2": p["routing_ids_2"],
+            "kv_post_transform_layer_3": torch.cat([p["latent"], p["kpe"]], -1),
+            "indexer_k_layer_3": 2 * p["index_key"],
+            "dsa_topk_indices_layer_3": topk,
+        },
+        chunk_rows=4,
+    )
+    trace, out = Trace(tmp_path / "trace"), tmp_path / "score"
+    manifest = json.loads((chain / MANIFEST).read_text())
+    partial = {**manifest, "segments": manifest["segments"][:2]}
+    (chain / MANIFEST).write_text(json.dumps(partial))
+    assert [r["end"] for r in chain_vs_trace.score_landed(chain, trace, out)] == [4, 8]
+    first = (out / "segment_000000.pt").stat().st_mtime_ns
+    (chain / MANIFEST).write_text(json.dumps(manifest))
+    results = chain_vs_trace.score_landed(chain, trace, out)
+    assert [r["end"] for r in results] == [4, 8, 10] and (out / "segment_000000.pt").stat().st_mtime_ns == first
+    s = chain_vs_trace.summarize(results, window=4)
+    w0, o = s["windows"][0], s["overall"]
+    assert w0["routing_1_recall_mean"] == pytest.approx((3 + 0.5) / 4) and w0["routing_1_set_equal"] == 0.75
+    assert w0["routing_1_dropped_mean"] == pytest.approx(float(p["routing_weights_1"][2, 1]) / 4, rel=1e-6)
+    assert o["routing_1_miss_rank_median"] == 1 and o["routing_2_recall_mean"] == 1.0
+    assert o["index_key_pcc"] == pytest.approx(1.0, abs=1e-12) and o["index_key_nrmse"] == pytest.approx(1.0, rel=1e-12)
+    assert o["latent_pcc"] == pytest.approx(1.0, abs=1e-12) and o["kpe_nrmse"] < 1e-7
+    assert o["topk_rows"] == 5 and o["topk_recall_mean"] == pytest.approx((4 + 5 / 6) / 5)
+    assert o["topk_miss_rank_median"] == 0 and o["topk_miss_top_half_fraction"] == 1.0
+    assert o["topk_miss_share_median"] == pytest.approx(0.99)
+    assert o["routing_3_sampled_rows"] == 0  # (the chain ran without trace checks, so it recorded none)
+    assert s["trend"]["routing_1_recall_mean"]["worst_at"] == 0
+    (out / "identity.json").write_text(json.dumps({"chain": "another"}))
+    with expect_error(ValueError, "another chain or trace"):
+        chain_vs_trace.score_landed(chain, trace, out)
+
+
+def test_key_sums_give_pcc_and_nrmse_by_hand():
+    """x = [1, 2, 3], y = [1, 2, 4]: PCC 0.98198 and NRMSE 1 / sqrt(21); rows' sums combine to the PCC / NRMSE of all
+    their elements."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.chain_vs_trace import key_sums, pcc_nrmse
+
+    p, n = pcc_nrmse(key_sums(torch.tensor([[1.0, 2.0, 3.0]]), torch.tensor([[1.0, 2.0, 4.0]])))
+    assert p == pytest.approx(0.9819805, rel=1e-6) and n == pytest.approx(21**-0.5)
+    gen = torch.Generator().manual_seed(0)
+    x, y = torch.randn(5, 7, generator=gen, dtype=torch.float64), torch.randn(5, 7, generator=gen, dtype=torch.float64)
+    p, n = pcc_nrmse(key_sums(x, y))
+    xf, yf = x.flatten() - x.mean(), y.flatten() - y.mean()
+    assert p == pytest.approx(float(xf @ yf / (xf.norm() * yf.norm())), rel=1e-12)
+    assert n == pytest.approx(float((x - y).norm() / y.norm()), rel=1e-12)
