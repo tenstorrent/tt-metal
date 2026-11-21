@@ -8,10 +8,10 @@ import torch
 
 import ttnn
 
-from ...models.vae.vae import VaeAttention, VaeContext, VaeNormDescRms, VaeRmsNorm
-from ...parallel.manager import CCLManager
-from ...utils import tensor
-from ...utils.check import assert_quality
+from ....models.vae.vae import VaeAttention, VaeContext, VaeNormDescRms, VaeRmsNorm
+from ....parallel.manager import CCLManager
+from ....utils import tensor
+from ....utils.check import assert_quality
 
 
 @pytest.mark.parametrize(
