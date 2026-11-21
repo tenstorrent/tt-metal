@@ -134,6 +134,31 @@ def test_eltwise_exp(device, num_tiles):
     assert matching
 
 
+def test_generic_op_rejects_zero_cb_page_size(device, expect_error):
+    shape = [1, 1, 32, 32]
+    input_tensor = ttnn.from_torch(
+        torch.rand(shape).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    cb_descriptor = ttnn.CBDescriptor(
+        total_size=2048,
+        core_ranges=core_grid,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=0)],
+    )
+    program_descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=[cb_descriptor])
+
+    with expect_error(RuntimeError, "Circular buffer page size must be greater than 0"):
+        ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
+
+
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_point_to_point(mesh_device):
