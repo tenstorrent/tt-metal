@@ -764,6 +764,27 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         for (const auto& output_tensor : output_tensors) {
             args.push_back(output_tensor.buffer());
         }
+        if (fuse_srs) {
+            // OpSignaler's core-invariant args, read from Crta::Dm::out_addr + N_chunks on device.
+            TT_FATAL(
+                output_tensors.size() == N_chunks,
+                "minimal_matmul: {} outputs for {} chunks",
+                output_tensors.size(),
+                N_chunks);
+            args.push_back(static_cast<uint32_t>(num_cores));
+            args.push_back(static_cast<uint32_t>(srs_fuse_signaler_sync_semaphore_id));
+            for (const auto& noc_core : all_worker_cores_noc) {
+                args.push_back(static_cast<uint32_t>(noc_core.x));
+                args.push_back(static_cast<uint32_t>(noc_core.y));
+            }
+            args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_fused_op_cores_to_signal));
+            for (const auto& noc_core : srs_fused_op_signaler->fused_op_receiver_cores_noc) {
+                args.push_back(static_cast<uint32_t>(noc_core.x));
+                args.push_back(static_cast<uint32_t>(noc_core.y));
+            }
+            args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
+            args.push_back(1u);  // mcast_signal_op_cores
+        }
         return args;
     };
     program.kernels[in0_sender_kernels_id].emplace_common_runtime_args(dm_common_args(in0_buffer, in3_buffer));
@@ -871,20 +892,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in0_args.append(fused_args);
         }
         if (fuse_srs) {
-            in0_args.push_back(static_cast<uint32_t>(num_cores));
+            // The signaler's core lists are the same on every core: they ride in the common args (dm_common_args).
             in0_args.push_back(static_cast<uint32_t>(core_id));
-            in0_args.push_back(static_cast<uint32_t>(srs_fuse_signaler_sync_semaphore_id));
-            for (const auto& noc_core : all_worker_cores_noc) {
-                in0_args.push_back(static_cast<uint32_t>(noc_core.x));
-                in0_args.push_back(static_cast<uint32_t>(noc_core.y));
-            }
-            in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_fused_op_cores_to_signal));
-            for (const auto& noc_core : srs_fused_op_signaler->fused_op_receiver_cores_noc) {
-                in0_args.push_back(static_cast<uint32_t>(noc_core.x));
-                in0_args.push_back(static_cast<uint32_t>(noc_core.y));
-            }
-            in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
-            in0_args.push_back(1);  // mcast_signal_op_cores
             // Per-core signaling: L1 base of the RS cores' per-MM-core progress counter array
             in0_args.push_back(srs_fused_op_signaler->mm_progress_counters_buffer);
             // Rolling window: where this core's window starts in the (shortened) output tensor, and
@@ -923,20 +932,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in1_args.append(fused_args);
         }
         if (fuse_srs) {
-            in1_args.push_back(static_cast<uint32_t>(num_cores));
+            // The signaler's core lists are the same on every core: they ride in the common args (dm_common_args).
             in1_args.push_back(static_cast<uint32_t>(core_id));
-            in1_args.push_back(static_cast<uint32_t>(srs_fuse_signaler_sync_semaphore_id));
-            for (const auto& noc_core : all_worker_cores_noc) {
-                in1_args.push_back(static_cast<uint32_t>(noc_core.x));
-                in1_args.push_back(static_cast<uint32_t>(noc_core.y));
-            }
-            in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_fused_op_cores_to_signal));
-            for (const auto& noc_core : srs_fused_op_signaler->fused_op_receiver_cores_noc) {
-                in1_args.push_back(static_cast<uint32_t>(noc_core.x));
-                in1_args.push_back(static_cast<uint32_t>(noc_core.y));
-            }
-            in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
-            in1_args.push_back(1);  // mcast_signal_op_cores
             // Per-core signaling: L1 base of the RS cores' per-MM-core progress counter array
             in1_args.push_back(srs_fused_op_signaler->mm_progress_counters_buffer);
             // Rolling window: where this core's window starts in the (shortened) output tensor, and

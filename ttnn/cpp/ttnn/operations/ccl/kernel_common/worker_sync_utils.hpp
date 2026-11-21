@@ -43,7 +43,6 @@ struct OpSignaler {
         // Runtime args
         this->num_workers_to_sync = get_arg_val<uint32_t>(rt_args_idx++);
         this->curr_worker_index = get_arg_val<uint32_t>(rt_args_idx++);
-        const uint32_t curr_worker_index = this->curr_worker_index;
         this->worker_sync_sem = Semaphore<>(get_arg_val<uint32_t>(rt_args_idx++));
         this->workers_noc_coords = (uint32_t*)get_arg_addr(
             increment_arg_idx(rt_args_idx, this->num_workers_to_sync * 2));  // Skip over the number of workers
@@ -54,14 +53,36 @@ struct OpSignaler {
         this->signal_op_sem = Semaphore<>(get_arg_val<uint32_t>(rt_args_idx++));
         this->mcast_signal_op_cores = get_arg_val<uint32_t>(rt_args_idx++) == 1;
 
-        uint32_t master_worker_noc_x = this->workers_noc_coords[0];
-        uint32_t master_worker_noc_y = this->workers_noc_coords[1];
-        uint32_t curr_worker_noc_x = this->workers_noc_coords[curr_worker_index * 2];
-        uint32_t curr_worker_noc_y = this->workers_noc_coords[curr_worker_index * 2 + 1];
-        this->curr_worker_is_master =
-            is_master(master_worker_noc_x, master_worker_noc_y, curr_worker_noc_x, curr_worker_noc_y);
-
+        this->init_master();
         this->initialized = true;
+    }
+
+    // The same signaler with its core-invariant args (worker count, sync semaphore, worker NOC list, signal-op core
+    // count and NOC list, signal semaphore, mcast flag) in the kernel's common runtime args from common_args_idx on, and
+    // only this worker's index in its own runtime args.
+    OpSignaler(uint32_t& rt_args_idx, uint32_t common_args_idx) {
+        this->curr_worker_index = get_arg_val<uint32_t>(rt_args_idx++);
+        this->num_workers_to_sync = get_common_arg_val<uint32_t>(common_args_idx++);
+        this->worker_sync_sem = Semaphore<>(get_common_arg_val<uint32_t>(common_args_idx++));
+        this->workers_noc_coords = (uint32_t*)get_common_arg_addr(common_args_idx);
+        common_args_idx += this->num_workers_to_sync * 2;
+
+        this->num_fused_op_cores_to_signal = get_common_arg_val<uint32_t>(common_args_idx++);
+        this->signal_op_cores_noc_coords = (uint32_t*)get_common_arg_addr(common_args_idx);
+        common_args_idx += this->num_fused_op_cores_to_signal * 2;
+        this->signal_op_sem = Semaphore<>(get_common_arg_val<uint32_t>(common_args_idx++));
+        this->mcast_signal_op_cores = get_common_arg_val<uint32_t>(common_args_idx++) == 1;
+
+        this->init_master();
+        this->initialized = true;
+    }
+
+    void init_master() {
+        this->curr_worker_is_master = is_master(
+            this->workers_noc_coords[0],
+            this->workers_noc_coords[1],
+            this->workers_noc_coords[this->curr_worker_index * 2],
+            this->workers_noc_coords[this->curr_worker_index * 2 + 1]);
     }
 
     void synchronize_workers_and_signal_op(uint32_t fused_op_core_idx) {
