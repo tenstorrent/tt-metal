@@ -31,7 +31,8 @@ constexpr uint32_t state_tiles = kt * kt;
 void kernel_main() {
     const uint32_t heads = get_arg_val<uint32_t>(0);
     const auto head_arg = [](uint32_t s, uint32_t i) { return get_arg_val<uint32_t>(1 + 4 * s + i); };
-    const bool back_sender = get_common_arg_val<uint32_t>(1);
+    // Which of the head's link's senders carry the final carry: the relay's (bit 0), the second (bit 1).
+    const uint32_t carry_senders = get_common_arg_val<uint32_t>(1);
     // The landing buffer's final slots, and the persistent count of the columns landed there.
     const uint32_t final_landing = get_common_arg_val<uint32_t>(2) + relay_heads * state_tiles * get_tile_size(cb_eout);
     const uint32_t final_semaphore = get_common_arg_val<uint32_t>(3);
@@ -47,16 +48,16 @@ void kernel_main() {
 
     // Hand each tile column of the heads' states compute forms in cb_eout, head after head, to the heads' sender(s) as
     // it is packed (a count on the sender's core).
-    const auto hand_on = [&](bool back) {
+    const auto hand_on = [&](uint32_t senders) {
         for (uint32_t s = 0; s < heads; ++s) {
             const uint32_t notify_semaphore = get_semaphore(head_arg(s, 1));
-            const uint32_t sender_xy = head_arg(s, 2);
-            const uint32_t back_xy = head_arg(s, 3);
             for (uint32_t j = 0; j < kt; ++j) {
                 cb_wait_front(cb_eout, s * state_tiles + (j + 1) * kt);
-                noc_semaphore_inc(get_noc_addr(sender_xy & 0xFFFF, sender_xy >> 16, notify_semaphore), 1);
-                if (back) {
-                    noc_semaphore_inc(get_noc_addr(back_xy & 0xFFFF, back_xy >> 16, notify_semaphore), 1);
+                for (uint32_t sender = 0; sender < 2; ++sender) {
+                    if (senders >> sender & 1) {
+                        const uint32_t xy = head_arg(s, 2 + sender);
+                        noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, notify_semaphore), 1);
+                    }
                 }
             }
         }
@@ -86,16 +87,16 @@ void kernel_main() {
         }
         noc_async_write_barrier();
     };
-    hand_on(false);
+    hand_on(1);
     release(1);
 
     if (position == 0) {
         // The final carries: hand their columns to the senders, then write them out.
-        hand_on(back_sender);
+        hand_on(carry_senders);
         cb_wait_front(cb_eout, heads * state_tiles);
         write_carry(get_read_ptr(cb_eout));
         // The relay's release, then each carry sender's.
-        release(back_sender ? 3 : 2);
+        release(1 + (carry_senders & 1) + (carry_senders >> 1));
     } else {
         // Each carry column out as it lands; the call ends once the whole carry has arrived, which separates
         // consecutive calls across the SP line.
