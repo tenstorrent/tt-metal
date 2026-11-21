@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // Data structure built up from ProgramSpec to enable fast lookups
 struct CollectedSpecData {
@@ -27,7 +27,11 @@ struct CollectedSpecData {
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
     std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*> scratchpad_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
-    std::unordered_map<PrefetcherPipeParamName, const PrefetcherPipeParameter*> prefetcher_pipe_by_name;
+    std::unordered_map<GlobalSemaphoreParamName, const GlobalSemaphoreParameter*> global_semaphore_parameter_by_name;
+    std::unordered_map<experimental::SRAMArenaParamName, const experimental::SRAMArenaParameter*>
+        sram_arena_parameter_by_name;
+    std::unordered_map<experimental::PrefetcherPipeParamName, const experimental::PrefetcherPipeParameter*>
+        prefetcher_pipe_by_name;
 
     // ------------------------------------------------------------------------
     // Resource -> Users lookups.
@@ -41,13 +45,11 @@ struct CollectedSpecData {
     // - Every pointer is non-nullptr, and the pointers in each vector are unique within the vector.
     // - Every pointer p is the registered DFB: dfb_by_name[p->unique_id] == p.
     // - Every element lists this pipe in its advanced_options.prefetcher_pipe_relays.
-    std::unordered_map<PrefetcherPipeParamName, std::vector<const DataflowBufferSpec*>> prefetcher_pipe_relays;
+    std::unordered_map<experimental::PrefetcherPipeParamName, std::vector<const DataflowBufferSpec*>>
+        prefetcher_pipe_relays;
 
     // Scratchpad binders (derived from kernel scratchpad bindings).
-    // Tracks which kernels bind a given ScratchpadSpec. More than one may, provided their node sets
-    // are disjoint; the per-node placement census in ValidateProgramSpec enforces that (it needs the
-    // kernel node sets, derived below). A kernel binds a given scratchpad at most once (enforced
-    // during collection), so each kernel appears at most once in a spec's binder list.
+    // Tracks which kernels bind a given ScratchpadSpec.
     //
     // Invariants:
     // - Every key is a key in scratchpad_by_name.
@@ -98,12 +100,18 @@ struct CollectedSpecData {
     //  - Every kernel in kernel_by_name have an entry.
     std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_set;
 
-    // dfb_node_set: union of binding-kernels' node sets.
-    //   - For each DFBSpecName, the node set could be empty.
+    // Node sets used to configure a DFB and reserve its backing memory.
+    struct DFBPlacement {
+        NodeRangeSet configuration;
+        NodeRangeSet allocation;
+    };
+
+    // dfb_placements: configuration and backing-memory placement of each DFB.
+    //   - For each DFBSpecName, the node sets could be empty.
     //   - Every key of dfb_by_name has an entry.
-    //   - The node set of a DFB d is the union of kernel_node_set[rec.kernel->unique_id] over every
-    //     record in dfb_endpoints[d].producers and dfb_endpoints[d].consumers.
-    std::unordered_map<DFBSpecName, NodeRangeSet> dfb_node_set;
+    //   - Configuration is the union of the producer and consumer kernels' node sets.
+    //   - Allocation is override_placement when set; otherwise it matches configuration.
+    std::unordered_map<DFBSpecName, DFBPlacement> dfb_placements;
 
     // Semaphore binder census (derived from kernel semaphore bindings and kernel_node_set): which
     // kernel instances bind each semaphore, and their placement. A kernel binds a given semaphore at
@@ -148,4 +156,4 @@ struct CollectedSpecData {
 //
 CollectedSpecData CollectSpecData(const ProgramSpec& spec);
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

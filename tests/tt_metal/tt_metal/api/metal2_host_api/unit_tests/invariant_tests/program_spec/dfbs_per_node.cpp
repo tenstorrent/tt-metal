@@ -13,8 +13,8 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/hal.hpp>
 
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
@@ -22,6 +22,8 @@
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
+
+#include "metal2_host_api/test_helpers/dfb_placement_test_helpers.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {
@@ -57,7 +59,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_MultipleDFBsSucceeds) {
     spec.dataflow_buffers = {dfb1, dfb2};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_TooManyDFBsFailsValidation) {
@@ -86,7 +88,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_TooManyDFBsFailsValidation) {
 
     const std::string expected_substr = "places " + std::to_string(too_many) + " DataflowBufferSpecs on node (0, 0)";
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(expected_substr)));
 }
 
@@ -99,7 +101,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TooManyDFBsOnSameNodeFails) {
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
 
-    const uint32_t too_many = tt::tt_metal::hal::get_num_dataflow_buffers() + 1;
+    const uint32_t too_many = env_->get_device_properties().num_dataflow_buffers() + 1;
     for (uint32_t i = 0; i < too_many; ++i) {
         const std::string name = "dfb_" + std::to_string(i);
         auto dfb = MakeMinimalDFB(name);
@@ -114,7 +116,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TooManyDFBsOnSameNodeFails) {
 
     const std::string expected_substr = "places " + std::to_string(too_many) + " DataflowBufferSpecs on node (0, 0)";
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(expected_substr)));
 }
 
@@ -122,7 +124,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TooManyDFBsOnSameNodeFails) {
 // get_num_dataflow_buffers() when each core hosts at most one. This is the Metal 2.0
 // path that issue #51409 needs — previously ValidateProgramSpec rejected on total count.
 TEST_F(ProgramSpecTestGen1, CPU_DisjointNodeDFBsExceedSlotCountSucceeds) {
-    const uint32_t max_slots = tt::tt_metal::hal::get_num_dataflow_buffers();
+    const uint32_t max_slots = env_->get_device_properties().num_dataflow_buffers();
     const uint32_t num_dfbs = max_slots + 1;
     constexpr uint32_t grid_x = 8;  // WH mock worker grid width
     ASSERT_GE(grid_x * 9u, num_dfbs) << "mock WH grid too small for this packing check";
@@ -148,12 +150,41 @@ TEST_F(ProgramSpecTestGen1, CPU_DisjointNodeDFBsExceedSlotCountSucceeds) {
         spec.work_units.push_back(MakeMinimalWorkUnit("wu_" + std::to_string(i), node, {pname, cname}));
     }
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         const std::string dname = "dfb_" + std::to_string(i);
         EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(dname))->device_slot, 0u)
             << dname << " is alone on its node and should reuse device slot 0";
     }
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementCountsSlotsOnEndpointNodes) {
+    // Disjoint storage overrides do not increase the slot limit for shared endpoint kernels.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    const uint32_t count = static_cast<uint32_t>(::dfb::NUM_DFBS) + 1;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR, count);
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
+    for (uint32_t i = 0; i < count; ++i) {
+        spec.dataflow_buffers[i].advanced_options.override_placement = CoreRangeSet(CoreRange({i % 2, 0}));
+    }
+    EXPECT_THAT(
+        [&] { Program(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DataflowBufferSpecs on node")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementDetectsL1OverflowOnSelectedNode) {
+    // DFBs whose combined storage exceeds L1 capacity on a selected endpoint node are rejected.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::WORMHOLE_B0, 2);
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {2, 0});
+    for (auto& dfb : spec.dataflow_buffers) {
+        dfb.entry_size = 2048;
+        dfb.num_entries = fixture_device.l1_size_per_core() / 4096;
+        dfb.advanced_options.override_placement = CoreRangeSet(CoreRange({2, 0}));
+    }
+    EXPECT_THAT(
+        [&] { Program(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("beyond max L1 size")));
 }
 
 }  // namespace

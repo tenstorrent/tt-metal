@@ -57,6 +57,7 @@ def test_to_layout_tile_rowmajor_roundtrip(ttnn_mesh_device, reset_seeds, hw, c)
 @U.with_default_mesh()
 @pytest.mark.parametrize("hw, c", [pytest.param(hw, c, id=i) for (hw, c, i) in _FMAPS])
 def test_to_layout_rowmajor_to_tile_bf8(ttnn_mesh_device, reset_seeds, hw, c):
+    U.skip_bfp_on_quasar()
     mesh = ttnn_mesh_device
 
     x_torch = U.torch_rand((1, 1, hw * hw, c))

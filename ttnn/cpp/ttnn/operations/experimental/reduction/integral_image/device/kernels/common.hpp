@@ -31,10 +31,13 @@ struct df_to_std<DataFormat::Int32> {
     using std_type = uint32_t;
 };
 
+// Quasar has no UInt32 DataFormat (and intimg only runs bf16/fp32 there).
+#ifndef ARCH_QUASAR
 template <>
 struct df_to_std<DataFormat::UInt32> {
     using std_type = uint32_t;
 };
+#endif
 
 template <>
 struct df_to_std<DataFormat::UInt16> {
@@ -79,8 +82,10 @@ class ReadCBGuard {
     uint32_t tiles;
 
 public:
-    ReadCBGuard(uint32_t cb, uint32_t tiles) : cb{cb}, tiles{tiles} { DataflowBuffer(cb).wait_front(tiles); }
-    ~ReadCBGuard() { DataflowBuffer(cb).pop_front(tiles); }
+    ReadCBGuard(uint32_t cb_id, uint32_t num_tiles) : cb{cb_id}, tiles{num_tiles} {
+        DataflowBuffer(static_cast<uint16_t>(cb_id)).wait_front(static_cast<uint16_t>(num_tiles));
+    }
+    ~ReadCBGuard() { DataflowBuffer(static_cast<uint16_t>(cb)).pop_front(static_cast<uint16_t>(tiles)); }
 
     ReadCBGuard(const ReadCBGuard&) = delete;  // can not allow to touch the object anyhow
     ReadCBGuard(ReadCBGuard&&) = delete;
@@ -119,8 +124,10 @@ class WriteCBGuard {
     uint32_t tiles;
 
 public:
-    WriteCBGuard(uint32_t cb, uint32_t tiles) : cb{cb}, tiles{tiles} { DataflowBuffer(cb).reserve_back(tiles); }
-    ~WriteCBGuard() { DataflowBuffer(cb).push_back(tiles); }
+    WriteCBGuard(uint32_t cb_id, uint32_t num_tiles) : cb{cb_id}, tiles{num_tiles} {
+        DataflowBuffer(static_cast<uint16_t>(cb_id)).reserve_back(static_cast<uint16_t>(num_tiles));
+    }
+    ~WriteCBGuard() { DataflowBuffer(static_cast<uint16_t>(cb)).push_back(static_cast<uint16_t>(tiles)); }
 
     WriteCBGuard(const WriteCBGuard&) = delete;  // can not allow to touch the object anyhow
     WriteCBGuard(WriteCBGuard&&) = delete;
@@ -149,8 +156,8 @@ FORCE_INLINE uint32_t get_tile_id(
     const uint32_t tensor_face_block_size = channels_blocks_num * height_blocks_num;
     const uint32_t tensor_face_thickness = tensor_face_block_size * generic_block_depth;
     const uint32_t block_first_tile_id =
-        tensor_face_thickness * column_block_i + row_block_i * channels_blocks_num + channels_slice_i;
-    const uint32_t tile_id = block_first_tile_id + inner_tile_stride * tensor_face_block_size;
+        (tensor_face_thickness * column_block_i) + (row_block_i * channels_blocks_num) + channels_slice_i;
+    const uint32_t tile_id = block_first_tile_id + (inner_tile_stride * tensor_face_block_size);
     return tile_id;
 }
 

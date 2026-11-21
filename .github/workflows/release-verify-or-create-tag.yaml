@@ -34,13 +34,28 @@ on:
 
 jobs:
   verify-create-new-tag:
-    runs-on: ubuntu-slim
+    # ubuntu-latest, not ubuntu-slim: off main the job joins the tailnet to get
+    # the release token, and ubuntu-slim cannot join.
+    runs-on: ubuntu-latest
+    # The release token can only be fetched by a job in environment `release`.
+    # Same form as the `mainline` binding in clang-tidy-reusable.yaml.
+    environment: ${{ github.ref != 'refs/heads/main' && !inputs.dry-run && 'release' || '' }}
+    permissions:
+      contents: write # checkout; read and create the tag with the built-in token on main
+      actions: write # "Dispatch upstream-tests" runs `gh workflow run`
+      id-token: write # off main: tailnet join and login for the release token
     outputs:
       version: ${{ steps.calculate-version.outputs.final_version }}
+    # On main the built-in token creates the tag. Off main (stable, v* tags) the
+    # tagged commit can carry workflow files that differ from main, so GitHub
+    # also asks for the `workflows` permission, which the built-in token cannot
+    # have. There the job gets a short-lived token (contents and workflows write
+    # on this repository only) at run time. No stored personal token is used.
     env:
-      GITHUB_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
+      VAULT_URL: https://vault-ospo.eng-svc.aws.tenstorrent.com
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           fetch-depth: ${{ inputs.fetch_depth }}
@@ -57,13 +72,56 @@ jobs:
           force-bump-type: ${{ inputs.force-bump-type }}
           ignore-commits: ${{ inputs.ignore-commits }}
 
+      # Off main and not a dry run: get the short-lived release token. Any
+      # failure here fails the job before "Create tag". There is no fallback
+      # to the built-in token off main.
+      - name: Join tailnet
+        if: ${{ github.ref != 'refs/heads/main' && !inputs.dry-run }}
+        timeout-minutes: 3
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        with:
+          oauth-client-id: ${{ vars.TS_VAULT_OSPO_CLIENT_ID }}
+          audience: ${{ vars.TS_VAULT_OSPO_AUDIENCE }}
+          tags: tag:tt-gha-vault-ospo
 
+      - name: Wait for Vault
+        if: ${{ github.ref != 'refs/heads/main' && !inputs.dry-run }}
+        timeout-minutes: 2
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            curl -fsS --max-time 5 "${VAULT_URL}/v1/sys/health?standbyok=true&uninitcode=204&sealedcode=204" >/dev/null && exit 0
+            sleep 2
+          done
+          echo "Vault ${VAULT_URL} did not become reachable over Tailscale" >&2
+          exit 1
+
+      - name: Get release tag token from Vault
+        if: ${{ github.ref != 'refs/heads/main' && !inputs.dry-run }}
+        timeout-minutes: 2
+        id: vault
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4.0.0
+        with:
+          url: ${{ env.VAULT_URL }}
+          method: jwt
+          path: jwt-github
+          role: tenstorrent--tt-metal--release
+          jwtGithubAudience: ${{ env.VAULT_URL }}
+          exportEnv: false
+          secrets: |
+            github/token/tenstorrent--tt-metal--release-tag token | GH_TOKEN
+
+      - name: Check release tag token
+        if: ${{ github.ref != 'refs/heads/main' && !inputs.dry-run && steps.vault.outputs.GH_TOKEN == '' }}
+        run: |
+          echo "::error::No release tag token for ${GITHUB_REF}. The tag needs the workflows permission off main, which the built-in token does not have. Ask OSPO."
+          exit 1
 
       - name: Create tag
         if: ${{ !inputs.dry-run }}
-        uses: actions/github-script@v7.0.1
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
-          github-token: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
+          # Built-in token on main; the release token everywhere else (no fallback).
+          github-token: ${{ github.ref == 'refs/heads/main' && github.token || steps.vault.outputs.GH_TOKEN }}
           script: |
             const owner = "${{ github.repository_owner }}";
             const repo = "${{ github.repository }}".split('/')[1];
