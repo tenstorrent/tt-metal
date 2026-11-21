@@ -17,11 +17,18 @@
 // every receiver reserves its slot, clears its valid flag and tells the sender (ready += 1); the sender waits for all
 // of them, multicasts the block, then sets their valid flags (the flag write follows the data on the same path).
 //
+// W_MCAST (resident weights with MCAST): the cores of one column chunk (one per row range) are one grid column or row
+// too; its first core (row range 0) reads the chunk's weights from DRAM and multicasts the whole cb_w group into the
+// others (the weights read once per chunk, not once per row range: the row ranges' reads of the same bank were the
+// op's bottleneck), with the x handshake on its own two semaphores.
+//
 // common runtime args: [w_addr, x_addr, ones_addr]
 // runtime args: [cols, m0, m_cnt, is_sender, mcast x0, y0, x1, y1 (receivers' NOC rectangle), receivers, sender x, y
-//                (the multicast ones read only with MCAST), n_segs, n_segs x (bank_id, byte offset of the segment's
+//                (the multicast ones read only with MCAST), w_is_sender, w mcast x0, y0, x1, y1, w receivers,
+//                w sender x, y (read only with W_MCAST), n_segs, n_segs x (bank_id, byte offset of the segment's
 //                first slot in the bank, slots)]
-// compile-time args: [cb_x, cb_w, KX, w_tile_bytes, MB, G, RESIDENT, MCAST, ready_sem, valid_sem, accessors (x, ones)]
+// compile-time args: [cb_x, cb_w, KX, w_tile_bytes, MB, G, RESIDENT, MCAST, ready_sem, valid_sem, W_MCAST,
+//                     w_ready_sem, w_valid_sem, accessors (x, ones)]
 
 #include <stdint.h>
 
@@ -34,7 +41,8 @@ void kernel_main() {
     const uint32_t cols = get_arg_val<uint32_t>(0);
     const uint32_t m0 = get_arg_val<uint32_t>(1);
     const uint32_t m_cnt = get_arg_val<uint32_t>(2);
-    constexpr uint32_t SEG_ARG = 11;
+    constexpr uint32_t W_ARG = 11;
+    constexpr uint32_t SEG_ARG = 19;
     [[maybe_unused]] const uint32_t n_segs = get_arg_val<uint32_t>(SEG_ARG);  // (the segments are walked by slot count)
 
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
@@ -47,7 +55,11 @@ void kernel_main() {
     constexpr bool MCAST = get_compile_time_arg_val(7) != 0;
     constexpr uint32_t ready_sem_id = get_compile_time_arg_val(8);
     constexpr uint32_t valid_sem_id = get_compile_time_arg_val(9);
-    constexpr auto x_args = TensorAccessorArgs<10>();
+    constexpr bool W_MCAST = get_compile_time_arg_val(10) != 0;
+    constexpr uint32_t w_ready_sem_id = get_compile_time_arg_val(11);
+    constexpr uint32_t w_valid_sem_id = get_compile_time_arg_val(12);
+    constexpr auto x_args = TensorAccessorArgs<13>();
+    static_assert(!W_MCAST || (RESIDENT && MCAST), "weight multicast is for resident weights in a multicast plan");
     constexpr auto ones_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr uint32_t KT = KX + 1;
     constexpr uint32_t col_bytes = KT * w_tile;
@@ -73,6 +85,23 @@ void kernel_main() {
         ready_addr = get_semaphore(ready_sem_id);
         valid_addr = get_semaphore(valid_sem_id);
     }
+    bool w_sender = true;
+    uint32_t wm_x0 = 0, wm_y0 = 0, wm_x1 = 0, wm_y1 = 0, w_recv = 0, wsnd_x = 0, wsnd_y = 0;
+    uint32_t w_ready_addr = 0, w_valid_addr = 0;
+    if constexpr (W_MCAST) {
+        w_sender = get_arg_val<uint32_t>(W_ARG) != 0;
+        wm_x0 = get_arg_val<uint32_t>(W_ARG + 1);
+        wm_y0 = get_arg_val<uint32_t>(W_ARG + 2);
+        wm_x1 = get_arg_val<uint32_t>(W_ARG + 3);
+        wm_y1 = get_arg_val<uint32_t>(W_ARG + 4);
+        w_recv = get_arg_val<uint32_t>(W_ARG + 5);
+        wsnd_x = get_arg_val<uint32_t>(W_ARG + 6);
+        wsnd_y = get_arg_val<uint32_t>(W_ARG + 7);
+        w_ready_addr = get_semaphore(w_ready_sem_id);
+        w_valid_addr = get_semaphore(w_valid_sem_id);
+    }
+    volatile tt_l1_ptr uint32_t* w_ready_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_ready_addr);
+    volatile tt_l1_ptr uint32_t* w_valid_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_valid_addr);
     volatile tt_l1_ptr uint32_t* ready_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
     volatile tt_l1_ptr uint32_t* valid_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid_addr);
     constexpr uint32_t VALID = 1;
@@ -113,6 +142,16 @@ void kernel_main() {
         if (RESIDENT && loaded) {
             continue;
         }
+        if (W_MCAST && !w_sender) {
+            // one resident group, filled by the chunk's sender
+            cb_reserve_back(cb_w, G * KT);
+            noc_semaphore_set(w_valid_ptr, 0);
+            noc_semaphore_inc(get_noc_addr(wsnd_x, wsnd_y, w_ready_addr), 1);
+            noc_semaphore_wait(w_valid_ptr, VALID);
+            cb_push_back(cb_w, G * KT);
+            loaded = true;
+            continue;
+        }
         for (uint32_t g = 0; g < n_groups; ++g) {
             const uint32_t gc = cols - g * G < G ? cols - g * G : G;
             cb_reserve_back(cb_w, G * KT);
@@ -137,8 +176,18 @@ void kernel_main() {
                 ++in_seg;
             }
             noc_async_read_barrier();
+            if constexpr (W_MCAST) {
+                noc_semaphore_wait(w_ready_ptr, w_recv);
+                noc_semaphore_set(w_ready_ptr, 0);
+                const uint64_t mc_data = get_noc_multicast_addr(wm_x0, wm_y0, wm_x1, wm_y1, w_l1);
+                noc_async_write_multicast(w_l1, mc_data, G * KT * w_tile, w_recv, true);
+                *w_valid_ptr = VALID;
+                const uint64_t mc_flag = get_noc_multicast_addr(wm_x0, wm_y0, wm_x1, wm_y1, w_valid_addr);
+                noc_semaphore_set_multicast(w_valid_addr, mc_flag, w_recv);
+            }
             cb_push_back(cb_w, G * KT);
         }
         loaded = true;
     }
+    noc_async_write_barrier();  // (the weight multicast)
 }
