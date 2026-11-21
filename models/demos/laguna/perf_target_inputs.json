@@ -1,0 +1,31 @@
+{
+ "source": "hand-tuned 2026-10-02 for the tt_hw_planner optimizer on Laguna-S-2.1 (MoE): per-token read set from the checkpoint's safetensors headers, with routed experts counted at 10/256 (top-10 of 256 per MoE layer) and the embed_tokens lookup excluded; device widths from doc/datatype_sweep/selected_precision_config.json (routed experts bfloat4_b, attention/dense/shared/lm_head bfloat8_b, router and norms bfloat16); geometry from config.json (poolside/Laguna-S-2.1, 48 layers, hidden 3072).",
+ "model_id": "poolside/Laguna-S-2.1",
+ "unit": "token",
+ "total_params": 8140974848,
+ "active_params": 8140974848,
+ "checkpoint_params": 117561977600,
+ "params_basis": "read set for unit=token: attention, layer-0 dense MLP, router, shared expert and lm_head in full; routed experts at 10/256; embed_tokens lookup excluded",
+ "weight_bytes": 6467001856,
+ "bytes_per_param": 0.794377,
+ "device_census_complete": true,
+ "dominant_dtype": "bfloat8_b",
+ "kv_dtype": "bfloat8_b",
+ "layers": 48,
+ "hidden_size": 3072,
+ "intermediate_size": 1024,
+ "kv_heads": 8,
+ "head_dim": 128,
+ "blocks": {
+  "model": {
+   "layers": 48,
+   "hidden_size": 3072,
+   "intermediate_size": 1024,
+   "kv_heads": 8,
+   "head_dim": 128,
+   "params": 8140974848,
+   "lookup_params": 308281344,
+   "matmul_params": 8140974848
+  }
+ }
+}
