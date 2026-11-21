@@ -410,6 +410,11 @@ void kernel_main() {
             }
             rm_index_output_dfb.push_back(TILE_H);
             pack_untilize_uninit(dfb::rm_index_output);
+
+            compute_kernel_hw_startup(dfb::rm_input, dfb::index_tensor, dfb::input_tensor);
+            compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);
+            ckernel::topk_tile_init();
+            transpose_init(dfb::input_tensor);
         }
 #endif
     }  // h loop
