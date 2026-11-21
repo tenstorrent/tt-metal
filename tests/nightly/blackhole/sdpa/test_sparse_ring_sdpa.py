@@ -17,8 +17,9 @@ inputs and checks the sparse output against:
 Small geometries gate on 0.999 PCC to the reference. Production lengths (MiniMax-H3 5 / 10 / 15 s) gate against the
 dense op's own accuracy on the same inputs (_check_vs_dense_floor). The cases cover: keep-all, random densities,
 ragged shards with partial last blocks, Q blocks that keep nothing, BFP8 inputs, determinism, new inputs on a cached
-program, several Q passes, and the runtime logical length (logical_n_tensor: one program, and one trace, for every
-length of a padded shape). Runs on a single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring); production
+program, several Q passes, the runtime logical length (logical_n_tensor: one program, and one trace, for every
+length of a padded shape), and the block residual (residual_bias: one residual per Q block from its mean query over
+the blocks it leaves out, merged by log-sum-exp, against an fp64 reference of that algorithm). Runs on a single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring); production
 lengths are skipped on CI.
 """
 
@@ -177,6 +178,79 @@ def dense_reference(q, k, v, logical_n, scale, heads, shards, rows):
     return out
 
 
+RESIDUAL_COLS = 2
+RESIDUAL_NEG = -30000.0
+
+
+def residual_bias_split(w, scale, cols=RESIDUAL_COLS):
+    """Raw log weights w (the residual weighs exp(w * scale)) -> [..., cols] bf16-exact column biases whose weights sum
+    to it: each column the remaining log weight truncated to bf16, the next the rest (the model's pre-pass rule)."""
+    out = []
+    w = w.float()
+    for c in range(cols):
+        b = (w.contiguous().view(torch.int32) & -65536).view(torch.float32)
+        out.append(b)
+        w = w + torch.log((1.0 - torch.exp((b - w) * scale)).clamp(min=1e-30)) / scale
+    return torch.stack(out, -1)
+
+
+def block_residual_inputs(q, k, v, mask, geo, S, scale, quantize, cols=RESIDUAL_COLS):
+    """The block residual of every (shard, head, Q block) in fp64: over the valid blocks the mask leaves out,
+    p_j = exp(scale q_bar . kc_j + ln len_j - m), res = sum p_j vc_j / sum p_j, lse = m + ln sum p_j (q_bar, kc, vc the
+    block means over real tokens). Returns the op's inputs (pooled_k zeros and pooled_v = res, [S, H, cols * nb_pad, D],
+    entry qb * cols + c; residual_bias [S, H, nb_pad, 32]) and, for the references, res as the device reads it and the
+    raw log weights of the op's biases (w_op) and of the exact lse (w_exact), [S, H, nb_pad]."""
+    nb_pad = geo.nb_pad()
+    lens = _block_lengths(geo, S).reshape(-1)
+    valid = lens > 0
+    log_len = torch.where(valid, lens.clamp(min=1).double().log(), torch.full_like(lens, -1e30, dtype=torch.float64))
+    qbar = pool(q, geo, S)[0].double().view(-1, S, nb_pad, q.shape[3]).permute(1, 0, 2, 3)
+    kc, vc = pool(k, geo, S)[0].double(), pool(v, geo, S)[0].double()
+    lg = scale * (qbar @ kc.transpose(-2, -1)[None]) + log_len
+    lg = lg.masked_fill(mask.bool() | ~valid, float("-inf"))
+    lse = torch.logsumexp(lg, -1)
+    p = torch.exp(lg - lse.clamp(min=-1e30)[..., None]).nan_to_num(0.0)
+    res = quantize((p @ vc[None]).float())
+    bias = residual_bias_split((lse / scale).clamp(min=RESIDUAL_NEG), scale, cols)
+    w_op = torch.logsumexp(bias.double() * scale, -1) / scale
+    rows = torch.zeros(*bias.shape[:3], 32)
+    rows[..., :cols] = bias
+    pv = res.repeat_interleave(cols, dim=2)
+    return {
+        "pooled_k": torch.zeros_like(pv),
+        "pooled_v": pv,
+        "bias_rows": rows,
+        "res": res,
+        "w_op": w_op,
+        "w_exact": lse / scale,
+    }
+
+
+def residual_reference(q, k, v, mask, res, w_log, geo, S, scale, *, heads=None, shards=None):
+    """fp64: kept blocks exact over their real tokens, merged per Q block with its residual res [S, H, nb_pad, D] of
+    raw log weight w_log [S, H, nb_pad] (weight exp(w_log * scale)) by log-sum-exp. heads / shards as in
+    sparse_reference."""
+    _, H, _, _ = q.shape
+    nb_pad = geo.nb_pad()
+    lens = _block_lengths(geo, S).reshape(-1)
+    tok = torch.arange(S * geo.rows)
+    tok_block = (tok // geo.rows) * nb_pad + (tok % geo.rows) // BLOCK
+    tok_valid = (tok % geo.rows) % BLOCK < lens[tok_block]
+    out = torch.full((1, H, S * geo.rows, q.shape[3]), float("nan"))
+    for h in range(H) if heads is None else heads:
+        kh, vh = k[0, h].double(), v[0, h].double()
+        for s, r0 in ((s, r0) for s in (range(S) if shards is None else shards) for r0 in range(0, geo.rows, 512)):
+            r1 = min(r0 + 512, geo.rows)
+            rows = slice(s * geo.rows + r0, s * geo.rows + r1)
+            qb = torch.arange(r0, r1) // BLOCK
+            exact = mask[s, h, qb].bool()[:, tok_block] & tok_valid[None, :]
+            le = ((q[0, h, rows].double() @ kh.T) * scale).masked_fill(~exact, float("-inf"))
+            lr = (w_log[s, h, qb].double() * scale)[:, None]
+            w = torch.softmax(torch.cat([le, lr], dim=1), dim=1).nan_to_num(0.0)
+            out[0, h, rows] = (w[:, :-1] @ vh + w[:, -1:] * res[s, h, qb].double()).float()
+    return out
+
+
 @pytest.fixture(scope="module")
 def runtime():
     rt = open_ring_joint_sdpa_runtime(MESH_CONFIG, trace_region_size=TRACE_REGION_SIZE)
@@ -293,21 +367,32 @@ class Case:
         dense_q_blocks=(),
         dense_q_blocks_tensor=None,
         dense_q_blocks_max_per_shard=8,
+        residual=None,
     ):
         """pooled=False omits pooled K / V: kept blocks only. dense_floor=True (with
         want_ref="slice") also computes the exact dense reference on the same slice (r["dense_ref"]). counts: the
         block_counts input ([S * nb_pad] real tokens per global block), also used by the pooling and the reference.
         logical_n_tensor: the op's runtime length input (holding geo.logical_n); host_logical_n: the logical_n
-        argument instead of geo.logical_n (a placeholder with the tensor). head_weights / dense_q_blocks: the op's."""
+        argument instead of geo.logical_n (a placeholder with the tensor). head_weights / dense_q_blocks: the op's.
+        residual: block_residual_inputs' dict: the block-residual inputs replace the pooled ones, and the reference is
+        residual_reference with the op's biases (r["ref_exact_lse"]: with the exact lse)."""
         rt, geo = self.rt, self.geo
         tq, tk, tv = (self._upload(x, self.seq_dims, dtype=self.dtype) for x in (q, k, v))
         pooled_k, pooled_v = (self.quantize(pool(x, geo, self.S, counts)) for x in (k, v))
         t_mask = self._upload(mask, self.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         t_pk, t_pv = (
             (self._upload(x, self.dims(None, 1), dtype=self.dtype) for x in (pooled_k, pooled_v))
-            if pooled
+            if pooled and residual is None
             else (None, None)
         )
+        t_rb = None
+        if residual is not None:
+            t_pk, t_pv = (
+                self._upload(residual[x], self.dims(0, 1), dtype=self.dtype) for x in ("pooled_k", "pooled_v")
+            )
+            t_rb = self._upload(
+                residual["bias_rows"], self.dims(0, 1), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
         t_counts = (
             None
             if counts is None
@@ -344,6 +429,7 @@ class Case:
             logical_n_tensor=logical_n_tensor,
             dense_q_blocks_tensor=dense_q_blocks_tensor,
             dense_q_blocks_max_per_shard=dense_q_blocks_max_per_shard,
+            **({} if t_rb is None else {"residual_bias": t_rb}),
         )
         sparse = ttnn.to_torch(out, mesh_composer=self.composer).float()
         dense = None
@@ -377,15 +463,23 @@ class Case:
                 dense_ref = dense_reference(q, k, v, geo.logical_n, self.scale, rows=geo.rows, **sl)
         else:
             sl = dict(heads=sorted({0, 1, self.H // 2, self.H - 1}))
-        ref = (
-            sparse_reference(
-                q, k, v, mask, pooled_k, pooled_v, geo, self.S, self.scale, pooled=pooled, counts=counts, **sl
+        ref_exact = None
+        if residual is not None and want_ref:
+            ref, ref_exact = (
+                residual_reference(q, k, v, mask, residual["res"], residual[w], geo, self.S, self.scale, **sl)
+                for w in ("w_op", "w_exact")
             )
-            if want_ref
-            else None
-        )
+        else:
+            ref = (
+                sparse_reference(
+                    q, k, v, mask, pooled_k, pooled_v, geo, self.S, self.scale, pooled=pooled, counts=counts, **sl
+                )
+                if want_ref
+                else None
+            )
         n = geo.logical_n
         return {
+            "ref_exact_lse": None if ref_exact is None else ref_exact[:, :, :n],
             "sparse": sparse[:, :, :n],
             "dense": None if dense is None else dense[:, :, :n],
             "ref": None if ref is None else ref[:, :, :n],
@@ -398,6 +492,13 @@ def _density(mask, geo, S, counts=None):
     lens = _block_lengths(geo, S, counts).reshape(-1)
     keepable = (lens == BLOCK) if counts is None else (lens > 0)
     return float(mask[:, :, : geo.nb()][..., keepable].float().mean())
+
+
+def _rel_l2(ref, got):
+    """Relative L2 error over the entries where both are defined."""
+    a, b = ref.flatten().double(), got.flatten().double()
+    keep = ~(torch.isnan(a) | torch.isnan(b))
+    return ((b[keep] - a[keep]).norm() / a[keep].norm()).item()
 
 
 def _check(tag, r, density, *, dense_min, ref_min):
@@ -777,3 +878,95 @@ def test_runtime_len_dense_table(runtime, geom, monkeypatch):
         )
         assert same, f"logical_n {n} dense {dense}: differs from the per-length list program, max |diff| {diff:.3e}"
     assert added == [1, 0, 0], f"program cache entries added per call {added}: expected one program for every pair"
+
+
+# Block residual (residual_bias): each Q block attends its kept blocks exactly and summarizes the blocks it leaves out
+# by one residual from its mean query, merged by log-sum-exp (the reference algorithm the MiniMax-H3 pre-pass computes,
+# sol_prepass.compute_block_residual). The inputs come from block_residual_inputs, the reference from
+# residual_reference with the op's bf16 column biases; the exact-lse reference is logged (the biases' own error). The
+# rel-L2 gate is the op's own rounding floor: the default (pooled) path against its reference on the same inputs.
+RESIDUAL_FLOOR_MARGIN = 1.25
+
+
+def _residual_run(case, mask, seed, **kw):
+    q, k, v = case.inputs(seed)
+    res = block_residual_inputs(q, k, v, mask, case.geo, case.S, case.scale, case.quantize)
+    want_ref = kw.pop("want_ref", True)
+    r = case.run(q, k, v, mask, want_dense=False, want_ref=want_ref, residual=res, **kw)
+    base = case.run(q, k, v, mask, want_dense=False, want_ref=want_ref, **kw)
+    r["floor"] = _rel_l2(base["ref"], base["sparse"])
+    return r
+
+
+def _check_residual(tag, r, density):
+    p_ref = _pcc(r["ref"], r["sparse"])
+    rel = _rel_l2(r["ref"], r["sparse"])
+    rel_exact = _rel_l2(r["ref_exact_lse"], r["sparse"])
+    logger.info(
+        f"[{tag}] block density {density:.3f}: vs residual reference pcc {p_ref:.6f} rel-L2 {rel:.3e} "
+        f"(exact-lse reference {rel_exact:.3e}; default path vs its reference {r['floor']:.3e})"
+    )
+    assert torch.isfinite(r["sparse"]).all(), f"{tag}: non-finite output"
+    bar = RESIDUAL_FLOOR_MARGIN * r["floor"]
+    assert p_ref > 0.999 and rel < bar, f"{tag}: pcc {p_ref:.6f}, rel-L2 {rel:.3e} (bar {bar:.3e})"
+
+
+@pytest.mark.parametrize("prod", [False, True], ids=["defaults", "prod_switches"])
+@pytest.mark.parametrize("geom", ["r1024k256", "r1184k512", "r1184ln_off"])
+def test_block_residual(runtime, geom, prod, monkeypatch):
+    """Random kept blocks without the forced block 0, aligned and ragged shards, with the op's defaults and with the
+    production switches plus the runtime length."""
+    geo = {**ALIGNED, **RAGGED}[geom]
+    extra = {}
+    case = Case(runtime, geo)
+    if prod:
+        for name, value in _PROD_SWITCHES.items():
+            monkeypatch.setenv(name, value)
+        extra = dict(logical_n_tensor=case.length_tensor(geo.logical_n), head_weights=case.head_weights(31))
+    mask = make_mask(geo, case.S, case.H, density=0.2, seed=31, keep_block0=False)
+    r = _residual_run(case, mask, 31, **extra)
+    _check_residual(f"residual {geom} {'prod' if prod else 'defaults'}", r, _density(mask, geo, case.S))
+
+
+def test_block_residual_bfp8(runtime):
+    """BFP8 inputs: the residual entries are read in the K / V CBs' block float format."""
+    geo = ALIGNED["r1024k256"]
+    case = Case(runtime, geo, dtype=ttnn.bfloat8_b)
+    mask = make_mask(geo, case.S, case.H, density=0.2, seed=33, keep_block0=False)
+    _check_residual("residual bfp8", _residual_run(case, mask, 33), _density(mask, geo, case.S))
+
+
+def test_block_residual_dense_and_empty_rows(runtime):
+    """Q blocks that keep every full block (a residual over the partial blocks only, or none: the -30000 bias) and Q
+    blocks that keep nothing (the residual only), on a ragged geometry."""
+    geo = RAGGED["r1184ln_off"]
+    case = Case(runtime, geo)
+    mask = make_mask(geo, case.S, case.H, density=0.2, seed=35, keep_block0=False)
+    mask = _dense_rows(mask, geo, case.S, [0, 1, geo.nb() + 2])
+    mask[:, 1, 5:9] = 0
+    mask[case.S - 1, case.H - 1] = 0
+    _check_residual("residual dense / empty rows", _residual_run(case, mask, 35), _density(mask, geo, case.S))
+
+
+@SLOW
+@pytest.mark.parametrize(("rows", "k_chunk"), [(4736, 256), (9184, 256)], ids=["5s", "10s"])
+def test_block_residual_production(runtime, rows, k_chunk, monkeypatch):
+    """MiniMax-H3 5 s / 10 s with the production switches, the runtime length, the dense Q block table and head
+    weights: the program fits and matches the residual reference on a slice."""
+    for name, value in _PROD_SWITCHES.items():
+        monkeypatch.setenv(name, value)
+    geo = Geometry(rows, rows * MESH_CONFIG.sp_size - 300, k_chunk)
+    case = Case(runtime, geo)
+    dense = [0, 1, 2 * geo.nb() + 1]
+    mask = _dense_rows(make_mask(geo, case.S, case.H, density=0.15, seed=37, keep_block0=False), geo, case.S, dense)
+    r = _residual_run(
+        case,
+        mask,
+        37,
+        want_ref="slice",
+        logical_n_tensor=case.length_tensor(geo.logical_n),
+        dense_q_blocks_tensor=case.dense_table(dense),
+        dense_q_blocks_max_per_shard=2,
+        head_weights=case.head_weights(37),
+    )
+    _check_residual(f"residual {rows} rows", r, _density(mask, geo, case.S))

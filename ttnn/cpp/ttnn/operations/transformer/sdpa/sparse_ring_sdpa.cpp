@@ -40,7 +40,8 @@ ttnn::Tensor sparse_ring_sdpa(
     std::optional<DataType> output_dtype,
     const std::optional<ttnn::Tensor>& logical_n_tensor,
     const std::optional<ttnn::Tensor>& dense_q_blocks_tensor,
-    uint32_t dense_q_blocks_max_per_shard) {
+    uint32_t dense_q_blocks_max_per_shard,
+    const std::optional<ttnn::Tensor>& residual_bias) {
     auto output_tensors = ttnn::prim::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -72,7 +73,8 @@ ttnn::Tensor sparse_ring_sdpa(
         output_dtype,
         logical_n_tensor,
         dense_q_blocks_tensor,
-        dense_q_blocks_max_per_shard);
+        dense_q_blocks_max_per_shard,
+        residual_bias);
     return output_tensors[prim::SPARSE_RING_SDPA_OUTPUT_IDX];
 }
 

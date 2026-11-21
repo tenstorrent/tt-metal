@@ -178,6 +178,46 @@ inline void generate_rows_lut(uint32_t dst, uint32_t tiles, uint32_t slice, uint
     }
 }
 
+// Block residual: bias tiles for pooled columns [row0_t * 32, (row0_t + tiles) * 32), entry e = qb * kCols + c of Q
+// block qb. Q block `qb` takes the bf16 of word c of its bias row (`row`, float32) on its own entries, NEG elsewhere.
+template <uint32_t tile_bytes, uint32_t kCols>
+inline void generate_residual_tiles(
+    const Noc& noc, uint32_t dst, uint32_t row0_t, uint32_t tiles, uint32_t qb, uint32_t row, uint32_t table_base_arg) {
+    static_assert(tile_bytes == 4 * kFaceWords * 4, "pooled bias tiles are Float16_b 32x32");
+    const uint8_t noc_id = noc.get_noc_id();
+    const uint32_t neg = table_entry(table_base_arg, 0);
+    volatile tt_l1_ptr uint32_t* bias = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row);
+    const uint32_t first = qb * kCols;
+    for (uint32_t t = 0; t < tiles; ++t) {
+        uint32_t vals[2 * kFaceRowWords];
+        for (uint32_t w = 0; w < 2 * kFaceRowWords; ++w) {
+            const uint32_t e = (row0_t + t) * 32 + 2 * w;
+            const uint32_t lo = e - first < kCols ? bias[e - first] >> 16 : neg;
+            const uint32_t hi = e + 1 - first < kCols ? bias[e + 1 - first] >> 16 : neg;
+            vals[w] = lo | (hi << 16);
+        }
+        const uint32_t tile_addr = dst + t * tile_bytes;
+        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
+        for (uint32_t r = 0; r < 16; ++r) {
+            volatile tt_l1_ptr uint32_t* row0 = p + r * kFaceRowWords;
+            volatile tt_l1_ptr uint32_t* row1 = p + kFaceWords + r * kFaceRowWords;
+            for (uint32_t w = 0; w < kFaceRowWords; ++w) {
+                row0[w] = vals[w];
+                row1[w] = vals[kFaceRowWords + w];
+            }
+        }
+        (void)p[2 * kFaceWords - 1];
+        UnicastEndpoint src;
+        noc.async_read(
+            src,
+            CoreLocalMem<uint32_t>(tile_addr + tile_bytes / 2),
+            tile_bytes / 2,
+            {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = tile_addr},
+            {});
+    }
+    noc.async_read_barrier();
+}
+
 template <uint32_t tile_bytes>
 inline void generate_key_bias_tile(const Noc& noc, uint32_t dst, uint32_t real_cols, uint32_t table_base_arg) {
     static_assert(tile_bytes == 4 * kFaceWords * 4, "key bias tiles are Float16_b 32x32");

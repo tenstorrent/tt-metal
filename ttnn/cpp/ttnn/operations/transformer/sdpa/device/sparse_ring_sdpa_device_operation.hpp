@@ -70,6 +70,9 @@ SparseRingSDPAResult sparse_ring_sdpa(
     // Dense Q block table ([1, 1, 1, K] uint32 DRAM, padded with 0xFFFFFFFF): dense_q_blocks read on device, the
     // program sized for dense_q_blocks_max_per_shard dense blocks per shard (default 8, the worst case).
     const std::optional<ttnn::Tensor>& dense_q_blocks_tensor = std::nullopt,
-    uint32_t dense_q_blocks_max_per_shard = 8);
+    uint32_t dense_q_blocks_max_per_shard = 8,
+    // Block residual ([1, NH, nqb_pad, 32] float32 row-major DRAM): pooled_k / pooled_v are C entries per Q block,
+    // each Q block attending its own with these column biases. Defaults to None (one pooled entry per key block).
+    const std::optional<ttnn::Tensor>& residual_bias = std::nullopt);
 
 }  // namespace ttnn::prim

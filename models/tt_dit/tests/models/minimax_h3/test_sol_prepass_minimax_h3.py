@@ -21,9 +21,12 @@ import ttnn
 
 from ....models.transformers.minimax_h3.sol_prepass import (
     NEG,
+    RESIDUAL_COLS,
     SolGeometry,
     SolPrepass,
+    block_residual_reference,
     build_constants,
+    residual_constants,
     sink_block_mask,
     torch_reference,
 )
@@ -271,6 +274,72 @@ def test_sol_prepass_fused_partial_prefix(
     )
     bar = max(0.985, r["agree_ttnn_ref"] - 0.002) if "agree_ttnn_ref" in r else 0.985
     assert r["agree_real"] >= bar, (r, bar)
+
+
+@GALAXY_RING
+@pytest.mark.parametrize(
+    ("rows", "logical_n", "sink_tokens"),
+    [(1184, 9000, 300), (1184, 7000, 1400), (4736, 37800, 453)],
+    ids=["mid_shard_cut", "sink_two_shards", "5s"],
+)
+def test_sol_prepass_fused_block_residual(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, sink_tokens, reset_seeds
+):
+    """block_residual (MINIMAX_H3_SOL_BLOCK_RESIDUAL) with the partial-prefix and no-forced-block switches, the
+    production pre-pass configuration: per (head, Q block) the residual and its column biases vs
+    block_residual_reference on the device's own mask and block means (the reference algorithm: one residual per Q
+    block from its mean query over the blocks the mask leaves out). The biases are bf16-exact and their summed weight
+    is within 0.01 nats of the exact lse; pooled_k is zero."""
+    S = tuple(mesh_device.shape)[sp_axis]
+    geo = SolGeometry(shards=S, rows=rows, logical_n=logical_n, q_chunk=64, k_chunk=512)
+    scale = D**-0.5
+    q, k, v = _structured_qkv(S, rows)
+    tq, tk, tv = (_upload(mesh_device, sp_axis, x) for x in (q, k, v))
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    pre = SolPrepassFused(
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        sp_axis=sp_axis,
+        tau=1.2,
+        mode="compact",
+        emit_bias=False,
+        head_weights=True,
+        partial_prefix=True,
+        force_first_chunk=False,
+        block_residual=True,
+    )
+    pre.prepare(geo, sink_tokens, scale)
+    pooled = pre.pool(tq, tk, tv)
+    host = {name: _to_host(mesh_device, sp_axis, tp_axis, t)[:, :H].float() for name, t in pooled.items()}
+    out = pre(tq, tk, tv, scale=scale)
+    ttnn.synchronize_device(mesh_device)
+    mask = _to_host(mesh_device, sp_axis, tp_axis, out["block_mask"])[:, :H].float()
+    pk = _to_host(mesh_device, sp_axis, tp_axis, out["pooled_k"])[:, :H].float()
+    pv = _to_host(mesh_device, sp_axis, tp_axis, out["pooled_v"])[:, :H].float()
+    bias = _to_host(mesh_device, sp_axis, tp_axis, out["residual_bias"])[:, :H].float()
+    C, nbp = RESIDUAL_COLS, geo.nb_pad
+    assert pv.shape == (S, H, C * nbp, D) and bias.shape == (S, H, nbp, 32), (pv.shape, bias.shape)
+    assert torch.all(pk == 0), "pooled_k must be zero"
+
+    kc = host["kc_local"].permute(1, 0, 2, 3).reshape(H, S * nbp, D)
+    vc = host["vc_local"].permute(1, 0, 2, 3).reshape(H, S * nbp, D)
+    ref = block_residual_reference(host["q_bar"], kc, vc, mask, residual_constants(geo), scale=scale)
+    real = torch.zeros(nbp, dtype=torch.bool)
+    real[: geo.nb] = True
+    live = (ref["lse"] > NEG * scale / 2) & real
+    res_dev = pv.view(S, H, nbp, C, D)
+    assert torch.equal(res_dev[:, :, :, 0], res_dev[:, :, :, C - 1]), "every column of a Q block holds its residual"
+    torch.testing.assert_close(res_dev[:, :, :, 0][live], ref["res"][live].bfloat16().float(), atol=3e-2, rtol=3e-2)
+    b = bias[..., :C]
+    assert torch.all(b.contiguous().view(torch.int32) & 0xFFFF == 0), "column biases must be bf16-exact"
+    w_dev = torch.logsumexp(b.double() * scale, -1)
+    err = (w_dev - ref["lse"].double()).abs()[live]
+    logger.info(
+        f"block residual: {int(live.sum())} live (head, Q block) rows of {int(real.sum()) * S * H}; summed bias weight "
+        f"vs exact lse: max {err.max():.2e} mean {err.mean():.2e} nats"
+    )
+    assert err.max() < 0.01, err.max()
+    assert torch.all(b[..., 0][~live & real[None, None]] <= NEG / 2), "Q blocks without a residual need a NEG bias"
 
 
 @SLOW

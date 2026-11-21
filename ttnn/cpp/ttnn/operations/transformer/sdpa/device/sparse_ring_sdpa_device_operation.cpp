@@ -296,11 +296,38 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
                 "pooled_k / pooled_v must be in DRAM");
         }
         TT_FATAL(pk.logical_shape() == pv.logical_shape(), "pooled_k and pooled_v shapes differ");
-        TT_FATAL(
-            pk.logical_shape()[1] == NQH && pk.logical_shape()[2] == n_blocks_pad && pk.logical_shape()[3] == DH,
-            "pooled_k must be [1, NH, n_blocks_pad = block_mask width {}, DH], got {}",
-            n_blocks_pad,
-            pk.logical_shape());
+        if (tensor_args.has_residual_bias()) {
+            const uint32_t nqb_pad = mask.logical_shape()[2];
+            const uint32_t entries = pk.logical_shape()[2];
+            TT_FATAL(
+                pk.logical_shape()[1] == NQH && pk.logical_shape()[3] == DH && entries % nqb_pad == 0 &&
+                    entries / nqb_pad >= 1 && entries / nqb_pad <= 32 && entries % tt::constants::TILE_HEIGHT == 0,
+                "with residual_bias, pooled_k must be [1, NH, C * {} (block_mask rows), DH] with 1 <= C <= 32, got {}",
+                nqb_pad,
+                pk.logical_shape());
+            const auto& rb = *tensor_args.residual_bias;
+            TT_FATAL(
+                rb.layout() == Layout::ROW_MAJOR && rb.dtype() == DataType::FLOAT32,
+                "residual_bias must be float32 row-major");
+            TT_FATAL(
+                rb.buffer() != nullptr && rb.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                    rb.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "residual_bias must be interleaved in DRAM");
+            const auto& rs = rb.logical_shape();
+            TT_FATAL(
+                rs.rank() == 4 && rs[0] == 1 && rs[1] == NQH && rs[2] == nqb_pad && rs[3] == 32,
+                "residual_bias must be [1, NH, {} (block_mask rows), 32], got {}",
+                nqb_pad,
+                rb.logical_shape());
+        } else {
+            TT_FATAL(
+                pk.logical_shape()[1] == NQH && pk.logical_shape()[2] == n_blocks_pad && pk.logical_shape()[3] == DH,
+                "pooled_k must be [1, NH, n_blocks_pad = block_mask width {}, DH], got {}",
+                n_blocks_pad,
+                pk.logical_shape());
+        }
+    } else {
+        TT_FATAL(!tensor_args.has_residual_bias(), "residual_bias needs pooled_k / pooled_v (the residual entries)");
     }
     if (tensor_args.block_counts.has_value()) {
         const auto& counts = *tensor_args.block_counts;
@@ -445,6 +472,9 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
     if (tensor_args.has_dense_q_blocks_tensor()) {
         input_tensors.push_back(*tensor_args.dense_q_blocks_tensor);
     }
+    if (tensor_args.has_residual_bias()) {
+        input_tensors.push_back(*tensor_args.residual_bias);
+    }
     const std::size_t keyed_logical_n = tensor_args.has_logical_n_tensor() ? 0 : args.logical_n;
     return tt::tt_metal::operation::hash_operation<SparseRingSDPADeviceOperation>(
         input_tensors,
@@ -467,6 +497,7 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         tensor_args.head_weights.has_value(),
         tensor_args.has_dense_q_blocks_tensor(),
         tensor_args.has_dense_q_blocks_tensor() ? args.dense_q_blocks_max_per_shard : 0u,
+        tensor_args.has_residual_bias(),
         sparse_ring_dyn_split(),
         sparse_ring_q_perm_request(),
         sparse_ring_fast_pbias(),
@@ -546,7 +577,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
     std::optional<DataType> output_dtype,
     const std::optional<ttnn::Tensor>& logical_n_tensor,
     const std::optional<ttnn::Tensor>& dense_q_blocks_tensor,
-    uint32_t dense_q_blocks_max_per_shard) {
+    uint32_t dense_q_blocks_max_per_shard,
+    const std::optional<ttnn::Tensor>& residual_bias) {
     using OperationType = ttnn::prim::SparseRingSDPADeviceOperation;
     TT_FATAL(
         pooled_k.has_value() == pooled_v.has_value(),
@@ -625,7 +657,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
         .block_counts = block_counts,
         .head_weights = head_weights,
         .logical_n_tensor = logical_n_tensor,
-        .dense_q_blocks_tensor = dense_q_blocks_tensor};
+        .dense_q_blocks_tensor = dense_q_blocks_tensor,
+        .residual_bias = residual_bias};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

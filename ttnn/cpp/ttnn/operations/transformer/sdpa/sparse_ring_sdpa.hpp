@@ -56,5 +56,9 @@ ttnn::Tensor sparse_ring_sdpa(
     const std::optional<ttnn::Tensor>& dense_q_blocks_tensor = std::nullopt,
     // With dense_q_blocks_tensor: the most dense Q blocks on one shard the program is sized for (part of the program
     // hash; the list path's value is its own most per shard). Defaults to 8, the worst case.
-    uint32_t dense_q_blocks_max_per_shard = 8);
+    uint32_t dense_q_blocks_max_per_shard = 8,
+    // Block residual ([1, NH, nqb_pad, 32] float32 row-major DRAM): pooled_k / pooled_v hold C entries per Q block
+    // (entry qb * C + c), each Q block attending its own C with these column biases (words 0..C-1 of its row).
+    // Defaults to None: one pooled entry per key block.
+    const std::optional<ttnn::Tensor>& residual_bias = std::nullopt);
 }

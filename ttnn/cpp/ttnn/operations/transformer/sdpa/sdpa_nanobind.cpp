@@ -211,7 +211,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
     std::optional<DataType> output_dtype,
     const std::optional<ttnn::Tensor>& logical_n_tensor,
     const std::optional<ttnn::Tensor>& dense_q_blocks_tensor,
-    uint32_t dense_q_blocks_max_per_shard) {
+    uint32_t dense_q_blocks_max_per_shard,
+    const std::optional<ttnn::Tensor>& residual_bias) {
     return ttnn::transformer::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -244,7 +245,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
         output_dtype,
         logical_n_tensor,
         dense_q_blocks_tensor,
-        dense_q_blocks_max_per_shard);
+        dense_q_blocks_max_per_shard,
+        residual_bias);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -978,6 +980,12 @@ void bind_sdpa(nb::module_& mod) {
             dense_q_blocks_max_per_shard (int, optional): with dense_q_blocks_tensor, the most dense Q blocks on one
                 shard the program is sized for (keyed). The same value as the list's gives the list's program and
                 bits; any contents up to 8 per shard run on any value. Defaults to 8.
+            residual_bias (ttnn.Tensor, optional): [1, NH, nqb_pad (block_mask rows), 32] float32 row-major in DRAM:
+                block residual. pooled_k / pooled_v are then [1, NH, C * nqb_pad, DH] (1 <= C <= 32), C entries per Q
+                block (entry qb * C + c of local Q block qb), and each Q block attends its own C entries only, with
+                the column biases in words 0..C-1 of its row (raw logit units, bf16-exact). With pooled_k = 0 and the
+                Q block's residual as pooled_v, the entries merge one residual per Q block by log-sum-exp. Defaults to
+                None (one pooled entry per key block, weighted by its token count).
 
         Returns:
             ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q (or token-major, see above).
@@ -1014,7 +1022,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("output_dtype") = nb::none(),
         nb::arg("logical_n_tensor").noconvert() = nb::none(),
         nb::arg("dense_q_blocks_tensor").noconvert() = nb::none(),
-        nb::arg("dense_q_blocks_max_per_shard") = 8);
+        nb::arg("dense_q_blocks_max_per_shard") = 8,
+        nb::arg("residual_bias").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

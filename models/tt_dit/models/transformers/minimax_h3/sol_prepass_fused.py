@@ -32,12 +32,15 @@ import ttnn
 from .sol_prepass import (
     LOG2E,
     NEG,
+    RESIDUAL_COLS,
     TILE,
     VAR_EPS,
     SolGeometry,
     _pad32,
     build_constants,
+    compute_block_residual,
     compute_row_max,
+    residual_constants,
     row_max_constants,
 )
 
@@ -194,11 +197,23 @@ class SolPrepassFused:
         gather_kwargs: dict | None = None,
         gather_persistent: bool = False,
         partial_prefix: bool = False,
+        block_residual: bool = False,
     ):
         assert mode in ("gather", "chunk", "compact", "pack"), mode
         assert thresh_type == "diag", "fused pre-pass implements the diag threshold (H3 policy)"
         self.mode = mode
         self.partial_prefix = bool(partial_prefix)
+        # Block residual (sol_prepass.compute_block_residual): the outputs are the sparse op's residual entries
+        # (pooled_k / pooled_v / residual_bias) instead of the per-block means; needs the gather-form mask per Q block.
+        self.block_residual = bool(block_residual)
+        assert not self.block_residual or mode != "chunk", "the block residual needs a block-form mask"
+        self._residual_ckc = (
+            ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+            )
+            if self.block_residual
+            else None
+        )
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.sp_axis = sp_axis
@@ -283,6 +298,8 @@ class SolPrepassFused:
         "ones": (False, ttnn.bfloat16, ttnn.TILE_LAYOUT),
         "shsel": (False, ttnn.bfloat16, ttnn.TILE_LAYOUT),
         "geo": (True, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+        "res_logl": (False, ttnn.float32, ttnn.TILE_LAYOUT),
+        **{f"res_e{c}": (False, ttnn.float32, ttnn.TILE_LAYOUT) for c in range(RESIDUAL_COLS)},
     }
 
     def _refresh_constants(self, st: dict) -> None:
@@ -308,8 +325,10 @@ class SolPrepassFused:
             block_map=self.block_map,
             partial_prefix=self.partial_prefix,
         )
-        host = {name: c[name] for name in self._CONST_SPECS if name != "geo"}
+        host = {name: c[name] for name in self._CONST_SPECS if name in c}
         host["geo"] = self._geo_host(geo, c["n_valid_blocks"])
+        if self.block_residual:
+            host.update(residual_constants(geo))
         return host, {"n_valid_blocks": c["n_valid_blocks"], "nkcl": c["nkcl"]}
 
     def prepare(self, geo: SolGeometry, sink_tokens: int, scale: float) -> None:
@@ -328,6 +347,7 @@ class SolPrepassFused:
             self.force_first_chunk,
             self.dense_prefix_queries,
             self.partial_prefix,
+            self.block_residual,
             self.tau,
             self.emit_bias,
             self.emit_chunk_union,
@@ -348,7 +368,8 @@ class SolPrepassFused:
                 "len_key": key,
                 "generation": SolPrepassFused._generation,
             }
-            for name, (shard, dtype, layout) in self._CONST_SPECS.items():
+            for name in host:
+                shard, dtype, layout = self._CONST_SPECS[name]
                 st[name] = self._upload(host[name], shard=shard, dtype=dtype, layout=layout)
             SolPrepassFused._shared[shared_key] = st
         elif st["len_key"] != key:
@@ -817,9 +838,17 @@ class SolPrepassFused:
                 cols = torch.cat([torch.arange(s * geo.nb_pad, s * geo.nb_pad + geo.nb) for s in range(geo.shards)])
             self.last_density = float(sub[..., cols].mean())
             self.last_block_density = None if self.mode == "chunk" else self.last_density
+        residual = None
+        if self.block_residual:
+            assert geo.q_chunk == geo.block, "the block residual is per Q block: q_chunk must be the block"
+            residual = compute_block_residual(
+                q_bar, kc, vc, mask, consts=self._state, scale=scale, compute_kernel_config=self._residual_ckc
+            )
         if not self.persistent_internal:
             ttnn.deallocate(q_bar)
         out = {"block_mask": mask, "pooled_k": kc, "pooled_v": vc, "bias": bias, "row_max": row_max}
+        if residual is not None:
+            out.update(residual)
         if union is not None:
             out["chunk_union"] = union
         if self._route_hw is not None:

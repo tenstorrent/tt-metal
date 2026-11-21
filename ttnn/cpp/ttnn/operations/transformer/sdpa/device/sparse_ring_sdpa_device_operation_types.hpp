@@ -127,8 +127,15 @@ struct SparseRingSDPAInputs {
     // host may rewrite it in place; the program is sized for dense_q_blocks_max_per_shard dense blocks per shard
     // instead of a dense_q_blocks list in the hash.
     std::optional<Tensor> dense_q_blocks_tensor;
+    // Block residual: the pooled columns are C residual entries per Q block (pooled_k / pooled_v [1, NH, C * nqb_pad,
+    // DH], entry qb * C + c of local Q block qb) instead of one per key block, and this [1, NH, nqb_pad, 32] float32
+    // row-major tensor holds their column biases (raw logit units, bf16-exact; words 0..C-1 of Q block qb's row). Each
+    // Q block attends its own C entries only, so with K = 0 they merge one residual per Q block by log-sum-exp.
+    std::optional<Tensor> residual_bias;
 
     bool pooled_route() const { return pooled_k.has_value(); }
+
+    bool has_residual_bias() const { return residual_bias.has_value(); }
 
     bool has_dense_q_blocks_tensor() const { return dense_q_blocks_tensor.has_value(); }
 

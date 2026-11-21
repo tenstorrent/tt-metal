@@ -97,7 +97,13 @@ void kernel_main() {
     constexpr bool kLogicalNTensor = false;
     constexpr uint32_t kLengthWordsOffset = 0;
 #endif
+#if defined(SPARSE_BLOCK_RESIDUAL)
+    // Block residual: SPARSE_BLOCK_RESIDUAL entries per Q block, their column biases in residual_bias.
+    constexpr auto residual_args = TensorAccessorArgs<head_weights_args.next_compile_time_args_offset()>();
+    constexpr uint32_t chains_base_offset = residual_args.next_compile_time_args_offset();
+#else
     constexpr uint32_t chains_base_offset = head_weights_args.next_compile_time_args_offset();
+#endif
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -675,7 +681,7 @@ void kernel_main() {
             CircularBuffer cb_plan(cb_sparse_plan);
             cb_plan.reserve_back(1);
             uint32_t scratch = cb_plan.get_write_ptr() + 64;
-            const auto read_chunk_row = [&](uint32_t nq, uint32_t qc) {
+            [[maybe_unused]] const auto read_chunk_row = [&](uint32_t nq, uint32_t qc) {
                 noc.async_read(
                     mask_reader,
                     CoreLocalMem<uint32_t>(scratch),
@@ -1078,17 +1084,21 @@ void kernel_main() {
             }
             if constexpr (pooled_route) {
                 if (do_pooled) {
+#if defined(SPARSE_BLOCK_RESIDUAL)
+                    constexpr uint32_t pooled_rows_t = get_named_compile_time_arg_val("residual_rows_t");
+                    const auto residual_reader =
+                        TensorAccessor(residual_args, get_common_arg_val<uint32_t>(SPARSE_RESIDUAL_ARG));
+#else
+                    constexpr uint32_t pooled_rows_t = mask_n_blocks_pad / 32;
+#endif
                     const auto pooled_k_generator = PaddedAddrGenerator(
-                        TensorAccessor(pooled_k_args, pooled_k_addr),
-                        TensorTileShape(1, NH, mask_n_blocks_pad / 32, DHt));
+                        TensorAccessor(pooled_k_args, pooled_k_addr), TensorTileShape(1, NH, pooled_rows_t, DHt));
                     const auto pooled_v_generator = PaddedAddrGenerator(
-                        TensorAccessor(pooled_v_args, pooled_v_addr),
-                        TensorTileShape(1, NH, mask_n_blocks_pad / 32, vDHt));
+                        TensorAccessor(pooled_v_args, pooled_v_addr), TensorTileShape(1, NH, pooled_rows_t, vDHt));
                     if constexpr (plan_rec_base != 0) {
                         cb_plan.reserve_back(1);
                         scratch = cb_plan.get_write_ptr() + 64;
                     }
-                    constexpr uint32_t pooled_rows_t = mask_n_blocks_pad / 32;
                     for (uint32_t i0 = 0; i0 < n_res;) {
                         uint32_t i1 = i0;
                         while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
@@ -1124,6 +1134,28 @@ void kernel_main() {
                             noc.async_read_barrier();
                             noc.write_zeros_l1_barrier();
                             cb_v.push_back(v_cb_entry_tiles);
+#if defined(SPARSE_BLOCK_RESIDUAL)
+                            for (uint32_t i = i0; i < i1; ++i) {
+                                noc.async_read(
+                                    residual_reader,
+                                    CoreLocalMem<uint32_t>(scratch),
+                                    32 * sizeof(uint32_t),
+                                    {.page_id = nq * mask_nqb_pad + res_qc[i]},
+                                    {});
+                                noc.async_read_barrier();
+                                CircularBuffer cb_bias(cb_pooled_bias);
+                                cb_bias.reserve_back(Sk_chunk_t);
+                                pooled_bias_gen::generate_residual_tiles<pooled_bias_tile_bytes, SPARSE_BLOCK_RESIDUAL>(
+                                    noc,
+                                    cb_bias.get_write_ptr(),
+                                    row0,
+                                    tiles,
+                                    res_qc[i],
+                                    scratch,
+                                    pooled_bias_table_base);
+                                cb_bias.push_back(Sk_chunk_t);
+                            }
+#else
 #if defined(SPARSE_FAST_PBIAS)
                             const uint32_t fp_slice_bytes = tiles * 32 * sizeof(uint32_t);
                             constexpr bool fp_always = Sk_chunk_t * 32 * sizeof(uint32_t) * 3 / 2 <= mask_row_bytes;
@@ -1176,6 +1208,7 @@ void kernel_main() {
                                 }
                                 cb_bias.push_back(Sk_chunk_t);
                             }
+#endif
                         }
                         i0 = i1;
                     }

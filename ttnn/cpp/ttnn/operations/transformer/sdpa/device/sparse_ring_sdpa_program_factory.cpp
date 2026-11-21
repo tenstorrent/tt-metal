@@ -377,7 +377,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t mask_nb_pad = mask_n_blocks_pad / ring_size;
     const uint32_t mask_nb = tt::div_up(kv_local_padded_Nt, block_tiles);
     const uint32_t mask_nqb_pad = tensor_args.block_mask.logical_shape()[2];
-    const uint32_t pooled_tiles = !pooled_route ? 0u : mask_n_blocks_pad / tt::constants::TILE_HEIGHT;
+    // Block residual (residual_bias): the pooled columns are C entries per Q block (pooled_k rows = C * mask rows).
+    const bool has_residual = tensor_args.has_residual_bias();
+    const uint32_t pooled_tiles =
+        !pooled_route ? 0u : tensor_args.pooled_k->logical_shape()[2] / tt::constants::TILE_HEIGHT;
+    const uint32_t residual_cols = has_residual ? tensor_args.pooled_k->logical_shape()[2] / mask_nqb_pad : 0u;
     const uint32_t pooled_chunks = tt::div_up(pooled_tiles, Sk_chunk_t);
     const uint32_t pooled_last_tiles = pooled_chunks > 0 ? pooled_tiles - (pooled_chunks - 1) * Sk_chunk_t : 0u;
     const uint32_t mask_row_bytes = tensor_args.block_mask.logical_shape()[3] * sizeof(uint32_t);
@@ -648,6 +652,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     tt::tt_metal::Buffer* const head_weights_buf =
         tensor_args.head_weights.has_value() ? tensor_args.head_weights->buffer() : nullptr;
     TensorAccessorArgs(head_weights_buf).append_to(reader_compile_time_args);
+    tt::tt_metal::Buffer* const residual_buf = has_residual ? tensor_args.residual_bias->buffer() : nullptr;
+    if (has_residual) {
+        TensorAccessorArgs(residual_buf).append_to(reader_compile_time_args);
+    }
     tt::tt_metal::Buffer* const logical_n_buf = has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr;
     // The dense Q block table is read as page 0 of an interleaved DRAM buffer (bank 0): its address only, no accessor.
     tt::tt_metal::Buffer* const dense_tensor_buf =
@@ -1583,6 +1591,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         reader_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::Os;
         reader_kernel.defines.emplace_back("SDPA_READER_FLATTEN_READS", "1");
     }
+    if (has_residual) {
+        // The residual entries per Q block; the reader takes residual_bias's accessor after head_weights'.
+        reader_kernel.defines.emplace_back("SPARSE_BLOCK_RESIDUAL", std::to_string(residual_cols));
+    }
     if (sparse_ring_banked_reads() > 0) {
         reader_kernel.defines.emplace_back("SDPA_READER_BANKED_READS", "1");
         log_info(tt::LogOp, "SparseRingSDPA: reader issues K/V block reads bank by bank (TT_SPARSE_RING_BANKED_READS)");
@@ -1661,6 +1673,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
+    if (has_residual) {
+        reader_kernel.named_compile_time_args.emplace_back("residual_rows_t", pooled_tiles);
+    }
     compute_kernel.defines = kernel_defines;
     compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     compute_kernel.config = ComputeConfigDescriptor{
@@ -1894,9 +1909,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     if (dyn_dense_on) {
         reader_common_args.insert(reader_common_args.end(), dyn_dense_words.begin(), dyn_dense_words.end());
     }
-    if (has_logical_n_tensor || has_dense_tensor) {
-        // Then the logical_n tensor's and the dense Q block table's addresses, buffer bindings (re-patched on a cache
-        // hit).
+    if (has_logical_n_tensor || has_dense_tensor || has_residual) {
+        // Then the logical_n tensor's, the dense Q block table's and residual_bias's addresses, buffer bindings
+        // (re-patched on a cache hit).
         KernelDescriptor::RTArgList common_args;
         common_args.append(reader_common_args);
         size_t next = reader_common_args.size();
@@ -1908,6 +1923,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             reader_kernel.defines.emplace_back("SPARSE_DENSE_Q_TENSOR", "1");
             reader_kernel.defines.emplace_back("SPARSE_DENSE_Q_ARG", std::to_string(next++));
             common_args.push_back(dense_tensor_buf);
+        }
+        if (has_residual) {
+            reader_kernel.defines.emplace_back("SPARSE_RESIDUAL_ARG", std::to_string(next++));
+            common_args.push_back(residual_buf);
         }
         if (has_logical_n_tensor) {
             // Then the ring iterations' first tiles (sparse_ring_length.hpp).
