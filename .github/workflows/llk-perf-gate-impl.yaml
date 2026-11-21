@@ -97,19 +97,16 @@ on:
         default: true
         type: boolean
       threshold:
-        description: "Relative slowdown counting as a regression (BH 0.02, WH 0.13)"
-        required: false
-        default: "0.02"
+        description: "Relative slowdown counting as a regression, from tt_metal/tt-llk/perf/gate_policy.json"
+        required: true
         type: string
       module_thresholds:
         description: "Per-module thresholds, comma-separated, e.g. perf_matmul=0.25"
-        required: false
-        default: ""
+        required: true
         type: string
       min_cycles:
         description: "A point must also move more than this many cycles"
-        required: false
-        default: "30"
+        required: true
         type: string
       gate_name:
         description: "Name of the gate in the Slack message"
