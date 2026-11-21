@@ -5602,6 +5602,19 @@ class UntilizeGolden:
 
         operand = quantize_input_to_unpack_format(operand, input_format)
 
+        # untilize_block changes the dtype with a plain torch cast, which wraps on overflow. The
+        # packer saturates instead, and its signed range is sign-magnitude (no INT_MIN), so a
+        # narrowing pack like Int32 -> Int8 needs saturate_integer. Keyed on input_format because
+        # only a cross-format pack narrows: callers that pass none are using this as a layout
+        # shuffle over data that is already in data_format.
+        if (
+            input_format is not None
+            and input_format != data_format
+            and input_format.is_integer()
+            and data_format.is_integer()
+        ):
+            operand = saturate_integer(torch.as_tensor(operand), data_format)
+
         result = untilize_block(
             operand,
             stimuli_format=data_format,
