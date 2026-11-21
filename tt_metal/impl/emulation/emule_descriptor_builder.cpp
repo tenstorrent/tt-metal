@@ -35,6 +35,9 @@
 #include "jit_build/jit_build_settings.hpp"  // NamedCTArgNamespaces, NamedRuntimeArgNamespaces
 #include "jit_build/genfiles.hpp"            // jit_build_genfiles_descriptors
 #include "jit_build/jit_build_options.hpp"   // JitBuildOptions
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <unistd.h>
 #include <tt-metalium/kernel_types.hpp>  // DataMovementConfig/ComputeConfig, DataMovementProcessor
@@ -100,9 +103,15 @@ std::string generate_chlkc_descriptors(detail::ProgramImpl& impl, IDevice& devic
     JitBuildOptions options(env);
     kernel.set_build_options(options);
     impl.set_dfb_data_fmt_and_tile(kernel.logical_coreranges(), options);
-    const auto dir = std::filesystem::temp_directory_path() / ("tt_emule_chlkc_" + std::to_string(::getpid()) + "_" +
-                                                               std::to_string(kernel.get_watcher_kernel_id()));
-    options.path = dir.string() + "/";
+    // A directory of its own per call (mkdtemp): the same kernel compiled for two devices at once must not share,
+    // and then delete, one scratch path.
+    std::string dir = (std::filesystem::temp_directory_path() / "tt_emule_chlkc_XXXXXX").string();
+    TT_FATAL(
+        ::mkdtemp(dir.data()) != nullptr,
+        "emule: cannot create a scratch directory for kernel {}'s chlkc_descriptors.h: {}",
+        kernel.name(),
+        std::strerror(errno));
+    options.path = dir + "/";
     jit_build_genfiles_descriptors(env, options);
     std::ifstream in(options.path + "chlkc_descriptors.h");
     std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -294,8 +303,8 @@ static void fill_core_state(Program& program, EmuleProgramDescriptor& pd) {
 
 EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device) {
     auto& impl = program.impl();  // non-const: get_kernels/get_kernel_groups/get_program_config_sizes
-    const auto& hw = MetalContext::instance().hal();
     auto& metal_context = MetalContext::instance(impl.get_context_id());
+    const auto& hw = metal_context.hal();
     const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
     std::string quasar_arch_include;
     if (metal_context.get_cluster().arch() == tt::ARCH::QUASAR) {
@@ -314,10 +323,8 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     EmuleProgramDescriptor pd;
     pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
     pd.config.asan_enabled = tt::tt_metal::emule::emule_asan_enabled();
-    pd.config.build_env_defines = MetalContext::instance(impl.get_context_id())
-                                      .build_env_manager()
-                                      .get_device_build_env(device->build_id())
-                                      .build_env.get_defines();
+    pd.config.build_env_defines =
+        metal_context.build_env_manager().get_device_build_env(device->build_id()).build_env.get_defines();
 
     // Per (programmable core type, logical core) -> the kernels placed there with resolved launch
     // offsets + unique RTA; stitched into each CoreDescriptor below. pct is part of the key because a
@@ -362,12 +369,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
             k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
             // The dispatch defines jit_build adds to every kernel build, copied from the kernel's build state.
             {
-                const auto& hal = MetalContext::instance(impl.get_context_id()).hal();
-                const auto recipe = MetalContext::instance(impl.get_context_id())
-                                        .build_env_manager()
+                const auto recipe = metal_context.build_env_manager()
                                         .get_kernel_build_state(
                                             device->build_id(),
-                                            hal.get_programmable_core_type_index(k.get_kernel_programmable_core_type()),
+                                            hw.get_programmable_core_type_index(k.get_kernel_programmable_core_type()),
                                             enchantum::to_underlying(k.get_kernel_processor_class()),
                                             k.get_kernel_processor_type(0))
                                         .export_target_recipe(nullptr);
@@ -384,8 +389,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
             if (!k.get_full_kernel_name().empty()) {
                 kd.elf_paths = k.elf_paths_by_processor_index(
                     *device,
-                    MetalContext::instance(impl.get_context_id())
-                        .build_env_manager()
+                    metal_context.build_env_manager()
                         .get_device_build_env(device->build_id())
                         .build_env.get_out_kernel_root_path());
             }
@@ -441,7 +445,6 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 if (eth_kernel != nullptr || de_kernel != nullptr) {
                     // Silicon's JIT takes an ethernet or dispatch-engine build's per-RISC macros (COMPILE_FOR_ERISC,
                     // COMPILE_FOR_DISPATCH_ENGINE, ...) from HAL.
-                    const auto& rtoptions = MetalContext::instance().rtoptions();
                     for (const auto& define : hw.get_jit_build_query().defines(
                              {false,
                               k.get_kernel_programmable_core_type(),
