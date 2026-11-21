@@ -77,7 +77,7 @@ def moe_fabric2d_transport_enabled(model_cfg) -> bool:
 def moe_fabric2d_split_tokens(model_cfg) -> bool:
     """Whether a model on the fabric2d transport opens its mesh with only the payload a split token needs, so
     dispatch_fabric2d sends each token as two half-size packets. Off unless the config names
-    MOE_FABRIC2D_SPLIT_TOKENS = True; no config does today.
+    MOE_FABRIC2D_SPLIT_TOKENS = True (GLM 5.3 today).
 
     Meant as a mitigation for the Blackhole fabric router hangs in #64573 (hangs #1 and #3), where routers writing
     a whole ~12 KB GLM 5.3 token into DRAM on NOC1 wedged the DRAM endpoint. Splitting costs dispatch_fabric2d
@@ -98,7 +98,8 @@ def moe_fabric_payload_size(model_cfg) -> int:
     expert with combine_fabric2d, so the mesh needs room for half a bf16 token plus combine's routing tail, and one
     that opts into the fabric2d transport (moe_fabric2d_transport_enabled) needs room for a whole routed token,
     which dispatch_fabric2d then sends in one packet, or for half of one if the model also opts into
-    moe_fabric2d_split_tokens, in which case it sends two. Everywhere else the model's own FABRIC_PAYLOAD_SIZE stands. TtMoe
+    moe_fabric2d_split_tokens, in which case it sends two. A model may raise the result to MOE_FABRIC_PAYLOAD_FLOOR
+    (GLM 5.3 opens at 8 KB with split tokens). Everywhere else the model's own FABRIC_PAYLOAD_SIZE stands. TtMoe
     reads the payload back to decide whether to use either, so a mesh opened any other way simply runs without
     them. No larger than needed: a larger max packet can leave the fabric routers fewer buffer slots, which every
     fabric op pays for. Deferred to avoid probing hardware at import time.
@@ -114,7 +115,7 @@ def moe_fabric_payload_size(model_cfg) -> int:
             payload = max(payload, dispatch_fabric2d_min_payload_bytes(routed_emb_dim))
         else:
             payload = max(payload, dispatch_fabric2d_packet_bytes(routed_emb_dim))
-    return payload
+    return max(payload, getattr(model_cfg, "MOE_FABRIC_PAYLOAD_FLOOR", 0))
 
 
 # Values of TtMoe's moe_transport: dispatch and combine (TtDispatchModule, TtCombineModule), or dispatch_fabric2d
