@@ -674,3 +674,4 @@
   pack at long histories (1M: device 6.08 vs 4.13, host 6.85 vs 1.40 ms); the harness added nothing. 5120 ladder now
   (steady ms / tok/s): 51200 72.1 / 71.0k; 131072 75.4 / 67.9k; 139264 77.2 / 66.3k; 262144 75.7 / 67.6k; 524288 79.7 /
   64.2k; 786432 85.9 / 59.6k; 1024000 86.9 / 58.9k = at or better than 11-19 everywhere. Branch ready to push (owner).
+- 17:20 on model_bringup: framework F298 parity (a46a236777f); QUEUED MB.5 (the no-conversion probe on the 5120 single path at 1M, tests only, outputs A == B). Launched --until MB.5.

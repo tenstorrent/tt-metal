@@ -6087,3 +6087,34 @@ tasks:
       ids_uploads_per_chunk*: == 0
       steady_tok_s_p*: '> 0'
       steady_wall_ms_p1024000_tagentic_cc: <= 88.5
+- id: MB.5
+  title: 'OWNER 2026-11-21: ASSESSMENT: how much faster the shipped 5120 path at 1M would be without the per-chunk bf16 ->
+    4-bit history conversion'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - MB.4
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.5_no_conversion.md
+  brief:
+    prior_work: 'Batching branch PB.NC (48bb0ee8205): tests/perf/test_no_conversion_probe.py (git show dnijemcevic/model_bringup_batching:<file>):
+      side A today''s path, side B every history pre-packed once as 4-bit records and history_gather._pack returning them
+      (no per-chunk pack), outputs A == B. There at 8192 / 1M: single 131.7 -> 130.7 ms (noise), the pack 0.5 ms device +
+      1 ms host, hidden under the engram wait. This branch: MB.4''s fused pack (ckv_bfp4_rows); 5120 ladder at 1024000 86.9
+      ms.'
+    details: 'TESTS ONLY, an assessment, never a serving switch. Take the batching branch''s probe, single-request part only
+      (no packed path here), at BRINGUP_CHUNK=5120 and history 1024000, steady, PB.9C''s method (real previous chunk, warm-up,
+      10 timed runs, median, one profiled run); run it twice. Report per side: harness wall, device ms, exposed host ms, the
+      pack''s device / host ms, the history ops'' device ms, and the difference (ms a chunk, tok/s with -> without); outputs
+      A vs B must be identical. Write models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.5_no_conversion.md
+      (one short table + one line of reading) after the last gate check.'
+  gate:
+    cmd: BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_no_conversion_probe.py
+    metrics:
+      noconv_*_wall_ms*: '> 0'
+      noconv_*_max_abs_diff*: == 0
