@@ -900,12 +900,21 @@ def test_short_first_chunk_stashes_padded_sliding_tail(
         ),
     ],
 )
-def test_chunked_prefill_matches_one_shot(layer_type, mesh_device, device_params, reset_seeds, request):
+def test_chunked_prefill_matches_one_shot(layer_type, mesh_device, device_params, reset_seeds, request, monkeypatch):
     """Two 1024-token chunks through the vLLM-style chunked prefill (``chunk_start_idx`` + ``chunk_page_table``,
     the served 8K / 32K path) match the one-shot 2048-token prefill of the same layer: the global layer's second
     chunk attends the paged prefix through ``chunked_prefill_sdpa`` and the sliding layer's through its stashed
-    tail, both on the prefill SDPA program config (step 3b units-fill rule) that the one-shot path uses."""
+    tail, both on the prefill SDPA program config (step 3b units-fill rule) that the one-shot path uses.
+
+    Then, where the layer takes the decode group split (``GEMMA4_SDPA_GROUP_SPLIT``: a global layer whose KV head sits
+    on G >= 2 chips of a line mesh, the 12B on (1, 4): G = 4), one decode step over the prefilled cache at position
+    2048, the first slot of a new block (2049 keys = 33 K chunks, uneven over the G parts), with the knob on (each
+    chip attends its part through ``sdpa_decode_lse``, merged by LSE) and off (the 4-head path): PCC >= 0.999
+    (``_check_group_split_decode``). The pair-sharded KV (``GEMMA4_KV_PAIR_SHARD``) is not covered here: it needs the
+    pair view and the half-block write tables of a model build (the 31B on the (1, 8) line), i.e. a (1, 8) leg."""
+    from models.common.utility_functions import is_blackhole
     from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
+    from models.demos.gemma4.tt.sdpa_pair_split import group_split_parts
     from models.tt_transformers.tt.common import PagedAttentionConfig
 
     hf_text_config = TestFactory.create_hf_text_config()
@@ -920,7 +929,22 @@ def test_chunked_prefill_matches_one_shot(layer_type, mesh_device, device_params
     max_num_blocks = total_seq // block_size + 2
     max_seq_len = max_num_blocks * block_size
     paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
-    _, _, config, tt_attn, mesh_config = _setup_attention(mesh_device, layer_idx, max_seq_len=max_seq_len)
+    # where the layer qualifies for the decode group split (a Blackhole path: sdpa_decode_lse), the decode check below
+    # builds its own copy of the layer
+    probe = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
+    tp, tp_axis = mesh_tp_and_axis(mesh_device)
+    shape = tuple(int(d) for d in mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    group_parts, _ = group_split_parts(
+        is_sliding=bool(probe.is_sliding),
+        num_q_heads=probe.num_attention_heads,
+        num_kv_heads=probe.num_key_value_heads,
+        tp=tp,
+        mesh_shape=shape,
+        tp_axis=tp_axis,
+        kv_replicated=probe.num_key_value_heads < tp,
+    )
+    group_parts = group_parts if is_blackhole() else 0
+    _, hf_attn, config, tt_attn, mesh_config = _setup_attention(mesh_device, layer_idx, max_seq_len=max_seq_len)
     _skip_if_l1_overflow(config, mesh_device)
     cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max_seq_len, layer_idx)
 
@@ -971,6 +995,114 @@ def test_chunked_prefill_matches_one_shot(layer_type, mesh_device, device_params
         )
         logger.info(f"chunked prefill vs one-shot, {layer_type} layer {layer_idx}, {name}: {pcc_msg}")
         assert passing, f"{layer_type} layer {layer_idx} {name} vs one-shot prefill: {pcc_msg}"
+    if group_parts:
+        _check_group_split_decode(
+            tt_attn,
+            hf_attn,
+            mesh_config,
+            hf_text_config,
+            layer_idx,
+            x,
+            page_table,
+            max_seq_len,
+            group_parts,
+            monkeypatch,
+        )
+
+
+def _check_group_split_decode(
+    tt_attn, hf_attn, mesh_config, hf_text_config, layer_idx, prompt, page_table, max_seq_len, parts, mp
+):
+    """One decode step at the prompt's length over ``tt_attn``'s prefilled paged cache, on a copy of the layer built
+    with GEMMA4_SDPA_GROUP_SPLIT=1 (the group copies), with the knob on and off: the two outputs at PCC >= 0.999, the
+    group split no further from HF (the prompt and the token through ``hf_attn``) than the 4-head path (1e-3), and the
+    on step must have run the group-split ``sdpa_decode_lse`` (a refused call falls back to the stock op silently).
+
+    The copy's q_norm weight is head_dim ** -0.5 (q.k ~ N(0, 1), a trained layer's softmax temperature; K and V, and
+    so the prefilled cache, do not depend on it): the random layer's unit weight puts q.k at N(0, head_dim), a near
+    one-hot softmax over 2049 keys where the bf16-dest score rounding alone parts each path from HF to PCC 0.992..0.994
+    and the two paths from each other to 0.990 (12B (1, 4), 2026-11-18; with the copy's weight: 0.99944 / 0.99954 vs
+    HF and 0.99964 between them)."""
+    from models.demos.gemma4.custom_ops.sdpa_decode_lse import SdpaDecodeLse
+    from models.demos.gemma4.tt.sdpa_pair_split import GROUP_SPLIT_ENV
+
+    mesh_device, config = tt_attn.mesh_device, tt_attn.config
+    pos = int(prompt.shape[-2])
+    with torch.no_grad():
+        hf_attn.q_norm.weight.mul_(float(config.head_dim) ** -0.5)
+    state_dict = {k: v.clone() for k, v in hf_attn.state_dict().items() if not k.startswith("v_norm")}
+    mp.setenv(GROUP_SPLIT_ENV, "1")  # the group copies are built with the layer when the knob is on
+    tt_dec = Gemma4Attention(
+        mesh_device=mesh_device,
+        config=config,
+        state_dict=state_dict,
+        ccl_manager=tt_attn.ccl_manager,
+        mesh_config=mesh_config,
+        program_config=None,
+        layer_idx=layer_idx,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
+    )
+    tt_dec.kv_cache = tt_attn.kv_cache
+    assert tt_dec.weights.group is not None, "GEMMA4_SDPA_GROUP_SPLIT=1 at build: the layer has no group copies"
+    rep = ttnn.ReplicateTensorToMesh(mesh_device)
+    x = torch.randn(1, 1, 1, config.hidden_size, dtype=torch.bfloat16)
+    with torch.no_grad():
+        ref, _ = hf_attn(
+            torch.cat([prompt.reshape(1, pos, -1), x.reshape(1, 1, -1)], dim=1).float(),
+            position_embeddings=TestFactory.create_hf_rope(hf_text_config, pos + 1, layer_idx),
+            attention_mask=build_hf_prefill_mask(pos + 1),
+            shared_kv_states=None,
+        )
+    ref = ref[:, -1:].reshape(1, 1, 1, -1).float()
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache_2d(mesh_device, hf_text_config, pos + 64, layer_idx)
+    pos_row = torch.zeros(1, 32, dtype=torch.int32)
+    pos_row[0, 0] = pos
+    page_table_tt = ttnn.from_torch(
+        page_table, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=rep
+    )
+    split_calls = []
+    op = SdpaDecodeLse.op
+
+    def counted(*args, **kwargs):
+        split_calls.append(int(kwargs.get("split_parts", 2)))
+        return op(*args, **kwargs)
+
+    mp.setattr(SdpaDecodeLse, "op", staticmethod(counted))
+    outs = {}
+    for knob in ("1", "0"):
+        mp.setenv(GROUP_SPLIT_ENV, knob)
+        x_tt = ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=rep)
+        position_idx_tt = ttnn.from_torch(
+            pos_row, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=rep
+        )
+        position_idx_cache_tt = ttnn.from_torch(
+            torch.tensor([pos], dtype=torch.int32),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+            mesh_mapper=rep,
+        )
+        calls_before = len(split_calls)
+        out = tt_dec(
+            x_tt,
+            rope_mats=(cos_tt, sin_tt),
+            position_idx=position_idx_tt,
+            is_decode=True,
+            page_table=page_table_tt,
+            position_idx_cache=position_idx_cache_tt,
+        )
+        outs[knob] = _from_device(out, mesh_device)[:, :, :1].float()
+        out.deallocate(True)
+        assert split_calls[calls_before:] == ([parts] if knob == "1" else []), (knob, split_calls)
+    passing, pcc = compare_tensors(outs["1"], outs["0"], pcc_threshold=0.999)
+    pcc_on, pcc_off = (float(compare_tensors(outs[k], ref, pcc_threshold=0.0)[1]) for k in ("1", "0"))
+    logger.info(
+        f"decode at {pos} after the chunked prefill, group split G={parts}: on vs off {pcc}, vs HF on {pcc_on:.6f} "
+        f"off {pcc_off:.6f}"
+    )
+    assert passing, f"GEMMA4_SDPA_GROUP_SPLIT decode at {pos}: on vs off {pcc}"
+    assert pcc_on >= pcc_off - 1e-3, f"GEMMA4_SDPA_GROUP_SPLIT decode at {pos}: vs HF on {pcc_on} off {pcc_off}"
 
 
 # ===== merged from tests/unit/test_attention_fracture.py: Attention under the galaxy one-instance fracture gate vs HF: heads shard over the tp axis and are

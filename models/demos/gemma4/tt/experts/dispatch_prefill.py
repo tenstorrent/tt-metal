@@ -21,7 +21,9 @@ stay Linear). The 4-chip line can instead open as the column mesh MeshShape(4, 1
 the rows): the rows are then the one dispatch group (32 experts per chip, direct ops, FABRIC_1D) and no ring is
 needed. The experts run on the model-local GeGLU op
 (custom_ops/geglu_routed_expert, a ttnn.generic_op) over TtRoutedExpert's weights, buffers and index table;
-TtRoutedExpert itself only loads and caches the weights, its fused op never runs here.
+TtRoutedExpert itself only loads and caches the weights, its fused op never runs here. On the whole-expert tp-only
+shapes (the (4,1) column mesh) the GeGLU op instead reads the routed experts' decode copy (``shared_weights``,
+GEMMA4_MOE_DISPATCH_SHARED_WEIGHTS) and TtRoutedExpert is never built: one copy of the routed experts per chip.
 """
 import os
 from pathlib import Path
@@ -196,6 +198,94 @@ def dispatch_prefill_enabled(mesh_shape=None):
     return dispatch_prefill_default(mesh_shape, blackhole=is_blackhole())
 
 
+# GEMMA4_MOE_DISPATCH_SHARED_WEIGHTS (default on): where the decode copy of the routed experts already holds every
+# dispatch-group chip's experts in its local slots (shared_weights_reason), the GeGLU experts read that copy and the
+# per-expert TtRoutedExpert copy is never loaded: one copy of the routed experts per chip instead of two (26B-A4B on
+# the (4,1) column mesh: 30 layers x 32 experts x 3 x 2816 x 704 bfp8 = ~6.07 GB per chip back to the KV pool).
+# 0 loads the per-expert copy again (ND-sharded on Blackhole), for A/B runs.
+SHARED_WEIGHTS_ENV = "GEMMA4_MOE_DISPATCH_SHARED_WEIGHTS"
+
+
+def shared_weights_reason(
+    mesh_shape, *, ep: int, tp: int, tp_axis: int, num_local_experts: int, num_experts: int, interleaved: bool = True
+):
+    """None when the dispatch prefill's GeGLU experts can read the routed experts' decode copy (experts/weights.py:
+    stacked ``[1, E_loc, H, 2I]`` ``[up | gate]`` and ``[1, E_loc, I, H]``) instead of a per-expert copy of their
+    own, else why not. Pure host logic (unit-tested).
+
+    The two copies hold the same experts in the same local slots exactly when the decode copy's whole-expert
+    partition IS the dispatch layout: one dispatch group (no replicated axis), no lane parallelism (ep 1) and the
+    tp group along the dispatch axis, so dispatch-group chip c owns experts [c * E_loc, (c + 1) * E_loc) in both
+    (``ExpertMapping.create_global_expert_idx_table`` and ``load_expert_weights``' mesh mapper): the whole-expert
+    tp-only line, i.e. the (4,1) column mesh of the 4-chip engine. The GeGLU op addresses the stacked tensors by page
+    id (``GegluRoutedExpert.from_stacked``), so they must be DRAM-interleaved."""
+    if os.environ.get(SHARED_WEIGHTS_ENV, "1").strip() == "0":
+        return f"{SHARED_WEIGHTS_ENV}=0"
+    rows, cols = (int(d) for d in mesh_shape)
+    dispatch_axis = 0 if rows > 1 else 1
+    dgs, ndg = (rows, cols) if dispatch_axis == 0 else (cols, rows)
+    if ndg != 1:
+        return f"mesh {rows}x{cols} has {ndg} dispatch groups: the decode copy's expert placement is not the dispatch layout"
+    if int(ep) != 1:
+        return f"the decode copy is expert-parallel over the lanes (ep {ep})"
+    if int(tp) != dgs or int(tp_axis) != dispatch_axis:
+        return f"the decode copy's tp group ({tp} chips on axis {tp_axis}) is not the dispatch group ({dgs} on axis {dispatch_axis})"
+    if int(num_local_experts) * dgs != int(num_experts):
+        return (
+            f"the decode copy holds {num_local_experts} experts per chip, the dispatch group {int(num_experts) // dgs}"
+        )
+    if not interleaved:
+        return "the decode copy is not DRAM-interleaved TILE"
+    return None
+
+
+def shared_weights_reason_for(mesh_device, mesh_config, expert_weights, num_experts: int):
+    """``shared_weights_reason`` of a mesh, its MeshConfig and the loaded decode copy (``ExpertWeights``)."""
+    if expert_weights is None or not hasattr(mesh_device, "shape"):
+        return "no decode copy on a mesh"
+    from models.demos.gemma4.tt.experts.weights import _expert_parallel_factors
+
+    _, _, _, tp_axis = _expert_parallel_factors(mesh_device, mesh_config)
+    interleaved = all(
+        w.layout == ttnn.TILE_LAYOUT
+        and w.memory_config().buffer_type == ttnn.BufferType.DRAM
+        and w.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        for w in (expert_weights.gate_up_proj, expert_weights.down_proj)
+    )
+    return shared_weights_reason(
+        tuple(mesh_device.shape),
+        ep=expert_weights.ep,
+        tp=expert_weights.tp,
+        tp_axis=tp_axis,
+        num_local_experts=expert_weights.num_local_experts,
+        num_experts=num_experts,
+        interleaved=interleaved,
+    )
+
+
+def _refuse_placeholder_cache_miss(tensor_cache_path, cache_name_prefix, experts_per_chip, weights_dtype):
+    """The per-expert copy of a warm-cache build (no torch weights: TtRoutedExpert loads cache-only) needs every one
+    of its tensorbins: on a miss ``ttnn.as_tensor`` would convert the dataless placeholders and persist them as the
+    cache. A warm marker seeded by a shared-weights build (which writes no per-expert files) certifies this cache too,
+    so a GEMMA4_MOE_DISPATCH_SHARED_WEIGHTS=0 run on it must cold-load instead (see experts/weights.py
+    ``_refuse_placeholder_on_cache_miss``)."""
+    if tensor_cache_path is None:
+        return
+    missing = []
+    for j in range(experts_per_chip):
+        for proj in ("gate", "up", "down"):
+            name = f"{tensor_cache_path}/{cache_name_prefix}.local_{j}_{proj}"
+            name += f"_dtype_{weights_dtype.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
+            if not os.path.isfile(name):
+                missing.append(name)
+    if missing:
+        raise RuntimeError(
+            f"Per-expert dispatch weight cache miss with a warm-cache placeholder state dict ({len(missing)} files, "
+            f"first {missing[0]}); refusing to persist dataless tensors. Cold-load the checkpoint (delete the "
+            f".weights_complete marker) or keep {SHARED_WEIGHTS_ENV} on."
+        )
+
+
 class _RoutingSetupOnAxis(TtMoERoutingSetup):
     """The reference routing setup shards its dispatch table over the mesh columns (one group per column) and runs
     the cross-chip offset cumsum along the rows. On a single-row mesh the dispatch group IS the row (4-chip / 8-chip
@@ -317,14 +407,25 @@ class _DispatchChunkPlan:
         # or the num_experts sentinel (pad rows, _pad_ids_with_sentinel): a row then counts at most once per
         # expert. The GeGLU kernels clamp a larger count to this capacity as the last line of defense (and ASSERT
         # under the watcher); see chunk_expert_counts and test_dispatch_chunk_capacity_host.py.
-        self.geglu_op = GegluRoutedExpert(
-            owner.mesh_device,
-            owner.routed_expert.gate_projs,
-            owner.routed_expert.up_projs,
-            owner.routed_expert.down_projs,
-            owner.global_idx,
-            max_tokens=self.max_tok,
-        )
+        if owner.shared_weights is not None:
+            # the routed experts' decode copy (stacked, DRAM-interleaved): the op addresses each local expert's tiles
+            # inside it by page id, so this path keeps no weights of its own (shared_weights_reason)
+            self.geglu_op = GegluRoutedExpert.from_stacked(
+                owner.mesh_device,
+                owner.shared_weights.gate_up_proj,
+                owner.shared_weights.down_proj,
+                owner.global_idx,
+                max_tokens=self.max_tok,
+            )
+        else:
+            self.geglu_op = GegluRoutedExpert(
+                owner.mesh_device,
+                owner.routed_expert.gate_projs,
+                owner.routed_expert.up_projs,
+                owner.routed_expert.down_projs,
+                owner.global_idx,
+                max_tokens=self.max_tok,
+            )
         # GEMMA4_SMALL_ROW_EXPERTS=1 on a chunk of <= 256 tokens: the gemma4 small-row path (no fabric dispatch;
         # custom_ops/expert_gather_small + the GeGLU op on a persistent zero-initialized output + W @ expert_out +
         # one all-reduce). Built here, outside any trace capture, with the drop-free buffer contract asserted.
@@ -369,9 +470,15 @@ class Gemma4DispatchExperts:
         weights_dtype=ttnn.bfloat8_b,
         num_links=1,
         ccl_manager=None,
+        shared_weights=None,  # the routed experts' decode copy (ExpertWeights) to read instead of a per-expert copy
+        mesh_config=None,  # the MeshConfig the decode copy was partitioned with (checks shared_weights)
     ):
         reason = self.unsupported_reason(mesh_device)
         assert reason is None, f"dispatch prefill: {reason}"
+        if shared_weights is not None:
+            reason = shared_weights_reason_for(mesh_device, mesh_config, shared_weights, config.num_experts)
+            assert reason is None, f"dispatch prefill on the decode copy: {reason}"
+        self.shared_weights = shared_weights
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager  # the small-row path's all-reduce runs on its semaphores when given
         rows, cols = mesh_device.shape
@@ -437,27 +544,38 @@ class Gemma4DispatchExperts:
             dtype=ttnn.uint32,
         )
         self.global_idx = ttnn.squeeze(ttnn.squeeze(global_idx, 0), 0)
-        # the weight loader's own buffer bound: the full chunk's worst case (its fused op never runs here)
-        _, _, _, max_tok_full = compute_constants(
-            CHUNK_TOKENS // dgs, self.num_experts, self.top_k, rows * cols, dgs, self.top_k
-        )
-        self.routed_expert = TtRoutedExpert(
-            mesh_device=mesh_device,
-            experts_per_chip=experts_per_chip,
-            global_expert_idx_table=self.global_idx,
-            emb_dim=self.hidden,
-            hidden_dim=self.inter,
-            max_tokens=max_tok_full,
-            torch_weights=expert_weights,
-            activations_dtype=ttnn.bfloat8_b,
-            weights_dtype=weights_dtype,
-            weight_cache_path=Path(tensor_cache_path) if tensor_cache_path else None,  # the loader joins with '/'
-            cache_name_prefix=f"layer_{layer_idx}.dispatch_experts",
-            # Weight loader and cache only: the GeGLU op below runs the experts, so TtRoutedExpert's own
-            # fused op (and its activation) never executes; Silu is the value the shared op validates.
-            activation=ttnn.RoutedExpertActivation.Silu,
-            hybrid_token_threshold=None,
-        )
+        if shared_weights is not None:
+            # one copy of the routed experts: the GeGLU op reads the decode copy, no per-expert weights are loaded
+            assert shared_weights.num_local_experts == experts_per_chip, (
+                shared_weights.num_local_experts,
+                experts_per_chip,
+            )
+            self.routed_expert = None
+        else:
+            cache_name_prefix = f"layer_{layer_idx}.dispatch_experts"
+            if expert_weights is None:
+                _refuse_placeholder_cache_miss(tensor_cache_path, cache_name_prefix, experts_per_chip, weights_dtype)
+            # the weight loader's own buffer bound: the full chunk's worst case (its fused op never runs here)
+            _, _, _, max_tok_full = compute_constants(
+                CHUNK_TOKENS // dgs, self.num_experts, self.top_k, rows * cols, dgs, self.top_k
+            )
+            self.routed_expert = TtRoutedExpert(
+                mesh_device=mesh_device,
+                experts_per_chip=experts_per_chip,
+                global_expert_idx_table=self.global_idx,
+                emb_dim=self.hidden,
+                hidden_dim=self.inter,
+                max_tokens=max_tok_full,
+                torch_weights=expert_weights,
+                activations_dtype=ttnn.bfloat8_b,
+                weights_dtype=weights_dtype,
+                weight_cache_path=Path(tensor_cache_path) if tensor_cache_path else None,  # the loader joins with '/'
+                cache_name_prefix=cache_name_prefix,
+                # Weight loader and cache only: the GeGLU op below runs the experts, so TtRoutedExpert's own
+                # fused op (and its activation) never executes; Silu is the value the shared op validates.
+                activation=ttnn.RoutedExpertActivation.Silu,
+                hybrid_token_threshold=None,
+            )
         self.reduce = TtMiniMaxReduce(
             mesh_device=mesh_device, topk_dim=3, cluster_axis=self.rep_axis, num_links=num_links, topology=self.topology
         )
@@ -479,7 +597,8 @@ class Gemma4DispatchExperts:
             f"Gemma4DispatchExperts: mesh {rows}x{cols} axis {self.dispatch_axis} {'ring' if self.ring else 'direct'}, "
             f"{experts_per_chip} experts/chip, chunk {CHUNK_TOKENS} "
             f"({self.seq_per_chip}/chip, fit {'on' if self.fit_chunk else 'off'}), dispatch buffer "
-            f"{self.max_buf} rows, max {plan.max_tok} tokens/expert"
+            f"{self.max_buf} rows, max {plan.max_tok} tokens/expert, weights "
+            f"{'the decode copy (shared)' if shared_weights is not None else 'a per-expert copy'}"
         )
 
     def _plan(self, chunk_tokens: int, small_only: bool = False):

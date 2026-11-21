@@ -145,6 +145,13 @@ void kernel_main() {
     constexpr uint32_t d_out_subblock_w_tail = get_compile_time_arg_val(32);
     using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
     using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
+    // Weight page addressing, the reader's args 37-40 (see there): stacked weights put expert e's up tiles at
+    // tile-row e * K_gate_tiles, K-row stride GU_ROW_STRIDE, column UP_COL_OFF, and its down tiles at tile-row
+    // e * K_down_tiles of the stacked buffers; per-expert tensors: 0, N_gate_tiles_full, 0.
+    constexpr bool w_stacked = get_compile_time_arg_val(33) != 0;
+    constexpr uint32_t GU_ROW_STRIDE = get_compile_time_arg_val(34);
+    constexpr uint32_t UP_COL_OFF = get_compile_time_arg_val(35);
+    static_assert(!w_stacked || (GU_SHARD_W == 0 && D_SHARD_W == 0), "stacked weights must be DRAM-interleaved");
 
     // This core's weight tile-column window, clipped to the tensor's real N. Both weight reads
     // below walk the same window on every K-row, so it is computed once.
@@ -155,7 +162,7 @@ void kernel_main() {
     const uint32_t down_col_end =
         (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
 
-    constexpr uint32_t out_accessor_offset = 33;
+    constexpr uint32_t out_accessor_offset = 36;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
@@ -244,6 +251,9 @@ void kernel_main() {
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
         const auto up_acc =
             TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
+        // This expert's first weight tile-row inside the stacked tensors (0 for per-expert tensors).
+        const uint32_t gu_row_base = w_stacked ? local_expert_id * K_gate_tiles : 0;
+        const uint32_t d_row_base = w_stacked ? local_expert_id * K_down_tiles : 0;
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
         // op and are dropped here exactly like a zero count.
@@ -292,10 +302,10 @@ void kernel_main() {
                             GuRuns::read(
                                 noc_up,
                                 up_acc,
-                                kb * in0_block_w_gu + k,
-                                N_gate_tiles_full,
-                                up_col0,
-                                up_col_end,
+                                gu_row_base + kb * in0_block_w_gu + k,
+                                GU_ROW_STRIDE,
+                                UP_COL_OFF + up_col0,
+                                UP_COL_OFF + up_col_end,
                                 l1_w_up,
                                 up_tile_bytes);
                             l1_w_up += per_core_N_gu * up_tile_bytes;
@@ -398,7 +408,7 @@ void kernel_main() {
                                 DRuns::read(
                                     noc_up,
                                     down_acc,
-                                    row,
+                                    d_row_base + row,
                                     N_down_tiles_full,
                                     down_col0,
                                     down_col_end,
