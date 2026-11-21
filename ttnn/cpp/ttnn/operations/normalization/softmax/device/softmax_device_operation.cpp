@@ -293,6 +293,24 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                                 program_config.block_w,
                                 program_config.block_h,
                                 num_cores_r * num_cores_c);
+                            if (attributes.is_causal_mask && mask.layout() == Layout::TILE) {
+                                // The causal reader steps the mask by whole batches and rewinds it every mask_Ht
+                                // tile rows, so it needs one mask per input batch and a shard of whole mask heights.
+                                TT_FATAL(
+                                    tensors_args.input_tensor.padded_shape()[0] == mask.padded_shape()[0],
+                                    "Input and mask batch sizes must match, got input: {} vs mask: {}",
+                                    tensors_args.input_tensor.padded_shape(),
+                                    mask.padded_shape());
+                                const uint32_t mask_Ht = mask.padded_shape()[-2] /
+                                                         tensors_args.input_tensor.tensor_spec().tile().get_height();
+                                TT_FATAL(
+                                    mask_Ht > 0 && program_config.block_h % mask_Ht == 0,
+                                    "block_h ({}) must be a positive multiple of the causal mask height in tiles "
+                                    "({}). Mask shape is {}.",
+                                    program_config.block_h,
+                                    mask_Ht,
+                                    mask.padded_shape());
+                            }
                         } else {
                             TT_FATAL(
                                 attributes.is_causal_mask,
