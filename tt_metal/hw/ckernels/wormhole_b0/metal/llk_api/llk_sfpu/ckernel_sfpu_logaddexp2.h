@@ -61,7 +61,8 @@ inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_i
         // The exponential follows the destination precision, as in logaddexp. For fp32 it is
         // the guarded exponential, for the reason given there, entered in base 2 so that -|a - b|
         // is reduced exactly rather than rounded by a multiply with ln 2. For bfloat16, _sfpu_exp2_bf16_
-        // is what exp2 uses for a bfloat16 result: logaddexp's exp_21f taken in base 2, so the
+        // computes what exp2 computes for a bfloat16 result (exp2 runs the same algorithm and
+        // coefficients on exp's TTI replay body): logaddexp's exp_21f taken in base 2, so the
         // ln 2 multiply drops out, and like logaddexp's it rounds 2^0 to exactly 1. The
         // approximate body is not usable: its 255/256 at zero lands on the correction term
         // whose exact value at |a - b| = 0 is 1.
