@@ -42,9 +42,9 @@ namespace {
 // uint16 lanes to fp32 in CB `fp32_cb`, and pushes the fp32 tile.
 // The shared bf16 staging CB `bf16_cb` is push/pop'd internally so
 // the SAME CB can be reused for both A and B reads.
-template <uint32_t P, typename AddrGen>
+template <uint32_t P, typename AddrGen, typename Bf16DFB, typename Fp32DFB>
 FORCE_INLINE void read_bf16_row_and_expand_fp32(
-    uint32_t row, const AddrGen& gen, DataflowBuffer& bf16_cb, DataflowBuffer& fp32_cb, Noc& noc) {
+    uint32_t row, const AddrGen& gen, Bf16DFB& bf16_cb, Fp32DFB& fp32_cb, Noc& noc) {
     bf16_cb.reserve_back(1);
     fp32_cb.reserve_back(1);
     const uint32_t bf16_l1 = bf16_cb.get_write_ptr();

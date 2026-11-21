@@ -107,15 +107,16 @@ namespace hw {
 
 #if defined(ARCH_QUASAR)
 
-// STALLWAIT takes wait-resource indices (up to three), so name every unit of this thread's engine.
+// STALLWAIT takes up to three wait-resource indices: name the units this thread drives. Unpacker 2 and packer 1
+// belong to the SrcS pipeline (the ISOLATE_SFPU TRISC), so this thread has nothing to wait for on them.
 #if defined(TRISC_UNPACK)
 inline constexpr std::uint32_t kIdle0 = ckernel::p_stall::UNPACK0;
 inline constexpr std::uint32_t kIdle1 = ckernel::p_stall::UNPACK1;
-inline constexpr std::uint32_t kIdle2 = ckernel::p_stall::UNPACK2;
+inline constexpr std::uint32_t kIdle2 = ckernel::p_stall::NOTHING;
 inline constexpr std::uint32_t kBlock = ckernel::p_stall::STALL_UNPACK;
 #else
 inline constexpr std::uint32_t kIdle0 = ckernel::p_stall::PACK0;
-inline constexpr std::uint32_t kIdle1 = ckernel::p_stall::PACK1;
+inline constexpr std::uint32_t kIdle1 = ckernel::p_stall::NOTHING;
 inline constexpr std::uint32_t kIdle2 = ckernel::p_stall::NOTHING;
 inline constexpr std::uint32_t kBlock = ckernel::p_stall::STALL_PACK;
 #endif

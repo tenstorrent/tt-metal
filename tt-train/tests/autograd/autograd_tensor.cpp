@@ -14,7 +14,6 @@
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/adamw_composite.hpp"
-#include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/sgd.hpp"
 #include "test_utils/optimizer_state.hpp"
 #include "test_utils/random_data.hpp"
@@ -96,13 +95,16 @@ void expect_full_view_tracks_fused_step(const Config& config) {
     expect_views_track(state_tensors(optimizer), autograd::PreferredPrecision::FULL, [&] { optimizer.step(); });
 }
 
-// AdamWFullPrecision updates its fp32 master weights and moments in place. Their bf16 views must follow. It creates
-// all of its state at construction, so one step checks every tensor.
-void expect_half_view_tracks_full_precision_step(const optimizers::AdamWFullPrecisionConfig& config) {
-    auto [theta, grad] = make_parameter(ttnn::DataType::BFLOAT16);
+// Fused AdamW on an fp32 parameter, the fp32 master weight, updates the parameter and its fp32 moments in place.
+// Their bf16 views must follow. AdamW creates its state at construction, so one step checks every tensor.
+void expect_half_views_track_fused_adamw_step_on_fp32_parameter(const optimizers::AdamWConfig& config) {
+    auto [theta, grad] = make_parameter(ttnn::DataType::FLOAT32);
+    ASSERT_EQ(theta->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::FLOAT32);
     theta->set_grad(grad);
-    optimizers::AdamWFullPrecision optimizer(serialization::NamedParameters{{"theta", theta}}, config);
-    expect_views_track(state_tensors(optimizer), autograd::PreferredPrecision::HALF, [&] { optimizer.step(); });
+    optimizers::AdamW optimizer(serialization::NamedParameters{{"theta", theta}}, config);
+    auto tensors = state_tensors(optimizer);
+    tensors.emplace_back("theta", theta);
+    expect_views_track(tensors, autograd::PreferredPrecision::HALF, [&] { optimizer.step(); });
 }
 
 const ttnn::Shape kShape({1, 1, 32, 32});
@@ -126,13 +128,13 @@ void expect_derived_view_tracks_writes(ttnn::DataType native_dtype, autograd::Pr
     auto tensor = autograd::AutocastTensor(filled(1.0F, native_dtype));
     const auto& before = tensor.get_tensor(derived);
     ASSERT_TRUE(all_equal(before, 1.0F));
-    const auto address = before.buffer()->address();
+    const auto address = before.mesh_buffer().address();
 
     write_in_place(tensor, 2.0F);
 
     const auto& after = tensor.get_tensor(derived);
     EXPECT_TRUE(all_equal(after, 2.0F)) << "the derived view is stale after an in-place write";
-    EXPECT_EQ(after.buffer()->address(), address) << "the refresh allocated a new buffer";
+    EXPECT_EQ(after.mesh_buffer().address(), address) << "the refresh allocated a new buffer";
 }
 
 }  // namespace
@@ -292,6 +294,46 @@ TEST_F(AutogradTensorTest, AutocastTensorRefreshesHostTensor) {
     EXPECT_TRUE(all_equal(tensor.get_tensor(autograd::PreferredPrecision::FULL), 1.0F));
 }
 
+// Loading values into a tensor keeps the dtype it is stored in, in both directions.
+TEST_F(AutogradTensorTest, AssignCastsToTheStoredDtype) {
+    for (const auto& [stored, loaded] :
+         {std::pair{ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32},
+          std::pair{ttnn::DataType::FLOAT32, ttnn::DataType::BFLOAT16}}) {
+        auto tensor = autograd::create_tensor(filled(0.0F, stored));
+        tensor->assign(filled(1.5F, loaded));
+        const auto& native = tensor->get_value(autograd::PreferredPrecision::NATIVE);
+        EXPECT_EQ(native.dtype(), stored);
+        EXPECT_TRUE(all_equal(native, 1.5F));
+    }
+}
+
+TEST_F(AutogradTensorTest, AssignToEmptyTensorTakesTheValueAsIs) {
+    auto tensor = autograd::create_tensor();
+    tensor->assign(filled(1.5F, ttnn::DataType::FLOAT32));
+    EXPECT_EQ(tensor->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::FLOAT32);
+}
+
+TEST_F(AutogradTensorTest, AssignEmptyValueEmptiesTheTensor) {
+    auto tensor = autograd::create_tensor(filled(1.5F, ttnn::DataType::BFLOAT16));
+    tensor->assign(ttnn::Tensor());
+    EXPECT_FALSE(core::is_tensor_initialized(tensor->get_value(autograd::PreferredPrecision::NATIVE)));
+}
+
+// Only bf16 and fp32 are cast; a value of any other dtype must match the stored one.
+TEST_F(AutogradTensorTest, AssignRejectsNonFloatDtypeMismatch) {
+    for (const auto float_dtype : {ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32}) {
+        auto stored_float = autograd::create_tensor(filled(1.0F, float_dtype));
+        EXPECT_ANY_THROW(stored_float->assign(filled(2.0F, ttnn::DataType::UINT32)));
+        EXPECT_EQ(stored_float->get_value(autograd::PreferredPrecision::NATIVE).dtype(), float_dtype);
+
+        auto stored_uint = autograd::create_tensor(filled(1.0F, ttnn::DataType::UINT32));
+        EXPECT_ANY_THROW(stored_uint->assign(filled(2.0F, float_dtype)));
+    }
+    auto stored_uint = autograd::create_tensor(filled(1.0F, ttnn::DataType::UINT32));
+    EXPECT_NO_THROW(stored_uint->assign(filled(2.0F, ttnn::DataType::UINT32)));
+    EXPECT_EQ(stored_uint->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::UINT32);
+}
+
 TEST_F(AutogradTensorTest, FullViewTracksFusedAdamWStep) {
     optimizers::AdamWConfig config;
     config.lr = 1e-2F;
@@ -326,28 +368,17 @@ TEST_F(AutogradTensorTest, FullViewTracksFusedSGDStepWithMomentum) {
     expect_full_view_tracks_fused_step<optimizers::SGD>(config);
 }
 
-TEST_F(AutogradTensorTest, NativeValueTracksFusedAdamWStepOnFp32Parameter) {
-    auto [theta, grad] = make_parameter(ttnn::DataType::FLOAT32);
-    ASSERT_EQ(theta->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::FLOAT32);
-    theta->set_grad(grad);
+TEST_F(AutogradTensorTest, HalfViewTracksFusedAdamWStateOnFp32Parameter) {
     optimizers::AdamWConfig config;
     config.lr = 1e-2F;
-    optimizers::AdamW optimizer(serialization::NamedParameters{{"theta", theta}}, config);
-    // A forward pass reads the bf16 compute copy before the step.
-    expect_views_track({{"theta", theta}}, autograd::PreferredPrecision::HALF, [&] { optimizer.step(); });
+    expect_half_views_track_fused_adamw_step_on_fp32_parameter(config);
 }
 
-TEST_F(AutogradTensorTest, HalfViewTracksAdamWFullPrecisionStep) {
-    optimizers::AdamWFullPrecisionConfig config;
-    config.lr = 1e-2F;
-    expect_half_view_tracks_full_precision_step(config);
-}
-
-TEST_F(AutogradTensorTest, HalfViewTracksAdamWFullPrecisionStepWithAmsgrad) {
-    optimizers::AdamWFullPrecisionConfig config;
+TEST_F(AutogradTensorTest, HalfViewTracksFusedAdamWStateOnFp32ParameterWithAmsgrad) {
+    optimizers::AdamWConfig config;
     config.lr = 1e-2F;
     config.amsgrad = true;
-    expect_half_view_tracks_full_precision_step(config);
+    expect_half_views_track_fused_adamw_step_on_fp32_parameter(config);
 }
 
 // Stochastic rounding applies to bf16 parameters only; an fp32 parameter is updated without it.

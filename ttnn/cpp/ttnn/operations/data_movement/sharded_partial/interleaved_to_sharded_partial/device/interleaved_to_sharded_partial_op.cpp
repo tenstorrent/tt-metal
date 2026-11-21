@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <ttnn/operation.hpp>
 
 namespace ttnn::prim {
@@ -40,7 +41,7 @@ void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
         "Total height of a tensor must be divisible by num_slices!");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to shard need to be allocated in buffers on device!");
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -97,17 +98,18 @@ ttsl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_program_h
     // refreshed on a hit: the factory bakes shape-derived reader/writer args at first miss while
     // override_runtime_arguments patches only the address and starting offset, and the input buffer
     // type selects the TensorAccessorArgs compile-time words, the scratch CB's existence and the input
-    // CB page size. The non-partial sibling already keys both.
+    // CB page size. The non-partial sibling already keys both. The input is keyed as Metal 2.0 matches it
+    // under match_padded_shape_only + relax_tensor_layout_alignment, which covers both: its padded shape
+    // and the rest of its TensorLayout (dtype, page config, memory config) (#59915). Its logical shape and
+    // Alignment are left out: the factory works only from the padded shape.
     return tt::tt_metal::operation::hash_operation<InterleavedToShardedPartialDeviceOperation>(
         operation_attributes.grid_size,
         operation_attributes.shard_spec,
         operation_attributes.num_slices,
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.padded_shape(),
-        input_tensor.memory_config());
+        tt::tt_metal::hash_tensorspec_with_relaxation(
+            input_tensor.tensor_spec(), {.match_padded_shape_only = true, .relax_tensor_layout_alignment = true}));
 }
 
 Tensor interleaved_to_sharded_partial(

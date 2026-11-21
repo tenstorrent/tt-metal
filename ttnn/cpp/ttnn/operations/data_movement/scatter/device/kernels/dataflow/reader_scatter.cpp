@@ -6,6 +6,8 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/scratchpad.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 #include "experimental/kernel_args.h"
 #include "../common.hpp"
 
@@ -14,10 +16,10 @@
 namespace {
 
 // copies source stick to destination stick (first phase of scatter)
-template <typename number_type>
+template <typename number_type, typename OutputDFB>
 FORCE_INLINE void copy_input_to_output(
     const Scratchpad<volatile number_type>& input_page,
-    const DataflowBuffer& output_dfb,
+    const OutputDFB& output_dfb,
     const uint32_t& input_chunk_size) {
     const uint32_t output_l1_write_addr = output_dfb.get_write_ptr();
     volatile tt_l1_ptr number_type* output_l1_write_ptr =
@@ -53,11 +55,11 @@ perform_reduction(number_type input, number_type source_value, ScatterReductionT
 }
 
 // performs scatter on data loaded to scratchpads with load_to_scratchpad
-template <typename number_type, typename index_type>
+template <typename number_type, typename index_type, typename OutputDFB>
 FORCE_INLINE void scatter_along_chunk(
     const Scratchpad<volatile index_type>& index_page,
     const Scratchpad<volatile number_type>& source_page,
-    const DataflowBuffer& output_dfb,
+    const OutputDFB& output_dfb,
     const uint32_t& input_stick_size,
     const uint32_t& input_offset,
     const uint32_t& input_chunk_size,
@@ -121,7 +123,9 @@ void kernel_main() {
 
     std::array<uint32_t, N> coord{from_id<N>(start_stick_id, input_dims)};
 
+#ifdef ARCH_QUASAR
     Scratchpad<volatile input_std_type> input_page(scratch::input);
+#endif
     DataflowBuffer output_dfb(dfb::output);
     Scratchpad<volatile index_std_type> index_page(scratch::index);
     Scratchpad<volatile input_std_type> source_page(scratch::source);
@@ -133,6 +137,7 @@ void kernel_main() {
             const uint32_t input_chunk_length = std::min(input_stick_size - input_offset, input_and_output_chunk_size);
 
             // first phase: copy input data to output
+#ifdef ARCH_QUASAR
             load_to_scratchpad(
                 noc,
                 input_page,
@@ -147,6 +152,19 @@ void kernel_main() {
                 auto input_lock = input_page.scoped_lock(0, input_chunk_length);
                 copy_input_to_output<input_std_type>(input_page, output_dfb, input_chunk_length);
             }
+#else
+            // WH/BH: the NoC reads the input chunk straight into the output page (the DFB holds one page, so its
+            // write pointer is the page base, aligned like the scratchpad). Data-movement cores do not cache L1, and
+            // the barrier completes the read before the scatter phase touches the page.
+            output_dfb.reserve_back(ONE_PAGE);
+            noc.async_read(
+                PrecomposedUnicastEndpoint{},
+                CoreLocalMem<uint32_t>(output_dfb.get_write_ptr()),
+                input_chunk_length * sizeof(input_std_type),
+                {.noc_addr = input_addr_gtor.get_noc_addr(input_stick_id) + input_offset * sizeof(input_std_type)},
+                {});
+            noc.async_read_barrier();
+#endif
 
             if (in_bounds<N>(coord, index_dims)) {
                 const uint32_t index_stick_id = to_id<N>(coord, index_strides);

@@ -81,7 +81,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
+        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
 
     // Programs ADDR_MOD_7, which the merge and the probe both use. Also reloads the
     // constant file, so it must stay ahead of the poison.
@@ -97,6 +97,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             sfpi::vFloat x                  = sfpi::dst_reg[0];
             sfpi::l_reg[sfpi::LRegs::LReg0] = x;
             TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG0, 0);
+            // SFPMAD takes 2 cycles, and Wormhole does not wait for it: the next instruction would read the old LREG0.
+            TTI_SFPNOP;
             sfpi::vFloat x_minus_1 = sfpi::l_reg[sfpi::LRegs::LReg0];
             sfpi::dst_reg[0]       = x_minus_1;
             sfpi::dst_reg++;

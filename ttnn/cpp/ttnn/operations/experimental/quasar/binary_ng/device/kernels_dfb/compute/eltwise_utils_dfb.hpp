@@ -20,10 +20,10 @@
 // in DST, writes the results into dfb_post. dfb_out's id is used only to briefly retarget the packer
 // at dfb_post and then restore it to dfb_out's data format. FPU variant: also reconfigures the
 // unpacker SrcA temporarily, then restores the physical-LHS format for the next pass.
-template <typename ActivationFn>
+template <typename ActivationFn, typename DFBPre, typename DFBPost>
 ALWI void preprocess_fpu_impl_dfb(
-    DataflowBuffer& dfb_pre,
-    DataflowBuffer& dfb_post,
+    DFBPre& dfb_pre,
+    DFBPost& dfb_post,
     uint32_t dfb_out_id,
     uint32_t per_core_block_size,
     ActivationFn&& process_activations) {

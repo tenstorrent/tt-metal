@@ -6,6 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/buf_rw_note.h"
+#include "api/dataflow/dfb_access.h"
 #include "internal/debug/noc_zero_guard.h"
 #include "noc_address_backend.h"
 template <typename DSpecT>
@@ -14,7 +15,6 @@ class TensorAccessor;
 struct UnicastEndpoint;
 struct MulticastEndpoint;
 class CircularBuffer;
-class DataflowBuffer;
 
 // Concrete arg struct for the DFB-specific Noc overloads.
 // Defined here so noc.h can use it in async_read/async_write specializations defined in
@@ -32,6 +32,11 @@ template <>
 struct noc_traits_t<UnicastEndpoint>;
 template <>
 struct noc_traits_t<MulticastEndpoint>;
+
+// The arguments Noc's multicast APIs take for a destination of type T, such as a DataflowBuffer's node rectangle and
+// byte offset.
+template <typename T>
+using noc_dst_args_mcast_t = typename noc_traits_t<T>::dst_args_mcast_type;
 
 // May T be a local-L1 endpoint of noc.async_write_zeros?
 template <typename T>
@@ -58,6 +63,12 @@ inline constexpr bool noc_addrgen_push_v = false;
 template <typename T>
 inline constexpr bool noc_addrgen_push_v<T, std::void_t<decltype(noc_traits_t<T>::may_push)>> =
     noc_traits_t<T>::may_push;
+
+// True when T reports the nodes a multicast into it must stay within, multicast_node_set, for Watcher to check.
+template <typename T, typename = void>
+inline constexpr bool noc_multicast_node_set_v = false;
+template <typename T>
+inline constexpr bool noc_multicast_node_set_v<T, std::void_t<decltype(&noc_traits_t<T>::multicast_node_set)>> = true;
 
 /**
  * @brief Compile-time bit-flags that control optional NoC transaction behaviours.
@@ -122,8 +133,6 @@ private:
     using src_args_t = typename noc_traits_t<T>::src_args_type;
     template <typename T>
     using dst_args_t = typename noc_traits_t<T>::dst_args_type;
-    template <typename T>
-    using dst_args_mcast_t = typename noc_traits_t<T>::dst_args_mcast_type;
 
     template <AddressType address_type>
     using addr_underlying_t = std::conditional_t<address_type == AddressType::LOCAL_L1, uintptr_t, uint64_t>;
@@ -198,7 +207,7 @@ private:
     }
 
     template <AddressType address_type, typename Dst>
-    auto get_dst_ptr_mcast(const Dst& dst, const dst_args_mcast_t<Dst>& dst_args) const {
+    auto get_dst_ptr_mcast(const Dst& dst, const noc_dst_args_mcast_t<Dst>& dst_args) const {
         tt_buf_rw::note_if_bound<tt_buf_rw::kWrite, Dst>();
         return addr_underlying_t<address_type>{
             noc_traits_t<Dst>::template dst_addr_mcast<address_type>(dst, *this, dst_args)};
@@ -496,7 +505,7 @@ public:
         uint32_t size_bytes,
         uint32_t num_dsts,
         const src_args_t<Src>& src_args,
-        const dst_args_mcast_t<Dst>& dst_args,
+        const noc_dst_args_mcast_t<Dst>& dst_args,
         bool linked = false) const {
         static_assert(!has_flag(opts, NocOptions::TXN_ID), "Mcasts with transaction id are not supported yet");
         static_assert(
@@ -506,6 +515,19 @@ public:
         NOC_ASSERT_NOT_ZERO_MODE();  // no NoC write between async_write_zeros and write_zeros_l1_barrier
         auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
         auto dst_noc_addr = get_dst_ptr_mcast<AddressType::NOC>(dst, dst_args);
+        if constexpr (noc_multicast_node_set_v<Dst>) {
+            DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(
+                noc_id_,
+                dst_noc_addr,
+                src_addr,
+                size_bytes,
+                dst_args.noc_x_start,
+                dst_args.noc_y_start,
+                dst_args.noc_x_end,
+                dst_args.noc_y_end,
+                noc_traits_t<Dst>::multicast_node_set(dst),
+                has_flag(opts, NocOptions::MCAST_INCL_SRC));
+        }
         if constexpr (has_flag(opts, NocOptions::MCAST_INCL_SRC)) {
             noc_async_write_multicast_loopback_src_impl(src_addr, dst_noc_addr, size_bytes, num_dsts, linked, noc_id_);
         } else {
@@ -796,10 +818,9 @@ public:
      *
      * Zeroes [start, start + @p size_bytes) where start = base + @p args.offset_bytes, and base is:
      *   - CircularBuffer / DataflowBuffer : get_write_ptr()
-     *   - Scratchpad                      : get_base_address()
-     *   - LocalTensorAccessor             : get_bank_base_address()
-     *   - CoreLocalMem                    : get_address()
+     *   - Scratchpad / LocalTensorAccessor / CoreLocalMem : the start of the local region
      * @p args.offset_bytes is in bytes, including for the typed handles (whose operator[] is not).
+     * A @p size_bytes of 0 issues nothing.
      *
      * @note The destination bytes are UNDEFINED until write_zeros_l1_barrier() returns: do not read
      *       or write the window before the barrier.
@@ -898,10 +919,10 @@ public:
      * via its private prepare/commit helpers.
      * Size of the read is not accepted here because the DataflowBuffer provides parameters for the read internally.
      */
-    template <NocOptions opts, typename Src>
+    template <NocOptions opts, typename Src, dfb::AccessPattern Pap, dfb::AccessPattern Cap>
     NOC_TRANSFER_INLINE std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)> async_read(
         const Src& src,
-        DataflowBuffer& dst,
+        DataflowBuffer<Pap, Cap>& dst,
         const src_args_t<Src>& src_args,
         const DataflowBufferArgs& dst_args = {}) const;
 
@@ -913,9 +934,12 @@ public:
      * via its private prepare/commit helpers.
      * Size of the write is not accepted here because the DataflowBuffer provides parameters for the write internally.
      */
-    template <NocOptions opts, typename Dst>
+    template <NocOptions opts, typename Dst, dfb::AccessPattern Pap, dfb::AccessPattern Cap>
     NOC_TRANSFER_INLINE std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)> async_write(
-        DataflowBuffer& src, const Dst& dst, const DataflowBufferArgs& src_args, const dst_args_t<Dst>& dst_args) const;
+        DataflowBuffer<Pap, Cap>& src,
+        const Dst& dst,
+        const DataflowBufferArgs& src_args,
+        const dst_args_t<Dst>& dst_args) const;
 #endif
 
 private:

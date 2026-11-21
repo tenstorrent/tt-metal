@@ -204,7 +204,7 @@ ProgramDescriptor SliceWriteRMInterleavedProgramFactory::create_descriptor(
     const auto& stride = operation_attributes.step;
 
     ProgramDescriptor desc;
-    tt::tt_metal::IDevice* device = input.device();
+    auto* device = input.device();
     const auto& input_padded_shape = input.padded_shape();
 
     uint32_t num_unpadded_sticks = input.physical_volume() / input.padded_shape()[-1];
@@ -266,7 +266,7 @@ ProgramDescriptor SliceWriteRMInterleavedProgramFactory::create_descriptor(
     KernelDescriptor::Defines writer_defines;
     if (stride[-1] != 1) {
         writer_defines.emplace_back("LAST_DIM_STRIDED", "1");
-        uint32_t output_row_size_bytes = input_padded_shape[-1] * input.element_size();
+        uint32_t output_row_size_bytes = output.padded_shape()[-1] * output.element_size();
         cb_page_size = tt::round_up(output_row_size_bytes, alignment);
         // input/output data_formats should be the same
         desc.cbs.push_back(make_slice_cb_descriptor(

@@ -13,12 +13,13 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
 
 void RunActiveEthKernels(const std::shared_ptr<distributed::MeshDevice>& mesh_device, int loop_count) {
-    IDevice* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto eth_cores = device->get_active_ethernet_cores(true);
     if (eth_cores.empty()) {
         fmt::print("No active ethernet cores on device {}, nothing to profile\n", device->id());
@@ -27,7 +28,7 @@ void RunActiveEthKernels(const std::shared_ptr<distributed::MeshDevice>& mesh_de
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr int loop_size = 200;
     constexpr int enqueue_times = 2;

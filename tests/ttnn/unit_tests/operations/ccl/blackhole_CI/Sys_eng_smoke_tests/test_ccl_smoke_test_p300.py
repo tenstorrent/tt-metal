@@ -6,7 +6,7 @@ import pytest
 import ttnn
 
 from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
-from models.common.utility_functions import skip_for_wormhole_b0, run_for_n_dev
+from tt_py_test_utils_common.utility_functions import skip_for_wormhole_b0, run_for_n_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
@@ -75,7 +75,7 @@ def test_ccl_ddr_smoke_test(
     enable_trace,
     num_iters,
 ):
-    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis, mesh_device=bh_1d_mesh_device)
     # Check all the rows and columns independantly within the device
     submesh_device = bh_1d_mesh_device.create_submesh(
         ttnn.MeshShape((num_devices, 1)), offset=ttnn.MeshCoordinate(0, 0)
@@ -174,7 +174,7 @@ def test_ccl_other_smoke_test(
     enable_trace,
     num_iters,
 ):
-    validate_test(num_devices, None, bh_2d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, cluster_axis, mesh_device=bh_2d_mesh_device)
     submesh_device = bh_2d_mesh_device.create_submesh(
         ttnn.MeshShape((num_devices, 1)), offset=ttnn.MeshCoordinate(0, 0)
     )

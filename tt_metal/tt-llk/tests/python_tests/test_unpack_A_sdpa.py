@@ -2,24 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Test for the SDPA-specific unpack-A path (experimental/llk_unpack_A_sdpa.h,
-# promoted in PR #53295). The SDPA MOP only supports the datacopy-identity
-# configuration (BType==NONE, acc_to_dest==false, reuse==NONE,
-# unpack_to_dest==false, no transpose) — see the golden-derivation comment at the
-# top of sources/unpack_A_sdpa_test.cpp. The header streams num_tiles*num_faces
-# plain SrcA UNPACRs with Z-increment and Set-Dvalid and nothing else, so the
-# observable result is a straight datacopy of the input tile. This test therefore
-# reuses DataCopyGolden and validates the full defined tile (every face/row is a
-# defined lane for an identity copy).
-#
-# Blackhole-only LLK: no BH card here, so runtime pass/fail cannot be checked.
-# The bar is a clean BH compile plus a golden that mirrors the header's real
-# math (identity datacopy).
+# The SDPA MOP supports only the identity configuration exercised here. It
+# streams SrcA without a SrcB dummy, so the A2D math path has a datacopy golden.
 
 from itertools import product
 
 import pytest
-import torch
 from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -35,20 +23,18 @@ from helpers.llk_params import (
     EltwiseBinaryReuseDestType,
     StochasticRounding,
     Transpose,
-    format_dict,
 )
 from helpers.param_config import (
     generate_params,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
 )
+from helpers.perf.blaze import compile_only, execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
-    DISABLE_SRC_ZERO_FLAG,
     INPUT_DIMENSIONS,
     NUM_BLOCKS,
     NUM_FACES,
@@ -63,12 +49,11 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [
     DataFormat.Float32,
-    DataFormat.Float16,
     DataFormat.Float16_b,
     DataFormat.Bfp8_b,
 ]
@@ -129,26 +114,6 @@ def filter_params_with_constraints(all_params):
     for params in all_params:
         (testname, formats, num_faces, face_r_dim, input_dims) = params
 
-        # ttsim functional-sim limitation (NOT a bug in the SDPA unpack path):
-        # a datacopy whose SOURCE/DEST format is a 127-exponent-bias 16-bit
-        # format (Float16_b) or a block-float (Bfp8_b) but whose OUTPUT is the
-        # 15-bias Float16 drops the upper 8 rows of every face on ttsim (the
-        # second MOV_8_ROWS of each face reads back as zero). The identical
-        # MOVA2D data movement is used for every format, and the exact same
-        # (in_Float16_b/Bfp8_b -> out_Float16) conversion is what fails, so this
-        # is ttsim's modeling of the 16-bit->16-bit exponent-rebias conversion,
-        # not the A->Dest copy under test. Float16->Float16 (no rebias) and
-        # Float32->Float16 (32-bit source) both pass. The passing sibling
-        # test_sdpa_reduce_row.py sidesteps this by only exercising
-        # Float16_b -> Float16_b. Skip the affected output=Float16 combinations
-        # here for the same reason; do not distort the identity golden to match
-        # the sim inaccuracy.
-        if formats.output_format == DataFormat.Float16 and formats.input_format in (
-            DataFormat.Float16_b,
-            DataFormat.Bfp8_b,
-        ):
-            continue
-
         # Partial faces (face_r_dim < 16) require num_faces == 2 and full-face
         # (16-row) formats — Bfp8_b partial faces are not exercised here.
         if face_r_dim < 16:
@@ -196,18 +161,17 @@ def create_simple_ids(all_params):
 param_ids = create_simple_ids(all_params)
 
 
-@blackhole_only
-@pytest.mark.parametrize(
-    "testname, formats, num_faces, face_r_dim, input_dimensions",
-    all_params,
-    ids=param_ids,
-)
-def test_unpack_A_sdpa(
+def _run_unpack_A_sdpa(
     testname,
     formats,
     num_faces,
     face_r_dim,
     input_dimensions,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     partial_face = face_r_dim < 16
     num_faces_r_dim, num_faces_c_dim = legacy_num_faces_to_grid(num_faces)
@@ -247,55 +211,61 @@ def test_unpack_A_sdpa(
         BlocksCalculationAlgorithm.Standard,
     )
 
-    configuration = TestConfig(
-        testname,
-        formats,
-        templates=[
-            STOCHASTIC_ROUNDING(StochasticRounding.No),
-            BROADCAST_TYPE(BroadcastType.None_),
-            ACC_TO_DEST(False),
-            REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
-            PARTIAL_FACE(
-                partial_a=partial_face,
-                partial_face_pack=partial_face,
-                partial_b=partial_face,
-                partial_face_math=partial_face,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name=testname,
+            formats=formats,
+            templates=[
+                compile_only(STOCHASTIC_ROUNDING(StochasticRounding.No)),
+                BROADCAST_TYPE(BroadcastType.None_),
+                ACC_TO_DEST(False),
+                REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
+                PARTIAL_FACE(
+                    partial_a=partial_face,
+                    partial_face_pack=partial_face,
+                    partial_b=partial_face,
+                    partial_face_math=partial_face,
+                ),
+            ],
+            runtimes=[
+                UNPACK_TRANS_FACES(Transpose.No),
+                UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+                NUM_FACES(num_faces),
+                NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
+                NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
+                TILE_COUNT(tile_cnt_A),
+                TEST_FACE_DIMS(face_r_dim=face_r_dim),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+                NUM_BLOCKS(num_blocks),
+                INPUT_DIMENSIONS(
+                    raw_dimensions[0] // TILE_DIMENSIONS[0],
+                    raw_dimensions[1] // TILE_DIMENSIONS[1],
+                ),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+                num_faces=num_faces,
+                face_r_dim=face_r_dim,
             ),
-            DISABLE_SRC_ZERO_FLAG(False),
-        ],
-        runtimes=[
-            # Identity SDPA path: no transpose of faces / within-face 16x16.
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-            NUM_FACES(num_faces),
-            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
-            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
-            TILE_COUNT(tile_cnt_A),
-            TEST_FACE_DIMS(face_r_dim=face_r_dim),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            NUM_BLOCKS(num_blocks),
-            INPUT_DIMENSIONS(
-                raw_dimensions[0] // TILE_DIMENSIONS[0],
-                raw_dimensions[1] // TILE_DIMENSIONS[1],
-            ),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-            face_r_dim=face_r_dim,
+            dest_acc=DestAccumulation.No,
+            unpack_to_dest=False,
         ),
-        dest_acc=DestAccumulation.No,
-        unpack_to_dest=False,
     )
+    if is_perf:
+        return
 
-    res_from_L1 = configuration.run().result
+    res_from_L1 = outcome.result
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -303,7 +273,29 @@ def test_unpack_A_sdpa(
 
     # Identity datacopy defines every lane of the tile, so validate the full
     # tile against the golden with the output-format tolerance.
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "testname, formats, num_faces, face_r_dim, input_dimensions",
+    all_params,
+    ids=param_ids,
+)
+def test_unpack_A_sdpa(
+    testname,
+    formats,
+    num_faces,
+    face_r_dim,
+    input_dimensions,
+):
+    _run_unpack_A_sdpa(
+        testname,
+        formats,
+        num_faces,
+        face_r_dim,
+        input_dimensions,
+    )

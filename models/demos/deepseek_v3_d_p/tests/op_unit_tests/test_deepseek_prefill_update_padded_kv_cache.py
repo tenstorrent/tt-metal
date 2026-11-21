@@ -25,12 +25,15 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
+from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     MlaKvCacheFormat,
     create_sequence_cache_mesh_composer,
     init_kvpe_cache,
     init_mla_kv_cache,
+    is_tp_deduped_kv_cache,
+    striped_cache_to_host,
 )
 
 # MLA KVPE head dim (kv_lora_rank=512 + qk_rope_head_dim=64). The op is a pure page copy, so a
@@ -424,25 +427,43 @@ def test_update_padded_kv_cache_full_mesh_rejects_axis_topology(mesh_device, exp
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
+    "mesh_device, device_params, sp_axis",
     [
         pytest.param(
             (1, 4),
             torus_x_device_params(),
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="torus-x-1x4",
         ),
         pytest.param(
             (2, 4),
             fabric2d_device_params(),
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
         ),
         pytest.param(
             (8, 4),
             torus_xy_device_params(),
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half): the cache's sequence is split over mesh axis 1.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -460,6 +481,7 @@ def test_update_padded_kv_cache_full_mesh_rejects_axis_topology(mesh_device, exp
 def test_update_padded_kv_cache_single_iteration_prefill(
     mesh_device,
     device_params,
+    sp_axis,
     config_name,
     num_users,
     num_layers,
@@ -480,7 +502,7 @@ def test_update_padded_kv_cache_single_iteration_prefill(
         pytest.skip("FP8_E4M3 is Blackhole-only")
     if is_ci_env or is_ci_v2_env:
         pytest.skip("CI runs only the small padded_partial case (multi-iteration); this is a subset of it")
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     sp = mesh_device.shape[sp_axis]
     tile = ttnn.TILE_SIZE
 
@@ -584,6 +606,108 @@ def test_update_padded_kv_cache_single_iteration_prefill(
     logger.info(f"program cache entries: {mesh_device.num_program_cache_entries()}")
 
 
+@pytest.mark.parametrize(
+    "mesh_device, device_params, sp_axis",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half), SP on mesh axis 1: chip (t, s) holds stripe s*tp + t,
+        # which the cache's row-major topology label does not describe.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_tp_deduped_round_trip(mesh_device, device_params, sp_axis):
+    """KV dedup round trip: write consecutive chunks of known tokens into a TP-deduped cache with
+    update_padded_kv_cache(tp_axis=...), read it back through striped_cache_to_host, undo the block-cyclic
+    layout, and require every written row at its natural position, bit-exact. Writer and host reader then
+    agree on the stripe order for SP on either mesh axis; test_mla_chunked_prefill's tp_sharded rows check
+    ring_mla's split-KV reads against the same writer."""
+    tp_axis = 1 - sp_axis
+    sp, tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
+    num_users, num_layers, num_chunks = 2, 2, 3
+    # Each SP chip takes chunk_local tokens of a chunk and keeps 1/tp of them, so a stripe's run is
+    # chunk_local / tp rows: two tiles here.
+    chunk_local = 2 * ttnn.TILE_SIZE * tp
+    chunk_global = chunk_local * sp
+    seq_len_cache = chunk_global * (num_chunks + 1)
+
+    kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=KVPE_HEAD_DIM,
+        mesh_device=mesh_device,
+        seq_len=seq_len_cache,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_users * num_layers,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        tp_axis=tp_axis,
+    )
+    assert is_tp_deduped_kv_cache(kv_cache, tuple(mesh_device.shape))
+
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2  # the chunk split over SP, replicated over TP, as MLA's kvpe output is
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims)
+    concat_dims = [None, None]
+    concat_dims[sp_axis], concat_dims[tp_axis] = 2, 1
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape)
+
+    torch.manual_seed(0)
+    expected = {}
+    for u in range(num_users):
+        for l in range(num_layers):
+            written = []
+            for c in range(num_chunks):
+                chunk = torch.randn(1, 1, chunk_global, KVPE_HEAD_DIM, dtype=torch.bfloat16)
+                tt_input = _make_input(chunk, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, mesh_device, mapper)
+                # The reference is the input read back, through the same bfp8 encode the cache applies.
+                written.append(ttnn.to_torch(tt_input, mesh_composer=composer).to(torch.bfloat16)[0, 0])
+                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                    kv_cache,
+                    tt_input,
+                    slot_idx=u,
+                    layer_idx=l,
+                    num_layers=num_layers,
+                    kv_actual_global=c * chunk_global,
+                    cluster_axis=sp_axis,
+                    tp_axis=tp_axis,
+                )
+                ttnn.deallocate(tt_input)
+            expected[(u, l)] = torch.cat(written, dim=0)
+    ttnn.synchronize_device(mesh_device)
+
+    # Stripe order (chip (s, t) -> stripe s*tp + t), then block-cyclic over sp*tp stripes to natural order.
+    stripes = striped_cache_to_host(kv_cache, mesh_device, sp_axis).to(torch.bfloat16)
+    natural = torch.empty_like(stripes)
+    natural[:, blockcyclic_positions(sp * tp, chunk_global, seq_len_cache)] = stripes
+    for u in range(num_users):
+        for l in range(num_layers):
+            got = natural[u * num_layers + l, : num_chunks * chunk_global]
+            assert torch.equal(got, expected[(u, l)]), (
+                f"sp_axis={sp_axis} user {u} layer {l}: {torch.count_nonzero(got != expected[(u, l)]).item()} "
+                f"elements differ from the tokens written"
+            )
+
+
 def _rotated_chip_positions(kv_actual, sp, chunk_local):
     """Global token position carried by each chip-local input row after the op's KV-pad-aware
     rotation, mirroring the writer kernel's update_idxt math. positions[c][r] is the global
@@ -609,19 +733,23 @@ def _rotated_chip_positions(kv_actual, sp, chunk_local):
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
+    "mesh_device, sp_axis",
     [
         pytest.param(
-            (2, 2), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"), id="2x2"
+            (2, 2), 0, marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"), id="2x2"
         ),
         pytest.param(
-            (2, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"), id="2x4"
+            (2, 4), 0, marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"), id="2x4"
         ),
         pytest.param(
-            (8, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"), id="8x4"
+            (8, 4), 0, marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"), id="8x4"
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half): the cache's sequence is split over mesh axis 1.
+        pytest.param(
+            (4, 4), 1, marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"), id="4x4-sp1"
         ),
     ],
-    indirect=True,
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
 @pytest.mark.parametrize(
@@ -636,6 +764,7 @@ def _rotated_chip_positions(kv_actual, sp, chunk_local):
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_multi_iteration_prefill(
     mesh_device,
+    sp_axis,
     config_name,
     num_users,
     num_layers,
@@ -664,7 +793,7 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
         pytest.skip("FP8_E4M3 is Blackhole-only")
     if (is_ci_env or is_ci_v2_env) and not (config_name == "small" and scenario == "padded_partial"):
         pytest.skip("CI runs only the small padded_partial case; the others are subsets of it")
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     sp = mesh_device.shape[sp_axis]
     tile = ttnn.TILE_SIZE
     C = new_isl_tiles_per_dev * tile  # per-device chunk (physical, fixed every iter)
@@ -1299,9 +1428,182 @@ def test_update_padded_kv_cache_multihead_head_stride(mesh_device, case):
     logger.success(f"[{case}] {heads} heads x {chunk_local} rows placed exactly (write_end={write_end})")
 
 
+# Input row window: several requests' K/V stacked along each chip's rows (a batched prefill step), each written
+# to its own slot from its rows of the stacked input. (slot, kv_actual_global in chunks of that lane, rows per
+# chip in tiles). The last lane starts one tile short of a chunk boundary: partway through a chip's two-tile stripe,
+# so its write crosses into the next chunk (and, on 2x2, the next chip).
+_WINDOW_LANES = [(0, 3, 1), (1, 0, 1), (2, 1, 2), (3, 2, 2)]
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((1, 1), id="1x1"),
+        pytest.param(
+            (2, 2), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"), id="2x2"
+        ),
+        # 2x4 is the shape L2's dp_op_unit_tests selects for this op; 8x4 is a BH Galaxy.
+        pytest.param(
+            (2, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"), id="2x4"
+        ),
+        pytest.param(
+            (8, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"), id="8x4"
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES[:2], ids=DTYPE_LAYOUT_IDS[:2])
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_input_row_window(mesh_device, dtype, layout):
+    """A windowed write of a stacked multi-head input matches slice-then-write bit for bit, for four lanes at
+    different slots and depths; same-size lanes hit the program cache at a new offset."""
+    sp_axis = 0
+    sp = mesh_device.shape[sp_axis]
+    tile = ttnn.TILE_SIZE
+    heads, head_dim, num_layers, layer_idx = 4, 128, 2, 1
+    lane_rows = [n * tile for _, _, n in _WINDOW_LANES]
+    stacked_local = sum(lane_rows)
+    seq_local = 8 * tile
+
+    mesh_device.enable_program_cache()
+    caches = [
+        _alloc_multihead_cache(
+            mesh_device,
+            batch=len(_WINDOW_LANES) * num_layers,
+            heads=heads,
+            seq_local=seq_local,
+            head_dim=head_dim,
+            dtype=dtype,
+            layout=layout,
+        )
+        for _ in range(2)
+    ]
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims)
+    torch.manual_seed(5)
+    stacked = _make_input(
+        torch.randn(1, heads, sp * stacked_local, head_dim, dtype=torch.bfloat16), dtype, layout, mesh_device, mapper
+    )
+
+    def write(cache, tensor, slot, kv_actual, **window):
+        # Tensor-metadata form, the one traced prefill uses.
+        slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=kv_actual, slot_idx=slot)
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache,
+            tensor,
+            slot_idx=slot_t,
+            kv_actual_global=kv_t,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            cluster_axis=sp_axis,
+            **window,
+        )
+        ttnn.deallocate(slot_t)
+        ttnn.deallocate(kv_t)
+
+    lanes = []
+    offset = 0
+    for (slot, depth, _), rows in zip(_WINDOW_LANES, lane_rows):
+        lanes.append((slot, depth * rows * sp - (tile if slot == 3 else 0), offset, rows))
+        offset += rows
+    for slot, kv_actual, offset, rows in lanes:
+        sliced = ttnn.slice(stacked, (0, 0, offset, 0), (1, heads, offset + rows, head_dim))
+        write(caches[0], sliced, slot, kv_actual)
+        ttnn.deallocate(sliced)
+    # The windowed writes alone: one program per distinct row count, whatever the offsets.
+    entries_before = mesh_device.num_program_cache_entries()
+    for slot, kv_actual, offset, rows in lanes:
+        write(caches[1], stacked, slot, kv_actual, input_row_offset=offset, input_rows=rows)
+    ttnn.synchronize_device(mesh_device)
+    distinct_rows = len(set(lane_rows))
+    assert mesh_device.num_program_cache_entries() == entries_before + distinct_rows, (
+        f"{len(lanes)} windowed writes of {distinct_rows} row counts should add {distinct_rows} programs, added "
+        f"{mesh_device.num_program_cache_entries() - entries_before}"
+    )
+
+    reference, windowed = (
+        [ttnn.to_torch(t).to(torch.float32) for t in ttnn.get_device_tensors(cache.cpu())] for cache in caches
+    )
+    for chip, (a, b) in enumerate(zip(reference, windowed)):
+        assert torch.count_nonzero(a) > 0, f"chip {chip}: the reference wrote nothing"
+        assert torch.equal(a, b), f"chip {chip}: windowed write differs from slice + write"
+    logger.success(f"{len(_WINDOW_LANES)} windows of a {stacked_local}-row stacked input match slice + write")
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((1, 1), id="1x1"),
+        pytest.param(
+            (2, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"), id="2x4"
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_input_row_window_rejects(mesh_device, expect_error):
+    """A window must be tile-aligned, non-empty and inside the input, on cache misses and hits alike."""
+    tile = ttnn.TILE_SIZE
+    cache = _alloc_multihead_cache(
+        mesh_device, batch=1, heads=1, seq_local=8 * tile, head_dim=128, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    tensor = ttnn.from_torch(
+        torch.zeros(1, 1, 4 * tile, 128, dtype=torch.bfloat16),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=0, slot_idx=0)
+    kwargs = dict(slot_idx=slot_t, kv_actual_global=kv_t, layer_idx=0, num_layers=1, cluster_axis=0)
+    window_cases = [
+        (16, tile),  # misaligned
+        (0, 0),  # empty
+        (3 * tile, 2 * tile),  # past the end
+        (4 * tile, None),  # offset alone, past the end
+        (2**32 - tile, 2 * tile),  # offset + rows wraps in uint32
+    ]
+    for offset, rows in window_cases:
+        window = dict(input_row_offset=offset) | ({} if rows is None else dict(input_rows=rows))
+        with expect_error(RuntimeError, "input row window"):
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(cache, tensor, **window, **kwargs)
+
+    # The offset is not hashed, so a cache hit must re-check it: prime a 2-tile window, then reuse its program
+    # with an offset that runs past the end.
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        cache, tensor, input_row_offset=0, input_rows=2 * tile, **kwargs
+    )
+    with expect_error(RuntimeError, "input row window"):
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache, tensor, input_row_offset=3 * tile, input_rows=2 * tile, **kwargs
+        )
+
+
 # KV dedup: the op gets a TP-REPLICATED input and each chip persists only its own 1/tp window, so the two
 # mesh axes linearize into one block-cyclic axis of sp*tp with per-chip chunk Cl = chunk_local/tp.
-@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 2), (2, 4)], ids=["1x4", "2x2", "2x4"], indirect=True)
+# With fabric up the op runs one program for the mesh, else one per chip; both must match the reference.
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param((1, 4), {}, id="1x4"),
+        pytest.param((2, 2), {}, id="2x2"),
+        pytest.param((2, 4), {}, id="2x4"),
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
 @pytest.mark.parametrize(
     "config_name, num_users, num_layers, cl_tiles_per_dev, cache_tokens_per_dev",
@@ -1485,6 +1787,35 @@ def test_update_padded_kv_cache_tp_sharded(
             logger.info(f"  user {u} layer {l}: exact match")
 
     logger.info(f"program cache entries: {mesh_device.num_program_cache_entries()}")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_on_offset_submesh(mesh_device, dtype, layout):
+    """Bottom half of the box: fabric chip ids are not the submesh's row-major order. Bit-exact."""
+    rows, cols = mesh_device.shape
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(rows // 2, cols), offset=ttnn.MeshCoordinate(rows // 2, 0))
+    test_update_padded_kv_cache_tp_sharded(
+        submesh, "small", 2, 3, 2, 512, "padded_partial", dtype, layout, False, False
+    )
 
 
 @pytest.mark.parametrize("mesh_device", _full_mesh_update_cases(), indirect=True)

@@ -5,8 +5,8 @@
 // PrefetcherPipe counterpart of writer_l1.cpp (the GlobalCircularBuffer writer, which lives beside it).
 //
 // Drains the reader's staging ring into this core's PrefetcherPipe: each staged block becomes one pipe
-// entry per receiver, receiver r getting the r-th column slice of every block row (write_strided). The
-// pipe's entry size follows the tensor being delivered.
+// entry per receiver, receiver r getting the r-th column slice of every block row
+// (write_strided_and_push_back). The pipe's entry size follows the tensor being delivered.
 //
 // Bindings:
 //   dfb::staging - CONSUMER: the reader's staging ring, max_block_num_tiles entries per block
@@ -16,8 +16,10 @@
 // size), block height in tile rows, coalesced_page_size, coalesced_num_pages. One receiver's slice of a
 // block row is coalesced_num_pages writes of coalesced_page_size bytes.
 //
-// The pipe's destructor commits its cursors and drains its credit atomics; the reader, which shares this
-// NOC, re-syncs the NoC counters at exit, so it is released only after that.
+// This kernel and the reader share one dedicated NOC (DramPrefetcherPipeSpecFactory): this kernel issues
+// only posted writes and atomics, the reader only reads. The NOC's hardware counters count both kernels'
+// traffic, so both re-sync their own counters from them at exit: this kernel once the pipe's destructor
+// has drained its credit atomics, the reader only after this kernel releases it through dfb::sync.
 
 #include <stdint.h>
 
@@ -26,6 +28,8 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/prefetcher_pipe.h"
 #include "experimental/kernel_args.h"
+
+static_assert(noc_mode == DM_DEDICATED_NOC, "writer_pipe_metal2 shares a dedicated NOC with the reader");
 
 void kernel_main() {
     constexpr uint32_t num_layers = get_arg(args::num_layers);
@@ -54,10 +58,9 @@ void kernel_main() {
                 for (uint32_t block = 0; block < num_blocks; ++block) {
                     staging.wait_front(max_block_num_tiles);
                     pipe.reserve_back(1);
-                    pipe.write_strided(noc, staging, block_height_in_tiles, coalesced_num_pages, coalesced_page_size);
-                    // Also what frees the staging slot: write_strided's source is that slot.
-                    pipe.flush_writes(noc);
-                    pipe.push_back(1, noc);
+                    // Returns with the writes flushed, which is what frees the staging slot they are read from.
+                    pipe.write_strided_and_push_back(
+                        noc, staging, 1, block_height_in_tiles, coalesced_num_pages, coalesced_page_size);
                     staging.pop_front(max_block_num_tiles);
                 }
             }
@@ -65,6 +68,10 @@ void kernel_main() {
         }
     }  // The pipe's destructor runs here: nothing of this kernel's is in flight on the NOC past this point.
 
+    // On a dedicated NOC each RISC compares its own transaction counts with the NOC's hardware counters,
+    // which also count the reader's reads. The reader has read every block this kernel sent, so take its
+    // reads in now, for the firmware's end-of-kernel checks.
+    ncrisc_noc_counters_init();
     sync.reserve_back(1);
     sync.push_back(1);
 }

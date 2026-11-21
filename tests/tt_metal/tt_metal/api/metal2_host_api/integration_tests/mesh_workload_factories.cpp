@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Real-hardware tests for Metal 2.0 MeshWorkload factory APIs (WH/BH).
+// Real-hardware tests for Metal 2.0 MeshWorkload constructors that take ProgramSpecs (WH/BH).
 //
-// These tests prove the ProgramSpec -> MakeMeshWorkloadFromSpec(s) -> MeshWorkload enqueue -> verify
+// These tests prove the ProgramSpec -> MeshWorkload constructors -> MeshWorkload enqueue -> verify
 // pipeline end-to-end on real Wormhole B0 and Blackhole hardware.
 
 #include <gtest/gtest.h>
@@ -18,9 +18,9 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "command_queue_fixture.hpp"
 #include "device_fixture.hpp"
@@ -135,7 +135,7 @@ void SetScratchpadArgs(Program& program) {
         .kernel = KernelSpecName{kScratchKernel},
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"report_addr", kReportAddr}}),
     }};
-    SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 }
 
 void SetScratchpadArgs(distributed::MeshWorkload& workload) {
@@ -158,7 +158,7 @@ IDevice* DeviceAt(
 void ClearScratchpadReport(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const distributed::MeshCoordinate& coordinate) {
     std::vector<uint32_t> report(1, 0u);
-    detail::WriteToDeviceL1(DeviceAt(mesh_device, coordinate), NodeCoord{0, 0}, kReportAddr, report);
+    tt::tt_metal::detail::WriteToDeviceL1(DeviceAt(mesh_device, coordinate), NodeCoord{0, 0}, kReportAddr, report);
 }
 
 void CheckScratchpad(
@@ -169,13 +169,13 @@ void CheckScratchpad(
     IDevice* device = DeviceAt(mesh_device, coordinate);
 
     std::vector<uint32_t> reported;
-    detail::ReadFromDeviceL1(device, node, kReportAddr, sizeof(uint32_t), reported);
+    tt::tt_metal::detail::ReadFromDeviceL1(device, node, kReportAddr, sizeof(uint32_t), reported);
     ASSERT_EQ(reported.size(), 1u);
     const uint32_t scratch_base = reported[0];
     EXPECT_NE(scratch_base, 0u) << "Kernel reported a 0 scratchpad base address";
 
     std::vector<uint32_t> scratch_contents;
-    detail::ReadFromDeviceL1(device, node, scratch_base, scratchpad_bytes, scratch_contents);
+    tt::tt_metal::detail::ReadFromDeviceL1(device, node, scratch_base, scratchpad_bytes, scratch_contents);
     EXPECT_EQ(scratch_contents, ExpectedScratchpadContents(scratchpad_bytes));
 }
 
@@ -228,14 +228,14 @@ void SetLoopbackArgs(
         },
     };
     params.dfb_run_overrides.push_back({.dfb = DFBSpecName{kLoopbackDfb}, .num_entries = dfb_num_entries});
-    SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 }
 
 TEST_F(MeshWorkloadFactoryHWTest, MakeMeshWorkloadFromSpecSupportsRepeatedEnqueue) {
     auto mesh_device = devices_.at(0);
 
     // Build a mesh-wide workload from one ProgramSpec.
-    distributed::MeshWorkload workload = MakeMeshWorkloadFromSpec(*mesh_device, MakeScratchpadSpec());
+    distributed::MeshWorkload workload(*mesh_device, MakeScratchpadSpec());
 
     // Set runtime args once, then repeatedly enqueue and verify scratchpad access.
     SetScratchpadArgs(workload);
@@ -247,15 +247,15 @@ TEST_F(MeshWorkloadFactoryHWTest, MakeMeshWorkloadFromSpecSupportsRepeatedEnqueu
 TEST_F(MeshWorkloadFactorySlowDispatchHWTest, FactoryMethodsSupportSlowDispatch) {
     auto mesh_device = devices_.at(0);
 
-    // Exercise the single-spec factory through slow dispatch.
-    distributed::MeshWorkload single_workload = MakeMeshWorkloadFromSpec(*mesh_device, MakeScratchpadSpec());
+    // Exercise the single-spec constructor through slow dispatch.
+    distributed::MeshWorkload single_workload(*mesh_device, MakeScratchpadSpec());
     SetScratchpadArgs(single_workload);
     EnqueueAndCheckScratchpad(mesh_device, single_workload);
 
-    // Exercise the mapped-spec factory through slow dispatch.
+    // Exercise the mapped-spec constructor through slow dispatch.
     std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec> specs;
     specs.emplace(distributed::MeshCoordinateRange(mesh_device->shape()), MakeScratchpadSpec());
-    distributed::MeshWorkload mapped_workload = MakeMeshWorkloadFromSpecs(*mesh_device, specs);
+    distributed::MeshWorkload mapped_workload(*mesh_device, specs);
     SetScratchpadArgs(mapped_workload);
     EnqueueAndCheckScratchpad(mesh_device, mapped_workload);
 }
@@ -264,7 +264,7 @@ TEST_F(MeshWorkloadFactoryHWTest, MakeMeshWorkloadFromSpecSupportsDfbResizeBetwe
     auto mesh_device = devices_.at(0);
 
     // Build a workload with a producer-consumer DFB loopback.
-    distributed::MeshWorkload workload = MakeMeshWorkloadFromSpec(*mesh_device, MakeLoopbackSpec());
+    distributed::MeshWorkload workload(*mesh_device, MakeLoopbackSpec());
 
     auto input_buffer = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = kBufferBytes},
@@ -303,7 +303,7 @@ TEST_F(MeshWorkloadFactoryHWTest, MakeMeshWorkloadFromSpecsMapOverloadSupportsRe
     // Build a region-mapped workload through the ProgramSpec map overload.
     std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec> specs;
     specs.emplace(distributed::MeshCoordinateRange(mesh_device->shape()), MakeScratchpadSpec());
-    distributed::MeshWorkload workload = MakeMeshWorkloadFromSpecs(*mesh_device, specs);
+    distributed::MeshWorkload workload(*mesh_device, specs);
     ASSERT_EQ(workload.get_programs().size(), 1u);
 
     // Set runtime args once, then repeatedly enqueue and verify scratchpad access.
@@ -322,7 +322,7 @@ TEST_F(MeshWorkloadFactory1x2HWTest, MakeMeshWorkloadFromSpecsRunsDistinctSpecsO
     std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec> specs;
     specs.emplace(distributed::MeshCoordinateRange(first), MakeScratchpadSpec(kScratchpadBytes));
     specs.emplace(distributed::MeshCoordinateRange(second), MakeScratchpadSpec(kLargeScratchpadBytes));
-    distributed::MeshWorkload workload = MakeMeshWorkloadFromSpecs(*mesh_device_, specs);
+    distributed::MeshWorkload workload(*mesh_device_, specs);
     ASSERT_EQ(workload.get_programs().size(), 2u);
 
     // Configure both programs, enqueue once, then verify each device ran its mapped spec.

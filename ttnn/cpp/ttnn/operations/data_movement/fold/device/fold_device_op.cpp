@@ -7,6 +7,7 @@
 #include <fmt/core.h>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/hal.hpp>
@@ -48,7 +49,14 @@ void validate_fold(const std::vector<Tensor>& input_tensors, uint32_t stride_h, 
     const auto& logical_shape = input_tensor.logical_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Fold: Expect input tensor to be allocated on a device buffer.");
+    TT_FATAL(input_tensor.is_allocated(), "Fold: Expect input tensor to be allocated on a device buffer.");
+    // Row-major fold copies raw bytes, so its output must be declared with the input's dtype.
+    const auto dtype = input_tensor.dtype();
+    TT_FATAL(
+        input_tensor.layout() != Layout::ROW_MAJOR || fold_output_dtype(dtype) == dtype,
+        "Fold: row-major output dtype ({}) must match the input dtype ({}).",
+        fold_output_dtype(dtype),
+        dtype);
 
     // Reject zero strides before any modulo/div; guards both fast + composite paths and compute_output_specs.
     TT_FATAL(stride_h > 0 && stride_w > 0, "Fold: stride_h ({}) and stride_w ({}) must be > 0.", stride_h, stride_w);
@@ -120,8 +128,8 @@ Fold::spec_return_value_t Fold::compute_output_specs(
     ttnn::Shape output_shape = op_attr.collapse_output ? ttnn::Shape({1, 1, out_N * out_H * out_W, out_C})
                                                        : ttnn::Shape({out_N, out_H, out_W, out_C});
 
-    tt::tt_metal::MemoryConfig out_mem_config = input_tensor.memory_config();
-    if (input_tensor.is_sharded()) {
+    tt::tt_metal::MemoryConfig out_mem_config = op_attr.output_mem_config.value_or(input_tensor.memory_config());
+    if (!op_attr.output_mem_config.has_value() && input_tensor.is_sharded()) {
         const uint32_t patch_size = op_attr.stride_h * op_attr.stride_w;
         // Concrete spec → rescale (h/=patch, w*=patch); specless → synthesise via shared helper.
         tt::tt_metal::ShardSpec output_spec =
@@ -156,9 +164,25 @@ namespace ttnn::prim {
 ttnn::operations::data_movement::Fold::tensor_return_value_t fold(
     const ttnn::Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w, bool collapse_output) {
     using OperationType = ttnn::operations::data_movement::Fold;
-    auto operation_attributes = OperationType::operation_attributes_t{
-        .stride_h = stride_h, .stride_w = stride_w, .collapse_output = collapse_output};
-    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    const auto attributes = [&](const std::optional<tt::tt_metal::MemoryConfig>& mem_config) {
+        return OperationType::operation_attributes_t{
+            .stride_h = stride_h,
+            .stride_w = stride_w,
+            .collapse_output = collapse_output,
+            .output_mem_config = mem_config};
+    };
+    // Fold derives its output config from its input's, so the output config to check is the input's.
+    return ttnn::operations::data_movement::launch_with_aligned_shard_rows(
+        input_tensor,
+        input_tensor.memory_config(),
+        std::nullopt,
+        [&] {
+            return OperationType::compute_output_specs(
+                attributes(std::nullopt), OperationType::tensor_args_t{.input_tensor = input_tensor});
+        },
+        [&](const Tensor& input, const std::optional<tt::tt_metal::MemoryConfig>& explicit_mem_config) {
+            return ttnn::device_operation::launch<OperationType>(
+                attributes(explicit_mem_config), OperationType::tensor_args_t{.input_tensor = input});
+        });
 }
 }  // namespace ttnn::prim

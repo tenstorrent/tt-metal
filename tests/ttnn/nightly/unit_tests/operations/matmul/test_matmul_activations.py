@@ -8,7 +8,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul, ttnn_linear
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
+from tt_py_test_utils_common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
 import torch.nn.functional as F
 from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
@@ -512,7 +512,7 @@ def test_activation_with_different_program_configs(
 # DRAM Sharded Matmul Tests with Bias and Activation
 # ============================================================================
 
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     is_blackhole,
 )
 

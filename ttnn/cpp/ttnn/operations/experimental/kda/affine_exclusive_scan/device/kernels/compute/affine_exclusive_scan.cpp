@@ -1,16 +1,19 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
 
 #include <cstdint>
 
 #include "api/compute/common.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/chronology_receive.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/identity_complement.hpp"
 
 constexpr uint32_t largest_common_divisor_at_most(uint32_t lhs, uint32_t rhs, uint32_t limit) {
     for (uint32_t divisor = limit; divisor > 1; --divisor) {
@@ -34,8 +37,15 @@ struct MatmulSubblock {
 
 // Apply a packed affine pair to a state: out = affine_a * state + affine_b. Unlike matmul_affine, this emits only
 // the transformed state; affine_b is loaded directly into DST so the matmul accumulates without an L1 partial.
-template <uint32_t Mt, uint32_t Kt, uint32_t Vt, uint32_t AffineRowStride = Kt + Vt>
-FORCE_INLINE void matmul_add_affine_b(DataflowBuffer& affine, DataflowBuffer& state, DataflowBuffer& out) {
+template <
+    uint32_t Mt,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t AffineRowStride = Kt + Vt,
+    typename AffineDFB,
+    typename StateDFB,
+    typename OutDFB>
+FORCE_INLINE void matmul_add_affine_b(AffineDFB& affine, StateDFB& state, OutDFB& out) {
     constexpr uint32_t subblock_cols = MatmulSubblock<Mt, Vt>::columns;
     constexpr uint32_t subblock_rows = MatmulSubblock<Mt, Vt>::rows;
 
@@ -90,9 +100,17 @@ FORCE_INLINE void matmul_add_affine_b(DataflowBuffer& affine, DataflowBuffer& st
 
 // Compose packed affine pairs: out_a = a * affine_a and out_b = a * affine_b + local_b. The local B term is
 // preloaded into DST before matmul accumulation, then the packed A and B columns are emitted to separate buffers.
-template <uint32_t Mt, uint32_t Kt, uint32_t At, uint32_t Vt>
-FORCE_INLINE void matmul_affine(
-    DataflowBuffer& a, DataflowBuffer& affine, DataflowBuffer& local_b, DataflowBuffer& out_a, DataflowBuffer& out_b) {
+template <
+    uint32_t Mt,
+    uint32_t Kt,
+    uint32_t At,
+    uint32_t Vt,
+    typename ADFB,
+    typename AffineDFB,
+    typename LocalBDFB,
+    typename OutADFB,
+    typename OutBDFB>
+FORCE_INLINE void matmul_affine(ADFB& a, AffineDFB& affine, LocalBDFB& local_b, OutADFB& out_a, OutBDFB& out_b) {
     constexpr uint32_t Nt = At + Vt;
     constexpr uint32_t subblock_cols = MatmulSubblock<Mt, At, Vt>::columns;
     constexpr uint32_t subblock_rows = MatmulSubblock<Mt, At, Vt>::rows;
@@ -146,7 +164,8 @@ FORCE_INLINE void matmul_affine(
     out_b.push_back(Mt * Vt);
 }
 
-FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) {
+template <typename InDFB, typename OutDFB>
+FORCE_INLINE void copy(InDFB& in, OutDFB& out, uint32_t tiles) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     const uint32_t in_id = in.get_id();
@@ -170,6 +189,55 @@ FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) 
     out.push_back(tiles);
 }
 
+// Summaries arrive in complement form (E = A - I). Copy a group's E [Kt, Kt] to out as A = E + I in FP32: the identity
+// tile (UnpackToDest, exact) is added on the diagonal tiles in FP32 DST.
+template <uint32_t Kt, typename InDFB, typename IdentityDFB, typename OutDFB>
+FORCE_INLINE void copy_complement(InDFB& in, IdentityDFB& identity, OutDFB& out) {
+    const uint32_t in_id = in.get_id();
+    const uint32_t out_id = out.get_id();
+    out.reserve_back(Kt * Kt);
+    reconfig_data_format_srca(in_id);
+    copy_init(in_id);
+    for (uint32_t row = 0; row < Kt; ++row) {
+        for (uint32_t column = 0; column < Kt; ++column) {
+            tile_regs_acquire();
+            const uint32_t a = kda::copy_tile_as_a(in, identity, row * Kt + column, row == column, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(a, out_id, row * Kt + column);
+            tile_regs_release();
+        }
+    }
+    out.push_back(Kt * Kt);
+}
+
+// out = lhs + rhs as an SFPU add in FP32 DST. Each operand enters DST through its own DFB's unpack mode, so an
+// UnpackToSrc operand is first rounded to TF32 in srcA.
+template <typename LhsDFB, typename RhsDFB, typename OutDFB>
+FORCE_INLINE void add(LhsDFB& lhs, RhsDFB& rhs, OutDFB& out, uint32_t tiles) {
+    const uint32_t lhs_id = lhs.get_id();
+    const uint32_t rhs_id = rhs.get_id();
+    const uint32_t out_id = out.get_id();
+    out.reserve_back(tiles);
+    reconfig_data_format_srca(lhs_id);
+    for (uint32_t tile = 0; tile < tiles; ++tile) {
+        tile_regs_acquire();
+        copy_init(lhs_id);
+        copy_tile(lhs_id, tile, 0);
+        reconfig_data_format_srca(lhs_id, rhs_id);
+        copy_init(rhs_id);
+        copy_tile(rhs_id, tile, 1);
+        reconfig_data_format_srca(rhs_id, lhs_id);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, out_id, tile);
+        tile_regs_release();
+    }
+    out.push_back(tiles);
+}
+
 template <uint32_t Kt, uint32_t Vt, uint32_t G>
 TT_KERNEL void compute(uint32_t group) {
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
@@ -188,6 +256,7 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer tail_affine(dfb::tail_affine);
     DataflowBuffer tail_entry_states(dfb::tail_entry_states);
     DataflowBuffer reset_b(dfb::reset_b);
+    DataflowBuffer identity(dfb::identity);
 
     kda_chronology::Topology topology{};
     {
@@ -199,6 +268,7 @@ TT_KERNEL void compute(uint32_t group) {
         return;
     }
     const uint32_t reset_group = topology.reset_group(G);
+    identity.wait_front(1);
     initial_a.wait_front(affine_a_tiles);
     const bool reset_worker = group == reset_group;
     if (!reset_worker) {
@@ -207,22 +277,26 @@ TT_KERNEL void compute(uint32_t group) {
     if (reset_worker) {
         const bool aligned_reset = topology.split_in_group(G) == 0;
         tail_entry_states.wait_front(affine_b_tiles);
+        // The reset worker's own transform is (0, seed) in A form: its zero A, written by dataflow, discards the
+        // prefix entering it.
+        copy(initial_a, to_remote_a, affine_a_tiles);
         if (aligned_reset) {
-            copy(tail_entry_states, reset_b, affine_b_tiles);
+            copy(tail_entry_states, to_remote_b, affine_b_tiles);
         } else {
+            // The tail transform is in complement form: seed = E @ S + B + S. S (tail_entry_states, UnpackToSrc) passes
+            // srcA here, as in the aligned branch's copy, so it is rounded to TF32.
             tail_affine.wait_front(affine_a_tiles + affine_b_tiles);
             matmul_add_affine_b<Kt, Kt, Vt>(tail_affine, tail_entry_states, reset_b);
+            reset_b.wait_front(affine_b_tiles);
+            add(reset_b, tail_entry_states, to_remote_b, affine_b_tiles);
+            reset_b.pop_front(affine_b_tiles);
         }
-        reset_b.wait_front(affine_b_tiles);
-        copy(initial_a, to_remote_a, affine_a_tiles);
-        copy(reset_b, to_remote_b, affine_b_tiles);
-        reset_b.pop_front(affine_b_tiles);
         if (!aligned_reset) {
             tail_affine.pop_front(affine_a_tiles + affine_b_tiles);
         }
         tail_entry_states.pop_front(affine_b_tiles);
     } else {
-        copy(initial_a, to_remote_a, affine_a_tiles);
+        copy_complement<Kt>(initial_a, identity, to_remote_a);
         copy(initial_b, to_remote_b, affine_b_tiles);
     }
     initial_a.pop_front(affine_a_tiles);

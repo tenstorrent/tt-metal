@@ -40,7 +40,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     // Basic tensor properties
     for (const auto* input_tensor : {&q, &k, &v}) {
         TT_FATAL(input_tensor->storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device");
-        TT_FATAL(input_tensor->buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device");
+        TT_FATAL(input_tensor->is_allocated(), "Operands to SDPA need to be allocated in buffers on device");
         TT_FATAL((input_tensor->layout() == Layout::TILE), "Inputs to SDPA must be tilized");
         TT_FATAL(
             input_tensor->dtype() == DataType::BFLOAT16 || input_tensor->dtype() == DataType::BFLOAT8_B ||
@@ -88,6 +88,16 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "Head dimension of V must be less than or equal to head dim of K, got {} and {}",
                 attrs.head_dim_v.value(),
                 q_shape[3]);
+            if (tensors.v.has_value()) {
+                // The K/V chain grouping divides Q heads by V heads.
+                const uint32_t nvh = tensors.v->logical_shape()[1];
+                TT_FATAL(
+                    nvh > 0 && nqh >= nvh && nqh % nvh == 0,
+                    "Q num_heads must be >= V num_heads and divisible by V num_heads, and V num_heads must be greater "
+                    "than 0. Got Q: {}, V: {}",
+                    nqh,
+                    nvh);
+            }
         } else {
             TT_FATAL(
                 k_shape[0] == B && v_shape[0] == B,
@@ -161,7 +171,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "When mask is provided to SDPA, it must be in BF16, BFP8, or BFP4 dataformat");
 
             TT_FATAL(
-                mask.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                mask.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
                 "When mask is provided to SDPA, it must be in DRAM");
 
             const auto& mask_shape = mask.logical_shape();
@@ -177,6 +187,39 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "Mask num_heads must either be 1 (to be broadcasted across all heads) or must match Q heads dimension");
             TT_FATAL(mask_shape[2] == q_shape[2], "Mask sequence length must match Q sequence length");
             TT_FATAL(mask_shape[3] == k_shape[2], "Mask sequence length must match K sequence length");
+        }
+
+        if (tensors.attn_mask_block_map.has_value()) {
+            const auto& map = tensors.attn_mask_block_map.value();
+            TT_FATAL(mask_option.has_value(), "attn_mask_block_map needs attn_mask");
+            TT_FATAL(
+                attrs.program_config.has_value(), "attn_mask_block_map needs a program_config with the chunk sizes");
+            TT_FATAL(
+                map.storage_type() == StorageType::DEVICE && q.device() == map.device(),
+                "attn_mask_block_map must be on the same device as Q");
+            TT_FATAL(
+                map.layout() == Layout::ROW_MAJOR &&
+                    (map.dtype() == DataType::INT32 || map.dtype() == DataType::UINT32),
+                "attn_mask_block_map must be a ROW_MAJOR int32 or uint32 tensor");
+            TT_FATAL(
+                map.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
+                "attn_mask_block_map must be in DRAM");
+            const auto& mask_shape = mask_option->logical_shape();
+            const auto& map_shape = map.logical_shape();
+            const uint32_t qc = attrs.program_config->q_chunk_size;
+            const uint32_t kc = attrs.program_config->k_chunk_size;
+            TT_FATAL(qc > 0 && kc > 0, "q_chunk_size ({}) and k_chunk_size ({}) must be greater than 0", qc, kc);
+            const uint32_t nq = (q.logical_shape()[2] + qc - 1) / qc;
+            const uint32_t nk = (k.logical_shape()[2] + kc - 1) / kc;
+            TT_FATAL(
+                map_shape.rank() == 4 && map_shape[0] == mask_shape[0] && map_shape[1] == mask_shape[1] &&
+                    map_shape[2] == nq && map_shape[3] == nk,
+                "attn_mask_block_map must be [{}, {}, {}, {}], got {}",
+                mask_shape[0],
+                mask_shape[1],
+                nq,
+                nk,
+                map_shape);
         }
 
         validate_shapes_and_chunks();
@@ -406,7 +449,11 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                     attention_sink.dtype() == DataType::BFLOAT4_B,
                 "Attention sink must be in BF16, BFP8, or BFP4 dataformat");
             TT_FATAL(
-                attention_sink.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                attention_sink.dtype() == DataType::BFLOAT16 || !get_fp32_dest_acc_en(attrs.compute_kernel_config),
+                "Attention sink must be BF16 when fp32_dest_acc_en=true (non-streaming compute), got {}",
+                attention_sink.dtype());
+            TT_FATAL(
+                attention_sink.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
                 "Attention sink must be in DRAM");
 
             const auto& sink_shape = attention_sink.logical_shape();
@@ -452,7 +499,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
 
         const auto& cu = tensors.cu_window_seqlens.value();
         TT_FATAL(cu.storage_type() == StorageType::DEVICE, "cu_window_seqlens must be on device.");
-        TT_FATAL(cu.buffer() != nullptr, "cu_window_seqlens must be allocated on device.");
+        TT_FATAL(cu.is_allocated(), "cu_window_seqlens must be allocated on device.");
         TT_FATAL(q.device() == cu.device(), "cu_window_seqlens must be on the same device as Q/K/V.");
         TT_FATAL(
             cu.dtype() == DataType::INT32 || cu.dtype() == DataType::UINT32,
@@ -504,7 +551,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         if (tensors.windowed_q_token_offset_tensor.has_value()) {
             const auto& off = tensors.windowed_q_token_offset_tensor.value();
             TT_FATAL(off.storage_type() == StorageType::DEVICE, "windowed_q_token_offset_tensor must be on device.");
-            TT_FATAL(off.buffer() != nullptr, "windowed_q_token_offset_tensor must be allocated on device.");
+            TT_FATAL(off.is_allocated(), "windowed_q_token_offset_tensor must be allocated on device.");
             TT_FATAL(q.device() == off.device(), "windowed_q_token_offset_tensor must be on the same device as Q/K/V.");
             TT_FATAL(
                 off.dtype() == DataType::INT32 || off.dtype() == DataType::UINT32,
@@ -520,6 +567,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
 
     check_conditions();
     bool is_chunked_mode = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
+
+    // The block map sets the reader's k range itself, which the windowed, sliding and chunked k ranges would fight.
+    TT_FATAL(
+        !tensors.attn_mask_block_map.has_value() ||
+            (!is_windowed_mode(attrs.windowed_mode) && !is_chunked_mode && attrs.sliding_window_size.value_or(0) == 0),
+        "attn_mask_block_map cannot be combined with cu_window_seqlens, sliding_window_size or chunked prefill");
 
     if (is_windowed_mode(attrs.windowed_mode)) {
         validate_windowed_mode();
@@ -660,7 +713,8 @@ Tensor sdpa(
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
-    bool output_concat_heads) {
+    bool output_concat_heads,
+    const std::optional<Tensor>& attn_mask_block_map) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -692,6 +746,7 @@ Tensor sdpa(
             .attention_sink = attention_sink,
             .cu_window_seqlens = cu_window_seqlens,
             .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
+            .attn_mask_block_map = attn_mask_block_map,
         });
 }
 }  // namespace ttnn::prim

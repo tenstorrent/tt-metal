@@ -39,7 +39,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp
 
 
 @pytest.fixture
@@ -652,6 +652,67 @@ def test_ng_scalar_interleaved_memcfg_with_sharded_output_cache_miss(device, iso
     assert device.cache_entries_counter.total == 2
 
 
+def test_ng_tensor_interleaved_memcfg_with_sharded_output_cache_miss(device, isolate_program_cache):
+    """Tensor-tensor form of the scalar guard above.
+
+    An explicit INTERLEAVED memory_config plus a SHARDED preallocated output leaves mem_config_actual
+    interleaved, while the real output is sharded. The fast path must still record that output's shape
+    in pages, or two shapes that share a shard spec collide on one cache entry."""
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_spec = ttnn.ShardSpec(core_grid, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
+    sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    def add_into(shape, seed):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16)
+        b = torch.rand(shape, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_out = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded
+        )
+        with device.cache_entries_counter.measure():
+            tt_c = ttnn.add(tt_a, tt_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=tt_out)
+        return a + b, ttnn.to_torch(tt_c)
+
+    ref_small, out_small = add_into([1, 1, 64, 128], 0)
+    assert_with_pcc(ref_small, out_small, 0.999)
+
+    ref_big, out_big = add_into([1, 1, 128, 128], 1)
+    assert_with_pcc(ref_big, out_big, 0.999)
+
+    assert device.cache_entries_counter.total == 2
+
+
+def test_ng_interleaved_a_sharded_b_cache_miss_across_page_counts(device, isolate_program_cache):
+    """Interleaved DRAM A with L1-sharded B, two shapes that share a shard spec.
+
+    The second call misses because B's shape in pages is in the tensor hash, and because the
+    output config is taken from B. This checks that mixed layout stays correct across that miss.
+    It does not isolate the sharded-config guard: that guard is already true from the output config."""
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_spec = ttnn.ShardSpec(core_grid, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
+    sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    def add_mixed(shape, seed):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16)
+        b = torch.rand(shape, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded)
+        with device.cache_entries_counter.measure():
+            tt_c = ttnn.add(tt_a, tt_b)
+        return a + b, ttnn.to_torch(tt_c)
+
+    ref_small, out_small = add_mixed([1, 1, 64, 128], 0)
+    assert_with_pcc(ref_small, out_small, 0.999)
+
+    ref_big, out_big = add_mixed([1, 1, 128, 128], 1)
+    assert_with_pcc(ref_big, out_big, 0.999)
+
+    assert device.cache_entries_counter.total == 2
+
+
 def test_ng_scalar_dram_sharded_cache_miss_across_page_counts(device, isolate_program_cache):
     """REGRESSION: on the accessor path the cache key must carry each sharded operand's shape in pages.
 
@@ -770,6 +831,60 @@ def test_scalar_side_is_in_hash(device, isolate_program_cache, op):
     assert device.num_program_cache_entries() == after_first + 1
     assert_with_pcc(_torch_scalar_op(op)(scalar, torch_a), scalar_first, 0.999)
     assert_with_pcc(_torch_tensor_op(op)(torch_a, scalar), tensor_first, 0.999)
+
+
+@pytest.mark.parametrize("variant", ["add", "add_scalar", "where_tts", "where_tst"])
+@pytest.mark.parametrize("pass_memory_config", [True, False])
+def test_ng_preallocated_output_memory_distinguishes_cache_entries(
+    device, isolate_program_cache, variant, pass_memory_config
+):
+    """REGRESSION: the cache key must carry the preallocated output's memory, not the memory_config argument.
+
+    The same call runs twice with the output in DRAM and L1. Each needs its own kernel, and the cache
+    must end up with 2 entries. Before the fix, both keys recorded memory_config and the L1 call
+    reused the DRAM program and returned garbage. add_scalar covers the tensor-scalar overload. The other
+    variants reach tensor-tensor."""
+    shape = (1, 1, 64, 64)
+    torch.manual_seed(0)
+    pred = torch.rand(shape, dtype=torch.bfloat16) > 0.5
+    lhs = torch.rand(shape, dtype=torch.bfloat16)
+    rhs = torch.rand(shape, dtype=torch.bfloat16)
+    scalar = 7.5
+
+    def to_dev(host, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        return ttnn.from_torch(
+            host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+
+    # Same call twice, differing ONLY in where the preallocated output lives.
+    for out_memory_config in (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG):
+        out = to_dev(torch.zeros(shape, dtype=torch.bfloat16), out_memory_config)
+        kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG} if pass_memory_config else {}
+        kwargs["output_tensor"] = out
+
+        if variant == "add":
+            result = ttnn.add(to_dev(lhs), to_dev(rhs), **kwargs)
+            expected = lhs + rhs
+        elif variant == "add_scalar":
+            result = ttnn.add(to_dev(lhs), scalar, **kwargs)
+            expected = lhs + scalar
+        elif variant == "where_tts":
+            result = ttnn.where(to_dev(pred.to(torch.bfloat16)), to_dev(lhs), scalar, **kwargs)
+            expected = torch.where(pred, lhs, torch.tensor(scalar, dtype=torch.bfloat16))
+        else:
+            result = ttnn.where(to_dev(pred.to(torch.bfloat16)), scalar, to_dev(rhs), **kwargs)
+            expected = torch.where(pred, torch.tensor(scalar, dtype=torch.bfloat16), rhs)
+
+        if variant.startswith("where"):
+            assert_equal(expected, ttnn.to_torch(result))
+        else:
+            assert_with_ulp(expected_result=expected, actual_result=ttnn.to_torch(result), ulp_threshold=1)
+
+    assert device.num_program_cache_entries() == 2, (
+        "outputs in different memories must get their own cache entries -- sharing one means the key "
+        "does not carry the preallocated output's memory, so the cached program addresses the wrong "
+        "address space"
+    )
 
 
 def _torch_scalar_op(op):

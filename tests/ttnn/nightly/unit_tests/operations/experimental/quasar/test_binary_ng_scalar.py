@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Tensor-SCALAR for the Quasar binary_ng DFB path (writer-fill of the RHS scalar tile).
+"""Tensor-scalar for the Quasar binary_ng DFB factories (native and Metal 2.0).
 
 Black-box, same op/golden/PCC as the no-broadcast suite, but the RHS is a Python number instead of a
-tensor. On the DFB path the writer becomes the producer of the RHS input DFB (in1) and fills it ONCE
+tensor. On Quasar the native gate goes first and takes the cases it admits, unless TTNN_QSR_NATIVE=0: its reader
+fills one full tile of the RHS input DFB (in1) per Neo with the packed scalar, inside scoped_write_lock. On the
+Metal 2.0 path the writer becomes the producer of the RHS input DFB (in1) and fills it ONCE
 with the packed scalar via a coherent store (the non-cacheable L1 alias on Quasar DM cores, since the
 DM write-back D$ is incoherent with the TL1 the compute consumer reads); the reader produces in0 only;
 the compute waits on in1 once and reuses tile index 0. This is the make-or-break coherence proof: a
@@ -13,19 +15,16 @@ add/subtract are bf16-FPU. The metal_v2 / DFB tensor-scalar path is arch-portabl
 Wormhole/Blackhole, overlay-backed on Quasar -- and the is_scalar gate admits interleaved + sharded
 scalar ops to it with no arch check, so these tests run on all three.
 
-Routing: on Quasar a PASS implicitly proves v2 routing, because the descriptor path cannot run at all
-(DataMovementKernel/ComputeKernel hard-throw on Quasar). On WH/BH both factories run, and nothing here
-asserts which one was chosen -- there is no Python-visible factory signal. In particular the program-cache
-test below does NOT distinguish them: this op's operation_attributes_t::attribute_values() already
-includes `scalar` (unlike production binary_ng, which excludes it and patches it as a runtime arg), and
-the adapter's default compute_program_hash folds the whole attribute tuple, so a distinct scalar mints a
-distinct program on EITHER factory. What that test does guard is the property that makes the v2 path safe:
-the packed scalar is baked into the program, so it must participate in the cache key.
+Routing: every case here runs a DFB factory: on Quasar the native factory by default, and the Metal 2.0 factory with
+TTNN_QSR_NATIVE=0 or off Quasar; an op outside their slices throws. The program-cache test below guards the property
+that makes both DFB paths safe: the packed scalar is baked into the program, so it must participate in the cache key.
+This op's operation_attributes_t::attribute_values() includes `scalar` (unlike production binary_ng, which excludes it
+and patches it as a runtime arg), and the adapter's default compute_program_hash folds the whole attribute tuple, so a
+distinct scalar mints a distinct program.
 
 Run on the Quasar simulator:
     unset TT_METAL_DISABLE_SFPLOADMACRO
-    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
-        TT_METAL_SLOW_DISPATCH_MODE=1 \
+    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 TT_METAL_SLOW_DISPATCH_MODE=1 \
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_scalar.py
 
 Run on real Wormhole / Blackhole (first-silicon validation of the DFB path):
@@ -79,8 +78,8 @@ def test_scalar_fp32_interleaved(device, op_name, scalar):
     # admit int32 add/multiply (their RHS derives to int32 == a, and add_int_sfpu / mul_int_sfpu are in
     # the SFPU scalar kernel), the int32 SFPU tile ops do NOT produce correct results on the Quasar DFB
     # compute path (empirically: scalar add/mul return all-zero tiles, int32 tensor-tensor returns
-    # garbage) -- a compute/sim-level gap, not a format issue. The gate keeps every int32 op on the
-    # descriptor, so this stays out of the DFB suite until the int32 DFB compute path is fixed.
+    # garbage) -- a compute/sim-level gap, not a format issue. The gate refuses every int32 op, so
+    # this stays out of the suite until the int32 DFB compute path is fixed.
     _run_scalar(device, op_name, ttnn.DRAM_MEMORY_CONFIG, ttnn.float32, [2, 1, 64, 128], scalar)
 
 
@@ -135,18 +134,16 @@ def test_scalar_lhs_activation_several_tiles_per_core(device, op_name):
 
 # --- The packed scalar must participate in the program-cache key ----------------------------------------
 def test_scalar_participates_in_program_cache_key(device):
-    # The DFB tensor-scalar path BAKES the packed scalar into the program (the writer's packed_scalar arg,
-    # filled once into in1), and the metal_v2 cache-hit adapter refreshes only tensor bindings -- it does
+    # Both DFB factories BAKE the packed scalar into the program (a packed_scalar arg: the native reader's,
+    # or the Metal 2.0 writer's), and the cache-hit adapter refreshes only tensor bindings -- it does
     # not re-emit that arg. So a cached program is only reusable for the scalar it was built with, and the
     # scalar MUST be part of the cache key or a second call with a different scalar would silently reuse
     # the stale baked value. Assert exactly that, on the SAME shape:
     #   - repeating the SAME scalar   -> program-cache HIT   (+0 entries)
     #   - a DISTINCT scalar           -> a distinct program  (+1 entry)
     # This holds because operation_attributes_t::attribute_values() includes `scalar` and the adapter's
-    # default compute_program_hash folds the whole tuple (binary_ng_device_operation.hpp). Note this is
-    # NOT a factory-routing assertion: the descriptor path hashes the same attributes, so both factories
-    # satisfy it. Routing is proven on Quasar by the fact that the descriptor path throws there; on WH/BH
-    # it is not observable from Python. Requires the program cache (the `device` fixture enables it, as in
+    # default compute_program_hash folds the whole tuple (binary_ng_device_operation.hpp). Requires the
+    # program cache (the `device` fixture enables it, as in
     # test_binary_ng_resnet_add.py / test_binary_ng_descriptor_cache_hit.py). _run_scalar PCC-checks every
     # call, so a stale-scalar reuse would fail on the value, not just the count.
     shape = [1, 1, 32, 32]

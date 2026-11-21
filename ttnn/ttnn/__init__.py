@@ -50,21 +50,21 @@ def manage_config(name: str, value):
     global CONFIG
     original_value = getattr(CONFIG, name)
     setattr(CONFIG, name, value)
-    logger.debug(f"Set ttnn.CONFIG.{name} to {value}")
+    logger.trace(f"Set ttnn.CONFIG.{name} to {value}")
     try:
         yield
     finally:
         # Restore even when the block raises, or the value leaks into everything that runs afterwards.
         try:
             setattr(CONFIG, name, original_value)
-            logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
+            logger.trace(f"Restored ttnn.CONFIG.{name} to {original_value}")
         except Exception as e:
             # Some config attributes (e.g., path-like) do not accept None; fallback to empty string
             # afuller
             if original_value is None:
                 try:
                     setattr(CONFIG, name, "")
-                    logger.debug(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
+                    logger.trace(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
                 except Exception as e2:
                     logger.error(
                         f"{e2}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to a safe default (original was None)"
@@ -82,7 +82,9 @@ from ttnn._ttnn.multi_device import (
     MeshComposerConfig,
     TensorTopology,
     get_device_tensors,
+    cpu_shards,
     from_host_shards,
+    from_local_host_shards,
     combine_device_tensors,
     replicate_tensor_to_mesh_mapper,
     shard_tensor_to_mesh_mapper,
@@ -181,6 +183,7 @@ from ttnn._ttnn.fabric import (
 from ttnn._ttnn import cluster
 
 from ttnn._ttnn.global_semaphore import (
+    experimental_create_global_semaphore_at_address,
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
@@ -204,6 +207,9 @@ from ttnn._ttnn.hd_socket import (
 
 from ttnn._ttnn.h2d_stream_service import (
     H2DStreamService,
+    StreamCounter,
+    StreamInputCounters,
+    StreamOutputCounters,
 )
 
 from ttnn._ttnn.d2h_stream_service import (
@@ -214,10 +220,17 @@ from ttnn._ttnn.d2d_stream_service import (
     D2DStreamService,
     D2DStreamServiceSender,
     D2DStreamServiceReceiver,
-)
-
-from ttnn._ttnn.counter_channel import (
-    InterProcessCounterChannel,
+    D2DStageGateConfig,
+    D2DStageGateDescriptor,
+    D2DStageGateMode,
+    D2D_STAGE_GATE_UNGATED_SLOT,
+    PCIeCoreLocation,
+    D2DReceiverCoordDescriptor,
+    D2DReceiverDescriptor,
+    D2DRankDescriptor,
+    D2DPipelineDescriptor,
+    D2DPipelineDescriptorFile,
+    d2d_pipeline_descriptor_path,
 )
 
 from ttnn._ttnn.layer_ack_service import (
@@ -237,6 +250,16 @@ from ttnn.types import (
     bfloat4_b,
     bfloat16,
     fp8_e4m3,
+    mxfp8_e4m3,
+    mxfp8_e5m2,
+    mxfp6_e2m3,
+    mxfp6_e3m2,
+    mxfp4,
+    mxint8,
+    mxint4,
+    mxint2,
+    MX_DTYPES,
+    is_mx_dtype,
     float32,
     MathFidelity,
     MemoryConfig,
@@ -333,6 +356,7 @@ from ttnn.device import (
     dump_device_memory_state,
     get_memory_view,
     get_allocator_base_address,
+    experimental_get_l1_occupied_ranges,
     get_max_worker_l1_unreserved_size,
     get_dram_alignment,
     get_l1_alignment,
@@ -390,6 +414,12 @@ from ttnn.core import (
 )
 
 tile_size = ttnn._ttnn.tensor.tile_size
+host_tensor_from_bytes = ttnn._ttnn.tensor.host_tensor_from_bytes
+experimental_create_sram_tensor_view = ttnn._ttnn.tensor.experimental_create_sram_tensor_view
+NodeLocalSpan = ttnn._ttnn.tensor.NodeLocalSpan
+PerNodeDeviceLocalMemorySpan = ttnn._ttnn.tensor.PerNodeDeviceLocalMemorySpan
+PerNodeMeshDeviceMemorySpan = ttnn._ttnn.tensor.PerNodeMeshDeviceMemorySpan
+experimental_allocate_single_device_tensor = ttnn._ttnn.tensor.experimental_allocate_single_device_tensor
 element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
@@ -483,6 +513,8 @@ ttnn.Tensor.__ge__ = lambda self, *args, **kwargs: ttnn.ge(self, *args, **kwargs
 ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: ttnn.lt(self, *args, **kwargs)
 ttnn.Tensor.__le__ = lambda self, *args, **kwargs: ttnn.le(self, *args, **kwargs)
 ttnn.Tensor.__getitem__ = lambda self, *args, **kwargs: ttnn.operations.core.__getitem__(self, *args, **kwargs)
+
+as_tensor_cache_repair = ttnn.operations.core.as_tensor_cache_repair
 
 from ttnn.operations.matmul import (
     MatmulMultiCoreReuseProgramConfig,
@@ -596,12 +628,41 @@ experimental.rgb_to_yuv = rgb_to_yuv
 experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
 experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
 
+# Sparse KV push: which of a requester's needed rows a push sends, and the cores it needs per link
+from ttnn._ttnn.operations.experimental import SparseKvPushPart, SPARSE_KV_PUSH_CORES_PER_LINK
+
+experimental.SparseKvPushPart = SparseKvPushPart
+experimental.SPARSE_KV_PUSH_CORES_PER_LINK = SPARSE_KV_PUSH_CORES_PER_LINK
+
 # PrefetcherPipe (Metal 2.0 durable cross-program remote DFB). Experimental-only surface.
 from ttnn._ttnn import prefetcher_pipe as _prefetcher_pipe
 
 experimental.PrefetcherPipeSpace = _prefetcher_pipe.PrefetcherPipeSpace
 experimental.PrefetcherPipe = _prefetcher_pipe.PrefetcherPipe
+experimental.PrefetcherPipeL1Source = _prefetcher_pipe.PrefetcherPipeL1Source
+experimental.PrefetcherPipeSpaceConfig = _prefetcher_pipe.PrefetcherPipeSpaceConfig
 experimental.create_prefetcher_pipe_space = _prefetcher_pipe.create_prefetcher_pipe_space
+experimental.create_prefetcher_pipe_spaces = _prefetcher_pipe.create_prefetcher_pipe_spaces
+
+# Command lists (Metal 2.0 replacement for trace). Experimental-only surface.
+from ttnn._ttnn.operations import command_list as _command_list
+from ttnn.command_list import CmdListParam as _CmdListParam
+
+experimental.CommandListBuilder = _command_list.CommandListBuilder
+experimental.CommandList = _command_list.CommandList
+experimental.CmdListParam = _CmdListParam
+
+# Metal 2.0 ProgramSpec, ProgramRunArgs and the types they use, and generic_op's MeshProgramSpec and
+# MeshProgramRunArgs, for ttnn.experimental.generic_op.
+# Experimental-only surface.
+from ttnn._ttnn import program_spec as _program_spec
+
+for _name in dir(_program_spec):
+    if not _name.startswith("_"):
+        setattr(experimental, _name, getattr(_program_spec, _name))
+del _name
+# generic_op's program-cache hash; ttnn.experimental.generic_op itself is registered by its binding.
+experimental.compute_program_spec_hash = ttnn._ttnn.operations.experimental.compute_program_spec_hash
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
@@ -664,6 +725,11 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
         root_dir = this_dir
 
     SetRootDir(str(root_dir))
+
+# The matmul config model's default path, and its download when ttnn.CONFIG.matmul_model_config is on
+from ttnn import matmul_model as _matmul_model
+
+_matmul_model.on_import(os.environ.get("TT_METAL_RUNTIME_ROOT") or root_dir)
 
 import atexit as _atexit
 

@@ -8,7 +8,7 @@ from tests.sweep_framework.sweeps.conv2d.short.conv2d_short_sweep import (
     failing_parameters_conv1d as failing_parameters_ttnn_pytorch,
 )
 
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     is_wormhole_b0,
 )
 

@@ -9,8 +9,15 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_slow_dispatch
+from tt_py_test_utils_common.utility_functions import is_slow_dispatch
 from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 TTNN_TO_TORCH_DTYPE = {
     ttnn.float32: torch.float32,
@@ -27,7 +34,7 @@ def isolate_program_cache(device):
     device.disable_and_clear_program_cache()
 
 
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.uint16])
 @pytest.mark.parametrize(
     "shape_output_end",
     [
@@ -46,7 +53,10 @@ def isolate_program_cache(device):
 def test_untilize_with_unpadding_fp32(device, dtype, shape_output_end, input_buffer_type, output_buffer_type):
     torch.manual_seed(42)
     shape, output_end = shape_output_end
-    torch_tensor = torch.rand(shape, dtype=TTNN_TO_TORCH_DTYPE[dtype])
+    if dtype == ttnn.uint16:
+        torch_tensor = torch.randint(0, 2**16, shape, dtype=torch.uint16)
+    else:
+        torch_tensor = torch.rand(shape, dtype=TTNN_TO_TORCH_DTYPE[dtype])
 
     input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, input_buffer_type)
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)
@@ -130,6 +140,11 @@ def test_untilize_with_unpadding_reuses_cache_when_only_width_l1_heuristic_chang
         # 2 cores
         ([1, 1, 128, 64], [0, 0, 127, 63], (64, 64), 2),
         ([1, 1, 128, 64], [0, 0, 100, 50], (64, 64), 2),
+        # Output width 16 with a tile-aligned height: with sharded output, this takes the sharded
+        # factory's W==16 fast path, which copies the two left faces of each tile straight into the
+        # output shard instead of untilizing the whole tile.
+        ([1, 1, 256, 32], [0, 0, 255, 15], (64, 32), 4),  # 2 tiles per core: fewer than one batch of 8 tiles
+        ([1, 1, 1280, 32], [0, 0, 1279, 15], (320, 32), 4),  # 10 tiles per core: one batch of 8 tiles and 2 more
     ],
 )
 @pytest.mark.parametrize("output_sharded", [True, False])
@@ -952,9 +967,25 @@ def test_untilize_with_unpadding_sharded_multi_batch_unpadding_regression(
         ((1, 1, 32, 7328), (1, 1, 30, 7300)),
         ((1, 1, 128, 7328), (1, 1, 100, 7328)),
         ((1, 1, 64, 8192), (1, 1, 60, 8192)),
+        ((1, 1, 64, 8192), (1, 1, 60, 8000)),
+        ((1, 1, 64, 8192), (1, 1, 64, 8000)),
         ((1, 1, 96, 7392), (1, 1, 90, 7392)),
         ((1, 1, 160, 6304), (1, 1, 150, 6301)),
         ((2, 1, 64, 7328), (2, 1, 60, 7328)),
+        # Unpadding that removes one or more whole tile rows of the padded height. The work split of the
+        # block-interleaved factory walks the input padded height, so a tile row that starts at or
+        # past the end of the output has none of its rows in the output, and the rows before it must
+        # still come out intact.
+        # The tile row at row 32 starts exactly at the end of the 32-row output.
+        ((1, 1, 64, 2048), (1, 1, 32, 2048)),
+        # The same tile row in each of two batch slices.
+        ((2, 1, 64, 2048), (2, 1, 32, 2048)),
+        # The tile row at row 32 starts exactly at the output end; the one at row 64 starts past it.
+        ((1, 1, 96, 2048), (1, 1, 32, 2048)),
+        # The tile row at row 32 starts past the end of the 30-row output.
+        ((1, 1, 64, 2048), (1, 1, 30, 2048)),
+        # Height and width unpadded together, so some sub-blocks also lie entirely in the width padding.
+        ((2, 1, 96, 2048), (2, 1, 32, 1000)),
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -997,14 +1028,30 @@ def test_untilize_with_unpadding_block_per_node_cb_size(
 
 
 @pytest.mark.parametrize(
-    "factory", ["single_core", "multi_core_interleaved", "multi_core_sharded", "multi_core_nd_sharded"]
+    "factory",
+    [
+        "single_core",
+        "multi_core_interleaved",
+        "multi_core_sharded",
+        "multi_core_sharded_to_sharded",
+        "multi_core_nd_sharded",
+    ],
 )
 def test_untilize_with_unpadding_spec_factories_program_cache_addr_change(device, factory, isolate_program_cache):
     torch.manual_seed(0)
     shape = [1, 1, 256, 128]
     output_end = [0, 0, 200, 100]
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
-    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    height_sharded_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (64, 128), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    # Sharded-to-sharded keeps the input's sharding, so each core writes its own output shard in place.
+    if factory == "multi_core_sharded_to_sharded":
+        output_memory_config = height_sharded_config
+    else:
+        output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     def to_device(torch_tensor):
         if factory in ("single_core", "multi_core_interleaved"):
@@ -1015,11 +1062,9 @@ def test_untilize_with_unpadding_spec_factories_program_cache_addr_change(device
                 device=device,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-        if factory == "multi_core_sharded":
-            shard_spec = ttnn.ShardSpec(shard_grid, (64, 128), ttnn.ShardOrientation.ROW_MAJOR)
-            memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+        if factory in ("multi_core_sharded", "multi_core_sharded_to_sharded"):
             host_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            return ttnn.to_device(host_tensor, device, memory_config=memory_config)
+            return ttnn.to_device(host_tensor, device, memory_config=height_sharded_config)
         tensor_spec = ttnn.TensorSpec(
             shape=shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
         ).sharded_across_dims([2, 3], shard_grid, ttnn.ShardOrientation.ROW_MAJOR)
@@ -1604,3 +1649,43 @@ def test_untilize_with_unpadding_rank_5_zero_volume(device, shape, ends):
 
     assert list(output.shape) == list(shape)
     assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.untilize_with_unpadding))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.untilize_with_unpadding))
+@pytest.mark.parametrize(
+    "shape, output_tensor_end",
+    [
+        ((2, 3, 64, 96), (1, 2, 49, 69)),  # cuts the last two dims only
+        ((2, 3, 64, 96), (0, 1, 63, 95)),  # cuts the outer dims, keeping them contiguous
+        ((2, 3, 4, 64, 64), (0, 1, 3, 40, 40)),  # rank 5
+        ((1, 1, 64, 2048), (0, 0, 40, 2000)),  # wide rows
+    ],
+    ids=["last_two", "outer", "rank5", "wide"],
+)
+def test_untilize_with_unpadding_docstring_supported_inputs(
+    shape, output_tensor_end, dtype, layout, buffer_type, device
+):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.untilize_with_unpadding docstring lists.
+
+    The ends follow the docstring: inclusive, within the input, and contiguous across the dims before the last two.
+    BFLOAT16 inputs leave out NaN, as the docstring requires, and compare zeros by value. A BFLOAT8_B input is compared
+    with its own block-float values, which its BFLOAT16 output holds exactly.
+    """
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input(shape, dtype, nan=dtype != ttnn.bfloat16),
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+    )
+    output = ttnn.untilize_with_unpadding(input_tensor, output_tensor_end=list(output_tensor_end))
+
+    expected = ttnn.to_torch(input_tensor)[tuple(slice(0, end + 1) for end in output_tensor_end)]
+    assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output.dtype == (ttnn.bfloat16 if dtype == ttnn.bfloat8_b else dtype)
+    assert output.memory_config() == memory_config
+    assert list(output.shape) == [end + 1 for end in output_tensor_end]
+    assert_exact(expected, ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)

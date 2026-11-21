@@ -15,14 +15,43 @@
 
 #include <stdint.h>
 
+#include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
+#include "internal/local_mem/address_access.h"
 
 namespace prefetcher_validator {
 
-// Overflow poll: long enough to cover a sender's round trip to publish one more entry after this
-// receiver's last pop -- the window an overshoot would show up in -- while still ending the test if
-// none does.
-constexpr uint32_t kExtraPollCycles = 1u << 18;
+// Overflow poll window: long enough to cover a sender's round trip to publish one more entry after this
+// receiver's last pop -- the window an overshoot would show up in -- while still ending the test if none
+// does. On Wormhole and Blackhole that is 2^18 polls, milliseconds of silicon time and far past a DRAM
+// sender's credit round trip under load. Quasar runs on emulators today, where each uncached poll costs
+// so much wall time that 2^18 of them take half an hour, so its window is bounded in this core's cycles
+// instead: 2^16, still well past the round trip.
+#ifdef ARCH_QUASAR
+constexpr uint64_t kExtraPollCycles = 1ull << 16;
+#else
+constexpr uint32_t kExtraPollIterations = 1u << 18;
+#endif
+
+// Polls `has_extra_entry` until it reports an entry or the window closes; returns whether it did.
+template <typename HasExtraEntry>
+FORCE_INLINE bool extra_entry_within_poll_window(HasExtraEntry&& has_extra_entry) {
+#ifdef ARCH_QUASAR
+    const uint64_t end = get_timestamp() + kExtraPollCycles;
+    do {
+        if (has_extra_entry()) {
+            return true;
+        }
+    } while (get_timestamp() < end);
+#else
+    for (uint32_t poll = 0; poll < kExtraPollIterations; ++poll) {
+        if (has_extra_entry()) {
+            return true;
+        }
+    }
+#endif
+    return false;
+}
 
 // What first_mismatching_word returns when the two buffers are identical, so a caller does not have
 // to re-derive the word count just to read the answer.
@@ -36,8 +65,9 @@ FORCE_INLINE bool should_log(uint32_t global_iter, uint32_t total_iters, uint32_
 
 // Gather this receiver's expected tiles for one block into `scratch_addr`, laid out as the sender
 // pushes them: page row h holds tiles (phys_blk * k_block_w_tiles + h, n_col_start + n) for n in
-// [0, n_per_recv_tiles). One accessor call per tile keeps bank routing out of the kernel. Returns
-// once the reads have landed.
+// [0, n_per_recv_tiles) of the (K, N) matrix that starts `first_page` pages into the tensor -- one group
+// of a grouped weight. One accessor call per tile keeps bank routing out of the kernel. Returns once the
+// reads have landed.
 template <typename Accessor>
 FORCE_INLINE void read_expected_block_tiles(
     const Accessor& accessor,
@@ -47,11 +77,12 @@ FORCE_INLINE void read_expected_block_tiles(
     uint32_t k_block_w_tiles,
     uint32_t total_n_tiles,
     uint32_t n_col_start,
-    uint32_t n_per_recv_tiles) {
+    uint32_t n_per_recv_tiles,
+    uint32_t first_page = 0) {
     uint32_t scratch_cursor = scratch_addr;
     for (uint32_t h = 0; h < k_block_w_tiles; ++h) {
         const uint32_t k_row = phys_blk * k_block_w_tiles + h;
-        const uint32_t row_page_base = k_row * total_n_tiles + n_col_start;
+        const uint32_t row_page_base = first_page + k_row * total_n_tiles + n_col_start;
         for (uint32_t n = 0; n < n_per_recv_tiles; ++n) {
             const uint64_t src_noc = accessor.get_noc_addr(row_page_base + n);
             noc_async_read(src_noc, scratch_cursor, tile_bytes);
@@ -61,8 +92,15 @@ FORCE_INLINE void read_expected_block_tiles(
     noc_async_read_barrier();
 }
 
-// One word of an L1 buffer, for reporting the bytes a mismatch was found on.
+// One word of an L1 buffer, for reporting the bytes a mismatch was found on. Both buffers compared here
+// were written over the NoC, which on Quasar does not snoop the data-movement caches, so they are read
+// through the uncached alias: a line cached by the previous block's compare would otherwise read stale.
 FORCE_INLINE uint32_t l1_word(uint32_t base_addr, uint32_t word_index) {
+#ifdef ARCH_QUASAR
+    if (base_addr < MEM_L1_UNCACHED_BASE) {
+        base_addr += MEM_L1_UNCACHED_BASE;
+    }
+#endif
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_addr)[word_index];
 }
 
@@ -77,6 +115,46 @@ FORCE_INLINE uint32_t first_mismatching_word(uint32_t received_addr, uint32_t ex
         }
     }
     return kNoMismatch;
+}
+
+// Handle overloads of the helpers above, for receivers that hold CoreLocalMem handles (a scratchpad's
+// local_mem(), a scoped lock's get_ptr()) rather than raw L1 addresses. They unwrap the address once
+// here and forward, so both receivers run the exact same code.
+template <typename Accessor, typename T, typename A>
+FORCE_INLINE void read_expected_block_tiles(
+    const Accessor& accessor,
+    const CoreLocalMem<T, A>& scratch,
+    uint32_t tile_bytes,
+    uint32_t phys_blk,
+    uint32_t k_block_w_tiles,
+    uint32_t total_n_tiles,
+    uint32_t n_col_start,
+    uint32_t n_per_recv_tiles,
+    uint32_t first_page = 0) {
+    read_expected_block_tiles(
+        accessor,
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(scratch)),
+        tile_bytes,
+        phys_blk,
+        k_block_w_tiles,
+        total_n_tiles,
+        n_col_start,
+        n_per_recv_tiles,
+        first_page);
+}
+
+template <typename T, typename A>
+FORCE_INLINE uint32_t l1_word(const CoreLocalMem<T, A>& base, uint32_t word_index) {
+    return l1_word(static_cast<uint32_t>(local_mem::detail::AddressAccess::address(base)), word_index);
+}
+
+template <typename T1, typename A1, typename T2, typename A2>
+FORCE_INLINE uint32_t first_mismatching_word(
+    const CoreLocalMem<T1, A1>& received, const CoreLocalMem<T2, A2>& expected, uint32_t page_bytes) {
+    return first_mismatching_word(
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(received)),
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(expected)),
+        page_bytes);
 }
 
 }  // namespace prefetcher_validator
