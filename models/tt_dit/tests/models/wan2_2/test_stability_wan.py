@@ -100,15 +100,15 @@ def test_stability(
 
             # Run inference
             with torch.no_grad():
+                # num_frames is fixed at construction; 4.0/3.0 = high-/low-noise expert (T2V A14B).
                 result = pipeline(
-                    prompt=prompt,
-                    negative_prompt=negative_prompt,
+                    prompts=[prompt],
+                    negative_prompts=[negative_prompt],
                     height=height,
                     width=width,
-                    num_frames=num_frames,
                     num_inference_steps=num_inference_steps,
-                    guidance_scale=3.0,
-                    guidance_scale_2=4.0,
+                    guidance_scale=4.0,
+                    guidance_scale_2=3.0,
                     output_type="uint8",
                 )
 
