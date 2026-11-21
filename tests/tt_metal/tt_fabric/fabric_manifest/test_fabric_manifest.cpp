@@ -1141,7 +1141,7 @@ void check_capture_plan(
     const std::vector<capture::MultiSampledRegion> multi_sampled_arch_areas = {
         {.kind = capture::RegionKind::L1,
          .address = hal.get_arch() == tt::ARCH::BLACKHOLE ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE
-                                                         : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE,
+                                                          : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE,
          .size_bytes = sizeof(uint32_t)},
         {.kind = capture::RegionKind::L1,
          .address = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::FABRIC_TELEMETRY),
@@ -1455,8 +1455,7 @@ std::vector<uint64_t> make_full_read_addresses(const capture::CapturePlan& plan,
         addresses.push_back(core_register.address);
     }
     addresses.push_back(plan.l1_address);
-    addresses.insert(
-        addresses.end(), router.stream_register_addresses.begin(), router.stream_register_addresses.end());
+    addresses.insert(addresses.end(), router.stream_register_addresses.begin(), router.stream_register_addresses.end());
     return addresses;
 }
 
