@@ -567,7 +567,10 @@ BLOCK_FILL_GATE = True
 # 386.9 -> 374.6, 514x1024 64->256 1372.6 -> 1386.7 (bm 15 -> 3: flat). Not at C_in 32 (KHR_MIN_C_IN_TILES): there the
 # output store is the critical path (the most output bytes per MAC), and the faster compute bunches the cores' NoC1
 # stores until the far-column cores starve: 1026x2048 32->128 1832.7 -> 2590.9, 514x1024 32->128 598 -> 697.5, although
-# with the store stubbed they gain 1614.8 -> 1437.0 and 432.4 -> 378.4.
+# with the store stubbed they gain 1614.8 -> 1437.0 and 432.4 -> 378.4. The rows are streamed and tilized in band-first
+# order (kernels/conv2d_3x3_khr_band_order.hpp: a core's first M-block waits for its own 3 bm rows, not the first
+# window of 2 W / 32 + bm rows every core fetches at once) with the unit FIFO's groups ending at each tilize step; the
+# ring slab's capacity is unchanged (a unit's pixels stay within (table + fill) tile-rows of the oldest live one).
 KHR_MIN_C_IN_TILES = 2
 KHR_DEPTH = 4  # gathered-block FIFO, in three-tap units
 # Column ring rows per NoC on Blackhole (physical y 0..11; worker rows 2..11).

@@ -50,6 +50,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "conv2d_3x3_slab_dataflow.hpp"
 #include "conv2d_3x3_gather_dataflow.hpp"
+#include "conv2d_3x3_khr_band_order.hpp"
 
 namespace conv2d_3x3 {
 
@@ -530,6 +531,295 @@ struct RmBankRing {
                 wp_lo = RM_INF;
             }
         }
+    }
+};
+
+// kh reuse in band-first order (conv2d_3x3_khr_band_order.hpp): the order's runs (one lane's rows [r0, r1) before one
+// K-block) as segments of a virtual stream. Run k's pixels [px0, px1) (its rows some output tile-row of this core
+// reads, lane l's rows below l wt + the core's tile-rows, with the last one's two halo pixels, clamped to the image)
+// sit at virtual positions [px0, px1) + delta, directly after run k - 1's. A run that continues the previous one (same
+// lane, next row) keeps its delta and starts after the halo pixels already read, so in steady state (lane 2 only) the
+// virtual stream is the monotone pixel stream; any other run reads its first row's two halo pixels again. Units are
+// emitted in the same order, so their virtual positions never decrease and the ring's cursors (copied / landed /
+// allowed) are virtual.
+template <uint32_t wt, uint32_t bm, int32_t px_shift, int32_t num_in_px>
+struct KhrBandRuns {
+    KhrBandOrder<wt, bm> order;
+    uint32_t nmb = 0;
+    uint32_t c0 = 0;
+    uint32_t actual = 0;
+    // Schedule cursor: the next (M-block, kernel row, lane) to look at.
+    uint32_t m = 0;
+    uint32_t kh = 0;
+    uint32_t l = 0;
+    // The current run.
+    uint32_t lane = 3;
+    uint32_t r0 = 0;
+    uint32_t r1 = 0;
+    int32_t px0 = 0;
+    int32_t px1 = 0;
+    int32_t delta = 0;
+    int32_t v_end = 0;
+    // Rows from this run's first on that the same K-block's tilize takes (its later runs included): the unit FIFO's
+    // groups end there, so the reader's next group never waits on a tilize that needs the group's own first units.
+    uint32_t step_rem = 0;
+    uint32_t step_id = 0xFFFFFFFFu;
+
+    FORCE_INLINE void init(uint32_t first_row, uint32_t actual_rows, uint32_t num_m_blocks) {
+        order.init(num_m_blocks);
+        nmb = num_m_blocks;
+        c0 = first_row;
+        actual = actual_rows;
+        m = kh = l = 0;
+        lane = 3;
+        r0 = r1 = 0;
+        px0 = px1 = delta = v_end = 0;
+        step_rem = 0;
+        step_id = 0xFFFFFFFFu;
+    }
+
+    static FORCE_INLINE int32_t clamp(int32_t p) { return p < 0 ? 0 : (p > num_in_px ? num_in_px : p); }
+
+    // The next run (false: none left).
+    FORCE_INLINE bool next() {
+        while (m < nmb) {
+            const uint32_t ll = l;
+            const uint32_t from = order.hw[ll];
+            const uint32_t t = order.target(m, kh, ll);
+            if (t > from && step_id != m * 3 + kh) {
+                // A new tilize step: its rows over every lane.
+                step_id = m * 3 + kh;
+                step_rem = 0;
+                for (uint32_t b = ll; b < 3; ++b) {
+                    const uint32_t tb = order.target(m, kh, b);
+                    step_rem += tb > order.hw[b] ? tb - order.hw[b] : 0;
+                }
+            } else if (t > from) {
+                step_rem -= r1 - r0;
+            }
+            if (++l == 3) {
+                if (++kh == 3) {
+                    kh = 0;
+                    ++m;
+                }
+                l = kh;
+            }
+            if (t > from) {
+                order.hw[ll] = t;
+                const bool cont = ll == lane && from == r1;
+                lane = ll;
+                r0 = from;
+                r1 = t;
+                // Rows past lim are read by no output tile-row of this core.
+                const uint32_t lim = ll * wt + actual;
+                const uint32_t t_px = t < lim ? t : lim;
+                if (cont) {
+                    px0 = px1;
+                } else {
+                    px0 = clamp(static_cast<int32_t>((c0 + from) * 32) - px_shift);
+                    delta = v_end - px0;
+                }
+                const int32_t hi = t_px > from ? clamp(static_cast<int32_t>((c0 + t_px) * 32) - px_shift + 2) : px0;
+                px1 = hi > px0 ? hi : px0;
+                v_end = px1 + delta;
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+// The ring slab's bank-run fill over the band-first virtual stream (as RmBankRing, origin 0): a chunk's DRAM pixels are
+// its virtual positions - delta, so it never crosses a change of delta (runs that keep it, the steady state, chunk as
+// one stream), and the de-interleave places virtual position v at ring slot v mod ring_px.
+template <
+    int32_t ring_px,
+    uint32_t pixel_bytes,
+    uint32_t nb,
+    uint32_t nstg,
+    int32_t chunk_px,
+    uint32_t copy_trid,
+    uint32_t stage_trid0,
+    typename Runs>
+struct RmBandRing {
+    static_assert(nstg >= 1 && stage_trid0 + nstg - 1 <= NOC_MAX_TRANSACTION_ID, "staging trids");
+    static_assert(chunk_px >= 1 && chunk_px <= ring_px, "a chunk fits the ring");
+    static constexpr uint32_t slot_bytes = (static_cast<uint32_t>(chunk_px) + nb - 1) / nb * pixel_bytes;
+    static constexpr uint32_t chunk_bytes = nb * slot_bytes;
+    static constexpr uint32_t ring_bytes = static_cast<uint32_t>(ring_px) * pixel_bytes;
+    static constexpr int32_t origin = 0;
+
+    uint32_t ring_l1 = 0;
+    uint32_t stage_l1 = 0;
+    Runs runs;
+    // DRAM issue cursor (virtual) inside the current segment [.., iss_hi) of runs with one delta; done once no run is
+    // left. The next run (a one-run lookahead: a chunk extends into it when it keeps the delta).
+    int32_t iss_a = 0;
+    int32_t iss_hi = 0;
+    int32_t iss_delta = 0;
+    bool iss_done = false;
+    bool nx_ok = false;
+    int32_t nx_hi = 0;
+    int32_t nx_delta = 0;
+    uint32_t n_issued = 0;
+    uint32_t n_proc = 0;
+    int32_t c_lo[nstg];
+    int32_t c_hi[nstg];
+    int32_t copied = 0;
+    int32_t landed = 0;
+    int32_t allowed = 0;
+    bool copies_out = false;
+
+    FORCE_INLINE void init(
+        uint32_t ring, uint32_t stage, uint32_t first_row, uint32_t actual_rows, uint32_t num_m_blocks) {
+        ring_l1 = ring;
+        stage_l1 = stage;
+        allowed = ring_px;
+        runs.init(first_row, actual_rows, num_m_blocks);
+        iss_a = iss_hi = iss_delta = 0;
+        iss_done = false;
+        copied = landed = 0;
+        n_issued = n_proc = 0;
+        fetch_next();
+        load_run();
+    }
+
+    FORCE_INLINE void fetch_next() {
+        nx_ok = runs.next();
+        if (nx_ok) {
+            nx_hi = runs.v_end;
+            nx_delta = runs.delta;
+        }
+    }
+
+    // The next non-empty run once the current segment is issued.
+    FORCE_INLINE void load_run() {
+        while (iss_a == iss_hi) {
+            if (!nx_ok) {
+                iss_done = true;
+                return;
+            }
+            iss_hi = nx_hi;
+            iss_delta = nx_delta;
+            fetch_next();
+        }
+    }
+
+    // Runs that keep the delta continue the segment (whole chunks across them: the monotone stream's chunking).
+    FORCE_INLINE void extend(int32_t to) {
+        while (iss_hi < to && nx_ok && nx_delta == iss_delta) {
+            iss_hi = nx_hi;
+            fetch_next();
+        }
+    }
+
+    FORCE_INLINE void release(int32_t live_lo) {
+        const int32_t a = live_lo + ring_px;
+        allowed = a > allowed ? a : allowed;
+    }
+
+    template <typename Reads>
+    FORCE_INLINE void land_copies(Reads& reads) {
+        if (copies_out) {
+            reads.wait(copy_trid);
+            copies_out = false;
+        }
+        landed = copied;
+    }
+
+    FORCE_INLINE bool can_issue() const { return n_issued - n_proc < nstg && !iss_done && iss_a < allowed; }
+
+    template <typename Reads, typename Accessor>
+    FORCE_INLINE void issue(Reads& reads, const Accessor& input) {
+        const uint32_t slot = n_issued % nstg;
+        if (n_issued >= nstg) {
+            land_copies(reads);
+        }
+        const int32_t a = iss_a;
+        extend(a + chunk_px);
+        int32_t e = a + chunk_px < iss_hi ? a + chunk_px : iss_hi;
+        e = e < allowed ? e : allowed;
+        ASSERT(a < e);
+        const uint32_t base = stage_l1 + slot * chunk_bytes;
+        const int32_t p = a - iss_delta;
+        reads.begin(stage_trid0 + slot);
+        for (int32_t s = 0; s < static_cast<int32_t>(nb) && a + s < e; ++s) {
+            const uint32_t run = static_cast<uint32_t>(e - a - s + nb - 1) / nb;
+            reads.read(input.get_noc_addr(p + s), base + s * slot_bytes, run * pixel_bytes);
+        }
+        c_lo[slot] = a;
+        c_hi[slot] = e;
+        iss_a = e;
+        load_run();
+        ++n_issued;
+    }
+
+    // The oldest staged chunk into its ring slots (blocking on its DRAM reads).
+    template <typename Reads>
+    FORCE_INLINE void process(Reads& reads) {
+        const uint32_t slot = n_proc % nstg;
+        const int32_t a = c_lo[slot];
+        const int32_t e = c_hi[slot];
+        ASSERT(e <= allowed);
+        reads.wait(stage_trid0 + slot);
+        const uint32_t base = stage_l1 + slot * chunk_bytes;
+        const uint32_t noc = reads.noc.get_noc_id();
+        reads.begin(copy_trid);
+        ncrisc_noc_read_set_state<DM_DEDICATED_NOC, true>(noc, NCRISC_RD_CMD_BUF, get_noc_addr(base, noc), pixel_bytes);
+        const int32_t slot_px = a % ring_px;
+        const uint32_t ring_end = ring_l1 + ring_bytes;
+        for (int32_t s = 0; s < static_cast<int32_t>(nb) && a + s < e; ++s) {
+            uint32_t src = base + s * slot_bytes;
+            int32_t x = slot_px + s;
+            if (x >= ring_px) {
+                x -= ring_px;
+            }
+            uint32_t dst = ring_l1 + static_cast<uint32_t>(x) * pixel_bytes;
+            for (int32_t q = a + s; q < e; q += nb) {
+                ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, true>(noc, NCRISC_RD_CMD_BUF, src, dst);
+                reads.count_packets(1);
+                src += pixel_bytes;
+                dst += nb * pixel_bytes;
+                if (dst >= ring_end) {
+                    dst -= ring_bytes;
+                }
+            }
+        }
+        reads.drop_fixed_state();
+        copies_out = true;
+        copied = e;
+        ++n_proc;
+    }
+
+    // Opportunistic (compute is behind): one DRAM chunk issue, else one landed chunk's de-interleave.
+    template <typename Reads, typename Accessor>
+    FORCE_INLINE bool step(Reads& reads, const Accessor& input) {
+        if (can_issue()) {
+            issue(reads, input);
+            return true;
+        }
+        if (n_proc < n_issued &&
+            ncrisc_noc_read_with_transaction_id_flushed(reads.noc.get_noc_id(), stage_trid0 + n_proc % nstg)) {
+            process(reads);
+            return true;
+        }
+        return false;
+    }
+
+    // Blocking, whole chunks: every virtual position below x is in the ring (as RmBankRing::need_whole).
+    template <typename Reads, typename Accessor>
+    FORCE_INLINE void need_whole(Reads& reads, const Accessor& input, int32_t x) {
+        if (x <= landed) {
+            return;
+        }
+        while (copied < x) {
+            if (can_issue() && iss_a < x) {
+                issue(reads, input);
+            } else {
+                process(reads);
+            }
+        }
+        land_copies(reads);
     }
 };
 

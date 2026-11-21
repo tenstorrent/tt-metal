@@ -77,6 +77,9 @@
 #include "conv2d_3x3_padded_slab.hpp"
 #include "conv2d_3x3_slab_direct.hpp"
 #include "conv2d_3x3_kblock_walk.hpp"
+#ifdef KH_REUSE
+#include "conv2d_3x3_khr_band_order.hpp"
+#endif
 #ifdef CONV2D_3X3_TAP_SHIFT
 #include "conv2d_3x3_tap_shift.hpp"
 #endif
@@ -882,14 +885,21 @@ struct ResidentWeightsPreKBlock {
 // 3 kh + kw). Tap (kh, kw) of output tile-row t is tap (0, kw) of tile-row t + kh * W / 32, so each input tile-row is
 // tilized once, as one three-tap unit ([kw][c] = 3 * tw tiles, the reader's TapDirectFifo entry), into a ring of
 // ring_rows such rows (cb_im2col_tiles), and K-block (kh, kw) of an M-block multiplies rows m0 + kh * W / 32 + i of it
-// at tap offset kw * tw. Rows are counted from the core's first output tile-row and tilized lazily: before K-block
-// (kh, 0), every row up to m0 + kh * wt + bm (so the reader streams rows in increasing order). The unpacker frees rows
-// with a bare ack of the ring's tiles_acked (its read pointer stays at the CB base, so a ring row's tiles sit at a
-// fixed index): before K-block (kh, 0), every row below m0 + min(bm, kh * wt) (kh > 0) or m0 (kh = 0), which no later
-// K-block reads; ring_rows = max(2 * wt, bm) then always holds the live rows. Same tiles, same K order as the
-// tap-direct walk (bit-identical); 3x fewer tilized tiles and ~9x fewer units. Raw LLK (capability): the walk's in0
-// comes from a CB read pointer with a per-K-block wait / pop, which cannot address a tile ring; nothing acks a CB
-// without moving its read pointer.
+// at tap offset kw * tw. Rows are counted from the core's first output tile-row; row r sits at ring row r mod
+// ring_rows. They are tilized lazily in band-first order (conv2d_3x3_khr_band_order.hpp, the reader streams them in the
+// same order): before K-block (kh, 0), lanes kh.. up to row m0 + kh * wt + bm, each lane's run packed at its own ring
+// rows (the packer's write pointer is placed per run). So M-block 0 waits for its own 3 bm rows, not for the whole
+// first window of 2 wt + bm rows that every core fetches from DRAM at once. The unpacker frees rows with a bare ack of
+// the ring's tiles_acked (its read pointer stays at the CB base, so a ring row's tiles sit at a fixed index): before
+// K-block (kh, 0), every row below m0 + min(bm, kh * wt) (kh > 0) or m0 (kh = 0), which no later K-block reads and
+// which are all tilized; ring_rows = max(2 * wt, bm) then always holds the live rows (a ring row is rewritten only
+// once its row is dead), and the CB counts stay exact (rows pushed, rows freed). Same tiles, same K order as the
+// tap-direct walk (bit-identical); 3x fewer tilized tiles and ~9x fewer units. Measured (Blackhole p150b, FLUX.2 bh2x4,
+// bit-identical, device kernel us), monotone order -> band-first with the reader's FIFO groups ending at each tilize
+// step: 514x1024 64->256 1385.8 -> 1268.8 (first M-block 114 -> 36), 514x1024 64->128 758.6 -> 726.9, 130x256
+// 128->512 374.0 -> 358.0, 258x512 64->256 399.2 -> 397.1 (perf_experiments/ring_band_first_startup). Raw LLK
+// (capability): the walk's in0 comes from a CB read pointer with a per-K-block wait / pop, which cannot address a tile
+// ring; nothing acks a CB without moving its read pointer, and nothing packs a CB push at a chosen ring row.
 namespace kh_reuse {
 #ifdef TRISC_UNPACK
 // tiles_acked += n without moving the read pointer (llk_pop_tiles' counter update and stall).
@@ -905,11 +915,14 @@ inline void ack_tiles(uint32_t cb, uint32_t n) {
 #endif
 
 struct State {
-    uint32_t hw = 0;                 // rows tilized (pushed)
-    uint32_t acked = 0;              // rows freed
-    uint32_t pos_hw = 0;             // hw's ring row
-    uint32_t m_row0 = 0;             // the M-block's first row
-    uint32_t kh_pos[3] = {0, 0, 0};  // ring row of m_row0 + kh * wt
+    uint32_t hw = 0;                   // rows tilized (pushed), every lane
+    uint32_t acked = 0;                // rows freed (all below it)
+    uint32_t m_row0 = 0;               // the M-block's first row
+    uint32_t kh_pos[3] = {0, 0, 0};    // ring row of m_row0 + kh * wt
+    uint32_t lane_hw[3] = {0, 0, 0};   // lane l's next row
+    uint32_t lane_pos[3] = {0, 0, 0};  // its ring row
+    uint32_t lane_end2 = 0;            // lane 2's end (the core's last row + 1)
+    uint32_t ring_base = 0;            // the ring CB's base (packer, 16 B units)
 };
 
 template <
@@ -929,6 +942,20 @@ struct Tilize {
     DataflowBuffer* ring;
     DataflowBuffer* table;
     State* st;
+    using Order = conv2d_3x3::KhrBandOrder<wt, bm>;
+
+    // Kernel start: the lanes' first rows and ring rows, lane 2's end, the ring CB's base.
+    ALWI void init(uint32_t num_m_blocks) const {
+        st->lane_end2 = num_m_blocks * bm + 2 * wt;
+        for (uint32_t l = 0; l < 3; ++l) {
+            st->lane_hw[l] = l * wt;
+            st->lane_pos[l] = l * wt < ring_rows ? l * wt : l * wt - ring_rows;
+        }
+        PACK(({
+            const auto& cb = get_local_cb_interface(get_output_id(cb_ring));
+            st->ring_base = cb.fifo_limit - cb.fifo_size;
+        }));
+    }
 
     // Per M-block, before the walk.
     ALWI void begin_block(uint32_t m_block_idx) const {
@@ -954,24 +981,37 @@ struct Tilize {
             UNPACK((ack_tiles(cb_ring, (free_to - st->acked) * row_tiles)));
             st->acked = free_to;
         }
-        const uint32_t target = m0 + kh * wt + bm;
-        if (target > st->hw) {
+        uint32_t lane_target[3] = {0, 0, 0};
+        bool work = false;
+        for (uint32_t l = kh; l < 3; ++l) {
+            lane_target[l] = Order::target_of(m0, kh, l, st->lane_end2);
+            work = work || lane_target[l] > st->lane_hw[l];
+        }
+        if (work) {
             MaybeDeviceZoneScope("compute_tilize");
             // The previous K-block's pack left packer L1 accumulation on; the tilize pack must overwrite.
             pack_reconfig_l1_acc(0);
             if constexpr (relu_on_last_matmul_pack) {
                 pack_relu_config(ReluConfig::none());
             }
-            // A DEST section's pack never crosses the ring end: one tilize call per contiguous run.
-            while (st->hw < target) {
-                uint32_t n = target - st->hw;
-                const uint32_t to_end = ring_rows - st->pos_hw;
-                n = n < to_end ? n : to_end;
-                fifo_tilize<tw, 3, false, cb_rm, cb_ring, cb_table, windows>(*rm, *ring, *table, n);
-                st->hw += n;
-                st->pos_hw += n;
-                if (st->pos_hw == ring_rows) {
-                    st->pos_hw = 0;
+            // Each lane's run at its own ring rows; a DEST section's pack never crosses the ring end: one tilize call
+            // per contiguous run.
+            for (uint32_t l = kh; l < 3; ++l) {
+                while (st->lane_hw[l] < lane_target[l]) {
+                    uint32_t n = lane_target[l] - st->lane_hw[l];
+                    const uint32_t to_end = ring_rows - st->lane_pos[l];
+                    n = n < to_end ? n : to_end;
+                    PACK(({
+                        auto& cb = get_local_cb_interface(get_output_id(cb_ring));
+                        cb.fifo_wr_ptr = st->ring_base + st->lane_pos[l] * row_tiles * cb.fifo_page_size;
+                    }));
+                    fifo_tilize<tw, 3, false, cb_rm, cb_ring, cb_table, windows>(*rm, *ring, *table, n);
+                    st->lane_hw[l] += n;
+                    st->hw += n;
+                    st->lane_pos[l] += n;
+                    if (st->lane_pos[l] == ring_rows) {
+                        st->lane_pos[l] = 0;
+                    }
                 }
             }
             if constexpr (relu_on_last_matmul_pack) {
@@ -980,8 +1020,8 @@ struct Tilize {
                 }
             }
         }
-        // The rows this kernel row's K-blocks read are packed.
-        cb_wait_front(cb_ring, (target - st->acked) * row_tiles);
+        // Every row tilized so far is packed (this kernel row's included).
+        cb_wait_front(cb_ring, (st->hw - st->acked) * row_tiles);
     }
 
     // Every row left (kernel end).
@@ -1490,6 +1530,7 @@ void kernel_main() {
         false,
         relu_on_last_matmul_pack>;
     const KhrPre khr_pre{&im2col_rm_dfb, &im2col_tiles_dfb, &src_table_dfb, &khr_state};
+    khr_pre.init(num_m_blocks_this_core);
 #endif
 #ifdef CONV2D_3X3_COUT_FOLD
     // C_out fold (conv2d_3x3_cout_fold.hpp): the core's first output tile-row and walk tile-rows (runtime args 3, 4).

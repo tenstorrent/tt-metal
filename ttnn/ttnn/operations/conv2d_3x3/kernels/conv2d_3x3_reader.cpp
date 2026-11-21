@@ -785,12 +785,16 @@ void kernel_main() {
     };
 #ifdef KH_REUSE
     // kh reuse (the compute kernel's kh_reuse::Tilize): one three-tap unit (kw = 0, 1, 2 of kernel row 0) per virtual
-    // tile-row J, in increasing J, over the rows compute tilizes: J in [m_tile_start, m_tile_start + nmb * bm + 2 wt).
-    // Tap (kh, kw) of output tile-row t is unit t + kh * wt's tap kw. A row no in-range output tile-row reads (past the
-    // core's bands, or between them when the core spans less than an image row) is the zero unit. The fill is the ring
-    // slab's (RmBankRing): the core's bands, each pixel read once; a unit waits for its 32 + 2 pixels, and the reader
-    // learns compute's progress from the entry FIFO (tap_direct_fifo_units deep): once units below e are reserved,
-    // compute popped every unit below e - tap_direct_fifo_units, whose pixels the ring may then overwrite.
+    // tile-row J, over the rows compute tilizes (J in [m_tile_start, m_tile_start + nmb * bm + 2 wt)), in the
+    // band-first order compute tilizes them (conv2d_3x3_khr_band_order.hpp). Tap (kh, kw) of output tile-row t is unit
+    // t + kh * wt's tap kw. A row no in-range output tile-row reads (past the core's bands) is the zero unit. The fill
+    // (RmBandRing) is the order's virtual stream (KhrBandRuns: each run's pixels once, a run's first halo pixels again
+    // where it does not continue the previous run); a unit waits for its 32 + 2 pixels, and the reader learns compute's
+    // progress from the entry FIFO (tap_direct_fifo_units deep): once units before e are reserved, compute popped every
+    // unit before e - tap_direct_fifo_units, whose ring positions the fill may then overwrite (unit positions never
+    // decrease). The FIFO's groups end where a tilize step ends: a group across two steps is reserved only once
+    // compute is inside the first step's tilize, which then waits for the reader to gather that step's last units, on
+    // every M-block.
     constexpr bool kh_reuse = true;
     static_assert(
         rm_ring && kb_tap_direct && stride == 1 && dilation == 1 && static_cast<int32_t>(output_width) == input_width &&
@@ -821,68 +825,88 @@ void kernel_main() {
         Fifo3T fifo3;
         fifo3.init(get_write_ptr(cb_im2col_rm), src_table_l1);
         const uint32_t c0 = m_tile_start;
-        const uint32_t total = num_m_blocks_this_core * block_m_tiles + 2 * wt;
         // Pixel range of virtual tile-row J's three taps: [J * 32 - pad_top * W - pad_left, + 34).
         constexpr int32_t px_shift = pad_top * input_width + pad_left;
-        const uint32_t core_end_tiles = (m_tile_start + actual_m_tiles) * TILE_DIM;
-        const conv2d_3x3::SlabFootprint core_fp =
-            conv2d_3x3::block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
-                c0 * TILE_DIM, core_end_tiles < num_out_px ? core_end_tiles : num_out_px);
-        rm.template init<input_width, num_in_px, dilation>(
-            slab_l1, get_write_ptr(cb_rm_stage), core_fp.f > 0 ? core_fp.f : 0, core_fp);
+        using Runs = conv2d_3x3::KhrBandRuns<wt, block_m_tiles, px_shift, num_in_px>;
+        conv2d_3x3::RmBandRing<
+            rm_ring_px,
+            pixel_bytes,
+            NUM_DRAM_BANKS,
+            rm_ring_nstg,
+            rm_ring_chunk,
+            TRID_RM_COPY,
+            TRID_RM_STAGE,
+            Runs>
+            rmb;
+#ifdef RM_RING_STAGE_BYTES
+        static_assert(rm_ring_nstg * decltype(rmb)::chunk_bytes <= RM_RING_STAGE_BYTES, "staging fits CB_RM_STAGE");
+#endif
+        rmb.init(slab_l1, get_write_ptr(cb_rm_stage), c0, actual_m_tiles, num_m_blocks_this_core);
         auto idle3 = [&]() {
-            if (rm.step(reads, input)) {
+            if (rmb.step(reads, input)) {
                 reads.begin(TRID_GATHER);
                 fifo3.fixed_state = 0;
             }
         };
-        int32_t q_lo = 0;  // base_for's wrap count at the current unit's lowest pixel
+        // Virtual positions of the last units (the release reads the one T entries back).
+        constexpr uint32_t HN = T < 2 ? 2 : (T < 4 ? 4 : (T < 8 ? 8 : (T < 16 ? 16 : (T < 32 ? 32 : 64))));
+        static_assert(HN > T, "unit history covers the FIFO");
+        int32_t vlo_hist[HN];
+        Runs units;
+        units.init(c0, actual_m_tiles, num_m_blocks_this_core);
+        uint32_t j = 0;
+        int32_t q_v = 0;  // the gather's wrap count at the current unit's lowest virtual position
         reads.begin(TRID_GATHER);
-        for (uint32_t j = 0; j < total; ++j) {
-            fifo3.reserve(tap_direct_group, total - j, idle3);
-            const uint32_t reserved_end = j + fifo3.tbl_reserved - fifo3.tbl_written;
-            if (reserved_end > T) {
-                rm.release(static_cast<int32_t>((c0 + reserved_end - T) * TILE_DIM) - px_shift);
-            }
-            const uint32_t J = c0 + j;
-            const bool needed = j < actual_m_tiles || (j >= wt && j - wt < actual_m_tiles) ||
-                                (j >= 2 * wt && j - 2 * wt < actual_m_tiles);
-            const int32_t lo = static_cast<int32_t>(J * TILE_DIM) - px_shift;
-            // Keep the staging ring's DRAM reads in flight under the gather (compute may be ahead of the fill), then
-            // wait for this unit's pixels.
-            bool refill = false;
-            if (rm.can_issue()) {
-                rm.issue(reads, input, conv2d_3x3::RM_INF);
-                refill = true;
-            }
-            if (needed) {
-                int32_t hi = lo + static_cast<int32_t>(TILE_DIM) + 2;
-                hi = hi < num_in_px ? hi : num_in_px;
-                // (A row below the image's last pixel has nothing to wait for: its taps are the zero block.)
-                if (hi > lo && hi > rm.landed) {
-                    rm.need_whole(reads, input, hi);
+        while (units.next()) {
+            for (uint32_t r = units.r0; r < units.r1; ++r, ++j) {
+                fifo3.reserve(tap_direct_group, units.step_rem - (r - units.r0), idle3);
+                const uint32_t J = c0 + r;
+                const bool needed = r < actual_m_tiles || (r >= wt && r - wt < actual_m_tiles) ||
+                                    (r >= 2 * wt && r - 2 * wt < actual_m_tiles);
+                const int32_t lo = static_cast<int32_t>(J * TILE_DIM) - px_shift;
+                const int32_t lo_c = Runs::clamp(lo);
+                const int32_t vlo = (lo_c < units.px1 ? lo_c : units.px1) + units.delta;
+                vlo_hist[j % HN] = vlo;
+                const uint32_t reserved_end = j + fifo3.tbl_reserved - fifo3.tbl_written;
+                if (reserved_end > T) {
+                    rmb.release(vlo_hist[(reserved_end - T) % HN]);
+                }
+                // Keep the staging ring's DRAM reads in flight under the gather (compute may be ahead of the fill),
+                // then wait for this unit's pixels.
+                bool refill = false;
+                if (rmb.can_issue()) {
+                    rmb.issue(reads, input);
                     refill = true;
                 }
+                if (needed) {
+                    int32_t hi = lo + static_cast<int32_t>(TILE_DIM) + 2;
+                    hi = hi < num_in_px ? hi : num_in_px;
+                    const int32_t vhi = hi + units.delta;
+                    // (A row below the image's last pixel has nothing to wait for: its taps are the zero block.)
+                    if (vhi > vlo && vhi > rmb.landed) {
+                        rmb.need_whole(reads, input, vhi);
+                        refill = true;
+                    }
+                }
+                if (refill) {
+                    reads.begin(TRID_GATHER);
+                    fifo3.fixed_state = 0;
+                }
+                while (vlo - q_v * rm_ring_px >= rm_ring_px) {
+                    ++q_v;
+                }
+                fifo3.unit(
+                    reads,
+                    slab_l1,
+                    slab_noc,
+                    zero_src_l1,
+                    zero_src_noc,
+                    J * TILE_DIM,
+                    needed ? (J + 1) * TILE_DIM : J * TILE_DIM,
+                    0,
+                    0,
+                    units.delta - q_v * rm_ring_px);
             }
-            if (refill) {
-                reads.begin(TRID_GATHER);
-                fifo3.fixed_state = 0;
-            }
-            const int32_t lo_c = lo > rm.origin ? lo : rm.origin;
-            while (lo_c - rm.origin - q_lo * rm_ring_px >= rm_ring_px) {
-                ++q_lo;
-            }
-            fifo3.unit(
-                reads,
-                slab_l1,
-                slab_noc,
-                zero_src_l1,
-                zero_src_noc,
-                J * TILE_DIM,
-                needed ? (J + 1) * TILE_DIM : J * TILE_DIM,
-                0,
-                0,
-                -rm.origin - q_lo * rm_ring_px);
         }
     }
 #else
