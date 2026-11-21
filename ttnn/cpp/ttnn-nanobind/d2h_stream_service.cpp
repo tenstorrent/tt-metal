@@ -179,6 +179,12 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::D2HStreamService::get_write_ack_counter_addr,
             "Service-core L1 write-ack counter addr for coord (owner-only).")
         .def(
+            "get_write_ack_counter",
+            &tt::tt_metal::D2HStreamService::get_write_ack_counter,
+            nb::arg("coord"),
+            "Write-ack counter for coord; step is every worker's inc for a transfer, or 1 without workers "
+            "(owner-only).")
+        .def(
             "get_worker_metadata_addr",
             &tt::tt_metal::D2HStreamService::get_worker_metadata_addr,
             "Worker-side metadata staging L1 base (owner-only).")

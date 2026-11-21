@@ -4,8 +4,8 @@
 
 """Generated BF16 logit cases, beside the unary category suites."""
 
-import torch
 import pytest
+import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, generate_all_bfloat16_bitpatterns
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole

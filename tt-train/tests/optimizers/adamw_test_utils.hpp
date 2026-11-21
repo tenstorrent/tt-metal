@@ -22,7 +22,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "xtensor/containers/xarray.hpp"
 
-// Launch tensors and checks shared by the AdamW and AdamWFullPrecision tests.
+// Launch tensors and checks shared by the AdamW tests on bf16 and on fp32 parameters.
 
 namespace ttml::test_utils::adamw {
 

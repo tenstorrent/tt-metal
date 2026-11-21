@@ -10,7 +10,6 @@ using ::sfpi::DataLayout;
 using ::sfpi::dst_reg;
 using ::sfpi::exexp;
 using ::sfpi::ExponentMode;
-using ::sfpi::lut;
 using ::sfpi::RoundMode;
 using ::sfpi::setexp;
 using ::sfpi::setsgn;

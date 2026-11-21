@@ -7,7 +7,6 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // FabricType
-#include <tt-umd/types/cluster_descriptor_types.hpp>       // ChipId
 #include <memory>
 #include <map>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
@@ -188,6 +187,7 @@ private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED by default
 
     // Builder context (lazy init on first access)
+    mutable std::once_flag builder_context_init_flag_;
     mutable std::unique_ptr<FabricBuilderContext> builder_context_;
 };
 

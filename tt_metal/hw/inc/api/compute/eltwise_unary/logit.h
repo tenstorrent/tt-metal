@@ -21,7 +21,7 @@ namespace ckernel {
 /**
  * Performs element-wise computation of logit on each element of a tile in DEST, which holds
  * BF16 data, with one pass of a generated SFPU kernel. The DEST register buffer must be in acquired
- * state via *acquire_dst* call. This call is blocking and is only available on the compute engine.
+ * state via *tile_regs_acquire* call. This call is blocking and is only available on the compute engine.
  *
  * Return value: None
  *

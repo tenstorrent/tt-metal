@@ -10,6 +10,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/debug/assert.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "../dispatch_fabric2d_routing_index.hpp"
 
 namespace {
@@ -352,7 +353,8 @@ struct Channels {
             } else {
                 fwd_meta->cmd = dspf2d::CMD_FORWARD;
                 fwd_meta->vc = next;
-                fwd_meta->this_addr = fwd_acc.get_noc_addr(fwd_page(next, out_page[next]++));
+                fwd_meta->this_addr =
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(fwd_acc, fwd_page(next, out_page[next]++));
             }
             queue.mark_ready();
         }
@@ -470,10 +472,14 @@ void own_phase(
 
                     // Both final addresses are computed here and travel with the token. Every buffer is
                     // interleaved DRAM with the same base on every chip, so a page index names the same
-                    // place on any chip.
+                    // place on any chip. Resolved through the fabric's helper, as every address a packet
+                    // carries must be: the router on the destination chip writes it on ITS NoC, and on
+                    // Blackhole each DRAM bank has a different endpoint per NoC. This kernel's own NoC would
+                    // name the NOC0 endpoint, which NOC1 traffic must not use (SYS-1419).
                     volatile tt_l1_ptr dspf2d::FwdMetadata* fwd_meta = entry_meta(entry);
-                    fwd_meta->final_payload_addr = out_acc.get_noc_addr(page);
-                    fwd_meta->final_meta_addr = meta_acc.get_noc_addr(page);
+                    fwd_meta->final_payload_addr =
+                        tt::tt_fabric::linear::addrgen_detail::get_noc_address(out_acc, page);
+                    fwd_meta->final_meta_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(meta_acc, page);
                     fwd_meta->dst_chip = dst_chip;
                     fwd_meta->meta[0] = ct.linearized_coord;
                     fwd_meta->meta[1] = token;
@@ -488,7 +494,8 @@ void own_phase(
                         // batch count.
                         fwd_meta->cmd = dspf2d::CMD_FORWARD;
                         fwd_meta->vc = own_vc;
-                        fwd_meta->this_addr = fwd_acc.get_noc_addr(fwd_page(own_vc, channels.out_page[own_vc]++));
+                        fwd_meta->this_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                            fwd_acc, fwd_page(own_vc, channels.out_page[own_vc]++));
                     }
                     queue.mark_ready();
                 }

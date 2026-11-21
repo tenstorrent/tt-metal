@@ -37,7 +37,6 @@ function(CREATE_EAGER_TEST_EXE TESTLIST)
                 ${PROJECT_SOURCE_DIR}/tt_metal
                 ${PROJECT_SOURCE_DIR}/ttnn/cpp
                 ${PROJECT_SOURCE_DIR}/ttnn/api
-                ${PROJECT_SOURCE_DIR}/tt_metal/common
                 ${PROJECT_SOURCE_DIR}/tests
                 ${CMAKE_CURRENT_SOURCE_DIR}
         )

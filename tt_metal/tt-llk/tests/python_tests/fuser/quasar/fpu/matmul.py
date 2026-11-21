@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.fpu.matmul import matmul_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.quasar.fpu.common import fidelity_source_formats
+from fuser.quasar.fpu.common import configure_alu_cfg, fidelity_source_formats
 
 
 class MatmulFpu(Fpu):
@@ -43,7 +43,7 @@ class MatmulFpu(Fpu):
             config, operation, compute_unit
         )
 
-        return (
+        return configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT") + (
             f"// Operation {stage}: Matmul FPU\n"
             f"_llk_math_matmul_init_<{math_fidelity}>({src_a_format}, {src_b_format}, {ct_dim}, {rt_dim}, {src_b_shape}, {src_a_shape});\n"
         )

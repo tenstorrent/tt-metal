@@ -389,6 +389,7 @@ _KNOWN_NONFINITE_LANES: dict[MathOperation, tuple[KnownNonfiniteLanes, ...]] = {
     MathOperation.Gelu: (replace(_TOP_OF_FP16, approx=ApproximationMode.No),),
     MathOperation.GeluTanh: (_TOP_OF_FP16,),
     MathOperation.Mish: (_TOP_OF_FP16,),
+    MathOperation.Softplus: (_TOP_OF_FP16,),
     MathOperation.Silu: (_ABOVE_65408,),
     MathOperation.Selu: (
         replace(
