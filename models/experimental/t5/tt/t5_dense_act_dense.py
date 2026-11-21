@@ -30,7 +30,7 @@ class TtT5DenseActDense(nn.Module):
 
     def forward(self, hidden_states):
         hidden_states = ttnn.matmul(hidden_states, self.out_proj_wi)
-        hidden_states = self.act(hidden_states, output_mem_config=self.mem_config)
+        hidden_states = self.act(hidden_states, memory_config=self.mem_config)
         # hidden_states = self.dropout(hidden_states)
         hidden_states = ttnn.matmul(hidden_states, self.out_proj_w0, memory_config=self.mem_config)
         return hidden_states
