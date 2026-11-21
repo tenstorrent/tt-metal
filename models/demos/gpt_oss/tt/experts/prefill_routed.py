@@ -103,6 +103,9 @@ ROUTED_SCATTER_GROUPS = 32
 # 3072 vs 2048 measured b32 TTFT 512 -1.2%, 1K -0.5%, 2K -0.7%. One block per 16K chunk instead: 32K +0.8%, the
 # reduced block no longer fits L1.)
 ROUTED_COMBINE_BLOCK = 3072
+# Combine block of the batched tensor-parallel prefill (whole users): its bf16 output stays in L1 for the per-user
+# reduce. 48 MiB: an 8K prefill's 8192 x 2880 bf16 block (45 MiB) fits with the following programs' circular buffers.
+TP_COMBINE_L1_BYTES = 48 << 20
 # Largest chunk-size-dependent transient this module places in L1 (per device, interleaved). Above it the tensor goes
 # to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1; the reduced combine block is
 # bounded by ROUTED_COMBINE_BLOCK (3072 tokens: 17 MiB), which is under it.
@@ -1299,8 +1302,10 @@ class RoutedPrefillExperts:
         ttnn.deallocate(pos)
         return pos_tm, pos_sm
 
-    def _chunk(self, x, indices, weights, out=None, out_start=0):
+    def _chunk(self, x, indices, weights, out=None, out_start=0, block_tokens=None, reduce_block=None):
         """Partial MoE output of this device's experts for one chunk.
+        block_tokens / reduce_block (batched TP prefill): combine block_tokens rows at a time and return
+        reduce_block(block, rows) of each block instead of the blocks (the block is freed after).
 
         x: [1, 1, C, H] (any float dtype, TILE); indices: [C, k] uint16 TILE; weights: [C, k] bf16 TILE.
         Returns the [1, 1, Cs, H] bf8 TILE blocks of the output in token order (ROUTED_COMBINE_BLOCK tokens each, the
@@ -1384,11 +1389,11 @@ class RoutedPrefillExperts:
         # from out_rm row pos[t, j] (no [Cs, k, H] gather copy), weights it and skips the non-local slots (dispatch
         # table -1; the spare row they point at is never read). The reduced [Cs, H] block stays in L1, so only its bf8
         # cast is written to DRAM.
-        Cs = self._combine_block(C)
+        Cs = block_tokens or self._combine_block(C)
         # A bf16 output (tensor-parallel experts) is the combine's own dtype: write the block straight to DRAM and use it
         # as the output, instead of an L1 block that no longer fits plus a bf16 -> bf16 "cast" (a full copy).
         same_dtype = self.out_dtype == ttnn.bfloat16
-        part_mem = ttnn.DRAM_MEMORY_CONFIG if same_dtype else _l1_if_fits(Cs * H * 2, self.l1_held)
+        part_mem = _l1_if_fits(Cs * H * 2, self.l1_held)
         pieces = []
         for s in range(0, C, Cs):
             e = min(s + Cs, C)
@@ -1412,6 +1417,10 @@ class RoutedPrefillExperts:
             for t, owned in block:
                 if owned:
                     ttnn.deallocate(t)
+            if reduce_block is not None:
+                pieces.append(reduce_block(part, e - s))
+                ttnn.deallocate(part)
+                continue
             if out is not None:
                 # Cast straight into this block's rows of the preallocated output (a narrow view): no concat.
                 ttnn.typecast(part, self.out_dtype, output_tensor=ttnn.narrow(out, 2, out_start + s, e - s))
@@ -1432,16 +1441,21 @@ class RoutedPrefillExperts:
         one [S, H] buffer first (a bf16 -> bf16 typecast of every chunk, 0.46 ms per 16K-token chunk); the concat
         moves only the reduced rows (1/N of them with scatter)."""
         seq_len = x.shape[-2]
+        # Combine blocks of whole users that fit L1 (TP_COMBINE_L1_BYTES): the reduce then reads its input from L1, and
+        # the combine output never goes to DRAM.
+        users = max(1, min(C // user_len, TP_COMBINE_L1_BYTES // (user_len * self.hidden_size * 2)))
         reduced = []
         for start in range(0, seq_len, C):
             n = min(C, seq_len - start)
             chunk = [_row_view(x, 2, start, n), _row_view(topk_indices, 0, start, n), _row_view(topk_weights, 0, start, n)]
-            (piece,) = self._chunk(*(t for t, _ in chunk), out=None, out_start=start)
+            reduced += self._chunk(
+                *(t for t, _ in chunk),
+                block_tokens=users * user_len,
+                reduce_block=lambda b, rows: per_user_reduce(b, rows // user_len, axis, links, scatter=scatter),
+            )
             for t, owned in chunk:
                 if owned:
                     ttnn.deallocate(t)
-            reduced.append(per_user_reduce(piece, n // user_len, axis, links, scatter=scatter))
-            ttnn.deallocate(piece)
         out = ttnn.concat(reduced, dim=2)
         for t in reduced:
             ttnn.deallocate(t)
@@ -1522,7 +1536,8 @@ class RoutedPrefillExperts:
             ttnn.deallocate(out)
             return reduced
         if scatter:
-            reduced = ring_reduce_scatter(out, self.mesh_config.tp_axis, links)
+            # (DRAM out: the combine output may be in L1, and the reduced rows become the residual)
+            reduced = ring_reduce_scatter(out, self.mesh_config.tp_axis, links, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(out)
             return reduced
         reduced = ttnn.all_reduce(
@@ -1530,6 +1545,7 @@ class RoutedPrefillExperts:
             num_links=links,
             topology=ttnn.Topology.Ring,
             cluster_axis=self.mesh_config.tp_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(out)
         return ttnn.reshape(reduced, (1, 1, seq_len, self.hidden_size))

@@ -88,6 +88,10 @@ def ring_reduce_scatter(x, cluster_axis, num_links, topology=ttnn.Topology.Ring,
     nbytes = _input_bytes(x)
     if topology == ttnn.Topology.Ring and nbytes is not None and nbytes > DIRECT_REDUCE_SCATTER_MAX_BYTES:
         kw["chunks_per_sync"] = RING_REDUCE_SCATTER_CHUNKS_PER_SYNC
+        if x.memory_config().buffer_type == ttnn.BufferType.L1:
+            # The intermediate otherwise takes the input's L1 and stays allocated, low in L1, under every later
+            # program's circular buffers (an 8K prefill's L1 combine output: the next 16K prefill's SDPA no longer fit).
+            kw["intermediate_memory_config"] = ttnn.DRAM_MEMORY_CONFIG
     if memory_config is not None:
         kw["memory_config"] = memory_config
     return ttnn.reduce_scatter(x, 2, cluster_axis=cluster_axis, num_links=num_links, topology=topology, **kw)
