@@ -24,6 +24,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 
 #include "router_common.hpp"
+#include "router_progress_log.hpp"
 
 namespace fabric_router {
 
@@ -404,6 +405,7 @@ struct Relay {
         const uint32_t dst = progress.next_slot_addr;
         forward_stateless<Traits::noc, Traits::data_cmd_buf>(link, dst, src_addr, size_bytes, trid);
         progress.next_slot_addr = slot_after(dst, link.first_slot_addr, last_slot_offset);
+        progress_log::log_relay_next_slot(progress.next_slot_addr);
         progress.free_slots--;
         increment_local_update_ptr_val<local_credit_stream>(-1);
     }
@@ -443,6 +445,7 @@ struct Downstreams {
         const uint32_t dst = downstream.next_slot_addr;
         ForwardCommands<VC>::template forward<entry>(links[entry], dst, src_addr, size_bytes, trid);
         downstream.next_slot_addr = slot_after(dst, links[entry].first_slot_addr, Traits::last_slot_offset);
+        progress_log::log_downstream_next_slot<VC, entry>(downstream.next_slot_addr);
         downstream.free_slots--;
         increment_local_update_ptr_val<Traits::template local_credit_stream<entry>>(-1);
     }
@@ -546,6 +549,7 @@ __attribute__((noinline)) void init_downstreams(Downstreams<VC>& downstreams, co
             dense++;
         }
         downstreams.progress[entry] = {/*free_slots=*/0, /*next_slot_addr=*/links[entry].first_slot_addr};
+        progress_log::log_downstream_next_slot<VC, entry>(downstreams.progress[entry].next_slot_addr);
     });
 }
 
@@ -609,6 +613,7 @@ __attribute__((noinline)) void init_relay(RelayT& relay, const Args& args) {
             get_stream_reg_write_addr(args.free_slots_stream),
             tt::tt_fabric::edm_to_downstream_noc);
         relay.progress = {/*free_slots=*/0, /*next_slot_addr=*/relay.link.first_slot_addr};
+        progress_log::log_relay_next_slot(relay.progress.next_slot_addr);
     }
 }
 

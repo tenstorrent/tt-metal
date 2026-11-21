@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_channel_progress_log_types.hpp"
 #include <tt-umd/types/arch.hpp>
 #include <vector>
 #include <algorithm>
@@ -158,6 +159,13 @@ uint32_t get_vc0_downstream_edm_count(bool is_2D_routing, bool express_routing_e
 uint32_t get_vc1_downstream_edm_count(bool is_2D_routing, bool express_routing_enabled = false);
 
 }  // namespace builder_config
+
+// The channel progress log's layout on every router: the kernel builds the same type from the maximum channel counts it
+// receives as compile-time args.
+using RouterChannelProgressLog = ChannelProgressLog<
+    builder_config::num_max_sender_channels,
+    builder_config::num_max_receiver_channels,
+    builder_config::MAX_NUM_VCS>;
 
 /**
  * Structure to hold all parameters needed for allocator construction.

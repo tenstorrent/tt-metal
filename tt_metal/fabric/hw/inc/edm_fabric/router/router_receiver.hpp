@@ -29,6 +29,7 @@
 #include "router_downstream.hpp"
 #include "router_init.hpp"
 #include "router_local_delivery.hpp"
+#include "router_progress_log.hpp"
 #include "router_round.hpp"
 #include "router_route_decode.hpp"
 #include "router_telemetry.hpp"
@@ -256,6 +257,7 @@ FORCE_INLINE bool accumulate_first_level_acks(ReceiverChannelProgress& progress,
         index = index_add<ReceiverChannel<VC>::num_slots>(index, 1);
     }
     progress.packets_ready += arrived;
+    progress_log::log_packets_ready<ReceiverChannel<VC>::rx>(progress.packets_ready);
     return true;
 }
 
@@ -274,6 +276,10 @@ FORCE_INLINE void retire(ReceiverChannelProgress& progress, SlotSourcesOf<VC>& s
         increment_local_update_ptr_val<ReceiverChannel<VC>::packets_received_stream>(-1);
     }
     advance<VC>(progress);
+    progress_log::log_retired<ReceiverChannel<VC>::rx>(progress.next_index, progress.uncredited);
+    if constexpr (ReceiverChannel<VC>::first_level_ack) {
+        progress_log::log_packets_ready<ReceiverChannel<VC>::rx>(progress.packets_ready);
+    }
 }
 
 // Channel-trimming capture and telemetry: a packet of `size` bytes (header included) taken on VC's channel.
@@ -568,6 +574,7 @@ FORCE_INLINE bool credit_completions(
     }
     accumulate_completion_credits<completion_group_size>(sources, first, count, credits);
     progress.uncredited = waiting - count;
+    progress_log::log_uncredited<ReceiverChannel<VC>::rx>(progress.uncredited);
     return true;
 }
 
@@ -714,10 +721,17 @@ FORCE_INLINE void pass(
 // ---------------------------------------------------------------------------------------------------------------------
 
 // Before the Ethernet handshake and the ERISCs' first sync, so before the remote sender can increment them: every
-// receiver channel's packets-received register at 0, serviced or not.
+// receiver channel's packets-received register at 0, serviced or not. With the channel progress log on, each channel
+// this ERISC services also logs its starting progress: the values its state starts from.
 __attribute__((noinline)) void init_channel_streams() {
-    for_each_index<NUM_RECEIVER_CHANNELS>(
-        [](auto rx) { init_stream_if_used<to_receiver_packets_sent_streams[decltype(rx)::value]>(0); });
+    for_each_index<NUM_RECEIVER_CHANNELS>([](auto rx) {
+        constexpr size_t RX = decltype(rx)::value;
+        init_stream_if_used<to_receiver_packets_sent_streams[RX]>(0);
+        if constexpr (ENABLE_CHANNEL_PROGRESS_LOG && is_receiver_channel_serviced[RX]) {
+            constexpr ReceiverChannelProgress start = progress_start<vc_of_receiver_channel(RX)>();
+            progress_log::log_receiver_record<RX>(start.next_index, start.uncredited, start.packets_ready);
+        }
+    });
 }
 
 // A single-ERISC router's loop takes them whatever channel trimming left it (empty without a receiver channel).

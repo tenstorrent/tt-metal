@@ -30,6 +30,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 
 #include "router_common.hpp"
+#include "router_progress_log.hpp"
 #include "router_round.hpp"
 #include "router_telemetry.hpp"
 
@@ -196,6 +197,9 @@ public:
     }
 
     FORCE_INLINE bool operator!=(const RemoteReceiverChannelProgress& other) const { return word != other.word; }
+
+    // The word itself.
+    FORCE_INLINE uint32_t raw_word() const { return word; }
 
 private:
     // The word: the free-slot count in the low FREE_SLOTS_BITS, the next slot's address in 16 B units above it.
@@ -580,6 +584,10 @@ FORCE_INLINE bool send(
     end_read_group();
 
     increment_local_update_ptr_val<SenderChannel<CH>::free_slots_stream>(1);
+    // Logged before the TX queue wait below, so a router stuck there shows this packet as sent: its slot already left
+    // the channel's free-slots count above.
+    progress_log::log_sent<CH>(next_slot_addr, sent + 1);
+    progress_log::log_remote_receiver<VC>(remote.raw_word());
     if (txq_busy(status_after)) {
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
         }
@@ -652,6 +660,8 @@ FORCE_INLINE void visit_worker(
     if (completions != 0) {
         remote.add_free_slots(completions);
         progress.completed += completions;
+        progress_log::log_completed<CH>(progress.completed);
+        progress_log::log_remote_receiver<SenderChannel<CH>::vc>(remote.raw_word());
         if constexpr (!SenderChannel<CH>::first_level_ack) {
             credit_slots<CH>(state, completions, progress.completed);
         }
@@ -660,6 +670,7 @@ FORCE_INLINE void visit_worker(
         if ((sent || read_acks) && reported_acks != progress.first_level_acked) {
             const uint32_t acks = reported_acks - progress.first_level_acked;
             progress.first_level_acked = reported_acks;
+            progress_log::log_first_level_acked<CH>(progress.first_level_acked);
             credit_slots<CH>(state, acks, progress.first_level_acked);
         }
     }
@@ -697,6 +708,8 @@ FORCE_INLINE void visit_channel_with_work(
         remote.add_free_slots(completions);
         completed += completions;
         state.progress.completed = completed;
+        progress_log::log_completed<CH>(completed);
+        progress_log::log_remote_receiver<SenderChannel<CH>::vc>(remote.raw_word());
         if constexpr (!SenderChannel<CH>::first_level_ack) {
             credit_slots<CH>(state, completions, completed);
         }
@@ -711,6 +724,7 @@ FORCE_INLINE void visit_channel_with_work(
             const uint32_t acks = reported_acks - state.progress.first_level_acked;
             if (acks != 0) {
                 state.progress.first_level_acked += acks;
+                progress_log::log_first_level_acked<CH>(state.progress.first_level_acked);
                 credit_slots<CH>(state, acks, state.progress.first_level_acked);
             }
         }
@@ -1020,6 +1034,8 @@ __attribute__((noinline)) void run() {
 // Before the Ethernet handshake and any producer connects (both ERISCs, before their first sync), every sender channel,
 // serviced or not: its free-slots register at its slot count, its first-level-ack and completion registers at 0 where
 // its VC takes stream credits. Positions past the router's own channels (arrays sized for the widest router) have none.
+// With the channel progress log on, each channel this ERISC services also logs its starting progress, and its VC's
+// starting view of the remote receiver channel: the values its state starts from.
 __attribute__((noinline)) void init_channel_streams() {
     constexpr size_t own_channels =
         ACTUAL_VC0_SENDER_CHANNELS + ACTUAL_VC1_SENDER_CHANNELS + ACTUAL_VC2_SENDER_CHANNELS;
@@ -1029,6 +1045,13 @@ __attribute__((noinline)) void init_channel_streams() {
         init_ptr_val<sender_free_slots_streams[position]>(SENDER_NUM_BUFFERS_ARRAY[CH]);
         init_stream_if_used<to_sender_packets_acked_streams[position]>(0);
         init_stream_if_used<to_sender_packets_completed_streams[position]>(0);
+        if constexpr (ENABLE_CHANNEL_PROGRESS_LOG && is_sender_channel_serviced[CH]) {
+            constexpr size_t VC = SenderChannel<CH>::vc;
+            const SenderChannelProgress start = SenderChannelState<CH>{}.progress;
+            progress_log::log_sender_record<CH>(
+                start.next_slot_addr, start.sent, start.completed, start.first_level_acked);
+            progress_log::log_remote_receiver<VC>(RemoteReceiverChannelProgress<VC>::start().raw_word());
+        }
     });
 }
 

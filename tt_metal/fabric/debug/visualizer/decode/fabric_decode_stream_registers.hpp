@@ -46,6 +46,11 @@ using StreamRegisterFactsByRegister = std::map<const manifest::content::StreamRe
 StreamRegisterFactsByRegister collect_stream_register_facts(
     const manifest::ManifestFacts& facts, const manifest::RouterRef& ref, const manifest::Router& router);
 
+// Whether ERISC `erisc` of `router` takes VC `vc`'s packets at first-level ack: the builder feeds each ERISC
+// ENABLE_FIRST_LEVEL_ACK_VC<v>, which the manifest records as the acked credits of the router's sender channels on
+// that VC. Null when the router has no sender channel there.
+std::optional<bool> find_first_level_ack(const manifest::Router& router, size_t vc, size_t erisc);
+
 // -- Counts (every StreamRole).
 
 // A count as the router reads it, sign-extended from stream_count_mask's width: a count taken below zero wraps
@@ -87,6 +92,11 @@ using StreamCountReads = std::map<const manifest::content::StreamReg*, StreamCou
 
 // The full read of every active count register (any StreamRole) `values` has one of.
 StreamCountReads collect_stream_count_reads(const RouterValues& values);
+
+// The full read of the count register the field `key` names, on the first ERISC of `fields_by_erisc` whose field has
+// one in `reads`. Null when none does.
+const StreamCountRead* find_field_count_read(
+    const manifest::FieldsByErisc& fields_by_erisc, std::string_view key, const StreamCountReads& reads);
 
 // A router with its count registers' full reads.
 struct RouterCountReads {

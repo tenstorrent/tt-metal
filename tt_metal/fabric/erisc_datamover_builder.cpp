@@ -523,19 +523,60 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         [](size_t sum, const MemoryRegion& region) { return sum + region.get_size(); });
 
     // Create the static channel allocator with per-VC channel distribution
-    auto static_allocator = std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
-        topology,
-        options,
-        this->num_used_sender_channels_per_vc,
-        this->num_used_receiver_channels_per_vc,
-        this->channel_buffer_size_bytes,
-        available_channel_buffering_space,
-        this->available_buffer_memory_regions);
+    const auto make_static_allocator = [&](size_t worker_slots_to_give_up) {
+        return std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
+            topology,
+            options,
+            this->num_used_sender_channels_per_vc,
+            this->num_used_receiver_channels_per_vc,
+            this->channel_buffer_size_bytes,
+            available_channel_buffering_space,
+            this->available_buffer_memory_regions,
+            worker_slots_to_give_up);
+    };
+    auto static_allocator = make_static_allocator(0);
+
+    // The channel progress log goes in the L1 left after the channel buffers. When it doesn't fit there and the log
+    // may take a worker slot, VC0's worker channel gives up one slot to make room.
+    const auto& rtoptions = fabric_context.get_rtoptions();
+    const bool enable_channel_progress_log = rtoptions.get_enable_fabric_channel_progress_log();
+    const auto channel_progress_log_fits = [&](const FabricStaticSizedChannelsAllocator& allocator) {
+        return tt::align(allocator.get_channel_buffers_end_address(), eth_word_l1_alignment) +
+                   sizeof(RouterChannelProgressLog) <=
+               this->max_l1_loading_size;
+    };
+    if (enable_channel_progress_log && !channel_progress_log_fits(*static_allocator) &&
+        rtoptions.get_fabric_channel_progress_log_may_take_worker_slot()) {
+        log_warning(
+            tt::LogFabric,
+            "Fabric channel progress log: {} B left above the channel buffers, {} B needed. VC0's worker channel "
+            "gives up one slot to make room.",
+            this->max_l1_loading_size - static_allocator->get_channel_buffers_end_address(),
+            sizeof(RouterChannelProgressLog));
+        static_allocator = make_static_allocator(1);
+    }
 
     this->channel_allocator = static_allocator;
-    // The channel buffers are the last allocated item placed below max_l1_loading_size.
-    // NOTE: If another item is placed after the channel buffers, this will need to reflect that change.
-    this->allocated_l1_end_address = static_allocator->get_channel_buffers_end_address();
+    // The channel buffers are placed below max_l1_loading_size, followed by the channel progress log when it's on.
+    // NOTE: If another item is placed after these, this will need to reflect that change.
+    const size_t channel_buffers_end_address = static_allocator->get_channel_buffers_end_address();
+    this->allocated_l1_end_address = channel_buffers_end_address;
+
+    if (enable_channel_progress_log) {
+        this->channel_progress_log_l1_address = tt::align(channel_buffers_end_address, eth_word_l1_alignment);
+        this->allocated_l1_end_address = this->channel_progress_log_l1_address + sizeof(RouterChannelProgressLog);
+        TT_FATAL(
+            this->allocated_l1_end_address <= this->max_l1_loading_size,
+            "TT_METAL_FABRIC_ENABLE_CHANNEL_PROGRESS_LOG needs {} B of router L1 above the channel buffers, but only "
+            "{} B are left (channel buffers end at {:#x}, usable L1 ends at {:#x}, slot size {} B). Set "
+            "TT_METAL_FABRIC_CHANNEL_PROGRESS_LOG_MAY_TAKE_WORKER_SLOT=1 to take a worker channel slot for it, use a "
+            "different fabric channel buffer size, or turn the log off.",
+            sizeof(RouterChannelProgressLog),
+            this->max_l1_loading_size - channel_buffers_end_address,
+            channel_buffers_end_address,
+            this->max_l1_loading_size,
+            this->channel_buffer_size_bytes);
+    }
 
     // set default noc and cmd bufs (current setup in TG 4U)
     for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
@@ -1550,6 +1591,15 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args["RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS"] =
             static_cast<uint32_t>(config.datapath_usage_l1_address);
     }
+
+    // --- Channel progress log (named args) ---
+    // The address is fed only with the log on.
+    const bool enable_channel_progress_log = config.channel_progress_log_l1_address != 0;
+    named_args["ENABLE_CHANNEL_PROGRESS_LOG"] = enable_channel_progress_log ? 1 : 0;
+    if (enable_channel_progress_log) {
+        named_args["CHANNEL_PROGRESS_LOG_L1_ADDRESS"] = static_cast<uint32_t>(config.channel_progress_log_l1_address);
+    }
+
     // Disabling RX forwarding is separate from "receiver saw traffic":
     // receiver_channel_data_forwarded also covers local-only delivery, so use the
     // forwarded-to capture together with locally-observed NOC writes when it is
@@ -1722,6 +1772,10 @@ FabricRouterDiagnosticBufferMap FabricEriscDatamoverConfig::get_telemetry_and_me
     // Channel trimming capture
     if (datapath_usage_l1_address != 0) {
         map.channel_trimming_capture = {datapath_usage_l1_address, datapath_usage_buffer_size};
+    }
+
+    if (channel_progress_log_l1_address != 0) {
+        map.channel_progress_log = {channel_progress_log_l1_address, sizeof(RouterChannelProgressLog)};
     }
 
     return map;

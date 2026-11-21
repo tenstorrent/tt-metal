@@ -97,6 +97,19 @@ DynamicStatistics get_heartbeat_statistic(HeartbeatSide side) {
     return side == HeartbeatSide::TX ? DynamicStatistics::HEARTBEAT_TX : DynamicStatistics::HEARTBEAT_RX;
 }
 
+// Whether `erisc` runs `side`'s step. Each ERISC moves only the heartbeat of a side it runs: in a router split over two
+// ERISCs, one runs the senders and the other the receivers. An ERISC runs a side when it services a channel there.
+bool runs_heartbeat_side(const manifest::Router& router, uint32_t erisc, HeartbeatSide side) {
+    const auto services = [&](const auto& channels_by_vc) {
+        return std::ranges::any_of(channels_by_vc, [&](const auto& channels) {
+            return std::ranges::any_of(channels, [&](const auto& channel) {
+                return std::ranges::find(channel.serviced_by, erisc) != channel.serviced_by.end();
+            });
+        });
+    };
+    return side == HeartbeatSide::TX ? services(router.channels.senders) : services(router.channels.receivers);
+}
+
 // Each side of each of the router's ERISCs, from the telemetry area's reads.
 std::vector<TelemetryHeartbeat> read_telemetry_heartbeats(
     const RouterValues& values,
@@ -116,8 +129,8 @@ std::vector<TelemetryHeartbeat> read_telemetry_heartbeats(
     for (uint32_t erisc = 0; erisc < num_eriscs; ++erisc) {
         for (const HeartbeatSide side : enchantum::values<HeartbeatSide>) {
             TelemetryHeartbeat heartbeat{.erisc = erisc, .side = side};
-            heartbeat.written =
-                layout_known && writes_telemetry_statistic(router, erisc, get_heartbeat_statistic(side));
+            heartbeat.written = layout_known && runs_heartbeat_side(router, erisc, side) &&
+                                writes_telemetry_statistic(router, erisc, get_heartbeat_statistic(side));
             if (heartbeat.written) {
                 std::vector<uint64_t> heartbeat_values;
                 for (const RegionRead<FabricTelemetry>& read : *reads) {

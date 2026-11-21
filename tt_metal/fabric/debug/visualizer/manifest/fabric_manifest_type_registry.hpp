@@ -23,6 +23,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt_stl/type_name.hpp>
 
+#include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
@@ -94,6 +95,7 @@ using RegisteredTypes = typename detail::concat_type_lists<
         SenderChannelProducerCursor,
         EDMChannelWorkerLocationInfo,
         ChannelTrimmingOverrides,
+        RouterChannelProgressLog,
         CodeProfilingTimerResult,
         FabricTelemetry,
         routing_l1_info_t>,

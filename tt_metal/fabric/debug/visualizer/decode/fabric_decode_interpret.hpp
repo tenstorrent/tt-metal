@@ -182,6 +182,13 @@ struct Interpreter<ChannelTrimmingOverrides> {
     static json make_json(const ChannelTrimmingOverrides& value, const InterpretContext& context);
 };
 
+// The block's fields as the router wrote them. Turning them into slot states takes the channels' stream registers and
+// buffer layout too, so that is left to the router's decode.
+template <>
+struct Interpreter<RouterChannelProgressLog> {
+    static json make_json(const RouterChannelProgressLog& value, const InterpretContext& context);
+};
+
 template <>
 struct Interpreter<CodeProfilingTimerResult> {
     static json make_json(const CodeProfilingTimerResult& value, const InterpretContext& context);

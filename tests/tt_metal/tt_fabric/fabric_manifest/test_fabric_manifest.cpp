@@ -712,8 +712,8 @@ void check_router_edges(const json& manifest, const std::vector<RouterEntry>& ro
 }
 
 // Whether `field`'s argument is emitted on this fabric: a 2D-only argument is not emitted in 1D, a capture-only
-// argument only when the builder allocated the channel trimming capture, and a deadlock-avoidance argument only on an
-// ERISC with deadlock avoidance on.
+// argument only when the builder allocated the channel trimming capture, a progress-log-only argument only when it
+// placed the channel progress log, and a deadlock-avoidance argument only on an ERISC with deadlock avoidance on.
 bool is_emitted(const manifest::RouterField& field, bool is_2d, bool deadlock_avoidance) {
     const auto* arg = std::get_if<manifest::NamedArg>(&field.source);
     if (arg == nullptr) {
@@ -724,6 +724,8 @@ bool is_emitted(const manifest::RouterField& field, bool is_2d, bool deadlock_av
         case manifest::Emitted::FABRIC_2D: return is_2d;
         case manifest::Emitted::CHANNEL_TRIMMING_CAPTURE:
             return builder_context().get_telemetry_and_metadata_buffer_map().channel_trimming_capture.is_enabled();
+        case manifest::Emitted::CHANNEL_PROGRESS_LOG:
+            return builder_context().get_telemetry_and_metadata_buffer_map().channel_progress_log.is_enabled();
         case manifest::Emitted::DEADLOCK_AVOIDANCE: return deadlock_avoidance;
     }
     return false;
@@ -860,8 +862,8 @@ void expect_diagnostic_buffer(const json& field, const FabricRouterDiagnosticBuf
 }
 
 // The diagnostic buffers the kernel is fed are where the builder's buffer map puts them, and the router records a
-// channel trimming capture exactly when the builder allocated one. notify_worker_src is where the builder's config puts
-// it.
+// channel trimming capture and a channel progress log exactly when the builder allocated them. notify_worker_src is
+// where the builder's config puts it.
 void check_router_diagnostics(const std::vector<RouterEntry>& routers) {
     const auto& context = builder_context();
     const auto buffers = context.get_telemetry_and_metadata_buffer_map();
@@ -875,6 +877,11 @@ void check_router_diagnostics(const std::vector<RouterEntry>& routers) {
             EXPECT_EQ(fields.at("channel_trimming_capture_enabled").at("value").get<bool>(), capture);
             if (capture) {
                 expect_diagnostic_buffer(fields.at("channel_trimming_capture"), buffers.channel_trimming_capture);
+            }
+            const bool progress_log = buffers.channel_progress_log.is_enabled();
+            EXPECT_EQ(fields.at("channel_progress_log_enabled").at("value").get<bool>(), progress_log);
+            if (progress_log) {
+                expect_diagnostic_buffer(fields.at("channel_progress_log"), buffers.channel_progress_log);
             }
             const auto& notify = fields.at("notify_worker_src");
             if (notify_address == 0) {

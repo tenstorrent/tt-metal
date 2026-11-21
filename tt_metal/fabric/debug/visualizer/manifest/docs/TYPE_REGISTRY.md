@@ -32,7 +32,7 @@ word.
 | Words | `uint32_t`: single words, the credit counter arrays, the ETH firmware mailbox, and the counts in stream registers |
 | Raw bytes | `std::byte`: what the manifest doesn't type, such as leftover L1 and the perf telemetry buffer |
 | Enums in L1 or a stream register | `EDMStatus`, `TerminationSignal`, `ConnectionValue`, `CoordinatedEriscContextSwitchState` |
-| Structs in L1 | `handshake_info_t`, `SenderChannelProducerCursor`, `EDMChannelWorkerLocationInfo`, `ChannelTrimmingOverrides`, `CodeProfilingTimerResult`, `FabricTelemetry`, `routing_l1_info_t` |
+| Structs in L1 | `handshake_info_t`, `SenderChannelProducerCursor`, `EDMChannelWorkerLocationInfo`, `ChannelTrimmingOverrides`, `RouterChannelProgressLog`, `CodeProfilingTimerResult`, `FabricTelemetry`, `routing_l1_info_t` |
 | Packet headers | Every packet header type fabric can pick for a run (`PacketHeaderTypes`) |
 
 Some types are deliberately left out:
@@ -223,6 +223,7 @@ A registered type's name is the compiler's spelling of it without its namespaces
 | `uint32_t` | `unsigned int` |
 | `std::byte` | `byte` |
 | `ChannelTrimmingOverrides` | `FabricDatapathUsageL1Results<true, 3, 10>` |
+| `RouterChannelProgressLog` | `ChannelProgressLog<10, 3, 3>` |
 
 ## How decode uses it
 

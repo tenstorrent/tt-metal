@@ -208,6 +208,8 @@ FindingSeverity get_finding_severity(FindingCode code) {
         case FindingCode::CORE_MISMATCH:
         case FindingCode::UNKNOWN_ENUMERATOR:
         case FindingCode::STREAM_COUNT_OUT_OF_RANGE:
+        case FindingCode::SLOT_COUNTS_OVER_DEPTH:
+        case FindingCode::PROGRESS_LOG_NEXT_SLOT_OUTSIDE_RING:
         case FindingCode::ROUTING_TABLE_COPIES_DIFFER:
         case FindingCode::ROUTING_TABLE_SHAPE_MISMATCH:
         case FindingCode::ROUTING_TABLE_MESH_MEMBERS_DIFFER: return FindingSeverity::WARNING;
@@ -235,6 +237,8 @@ FindingOrigin get_finding_origin(FindingCode code) {
         case FindingCode::UNKNOWN_ENUMERATOR:
         case FindingCode::STREAM_COUNT_OUT_OF_RANGE:
         case FindingCode::UNCREDITED_AT_PEER_NEGATIVE:
+        case FindingCode::SLOT_COUNTS_OVER_DEPTH:
+        case FindingCode::PROGRESS_LOG_NEXT_SLOT_OUTSIDE_RING:
         case FindingCode::CONNECTED_NOT_LIVE:
         case FindingCode::LIVE_NOT_CONNECTED:
         case FindingCode::ROUTING_TABLE_COPIES_DIFFER:

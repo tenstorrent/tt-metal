@@ -19,6 +19,7 @@ target_sources(
         fabric_decode_router_analysis.cpp
         fabric_decode_routing.cpp
         fabric_decode_routing_table.cpp
+        fabric_decode_slot_states.cpp
         fabric_decode_snapshot.cpp
         fabric_decode_stream_registers.cpp
         fabric_decode_values.cpp

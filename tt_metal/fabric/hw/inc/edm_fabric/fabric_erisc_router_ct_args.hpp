@@ -10,6 +10,7 @@
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_channel_progress_log_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_static_channels_ct_args.hpp"
@@ -144,7 +145,8 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_free_slots_stream
 
 // This router's local copy of each downstream router's free slots, by VC that forwards to routers (VC0, VC1) and by
 // downstream entry (the host's compact order: VC<n>_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_<entry + 1>_STREAM_ID).
-constexpr std::array<std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS>, 2> local_downstream_credit_streams = {{
+constexpr std::array<std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS>, tt::tt_fabric::num_forwarding_vcs>
+    local_downstream_credit_streams = {{
     {vc_0_free_slots_from_downstream_edge_1_stream_id,
      vc_0_free_slots_from_downstream_edge_2_stream_id,
      vc_0_free_slots_from_downstream_edge_3_stream_id,
@@ -974,6 +976,17 @@ using ChannelTrimmingUsagePtr = tt::tt_fabric::FabricDatapathUsageL1Ptr<
     MAX_NUM_VCS,
     MAX_NUM_SENDER_CHANNELS>;
 constexpr ChannelTrimmingUsagePtr channel_trimming_usage_recorder{};
+
+//-------------------------------- Channel Progress Log --------------------------------//
+
+// The channel progress log: with it on, the router copies each channel's progress into a block of its L1 every time it
+// changes (TT_METAL_FABRIC_ENABLE_CHANNEL_PROGRESS_LOG). The host feeds the address only with the log on.
+constexpr bool ENABLE_CHANNEL_PROGRESS_LOG = get_named_compile_time_arg_val("ENABLE_CHANNEL_PROGRESS_LOG") != 0;
+constexpr size_t CHANNEL_PROGRESS_LOG_L1_ADDRESS =
+    ENABLE_CHANNEL_PROGRESS_LOG ? get_named_compile_time_arg_val("CHANNEL_PROGRESS_LOG_L1_ADDRESS") : 0;
+// The block's layout, from the same maximum channel counts the host sizes it with.
+using RouterChannelProgressLog =
+    tt::tt_fabric::ChannelProgressLog<MAX_NUM_SENDER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_VCS>;
 
 //-------------------------------- Credit Amortization --------------------------------//
 constexpr uint32_t SENDER_CREDIT_AMORTIZATION_FREQUENCY =

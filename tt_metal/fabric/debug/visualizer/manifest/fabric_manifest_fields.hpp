@@ -63,6 +63,8 @@ enum class Emitted : uint8_t {
     FABRIC_2D,
     // Only with the channel trimming capture on (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE).
     CHANNEL_TRIMMING_CAPTURE,
+    // Only with the channel progress log on (ENABLE_CHANNEL_PROGRESS_LOG).
+    CHANNEL_PROGRESS_LOG,
     // Only with deadlock avoidance on (ENABLE_DEADLOCK_AVOIDANCE): VC0 runs bubble flow control.
     DEADLOCK_AVOIDANCE,
 };
@@ -394,6 +396,28 @@ inline constexpr auto k_router_fields = [] {
             .description = "Where it records them: the packet sizes each sender channel saw, and which sender and "
                            "receiver channels carried traffic.",
             .written_when = "channel_trimming_capture_enabled",
+        },
+        RouterField{
+            .key = "channel_progress_log_enabled",
+            .source = "ENABLE_CHANNEL_PROGRESS_LOG",
+            .category = DIAGNOSTICS,
+            .content = content::Flag{},
+            .description = "Whether the router copies each channel's progress into L1 every time it changes, so "
+                           "decode can tell which slots of each channel are free, waiting to be sent, or sent and "
+                           "still held.",
+        },
+        RouterField{
+            .key = "channel_progress_log",
+            .source = NamedArg{"CHANNEL_PROGRESS_LOG_L1_ADDRESS", ArgIndex::NONE, Emitted::CHANNEL_PROGRESS_LOG},
+            .category = DIAGNOSTICS,
+            .content = register_l1_field<RouterChannelProgressLog>(),
+            .description = "Where it copies it, after the channel buffers: each sender channel's next slot and its "
+                           "sent, completed and acked counts; each receiver channel's next slot, uncredited and "
+                           "ready counts; each sender VC's view of the remote receiver channel; and the next slot "
+                           "the receivers forward into on each downstream router and the UDM relay. Indexed by the "
+                           "router's own channel indices. The router writes every record before it reports "
+                           "EDMStatus::STARTED, so the block holds nothing from this run before then.",
+            .written_when = "channel_progress_log_enabled",
         },
 
         // What differs between a router's ERISCs by design: each one's role, its handshake, and its context switching.
@@ -900,6 +924,7 @@ inline constexpr auto k_router_pass_args = std::to_array<std::string_view>({
     "LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR",
     "IS_2D_FABRIC",
     "ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE",
+    "ENABLE_CHANNEL_PROGRESS_LOG",
     "FABRIC_TENSIX_EXTENSION_MUX_MODE",
     "CHANNEL_BUFFER_SIZE",
     "VC{}_FABRIC_POSITION_START",

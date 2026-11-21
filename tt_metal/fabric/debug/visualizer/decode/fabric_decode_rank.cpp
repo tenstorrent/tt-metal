@@ -104,6 +104,10 @@ DecodedRouter decode_router(
     }
     decoded.directions = find_router_directions(router);
     decoded.count_reads = collect_stream_count_reads(values);
+    decoded.slots = find_router_slots(values, decoded.count_reads);
+    if (decoded.slots.has_value()) {
+        std::ranges::move(find_slot_findings(captured.path, *decoded.slots), std::back_inserter(findings));
+    }
     if (std::optional<RoutingTableRead> read = find_routing_table_read(values)) {
         routing_tables.push_back(
             RouterRoutingTable{.ref = captured.ref, .path = captured.path, .router = captured.router, .read = *read});
@@ -225,6 +229,29 @@ void place_router(
                 make_uncredited_at_peer_json(router.uncredited_at_peer[vc][channel]);
         }
     }
+    if (router.slots.has_value()) {
+        const auto place_channel_slots = [&](std::string_view side, size_t vc, size_t channel, json slots_json) {
+            const json::json_pointer channel_pointer(fmt::format("/channels/{}/vc{}/ch{}", side, vc, channel));
+            TT_FATAL(
+                node.contains(channel_pointer),
+                "Fabric decode: {} has no channel node at {}",
+                router.path,
+                channel_pointer.to_string());
+            node[channel_pointer]["analysis"]["slots"] = std::move(slots_json);
+        };
+        for (size_t vc = 0; vc < router.slots->senders.size(); ++vc) {
+            for (size_t channel = 0; channel < router.slots->senders[vc].size(); ++channel) {
+                place_channel_slots(
+                    "senders", vc, channel, make_sender_slots_json(router.slots->senders[vc][channel]));
+            }
+        }
+        for (size_t vc = 0; vc < router.slots->receivers.size(); ++vc) {
+            for (size_t channel = 0; channel < router.slots->receivers[vc].size(); ++channel) {
+                place_channel_slots(
+                    "receivers", vc, channel, make_receiver_slots_json(router.slots->receivers[vc][channel]));
+            }
+        }
+    }
     json analysis;
     analysis["capture"] = make_capture_json(router.capture);
     analysis["activity"] = router.activity.has_value() ? make_activity_json(*router.activity, protocol) : json(nullptr);
@@ -246,6 +273,8 @@ json make_analysis_json(const DecodedRank& rank) {
     vocabulary["hop_action_1d"] = make_1d_hop_action_vocabulary_json();
     vocabulary["action_2d"] = make_2d_action_vocabulary_json();
     vocabulary["path_end"] = make_vocabulary_list_json<PathEnd>();
+    vocabulary["slot_state"] = make_vocabulary_list_json<SlotState>();
+    vocabulary["slots_unknown_reason"] = make_vocabulary_list_json<SlotsUnknownReason>();
     json findings = json::array();
     for (const Finding& finding : rank.findings) {
         findings.push_back(make_finding_json(finding));

@@ -109,6 +109,8 @@ enum class EnvVarID {
     TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,           // Enable channel trimming resource usage capture
     TT_METAL_FABRIC_TRIMMING_PROFILE,                   // Path to channel trimming profile YAML for import
     TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
+    TT_METAL_FABRIC_ENABLE_CHANNEL_PROGRESS_LOG,        // Enable fabric router channel progress logging to L1
+    TT_METAL_FABRIC_CHANNEL_PROGRESS_LOG_MAY_TAKE_WORKER_SLOT,  // Let the log take a worker channel slot to fit
     TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
     TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
     TT_METAL_FABRIC_GRAPH_BUILDER,                      // Build fabric routers from the fabric graph
@@ -829,6 +831,24 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE=1
         case EnvVarID::TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE: this->enable_channel_trimming_capture = true; break;
+
+        // TT_METAL_FABRIC_ENABLE_CHANNEL_PROGRESS_LOG
+        // Fabric routers store each channel's progress (slot pointers and counts) into a block in their
+        // leftover L1, for the fabric debug visualizer to read.
+        // Default: false
+        // Usage: export TT_METAL_FABRIC_ENABLE_CHANNEL_PROGRESS_LOG=1
+        case EnvVarID::TT_METAL_FABRIC_ENABLE_CHANNEL_PROGRESS_LOG:
+            this->enable_fabric_channel_progress_log = is_env_enabled(value);
+            break;
+
+        // TT_METAL_FABRIC_CHANNEL_PROGRESS_LOG_MAY_TAKE_WORKER_SLOT
+        // With the channel progress log on: when its block doesn't fit in the leftover router L1,
+        // take one slot from VC0's worker channel to make room, instead of failing.
+        // Default: false
+        // Usage: export TT_METAL_FABRIC_CHANNEL_PROGRESS_LOG_MAY_TAKE_WORKER_SLOT=1
+        case EnvVarID::TT_METAL_FABRIC_CHANNEL_PROGRESS_LOG_MAY_TAKE_WORKER_SLOT:
+            this->fabric_channel_progress_log_may_take_worker_slot = is_env_enabled(value);
+            break;
 
         // TT_METAL_FABRIC_TRIMMING_PROFILE
         // Path to a previously captured channel trimming YAML file. When set, fabric router

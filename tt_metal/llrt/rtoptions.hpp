@@ -382,6 +382,12 @@ class RunTimeOptions {
     // Enable channel trimming resource usage capture
     bool enable_channel_trimming_capture = false;
 
+    // Fabric routers log each channel's progress to L1
+    bool enable_fabric_channel_progress_log = false;
+
+    // The channel progress log may take a worker channel slot when its block doesn't fit in the leftover l1.
+    bool fabric_channel_progress_log_may_take_worker_slot = false;
+
     // Path to channel trimming profile YAML for import-driven router construction
     std::string fabric_trimming_profile_path;
 
@@ -961,6 +967,20 @@ public:
     // If true, enables channel trimming resource usage capture on fabric routers
     bool get_enable_channel_trimming_capture() const { return enable_channel_trimming_capture; }
     void set_enable_channel_trimming_capture(bool enable) { enable_channel_trimming_capture = enable; }
+
+    // If true, fabric routers store each channel's progress (slot pointers and counts) into a block in their leftover
+    // L1, for the fabric debug visualizer to read
+    bool get_enable_fabric_channel_progress_log() const { return enable_fabric_channel_progress_log; }
+    void set_enable_fabric_channel_progress_log(bool enable) { enable_fabric_channel_progress_log = enable; }
+
+    // If true, when the channel progress log's block doesn't fit in the leftover router L1, the
+    // builder takes one slot from VC0's worker channel to make room instead of failing
+    bool get_fabric_channel_progress_log_may_take_worker_slot() const {
+        return fabric_channel_progress_log_may_take_worker_slot;
+    }
+    void set_fabric_channel_progress_log_may_take_worker_slot(bool enable) {
+        fabric_channel_progress_log_may_take_worker_slot = enable;
+    }
 
     // Channel trimming profile import path
     bool has_fabric_trimming_profile() const { return !fabric_trimming_profile_path.empty(); }
