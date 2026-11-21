@@ -34,6 +34,19 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate_on_program_cache_mis
         kv_input_tensor.layout());
     TT_FATAL(q_input_tensor.is_sharded() && kv_input_tensor.is_sharded(), "Operands to TM must be sharded");
 
+    // The program runs on Q's shard grid and reads the KV shard from each core's own L1, so the KV
+    // shards must sit on the same cores in the same order as Q's.
+    TT_FATAL(
+        kv_input_tensor.shard_spec().value().grid == q_input_tensor.shard_spec().value().grid,
+        "Q and KV input tensors must be sharded over the same core grid but got Q: {}, KV: {}",
+        q_input_tensor.shard_spec().value().grid,
+        kv_input_tensor.shard_spec().value().grid);
+    TT_FATAL(
+        kv_input_tensor.shard_spec().value().orientation == q_input_tensor.shard_spec().value().orientation,
+        "Q and KV input tensors must have the same shard orientation but got Q: {}, KV: {}",
+        q_input_tensor.shard_spec().value().orientation,
+        kv_input_tensor.shard_spec().value().orientation);
+
     auto bbox = q_input_tensor.shard_spec().value().grid.bounding_box();
     TT_FATAL(
         (bbox.end_coord.x < q_input_tensor.device()->compute_with_storage_grid_size().x &&
