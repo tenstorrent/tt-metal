@@ -33,6 +33,7 @@ with ``TT_MOE_TF_ROUTED_BFP8``:
     TT_METAL_MOCK_CLUSTER_DESC_PATH=.../blackhole_galaxy.yaml python -m ...moe_teacher_feed routed-cache --layer L \\
         --cache PRIVATE
     TT_MOE_TF_ROUTED_BFP8=PRIVATE TT_MOE_TF_INPUT=IN TT_MOE_TF_OUT=OUT8 scripts/run_safe_pytest.sh ...
+    TT_METAL_MOCK_CLUSTER_DESC_PATH=.../blackhole_galaxy.yaml python -m ...moe_teacher_feed emulate --out OUT
 """
 
 from __future__ import annotations
@@ -498,20 +499,32 @@ def nrmse_rows(got: torch.Tensor, want: torch.Tensor, floor: float) -> torch.Ten
     return (got.float() - want.float()).norm(dim=-1) / want.float().norm(dim=-1).clamp_min(floor)
 
 
+def _stats(v: torch.Tensor) -> dict[str, float]:
+    return {"median": float(v.median()), "p90": _q(v, 0.9), "max": float(v.max())}
+
+
+def _sampled_rows(out: Path, rows: int) -> tuple[dict, list[int], torch.Tensor, torch.Tensor]:
+    """The scored run in ``out``: (its metrics.json, ``rows`` positions spread over the run, their MoE inputs, their
+    device outputs) - the rows ``host`` and ``emulate`` measure."""
+    metrics = json.loads((out / "metrics.json").read_text())
+    manifest = metrics["run"]
+    source, chunk = Path(manifest["input"]), manifest["chunk"]
+    picks = torch.linspace(0, manifest["count"] - 1, rows).long().tolist()
+    x = torch.cat([load_input(source, r, r + 1) for r in picks])
+    dev = torch.stack([torch.load(chunk_path(out, r // chunk), weights_only=True)["moe_out"][r % chunk] for r in picks])
+    return metrics, picks, x, dev
+
+
 def host_check(*, trace: Trace, out: Path, checkpoint: Path, rows: int) -> dict:
     """fp32 host MoE on ``rows`` rows spread over the scored run in ``out``: per-row NRMSE (floored as the scorer
     floors) of device vs trace, device vs fp32, trace vs fp32 (fp32 routed by itself) and trace vs fp32 routed by
     the trace's own top-16 (the experts' numerics without routing differences). Writes host.json."""
-    metrics = json.loads((out / "metrics.json").read_text())
+    metrics, picks, x, dev = _sampled_rows(out, rows)
     manifest, layer, floor = metrics["run"], metrics["layer"], metrics["moe_nrmse_floor"]
-    source, chunk = Path(manifest["input"]), manifest["chunk"]
-    picks = torch.linspace(0, manifest["count"] - 1, rows).long().tolist()
     host = HostMoE.from_checkpoint(checkpoint, layer)
-    x = torch.cat([load_input(source, r, r + 1) for r in picks])
     want = torch.cat([trace.rows(f"decoder_output_layer_{layer}", r, r + 1) for r in picks])
     ids = torch.cat([trace.rows(f"expert_ids_layer_{layer}", r, r + 1) for r in picks]).long()
     ws = torch.cat([trace.rows(f"expert_weights_layer_{layer}", r, r + 1) for r in picks])
-    dev = torch.stack([torch.load(chunk_path(out, r // chunk), weights_only=True)["moe_out"][r % chunk] for r in picks])
     began = time.perf_counter()
     fp32 = host(x)
     fp32_trace_routing = host(x, ids, ws)
@@ -528,7 +541,7 @@ def host_check(*, trace: Trace, out: Path, checkpoint: Path, rows: int) -> dict:
         "rows": picks,
         "seconds": round(time.perf_counter() - began, 1),
         "experts_read": len(host.experts),
-        **{k: {"median": float(v.median()), "p90": _q(v, 0.9), "max": float(v.max())} for k, v in distances.items()},
+        **{k: _stats(v) for k, v in distances.items()},
     }
     (out / "host.json").write_text(json.dumps(result, indent=1))
     return result
@@ -552,27 +565,24 @@ def emulate(*, out: Path, checkpoint: Path, rows: int, names: list[str]) -> dict
     entry's weights in its device format, every one routed by the fp32 router's selection on the unchanged gate (the
     weight formats alone, no routing difference): per-row NRMSE of each emulation vs fp32 and vs the device run, and
     of the device vs fp32 (floored as the scorer floors). Distances are measured, never combined. Writes
-    emulate.json."""
-    metrics = json.loads((out / "metrics.json").read_text())
+    emulate.json. Needs ``$TT_METAL_MOCK_CLUSTER_DESC_PATH`` (``block_float``'s conversions otherwise open the real
+    cluster, outside the device lock)."""
+    assert os.environ.get("TT_METAL_MOCK_CLUSTER_DESC_PATH"), "emulate converts on a mock cluster only"
+    metrics, picks, x, dev = _sampled_rows(out, rows)
     manifest, layer, floor = metrics["run"], metrics["layer"], metrics["moe_nrmse_floor"]
-    source, chunk = Path(manifest["input"]), manifest["chunk"]
-    picks = torch.linspace(0, manifest["count"] - 1, rows).long().tolist()
     base = HostMoE.from_checkpoint(checkpoint, layer)
     raw: dict[int, tuple[torch.Tensor, ...]] = {}  # (each expert read once for every emulation)
     load = base.load_expert
     base.load_expert = lambda e: raw[e] if e in raw else raw.setdefault(e, load(e))
-    x = torch.cat([load_input(source, r, r + 1) for r in picks])
-    dev = torch.stack([torch.load(chunk_path(out, r // chunk), weights_only=True)["moe_out"][r % chunk] for r in picks])
     ids, weights, _ = route(x, base.w["gate.weight"], base.w["gate.e_score_correction_bias"], base.top_k)
     began = time.perf_counter()
     fp32 = base(x, ids, weights)
-    stat = lambda v: {"median": float(v.median()), "p90": _q(v, 0.9), "max": float(v.max())}  # noqa: E731
     result = {
         "layer": layer,
         "run_code_revision": manifest.get("code_revision"),
-        "run_routed_weights": manifest.get("routed_weights", "BFLOAT4_B"),
+        "run_routed_weights": manifest.get("routed_weights", "default"),
         "rows": picks,
-        "device_vs_fp32": stat(nrmse_rows(dev, fp32, floor)),
+        "device_vs_fp32": _stats(nrmse_rows(dev, fp32, floor)),
         "emulations": {},
     }
     base.experts.clear()
@@ -581,8 +591,8 @@ def emulate(*, out: Path, checkpoint: Path, rows: int, names: list[str]) -> dict
         y = moe(x, ids, weights)
         result["emulations"][name] = {
             "formats": EMULATIONS[name],
-            "vs_fp32": stat(nrmse_rows(y, fp32, floor)),
-            "device_vs_emulation": stat(nrmse_rows(dev, y, floor)),
+            "vs_fp32": _stats(nrmse_rows(y, fp32, floor)),
+            "device_vs_emulation": _stats(nrmse_rows(dev, y, floor)),
         }
         del moe, y
     result["seconds"] = round(time.perf_counter() - began, 1)

@@ -125,11 +125,12 @@ def test_k31_moe_layer_teacher_fed(mesh_device, device_params):
         "moe_impl": "block",
         "order": "reverse" if REVERSE else "forward",
         "weight_cache": str(weight_cache),
-        "routed_weights": "BFLOAT8_B" if routed_dtype is not None else "BFLOAT4_B",
+        # (what the run asked for; "default": the knob unset, production's value as MoEDtypes / moe_tail define it)
+        "routed_weights": "BFLOAT8_B" if routed_dtype is not None else "default",
         "routed_cache": str(routed_cache),
-        "head_weights": HEAD_WEIGHTS or "BFLOAT8_B",
-        "head_fidelity": HEAD_FIDELITY or "HiFi2",
-        "tail_weights": TAIL_WEIGHTS or "BFLOAT8_B",
+        "head_weights": HEAD_WEIGHTS or "default",
+        "head_fidelity": HEAD_FIDELITY or "default",
+        "tail_weights": TAIL_WEIGHTS or "default",
         "combine_snap": float(COMBINE_SNAP) if COMBINE_SNAP else "default",
         **provenance(),
     }
