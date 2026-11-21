@@ -141,6 +141,46 @@ def test_slice_write_nd(rank, layout, device):
     assert_equal(torch_out_ref, ttnn.to_torch(tt_out_hit))
 
 
+@pytest.mark.parametrize("stride", [2, 3, 4])
+@pytest.mark.parametrize("width", [64, 100, 130])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint16])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_slice_write_last_dim_stride(stride, width, dtype, layout, device):
+    # Last-dim strided slice_write compacts each output stick from the input with a stride; the
+    # reference is out[..., begin:end:stride] = input. Values are small integers so bf16/fp32
+    # round-trip exactly and the compare can be exact.
+    shape = (1, 2, 16, width)
+    begins = [0, 0, 0, 0]
+    ends = list(shape)
+    strides = [1, 1, 1, stride]
+
+    selected = len(range(begins[-1], ends[-1], strides[-1]))
+    in_shape = (1, 2, 16, selected)
+
+    src = torch.randint(0, 100, in_shape).to(torch.float32)
+    if dtype == ttnn.int32:
+        src = src.to(torch.int32)
+    elif dtype == ttnn.uint16:
+        src = src.to(torch.int16)
+    elif dtype == ttnn.bfloat16:
+        src = src.to(torch.bfloat16)
+
+    torch_out_ref = torch.zeros(shape, dtype=src.dtype)
+    torch_out_ref[..., begins[-1] : ends[-1] : strides[-1]] = src
+
+    tt_out = ttnn.from_torch(torch.zeros(shape, dtype=src.dtype), device=device, layout=layout, dtype=dtype)
+    tt_out = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
+    tt_in = ttnn.from_torch(src, device=device, layout=layout, dtype=dtype)
+    tt_in = ttnn.to_memory_config(tt_in, ttnn.L1_MEMORY_CONFIG)
+
+    ttnn.experimental.slice_write(tt_in, tt_out, begins, ends, strides)
+
+    out_host = ttnn.to_torch(tt_out)
+    written_region = out_host[..., begins[-1] : ends[-1] : strides[-1]]
+    assert_equal(src, written_region)
+    assert_equal(torch_out_ref, out_host)
+
+
 def _bf16_pattern(shape, offset):
     numel = 1
     for dim in shape:
