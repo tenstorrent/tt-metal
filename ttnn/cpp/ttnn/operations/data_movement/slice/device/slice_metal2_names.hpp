@@ -44,6 +44,7 @@ inline const tt::tt_metal::KernelSpecName TILE_READER{"tile_reader"};
 inline const tt::tt_metal::KernelSpecName TILE_WRITER{"tile_writer"};
 inline const tt::tt_metal::DFBSpecName TILE_IN{"tile_in"};
 inline const tt::tt_metal::ScratchpadSpecName TILE_ID_PER_DIM{"tile_id_per_dim"};
+inline const tt::tt_metal::ScratchpadSpecName TILE_PAIR{"tile_pair"};
 
 // SliceTileTensorArgsProgramFactory
 inline const tt::tt_metal::KernelSpecName TA_READER{"ta_reader"};
