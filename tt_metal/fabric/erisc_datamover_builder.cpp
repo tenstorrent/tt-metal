@@ -277,10 +277,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
     // Allocate L1 addresses for global max sender channels so layout is stable across all configs
     uint32_t num_sender_channels =
         is_2D_routing ? builder_config::num_max_sender_channels : builder_config::get_sender_channel_count(false);
-    // A 1D router's host_rdma channel follows its two VC0 senders (2D already sets aside the maximum).
-    if (!is_2D_routing && rtoptions.get_enable_fabric_host_rdma()) {
-        num_sender_channels += 1;
-    }
     uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
     // Global
     size_t next_l1_addr = erisc_l1_unreserved_base;

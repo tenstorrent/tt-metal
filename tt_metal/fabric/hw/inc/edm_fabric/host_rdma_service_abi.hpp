@@ -41,8 +41,7 @@ struct Request {
     uint32_t completion_inc;
     uint16_t dst_dev_id;
     uint16_t dst_mesh_id;
-    uint32_t hops;  // 1D fabrics: chips from the source to the destination (2D routes by dst_dev_id/dst_mesh_id)
-    uint32_t pad[6];
+    uint32_t pad[7];
 };
 static_assert(sizeof(Request) == 64);
 

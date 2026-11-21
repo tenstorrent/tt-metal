@@ -345,7 +345,7 @@ RouterVcShape router_vc_shape(
         vc2_receivers = (requires_vc2 && !z_boundary_router) ? 1 : 0;
     }
 
-    // The host_rdma channel: one more VC0 sender, after the worker and every forwarding channel, on every topology. It
+    // The host_rdma channel (2D fabrics only): one more VC0 sender, after the worker and every forwarding channel. It
     // has no producer router, so it stays out of the direction-to-slot bijection
     // (RouterVcShape::producer_sender_counts).
     if (vc_config && vc_config->requires_host_rdma) {

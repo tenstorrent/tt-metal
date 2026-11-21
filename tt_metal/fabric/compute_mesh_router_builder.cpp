@@ -394,7 +394,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
                                       ? compute_sender_channel_injection_flags(producer_slots, vc, injection_policy)
                                       : std::vector<bool>(producer_slots.sender_count(vc), false);
         // The host_rdma channel (last on VC0, outside the producer slots) injects like the worker channel: it starts
-        // packets on this router, so it takes the worker's bubble on a ring or torus.
+        // packets on this router, so it takes the worker's bubble on a torus.
         if (vc == 0 && vc_shape.host_rdma_channel.has_value()) {
             TT_FATAL(
                 vc_injection_flags.size() == *vc_shape.host_rdma_channel,

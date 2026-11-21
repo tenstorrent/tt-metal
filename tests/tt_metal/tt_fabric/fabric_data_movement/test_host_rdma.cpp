@@ -167,8 +167,6 @@ protected:
             << "chip " << src.chip << " -> chip " << dst.chip << ", " << num_words * 4 << " B";
     }
 
-    // Whether a write from `src` can reach `dst`: on 2D, any chip; on 1D, a chip on the same mesh row or column (a 1D
-    // fabric runs lines, and a 1D header counts hops along one).
     // Workers see the fabric as they would without host_rdma: one worker sender channel per routing plane. The
     // connection table every worker core reads (written at device init) holds exactly one entry per active router
     // (one per routing plane in each direction), and each names the router's sender channel 0, never its host_rdma
@@ -196,7 +194,7 @@ protected:
                     << "chip " << chip.chip << " direction " << static_cast<int>(direction);
                 for (const chan_id_t eth_chan : eth_chans) {
                     routing_planes++;
-                    const auto rc = tt::tt_fabric::host_rdma::find_router_channel(context, chip.node, eth_chan);
+                    const auto host_rdma = control_plane.get_host_rdma_connection_info(chip.node, eth_chan);
                     ASSERT_NE((table.valid_connections_mask >> eth_chan) & 1u, 0u)
                         << "chip " << chip.chip << " eth chan " << eth_chan << " has no worker connection";
                     const auto& entry = table.read_only[eth_chan];
@@ -206,10 +204,11 @@ protected:
                     EXPECT_EQ(
                         entry.edm_connection_handshake_addr,
                         edm_config.sender_channels_connection_semaphore_address[0]);
-                    EXPECT_NE(rc.channel, 0u);
-                    EXPECT_NE(entry.edm_worker_location_info_addr, rc.connection_info_addr);
-                    EXPECT_NE(entry.edm_connection_handshake_addr, rc.connection_semaphore_addr);
-                    EXPECT_NE(entry.edm_buffer_base_addr, rc.slots_base);
+                    EXPECT_NE(entry.edm_worker_location_info_addr, host_rdma.edm_worker_location_info_addr);
+                    EXPECT_NE(entry.edm_connection_handshake_addr, host_rdma.edm_connection_handshake_addr);
+                    EXPECT_NE(entry.buffer_index_semaphore_id, host_rdma.buffer_index_semaphore_id);
+                    EXPECT_NE(entry.edm_buffer_base_addr, host_rdma.edm_buffer_base_addr);
+                    EXPECT_NE(entry.worker_free_slots_stream_id, host_rdma.worker_free_slots_stream_id);
                     routers++;
                 }
             }
@@ -220,32 +219,8 @@ protected:
         EXPECT_GT(routers, 0u);
     }
 
-    static bool reachable(FabricNodeId src, FabricNodeId dst) {
-        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-        if (control_plane.get_fabric_context().is_2D_routing_enabled()) {
-            return true;
-        }
-        const auto& mesh_graph = control_plane.get_mesh_graph();
-        const auto a = mesh_graph.chip_to_coordinate(src.mesh_id, src.chip_id);
-        const auto b = mesh_graph.chip_to_coordinate(dst.mesh_id, dst.chip_id);
-        return src.mesh_id == dst.mesh_id && (a[0] == b[0] || a[1] == b[1]);
-    }
-
-    // Chips crossed from `src` to `dst` on the route the host_rdma channel takes.
-    static uint32_t hops(FabricNodeId src, FabricNodeId dst) {
-        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-        uint32_t count = 0;
-        FabricNodeId previous = src;
-        for (const auto& [node, chan] : control_plane.get_fabric_route(
-                 src,
-                 dst,
-                 tt::tt_fabric::host_rdma::eth_chan_toward(tt::tt_metal::MetalContext::instance(), src, dst))) {
-            if (node != previous) {
-                count++;
-                previous = node;
-            }
-        }
-        return count;
+    bool neighbours(const Chip& a, const Chip& b) const {
+        return tt::tt_fabric::are_intra_mesh_neighbors(*devices_map_.at(a.chip), a.node, b.node);
     }
 
     // For every ordered pair of chips (optionally neighbours only), writes of each size.
@@ -264,7 +239,7 @@ protected:
                 if (src.chip == dst.chip) {
                     continue;
                 }
-                if (!reachable(src.node, dst.node) || (neighbours_only && hops(src.node, dst.node) != 1)) {
+                if (neighbours_only && !neighbours(src, dst)) {
                     continue;
                 }
                 for (const size_t words : sizes) {
@@ -283,29 +258,10 @@ protected:
     // All-gather: chip i holds shard i; the host writes every shard to every other chip at slot i, each write
     // completing on the destination's counter. Every chip ends up with every shard.
     void run_all_gather(size_t shard_words, uint32_t rounds) {
-        // The participants: every chip on 2D; on 1D, the longer of the mesh row and column through the first chip.
         std::vector<Chip*> group;
-        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-        if (control_plane.get_fabric_context().is_2D_routing_enabled()) {
-            for (auto& c : chips_) {
-                group.push_back(&c);
-            }
-        } else {
-            const auto& mesh_graph = control_plane.get_mesh_graph();
-            const auto& first = chips_.front().node;
-            const auto origin = mesh_graph.chip_to_coordinate(first.mesh_id, first.chip_id);
-            for (const size_t axis : {0u, 1u}) {
-                std::vector<Chip*> line;
-                for (auto& c : chips_) {
-                    const auto at = mesh_graph.chip_to_coordinate(c.node.mesh_id, c.node.chip_id);
-                    if (c.node.mesh_id == first.mesh_id && at[axis] == origin[axis]) {
-                        line.push_back(&c);
-                    }
-                }
-                if (line.size() > group.size()) {
-                    group = std::move(line);
-                }
-            }
+        group.reserve(chips_.size());
+        for (auto& c : chips_) {
+            group.push_back(&c);
         }
         const size_t n = group.size();
         ASSERT_GE(n, 2u);
@@ -364,7 +320,6 @@ protected:
 };
 
 using HostRdmaFabric2DFixture = HostRdmaFixture<tt_fabric::FabricConfig::FABRIC_2D>;
-using HostRdmaFabric1DFixture = HostRdmaFixture<tt_fabric::FabricConfig::FABRIC_1D>;
 
 }  // namespace
 
@@ -372,12 +327,8 @@ TEST_F(HostRdmaFabric2DFixture, AToBNeighbours) { run_a_to_b(/*neighbours_only=*
 TEST_F(HostRdmaFabric2DFixture, AToBAllPairs) { run_a_to_b(/*neighbours_only=*/false); }
 TEST_F(HostRdmaFabric2DFixture, AllGather) { run_all_gather(/*shard_words=*/4096, /*rounds=*/3); }
 
-TEST_F(HostRdmaFabric1DFixture, AToBAllPairs) { run_a_to_b(/*neighbours_only=*/false); }
-TEST_F(HostRdmaFabric1DFixture, AllGather) { run_all_gather(/*shard_words=*/4096, /*rounds=*/3); }
-
 // With the host_rdma channel built, a worker still sees one worker sender channel per routing plane.
 TEST_F(HostRdmaFabric2DFixture, OneWorkerChannelPerRoutingPlane) { check_one_worker_channel_per_routing_plane(); }
-TEST_F(HostRdmaFabric1DFixture, OneWorkerChannelPerRoutingPlane) { check_one_worker_channel_per_routing_plane(); }
 
 // Host-injection bandwidth from one chip to a neighbour (disabled by default: a benchmark, not a check). Run with
 // --gtest_also_run_disabled_tests --gtest_filter=*HostRdma*Bandwidth*.
@@ -385,7 +336,7 @@ TEST_F(HostRdmaFabric2DFixture, DISABLED_Bandwidth) {
     auto& src = chips_[0];
     const Chip* dst = nullptr;
     for (const auto& c : chips_) {
-        if (c.chip != src.chip && hops(src.node, c.node) == 1) {
+        if (c.chip != src.chip && neighbours(src, c)) {
             dst = &c;
             break;
         }
