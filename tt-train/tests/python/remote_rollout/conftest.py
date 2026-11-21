@@ -61,7 +61,8 @@ def _set_fabric_2d():
     Request this fixture explicitly, e.g. through ``pytest.mark.usefixtures``,
     from a module that already self-skips unless ``OMPI_COMM_WORLD_SIZE == 2``.
     Both ranks must agree on the fabric config before either one opens a device.
-    See description in ``_ttt_sampler_utils.open_device`` for more details.
+    A caller that then builds a ttml model passes the opened device into
+    ``setup_ttml_model`` so that helper does not call ``SetFabricConfig`` again.
     """
     import ttnn
 

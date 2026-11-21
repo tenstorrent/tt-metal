@@ -123,7 +123,14 @@ def _ttml_side() -> None:
     model: Any = None
     client: Any = None
     try:
-        model, _ = setup_ttml_model(get_model_config(raw["training_config"]["model_config"]), device_config, MODEL_ID)
+        # _set_fabric_2d already pinned the fabric config on both ranks.
+        autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
+        model, _ = setup_ttml_model(
+            get_model_config(raw["training_config"]["model_config"]),
+            device_config,
+            MODEL_ID,
+            device=autograd_ctx.get_device(),
+        )
         # Constructing the client blocks on the bridge handshake.
         bridge = HostWeightBridge.init_sender(mesh=autograd_ctx.get_device(), peer_rank=TTT_RANK)
         client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)

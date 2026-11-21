@@ -111,7 +111,9 @@ device_config:
 
 Device setup (`enable_fabric`, `open_device`,
 `initialize_parallelism_context`) is performed by `setup_ttml_model`,
-which the `GRPOTrainer` constructor calls. FSDP-specific behavior is documented in the
+which the `GRPOTrainer` constructor calls. A remote-rollout job is the exception:
+both ranks pin the fabric config first, and the trainer rank opens its device
+before passing it in. FSDP-specific behavior is documented in the
 [FSDP subsection](../../../docs/GRPO_TRAINER.md#fsdp) of the trainer
 doc.
 
