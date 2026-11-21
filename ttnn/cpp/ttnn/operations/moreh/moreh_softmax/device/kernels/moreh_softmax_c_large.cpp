@@ -15,6 +15,8 @@
 
 namespace ckl = compute_kernel_lib;
 
+constexpr uint32_t kSumBlock = 32;
+
 #if defined(FP32_DEST_ACC_EN)
 constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Enabled;
 #else
@@ -75,12 +77,23 @@ void kernel_main() {
             rexp_tile_to_dfb<dfb::tmp, dfb::exps>(dfb_tmp_obj, dfb_exps_obj);
 #endif
 
-            if (i == 0) {
+            if (i % kSumBlock == 0) {
                 copy_tile_to_dfb<dfb::exps, dfb::add>(dfb_exps_obj, dfb_add_obj);
             } else {
                 add_tiles_to_dfb<dfb::add, dfb::exps, dfb::add>(dfb_add_obj, dfb_exps_obj, dfb_add_obj);
             }
+            // The FPU add reads the running sum at TF32, so a tile added to a much larger sum is lost. Sum
+            // blocks of tiles and fold each block into recip_sum_exps, which is free until the sum is done.
+            if (i % kSumBlock == kSumBlock - 1 || i == dim_size - 1) {
+                if (i < kSumBlock) {
+                    copy_tile_to_dfb<dfb::add, dfb::recip_sum_exps>(dfb_add_obj, dfb_recipsumexps_obj);
+                } else {
+                    add_tiles_to_dfb<dfb::recip_sum_exps, dfb::add, dfb::recip_sum_exps>(
+                        dfb_recipsumexps_obj, dfb_add_obj, dfb_recipsumexps_obj);
+                }
+            }
         }
+        copy_tile_to_dfb<dfb::recip_sum_exps, dfb::add>(dfb_recipsumexps_obj, dfb_add_obj);
 
 #ifdef LOG
         // compute log(sum)
