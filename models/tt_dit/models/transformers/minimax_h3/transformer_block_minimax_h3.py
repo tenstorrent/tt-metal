@@ -85,10 +85,12 @@ class MiniMaxH3TransformerBlock(Module):
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
         agmm_mode: AgmmMode | str | None = None,
+        matmul_profile: str | None = None,
     ) -> None:
         """`dynamic_length` freezes the ff1 / ff2 blockings and the one-hot gathers' blocking at construction, so
         no per-block program depends on the length; `norm_row_capacity` (per-device rows) sizes the fused norms, and
-        `agmm_mode` picks the all-gather matmul pins (`resolve_agmm_mode`)."""
+        `agmm_mode` picks the all-gather matmul pins (`resolve_agmm_mode`). `matmul_profile="image"` takes the
+        image-tuned all-gather-matmul pins (`IMAGE_AGMM_PINS`) where they exist."""
         super().__init__()
 
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
@@ -140,6 +142,7 @@ class MiniMaxH3TransformerBlock(Module):
             dynamic_length=dynamic_length,
             norm_row_capacity=norm_row_capacity,
             agmm_mode=agmm_mode,
+            matmul_profile=matmul_profile,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -171,6 +174,7 @@ class MiniMaxH3TransformerBlock(Module):
                     num_links=ccl_manager.num_links,
                     compute_kernel_config=self.mm_compute_kernel_config,
                     mode=agmm_mode,
+                    profile=matmul_profile,
                 )
             if self.tp_factor > 1 and ccl_manager.topology == ttnn.Topology.Ring:
                 self._mmrs_pin = pinned_mmrs_config(ffn_dim // self.tp_factor, hidden_size, grid)
@@ -284,6 +288,11 @@ class MiniMaxH3TransformerBlock(Module):
             raise RuntimeError("modulation_row_indices needs prepare_modulation first")
         return ttnn.embedding(modulation_row_indices, self._precomputed_adaln_projections, layout=ttnn.ROW_MAJOR_LAYOUT)
 
+    def modulation_tables(self, temb: ttnn.Tensor) -> list[ttnn.Tensor]:
+        """The six modulation tables for `temb` ([1, 1, num_slots, time_embed_dim]), for a caller that reuses them
+        across forwards (`forward(tables=...)`): a sampler whose timesteps are fixed builds them once per step."""
+        return self._modulation_tables(self._compute_adaln_projection(temb))
+
     def _modulation_tables(self, projected: ttnn.Tensor) -> list[ttnn.Tensor]:
         """Split a projection (`_compute_adaln_projection` or `_lookup_precomputed_adaln_projections`) into the six
         per-(slot, modality) modulation tables.
@@ -390,6 +399,7 @@ class MiniMaxH3TransformerBlock(Module):
         onehot: ttnn.Tensor | None = None,
         tilerow: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         modulation_row_indices: ttnn.Tensor | None = None,
+        tables: list[ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
@@ -404,19 +414,25 @@ class MiniMaxH3TransformerBlock(Module):
 
         modulation_row_indices: [1, num_slots] uint32, the rows of `prepare_modulation`'s projection to take the tables
             from in place of projecting a `temb`: the transformer's `modulation_row_indices`, flattened.
+        tables: this block's six modulation tables, built with `modulation_tables` for this step's `temb`; they take
+            precedence over `temb` / `modulation_row_indices` and skip the projection and the split entirely.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
-        if (temb is None) == (modulation_row_indices is None):
-            raise ValueError("pass exactly one of temb and modulation_row_indices")
-        if modulation_row_indices is None:
-            projected = self._compute_adaln_projection(temb)
+        if tables is not None:
+            num_slots = tables[0].shape[-2] // MODALITY_NUM
         else:
-            projected = self._lookup_precomputed_adaln_projections(modulation_row_indices)
-        tables = self._modulation_tables(projected)
+            if (temb is None) == (modulation_row_indices is None):
+                raise ValueError("pass exactly one of temb and modulation_row_indices (or tables)")
+            if modulation_row_indices is None:
+                projected = self._compute_adaln_projection(temb)
+            else:
+                projected = self._lookup_precomputed_adaln_projections(modulation_row_indices)
+            num_slots = projected.shape[-2]
+            tables = self._modulation_tables(projected)
 
         if onehot is None:
-            onehot = self.onehot_table(adaln_indices, projected.shape[-2])
+            onehot = self.onehot_table(adaln_indices, num_slots)
 
         def modulation(param: int) -> ttnn.Tensor:
             return self._gather_rows(tables[param], onehot)

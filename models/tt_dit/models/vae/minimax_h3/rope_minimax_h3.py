@@ -52,14 +52,23 @@ def head_lane_permutation(attention_head_dim: int = 64, rope_dim_ratio: float = 
     return torch.tensor(interleaved + list(range(rotary, attention_head_dim)), dtype=torch.long)
 
 
-def position_grid(num_frames: int, height: int, width: int) -> torch.Tensor:
-    """``(T*H*W, 3)`` coordinates, each axis length-normalised to ``[-1, 1)``.
+def position_grid(num_frames: int, height: int, width: int, *, num_axes: int = 3) -> torch.Tensor:
+    """``(T*H*W, num_axes)`` coordinates, each axis length-normalised to ``[-1, 1)``.
 
     Matches the reference exactly: ``2 * (arange(0.5, size) / size) - 1`` per axis, then
-    ``meshgrid(indexing="ij")`` so T is the slowest-varying axis.
+    ``meshgrid(indexing="ij")`` so the leading axis is the slowest-varying one. ``num_axes=2`` is the
+    image decoder's (H, W) grid (``ViT2DDecoder``); it requires ``num_frames == 1``.
     """
-    grids = [2.0 * (torch.arange(0.5, size, dtype=torch.float32) / size) - 1.0 for size in (num_frames, height, width)]
-    return torch.stack(torch.meshgrid(*grids, indexing="ij"), dim=-1).flatten(0, 2)
+    if num_axes == 3:
+        sizes = (num_frames, height, width)
+    elif num_axes == 2:
+        if num_frames != 1:
+            raise ValueError(f"a 2-axis (image) RoPE grid has one frame, got num_frames={num_frames}")
+        sizes = (height, width)
+    else:
+        raise ValueError(f"num_axes must be 2 or 3, got {num_axes}")
+    grids = [2.0 * (torch.arange(0.5, size, dtype=torch.float32) / size) - 1.0 for size in sizes]
+    return torch.stack(torch.meshgrid(*grids, indexing="ij"), dim=-1).reshape(-1, num_axes)
 
 
 def inverse_frequencies(rotary_dim: int, theta: float = 100.0, num_axes: int = 3) -> torch.Tensor:
@@ -80,6 +89,7 @@ def rope_tables(
     rope_dim_ratio: float = 0.75,
     theta: float = 100.0,
     permuted: bool = True,
+    num_axes: int = 3,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """``(cos, sin)`` of shape ``(num_patches + num_suffix_tokens, attention_head_dim)``.
 
@@ -94,13 +104,13 @@ def rope_tables(
     what the host-side equivalence check compares against.
     """
     rotary = rope_dim(attention_head_dim, rope_dim_ratio)
-    inv_freq = inverse_frequencies(rotary, theta)
+    inv_freq = inverse_frequencies(rotary, theta, num_axes=num_axes)
 
-    positions = position_grid(num_frames, height, width)
-    suffix = positions.new_zeros((num_suffix_tokens, 3))
+    positions = position_grid(num_frames, height, width, num_axes=num_axes)
+    suffix = positions.new_zeros((num_suffix_tokens, num_axes))
     positions = torch.cat([positions, suffix], dim=0)
 
-    # (N, 3, F) -> (N, 3F) -> tile to (N, 2*3F) == (N, rotary)
+    # (N, A, F) -> (N, A*F) -> tile to (N, 2*A*F) == (N, rotary); A = 3 (video) or 2 (image)
     angles = 2.0 * math.pi * positions[:, :, None] * inv_freq[None, None, :]
     angles = angles.flatten(1, 2).tile(2)
 

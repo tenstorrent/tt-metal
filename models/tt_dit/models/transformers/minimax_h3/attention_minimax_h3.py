@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -119,10 +120,12 @@ class MiniMaxH3Attention(Module):
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
         agmm_mode: AgmmMode | str | None = None,
+        matmul_profile: str | None = None,
     ) -> None:
         """`dynamic_length` freezes every length-keyed choice at construction (one program per op for every
         length); `norm_row_capacity` (per-device rows) sizes the fused QK norms' program on that path, and
-        `agmm_mode` picks its all-gather matmul pins (`resolve_agmm_mode`)."""
+        `agmm_mode` picks its all-gather matmul pins (`resolve_agmm_mode`), with `matmul_profile="image"` applying the
+        image overrides (`IMAGE_AGMM_PINS`)."""
         super().__init__()
 
         self.kv_gather_capacity = kv_gather_capacity
@@ -226,6 +229,7 @@ class MiniMaxH3Attention(Module):
                 num_links=ccl_manager.num_links,
                 compute_kernel_config=self.mm_compute_kernel_config,
                 mode=agmm_mode,
+                profile=matmul_profile,
             )
             self._qkv_pins = agmm_pins(hidden_size, 3 * self.inner_dim // tp_factor, **pin_kwargs)
             self._out_pins = agmm_pins(self.inner_dim, hidden_size // tp_factor, **pin_kwargs)
@@ -233,7 +237,11 @@ class MiniMaxH3Attention(Module):
             grid = compute_grid_key(full_grid)
             if grid not in DYNAMIC_RING_SDPA_CHUNKS:
                 raise ValueError(f"dynamic_length has no ring SDPA chunk sizes for the {grid} compute grid")
-            chunks = DYNAMIC_RING_SDPA_CHUNKS[grid]
+            chunks = dict(DYNAMIC_RING_SDPA_CHUNKS[grid])
+            # For sweeping: MINIMAX_H3_RING_SDPA_CHUNKS="short=320,384;long=256,512" overrides a class's (q, k) chunks.
+            for item in filter(None, os.environ.get("MINIMAX_H3_RING_SDPA_CHUNKS", "").split(";")):
+                name, pair = item.split("=")
+                chunks[name.strip()] = tuple(int(v) for v in pair.split(","))
             self._ring_sdpa_configs = {
                 cls.name: ttnn.SDPAProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
@@ -263,6 +271,15 @@ class MiniMaxH3Attention(Module):
             and self.exp_ring_num_passes <= self.exp_ring_max_passes
         )
         self._exp_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig | None] = {}
+        # Ring joint SDPA hangs with a ring of two (a 4x2 DP replica's SP pair); two chips are the same link pair as a
+        # line, which the op supports, so SP=2 runs it as a line. MINIMAX_H3_RING_SDPA_TOPOLOGY overrides.
+        sdpa_topology = os.environ.get("MINIMAX_H3_RING_SDPA_TOPOLOGY", "").lower()
+        if sdpa_topology:
+            self.ring_sdpa_topology = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}[sdpa_topology]
+        elif parallel_config.sequence_parallel.factor == 2:
+            self.ring_sdpa_topology = ttnn.Topology.Linear
+        else:
+            self.ring_sdpa_topology = ccl_manager.topology
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -649,7 +666,7 @@ class MiniMaxH3Attention(Module):
                 num_links=self.ccl_manager.num_links,
                 cluster_axis=self.sp_mesh_axis,
                 mesh_device=self.mesh_device,
-                topology=self.ccl_manager.topology,
+                topology=self.ring_sdpa_topology,
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
                 ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
                 use_column_major_ccl=True,
