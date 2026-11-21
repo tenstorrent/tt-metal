@@ -199,7 +199,6 @@ def test_conv2d_3x3_height_sharded_multi_m_block(dtype, layout, with_bias, devic
             block_m_tiles=1,
             block_k_tiles=b.block_k_tiles,
             block_n_tiles=b.block_n_tiles,
-            out_depth_row_groups=b.out_depth_row_groups,
             **fit,
         )
 
@@ -231,7 +230,6 @@ def test_conv2d_3x3_height_sharded_weight_mcast_ragged_core(dtype, layout, devic
             block_m_tiles=1,
             block_k_tiles=b.block_k_tiles,
             block_n_tiles=b.block_n_tiles,
-            out_depth_row_groups=b.out_depth_row_groups,
             **fit,
         )
 
@@ -313,7 +311,6 @@ def test_conv2d_3x3_height_sharded_face_direct_multi_m_block(device, monkeypatch
             block_m_tiles=4,
             block_k_tiles=b.block_k_tiles,
             block_n_tiles=b.block_n_tiles,
-            out_depth_row_groups=b.out_depth_row_groups,
             **fit,
         )
 
@@ -368,7 +365,6 @@ def test_conv2d_3x3_height_sharded_slab_direct_whole_grid(case, with_bias, devic
             block_m_tiles=force_bm,
             block_k_tiles=b.block_k_tiles,
             block_n_tiles=b.block_n_tiles,
-            out_depth_row_groups=b.out_depth_row_groups,
             **fit,
         )
 

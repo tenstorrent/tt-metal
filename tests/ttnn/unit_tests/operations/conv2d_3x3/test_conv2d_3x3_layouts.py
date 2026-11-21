@@ -224,7 +224,6 @@ def test_conv2d_3x3_multi_m_block_relu(dtype, layout, with_bias, device, monkeyp
         block_m_tiles=1,
         block_k_tiles=geometry.tensor_kkh_tiles,
         block_n_tiles=geometry.tensor_n_tiles,
-        out_depth_row_groups=_pd.OUT_DEPTH_ROW_GROUPS,
         **fit,
     )
     assert blocking.max_m_blocks_per_core > 1
