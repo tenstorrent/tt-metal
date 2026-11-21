@@ -1264,3 +1264,4 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   host (single), 2 ms device + 2.5 ms host (4x2k) but runs hidden (engram wait / gather-hide regions); a 4-bit served cache
   gains ~1% prefill at 1M. Next: model_bringup MB.5 (the same at 5120).
 - 17:15 switching to model_bringup for MB.5.
+- 21:10 back on batching (model_bringup: 4 commits after the owner's push, its records stashed). OWNER: (a) a read-only analysis agent (Agent tool, no device) on the indexer: algorithm, core split, top-k selection at 1M, early pruning; (b) QUEUED PB.AR (ledger, device probes through the resident runner): sparse-attention roofline at the shipped fidelity, DRAM vs compute bound, utilization vs plain matmuls. Launched --until PB.AR.

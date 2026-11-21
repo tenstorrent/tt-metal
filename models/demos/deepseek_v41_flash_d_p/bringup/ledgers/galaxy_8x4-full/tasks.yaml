@@ -7123,3 +7123,44 @@ tasks:
     metrics:
       noconv_*_wall_ms*: '> 0'
       noconv_*_max_abs_diff*: == 0
+- id: PB.AR
+  title: 'OWNER 2026-11-21: ANALYSIS: the roofline of sparse attention over the top-k tokens at the shipped fidelity; DRAM-
+    or compute-bound; math utilization vs plain matmuls of the same size (probe kernels allowed)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - PB.NC
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests/perf/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.AR_attention_roofline.md
+  brief:
+    prior_work: 'Measured (PB.HG ladder, 8192-row chunk, steady, layers 0-20): sparse attention (the sdpa fork''s sparse path,
+      ttnn.bringup sdpa: see ttnn/ttnn/bringup/INDEX.md and its README / kernels) 28.0 ms (single, 139k) / 28.9 (single, 1M)
+      / 29.2 (chip-aligned 4x2k, 139k) / 40.0 (4x2k, 1M) device ms a chunk; the indexer is analysed separately. Model math:
+      models/demos/deepseek_v41_flash_d_p/reference/kernels.py sparse_attn (q [b, m, h, d], kv [b, n, d], topk idx), tt/sparse_attention.py,
+      the window region rows, the history format (4-bit bfloat4_b row records, 320 B a row, read by the sdpa fork''s ROW_BFP4).
+      Fidelity / formats: tt/settings.py and the sdpa call sites.'
+    details: 'OWNER 2026-11-21: an ANALYSIS (no model change, no fork change). (1) From the code: the exact shapes per chip
+      per layer (queries a chip, heads, head dims, top-k k, window rows, how many layers run sparse attention, dtypes / formats
+      of Q, K/V records, math fidelity (HiFi2?), fp32 accumulation), the FLOPs and the bytes moved (DRAM reads of the selected
+      rows, L1 traffic) per chip per chunk; the Blackhole roofline at that fidelity (the per-core matmul peak at that fidelity
+      and format, cores used, DRAM bandwidth a chip): DRAM- or compute-bound, and the expected ms at roofline vs the measured.
+      (2) PROBES on the device (tests/perf/, BATCH_SHARED tests through the resident runner on the whole 8x4 mesh; never a
+      single-card job: agent rule 19; bounded waits, smallest shape first): (a) a plain matmul of the same total size / shapes
+      at the same fidelity and formats (the math-utilization baseline), (b) the sdpa fork''s sparse path alone at the model''s
+      shapes with synthetic top-k indices (random and clustered), (c) if useful, a probing kernel isolating the gather of
+      selected rows (DRAM read rate for scattered 320 B rows). Report: achieved TFLOP/s and GB/s per chip, % of roofline,
+      the gap and where it goes (gather / reads, softmax / SFPU, matmul, sync), and whether 4x2k at 1M is slower for a reason
+      other than shapes (load balance across chips). End with a ranked list of concrete improvements (expected ms a chunk,
+      effort, exactness). Write models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.AR_attention_roofline.md
+      after the last gate check. Read rule 20 of models/demos/common/bringup/agents/bringup-engineer.md.'
+  gate:
+    cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_attention_roofline_probe.py
+    metrics:
+      ar_*: '> 0'
