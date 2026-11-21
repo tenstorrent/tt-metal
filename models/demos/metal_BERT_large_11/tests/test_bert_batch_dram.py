@@ -5,14 +5,16 @@
 import pytest
 import torch
 from loguru import logger
-from transformers import BertForQuestionAnswering, BertTokenizer
+from transformers import BertTokenizer
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, profiler
+from models.demos.metal_BERT_large_11.tt import grid
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import (
     get_model_config,
     get_tt_cache_path,
+    load_reference_model,
     skip_unsupported_config,
 )
 from models.demos.utils.qa_pipeline_compat import QuestionAnsweringPipeline
@@ -37,7 +39,7 @@ def run_bert_question_and_answering_inference(
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
     tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name)
+    hugging_face_reference_model = load_reference_model(model_name)
     hugging_face_reference_model.eval()
     tt_bert_model = TtBertBatchDram(
         hugging_face_reference_model.config,
@@ -381,11 +383,15 @@ def test_bert_batch_dram_with_program_cache(
         device,
     )
 
-    if model_config_str == "BFLOAT8_B-SHARDED":
-        assert device.num_program_cache_entries() == 19
-    elif batch == 8 and model_config_str == "MIXED_PRECISION_BATCH8":
-        assert device.num_program_cache_entries() == 17
-    elif batch == 9 and model_config_str in {"BFLOAT8_B-L1", "BFLOAT8_B-DRAM"}:
-        assert device.num_program_cache_entries() == 17
+    if "OP1_FUSED_QKV_MM_INPUT_SHARDED_MEMCFG" in model_config:
+        expected_programs = 19
+    elif model_config_str == "MIXED_PRECISION_BATCH8" or model_config_str.startswith("BFLOAT8_B"):
+        # BFLOAT8_B-SHARDED lands here on a grid without 8 x batch cores, which runs BFLOAT8_B-DRAM.
+        expected_programs = 17
     else:
-        assert device.num_program_cache_entries() == 16
+        expected_programs = 16
+    device_grid = device.compute_with_storage_grid_size()
+    if "OP9_FF1_MM_CONFIG" not in model_config and not grid.fits_matmul_configs(batch, device_grid):
+        # FF1 without a program config applies its GELU as a separate op.
+        expected_programs += 1
+    assert device.num_program_cache_entries() == expected_programs

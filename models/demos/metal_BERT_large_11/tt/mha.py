@@ -10,7 +10,7 @@ import torch
 from tt_lib.utils import pad_weight
 
 import ttnn
-from models.demos.metal_BERT_large_11.tt import custom_matmuls
+from models.demos.metal_BERT_large_11.tt import custom_matmuls, grid
 from models.demos.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
 
 
@@ -50,6 +50,15 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     grid_size = model_config.get("GRID_SIZE", device.compute_with_storage_grid_size())
 
     def op2_create_qkv_heads(qkv):
+        batch, _, sequence, width = qkv.shape
+        if not qkv.is_sharded() and not grid.fits_experimental_split_heads(batch, sequence, grid_size):
+            # The generic op splits the same [Q | K | V] layout on any grid.
+            return ttnn.transformer.split_query_key_value_and_split_heads(
+                ttnn.reshape(qkv, (batch, sequence, width)),
+                num_heads=num_heads,
+                transpose_key=True,
+                memory_config=model_config["OP2_SPLIT_QKV_HEADS_OUTPUT_MEMCFG"],
+            )
         (
             q_heads,
             kt_heads,

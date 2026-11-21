@@ -2,12 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from pathlib import Path
 
 import pytest
 from loguru import logger
+from transformers import BertConfig, BertForQuestionAnswering
 
 import ttnn
+from models.demos.metal_BERT_large_11.tt import grid
+
+NUM_LAYERS_ENV = "BERT_NUM_LAYERS"
 
 OP_MEMCFG_KEYS = (
     # EMBEDDINGS
@@ -134,6 +139,12 @@ def get_model_config(batch, device_grid_size, model_config_str):
     else:
         raise NotImplementedError(f"Model config {model_config_str} is not supported!")
 
+    if mem_config == L1_MEMCFG and not grid.fits_l1_activations(batch, device_grid_size):
+        logger.warning(
+            f"Grid {device_grid_size} does not hold {model_config_str}'s L1 activations; running them in DRAM"
+        )
+        mem_config = DRAM_MEMCFG
+
     # Set defaults for dtype and mem_config for all ops
     model_config = {
         "DEFAULT_DTYPE": dtype,
@@ -189,8 +200,9 @@ def get_model_config(batch, device_grid_size, model_config_str):
         }
         model_config.update(new_config_values)
 
-    elif model_config_str == "BFLOAT8_B-L1" or model_config_str == "BFLOAT8_B-DRAM":
-        grid_size = ttnn.CoreCoord(12, batch)
+    elif model_config_str in ("BFLOAT8_B-L1", "BFLOAT8_B-DRAM") and grid.fits_matmul_configs(batch, device_grid_size):
+        # Every per_core_N below covers its output's width on grid.MIN_MATMUL_COLUMNS columns or more.
+        grid_size = ttnn.CoreCoord(grid.matmul_columns(device_grid_size), batch)
         new_config_values = {
             "OP3_PRE_SOFTMAX_BMM_CONFIG": ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=grid_size,
@@ -285,17 +297,12 @@ def get_model_config(batch, device_grid_size, model_config_str):
         model_config.update(new_config_values)
 
     elif model_config_str == "BFLOAT8_B-SHARDED":
-        activation_grid_dim = 8
-        # For GS COL_MAJOR is expected to be more optimal, so we test that case first
-        # Opposite for other arch like WH where ROW_MAJOR is more optimal
-        if activation_grid_dim <= device_grid_size.x and batch <= device_grid_size.y:
-            grid_size = ttnn.CoreCoord(activation_grid_dim, batch)
-            shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
-        elif batch <= device_grid_size.x and activation_grid_dim <= device_grid_size.y:
-            grid_size = ttnn.CoreCoord(batch, activation_grid_dim)
-            shard_orientation = ttnn.ShardOrientation.COL_MAJOR
-        else:
-            assert False, f"Device grid size does not support batch {batch} {model_config_str} configuration"
+        activation_grid_dim = grid.SHARDED_CORES_PER_IMAGE
+        sharded = grid.sharded_grid(batch, device_grid_size)
+        if sharded is None:
+            logger.warning(f"Grid {device_grid_size} has no 8 x {batch} cores; running BFLOAT8_B-DRAM instead")
+            return get_model_config(batch, device_grid_size, "BFLOAT8_B-DRAM")
+        grid_size, shard_orientation = sharded
         transpose_mm_mcast = shard_orientation == ttnn.ShardOrientation.COL_MAJOR
         new_config_values = {
             "GRID_SIZE": grid_size,
@@ -403,6 +410,22 @@ def get_model_config(batch, device_grid_size, model_config_str):
     return model_config
 
 
+def load_reference_model(model_name, **kwargs):
+    """The Hugging Face model with its first ``BERT_NUM_LAYERS`` encoder layers, or all of them when
+    it is unset. TtBertBatchDram builds as many encoder layers as the model's config holds."""
+    value = os.environ.get(NUM_LAYERS_ENV)
+    if value:
+        num_layers = int(value)
+        config = BertConfig.from_pretrained(model_name)
+        max_layers = config.num_hidden_layers
+        if not 1 <= num_layers <= max_layers:
+            raise ValueError(f"{NUM_LAYERS_ENV} must be between 1 and {max_layers}, got {num_layers}")
+        logger.info(f"Running {num_layers} of {max_layers} encoder layers ({NUM_LAYERS_ENV}={num_layers})")
+        config.num_hidden_layers = num_layers
+        kwargs["config"] = config
+    return BertForQuestionAnswering.from_pretrained(model_name, **kwargs)
+
+
 # TODO: Generalize TT tensor caching
 def get_tt_cache_path(model_version):
     tt_cache_path = Path("/mnt/MLPerf/tt_dnn-models/tt/Bert") / model_version
@@ -413,12 +436,10 @@ def get_tt_cache_path(model_version):
 
 
 def skip_unsupported_config(device, model_config_str, batch):
-    grid_size = device.compute_with_storage_grid_size()
-    if device.arch() == ttnn.device.Arch.WORMHOLE_B0 and model_config_str != "BFLOAT8_B-SHARDED":
+    if device.arch() != ttnn.device.Arch.WORMHOLE_B0:
+        return
+    if model_config_str != "BFLOAT8_B-SHARDED":
         pytest.skip("Only BFLOAT8_B-SHARDED supported for WH B0")
-
-    # Requires a minumum 8xB or Bx8 grid size for sharding
-    if "SHARDED" in model_config_str and not (
-        (grid_size.x >= 8 and grid_size.y >= batch) or (grid_size.x >= batch and grid_size.y >= 8)
-    ):
+    # The DRAM fallback for a grid without 8 x batch cores has not been verified on Wormhole.
+    if grid.sharded_grid(batch, device.compute_with_storage_grid_size()) is None:
         pytest.skip("Unsupported grid size for sharded test")
