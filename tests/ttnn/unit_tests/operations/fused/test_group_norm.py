@@ -2704,3 +2704,33 @@ def test_group_norm_user_fp32_dest_acc_en_honored_for_bf16_input(device, use_wel
         err_on = (out_on - ref).abs().mean().item()
         err_off = (out_off - ref).abs().mean().item()
         assert err_on < err_off, f"fp32 DEST mean abs error {err_on} is not below bf16 DEST {err_off}"
+
+
+@pytest.mark.parametrize("input_memory", ["dram", "l1", "height_sharded", "block_sharded"])
+def test_group_norm_output_defaults_to_input_memory_config(device, input_memory):
+    # With memory_config omitted, the output takes the input's memory config, as documented.
+    torch.manual_seed(0)
+    N, HW, C, G = 1, 1024, 64, 8
+    x = torch.randn((N, 1, HW, C), dtype=torch.bfloat16)
+    ref = torch.nn.functional.group_norm(x.float().permute(0, 3, 1, 2), G, eps=1e-5).permute(0, 2, 3, 1)
+
+    core_grid = None
+    memory_config = ttnn.DRAM_MEMORY_CONFIG if input_memory == "dram" else ttnn.L1_MEMORY_CONFIG
+    if input_memory == "height_sharded":
+        core_grid = ttnn.CoreGrid(y=1, x=8)
+        memory_config = ttnn.create_sharded_memory_config(
+            (N * HW // 8, C), core_grid, ttnn.ShardStrategy.HEIGHT, use_height_and_width_as_shard_shape=True
+        )
+    elif input_memory == "block_sharded":
+        core_grid = ttnn.CoreGrid(y=4, x=2)
+        memory_config = ttnn.create_sharded_memory_config(
+            (N * HW // 4, C // 2), core_grid, ttnn.ShardStrategy.BLOCK, use_height_and_width_as_shard_shape=True
+        )
+
+    tt_input = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    tt_output = ttnn.group_norm(tt_input, num_groups=G, epsilon=1e-5, core_grid=core_grid, inplace=False)
+
+    assert tt_output.memory_config() == tt_input.memory_config()
+    assert_numeric_metrics(
+        ref, ttnn.to_torch(tt_output).float(), pcc_threshold=0.999, rtol=0.02, atol=0.05, frobenius_threshold=0.01
+    )
