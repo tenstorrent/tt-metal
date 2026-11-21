@@ -67,7 +67,7 @@ inline uint32_t sparse_ring_member_rescale() {
 }
 
 // TT_SPARSE_RING_DENSE_HIFI=1 (HiFi2; or 2 / 3 / 4 for HiFi2 / HiFi3 / HiFi4): the dense Q blocks (dense_q_blocks)
-// run their Q.K^T, P.V and row-sum matmuls at that fidelity, every other block at the usual one (e.g. a LoFi
+// run their Q.K^T and P.V matmuls at that fidelity, every other block at the usual one (e.g. a LoFi
 // matmul_math_fidelity). Needs the dense list on the device, i.e. the dynamic split with dense_q_blocks. Default off.
 inline uint32_t sparse_ring_dense_hifi() {
     const char* s = std::getenv("TT_SPARSE_RING_DENSE_HIFI");
