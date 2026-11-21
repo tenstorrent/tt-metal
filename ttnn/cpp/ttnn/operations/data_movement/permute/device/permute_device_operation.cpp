@@ -20,6 +20,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::data_movement {
 PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program_factory(
@@ -164,6 +166,49 @@ PermuteDeviceOperation::create_op_performance_model(
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output}, ideal_dev_clock_cycles);
     return result;
+}
+
+uint32_t permute_row_invariant_rows_per_batch(const Tensor& input_tensor, const tt::tt_metal::TensorSpec& output_spec) {
+    constexpr uint32_t kMaxRows = 256;
+    constexpr uint32_t kMinRows = 32;
+    constexpr uint32_t kScratchBytes = 16 * 1024;
+    const auto& shape = input_tensor.logical_shape();
+    if (input_tensor.device()->arch() != tt::ARCH::WORMHOLE_B0 || input_tensor.layout() != Layout::ROW_MAJOR ||
+        shape.rank() < 2 || input_tensor.is_sharded() || output_spec.memory_config().is_sharded()) {
+        return 0;
+    }
+    const auto grid = input_tensor.device()->compute_with_storage_grid_size();
+    if (shape[-1] == 0 || shape.volume() / shape[-1] < 2ull * grid.x * grid.y) {
+        return 0;
+    }
+    auto row_bytes = [&](tt::tt_metal::BufferType buffer_type) {
+        const uint32_t alignment = buffer_type == tt::tt_metal::BufferType::DRAM
+                                       ? tt::tt_metal::hal::get_dram_alignment()
+                                       : tt::tt_metal::hal::get_l1_alignment();
+        return tt::round_up(shape[-1] * input_tensor.element_size(), alignment);
+    };
+    const uint32_t page_size = row_bytes(input_tensor.buffer()->buffer_type());
+    if (page_size != row_bytes(output_spec.memory_config().buffer_type())) {
+        return 0;
+    }
+    const uint32_t rows = std::min(kMaxRows, kScratchBytes / page_size);
+    if (rows < kMinRows || 2ull * rows * page_size > get_max_l1_space(input_tensor)) {
+        return 0;
+    }
+    return rows;
+}
+
+ttsl::hash::hash_t PermuteDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    uint32_t rows_per_batch = 0;
+    if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0 && input_tensor.layout() == Layout::ROW_MAJOR &&
+        !input_tensor.is_sharded() && operation_attributes.dims.back() == input_tensor.logical_shape().rank() - 1) {
+        rows_per_batch =
+            permute_row_invariant_rows_per_batch(input_tensor, compute_output_specs(operation_attributes, tensor_args));
+    }
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<PermuteDeviceOperation>, operation_attributes, tensor_args, rows_per_batch);
 }
 
 PermuteDeviceOperation::tensor_return_value_t PermuteDeviceOperation::create_output_tensors(

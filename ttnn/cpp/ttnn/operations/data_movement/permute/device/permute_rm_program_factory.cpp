@@ -9,6 +9,7 @@
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/math.hpp>
+#include <utility>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -121,6 +122,25 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreRowInv
     writer_varargs.insert(writer_varargs.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
     writer_varargs.insert(writer_varargs.end(), output_strides.begin(), output_strides.end());
 
+    const uint32_t rows_per_batch = permute_row_invariant_rows_per_batch(input_tensor, output_tensor.tensor_spec());
+    const ScratchpadSpecName READER_SCRATCH{"reader_scratch"};
+    const ScratchpadSpecName WRITER_SCRATCH{"writer_scratch"};
+    if (rows_per_batch > 0) {
+        for (auto [kernel, scratch] : {std::pair{&reader, READER_SCRATCH}, std::pair{&writer, WRITER_SCRATCH}}) {
+            kernel->source =
+                "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+                "permute_interleaved_rm_row_invariant_batched.cpp";
+            kernel->dfb_bindings = {};
+            kernel->tensor_bindings = {
+                TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
+                TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}};
+            kernel->scratchpad_bindings = {
+                ScratchpadBinding{.scratchpad_spec_name = scratch, .accessor_name = "scratch"}};
+            kernel->compile_time_args = {{"N", N}, {"page_size", input_rm_page_size}, {"batch", rows_per_batch}};
+            kernel->advanced_options.num_runtime_varargs = 3 * N;
+        }
+    }
+
     // ---- Per-node runtime args (legacy node-first loop, bridged name-first) ----
     KernelRunArgs reader_run_args{.kernel = READER};
     KernelRunArgs writer_run_args{.kernel = WRITER};
@@ -138,10 +158,19 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreRowInv
             num_rows_per_core = 0;
         }
         uint32_t end_row = start_row + num_rows_per_core;
-        AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values, core, {{"start_row", start_row}, {"end_row", end_row}});
-        AddRuntimeArgsForNode(
-            writer_run_args.runtime_arg_values, core, {{"start_row", start_row}, {"end_row", end_row}});
+        if (rows_per_batch > 0) {
+            const uint32_t mid_row = start_row + num_rows_per_core / 2;
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values, core, {{"start_row", start_row}, {"end_row", mid_row}});
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values, core, {{"start_row", mid_row}, {"end_row", end_row}});
+            reader_run_args.advanced_options.runtime_varargs.emplace(core, writer_varargs);
+        } else {
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values, core, {{"start_row", start_row}, {"end_row", end_row}});
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values, core, {{"start_row", start_row}, {"end_row", end_row}});
+        }
         writer_run_args.advanced_options.runtime_varargs.emplace(core, writer_varargs);
         start_row = end_row;
     }
@@ -150,7 +179,13 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreRowInv
     ProgramSpec spec;
     spec.name = "permute_rm_row_invariant";
     spec.kernels = {std::move(reader), std::move(writer)};
-    spec.dataflow_buffers = {std::move(src_cb)};
+    if (rows_per_batch > 0) {
+        spec.scratchpads = {
+            ScratchpadSpec{.unique_id = READER_SCRATCH, .size_per_node = rows_per_batch * input_rm_page_size},
+            ScratchpadSpec{.unique_id = WRITER_SCRATCH, .size_per_node = rows_per_batch * input_rm_page_size}};
+    } else {
+        spec.dataflow_buffers = {std::move(src_cb)};
+    }
     spec.tensor_parameters = {std::move(input_param), std::move(output_param)};
     spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores}};
 
