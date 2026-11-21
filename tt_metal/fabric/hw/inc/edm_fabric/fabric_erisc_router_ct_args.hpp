@@ -909,7 +909,11 @@ static constexpr uint8_t worker_handshake_noc = sender_channel_ack_noc_ids[0];
 constexpr bool local_chip_noc_equals_downstream_noc =
     receiver_channel_forwarding_noc_ids[0] == receiver_channel_local_write_noc_ids[0];
 static constexpr uint8_t local_chip_data_cmd_buf = receiver_channel_local_write_cmd_buf_ids[0];
-static constexpr uint8_t forward_and_local_write_noc_vc = NAMED_CT_ARG("EDM_NOC_VC");
+// The router's pair of NoC VCs, chosen by the host: forwards to the next router go out on one, writes to this chip on
+// the other, so that a packet's local writes do not queue behind its forward.
+static constexpr uint8_t forward_noc_vc = NAMED_CT_ARG("EDM_NOC_VC_FORWARD");
+static constexpr uint8_t local_write_noc_vc = NAMED_CT_ARG("EDM_NOC_VC_LOCAL_WRITE");
+static_assert(forward_noc_vc != local_write_noc_vc, "Forward and local-write NoC VCs must differ");
 
 // Helpers to extract num_slots from a channel's allocation entry
 template <typename Allocs, auto& ChannelToEntryIndex, size_t ChannelIdx>

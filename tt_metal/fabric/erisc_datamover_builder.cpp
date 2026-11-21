@@ -562,7 +562,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
                 FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC;
         }
     }
-    this->edm_noc_vc = FabricEriscDatamoverConfig::DEFAULT_NOC_VC;
+    this->set_edm_noc_vcs(FabricEriscDatamoverConfig::DEFAULT_NOC_VC);
 }
 
 void get_runtime_args_for_edm_termination_infos(
@@ -1519,7 +1519,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args[fmt::format("RX_CH_{}_LOCAL_WRITE_CMD_BUF_ID", i)] =
             (i < num_receiver_channels) ? static_cast<uint32_t>(config.receiver_channel_local_write_cmd_buf_ids[i]) : 0;
     }
-    named_args["EDM_NOC_VC"] = config.edm_noc_vc;
+    named_args["EDM_NOC_VC_FORWARD"] = config.edm_noc_vc_forward;
+    named_args["EDM_NOC_VC_LOCAL_WRITE"] = config.edm_noc_vc_local_write;
 
     // --- Telemetry ---
     get_telemetry_compile_time_args(risc_id, named_args);

@@ -271,8 +271,14 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, builder_config::num_max_sender_channels> sender_channel_ack_noc_ids = {};
     std::array<NocCmdBuf, builder_config::num_max_sender_channels> sender_channel_ack_cmd_buf_ids = {};
 
-    // emd vcs
-    std::size_t edm_noc_vc = 0;
+    // The router's pair of EDM NoC VCs: forwards to the next router go out on one, writes to its own chip on the other.
+    std::size_t edm_noc_vc_forward = 0;
+    std::size_t edm_noc_vc_local_write = 0;
+    // Sets the pair from the forward VC: local writes take the next EDM VC, wrapping around.
+    void set_edm_noc_vcs(std::size_t forward_vc) {
+        edm_noc_vc_forward = forward_vc;
+        edm_noc_vc_local_write = DEFAULT_NOC_VC + ((forward_vc - DEFAULT_NOC_VC + 1) % NUM_EDM_NOC_VCS);
+    }
 
     // Fabric channel allocator for L1 memory management
     // Points to the primary allocator (typically static allocator for single-pool configs)
