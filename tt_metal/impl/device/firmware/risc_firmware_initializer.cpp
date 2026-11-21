@@ -38,6 +38,7 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_context.hpp"
+#include <cstring>
 #include "hostdev/eth_link.h"
 #include "hostdev/keraunos_noc_channels.h"
 #include "hostdev/keraunos_spa_routes.h"
@@ -1561,28 +1562,33 @@ void RiscFirmwareInitializer::initialize_firmware(
                 }
             }
             if (quasar_ethernet) {
+                // KeraunosSpaRoutes after the bank-to-NOC scratch, the same place the Mimir routes use, and
+                // KeraunosNocChannels in the slot behind it: one write for both. A router's core resolves NOC addresses
+                // with both records, as an idle core does. CCE-relative addresses.
                 const auto& soc_k = cluster_.get_soc_desc(device_id);
-                const auto& keraunos = soc_k.get_arch_descriptor().get_keraunos();
-                const tt_xy_pair noc0 = soc_k.translate_coord_to(
-                    tt_xy_pair(virtual_core.x, virtual_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
-                for (const auto& keraunos_core : keraunos.cores) {
-                    if (keraunos_core.coord == noc0) {
-                        // After the bank-to-NOC scratch, the same place the Mimir routes use. CCE-relative address.
-                        const KeraunosSpaRoutes routes = keraunos_spa_routes_for_core(soc_k, keraunos_core);
-                        const uint64_t routes_addr =
-                            hal_.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BANK_TO_NOC_SCRATCH) +
-                            hal_.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
-                        cluster_.write_core(&routes, sizeof(routes), tt_cxy_pair(device_id, virtual_core), routes_addr);
-                        break;
-                    }
-                }
-                // A router's core resolves NOC addresses with both records, as an idle core does.
                 const KeraunosNocChannels channels = keraunos_noc_channels(cluster_, device_id);
+                const auto* keraunos_core = soc_k.find_keraunos_core(soc_k.translate_coord_to(
+                    tt_xy_pair(virtual_core.x, virtual_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0));
+                TT_FATAL(
+                    keraunos_core != nullptr,
+                    "Chip {} Ethernet core {} has no keraunos.cores entry",
+                    device_id,
+                    virtual_core.str());
+                const KeraunosSpaRoutes routes = keraunos_spa_routes_for_core(soc_k, *keraunos_core);
+                const uint64_t routes_addr =
+                    hal_.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BANK_TO_NOC_SCRATCH) +
+                    hal_.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+                const uint64_t channels_addr = hal_.get_dev_addr(core_type, HalL1MemAddrType::KERAUNOS_NOC_CHANNELS);
+                TT_FATAL(
+                    channels_addr >= routes_addr + sizeof(routes),
+                    "KeraunosNocChannels at {:#x} is not behind KeraunosSpaRoutes at {:#x}",
+                    channels_addr,
+                    routes_addr);
+                std::vector<uint8_t> records(channels_addr - routes_addr + sizeof(channels), 0);
+                std::memcpy(records.data(), &routes, sizeof(routes));
+                std::memcpy(records.data() + (channels_addr - routes_addr), &channels, sizeof(channels));
                 cluster_.write_core(
-                    &channels,
-                    sizeof(channels),
-                    tt_cxy_pair(device_id, virtual_core),
-                    hal_.get_dev_addr(core_type, HalL1MemAddrType::KERAUNOS_NOC_CHANNELS));
+                    records.data(), records.size(), tt_cxy_pair(device_id, virtual_core), routes_addr);
             }
             if (quasar_ethernet) {
                 // All eight harts start together, and the completion word is 0. The L1 wipe leaves it at 0, so seed

@@ -1100,18 +1100,12 @@ uint32_t Cluster::get_keraunos_eth_cce(ChipId chip, tt::tt_metal::CoreCoord virt
         return 0;
     }
     const auto& soc = this->get_soc_desc(chip);
-    const auto& keraunos = soc.get_arch_descriptor().get_keraunos();
-    if (keraunos.cores.empty()) {
+    if (soc.get_arch_descriptor().get_keraunos().cores.empty()) {
         return 0;
     }
-    const tt_xy_pair noc0 = soc.translate_coord_to(
-        tt_xy_pair(virtual_core.x, virtual_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
-    for (const auto& core : keraunos.cores) {
-        if (core.coord == noc0) {
-            return core.eth_cce;
-        }
-    }
-    return 0;
+    const auto* core = soc.find_keraunos_core(soc.translate_coord_to(
+        tt_xy_pair(virtual_core.x, virtual_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0));
+    return core != nullptr ? core->eth_cce : 0;
 }
 
 tt::tt_metal::CoreCoord Cluster::get_logical_ethernet_core_from_virtual(ChipId chip, tt::tt_metal::CoreCoord core) const {
