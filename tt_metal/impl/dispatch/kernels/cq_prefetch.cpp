@@ -2042,14 +2042,17 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
     uint32_t remaining_stride = exec_buf_state.length;
     uint32_t remaining = exec_buf_state.length - sizeof(CQPrefetchCmd);
     while (length > remaining) {
-        // wrap cmddat
-        write_downstream<RelayInlineState::downstream_cb_base_addr, RelayInlineState::downstream_write_cmd_buf>(
-            data_ptr,
-            local_downstream_data_ptr,
-            remaining,
-            RelayInlineState::downstream_cb_end_addr,
-            RelayInlineState::downstream_noc_encoding);
-        length -= remaining;
+        // wrap cmddat. When the header ends exactly at the end of the fetched exec_buf data the whole payload is in
+        // the next fetch, and this part is empty: skip it rather than issue a zero-length NOC write.
+        if (remaining > 0) {
+            write_downstream<RelayInlineState::downstream_cb_base_addr, RelayInlineState::downstream_write_cmd_buf>(
+                data_ptr,
+                local_downstream_data_ptr,
+                remaining,
+                RelayInlineState::downstream_cb_end_addr,
+                RelayInlineState::downstream_noc_encoding);
+            length -= remaining;
+        }
         stride -= remaining_stride;
         exec_buf_state.length = 0;
         cmd_ptr += remaining_stride;
@@ -2095,20 +2098,22 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
     uint32_t remaining_stride = exec_buf_state.length;
     uint32_t remaining = exec_buf_state.length - sizeof(CQPrefetchCmd);
     while (length > remaining) {
-        // wrap cmddat
+        // wrap cmddat; an empty part (header ending at the end of the fetched exec_buf data) issues no write
+        if (remaining > 0) {
 #if defined(FABRIC_RELAY)
-        noc_async_write(
-            static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
+            noc_async_write(
+                static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
 #else
-        cq_noc_async_write_with_state_any_len<
-            true,
-            true,
-            CQNocWait::CQ_NOC_WAIT,
-            DispatchRelayInlineState::downstream_write_cmd_buf>(
-            static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
+            cq_noc_async_write_with_state_any_len<
+                true,
+                true,
+                CQNocWait::CQ_NOC_WAIT,
+                DispatchRelayInlineState::downstream_write_cmd_buf>(
+                static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
 #endif
-        dispatch_data_ptr += remaining;
-        length -= remaining;
+            dispatch_data_ptr += remaining;
+            length -= remaining;
+        }
         stride -= remaining_stride;
         exec_buf_state.length = 0;
         cmd_ptr += remaining_stride;
