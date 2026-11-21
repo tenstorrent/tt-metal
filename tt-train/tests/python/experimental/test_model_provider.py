@@ -11,9 +11,9 @@ from types import SimpleNamespace
 import pytest
 
 import ttml.experimental.models.provider as model_provider
+from ttml.experimental.errors import UnsupportedTrainingConfig
 from ttml.experimental.models.provider import (
     LlamaProvider,
-    UnsupportedTrainingConfig,
     get_provider,
     providers,
     register_provider,

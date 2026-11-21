@@ -16,14 +16,14 @@ if TYPE_CHECKING:
 class CustomProvider(DatasetProvider):
     """A local JSON / JSONL / CSV / Parquet file per split, rendered with a template (``dataset.custom_options``)."""
 
-    def __init__(self, config: SFTTrainerConfig, split: str, tokenizer: Any) -> None:
+    def __init__(self, config: SFTTrainerConfig, split: str, tokenizer: Any, source: Any = None) -> None:
         custom = config.dataset.custom_options
         # `datasets` reads JSON Lines with its "json" builder.
         self.file_type = "json" if custom.file_type == "jsonl" else custom.file_type
         self.data_path = custom.train_dataset_path if split == "train" else custom.val_dataset_path
         self.template = custom.template
         self.column_mapping = custom.column_mapping
-        super().__init__(config, split, tokenizer)
+        super().__init__(config, split, tokenizer, source)
 
     @classmethod
     def has_split(cls, config: SFTTrainerConfig, split: str) -> bool:

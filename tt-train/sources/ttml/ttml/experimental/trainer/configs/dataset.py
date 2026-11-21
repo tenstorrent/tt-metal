@@ -35,7 +35,7 @@ class DatasetConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_custom_options(self) -> "DatasetConfig":
-        # Ids are matched case-insensitively (see ``ttml.experimental.datasets.provider.sft.get_provider``).
+        # Ids are matched case-insensitively (see ``ttml.experimental.datasets.provider.sft.get_providers``).
         if self.id.lower() == "custom" and self.custom_options is None:
             raise ValueError("custom_options is required when id is 'custom'")
         return self

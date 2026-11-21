@@ -26,8 +26,8 @@ from typing import TYPE_CHECKING, Any, Iterator, Optional, Sequence
 
 import numpy as np
 
+from ...errors import UnsupportedTrainingConfig
 from ..utils.checkpoint import TT_CHECKPOINT, AdapterState, PathLike, read_adapter, write_adapter
-from ..utils.errors import UnsupportedTrainingConfig
 from ..utils.hub import load_hf_config, model_dir
 from ..utils.peft import check_peft_keys, lora_to_peft, peft_adapter_config, peft_to_lora, with_peft_prefix
 from .base import ModelProvider

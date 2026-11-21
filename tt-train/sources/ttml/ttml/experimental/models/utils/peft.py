@@ -24,7 +24,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Protocol, Sequenc
 
 import numpy as np
 
-from .errors import UnsupportedTrainingConfig
+from ...errors import UnsupportedTrainingConfig
 
 PEFT_PREFIX = "base_model.model."
 

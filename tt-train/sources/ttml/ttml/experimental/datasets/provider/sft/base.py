@@ -23,7 +23,7 @@ class DatasetProvider:
     The trainer takes an epoch's batches one at a time, or by iterating the provider; ``len`` is the batches of
     an epoch::
 
-        train = get_provider(config, "train", tokenizer)
+        train = get_providers(config, tokenizer, ["train"])["train"]
         while (batch := train.next_batch()) is not None:
             ...
 
@@ -47,10 +47,19 @@ class DatasetProvider:
     # has the requested split natively.
     train_val_split_ratio: Optional[float] = None
 
-    def __init__(self, config: SFTTrainerConfig, split: str, tokenizer: Any) -> None:
+    def __init__(self, config: SFTTrainerConfig, split: str, tokenizer: Any, source: Any = None) -> None:
+        """``source`` is the ``source`` of another split's provider, of the same config and tokenizer: with
+        ``train_val_split_ratio``, this split is carved out of it instead of loading and tokenizing the dataset again.
+        """
         self.config = config
         self.split = split
         self.tokenizer = tokenizer
+        # With `train_val_split_ratio`, the tokenized and shuffled dataset the splits are carved out of; else None.
+        self.source: Any = None
+        if self.train_val_split_ratio is not None:
+            if source is None:
+                source = self._tokenize_and_filter(self._load_raw_dataset()).shuffle(seed=config.seed)
+            self.source = source
         # A `datasets.Dataset` of the split's tokenized examples.
         self.examples: Any = self._prepare_examples()
         collate = partial(collate_causal_lm, max_length=config.max_length, pad_token_id=tokenizer.pad_token_id)
@@ -141,10 +150,9 @@ class DatasetProvider:
         if self.train_val_split_ratio is None:
             return self._tokenize_and_filter(self._load_raw_dataset())
 
-        full = self._tokenize_and_filter(self._load_raw_dataset()).shuffle(seed=self.config.seed)
-        train_end = int(self.train_val_split_ratio * len(full))
+        train_end = int(self.train_val_split_ratio * len(self.source))
         if self.split == "train":
-            return full.select(range(0, train_end))
+            return self.source.select(range(0, train_end))
         if self.split == "validation":
-            return full.select(range(train_end, len(full)))
+            return self.source.select(range(train_end, len(self.source)))
         raise ValueError(f"{type(self).__name__} has the splits 'train' and 'validation', not {self.split!r}")

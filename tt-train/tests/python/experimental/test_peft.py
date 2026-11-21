@@ -11,7 +11,7 @@ are permuted for RoPE as on a real model.
 import numpy as np
 import pytest
 
-from ttml.experimental.models.utils.errors import UnsupportedTrainingConfig
+from ttml.experimental.errors import UnsupportedTrainingConfig
 from ttml.experimental.models.utils.peft import (
     PEFT_PREFIX,
     check_peft_keys,

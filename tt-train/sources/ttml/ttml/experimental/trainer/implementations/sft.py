@@ -12,16 +12,16 @@ import ttnn
 import ttml
 from ttml.common.utils import no_grad, validate_clip_grad_norm
 from ttml.experimental.datasets.provider.sft import DatasetProvider, load_tokenizer
-from ttml.experimental.datasets.provider.sft import get_provider as get_dataset_provider
+from ttml.experimental.datasets.provider.sft import get_providers as get_dataset_providers
 from ttml.experimental.datasets.provider.sft import providers as dataset_providers
-from ttml.experimental.models.provider import UnsupportedTrainingConfig
+from ttml.experimental.errors import UnsupportedTrainingConfig
 from ttml.experimental.models.provider import get_provider as get_model_provider
 from ..configs import SFTTrainerConfig
 from ..managers.device import DeviceManager
 from ..utils import CombinedOptimizer, assign_parameters, staged_directory, write_trainer_state
 from .base import Trainer
 
-# Device layout and dtype of each key `collate_causal_lm` produces.
+# Device layout and dtype of each key of a dataset provider's batches.
 BATCH_SPEC = {
     "input_ids": (ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32),
     "labels": (ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32),
@@ -59,15 +59,17 @@ class SFTTrainer(Trainer):
     def _load_dataloaders(self) -> tuple[DatasetProvider, Optional[DatasetProvider]]:
         """The dataset providers of the train and validation splits; the loop gets its batches from them."""
         tokenizer = load_tokenizer(self.provider.model_source())
-        train = get_dataset_provider(self.config, "train", tokenizer)
+        splits = ["train"] if self.config.metrics.validation.frequency == 0 else ["train", "validation"]
+        built = get_dataset_providers(self.config, tokenizer, splits)
+        return built["train"], built.get("validation")
+
+    def _check_train_data(self) -> None:
+        train = self.train_dataloader
         if len(train) == 0:
             raise ValueError(
                 f"dataset.id: the train split has {train.num_examples} examples of at most max_length="
                 f"{self.config.max_length} tokens, fewer than one batch of {self.config.batch_size}"
             )
-        if self.config.metrics.validation.frequency == 0:
-            return train, None
-        return train, get_dataset_provider(self.config, "validation", tokenizer)
 
     def _create_device_manager(self) -> DeviceManager:
         return DeviceManager(self.config.device)

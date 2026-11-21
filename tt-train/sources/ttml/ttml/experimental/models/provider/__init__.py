@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..utils.errors import UnsupportedTrainingConfig
+from ...errors import UnsupportedTrainingConfig
 from .base import ModelProvider
 from .llama import LlamaProvider
 
@@ -60,7 +60,6 @@ def get_provider(config: TrainerConfig) -> ModelProvider:
 __all__ = [
     "LlamaProvider",
     "ModelProvider",
-    "UnsupportedTrainingConfig",
     "get_provider",
     "providers",
     "register_provider",
