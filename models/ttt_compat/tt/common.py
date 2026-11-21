@@ -334,6 +334,12 @@ def preprocess_inputs_prefill(
         assert (
             max_prompt_len <= m.max_seq_len
         ), f"Max prompt length {max_prompt_len} exceeds model max seq len {m.max_seq_len}"
+        # Clipping above only runs when even the shortest prompt is too long, so a mixed batch can still
+        # leave its longest prompt without room for the generated tokens.
+        assert max_prompt_len + max_generated_tokens <= m.max_seq_len, (
+            f"Max prompt length {max_prompt_len} + max_generated_tokens {max_generated_tokens} exceeds "
+            f"model max seq len {m.max_seq_len}"
+        )
     assert min_prompt_len > 0, "Minimum prompt length must be greater than 0"
     assert min_prompt_len <= max_prompt_len, f"Minimum prompt length {min_prompt_len} exceeds max len {max_prompt_len}"
 
