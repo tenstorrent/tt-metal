@@ -28,7 +28,7 @@ import numpy as np
 
 from ..utils.checkpoint import TT_CHECKPOINT, AdapterState, PathLike, read_adapter, write_adapter
 from ..utils.errors import UnsupportedTrainingConfig
-from ..utils.hub import load_hf_config, model_dir, same_model
+from ..utils.hub import load_hf_config, model_dir
 from ..utils.peft import check_peft_keys, lora_to_peft, peft_adapter_config, peft_to_lora, with_peft_prefix
 from .base import ModelProvider
 
@@ -111,7 +111,7 @@ class LlamaProvider(ModelProvider):
     def __init__(self, config: SFTTrainerConfig) -> None:
         super().__init__(config)
         # The model's HF config.json.
-        self.hf_config = load_hf_config(config.model.name)
+        self.hf_config = load_hf_config(self.model_source())
 
     def check(self) -> None:
         config = self.config
@@ -154,7 +154,7 @@ class LlamaProvider(ModelProvider):
 
         model = Llama(self._llama_config())
         # Before wrapping: the adapters LoraModel adds have no HF tensors, and keep their initial values.
-        load_from_safetensors(model, model_dir(self.config.model.name))
+        load_from_safetensors(model, model_dir(self.model_source()))
         lora = self.config.model.lora
         if lora is None:
             return model
@@ -231,7 +231,7 @@ class LlamaProvider(ModelProvider):
         else:
             from ttml.models.llama import export_hf_model
 
-            export_hf_model(model, directory, hf_source_dir=model_dir(self.config.model.name, local_only=True))
+            export_hf_model(model, directory, hf_source_dir=model_dir(self.model_source(), local_only=True))
 
     # ------------------------------------------------------------------ tt checkpoints
 
@@ -278,8 +278,9 @@ class LlamaProvider(ModelProvider):
         checkpointing.load_checkpoint(str(file), model_params=self._tt_parameters(model))
 
     def _check_base_model(self, directory: Path, base: Optional[str]) -> None:
+        """A checkpoint that records no base model is taken as this model's."""
         name = self.config.model.name
-        if not same_model(base, name):
+        if base and base != name:
             _fail("checkpoint", f"{directory} is for {base!r}, this model is {name!r}")
 
     # ------------------------------------------------------------------ PEFT adapters

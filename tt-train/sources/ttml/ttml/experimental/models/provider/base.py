@@ -17,13 +17,19 @@ class ModelProvider(ABC):
     def __init__(self, config: TrainerConfig) -> None:
         self.config = config
 
+    def model_source(self) -> str:
+        """Where the pretrained model's files are: an HF hub id, or a local directory laid out as ``save_pretrained``
+        writes one. ``config.model.name``, the hub id, by default; a provider whose model isn't on the hub returns
+        where it is."""
+        return self.config.model.name
+
     @abstractmethod
     def check(self) -> None:
         """Raise ``UnsupportedTrainingConfig`` if the model can't be built and trained as ``config`` describes."""
 
     @abstractmethod
     def build(self) -> Any:
-        """Build the model and its optimizations, with the pretrained weights of ``config.model.name``."""
+        """Build the model and its optimizations, with the pretrained weights at ``model_source()``."""
 
     @abstractmethod
     def load_weights(self, model: Any, directory: PathLike) -> None:

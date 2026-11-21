@@ -58,7 +58,7 @@ class SFTTrainer(Trainer):
 
     def _load_dataloaders(self) -> tuple[DatasetProvider, Optional[DatasetProvider]]:
         """The dataset providers of the train and validation splits; the loop gets its batches from them."""
-        tokenizer = load_tokenizer(self.config.model.name)
+        tokenizer = load_tokenizer(self.provider.model_source())
         train = get_dataset_provider(self.config, "train", tokenizer)
         if len(train) == 0:
             raise ValueError(

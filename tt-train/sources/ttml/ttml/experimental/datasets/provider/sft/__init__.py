@@ -39,7 +39,8 @@ def get_provider(config: SFTTrainerConfig, split: str, tokenizer: Any) -> Option
 
 
 def load_tokenizer(model_name: str) -> Any:
-    """The model's HF tokenizer, padding on the right; EOS pads when the model has no pad token."""
+    """The HF tokenizer of the model at ``model_name``, a hub id or a local directory, padding on the right; EOS pads
+    when the model has no pad token."""
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="right", use_fast=True)

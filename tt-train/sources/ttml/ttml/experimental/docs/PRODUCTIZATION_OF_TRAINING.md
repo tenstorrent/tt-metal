@@ -64,8 +64,9 @@ What a run trains today is the components registered so far. A config joins the 
 dataset described below.
 
 **Models.** The models `providers()` in `ttml/experimental/models/provider/__init__.py` lists, by HF hub id: Llama 3.2 1B and Llama
-3.1 8B, base and Instruct, in bf16. `model.name` is the hub id, or a local copy of the model in a directory
-named as the model, for example `/models/Llama-3.2-1B-Instruct`. Checkpoints the ttml Llama can't represent are
+3.1 8B, base and Instruct, in bf16. `model.name` is the hub id, and only the hub id: where the model's files are
+loaded from is its provider's. `LlamaProvider` loads them from the HF hub, through the HF cache (`HF_HOME`,
+`HF_HUB_OFFLINE`). Checkpoints the ttml Llama can't represent are
 rejected before the device opens: quantized weights, attention or MLP biases, an activation other than SiLU, and RoPE
 scaling other than `llama3` or the default. Other models plug in as model providers (see
 [Adding a model](#adding-a-model)).
@@ -128,7 +129,7 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 
 | Field | Default | Description |
 |---|---|---|
-| `model` | | `name`, an HF hub id or a local HF model directory, is required. `lora`, when set, is the LoRA adapters to train: `r`, `alpha` (the scaling is `alpha / r`), `target_modules`, `dropout` (0.0), `task_type` (`CAUSAL_LM`). Unset, every weight is trained. `gradient_checkpointing` (`false`) builds the model to recompute activations in the backward pass, which saves memory. |
+| `model` | | `name`, the HF hub id of a model with a registered provider, is required. `lora`, when set, is the LoRA adapters to train: `r`, `alpha` (the scaling is `alpha / r`), `target_modules`, `dropout` (0.0), `task_type` (`CAUSAL_LM`). Unset, every weight is trained. `gradient_checkpointing` (`false`) builds the model to recompute activations in the backward pass, which saves memory. |
 | `dataset` | | `id`, one of `sst2`, `alpaca` or `custom`, is required. `custom_options` is required when `id` is `custom`: `train_dataset_path`, `val_dataset_path` (no validation if unset), `file_type` (`json`; `jsonl` works too), `template` (`alpaca`), `column_mapping`. |
 | `optimizer` | | One optimizer, or a list (see [Several optimizers](#several-optimizers)). Each takes `lr` (constant), `modules`, and `type`, which picks the optimizer and the other fields it takes. `adamw` (the default, and the only one supported so far) takes `weight_decay` (0.0, decoupled), `beta1`, `beta2`, `epsilon`, `amsgrad` and `stochastic_rounding`; unset, those keep ttml's defaults. |
 | `device` | | `mesh` (`[1, 1]`), the size of each dimension of the device mesh the run opens, such as `[rows, columns]`. A single chip, `[1, 1]`, is the only mesh supported so far. |
@@ -368,17 +369,38 @@ its four methods:
 
 - `check()`: raise `UnsupportedTrainingConfig` for anything the model can't be built or trained with, including a
   `device.mesh` it can't be built on. It must not download weights or open the device.
-- `build()`: the model, with the pretrained weights of `model.name`.
+- `build()`: the model, with the pretrained weights at `model_source()`.
 - `load_weights(model, directory)`: the weights `export_weights` wrote to `directory`, into a model `build` made.
 - `export_weights(model, directory)`: reads the weights from the device and writes them to `directory`.
 
+`model_source()` is where the pretrained model's files are: an HF hub id, or a local directory laid out as
+`save_pretrained` writes one. By default it is `model.name`, so the files come from the hub; a provider whose model
+isn't on the hub overrides it. The trainer loads the tokenizer from it too.
+
 What a checkpoint holds and how it is laid out is the provider's: `LlamaProvider` writes the layouts in the table under
 [Checkpoints](#checkpoints). Anything else a provider needs it reads itself: `LlamaProvider` reads the model's HF
-`config.json` from `model.name`. `ttml/experimental/models/utils/` has shared helpers for HF hub models and PEFT adapters.
+`config.json` from `model_source()`. `ttml/experimental/models/utils/` has shared helpers for HF hub models and PEFT
+adapters.
 
-Write it in `ttml/experimental/models/provider/<family>.py` and add each model it supports to `providers()` in
-`ttml/experimental/models/provider/__init__.py`, keyed by its HF hub id; a model of a family that already has a provider only needs
-the entry. `LlamaProvider` in `ttml/experimental/models/provider/llama.py` is the reference.
+Write it in `ttml/experimental/models/provider/<family>.py` and register it in
+`ttml/experimental/models/provider/__init__.py` for the hub id of each model it supports; a model of a family that
+already has a provider only needs the registration. `LlamaProvider` in `ttml/experimental/models/provider/llama.py` is
+the reference.
+
+A provider outside ttml, for a model ttml doesn't ship, registers itself before `setup`. `model.name` is still a hub
+id, which names the model whether or not it is on the hub:
+
+```python
+from ttml.experimental.models.provider import LlamaProvider, register_provider
+
+
+class AcmeProvider(LlamaProvider):
+    def model_source(self) -> str:
+        return "/models/acme-7b"
+
+
+register_provider("acme/acme-7b", AcmeProvider)
+```
 
 ---
 

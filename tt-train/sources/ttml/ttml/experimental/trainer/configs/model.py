@@ -14,7 +14,7 @@ class ModelConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # An HF hub id or a local HF model directory.
+    # The HF hub id of a model with a registered provider (``ttml.experimental.models.provider``).
     name: str = Field(min_length=1)
     # The LoRA adapters to train. Unset trains every weight.
     lora: Optional[LoraConfig] = None

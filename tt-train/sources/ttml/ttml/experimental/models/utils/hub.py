@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -35,15 +34,3 @@ def model_dir(model_name: str, local_only: bool = False) -> str:
     from huggingface_hub import snapshot_download
 
     return snapshot_download(model_name, allow_patterns=_MODEL_FILES, local_files_only=local_only)
-
-
-def same_model(base: Any, model_name: str) -> bool:
-    """Whether a checkpoint's base model ``base`` names ``model_name``: a hub id and a local copy of it match, and so
-    does a checkpoint that records no base."""
-    if not base:
-        return True
-
-    def tail(name: str) -> str:
-        return os.path.basename(os.path.normpath(name))
-
-    return base == model_name or tail(base) == tail(model_name)
