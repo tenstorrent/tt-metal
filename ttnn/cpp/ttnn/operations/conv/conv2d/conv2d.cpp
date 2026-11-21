@@ -185,6 +185,11 @@ Result conv2d_L1(
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
 
+    // A conv folded from kernel == stride into 1x1 stride 1 consumes the same pointwise weight layout
+    // as the auto-sharded matmul path, even when an explicit shard_layout skips auto sharding.
+    const bool folded_pointwise_conv = is_folded_pointwise_conv(
+        conv_config.enable_kernel_stride_folding.value(), kernel_size, stride, padding_n4, dilation);
+
     // Configure weight and bias preparation parameters
     Conv2dWeightsBiasPrepConfig params(
         input_channels_alignment,
@@ -197,7 +202,7 @@ Result conv2d_L1(
         opt_conv_op_block_config.act_block_h_ntiles,
         input_height,
         input_width,
-        mm_conv && auto_shard,
+        (mm_conv && auto_shard) || folded_pointwise_conv,
         out_channels,
         bias_tensor.has_value(),
         conv_config.enable_kernel_stride_folding.value(),

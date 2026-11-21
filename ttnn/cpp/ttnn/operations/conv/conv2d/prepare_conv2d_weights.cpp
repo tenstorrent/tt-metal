@@ -1525,6 +1525,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         input_dtype);
 
     const bool auto_shard = !input_memory_config.is_sharded() && !conv_config.shard_layout.has_value();
+    const bool folded_pointwise_conv = is_folded_pointwise_conv(
+        conv_config.enable_kernel_stride_folding.value(), kernel_size, stride, padding_n4, dilation);
     return Conv2dWeightsBiasPrepConfig(
         input_channels_alignment,
         conv_config.weights_dtype,
@@ -1536,7 +1538,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         opt_conv_op_block_config.act_block_h_ntiles,
         input_height,
         input_width,
-        mm_conv && (auto_shard || is_dram_conv),
+        (mm_conv && (auto_shard || is_dram_conv)) || folded_pointwise_conv,
         out_channels,
         has_bias,
         conv_config.enable_kernel_stride_folding.value(),
