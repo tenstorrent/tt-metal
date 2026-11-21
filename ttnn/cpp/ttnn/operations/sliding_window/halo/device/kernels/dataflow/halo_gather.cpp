@@ -288,12 +288,12 @@ void kernel_main() {
     experimental::CB pad_cb(pad_cb_id);
 
 #ifdef CONFIG_TENSOR_IN_DRAM
-    constexpr uint32_t padding_config_dram_addr = get_compile_time_arg_val(18);
-    constexpr uint32_t padding_config_page_size = get_compile_time_arg_val(19);
-    constexpr uint32_t gather_config_dram_addr = get_compile_time_arg_val(20);
-    constexpr uint32_t gather_config_page_size = get_compile_time_arg_val(21);
+    const uint32_t padding_config_dram_addr = get_common_arg_val<uint32_t>(0);
+    constexpr uint32_t padding_config_page_size = get_compile_time_arg_val(18);
+    const uint32_t gather_config_dram_addr = get_common_arg_val<uint32_t>(1);
+    constexpr uint32_t gather_config_page_size = get_compile_time_arg_val(19);
 
-    constexpr auto padding_config_tensor_args = TensorAccessorArgs<22>();
+    constexpr auto padding_config_tensor_args = TensorAccessorArgs<20>();
     constexpr auto gather_config_tensor_args =
         TensorAccessorArgs<padding_config_tensor_args.next_compile_time_args_offset()>();
 
