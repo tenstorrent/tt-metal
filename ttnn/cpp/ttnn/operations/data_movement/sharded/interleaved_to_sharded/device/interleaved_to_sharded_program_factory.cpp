@@ -17,6 +17,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
+#include "ttnn/operations/core/program_cache_l1.hpp"
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -27,6 +29,29 @@ namespace ttnn::prim {
 // https://github.com/tenstorrent/tt-metal/issues/32752
 constexpr uint32_t num_slices = 1;
 constexpr uint32_t slice_index = 0;
+
+constexpr uint32_t kBankSegmentRows = 16;
+constexpr uint32_t kBankSegmentMaxPageBytes = 64;
+
+bool InterleavedToShardedProgramFactory::uses_bank_segments(const Tensor& input, const TensorSpec& output_spec) {
+    const auto& out_mem = output_spec.memory_config();
+    if (input.device()->arch() != tt::ARCH::WORMHOLE_B0 || input.layout() == Layout::TILE ||
+        input.buffer()->buffer_type() != tt::tt_metal::BufferType::DRAM || out_mem.is_dram() ||
+        out_mem.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED || !out_mem.shard_spec().has_value() ||
+        input.dtype() != output_spec.data_type()) {
+        return false;
+    }
+    const uint32_t row_bytes = static_cast<uint32_t>(out_mem.shard_spec()->shape[1] * input.element_size());
+    const uint32_t input_row_bytes = static_cast<uint32_t>(input.logical_shape()[-1] * input.element_size());
+    const uint32_t padded_row_bytes = tt::align(row_bytes, hal::get_l1_alignment());
+    const uint32_t page_stride = static_cast<uint32_t>(input.buffer()->aligned_page_size());
+    const uint32_t num_dram_banks = input.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+    const uint64_t scratch_bytes = 2ull * 2 * kBankSegmentRows * num_dram_banks * page_stride;
+    return padded_row_bytes % hal::get_dram_alignment() != 0 && row_bytes >= input_row_bytes &&
+           row_bytes % sizeof(uint32_t) == 0 && padded_row_bytes % sizeof(uint32_t) == 0 && row_bytes <= page_stride &&
+           page_stride <= kBankSegmentMaxPageBytes && page_stride % sizeof(uint32_t) == 0 &&
+           scratch_bytes <= ttnn::operations::core::usable_program_l1_capacity(input.device());
+}
 
 ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::create_program_artifacts(
     const InterleavedToShardedParams& /*operation_attributes*/,
@@ -159,6 +184,11 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         });
     }
 
+    const uint32_t src_page_stride = static_cast<uint32_t>(src_buffer->aligned_page_size());
+    const uint32_t num_dram_banks = input.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+    const uint32_t bank_segment_scratch_bytes = 2 * kBankSegmentRows * num_dram_banks * src_page_stride;
+    const bool use_bank_segments = InterleavedToShardedProgramFactory::uses_bank_segments(input, output.tensor_spec());
+
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t l1_alignment = hal::get_l1_alignment();
     uint32_t num_trids = 4;
@@ -286,6 +316,41 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     Group<KernelSpec> kernels;
     kernels.push_back(std::move(reader));
     kernels.push_back(std::move(writer));
+
+    if (use_bank_segments) {
+        const ScratchpadSpecName SEGMENT_SCRATCH[2] = {
+            ScratchpadSpecName{"segment_scratch_reader"}, ScratchpadSpecName{"segment_scratch_writer"}};
+        scratchpads.clear();
+        for (size_t ki = 0; ki < 2; ++ki) {
+            const bool is_reader = ki == 0;
+            scratchpads.push_back(
+                ScratchpadSpec{.unique_id = SEGMENT_SCRATCH[ki], .size_per_node = bank_segment_scratch_bytes});
+            KernelSpec& ks = kernels[ki];
+            ks.source =
+                "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+                "reader_unary_stick_layout_sharded_bank_segments_metal2.cpp";
+            ks.dfb_bindings = {DFBBinding{
+                .dfb_spec_name = OUT_DFB,
+                .accessor_name = "in",
+                .endpoint_type = is_reader ? DFBEndpointType::PRODUCER : DFBEndpointType::CONSUMER,
+            }};
+            ks.tensor_bindings = {
+                TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"},
+                TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}};
+            ks.scratchpad_bindings = {ScratchpadBinding{
+                .scratchpad_spec_name = SEGMENT_SCRATCH[ki],
+                .accessor_name = "scratch",
+            }};
+            ks.compile_time_args = {
+                {"segment_rows", kBankSegmentRows},
+                {"page_stride", src_page_stride},
+                {"num_banks", num_dram_banks},
+                {"copy_words", input_unit_size / static_cast<uint32_t>(sizeof(uint32_t))},
+                {"producer", is_reader ? 1u : 0u}};
+            ks.runtime_arg_schema.runtime_arg_names = {
+                "block_height", "row_begin", "row_end", "dst_stride", "start_id"};
+        }
+    }
 
     Group<KernelSpecName> work_unit_kernels{READER, WRITER};
 
@@ -508,6 +573,33 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         if (convert_df) {
             AddRuntimeArgsForNode(
                 compute_run_args.runtime_arg_values, core, {{"per_core_tile_cnt", curr_num_units_per_shard}});
+        }
+    }
+
+    if (use_bank_segments) {
+        reader_run_args.runtime_arg_values.clear();
+        writer_run_args.runtime_arg_values.clear();
+        uint32_t start_id = 0;
+        for (const auto& core : cores) {
+            const bool last = core.x == end_core.x && core.y == end_core.y;
+            const uint32_t h = last ? num_units_per_shard_height_last : num_units_per_shard_height;
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
+                core,
+                {{"block_height", h},
+                 {"row_begin", 0u},
+                 {"row_end", h / 2},
+                 {"dst_stride", padded_offset_bytes},
+                 {"start_id", start_id}});
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core,
+                {{"block_height", h},
+                 {"row_begin", h / 2},
+                 {"row_end", h},
+                 {"dst_stride", padded_offset_bytes},
+                 {"start_id", start_id}});
+            start_id += num_units_per_shard_height;
         }
     }
 
