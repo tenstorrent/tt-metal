@@ -11,6 +11,7 @@
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-umd/soc_arch_descriptor.hpp>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -33,6 +34,9 @@ struct DPrintBufferInfo {
 
 class DPrintServer {
 public:
+    // With firmware tagging on (TT_METAL_DPRINT_TAG_FIRMWARE), each line that firmware printed starts with this tag.
+    static constexpr std::string_view kFirmwareLineTag = "[FW] ";
+
     // Constructor/destructor, reads dprint options from RTOptions.
     DPrintServer(
         MetalContext* context, MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config);

@@ -23,6 +23,7 @@
 #include "dev_mem_map.h"
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
+#include "api/debug/dprint.h"
 
 // Checkpoints work independently of DPRINT. When a print backend is available,
 // the dump phase prints CB metadata and optionally L1 data / dest registers.
@@ -30,7 +31,6 @@
 // (all RISCs synchronize) but skips the dump.
 #if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
 #define CHECKPOINT_PRINT_ENABLED 1
-#include "api/debug/dprint.h"
 #include "internal/circular_buffer_interface.h"
 #if defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 1)
 #include "api/debug/dprint_tensix.h"
@@ -89,8 +89,10 @@ inline void debug_checkpoint_init(uint32_t enables) {
 // Each RISC writes its own arrival byte (no shared read-modify-write).
 // The orchestrator (lowest active RISC) polls all arrival bytes, then
 // increments the proceed epoch. Subordinates spin on the proceed epoch.
+// With printing on, one copy per kernel, not one in each checkpoint; with
+// printing off the barrier is all a checkpoint does, and stays inline.
 // ---------------------------------------------------------------------------
-inline void debug_checkpoint_barrier() {
+DEVICE_PRINT_FORCE_NOINLINE inline void debug_checkpoint_barrier() {
     volatile debug_checkpoint_state_t tt_l1_ptr* ckpt = get_checkpoint_state();
     uint32_t my_idx = internal_::get_hw_thread_idx();
     uint32_t mask = ckpt->participant_mask;
@@ -126,12 +128,12 @@ inline void debug_checkpoint_barrier() {
 }
 
 // ---------------------------------------------------------------------------
-// CB dump implementation: prints CB state and optionally dest registers.
-// DPRINT headers are printed by the calling macro via C string literal
-// concatenation (since DPRINT format strings must be compile-time literals).
+// CB dump implementation: prints the checkpoint's header, CB state and
+// optionally dest registers. The checkpoint's name is a compile-time string
+// (CTSTR). One copy per kernel and template arguments while printing is on.
 // ---------------------------------------------------------------------------
 template <uint8_t num_cbs = 0, uint16_t words_per_cb = 0, bool dump_dest = false>
-inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
+DEVICE_PRINT_FORCE_NOINLINE inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] ct_string name) {
 #if !defined(CHECKPOINT_PRINT_ENABLED)
     return;
 #else
@@ -139,6 +141,7 @@ inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
 #if defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 1)
     // Math thread: optionally dump dest registers (only Math can access them)
     if constexpr (dump_dest) {
+        DPRINT("=== CKPT {} dest regs ===\n", name);
         uint32_t data_format_reg_field_value = READ_HW_CFG_0_REG_FIELD(ALU_FORMAT_SPEC_REG2_Dstacc);
         if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
             data_format_reg_field_value = (uint32_t)DataFormat::Float32;
@@ -165,6 +168,7 @@ inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
 #else
     // BRISC, NCRISC, TRISC0 (Unpack), TRISC2 (Pack) print CB metadata.
     uint32_t risc_idx = internal_::get_hw_thread_idx();
+    DPRINT("=== CKPT {} RISC{} CBs ===\n", name, risc_idx);
 
     constexpr uint32_t max_cb = (num_cbs == 0) ? NUM_CIRCULAR_BUFFERS : num_cbs;
     for (uint32_t cb = 0; cb < max_cb; cb++) {
@@ -197,29 +201,6 @@ inline void debug_checkpoint_dump_cbs_impl([[maybe_unused]] const char* name) {
 #endif  // COMPILE_FOR_TRISC == 1 / else
 #endif  // CHECKPOINT_PRINT_ENABLED
 }
-
-// ---------------------------------------------------------------------------
-// DPRINT header macros — use C string literal concatenation so the
-// checkpoint name is embedded into the format string at compile time.
-// (DPRINT format strings must be compile-time literals.)
-// ---------------------------------------------------------------------------
-#if defined(CHECKPOINT_PRINT_ENABLED)
-#if defined(COMPILE_FOR_TRISC) && (COMPILE_FOR_TRISC == 1)
-#define _DEBUG_CKPT_DPRINT_HEADER(name, dump_dest)       \
-    do {                                                 \
-        if (dump_dest) {                                 \
-            DPRINT("=== CKPT " name " dest regs ===\n"); \
-        }                                                \
-    } while (0)
-#else
-#define _DEBUG_CKPT_DPRINT_HEADER(name, dump_dest) \
-    DPRINT("=== CKPT " name " RISC{} CBs ===\n", internal_::get_hw_thread_idx())
-#endif
-#else
-#define _DEBUG_CKPT_DPRINT_HEADER(name, dump_dest) \
-    do {                                           \
-    } while (0)
-#endif
 
 // ---------------------------------------------------------------------------
 // Cross-core barrier: synchronize BRISC across all tensix cores via a NOC
@@ -313,35 +294,31 @@ inline void debug_checkpoint_global_post_dump(
 }
 
 // ---------------------------------------------------------------------------
-// User-facing macros.
-// These expand the DPRINT header inline (for literal concatenation)
-// then call the impl function for the body data.
+// User-facing macros: barrier, dump (header with the checkpoint's name, then
+// the body data), barrier.
 // ---------------------------------------------------------------------------
-#define DEBUG_CHECKPOINT(name)                  \
-    do {                                        \
-        WAYPOINT("CKW");                        \
-        debug_checkpoint_barrier();             \
-        _DEBUG_CKPT_DPRINT_HEADER(name, false); \
-        debug_checkpoint_dump_cbs_impl<>(name); \
-        debug_checkpoint_barrier();             \
-        WAYPOINT("CKD");                        \
+#define DEBUG_CHECKPOINT(name)                         \
+    do {                                               \
+        WAYPOINT("CKW");                               \
+        debug_checkpoint_barrier();                    \
+        debug_checkpoint_dump_cbs_impl<>(CTSTR(name)); \
+        debug_checkpoint_barrier();                    \
+        WAYPOINT("CKD");                               \
     } while (0)
 
-#define DEBUG_CHECKPOINT_EX(name, num_cbs, words_per_cb, dump_dest)             \
-    do {                                                                        \
-        WAYPOINT("CKW");                                                        \
-        debug_checkpoint_barrier();                                             \
-        _DEBUG_CKPT_DPRINT_HEADER(name, dump_dest);                             \
-        debug_checkpoint_dump_cbs_impl<num_cbs, words_per_cb, dump_dest>(name); \
-        debug_checkpoint_barrier();                                             \
-        WAYPOINT("CKD");                                                        \
+#define DEBUG_CHECKPOINT_EX(name, num_cbs, words_per_cb, dump_dest)                    \
+    do {                                                                               \
+        WAYPOINT("CKW");                                                               \
+        debug_checkpoint_barrier();                                                    \
+        debug_checkpoint_dump_cbs_impl<num_cbs, words_per_cb, dump_dest>(CTSTR(name)); \
+        debug_checkpoint_barrier();                                                    \
+        WAYPOINT("CKD");                                                               \
     } while (0)
 
 #define DEBUG_CHECKPOINT_GLOBAL(name, sem_id, barrier_coord_x, barrier_coord_y, num_cores)      \
     do {                                                                                        \
         debug_checkpoint_global_pre_dump(sem_id, barrier_coord_x, barrier_coord_y, num_cores);  \
-        _DEBUG_CKPT_DPRINT_HEADER(name, false);                                                 \
-        debug_checkpoint_dump_cbs_impl<>(name);                                                 \
+        debug_checkpoint_dump_cbs_impl<>(CTSTR(name));                                          \
         debug_checkpoint_global_post_dump(sem_id, barrier_coord_x, barrier_coord_y, num_cores); \
     } while (0)
 

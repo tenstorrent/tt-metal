@@ -95,6 +95,7 @@ struct TargetSelection {
     std::string file_name;  // File name to write output to.
     bool one_file_per_risc = false;
     bool prepend_device_core_risc{};
+    bool tag_firmware{};  // Start each line that firmware printed with "[FW] ".
 };
 
 struct WatcherSettings {
@@ -674,6 +675,10 @@ public:
     void set_feature_prepend_device_core_risc(RunTimeDebugFeatures feature, bool prepend_device_core_risc) {
         feature_targets[feature].prepend_device_core_risc = prepend_device_core_risc;
     }
+    bool get_feature_tag_firmware(RunTimeDebugFeatures feature) const { return feature_targets[feature].tag_firmware; }
+    void set_feature_tag_firmware(RunTimeDebugFeatures feature, bool tag_firmware) {
+        feature_targets[feature].tag_firmware = tag_firmware;
+    }
     TargetSelection get_feature_targets(RunTimeDebugFeatures feature) const { return feature_targets[feature]; }
     void set_feature_targets(RunTimeDebugFeatures feature, const TargetSelection& targets) {
         feature_targets[feature] = targets;
@@ -1126,6 +1131,7 @@ private:
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string& env_var);
+    void ParseFeatureTagFirmware(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFabricTelemetryEnv(const char* value);
     void HandleEnvVar(
         EnvVarID id, const char* value);  // Handle single env var (value usually non-null, see cpp for details)

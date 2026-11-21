@@ -6,6 +6,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <functional>
+#include <map>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -33,20 +34,17 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-void UpdateGoldenOutput(
-    std::vector<std::string>& golden_output,
+// Adds the lines `risc` on `core` prints: print_simple.cpp's plain print, then, on a Tensix RISC, the variant that
+// names it. The key is the line prefix, which uses logical core coordinates (CoreCoord::str() formats as "x-y").
+void AddExpectedLines(
+    std::map<std::string, std::vector<std::string>>& expected,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const CoreCoord& core,
     const std::string& risc) {
-    // Using wildcard characters in lieu of actual values for the virtual coordinates as virtual coordinates can vary
-    // by machine. CoreCoord::str() formats as "x-y".
-    const std::string& device_core_risc = std::to_string(mesh_device->get_device_ids()[0]) + ":?-?:" + risc + ": ";
-
-    const std::string& output_line_all_riscs = device_core_risc + "Printing on a RISC.";
-    golden_output.push_back(output_line_all_riscs);
-
+    auto& lines = expected[fmt::format("{}:{}:{}", mesh_device->get_device_ids()[0], core.str(), risc)];
+    lines.push_back("Printing on a RISC.");
     if (risc != "ER0" && risc != "ER") {
-        const std::string& output_line_risc = device_core_risc + "Printing on " + risc + ".";
-        golden_output.push_back(output_line_risc);
+        lines.push_back("Printing on " + risc + ".");
     }
 }
 
@@ -108,7 +106,7 @@ void RunTest(
     DevicePrintFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const bool add_active_eth_kernel = false) {
-    std::vector<std::string> golden_output;
+    std::map<std::string, std::vector<std::string>> expected;
 
     CoreRange cores({0, 0}, {0, 1});
     distributed::MeshWorkload workload;
@@ -137,12 +135,10 @@ void RunTest(
         CreateKernel(program_, kPrintSimpleKernel, cores, ComputeConfig{});
     }
 
-    for ([[maybe_unused]] const CoreCoord& core : cores) {
-        UpdateGoldenOutput(golden_output, mesh_device, "BR");
-        UpdateGoldenOutput(golden_output, mesh_device, "NC");
-        UpdateGoldenOutput(golden_output, mesh_device, "TR0");
-        UpdateGoldenOutput(golden_output, mesh_device, "TR1");
-        UpdateGoldenOutput(golden_output, mesh_device, "TR2");
+    for (const CoreCoord& core : cores) {
+        for (const char* risc : {"BR", "NC", "TR0", "TR1", "TR2"}) {
+            AddExpectedLines(expected, mesh_device, core, risc);
+        }
     }
 
     if (add_active_eth_kernel) {
@@ -152,20 +148,17 @@ void RunTest(
         eth_test_common::set_arch_specific_eth_config(config);
         CreateKernel(program_, kPrintSimpleKernel, crs, config);
 
-        for ([[maybe_unused]] const CoreCoord& core : active_eth_cores) {
-            if (tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-                    HalProgrammableCoreType::ACTIVE_ETH) > 1) {
-                UpdateGoldenOutput(golden_output, mesh_device, "ER0");
-            } else {
-                UpdateGoldenOutput(golden_output, mesh_device, "ER");
-            }
+        const bool two_eriscs = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+                                    HalProgrammableCoreType::ACTIVE_ETH) > 1;
+        for (const CoreCoord& core : active_eth_cores) {
+            AddExpectedLines(expected, mesh_device, core, two_eriscs ? "ER0" : "ER");
         }
     }
 
     fixture->RunProgram(mesh_device, workload);
 
-    // Check the print log against golden output.
-    EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, golden_output));
+    // Lines from different RISCs interleave in no defined order, so each RISC's lines are checked on their own.
+    EXPECT_TRUE(FileMatchesLinesPerRisc(fixture->dprint_file_name, expected));
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
@@ -194,12 +187,14 @@ TEST_F(DevicePrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
     }
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
+    bool ran = false;
     for (auto& mesh_device : this->devices_) {
         if (mesh_device->impl().get_devices()[0]->get_active_ethernet_cores(true).empty()) {
             const auto device_id = mesh_device->get_device_ids()[0];
             log_info(tt::LogTest, "Skipping device {} due to no active ethernet cores...", device_id);
             continue;
         }
+        ran = true;
         this->RunTestOnDevice(
             [](DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, mesh_device, true);
@@ -208,4 +203,7 @@ TEST_F(DevicePrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
     }
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, false);
+    if (!ran) {
+        GTEST_SKIP() << "No device has an active ethernet core";
+    }
 }
