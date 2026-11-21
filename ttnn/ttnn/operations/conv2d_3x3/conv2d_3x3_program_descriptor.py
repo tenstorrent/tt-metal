@@ -125,6 +125,22 @@ def _brf_staging(g, slack_bytes):
 # 1408 -> 806 (perf_experiments/rm_ring_bank_run).
 RM_RING_NSTG = 2
 RM_RING_CHUNK_BYTES = 8192
+# Split startup fill (RM_SPLIT, kernels/conv2d_3x3_rm_ring.hpp): before a core's first M-block can finish, the ring
+# takes its whole first window (~2 image rows), on every core at once: DRAM-bound, and on NoC0 the far grid rows got
+# their share up to ~3x later than the near ones. With resident weights the writer (BRISC, NoC1) has nothing to store
+# yet, so the reader and the writer split that window: the reader claims its chunks from the front, the writer from the
+# back, until they meet. The writer stages through the last RM_SPLIT_W_NSTG of CB_RM_STAGE's RM_RING_NSTG chunks (no
+# new L1; the reader takes them back after the window) and fills nothing after it: its NoC1 reads beside the NoC1
+# output store slowed the store-bound far columns (1026x2048 32->128 +13%). Measured (Blackhole p150b, 110 cores,
+# bit-identical, us): 1026x2048 128->3 2401 -> 2184, 514x1024 128->3 798 -> 595 (perf_experiments/ring_fill_noc_split).
+RM_SPLIT_W_NSTG = 1
+# Smallest first window (ring pixels x pixel bytes) the split takes. Below it the reader alone fills the window about as
+# fast, and the split only lines up every core's first output stores: 130x256 128->512 (213 KB) +1.5%, 514x1024 32->128
+# (233 KB) +1.2%, 514x1024 64->128 (385 KB) +1.3% (Blackhole p150b, 3-5 runs each); the windows of 541 KB and up gain.
+RM_SPLIT_MIN_WINDOW_BYTES = 512 * 1024
+# Its handshake words (semaphores): the window's first pixel, end pixel (published last) and the ring origin (reader),
+# the reader's and the writer's claim counts, the writer's done flag.
+RM_SPLIT_SEMS = 6
 
 
 # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
@@ -3632,6 +3648,19 @@ def create_program_descriptor(
             args[writer_split_arg] = int(split_core)
         return args
 
+    # Split startup fill (RM_SPLIT): on the ring with resident weights (streamed, the writer's block-0 weight rounds wait
+    # on compute, which would wait on the writer's chunks).
+    rm_split = (
+        bool(b.rm_ring_px)
+        and b.weights_resident
+        and b.rm_stage_n > RM_SPLIT_W_NSTG
+        and b.rm_ring_px * g.c_in_p * 2 >= RM_SPLIT_MIN_WINDOW_BYTES
+    )
+    rm_split_sems = ()
+    if rm_split:
+        rm_split_sems = tuple(range(len(sem_ids), len(sem_ids) + RM_SPLIT_SEMS))
+        sem_ids += rm_split_sems
+        assert len(sem_ids) <= MAX_SEMAPHORES, sem_ids
     writer_ct_args.extend(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
     writer_ct_args.extend(
         ttnn.TensorAccessorArgs(bias_tensor).get_compile_time_args()
@@ -3645,7 +3674,7 @@ def create_program_descriptor(
     )
     writer_ct_args.extend(
         ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
-        if fill_split
+        if fill_split or rm_split
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
 
@@ -4132,6 +4161,18 @@ def create_program_descriptor(
         if b.rm_ring_px
         else []
     )
+    if rm_split:
+        # The writer stages through the last RM_SPLIT_W_NSTG chunks while it fills (the reader takes them back after).
+        _rm_ring_defines += [
+            ("RM_SPLIT", "1"),
+            ("RM_W_NSTG", str(RM_SPLIT_W_NSTG)),
+            ("RM_SEM_LO", str(rm_split_sems[0])),
+            ("RM_SEM_HI", str(rm_split_sems[1])),
+            ("RM_SEM_ORIGIN", str(rm_split_sems[2])),
+            ("RM_SEM_R_CLAIM", str(rm_split_sems[3])),
+            ("RM_SEM_W_CLAIM", str(rm_split_sems[4])),
+            ("RM_SEM_W_DONE", str(rm_split_sems[5])),
+        ]
     readers = [
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
@@ -4167,6 +4208,7 @@ def create_program_descriptor(
             + _host_fill_defines
             + _wr_defines
             + _fold_defines
+            + (_rm_ring_defines if rm_split else [])
             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
             + (
                 [

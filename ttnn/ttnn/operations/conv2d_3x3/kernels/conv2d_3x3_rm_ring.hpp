@@ -29,18 +29,59 @@
 //
 // Raw NoC (capability): dataflow_kernel_lib::read_with_state fixes the source address; the de-interleave changes both
 // addresses on every read (as the graduated bank-run fill).
+//
+// Split startup fill (RM_SPLIT, `w_nstg` > 0): the first window (the stream's first segment up to the first `allowed`,
+// ~2 image rows) must land before the core's first M-block can finish, on every core at once. The reader publishes
+// it in L1 words (RmSplitWords) and the writer (BRISC, NoC1; RmRingWriterPart) fills part of it through its own
+// staging chunks. Both number the window's chunks from its first pixel; the reader claims them from the front, the
+// writer from the back, until they meet, so each core's split follows whichever RISC and NoC deliver faster there. A
+// claim is a Dekker pair: each side publishes its claim count, then reads the other's. The writer marks a claim
+// undecided until it has read the reader's count and gives the chunk up if the reader claimed it; the reader reads
+// only decided writer claims; so every chunk has exactly one owner. The writer sets `done` once its chunks landed in
+// the ring; the reader's `landed` passes the first pixel of the writer's part only then. The writer stages through
+// the last w_nstg of the nstg staging chunks; after the window (the writer done, nothing staged) the reader fills alone
+// through all nstg again: with one chunk it would wait for each chunk's copies before the next chunk's DRAM reads.
 
 #pragma once
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "conv2d_3x3_slab_dataflow.hpp"
 #include "conv2d_3x3_gather_dataflow.hpp"
 
 namespace conv2d_3x3 {
 
 constexpr int32_t RM_INF = 0x7FFFFFFF;
+
+// Split startup fill handshake words (L1 semaphores of this core).
+struct RmSplitWords {
+    volatile tt_l1_ptr uint32_t* lo;       // the window's first pixel (reader)
+    volatile tt_l1_ptr uint32_t* hi;       // its end pixel, published last (0: not yet)
+    volatile tt_l1_ptr uint32_t* origin;   // the ring origin (reader)
+    volatile tt_l1_ptr uint32_t* r_claim;  // chunks the reader claimed from the front
+    volatile tt_l1_ptr uint32_t* w_claim;  // chunks the writer claimed from the back, | RM_DECIDED once checked
+    volatile tt_l1_ptr uint32_t* w_done;   // 1 once the writer's chunks landed in the ring
+
+    template <uint32_t lo_id, uint32_t hi_id, uint32_t origin_id, uint32_t rc_id, uint32_t wc_id, uint32_t done_id>
+    static FORCE_INLINE RmSplitWords from_semaphores() {
+        auto w = [](uint32_t id) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)); };
+        return RmSplitWords{w(lo_id), w(hi_id), w(origin_id), w(rc_id), w(wc_id), w(done_id)};
+    }
+};
+constexpr uint32_t RM_DECIDED = 0x80000000u;
+
+// The other RISC's word.
+FORCE_INLINE uint32_t rm_load(volatile tt_l1_ptr uint32_t* p) {
+    invalidate_l1_cache();
+    return *p;
+}
+// Visible to the other RISC before any later load or store of this one.
+FORCE_INLINE void rm_store(volatile tt_l1_ptr uint32_t* p, uint32_t v) {
+    *p = v;
+    asm volatile("fence" ::: "memory");
+}
 
 // In-image pixel extent of one M-block's three bands: band kh is [band_lo[kh], band_hi[kh]) (empty: band_hi == 0),
 // the window [lo, hi) their union's hull.
@@ -129,8 +170,11 @@ template <
     uint32_t nstg,
     int32_t chunk_px,
     uint32_t copy_trid,
-    uint32_t stage_trid0>
+    uint32_t stage_trid0,
+    uint32_t w_nstg = 0>
 struct RmBankRing {
+    static constexpr bool split = w_nstg > 0;
+    static_assert(w_nstg < nstg, "the reader keeps a staging chunk");
     static_assert(nstg >= 1 && stage_trid0 + nstg - 1 <= NOC_MAX_TRANSACTION_ID, "staging trids");
     static_assert(chunk_px >= 1 && chunk_px <= ring_px, "a chunk fits the ring");
     static constexpr uint32_t slot_bytes = (static_cast<uint32_t>(chunk_px) + nb - 1) / nb * pixel_bytes;
@@ -160,6 +204,29 @@ struct RmBankRing {
     int32_t landed = 0;
     int32_t allowed = 0;
     bool copies_out = false;
+    // Split startup fill: the handshake words; the window [ep_lo, ep_hi) while it is still claimable (ep_open), its
+    // chunks and the reader's front claims, the stream position after it (iss_seg / iss_a point there meanwhile); the
+    // first pixel of the writer's part until the writer is seen done (RM_INF: none, or done).
+    RmSplitWords sw{};
+    bool ep_open = false;
+    int32_t ep_lo = 0;
+    int32_t ep_hi = 0;
+    uint32_t ep_n = 0;
+    uint32_t ep_rc = 0;
+    int32_t ep_next = 0;
+    int32_t wp_lo = RM_INF;
+    // Staging chunks the reader cycles through: nstg - w_nstg during the split window, then nstg.
+    uint32_t nstg_now = nstg;
+
+    // Staging chunk of the n-th chunk (both counts compile-time: no runtime division).
+    FORCE_INLINE uint32_t slot_of(uint32_t n) const {
+        if constexpr (split) {
+            if (nstg_now != nstg) {
+                return n % (nstg - w_nstg);
+            }
+        }
+        return n % nstg;
+    }
 
     template <int32_t input_width, int32_t num_in_px, int32_t dilation>
     FORCE_INLINE void init(uint32_t ring, uint32_t stage, int32_t first_px, const SlabFootprint& core_fp) {
@@ -188,6 +255,106 @@ struct RmBankRing {
         iss_seg = 0;
         iss_a = copied = landed = num_segs > 0 ? seg_lo[0] : RM_INF;
         n_issued = n_proc = 0;
+        if constexpr (split) {
+            if (num_segs > 0) {
+                // The window: the first segment up to `allowed`.
+                ep_lo = seg_lo[0];
+                ep_hi = seg_hi[0] < allowed ? seg_hi[0] : allowed;
+                ep_n = static_cast<uint32_t>(ep_hi - ep_lo + chunk_px - 1) / chunk_px;
+                ep_rc = 0;
+                ep_open = true;
+                iss_a = ep_hi;
+                if (ep_hi == seg_hi[0]) {
+                    iss_seg = 1;
+                    iss_a = num_segs > 1 ? seg_lo[1] : RM_INF;
+                }
+                ep_next = iss_a;
+                // The last w_nstg staging chunks are the writer's until it is done; the window goes out last.
+                nstg_now = nstg - w_nstg;
+                rm_store(sw.origin, static_cast<uint32_t>(origin));
+                rm_store(sw.lo, static_cast<uint32_t>(ep_lo));
+                rm_store(sw.hi, static_cast<uint32_t>(ep_hi));
+            }
+        }
+    }
+
+    // Split startup fill: the writer's claims, once its latest one is decided.
+    FORCE_INLINE uint32_t writer_claims() const {
+        uint32_t w;
+        do {
+            w = rm_load(sw.w_claim);
+        } while (w != 0 && (w & RM_DECIDED) == 0);
+        return w & ~RM_DECIDED;
+    }
+
+    // The front and back claims met: the writer owns the window's last wc chunks. Every pixel from the reader's last
+    // chunk to ep_next is then the writer's (or in a segment gap nothing reads).
+    FORCE_INLINE void close_window(uint32_t wc) {
+        ep_open = false;
+        if (wc > 0) {
+            wp_lo = ep_lo + static_cast<int32_t>(ep_n - wc) * chunk_px;
+        }
+        if (n_issued > n_proc) {
+            c_after[slot_of(n_issued - 1)] = ep_next;
+        } else {
+            copied = ep_next;
+        }
+    }
+
+    // After the split window: every staging chunk back to the reader once the writer is done with its own and nothing
+    // is staged at a slot index both counts agree on.
+    FORCE_INLINE void widen() {
+        if constexpr (split) {
+            if (nstg_now < nstg && !ep_open && wp_lo == RM_INF && n_issued == n_proc && n_issued % nstg == 0) {
+                nstg_now = nstg;
+            }
+        }
+    }
+
+    // The window's next front chunk, or false (the claims met: the window is closed).
+    FORCE_INLINE bool claim_front() {
+        rm_store(sw.r_claim, ep_rc + 1);
+        const uint32_t wc = writer_claims();
+        if (ep_rc + wc < ep_n) {
+            ++ep_rc;
+            return true;
+        }
+        close_window(wc);
+        return false;
+    }
+
+    // The DRAM reads of the front chunk just claimed.
+    template <typename Reads, typename Accessor>
+    FORCE_INLINE void issue_claimed(Reads& reads, const Accessor& input) {
+        const uint32_t slot = slot_of(n_issued);
+        if (n_issued >= nstg_now) {
+            land_copies(reads);
+        }
+        const int32_t a = ep_lo + static_cast<int32_t>(ep_rc - 1) * chunk_px;
+        const int32_t e = a + chunk_px < ep_hi ? a + chunk_px : ep_hi;
+        const uint32_t base = stage_l1 + slot * chunk_bytes;
+        reads.begin(stage_trid0 + slot);
+        for (int32_t s = 0; s < static_cast<int32_t>(nb) && a + s < e; ++s) {
+            const uint32_t run = static_cast<uint32_t>(e - a - s + nb - 1) / nb;
+            reads.read(input.get_noc_addr(a + s), base + s * slot_bytes, run * pixel_bytes);
+        }
+        c_lo[slot] = a;
+        c_hi[slot] = e;
+        c_after[slot] = e;
+        ++n_issued;
+    }
+
+    // Every needed pixel below it has landed, the writer's part included.
+    FORCE_INLINE int32_t landed_all() {
+        if constexpr (split) {
+            if (wp_lo < RM_INF) {
+                if (rm_load(sw.w_done) == 0) {
+                    return landed < wp_lo ? landed : wp_lo;
+                }
+                wp_lo = RM_INF;
+            }
+        }
+        return landed;
     }
 
     // Base the tap-direct gather adds to a pixel of a block whose lowest pixel is lo: v + base is v's ring slot or that
@@ -213,14 +380,17 @@ struct RmBankRing {
         landed = copied;
     }
 
-    FORCE_INLINE bool can_issue() const { return n_issued - n_proc < nstg && iss_seg < num_segs && iss_a < allowed; }
+    // (Never while the split startup window is open: chunks are issued and copied in stream order.)
+    FORCE_INLINE bool can_issue() const {
+        return !ep_open && n_issued - n_proc < nstg_now && iss_seg < num_segs && iss_a < allowed;
+    }
 
     // The next chunk (at most to `to`, never past `allowed`, so every staged chunk can be copied): NB bank-run DRAM
     // reads into its staging slot, whose previous chunk's copies must have landed.
     template <typename Reads, typename Accessor>
     FORCE_INLINE void issue(Reads& reads, const Accessor& input, int32_t to) {
-        const uint32_t slot = n_issued % nstg;
-        if (n_issued >= nstg) {
+        const uint32_t slot = slot_of(n_issued);
+        if (n_issued >= nstg_now) {
             land_copies(reads);
         }
         const int32_t a = iss_a;
@@ -249,7 +419,7 @@ struct RmBankRing {
     // The oldest staged chunk into its ring slots (blocking on its DRAM reads).
     template <typename Reads>
     FORCE_INLINE void process(Reads& reads) {
-        const uint32_t slot = n_proc % nstg;
+        const uint32_t slot = slot_of(n_proc);
         const int32_t a = c_lo[slot];
         const int32_t e = c_hi[slot];
         ASSERT(e <= allowed);
@@ -287,12 +457,19 @@ struct RmBankRing {
     // it did anything; the caller then restores its own read transaction id and command-buffer state.
     template <typename Reads, typename Accessor>
     FORCE_INLINE bool step(Reads& reads, const Accessor& input) {
+        if constexpr (split) {
+            if (ep_open && n_issued - n_proc < nstg_now && claim_front()) {
+                issue_claimed(reads, input);
+                return true;
+            }
+            widen();
+        }
         if (can_issue()) {
             issue(reads, input, RM_INF);
             return true;
         }
         if (n_proc < n_issued &&
-            ncrisc_noc_read_with_transaction_id_flushed(reads.noc.get_noc_id(), stage_trid0 + n_proc % nstg)) {
+            ncrisc_noc_read_with_transaction_id_flushed(reads.noc.get_noc_id(), stage_trid0 + slot_of(n_proc))) {
             process(reads);
             return true;
         }
@@ -303,18 +480,203 @@ struct RmBankRing {
     // (x <= allowed), so the chunks it needs can be issued.
     template <typename Reads, typename Accessor>
     FORCE_INLINE void need(Reads& reads, const Accessor& input, int32_t x) {
-        if (x <= landed) {
+        if (x <= landed_all()) {
             return;
         }
         ASSERT(x <= allowed);
+        if constexpr (split) {
+            widen();
+        }
         while (copied < x) {
-            if (can_issue() && iss_a < x) {
+            if (ep_open) {
+                // Split startup window: the reader's front chunks (a claim that finds the writer's closes it: the
+                // stream then goes on past the window).
+                if (n_issued - n_proc < nstg_now && ep_lo + static_cast<int32_t>(ep_rc) * chunk_px < x) {
+                    if (claim_front()) {
+                        issue_claimed(reads, input);
+                    }
+                    continue;
+                }
+            } else if (can_issue() && iss_a < x) {
                 issue(reads, input, x);
-            } else {
-                process(reads);
+                continue;
             }
+            process(reads);
         }
         land_copies(reads);
+        if constexpr (split) {
+            if (landed_all() < x) {
+                MaybeDeviceZoneScope("reader_rm_split_wait");
+                while (rm_load(sw.w_done) == 0) {
+                }
+                wp_lo = RM_INF;
+            }
+        }
+    }
+};
+
+// The split startup fill's writer part (BRISC, NoC1): claims the window's chunks from the back, one DRAM read per bank
+// into its own nstg staging chunks, then one self-aimed read per pixel into the ring (as RmBankRing). The writer calls
+// serve() while it waits for output tiles, so one call does at most one bank's de-interleave run (chunk_px / nb
+// pixels): a whole chunk's copies would hold back the output store.
+template <
+    int32_t ring_px,
+    uint32_t pixel_bytes,
+    uint32_t nb,
+    uint32_t nstg,
+    int32_t chunk_px,
+    uint32_t copy_trid,
+    uint32_t stage_trid0>
+struct RmRingWriterPart {
+    static_assert(nstg >= 1 && stage_trid0 + nstg - 1 <= NOC_MAX_TRANSACTION_ID, "staging trids");
+    static constexpr uint32_t slot_bytes = (static_cast<uint32_t>(chunk_px) + nb - 1) / nb * pixel_bytes;
+    static constexpr uint32_t chunk_bytes = nb * slot_bytes;
+    static constexpr uint32_t ring_bytes = static_cast<uint32_t>(ring_px) * pixel_bytes;
+
+    uint32_t ring_l1 = 0;
+    uint32_t stage_l1 = 0;
+    RmSplitWords sw{};
+    int32_t origin = 0;
+    // The window, its chunks, this writer's back claims; started (the reader published it), met (no more claims),
+    // done (every claimed chunk landed and `done` is published).
+    int32_t lo = 0;
+    int32_t hi = 0;
+    uint32_t n = 0;
+    uint32_t wc = 0;
+    bool started = false;
+    bool met = false;
+    bool done = false;
+    uint32_t n_issued = 0;
+    uint32_t n_proc = 0;
+    int32_t c_lo[nstg];
+    int32_t c_hi[nstg];
+    bool copies_out = false;
+    // The oldest staged chunk's next bank run to de-interleave (0: not started).
+    uint32_t proc_bank = 0;
+
+    FORCE_INLINE void init(uint32_t ring, uint32_t stage, const RmSplitWords& words) {
+        ring_l1 = ring;
+        stage_l1 = stage;
+        sw = words;
+    }
+
+    // Claim the next chunk from the back (false: the claims met).
+    FORCE_INLINE bool claim_back(uint32_t& j) {
+        if (wc >= n) {
+            return false;
+        }
+        j = n - 1 - wc;
+        if (rm_load(sw.r_claim) > j) {
+            return false;
+        }
+        rm_store(sw.w_claim, wc + 1);
+        if (rm_load(sw.r_claim) > j) {
+            rm_store(sw.w_claim, wc | RM_DECIDED);
+            return false;
+        }
+        ++wc;
+        rm_store(sw.w_claim, wc | RM_DECIDED);
+        return true;
+    }
+
+    template <typename Reads, typename Accessor>
+    FORCE_INLINE void issue(Reads& reads, const Accessor& input, uint32_t j) {
+        const uint32_t slot = n_issued % nstg;
+        if (n_issued >= nstg && copies_out) {
+            // The slot's previous chunk's copies read it.
+            reads.wait(copy_trid);
+            copies_out = false;
+        }
+        const int32_t a = lo + static_cast<int32_t>(j) * chunk_px;
+        const int32_t e = a + chunk_px < hi ? a + chunk_px : hi;
+        const uint32_t base = stage_l1 + slot * chunk_bytes;
+        reads.begin(stage_trid0 + slot);
+        for (int32_t s = 0; s < static_cast<int32_t>(nb) && a + s < e; ++s) {
+            const uint32_t run = static_cast<uint32_t>(e - a - s + nb - 1) / nb;
+            reads.read(input.get_noc_addr(a + s), base + s * slot_bytes, run * pixel_bytes);
+        }
+        c_lo[slot] = a;
+        c_hi[slot] = e;
+        ++n_issued;
+    }
+
+    // One bank run of the oldest staged chunk (its DRAM reads landed) into the ring.
+    template <typename Reads>
+    FORCE_INLINE void process_bank(Reads& reads) {
+        const uint32_t slot = n_proc % nstg;
+        const int32_t a = c_lo[slot];
+        const int32_t e = c_hi[slot];
+        const int32_t s = static_cast<int32_t>(proc_bank);
+        const uint32_t base = stage_l1 + slot * chunk_bytes;
+        const uint32_t noc = reads.noc.get_noc_id();
+        reads.begin(copy_trid);
+        ncrisc_noc_read_set_state<DM_DEDICATED_NOC, true>(noc, read_cmd_buf, get_noc_addr(base, noc), pixel_bytes);
+        const uint32_t ring_end = ring_l1 + ring_bytes;
+        uint32_t src = base + s * slot_bytes;
+        int32_t x = (a - origin) % ring_px + s;
+        if (x >= ring_px) {
+            x -= ring_px;
+        }
+        uint32_t dst = ring_l1 + static_cast<uint32_t>(x) * pixel_bytes;
+        for (int32_t q = a + s; q < e; q += nb) {
+            ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, true>(noc, read_cmd_buf, src, dst);
+            reads.count_packets(1);
+            src += pixel_bytes;
+            dst += nb * pixel_bytes;
+            if (dst >= ring_end) {
+                dst -= ring_bytes;
+            }
+        }
+        reads.drop_fixed_state();
+        copies_out = true;
+        ++proc_bank;
+        if (proc_bank == nb || a + static_cast<int32_t>(proc_bank) >= e) {
+            proc_bank = 0;
+            ++n_proc;
+        }
+    }
+
+    // One non-blocking step: take the published window, claim and issue a chunk, de-interleave one landed bank run,
+    // or publish `done` once every claimed chunk's copies landed. Leaves the read transaction id at 0.
+    template <typename Reads, typename Accessor>
+    FORCE_INLINE void serve(Reads& reads, const Accessor& input) {
+        if (done) {
+            return;
+        }
+        if (!started) {
+            const uint32_t h = rm_load(sw.hi);
+            if (h == 0) {
+                return;
+            }
+            hi = static_cast<int32_t>(h);
+            lo = static_cast<int32_t>(*sw.lo);
+            origin = static_cast<int32_t>(*sw.origin);
+            n = static_cast<uint32_t>(hi - lo + chunk_px - 1) / chunk_px;
+            started = true;
+        }
+        if (!met && n_issued - n_proc < nstg) {
+            uint32_t j;
+            if (claim_back(j)) {
+                issue(reads, input, j);
+                dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+                return;
+            }
+            met = true;
+        }
+        if (n_proc < n_issued) {
+            if (proc_bank > 0 ||
+                ncrisc_noc_read_with_transaction_id_flushed(reads.noc.get_noc_id(), stage_trid0 + n_proc % nstg)) {
+                process_bank(reads);
+                dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+            }
+            return;
+        }
+        if (copies_out && !ncrisc_noc_read_with_transaction_id_flushed(reads.noc.get_noc_id(), copy_trid)) {
+            return;
+        }
+        copies_out = false;
+        rm_store(sw.w_done, 1);
+        done = true;
     }
 };
 

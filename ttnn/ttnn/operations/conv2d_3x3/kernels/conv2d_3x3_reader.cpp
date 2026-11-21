@@ -181,6 +181,13 @@ constexpr uint32_t cb_rm_stage = 0;
 #endif
 constexpr uint32_t TRID_RM_COPY = 1;
 constexpr uint32_t TRID_RM_STAGE = 8;
+// Split startup fill (RM_SPLIT, conv2d_3x3_rm_ring.hpp): the writer fills the back of the ring's first window through
+// the last RM_W_NSTG staging chunks.
+#ifdef RM_SPLIT
+constexpr uint32_t rm_split_w_nstg = RM_W_NSTG;
+#else
+constexpr uint32_t rm_split_w_nstg = 0;
+#endif
 
 }  // namespace
 
@@ -750,9 +757,19 @@ void kernel_main() {
         num_out_px,
         block_m_tiles>;
     static_assert(sizeof(RmB) >= 1, "RmB is used only on the ring path");
-    [[maybe_unused]] conv2d_3x3::
-        RmBankRing<rm_ring_px, pixel_bytes, NUM_DRAM_BANKS, rm_ring_nstg, rm_ring_chunk, TRID_RM_COPY, TRID_RM_STAGE>
-            rm;
+    [[maybe_unused]] conv2d_3x3::RmBankRing<
+        rm_ring_px,
+        pixel_bytes,
+        NUM_DRAM_BANKS,
+        rm_ring_nstg,
+        rm_ring_chunk,
+        TRID_RM_COPY,
+        TRID_RM_STAGE,
+        rm_split_w_nstg> rm;
+#ifdef RM_SPLIT
+    rm.sw = conv2d_3x3::RmSplitWords::
+        from_semaphores<RM_SEM_LO, RM_SEM_HI, RM_SEM_ORIGIN, RM_SEM_R_CLAIM, RM_SEM_W_CLAIM, RM_SEM_W_DONE>();
+#endif
 #ifdef RM_RING_STAGE_BYTES
     static_assert(rm_ring_nstg * decltype(rm)::chunk_bytes <= RM_RING_STAGE_BYTES, "staging fits CB_RM_STAGE");
 #endif
