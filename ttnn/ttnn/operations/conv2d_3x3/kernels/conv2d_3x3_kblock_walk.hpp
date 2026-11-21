@@ -35,6 +35,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
@@ -45,6 +46,22 @@
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace conv2d_3x3::kblock_walk {
+
+// The default in0 addressing: K-block k's [bm, bk] tiles at the in0 CB's read pointer, waited for and popped per
+// K-block.
+struct In0Fifo {};
+
+// KH_REUSE (conv2d_3x3_compute.cpp, KhReuseTilize): in0 tiles are read from a compute-owned tile ring at the tile index
+// the functor returns for (K-block, subblock row), never waited for or popped here (the PreKBlockFn does both).
+template <typename F>
+struct In0Indexed {
+    F f;
+    ALWI uint32_t operator()(uint32_t block, uint32_t i0) const { return f(block, i0); }
+};
+template <typename T>
+struct is_in0_indexed : std::false_type {};
+template <typename F>
+struct is_in0_indexed<In0Indexed<F>> : std::true_type {};
 
 template <
     bool has_bias,
@@ -65,14 +82,22 @@ template <
     uint32_t num_k_blocks,
     typename PreKBlockFn,
     typename In0SourceFn,
-    typename In1BaseOffsetFn>
-ALWI void walk(const PreKBlockFn& pre_k_block, const In0SourceFn& in0_source, const In1BaseOffsetFn& in1_offset) {
+    typename In1BaseOffsetFn,
+    typename In0IndexFn = In0Fifo>
+ALWI void walk(
+    const PreKBlockFn& pre_k_block,
+    const In0SourceFn& in0_source,
+    const In1BaseOffsetFn& in1_offset,
+    const In0IndexFn& in0_indexed = {}) {
     static_assert(!has_bias || groups >= 1);
+    constexpr bool in0_ring = is_in0_indexed<In0IndexFn>::value;
+    // A ring tile index addresses one tile per subblock row: one-row subblocks only.
+    static_assert(!in0_ring || sb_h == 1);
     constexpr uint32_t bn = in1_num_subblocks * sb_w;
     constexpr uint32_t row_group_tiles = sb_h * bn;
     constexpr uint32_t block_tiles = in0_num_subblocks * row_group_tiles;
-    constexpr uint32_t in0_block_tiles = in0_num_subblocks * sb_h * bk;
-    constexpr uint32_t in1_block_tiles = bk * bn;
+    [[maybe_unused]] constexpr uint32_t in0_block_tiles = in0_num_subblocks * sb_h * bk;
+    [[maybe_unused]] constexpr uint32_t in1_block_tiles = bk * bn;
     // No bias: the last K-block reloads the partials of the others (none with one K-block).
     constexpr bool reload = !has_bias && num_k_blocks >= 2;
     constexpr bool uses_partials = has_bias || reload;
@@ -138,7 +163,9 @@ ALWI void walk(const PreKBlockFn& pre_k_block, const In0SourceFn& in0_source, co
         }
         ckernel::matmul_block_init(a_cb, in1_cb, false, sb_w, sb_h, bk);
         const uint32_t in1_base = in1_offset(block);
-        cb_wait_front(a_cb, in0_block_tiles);
+        if constexpr (!in0_ring) {
+            cb_wait_front(a_cb, in0_block_tiles);
+        }
         if constexpr (!in1_resident) {
             cb_wait_front(in1_cb, in1_block_tiles);
         }
@@ -176,6 +203,9 @@ ALWI void walk(const PreKBlockFn& pre_k_block, const In0SourceFn& in0_source, co
                     }
                 }
                 uint32_t in0_index = in0_sub;
+                if constexpr (in0_ring) {
+                    in0_index = in0_indexed(block, i0);
+                }
                 uint32_t in1_index = in1_base + col;
                 for (uint32_t k = 0; k < bk; ++k) {
                     ckernel::matmul_block(a_cb, in1_cb, in0_index, in1_index, 0, false, sb_w, sb_h, bk);
@@ -223,7 +253,9 @@ ALWI void walk(const PreKBlockFn& pre_k_block, const In0SourceFn& in0_source, co
                 cb_pop_front(partials_cb, block_tiles);
             }
         }
-        cb_pop_front(a_cb, in0_block_tiles);
+        if constexpr (!in0_ring) {
+            cb_pop_front(a_cb, in0_block_tiles);
+        }
         if constexpr (!in1_resident) {
             cb_pop_front(in1_cb, in1_block_tiles);
         }

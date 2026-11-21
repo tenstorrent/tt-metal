@@ -476,6 +476,24 @@ struct RmBankRing {
         return false;
     }
 
+    // Blocking, whole chunks: every needed pixel below x is in the ring, the chunks that bring it in issued whole (up
+    // to `allowed`), not cut at x. The kh-reuse stream waits for one unit's pixels at a time; cutting there would turn
+    // a lagging fill into one DRAM round trip per unit.
+    template <typename Reads, typename Accessor>
+    FORCE_INLINE void need_whole(Reads& reads, const Accessor& input, int32_t x) {
+        if (x <= landed) {
+            return;
+        }
+        while (copied < x) {
+            if (can_issue() && iss_a < x) {
+                issue(reads, input, RM_INF);
+            } else {
+                process(reads);
+            }
+        }
+        land_copies(reads);
+    }
+
     // Blocking: every needed pixel below x is in the ring. x is within the plan's capacity of the live pixels
     // (x <= allowed), so the chunks it needs can be issued.
     template <typename Reads, typename Accessor>

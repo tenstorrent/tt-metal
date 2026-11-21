@@ -546,6 +546,19 @@ HOST_FILL_MAX_WORDS = 256
 # band's batches one at a time, slower.
 BLOCK_FILL_BALANCE = True
 BLOCK_FILL_GATE = True
+# kh reuse (kernels: KH_REUSE): on the interleaved ROW_MAJOR ring-slab walk at stride 1, d 1, W_out == W_in a multiple
+# of 32 and one tap per K-block, tap (kh, kw) of output tile-row t is tap (0, kw) of tile-row t + kh * W / 32, so
+# compute tilizes each input tile-row once, as one three-tap unit, into a tile ring of max(2 W / 32, bm) rows x 3 taps,
+# and K-block (kh, kw) reads in0 from it: 3x fewer tilized tiles, ~9x fewer units. The ring costs 3 x the tap's tiles
+# per row; the ROW_MAJOR ring slab shrinks to the reader's lookahead (two FIFOs' worth of tile-rows), and bm
+# is re-solved against both (the weights stay resident). Measured (Blackhole p150b, FLUX.2 bh2x4, bit-identical, device
+# kernel us, medians of 2-6 runs): 258x512 64->256 448.1 -> 398.9, 514x1024 64->128 798.5 -> 754.6, 130x256 128->512
+# 386.9 -> 374.6, 514x1024 64->256 1372.6 -> 1386.7 (bm 15 -> 3: flat). Not at C_in 32 (KHR_MIN_C_IN_TILES): there the
+# output store is the critical path (the most output bytes per MAC), and the faster compute bunches the cores' NoC1
+# stores until the far-column cores starve: 1026x2048 32->128 1832.7 -> 2590.9, 514x1024 32->128 598 -> 697.5, although
+# with the store stubbed they gain 1614.8 -> 1437.0 and 432.4 -> 378.4.
+KHR_MIN_C_IN_TILES = 2
+KHR_DEPTH = 4  # gathered-block FIFO, in three-tap units
 # Column ring rows per NoC on Blackhole (physical y 0..11; worker rows 2..11).
 _BH_RING_ROWS = 12
 
@@ -728,6 +741,9 @@ class Conv3x3Blocking:
     # N split: work index j * num_m_groups + i multiplies M range i against output columns
     # [j * block_n_tiles, (j + 1) * block_n_tiles).
     n_groups: int = 1
+    # kh reuse (KH_REUSE): tile-ring rows (0: off) and unit FIFO entries.
+    khr_ring_rows: int = 0
+    khr_table: int = 0
 
     @property
     def slab_px(self):
@@ -1518,6 +1534,103 @@ def _rm_ring_delta(g: Conv3x3Geometry, fit, ring_px):
     return (ring_px - slab_px) * g.c_in_p * BF16_BYTES + _rm_stage_bytes(g)
 
 
+def kh_reuse_capable(g: Conv3x3Geometry, b: Conv3x3Blocking):
+    """kh reuse (KH_REUSE): the ROW_MAJOR ring-slab walk (interleaved, no K split) at stride 1, d 1, W_out == W_in a
+    multiple of 32 (a tile-row is one image-row run and the kh offset whole tile-rows), one tap per K-block, one-row
+    subblocks (a ring tile index per subblock row)."""
+    return (
+        b.rm_ring_px > 0
+        and not g.tile_input
+        and not g.sharded_output
+        and not g.k_split
+        and not b.nslice
+        and g.stride == 1
+        and g.dilation == 1
+        and g.output_width == g.input_width
+        and g.input_width % TILE == 0
+        and g.c_in_p % TILE == 0
+        and g.c_in_tiles >= KHR_MIN_C_IN_TILES
+        and b.block_k_tiles == g.c_in_tiles
+        and b.num_k_blocks == 9
+        and b.center_mode == CENTER_NONE
+    )
+
+
+def _khr_plan(g: Conv3x3Geometry, bm):
+    """(ring rows, FIFO entries, ring-slab pixels, gathered-block depth) of the kh-reuse walk at bm."""
+    wt = g.input_width // TILE
+    ring_rows = max(2 * wt, bm)
+    # The unit FIFO holds an M-block of entries; the ring slab one FIFO's worth of tile-rows more.
+    table = bm
+    fill = table
+    nstg, chunk_px = _rm_stage(g)
+    ring_px = max((table + fill) * TILE + 2, chunk_px)
+    return ring_rows, table, ring_px, KHR_DEPTH
+
+
+def _khr_footprint(g: Conv3x3Geometry, b: Conv3x3Blocking, bm):
+    """The L1 of the kh-reuse walk at bm (the ring-slab walk's buffers with the tile ring for in0, the ring slab sized
+    to the reader's lookahead, three-tap gathered blocks and FIFO entries), or None when one-row subblocks do not
+    hold."""
+    sb_h, sb_w = _out_subblock(bm, b.block_n_tiles)
+    if sb_h != 1:
+        return None
+    ring_rows, table, ring_px, depth = _khr_plan(g, bm)
+    tw = g.c_in_tiles
+    bn = b.block_n_tiles
+    ns = g.out_n_tiles if b.n_groups == 1 else bn
+    weight_depth = b.num_k_blocks if b.weights_resident else WEIGHT_DEPTH
+    total = (
+        ring_px * g.c_in_p * BF16_BYTES
+        + _rm_stage_bytes(g)
+        + depth * 3 * tw * TILE_BYTES_BF16
+        + TILE * g.c_in_p * BF16_BYTES
+        + ring_rows * 3 * tw * g.in0_tile_bytes
+        + weight_depth * b.block_k_tiles * bn * g.weight_tile_bytes
+        + (ns * g.weight_tile_bytes if g.has_bias else 0)
+        + bm * bn * TILE_BYTES_FP32
+        + OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes
+        + table * 16
+    )
+    return dict(
+        ring_rows=ring_rows,
+        table=table,
+        ring_px=ring_px,
+        depth=depth,
+        sb=(sb_h, sb_w),
+        footprint=total,
+    )
+
+
+def kh_reuse_blocking(g: Conv3x3Geometry, b: Conv3x3Blocking, l1_budget):
+    """The kh-reuse walk at the ring-slab solve's bk, weight residency and N split: the largest bm that fits, or
+    None."""
+    if not kh_reuse_capable(g, b):
+        return None
+    cm = b.core_m_tiles
+    for bm in sorted({_div_up(cm, n) for n in range(1, cm + 1)}, reverse=True):
+        fit = _khr_footprint(g, b, bm)
+        if fit is None or fit["footprint"] > l1_budget:
+            continue
+        sb_h, sb_w = fit["sb"]
+        return replace(
+            b,
+            block_m_tiles=bm,
+            max_m_blocks_per_core=_div_up(cm, bm),
+            out_subblock_h=sb_h,
+            out_subblock_w=sb_w,
+            combine_subblock_h=_out_subblock(bm, g.out_n_tiles if b.n_groups == 1 else b.block_n_tiles)[0],
+            combine_subblock_w=_out_subblock(bm, g.out_n_tiles if b.n_groups == 1 else b.block_n_tiles)[1],
+            in0_stream_rows=_in0_stream_rows(g, bm, b.block_k_tiles, sb_h),
+            im2col_rm_depth_rows=fit["depth"],
+            rm_ring_px=fit["ring_px"],
+            footprint_bytes=fit["footprint"],
+            khr_ring_rows=fit["ring_rows"],
+            khr_table=fit["table"],
+        )
+    return None
+
+
 @functools.lru_cache(maxsize=256)
 def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
     """The one place block extents are chosen. Order of the L1 solve (op_design Mechanism caps #1):
@@ -1683,6 +1796,9 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
         ring_blocking = solve(ring_search, nslice=False, wr_solve=blocking.weights_resident, rm=True, split=split)
         if ring_blocking is not None:
             blocking = ring_blocking
+            khr = kh_reuse_blocking(g, blocking, l1_budget)
+            if khr is not None:
+                blocking = khr
     if blocking is not None and g.k_split:
         # N-slice-outer at the K-blocked solve's bm, unless its resident [bm, K] in0 does not fit. There bk only sets
         # the gather / tilize granularity and costs almost no L1, so the coarsest that fits wins.
@@ -3026,8 +3142,10 @@ def create_program_descriptor(
             if ub_s2 != ub0:
                 b = replace(b, untilize_batch_rows=ub_s2)
     cbs = [slab_cb]
+    # kh reuse: the gathered-block FIFO holds three-tap units, cb_im2col_tiles is the tile ring.
+    khr = b.khr_ring_rows > 0
     if not face_direct:
-        im2col_rm_pages = (1 if padded_slab or s2_taps else b.im2col_rm_depth_rows) * bk
+        im2col_rm_pages = (1 if padded_slab or s2_taps else b.im2col_rm_depth_rows) * bk * (3 if khr else 1)
         cbs.append(_cb(CB_IM2COL_RM, ttnn.bfloat16, TILE_BYTES_BF16, im2col_rm_pages, cores))
     cbs += [
         # Face-direct: the reader writes these tiles; it relies on every K-block starting at the CB base.
@@ -3038,7 +3156,11 @@ def create_program_descriptor(
             (
                 2
                 if slab_direct
-                else (s2_in0_tiles if s2_taps else bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks))
+                else (
+                    b.khr_ring_rows * 3 * bk
+                    if khr
+                    else (s2_in0_tiles if s2_taps else bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks))
+                )
             ),
             cores,
         ),
@@ -3105,6 +3227,8 @@ def create_program_descriptor(
     # kw-fold has no gather (its reader only fills the slab) and owns CB_SRC_TABLE as its ACC-ready token.
     tap_direct = not kwf and _tap_direct(g, bm, bk, b.nslice)
     tap_direct_fifo_units = 0 if kwf else _tap_direct_fifo_units(g, bm, bk, b.nslice)
+    if khr:
+        tap_direct_fifo_units = b.khr_table
     tap_direct_windows = not kwf and _tap_direct_windows(g, bm, bk, b.nslice, b.center_mode)
     if tap_direct_fifo_units:
         cbs.append(_cb(CB_SRC_TABLE, ttnn.bfloat16, 16, tap_direct_fifo_units, cores))
@@ -4105,7 +4229,7 @@ def create_program_descriptor(
     # the previous M-block, and it gathers again only after the fill. No new L1, no blocking change. Elsewhere the
     # per-pixel fill: TILE and sharded inputs have no pixel pages to coalesce, L1-interleaved pages stride by the L1
     # bank count, and the other walks keep cb_im2col_rm live during the fill.
-    brf_stage = _brf_staging(g, b.im2col_rm_depth_rows * bk * TILE_BYTES_BF16)
+    brf_stage = _brf_staging(g, b.im2col_rm_depth_rows * bk * (3 if khr else 1) * TILE_BYTES_BF16)
     brf_fill = (
         brf_stage is not None
         and not g.tile_input
@@ -4150,7 +4274,16 @@ def create_program_descriptor(
         if brf_fill
         else []
     )
-    _rm_ring_defines = (
+    _khr_defines = (
+        [
+            ("KH_REUSE", "1"),
+            ("KHR_RING_ROWS", str(b.khr_ring_rows)),
+            ("KHR_WT", str(g.input_width // TILE)),
+        ]
+        if khr
+        else []
+    )
+    _rm_ring_defines = _khr_defines + (
         [
             ("RM_RING_PX", str(b.rm_ring_px)),
             ("RM_RING_NSTG", str(b.rm_stage_n)),
@@ -4238,7 +4371,8 @@ def create_program_descriptor(
         + _s2_compute_defines
         + _ring_arrival_defines
         + _wr_defines
-        + _fold_defines,
+        + _fold_defines
+        + _khr_defines,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=compute_kernel_config.math_fidelity,
             math_approx_mode=compute_kernel_config.math_approx_mode,
