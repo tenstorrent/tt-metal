@@ -43,11 +43,11 @@ ALWI void binary_max_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
-        (true /* IS_MAX */, false /* IS_UNSIGNED */),
+        (true /* IS_MAX */, false /* IS_UNSIGNED */, 32 /* ITERATIONS */),
         idst0,
         idst1,
         odst,
-        VectorMode::RC)));
+        VectorMode::RC_custom)));
 #endif
 }
 
@@ -88,11 +88,11 @@ ALWI void binary_max_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
-        (true /* IS_MAX */, true /* IS_UNSIGNED */),
+        (true /* IS_MAX */, true /* IS_UNSIGNED */, 32 /* ITERATIONS */),
         idst0,
         idst1,
         odst,
-        VectorMode::RC)));
+        VectorMode::RC_custom)));
 }
 
 /**
@@ -127,6 +127,18 @@ ALWI void binary_max_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorM
 #if defined(ARCH_QUASAR)
     MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX>(idst0, idst1, odst, vector_mode)));
 #else
+    if (vector_mode == VectorMode::RC) {
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binary_max_min,
+            (true /* IS_MAX */, 32 /* ITERATIONS */),
+            idst0,
+            idst1,
+            odst,
+            VectorMode::RC_custom)));
+        return;
+    }
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -177,11 +189,11 @@ ALWI void binary_min_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
-        (false /* IS_MAX */, false /* IS_UNSIGNED */),
+        (false /* IS_MAX */, false /* IS_UNSIGNED */, 32 /* ITERATIONS */),
         idst0,
         idst1,
         odst,
-        VectorMode::RC)));
+        VectorMode::RC_custom)));
 #endif
 }
 
@@ -222,11 +234,11 @@ ALWI void binary_min_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
-        (false /* IS_MAX */, true /* IS_UNSIGNED */),
+        (false /* IS_MAX */, true /* IS_UNSIGNED */, 32 /* ITERATIONS */),
         idst0,
         idst1,
         odst,
-        VectorMode::RC)));
+        VectorMode::RC_custom)));
 }
 
 /**
@@ -261,6 +273,18 @@ ALWI void binary_min_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorM
 #if defined(ARCH_QUASAR)
     MATH((llk_math_eltwise_binary_sfpu_binary_min<APPROX>(idst0, idst1, odst, vector_mode)));
 #else
+    if (vector_mode == VectorMode::RC) {
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binary_max_min,
+            (false /* IS_MAX */, 32 /* ITERATIONS */),
+            idst0,
+            idst1,
+            odst,
+            VectorMode::RC_custom)));
+        return;
+    }
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
