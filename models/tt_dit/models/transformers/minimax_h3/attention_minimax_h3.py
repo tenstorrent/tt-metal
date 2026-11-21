@@ -707,9 +707,64 @@ class MiniMaxH3Attention(Module):
     @sol_logical_n.setter
     def sol_logical_n(self, value: int | None) -> None:
         self._sol_logical_n = value
-        self._sol_prepass = None
+        if self.sol_runtime_length() and self._sol_prepass is not None:
+            # Keep the pre-pass: its buffers and semaphores are in the bucket's trace. prepare() rewrites the constants.
+            self._sol_prepass._key = None
+        else:
+            self._sol_prepass = None
         self._sol_prefix_cache = {}
         SolPrepassFused.new_generation()
+
+    def sol_runtime_length(self) -> bool:
+        """Whether this module's Sol path takes the prompt length from device tensors (MINIMAX_H3_SOL_RUNTIME_LEN):
+        the fused pre-pass and the sparse ring op in resident mode. Then the ops it issues do not depend on the length,
+        the sink or the block map, which stay out of the trace key."""
+        return self._RUNTIME_LEN and self.sol_fused and self.sol_mode == "resident" and self._SPARSE_RING
+
+    def sol_dense_class(self, rows: int) -> int | None:
+        """The sparse op's dense_q_blocks_max_per_shard with the table: the most dense Q blocks on one shard, capped at
+        3 (the op sizes its per-core Q blocks by min(that, 3), as for the list), so the program and the bits are the
+        list path's. Prompts of a bucket share it unless their prefix crosses a shard's block boundary. None without
+        dense blocks."""
+        if not (self._PREFIX_WEIGHTS and self.sol_prefix_mode == "fused" and self._DYN_SPLIT):
+            return None
+        dense = self._sol_dense_q_blocks(rows)
+        nb = -(-rows // SOL_BLOCK)
+        per_shard: dict[int, int] = {}
+        for g in dense:
+            per_shard[g // nb] = per_shard.get(g // nb, 0) + 1
+        return min(max(per_shard.values(), default=0), 3)
+
+    _dense_tables: dict = {}  # per mesh: the dense Q block table of the sparse op (runtime prompt length)
+    _DENSE_TABLE_ROWS = 64
+
+    def _sol_dense_table(self, rows: int) -> ttnn.Tensor | None:
+        """The sparse op's dense_q_blocks_tensor (runtime prompt length): one [1, 1, 1, 64] uint32 table per mesh, the
+        dense Q blocks of `_sol_dense_q_blocks`, then 0xFFFFFFFF. Rewritten in place when
+        the blocks change and once per request (other models' traces may overwrite buffers between requests), always
+        outside a trace capture (`sol_prepare` runs before it). None when the op takes no dense blocks."""
+        if not (self._PREFIX_WEIGHTS and self.sol_prefix_mode == "fused" and self._DYN_SPLIT):
+            return None
+        dense = self._sol_dense_q_blocks(rows)
+        contents = (tuple(dense), SolPrepassFused._generation)
+        key = id(self.mesh_device)
+        entry = MiniMaxH3Attention._dense_tables.get(key)
+        if entry is not None and entry["contents"] == contents:
+            return entry["tensor"]
+        assert len(dense) <= self._DENSE_TABLE_ROWS, len(dense)
+        host = torch.full((1, 1, 1, self._DENSE_TABLE_ROWS), 0xFFFFFFFF, dtype=torch.int64)
+        if dense:
+            host[0, 0, 0, : len(dense)] = torch.tensor(dense, dtype=torch.int64)
+        kwargs = dict(
+            dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device)
+        )
+        if entry is None:
+            entry = {"tensor": ttnn.from_torch(host, device=self.mesh_device, **kwargs)}
+            MiniMaxH3Attention._dense_tables[key] = entry
+        else:
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(host, **kwargs), entry["tensor"])
+        entry["contents"] = contents
+        return entry["tensor"]
 
     def _sol_tensors(self, q_BHNE: ttnn.Tensor, k_BHNE: ttnn.Tensor, v_BHNE: ttnn.Tensor) -> dict:
         """Run the routing pre-pass and return the ring op's `sol_*` keyword tensors."""
@@ -784,6 +839,8 @@ class MiniMaxH3Attention(Module):
             raise ValueError("the prefix spread (sol_block_map) needs sol_prefix_mode 'fused' or 'off', not 'separate'")
         self._sol_prepass.block_map = self.sol_block_map
         self._sol_prepass.prepare(geo, self.sol_sink_tokens, scale)
+        if self.sol_runtime_length():
+            self._sol_dense_table(rows)
 
     def _sol_dense_q_blocks(self, rows: int) -> list[int]:
         """Prefix-spread step 2 (MINIMAX_H3_SOL_PREFIX_WEIGHTS=1, `fused` prefix mode, dynamic split on): the sparse
@@ -1144,6 +1201,11 @@ class MiniMaxH3Attention(Module):
     # split then balances them by cost (sparse_dyn_split.hpp weighted_range). Off: the op's equal counts.
     _PREFIX_WEIGHTS = os.environ.get("MINIMAX_H3_SOL_PREFIX_WEIGHTS", "0") == "1"
     _DYN_SPLIT = os.environ.get("TT_SPARSE_RING_DYN_SPLIT", "") == "on"
+    # Runtime prompt length: the Sol path (fused pre-pass, sparse ring op) takes the length, the sink, the block map and
+    # the dense Q blocks from device tensors the host rewrites per request (the pre-pass constants, the op's
+    # logical_n_tensor and dense_q_blocks_tensor), so one compile and one trace serve every prompt length of a bucket.
+    # Default off: per-length programs and traces.
+    _RUNTIME_LEN = os.environ.get("MINIMAX_H3_SOL_RUNTIME_LEN", "0") == "1"
 
     def _bf8_native_path(self, rows: int) -> bool:
         """Whether this call takes the 8-bit sparse ring path with native BFP8 q / k / v."""
@@ -1169,10 +1231,15 @@ class MiniMaxH3Attention(Module):
         )
         return ttnn.bfloat8_b if bf8_consumer else ttnn.bfloat16
 
-    def _sparse_ring_attention(self, q_BHNE, k_BHNE, v_BHNE, sol_kwargs: dict, token_major_dtype=None) -> ttnn.Tensor:
+    def _sparse_ring_attention(
+        self, q_BHNE, k_BHNE, v_BHNE, sol_kwargs: dict, token_major_dtype=None, logical_n: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
         """Resident-mode Sol-Attn through the sparse ring op; returns [1, H, N_local, D] like `_ring_attention`, or
-        [1, 1, N_local, H * D] in `token_major_dtype` when that is given."""
+        [1, 1, N_local, H * D] in `token_major_dtype` when that is given. With the runtime prompt length
+        (`sol_runtime_length`) the op reads the length from `logical_n` (the [1, 1, 1, 1] device tensor) and the dense
+        Q blocks from the per-mesh table, so its program does not depend on the prompt."""
         assert self.sol_logical_n is not None, "the sparse ring op needs sol_logical_n (host int)"
+        runtime = self.sol_runtime_length() and logical_n is not None
         if self._SPARSE_RING_DTYPE not in ("bf16", "bf8"):
             raise ValueError(f"MINIMAX_H3_SPARSE_RING_DTYPE must be bf16 or bf8, got {self._SPARSE_RING_DTYPE!r}")
         q, k, v = q_BHNE, k_BHNE, v_BHNE
@@ -1201,7 +1268,10 @@ class MiniMaxH3Attention(Module):
             persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
                 v.shape, 2, self.sp_mesh_axis, dtype=v.dtype, capacity=self.kv_gather_capacity
             ),
-            logical_n=int(self.sol_logical_n),
+            # With the tensor the host value is a placeholder kept out of the program: the padded length.
+            logical_n=(
+                q.shape[2] * self.parallel_config.sequence_parallel.factor if runtime else int(self.sol_logical_n)
+            ),
             program_config=program_config,
             scale=self.head_dim**-0.5,
             compute_kernel_config=self.sdpa_compute_kernel_config,
@@ -1216,7 +1286,8 @@ class MiniMaxH3Attention(Module):
             use_column_major_ccl=True,
             block_size=SOL_BLOCK,
             **({"head_weights": sol_kwargs["sol_head_weights"]} if "sol_head_weights" in sol_kwargs else {}),
-            **({"dense_q_blocks": dense} if (dense := self._sol_dense_q_blocks(q.shape[2])) else {}),
+            **self._sparse_dense_kwargs(q.shape[2], runtime),
+            **({"logical_n_tensor": logical_n} if runtime else {}),
             **({} if token_major_dtype is None else {"output_token_major": True, "output_dtype": token_major_dtype}),
         )
         for t in cast:
@@ -1229,6 +1300,16 @@ class MiniMaxH3Attention(Module):
             ttnn.deallocate(out)
             out = out_bf16
         return out
+
+    def _sparse_dense_kwargs(self, rows: int, runtime: bool) -> dict:
+        """The sparse op's dense Q blocks: the device table (runtime prompt length) or the host list (in the hash)."""
+        if runtime:
+            table = self._sol_dense_table(rows)
+            if table is None:
+                return {}
+            return {"dense_q_blocks_tensor": table, "dense_q_blocks_max_per_shard": self.sol_dense_class(rows)}
+        dense = self._sol_dense_q_blocks(rows)
+        return {"dense_q_blocks": dense} if dense else {}
 
     def row_parallel_gate_fusable(self, rows: int) -> bool:
         """Whether to_out will run the fused row-parallel MM + RS + addcmul for `rows` padded rows, i.e. whether a
@@ -1483,7 +1564,7 @@ class MiniMaxH3Attention(Module):
             if sol_kwargs and self.sol_mode == "resident" and self._SPARSE_RING:
                 token_major_dtype = self._s1_token_major_out()
                 spatial_BHNE = self._sparse_ring_attention(
-                    q_BHNE, k_BHNE, v_BHNE, sol_kwargs, token_major_dtype=token_major_dtype
+                    q_BHNE, k_BHNE, v_BHNE, sol_kwargs, token_major_dtype=token_major_dtype, logical_n=logical_n
                 )
                 if token_major_dtype is not None:
                     spatial_1BND_token_major = spatial_BHNE

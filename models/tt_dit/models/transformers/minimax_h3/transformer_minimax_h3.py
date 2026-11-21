@@ -614,7 +614,7 @@ class MiniMaxH3Transformer3DModel(Module):
             trace_key = (pad_to, adaln_tile_map is not None)
             run_traced, tracer_kwargs, phase = traced, {}, None
             if traced and self.lazy_trace:
-                trace_key = (*trace_key, self._sol_graph_key(), plan is not None)
+                trace_key = (*trace_key, self._sol_graph_key(local_rows), plan is not None)
                 first = self._trace_first_seen.setdefault(trace_key, self._request_index)
                 run_traced = first < self._request_index
                 slot_traces = run_traced and self._modulation_slot_traces and plan is not None and plan.slot is not None
@@ -786,13 +786,17 @@ class MiniMaxH3Transformer3DModel(Module):
         """Mark a request boundary (the pipeline calls this once per denoise) for the lazy trace."""
         self._request_index += 1
 
-    def _sol_graph_key(self) -> tuple:
+    def _sol_graph_key(self, local_rows: int) -> tuple:
         """Everything host-side that changes the ops `run_blocks` issues: per block, dense or the Sol configuration.
-        `sol_logical_n` is part of it because the route program bakes 1/n_valid_blocks as a compile-time argument."""
+        The prompt length, the sink and the block map are part of it unless the block takes them from device tensors
+        (`sol_runtime_length`: written before each request), which lets every prompt length of a bucket share one
+        capture; then only the sparse op's dense-block size class (`sol_dense_class`, the most dense Q blocks on a shard,
+        capped at 3) is, as it sizes the op's per-core Q blocks."""
         key = []
         for block in self.transformer_blocks:
             attn = block.attn
             if attn.sol_attn and attn.sol_active:
+                runtime = attn.sol_runtime_length()
                 key.append(
                     (
                         attn.sol_mode,
@@ -802,9 +806,10 @@ class MiniMaxH3Transformer3DModel(Module):
                         attn.sol_prefix_mode,
                         attn.sol_fused,
                         attn.sol_mask_reuse,
-                        attn.sol_logical_n,
-                        repr(attn.sol_sink_tokens),
-                        attn.sol_block_map,
+                        None if runtime else attn.sol_logical_n,
+                        None if runtime else repr(attn.sol_sink_tokens),
+                        None if runtime else attn.sol_block_map,
+                        attn.sol_dense_class(local_rows) if runtime else None,
                         attn._SOL_RESIDENT_PASSES,
                         attn._SOL_RESIDENT_K_CHUNK,
                     )
