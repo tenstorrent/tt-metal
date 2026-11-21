@@ -431,6 +431,14 @@ def generate_ring_joint_perf_model_configs(
         # q=128 excluded: hung twice on 2026-09-17 on one Wormhole galaxy (seq_local 13632, k=512), did not
         # reproduce on another the same day (6/6), and is slower than q=192 at every feasible k regardless.
         ("minimax_h3_15s_768p", 13664, [192, 256], [512, 640, 768, 1024]),
+        # The 4x8 presets run bucket_denoise, so production lengths are the MINIMAX_H3_BUCKET_LADDER_4X8
+        # rungs / SP=8, not the SP * TILE lengths above: 38912 / 76800 / 111616 -> 4864 / 9600 / 13952.
+        # The model table carries these at the fallback (256, 512), unswept. At 4864 the measured 4736
+        # pick (320, 384) no longer tiles 110 cores (16 chunks, 224 items, 3 per core); q = 352 does
+        # (14 chunks, 196 items, 2 per core) if it fits L1, which only this sweep can say.
+        ("minimax_h3_5s_768p_bucket", 4864, [256, 320, 352, 384], [256, 384, 512]),
+        ("minimax_h3_10s_768p_bucket", 9600, [256, 320], [256, 512]),
+        ("minimax_h3_15s_768p_bucket", 13952, [192, 256], [512, 640]),
     ):
         perf_configs[_name] = ModelConfig(
             name=_name,

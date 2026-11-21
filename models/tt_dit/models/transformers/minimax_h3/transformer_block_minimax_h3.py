@@ -10,6 +10,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ....layers.feedforward import ParallelFeedForward
 from ....layers.linear import ColParallelLinear
@@ -522,6 +523,12 @@ class MiniMaxH3TransformerBlock(Module):
         config is set at construction."""
         if not self.use_fused_agmm:
             return {}
-        kwargs = agmm_kwargs(self._ff1_pins, *self._ff1_kn, normed.padded_shape[-2], self.mm_compute_kernel_config)
+        kwargs = agmm_kwargs(
+            self._ff1_pins,
+            *self._ff1_kn,
+            normed.padded_shape[-2],
+            self.mm_compute_kernel_config,
+            rules_fallback=is_blackhole(),
+        )
         del kwargs["compute_kernel_config"]
         return kwargs
