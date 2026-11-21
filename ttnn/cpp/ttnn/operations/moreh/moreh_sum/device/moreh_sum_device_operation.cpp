@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include <tt-metalium/base_types.hpp>
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -65,6 +66,18 @@ void MorehSumOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };
+
+bool MorehSumOperation::skip_launch(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    const tensor_return_value_t&) {
+    // The program factories divide by the empty dims; prim::moreh_sum zero-fills the output instead.
+    if (tensor_args.input.logical_volume() != 0) {
+        return false;
+    }
+    validate_tensors(operation_attributes, tensor_args);
+    return true;
+}
 
 MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -141,8 +154,17 @@ ttnn::operations::moreh::moreh_sum::MorehSumOperation::tensor_return_value_t mor
         dim,
         keepdim,
         memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(
+            input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input, output};
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    auto result = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    if (input.logical_volume() == 0 && result.logical_volume() != 0) {
+        // skip_launch left the output unwritten; a sum over an empty dim is zero.
+        if (result.dtype() == DataType::INT32) {
+            return ttnn::fill(result, int32_t{0}, std::nullopt, result);
+        }
+        return ttnn::fill(result, 0.0f, std::nullopt, result);
+    }
+    return result;
 }
 }  // namespace ttnn::prim
