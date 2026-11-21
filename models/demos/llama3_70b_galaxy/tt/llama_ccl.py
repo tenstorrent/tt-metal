@@ -98,7 +98,15 @@ class TT_CCL:
 
         self.ring_topology = self.model_config["CCL_TOPOLOGY"] == ttnn.Topology.Ring
         self.use_ring_prefill = self.ring_topology and mode == "prefill"
-        self.use_ring_ag_prefill = (self.ring_topology and not LINE_AG) and mode == "prefill"
+        # Blackhole's no-prefetch path uses the stable public all-gather below. Keeping the
+        # experimental ring gather enabled here makes traced model collectives share rotating
+        # semaphores with eager output processing, which can desynchronize repeated trace replay.
+        self.use_ring_ag_prefill = (
+            self.ring_topology
+            and not LINE_AG
+            and mode == "prefill"
+            and not (self.is_blackhole and not self.use_prefetcher)
+        )
         self.use_ring_rs_prefill = (self.ring_topology and not LINE_RS) and mode == "prefill"
         # Keep this reduction sequence specific to Qwen3-32B on Wormhole Galaxy.
         self.use_qwen_prefill_ff2_gather_reduce = (
