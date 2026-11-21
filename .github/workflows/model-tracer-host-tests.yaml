@@ -1,0 +1,45 @@
+name: "[post-commit] model tracer - host tests"
+
+# Host-only unit tests for model_tracer/ (runner resolution, machine info, the traced-test
+# command). No device or build needed. Path-filtered so it only runs when that code changes.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - "main"
+    paths:
+      - "model_tracer/**"
+      - "tests/sweep_framework/test_resolve_trace_runner.py"
+      - "tests/sweep_framework/test_machine_info.py"
+      - "tests/sweep_framework/test_generic_ops_tracer_cmd.py"
+      - ".github/workflows/model-tracer-host-tests.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  model-tracer-host-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        timeout-minutes: 5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.10"
+      - name: Install dependencies
+        run: pip install pyyaml tqdm pytest
+      - name: Run model tracer host tests
+        # --noconftest: the repo-root conftest imports torch and models/, which this job doesn't install.
+        run: |
+          PYTHONPATH=. python -m pytest --noconftest -q \
+            tests/sweep_framework/test_resolve_trace_runner.py \
+            tests/sweep_framework/test_machine_info.py \
+            tests/sweep_framework/test_generic_ops_tracer_cmd.py
+      - name: Resolve every model-trace runner alias against sku_config.yaml
+        # Fails when a SKU named in model_tracer/resolve_trace_runner.py is missing from sku_config.yaml.
+        run: |
+          for label in $(PYTHONPATH=. python -c 'import itertools as it, model_tracer.resolve_trace_runner as r; print(" ".join([*r.LABEL_ALIASES, *it.chain(*r.RETIRED_LABELS.values())]))'); do
+            PYTHONPATH=. python model_tracer/resolve_trace_runner.py --runner-label "$label" > /dev/null
+          done
