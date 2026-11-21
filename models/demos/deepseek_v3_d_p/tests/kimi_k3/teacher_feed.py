@@ -118,6 +118,26 @@ def replay_live_and_sealed(
     return live, torch.stack(sealed, dim=1)
 
 
+def checkpoint_tensors(checkpoint: Path, layer: int | None, names: list[str]) -> dict[str, torch.Tensor]:
+    """Tensors ``layers.<layer>.<name>`` (``layer`` None: ``<name>`` under the model root, e.g. ``embed_tokens.weight``)
+    of a K3 / K3.1 checkpoint (either key root), keyed by ``name``, read through its safetensors index opening each
+    shard once. Imports no device code (the K3 golden's loader imports the device adapters, and so ttnn)."""
+    weight_map = json.loads((Path(checkpoint) / "model.safetensors.index.json").read_text())["weight_map"]
+    base = "" if layer is None else f"layers.{layer}."
+    roots = [r for r in ("model.", "language_model.model.") if f"{r}{base}{names[0]}" in weight_map]
+    if not roots:
+        raise ValueError(f"{checkpoint} has no {base}{names[0]}")
+    full = {f"{roots[0]}{base}{n}": n for n in names}
+    by_shard: dict[str, list[str]] = {}
+    for key in full:
+        by_shard.setdefault(weight_map[key], []).append(key)
+    out = {}
+    for shard, keys in by_shard.items():
+        with safe_open(str(Path(checkpoint) / shard), framework="pt") as handle:
+            out.update({full[k]: handle.get_tensor(k) for k in keys})
+    return out
+
+
 def rms_norm(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     """The model reference's RMSNorm (`modeling_kimi_k3_mla.KimiRMSNorm`) in bf16: normalize in fp32, round to bf16,
     then scale by the bf16 weight (a second rounding)."""

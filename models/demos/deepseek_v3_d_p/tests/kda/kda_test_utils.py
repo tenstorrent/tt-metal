@@ -5,12 +5,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
 from loguru import logger
 
-import ttnn
+if TYPE_CHECKING:  # only the device helpers below use ttnn; they import it, so the host metrics import without it
+    import ttnn
 
 
 def encode_tail(rows: torch.Tensor, page_channels: int | None) -> torch.Tensor:
@@ -296,6 +298,8 @@ def collect_accuracy_and_determinism_results(
     count: int = 3,
 ) -> tuple[tuple[ttnn.Tensor, ...], tuple[torch.Tensor, ...], torch.Tensor]:
     """Run repeatedly, retaining only first outputs and one device-side mismatch marker."""
+    import ttnn
+
     if count <= 1:
         raise ValueError("count must be greater than one")
 
@@ -352,6 +356,8 @@ def collect_accuracy_and_determinism_results(
 def height_sharded_memory_config(
     device: ttnn.Device, leading: int, matrix_height: int, matrix_width: int
 ) -> ttnn.MemoryConfig:
+    import ttnn
+
     cores = ttnn.num_cores_to_corerangeset(leading, device.compute_with_storage_grid_size(), row_wise=True)
     return ttnn.create_sharded_memory_config(
         (leading, matrix_height, matrix_width),
@@ -382,11 +388,20 @@ def qkv_to_device(
     tensor: torch.Tensor,
     device: ttnn.Device,
     *,
-    dtype: ttnn.DataType = ttnn.bfloat16,
+    dtype: ttnn.DataType | None = None,
     layout: ttnn.Layout,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    memory_config: ttnn.MemoryConfig | None = None,
 ) -> ttnn.Tensor:
-    return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+    """``dtype`` defaults to bfloat16 and ``memory_config`` to DRAM."""
+    import ttnn
+
+    return ttnn.from_torch(
+        tensor,
+        dtype=ttnn.bfloat16 if dtype is None else dtype,
+        layout=layout,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG if memory_config is None else memory_config,
+    )
 
 
 def qkv_device_inputs(
@@ -410,6 +425,8 @@ def qkv_device_inputs(
         seed=seed,
     )
     inputs, history, taps = host
+    import ttnn
+
     return host, (
         qkv_to_device(inputs, device, layout=ttnn.ROW_MAJOR_LAYOUT),
         qkv_to_device(encode_tail(history, page_channels), device, layout=ttnn.ROW_MAJOR_LAYOUT),
@@ -430,6 +447,8 @@ def qkv_reference(
 
 def make_actual_start(device: ttnn.MeshDevice, actual_start: int = 0) -> ttnn.Tensor:
     """Allocate caller-owned start metadata before any trace capture."""
+    import ttnn
+
     return ttnn.from_torch(
         torch.tensor([actual_start], dtype=torch.int64),
         device=device,
