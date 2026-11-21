@@ -282,9 +282,10 @@ __attribute__((noinline)) void two_level_gather(
     }
 }
 
-// Wall-clock ticks (about 150 us) a core waits for one of its rows' units once every unit is claimed, before it does
-// the unit itself. A claimed unit is usually done well within it (its core may first finish a row's last chunks); a
-// repair that comes too early only does a unit twice.
+// Wall-clock ticks (about 150 us) a core waits for one of its rows' units once every unit is claimed, or in a streamed
+// stage 2 from a look at the claimed count that found it claimed, before it does the unit itself. A claimed unit is
+// usually done well within it (its core may first finish a row's last chunks); a repair that comes too early only does
+// a unit twice.
 constexpr uint32_t repair_after = 200000;
 // Wall-clock ticks (about 10 us) between looks at the claimed count while a streamed stage 2 waits for a unit not yet
 // claimed (see two_level_stage2).
@@ -350,10 +351,10 @@ __attribute__((noinline)) void two_level_unit_maxima(
 
 // Stage 2 of one row: its block maxima from the maxima tensor through the input CB, one chunk per reserve so a chunk
 // never wraps. Past the row's blocks a chunk is -inf. With done_words (the row's done words, per_row of them), the row
-// runs before its maxima are complete: each chunk waits for the units it covers, and a unit still missing after
-// repair_after and claimed by then is computed here (see two_level_run's claims; one claimed just before is only done
-// twice). A unit seen unclaimed (the claimed count, read by claimed_count, not past it) is waited for until it is
-// claimed, which a core that finishes its rows does, and from then on repair_after again.
+// runs before its maxima are complete: each chunk waits for the units it covers, and a unit still missing repair_after
+// after a look at the claimed count (read by claimed_count) found it claimed is computed here (see two_level_run's
+// claims; a slow one is only done twice). The count is read when an awaited unit is missing and not known claimed,
+// then every claim_poll until it is, so the units of the row that the same look found claimed share one wait.
 template <typename InputAccessor, typename MaxAccessor, typename ClaimedCount>
 FORCE_INLINE void two_level_stage2(
     const Noc& noc,
@@ -376,33 +377,32 @@ FORCE_INLINE void two_level_stage2(
     constexpr uint32_t chunk_maxima = chunk_bytes / sizeof(uint16_t);
     static_assert(chunk_maxima % unit_maxima == 0);
     uint32_t parts_seen = 0;
+    // The claimed count at the last look, and the time of that look; the first look is at once.
+    uint32_t claims = 0;
+    uint32_t since = get_timestamp_32b() - claim_poll - 1;
     for (uint32_t chunk = 0; chunk < max_chunks; ++chunk) {
         // The chunk's units to compute here, a bit per unit from its first.
         uint32_t repairs = 0;
         if (done_words != nullptr) {
             uint32_t needed = (chunk + 1) * (chunk_maxima / unit_maxima);
             needed = needed < units.per_row ? needed : units.per_row;
-            uint32_t since = get_timestamp_32b();
-            // Whether the awaited unit was seen unclaimed, and since when it is seen claimed if so.
-            bool unclaimed = false;
             while (parts_seen < needed) {
                 invalidate_l1_cache();
-                bool late = false;
-                if (done_words[parts_seen] == 0 &&
-                    get_timestamp_32b() - since > (unclaimed ? claim_poll : repair_after)) {
-                    const bool claimed = claimed_count() > units.unit_of(row, parts_seen);
-                    late = claimed && !unclaimed;
-                    unclaimed = !claimed;
-                    since = get_timestamp_32b();
-                }
-                if (done_words[parts_seen] != 0 || late) {
-                    if (done_words[parts_seen] == 0) {
-                        repairs |= 1u << (parts_seen - chunk * (chunk_maxima / unit_maxima));
+                if (done_words[parts_seen] == 0) {
+                    const uint32_t now = get_timestamp_32b();
+                    if (units.unit_of(row, parts_seen) >= claims) {
+                        if (now - since > claim_poll) {
+                            claims = claimed_count();
+                            since = get_timestamp_32b();
+                        }
+                        continue;
                     }
-                    ++parts_seen;
-                    unclaimed = false;
-                    since = get_timestamp_32b();
+                    if (now - since <= repair_after) {
+                        continue;
+                    }
+                    repairs |= 1u << (parts_seen - chunk * (chunk_maxima / unit_maxima));
                 }
+                ++parts_seen;
             }
         }
         input_cb.reserve_back(tiles_per_chunk);
@@ -495,7 +495,8 @@ FORCE_INLINE void two_level_run(
     // are reliable, so correctness rests on those:
     // - A claim waits for claim_word to change from the core's last value (the word starts at 0xFFFFFFFF, which no
     //   claim returns), for at most claim_timeout. A wrong or missing value is a unit done twice, which its done word
-    //   absorbs, or a unit nobody does, which its row's owner repairs (see below).
+    //   absorbs, or a unit nobody does, which its row's owner repairs (see below). A value that lands after the
+    //   counter ran out is still taken.
     // - The other atomics (the cleared count and the row counter) use the register-write buffer, unused by this kernel
     //   otherwise, with rows_word as its return address, so their values never land in claim_word. The row counter's
     //   value is only the cap's estimate.
@@ -510,8 +511,9 @@ FORCE_INLINE void two_level_run(
         const uint32_t start = get_timestamp_32b();
         do {
             invalidate_l1_cache();
-            if (*claimed != last_claimed) {
-                last_claimed = *claimed;
+            const uint32_t value = *claimed;
+            if (value != last_claimed) {
+                last_claimed = value;
                 return true;
             }
         } while (get_timestamp_32b() - start < claim_timeout);
@@ -741,7 +743,17 @@ FORCE_INLINE void two_level_run(
                 units_left = read_counter() < units.total;
                 continue;
             }
-        } else if (repairing) {
+        } else if constexpr (!has_block_max) {
+            // A claim's value that came after its timeout.
+            invalidate_l1_cache();
+            const uint32_t value = *claimed;
+            if (value != last_claimed) {
+                last_claimed = value;
+                unit = value;
+            }
+        }
+        if (unit >= units.total && repairing) {
+            unit = units.total;
             // The repair walks this core's done words once, from repair_next: each missing unit is done once.
             for (; repair_next < local_rows * max_row_units && unit == units.total; ++repair_next) {
                 const uint32_t local_row = repair_next / max_row_units;
