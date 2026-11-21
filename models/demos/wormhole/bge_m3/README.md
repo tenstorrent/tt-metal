@@ -311,8 +311,9 @@ Notes:
 
 - The current generator path is single-device.
 - `sentence_pooling_method` controls how `dense_vecs` are produced from the last hidden state.
-- The default is `"mean"`, which averages token embeddings across the non-padded tokens in the prompt.
-- `"cls"` pools from the first token and matches the reference setup used in `tests/pcc/test_generator_vllm.py`.
+- The default is `"cls"`, which pools from the first token, as the BAAI/bge-m3 checkpoint does.
+- `"mean"` averages token embeddings across the non-padded tokens in the prompt.
+- `normalize_embeddings` (default `True`) L2-normalizes `dense_vecs`, as the checkpoint does. Pass `False` for the raw pooled vectors.
 - `"last_token"` pools from the last valid token in each prompt.
 - The returned tensors are padded to `max_batch_size`, so slice back to your real batch size.
 
@@ -320,8 +321,8 @@ Notes:
 
 `BgeM3ForEmbedding` currently supports these `sentence_pooling_method` values:
 
-- `"mean"`: (default) averages token embeddings using the attention mask.
-- `"cls"`: returns the embedding from the first token position.
+- `"cls"`: (default) returns the embedding from the first token position.
+- `"mean"`: averages token embeddings using the attention mask.
 - `"last_token"`: returns the embedding from the last non-padding token.
 
 Example with the default behavior:
