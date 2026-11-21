@@ -550,24 +550,34 @@ def record_python_operation_error(record, error_type, error_message):
     record["error"] = {"type": error_type, "message": error_message}
 
 
-def store_output_tensor_ids(output_tensor_ids):
-    """Attach output tensor IDs to the most recent _python_io_data entry.
+def store_output_tensor_ids(output_tensor_ids, record=None):
+    """Attach output tensor IDs to this operation's python_io record.
 
-    Called from both ``FastOperation.__call__`` and ``runtime_decorator.call_wrapper``.
+    Called from both ``FastOperation.__call__`` and ``runtime_decorator.call_wrapper``,
+    which pass the ``record`` they reserved with :func:`append_python_io_record`. An
+    operation that calls other recorded operations is no longer the last entry when
+    it finishes, so the latest entry is used only when no record is passed.
     """
-    if _python_io_data:
-        _python_io_data[-1]["output_tensor_ids"] = output_tensor_ids
+    if record is None:
+        if not _python_io_data:
+            return
+        record = _python_io_data[-1]
+    record["output_tensor_ids"] = output_tensor_ids
 
 
-def store_captured_graph(captured_graph_json):
-    """Attach a per-op captured graph to the most recent _python_io_data entry.
+def store_captured_graph(captured_graph_json, record=None):
+    """Attach a per-op captured graph to this operation's python_io record.
 
     Called from ``runtime_decorator.call_wrapper`` (slow dispatch) right after
-    ``end_graph_capture()``.  ``[-1]`` is always the correct entry since
-    ``append_python_io_record`` is called first for the same operation.
+    ``end_graph_capture()`` with the ``record`` reserved for the call. Nested
+    operations append their own records during the call, so the latest entry is
+    used only when no record is passed.
     """
-    if _python_io_data:
-        _python_io_data[-1]["captured_graph"] = captured_graph_json
+    if record is None:
+        if not _python_io_data:
+            return
+        record = _python_io_data[-1]
+    record["captured_graph"] = captured_graph_json
 
 
 def record_tensor_comparison_data(

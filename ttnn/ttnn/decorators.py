@@ -1283,7 +1283,7 @@ class FastOperation:
 
         if recording:
             set_tensor_id(get_all_tensors(result), force=True)
-            ttnn.graph.store_output_tensor_ids(get_output_tensor_ids(result))
+            ttnn.graph.store_output_tensor_ids(get_output_tensor_ids(result), record=python_io_record)
 
         return result
 
@@ -1677,11 +1677,11 @@ class Operation:
                     # Failure path: the success block below is skipped, so persist here instead.
                     if operation_error is not None and ttnn.graph.is_graph_capture_active():
                         ttnn.graph.record_python_operation_error(python_io_record, *operation_error)
-                        ttnn.graph.store_captured_graph(captured_graph)
+                        ttnn.graph.store_captured_graph(captured_graph, record=python_io_record)
 
                 if ttnn.graph.is_graph_capture_active() and ttnn.graph.is_python_io_recording_enabled():
-                    ttnn.graph.store_output_tensor_ids(get_output_tensor_ids(output))
-                    ttnn.graph.store_captured_graph(captured_graph)
+                    ttnn.graph.store_output_tensor_ids(get_output_tensor_ids(output), record=python_io_record)
+                    ttnn.graph.store_captured_graph(captured_graph, record=python_io_record)
 
                 for hook in POST_OPERATION_HOOKS:
                     hook_return_value = hook(self, function_args, function_kwargs, output)
