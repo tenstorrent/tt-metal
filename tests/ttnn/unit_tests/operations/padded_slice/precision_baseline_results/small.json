@@ -1,0 +1,30 @@
+{
+ "shape": [
+  1,
+  4,
+  4,
+  16
+ ],
+ "start": [
+  0,
+  0,
+  0,
+  0
+ ],
+ "end": [
+  1,
+  2,
+  4,
+  16
+ ],
+ "rows": 8,
+ "pcc": 1.0,
+ "max_abs_err": 0.0,
+ "mean_abs_err": 0.0,
+ "relative_rms": 0.0,
+ "ulp_max": 0,
+ "ratio_median": 1.0,
+ "ratio_p5": 1.0,
+ "ratio_p95": 1.0,
+ "allclose": "Max ATOL Delta: 0.0, Max RTOL Delta: 0.0"
+}
