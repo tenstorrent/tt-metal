@@ -51,6 +51,28 @@ def _pack_dest_acc(
     return [DestAccumulation.No, DestAccumulation.Yes]
 
 
+def _format_group(fmt: DataFormat) -> tuple[bool, bool, bool]:
+    return (fmt.is_exponent_A(), fmt.is_exponent_B(), fmt.is_integer())
+
+
+def _pack_next_src(
+    prev_src: DataFormat, next_dst: DataFormat, dest_acc: DestAccumulation
+) -> list[DataFormat | None]:
+    """``pack_src`` overrides to sweep; ``None`` keeps the inferred one."""
+    if dest_acc == DestAccumulation.Yes or not {prev_src, next_dst} & _INT8_FORMATS:
+        return [None]
+    # With a 16-bit Dest the format inference keeps pack_src at the previous (unpack) format,
+    # which would give both runs the same Dest-read control (and an unsupported Int8 -> float
+    # pack in run 0). Pack every format of next_dst's group instead, so the control changes and
+    # converting packs such as UInt8 -> Int8 or Float32 -> Bfp8_b stay covered.
+    return [
+        f
+        for f in RECONFIG_FORMATS
+        if _format_group(f) == _format_group(next_dst)
+        and (not f.is_integer() or f in _INT8_FORMATS)
+    ]
+
+
 # Float16 is out of the sweep below, but PCK_DEST_RD_CTRL_Round_10b_mant is set only when an fp32
 # dest packs from Float16, and no functional test can see a 10-bit-mantissa rounding difference.
 # These (prev_src, next_dst) rows keep the reconfig RMW of that bit covered, so they only run with
@@ -64,15 +86,16 @@ if get_chip_architecture() != ChipArchitecture.WORMHOLE:
 
 @parametrize(
     **flat_axes(
-        ("prev_src", "next_dst", "dest_acc"),
+        ("prev_src", "next_dst", "dest_acc", "next_src"),
         [
-            (prev_src, next_dst, dest_acc)
+            (prev_src, next_dst, dest_acc, next_src)
             for prev_src in RECONFIG_FORMATS
             for next_dst in RECONFIG_FORMATS
             for dest_acc in _pack_dest_acc(prev_src, next_dst)
+            for next_src in _pack_next_src(prev_src, next_dst, dest_acc)
         ]
         + [
-            (prev_src, next_dst, DestAccumulation.Yes)
+            (prev_src, next_dst, DestAccumulation.Yes, None)
             for prev_src, next_dst in ROUND_10B_MANT_FORMATS
         ],
     )
@@ -81,25 +104,20 @@ def test_pack_reconfig(
     prev_src,
     next_dst,
     dest_acc,
+    next_src,
 ):
     configuration = TestConfig(
         "sources/state/reconfig/pack_reconfig_test.cpp",
-        # The kernel takes prev_dst and next_src from the inferred unpack_A_dst and pack_src.
+        # The kernel takes prev_dst from the inferred unpack_A_dst and next_src from pack_src.
         InputOutputFormat(prev_src, next_dst),
         runtimes=[
             CONFIGURE_TEST_RUN_IDX(0),
         ],
         dest_acc=dest_acc,
     )
-    if dest_acc == DestAccumulation.No and (
-        prev_src in _INT8_FORMATS or next_dst in _INT8_FORMATS
-    ):
-        # With a 16-bit Dest the format inference keeps pack_src at the previous (unpack) format,
-        # which would give both runs the same Dest-read control (and an unsupported Int8 -> float
-        # pack in run 0). Pack the next format's own register representation so the control
-        # changes between the previous and the next format.
+    if next_src is not None:
         for fmt_config in configuration.formats_config:
-            fmt_config.pack_src = next_dst
+            fmt_config.pack_src = next_src
 
     configuration.run()
     expected = TensixState.fetch(TestConfig.TENSIX_LOCATION)
