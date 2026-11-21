@@ -21,11 +21,13 @@ enum class QuantVariant : std::uint8_t { Quant, Requant, Dequant };
 template <QuantVariant>
 inline constexpr bool quant_unhandled_variant = false;
 
-// Shared LREG layout across all three quant ops:
-//   LREG0 = operand A load / running accumulator / result before store
-//   LREG1 = operand B (fp32 scale)
+// Shared LREG layout across all three quant ops. Each replay processes TWO SFPU passes (row pairs):
+//   LREG0 = pass 0 operand A load / running accumulator / result before store
+//   LREG1 = pass 0 operand B (fp32 scale)
+//   LREG3 = pass 1 operand A load / running accumulator / result before store
+//   LREG4 = pass 1 operand B (fp32 scale)
 //   LREG2 = zero-point (fp32), loaded once by the matching init
-// LREG3-7 stay free. Each init must run before the first call to its kernel.
+// LREG5-7 stay free. Each init must run before the first call to its kernel.
 //
 // SIGN_MAGNITUDE_FORMAT gates the SM<->2's-comp casts: the default (false) path
 // treats int32 dest content as 2's-complement (UNP_DEST / Int32-L1), while
@@ -33,29 +35,47 @@ inline constexpr bool quant_unhandled_variant = false;
 // the !SIGN_MAGNITUDE_FORMAT path; the true path stores STOCH_RND output as-is.
 //
 // The init records once the register-to-register math that turns the loaded
-// operands into the result; the kernel replays it each iteration around inline
-// operand loads and a result store.
+// operands into the result; the kernel replays it for every pair of SFPU passes
+// around inline operand loads and result stores.
+//
+// Each recorded body handles two passes: pass 0 in LREG0/LREG1, pass 1 in LREG3/LREG4,
+// with the two chains interleaved instruction by instruction (p0/p1 below). Every
+// instruction of a chain (CAST -> CAST -> MAD -> STOCH_RND -> CAST, MAD -> MUL) depends
+// on the previous one, so a single-pass body issues each consumer right behind its
+// producer; with the other pass's independent instruction in between, the SFPU
+// pipeline has one more issue slot to retire the producer before the consumer reads
+// it. Per element the instruction sequence and operand order are unchanged.
 //
 // Per-op slots are non-overlapping and sized to the larger (2's-complement)
 // variant (the sign-magnitude variant records fewer instructions into the same
 // slot), so one compute kernel can mix all three ops without cross-clobbering:
-//   QUANT   (2s-comp, 3) : SFPMAD, STOCH_RND, SFPCAST
-//   QUANT   (sign-m, 2)  : SFPMAD, STOCH_RND
-//   REQUANT (2s-comp, 5) : SFPCAST(in), SFPCAST(int->fp32), SFPMAD, STOCH_RND, SFPCAST(out)
-//   REQUANT (sign-m, 3)  : SFPCAST(int->fp32), SFPMAD, STOCH_RND
-//   DEQUANT (2s-comp, 4) : SFPCAST(in), SFPCAST(int->fp32), SFPMAD, SFPMUL
-//   DEQUANT (sign-m, 3)  : SFPCAST(int->fp32), SFPMAD, SFPMUL
+//   QUANT   (2s-comp, 6)  : SFPMAD p0/p1, STOCH_RND p0/p1, SFPCAST p0/p1
+//   QUANT   (sign-m, 4)   : SFPMAD p0/p1, STOCH_RND p0/p1
+//   REQUANT (2s-comp, 10) : SFPCAST(in) p0/p1, SFPCAST(int->fp32) p0/p1, SFPMAD p0/p1, STOCH_RND p0/p1,
+//                           SFPCAST(out) p0/p1
+//   REQUANT (sign-m, 6)   : SFPCAST(int->fp32) p0/p1, SFPMAD p0/p1, STOCH_RND p0/p1
+//   DEQUANT (2s-comp, 8)  : SFPCAST(in) p0/p1, SFPCAST(int->fp32) p0/p1, SFPMAD p0/p1, SFPMUL p0/p1
+//   DEQUANT (sign-m, 6)   : SFPCAST(int->fp32) p0/p1, SFPMAD p0/p1, SFPMUL p0/p1
 constexpr std::uint32_t QUANT_REPLAY_SLOT = 0;
-constexpr std::uint32_t QUANT_REPLAY_LEN_2S_COMP = 3;
-constexpr std::uint32_t QUANT_REPLAY_LEN_SIGN_MAGN = 2;
+constexpr std::uint32_t QUANT_REPLAY_LEN_2S_COMP = 6;
+constexpr std::uint32_t QUANT_REPLAY_LEN_SIGN_MAGN = 4;
 
 constexpr std::uint32_t REQUANT_REPLAY_SLOT = QUANT_REPLAY_SLOT + QUANT_REPLAY_LEN_2S_COMP;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_2S_COMP = 5;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_SIGN_MAGN = 3;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_2S_COMP = 10;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_SIGN_MAGN = 6;
 
 constexpr std::uint32_t DEQUANT_REPLAY_SLOT = REQUANT_REPLAY_SLOT + REQUANT_REPLAY_LEN_2S_COMP;
-constexpr std::uint32_t DEQUANT_REPLAY_LEN_2S_COMP = 4;
-constexpr std::uint32_t DEQUANT_REPLAY_LEN_SIGN_MAGN = 3;
+constexpr std::uint32_t DEQUANT_REPLAY_LEN_2S_COMP = 8;
+constexpr std::uint32_t DEQUANT_REPLAY_LEN_SIGN_MAGN = 6;
+
+static_assert(
+    DEQUANT_REPLAY_SLOT + DEQUANT_REPLAY_LEN_2S_COMP <= 32, "quant replay bodies exceed the 32-entry replay bank");
+
+// Pass-pair register plan (see the replay-body comment above).
+constexpr std::uint32_t QUANT_PASS0_A = p_sfpu::LREG0;
+constexpr std::uint32_t QUANT_PASS0_B = p_sfpu::LREG1;
+constexpr std::uint32_t QUANT_PASS1_A = p_sfpu::LREG3;
+constexpr std::uint32_t QUANT_PASS1_B = p_sfpu::LREG4;
 
 // Replay slot base (per op) and recorded length (per op, per format) for the
 // register-only compute middle.
@@ -111,46 +131,62 @@ inline void quant_family_init(const std::uint32_t zero_point) {
         // Requant/Dequant take an int32 operand A -> bring it to fp32 first.
         if constexpr (OP == QuantVariant::Requant || OP == QuantVariant::Dequant) {
             if constexpr (!SIGN_MAGNITUDE_FORMAT) {
-                TTI_SFPCAST(
-                    p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM);  // 2's-comp -> sign-mag input
+                // 2's-comp -> sign-mag input, both passes
+                TTI_SFPCAST(QUANT_PASS0_A, QUANT_PASS0_A, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM);
+                TTI_SFPCAST(QUANT_PASS1_A, QUANT_PASS1_A, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM);
             }
-            TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0 /* mod1: int32(sign-mag) -> fp32 RNE */);
+            // int32 (sign-mag) -> fp32 RNE, both passes
+            TTI_SFPCAST(QUANT_PASS0_A, QUANT_PASS0_A, 0 /* mod1 */);
+            TTI_SFPCAST(QUANT_PASS1_A, QUANT_PASS1_A, 0 /* mod1 */);
         }
 
         if constexpr (OP == QuantVariant::Quant || OP == QuantVariant::Requant) {
-            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /* mod1 */);  // A*B + zp
+            // A*B + zp, both passes
+            TTI_SFPMAD(QUANT_PASS0_A, QUANT_PASS0_B, p_sfpu::LREG2, QUANT_PASS0_A, 0 /* mod1 */);
+            TTI_SFPMAD(QUANT_PASS1_A, QUANT_PASS1_B, p_sfpu::LREG2, QUANT_PASS1_A, 0 /* mod1 */);
 
             // fp32 -> signed int8 (SMAG32 container), round-nearest-even; (1<<3) selects the imm8 descale slot (0 = no
-            // descale)
+            // descale). Both passes.
             TTI_SFP_STOCH_RND(
                 p_sfpu::sfp_stochrnd_rnd_mod::NearEven,
                 0 /* imm8 descale */,
                 p_sfpu::LCONST_0 /* lreg_b (unused on fp32 path) */,
-                p_sfpu::LREG0,
-                p_sfpu::LREG0,
+                QUANT_PASS0_A,
+                QUANT_PASS0_A,
+                (1 << 3) | p_sfpu::sfp_stochrnd_mod::FP32_TO_INT8);
+            TTI_SFP_STOCH_RND(
+                p_sfpu::sfp_stochrnd_rnd_mod::NearEven,
+                0 /* imm8 descale */,
+                p_sfpu::LCONST_0 /* lreg_b (unused on fp32 path) */,
+                QUANT_PASS1_A,
+                QUANT_PASS1_A,
                 (1 << 3) | p_sfpu::sfp_stochrnd_mod::FP32_TO_INT8);
 
             if constexpr (!SIGN_MAGNITUDE_FORMAT) {
-                TTI_SFPCAST(
-                    p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);  // sign-mag -> 2's-comp output
+                // sign-mag -> 2's-comp output, both passes
+                TTI_SFPCAST(QUANT_PASS0_A, QUANT_PASS0_A, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);
+                TTI_SFPCAST(QUANT_PASS1_A, QUANT_PASS1_A, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);
             }
         } else {  // Dequant: (A + (-zp)) * B, fp32 output (no round / no output cast)
             // LCONST_1 = 1.0 -> A*1 + (-zp) = A - zp ; then LCONST_0 = 0.0 ignored as +C -> (A - zp) * B
-            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /* mod1 */);
-            TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* mod1 */);
+            TTI_SFPMAD(QUANT_PASS0_A, p_sfpu::LCONST_1, p_sfpu::LREG2, QUANT_PASS0_A, 0 /* mod1 */);
+            TTI_SFPMAD(QUANT_PASS1_A, p_sfpu::LCONST_1, p_sfpu::LREG2, QUANT_PASS1_A, 0 /* mod1 */);
+            TTI_SFPMUL(QUANT_PASS0_A, QUANT_PASS0_B, p_sfpu::LCONST_0, QUANT_PASS0_A, 0 /* mod1 */);
+            TTI_SFPMUL(QUANT_PASS1_A, QUANT_PASS1_B, p_sfpu::LCONST_0, QUANT_PASS1_A, 0 /* mod1 */);
         }
     });
 }
 
 /**
- * @brief Apply a quant-family op over a tile: per iteration load A/B, replay the compute middle, store.
+ * @brief Apply a quant-family op over a tile: per pair of passes load A/B of both, replay the compute middle, store
+ * both.
  *
  * Operand A is loaded as fp32 for Quant and int32 for Requant/Dequant; the result is stored as
- * int32 for Quant/Requant and fp32 for Dequant. The runtime-address loads/store stay inline; the
- * register-only middle recorded by @ref quant_family_init is replayed each iteration.
+ * int32 for Quant/Requant and fp32 for Dequant. The runtime-address loads/stores stay inline; the
+ * register-only middle recorded by @ref quant_family_init is replayed once per pair of passes.
  *
  * @tparam OP: Which quant-family op, values = <Quant/Requant/Dequant>
- * @tparam ITERATIONS: Number of SFPU passes spanning the tile (default = SFPU_ITERATIONS).
+ * @tparam ITERATIONS: Number of SFPU passes spanning the tile (default = SFPU_ITERATIONS); must be even.
  * @tparam SIGN_MAGNITUDE_FORMAT: Must match the value passed to @ref quant_family_init.
  * @tparam TILE_SHAPE: Dest tile shape used to scale the tile indices into row offsets.
  * @param dst_index_in0,dst_index_in1,dst_index_out: Dest tile indices of operand A, operand B, and the result.
@@ -173,15 +209,21 @@ inline void quant_family(
     const std::uint32_t in1_offset = dst_index_in1 * tile_stride;
     const std::uint32_t out_offset = dst_index_out * tile_stride;
 
+    static_assert(ITERATIONS % 2 == 0, "quant_family processes SFPU passes in pairs");
+    constexpr std::uint32_t PASS_ROWS = ckernel::math::SFP_ROWS;  // Dest rows per SFPU pass
+
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(p_sfpu::LREG0, A_FORMAT, ADDR_MOD_7, 0, in0_offset + (d << 1));  // operand A
-        TT_SFPLOAD(
-            p_sfpu::LREG1, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, in1_offset + (d << 1));  // operand B (fp32 scale)
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        const std::uint32_t row = d * PASS_ROWS;  // first Dest row of pass d; pass d + 1 is PASS_ROWS further
+        TT_SFPLOAD(QUANT_PASS0_A, A_FORMAT, ADDR_MOD_7, 0, in0_offset + row);              // operand A, pass 0
+        TT_SFPLOAD(QUANT_PASS0_B, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, in1_offset + row);  // operand B (fp32 scale)
+        TT_SFPLOAD(QUANT_PASS1_A, A_FORMAT, ADDR_MOD_7, 0, in0_offset + row + PASS_ROWS);  // operand A, pass 1
+        TT_SFPLOAD(QUANT_PASS1_B, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, in1_offset + row + PASS_ROWS);  // operand B
 
-        TTI_REPLAY(slot, len, 0, 0, 0, 0);  // recorded compute middle
+        TTI_REPLAY(slot, len, 0, 0, 0, 0);  // recorded compute middle, both passes
 
-        TT_SFPSTORE(p_sfpu::LREG0, OUT_FORMAT, ADDR_MOD_7, 0, out_offset + (d << 1));  // store result
+        TT_SFPSTORE(QUANT_PASS0_A, OUT_FORMAT, ADDR_MOD_7, 0, out_offset + row);              // store result, pass 0
+        TT_SFPSTORE(QUANT_PASS1_A, OUT_FORMAT, ADDR_MOD_7, 0, out_offset + row + PASS_ROWS);  // store result, pass 1
     }
 }
 
