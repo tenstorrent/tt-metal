@@ -1238,6 +1238,19 @@ def test_tilize_with_val_padding_wide_row_dram_width_sharded(device):
     assert torch.equal(torch_tensor, ttnn.to_torch(tt_tile))
 
 
+@pytest.mark.parametrize("width", [2048, 4096])
+def test_tilize_with_val_padding_one_core_sub_core_grids(device, width):
+    """On a one-core sub_core_grids a wide row must not pick the block factory, whose split needs more cores."""
+    torch_input = torch.randn(1, 1, 1, width, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+    output = ttnn.tilize_with_val_padding(tt_input, [1, 1, 32, width], 0.0, sub_core_grids=sub_core_grids)
+
+    expected = torch.cat([torch_input, torch.zeros(1, 1, 31, width, dtype=torch.bfloat16)], dim=2)
+    assert torch.equal(output.cpu().to_torch_with_padded_shape(), expected)
+
+
 # A pad value of the kind the docstring's pad_value line asks for: a float for BFLOAT16 and FLOAT32, and for the
 # integer dtypes an int at the end of the documented range.
 _DOCSTRING_PAD_VALUES = {
