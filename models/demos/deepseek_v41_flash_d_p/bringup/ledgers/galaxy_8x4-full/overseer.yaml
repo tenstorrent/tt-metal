@@ -736,6 +736,33 @@ notes:
     input tensor (one prepared gather / page copy into natural order, positions from the descriptor), the embedding reads
     that; the host keeps only the readback for the engram job. Applies to the single-request, lane and glued paths. Record
     ids_uploads_per_chunk (== 0) next to the builds count; bit-identical.'
+- id: OV-70
+  tasks:
+  - PB.8RP
+  status: closed
+  t: '2026-11-21T05:04:09'
+  text: 'The overseer stopped attempt 1 (fix): gate failure was the one-load rule (F283) refusing test_packed_walls in a
+    shared process: a gate configuration issue (overseer), not the model; no agent work needed'
+  closed: '2026-11-21T05:04:56'
+  why_closed: abort reason only; no agent work needed
+- id: OV-71
+  tasks:
+  - PB.8RP
+  status: closed
+  t: '2026-11-21T05:05:03'
+  text: 'The overseer stopped attempt 2 (fix): duplicate: classified framework, resume runs the remaining units'
+  closed: '2026-11-21T05:05:13'
+  why_closed: abort reason only
+- id: OV-72
+  tasks:
+  - PB.9C
+  status: open
+  t: '2026-11-21T06:47:16'
+  text: 'tests/test_no_rebuild.py: the single-request check always asserts (0 builds). The packed paths (glued4x2k, glued5x1600,
+    lanes4x2k) RECORD no_rebuild_pass_<path> + program_builds_after_warmup_<path> and assert only when NO_REBUILD_PACKED_STRICT=1
+    (declare it in BATCH_ITEM_VARS; the glued fix task PB.9G, PB.T and PB.9H set it). The gate''s re-run showed glued5x1600
+    FAIL too (16 builds on glued4x2k incl. resumed rows) - report both glued paths as FAIL in packed_ladder_20261121.md
+    (only the single-request ladder counts today) and name each op that built. Change nothing else.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -1505,3 +1532,7 @@ classified:
     kind: framework
     why: ''
     t: '2026-11-18T21:54:34'
+  PB.8RP:
+    kind: framework
+    why: ''
+    t: '2026-11-21T05:05:14'
