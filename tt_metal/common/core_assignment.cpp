@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <limits>
 #include <numeric>
+#include <optional>
 
 #include <tt_stl/assert.hpp>
 #include "core_assignment.hpp"
@@ -185,6 +186,45 @@ void reassign_dram_interface_cores_for_blackhole(
     }
 }
 
+// Moves a Blackhole DRAM interface worker that an earlier bank already holds to the nearest worker row
+// in its column that no earlier bank holds, preferring the row below on a tie. Rows 0 and 1 hold no
+// Tensix on Blackhole, so an endpoint there gets the worker on row 2, the same worker as an endpoint on
+// row 2 of that column. The SYS-4948 relocated endpoints put NOC1 on both rows in the east column, and
+// the SYS-5391 harvested endpoints put NOC0 on both in one column. Callers take one core per bank, so two
+// banks must not share one.
+void separate_colliding_dram_interface_cores_for_blackhole(
+    std::vector<CoreCoord>& dram_interface_workers, const std::vector<uint32_t>& worker_phy_y) {
+    for (size_t bank = 0; bank < dram_interface_workers.size(); ++bank) {
+        const auto held_by_earlier_bank = [&](const CoreCoord& core) {
+            const auto earlier_end = dram_interface_workers.begin() + bank;
+            return std::find(dram_interface_workers.begin(), earlier_end, core) != earlier_end;
+        };
+        CoreCoord& worker = dram_interface_workers[bank];
+        if (!held_by_earlier_bank(worker)) {
+            continue;
+        }
+        std::optional<uint32_t> nearest_free_y;
+        uint32_t nearest_distance = std::numeric_limits<uint32_t>::max();
+        for (const uint32_t y : worker_phy_y) {
+            if (held_by_earlier_bank(CoreCoord(worker.x, y))) {
+                continue;
+            }
+            const uint32_t distance = y > worker.y ? y - worker.y : worker.y - y;
+            if (distance < nearest_distance || (distance == nearest_distance && y > *nearest_free_y)) {
+                nearest_free_y = y;
+                nearest_distance = distance;
+            }
+        }
+        TT_FATAL(
+            nearest_free_y.has_value(),
+            "DRAM bank {} has no free worker in physical column {}: earlier banks hold all {} worker rows",
+            bank,
+            worker.x,
+            worker_phy_y.size());
+        worker.y = *nearest_free_y;
+    }
+}
+
 std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     ARCH arch,
     const std::vector<CoreCoord>& dram_phy_coords,
@@ -295,6 +335,7 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
             }
         }
         reassign_dram_interface_cores_for_blackhole(non_worker_cols, dram_interface_workers, full_grid_size_x);
+        separate_colliding_dram_interface_cores_for_blackhole(dram_interface_workers, worker_phy_y);
         return dram_interface_workers;
     }
     TT_THROW("Invalid Arch Name specified");
