@@ -576,3 +576,126 @@ def router_option(arch, option, include_dir=None) -> RouterOption:
     ]
     vcs = [vc for vc in range(consts["NUM_VCS"]) if (option >> vc) & 1]
     return RouterOption(banks, vcs, bool(option & consts["PER_VC"]))
+
+
+# Ethernet core counters: eth_counters_types.h has the EthCounter names, eth_counters_<arch>.h the queue register
+# tables, the L1 table of the base firmware values and the Layout the queue offsets are relative to.
+_ETH_ARCH_HEADER = {
+    "blackhole": "eth_counters_blackhole.h",
+    "wormhole": "eth_counters_wormhole.h",
+    "wormhole_b0": "eth_counters_wormhole.h",
+    "quasar": "eth_counters_quasar.h",
+}
+_ETH_QUEUE_ENTRY = re.compile(
+    r"\{\s*EthCounter::(\w+)\s*,\s*(0[xX][0-9a-fA-F]+|\d+)\s*\}"
+)
+_ETH_L1_ENTRY = re.compile(
+    r"\{\s*EthCounter::(\w+)\s*,\s*(NO_QUEUE|\d+)\s*,\s*(\d+)\s*,\s*WordOrder::(\w+)\s*,\s*"
+    r"(0[xX][0-9a-fA-F]+|\d+)\s*\}"
+)
+_ETH_LAYOUT = re.compile(r"Layout\s+layout\s*=\s*\{([^}]*)\}")
+NO_QUEUE = -1
+
+
+class EthL1Entry(NamedTuple):
+    name: str
+    queue: int  # NO_QUEUE (-1) when the value does not belong to a queue
+    words: int
+    high_first: bool
+    address: int
+
+
+class EthLayout(NamedTuple):
+    txq_base: int
+    rxq_base: int
+    queue_stride: int
+    num_txq: int
+    num_rxq: int
+    txq_word_bytes: int
+    rxq_word_bytes: int
+
+
+def eth_counter_names(include_dir=None) -> List[str]:
+    """EthCounter enumerator names in declaration order (UNDEF first), parsed from eth_counters_types.h."""
+    header = find_include_dir(include_dir) / "eth_counters_types.h"
+    names = parse_enum(header.read_text(), "EthCounter")
+    if not names:
+        raise ValueError(f"enum EthCounter in {header} parsed empty")
+    return [names[i] for i in sorted(names)]
+
+
+def _eth_header_text(arch, include_dir) -> str:
+    arch = normalize_arch(arch)
+    if arch not in _ETH_ARCH_HEADER:
+        raise ValueError(
+            f"unknown arch {arch!r}; expected one of {sorted(_ETH_ARCH_HEADER)}"
+        )
+    return (find_include_dir(include_dir) / _ETH_ARCH_HEADER[arch]).read_text()
+
+
+def _eth_array_chunk(text: str, array: str) -> tuple:
+    decl = re.search(
+        r"std::array<\s*(?:QueueEntry|L1Entry)\s*,\s*(\d+)\s*>\s+"
+        + array
+        + r"\b[^=;]*=",
+        text,
+    )
+    if decl is None:
+        raise ValueError(f"{array} not found")
+    size = int(decl.group(1))
+    chunk = text[decl.end() :].split("}};", 1)[0] if size else ""
+    return size, chunk
+
+
+def _eth_queue_table(arch, array, include_dir) -> List[tuple]:
+    size, chunk = _eth_array_chunk(
+        _strip_comments(_eth_header_text(arch, include_dir)), array
+    )
+    pairs = [(n, int(s, 0)) for n, s in _ETH_QUEUE_ENTRY.findall(chunk)]
+    if len(pairs) != size:
+        raise ValueError(
+            f"{array}: parsed {len(pairs)} entries but the array declares {size}"
+        )
+    return pairs
+
+
+def eth_tx_queue_table(arch, include_dir=None) -> List[tuple]:
+    """[(counter name, offset in the queue register space)] of the TX queue table."""
+    return _eth_queue_table(arch, "tx_queue_counters", include_dir)
+
+
+def eth_rx_queue_table(arch, include_dir=None) -> List[tuple]:
+    """[(counter name, offset in the queue register space)] of the RX queue table."""
+    return _eth_queue_table(arch, "rx_queue_counters", include_dir)
+
+
+def eth_l1_table(arch, include_dir=None) -> List[EthL1Entry]:
+    """Values the base firmware keeps in the L1 of the ethernet core, empty when the map is not known."""
+    size, chunk = _eth_array_chunk(
+        _strip_comments(_eth_header_text(arch, include_dir)), "l1_counters"
+    )
+    entries = [
+        EthL1Entry(
+            name,
+            NO_QUEUE if queue == "NO_QUEUE" else int(queue),
+            int(words),
+            order == "HIGH_FIRST",
+            int(address, 0),
+        )
+        for name, queue, words, order, address in _ETH_L1_ENTRY.findall(chunk)
+    ]
+    if len(entries) != size:
+        raise ValueError(
+            f"l1_counters: parsed {len(entries)} entries but the array declares {size}"
+        )
+    return entries
+
+
+def eth_layout(arch, include_dir=None) -> EthLayout:
+    """What the queue offsets are relative to. Zeros mean the architecture's map is not known."""
+    text = _strip_comments(_eth_header_text(arch, include_dir))
+    match = _ETH_LAYOUT.search(text)
+    if match is None:
+        raise ValueError(f"no Layout found for arch {arch!r}")
+    values = [int(g.strip().rstrip("uU"), 0) for g in match.group(1).split(",")]
+    return EthLayout(*values)

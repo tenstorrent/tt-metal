@@ -50,6 +50,16 @@ NoC router counters (per output or input port and virtual channel), namespace `l
 
 Reference: `docs/performance_counters/router_counters.md`.
 
+Ethernet core counters (read by the host, not by a core), namespace `llk::perf::eth`:
+
+- `eth_counters_types.h`: `EthCounter` (names), `Arch`, `QueueEntry` = `{counter, offset}`, `L1Entry`, `Layout`.
+- `eth_counters_blackhole.h`, `eth_counters_wormhole.h`, `eth_counters_quasar.h`: `layout`, `tx_queue_counters`,
+  `rx_queue_counters`, `l1_counters`; Quasar's are empty because its register map is not known.
+- `eth_counters_inventory.h`: `tx_queue_table(arch)`, `rx_queue_table(arch)`, `l1_table(arch)`, `layout_for(arch)`,
+  `tx_queue_address(arch, queue, offset)`, `rx_queue_address(arch, queue, offset)`.
+
+Reference: `docs/performance_counters/eth_counters.md`.
+
 A profiler record carries the raw mhpmevent select, not an ordinal, so `PmcEvent` is only for names: append new
 names, the host decodes a select by looking it up in the arch table. Reference: `docs/performance_counters/riscv_pmc.md`.
 
