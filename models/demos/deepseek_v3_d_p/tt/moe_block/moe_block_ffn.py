@@ -100,12 +100,17 @@ class MoEBlockFfnOptions:
         block's ops run on the transposed mesh (MoEBlockConfig.sp_axis).
     routed_weights: the routed experts' weight dtype (MoEDtypes.routed_weights): None production's bfloat4_b;
         ttnn.bfloat8_b reads the layer's bfloat8_b tensorbins from cache_path (a cache built at that dtype; a bfp4-only
-        cache fails closed) - an accuracy experiment's opt-in (kimi_k3/test_moe_teacher_feed.py)."""
+        cache fails closed) - an accuracy experiment's opt-in (kimi_k3/test_moe_teacher_feed.py).
+    head_weights, head_fidelity: the MoE head's weights (the shared expert and a latent MoE's latent down projection:
+        MoEDtypes.shared_weights, bfloat8_b) and its matmul fidelity (MoEDtypes.shared_fidelity, HiFi2); None:
+        production's - accuracy experiments' opt-ins, as routed_weights."""
 
     combine_snap: Optional[float] = None
     combine_landing: Optional[str] = None
     sp_axis: int = 0
     routed_weights: Optional[ttnn.DataType] = None
+    head_weights: Optional[ttnn.DataType] = None
+    head_fidelity: Optional[ttnn.MathFidelity] = None
 
     @property
     def routed_dtype(self) -> ttnn.DataType:
@@ -284,6 +289,10 @@ class TtMoEBlockFfn:
             cfg.words_slab_bytes = self.words_slab
             dtypes = moe_block_utils.MoEDtypes()
             dtypes.routed_weights = opts.routed_dtype
+            if opts.head_weights is not None:
+                dtypes.shared_weights = opts.head_weights
+            if opts.head_fidelity is not None:
+                dtypes.shared_fidelity = opts.head_fidelity
             t0 = time.time()
             res = moe_block_utils.MoEBlockResources(self.mesh, self.dims, cfg, dtypes)
             block = MoEBlock(

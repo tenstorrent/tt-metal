@@ -13,7 +13,9 @@ checkpoint ids, and their bf16 weights) are saved to ``$TT_MOE_TF_OUT``; nothing
 ``$TT_MOE_TF_REVERSE=1`` runs the chunks in reverse order (``moe_teacher_feed.py same`` then compares two runs).
 ``$TT_MOE_TF_ROUTED_BFP8=<dir>`` runs the routed experts in bfloat8_b instead of production's bfloat4_b, read from that
 private cache (``moe_teacher_feed.py routed-cache``), everything else unchanged: the weight format's share of the
-device's error is the difference between the two runs' scores on the same input.
+device's error is the difference between the two runs' scores on the same input. ``$TT_MOE_TF_HEAD_WEIGHTS=<ttnn dtype
+name>`` / ``$TT_MOE_TF_HEAD_FIDELITY=<MathFidelity name>`` set the MoE head's weight format (shared expert and latent
+down projection, bfloat8_b in production) / matmul fidelity (HiFi2) the same way.
 
     TT_MOE_TF_INPUT=/mnt/.../k31-l49-moe-input-128k-v2 TT_MOE_TF_OUT=/mnt/.../k31-l49-moe-dev-128k \\
     models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- \\
@@ -46,6 +48,7 @@ SOURCE, OUT = os.environ.get("TT_MOE_TF_INPUT"), os.environ.get("TT_MOE_TF_OUT")
 # per-row outputs must equal a forward run's bit for bit, and any trend over position is the inputs'.
 REVERSE = os.environ.get("TT_MOE_TF_REVERSE") == "1"
 ROUTED_BFP8 = os.environ.get("TT_MOE_TF_ROUTED_BFP8")
+HEAD_WEIGHTS, HEAD_FIDELITY = os.environ.get("TT_MOE_TF_HEAD_WEIGHTS"), os.environ.get("TT_MOE_TF_HEAD_FIDELITY")
 
 
 def device_routing(ffn, block, rows: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -122,6 +125,8 @@ def test_k31_moe_layer_teacher_fed(mesh_device, device_params):
         "weight_cache": str(weight_cache),
         "routed_weights": "BFLOAT8_B" if routed_dtype is not None else "BFLOAT4_B",
         "routed_cache": str(routed_cache),
+        "head_weights": HEAD_WEIGHTS or "BFLOAT8_B",
+        "head_fidelity": HEAD_FIDELITY or "HiFi2",
         **provenance(),
     }
     start_run(out, manifest)
@@ -131,7 +136,12 @@ def test_k31_moe_layer_teacher_fed(mesh_device, device_params):
         KimiK31Config,
         layer,
         cache_path=routed_cache,
-        options=MoEBlockFfnOptions(sp_axis=layout.sp_axis, routed_weights=routed_dtype),
+        options=MoEBlockFfnOptions(
+            sp_axis=layout.sp_axis,
+            routed_weights=routed_dtype,
+            head_weights=getattr(ttnn.DataType, HEAD_WEIGHTS) if HEAD_WEIGHTS else None,
+            head_fidelity=getattr(ttnn.MathFidelity, HEAD_FIDELITY) if HEAD_FIDELITY else None,
+        ),
     )
     dims = [None, None]
     dims[layout.sp_axis], dims[layout.tp_axis] = -2, -1
