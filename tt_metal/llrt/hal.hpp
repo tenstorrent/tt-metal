@@ -249,6 +249,9 @@ private:
     std::vector<uint32_t> tensix_debug_regs_;
     // The physical RISCs the core has.
     std::optional<uint32_t> num_physical_riscs_;
+    // Kernel binaries built per processor. A Keraunos ethernet core is one CCE of an HSIO tile, and each CCE needs
+    // its own build of a kernel (its SRAM base differs), so a kernel there has one build state per CCE.
+    uint32_t build_variants_ = 1;
     bool supports_cbs_ = false;
     bool supports_dfbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
@@ -528,7 +531,8 @@ private:
         bool enable_dram_backed_cq,
         IpVariant quasar_arch_variant,
         bool enable_dram_programmable_cores,
-        uint64_t drisc_l1_noc_offset);
+        uint64_t drisc_l1_noc_offset,
+        bool enable_ethernet_cores);
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
@@ -560,7 +564,8 @@ public:
         bool enable_aerisc_ptp_trace = false,
         IpVariant quasar_arch_variant = IpVariant::GRENDEL,
         bool enable_quasar_dram_programmable_cores = false,
-        uint64_t quasar_drisc_l1_noc_offset = 0);
+        uint64_t quasar_drisc_l1_noc_offset = 0,
+        bool enable_ethernet_cores = false);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -753,6 +758,10 @@ public:
     HalProcessorSet parse_processor_set_spec(std::string_view spec) const;
 
     uint32_t get_total_num_risc_processors() const;
+    // Kernel build states per processor on a core type (1 unless the core has per-CCE builds).
+    uint32_t get_build_variants(uint32_t programmable_core_type_idx) const {
+        return this->core_info_[programmable_core_type_idx].build_variants_;
+    }
     uint32_t get_max_processors_per_core() const { return max_processors_per_core_; }
 
     const HalJitBuildConfig& get_jit_build_config(

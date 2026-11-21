@@ -103,7 +103,32 @@ public:
         // relaxation so HI20/LO12 stay paired/adjacent. The assembler still emits R_RISCV_RELAX relocs
         // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
         flags += "-Wl,--no-relax ";
-        if (params.core_type == HalProgrammableCoreType::DRAM) {
+        if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
+            // Firmware is built per CCE (processor_id is the CCE); a kernel's processor_id is
+            // MEM_IERISC_LOCAL_HARTS * CCE + hart. Each build is linked into its own CCE's SRAM, at the CCE's base.
+            const uint32_t eth_cce = params.is_fw ? params.processor_id : params.processor_id / MEM_IERISC_LOCAL_HARTS;
+            const uint32_t hart = params.is_fw ? 0 : params.processor_id % MEM_IERISC_LOCAL_HARTS;
+            const DeviceAddr cce_base = MEM_IERISC_ETH_CCE_BASE(eth_cce);
+            const DeviceAddr text = cce_base + MEM_IERISC_FIRMWARE_BASE;
+            const DeviceAddr data = cce_base + MEM_IERISC_GLOBAL_BASE;
+            const DeviceAddr tls = cce_base + MEM_IERISC_LOCAL_BASE;
+            if (params.is_fw) {
+                flags += fmt::format("-Wl,--defsym=__fw_text={} ", text);
+                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_IERISC_FIRMWARE_SIZE);
+            } else {
+                const DeviceAddr kn_text = cce_base + MEM_IERISC_KERNEL_BASE + hart * MEM_IERISC_KERNEL_SIZE;
+                flags += fmt::format("-Wl,--defsym=__kn_text={} ", kn_text);
+                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_IERISC_KERNEL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__kn_data={} ", data + MEM_IERISC_GLOBAL_SIZE * (1 + hart));
+            }
+            flags += fmt::format("-Wl,--defsym=__fw_data={} ", data);
+            flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_IERISC_GLOBAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__fw_tls={} ", tls);
+            flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_IERISC_LOCAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_IERISC_STACK_MIN_SIZE);
+            flags += fmt::format("-Wl,--defsym=__local_base={} ", tls);
+            flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_IERISC_LOCAL_SIZE);
+        } else if (params.core_type == HalProgrammableCoreType::DRAM) {
             const DeviceAddr eth_cce_text = MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_FIRMWARE_BASE;
             const DeviceAddr eth_cce_data = MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_GLOBAL_BASE;
             const DeviceAddr eth_cce_tls = MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_LOCAL_BASE;
@@ -306,11 +331,8 @@ public:
         if (params.is_fw) {
             objs.push_back(fmt::format("{}/{}-crt0.o", dir, cpu));
         }
-        if ((params.core_type == HalProgrammableCoreType::TENSIX and
-             params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
-            (params.core_type == HalProgrammableCoreType::IDLE_ETH and
-             params.processor_class == HalProcessorClassType::DM and params.processor_id == 0)) {
-            // Brisc and Idle Erisc.
+        if (params.core_type == HalProgrammableCoreType::TENSIX and
+            params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) {
             objs.push_back(fmt::format("{}/{}-noc.o", dir, cpu));
         }
         objs.push_back(fmt::format("{}/{}-substitutes.o", dir, cpu));
@@ -396,6 +418,13 @@ public:
         if (hal_.quasar_arch_variant_ == IpVariant::HORIZON) {
             defines.push_back("IP_VARIANT_HORIZON");
         }
+        if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
+            // Which CCE of its HSIO tile this firmware or kernel build runs on: where its own SRAM sits in its
+            // view, and where the sibling CCE's does.
+            const uint32_t eth_cce = params.is_fw ? params.processor_id : params.processor_id / MEM_IERISC_LOCAL_HARTS;
+            defines.push_back(fmt::format("ETH_CCE_LOCAL_BASE={}", MEM_IERISC_ETH_CCE_BASE(eth_cce)));
+            defines.push_back(fmt::format("ETH_CCE_PEER_BASE={}", MEM_IERISC_ETH_CCE_BASE(1 - eth_cce)));
+        }
         // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
         // emulation by the same .so test.
         if (params.rtoptions.get_simulator_path().extension() == ".so") {
@@ -433,13 +462,14 @@ public:
     }
 
     std::vector<std::string> srcs(const Params& params) const override {
+        if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
+            return {
+                params.is_fw ? "tt_metal/hw/firmware/src/tt-2xx/idle_erisc.cc"
+                             : "tt_metal/hw/firmware/src/tt-2xx/idle_erisck.cc"};
+        }
         auto srcs = HalJitBuildQueryBase::srcs(params);
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
-            if (params.is_fw) {
-                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
-            } else {
-                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
-            }
+            TT_FATAL(false, "Active ethernet is not supported for Quasar yet");
         }
         return srcs;
     }
@@ -503,15 +533,7 @@ public:
                 return params.is_fw ? "runtime/hw/toolchain/quasar/firmware_aerisc.ld"
                                     : "runtime/hw/toolchain/quasar/kernel_aerisc.ld";
             case HalProgrammableCoreType::IDLE_ETH:
-                switch (params.processor_id) {
-                    case 0:
-                        return params.is_fw ? "runtime/hw/toolchain/quasar/firmware_ierisc.ld"
-                                            : "runtime/hw/toolchain/quasar/kernel_ierisc.ld";
-                    case 1:
-                        return params.is_fw ? "runtime/hw/toolchain/quasar/firmware_subordinate_ierisc.ld"
-                                            : "runtime/hw/toolchain/quasar/kernel_subordinate_ierisc.ld";
-                    default: TT_THROW("Invalid processor id {}", params.processor_id);
-                }
+                return fmt::format("runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
             case HalProgrammableCoreType::DISPATCH:
                 switch (params.processor_class) {
                     case HalProcessorClassType::DM: {
@@ -539,6 +561,10 @@ public:
     }
 
     std::string target_name(const Params& params) const override {
+        if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
+            return params.is_fw ? idle_eth_firmware_name(params.processor_id)
+                                : fmt::format("erisc{}", params.processor_id);
+        }
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             // build.cpp used to distinguish "active_erisc" and "erisc" and use
             // that to determine what object files to link.
@@ -546,6 +572,21 @@ public:
             return "active_erisc";
         }
         return HalJitBuildQueryBase::target_name(params);
+    }
+
+    std::string weakened_firmware_target_name(const Params& params) const override {
+        if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
+            // A kernel links against the firmware of its own CCE.
+            return idle_eth_firmware_name(
+                params.is_fw ? params.processor_id : params.processor_id / MEM_IERISC_LOCAL_HARTS);
+        }
+        return HalJitBuildQueryBase::weakened_firmware_target_name(params);
+    }
+
+private:
+    // One firmware image per CCE.
+    static std::string idle_eth_firmware_name(uint32_t eth_cce) {
+        return eth_cce == 0 ? "erisc" : fmt::format("eth_cce{}", eth_cce);
     }
 };
 
@@ -570,7 +611,8 @@ void Hal::initialize_qa(
     bool enable_dram_backed_cq,
     IpVariant quasar_arch_variant,
     bool enable_dram_programmable_cores,
-    uint64_t drisc_l1_noc_offset) {
+    uint64_t drisc_l1_noc_offset,
+    bool enable_ethernet_cores) {
     using namespace quasar;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -583,7 +625,7 @@ void Hal::initialize_qa(
     this->quasar_arch_variant_ = quasar_arch_variant;
     this->core_info_.push_back(quasar::create_tensix_mem_map(quasar_arch_variant));
     this->core_info_.push_back(quasar::create_active_eth_mem_map());
-    this->core_info_.push_back(quasar::create_idle_eth_mem_map());
+    this->core_info_.push_back(quasar::create_idle_eth_mem_map(enable_ethernet_cores));
     ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
     if (enable_dram_programmable_cores) {
         this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DRAM)] =
@@ -597,6 +639,8 @@ void Hal::initialize_qa(
         static_cast<uint32_t>(EthProcessorTypes::COUNT);
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::IDLE_ETH)].num_physical_riscs_ =
         static_cast<uint32_t>(EthProcessorTypes::COUNT);
+    // One build of each ethernet kernel per CCE of an HSIO tile.
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::IDLE_ETH)].build_variants_ = MEM_IERISC_ETH_CCES;
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)].num_physical_riscs_ =
         static_cast<uint32_t>(DispatchEngineProcessorTypes::COUNT);
 
@@ -691,7 +735,10 @@ void Hal::initialize_qa(
             case DispatchFeature::ETH_MAILBOX_API: return true;
             // Active eth kernel config buffer is not needed until 2 ERISCs
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
-            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
+            // Idle ethernet text is linked at MEM_IERISC_KERNEL_BASE. The firmware jumps to
+            // kernel_text_offset directly, so that field has to be the absolute address. A
+            // config-buffer offset lands in the reset-vector registers and the fetch never returns.
+            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return false;
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
             case DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER: return false;
             default: TT_THROW("Invalid Quasar dispatch feature {}", static_cast<int>(feature));

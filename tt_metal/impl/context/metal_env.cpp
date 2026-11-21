@@ -200,6 +200,17 @@ uint64_t quasar_drisc_l1_noc_offset_for_hal(const Cluster& cluster) {
     }
     return tt::umd::GrendelAddressWindows{}.dram_l1_noc_offset;
 }
+
+// True when any chip's soc descriptor lists ethernet cores. Quasar uses this to replace the
+// on-package ethernet image; an empty eth list keeps that image, which loads nothing.
+bool should_enable_ethernet_cores(const Cluster& cluster) {
+    for (ChipId chip_id : cluster.all_chip_ids()) {
+        if (!cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
 }  // namespace
 
 void MetalEnvImpl::initialize_base_objects() {
@@ -250,7 +261,8 @@ void MetalEnvImpl::initialize_base_objects() {
         // just take the descriptor of the first device
         this->cluster_->get_quasar_ip_variant(),
         should_enable_quasar_dram_programmable_cores(*this->cluster_),
-        quasar_drisc_l1_noc_offset_for_hal(*this->cluster_));
+        quasar_drisc_l1_noc_offset_for_hal(*this->cluster_),
+        should_enable_ethernet_cores(*this->cluster_));
     if (platform_arch == tt::ARCH::QUASAR) {
         log_info(tt::LogMetal, "Quasar IP variant: {}", this->cluster_->get_quasar_ip_variant());
     }

@@ -172,13 +172,14 @@ uint32_t firmware_config_init(
 #pragma GCC unroll ProgrammableCoreType::COUNT
     for (uint32_t index = 0; index < ProgrammableCoreType::COUNT; index++) {
         kernel_config_base[index] = launch_msg_address->kernel_config.kernel_config_base[index];
+        // On Quasar this stays the host's CCE-relative offset. Every DM consumer adds MEM_L1_UNCACHED_BASE, which
+        // already carries this CCE's ETH_CCE_LOCAL_BASE, so adding it here too would count it twice.
         sem_l1_base[index] =
             (uint32_t tt_l1_ptr*)(kernel_config_base[index] + launch_msg_address->kernel_config.sem_offset[index]);
     }
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when cache invalidating
-    // functionality is ready for Quasar
-    // Note that the uncached address range is only valid for Quasar DM cores.
+    // Host writes land in SRAM and are not snooped into L2, so the hart reads them through
+    // MEM_L1_UNCACHED_BASE, this core's uncached alias.
     rta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
                                         launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset +
                                         MEM_L1_UNCACHED_BASE);

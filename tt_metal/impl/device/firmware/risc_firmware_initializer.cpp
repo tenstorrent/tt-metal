@@ -51,6 +51,11 @@ namespace tt::tt_metal {
 
 namespace {
 
+// True when this Quasar chip's soc descriptor lists ethernet cores.
+bool quasar_device_has_ethernet_cores(const Cluster& cluster, ChipId device_id) {
+    return cluster.arch() == ARCH::QUASAR && !cluster.get_soc_desc(device_id).logical_eth_core_to_chan_map.empty();
+}
+
 tt::umd::RiscType dram_core_reset_riscs(ARCH arch) {
     // Harts only. RiscType::ALL also holds the CCE uncore and, on deassert, reprograms the DMRISC
     // remap. SMC firmware owns both on full Grendel, and chippy owns both on the Mimir-local path.
@@ -1403,13 +1408,17 @@ void RiscFirmwareInitializer::initialize_firmware(
         }
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
-            if (!has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            // Quasar ethernet cores initialize without fabric-manager init.
+            const bool quasar_ethernet = quasar_device_has_ethernet_cores(cluster_, device_id);
+            if (!quasar_ethernet &&
+                !has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
                 break;
             }
             const bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
             const bool is_active_eth = !is_idle_eth;
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX;
-            if (is_active_eth) {
+            tt::umd::RiscType reset_val =
+                quasar_ethernet ? tt::umd::RiscType::ALL_NEO_DMS : tt::umd::RiscType::ALL_TENSIX;
+            if (is_active_eth && !quasar_ethernet) {
                 reset_val &= ~tt::umd::RiscType::ERISC0;
             }
             if (is_idle_eth or !hal_.get_eth_fw_is_cooperative()) {
@@ -1417,8 +1426,12 @@ void RiscFirmwareInitializer::initialize_firmware(
             }
             if (not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                    auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
+                    auto num_build_states = hal_.get_processor_class_num_fw_binaries(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = 0; eriscv_id < num_build_states; eriscv_id++) {
+                        if (is_idle_eth && quasar_ethernet &&
+                            eriscv_id != cluster_.get_keraunos_eth_cce(device_id, virtual_core)) {
+                            continue;  // One image per CCE; load only this core's.
+                        }
                         auto fw_path = build_env_manager.get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, eriscv_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
@@ -1456,6 +1469,21 @@ void RiscFirmwareInitializer::initialize_firmware(
                         fw_stage_addr + (slot * sizeof(uint32_t)));
                 }
             }
+            if (quasar_ethernet) {
+                // All eight harts start together, and the completion word is 0. The L1 wipe leaves it at 0, so seed
+                // INIT or hart 0 treats the other harts as finished before they have written their slots.
+                const auto factory = hal_.get_dev_msgs_factory(core_type);
+                const uint64_t mailbox_addr = hal_.get_dev_addr(core_type, HalL1MemAddrType::MAILBOX);
+                const uint64_t subordinate_sync_addr =
+                    mailbox_addr +
+                    factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::subordinate_sync);
+                const uint64_t subordinate_init = dev_msgs::RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT;
+                cluster_.write_core(
+                    &subordinate_init,
+                    sizeof(subordinate_init),
+                    tt_cxy_pair(device_id, virtual_core),
+                    subordinate_sync_addr);
+            }
             if (core_type == HalProgrammableCoreType::ACTIVE_ETH) {
                 DeviceAddr mailbox_addr = hal_.get_dev_addr(core_type, HalL1MemAddrType::MAILBOX);
                 auto factory = hal_.get_dev_msgs_factory(core_type);
@@ -1467,15 +1495,19 @@ void RiscFirmwareInitializer::initialize_firmware(
 
             if (hal_.get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH ||
                 !rtoptions_.get_enable_2_erisc_mode()) {
-                if (is_idle_eth) {
+                if (is_idle_eth && !quasar_ethernet) {
                     // Disable all ERISC interrupts on idle eth: base FW interrupts can corrupt PC when
                     // we switch to runtime FW. Must happen before we write PC and deassert.
                     disable_eth_interrupts(device_id, virtual_core);
                 }
+                uint32_t fw_launch_addr_value = jit_build_config.fw_launch_addr_value;
+                if (is_idle_eth && quasar_ethernet) {
+                    // The CCE's image is linked at its native SRAM base.
+                    fw_launch_addr_value += cluster_.get_keraunos_eth_cce(device_id, virtual_core) *
+                                            hal_.get_dev_size(core_type, HalL1MemAddrType::BASE);
+                }
                 cluster_.write_reg(
-                    &jit_build_config.fw_launch_addr_value,
-                    tt_cxy_pair(device_id, virtual_core),
-                    jit_build_config.fw_launch_addr);
+                    &fw_launch_addr_value, tt_cxy_pair(device_id, virtual_core), jit_build_config.fw_launch_addr);
             } else {
                 constexpr uint32_t mailbox_index = 0;
                 tt::llrt::internal_::send_msg_to_eth_mailbox(
@@ -1676,9 +1708,13 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         }
     }
 
+    const bool has_quasar_ethernet = quasar_device_has_ethernet_cores(cluster_, device_id);
+    std::unordered_set<CoreCoord> multi_risc_active_eth_cores;
+
     for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         static std::vector<uint32_t> zero_vec_erisc_init(
-            hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) / sizeof(uint32_t),
+            hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) /
+                sizeof(uint32_t),
             0);
 
         CoreCoord virtual_core =
@@ -1698,7 +1734,6 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
-    std::unordered_set<CoreCoord> multi_risc_active_eth_cores;
     for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
@@ -1709,7 +1744,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             core_info.size(),
             {static_cast<size_t>(device_id), virtual_core},
             hal_.get_dev_addr(
-                llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
+                llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core),
+                HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         if (!hal_.get_eth_fw_is_cooperative()) {
@@ -1734,7 +1770,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             core_info.size(),
             {static_cast<size_t>(device_id), virtual_core},
             hal_.get_dev_addr(
-                llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
+                llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core),
+                HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         not_done_cores.insert(virtual_core);
@@ -1791,7 +1828,12 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         }
 
         tt::umd::RiscType reset_val;
-        if (cluster_.arch() == ARCH::QUASAR) {
+        if (has_quasar_ethernet) {
+            const auto core_type = llrt::get_core_type(descriptor_->env_impl(), device_id, worker_core);
+            const bool ethernet_core = core_type == HalProgrammableCoreType::ACTIVE_ETH ||
+                                       core_type == HalProgrammableCoreType::IDLE_ETH;
+            reset_val = ethernet_core ? tt::umd::RiscType::ALL_NEO_DMS : tt::umd::RiscType::ALL;
+        } else if (cluster_.arch() == ARCH::QUASAR) {
             reset_val = tt::umd::RiscType::ALL;
         } else {
             reset_val = tt::umd::RiscType::BRISC;

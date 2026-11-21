@@ -60,9 +60,10 @@ inline __attribute__((always_inline)) void init_hw_thread_idx() { hw_thread_idx 
 //   Index 3: TRISC1
 //   Index 4: TRISC2
 //
-// Ethernet cores for all archs use PROCESSOR_INDEX
+// Wormhole and Blackhole ethernet use PROCESSOR_INDEX (one binary per ERISC).
 // ETH Wormhole: Index 0
-// ETH Blackhole/Quasar: Index 0 to 1
+// ETH Blackhole: Index 0 to 1
+// Quasar idle ethernet uses the cached mhartid, same as a DM hart.
 inline __attribute__((always_inline)) uint32_t get_hw_thread_idx() {
 #if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
     // A stack overflow into the TLS region below clobbers hw_thread_idx, which then indexes the debug

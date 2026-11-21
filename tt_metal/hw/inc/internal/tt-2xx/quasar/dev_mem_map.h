@@ -350,7 +350,9 @@
 // Routing path sizes (union = same memory, consolidated from intermediate aliases)
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D ROUTING_PATH_SIZE_1D
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D  // Union size
-#define MEM_ERISC_MAILBOX_SIZE 12768
+// Eight ethernet harts instantiate the same mailboxes_t as a CCE. The active slot has no
+// processors; this size is what lets that translation unit's static_assert accept the struct.
+#define MEM_ERISC_MAILBOX_SIZE 32768
 #define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
 #define MEM_ERISC_BASE 0
 
@@ -396,52 +398,100 @@
 
 /////////////
 // Idle ERISC memory map
-// TODO: reduce this when mailbox sizes are core type aware for some members (eg watcher/dprint)
-// TODO: also, move into gap above in the reserved area
-#define MEM_IERISC_LOCAL_SIZE MEM_ERISC_LOCAL_SIZE
-#define MEM_SUBORDINATE_IERISC_LOCAL_SIZE MEM_ERISC_LOCAL_SIZE
-#define MEM_IERISC_MAILBOX_BASE (MEM_ERISC_RESERVED1 + MEM_ERISC_RESERVED1_SIZE)
-#define MEM_IERISC_MAILBOX_SIZE MEM_ERISC_MAILBOX_SIZE
-// Uncached alias of this core's own SRAM. Device code takes MEM_L1_UNCACHED_BASE from overlay_addresses.h;
-// host code does not include that header and falls back to the worker window.
-#if !defined(MEM_L1_UNCACHED_BASE)
+//
+// Eight harts share one firmware image. The local CPU view is 4 MiB at 0, which is the host window
+// for that core. The uncached alias is 8 MiB above the cached window. +4 MiB is the sibling core,
+// so the mailbox is not placed there. Offsets 0..63 are reset-vector registers, not SRAM.
+// Register-width write of offset 0 programs the reset vector. A larger write stays in SRAM.
+#define MEM_IERISC_L1_SIZE (4 * 1024 * 1024)
+#define MEM_IERISC_UNCACHED_BASE 0x800000
+// This core's uncached alias of its own SRAM: 8 MiB above the CCE's own base (CCE0 8 MiB, CCE1 12 MiB), so a
+// CCE-relative offset plus this name is the alias address. Every other core uses the worker window.
+// Callers use this name; MEM_WORKER_UNCACHED_BASE is the +4 MiB window only.
+// Device code otherwise takes MEM_L1_UNCACHED_BASE from overlay_addresses.h (the variant's register headers);
+// that header leaves it to this one on idle-eth builds. The worker window is the fallback where it is not included,
+// as in host code.
+#if defined(COMPILE_FOR_IDLE_ERISC)
+#undef MEM_L1_UNCACHED_BASE
+#define MEM_L1_UNCACHED_BASE (ETH_CCE_LOCAL_BASE + MEM_IERISC_UNCACHED_BASE)
+#elif !defined(MEM_L1_UNCACHED_BASE)
 #define MEM_L1_UNCACHED_BASE MEM_WORKER_UNCACHED_BASE
 #endif
-// Distance from a cached address to its uncached alias.
+// Distance from a cached address to its uncached alias: uncached = cached + MEM_L1_UNCACHED_OFFSET. A core whose own
+// cached view starts at 0 has MEM_L1_UNCACHED_OFFSET == MEM_L1_UNCACHED_BASE. A Keraunos CCE's own cached view starts at
+// ETH_CCE_LOCAL_BASE (CCE1: 4 MiB), so subtracting MEM_L1_UNCACHED_BASE there would land in the sibling CCE's SRAM.
+#if defined(COMPILE_FOR_IDLE_ERISC)
+#define MEM_L1_UNCACHED_OFFSET MEM_IERISC_UNCACHED_BASE
+#else
 #define MEM_L1_UNCACHED_OFFSET MEM_L1_UNCACHED_BASE
+#endif
+#define MEM_IERISC_LOCAL_SIZE MEM_DM_LOCAL_SIZE
+#define MEM_SUBORDINATE_IERISC_LOCAL_SIZE MEM_IERISC_LOCAL_SIZE
+#define MEM_IERISC_LOCAL_HARTS 8
+// One idle-ethernet core is one CCE of an HSIO tile, so a tile is two cores (CCE0 and CCE1). Each CCE sees
+// its own SRAM at local 0, and the sibling CCE's SRAM in the next window, MEM_IERISC_PEER_CCE_BASE (cached;
+// the uncached alias is MEM_L1_UNCACHED_BASE above it). Bring-up programs that view for both CCEs.
+#define MEM_IERISC_ETH_CCES 2
+#define MEM_IERISC_ETH_CCE_BASE(eth_cce) ((eth_cce) * MEM_IERISC_L1_SIZE)
+// The host and the HAL use CCE-relative offsets (CCE0's view). A firmware or kernel build is linked at its own CCE's
+// native addresses, where ETH_CCE_LOCAL_BASE is that CCE's SRAM and ETH_CCE_PEER_BASE its sibling's (the JIT defines
+// both per build).
+#ifndef ETH_CCE_LOCAL_BASE
+#define ETH_CCE_LOCAL_BASE 0
+#endif
+#ifndef ETH_CCE_PEER_BASE
+#define ETH_CCE_PEER_BASE MEM_IERISC_L1_SIZE
+#endif
+#define MEM_IERISC_PEER_CCE_BASE ETH_CCE_PEER_BASE
+// Offsets 0..63 are reset-vector registers, not SRAM. Reserve through 128 and start the mailbox there.
+#define MEM_IERISC_RESERVED_SIZE 128
+// Watcher ring buffer lock (cached view of this CCE's own SRAM). A Keraunos CCE has no NEO cluster semaphore to claim
+// slots with, so harts claim them under this lock, as a Mimir CCE does. Offsets 0..63 are registers and 64 is the
+// barrier word; the lock sits in the same reserved block, above them.
+#define MEM_IERISC_WATCHER_RING_BUFFER_LOCK 96
+#define MEM_IERISC_MAILBOX_BASE MEM_IERISC_RESERVED_SIZE
+#define MEM_IERISC_MAILBOX_SIZE 32768
 #define MEM_IERISC_MAILBOX_END (MEM_IERISC_MAILBOX_BASE + MEM_IERISC_MAILBOX_SIZE)
 #define MEM_IERISC_L1_INLINE_BASE MEM_IERISC_MAILBOX_END
 #define MEM_IERISC_L1_INLINE_END MEM_IERISC_L1_INLINE_BASE
 #define MEM_IERISC_FIRMWARE_BASE MEM_IERISC_L1_INLINE_END
-#define MEM_IERISC_FIRMWARE_SIZE MEM_ERISC_FIRMWARE_SIZE
-#define MEM_SUBORDINATE_IERISC_FIRMWARE_BASE (MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE)
-#define MEM_SUBORDINATE_IERISC_FIRMWARE_SIZE MEM_ERISC_FIRMWARE_SIZE
-#define MEM_SUBORDINATE_IERISC_FIRMWARE_END \
-    (MEM_SUBORDINATE_IERISC_FIRMWARE_BASE + MEM_SUBORDINATE_IERISC_FIRMWARE_SIZE)
+#define MEM_IERISC_FIRMWARE_SIZE (24 * 1024)
+// One image for every hart. The subordinate symbols name that same image.
+#define MEM_SUBORDINATE_IERISC_FIRMWARE_BASE MEM_IERISC_FIRMWARE_BASE
+#define MEM_SUBORDINATE_IERISC_FIRMWARE_SIZE MEM_IERISC_FIRMWARE_SIZE
+#define MEM_SUBORDINATE_IERISC_FIRMWARE_END (MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE)
+#define MEM_IERISC_GLOBAL_BASE MEM_SUBORDINATE_IERISC_FIRMWARE_END
+#define MEM_IERISC_GLOBAL_SIZE MEM_DM_GLOBAL_SIZE
+#define MEM_IERISC_LOCAL_BASE (MEM_IERISC_GLOBAL_BASE + MEM_IERISC_GLOBAL_SIZE * (MEM_IERISC_LOCAL_HARTS + 1))
+#define MEM_IERISC_MAP_END (MEM_IERISC_LOCAL_BASE + (MEM_IERISC_LOCAL_SIZE * MEM_IERISC_LOCAL_HARTS))
+#define MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_IERISC_MAP_END
+#define MEM_SUBORDINATE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH
+#define MEM_IERISC_STACK_MIN_SIZE MEM_DM_STACK_MIN_SIZE
+#define MEM_SUBORDINATE_IERISC_STACK_MIN_SIZE MEM_IERISC_STACK_MIN_SIZE
+#define MEM_IERISC_BANK_TO_NOC_SCRATCH (MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH + 1024)
+#define MEM_IERISC_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
+// KeraunosSpaRoutes (hostdev/keraunos_spa_routes.h), host-written per core, read by experimental/keraunos_cce.h.
+#define MEM_IERISC_SPA_ROUTES_BASE (MEM_IERISC_BANK_TO_NOC_SCRATCH + MEM_IERISC_BANK_TO_NOC_SIZE)
+#define MEM_IERISC_SPA_ROUTES_SIZE 128
+#define MEM_IERISC_KERNEL_CONFIG_BASE (MEM_IERISC_SPA_ROUTES_BASE + MEM_IERISC_SPA_ROUTES_SIZE)
+#define MEM_IERISC_KERNEL_CONFIG_SIZE (2 * 1024)
+#define MEM_IERISC_KERNEL_BASE ((MEM_IERISC_KERNEL_CONFIG_BASE + MEM_IERISC_KERNEL_CONFIG_SIZE + 63) & ~63)
+#define MEM_IERISC_KERNEL_SIZE MEM_DM_KERNEL_SIZE
 
-// IDLE ETH fabric routing paths - placed in dedicated reserved area after firmware
-#define MEM_IERISC_ROUTING_TABLE_BASE ((MEM_SUBORDINATE_IERISC_FIRMWARE_END + 31) & ~31)
-// IERISC fabric routing paths (union = same offset for 1D and 2D)
+// Fabric symbols stay defined for the shared headers. They sit after the kernels.
+#define MEM_IERISC_ROUTING_TABLE_BASE \
+    ((MEM_IERISC_KERNEL_BASE + MEM_IERISC_KERNEL_SIZE * MEM_IERISC_LOCAL_HARTS + 31) & ~31)
 #define MEM_IERISC_FABRIC_ROUTING_PATH_BASE (MEM_IERISC_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
 #define MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D MEM_IERISC_FABRIC_ROUTING_PATH_BASE
 #define MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D MEM_IERISC_FABRIC_ROUTING_PATH_BASE
 #define MEM_IERISC_FABRIC_ROUTING_PATH_END (MEM_IERISC_FABRIC_ROUTING_PATH_BASE + MEM_ERISC_FABRIC_ROUTING_PATH_SIZE)
-
 #define MEM_IERISC_EXIT_NODE_TABLE_BASE MEM_IERISC_FABRIC_ROUTING_PATH_END
 #define MEM_IERISC_EXIT_NODE_TABLE_END (MEM_IERISC_EXIT_NODE_TABLE_BASE + MEM_EXIT_NODE_TABLE_SIZE)
 
-#define MEM_IERISC_MAP_END (MEM_IERISC_EXIT_NODE_TABLE_END + MEM_ROUTING_TABLE_PADDING)
-#define MEM_IERISC_KERNEL_SIZE MEM_ERISC_KERNEL_SIZE
-#define MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_IERISC_MAP_END
-#define MEM_SUBORDINATE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH (MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_ERISC_LOCAL_SIZE)
-#define MEM_IERISC_STACK_MIN_SIZE MEM_ERISC_STACK_MIN_SIZE
-#define MEM_SUBORDINATE_IERISC_STACK_MIN_SIZE MEM_ERISC_STACK_MIN_SIZE
-#define MEM_IERISC_BANK_TO_NOC_SCRATCH \
-    (MEM_SUBORDINATE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_SUBORDINATE_ERISC_LOCAL_SIZE)
-#define MEM_IERISC_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
-
-#define IERISC_RESET_PC (MEM_LOCAL_BASE | 0x14000)
-#define SUBORDINATE_IERISC_RESET_PC (MEM_LOCAL_BASE | 0x14008)
+// Offset 0 is the reset-vector register. Every hart starts there.
+#define ETH_BOOT_HART_RESET_VECTOR 0
+#define IERISC_RESET_PC ETH_BOOT_HART_RESET_VECTOR
+#define SUBORDINATE_IERISC_RESET_PC ETH_BOOT_HART_RESET_VECTOR
 
 /////////////
 // Active ERISC memory map
