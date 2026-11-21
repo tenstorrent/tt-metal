@@ -32,6 +32,9 @@ from analysis_common import (
 MAX_ERROR_LINES = 30
 MAX_SKIP_REASONS = 5
 
+# GTest marks the location of a skipped test as "<file>:<line>: Skipped".
+_SKIP_LOCATION = re.compile(r":\d+:\s*Skipped\s*$")
+
 # Error categories for dispatch tests.
 # Maps category_key -> (compiled_regex, severity).
 # Add new entries here to detect new error types automatically.
@@ -170,17 +173,20 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
     if failure_context:
         result.failure_details.extend(failure_context)
 
-    # Extract skip reasons
+    # Extract skip reasons. GTest prints "<file>:<line>: Skipped" under the
+    # skipped test, with the reason logged on the preceding line, so match the
+    # real marker instead of the literal "Skipped$" (which never occurs).
     for i, line in enumerate(lines):
-        if "Skipped$" in line and i > 0:
-            prev_line = lines[i - 1]
-            if any(kw in prev_line for kw in ["This suite must be run with", "requires", "needs"]):
-                # Extract the reason part
-                reason_match = re.search(r"\| info.*\| (.+)", prev_line)
-                if reason_match:
-                    result.skip_reasons.append(reason_match.group(1).strip())
-                else:
-                    result.skip_reasons.append(prev_line.strip())
+        if i == 0 or not _SKIP_LOCATION.search(line):
+            continue
+        prev_line = lines[i - 1]
+        if any(kw in prev_line for kw in ["This suite must be run with", "requires", "needs"]):
+            # Strip the "Metal | INFO | ..." logger prefix when present.
+            reason_match = re.search(r"\|\s*[^|]*\|\s*(.+)$", prev_line)
+            if reason_match:
+                result.skip_reasons.append(reason_match.group(1).strip())
+            else:
+                result.skip_reasons.append(prev_line.strip())
 
     # Classify errors using the category registry
     for cat_key, (pattern, severity) in DISPATCH_ERROR_CATEGORIES.items():
