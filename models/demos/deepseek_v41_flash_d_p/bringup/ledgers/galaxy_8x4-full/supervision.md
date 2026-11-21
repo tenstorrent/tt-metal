@@ -1206,3 +1206,4 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 07:20 PB.NR's cold run (agent): glued5x1600 13 builds, glued4x2k 16 (14 on the resumed rows) -> DS41-360's "5x1.6k: 0"
   contradicted (it came from a held process). Agent done; the task paused before its quick A/B.
 - 07:30 OWNER: model_bringup is the hot path (push to others). Plan: finish PB.NR's gate here (~20 min), stop, switch to model_bringup (records stashed), one ledger task there: framework F296 / F297 + the cold no-rebuild test, MB.2's no-rebuild re-run cold, the 5120 ladder at real histories; then hand the owner the branch (owner pushes). Batching queue (PB.9G chip-aligned lanes ...) resumes after.
+- 07:40 PB.NR gate PASS -> 21de88e33ad. COLD no-rebuild: single5120 PASS (0), single8192 PASS (0); glued4x2k 16, glued5x1600 13, lanes4x2k 224 builds (FAIL, recorded). Switching to model_bringup (owner hot path); batching resumes at PB.9G (chip-aligned lanes) afterwards.
