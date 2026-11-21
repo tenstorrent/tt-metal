@@ -1562,3 +1562,24 @@ def test_topk_stable_float32_signed_zero(largest, device):
     # torch.eq treats -0.0 == 0.0, so the values check is sign-insensitive by design.
     assert_equal(golden_values, ttnn_torch_values)
     assert_equal(order, ttnn_torch_indices)
+
+
+@pytest.mark.parametrize(
+    "dtype, expected_indices_dtype",
+    [(ttnn.bfloat16, ttnn.uint16), (ttnn.float32, ttnn.uint32)],
+    ids=["bf16", "fp32"],
+)
+def test_topk_k_zero_indices_dtype(dtype, expected_indices_dtype, device):
+    # k = 0 is a legal call with empty outputs, but the indices tensor must keep the op's index
+    # dtype (UINT16, or UINT32 for fp32 input) instead of taking the input dtype.
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, 32, 32, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype, layout=ttnn.Layout.TILE, device=device)
+
+    values, indices = ttnn.topk(ttnn_input, 0, dim=-1, largest=True, sorted=True)
+
+    assert list(values.shape) == [1, 1, 32, 0]
+    assert list(indices.shape) == [1, 1, 32, 0]
+    assert values.dtype == dtype
+    assert indices.dtype == expected_indices_dtype
