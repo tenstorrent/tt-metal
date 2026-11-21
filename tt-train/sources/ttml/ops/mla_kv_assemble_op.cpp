@@ -8,9 +8,11 @@
 #include <tuple>
 #include <utility>
 
+#include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -29,9 +31,18 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr> mla_kv_assemble(
     auto out_k = autograd::create_tensor(k_raw);
     auto out_v = autograd::create_tensor(v_raw);
 
+    const bool grad_enabled = autograd::ctx().get_gradient_mode() == autograd::GradMode::ENABLED;
+    const bool needs_grad = grad_enabled && autograd::any_requires_grad(kv_up, k_pe);
+    if (!needs_grad) {
+        return {out_k, out_v};
+    }
+
     autograd::GradFunction grad = [kv_up, k_pe, out_k, out_v, n_heads, qk_nope_dim, qk_rope_dim, v_dim]() {
-        auto [dkv_up, dk_pe] = ttml::metal::mla_kv_assemble_bw(
-            out_k->get_grad(), out_v->get_grad(), n_heads, qk_nope_dim, qk_rope_dim, v_dim);
+        const ttnn::Tensor dK =
+            out_k->is_grad_initialized() ? out_k->get_grad() : core::zeros_like(out_k->get_value());
+        const ttnn::Tensor dV =
+            out_v->is_grad_initialized() ? out_v->get_grad() : core::zeros_like(out_v->get_value());
+        auto [dkv_up, dk_pe] = ttml::metal::mla_kv_assemble_bw(dK, dV, n_heads, qk_nope_dim, qk_rope_dim, v_dim);
         kv_up->add_grad(dkv_up);
         k_pe->add_grad(dk_pe);
     };
