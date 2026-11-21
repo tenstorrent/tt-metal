@@ -269,10 +269,10 @@ FORCE_INLINE void swap_partials(
     noc_async_write_barrier();
 }
 
-// The output gate's operands as a kernel moves them. Where their buffers fit (`ways` 2) the heads pair up, h with h ^
-// 1: each core forms both heads' columns of its rows over its head's half of K (the first half for a pair's first
-// head), then swaps partial sums with the pair's core (swap_partials). Else (`ways` 1) each core forms its head's
-// columns over all of K.
+// The output gate's operands as a kernel moves them. Where their buffers fit (`ways` 1) each core forms its head's
+// columns over all of K. Else (`ways` 2) the heads pair up, h with h ^ 1: each core forms both heads' columns of its
+// rows over its head's half of K (the first half for a pair's first head), then swaps partial sums with the pair's
+// core (swap_partials).
 //
 // Compile-time args from `ct`: x's, W's and the progress CBs; the rows and a head's columns (tiles) a core forms; the
 // K block and K (tiles); the K tiles of the local input (0: none); W's tile columns; the heads per batch; the x groups
