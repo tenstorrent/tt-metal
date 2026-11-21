@@ -14,6 +14,14 @@ from models.experimental.tt_symbiote.modules.activation import TTNNReLU
 from models.experimental.tt_symbiote.modules.tensor import TTNNPermute, TTNNReshape
 
 
+def _check_conv_supported(conv: nn.Conv2d) -> None:
+    """Reject nn.Conv2d settings the device path does not implement instead of silently ignoring them."""
+    if conv.padding_mode != "zeros":
+        raise ValueError(f"Only padding_mode='zeros' is supported for Conv2d conversion, got '{conv.padding_mode}'.")
+    if isinstance(conv.padding, str):
+        raise ValueError(f"String padding '{conv.padding}' is not supported for Conv2d conversion, use explicit ints.")
+
+
 def fold_batch_norm2d_into_conv2d(weight, bias, scale, shift, running_mean, running_var, eps):
     weight = weight * (scale / torch.sqrt(running_var + eps))[:, None, None, None]
     if bias is not None:
@@ -161,6 +169,7 @@ class TTNNConv2dNHWC(TTNNModule):
     @classmethod
     def from_torch(cls, conv: nn.Conv2d, slice_config=None) -> "TTNNConv2d":
         """Create TTNNConv2d from PyTorch Conv2d layer."""
+        _check_conv_supported(conv)
         new_conv = TTNNConv2dNHWC(
             in_channels=conv.in_channels,
             out_channels=conv.out_channels,
@@ -265,6 +274,7 @@ class TTNNConv2dBNNHWC(TTNNConv2dNHWC):
     @classmethod
     def from_torch(cls, conv: nn.Conv2d, bn: nn.BatchNorm2d, slice_config=None) -> "TTNNConv2d":
         """Create TTNNConv2d from PyTorch Conv2d layer."""
+        _check_conv_supported(conv)
         new_conv = TTNNConv2dBNNHWC(
             in_channels=conv.in_channels,
             out_channels=conv.out_channels,
@@ -318,6 +328,7 @@ class TTNNConv2dBNActivationNHWC(TTNNConv2dBNNHWC):
     @classmethod
     def from_torch(cls, conv: nn.Conv2d, bn: nn.BatchNorm2d, activation, slice_config=None) -> "TTNNConv2d":
         """Create TTNNConv2d from PyTorch Conv2d layer."""
+        _check_conv_supported(conv)
         new_conv = TTNNConv2dBNActivationNHWC(
             in_channels=conv.in_channels,
             out_channels=conv.out_channels,
@@ -607,6 +618,15 @@ class TTNNViTEmbeddings(TTNNModule):
         return embedding_output
 
 
+def _pool_output_size(size, kernel_size, stride, padding, dilation, ceil_mode):
+    """Pooling output size with torch semantics, including the ceil_mode window-start rule."""
+    span = size + 2 * padding - dilation * (kernel_size - 1) - 1
+    out = (-(-span // stride) if ceil_mode else span // stride) + 1
+    if ceil_mode and (out - 1) * stride >= size + padding:
+        out -= 1
+    return out
+
+
 class TTNNMaxPool2dNHWC(TTNNModule):
     """TTNN-accelerated MaxPool2d layer."""
 
@@ -617,24 +637,29 @@ class TTNNMaxPool2dNHWC(TTNNModule):
         padding,
         dilation,
         slice_config=None,
+        ceil_mode=False,
     ) -> None:
         super().__init__()
         self.kernel_size = kernel_size
         self.stride = stride
         self.padding = padding
         self.dilation = dilation
+        self.ceil_mode = ceil_mode
         self.slice_config = slice_config
         self.reshape = TTNNReshape()
 
     @classmethod
     def from_torch(cls, maxpool: nn.MaxPool2d, slice_config=None) -> "TTNNMaxPool2dNHWC":
         """Create TTNNMaxPool2dNHWC from PyTorch MaxPool2d layer."""
+        if maxpool.return_indices:
+            raise NotImplementedError("MaxPool2d(return_indices=True) is not supported in TTNNMaxPool2dNHWC.")
         new_maxpool = TTNNMaxPool2dNHWC(
             kernel_size=maxpool.kernel_size,
             stride=maxpool.stride,
             padding=maxpool.padding,
             dilation=maxpool.dilation,
             slice_config=slice_config,
+            ceil_mode=maxpool.ceil_mode,
         )
         assert isinstance(new_maxpool.kernel_size, int), "Only integer kernel_size is supported in TTNNMaxPool2dNHWC."
         assert isinstance(new_maxpool.stride, int), "Only integer stride is supported in TTNNMaxPool2dNHWC."
@@ -666,10 +691,15 @@ class TTNNMaxPool2dNHWC(TTNNModule):
             stride=[self.stride, self.stride],
             padding=[self.padding, self.padding],
             dilation=[self.dilation, self.dilation],
+            ceil_mode=self.ceil_mode,
             slice_strategy=self.slice_config,
         )
-        output_h = (input_height + 2 * self.padding - self.dilation * (self.kernel_size - 1) - 1) // self.stride + 1
-        output_w = (input_width + 2 * self.padding - self.dilation * (self.kernel_size - 1) - 1) // self.stride + 1
+        output_h = _pool_output_size(
+            input_height, self.kernel_size, self.stride, self.padding, self.dilation, self.ceil_mode
+        )
+        output_w = _pool_output_size(
+            input_width, self.kernel_size, self.stride, self.padding, self.dilation, self.ceil_mode
+        )
         h_w = (output_h, output_w)
         layer = TtMaxPool2d(config, input_tensor.device())
         if reshape_output:
@@ -694,6 +724,11 @@ class TTNNUpsampleNHWC(TTNNModule):
     @classmethod
     def from_torch(cls, upsample: nn.Upsample) -> "TTNNUpsampleNHWC":
         """Create TTNNUpsampleNHWC from PyTorch Upsample layer."""
+        if upsample.align_corners:
+            raise NotImplementedError("Upsample(align_corners=True) is not supported in TTNNUpsampleNHWC.")
+        scale = upsample.scale_factor
+        if not isinstance(scale, (int, float)) or int(scale) != scale:
+            raise ValueError(f"Only a single integer scale_factor is supported in TTNNUpsampleNHWC, got {scale}.")
         new_upsample = TTNNUpsampleNHWC(
             scale_factor=upsample.scale_factor,
             mode=upsample.mode,

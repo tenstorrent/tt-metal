@@ -226,6 +226,10 @@ class Conv2dConfiguration:
         mesh_mapper=None,
         **kwargs,
     ):
+        if torch_layer.padding_mode != "zeros":
+            raise ValueError(f"Only padding_mode='zeros' is supported, got '{torch_layer.padding_mode}'.")
+        if isinstance(torch_layer.padding, str):
+            raise ValueError(f"String padding '{torch_layer.padding}' is not supported, use explicit ints.")
         weight, bias = Conv2dConfiguration.convert_torch_weight_and_bias_to_ttnn(
             torch_layer.weight.data,
             bias=(torch_layer.bias.data if torch_layer.bias is not None else None),
@@ -354,6 +358,8 @@ class MaxPool2dConfiguration:
         channels: int,
         **kwargs,
     ):
+        if torch_layer.return_indices:
+            raise NotImplementedError("MaxPool2d(return_indices=True) is not supported.")
         kernel_size = (torch_layer.kernel_size, torch_layer.kernel_size)
         stride = (torch_layer.stride, torch_layer.stride)
         padding = (torch_layer.padding, torch_layer.padding)
@@ -367,6 +373,7 @@ class MaxPool2dConfiguration:
             stride=stride,
             padding=padding,
             dilation=dilation,
+            ceil_mode=torch_layer.ceil_mode,
             **kwargs,
         )
 
@@ -413,6 +420,8 @@ class UpsampleConfiguration:
         channels: int,
         **kwargs,
     ):
+        if torch_layer.align_corners:
+            raise NotImplementedError("Upsample(align_corners=True) is not supported.")
         scale_factor = torch_layer.scale_factor
         if isinstance(scale_factor, (list, tuple)):
             scale_factor = tuple(scale_factor)
