@@ -595,7 +595,10 @@ def load_tp_block(directory: str) -> list[str]:
     """Load ``directory/ckpt``, a TPBlock checkpoint the two-rank module wrote on its shared [1, 4] mesh, into a
     TPBlock on this process's single device, and compare every parameter with the global array rebuilt from the
     shards the two ranks dumped next to it (``shards_<rank>.npz``): sharded parameters by concatenating the four
-    devices' shards in TP order, replicated ones from the first device. Nothing here goes through DCP's topology."""
+    devices' shards in TP order, replicated ones as the device that wrote them held them (the index names its file's
+    coordinate). A save writes one copy of a replicated tensor, so replicas that differ (an all-reduce whose result
+    differs in the last bit across devices) load back as that copy; a note says when they do. Nothing here goes
+    through DCP's topology."""
     shards: dict[str, dict[tuple[int, ...], np.ndarray]] = {}
     for rank in (0, 1):
         with np.load(os.path.join(directory, f"shards_{rank}.npz")) as part:
@@ -604,14 +607,21 @@ def load_tp_block(directory: str) -> list[str]:
                 shards.setdefault(name, {})[tuple(int(c) for c in coord.split("-"))] = part[key]
     model = TPBlock(64)
     params = model.parameters()
-    dcp.load(os.path.join(directory, "ckpt"), model=model)
+    ckpt = os.path.join(directory, "ckpt")
+    dcp.load(ckpt, model=model)
+    index = dcp.read_index(ckpt)
     loaded = model_shards(params, [(0, 0)])
     problems = []
     for name in params:
         by_coord = shards[name]
         dim = next((d for suffix, d in TP_BLOCK_SHARDED_DIMS.items() if name.endswith(suffix)), None)
         if dim is None:
-            expected = by_coord[(0, 0)]
+            (chunk,) = index.entries[f"model/{name}"].chunks
+            writer = tuple(index.files[chunk.file].coord)
+            expected = by_coord[writer]
+            spread = max(float(np.max(np.abs(a - expected))) for a in by_coord.values())
+            if spread:
+                print(f"NOTE: {name}: the devices' replicas differ by up to {spread}; the checkpoint holds {writer}'s")
         else:
             expected = np.concatenate([by_coord[c] for c in sorted(by_coord)], axis=dim)
         if not np.array_equal(loaded[name][0], expected):
