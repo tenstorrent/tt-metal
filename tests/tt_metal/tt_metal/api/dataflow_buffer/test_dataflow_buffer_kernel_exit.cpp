@@ -84,4 +84,15 @@ TEST_F(UnitMeshFixture, DFBKernelExitFullBatchThenPartialDMDM) {
     }
 }
 
+// Rings above 255 entries, which the txn-id counts used to cap. 593 is prime, so its ring has one txn id of 593
+// entries and the run ends 7 entries into the next batch; 600 splits into two txn ids of 300 and ends 10 entries in.
+TEST_F(UnitMeshFixture, DFBKernelExitRingOver255DMDM) {
+    skip_unless_quasar(this->device());
+    for (const auto [ring, traffic] : {std::pair<uint32_t, uint32_t>{593, 600}, {600, 610}}) {
+        M2SingleDFBParams p = implicit_params(M2PorCType::DM, M2PorCType::DM, 1, 1, ring, traffic);
+        p.entry_size = 256;
+        run_single_dfb_program_2_0(this->device(), p);
+    }
+}
+
 }  // namespace tt::tt_metal
