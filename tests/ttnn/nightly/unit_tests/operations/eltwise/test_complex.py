@@ -173,35 +173,6 @@ def test_level2_abs(bs, memcfg, dtype, device, function_level_defaults):
 )
 @pytest.mark.parametrize("dtype", ((ttnn.bfloat16,)))
 @pytest.mark.parametrize("bs", ((1, 1), (1, 2), (2, 2)))
-def test_level2_abs(bs, memcfg, dtype, device, function_level_defaults):
-    input_shape = torch.Size([bs[0], bs[1], 32, 64])
-    # check abs
-    x = Complex(input_shape)
-    xtt = ttnn.complex_tensor(
-        ttnn.Tensor(x.real, dtype).to(ttnn.TILE_LAYOUT).to(device, memcfg),
-        ttnn.Tensor(x.imag, dtype).to(ttnn.TILE_LAYOUT).to(device, memcfg),
-    )
-    tt_dev = ttnn.abs(xtt, memory_config=memcfg)
-    tt_dev = tt_dev.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-    tt_cpu = x.abs().real
-    if is_wormhole_b0():
-        passing, output = comp_pcc(tt_cpu, tt_dev, pcc=0.8)
-    else:
-        passing, output = comp_pcc(tt_cpu, tt_dev)
-    logger.info(output)
-    assert passing
-
-
-@pytest.mark.parametrize(
-    "memcfg",
-    (
-        ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.L1_MEMORY_CONFIG,
-    ),
-    ids=["out_DRAM", "out_L1"],
-)
-@pytest.mark.parametrize("dtype", ((ttnn.bfloat16,)))
-@pytest.mark.parametrize("bs", ((1, 1), (1, 2), (2, 2)))
 def test_level2_conj(bs, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([bs[0], bs[1], 32, 64])
     # check abs
