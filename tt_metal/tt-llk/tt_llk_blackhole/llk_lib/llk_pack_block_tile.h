@@ -30,18 +30,27 @@ inline constexpr bool pack_strides_u2d<PackMode::Default> = llk_pack_u2d;
 template <PackMode pack_mode>
 inline constexpr bool llk_pack_rmw_tile = DST_SYNC_MODE == DstSync::SyncFull && pack_mode == PackMode::Default;
 
-// A 16-bit DEST matmul kernel with a block-float CB (Bfp8 in0 at HiFi2: minimal 222 1x1): its unpacker binds, and the byte-wise
-// write's earlier start costs it L1 (+0.4..+0.8 %, e41d7fe1da8 bisect). SDPA kernels (a block-float mask CB) keep the byte-wise write:
-// their k128 rows lose 0.1-0.3 % with the word write.
+// A 16-bit DEST matmul kernel of four CBs with a block-float in0 (CB 0), a Float16_b or Float32 in1 (CB 1) and a Float16_b output (CB 2):
+// minimal 222 1x1 bfp8 x bf16 HiFi2, whose unpacker binds, and the byte-wise write's earlier start costs it L1 (+0.4..+0.8 %, e41d7fe1da8
+// bisect). Block-float in1 or output keeps the byte-wise write (bmm Bfp8 1x1x1 +6 cy/block with the word write).
 template <std::uint32_t dep>
 constexpr bool llk_pack_matmul_bfp16()
 {
-    bool bfp = false;
+    constexpr std::uint8_t inv = static_cast<std::uint8_t>(DataFormat::Invalid);
+    if (sizeof(unpack_src_format) < 4)
+    {
+        return false;
+    }
+    bool four = true;
     for (std::uint32_t i = 0; i < sizeof(unpack_src_format); i++)
     {
-        bfp = bfp || (unpack_src_format[i] != static_cast<std::uint8_t>(DataFormat::Invalid) && IS_BFP_FORMAT(unpack_src_format[i]));
+        four = four && ((unpack_src_format[i] != inv) == (i < 4));
     }
-    return bfp && ckernel::packer::llk_pack_matmul_kernel<dep>() && !ckernel::packer::llk_pack_sdpa_api<dep * 0 + 1>::value;
+    const std::uint8_t in1 = unpack_src_format[1];
+    return four && IS_BFP_FORMAT(unpack_src_format[0]) &&
+           (in1 == static_cast<std::uint8_t>(DataFormat::Float16_b) || in1 == static_cast<std::uint8_t>(DataFormat::Float32)) &&
+           unpack_src_format[2] == static_cast<std::uint8_t>(DataFormat::Float16_b) && ckernel::packer::llk_pack_matmul_kernel<dep>() &&
+           !ckernel::packer::llk_pack_sdpa_api<dep * 0 + 1>::value;
 }
 
 // The default per-tile pack writes the destination by bytes under both syncs, except at half sync where its earlier start

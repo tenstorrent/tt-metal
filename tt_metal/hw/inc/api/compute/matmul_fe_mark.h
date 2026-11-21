@@ -18,6 +18,8 @@
 namespace ckernel::matmul_fe_mark {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnon-template-friend"
+// tag 21: a matmul_block call in a LoFi fp32 half-sync bmm cell that keeps main's section end (22 unread).
+// The next free tag is 23.
 template <int>
 struct tag {
     friend auto used(tag);

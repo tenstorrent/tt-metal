@@ -581,8 +581,31 @@ constexpr bool matmul_half_end_fold_k = matmul_tile_mop && matmul_half_end_fold<
 constexpr bool matmul_half_end_fold_k = false;
 #endif
 // Wormhole and Quasar take main's template arguments: the tile MOP, reuse direction and fold parameters are Blackhole's
+// production's section end for the test's block (matmul.h matmul_fe_main_section_end); a call of run-time ct and rt takes none
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_PRODUCTION) && !defined(RUNTIME_FORMATS) && defined(MATMUL_PACK_KEYS) && !defined(MATMUL_PACK_TILES)
+#if defined(MATMUL_L1_ACC) && MATMUL_L1_ACC == 1
+constexpr bool matmul_prod_l1_acc = true;
+#else
+constexpr bool matmul_prod_l1_acc = false;
+#endif
+constexpr bool matmul_prod_main_section_end = ckernel::matmul_main_section_end(
+    MATH_FIDELITY,
+    dest_sync == ckernel::DstSync::SyncHalf,
+    is_fp32_dest_acc_en,
+    static_cast<DataFormat>(UNPACK_A_IN),
+    static_cast<DataFormat>(UNPACK_B_IN),
+    static_cast<DataFormat>(PACK_OUT),
+    MATMUL_PK_RT,
+    MATMUL_PK_CT,
+    MATMUL_PK_KT,
+    THROTTLE_LEVEL,
+    matmul_prod_l1_acc);
+#else
+constexpr bool matmul_prod_main_section_end = false;
+#endif
+#line 204
 #ifdef ARCH_BLACKHOLE
-#define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en, fused_post_flip, next_op_sets_base
+#define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en, fused_post_flip, next_op_sets_base, matmul_prod_main_section_end
 #else
 #define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en
 #endif

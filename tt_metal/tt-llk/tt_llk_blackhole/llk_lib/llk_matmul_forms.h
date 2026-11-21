@@ -2581,6 +2581,51 @@ constexpr bool matmul_main_flip(const MathFidelity fidelity, const bool half_syn
     return false;
 }
 
+// LoFi fp32 DEST half sync blocks of a plain call that keep main's section end in a matmul kernel: the base write ahead of the drain stall
+// read 0.2-1.5 cy/block slower on them
+struct matmul_section_end_cell
+{
+    DataFormat in1;
+    DataFormat in0;
+    DataFormat out;
+    std::uint8_t rt, ct, kt;
+};
+
+inline constexpr matmul_section_end_cell matmul_main_section_end_cells[] = {
+    {DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, 2, 1, 2},
+    {DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float16_b, 4, 1, 2},
+    {DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 1, 2},
+    {DataFormat::Float32, DataFormat::Float32, DataFormat::Tf32, 3, 1, 2},
+    {DataFormat::Float32, DataFormat::Float32, DataFormat::Tf32, 1, 2, 2},
+};
+
+constexpr bool matmul_main_section_end(
+    const MathFidelity fidelity,
+    const bool half_sync,
+    const bool fp32_acc,
+    const DataFormat in1,
+    const DataFormat in0,
+    const DataFormat out,
+    const std::uint32_t rt,
+    const std::uint32_t ct,
+    const std::uint32_t kt,
+    const std::uint32_t throttle = 0,
+    const bool l1_acc            = false)
+{
+    if (fidelity != MathFidelity::LoFi || !half_sync || !fp32_acc || throttle != 0 || l1_acc)
+    {
+        return false;
+    }
+    for (const matmul_section_end_cell& c : matmul_main_section_end_cells)
+    {
+        if (c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt && c.ct == ct && c.kt == kt)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 constexpr bool matmul_unfused_post(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
                                    const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false,
                                    const std::uint32_t nb = 1)

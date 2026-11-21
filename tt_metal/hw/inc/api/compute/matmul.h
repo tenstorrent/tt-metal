@@ -1351,6 +1351,42 @@ struct matmul_fe_cell_mark {
         sizeof(matmul_fe_mark::set < (cell || rt_cell) ? 5 : 6 >) + (cell ? 2 : (rt_cell ? 3 : 0));
 };
 
+// Whether a plain call of constant cbs 0 and 1 and a constant block keeps main's section end (llk_matmul_forms.h
+// matmul_main_section_end); cb 2 is the output of the production bmm kernels
+template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::uint32_t kt>
+constexpr bool matmul_fe_main_section_end() {
+#if defined(UCK_CHLKC_MATH)
+    if constexpr (
+        in0_cb == 0 && in1_cb == 1 && sizeof(unpack_dst_format) > 2 && ct != 0xFFu && rt != 0xFFu && kt != 0xFFu) {
+#ifdef PACKER_L1_ACC
+        constexpr bool l1_acc = true;
+#else
+        constexpr bool l1_acc = false;
+#endif
+        return matmul_main_section_end(
+            MATH_FIDELITY,
+            DST_SYNC_MODE == DstSync::SyncHalf,
+            DST_ACCUM_MODE,
+            static_cast<DataFormat>(unpack_src_format[in1_cb]),
+            static_cast<DataFormat>(unpack_src_format[in0_cb]),
+            static_cast<DataFormat>(unpack_dst_format[2]),
+            rt,
+            ct,
+            kt,
+            MM_THROTTLE,
+            l1_acc);
+    }
+#endif
+    return false;
+}
+
+// MATMUL_FE_SECTION_END's value: 0, completing tag 21 where the call keeps main's section end (22 unread)
+template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::uint32_t kt>
+struct matmul_fe_section_end_mark {
+    static constexpr std::size_t value =
+        0 * sizeof(matmul_fe_mark::set < matmul_fe_main_section_end<in0_cb, in1_cb, ct, rt, kt>() ? 21 : 22 >);
+};
+
 // the unpack_auto_ttsync of a plain call: the kernel's class rule (MATMUL_FE_MARK 1 or 2, one value per kernel, and tag 8 read at the
 // end of the unit), or 3 where the call's cell runs the ttsync unpack in a polling class (MATMUL_FE_CELL_MARK)
 template <std::size_t mark>
@@ -1632,24 +1668,31 @@ ALWI void matmul_block_fe(
             (::ckernel::matmul_fe_keyable<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>( \
                 MATMUL_FE_CK(kt))))>(line, a, b, tr, ct, rt, kt)
 #define matmul_block(...) MATMUL_FE_CAT(MATMUL_FE_BLOCK_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define MATMUL_FE_SECTION_END(a, b, ct, rt, kt) \
+    ::ckernel::matmul_fe_section_end_mark<      \
+        MATMUL_FE_C(a),                         \
+        MATMUL_FE_C(b),                         \
+        MATMUL_FE_C(ct),                        \
+        MATMUL_FE_C(rt),                        \
+        MATMUL_FE_CK(kt)>::value
 // the experimental 2_0 call (no transpose argument)
 #define MATMUL_FE_BLOCK_8(a, ...) \
     matmul_block_fe<0xFFu, 0xFFu, 0xFFu, 0xFFu, 0, ::ckernel::matmul_fe_unkeyed<MATMUL_FE_KDEC(a, false)>()>(__builtin_LINE(), a, __VA_ARGS__)
-#define MATMUL_FE_BLOCK_9(a, b, i0, i1, d, tr, ct, rt, kt) \
-    matmul_block_fe<                                       \
-        MATMUL_FE_C(a),                                    \
-        MATMUL_FE_C(b),                                    \
-        MATMUL_FE_C(ct),                                   \
-        MATMUL_FE_C(rt),                                   \
-        MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_KT1(kt),       \
+#define MATMUL_FE_BLOCK_9(a, b, i0, i1, d, tr, ct, rt, kt)                                     \
+    matmul_block_fe<                                                                           \
+        MATMUL_FE_C(a),                                                                        \
+        MATMUL_FE_C(b),                                                                        \
+        MATMUL_FE_C(ct),                                                                       \
+        MATMUL_FE_C(rt),                                                                       \
+        MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_KT1(kt) + MATMUL_FE_SECTION_END(a, b, ct, rt, kt), \
         MATMUL_FE_KDEC(a, false)>(__builtin_LINE(), a, b, i0, i1, d, tr, ct, rt, kt)
-#define MATMUL_FE_BLOCK_10(a, b, i0, i1, d, tr, ct, rt, kt, line) \
-    matmul_block_fe<                                              \
-        MATMUL_FE_C(a),                                           \
-        MATMUL_FE_C(b),                                           \
-        MATMUL_FE_C(ct),                                          \
-        MATMUL_FE_C(rt),                                          \
-        MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_KT1(kt),              \
+#define MATMUL_FE_BLOCK_10(a, b, i0, i1, d, tr, ct, rt, kt, line)                              \
+    matmul_block_fe<                                                                           \
+        MATMUL_FE_C(a),                                                                        \
+        MATMUL_FE_C(b),                                                                        \
+        MATMUL_FE_C(ct),                                                                       \
+        MATMUL_FE_C(rt),                                                                       \
+        MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_KT1(kt) + MATMUL_FE_SECTION_END(a, b, ct, rt, kt), \
         MATMUL_FE_KDEC(a, false)>(line, a, b, i0, i1, d, tr, ct, rt, kt)
 #else
 // the unpack and pack macros: the class rule's mark and the shape mark, and on a call that names ct, rt and kt the cell mark; every
