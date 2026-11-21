@@ -4364,6 +4364,59 @@ def test_matmul_default_sharded_non_origin_single_core(device, memory_layout, m_
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@pytest.mark.parametrize("op", ["matmul", "linear"])
+@pytest.mark.parametrize(
+    "grid_start",
+    [(0, 0), (1, 1), (1, 0), (3, 2)],
+    ids=["origin", "offset_1_1", "offset_1_0", "offset_3_2"],
+)
+def test_matmul_default_block_sharded_non_origin_grid(device, grid_start, op):
+    """Block-sharded in0 on a 2x2 grid away from (0,0) must be read from the cores that hold it.
+
+    Before each run a decoy tensor with the same shard spec is written to the origin grid and freed,
+    so reading the origin cores by mistake gives a wrong result instead of stale copies of in0.
+    """
+    torch.manual_seed(0)
+    device_grid = device.compute_with_storage_grid_size()
+    if grid_start[0] + 2 > device_grid.x or grid_start[1] + 2 > device_grid.y:
+        pytest.skip("Grid does not fit on the device")
+
+    m = k = n = 128
+    shard_shape = (m // 2, k // 2)
+
+    def block_sharded(start):
+        grid = ttnn.CoreRange(ttnn.CoreCoord(*start), ttnn.CoreCoord(start[0] + 1, start[1] + 1))
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(ttnn.CoreRangeSet({grid}), shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    torch_a = torch.randn((1, 1, m, k), dtype=torch.bfloat16)
+    torch_b = torch.randn((1, 1, k, n), dtype=torch.bfloat16)
+    torch_output = torch.matmul(torch_a.float(), torch_b.float())
+
+    decoy = ttnn.from_torch(
+        torch.randn((1, 1, m, k), dtype=torch.bfloat16) + 3,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=block_sharded((0, 0)),
+    )
+    ttnn.deallocate(decoy)
+
+    input_a = ttnn.from_torch(
+        torch_a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=block_sharded(grid_start)
+    )
+    input_b = ttnn.from_torch(
+        torch_b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    fn = ttnn.matmul if op == "matmul" else ttnn.linear
+    output = fn(input_a, input_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert_with_pcc(torch_output, ttnn.to_torch(output).float(), pcc=0.999)
+
+
 def test_matmul_activation_with_sharded_input(device):
     # Create input tensors
     torch.manual_seed(0)
