@@ -124,6 +124,9 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor_a.is_allocated(), "Operands need to be allocated in buffers on device!");
+    TT_FATAL(
+        !operation_attributes.sub_core_grids.has_value() || operation_attributes.sub_core_grids->num_cores() > 0,
+        "sub_core_grids must contain at least one core");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
     TT_FATAL(
