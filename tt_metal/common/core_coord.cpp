@@ -711,7 +711,7 @@ nlohmann::json to_json_t<tt::tt_metal::CoreCoord>::operator()(const tt::tt_metal
     return {{"x", to_json(core_coord.x)}, {"y", to_json(core_coord.y)}};
 }
 
-tt::tt_metal::CoreCoord from_json_t<tt::tt_metal::CoreCoord>::operator()(const nlohmann::json& json) noexcept {
+tt::tt_metal::CoreCoord from_json_t<tt::tt_metal::CoreCoord>::operator()(const nlohmann::json& json) {
     return {from_json<uint32_t>(json.at("x")), from_json<uint32_t>(json.at("y"))};
 }
 
@@ -720,8 +720,7 @@ nlohmann::json to_json_t<tt::tt_metal::RelativeCoreCoord>::operator()(
     return {{"x", to_json(relative_core_coord.x)}, {"y", to_json(relative_core_coord.y)}};
 }
 
-tt::tt_metal::RelativeCoreCoord from_json_t<tt::tt_metal::RelativeCoreCoord>::operator()(
-    const nlohmann::json& json) noexcept {
+tt::tt_metal::RelativeCoreCoord from_json_t<tt::tt_metal::RelativeCoreCoord>::operator()(const nlohmann::json& json) {
     return {from_json<int32_t>(json.at("x")), from_json<int32_t>(json.at("y"))};
 }
 
@@ -729,7 +728,7 @@ nlohmann::json to_json_t<tt::tt_metal::CoreRange>::operator()(const tt::tt_metal
     return {{"start", to_json(core_range.start_coord)}, {"end", to_json(core_range.end_coord)}};
 }
 
-tt::tt_metal::CoreRange from_json_t<tt::tt_metal::CoreRange>::operator()(const nlohmann::json& json) noexcept {
+tt::tt_metal::CoreRange from_json_t<tt::tt_metal::CoreRange>::operator()(const nlohmann::json& json) {
     return {from_json<tt::tt_metal::CoreCoord>(json.at("start")), from_json<tt::tt_metal::CoreCoord>(json.at("end"))};
 }
 
@@ -739,7 +738,7 @@ nlohmann::json to_json_t<tt::tt_metal::CoreRangeSet>::operator()(
     return to_json(core_range_set.ranges());
 }
 
-tt::tt_metal::CoreRangeSet from_json_t<tt::tt_metal::CoreRangeSet>::operator()(const nlohmann::json& json) noexcept {
+tt::tt_metal::CoreRangeSet from_json_t<tt::tt_metal::CoreRangeSet>::operator()(const nlohmann::json& json) {
     return tt::tt_metal::CoreRangeSet(from_json<std::vector<tt::tt_metal::CoreRange>>(json));
 }
 
