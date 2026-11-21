@@ -37,8 +37,6 @@ _TIMING_BASES = (
     "UNPACK_ISOLATE",
     "MATH_ISOLATE",
     "PACK_ISOLATE",
-    "L1_CONGESTION[UNPACK]",
-    "L1_CONGESTION[PACK]",
     "SFPU_ISOLATE",
 )
 _TIMING_COLUMNS = [
@@ -114,7 +112,9 @@ DB_SCHEMA = [
     Column("output_tile_cnt", "int64", True, "configuration"),
     Column("pool_type", "string", True, "configuration"),
     Column("r_dimm", "int64", True, "configuration"),
+    Column("quasar_variant", "string", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
+    Column("relu_type", "string", True, "configuration"),
     Column("reuse_dest_type", "string", True, "configuration"),
     Column("sfpu_impl", "string", True, "configuration"),
     Column("sign_magnitude", "bool", True, "configuration"),

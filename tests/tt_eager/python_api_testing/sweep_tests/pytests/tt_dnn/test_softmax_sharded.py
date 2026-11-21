@@ -12,7 +12,6 @@ import ttnn
 import ttnn
 from tt_lib.utils import (
     pad_weight,
-    tilize_to_list,
     untilize,
     is_close,
 )
@@ -85,14 +84,12 @@ def test_softmax(device, in_dtype, causal_mask, grid_size, seq_len, scale_mask):
         # attention_mask = torch.zeros(batch, 1, seq_len, seq_len)
         attention_mask = torch.rand(batch, 1, seq_len, seq_len)
         attention_mask = (attention_mask > 0.5).float()
-        attention_mask32 = tilize_to_list(pad_weight(attention_mask))
-        attention_mask_t = ttnn.Tensor(
-            attention_mask32,
-            [batch, 1, seq_len, seq_len],
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
-            device,
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        attention_mask_t = ttnn.from_torch(
+            pad_weight(attention_mask),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         )
 
     input_tensor = torch.randn(input_shape).bfloat16().float()

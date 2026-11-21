@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "env_lib.hpp"
+#include "common/env_lib.hpp"
 #include "gtest/gtest.h"
 #include "impl/dispatch/worker_config_buffer.hpp"
 

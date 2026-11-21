@@ -22,11 +22,14 @@ from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdap
 from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
 from models.tt_dit.utils import vbench_bundle
 from models.tt_dit.utils.ltx import (
+    DEFAULT_LTX_I2V_IMAGE,
+    DEFAULT_LTX_I2V_PROMPT,
     DEFAULT_LTX_PROMPT,
     STEADY_STATE_LTX_PROMPT,
     STEADY_STATE_REPLAY_LTX_PROMPT,
     default_ltx_checkpoint,
     default_ltx_gemma,
+    missing_checkpoints_fail,
     print_ltx_timing_table,
     traced_default,
 )
@@ -75,9 +78,9 @@ FAST_T2V_TIMING_LIMITS = {
 }
 
 
-# Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips without one.
+# Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips without one (outside CI).
 @pytest.mark.skipif(
-    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
+    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors") and not missing_checkpoints_fail(),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(
@@ -453,7 +456,7 @@ def _temporal_seam_score(path):
 
 
 @pytest.mark.skipif(
-    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
+    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors") and not missing_checkpoints_fail(),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(
@@ -466,8 +469,9 @@ def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynami
     (same DEFAULT_LTX_PROMPT), and splice both into one continuous ~12s clip. Asserts the
     I2V output (a) reproduces the conditioning frame at frame-0 (conditioning works) and
     (b) is free of the VAE 2x4 grid seam (guards the non-mesh-aligned i2v fix at 1088x1920,
-    whose s1 cond latent is the uneven 17x30 that used to seam). An external LTX_I2V_IMAGE
-    overrides the t2v pre-gen (single i2v, no splice)."""
+    whose s1 cond latent is the uneven 17x30 that used to seam). By default it conditions on
+    DEFAULT_LTX_I2V_IMAGE with DEFAULT_LTX_I2V_PROMPT and skips the t2v pre-gen (single i2v, no
+    splice); LTX_I2V_IMAGE overrides the image, and LTX_I2V_IMAGE="" runs the chained t2v->i2v."""
     import subprocess
 
     from PIL import Image
@@ -484,7 +488,8 @@ def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynami
     width = int(os.environ.get("WIDTH", "1920"))
     traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
     seed = int(os.environ.get("SEED", "10"))
-    prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
+    cond_override = os.environ.get("LTX_I2V_IMAGE", DEFAULT_LTX_I2V_IMAGE)
+    prompt = os.environ.get("PROMPT", DEFAULT_LTX_I2V_PROMPT if cond_override else DEFAULT_LTX_PROMPT)
 
     pipeline = LTXDistilledPipeline.create_pipeline(
         mesh_device=mesh_device,
@@ -514,10 +519,9 @@ def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynami
             prompt, output_path=str(out), images=images, num_frames=num_frames, height=height, width=width, seed=seed
         )
 
-    # Conditioning image: an explicit LTX_I2V_IMAGE conditions directly on it and SKIPS the t2v
-    # pre-gen (an external/user image, or a t2v last frame produced by a prior process). Else this
-    # generates a t2v clip and conditions on its LAST FRAME so the i2v continues the shot.
-    cond_override = os.environ.get("LTX_I2V_IMAGE")
+    # Conditioning image (cond_override): conditions directly on it and SKIPS the t2v pre-gen (the
+    # default image, a user image, or a t2v last frame produced by a prior process). Empty: generate
+    # a t2v clip and condition on its LAST FRAME so the i2v continues the shot.
     strength = float(os.environ.get("LTX_I2V_STRENGTH", "1.0"))
     t2v = None
     if cond_override:
@@ -639,7 +643,7 @@ def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynami
 
 
 @pytest.mark.skipif(
-    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
+    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors") and not missing_checkpoints_fail(),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(
