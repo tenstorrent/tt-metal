@@ -32,6 +32,10 @@ Tensor interleaved_to_sharded_partial(
         "shard_shape must be greater than 0 in both dims, got [{}, {}]",
         shard_shape[0],
         shard_shape[1]);
+    TT_FATAL(
+        shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED || shard_scheme == TensorMemoryLayout::WIDTH_SHARDED ||
+            shard_scheme == TensorMemoryLayout::BLOCK_SHARDED,
+        "Unsupported sharding scheme");
     bool row_wise = shard_orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set;
@@ -53,7 +57,7 @@ Tensor interleaved_to_sharded_partial(
                     case TensorMemoryLayout::BLOCK_SHARDED:
                         num_cores = tt::div_up(total_height, shard_shape[0]) * tt::div_up(total_width, shard_shape[1]);
                         break;
-                    default: TT_ASSERT(false, "Unsupported sharding scheme");
+                    default: TT_FATAL(false, "Unsupported sharding scheme");
                 }
                 grid_set = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, row_wise);
             } else if constexpr (std::is_same_v<GridType, CoreRangeSet>) {
