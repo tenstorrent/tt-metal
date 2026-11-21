@@ -18,8 +18,8 @@ No intermediate ring: the sum lives in DEST for one block and is packed straight
 
 | Symbol | Bound | Predicate / source that establishes it |
 |--------|-------|----------------------------------------|
-| `block_tiles` | 1 ≤ `block_tiles` ≤ `DEST_AUTO_LIMIT` (4 at fp32 half-sync, 8 at 16-bit half-sync or fp32 full-sync, 16 at 16-bit full-sync) | host `max(1, min(BLOCK_TILES, ceil(max_core_tiles / C)))`; kernel `static_assert(block_tiles <= DEST_AUTO_LIMIT)` (`dest_helpers.hpp:89-103`) |
-| `RING_DEPTH_BLOCKS` | 2 ≤ · ≤ 4 (perf-lamp range) | host constant |
+| `block_tiles` | 1 ≤ `block_tiles` ≤ `DEST_AUTO_LIMIT` (4 at fp32 half-sync, 8 at 16-bit half-sync or fp32 full-sync, 16 at 16-bit full-sync) | host `max(1, min(BLOCK_TILES, dest_section_tiles(config), ceil(max_core_tiles / C)))` (`add_program_artifacts.py`; `dest_section_tiles` mirrors `get_dest_limit`); kernel `static_assert(block_tiles <= DEST_AUTO_LIMIT)` (`dest_helpers.hpp:89-103`) |
+| `RING_DEPTH_BLOCKS` | ≥ 2; 2–4 is the perf-lamp range | host check `ring_depth >= 2` in `create_program_artifacts`; no explicit upper bound — the per-ring and footprint asserts below bound it |
 | `C` | {1, 2, 4} | `validate_thread_plan` (target page *Thread plan*) |
 | `tile_bytes` | 2,048 (bf16) in Phase 0; ≤ 4,096 (float32) in TARGET | `buffer_page_size()` of each tensor; bfloat8_b unbuildable on quasar |
 | one ring | `RING_DEPTH_BLOCKS × block_tiles × C × tile_bytes` ≤ 1,048,560 B | host assert (target page: ring cap) |

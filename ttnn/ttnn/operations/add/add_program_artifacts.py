@@ -33,7 +33,7 @@ MIN_TILES_PER_CORE = 1  # occupancy lamp: engage ceil(num_tiles / MIN_TILES_PER_
 
 # --- Cluster model of the target page (.claude/references/targets/quasar.md); Python has no query for them ---
 FREE_DM_HARTS = 6  # of 8: DM0 serves the ring interrupts, DM1 is the remapper
-NEOS = 4
+COMPUTE_THREAD_COUNTS = (1, 2, 4)  # C: one compute thread per NEO, 4 NEOs per cluster
 MAX_RING_BYTES = 1_048_560  # one DFB ring, compute side
 
 # Semantic ring names (shared with the kernels as dfb::<name>).
@@ -44,9 +44,9 @@ CB_OUTPUT = "cb_output_tiles"
 
 def validate_thread_plan(threads):
     r, c, w = threads
-    if not (c in (1, 2, 4) and r >= 1 and w >= 1 and r + w <= FREE_DM_HARTS and c % r == 0 and c % w == 0):
+    if not (c in COMPUTE_THREAD_COUNTS and r >= 1 and w >= 1 and r + w <= FREE_DM_HARTS and c % r == 0 and c % w == 0):
         raise ValueError(
-            f"thread plan (R, C, W) = {threads}: need C in {{1, 2, 4}}, R + W <= {FREE_DM_HARTS}, R | C, W | C"
+            f"thread plan (R, C, W) = {threads}: need C in {COMPUTE_THREAD_COUNTS}, R + W <= {FREE_DM_HARTS}, R | C, W | C"
         )
 
 
