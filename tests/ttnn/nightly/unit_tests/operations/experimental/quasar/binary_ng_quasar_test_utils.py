@@ -5,7 +5,7 @@
 """
 Shared test harness for the Quasar binary_ng sweeps under
 tests/ttnn/nightly/unit_tests/operations/experimental/quasar/. Holds the helpers originally defined in
-test_binary_ng_no_bcast.py (_on_quasar, the *_sharded_config builders, _act, _run, _run_mixed) so they can
+test_binary_ng_no_bcast.py (the *_sharded_config builders, _act, _run, _run_mixed) so they can
 be reused by both the no-broadcast suite and upcoming subtile-broadcast test files.
 
 Not collected by pytest: the module deliberately has no `test_` prefix.
@@ -13,17 +13,13 @@ Not collected by pytest: the module deliberately has no `test_` prefix.
 
 import math
 import os
+import pathlib
+import time
 
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-
-
-def _on_quasar():
-    # ttnn.get_arch_name() returns "invalid" under the simulator, so detect Quasar from the sim env
-    # vars the simulator run sets (ARCH_NAME=quasar / CHIP_ARCH=quasar).
-    return any("quasar" in os.environ.get(v, "").lower() for v in ("ARCH_NAME", "CHIP_ARCH"))
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, ulp_distance
 
 
 def _height_sharded_config(shard_shape, core_grid):
@@ -33,15 +29,6 @@ def _height_sharded_config(shard_shape, core_grid):
         strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
-    )
-
-
-def _dram_height_sharded_config(shard_shape, core_grid):
-    # core_grid is in DRAM-bank coordinates, not worker-core coordinates.
-    return ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
     )
 
 
@@ -81,7 +68,7 @@ _OPS = {
     "minimum": (lambda: ttnn.experimental.quasar.minimum, torch.minimum),
 }
 
-# PCC thresholds. NEVER weakened below what the descriptor path achieves for the same config.
+# PCC thresholds. Never weaken these.
 _PCC = {ttnn.bfloat16: 0.997, ttnn.float32: 0.9999}
 
 # Default shape for _run_mixed: a 16x16-tile square (256 tiles). See test_binary_ng_no_bcast.py for the
@@ -110,28 +97,109 @@ def _act(act_type):
     return [ttnn.UnaryWithParam(act_type)] if act_type is not None else []
 
 
-# The largest ULP distance from torch's result on the device's operands, per dtype and op. fp32 was measured on
-# craq-sim: add, subtract and multiply match bit for bit, and divide is within one step. bf16 takes production's bound
-# of 1: Quasar's SFPU multiply truncates, while Wormhole and Blackhole, where these suites also run, round to nearest
-# even. maximum and minimum select an operand, so they are exact.
+# Resolve the inspector output the way the runtime does: <logs_dir>/generated/inspector, where
+# logs_dir is TT_METAL_LOGS_PATH if set, else the root dir (TT_METAL_HOME, else cwd). See
+# tt_metal/llrt/rtoptions.cpp. A hardcoded absolute path would be the only one in this directory and
+# would silently miss the file under any relocated logs dir.
+_LOGS_ROOT = pathlib.Path(os.environ.get("TT_METAL_LOGS_PATH") or os.environ.get("TT_METAL_HOME") or os.getcwd())
+INSPECTOR_YAML = _LOGS_ROOT / "generated" / "inspector" / "kernels.yaml"
+
+# Wall-clock at module import. pytest imports every test module during collection, and this module with them,
+# strictly before any fixture runs, so kernels.yaml -- created when the `device` fixture opens the device -- is
+# necessarily newer than this. See bound_kernel_sources() for why that matters.
+_IMPORT_TIME = time.time()
+
+
+def bound_kernel_sources():
+    """Kernel `source:` lines from THIS process's inspector output.
+
+    Do NOT unlink kernels.yaml first: the inspector opens it once with std::ios::trunc at device
+    creation and holds the handle, and the `device` fixture runs before the test body -- so deleting the
+    path unlinks a live inode and it never reappears. Truncate-at-open is what makes the contents this
+    process's; the mtime assertion is what rejects a stale leftover, which for the fallback arm would
+    otherwise be a false green (a previous run's file holds exactly the kernels_dfb sources it asserts).
+    """
+    mtime = INSPECTOR_YAML.stat().st_mtime
+    assert mtime >= _IMPORT_TIME, (
+        f"{INSPECTOR_YAML} predates this process (mtime {mtime} < import {_IMPORT_TIME}); it is a stale "
+        "leftover, so it proves nothing about this run. Is the inspector disabled?"
+    )
+    text = INSPECTOR_YAML.read_text()
+    return [ln.split("source:", 1)[1].strip() for ln in text.splitlines() if "source:" in ln]
+
+
+# The largest ULP distance from torch's result on the device's operands, per dtype and op, on Quasar (fp32 as measured
+# on ttsim); the Wormhole and Blackhole runs share these bounds. bf16 takes production's bound of 1: on Quasar the SFPU
+# multiply truncates and the FPU add rounds twice. maximum and minimum select an operand, so they are exact.
 _ULP = {
-    ttnn.float32: {"add": 0, "subtract": 0, "multiply": 0, "divide": 1, "maximum": 0, "minimum": 0},
+    ttnn.float32: {"add": 0, "subtract": 0, "multiply": 0, "divide": 2, "maximum": 0, "minimum": 0},
     ttnn.bfloat16: {"add": 1, "subtract": 1, "multiply": 1, "divide": 1, "maximum": 0, "minimum": 0},
 }
+
+
+def _fpu_add_bf16(a, b):
+    """bf16 a + b as Quasar's FPU rounds it. The FPU aligns the operand with the smaller exponent to the other's with 7
+    bits below the bf16 ULP, rounds it half away from zero, and rounds the sum to nearest even."""
+    a, b = a.double(), b.double()
+    ea, eb = torch.frexp(a).exponent, torch.frexp(b).exponent
+    a_big = ea >= eb
+    big, small = torch.where(a_big, a, b), torch.where(a_big, b, a)
+    # frexp's mantissa is in [0.5, 1), so the larger operand's bf16 ULP is 2**(e - 8); the FPU keeps 7 bits below it.
+    step = torch.exp2((torch.maximum(ea, eb) - (8 + 7)).double())
+    aligned = torch.sign(small) * torch.floor(small.abs() / step + 0.5) * step
+    rounded = (big + aligned).float().to(torch.bfloat16)
+    # frexp gives a zero the exponent 0, which can make the zero the larger operand.
+    return torch.where((a == 0) | (b == 0), (a + b).float().to(torch.bfloat16), rounded)
+
+
+def _truncate_to_bf16(x):
+    """bfloat16 of float32 values with their low 16 bits dropped, as Quasar's SFPU multiply gives its result. The
+    Wormhole and Blackhole LLKs round to nearest even instead."""
+    assert x.dtype == torch.float32, f"the truncation model takes float32 values, not {x.dtype}"
+    return (x.contiguous().view(torch.int32) & -65536).view(torch.float32).to(torch.bfloat16)
+
+
+def _sfpu_multiply_bf16(a, b):
+    """bf16 a * b as Quasar's SFPU multiply gives it out of fast mode: the float32 product, truncated to bf16. The
+    product of two bf16 values is exact in float32, so only the truncation rounds."""
+    return _truncate_to_bf16(a.float() * b.float())
+
+
+# The bf16 sum as Quasar rounds it: twice, as the hardware and ttsim do.
+_FPU_ADD_ROUNDINGS = (_fpu_add_bf16,)
+
+
+def _add_goldens(ta, tb):
+    """The oracles of a bf16 add (one today), on the operands as the device holds them."""
+    a, b = ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()
+    return [rounding(a, b) for rounding in _FPU_ADD_ROUNDINGS]
+
+
+def _matches_none(got, goldens, bound=0):
+    """Per element: True where `got` is more than `bound` ULP from every golden. As assert_with_ulp's allow_nonfinite
+    treats them, a NaN matches a NaN whatever its payload, and an inf matches only an inf of the same sign."""
+
+    def differs(golden):
+        far = ulp_distance(got, golden) > bound
+        inf_differs = (got.isinf() | golden.isinf()) & (got != golden)
+        return (far | inf_differs) & ~(got.isnan() & golden.isnan())
+
+    return torch.stack([differs(golden) for golden in goldens]).all(dim=0)
+
+
 # Activations that keep the golden exact: RELU, and SQUARE in fp32.
 _EXACT_ACTS = {
     ttnn.float32: (None, ttnn.UnaryOpType.RELU, ttnn.UnaryOpType.SQUARE),
     ttnn.bfloat16: (None, ttnn.UnaryOpType.RELU),
 }
-# The other activations, after a multiply: the largest ULP distance measured on craq-sim against a golden that rounds
-# each intermediate to the dtype, or production's bound where that is larger (TANH: 5). The bounds were measured on a
-# multiply only; beside another op the check is PCC only. GELU's fused form is the fast lookup table, for which
-# production's own bounds (30,000 ULP in bf16) show that ULP is not a measure, so it is PCC only too.
+# The other activations, after a multiply: the largest ULP distance on Quasar (bf16 on ttsim, fp32 on craq-sim) against
+# a golden that rounds each intermediate to the dtype, or production's bound where larger (TANH: 5). Beside another op
+# the check is PCC only, and so is GELU's fused form, the fast lookup table (production's own bf16 bound: 30,000 ULP).
 _ACT_ULP = {
     ttnn.float32: {ttnn.UnaryOpType.TANH: 5, ttnn.UnaryOpType.SIGMOID: 3, ttnn.UnaryOpType.SILU: 4},
     ttnn.bfloat16: {
         ttnn.UnaryOpType.TANH: 5,
-        ttnn.UnaryOpType.SIGMOID: 4,
+        ttnn.UnaryOpType.SIGMOID: 5,
         ttnn.UnaryOpType.SILU: 4,
         ttnn.UnaryOpType.SQUARE: 4,
     },
@@ -374,8 +442,8 @@ def _run_scalar(
 ):
     # Tensor-SCALAR sibling of _run: operand A is a tensor, the RHS is a Python number (not a tensor),
     # and the golden uses that same scalar. Same op->torch map, PCC thresholds, and degenerate-constant
-    # guard as _run. On Quasar the DFB path is the only path that can run (the descriptor throws as
-    # unsupported), so a passing PCC here is itself the proof the op routed to the v2/DFB tensor-scalar
+    # guard as _run. On Quasar a DFB factory is the only path that can run (an op outside the native and Metal 2.0
+    # slices raises an error), so a passing PCC here is itself the proof the op routed to the v2/DFB tensor-scalar
     # factory -- the same implicit v2-routing check the no-broadcast / subtile-broadcast suites rely on
     # (there is no explicit DFB-path assertion helper in this module). The scalar is passed as the second
     # positional arg, which the nanobind binding routes to the tensor-scalar overload.

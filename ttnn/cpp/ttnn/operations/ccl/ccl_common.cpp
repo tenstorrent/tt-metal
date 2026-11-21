@@ -22,12 +22,6 @@
 
 namespace ttnn::ccl {
 
-bool is_fabric_2d() {
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-
-    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D;
-}
-
 std::optional<ttnn::DeviceComputeKernelConfig> resolve_fp32_acc_compute_kernel_config(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config, tt::tt_metal::DataType input_dtype) {
     if (!compute_kernel_config.has_value() && input_dtype == tt::tt_metal::DataType::FLOAT32) {
@@ -227,7 +221,8 @@ tt::tt_fabric::Topology get_usable_topology(
     const Tensor& tensor,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& cluster_axis) {
-    tt::tt_fabric::Topology topology_ = topology.has_value() ? *topology : tt::tt_fabric::get_fabric_topology();
+    tt::tt_fabric::Topology topology_ =
+        topology.has_value() ? *topology : tt::tt_fabric::get_fabric_topology(*tensor.device());
     if (topology_ == tt::tt_fabric::Topology::Ring || topology_ == tt::tt_fabric::Topology::Torus) {
         bool wraps;
         if (cluster_axis.has_value()) {
@@ -578,7 +573,7 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
     this->slice_dim_is_width = input_tensor.padded_shape().rank() - 1 == slice_dim;
     this->is_sharded = input_tensor.is_sharded();
 
-    this->input_page_size = input_tensor.buffer()->page_size();
+    this->input_page_size = input_tensor.mesh_buffer().page_size();
     log_trace(tt::LogOp, "input_page_size={}", input_page_size);
     if (row_major) {
         this->num_cols = input_tensor.padded_shape()[-1];
@@ -1228,7 +1223,7 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
     std::array<uint32_t, 2> forward_args = {};
     std::array<uint32_t, 2> backward_args = {};
 
-    auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     if (tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
         validate_fabric_2d_dynamic_config();
         if (forward_device_coord) {
@@ -1288,7 +1283,7 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     std::array<uint32_t, 6> backward_args = {};
     // Used for experimentation for optimal perf
     // May be uplifted to an op parameter if needed
-    auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
 
     if (tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
         validate_fabric_2d_dynamic_config();
@@ -1301,8 +1296,8 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
             if (coord) {
                 const auto& dev_coord = *coord;
                 auto device_fabric_node_id = mesh_device->get_fabric_node_id(dev_coord);
-                auto eth_chan_dir =
-                    tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, device_fabric_node_id);
+                auto eth_chan_dir = tt::tt_fabric::get_eth_forwarding_direction(
+                    *mesh_device, src_fabric_node_id, device_fabric_node_id);
                 args[0] = *device_fabric_node_id.mesh_id;
                 args[1] = device_fabric_node_id.chip_id;
                 args[2 + static_cast<std::uint8_t>(eth_chan_dir.value())] = num_targets;
@@ -1348,8 +1343,13 @@ void fabric_mux_connection_ct_args(
     std::vector<uint32_t>& worker_ct_args) {
     worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));  // fabric_mux_num_buffers_per_channel 0
     worker_ct_args.push_back(
-        mux_kernel_config.get_buffer_size_bytes(channel_type));        // fabric_mux_channel_buffer_size_bytes 1
-    worker_ct_args.push_back(mux_kernel_config.get_status_address());  // fabric_mux_status_address 2
+        mux_kernel_config.get_buffer_size_bytes(channel_type));  // fabric_mux_channel_buffer_size_bytes 1
+    // A mux in program-local L1 publishes its map's address in a semaphore, which its clients wait on in place of the
+    // status word; every other mux address is then an offset from that address.
+    worker_ct_args.push_back(
+        mux_kernel_config.is_in_program_local_l1()
+            ? mux_kernel_config.get_l1_base_semaphore_id()
+            : mux_kernel_config.get_status_address());  // fabric_mux_status_address or l1_base_semaphore_id 2
     worker_ct_args.push_back(
         mux_kernel_config.get_termination_signal_address());  // fabric_mux_termination_signal_address 3
     worker_ct_args.push_back(num_workers_per_direction);      // num_mux_clients 4

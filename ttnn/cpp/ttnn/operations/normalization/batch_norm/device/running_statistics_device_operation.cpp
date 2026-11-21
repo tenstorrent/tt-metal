@@ -23,7 +23,7 @@ inline void check_tensor_stat(const Tensor& tensor, std::string_view name, std::
         tensor.storage_type() == StorageType::DEVICE,
         "Operands to batch_norm need to be on device! Got: {}",
         tensor.storage_type());
-    TT_FATAL(tensor.buffer() != nullptr, "Operands to batch_norm need to be allocated in buffers on device!");
+    TT_FATAL(tensor.is_allocated(), "Operands to batch_norm need to be allocated in buffers on device!");
     TT_FATAL(tensor.logical_shape().rank() == 4, "batch_norm supports tensors of rank 4");
     TT_FATAL(tensor.logical_shape()[1] == input_c_dim, "{}[1] must be the same as input's channel size.", name);
 }
@@ -83,6 +83,14 @@ void RunningStatistics::validate_on_program_cache_miss(
     }
 
     validate_tensors(operation_attributes, tensor_args);
+
+    const bool any_float32 = batch_mean.dtype() == DataType::FLOAT32 || batch_var.dtype() == DataType::FLOAT32 ||
+                             operation_attributes.get_dtype() == DataType::FLOAT32 ||
+                             (running_mean.has_value() && running_mean->dtype() == DataType::FLOAT32) ||
+                             (running_var.has_value() && running_var->dtype() == DataType::FLOAT32);
+    TT_FATAL(
+        !any_float32 || ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config),
+        "batch_norm with float32 tensors requires fp32_dest_acc_en=True in compute_kernel_config");
 };
 
 DataType RunningStatistics::operation_attributes_t::get_dtype() const {

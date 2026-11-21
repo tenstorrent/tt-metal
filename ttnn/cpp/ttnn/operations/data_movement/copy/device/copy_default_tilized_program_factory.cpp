@@ -14,13 +14,14 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/compute_hardware_config.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <cstdint>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -30,7 +31,7 @@ namespace ttnn::prim {
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 namespace {
 
@@ -41,7 +42,7 @@ constexpr const char* KERNEL_READER_INTERLEAVED =
     "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id_metal2.cpp";
 constexpr const char* KERNEL_WRITER_INTERLEAVED =
     "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp";
-constexpr const char* KERNEL_COMPUTE_ELTWISE_COPY =
+constexpr const char* KERNEL_COMPUTE_ELTWISE_COPY_METAL2 =
     "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/compute/eltwise_copy_metal2.cpp";
 
 }  // namespace
@@ -89,7 +90,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     const m2::KernelSpecName WRITER{"writer"};
     const m2::KernelSpecName COMPUTE{"compute"};
 
-    const auto aligned_input_page_size = input.buffer()->aligned_page_size();
+    const auto aligned_input_page_size = input.mesh_buffer().aligned_page_size();
     m2::DataflowBufferSpec in_dfb{
         .unique_id = IN,
         .entry_size = aligned_input_page_size,
@@ -100,7 +101,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     // When converting data formats through the compute kernel, output pages land in a separate DFB.
     // Double buffered, and the output page_size is aligned so the noc_write reads from an aligned
     // address in the DFB.
-    const auto aligned_output_page_size = output.buffer()->aligned_page_size();
+    const auto aligned_output_page_size = output.mesh_buffer().aligned_page_size();
     m2::DataflowBufferSpec out_dfb{
         .unique_id = OUT,
         .entry_size = aligned_output_page_size,
@@ -161,7 +162,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     // to O3 explicitly (legacy compute defaults to O3; Metal 2.0 CompilerOptions defaults to O2).
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
-        .source = KERNEL_COMPUTE_ELTWISE_COPY,
+        .source = KERNEL_COMPUTE_ELTWISE_COPY_METAL2,
         .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {

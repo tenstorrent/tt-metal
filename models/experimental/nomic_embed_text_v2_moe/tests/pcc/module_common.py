@@ -21,15 +21,19 @@ import ttnn
 
 from models.common.metrics import compute_max_abs_error, compute_pcc
 from models.experimental.nomic_embed_text_v2_moe.common import slice_state_dict
+from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device
+from models.experimental.nomic_embed_text_v2_moe.tt.router import Routing
 
 # (batch, seqlen). 37 is deliberately off-tile: padding bugs only surface when S is not a
 # multiple of 32, and S is the batch's longest tokenized sequence, so that is the common case.
 TOKEN_SHAPES = [(1, 128), (2, 512), (2, 37)]
 
-# Past 32 tile rows of M = B * S the dense projections run through minimal_matmul, which no
-# TOKEN_SHAPES entry reaches. 4x512 folds to 64: M is below N for QKV and fc1 and above it for
-# out_proj and fc2, so both orientations run, and the QKV, out_proj and fc1 outputs go to L1.
-DENSE_SHAPES = [*TOKEN_SHAPES, (4, 512)]
+# From 32 tile rows of M = B * S (2x512 here) the dense projections run on the port's own matmuls: QKV while M <= N
+# and fc1 on grouped_matmul_w1 with one expert, the others on pirotski_matmul. 4x512 folds to 64: M is below N for
+# QKV and above it for out_proj and fc2, so both run, and the QKV, out_proj and fc1 outputs go to L1.
+# 16x512 is the largest chunk a forward runs (tt/chunking.py), 8192 tokens, where SDPA's key chunk
+# is smaller than its rule's so the heads fit L1.
+DENSE_SHAPES = [*TOKEN_SHAPES, (4, 512), (16, 512)]
 
 # A wrong layout or convention does not lose precision, it decorrelates. Anything under this is
 # the wrong tensor, not a less precise one.
@@ -44,11 +48,11 @@ MOE_LAYER = 1
 # see it at all.
 BIAS_MISPLACEMENT_MAX_ABS = 1e-3
 
-# How far from 1 the measured count of shared biases a token holds may be. Measured 1.000 and 1.007
-# where a stacked pass adds the bias in w2's fp32 accumulator, and 0.946 and 0.950 where a transposed
-# pass adds it to the bfloat16 sum in bfloat16, which drops it from the half of the elements where
-# it is under half a step of the sum. A bias added inside the per-expert loop counts the mean
-# routed-weight sum instead, about 0.55.
+# How far from 1 the measured count of shared biases a token holds may be. Measured 1.003 and 0.996
+# where routed_combine adds it to the fp32 sum before rounding once. A bfloat16 add of the bias to a
+# bfloat16 sum measured 0.946 and 0.950: it drops the bias from the half of the elements where it is
+# under half a step of the sum. A bias added inside the per-expert loop counts the mean routed-weight
+# sum instead, about 0.55.
 BIAS_SCALE_TOLERANCE = 0.1
 
 
@@ -110,15 +114,41 @@ def keep_mask(batch: int, seqlen: int, keep) -> torch.Tensor:
     return mask
 
 
-def dense_routing(tokens: int, experts: int, top_k: int) -> torch.Tensor:
-    """A plausible (T, E) dense routing tensor, zero off the top-k and not renormalized.
+def routing_selection(tokens: int, experts: int, top_k: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """A plausible top-k selection: (T, K) float32 weights, descending and not renormalized, and (T, K) experts."""
+    probabilities = torch.randn(tokens, experts).softmax(dim=-1)
+    return torch.topk(probabilities, top_k, dim=-1)
+
+
+def selection_as_dense(values: torch.Tensor, indices: torch.Tensor, experts: int) -> torch.Tensor:
+    """A (T, K) selection as the (T, E) dense routing tensor it stands for, zero off the top-k."""
+    return torch.zeros(values.shape[0], experts).scatter_(-1, indices, values)
+
+
+def injected_routing(tokens: int, experts: int, top_k: int, device) -> tuple[Routing, torch.Tensor]:
+    """A plausible selection on the device, and the (T, E) dense weights it stands for, which
+    NomicExperts.dense_forward takes.
 
     Injected rather than routed so the expert tests measure the expert arithmetic alone; a
     routing flip would otherwise show up as an expert error.
     """
-    probabilities = torch.randn(tokens, experts).softmax(dim=-1)
-    values, indices = torch.topk(probabilities, top_k, dim=-1)
-    return torch.zeros_like(probabilities).scatter_(-1, indices, values)
+    values, indices = routing_selection(tokens, experts, top_k)
+    return device_selection(values, indices, experts, device), selection_as_dense(values, indices, experts)
+
+
+def device_selection(values: torch.Tensor, indices: torch.Tensor, experts: int, device) -> Routing:
+    """A (T, K) selection on the device as the router's (T, E) scores, from which routing_metadata selects
+    exactly it: the chosen experts' weights, which must be descending and above 0, and zeros elsewhere."""
+    scores = torch.zeros(values.shape[0], experts).scatter_(-1, indices, values)
+    return Routing(scores=to_device(scores.reshape(1, 1, *scores.shape), device, dtype=ttnn.float32))
+
+
+def selection_of(routing: Routing, top_k: int, num_experts: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """The (T, K) weights and experts routing_metadata selects from routing's scores: each token's
+    top_k of the experts' columns, largest first and a tie to the lower expert."""
+    scores = ttnn.to_torch(routing.scores).float().reshape(-1, routing.scores.shape[-1])
+    values, indices = torch.sort(scores[:, :num_experts], dim=-1, descending=True, stable=True)
+    return values[:, :top_k], indices[:, :top_k]
 
 
 def bias_scale(got: torch.Tensor, without_bias: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:

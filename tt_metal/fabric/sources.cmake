@@ -8,6 +8,7 @@ set(FABRIC_JIT_API_HEADERS
     hw/inc/edm_fabric/edm_fabric_utils.hpp
     hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp
     hw/inc/edm_fabric/edm_handshake.hpp
+    hw/inc/edm_fabric/edm_handshake_types.hpp
     hw/inc/edm_fabric/fabric_connection_manager.hpp
     hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp
     hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
@@ -20,6 +21,7 @@ set(FABRIC_SOURCES
     control_plane.cpp
     mesh_graph_descriptor.cpp
     routing_table_generator.cpp
+    fabric_flat_address_routing_table_generator.cpp
     axis_route_topology.cpp
     mcast_reverse_tree.cpp
     mesh_graph.cpp
@@ -30,16 +32,28 @@ set(FABRIC_SOURCES
     builder/fabric_builder_config.cpp
     builder/fabric_builder_helpers.cpp
     builder/fabric_edge_capability.cpp
+    builder/fabric_master_router_selection.cpp
     builder/protected_domain_effect.cpp
     builder/injection_policy.cpp
     builder/fabric_stream_assignment.cpp
     builder/fabric_core_placement.cpp
     builder/fabric_channel_allocator.cpp
     builder/fabric_static_sized_channels_allocator.cpp
-    builder/fabric_remote_channels_allocator.cpp
+    builder/fabric_slot_allocator.cpp
+    builder/fabric_trid_allocator.cpp
     builder/static_sized_channel_connection_writer_adapter.cpp
     builder/connection_registry.cpp
     builder/router_wiring_rules.cpp
+    builder/router_channel_layouts.cpp
+    graph/fabric_graph_types.cpp
+    graph/fabric_graph_inputs.cpp
+    graph/fabric_wiring_rules.cpp
+    graph/logical_graph_lowering.cpp
+    graph/logical_graph_validation.cpp
+    graph/channel_graph_lowering.cpp
+    graph/physical_graph_lowering.cpp
+    graph/graph_fabric_build_session.cpp
+    graph/graph_fabric_builder.cpp
     channel_trimming_export.cpp
     channel_trimming_import.cpp
     channel_trimming_io.cpp
@@ -53,6 +67,7 @@ set(FABRIC_SOURCES
     fabric_context.cpp
     fabric_builder_context.cpp
     fabric_mux_config.cpp
+    fabric_mux_program_local_l1.cpp
     fabric_mux_v2_config.cpp
     fabric_tensix_builder.cpp
     fabric_tensix_builder_impl.cpp
