@@ -817,7 +817,7 @@ class RoutedPrefillExperts:
             H // tile,
             n_gu,
             shard_tiles["gate"] * tile_bytes,
-            shard_tiles["down"] * tile_bytes,
+            sp.dense_down_k_stride(E, shard_tiles["down"], tile_bytes),
             tile_bytes,
             (H // tile) * shard_tiles["gate"] * tile_bytes,  # a bank's shard: K tile rows x shard width
             (E * il_pad // tile) * shard_tiles["down"] * tile_bytes,
@@ -840,7 +840,7 @@ class RoutedPrefillExperts:
             gate_up_weight_source=dense.gate,
             down_weight_source=dense.down,
             gate_up_k_stride=shard_tiles["gate"] * tile_bytes,
-            down_k_stride=shard_tiles["down"] * tile_bytes,
+            down_k_stride=sp.dense_down_k_stride(E, shard_tiles["down"], tile_bytes),
             weights_n_gate_up=n_gu,
             weights_n_down=n_dn,
             weights_k_gate_up=H // tile,
@@ -852,19 +852,31 @@ class RoutedPrefillExperts:
 
     def _dense_tp_biases(self, dense, il_pad):
         """Dense TP mode: one (1, N) bf16 TILE bias per expert and projection, copied on device from the dense decode
-        biases (gate / up: row 0 of [32, E * il_pad], columns of expert e; down: row e of [E, H], zero off device 0),
-        so the values are exactly those decode adds."""
+        biases (gate / up: row 0 of [32, E * il_pad], expert e's column tiles t * E + e (dense_layout.py expert_tile);
+        down: row e of [E, H], zero off device 0), so the values are exactly those decode adds."""
         E, H = self.num_experts, self.hidden_size
+        T = il_pad // ttnn.TILE_SIZE
         dram = ttnn.DRAM_MEMORY_CONFIG
         out = {}
-        # (projection, source, width, (row, first column) of expert e)
+
+        def by_expert(rm):
+            # row 0's column tiles [T, E] (interleaved) -> rows [E, T * 32]: expert e's columns in row e (a copy)
+            row = ttnn.slice(rm, [0, 0, 0, 0], [1, 1, 1, E * il_pad], memory_config=dram)
+            row = ttnn.permute(ttnn.reshape(row, (1, T, E, ttnn.TILE_SIZE)), (0, 2, 1, 3), memory_config=dram)
+            return ttnn.reshape(row, (1, 1, E, il_pad))
+
+        # (projection, source, width, (row, first column) of expert e in the by-expert rows)
         for proj, src, width, at in (
-            ("gate", dense.gate_bias, il_pad, lambda e: (0, e * il_pad)),
-            ("up", dense.up_bias, il_pad, lambda e: (0, e * il_pad)),
+            ("gate", dense.gate_bias, il_pad, lambda e: (e, 0)),
+            ("up", dense.up_bias, il_pad, lambda e: (e, 0)),
             ("down", dense.down_bias, H, lambda e: (e, 0)),
         ):
             assert src.layout == ttnn.TILE_LAYOUT  # (rm is then a new tensor, freed below)
             rm = ttnn.to_layout(src, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
+            if proj != "down":
+                rm_e = by_expert(rm)
+                ttnn.deallocate(rm)
+                rm = rm_e
             out[proj] = []
             for e in range(E):
                 r, c = at(e)

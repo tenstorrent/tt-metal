@@ -262,7 +262,8 @@ def load_dense_decode_expert_weights(
     # Cache names carry the padded width (the unpadded 720-column layout had the same names without it). The K-GPTQ
     # weights (transposed tiles) are named per source: a hash of the source as given, which names the pinned Hub
     # revision (as the routed prefill's K-GPTQ caches, prefill_routed.py).
-    tag = f"dense_decode_p{il_pad}"
+    # "_i": the experts' tiles interleaved (dense_layout.py expert_tile); the expert-contiguous layout was "_p".
+    tag = f"dense_decode_i{il_pad}"
     wtag = tag
     if kgptq_dir:
         import hashlib

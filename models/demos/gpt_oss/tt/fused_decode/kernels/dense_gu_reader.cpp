@@ -6,7 +6,7 @@
 // Units: the NA column tiles n of the [32, E * I_pad] activation, core c of NC taking [c NA / NC, (c + 1) NA / NC).
 // A unit's weights are the grouped MoE's relaid gate|up page of (expert e, local column j) = the dense columns of tile
 // n (gmoe_relayout.cpp: [k][gate, up], GMOE_SPLIT consecutive pages): every expert is NU whole tiles (I_pad =
-// NU * 32), e = n / NU, j = n - g0(e). Pushes:
+// NU * 32), e = n % E, j = n / E (gmoe::tile). Pushes:
 //   cb_x: the 32 rows' K tiles (BFP8, once);
 //   cb_r: the routing weights tile [32 tokens, 32 experts] (BF16, once);
 //   per unit: cb_w its 2 KT weight tiles (BFP4), cb_b the gate / up bias tiles n (32 equal rows, BF16), cb_e the
@@ -76,7 +76,7 @@ void kernel_main() {
 
     const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
     for (uint32_t n = n0; n < n1; ++n) {
-        const uint32_t e = n * 32 / I_LOCAL, u = e * NU + (n - gmoe::g0(e));
+        const uint32_t e = n % gmoe::E, u = e * NU + n / gmoe::E;  // (dense_layout.py expert_tile)
         cb_reserve_back(cb_w, PW);
         cb_reserve_back(cb_b, 2);
         cb_reserve_back(cb_e, 1);
@@ -91,10 +91,10 @@ void kernel_main() {
             noc_async_read(zeros, el1 + z, MEM_ZEROS_SIZE, 0);
         }
         noc_async_read_barrier(0);
-        // the expand tile: column cc of tile n belongs to expert (32 n + cc) / I_LOCAL
+        // the expand tile: every column of tile n belongs to expert e
         volatile tt_l1_ptr uint16_t* et = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(el1);
         for (uint32_t cc = 0; cc < 32; ++cc) {
-            const uint32_t ec = (n * 32 + cc) / I_LOCAL;
+            const uint32_t ec = e;
             et[(((ec / 16) * 2 + cc / 16) * 256) + (ec % 16) * 16 + cc % 16] = 0x3F80;
         }
         noc_async_read_barrier(NOC_B);

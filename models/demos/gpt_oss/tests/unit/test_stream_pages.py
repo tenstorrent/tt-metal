@@ -189,8 +189,9 @@ def test_bank_bytes_from_host():
 
 
 def test_dense_page_table():
-    """Batch-32 dense layout (gate / up [H, E * il], down [E * il, H], DRAM width-sharded): the table entry + k * stride
-    is tile (k, column) of the expert's slice, tracked here by tile ids in a simulated sharded buffer."""
+    """Batch-32 dense layout (gate / up [H, E * il], down [E * il, H], DRAM width-sharded, the experts' tiles
+    interleaved: local tile t of expert e at tile t * E + e): the table entry + k * stride is tile (k, column) of the
+    expert's slice, tracked here by tile ids in a simulated sharded buffer."""
     E, il, H, banks = 4, 64, 96, 4
     tb = 8  # bytes per simulated tile
     gu_w = -(-(E * il) // (TILE * banks))  # shard width in tiles (_dram_width_sharded)
@@ -220,12 +221,12 @@ def test_dense_page_table():
     ge, ue, de = sp.table_entries(table, n_gu, n_dn)
     tile_id = lambda bufs, entries, k, stride: sp.read_tiles(bufs, entries, k, stride, tb).view(torch.int64)[..., 0]
     for k in range(H // TILE):
-        want = torch.tensor([[k * (E * il // TILE) + e * n_gu + n for n in range(n_gu)] for e in range(E)])
+        want = torch.tensor([[k * (E * il // TILE) + n * E + e for n in range(n_gu)] for e in range(E)])
         assert torch.equal(tile_id(gu, ge, k, gu_w * tb), want)
         assert torch.equal(tile_id(gu, ue, k, gu_w * tb), want + 10**6)
     for k in range(il // TILE):
-        want = torch.tensor([[(e * n_gu + k) * n_dn + n for n in range(n_dn)] for e in range(E)]) + 2 * 10**6
-        assert torch.equal(tile_id(down, de, k, dn_w * tb), want)
+        want = torch.tensor([[(k * E + e) * n_dn + n for n in range(n_dn)] for e in range(E)]) + 2 * 10**6
+        assert torch.equal(tile_id(down, de, k, sp.dense_down_k_stride(E, dn_w, tb)), want)
 
 
 def test_dense_page_table_needs_whole_tiles():
@@ -253,7 +254,8 @@ def _model_tables():
     gu_w, dn_w, up_delta = 93, 12, (1 << 32) - (1 << 20)  # up below gate: the delta wraps
     table = sp.dense_page_table(E, il_pad, H, gu_w, dn_w, 576, up_delta)
     n_gu = il_pad // TILE
-    args = (n_gu, 90, banks, H // TILE, n_gu, gu_w * 576, dn_w * 576, 576, 90 * gu_w * 576, E * n_gu * dn_w * 576)
+    args = (n_gu, 90, banks, H // TILE, n_gu, gu_w * 576, sp.dense_down_k_stride(E, dn_w, 576), 576, 90 * gu_w * 576,
+            E * n_gu * dn_w * 576)  # fmt: skip
     out.append((table, args, dict(up_delta=up_delta)))
     return out
 

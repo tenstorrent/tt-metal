@@ -28,8 +28,9 @@ constexpr uint32_t K_IDS = K_SEL + 1;  // the router's ids per row (top-k + 1: a
 // column tiles per expert in the dense [*, E * 736] layout (each expert's 720 columns zero padded to 23 whole tiles,
 // experts/dense_layout.py)
 constexpr uint32_t NU_EXPERT = 23;
-// expert e's first column tile in the dense layout
-inline uint32_t g0(uint32_t e) { return NU_EXPERT * e; }
+// the dense layout's column (gate / up) or row (down) tile of expert e's local tile j: the experts' tiles interleaved
+// (dense_layout.py expert_tile), so the expert of tile n is n % E
+inline uint32_t tile(uint32_t e, uint32_t j) { return j * E + e; }
 
 struct Plan {
     uint32_t tiles[E];

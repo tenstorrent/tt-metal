@@ -3,7 +3,7 @@
 
 // Grouped MoE gate|up + SwiGLU, reader (BRISC) (dflash/grouped_moe.py GroupedMoE.gate_up). Units (gmoe_common.hpp):
 // (expert e, local column tile j of 23); per unit the expert's slot rows of X_g (all K tiles, once per expert while
-// they fit 4 slots, else per 4-slot group per unit), the gate and up column tiles of global column g0(e) + j
+// they fit 4 slots, else per 4-slot group per unit), the gate and up column tiles of global column tile(e, j)
 // interleaved [k][gate, up] (the relaid weights, gmoe_relayout.cpp: GMOE_SPLIT consecutive pages in consecutive DRAM
 // banks, alternating NOCs), and the two column tiles of the 32-row gate / up bias; GMOE_DEPTH units buffered, their
 // reads in flight together (dynamic NOC mode).
@@ -156,7 +156,7 @@ void kernel_main() {
                     cb_reserve_back(cb_w, PW);
                     cb_reserve_back(cb_b, 2);
                     const uint32_t wl1 = wbase + slot * PW * w_tile, bl1 = bbase + slot * 2 * b_tile;
-                    const uint32_t n = gmoe::g0(e) + uu % NU;
+                    const uint32_t n = gmoe::tile(e, uu % NU);
                     for (uint32_t q = 0; q < SPLIT; ++q) {
                         noc_async_read(s_gu.get_noc_addr(uu * SPLIT + q, 0, 0), wl1 + q * sp, sp, 0);
                     }
@@ -181,7 +181,7 @@ void kernel_main() {
         cb_reserve_back(cb_w, inflight * PW);
         cb_reserve_back(cb_b, inflight * 2);
         const uint32_t wl1 = wbase + slot * PW * w_tile, bl1 = bbase + slot * 2 * b_tile;
-        const uint32_t n = gmoe::g0(e) + j;  // global column tile
+        const uint32_t n = gmoe::tile(e, j);  // global column tile
         noc_async_read_set_trid(1 + slot, 0);
         noc_async_read_set_trid(1 + slot, NOC_B);
         // the unit's [k][gate, up] tiles (SPLIT consecutive pages of the relaid weights: consecutive DRAM banks),

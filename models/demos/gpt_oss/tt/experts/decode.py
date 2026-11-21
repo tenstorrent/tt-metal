@@ -301,7 +301,8 @@ def _dense_swiglu(gate, up, w, weights, plan):
         first += [0] * (-len(first) % 4)
         cache["table"] = [sum(first[k + j] << (8 * j) for j in range(4)) for k in range(0, len(first), 4)]
     cb_gate, cb_up, cb_e, cb_w, cb_bg, cb_ub, cb_act = range(7)
-    rct = [cb_gate, cb_up, cb_e, cb_w, cb_bg, cb_ub, NT, gx, weights.intermediate_padded]
+    num_experts = weights.gate_bias.shape[-1] // weights.intermediate_padded  # (the reader maps column tile n to n % E)
+    rct = [cb_gate, cb_up, cb_e, cb_w, cb_bg, cb_ub, NT, gx, num_experts]
     for t in (w, weights.gate_bias, weights.up_bias):
         rct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
     kernels = [

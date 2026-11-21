@@ -202,28 +202,34 @@ def width_sharded_tile_entry(n_tile, k_tile, shard_tiles, tile_bytes):
     return b, (k_tile * shard_tiles + c) * tile_bytes
 
 
+def dense_down_k_stride(num_experts, down_shard_tiles, tile_bytes):
+    """K stride (bytes) of the dense layout's down column entries: an expert's consecutive row tiles are num_experts
+    row tiles apart (experts/dense_layout.py expert_tile)."""
+    return num_experts * down_shard_tiles * tile_bytes
+
+
 def dense_page_table(num_experts, inter_pad, hidden, gu_shard_tiles, down_shard_tiles, tile_bytes, up_delta=0):
     """[E, 2 * (2 * n_gu + n_dn)] int64 page table of the batch-32 dense decode expert weights (experts/weights.py
-    load_dense_decode_expert_weights, experts/dense_layout.py: gate / up [H, E * inter_pad] with expert e in columns
-    [e * inter_pad, (e + 1) * inter_pad), down [E * inter_pad, H] with expert e in rows [e * inter_pad,
-    (e + 1) * inter_pad), all DRAM width-sharded; K-GPTQ tiles stored transposed within themselves sit at the same
-    places, so the table is the same). Gate and up are two tensors: the up
+    load_dense_decode_expert_weights, experts/dense_layout.py: gate / up [H, E * inter_pad] with expert e's column tile
+    t at dense_layout.expert_tile(e, t) = t * E + e, down [E * inter_pad, H] with expert e's row tile t there, all DRAM
+    width-sharded; K-GPTQ tiles stored transposed within themselves sit at the same places, so the table is the same).
+    Gate and up are two tensors: the up
     entries carry up_delta = up buffer address - gate buffer address (mod 2^32) so both read from the gate source.
     n_gu = inter_pad / 32, n_dn = ceil(hidden / 32); k strides: gu_shard_tiles * tile_bytes (gate / up, K = hidden)
-    and down_shard_tiles * tile_bytes (down, K = inter_pad).
+    and dense_down_k_stride (down, K = inter_pad: the expert's row tiles E apart).
 
     Only whole-tile experts can be addressed: inter_pad must be a multiple of 32 (gpt-oss-20b at TP 4: 720 columns
     padded to 736, dense_layout.padded_expert_width)."""
     assert (
         inter_pad % TILE == 0
     ), f"expert width {inter_pad} is not whole tiles: the dense layout is not addressable per expert"
-    n_gu, n_dn, k_dn = inter_pad // TILE, -(-hidden // TILE), inter_pad // TILE
+    n_gu, n_dn = inter_pad // TILE, -(-hidden // TILE)
     assert gu_shard_tiles > 0 and down_shard_tiles > 0
     rows = []
     for e in range(num_experts):
-        gate = [width_sharded_tile_entry(e * n_gu + n, 0, gu_shard_tiles, tile_bytes) for n in range(n_gu)]
+        gate = [width_sharded_tile_entry(n * num_experts + e, 0, gu_shard_tiles, tile_bytes) for n in range(n_gu)]
         up = [(b, (o + up_delta) % (1 << 32)) for b, o in gate]
-        down = [width_sharded_tile_entry(n, e * k_dn, down_shard_tiles, tile_bytes) for n in range(n_dn)]
+        down = [width_sharded_tile_entry(n, e, down_shard_tiles, tile_bytes) for n in range(n_dn)]
         rows.append([v for entry in gate + up + down for v in entry])
     return torch.tensor(rows, dtype=torch.int64)
 

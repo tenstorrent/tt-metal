@@ -367,8 +367,9 @@ class ModelArgs:
     # Layout version of the batched dense decode MoE weights (experts dense_decode_*). 2: each expert padded to whole
     # tiles (dense_decode_p736_*, experts/dense_layout.py); the routed prefill reads them (no routed copy). 3: with
     # GPT_OSS_DECODE_SPLIT_ROUND_DIR the K-GPTQ experts in transposed tiles (experts/weights.py dense_kgptq_dir); the
-    # marker records that directory (_dense_moe_decode_version).
-    DENSE_MOE_DECODE_WEIGHTS_VERSION = 3
+    # marker records that directory (_dense_moe_decode_version). 4: the experts' tiles interleaved
+    # (dense_decode_i736_*, dense_layout.py expert_tile) so the routed prefill reads every expert from all the banks.
+    DENSE_MOE_DECODE_WEIGHTS_VERSION = 4
 
     # Settings that choose which weight values or layouts the cache holds: the marker records them, so a run with other
     # values (another pinned revision of the rounded weights, say) loads the HF weights once and writes its own files

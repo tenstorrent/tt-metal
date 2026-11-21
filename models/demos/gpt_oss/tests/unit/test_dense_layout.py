@@ -4,7 +4,8 @@
 """Host-only checks of the batched dense decode MoE layout (tt/experts/dense_layout.py) with every expert padded to
 whole tiles (gpt-oss-20b at TP 4: 720 -> 736 columns), and of the routed prefill's page table over it
 (tt/experts/stream_pages.py dense_page_table):
-  * the padded layout holds each device's shard of every expert at its place and zeros in the padded columns / rows;
+  * the padded layout holds each device's shard of every expert at its place (the experts' tiles interleaved:
+    dense_layout.expert_tile) and zeros in the padded columns / rows;
   * the dense decode math (decode_forward_dense: biases, SwiGLU-OAI with clamp, routing weights, down, down bias,
     summed over the TP devices) on the padded layout equals the per-expert MoE: padded columns add exactly zero;
   * reading tile (expert, column, k) through the page table returns that tile of the padded tensors in a simulated
@@ -50,13 +51,17 @@ def _config_constants():
     return out
 
 
-def _old_side_by_side(w, tp):
-    """The unpadded layout as experts/weights.py built it before the padding (gate / up)."""
-    E, H, I = w.shape
-    il = I // tp
-    return torch.cat(
-        [w[:, :, d * il : (d + 1) * il].permute(1, 0, 2).reshape(H, E * il) for d in range(tp)], dim=-1
-    ).reshape(1, 1, H, tp * E * il)
+def _expert_cols(e, E, il_pad):
+    """Indices of expert e's il_pad columns (rows for down) of one device's [*, E * il_pad] dense layout, in local
+    column order (dense_layout.expert_tile: local tile t at tile t * E + e)."""
+    return torch.cat([torch.arange(TILE) + dl.expert_tile(e, t, E) * TILE for t in range(il_pad // TILE)])
+
+
+def _by_expert(x, dim, E, il_pad):
+    """x with dimension dim of one device's E * il_pad interleaved columns -> [..., E, il_pad, ...] by expert."""
+    idx = torch.cat([_expert_cols(e, E, il_pad) for e in range(E)])
+    shape = list(x.shape)
+    return x.index_select(dim, idx).reshape(shape[:dim] + [E, il_pad] + shape[dim + 1 :])
 
 
 def test_padded_width():
@@ -72,11 +77,11 @@ def test_padded_layout(E, H, I, tp):
     w = torch.randn(E, H, I, generator=gen)
     wd = torch.randn(E, I, H, generator=gen)
     b = torch.randn(E, I, generator=gen)
-    gate = dl.gate_up_columns(w, tp, il_pad)[0, 0].reshape(H, tp, E, il_pad)  # device d = column block d
-    down = dl.down_rows(wd, tp, il_pad)[0, 0].reshape(tp, E, il_pad, H)
+    gate = _by_expert(dl.gate_up_columns(w, tp, il_pad)[0, 0].reshape(H, tp, E * il_pad), 2, E, il_pad)
+    down = _by_expert(dl.down_rows(wd, tp, il_pad)[0, 0].reshape(tp, E * il_pad, H), 1, E, il_pad)
     bias = dl.bias_rows(b, tp, il_pad, 5)[0, 0]
     assert bias.shape == (5, tp * E * il_pad) and torch.equal(bias[0], bias[4])
-    bias = bias[0].reshape(tp, E, il_pad)
+    bias = _by_expert(bias[0].reshape(tp, E * il_pad), 1, E, il_pad)
     for d in range(tp):
         for e in range(E):
             assert torch.equal(gate[:, d, e, :il], w[e, :, d * il : (d + 1) * il])
@@ -84,13 +89,11 @@ def test_padded_layout(E, H, I, tp):
             assert torch.equal(bias[d, e, :il], b[e, d * il : (d + 1) * il])
     # padded columns / rows are zero
     assert not gate[..., il:].any() and not down[:, :, il:].any() and not bias[..., il:].any()
-    # without padding: the old layout exactly
-    if il % TILE == 0:
-        assert torch.equal(dl.gate_up_columns(w, tp, il), _old_side_by_side(w, tp))
     db = dl.down_bias_rows(torch.randn(E, H, generator=gen), tp)[0, 0]
     assert db.shape == (E, tp * H) and not db[:, H:].any()
     ex = dl.expand_matrix(E, il_pad)[0, 0]
-    assert torch.equal(ex.sum(0), torch.ones(E * il_pad)) and all(ex[e, e * il_pad + il_pad - 1] == 1 for e in range(E))
+    assert torch.equal(ex.sum(0), torch.ones(E * il_pad))
+    assert all(bool((ex[e, _expert_cols(e, E, il_pad)] == 1).all()) for e in range(E))
 
 
 def _swiglu_oai(g, u, limit=7.0, alpha=1.702):
@@ -142,9 +145,8 @@ def test_padded_columns_add_nothing():
     for d in range(tp):
         cols = slice(d * n, (d + 1) * n)
         act = _swiglu_oai(x @ gate[:, cols] + gb[:, cols], x @ up[:, cols] + ub[:, cols]) * (rw @ expand)
-        pad = torch.zeros(E, il_pad, dtype=torch.bool)
-        pad[:, il:] = True
-        assert not act[:, pad.reshape(-1)].any(), "a padded column is non-zero"
+        pad = torch.cat([_expert_cols(e, E, il_pad)[il:] for e in range(E)])
+        assert not act[:, pad].any(), "a padded column is non-zero"
         out += act @ down[cols] + rw @ db[:, d * H : (d + 1) * H]
     assert torch.allclose(out, ref, rtol=1e-10, atol=1e-9)
 
@@ -209,10 +211,10 @@ def test_dense_page_table_reads_padded_tiles(E, H, I, tp, banks, wpb):
         return torch.cat(rows, dim=0)
 
     for e in range(E):
-        cols = slice(e * il_pad, (e + 1) * il_pad)
+        cols = _expert_cols(e, E, il_pad)
         assert torch.equal(rebuild(gu, ge[e], H // TILE, gu_w * tb), gate[:, cols])
         assert torch.equal(rebuild(gu, ue[e], H // TILE, gu_w * tb), up[:, cols])
-        assert torch.equal(rebuild(d_banks, de[e], n_gu, dn_w * tb), down[cols])
+        assert torch.equal(rebuild(d_banks, de[e], n_gu, sp.dense_down_k_stride(E, dn_w, tb)), down[cols])
         assert not gate[:, cols][:, il:].any() and not down[cols][il:].any()
 
 
@@ -240,8 +242,10 @@ def test_dense_page_table_gpt_oss_20b():
         b, o = ge[E20 - 1, 22].tolist()
         assert (b, o // tb) == ((n_tiles - 1) // gu_w, (n_tiles - 1) % gu_w)
         assert all(o // tb + (H20 // TILE - 1) * gu_w < gu_w * (H20 // TILE) for _, o in ge.reshape(-1, 2).tolist())
-        # down: expert e's K rows start at tile row 23 e
-        assert torch.equal(de[:, 0, 1], torch.arange(E20) * 23 * dn_w * tb)
+        # down: expert e's K rows start at tile row e (its row tiles E apart)
+        assert torch.equal(de[:, 0, 1], torch.arange(E20) * dn_w * tb)
+        # every expert's gate / up spreads over all the banks (the reason for the interleave)
+        assert all(len(set(ge[e, :, 0].tolist())) == BANKS for e in range(E20))
 
 
 def test_dense_page_table_rejects_partial_tiles():

@@ -4,11 +4,15 @@
 """Host layout of the batched dense decode MoE weights (experts/weights.py load_dense_decode_expert_weights) and the
 core split of its decode programs (experts/decode.py DenseDecodePlan).
 
-Per device (TP shard d of tp), every expert's shard side by side, each expert padded from il = I / tp to il_pad (whole
-tiles) intermediate columns with zero weights and zero biases:
-  gate / up [H, E * il_pad]: expert e in columns [e * il_pad, (e + 1) * il_pad), its shard's il columns first;
-  down [E * il_pad, H]: expert e in rows [e * il_pad, (e + 1) * il_pad), its shard's il rows first;
+Per device (TP shard d of tp), every expert's shard, each expert padded from il = I / tp to il_pad (whole tiles)
+intermediate columns with zero weights and zero biases, its T = il_pad / 32 column tiles interleaved with the other
+experts' by tile: tile t of expert e is column tile expert_tile(e, t) = t * E + e (expert of column tile n: n % E):
+  gate / up [H, E * il_pad]: expert e's column tile t at expert_tile(e, t), its shard's il columns first;
+  down [E * il_pad, H]: expert e's row tile t at expert_tile(e, t), its shard's il rows first;
   gate / up bias [tokens, E * il_pad] (one identical row per token), down bias [E, H] (real on device 0 only).
+The interleave spreads every expert over all the DRAM banks of the width-sharded gate / up (expert-contiguous, a bank
+held 4 whole experts, so the routed prefill read each expert's gate / up from one bank: 5.28 -> 4.22 ms per 16K-token
+expert call); the dense decode's matmuls are over all columns at once and only the column-to-expert map changes.
 gpt-oss-20b at TP 4: il = 720 (22.5 tiles), il_pad = 736 (23 tiles), so every expert is whole tiles and the routed
 prefill reads each expert's tiles through a page table (stream_pages.py dense_page_table).
 
@@ -38,6 +42,20 @@ def dram_shard_tiles(n_tiles, banks, workers_per_bank=1):
     return w * -(-n_tiles // (banks * w))
 
 
+def expert_tile(e, t, num_experts):
+    """Column (gate / up, biases) or row (down) tile of expert e's local tile t in the dense layout."""
+    return t * num_experts + e
+
+
+def _interleave(x, dim, num_experts, il_pad):
+    """x with dimension dim of size num_experts * il_pad in expert-contiguous order -> the dense layout's tile
+    interleave (local tile t of expert e at tile t * E + e)."""
+    T = il_pad // TILE
+    shape = list(x.shape)
+    x = x.reshape(shape[:dim] + [num_experts, T, TILE] + shape[dim + 1 :])
+    return x.transpose(dim, dim + 1).reshape(shape)
+
+
 def _check(tp, il, il_pad):
     assert il_pad % TILE == 0 and il_pad >= il, (il, il_pad)
     assert tp >= 1
@@ -52,6 +70,7 @@ def gate_up_columns(w, tp, il_pad):
     _check(tp, il, il_pad)
     out = torch.zeros(H, tp, E, il_pad, dtype=w.dtype)
     out[..., :il] = w.reshape(E, H, tp, il).permute(1, 2, 0, 3)
+    out = _interleave(out.reshape(H, tp, E * il_pad), 2, E, il_pad)
     return out.reshape(1, 1, H, tp * E * il_pad)
 
 
@@ -63,6 +82,7 @@ def down_rows(w, tp, il_pad):
     _check(tp, il, il_pad)
     out = torch.zeros(tp, E, il_pad, H, dtype=w.dtype)
     out[:, :, :il] = w.reshape(E, tp, il, H).permute(1, 0, 2, 3)
+    out = _interleave(out.reshape(tp, E * il_pad, H), 1, E, il_pad)
     return out.reshape(1, 1, tp * E * il_pad, H)
 
 
@@ -74,6 +94,7 @@ def bias_rows(b, tp, il_pad, tokens):
     _check(tp, il, il_pad)
     out = torch.zeros(tp, E, il_pad, dtype=b.dtype)
     out[..., :il] = b.reshape(E, tp, il).permute(1, 0, 2)
+    out = _interleave(out.reshape(tp, E * il_pad), 1, E, il_pad)
     return out.reshape(1, 1, 1, -1).expand(1, 1, tokens, tp * E * il_pad).contiguous()
 
 
@@ -85,11 +106,13 @@ def down_bias_rows(b, tp):
 
 
 def expand_matrix(num_experts, il_pad):
-    """[1, 1, E, E * il_pad]: 1 where column c belongs to expert e = c // il_pad (padded columns included; their
+    """[1, 1, E, E * il_pad]: 1 where column c belongs to expert e = (c // 32) % E (padded columns included; their
     activation is 0)."""
     expand = torch.zeros(1, 1, num_experts, num_experts * il_pad)
     for e in range(num_experts):
-        expand[0, 0, e, e * il_pad : (e + 1) * il_pad] = 1
+        for t in range(il_pad // TILE):
+            n = expert_tile(e, t, num_experts)
+            expand[0, 0, e, n * TILE : (n + 1) * TILE] = 1
     return expand
 
 

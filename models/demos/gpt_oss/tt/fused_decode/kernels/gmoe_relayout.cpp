@@ -4,8 +4,8 @@
 // Grouped MoE weight relayout (init, dflash/grouped_moe.py GroupedMoE._relayout): every work unit's weight tiles into
 // one contiguous DRAM page, so the grouped readers fetch a unit in one large read (tile by tile from the dense layout:
 // ~180 GB/s for the gate|up pass).
-//   gate|up (default): unit u = (e, j), e = u / NU, j = u % NU, column n = g0(e) + j: [k][gate (k, n), up (k, n)];
-//   down (GMOE_RELAYOUT_DOWN): unit u = (e, c), c = u % NU: [k] down (g0(e) + k, c) from src0 (src1 unused: every
+//   gate|up (default): unit u = (e, j), e = u / NU, j = u % NU, column n = tile(e, j): [k][gate (k, n), up (k, n)];
+//   down (GMOE_RELAYOUT_DOWN): unit u = (e, c), c = u % NU: [k] down (tile(e, k), c) from src0 (src1 unused: every
 //   expert is whole tiles, no K tile is shared with a neighbour).
 // GMOE_RELAYOUT_SPLIT: each unit's page stored as that many consecutive smaller pages (spread over the DRAM banks).
 // Core i of NC takes units i, i + NC, ...
@@ -55,10 +55,10 @@ void kernel_main() {
 #ifdef GMOE_RELAYOUT_DOWN
         static_assert(KD == gmoe::NU_EXPERT);
         for (uint32_t k = 0; k < KD; ++k) {
-            noc_async_read(s0.get_noc_addr((gmoe::g0(e) + k) * NT + j), buf + k * w_tile, w_tile);
+            noc_async_read(s0.get_noc_addr(gmoe::tile(e, k) * NT + j), buf + k * w_tile, w_tile);
         }
 #else
-        const uint32_t n = gmoe::g0(e) + j;
+        const uint32_t n = gmoe::tile(e, j);
         for (uint32_t k = 0; k < KT; ++k) {
             noc_async_read(s0.get_noc_addr(k * NT + n), buf + (2 * k) * w_tile, w_tile);
             noc_async_read(s1.get_noc_addr(k * NT + n), buf + (2 * k + 1) * w_tile, w_tile);
