@@ -84,6 +84,79 @@ def _reload_local_dependencies(module: ModuleType, root: Path) -> None:
         importlib.reload(value)
 
 
+# Fused cases come from YAML; the comparer expands it without building a FuserConfig.
+FUSER_MODULES = frozenset(
+    {"test_fused", "perf_fused", "test_fused_quasar", "perf_fused_quasar"}
+)
+
+
+def _import_fresh_fuser(root: Path, arch: str) -> ModuleType:
+    """Import ``fuser.sweep`` for ``arch``; its parsers bind the architecture at import."""
+    os.environ["CHIP_ARCH"] = arch
+    _clear_chip_arch_cache()
+    for name in [n for n in sys.modules if n == "fuser" or n.startswith("fuser.")]:
+        del sys.modules[name]
+    return importlib.import_module("fuser.sweep")
+
+
+def _fuser_case_fields(case_name: str, definition: dict) -> tuple:
+    """One row per expanded case: the YAML fields that identify its sweep point."""
+
+    def collect(nodes: list, key: str) -> str:
+        return "+".join(sorted({str(node[key]) for node in nodes if key in node}))
+
+    stages = definition.get("operations", [])
+    math_nodes = [node for stage in stages for node in stage.get("math", [])]
+    pack_nodes = [node for stage in stages for node in stage.get("pack", [])]
+    yaml_name, _, case = case_name.partition("__")
+    return (
+        yaml_name,
+        case,
+        bool(definition.get("dest_acc", False)),
+        collect(definition.get("operands", []), "format"),
+        collect(math_nodes + pack_nodes, "operation"),
+        collect(math_nodes, "unpack_to_dest"),
+    )
+
+
+_FUSER_AXES = "yaml,case,dest_acc,formats,operations,unpack_to_dest"
+
+
+def fuser_module(path: Path, root: Path, arch: str) -> ModuleType:
+    """Stand in for a fused test module: ``test_fuser`` carries one row per YAML case."""
+    sweep = _import_fresh_fuser(root, arch)
+    config_dir = sweep.FUSER_CONFIG_DIR
+    yaml_files = sorted(config_dir.glob("*.yaml"))
+    if path.stem.endswith("_quasar"):
+        yaml_files += sorted((config_dir / "quasar").glob("*.yaml"))
+
+    rows = []
+    for yaml_path in yaml_files:
+        test_name = str(yaml_path.relative_to(config_dir).with_suffix(""))
+        definition = sweep.FuserConfigSchema.load_definition(test_name)
+        supported = definition.get("supported_archs")
+        if supported is not None and arch not in supported:
+            continue
+        for case_name, case in sweep.expand_fuser_configs(test_name, definition):
+            rows.append(_fuser_case_fields(case_name, case))
+
+    def test_fuser():
+        raise NotImplementedError("comparer adapter, not a runnable test")
+
+    module = ModuleType(
+        ".".join(path.resolve().relative_to(root).with_suffix("").parts)
+    )
+    test_fuser.__module__ = module.__name__
+    marks = [pytest.mark.parametrize(_FUSER_AXES, rows)]
+    if path.stem.startswith("perf_"):
+        from helpers.llk_params import PERF_RUN_TYPES_QUASAR
+
+        marks.append(pytest.mark.parametrize("run_type", PERF_RUN_TYPES_QUASAR[0]))
+    test_fuser.pytestmark = marks
+    module.test_fuser = test_fuser
+    return module
+
+
 def import_test_module(path: Path, root: Path, arch: str) -> ModuleType:
     # tt_llk_perf lives outside the test tree; the pytest plugin adds it, this script must too.
     tools_python = str(root.parent.parent / "tools" / "python")
@@ -93,6 +166,8 @@ def import_test_module(path: Path, root: Path, arch: str) -> ModuleType:
     os.environ.setdefault("LLK_HOME", str(root.parent.parent))
     os.environ["CHIP_ARCH"] = arch
     _clear_chip_arch_cache()
+    if path.stem in FUSER_MODULES:
+        return fuser_module(path, root, arch)
     dotted = ".".join(path.resolve().relative_to(root).with_suffix("").parts)
     loaded = sys.modules.get(dotted)
     if loaded is not None:
@@ -491,7 +566,9 @@ def pair_functions(
     return pairs
 
 
-MEASUREMENT_AXES = frozenset({"iterations", "loop_factor", "run_types", "is_perf"})
+MEASUREMENT_AXES = frozenset(
+    {"iterations", "loop_factor", "run_types", "run_type", "is_perf"}
+)
 IGNORED_AXES = MEASUREMENT_AXES
 
 
