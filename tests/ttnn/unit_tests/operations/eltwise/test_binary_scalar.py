@@ -447,10 +447,9 @@ def test_scalar_tensor_div_float_rounding(device, rounding_mode, ttnn_dtype, tor
     """The float rounding-mode branch of div is a separate code path from the int32 one: it
     divides and then applies ttnn.floor/trunc, forwarding scalar_is_lhs on its own call.
 
-    Operand order is checked against torch on the unrounded quotient. The rounding is then
-    checked against that same device quotient rather than torch's, because rounding collapses
-    a quotient to a small integer and a bf16 value landing either side of an integer boundary
-    flips it by a whole step -- a precision artifact, not a dispatch error."""
+    Operand order is checked against torch on the unrounded quotient. The rounding is checked
+    exactly, since the quotient stays in float32 until it is rounded; the scalar is packed in
+    the input's dtype, so torch divides by that same rounded scalar."""
     torch.manual_seed(0)
     torch_input = torch.rand((1, 1, 320, 384), dtype=torch_dtype) + 0.5
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -460,7 +459,8 @@ def test_scalar_tensor_div_float_rounding(device, rounding_mode, ttnn_dtype, tor
     assert_with_pcc(scalar / torch_input, quotient, 0.999)
 
     rounded = ttnn.to_torch(ttnn.div(scalar, input_tensor, rounding_mode=rounding_mode))
-    expected = torch.floor(quotient) if rounding_mode == "floor" else torch.trunc(quotient)
+    packed_scalar = torch.full_like(torch_input, scalar).float()
+    expected = torch.div(packed_scalar, torch_input.float(), rounding_mode=rounding_mode).to(torch_dtype)
 
     assert torch.equal(expected, rounded)
 
