@@ -1,0 +1,107 @@
+# Changelog: reshape
+
+## Phase 0 — Core Implementation
+- **Date**: 2026-11-21
+- **What was done**: Initial implementation via incremental pipeline (planner → implementer → verifier). Two Metal 2.0 `ProgramSpec` regimes, one `ttnn.generic_op` per call. `page_identity` copies pages one-to-one (row-major with W kept; tile layout when the tiles keep their rows). `tile_row_regroup` moves face-row runs between tiles when H changes in tile layout. Full grid (32 clusters on quasar), thread plan (1, 1, 1), no compute kernel.
+- **SUPPORTED at Phase 0**: dtype=[bfloat16], layout=[TILE, ROW_MAJOR], memory_config=[DRAM, L1], sharding=[interleaved], changes=[leading, h], alignment=[tile_aligned, w_non_aligned, h_non_aligned], rank=[1, 3, 4]
+- **Accuracy achieved**: bit-exact. PCC=1.000, max_abs_err=0, rms_err=0 (relative), ULP p99=0, got/true ratio 1.0 everywhere, measured on 4 shapes covering both regimes and both placements via `test_reshape_precision_baseline.py`.
+- **Golden suite at Phase 0**: 124 / 644 passed (121 `supported_pass` incl. the loose case, 3 rejection tests); 520 `xfail_expected`; 0 `supported_fail` / `xpass_drift` / `xfail_wrong_mode` (per `verifier_report.json`).
+- **Issues encountered** (verifier):
+  - No drift and no failing cells.
+  - DRY fix: the relayout kernel's tile geometry literals (`TILE_ROWS = 32`, `FACE_ROWS = 16`) now come from the host constants as compile-time arguments.
+  - Added the R8 sharded-input refusal test, which the spec says the op carries itself.
+- **Tests added**: `test_reshape.py` (generated acceptance), `test_reshape_regimes.py` (regime-pinned, forced blocks, engaged clusters, thread plan, device-session tests; verifier added `test_sharded_input_refused_by_name`), `test_reshape_precision_baseline.py`.
+- **Structural baseline for the perf queue** (ttsim, no clock):
+  - Regime A issues 1 NoC transaction per page per side (1,600 + 1,600 on `(1,1,1600,144)` RM).
+  - Regime B runs 1 block per core on every regroup input.
+  - Regime B reads 1.00–1.75× the minimum number of input tiles (28 / 16 on `(2,1,100,47)→(2,4,25,47)`).
+  - Regime B does 1 output-ring reserve/push per output tile.
+  - The regime B relayout copies every output byte on the CPU.
+
+## Refinement 0 — uint32 tensors and rank 2 (Llama, Qwen)
+- Date: 2026-11-21
+- What was done: `SUPPORTED["dtype"]` gains `ttnn.uint32` and `SUPPORTED["rank"]` gains `2`.
+  - No kernel changed: page, face-row and tile byte counts already derive from `buffer_page_size()`.
+  - Rank 2 needed no code: it already passed with the gate bypassed (probe).
+  - uint32 failed before any kernel ran: `ProgramSpec` validation refused `DFB 'pages' has data format 'UInt32'`, because Quasar's `is_data_format_supported` has `Int32` but no `UInt32`. Every ring now passes `data_format_metadata=RING_DATA_FORMAT` (`None`). The runtime sets a DFB's format only for a compute kernel's CB slots, and skips a format-less DFB on purpose ("a format-less DFB has no compute consumer"). This op has no compute kernel, and no kernel reads a ring's format.
+  - Rule R1 holds trivially: every copy is a byte copy, and nothing can interpret the bytes as another dtype. The bf16 paths only lose their (unused) tag.
+  - Reused: both regimes, all kernels and the plan code unchanged. Added: one host constant, two SUPPORTED values, tests.
+- Accuracy achieved: bit-exact, compared with `torch.equal` (PCC=1.0, relative RMS=0). uint32 values were drawn over the full 32-bit range on `(32,)→(1,1,1,32)` RM DRAM, `(1,)→(1,1)` RM DRAM and TILE L1, `(128,512)→(4,32,512)` TILE L1, `(1,64,400)→(1,4,16,400)` TILE L1 (regroup), `(2,1,100,47)→(2,-1,25,47)` TILE DRAM (regroup, ragged), `(1,64,8400)→(1,4,16,8400)` RM DRAM (33,600 B page) and `(4,128,512)→(-1,512)` TILE DRAM.
+- Golden test progress: targeted slice 156/156 passed: all 152 cells with `dtype=UINT32` or `rank=2` that the new SUPPORTED covers, plus 4 prior bf16 cells. Expected full suite: 124 + 152 = 276 passing. The `changes=w`, float32 and int32 cells stay `xfail_expected` for Refinements 1, 2 and 4.
+- Issues encountered: the one above (no `UInt32` in Quasar's format table). The fix is generic, so Refinement 4's float32 and int32 do not depend on the format table either.
+- Tests added: `test_reshape_regimes.py`:
+  - `test_model_calls`: the three Llama / Qwen calls.
+  - `test_uint32_regimes`: full-range uint32 on both regimes, both placements, rank 2 in and out.
+  - `test_uint32_session_after_other_programs`: one device session with a tt-metal `to_layout` and bf16 calls.
+  - Unit directory: 58/58 passed.
+
+## Refinement 1 — `changes = w` in row-major layout (regime `w_regroup_rm`)
+- Date: 2026-11-21
+- What was done: `SUPPORTED["changes"]` gains `"w"`. `EXCLUSIONS` gains `{"changes": "w", "layout": TILE}`, a structural gap until Refinement 2 builds `w_regroup_tile`. A new regime `w_regroup_rm` (its own `ProgramSpec`, one `generic_op`): output row j is bytes `[j·page_out, (j+1)·page_out)` of the input rows' flat byte stream.
+  - Reused:
+    - Regime B's window reader, unchanged. A row-major tensor is a one-column grid of pages: `tensor_w_tiles = block_tile_cols = 1`, and the entry is the input page rounded up to the L1 alignment. Its define is renamed `RESHAPE_WINDOW_READER`, and its `KernelSpec` is built by one shared `_window_reader_spec`.
+    - Regime A's page writer, unchanged: output pages in order, one implicit-sync write each.
+    - `_balanced_ranges`, `_row_blocks`, `_grid_cores`, `_dm_config` and the knobs `OUTPUT_RING_DEPTH`, `BLOCK_BYTES_TARGET`, `L1_RESERVE_BYTES`, `DFB_RING_MAX_BYTES`.
+  - Added:
+    - `plan_w_regroup_rm`, `_w_regroup_rm_artifacts`.
+    - A `RESHAPE_W_REGROUP_RM` branch in the relayout kernel. It walks byte runs, each cut where the output page or the current input page ends. The host gives the start cursor `in_off0`, and the cursor resets to window page 0 at every block, so the kernel never divides.
+    - A phase-aware `copy_bytes`: words when source and destination share a word phase; when they are 2 bytes apart (rows cut at odd bf16 elements), one aligned load + one store per word by a 16-bit shift-merge; bytes only for odd phases.
+    - validate() checks the output row page against `NOC_MAX_BURST_SIZE` as well.
+  - Split: output pages over `row_groups = min(out_pages, in_pages, num_cores)` balanced ranges. The `in_pages` cap keeps the re-read at one boundary input page per range boundary, the same cap as regime B. Block knob `block_out_rows` defaults to the whole per-core range, with a bisection fit search. Window depth is 2 when a core has more than one block. Every byte count derives from `buffer_page_size()`, so uint32 (already in SUPPORTED) runs the same walker, and float32 / int32 (Refinement 4) need only the gate.
+- Accuracy achieved: bit-exact (`torch.equal`; PCC=1.0, relative RMS=0) on `(1,1,17,50)→(1,1,25,34)`, `(4,128,47)→(4,47,128)`, `(3,5,7)→(7,15)`, `(1,32,128)→(4096,)`, `(2048,)→(32,64)`, `(1,1,32,8192)→(1,8,32,1024)`, `(1,1,64,128)→(1,1,128,64)` (bf16), and uint32 over the full 32-bit range on three of them, in DRAM and L1.
+- Golden test progress: targeted slice 38/38 passed. That is all 36 row-major `changes=w` cells (9 INPUTS entries × DRAM/L1 × bf16/uint32: more than the 16 the entry named, because Refinement 0 added uint32) plus 2 prior representatives (`(1,64,400)` TILE L1 regroup, `(1,1,1600,144)` RM DRAM identity). The 4 TILE `changes=w` cells sampled xfail as excluded. Expected full suite: 284 + 36 = 320 passing. Unit directory: 75/75 passed. `validate_contract`: passed.
+- Structural counts (ttsim, no clock; the time gain is unconfirmed on this backend), input pages read / minimum and clusters:
+  - `(4,8,32,256)→(4,8,16,512)`: 1024/1024, 32 clusters.
+  - `(1,1,32,8192)→(1,8,32,1024)`: 32/32, 32 clusters.
+  - `(4,128,47)→(4,47,128)`: 543/512, 32 clusters.
+  - `(1,1,17,50)→(1,1,25,34)`: 33/17, 17 clusters.
+  - `(1,32,128)→(4096,)`: 32/32, 1 cluster (one output page).
+  - `(2048,)→(32,64)`: 1/1, 1 cluster (one input page).
+  - Every INPUTS entry runs one block per core. The relayout copies every output byte through the CPU (Refinement 6's lever) and does one output-ring reserve/push per output page (the batching of Refinement 5 applies here as well).
+- Issues encountered: the relayout's file-scope tile-geometry constants read regime-B compile-time args; they are now guarded by the regime-B define. Nothing else.
+- Tests added: `test_reshape_regimes.py`:
+  - `test_w_regroup_rm_pinned` (7 shapes: non-aligned both sides, 2 B word-phase shifts, rank 1 in / out, wide, ResNet's call in RM).
+  - `test_w_regroup_rm_forced_blocks` (ragged blocks with window depth 2, one cluster with 38 blocks, uneven ranges with mid-page starts).
+  - `test_w_regroup_rm_split` (clusters, coverage, one block per core and the read bound, read off the plan).
+  - `test_w_regroup_rm_uint32`.
+  - `test_w_regroup_rm_session` (after `to_layout` and between the other regimes, then `to_layout(…, TILE)` on a W output).
+  - `test_w_tile_layout_still_refused`.
+
+## Refinement 2 — `changes = w` in tile layout (regime `w_regroup_tile`)
+- Date: 2026-11-21
+- What was done: `EXCLUSIONS` is empty again. A tile-layout reshape that changes W now runs the new regime `w_regroup_tile` (its own `ProgramSpec`, one `generic_op`). Output row g is flat elements `[g·W_out, (g+1)·W_out)`, and output tile (k, j) holds columns `[32j, 32j+32)` of the valid rows of output tile-row k. The output tiles are padded for the new shape (R4). Their padding rows and columns are not written, as in regime B.
+  - Reused:
+    - Regime B's window reader, unchanged. Its `col_start` / `col_count` are now the cluster's input tile-column window, and `block_tile_cols` is the widest window.
+    - Regime B's tile writer, unchanged. It is now built by one shared `_tile_writer_spec`, and its define is renamed `RESHAPE_TILE_WRITER`, because both tile regimes use it.
+    - `_RowGeometry`, `_balanced_ranges`, `_row_blocks`, `_largest_fitting`, `_grid_cores`, the phase-aware `copy_bytes` of Refinement 1, and the knobs `OUTPUT_RING_DEPTH`, `BLOCK_BYTES_TARGET`, `L1_RESERVE_BYTES`, `DFB_RING_MAX_BYTES`.
+  - Added:
+    - `plan_w_regroup_tile`, `_w_regroup_tile_artifacts`, and `_FlatGeometry`: flat index ↔ input tile-row / column, block windows, and column windows bounded over one period `W_in / gcd(W_in, W_out)` of rows.
+    - A `RESHAPE_W_REGROUP_TILE` branch in the relayout kernel. Per output tile-row it sets one input cursor per valid output row: row r+1 starts W_out elements after row r. Each output tile takes the next `cols` elements of each row's cursor, as element runs cut where an input row, an input face row (16 elements) or an output face row ends. The cursors start at host values and move by increments, compares and power-of-two shifts. The kernel never divides.
+  - Split and knobs (single source, host): `row_groups = min(t_out, t_in, num_cores)`, the regime-B cap. `col_groups` is the largest count whose input reads stay ≤ max(2 × minimum, column-unsplit reads), because column windows overlap when W changes. `block_out_tile_rows` defaults to the whole per-core range.
+  - Fit search: the whole range, else the largest fitting block by bisection, else one more column group. This lets the 4-byte `(1,1,32,8192)→(1,8,32,1024)` fit: a whole input tile-row is 1 MiB, more than one ring holds, and two column windows of 240 tiles hold 983,040 B. Every byte count derives from `buffer_page_size()` (element bytes = face-row bytes / 16), so float32 / int32 (Refinement 4) only need the gate.
+- Accuracy achieved: bit-exact (`torch.equal`; PCC=1.0, relative RMS=0).
+  - bf16: `(1,1,32,64)→(1,1,64,32)`, `(1,1,17,50)→(1,1,25,34)`, `(4,128,47)→(4,47,128)`, `(1,1,32,8192)→(1,8,32,1024)`, `(1,1,64,128)→(1,1,128,64)`, `(1,32,128)→(4096,)`, `(2048,)→(32,64)`, `(4,8,32,256)→(4,8,16,512)`, `(1,32,64)→(2,32,32)`, `(2,3,5,24)→(4,9,20)` and `(3,5,7)→(7,15)`.
+  - uint32 over the full 32-bit range: four of them.
+  - DRAM and L1.
+  - Forced multi-block and column-split plans.
+- Golden test progress: targeted slice 40/40 passed: all 37 tile-layout `changes=w` cells in bf16 and uint32 (DRAM / L1), plus 3 prior representatives (`(1,64,400)` TILE L1 regroup, `(1,1,1600,144)` RM DRAM identity, `(4,128,47)→(4,47,128)` RM L1). Expected full suite: the previous count + 37. Only the float32 / int32 cells stay `xfail_expected`, for Refinement 4. `validate_contract`: passed.
+- Structural counts (ttsim, no clock: the time gain is unconfirmed on this backend). Input tiles read / minimum, and clusters:
+  - `(4,8,32,256)→(4,8,16,512)`: 256/256, 32.
+  - `(4,128,47)→(4,47,128)`: 40/32, 8.
+  - `(1,1,32,8192)→(1,8,32,1024)`: 480/256, 2.
+  - `(1,1,64,128)→(1,1,128,64)`: 12/8, 4.
+  - `(2048,)→(32,64)`: 126/64, 2.
+  - `(1,1,17,50)→(1,1,25,34)`: 4/2, 2.
+  - Every INPUTS entry runs one block per core.
+  - The relayout copies every output element through the CPU (Refinement 6's lever), and does one output-ring reserve/push per output tile (Refinement 5's batching applies).
+  - Shapes with t_in = 1 engage few clusters. The 2× read cap on column groups is the trade: on `(1,1,32,8192)` every output tile column needs input tile columns 32 apart. Lifting the cap, or splitting by input column, is a perf-queue lever.
+- Issues encountered:
+  - The first fit search tested feasibility only at a one-tile-row block. There the window depth is 2, so the 4-byte wide shape was refused although its single whole-range block (depth 1) fits. The search now tries the whole range first.
+  - `test_rejections_and_shape_forms` pinned the old refusal of `(1,64,400)→(1,400,64)` in tile layout. That call is now a positive check.
+- Tests added: `test_reshape_regimes.py`:
+  - `test_w_regroup_tile_pinned` (9 shapes, including the 4 the refinement named).
+  - `test_w_regroup_tile_forced_blocks` (ragged blocks with window depth 2, column windows starting mid-row, small planes).
+  - `test_w_regroup_tile_split` (clusters, coverage, one block per core and the read bound, read off the plan).
+  - `test_w_regroup_tile_uint32` (including the fit search's column split on the wide shape).
+  - `test_w_regroup_tile_session`: after `to_layout`, between the other regimes, then `to_layout(…, ROW_MAJOR)` on a tile W output.
+  - `test_w_tile_layout_still_refused` is removed.
