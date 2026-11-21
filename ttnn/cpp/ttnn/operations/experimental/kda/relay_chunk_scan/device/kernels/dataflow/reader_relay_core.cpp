@@ -76,22 +76,24 @@ void kernel_main() {
     ctl[2] = heads;
     cb_push_back(Chronology::cb_ctl, 1);
 
-    // [E | B] rows of each head: kt tile rows of 2 kt tiles.
+    // [E | B] rows of a head: kt tile rows of 2 kt tiles.
     const auto packed = TensorAccessor(packed_args, get_common_arg_val<uint32_t>(packed_arg));
     cb_reserve_back(cb_e, heads * state_tiles);
     cb_reserve_back(cb_b, heads * state_tiles);
     const uint32_t eb_tile = get_tile_size(cb_e);
-    for (uint32_t s = 0; s < heads; ++s) {
+    const uint32_t e_base = get_write_ptr(cb_e);
+    const uint32_t b_base = get_write_ptr(cb_b);
+    const auto read_summary = [&](uint32_t s) {
         for (uint32_t r = 0; r < kt; ++r) {
             for (uint32_t c = 0; c < kt; ++c) {
                 const uint32_t page = (head_of(s) * kt + r) * 2 * kt + c;
                 const uint32_t offset = (s * state_tiles + r * kt + c) * eb_tile;
-                noc_async_read_page(page, packed, get_write_ptr(cb_e) + offset);
-                noc_async_read_page(page + kt, packed, get_write_ptr(cb_b) + offset);
+                noc_async_read_page(page, packed, e_base + offset);
+                noc_async_read_page(page + kt, packed, b_base + offset);
             }
         }
-    }
-    // The BF16 identity tile while the reads are in flight.
+    };
+    // The BF16 identity tile.
     DataflowBuffer identity_tile(cb_identity);
     identity_tile.reserve_back(1);
     dataflow_kernel_lib::zero_tile(identity_tile);
@@ -106,15 +108,17 @@ void kernel_main() {
     cb_reserve_back(cb_ein, heads * state_tiles);
     cb_reserve_back(cb_ein_exact, heads * state_tiles);
     if (holder) {
-        // The relay starts from the first rank's entry states.
-        if (chronology.zero_entry) {
-            const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
-            for (uint32_t offset = 0; offset < heads * state_bytes; offset += MEM_ZEROS_SIZE) {
-                noc_async_read(zeros, landing + offset, MEM_ZEROS_SIZE);
-            }
-        } else {
-            const auto init = TensorAccessor(init_args, get_common_arg_val<uint32_t>(init_arg));
-            for (uint32_t s = 0; s < heads; ++s) {
+        // The relay starts from the first rank's entry states, head by head: the first head's hop starts as soon as
+        // its own reads have landed.
+        const auto init = TensorAccessor(init_args, get_common_arg_val<uint32_t>(init_arg));
+        for (uint32_t s = 0; s < heads; ++s) {
+            read_summary(s);
+            if (chronology.zero_entry) {
+                const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+                for (uint32_t offset = 0; offset < state_bytes; offset += MEM_ZEROS_SIZE) {
+                    noc_async_read(zeros, landing + s * state_bytes + offset, MEM_ZEROS_SIZE);
+                }
+            } else {
                 for (uint32_t j = 0; j < kt; ++j) {
                     for (uint32_t r = 0; r < kt; ++r) {
                         noc_async_read_page(
@@ -124,13 +128,16 @@ void kernel_main() {
                     }
                 }
             }
+            noc_async_read_barrier();
+            cb_push_back(cb_e, state_tiles);
+            cb_push_back(cb_b, state_tiles);
+            cb_push_back(cb_ein, state_tiles);
+            cb_push_back(cb_ein_exact, state_tiles);
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_e, heads * state_tiles);
-        cb_push_back(cb_b, heads * state_tiles);
-        cb_push_back(cb_ein, heads * state_tiles);
-        cb_push_back(cb_ein_exact, heads * state_tiles);
     } else {
+        for (uint32_t s = 0; s < heads; ++s) {
+            read_summary(s);
+        }
         noc_async_read_barrier();
         cb_push_back(cb_e, heads * state_tiles);
         cb_push_back(cb_b, heads * state_tiles);
@@ -189,39 +196,36 @@ void kernel_main() {
 
     if (holder) {
         // The last rank's sender writes each tile column of each head's final state into the head's final slot, then
-        // counts it. With a separated tail, each head's final transition goes in first: P lands only after the whole
-        // lap. It shares cb_e's and cb_b's storage, free once every head's hop has left.
-        for (uint32_t s = 0; s < heads && chronology.interval.split; ++s) {
-            noc_semaphore_wait_min(released(s), 1);
+        // counts it. With a separated tail, the heads' final transitions go in first: P lands only after the whole lap.
+        // They take the entry states' landing slots and cb_b's storage, free once every head's hop has left.
+        if (chronology.interval.split) {
+            const auto fe = TensorAccessor(fe_args, get_common_arg_val<uint32_t>(fe_arg));
+            const auto fb = TensorAccessor(fb_args, get_common_arg_val<uint32_t>(fb_arg));
+            for (uint32_t s = 0; s < heads; ++s) {
+                noc_semaphore_wait_min(released(s), 1);
+            }
+            cb_reserve_back(cb_fe, heads * state_tiles);
+            cb_reserve_back(cb_fb, heads * state_tiles);
+            for (uint32_t i = 0; i < heads * state_tiles; ++i) {
+                const uint32_t page = head_of(i / state_tiles) * state_tiles + i % state_tiles;
+                noc_async_read_page(page, fe, get_write_ptr(cb_fe) + i * state_tile);
+                noc_async_read_page(page, fb, get_write_ptr(cb_fb) + i * state_tile);
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_fe, heads * state_tiles);
+            cb_push_back(cb_fb, heads * state_tiles);
         }
-        const auto fe = TensorAccessor(fe_args, get_common_arg_val<uint32_t>(fe_arg));
-        const auto fb = TensorAccessor(fb_args, get_common_arg_val<uint32_t>(fb_arg));
+        // Each head's P also seeds the tail's chunks [reset, valid), on the cores that hold them, as soon as it lands.
+        const uint32_t reset = chronology.interval.reset_chunk(0, 1);
         cb_reserve_back(cb_p, heads * state_tiles);
         cb_reserve_back(cb_p_exact, heads * state_tiles);
         for (uint32_t s = 0; s < heads; ++s) {
-            if (chronology.interval.split) {
-                cb_reserve_back(cb_fe, state_tiles);
-                cb_reserve_back(cb_fb, state_tiles);
-                for (uint32_t i = 0; i < state_tiles; ++i) {
-                    noc_async_read_page(head_of(s) * state_tiles + i, fe, get_write_ptr(cb_fe) + i * state_tile);
-                    noc_async_read_page(head_of(s) * state_tiles + i, fb, get_write_ptr(cb_fb) + i * state_tile);
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb_fe, state_tiles);
-                cb_push_back(cb_fb, state_tiles);
-            }
             for (uint32_t j = 0; j < kt; ++j) {
                 kda_counter::wait(final_semaphore, s * kt + j + 1);
                 cb_push_back(cb_p, kt);
                 cb_push_back(cb_p_exact, kt);
             }
-        }
-        kda_counter::consume(final_semaphore, heads * kt);
-        // P seeds the tail's chunks [reset, valid), on the cores that hold them, once the carry formed from P has left.
-        const uint32_t reset = chronology.interval.reset_chunk(0, 1);
-        if (reset != 0) {
-            for (uint32_t s = 0; s < heads; ++s) {
-                noc_semaphore_wait_min(released(s), 2);
+            if (reset != 0) {
                 distribute(
                     s,
                     landing + (relay_heads + s) * state_bytes,
@@ -230,6 +234,7 @@ void kernel_main() {
                     (valid + core_chunks - 1) / core_chunks);
             }
         }
+        kda_counter::consume(final_semaphore, heads * kt);
     }
     noc_async_atomic_barrier();
 }
