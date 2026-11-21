@@ -335,24 +335,21 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
              .compact_two_pass_fits_in_l1 = two_pass_fits}) == layernorm::StatisticsBackend::SFPU_TWO_PASS;
     const bool fp32_sfpu_finalizer = fp32_finalizer_eligible && plan.use_welford;
     const bool selected_fits = plan.use_welford ? two_pass_fits : tile_fits;
-    const bool large_tensor_kernel_allowed = !row_major_affine || input_is_row_major;
     // These empirical limits keep the largest validated streaming configurations within L1. The tile-size ratio
     // scales them down when FP32 destination accumulation doubles the intermediate tile footprint.
     const std::uint32_t with_weights_max = 56 * bfloat16_tile_size / intermediate_tile_size;
     const std::uint32_t without_weights_max = 112 * bfloat16_tile_size / intermediate_tile_size;
-    if (large_tensor_kernel_allowed) {
-        if ((gamma.has_value() || beta.has_value() || input_format == tt::DataFormat::Float32) && !selected_fits) {
-            plan.large_tensor = true;
-            plan.width_block_tiles = std::min(plan.width_block_tiles, with_weights_max);
-        } else if (!selected_fits) {
-            plan.large_tensor = true;
-            plan.width_block_tiles = std::min(plan.width_block_tiles, without_weights_max);
-        }
+    if ((gamma.has_value() || beta.has_value() || input_format == tt::DataFormat::Float32) && !selected_fits) {
+        plan.large_tensor = true;
+        plan.width_block_tiles = std::min(plan.width_block_tiles, with_weights_max);
+    } else if (!selected_fits) {
+        plan.large_tensor = true;
+        plan.width_block_tiles = std::min(plan.width_block_tiles, without_weights_max);
     }
-    // The large-tensor reader cannot consume row-major affine tensors. Keep fused FP32 calls with
-    // row-major affine parameters on the small kernel and use its retained-input SFPU finaliser.
+    // Fused FP32 calls with row-major affine parameters stay on the small kernel's retained-input SFPU
+    // finaliser while the row fits in L1; wider rows stream through the large kernel.
     plan.compact_fp32_finalizer = plan.use_welford && compact_fp32_finalizer_eligible && !plan.large_tensor;
-    if (large_tensor_kernel_allowed && fp32_sfpu_finalizer && !plan.compact_fp32_finalizer) {
+    if (fp32_sfpu_finalizer && !plan.compact_fp32_finalizer) {
         plan.large_tensor = true;
     }
     const auto configure_large_buffers = [&]() {
@@ -396,7 +393,8 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
         }
     }
     const bool affine_mcast_core_set_safe = all_cores.bounding_box().size() == num_cores;
-    plan.affine_mcast = plan.fused_pre_add_replay && num_cores >= kLayerNormAffineMcastMinCores &&
+    // The affine multicast sender reads gamma/beta as whole tiles, so row-major affine tensors read per core.
+    plan.affine_mcast = plan.fused_pre_add_replay && !row_major_affine && num_cores >= kLayerNormAffineMcastMinCores &&
                         num_tile_rows % num_cores == 0 && affine_mcast_core_set_safe;
 
     if (plan.use_welford && !rms_norm && !plan.large_tensor) {
@@ -581,12 +579,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     const bool compact_fp32_finalizer = selected_plan.compact_fp32_finalizer;
     const bool compact_fp32_pre_add = compact_fp32_finalizer && b.has_value();
-    // The large-tensor reader reads gamma/beta as whole tiles, so row-major gamma/beta (32-wide pages) would be
-    // misread as tiles and silently give wrong results. TILE gamma/beta work with both input layouts.
-    TT_FATAL(
-        !large_tensor_needed || !use_row_major_kernel,
-        "The LayerNorm large-tensor path does not support row-major gamma/beta; pass gamma/beta in TILE layout");
-
     // When the input is ROW_MAJOR and float32, the in-flight tilize_block path requires
     // fp32_dest_acc_en=True. Without it, UNPACK's SRCA register file is 16-bit and
     // silently truncates every float32 value to bfloat16 before it reaches DST, producing
@@ -893,6 +885,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     }
     if (rms_norm) {
         reader.compiler_options.defines.emplace("RMSNORM", "1");
+    }
+    if (large_tensor_needed && use_row_major_kernel) {
+        // Row-major gamma/beta hold one 32-wide page per tile column; the large readers lay each page
+        // into row 0 of a tile.
+        reader.compiler_options.defines.emplace("AFFINE_ROW_MAJOR", "1");
     }
     if (input_is_row_major) {
         reader.compiler_options.defines.emplace("TILIZE_IN", "1");
@@ -1279,8 +1276,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
         // Merged readers (rm_and_tile, large_tensor_rm_and_tile) use a unified start_tile_row = curr_row.
         // Legacy kernels (welford large-tensor, rm_gb) still expect tile_offset = curr_row * Wt.
-        const bool reader_uses_tile_offset =
-            (use_welford_and_not_rms_norm && large_tensor_needed) || (use_row_major_kernel && !input_is_row_major);
+        const bool reader_uses_tile_offset = (use_welford_and_not_rms_norm && large_tensor_needed) ||
+                                             (use_row_major_kernel && !input_is_row_major && !large_tensor_needed);
         const std::uint32_t reader_start = reader_uses_tile_offset ? tile_offset : curr_row;
 
         auto& active_reader_run_args =

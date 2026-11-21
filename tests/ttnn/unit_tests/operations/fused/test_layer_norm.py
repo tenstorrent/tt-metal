@@ -481,6 +481,49 @@ def test_large_layer_norm(device, h, w, use_welford, dtype):
     assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
+# Rows too wide for the whole-row kernel stream through the large-tensor kernel. ROW_MAJOR gamma/beta (one
+# 32-wide page per tile column) used to be kept on the whole-row kernel, so these widths failed to allocate
+# their circular buffers in L1. TILE gamma/beta are the control.
+@pytest.mark.parametrize("w", [4096, 8192])
+@pytest.mark.parametrize("use_welford", [False, True])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("with_residual", [False, True], ids=["no_residual", "residual"])
+@pytest.mark.parametrize("affine_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["rm_affine", "tile_affine"])
+def test_large_layer_norm_row_major_weight_and_bias(device, w, use_welford, dtype, with_residual, affine_layout):
+    h = 64
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((h, w), dtype=dtype)
+    torch_residual = torch.rand((h, w), dtype=dtype) if with_residual else None
+    torch_weight = torch.rand((w,), dtype=dtype)
+    torch_bias = torch.rand((w,), dtype=dtype)
+    reference_input = torch_input_tensor + torch_residual if with_residual else torch_input_tensor
+    torch_output_tensor = torch.nn.functional.layer_norm(
+        reference_input, normalized_shape=[w], weight=torch_weight, bias=torch_bias
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    residual_input_tensor = (
+        ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device) if with_residual else None
+    )
+    affine_shape = (w // 32, 32) if affine_layout == ttnn.ROW_MAJOR_LAYOUT else (1, w)
+    weight = ttnn.from_torch(torch_weight.reshape(affine_shape), layout=affine_layout, device=device)
+    bias = ttnn.from_torch(torch_bias.reshape(affine_shape), layout=affine_layout, device=device)
+
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
+    output_tensor = ttnn.layer_norm(
+        input_tensor,
+        residual_input_tensor=residual_input_tensor,
+        weight=weight,
+        bias=bias,
+        program_config=program_config,
+        recip_tensor=recip_tensor,
+    )
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
+
+
 @pytest.mark.parametrize("h", [24, 2048])
 @pytest.mark.parametrize("w", [42, 4096])
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -970,10 +1013,9 @@ def test_large_layer_norm_row_major_input(device, h, w, dtype, with_residual):
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
-# The large-tensor reader reads gamma/beta as tiles: ROW_MAJOR input works with TILE gamma/beta, and ROW_MAJOR
-# gamma/beta are rejected on this path instead of being misread.
+# ROW_MAJOR input on the large-tensor path works with both TILE and ROW_MAJOR gamma/beta.
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_large_layer_norm_row_major_input_affine(device, dtype, expect_error):
+def test_large_layer_norm_row_major_input_affine(device, dtype):
     h, w = 64, 4096
     torch.manual_seed(0)
     torch_input_tensor = torch.rand((h, w), dtype=dtype)
@@ -990,5 +1032,5 @@ def test_large_layer_norm_row_major_input_affine(device, dtype, expect_error):
 
     weight_rm = ttnn.from_torch(torch_weight.reshape(w // 32, 32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     bias_rm = ttnn.from_torch(torch_bias.reshape(w // 32, 32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    with expect_error(RuntimeError, "does not support row-major gamma/beta"):
-        ttnn.layer_norm(input_tensor, weight=weight_rm, bias=bias_rm)
+    output_tensor = ttnn.to_torch(ttnn.from_device(ttnn.layer_norm(input_tensor, weight=weight_rm, bias=bias_rm)))
+    assert_output_accuracy(torch_output_tensor, output_tensor)
