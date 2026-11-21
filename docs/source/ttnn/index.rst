@@ -19,6 +19,7 @@ Welcome to TT-NN documentation!
    ttnn/onboarding
    ttnn/converting_torch_model_to_ttnn
    ttnn/adding_new_ttnn_operation
+   ttnn/generic_op_program_spec
    ttnn/profiling_ttnn_operations
    tools/index
 
