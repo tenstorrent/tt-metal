@@ -6,11 +6,11 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <host_api.hpp>
-#include <profiler.hpp>
+#include "impl/profiler/profiler.hpp"
 #include <mesh_workload.hpp>
 #include <mesh_command_queue.hpp>
 #include <tt_metal.hpp>
-#include "tt_metal_profiler.hpp"
+#include "impl/profiler/tt_metal_profiler.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -18,7 +18,6 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
-#include <limits>
 #include <map>
 #include <optional>
 #include <ostream>
@@ -35,8 +34,8 @@
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "hostdev/profiler_common.h"
 #include "context/context_types.hpp"
 #include "context/metal_context.hpp"
@@ -51,7 +50,7 @@
 #include "profiler_analysis.hpp"
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
-#include "profiler_types.hpp"
+#include "impl/profiler/profiler_types.hpp"
 #include "profiler_state_manager.hpp"
 #include "program.hpp"
 #include "program/program_impl.hpp"
@@ -729,13 +728,6 @@ void ProfilerSync(MetalContext& ctx, ProfilerSyncState state) {
 #endif
 }
 
-void ProfilerSync(ProfilerSyncState state) {
-#if defined(TRACY_ENABLE)
-    ProfilerRegistry::instance().for_each_attached(
-        [state](ProfilerStateManager& profiler_state_manager) { ProfilerSync(profiler_state_manager.ctx_, state); });
-#endif
-}
-
 void ClearProfilerControlBuffer(IDevice* device) {
 #if defined(TRACY_ENABLE)
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
@@ -743,10 +735,9 @@ void ClearProfilerControlBuffer(IDevice* device) {
 #endif
 }
 
-void InitDeviceProfiler(IDevice* device) {
+void InitDeviceProfiler(MetalContext& ctx, IDevice* device) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    auto& ctx = MetalContext::instance(extract_context_id(device));
     auto& env = MetalEnvAccessor(ctx.get_env()).impl();
     if (!getDeviceProfilerState(env)) {
         return;

@@ -26,6 +26,8 @@ void bind_narrow(nb::module_& mod) {
               with ``start`` pointing to the first DRAM bank.
             * For L1 sharded tensors, narrow is supported only when the narrowed region consists of complete
               full shards, or spans multiple shards with the same page offset.
+            * ``start`` and ``length`` are bounds-checked against the logical shape, not the tile-padded shape, so
+              the window must lie within the logical size of ``dim`` (same as `torch.narrow`).
             * For TILE_LAYOUT, ``start`` and ``length`` on the height or width dimension must be multiples of 32.
             * Negative values for ``dim`` and ``start`` are supported.
 

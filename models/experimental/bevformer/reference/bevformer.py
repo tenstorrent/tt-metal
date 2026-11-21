@@ -25,7 +25,7 @@ detector in ``tt/tt_bevformer.py`` is checked against:
 The caller carries the previous BEV between frames and makes the CAN bus relative to the previous
 frame (:func:`relative_can_bus`), as upstream's ``forward_test`` does.
 
-:func:`build_bevformer_base` builds BEVFormer-base from ``model_config.py``.
+:func:`build_bevformer` builds the BEVFormer variant ``model_config.py`` selects.
 """
 
 import torch
@@ -145,8 +145,8 @@ class BEVFormer(nn.Module):
         return bev_embed, self.get_bboxes(cls_scores, bbox_preds)
 
 
-def build_bevformer_base(bev_h=BEV_H, bev_w=BEV_W):
-    """BEVFormer-base with PyTorch's default init."""
+def build_bevformer(bev_h=BEV_H, bev_w=BEV_W):
+    """``model_config.py``'s BEVFormer variant with PyTorch's default init."""
     return BEVFormer(
         ResNet(**RESNET_KWARGS),
         FPN(**FPN_KWARGS),

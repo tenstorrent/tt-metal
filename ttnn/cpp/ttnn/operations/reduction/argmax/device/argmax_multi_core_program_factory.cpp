@@ -6,13 +6,12 @@
 
 #include <algorithm>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
@@ -22,7 +21,6 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 /**
  * @brief Distributes work across cores for argmax reduction operations
@@ -215,7 +213,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
         output_dfb_data_format = tt::DataFormat::RawUInt32;
     }
 
-    const auto src_is_dram = input.mesh_buffer().device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
+    const auto src_is_dram = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // NOC transactions need to be aligned.
     // So, for bfloat16 dtype, we need at least 16/32 units per core (depending on alignment) to avoid unaligned

@@ -50,9 +50,9 @@ constexpr std::uint32_t WELFORDS_REPLAY_LEN = WELFORDS_QUAD_ROWS * WELFORDS_INST
 constexpr std::uint32_t WELFORDS_REPLAY_DEPTH = 32;
 static_assert(WELFORDS_REPLAY_LEN <= WELFORDS_REPLAY_DEPTH, "the recorded row bodies must fit the replay buffer");
 
-constexpr std::uint32_t FP16B_ZERO = 0x0000;
-constexpr std::uint32_t FP32_HI16_SHIFT = 16;     // fp32 bits [31:16] -> MOD0_UPPER immediate
-constexpr std::uint32_t FP32_LO16_MASK = 0xFFFF;  // fp32 bits [15:0]  -> MOD0_LOWER immediate
+constexpr std::uint32_t WELFORDS_FP16B_ZERO = 0x0000;
+constexpr std::uint32_t WELFORDS_FP32_HI16_SHIFT = 16;     // fp32 bits [31:16] -> MOD0_UPPER immediate
+constexpr std::uint32_t WELFORDS_FP32_LO16_MASK = 0xFFFF;  // fp32 bits [15:0]  -> MOD0_LOWER immediate
 
 enum class WelfordsOutputLayout : std::uint8_t { Row, Face };
 
@@ -71,11 +71,13 @@ inline void _welfords_load_recip_(
         bits = __builtin_bit_cast(std::uint32_t, 1.0f / static_cast<float>(idx + 1));
     }
     TT_SFPLOADI(
-        WELFORDS_RECIP_REG, sfpi::SFPLOADI_MOD0_UPPER, bits >> FP32_HI16_SHIFT /* imm16: high half of 1/(idx+1) */);
+        WELFORDS_RECIP_REG,
+        sfpi::SFPLOADI_MOD0_UPPER,
+        bits >> WELFORDS_FP32_HI16_SHIFT /* imm16: high half of 1/(idx+1) */);
     TT_SFPLOADI(
         WELFORDS_RECIP_REG,
         sfpi::SFPLOADI_MOD0_LOWER,
-        bits & FP32_LO16_MASK /* imm16: low half of 1/(idx+1), high half preserved */);
+        bits & WELFORDS_FP32_LO16_MASK /* imm16: low half of 1/(idx+1), high half preserved */);
 }
 
 /**
@@ -237,8 +239,8 @@ inline void welfords_init() {
 
 /** @brief Zero the running mean (LREG4) and M2 (LREG5). */
 inline void welfords_clear_previous_mean_and_m2() {
-    TTI_SFPLOADI(WELFORDS_MEAN_REG, sfpi::SFPLOADI_MOD0_FLOATB, FP16B_ZERO);
-    TTI_SFPLOADI(WELFORDS_M2_REG, sfpi::SFPLOADI_MOD0_FLOATB, FP16B_ZERO);
+    TTI_SFPLOADI(WELFORDS_MEAN_REG, sfpi::SFPLOADI_MOD0_FLOATB, WELFORDS_FP16B_ZERO);
+    TTI_SFPLOADI(WELFORDS_M2_REG, sfpi::SFPLOADI_MOD0_FLOATB, WELFORDS_FP16B_ZERO);
 }
 
 /**
@@ -311,18 +313,18 @@ inline void welfords_store_mean_var_to_dst(
 
     if constexpr (LAYOUT == WelfordsOutputLayout::Row) {
         TTI_SFPMOV(WELFORDS_MEAN_REG, p_sfpu::LREG0, 0 /* instr_mod1: plain copy */);
-        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, FP16B_ZERO);
-        TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, FP16B_ZERO);
-        TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, FP16B_ZERO);
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, WELFORDS_FP16B_ZERO);
+        TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, WELFORDS_FP16B_ZERO);
+        TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, WELFORDS_FP16B_ZERO);
         TTI_SFPMAD(
             WELFORDS_RECIP_REG,
             WELFORDS_M2_REG,
             p_sfpu::LCONST_0,
             p_sfpu::LREG4,
             0 /* instr_mod1 */);  // variance -> LREG4
-        TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, FP16B_ZERO);
-        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, FP16B_ZERO);
-        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, FP16B_ZERO);
+        TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, WELFORDS_FP16B_ZERO);
+        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, WELFORDS_FP16B_ZERO);
+        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, WELFORDS_FP16B_ZERO);
         TTI_SFPTRANSP;  // lane values -> tile row 0 (mean in LREG0-3, variance in LREG4-7)
 
         TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, WELFORDS_LEFT_EVEN);
@@ -379,14 +381,14 @@ constexpr std::uint32_t FP32_SIGN_BIT = 0x80000000U;
 /** @brief Load fp32 bit pattern bits into LREG. */
 template <std::uint32_t LREG>
 inline void _two_pass_load_fp32_(const std::uint32_t bits) {
-    TT_SFPLOADI(LREG, sfpi::SFPLOADI_MOD0_UPPER, bits >> FP32_HI16_SHIFT /* imm16: high half */);
-    TT_SFPLOADI(LREG, sfpi::SFPLOADI_MOD0_LOWER, bits & FP32_LO16_MASK /* imm16: low half, high kept */);
+    TT_SFPLOADI(LREG, sfpi::SFPLOADI_MOD0_UPPER, bits >> WELFORDS_FP32_HI16_SHIFT /* imm16: high half */);
+    TT_SFPLOADI(LREG, sfpi::SFPLOADI_MOD0_LOWER, bits & WELFORDS_FP32_LO16_MASK /* imm16: low half, high kept */);
 }
 
 /** @brief Zero LREG. */
 template <std::uint32_t LREG>
 inline void _two_pass_zero_() {
-    TTI_SFPLOADI(LREG, sfpi::SFPLOADI_MOD0_FLOATB, FP16B_ZERO);
+    TTI_SFPLOADI(LREG, sfpi::SFPLOADI_MOD0_FLOATB, WELFORDS_FP16B_ZERO);
 }
 
 /** @brief LREG5 += LREG6. */

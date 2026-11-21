@@ -16,6 +16,8 @@ from .format_config import DataFormat
 from .tilize_untilize import untilize_block
 
 BFP_BLOCK = 16
+# Seven magnitude bits plus a guard bit are exhausted here; keep int32 shifts in range.
+BFP_MAX_ALIGNMENT_SHIFT = 8
 
 
 def _bf16_sign_exp_mantissa(flat: torch.Tensor):
@@ -34,12 +36,12 @@ def _bfp8_mantissas_per_block(mants_blocks: torch.Tensor, exps_blocks: torch.Ten
     """
     shared_exps = exps_blocks.max(dim=1, keepdim=True).values
     deltas = shared_exps - exps_blocks
-    # Clamp the shift to avoid evaluating `mants_blocks >> -1` when delta == 0;
-    # torch.where selects element-wise but both branches are evaluated eagerly.
-    guard_shifts = torch.clamp(deltas - 1, min=0)
+    shifts = deltas.clamp(max=BFP_MAX_ALIGNMENT_SHIFT)
+    # Both branches are evaluated eagerly, so also avoid a negative guard shift.
+    guard_shifts = (deltas - 1).clamp(min=0, max=BFP_MAX_ALIGNMENT_SHIFT)
     guard_bits = (mants_blocks >> guard_shifts) & 1
     guard = torch.where(deltas > 0, guard_bits, torch.zeros_like(mants_blocks))
-    bfp8 = ((mants_blocks >> deltas) + guard) & 0x7F
+    bfp8 = ((mants_blocks >> shifts) + guard) & 0x7F
     return shared_exps, bfp8
 
 

@@ -35,7 +35,8 @@ ttnn::Tensor fused_msda_from_offsets(
     MSDAReferenceMode reference_mode,
     bool align_corners,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<std::vector<uint32_t>>& num_valid_queries) {
+    const std::optional<std::vector<uint32_t>>& num_valid_queries,
+    const std::optional<ttnn::Tensor>& num_valid_queries_tensor) {
     return ttnn::prim::fused_msda_from_offsets(
         value,
         reference_points,
@@ -45,7 +46,8 @@ ttnn::Tensor fused_msda_from_offsets(
         reference_mode,
         align_corners,
         memory_config,
-        num_valid_queries);
+        num_valid_queries,
+        num_valid_queries_tensor);
 }
 
 bool can_use_fused_msda_from_offsets_l1_value(
@@ -55,9 +57,17 @@ bool can_use_fused_msda_from_offsets_l1_value(
     const ttnn::Tensor& attention_weights,
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     MSDAReferenceMode reference_mode,
-    bool align_corners) {
+    bool align_corners,
+    bool device_valid_counts) {
     return ttnn::prim::can_use_fused_msda_from_offsets_l1_value(
-        value, reference_points, sampling_offsets, attention_weights, spatial_shapes, reference_mode, align_corners);
+        value,
+        reference_points,
+        sampling_offsets,
+        attention_weights,
+        spatial_shapes,
+        reference_mode,
+        align_corners,
+        device_valid_counts);
 }
 
 }  // namespace ttnn::experimental

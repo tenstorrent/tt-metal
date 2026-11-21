@@ -10,11 +10,150 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
+
+namespace {
+
+// Full spec hash, for a sharded tensor: its accessor args compile the page count and the shard grid in.
+ttsl::hash::hash_t full_spec(const Tensor& tensor) {
+    return ttsl::hash::hash_objects_with_default_seed(tensor.tensor_spec());
+}
+
+// Spec hash of an optional tensor minus its row count (shape[-2]); presence is part of the hash. A sharded
+// tensor keeps its full spec.
+ttsl::hash::hash_t spec_without_rows(const std::optional<Tensor>& tensor) {
+    if (!tensor.has_value()) {
+        return ttsl::hash::hash_objects_with_default_seed(false);
+    }
+    return tensor->is_sharded() ? full_spec(*tensor)
+                                : operations::common::hash_spec_without_rows(tensor->tensor_spec());
+}
+
+using operations::common::folded_rows;
+
+// Shared by the miss and hit validators so a call that built the program is never refused on a later hit.
+// Logical rows as on the unfused op; folded rows because the kernels read the flat tile grid.
+void validate_fused_ternary_rows(const Tensor& act, const Tensor& ternary_a, const Tensor& ternary_b) {
+    const uint32_t M = folded_rows(act);
+    const uint32_t M_logical = act.logical_shape()[-2];
+    const uint32_t a_rows = folded_rows(ternary_a);
+    const uint32_t b_rows = folded_rows(ternary_b);
+    TT_FATAL(
+        ternary_a.logical_shape()[-2] == M_logical && a_rows == M,
+        "fused_ternary_input_a must hold the activation's rows (M={}, {} folded), got shape {} ({} folded)",
+        M_logical,
+        M,
+        ternary_a.logical_shape(),
+        a_rows);
+    if (ternary_b.logical_shape()[-2] == 1) {
+        // A [..., 1, N] gate is broadcast from tile row 0, so it cannot carry one gate per batch.
+        TT_FATAL(
+            b_rows == TILE_HEIGHT,
+            "fused_ternary_input_b broadcasts over the rows only when every upper dim is 1, got shape {}",
+            ternary_b.logical_shape());
+    } else {
+        // With M == 32 a full b is one tile row and the factory builds the broadcast program: the same one tile.
+        TT_FATAL(
+            ternary_b.logical_shape()[-2] == M_logical && b_rows == M,
+            "fused_ternary_input_b must be one row or the activation's rows (M={}, {} folded), got {} ({} folded)",
+            M_logical,
+            M,
+            ternary_b.logical_shape(),
+            b_rows);
+    }
+}
+
+// Every operand the kernels address must sit on the activation's device: the hash carries no device
+// identity, so the miss and the hit validator both run this.
+void validate_operands_on_device(const MinimalMatmulInputs& tensor_args) {
+    const auto& act_tensor = tensor_args.input_tensor;
+    const auto check = [&act_tensor](const Tensor& tensor, const char* name) {
+        TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "minimal_matmul {} must be on device", name);
+        TT_FATAL(tensor.is_allocated(), "minimal_matmul {} must be allocated in a device buffer", name);
+        TT_FATAL(
+            tensor.device() == act_tensor.device(),
+            "minimal_matmul {} must be on the same device as the activation",
+            name);
+    };
+    check(act_tensor, "activation");
+    check(tensor_args.weight_tensor, "weight");
+    if (tensor_args.bias_tensor.has_value()) {
+        check(*tensor_args.bias_tensor, "bias");
+    }
+    if (tensor_args.optional_input_tensor.has_value()) {
+        check(*tensor_args.optional_input_tensor, "fused-concat second input");
+    }
+    if (tensor_args.fused_ternary_input_a.has_value()) {
+        check(*tensor_args.fused_ternary_input_a, "fused_ternary_input_a");
+    }
+    if (tensor_args.fused_ternary_input_b.has_value()) {
+        check(*tensor_args.fused_ternary_input_b, "fused_ternary_input_b");
+    }
+}
+
+}  // namespace
+
+ttsl::hash::hash_t MinimalMatmulDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input_tensor;
+    const uint32_t M = input.physical_volume() / input.padded_shape()[-1];
+    const uint32_t N = tensor_args.weight_tensor.padded_shape()[-1];
+    const auto& b = tensor_args.fused_ternary_input_b;
+    // The grid orientation (M > N) and, without an explicit config, the default subblock choice
+    // (N >= M) are the only row-dependent program decisions; they enter the key as one bit.
+    const bool transpose_core_grid = M > N;
+    // A [..., 1, N] gate is broadcast (a full gate of up to 32 rows folds to one tile row too, so the logical rows
+    // decide, as in the validator).
+    const bool b_broadcast = b.has_value() && b->logical_shape()[-2] == 1;
+    // A sharded output's accessor args compile its page count and shard grid in, so an op-created sharded
+    // output pins M through the input's full spec.
+    const bool output_sharded = operation_attributes.output_mem_config.value_or(input.memory_config()).is_sharded();
+    return ttsl::hash::hash_objects_with_default_seed(
+        operation_attributes,
+        (input.is_sharded() || output_sharded) ? full_spec(input) : operations::common::hash_spec_without_rows(input),
+        tensor_args.weight_tensor.tensor_spec(),
+        spec_without_rows(tensor_args.bias_tensor),
+        spec_without_rows(tensor_args.optional_input_tensor),
+        spec_without_rows(tensor_args.fused_ternary_input_a),
+        spec_without_rows(tensor_args.fused_ternary_input_b),
+        transpose_core_grid,
+        b_broadcast);
+}
+
+// The invariants the hash does not cover: device affinity and the row-dependent checks; everything else
+// was checked on the miss that built the program.
+void MinimalMatmulDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_operands_on_device(tensor_args);
+    const auto& act_tensor = tensor_args.input_tensor;
+    const uint32_t M = folded_rows(act_tensor);
+    TT_FATAL(M > 0 && M % TILE_HEIGHT == 0, "minimal_matmul activation rows ({}) must be a multiple of 32", M);
+    if (tensor_args.optional_input_tensor.has_value()) {
+        // Logical rows as on the miss path: two sources that only agree once padded would feed the
+        // suffix's padding to live activation rows.
+        const auto& second_input = tensor_args.optional_input_tensor.value();
+        TT_FATAL(
+            second_input.logical_shape()[-2] == act_tensor.logical_shape()[-2] && folded_rows(second_input) == M,
+            "minimal_matmul fused concat: second-input rows ({} logical, {} folded) must match the activation rows "
+            "({} logical, {} folded)",
+            second_input.logical_shape()[-2],
+            folded_rows(second_input),
+            act_tensor.logical_shape()[-2],
+            M);
+    }
+    if (operation_attributes.fused_ternary_scalar.has_value()) {
+        validate_fused_ternary_rows(
+            tensor_args.input_tensor,
+            tensor_args.fused_ternary_input_a.value(),
+            tensor_args.fused_ternary_input_b.value());
+    }
+}
+
 void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& act_tensor = tensor_args.input_tensor;
@@ -23,20 +162,7 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     const Tensor* bias_ptr = has_bias ? &tensor_args.bias_tensor.value() : nullptr;
     const auto& config = operation_attributes.config;
 
-    // Basic device/storage checks
-    TT_FATAL(
-        act_tensor.storage_type() == StorageType::DEVICE && weight_tensor.storage_type() == StorageType::DEVICE,
-        "minimal_matmul operands must be on device");
-    TT_FATAL(act_tensor.device() == weight_tensor.device(), "minimal_matmul inputs must reside on the same device");
-    TT_FATAL(
-        act_tensor.is_allocated() && weight_tensor.is_allocated(),
-        "minimal_matmul inputs must be allocated in device buffers");
-    if (has_bias) {
-        const auto& bias_tensor = *bias_ptr;
-        TT_FATAL(bias_tensor.storage_type() == StorageType::DEVICE, "minimal_matmul bias must be on device");
-        TT_FATAL(bias_tensor.device() == act_tensor.device(), "minimal_matmul bias must be on the same device");
-        TT_FATAL(bias_tensor.is_allocated(), "minimal_matmul bias must be allocated in a device buffer");
-    }
+    validate_operands_on_device(tensor_args);
 
     // Layout requirements: all inputs must be TILE layout
     TT_FATAL(
@@ -82,9 +208,6 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
         // point is input_tensor's K width. The two sources must be concatenable on K (differ only on
         // the last axis) and their K's must sum to the weight's K (weight stacked [W_prefix; W_suffix]).
         const auto& second_input = tensor_args.optional_input_tensor.value();
-        TT_FATAL(
-            second_input.device() == act_tensor.device(),
-            "minimal_matmul fused concat: second input must be on the same device as activation");
         // The suffix is read tile-by-tile through the same in0 path (in3), so it must be TILE layout
         // and share the activation's dtype (the in0 reads use the activation's tile size for both
         // sources — a differing dtype would read the wrong number of bytes per tile).
@@ -214,13 +337,6 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
         const auto& ternary_a = tensor_args.fused_ternary_input_a.value();
         const auto& ternary_b = tensor_args.fused_ternary_input_b.value();
 
-        TT_FATAL(ternary_a.storage_type() == StorageType::DEVICE, "fused_ternary_input_a must be on device");
-        TT_FATAL(ternary_b.storage_type() == StorageType::DEVICE, "fused_ternary_input_b must be on device");
-        TT_FATAL(ternary_a.device() == act_tensor.device(), "fused_ternary_input_a must be on same device");
-        TT_FATAL(ternary_b.device() == act_tensor.device(), "fused_ternary_input_b must be on same device");
-        TT_FATAL(ternary_a.is_allocated(), "fused_ternary_input_a must be allocated");
-        TT_FATAL(ternary_b.is_allocated(), "fused_ternary_input_b must be allocated");
-
         TT_FATAL(ternary_a.layout() == Layout::TILE, "fused_ternary_input_a must be TILE layout");
         TT_FATAL(ternary_b.layout() == Layout::TILE, "fused_ternary_input_b must be TILE layout");
 
@@ -228,25 +344,18 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             dtype_supported(ternary_a.dtype()) && dtype_supported(ternary_b.dtype()),
             "fused_ternary tensors must have supported dtypes");
 
-        const auto& ternary_a_logical = ternary_a.logical_shape();
-        const auto& ternary_b_logical = ternary_b.logical_shape();
-
-        // ternary_a matches output [M, N], ternary_b is broadcast [1, N]
+        // ternary_a matches the output [M, N]; ternary_b is broadcast [1, N] or full [M, N].
         TT_FATAL(
-            ternary_a_logical[-2] == M && ternary_a_logical[-1] == N,
-            "fused_ternary_input_a shape must match output [M={}, N={}], got [{}, {}]",
-            M,
-            N,
-            ternary_a_logical[-2],
-            ternary_a_logical[-1]);
+            ternary_a.logical_shape()[-1] == N,
+            "fused_ternary_input_a width ({}) must match the output width N ({})",
+            ternary_a.logical_shape()[-1],
+            N);
         TT_FATAL(
-            (ternary_b_logical[-2] == 1 || ternary_b_logical[-2] == M) && ternary_b_logical[-1] == N,
-            "fused_ternary_input_b shape must be [1, N={}] (broadcast) or [M={}, N={}] (full), got [{}, {}]",
-            N,
-            M,
-            N,
-            ternary_b_logical[-2],
-            ternary_b_logical[-1]);
+            ternary_b.logical_shape()[-1] == N,
+            "fused_ternary_input_b width ({}) must match the output width N ({})",
+            ternary_b.logical_shape()[-1],
+            N);
+        validate_fused_ternary_rows(act_tensor, ternary_a, ternary_b);
     }
 
     // Config constraints

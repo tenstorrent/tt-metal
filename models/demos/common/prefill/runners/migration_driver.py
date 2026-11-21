@@ -4,7 +4,6 @@
 
 import json
 import os
-import struct
 import sys
 import time
 
@@ -289,9 +288,10 @@ class MigrationDriver:
 def _layer_runs(layers, real_len: int, position_range) -> list:
     """Consecutive layers sharing a position range, as ``(layer_start, layer_end, pos_start, pos_end)``.
 
-    One /migrate applies one position range to every config of its layers, so layers whose caches sit
-    on different axes (Kimi-K3: MLA on tokens, KDA on the contract's version windows) need separate
-    calls; consecutive layers of one kind share a call.
+    One /migrate applies one position range to every config of its layers, so consecutive layers share
+    a call exactly when their ranges are equal. A Snapshot config moves whole whatever the range, so
+    Kimi-K3's KDA layers (``[0, W)``) share a call with its MLA layers (``[0, real_len)``) when
+    ``real_len == W``.
     """
     runs = []
     for layer in sorted(int(l) for l in layers):
@@ -501,9 +501,8 @@ def _verify_dst_vs_src_bytes(
         for cfg_id, picked in checkable:
             tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
             stride = int(tcfg.chunk_n_tokens)
-            # Compare the positions _issue requested for each layer: [0, real_len) on a token cache, one
-            # version window of the synthetic axis on Kimi-K3's KDA configs (the other windows alias the
-            # same source bytes and, on a real destination, hold versions this migration did not touch).
+            # Compare the positions _issue requested for each layer: [0, real_len) on a token cache, the
+            # whole synthetic window on Kimi-K3's KDA configs (a Snapshot, moved whole).
             spans = {}
             for layer, _ in picked:
                 pos_start, pos_end = producer.ADAPTER.layer_position_range(layer, real_len)
@@ -868,16 +867,16 @@ def main() -> None:
     slot_traces, slot_lengths, pools_by_trace = producer._resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
-    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
-        pool = pools_by_trace[slot_traces[slot_id]]
-        logger.info(f"[migration_driver] push slot={slot_id} cidx={chunk_idx} start={actual_start} end={actual_end}")
+    def push_forward(pushes: list) -> float:
+        for p in pushes:
+            logger.info(
+                f"[migration_driver] push slot={p.slot_id} cidx={p.chunk_idx} start={p.actual_start} end={p.actual_end}"
+            )
         push_start = time.perf_counter()
         producer._push(
             service,
             payload_bytes,
-            producer._h2d_rows(producer._chunk_slice(pool, actual_start, actual_isl), actual_start),
-            producer._mtp_rows(pool, actual_start, actual_isl, actual_end=actual_end),
-            producer._pack_metadata(slot_id, actual_start, actual_end),
+            *producer._forward_payload(pushes, lambda slot_id: pools_by_trace[slot_traces[slot_id]]),
         )
         return (time.perf_counter() - push_start) * 1000.0
 
@@ -887,13 +886,13 @@ def main() -> None:
         completion_channel, num_layers=producer._completion_layer_bound(chunk_layers), chunk_layers=chunk_layers
     )
     try:
-        stats = producer.run_schedule(cfg, push_fn=push_chunk)
+        stats = producer.run_schedule(cfg, push_fn=push_forward)
         service.barrier()
         logger.info(
             f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
             f"requests={stats.completed}"
         )
-        wait_for_layer_completions(drain, chunk_layers * stats.total_pushes)
+        wait_for_layer_completions(drain, chunk_layers * stats.total_chunks)
     finally:
         if drain is not None:
             drain.stop()
@@ -972,15 +971,8 @@ def main() -> None:
         all_ranks_ok = all(verdicts)
 
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
-        sentinel = struct.pack("<iii", -1, -1, -1)
         logger.info("[migration_driver] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
-        producer._push(
-            service,
-            payload_bytes,
-            producer._h2d_rows(producer._chunk_slice([], 0)),
-            producer._mtp_rows([], 0),
-            sentinel,
-        )
+        producer._push(service, payload_bytes, *producer._shutdown_payload())
         service.barrier()
     else:
         logger.info("[migration_driver] exiting (the runner keeps its sync-op loop running).")

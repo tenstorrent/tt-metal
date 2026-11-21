@@ -4,40 +4,29 @@
 
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
 
-#include <algorithm>
 #include <cstdint>
 #include <limits>
-#include <map>
 #include <memory>
-#include <numeric>
 #include <optional>
-#include <set>
 #include <string>
-#include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
-#include <variant>
 #include <vector>
 
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
-#include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
-#include "impl/context/metal_context.hpp"
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -102,7 +91,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
                           spec.layout() == Layout::ROW_MAJOR;
     // dynamic_tensor_shape's runtime accessor fields would have no reader: a per-node binding builds only a
     // LocalTensorAccessor, which reads just its base address.
-    const bool is_per_node = per_core_allocation::is_per_core_allocation(memory_config);
+    const bool is_per_node = experimental::per_core_allocation::is_per_core_allocation(memory_config);
     TT_FATAL(
         !is_per_node || !tensor_parameter.relaxations.dynamic_tensor_shape,
         "TensorParameter '{}' is per-node allocated, which does not support dynamic_tensor_shape",
@@ -202,10 +191,10 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     // Non-DRAM coords are virtualized; DRAM coords are kept logical (DRAM bank id == logical x).
     const CoreType core_type = is_dram ? CoreType::DRAM : CoreType::WORKER;
     auto resolve_coord = [&](const CoreCoord& logical) -> CoreCoord {
-        if (is_dram) {
-            return logical;
-        }
-        return mesh_device.virtual_core_from_logical_core(logical, core_type);
+        const NodeCoord coord = is_dram ? logical : mesh_device.virtual_core_from_logical_core(logical, core_type);
+        // Each coordinate is packed into 8 bits; a larger one would be silently truncated to another bank's coordinate.
+        TT_FATAL(coord.x <= 0xFF && coord.y <= 0xFF, "Bank coordinate {} does not fit into 8 bits", coord);
+        return coord;
     };
     for (size_t i = 0; i < n_banks; i += 2) {
         const CoreCoord c1 = resolve_coord(bank_coords[i]);
@@ -226,7 +215,8 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 //  1. Walk the kernel's tensor_bindings in declaration order
 //  2. Pack each binding's CTA payload into a contiguous positional buffer
 //  3. Assign each binding a slot in the kernel's TensorBinding section of the CRTA buffer.
-//     The section is structurally separate, immediately following the user-named CRTAs.
+//     The section is structurally separate, immediately following the user-named CRTAs
+//     (base_named_crta_words: the scalars, then the arrays).
 //     Each binding occupies (1 + extra_crta_words) words: the always-present base address
 //     word, plus any runtime accessor field words (e.g. shape, when dynamic_tensor_shape
 //     is set on a sharded TensorParameter).
@@ -235,13 +225,13 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 //  4. Record the resulting CRTA buffer layout (the three section sizes) on the output, so
 //     the headergen and runtime can consult it directly instead of re-summing the bindings.
 //
-// (SetProgramRunArgs will fill the address slots and runtime field slots at enqueue
+// (Program::set_program_run_args will fill the address slots and runtime field slots at enqueue
 // time, extracting info from the TensorArgs.)
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
     const std::unordered_map<TensorParamName, ResolvedTensorParameter>& resolved_tensor_parameters,
-    size_t base_named_crta_count,
-    size_t base_named_rta_count,
+    size_t base_named_crta_words,
+    size_t base_named_rta_words,
     uint32_t base_cta_offset) {
     TensorBindingsForKernel out;
     out.handles.reserve(kernel.tensor_bindings.size());
@@ -249,8 +239,8 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
     // Absolute word index into the unified positional CTA buffer:
     //   [ CTA varargs (base_cta_offset words) | TensorBinding payloads ... ]
     uint32_t cta_word_offset = base_cta_offset;
-    size_t crta_word_index = base_named_crta_count;
-    size_t rta_word_index = base_named_rta_count;
+    size_t crta_word_index = base_named_crta_words;
+    size_t rta_word_index = base_named_rta_words;
     uint32_t binding_section_words = 0;
     for (const auto& binding : kernel.tensor_bindings) {
         const ResolvedTensorParameter& resolved = resolved_tensor_parameters.at(binding.tensor_parameter_name);
@@ -280,11 +270,11 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         out.handles.push_back(std::move(handle));
     }
 
-    out.crta_layout.num_named_words = static_cast<uint32_t>(base_named_crta_count);
+    out.crta_layout.num_named_words = static_cast<uint32_t>(base_named_crta_words);
     out.crta_layout.binding_section_words = binding_section_words;
-    out.crta_layout.vararg_section_offset = static_cast<uint32_t>(base_named_crta_count) + binding_section_words;
-    out.rta_layout.num_named_words = static_cast<uint32_t>(base_named_rta_count);
-    out.rta_layout.binding_section_words = static_cast<uint32_t>(rta_word_index - base_named_rta_count);
+    out.crta_layout.vararg_section_offset = static_cast<uint32_t>(base_named_crta_words) + binding_section_words;
+    out.rta_layout.num_named_words = static_cast<uint32_t>(base_named_rta_words);
+    out.rta_layout.binding_section_words = static_cast<uint32_t>(rta_word_index - base_named_rta_words);
     out.rta_layout.vararg_section_offset = static_cast<uint32_t>(rta_word_index);
 
     return out;
@@ -298,7 +288,7 @@ std::unordered_map<TensorParamName, ResolvedTensorParameter> RegisterTensorParam
     //   - Static layout (rank, shape, bank coords, ...) flows through the kernel's positional
     //     CTA buffer, after any user CTA-vararg prefix (KernelAdvancedOptions::compile_time_varargs).
     //   - Per-enqueue base address flows through a reserved-prefix named CRTA, appended to
-    //     the kernel's user-named CRTAs and filled by SetProgramRunArgs from the
+    //     the kernel's user-named CRTAs and filled by Program::set_program_run_args from the
     //     corresponding TensorArgument entry. TensorParameters that opt into a dynamic accessor
     //     field (currently: dynamic_tensor_shape, sharded only) carry additional CRTA words
     //     immediately after the address slot, also filled at enqueue time.
@@ -317,4 +307,4 @@ std::unordered_map<TensorParamName, ResolvedTensorParameter> RegisterTensorParam
     return resolved_tensor_parameters;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

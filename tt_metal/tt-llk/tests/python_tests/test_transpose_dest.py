@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from itertools import product
-
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -11,7 +9,7 @@ from helpers.golden_generators import (
     TransposeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, DestSync, Transpose, format_dict
+from helpers.llk_params import DestAccumulation, DestSync, Transpose
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
@@ -21,6 +19,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
+    DEST_SYNC,
     MATH_TRANSPOSE_FACES,
     NUM_BLOCKS,
     NUM_FACES,
@@ -28,7 +27,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 TRANSPOSE_DEST_FLOAT_FORMATS = input_output_formats(
     [
@@ -39,83 +38,52 @@ TRANSPOSE_DEST_FLOAT_FORMATS = input_output_formats(
 )
 
 
-def generate_transpose_dest_float_combinations(formats_list):
-    """
-    Generate transpose dest combinations that respect constraints.
+def transpose_dest_float_dest_acc(formats):
+    """16-bit inputs run with both a 16-bit and a 32-bit dest; 32-bit inputs need a 32-bit dest."""
+    if formats.input_format.is_32_bit():
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No, DestAccumulation.Yes]
 
-    Key rules:
-    1. math_transpose_faces = Transpose.No is not supported for 16-bit dest.
-    2. math_transpose_faces = Transpose.No and 32-bit dest will transpose within faces, and can be combined with
-       unpack_transpose_faces = Transpose.Yes in order to transpose faces.
-    3. math_transpose_faces = Transpose.Yes and 16-bit dest is supported.
-    1. math_transpose_faces = Transpose.No and 32-bit dest is supported.
+
+def transpose_dest_float_math_transpose_faces(formats):
+    """Transpose of 16-bit values in dest is supported only for math_transpose_faces = Yes."""
+    if formats.input_format.is_32_bit():
+        return [Transpose.Yes, Transpose.No]
+    return [Transpose.Yes]
+
+
+def transpose_dest_float_unpack_to_dest(formats, math_transpose_faces):
+    """Lossy (unpack to src regs) and lossless (unpack to dest) transpose for 32-bit inputs.
 
     Covered combinations:
-    1. Lossless transpose of 32-bit values in dest -> input_format=Float32, dest_acc=DestAccumulation.Yes and unpack_to_dest=True.
-    2. Transpose of 32-bit values in dest with precision loss (unpacks Float32 to src registers, Float32 truncates to Tf32) ->
-       input_format=Float32, dest_acc=DestAccumulation.Yes and unpack_to_dest=False.
-    3. Transpose of 32-bit values in dest with potential precision loss -> input_format=[Bfp8_b, Float16_b],
-       dest_acc=DestAccumulation.Yes and unpack_to_dest=False (intermediate data is 32-bit in dest).
+    1. Lossless transpose of 32-bit values in dest -> input_format=Float32, dest_acc=Yes and unpack_to_dest=True.
+    2. Transpose of 32-bit values with precision loss (Float32 unpacked to src registers truncates to Tf32) ->
+       input_format=Float32, dest_acc=Yes and unpack_to_dest=False.
+    3. Transpose of 32-bit values with potential precision loss -> input_format=[Bfp8_b, Float16_b],
+       dest_acc=Yes and unpack_to_dest=False (intermediate data is 32-bit in dest).
     4. Transpose of 16-bit values in dest -> input_format=[Float16_b, Bfp8_b],
-       dest_acc=DestAccumulation.No and unpack_to_dest=False.
+       dest_acc=No and unpack_to_dest=False.
 
-    Args:
-        formats_list: List of InputOutputFormat combinations
-    Returns:
-        List of tuples: (format, dest_acc, math_transpose_faces, unpack_to_dest)
+    math_transpose_faces = Transpose.No transposes within faces only (32-bit dest) and always unpacks to dest.
     """
-
-    combinations = []
-
-    for fmt in formats_list:
-        is_input_32bit = fmt.input_format.is_32_bit()
-        # 16-bit inputs run with both a 16-bit and a 32-bit dest (combinations 3 and 4)
-        dest_acc_list = (
-            [DestAccumulation.Yes]
-            if is_input_32bit
-            else [DestAccumulation.No, DestAccumulation.Yes]
-        )
-
-        # Transpose of 16-bit values in dest is supported only for math_transpose_faces = True
-        math_transpose_faces_list = (
-            [Transpose.Yes, Transpose.No] if is_input_32bit else [Transpose.Yes]
-        )
-
-        for dest_acc, math_transpose_faces in product(
-            dest_acc_list, math_transpose_faces_list
-        ):
-            # Test both loss (unpacking to src registers) and lossless (unpacking to dest) transpose dest
-            # for 32bit inputs when math_transpose_faces = Transpose.Yes
-            if math_transpose_faces == Transpose.Yes:
-                unpack_to_dest_list = [False, True] if is_input_32bit else [False]
-            else:
-                unpack_to_dest_list = [True]
-
-            combinations.extend(
-                (fmt, dest_acc, math_transpose_faces, unpack_to_dest)
-                for unpack_to_dest in unpack_to_dest_list
-            )
-
-    return combinations
+    if math_transpose_faces == Transpose.Yes:
+        return [False, True] if formats.input_format.is_32_bit() else [False]
+    return [True]
 
 
 @parametrize(
-    fmt_dest_acc_math_transp_unpack_to_dest=generate_transpose_dest_float_combinations(
-        TRANSPOSE_DEST_FLOAT_FORMATS
-    ),
+    formats=TRANSPOSE_DEST_FLOAT_FORMATS,
+    dest_acc=transpose_dest_float_dest_acc,
+    math_transpose_faces=transpose_dest_float_math_transpose_faces,
+    unpack_to_dest=transpose_dest_float_unpack_to_dest,
 )
 def test_transpose_dest_float(
-    fmt_dest_acc_math_transp_unpack_to_dest,
+    formats,
+    dest_acc,
+    math_transpose_faces,
+    unpack_to_dest,
 ):
-
-    fmt_dest_acc_math_transp_unpack_to_dest = fmt_dest_acc_math_transp_unpack_to_dest[0]
-
-    transpose_dest(
-        formats=fmt_dest_acc_math_transp_unpack_to_dest[0],
-        dest_acc=fmt_dest_acc_math_transp_unpack_to_dest[1],
-        math_transpose_faces=fmt_dest_acc_math_transp_unpack_to_dest[2],
-        unpack_to_dest=fmt_dest_acc_math_transp_unpack_to_dest[3],
-    )
+    transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest)
 
 
 @parametrize(
@@ -249,12 +217,7 @@ def transpose_dest_int8(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert torch.equal(res_tensor, golden_tensor), "Assert against golden failed"
 
@@ -319,7 +282,11 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
     configuration = TestConfig(
         "sources/transpose_dest_test.cpp",
         formats,
-        templates=[MATH_TRANSPOSE_FACES(math_transpose_faces)],
+        templates=[
+            # The kernel only syncs Dest in halves.
+            DEST_SYNC(DestSync.Half),
+            MATH_TRANSPOSE_FACES(math_transpose_faces),
+        ],
         runtimes=[
             # When math_transpose_faces is False, unpack_transpose_faces should be Transpose.Yes
             # This mode is supported only for 32-bit dest
@@ -352,18 +319,13 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     if (
         unpack_to_dest == True
         and dest_acc == DestAccumulation.Yes
-        and formats.input_format in (DataFormat.Int32, DataFormat.Float32)
-        and formats.output_format in (DataFormat.Int32, DataFormat.Float32)
+        and formats.input_format.is_32_bit()
+        and formats.output_format.is_32_bit()
     ):
         is_equal = torch.equal(res_tensor, golden_tensor)
         assert is_equal, "Assert against golden failed"
