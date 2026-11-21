@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <span>
 #include <cmath>
 #include <string>
 #include <deque>
@@ -4114,6 +4115,44 @@ void apply_full_mesh_route(RingJointSDPAParams& args, const FullMeshRoute& route
     ag.route_plan_hash = route.route_plan_hash;
 }
 
+// apply_resolved_bindings for one cached program, writing only the bindings whose buffer address changed since the last
+// hit. The slots are recorded on the first hit; dispatch updates the RuntimeArgsData objects in place, so the recorded
+// pointers stay valid.
+void apply_changed_bindings(
+    tt::tt_metal::Program& program,
+    const tt::tt_metal::ResolvedBindings& bindings,
+    RingJointSDPAMeshWorkloadFactory::BindingSlots& slots,
+    std::span<tt::tt_metal::Buffer* const> buffers) {
+    if (!slots.recorded) {
+        slots.rt_args.reserve(bindings.rt_args.size());
+        for (const auto& b : bindings.rt_args) {
+            slots.rt_args.push_back(
+                b.is_common ? &tt::tt_metal::GetCommonRuntimeArgs(program, b.kernel_idx)
+                            : &tt::tt_metal::GetRuntimeArgs(program, b.kernel_idx, b.core));
+        }
+        slots.rt_written.assign(bindings.rt_args.size(), std::nullopt);
+        slots.cb_written.assign(bindings.cbs.size(), std::nullopt);
+        slots.recorded = true;
+    }
+    for (size_t i = 0; i < bindings.rt_args.size(); ++i) {
+        const auto& b = bindings.rt_args[i];
+        const auto address = static_cast<uint32_t>(buffers[b.tensor_buffer_idx]->address());
+        if (slots.rt_written[i] != address) {
+            (*slots.rt_args[i])[b.arg_idx] = address;
+            slots.rt_written[i] = address;
+        }
+    }
+    for (size_t i = 0; i < bindings.cbs.size(); ++i) {
+        const auto& cb = bindings.cbs[i];
+        const auto address = static_cast<uint32_t>(buffers[cb.tensor_buffer_idx]->address());
+        if (slots.cb_written[i] != address) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(
+                program, cb.cb_id, *buffers[cb.tensor_buffer_idx], cb.address_offset);
+            slots.cb_written[i] = address;
+        }
+    }
+}
+
 // A full-mesh gather's route (snake orientation, Ring vs Linear closure) is proved here, on a program-cache miss,
 // instead of in invoke on every call: proving it walks the fabric control plane. The key need not hold it: the
 // program cache is per mesh device, and the device's fabric cannot change while it is open.
@@ -4217,7 +4256,8 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared = cached_workload.shared_variables.at(coordinate_range);
         if (!shared.descriptor.resolved_bindings.empty()) {
-            tt::tt_metal::apply_resolved_bindings(program, shared.descriptor.resolved_bindings, collected.buffers);
+            CMAKE_UNIQUE_NAMESPACE::apply_changed_bindings(
+                program, shared.descriptor.resolved_bindings, shared.bindings, collected.buffers);
         }
         const ttnn::MeshCoordinate coord = coordinate_range.start_coord();
         TT_FATAL(

@@ -5,10 +5,12 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -50,11 +52,21 @@ struct RingJointSDPAMeshWorkloadFactory {
         ttnn::ccl::snake_ring::Orientation orientation;
         uint64_t route_plan_hash;
     };
-    // The adapter's state plus the semaphore slots recorded at create time (see apply_semaphore_arg_patch).
+    // The resolved bindings' runtime-arg slots and the address last written to each, and the CB bindings' last
+    // addresses: a cache hit writes a binding only when its buffer moved.
+    struct BindingSlots {
+        bool recorded = false;
+        std::vector<tt::tt_metal::RuntimeArgsData*> rt_args;
+        std::vector<std::optional<uint32_t>> rt_written;
+        std::vector<std::optional<uint32_t>> cb_written;
+    };
+    // The adapter's state plus the semaphore slots recorded at create time (see apply_semaphore_arg_patch)
+    // and the binding slots recorded on the first hit.
     struct shared_variables_t {
         typename descriptor_adapter_t::shared_variables_t descriptor;
         ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::SemaphoreArgPatch semaphore_patch;
         std::optional<FullMeshRoute> full_mesh_route;
+        BindingSlots bindings;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
