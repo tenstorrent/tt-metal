@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 from models.demos.informer.reference.torch_reference import compute_metrics
-from models.demos.informer.tt.embeddings import PositionalEmbedding, TemporalEmbedding, ValueEmbedding
+from models.demos.informer.tt.embeddings import ConvDistillLayer, PositionalEmbedding, TemporalEmbedding, ValueEmbedding
 from models.demos.informer.tt.ops import sinusoidal_position_encoding, to_torch
 
 
@@ -122,6 +122,33 @@ class TestPositionalEmbeddingClass:
 
             assert pe_torch.shape == (1, length, d_model), f"Expected (1, {length}, {d_model}), got {pe_torch.shape}"
             assert torch.isfinite(pe_torch).all(), "Positional encoding contains non-finite values"
+
+
+class TestConvDistillLayer:
+    """Test the distilling conv block (circular conv1d, ELU, max pool) between encoder layers."""
+
+    @pytest.mark.parametrize("batch_size", [8, 32])
+    @pytest.mark.parametrize("seq_len,d_model", [(24, 32), (48, 64)])
+    def test_conv_distill_pcc(self, device, batch_size, seq_len, d_model):
+        """Test ConvDistillLayer matches PyTorch reference."""
+        rng = torch.Generator().manual_seed(42)
+        dtype = ttnn.float32
+
+        ttnn_conv = ConvDistillLayer(d_model, rng, device=device, dtype=dtype)
+
+        x = torch.randn(batch_size, seq_len, d_model, dtype=torch.float32)
+        x_ttnn = ttnn.from_torch(x, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+
+        x_pad = torch.nn.functional.pad(x.transpose(1, 2), (1, 1), mode="circular")
+        h = torch.nn.functional.conv1d(x_pad, ttnn_conv.weight_torch, ttnn_conv.bias_torch)
+        h = torch.nn.functional.elu(h)
+        expected = torch.nn.functional.max_pool1d(h, kernel_size=3, stride=2, padding=1).transpose(1, 2)
+
+        actual = to_torch(ttnn_conv(x_ttnn))
+
+        assert actual.shape == expected.shape
+        pcc = compute_metrics(expected, actual)[2]
+        assert pcc > 0.99, f"ConvDistillLayer PCC {pcc:.4f} < 0.99"
 
 
 if __name__ == "__main__":
