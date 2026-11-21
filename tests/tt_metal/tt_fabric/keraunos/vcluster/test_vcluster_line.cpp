@@ -53,17 +53,6 @@ const vc::Device& device_of_chip(const vc::Manifest& manifest, uint32_t fabric_c
 }
 
 // The opened cluster is the manifest's, and the failure names the first difference.
-// The core keraunos.cores of the package SoC descriptor gives CCE `cce` of HSIO tile `tile`, as "x-y"; empty when it
-// lists none.
-std::string package_core(const YAML::Node& package, uint32_t tile, uint32_t cce) {
-    for (const auto& entry : package["keraunos"]["cores"]) {
-        if (entry["hsio"].as<uint32_t>() == tile && entry["cce"].as<uint32_t>() == cce) {
-            return entry["core"].as<std::string>();
-        }
-    }
-    return "";
-}
-
 void expect_cluster_is_manifest(const vc::Manifest& manifest, const YAML::Node& package) {
     const auto& control_plane = MetalContext::instance().get_control_plane();
     const auto& cluster = MetalContext::instance().get_cluster();
