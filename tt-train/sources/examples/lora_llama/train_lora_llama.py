@@ -321,7 +321,10 @@ def main():
         # logits ([B,1,S,padded_V/tp_size] per device).
         if use_tp:
             loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
-                logits, tt_y, cluster_axis=mesh.axis_index("tp")
+                logits,
+                tt_y,
+                cluster_axis=mesh.axis_index("tp"),
+                vocab_size=llama_cfg.vocab_size,
             )
         else:
             loss = ttml.ops.loss.cross_entropy_loss(logits, tt_y, ttml.ops.ReduceType.MEAN)

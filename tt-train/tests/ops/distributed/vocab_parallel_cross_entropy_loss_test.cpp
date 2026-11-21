@@ -760,3 +760,74 @@ TEST_F(ShardedCrossEntropyLossTest, NoneReductionSummedMatchesMean) {
     const float none_summed = static_cast<float>(xt::sum(none_xt[0])()) / static_cast<float>(B * S);
     EXPECT_NEAR(mean_val, none_summed, 5e-2F);
 }
+
+TEST_F(ShardedCrossEntropyLossTest, PaddedVocabColumnsAreMaskedOutOfLossAndGrad) {
+    SKIP_FOR_WATCHER();
+
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    const uint32_t B = 2U, S = 32U;
+    const uint32_t local_V = 96U;
+    const uint32_t full_V = local_V * 2U;  // 192 padded columns
+    const uint32_t vocab_size = 130U;      // 62 trailing padded columns on shard 1
+
+    std::mt19937 gen(123);
+    xt::xarray<float> logits_xt = xt::empty<float>({B, 1U, S, full_V});
+    std::uniform_real_distribution<float> dist(-3.0F, 3.0F);
+    for (auto& v : logits_xt) {
+        v = dist(gen);
+    }
+
+    xt::xarray<uint32_t> targets_xt = xt::zeros<uint32_t>({B, S});
+    std::uniform_int_distribution<uint32_t> idx_dist(0U, vocab_size - 1U);
+    for (uint32_t b = 0; b < B; ++b) {
+        for (uint32_t s = 0; s < S; ++s) {
+            targets_xt(b, s) = idx_dist(gen);
+        }
+    }
+
+    auto shard_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto logits_dev =
+        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(logits_xt, device, ttnn::Layout::TILE, shard_mapper.get());
+
+    auto replicate_mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto targets_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        targets_xt, device, ttnn::Layout::ROW_MAJOR, replicate_mapper.get());
+
+    auto logits_ptr = autograd::create_tensor(logits_dev, true);
+    auto targets_ptr = autograd::create_tensor(targets_dev, false);
+
+    auto loss = ops::distributed::vocab_parallel_cross_entropy_loss(
+        logits_ptr, targets_ptr, /*cluster_axis=*/std::nullopt, ops::ReduceType::MEAN, vocab_size);
+
+    xt::xarray<float> unpadded_logits_xt =
+        xt::view(logits_xt, xt::all(), xt::all(), xt::all(), xt::range(0U, vocab_size));
+    float expected_loss = cross_entropy_loss_reference(unpadded_logits_xt, targets_xt);
+
+    auto loss_xt = core::to_xtensor<float>(loss->get_value(), core::IdentityComposer{});
+    EXPECT_NEAR(loss_xt[0](0, 0, 0, 0), expected_loss, 5e-2F);
+    EXPECT_NEAR(loss_xt[1](0, 0, 0, 0), expected_loss, 5e-2F);
+
+    xt::xarray<float> grad_ones = xt::ones<float>({1U, 1U, 1U, 1U});
+    auto grad_dev = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+        grad_ones, device, ttnn::Layout::TILE, replicate_mapper.get());
+    loss->set_grad(grad_dev);
+    loss->backward();
+
+    ASSERT_TRUE(core::is_tensor_initialized(logits_ptr->get_grad()));
+    auto grad_xtensors = core::to_xtensor<float>(logits_ptr->get_grad(), core::IdentityComposer{});
+
+    xt::xarray<float> expected_grad = xt::zeros<float>({B, 1U, S, full_V});
+    xt::view(expected_grad, xt::all(), xt::all(), xt::all(), xt::range(0U, vocab_size)) =
+        cross_entropy_grad_reference(unpadded_logits_xt, targets_xt);
+
+    auto expected_shard0 = xt::view(expected_grad, xt::all(), xt::all(), xt::all(), xt::range(0U, local_V));
+    auto expected_shard1 = xt::view(expected_grad, xt::all(), xt::all(), xt::all(), xt::range(local_V, full_V));
+
+    EXPECT_TRUE(xt::allclose(grad_xtensors[0], expected_shard0, 3e-2F, 1e-2F));
+    EXPECT_TRUE(xt::allclose(grad_xtensors[1], expected_shard1, 3e-2F, 1e-2F));
+
+    auto padded_grad = xt::view(grad_xtensors[1], xt::all(), xt::all(), xt::all(), xt::range(vocab_size - local_V, local_V));
+    EXPECT_EQ(xt::amax(xt::abs(padded_grad))(), 0.0F);
+}
