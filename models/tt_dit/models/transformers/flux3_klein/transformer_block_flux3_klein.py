@@ -258,7 +258,7 @@ class Flux3KleinTransformerBlock(Module):
                 ),
                 multi_device_global_semaphore=self._ccl_manager.get_ag_ping_pong_semaphore(tp.mesh_axis),
                 num_links=self._ccl_manager.num_links,
-                topology=self._ccl_manager.topology,
+                topology=self._ccl_manager.axis_topology(tp.mesh_axis),
                 cluster_axis=tp.mesh_axis,
                 barrier_semaphore=None,
                 force_transpose=True,
