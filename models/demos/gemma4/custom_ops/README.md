@@ -2,7 +2,7 @@
 
 Model-local fused kernels for Gemma 4 (`ttnn.generic_op` programs with their kernels beside them, the GLM 5.3
 `custom_ops/` pattern). Each op replaces a chain of data-movement or small compute programs of the decode step or
-the prefill with one program; the measurement protocol is `tests/unit/roofline/test_decode_roofline.py` (device
+the prefill with one program; the measurement protocol is `tools/roofline/test_decode_roofline.py` (device
 programs and device ms per step) plus the model gates. No code outside `models/demos/gemma4` carries a Gemma 4 kernel.
 
 ```

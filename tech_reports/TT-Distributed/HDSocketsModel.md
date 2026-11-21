@@ -78,7 +78,7 @@ The FIFO is parameterised by two quantities that directly control performance:
 | PCIe link  -  high-bandwidth chips (ASIC 6 per tray, 4 total) | **Rev A/B: Gen 4 x8** · **Rev C: Gen 5 x8**. Measured throughput / latency in S.4.1 (Rev A/B) and S.4.2 (Rev C). |
 | PCIe link  -  low-bandwidth chips (all others, 28 total) | **Rev A/B: Gen 4 x1** · **Rev C: Gen 5 x1**. Requires KMD >= 2.7  -  see S.4 hardware overview. |
 
-Sources: L1, DRAM, and NOC alignment from [`BlackholeBringUpProgrammingGuide.md`](../../../tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md); AI clock (1.35 GHz) from [`GEMM_FLOPS.md`](../../../tech_reports/GEMM_FLOPS/GEMM_FLOPS.md); PCIe link bandwidth from benchmark measurements in this report.
+Sources: L1, DRAM, and NOC alignment from [`BlackholeBringUpProgrammingGuide.md`](../Blackhole/BlackholeBringUpProgrammingGuide.md); AI clock (1.35 GHz) from [`GEMM_FLOPS.md`](../GEMM_FLOPS/GEMM_FLOPS.md); PCIe link bandwidth from benchmark measurements in this report.
 
 ---
 
