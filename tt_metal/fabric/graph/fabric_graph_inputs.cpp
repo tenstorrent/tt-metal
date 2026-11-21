@@ -25,6 +25,49 @@ namespace tt::tt_fabric::graph {
 
 namespace {
 
+using tt::tt_metal::AsicID;
+using tt::tt_metal::PhysicalSystemDescriptor;
+
+// The far end, if the PSD knows its chip, lists the same cable back. A chip outside the job isn't in it.
+bool both_ends_agree(
+    const PhysicalSystemDescriptor& psd, AsicID asic, chan_id_t chan, AsicID peer, chan_id_t peer_chan) {
+    if (!psd.get_asic_descriptors().contains(peer)) {
+        return true;
+    }
+    const auto back = psd.get_eth_connections(peer, asic);
+    return std::any_of(
+        back.begin(), back.end(), [&](const auto& c) { return c.src_chan == peer_chan && c.dst_chan == chan; });
+}
+
+// every trained chan on `asic` -> the asic and chan across it, with both ends agreeing. The PSD first; cables to
+// chips outside the job, which global discovery drops from it, from the cluster.
+std::map<chan_id_t, std::pair<AsicID, chan_id_t>> trained_links(
+    const PhysicalSystemDescriptor& psd, const tt::Cluster& cluster, AsicID asic, ChipId chip) {
+    std::map<chan_id_t, std::pair<AsicID, chan_id_t>> live;
+    for (const auto& peer : psd.get_asic_neighbors(asic)) {
+        for (const auto& c : psd.get_eth_connections(asic, peer)) {
+            if (both_ends_agree(psd, asic, c.src_chan, peer, c.dst_chan)) {
+                live[c.src_chan] = {peer, c.dst_chan};
+            } else {
+                log_warning(
+                    tt::LogFabric,
+                    "fabric graph: asic {} chan {} -> asic {} chan {}: the far end doesn't list it back",
+                    *asic,
+                    c.src_chan,
+                    *peer,
+                    c.dst_chan);
+            }
+        }
+    }
+    const auto& remote = cluster.get_ethernet_connections_to_remote_devices();
+    if (auto it = remote.find(chip); it != remote.end()) {
+        for (const auto& [chan, peer] : it->second) {
+            live.try_emplace(chan, AsicID{std::get<0>(peer)}, std::get<1>(peer));
+        }
+    }
+    return live;
+}
+
 PortDirection port_direction(RoutingDirection direction) {
     TT_FATAL(
         direction != RoutingDirection::C && direction != RoutingDirection::NONE,
@@ -137,44 +180,28 @@ std::vector<UnusedLink> unused_links(
     // this host's chips only: each host builds its own routers, so it only needs its own ports
     std::vector<UnusedLink> links;
     std::vector<UnusedLink> missing;
-    const auto& asics = cluster.get_unique_chip_ids();
-    const auto& local = cluster.get_ethernet_connections();
-    const auto& remote = cluster.get_ethernet_connections_to_remote_devices();
-    for (const auto& [chip, asic] : asics) {
-        const auto node = node_of(asic);
-        if (!node) {
-            continue;  // not a fabric chip
-        }
+    for (const auto& [node, chip] : mapper.get_local_logical_mesh_chip_id_to_physical_chip_id_mapping()) {
+        const auto asic = control_plane.get_asic_id_from_fabric_node_id(node);
         std::set<chan_id_t> used;
-        for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(*node)) {
+        for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(node)) {
             used.insert(chan);
         }
-        std::map<chan_id_t, std::pair<uint64_t, chan_id_t>> live;  // every trained chan -> peer chip and chan
-        if (auto it = local.find(chip); it != local.end()) {
-            for (const auto& [chan, peer] : it->second) {
-                live[chan] = {asics.at(std::get<0>(peer)), std::get<1>(peer)};
-            }
-        }
-        if (auto it = remote.find(chip); it != remote.end()) {
-            for (const auto& [chan, peer] : it->second) {
-                live[chan] = {std::get<0>(peer), std::get<1>(peer)};
-            }
-        }
+        const auto live = trained_links(psd, cluster, asic, chip);
         for (const auto& [chan, peer] : live) {
             if (used.contains(chan)) {
                 continue;
             }
             const auto core = cluster.get_soc_desc(chip).get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
             links.push_back(UnusedLink{
-                .node = *node,
+                .node = node,
                 .chan = chan,
-                .peer_asic = peer.first,
+                .peer_asic = *peer.first,
                 .peer_chan = peer.second,
-                .peer_in_domain = node_of(peer.first).has_value(),
+                .peer_in_domain = node_of(*peer.first).has_value(),
                 .trained = cluster.is_ethernet_link_up(chip, core)});
         }
 
-        const auto address = psd.find_physical_node_id(tt::tt_metal::AsicID{asic});
+        const auto address = psd.find_physical_node_id(asic);
         const auto fsd_asic = fsd && address ? fsd->find_asic_id(*address) : std::nullopt;
         if (!fsd_asic) {
             continue;
@@ -187,7 +214,7 @@ std::vector<UnusedLink> unused_links(
             std::optional<uint64_t> key;
             for (const auto& c : cables) {
                 if (auto it = live.find(c.src_chan); it != live.end()) {
-                    key = it->second.first;
+                    key = *it->second.first;
                 }
             }
             if (!key) {
@@ -197,7 +224,7 @@ std::vector<UnusedLink> unused_links(
             for (const auto& c : cables) {
                 if (!live.contains(c.src_chan)) {
                     missing.push_back(UnusedLink{
-                        .node = *node,
+                        .node = node,
                         .chan = c.src_chan,
                         .peer_asic = *key,
                         .peer_chan = static_cast<chan_id_t>(c.dst_chan),

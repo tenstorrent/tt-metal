@@ -125,7 +125,7 @@ std::vector<InterDomainPort> get_inter_domain_ports(const tt::tt_metal::distribu
 }
 
 uint64_t get_inter_domain_port_asic(const InterDomainPort& port) {
-    return fabric_context(port).get_cluster().get_unique_chip_ids().at(router_core(port).chip);
+    return *fabric_context(port).get_control_plane().get_asic_id_from_fabric_node_id(port.node);
 }
 
 InterDomainMetadata get_inter_domain_metadata(const InterDomainPort& port, uint32_t domain_id) {

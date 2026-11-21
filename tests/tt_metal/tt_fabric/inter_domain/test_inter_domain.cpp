@@ -37,6 +37,8 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/inter_domain.hpp>
 
+#include <internal/cluster.hpp>
+
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
@@ -153,14 +155,16 @@ TEST(InterDomain, Sanity) {
     auto mesh =
         distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::SystemMesh::instance().shape()));
 
-    // every chip in this mesh, by asic
+    // every chip in this mesh, by asic: fabric node -> asic, as the prefill runner resolves it
     std::map<uint64_t, distributed::MeshCoordinate> coord_of;
     std::map<uint64_t, IDevice*> device_of;
+    std::map<uint64_t, tt::tt_fabric::FabricNodeId> node_of;
     for (const auto& coord : distributed::MeshCoordinateRange(mesh->shape())) {
-        IDevice* dev = mesh->get_view().impl().get_device(coord);
-        const uint64_t asic = MetalContext::instance().get_cluster().get_unique_chip_ids().at(dev->id());
+        const auto node = mesh->get_fabric_node_id(coord);
+        const uint64_t asic = *tt::tt_metal::internal::get_chip_unique_id_from_fabric_node_id(*mesh, node);
         coord_of.emplace(asic, coord);
-        device_of[asic] = dev;
+        device_of[asic] = mesh->get_view().impl().get_device(coord);
+        node_of.emplace(asic, node);
     }
 
     // publish ours: metadata per port, a receive buffer per chip
@@ -184,8 +188,7 @@ TEST(InterDomain, Sanity) {
     for (const auto& [asic, dev] : device_of) {
         const uint32_t base = dev->allocator()->get_base_allocator_addr(HalMemType::L1);
         const auto core = dev->worker_core_from_logical_core(kCore);
-        const auto node =
-            MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(dev->id());
+        const auto& node = node_of.at(asic);
         me.rx[asic] = RxInfo{
             static_cast<uint32_t>(core.x),
             static_cast<uint32_t>(core.y),
@@ -261,9 +264,6 @@ TEST(InterDomain, Sanity) {
         // inter-domain router.
         const auto& control_plane = MetalContext::instance().get_control_plane();
         const auto& mesh_graph = control_plane.get_mesh_graph();
-        auto node_of = [&](uint64_t asic) {
-            return control_plane.get_fabric_node_id_from_physical_chip_id(device_of.at(asic)->id());
-        };
         struct Send {
             CoreCoord core;
             uint64_t to;
@@ -289,9 +289,9 @@ TEST(InterDomain, Sanity) {
                              }});
                 }
             }
-            const auto exit = node_of(chips.first);
+            const auto exit = node_of.at(chips.first);
             for (const auto& [asic, dev] : device_of) {
-                const auto from = node_of(asic);
+                const auto from = node_of.at(asic);
                 const auto out = control_plane.get_forwarding_direction(from, exit);
                 if (asic == chips.first || !out || control_plane.get_chip_neighbors(from, *out).empty()) {
                     continue;
