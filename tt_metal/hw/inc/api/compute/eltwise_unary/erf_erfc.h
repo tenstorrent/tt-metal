@@ -62,7 +62,12 @@ ALWI void erfc_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::erfc_init, (tru
  */
 // clang-format on
 ALWI void erfc_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (), idst, VectorMode::RC));
+    MATH(if constexpr (ckernel::sfpu::erfc_bf16_whole_tile && !DST_ACCUM_MODE) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (32 /*ITERATIONS*/, DST_ACCUM_MODE), idst, VectorMode::None);
+        return;
+    });
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (8, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
 }  // namespace ckernel
