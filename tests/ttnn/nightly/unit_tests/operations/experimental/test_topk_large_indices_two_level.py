@@ -691,6 +691,8 @@ def test_two_level_default_long_rows(device, columns):
     """The production long case on both top-k grids under the default cutover."""
     rows, width, n = 160, 1_049_600, 1_048_576
     torch_input = generate("iid", rows, width, 16, n=n)
+    mode = _scalar(device, 0)
+    maxima = _dev(torch.zeros(1, 1, rows, (width + BLOCK - 1) // BLOCK, dtype=torch.bfloat16), device)
     out = ttnn.experimental.topk_large_indices(
         _dev(torch_input.reshape(1, 1, rows, width), device),
         k=K,
@@ -698,8 +700,12 @@ def test_two_level_default_long_rows(device, columns):
         block_select=32,
         sub_core_grids=_grid(device, columns),
         dram_read_noc=ttnn.NOC.NOC_0,
+        block_max_output=maxima,
+        mode_output=mode,
     )
+    assert _mode(mode) == 1, "the default cutover runs 1M keys two-level"
     _check_rows(torch_input, _indices(out, rows), n, (0, 51, 52, 98, 107, 108, 143, 144, 159))
+    _check_maxima(maxima, torch_input, n, (0, 1, 107, 108, 158, 159))
 
 
 @pytest.mark.parametrize("n", [1_500, 3_000])

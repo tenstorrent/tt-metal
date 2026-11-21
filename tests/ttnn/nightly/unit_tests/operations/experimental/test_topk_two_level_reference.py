@@ -16,7 +16,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.topk_two_level_refere
     two_level_reference,
 )
 
-LENGTHS = [65_537, 524_304, 1_048_576]
+LENGTHS = [65_536, 65_537, 524_304, 1_048_576]
 SEED = 0
 ROWS = 4
 
