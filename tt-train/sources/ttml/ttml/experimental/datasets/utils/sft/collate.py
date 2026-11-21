@@ -23,8 +23,10 @@ def collate_causal_lm(examples: Sequence[Mapping], max_length: int, pad_token_id
     - ``loss_mask``  ``[B, 1, T, 1]`` float32, 1 at positions with a real target, scaled to sum to ``B * T``:
       ``mean(cross_entropy * loss_mask)`` is then the mean over real targets.
 
-    The same loss as HF's: right padding with ``-100`` labels, labels shifted by one, and
-    ``cross_entropy(..., ignore_index=-100)``.
+    The same loss as HF's on one batch: right padding with ``-100`` labels, labels shifted by one, and
+    ``cross_entropy(..., ignore_index=-100)``. With gradient accumulation the trainers average the batches' losses
+    equally, as ``ttml.trainers.SFTTrainer`` does, where HF's Trainer weights each by its share of the window's
+    targets; the two match only with ``gradient_accumulation_steps=1``.
     """
     batch_size = len(examples)
     input_ids = np.full((batch_size, max_length), pad_token_id, dtype=np.uint32)
