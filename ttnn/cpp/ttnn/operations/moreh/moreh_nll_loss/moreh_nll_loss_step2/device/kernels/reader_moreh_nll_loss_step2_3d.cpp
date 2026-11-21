@@ -105,6 +105,9 @@ void kernel_main() {
 #endif
             } else {
                 tmp_input_l1_ptr[idx] = fp32_dest_acc_cast(0.0f);
+#if defined(WEIGHT)
+                tmp_weight_l1_ptr[idx] = fp32_dest_acc_cast(0.0f);
+#endif
             }
         }
         dfb_tmp_input_obj.push_back(onetile);
