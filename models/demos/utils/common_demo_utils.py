@@ -463,13 +463,21 @@ def get_label(image_path):
     return label
 
 
-def get_batch(data_loader, resolution=224):
+def get_batch(data_loader, resolution=224, resize_size=None, interpolation=None):
+    """Load a batch and apply Resize + CenterCrop + ImageNet normalization.
+
+    resize_size and interpolation default to the historic behaviour (resize the short side to `resolution`, bilinear).
+    Pass the checkpoint's own values (e.g. torchvision `weights.transforms()`) to match its reference preprocessing.
+    """
     loaded_images = next(data_loader)
     images = []
     labels = []
     transform = transforms.Compose(
         [
-            transforms.Resize(resolution),
+            transforms.Resize(
+                resolution if resize_size is None else resize_size,
+                **({} if interpolation is None else {"interpolation": interpolation}),
+            ),
             transforms.CenterCrop(resolution),
             transforms.ToTensor(),
             transforms.Normalize(
