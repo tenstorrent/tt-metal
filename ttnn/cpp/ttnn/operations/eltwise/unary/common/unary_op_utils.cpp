@@ -111,6 +111,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDSIGMOID:
         case UnaryOpType::CELU: return "SFPU_OP_ACTIVATIONS_INCLUDE";
         case UnaryOpType::THRESHOLD: return "SFPU_OP_THRESHOLD_INCLUDE";
+        case UnaryOpType::HARDSWISH: return "SFPU_OP_HARDSWISH_INCLUDE";
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
@@ -1305,6 +1306,7 @@ std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
     std::string op_name;
     switch (op.type()) {
         case UnaryOpType::QUICK_GELU: op_name = arch == tt::ARCH::BLACKHOLE ? "quick_gelu" : ""; break;
+        case UnaryOpType::HARDSWISH: op_name = "hardswish"; break;
         default: return std::nullopt;
     }
     if (op_name.empty()) {
