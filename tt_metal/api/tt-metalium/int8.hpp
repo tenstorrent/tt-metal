@@ -4,12 +4,7 @@
 
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
-#include <vector>
+// DEPRECATED-FORWARDING-HEADER: <tt-metalium/int8.hpp> moved to <tt-metalium/data_formats/int8.hpp>.
+// This header only forwards to the new location; it is deprecated, with a warning and a removal date, in a follow-up change.
 
-[[deprecated("This API is deprecated without replacement, it will be removed after 2026-11-12.")]]
-uint32_t pack_four_int8_into_uint32(int8_t a, int8_t b, int8_t c, int8_t d);
-
-[[deprecated("This API is deprecated without replacement, it will be removed after 2026-11-12.")]]
-std::vector<uint32_t> create_random_vector_of_int8(size_t num_bytes, int seed);
+#include <tt-metalium/data_formats/int8.hpp>  // IWYU pragma: export
