@@ -398,11 +398,11 @@ def load(
         if optimizer is not None:
             state_live, _ = collect_optimizer(optimizer, live)
             live.extend(state_live)
-        return index, header, train_state, missing_state, fsdp_states, live, set(local_coords())
+        return index, header, train_state, missing_state, live, set(local_coords())
 
     # Even the local work runs inside a phase, so a rank that fails here cannot leave the others waiting in the next
     # collective; on a single process the phase just runs it.
-    index, header, train_state, missing_state, fsdp_states, live, local = group.phase(
+    index, header, train_state, missing_state, live, local = group.phase(
         "reading the index and collecting the live tensors", open_and_collect
     )
     by_key = {lt.key: lt for lt in live}
