@@ -174,6 +174,18 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
         return {};
     }
 
+    // The D2H socket's host buffer is cacheable pinned memory. On a host whose device DMA does not snoop CPU caches
+    // and that cannot maintain them (UMD then uses uncached sysmem), the host reads stale samples, the sync deadline
+    // is missed and dispatch stalls for seconds (measured on SpacemiT K3 with its IOMMU enabled).
+    if (cluster.uses_uncached_sysmem()) {
+        log_debug(
+            tt::LogMetal,
+            "Real-time profiler disabled on device {}: host DMA is not cache-coherent and no host cache maintenance "
+            "is available, and the D2H socket needs coherent pinned host memory.",
+            device_id);
+        return {};
+    }
+
     if (hal.get_supports_64_bit_pcie_addressing() && !cluster.is_iommu_enabled()) {
         log_debug(
             tt::LogMetal,

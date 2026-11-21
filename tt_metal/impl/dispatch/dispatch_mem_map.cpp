@@ -46,7 +46,8 @@ DispatchMemMap::DispatchMemMap(
     const Hal& hal,
     bool is_galaxy_cluster,
     const CommandQueueDispatchLayout& cq_layout,
-    const tt::llrt::RunTimeOptions& rtoptions) :
+    const tt::llrt::RunTimeOptions& rtoptions,
+    uint32_t max_issue_queue_bytes) :
     settings(DispatchSettings(
         num_hw_cqs,
 
@@ -67,7 +68,9 @@ DispatchMemMap::DispatchMemMap(
         // prefetch_max_cmd_size on every arch. We prefer 4 bytes because sub-32-bit reads/writes have been
         // observed to fail on Quasar, and using one width everywhere keeps host/kernel code simple. WH ETH
         // stays at 2 bytes because of tighter memory constraints.
-        (hal.get_arch() == tt::ARCH::WORMHOLE_B0 && core_type == CoreType::ETH) ? 2u : 4u)),
+        (hal.get_arch() == tt::ARCH::WORMHOLE_B0 && core_type == CoreType::ETH) ? 2u : 4u,
+
+        max_issue_queue_bytes)),
     prefetch_q_cached_(use_prefetch_q_cached(hal, core_type, rtoptions)),
     num_cqs_per_core_(cq_layout.num_cqs_per_core),
     host_alignment_(hal.get_alignment(HalMemType::HOST)),
