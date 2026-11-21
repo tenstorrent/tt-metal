@@ -313,6 +313,11 @@ void kernel_main() {
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
                 const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t_dynamic;
                 uint64_t k_base_read_ptr;
+                uint32_t valid_rows = UINT32_MAX;
+                if constexpr (is_causal) {
+                    const uint32_t chunk_start_pos = k_chunk_start_row_num * tt::constants::TILE_HEIGHT;
+                    valid_rows = cur_pos >= chunk_start_pos ? cur_pos - chunk_start_pos + 1 : 0;
+                }
 
                 // Read K chunk - supports both multicast and non-multicast paths
                 k_base_read_ptr = read_k<
@@ -333,7 +338,8 @@ void kernel_main() {
                     page_table_ptr_u16,
                     page_table_ptr_u32,
                     barrier_count,
-                    k_mcast_params);
+                    k_mcast_params,
+                    valid_rows);
 
                 if constexpr (use_attention_mask) {
                     mask_start_tile_id = read_mask_chunk<cb_mask_in, mask_tile_bytes, barrier_threshold, PNHt>(
@@ -359,7 +365,8 @@ void kernel_main() {
                     page_table_ptr_u32,
                     barrier_count,
                     k_base_read_ptr,
-                    k_tile_bytes);
+                    k_tile_bytes,
+                    valid_rows);
             }
         } else {
             // Offset for current batch
