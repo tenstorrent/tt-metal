@@ -34,6 +34,10 @@ FORCE_INLINE std::uint16_t fp32_to_bf16(float x) {
     std::uint32_t bits;
     std::memcpy(&bits, &x, sizeof(bits));
 
+    if (__builtin_expect((bits & 0x7FFFFFFFu) > 0x7F800000u, 0)) {
+        return static_cast<std::uint16_t>((bits >> 16) | 0x0040u);
+    }
+
     std::uint32_t lsb = (bits >> 16) & 1u;
     std::uint32_t rounding_bias = 0x7FFFu + lsb;
     bits += rounding_bias;
@@ -47,6 +51,9 @@ FORCE_INLINE std::uint16_t fp32_to_bf16(float x) {
 FORCE_INLINE std::uint16_t fp32_to_bf16_truncate(float x) {
     std::uint32_t bits;
     std::memcpy(&bits, &x, sizeof(bits));
+    if (__builtin_expect((bits & 0x7FFFFFFFu) > 0x7F800000u, 0)) {
+        return static_cast<std::uint16_t>((bits >> 16) | 0x0040u);
+    }
     return static_cast<std::uint16_t>(bits >> 16);
 }
 
