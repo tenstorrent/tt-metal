@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import time
@@ -23,7 +24,7 @@ from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
-from ...utils.video import export_video_audio, export_video_audio_yuv
+from ...utils.video import YuvVideoExport, export_video_audio, export_video_audio_yuv
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
 # Distilled sigma schedules for the two stages.
@@ -799,14 +800,29 @@ class LTXDistilledPipeline(LTXPipeline):
         yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", yuv_default) != "0"
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
         decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type
+        # LTX_ASYNC_EXPORT=1 (opt-in): the VAE returns once its YUV reads land, and a worker thread assembles
+        # the planar frames and runs the host libx264 encode while the audio decodes on the device.
+        async_export = yuv_export and os.environ.get("LTX_ASYNC_EXPORT", "0") == "1"
         t0 = time.time()
-        video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
+        video_pixels = self.decode_latents(
+            s2_video, latent_frames, latent_h, latent_w, output_type=decode_type, defer_yuv=async_export
+        )
         t_vae_decode = time.time() - t0
         timings.append(("VAE decode", t_vae_decode))
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
 
+        video_export = None
+        if async_export:
+            rate = self.tt_vocoder_with_bwe.output_sampling_rate
+            video_export = YuvVideoExport(video_pixels, output_path, fps=fps, audio_sampling_rate=rate)
         t0 = time.time()
-        audio_obj = self.decode_audio(s2_audio, num_frames, fps=fps)
+        try:
+            audio_obj = self.decode_audio(s2_audio, num_frames, fps=fps)
+        except BaseException:
+            if video_export is not None:
+                with contextlib.suppress(Exception):  # surface the decode error, not the aborted export's
+                    video_export.finish(None)
+            raise
         t_audio_decode = time.time() - t0
         timings.append(("Audio decode", t_audio_decode))
         logger.info(f"Audio decode: {t_audio_decode:.1f}s")
@@ -817,7 +833,9 @@ class LTXDistilledPipeline(LTXPipeline):
             return video_pixels, audio_obj
 
         t0 = time.time()
-        if yuv_export:
+        if video_export is not None:
+            video_export.finish(audio_obj)
+        elif yuv_export:
             export_video_audio_yuv(video_pixels, output_path, fps=fps, audio=audio_obj)
         else:
             export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
