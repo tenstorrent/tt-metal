@@ -9,6 +9,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 #include <array>
+#include <span>
 #include <vector>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
@@ -211,6 +212,43 @@ std::array<uint32_t, MeshFactory::kNumCounters> counter_addresses(
     }
     return address;
 }
+// apply_resolved_bindings for one cached program, writing only the bindings whose buffer address changed since the last
+// hit. The slots are recorded on the first hit; dispatch updates the RuntimeArgsData objects in place, so the recorded
+// pointers stay valid.
+void apply_changed_bindings(
+    tt::tt_metal::Program& program,
+    const tt::tt_metal::ResolvedBindings& bindings,
+    MeshFactory::BindingSlots& slots,
+    std::span<tt::tt_metal::Buffer* const> buffers) {
+    if (!slots.recorded) {
+        slots.rt_args.reserve(bindings.rt_args.size());
+        for (const auto& b : bindings.rt_args) {
+            slots.rt_args.push_back(
+                b.is_common ? &tt::tt_metal::GetCommonRuntimeArgs(program, b.kernel_idx)
+                            : &tt::tt_metal::GetRuntimeArgs(program, b.kernel_idx, b.core));
+        }
+        slots.rt_written.assign(bindings.rt_args.size(), std::nullopt);
+        slots.cb_written.assign(bindings.cbs.size(), std::nullopt);
+        slots.recorded = true;
+    }
+    for (size_t i = 0; i < bindings.rt_args.size(); ++i) {
+        const auto& b = bindings.rt_args[i];
+        const auto address = static_cast<uint32_t>(buffers[b.tensor_buffer_idx]->address());
+        if (slots.rt_written[i] != address) {
+            (*slots.rt_args[i])[b.arg_idx] = address;
+            slots.rt_written[i] = address;
+        }
+    }
+    for (size_t i = 0; i < bindings.cbs.size(); ++i) {
+        const auto& cb = bindings.cbs[i];
+        const auto address = static_cast<uint32_t>(buffers[cb.tensor_buffer_idx]->address());
+        if (slots.cb_written[i] != address) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(
+                program, cb.cb_id, *buffers[cb.tensor_buffer_idx], cb.address_offset);
+            slots.cb_written[i] = address;
+        }
+    }
+}
 }  // namespace
 
 MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory::cached_mesh_workload_t
@@ -234,14 +272,19 @@ void MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory::override_runtime
     const MinimalMatmulStridedReduceScatterAsyncInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     const auto address = counter_addresses(operation_attributes, tensor_args);
+    // Every program binds the same tensors: collect them once per hit, not once per program.
+    std::optional<typename descriptor_adapter_t::CollectedTensorBuffers> collected;
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared = cached_workload.shared_variables.at(coordinate_range);
         // As DescriptorMeshWorkloadAdapter::apply_descriptor (ttnn/api/ttnn/mesh_device_operation_adapter.hpp) does on a
-        // hit for a WorkloadDescriptor factory: re-apply the resolved buffer bindings, then the runtime args.
+        // hit for a WorkloadDescriptor factory: re-apply the resolved buffer bindings (here only those whose buffer
+        // moved), then the runtime args.
         if (!shared.descriptor.resolved_bindings.empty()) {
-            auto collected = descriptor_adapter_t::collect_tensor_buffers(
-                tensor_args, tensor_return_value, shared.descriptor.workload_descriptor);
-            tt::tt_metal::apply_resolved_bindings(program, shared.descriptor.resolved_bindings, collected.buffers);
+            if (!collected.has_value()) {
+                collected = descriptor_adapter_t::collect_tensor_buffers(
+                    tensor_args, tensor_return_value, shared.descriptor.workload_descriptor);
+            }
+            apply_changed_bindings(program, shared.descriptor.resolved_bindings, shared.bindings, collected->buffers);
         }
         override_common_runtime_arguments(program, operation_attributes, tensor_args, tensor_return_value);
         auto& counters = shared.counters;

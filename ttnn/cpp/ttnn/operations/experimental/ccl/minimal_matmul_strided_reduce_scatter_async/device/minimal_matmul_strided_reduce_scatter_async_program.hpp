@@ -47,9 +47,9 @@ struct MinimalMatmulStridedReduceScatterAsyncAdapterOperation {
 
 }  // namespace detail
 
-// The descriptor workload plus, per cached program, the per-core slots of the caller-owned progress and credit
-// counters: a cache hit rewrites them only when a counter address changes, instead of walking every reader and
-// matmul core of every per-device program.
+// The descriptor workload plus, per cached program, the slots of the resolved buffer bindings and of the caller-owned
+// progress and credit counters: a cache hit rewrites a slot only when its address changes, instead of re-applying
+// every binding and walking every reader and matmul core of every per-device program.
 struct MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory {
     using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
         detail::MinimalMatmulStridedReduceScatterAsyncAdapterOperation>::
@@ -61,9 +61,18 @@ struct MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory {
         std::array<std::vector<std::pair<tt::tt_metal::RuntimeArgsData*, uint32_t>>, kNumCounters> slots;
         std::array<std::optional<uint32_t>, kNumCounters> written;
     };
+    // The resolved bindings' runtime-arg slots and the address last written to each, and the CB bindings' last
+    // addresses: a hit writes a binding only when its buffer moved.
+    struct BindingSlots {
+        bool recorded = false;
+        std::vector<tt::tt_metal::RuntimeArgsData*> rt_args;
+        std::vector<std::optional<uint32_t>> rt_written;
+        std::vector<std::optional<uint32_t>> cb_written;
+    };
     struct shared_variables_t {
         typename descriptor_adapter_t::shared_variables_t descriptor;
         CounterSlots counters;
+        BindingSlots bindings;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
