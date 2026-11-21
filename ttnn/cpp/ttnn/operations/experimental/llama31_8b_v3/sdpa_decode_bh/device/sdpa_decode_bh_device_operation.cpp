@@ -1,0 +1,645 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "sdpa_decode_bh_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/device_operation.hpp"
+#include <cstdlib>
+
+#include <cstdint>
+
+#include <tt-metalium/constants.hpp>
+
+#include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+
+#include <tt_stl/reflection.hpp>
+
+using namespace tt::tt_metal;
+
+namespace ttnn::experimental::llama31_8b_v3::sdpa_decode_bh_detail {
+void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    bool use_mla = operation_attributes.use_mla.value_or(false);
+    const uint32_t spec_T = operation_attributes.spec_multi_pos_tiles;
+    const bool spec_multi_pos = spec_T > 0;
+
+    if (use_mla) {
+        TT_FATAL(
+            operation_attributes.head_dim_v.has_value(), "Must provide head_dim_v for multi-latent attention decode");
+        TT_FATAL(operation_attributes.is_causal, "Multi-latent attention decode only tested for causal!");
+    } else {
+        TT_FATAL(tensor_args.v.has_value(), "Must have 3 input tensors and mask");
+    }
+
+    std::vector<Tensor> input_tensors{{tensor_args.q}, {tensor_args.k}};
+    if (tensor_args.v.has_value()) {
+        input_tensors.emplace_back(tensor_args.v.value());
+    }
+    for (const auto& input_tensor : input_tensors) {
+        TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
+        TT_FATAL(input_tensor.is_allocated(), "Operands to SDPA need to be allocated in buffers on device!");
+        TT_FATAL(
+            input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B ||
+                input_tensor.dtype() == DataType::BFLOAT4_B,
+            "Unsupported data type {}.",
+            input_tensor.dtype());
+    }
+
+    for (size_t i = 1; i < input_tensors.size(); i++) {
+        TT_FATAL(input_tensors.at(i).layout() == Layout::TILE, "Inputs to SDPA must be tilized except for Q");
+    }
+
+    const auto q_shape = input_tensors.at(0).padded_shape();
+    const auto q_shape_unpadded = input_tensors.at(0).logical_shape();
+    const auto k_shape = input_tensors.at(1).padded_shape();
+    const auto v_shape = input_tensors.size() > 2 ? input_tensors.at(2).padded_shape() : k_shape;
+
+    if (use_mla) {
+        if (tensor_args.v.has_value()) {
+            TT_FATAL(
+                v_shape[3] == operation_attributes.head_dim_v.value(),
+                "Head dimension of V must be equal to head_dim_v, got {} and {}",
+                v_shape[3],
+                operation_attributes.head_dim_v.value());
+        }
+        TT_FATAL(
+            q_shape[3] == k_shape[3],
+            "Head dimension of Q must be equal to head dim of K, got {} and {}",
+            q_shape[3],
+            k_shape[3]);
+        TT_FATAL(
+            operation_attributes.head_dim_v.value() <= q_shape[3],
+            "Head dimension of V must be less than or equal to head dim of Q, got {} and {}",
+            operation_attributes.head_dim_v.value(),
+            q_shape[3]);
+    }
+
+    if (spec_multi_pos) {
+        TT_FATAL(operation_attributes.is_causal, "spec_multi_pos_tiles requires is_causal");
+        TT_FATAL(operation_attributes.paged_attention, "spec_multi_pos_tiles requires paged attention");
+        TT_FATAL(tensor_args.page_table_tensor.has_value(), "spec_multi_pos_tiles requires a page_table tensor");
+        TT_FATAL(!use_mla, "spec_multi_pos_tiles is not supported with multi-latent attention");
+        TT_FATAL(
+            !operation_attributes.sliding_window_size.has_value() ||
+                operation_attributes.sliding_window_size.value() == 0,
+            "spec_multi_pos_tiles is not supported with sliding_window_size");
+        TT_FATAL(
+            !tensor_args.attn_mask.has_value(), "spec_multi_pos_tiles is not supported with an explicit attn_mask");
+        TT_FATAL(
+            !input_tensors.at(0).is_sharded(),
+            "spec_multi_pos_tiles requires an unsharded (DRAM interleaved) Q tensor");
+        TT_FATAL(
+            input_tensors.at(0).dtype() == DataType::BFLOAT16,
+            "spec_multi_pos_tiles requires a BFLOAT16 Q tensor, got {}",
+            input_tensors.at(0).dtype());
+        TT_FATAL(
+            input_tensors.at(0).layout() == Layout::TILE,
+            "spec_multi_pos_tiles requires a TILE layout Q tensor, got {}",
+            input_tensors.at(0).layout());
+        TT_FATAL(k_shape[1] == 1, "spec_multi_pos_tiles requires num_kv_heads == 1, got {}", k_shape[1]);
+        TT_FATAL(
+            q_shape[2] == spec_T * tt::constants::TILE_HEIGHT,
+            "spec_multi_pos_tiles={}: Q must have {} padded rows per batch (one 32-row tile per candidate), got {}",
+            spec_T,
+            spec_T * tt::constants::TILE_HEIGHT,
+            q_shape[2]);
+        const auto& spec_page_table = tensor_args.page_table_tensor.value();
+        TT_FATAL(!spec_page_table.is_sharded(), "spec_multi_pos_tiles requires an unsharded page_table tensor");
+
+        TT_FATAL(
+            spec_page_table.padded_shape()[0] == q_shape[1],
+            "spec_multi_pos_tiles: page_table must have one row per Q batch group, got {} rows for Q batch {}",
+            spec_page_table.padded_shape()[0],
+            q_shape[1]);
+        TT_FATAL(tensor_args.cur_pos_tensor.has_value(), "spec_multi_pos_tiles requires a cur_pos tensor");
+
+        TT_FATAL(
+            q_shape_unpadded[2] > 16,
+            "spec_multi_pos_tiles requires full 32x32 tiles (use_half_tile must be false), but Q has {} logical heads",
+            q_shape_unpadded[2]);
+    }
+
+    const auto& pc = operation_attributes.program_config;
+    TT_FATAL(
+        pc.has_value() && pc->compute_with_storage_grid_size == CoreCoord(8, 8) && !pc->sub_core_grids.has_value() &&
+            pc->q_chunk_size == 0 && pc->k_chunk_size == 0 && !pc->exp_approx_mode.value_or(false),
+        "llama31_8b_v3.sdpa_decode_bh: program config must be an (8, 8) grid without sub_core_grids, q_chunk_size = "
+        "k_chunk_size = 0 and exp_approx_mode off");
+    const auto [fidelity, approx, fp32_acc, l1_acc, full_sync] = ttnn::get_compute_kernel_config_args(
+        input_tensors.at(0).device()->arch(), operation_attributes.compute_kernel_config);
+    TT_FATAL(
+        fidelity == MathFidelity::HiFi2 && approx && fp32_acc && l1_acc && !full_sync,
+        "llama31_8b_v3.sdpa_decode_bh: compute kernel config must be HiFi2, math_approx_mode, fp32_dest_acc_en, "
+        "packer_l1_acc, no dst_full_sync");
+    const auto Q_memcfg = input_tensors.at(0).memory_config();
+    TT_FATAL(
+        input_tensors.at(0).is_sharded() && Q_memcfg.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+            Q_memcfg.shard_spec().has_value() && Q_memcfg.shard_spec()->shape[0] == q_shape[2] &&
+            Q_memcfg.shard_spec()->shape[1] == q_shape[3] &&
+            Q_memcfg.shard_spec()->orientation == ShardOrientation::ROW_MAJOR &&
+            (operation_attributes.multi_pos ? q_shape[1] >= 2 && q_shape[1] <= 8 : q_shape[1] == 1) &&
+            Q_memcfg.shard_spec()->grid == CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(q_shape[1] - 1, 0))),
+        "llama31_8b_v3.sdpa_decode_bh: Q must be height-sharded in L1, one ({}, {}) shard per row on cores (0, "
+        "0)..({}, 0), "
+        "got {}",
+        q_shape[2],
+        q_shape[3],
+        q_shape[1] - 1,
+        Q_memcfg);
+
+    if (input_tensors.at(0).layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            input_tensors.at(0).is_sharded(),
+            "ROW_MAJOR Q is only supported when Q is HEIGHT_SHARDED in L1; interleaved ROW_MAJOR Q is not "
+            "supported. Convert Q to TILE layout or shard it.");
+        TT_FATAL(
+            operation_attributes.output_mem_config.is_sharded(),
+            "ROW_MAJOR Q produces a ROW_MAJOR output, which requires a HEIGHT_SHARDED output memory config; "
+            "got {}",
+            operation_attributes.output_mem_config.memory_layout());
+    }
+
+    for (std::size_t i = 1; i < input_tensors.size(); i++) {
+        TT_FATAL(
+            input_tensors.at(i).memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Input tensor {} buffer type must be DRAM but got {}",
+            i,
+            input_tensors.at(i).memory_config().buffer_type());
+    }
+
+    if (operation_attributes.output_mem_config.is_sharded()) {
+        TT_FATAL(
+            operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "Output memory config layout must be HEIGHT_SHARDED when sharded but got {}",
+            operation_attributes.output_mem_config.memory_layout());
+    }
+
+    if (!operation_attributes.is_causal) {
+        if (tensor_args.attn_mask.has_value()) {
+            const auto& mask_tensor = tensor_args.attn_mask.value();
+            const auto mask_shape = mask_tensor.padded_shape();
+            const auto mask_shape_unpadded = mask_tensor.logical_shape();
+
+            TT_FATAL(
+                mask_shape[2] == q_shape[2],
+                "Expect same number of padded heads in mask as in Q, got {} and {}",
+                mask_shape[2],
+                q_shape[2]);
+            TT_FATAL(
+                mask_shape_unpadded[2] == q_shape_unpadded[2],
+                "Expect same number of heads in mask as in Q, got {} and {}",
+                mask_shape_unpadded[2],
+                q_shape_unpadded[2]);
+            if (!operation_attributes.paged_attention) {
+                TT_FATAL(
+                    mask_shape[3] == k_shape[2],
+                    "Expect same sequence length in mask as in K, got {} and {}",
+                    mask_shape[3],
+                    k_shape[2]);
+            }
+
+            TT_FATAL(operation_attributes.k_chunk_size > 0, "Must provide k_chunk_size if using attention mask!");
+            TT_FATAL(
+                mask_shape[3] % operation_attributes.k_chunk_size == 0,
+                "Mask sequence length must be multiple of chunk size, got: {} and {}",
+                mask_shape[3],
+                operation_attributes.k_chunk_size);
+
+            TT_FATAL(
+                mask_tensor.dtype() == DataType::BFLOAT16 || mask_tensor.dtype() == DataType::BFLOAT8_B ||
+                    mask_tensor.dtype() == DataType::BFLOAT4_B,
+                "Unsupported data type for mask tensor: {}.",
+                mask_tensor.dtype());
+        }
+    } else {
+        TT_FATAL(
+            not tensor_args.attn_mask.has_value(),
+            "attn_mask must not be provided when is_causal=True. Pass is_causal=False to use an explicit mask.");
+    }
+
+    const auto& paged_geo = operation_attributes.paged_cache_geometry;
+    if (paged_geo.active()) {
+        TT_FATAL(
+            tensor_args.page_table_tensor.has_value(),
+            "PagedCacheGeometryOverride is only supported in paged mode (when page_table is provided)");
+        TT_FATAL(paged_geo.block_size > 0, "PagedCacheGeometryOverride.block_size must be > 0");
+        TT_FATAL(paged_geo.num_kv_heads > 0, "PagedCacheGeometryOverride.num_kv_heads must be > 0");
+    }
+
+    if (operation_attributes.cache_position_modulo.has_value()) {
+        TT_FATAL(
+            tensor_args.page_table_tensor.has_value(),
+            "cache_position_modulo is only supported in paged mode (when page_table is provided)");
+        const uint32_t modulo = operation_attributes.cache_position_modulo.value();
+        TT_FATAL(modulo > 0, "cache_position_modulo must be > 0 when provided");
+
+        const uint32_t effective_block_size = paged_geo.active() ? paged_geo.block_size : k_shape[2];
+        TT_FATAL(
+            modulo % effective_block_size == 0,
+            "cache_position_modulo ({}) must be a multiple of effective block_size ({})",
+            modulo,
+            effective_block_size);
+        if (operation_attributes.sliding_window_size.has_value() &&
+            operation_attributes.sliding_window_size.value() > 0) {
+            TT_FATAL(
+                modulo >= operation_attributes.sliding_window_size.value(),
+                "cache_position_modulo ({}) must be >= sliding_window_size ({}); a tighter "
+                "capacity would let the SDPA attention range wrap multiple times and "
+                "double-count positions.",
+                modulo,
+                operation_attributes.sliding_window_size.value());
+        }
+    }
+
+    if (operation_attributes.is_causal && tensor_args.cur_pos_tensor.has_value() &&
+        !tensor_args.cur_pos_tensor->is_sharded()) {
+        const auto& cur_pos_shape = tensor_args.cur_pos_tensor->padded_shape();
+        TT_FATAL(
+            cur_pos_shape.volume() == cur_pos_shape[-1],
+            "cur_pos tensor must hold all positions in its last dim (e.g. [B] or [1, B]), got shape {}",
+            cur_pos_shape);
+    }
+
+    if (operation_attributes.paged_attention) {
+        TT_FATAL(
+            !operation_attributes.share_cache.value_or(false), "Share cache feature not supported for paged attention");
+        TT_FATAL(tensor_args.page_table_tensor.has_value(), "Must have page_table tensor for paged attention");
+        const auto& page_table_tensor = tensor_args.page_table_tensor.value();
+        const auto B = page_table_tensor.is_sharded() ? q_shape[1] : page_table_tensor.padded_shape()[0];
+
+        if (operation_attributes.is_causal) {
+            TT_FATAL(
+                tensor_args.cur_pos_tensor.has_value(), "Must have cur_pos tensor for paged attention in causal mode");
+            const auto& cur_pos_tensor = tensor_args.cur_pos_tensor.value();
+            TT_FATAL(
+                cur_pos_tensor.dtype() == DataType::INT32,
+                "Expect cur_pos to be INT32, got {}",
+                cur_pos_tensor.dtype());
+            TT_FATAL(
+                cur_pos_tensor.layout() == Layout::ROW_MAJOR,
+                "Expect cur_pos to be ROW_MAJOR, got {}",
+                cur_pos_tensor.layout());
+            const auto cur_pos_shape = cur_pos_tensor.padded_shape();
+
+            if (!cur_pos_tensor.is_sharded()) {
+                if (spec_multi_pos) {
+                    TT_FATAL(
+                        cur_pos_shape[-1] == B * spec_T,
+                        "spec_multi_pos_tiles={}: cur_pos must have {} entries (B={} groups of {}), got {}",
+                        spec_T,
+                        B * spec_T,
+                        B,
+                        spec_T,
+                        cur_pos_shape[-1]);
+
+                    const auto& host_cur_pos = operation_attributes.cur_pos;
+                    if (host_cur_pos.size() == static_cast<size_t>(B) * spec_T) {
+                        for (uint32_t b = 0; b < B; b++) {
+                            for (uint32_t i = 0; i + 1 < spec_T; i++) {
+                                TT_FATAL(
+                                    host_cur_pos[b * spec_T + i] <= host_cur_pos[b * spec_T + i + 1],
+                                    "spec_multi_pos_tiles={}: cur_pos entries within candidate group {} must be "
+                                    "non-decreasing, but entry {} ({}) > entry {} ({}); the reader derives the "
+                                    "group's KV scan range from the group's last entry, so a non-ascending group "
+                                    "would silently drop KV.",
+                                    spec_T,
+                                    b,
+                                    b * spec_T + i,
+                                    host_cur_pos[b * spec_T + i],
+                                    b * spec_T + i + 1,
+                                    host_cur_pos[b * spec_T + i + 1]);
+                            }
+                        }
+                    }
+                } else {
+                    TT_FATAL(
+                        cur_pos_shape[-1] == B,
+                        "cur_pos must have batch size equal to Q, got {} and {}",
+                        cur_pos_shape[0],
+                        B);
+                }
+            }
+        }
+
+        if (page_table_tensor.is_sharded()) {
+            TT_FATAL(
+                page_table_tensor.dtype() == DataType::UINT16,
+                "Error: SDPA currently only supports UINT16 datatype for sharded configurations");
+        } else {
+            TT_FATAL(
+                page_table_tensor.dtype() == DataType::INT32, "Error: SDPA currently only supports INT32 datatype");
+        }
+
+        TT_FATAL(
+            page_table_tensor.layout() == Layout::ROW_MAJOR,
+            "Page table tensor layout must be ROW_MAJOR but got {}",
+            page_table_tensor.layout());
+
+        const auto page_table_shape = page_table_tensor.padded_shape();
+
+        if (page_table_tensor.is_sharded()) {
+            uint32_t num_cores = page_table_tensor.memory_config().shard_spec()->grid.num_cores();
+            TT_FATAL(
+                page_table_shape[0] / num_cores == B,
+                "Page_table must have shard height batch_size {} equal to Q on {} cores",
+                B,
+                num_cores);
+        } else {
+            TT_FATAL(page_table_shape[0] == B, "Page_table must have batch size equal to Q");
+        }
+
+        TT_FATAL(k_shape[2] == v_shape[2], "K and V must have same block size");
+
+        const auto& geo = operation_attributes.paged_cache_geometry;
+        if (geo.active()) {
+            TT_FATAL(!use_mla, "PagedCacheGeometryOverride is not supported with multi-latent attention");
+        }
+
+        if (use_mla) {
+            TT_FATAL(
+                k_shape[3] == q_shape[3], "Q and K must have same hidden size, got {} and {}", k_shape[3], q_shape[3]);
+            if (tensor_args.v.has_value()) {
+                TT_FATAL(
+                    v_shape[3] == operation_attributes.head_dim_v.value(),
+                    "V must have hidden size equal to head_dim_v, got {} and {}",
+                    v_shape[3],
+                    operation_attributes.head_dim_v.value());
+            }
+        } else if (geo.active()) {
+            TT_FATAL(
+                k_shape[3] == v_shape[3],
+                "K and V cache must have same hidden size with geometry overrides, got {} and {}",
+                k_shape[3],
+                v_shape[3]);
+            const uint32_t cache_num_kv_heads = k_shape[1];
+            const uint32_t cache_block_size = k_shape[2];
+            const uint32_t cache_head_dim = k_shape[3];
+            const uint32_t q_head_dim = q_shape[3];
+
+            const uint32_t effective_block_size = geo.block_size;
+
+            const uint32_t view_num_kv_heads = geo.num_kv_heads;
+            const uint64_t cache_elems_per_block =
+                static_cast<uint64_t>(cache_num_kv_heads) * cache_block_size * cache_head_dim;
+            const uint64_t view_elems_per_block =
+                static_cast<uint64_t>(view_num_kv_heads) * effective_block_size * q_head_dim;
+            TT_FATAL(
+                view_elems_per_block == cache_elems_per_block,
+                "paged_scaled_dot_product_attention_decode geometry mismatch: cache has {} elems/block "
+                "(kv_heads={}, block_size={}, head_dim={}) but call view is {} "
+                "(kv_heads={}, block_size={}, head_dim={} from Q.padded_shape[-1]).",
+                cache_elems_per_block,
+                cache_num_kv_heads,
+                cache_block_size,
+                cache_head_dim,
+                view_elems_per_block,
+                view_num_kv_heads,
+                effective_block_size,
+                q_head_dim);
+            TT_FATAL(
+                effective_block_size % tt::constants::TILE_HEIGHT == 0,
+                "effective block_size ({}) must be a multiple of TILE_HEIGHT ({})",
+                effective_block_size,
+                tt::constants::TILE_HEIGHT);
+            TT_FATAL(
+                q_head_dim % tt::constants::TILE_WIDTH == 0,
+                "Q last dim ({}) must be a multiple of TILE_WIDTH ({})",
+                q_head_dim,
+                tt::constants::TILE_WIDTH);
+        } else {
+            TT_FATAL(k_shape[3] == v_shape[3] && k_shape[3] == q_shape[3], "Q, K, V must have same hidden size");
+        }
+
+        TT_FATAL(
+            operation_attributes.k_chunk_size % 32 == 0,
+            "Chunk size must be multiple of 32, got: {}",
+            operation_attributes.k_chunk_size);
+        if (!operation_attributes.is_causal) {
+            TT_FATAL(operation_attributes.k_chunk_size > 0, "Must provide k_chunk_size if paged and non-causal!");
+            TT_FATAL(
+                (page_table_shape[1] * k_shape[2]) % operation_attributes.k_chunk_size == 0,
+                "K sequence length must be multiple of chunk size, got: {} and {}",
+                page_table_shape[1] * k_shape[2],
+                operation_attributes.k_chunk_size);
+        }
+    } else {
+        TT_FATAL(
+            not tensor_args.page_table_tensor.has_value(), "Must not have page_table tensor for unpaged attention");
+
+        const auto B = q_shape[1];
+        if (operation_attributes.share_cache.value_or(false)) {
+            TT_FATAL(k_shape[0] == 1, "Share cache expects K to have batch size of 1, but got {}", k_shape[0]);
+            TT_FATAL(v_shape[0] == 1, "Share cache expects V to have batch size of 1, but got {}", v_shape[0]);
+        } else {
+            TT_FATAL(k_shape[0] == B, "K tensor batch size ({}) must equal B ({})", k_shape[0], B);
+            TT_FATAL(v_shape[0] == B, "V tensor batch size ({}) must equal B ({})", v_shape[0], B);
+        }
+
+        TT_FATAL(q_shape[0] == 1, "Q tensor batch size must be 1 for decode mode but got {}", q_shape[0]);
+
+        TT_FATAL(
+            k_shape[-2] == v_shape[-2],
+            "K and V tensors must have the same sequence length. K: {}, V: {}",
+            k_shape[-2],
+            v_shape[-2]);
+
+        TT_FATAL(operation_attributes.k_chunk_size > 0, "Must provide k_chunk_size if non-causal!");
+        TT_FATAL(
+            operation_attributes.k_chunk_size % 32 == 0,
+            "Chunk size must be multiple of 32, got: {}",
+            operation_attributes.k_chunk_size);
+        TT_FATAL(
+            k_shape[2] % operation_attributes.k_chunk_size == 0,
+            "K sequence length must be multiple of chunk size, got: {} and {}",
+            k_shape[2],
+            operation_attributes.k_chunk_size);
+
+        const auto D = q_shape[-1];
+        TT_FATAL(
+            k_shape[-1] == D,
+            "K tensor hidden dimension ({}) must equal Q tensor hidden dimension ({})",
+            k_shape[-1],
+            D);
+
+        if (!use_mla) {
+            TT_FATAL(
+                v_shape[-1] == D,
+                "V tensor hidden dimension ({}) must equal Q tensor hidden dimension ({})",
+                v_shape[-1],
+                D);
+        }
+        if (operation_attributes.is_causal && tensor_args.cur_pos_tensor.has_value() &&
+            !tensor_args.cur_pos_tensor->is_sharded()) {
+            TT_FATAL(
+                tensor_args.cur_pos_tensor->padded_shape()[-1] >= B,
+                "cur_pos tensor must have at least one position per batch ({}), got shape {}",
+                B,
+                tensor_args.cur_pos_tensor->padded_shape());
+        }
+
+        for (unsigned int cur_pos_val : operation_attributes.cur_pos) {
+            TT_FATAL(cur_pos_val < k_shape[-2], "cur_pos must be <= K sequence dim");
+        }
+    }
+
+    TT_FATAL(
+        k_shape[1] == v_shape[1],
+        "Flash decode expects K and V to have same number of heads, but got {} and {}",
+        k_shape[1],
+        v_shape[1]);
+    bool is_gqa = (k_shape[1] > 1);
+    if (is_gqa) {
+        TT_FATAL(!operation_attributes.output_mem_config.is_sharded(), "Sharded output not supported for GQA");
+        TT_FATAL(
+            input_tensors.at(0).dtype() == DataType::BFLOAT16,
+            "GQA expects BFLOAT16 input tensor, but got {}",
+            input_tensors.at(0).dtype());
+        TT_FATAL(
+            q_shape_unpadded[2] % k_shape[1] == 0,
+            "GQA expects Q to have a multiple of K heads, but got {} and {}",
+            q_shape_unpadded[2],
+            k_shape[1]);
+    }
+
+    if (tensor_args.attention_sink.has_value()) {
+        const auto& attention_sink = tensor_args.attention_sink.value();
+
+        const auto& sink_shape = attention_sink.padded_shape();
+        TT_FATAL(sink_shape.size() == 2, "Attention sink must have 2 dimensions");
+        TT_FATAL(
+            sink_shape[0] == q_shape[2],
+            "Attention sink must have the same padded num heads as Q but got {}",
+            sink_shape[0]);
+        TT_FATAL(
+            sink_shape[1] == tt::constants::TILE_WIDTH,
+            "Attention sink must be a single tile wide, but got {}",
+            sink_shape[1]);
+        TT_FATAL(
+            attention_sink.dtype() == DataType::BFLOAT16,
+            "Attention sink must by a BF16 tensor, but got {}",
+            attention_sink.dtype());
+        TT_FATAL(
+            attention_sink.layout() == Layout::TILE,
+            "Attention sink must be in TILE layout, but got {}",
+            attention_sink.layout());
+        TT_FATAL(
+            attention_sink.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Attention sink must be in DRAM memory, but got {}",
+            attention_sink.memory_config().buffer_type());
+    }
+}
+
+tt::tt_metal::TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.q;
+    const auto q_shape = input.padded_shape();
+    const auto q_shape_unpadded = input.logical_shape();
+    const bool use_mla = operation_attributes.use_mla.value_or(false);
+    uint32_t B;
+    if (operation_attributes.paged_attention && tensor_args.page_table_tensor.has_value()) {
+        const auto& page_table = tensor_args.page_table_tensor.value();
+        if (page_table.is_sharded()) {
+            uint32_t num_cores = page_table.memory_config().shard_spec()->grid.num_cores();
+            const uint32_t total_batch = page_table.padded_shape()[0];
+            TT_FATAL(
+                total_batch % num_cores == 0,
+                "Paged attention with sharded page table expects batch dimension batch size to be divisible by number "
+                "of cores");
+            B = total_batch / num_cores;
+        } else {
+            B = page_table.padded_shape()[0];
+        }
+    } else {
+        B = tensor_args.k.padded_shape()[0];
+    }
+    bool q_locally_available = false;
+    uint32_t num_q_heads = q_shape_unpadded[2];
+    if (input.is_sharded() && use_mla && operation_attributes.program_config.has_value()) {
+        const uint32_t q_shard_height = input.memory_config().shard_spec()->shape[0];
+        const uint32_t max_cores = operation_attributes.program_config->max_cores_per_head_batch;
+        const uint32_t num_q_shards = input.memory_config().shard_spec()->grid.num_cores();
+        const uint32_t num_groups = num_q_shards / max_cores;
+        const uint32_t q_heads_parallel_factor = num_groups / B;
+        q_locally_available = (q_shape[2] == B * q_shard_height * q_heads_parallel_factor * max_cores);
+        if (q_locally_available) {
+            num_q_heads = q_heads_parallel_factor * q_shard_height;
+        }
+    }
+    Layout output_layout = input.layout() == Layout::ROW_MAJOR ? Layout::ROW_MAJOR : Layout::TILE;
+    ttnn::Shape output_shape = input.logical_shape();
+    output_shape[1] = B;
+    output_shape[2] = num_q_heads;
+
+    if (use_mla) {
+        output_shape[3] = operation_attributes.head_dim_v.value();
+    }
+    return tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
+}
+
+Tensor SdpaDecodeDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
+}
+
+Tensor sdpa_decode(
+    const Tensor& input_tensor_q,
+    const Tensor& input_tensor_k,
+    const std::optional<const Tensor>& input_tensor_v,
+    const std::optional<const Tensor>& cur_pos_tensor,
+    const std::optional<const Tensor>& page_table_tensor,
+    const std::optional<const Tensor>& attn_mask,
+    const std::optional<const Tensor>& attention_sink,
+    bool is_causal,
+    bool paged_attention,
+    const std::vector<uint32_t>& cur_pos,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t k_chunk_size,
+    std::optional<bool> share_cache,
+    std::optional<bool> use_mla,
+    std::optional<uint32_t> head_dim_v,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    std::optional<uint32_t> cache_position_modulo,
+    uint32_t spec_multi_pos_tiles,
+    bool multi_pos) {
+    using OperationType = SdpaDecodeDeviceOperation;
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .is_causal = is_causal,
+        .paged_attention = paged_attention,
+        .cur_pos = cur_pos,
+        .scale = scale,
+        .sliding_window_size = sliding_window_size,
+        .output_mem_config = output_mem_config,
+        .program_config = program_config,
+        .compute_kernel_config = compute_kernel_config,
+        .k_chunk_size = k_chunk_size,
+        .share_cache = share_cache,
+        .use_mla = use_mla,
+        .head_dim_v = head_dim_v,
+        .paged_cache_geometry =
+            paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
+        .cache_position_modulo = cache_position_modulo,
+        .spec_multi_pos_tiles = spec_multi_pos_tiles,
+        .multi_pos = multi_pos,
+    };
+
+    auto tensor_args = OperationType::tensor_args_t{
+        .q = input_tensor_q,
+        .k = input_tensor_k,
+        .v = input_tensor_v,
+        .cur_pos_tensor = cur_pos_tensor,
+        .page_table_tensor = page_table_tensor,
+        .attn_mask = attn_mask,
+        .attention_sink = attention_sink,
+    };
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+}
+
+}  // namespace ttnn::experimental::llama31_8b_v3::sdpa_decode_bh_detail
