@@ -1013,7 +1013,8 @@ class ResidentModel:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
             # candidates, launches (row groups: then each parity's CCL count at the last launch's end, mlp_hub.cpp)
-            self.feed_sems = [ttnn.create_global_semaphore(mesh, hub_grid, 0) for _ in range(2 if groups == 1 else 4)]
+            # (and each parity's slot-free count of the pipelined sub-rounds)
+            self.feed_sems = [ttnn.create_global_semaphore(mesh, hub_grid, 0) for _ in range(2 if groups == 1 else 6)]
             rope = rope_compact(sts[0].max_pos).view(np.int32)
             self.rope_t = dram_t(torch.from_numpy(rope.copy()), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep)
             # (rows mode: per launch, 16 B of out and 16 parameter words per row)
@@ -1214,7 +1215,8 @@ class ResidentModel:
             cbs.append(cb(2, hub_grid, x_views))
             # (the feed: its candidates in fabric packets, mlp_hub.cpp cand_packets)
             cand_packets = -(-4 * self._cand_words // packet_bytes) if self.feed else 0
-            cbs.append(cb(1, hub_grid, 1, page=(hub_headers + 2 * cand_packets) * 160 + 16))
+            free_headers = 4 if groups > 1 else 0  # (row groups: the slot-free signals, mlp_hub.cpp)
+            cbs.append(cb(1, hub_grid, 1, page=(hub_headers + 2 * cand_packets + free_headers) * 160 + 16))
             if groups > 1:
                 # the hub compute's sub-round count; the streamers' active-group mask (reader -> compute); the mixers'
                 # row buffer (E4.2, kernels/active_rows.hpp kCbRows)

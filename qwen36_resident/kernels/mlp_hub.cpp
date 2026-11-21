@@ -159,7 +159,7 @@ void write_tap(uint32_t x, uint32_t addr) {
 constexpr uint32_t packets_per_vector = (vector_bytes + packet_bytes - 1) / packet_bytes;
 constexpr uint32_t kRopeEntry = 128;  // compact rope table page: cos[32] | sin[32] bf16
 static_assert(rope_bytes == 3 * 2048, "the token state's rope tiles: cos, sin, -sin");
-constexpr uint32_t num_headers = 2 * packets_per_vector * 2 + (feed ? 2 * cand_packets : 0);
+constexpr uint32_t num_headers = 2 * packets_per_vector * 2 + (feed ? 2 * cand_packets : 0) + (groups > 1 ? 4 : 0);
 constexpr bool pooled = num_headers <= NUM_PACKET_HEADERS / MaxDMProcessorsPerCoreType;
 
 // row `row` (row_bytes, in L1) as row u of the R x 32 tiles at `dst` (face rows of 32 B)
@@ -307,6 +307,7 @@ void kernel_main() {
     const size_t rect_args = arg_idx;
     arg_idx += 5 * rects;
     uint32_t argmax_addr = 0, cand_addr = 0, cand_sem_addr = 0, launch_addr = 0, ccl_base_addr[2] = {0, 0};
+    uint32_t free_sem_addr[2] = {0, 0};
     uint32_t tok_addr = 0, embed_addr = 0, rope_addr = 0, out_addr = 0, params_addr = 0, peer_tok_addr = 0;
     if constexpr (feed) {
         argmax_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -318,6 +319,9 @@ void kernel_main() {
             // carries over from the previous launch in a word of its own (zeroed with the launch counter)
             ccl_base_addr[0] = get_arg_val<uint32_t>(arg_idx++);
             ccl_base_addr[1] = get_arg_val<uint32_t>(arg_idx++);
+            // and each parity's slot-free count (the peers' sums done, see the sub-round loop)
+            free_sem_addr[0] = get_arg_val<uint32_t>(arg_idx++);
+            free_sem_addr[1] = get_arg_val<uint32_t>(arg_idx++);
         }
         tok_addr = get_arg_val<uint32_t>(arg_idx++);
         embed_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -398,6 +402,20 @@ void kernel_main() {
             }
         }
     }
+    // row groups: per parity a header-only atomic increment of the peers' slot-free count (pipelined sub-rounds)
+    volatile PACKET_HEADER_TYPE* free_hdr[2][2] = {};
+    if constexpr (groups > 1) {
+        for (uint32_t par = 0; par < 2; par++) {
+            const uint64_t sem = get_noc_addr(my_x[0], my_y[0], free_sem_addr[par]);
+            for (uint32_t dir = 0; dir < 2; dir++) {
+                volatile PACKET_HEADER_TYPE* h = allocate();
+                h->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
+                    1, static_cast<uint8_t>(dir == 0 ? num_chips - 1 - chip : chip)});
+                h->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem, 1, true});
+                free_hdr[par][dir] = h;
+            }
+        }
+    }
     if (fabric.is_logically_connected()) {
         fabric.open_finish();
     }
@@ -468,7 +486,13 @@ void kernel_main() {
     }
     // sub-round s = round l, k-th active row group g (groups == 1: s == l): group g's partials all-reduced through
     // slot[s & 1], its x multicast to the streamers' x at group offset g
-    for (uint32_t s = 0; s < layers * ag.n; s++) {
+    // sub-round s: gather + send (the fabric part) and finish (the peers' slots in, sum, multicast). Row groups with
+    // more than one active group pipeline the groups of a round: sub-round s's send goes out before s - 1 finishes
+    // (a round's first partials need the previous round's multicasts, so only within a round), once every peer has
+    // freed its slot s & 1 (finished s - 2; each hub signals the others after each sum, free_sem[par])
+    constexpr uint32_t kPerSub = num_chips > 1 ? (num_chips - 1) * packets_per_vector : 1;
+    const uint32_t free_base[2] = {expected[0] / kPerSub, expected[1] / kPerSub};
+    auto send_sub = [&](uint32_t s) {
         const uint32_t l = s / ag.n, g = ag.g[s % ag.n];
         const uint32_t par = s & 1;
         const uint32_t base = slots + par * num_chips * vector_bytes;
@@ -483,6 +507,13 @@ void kernel_main() {
         }
         mark(s, 0);
         if constexpr (num_chips > 1) {
+            if constexpr (groups > 1) {
+                if (ag.n > 1 && s >= 2) {
+                    noc_semaphore_wait_min(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(free_sem_addr[par]),
+                        (num_chips - 1) * (free_base[par] + s / 2));
+                }
+            }
             for (uint32_t p = 0; p < packets_per_vector; p++) {
                 const uint32_t src = base + chip * vector_bytes + p * packet_bytes;
                 const uint32_t bytes =
@@ -497,6 +528,13 @@ void kernel_main() {
             }
             mark(s, 1);
             expected[par] += (num_chips - 1) * packets_per_vector;
+        }
+    };
+    auto finish_sub = [&](uint32_t s) {
+        const uint32_t l = s / ag.n, g = ag.g[s % ag.n];
+        const uint32_t par = s & 1;
+        const uint32_t base = slots + par * num_chips * vector_bytes;
+        if constexpr (num_chips > 1) {
             noc_semaphore_wait_min(ccl_sem[par], expected[par]);
         }
         mark(s, 2);
@@ -508,6 +546,21 @@ void kernel_main() {
             cb_push_back(0, num_chips * views);
             cb_wait_front(2, views);
             mark(s, 3);
+            if constexpr (groups > 1 && num_chips > 1) {
+                // the slots of parity par are summed: tell the peers (their pipelined send of s + 2 waits for it).
+                // Every sub-round signals, pipelined or not, so the counts keep pace with the CCL counts the bases
+                // are derived from (launches with one active group run unpipelined)
+                if (fabric.has_forward_connection()) {
+                    fabric.get_forward_connection().wait_for_empty_write_slot();
+                    fabric.get_forward_connection().send_payload_flush_blocking_from_address(
+                        (uint32_t)free_hdr[par][0], sizeof(PACKET_HEADER_TYPE));
+                }
+                if (fabric.has_backward_connection()) {
+                    fabric.get_backward_connection().wait_for_empty_write_slot();
+                    fabric.get_backward_connection().send_payload_flush_blocking_from_address(
+                        (uint32_t)free_hdr[par][1], sizeof(PACKET_HEADER_TYPE));
+                }
+            }
             src = get_read_ptr(2);
             bytes = vector_bytes;
             if (l + 1 == layers && arg0 != 0) {
@@ -559,6 +612,22 @@ void kernel_main() {
             cb_pop_front(2, vector_bytes / 2048);
         }
         mark(s, 5);
+    };
+    if (groups == 1 || ag.n == 1) {
+        for (uint32_t s = 0; s < layers * ag.n; s++) {
+            send_sub(s);
+            finish_sub(s);
+        }
+    } else {
+        for (uint32_t r = 0; r < layers; r++) {
+            for (uint32_t k = 0; k < ag.n; k++) {
+                send_sub(r * ag.n + k);
+                if (k > 0) {
+                    finish_sub(r * ag.n + k - 1);
+                }
+            }
+            finish_sub(r * ag.n + ag.n - 1);
+        }
     }
     noc_async_write_barrier();
     if constexpr (feed) {
