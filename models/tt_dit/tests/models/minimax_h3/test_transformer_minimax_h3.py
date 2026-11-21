@@ -1241,7 +1241,8 @@ def test_minimax_h3_transformer_block_perf(
     reset_seeds,
 ) -> None:
     """One block at the production geometry, legacy or dynamic-length configs. H3_BLOCK_PERF_ITERS=N adds N
-    timed warm iterations (host wall with a sync, min / median logged) after the profiled one."""
+    timed warm iterations (host wall with a sync, min / median logged) after the profiled one. H3_BLOCK_PERF_LORA_RANK=r
+    runs the block with a random rank-r LoRA side branch."""
     skip_if_unsupported_num_links(mesh_device, num_links)
     # SP simulation emulates the Blackhole 4x32 quad's per-device shard by shrinking the sequence so a
     # 4x8 device carries what a 4x32 device would. There is no Wormhole quad, so sp_sim rows measure
@@ -1277,6 +1278,7 @@ def test_minimax_h3_transformer_block_perf(
     adaln_indices = timestep_indices * MINIMAX_H3_MODALITY_NUM + tags.clamp(min=0)
 
     torch_block = TorchMiniMaxH3Block(**REAL_BLOCK_CONFIG).to(torch.float32)
+    lora_rank = int(os.environ["H3_BLOCK_PERF_LORA_RANK"]) if os.environ.get("H3_BLOCK_PERF_LORA_RANK") else None
 
     rope = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
     with torch.no_grad():
@@ -1298,9 +1300,11 @@ def test_minimax_h3_transformer_block_perf(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
         dynamic_length=dynamic_length,
+        lora_rank=lora_rank,
     )
-    tt_block.load_torch_state_dict(torch_block.state_dict())
-    del torch_block
+    adapter = {} if lora_rank is None else _random_side_adapter(torch_block, lora_rank)
+    tt_block.load_torch_state_dict({**torch_block.state_dict(), **adapter})
+    del torch_block, adapter
 
     # H3_BLOCK_PERF_LEGACY_PARTS=agmm_attn,agmm_ff1,sdpa,mmrs,gather puts those dynamic-length pins back on
     # the legacy choice (sdpa320 / sdpa256: that chunk pair in every class), to attribute a delta part by part.
@@ -1372,7 +1376,7 @@ def test_minimax_h3_transformer_block_perf(
             times_ms.append(1000 * (time.perf_counter() - t0))
         times_ms.sort()
         logger.info(
-            f"BLOCK_PERF dynamic_length={dynamic_length} legacy_parts={','.join(sorted(legacy_parts)) or '-'} "
+            f"BLOCK_PERF lora_rank={lora_rank} dynamic_length={dynamic_length} legacy_parts={','.join(sorted(legacy_parts)) or '-'} "
             f"duration={duration_s:g}s rows/device={padded_len // sp_factor} "
             f"iters={iters} min={times_ms[0]:.2f} ms median={times_ms[len(times_ms) // 2]:.2f} ms"
         )
