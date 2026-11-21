@@ -45,7 +45,7 @@
 
 **Result** (implementer): SUPPORTED["layout"] = [TILE, ROW_MAJOR]. Regimes `row_major_copy` (dim -2, implicit whole-stick reads) and `row_major_runs` (dim -1, `count` tagged sub-page reads per stick, one barrier per block of sticks) in the existing reader; writer and ring unchanged. Golden slice: 58/58 in-SUPPORTED ROW_MAJOR cells exact, TILE representatives green; unit dir 147/147.
 
-### [ ] Refinement 10 — Height-sharded tensors in L1 (the YOLOv8 neck join)
+### [x] Refinement 10 — Height-sharded tensors in L1 (the YOLOv8 neck join)
 
 **Goal**: add `"height"` to SUPPORTED["sharding"]: every tensor of the list height-sharded in L1, each with a shard shape and cores of its own, in both layouts the op supports by now (TILE and, after Refinement 1, ROW_MAJOR), at the supported values of every other axis. The specification's TARGET gained this value after Phase 0 (rules R3, R5 and R6, the INVALID entry DRAM x height, the INPUTS entry `(-1, [1, 1, 64, 64], [1, 1, 64, 32])`, the DECISIONS entry of 2026-11-21). The result stays in DRAM, interleaved (R5).
 
@@ -58,6 +58,8 @@
 - Keep the data path: reading each shard on the core that holds it is a performance refinement of its own and is not asked for here.
 
 **Done when**: every golden cell with `sharding=height` inside the new SUPPORTED passes exactly; the interleaved cells are unchanged; `verify_supported` loud categories are 0; a test in the op's own test file makes the model's call (row-major, two cores and one) and asserts the values and that the result is in DRAM, interleaved.
+
+**Result** (implementer): SUPPORTED["sharding"] = [interleaved, height]. No kernel or host-program change: the operator's hint held — every input page is reached through its `TensorAccessor`, which maps a logical page to the cluster holding its shard, so all four regimes (`page_copy`, `run_assembly`, `row_major_copy`, `row_major_runs`) serve height-sharded inputs unchanged, bit-exact, with tensors of one call on different shard grids (32/16/4, 8/24/8, 2/1/1 cores), one-core grids and grids of 25 clusters. Golden slice: 58/58 in-SUPPORTED `sharding=height` cells (29 TILE, 29 ROW_MAJOR) exact + 4 interleaved representatives; `verify_supported --queue` gaps 0. The data path is kept (accessor reads, output split over the whole grid); native per-shard reading is left as its own perf refinement, as the entry says.
 
 ### [ ] Refinement 2 — Leading dimensions, one and five tensors, rank 2
 

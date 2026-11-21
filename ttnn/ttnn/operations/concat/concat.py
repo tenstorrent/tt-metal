@@ -6,7 +6,9 @@
 The op moves values and computes nothing: a reader gathers each output page from the input pages (whole pages
 when every seam sits on a page boundary, byte runs otherwise) into one ring, and a writer stores the ring's
 entries to the output. A page is a tile in TILE layout and a stick (one row) in ROW_MAJOR layout; the output has
-the tensors' layout and no layout conversion happens anywhere. The output is always DRAM interleaved (spec R5). Elements of the output's tile padding
+the tensors' layout and no layout conversion happens anywhere. Inputs may be in DRAM or L1, interleaved or
+height-sharded in L1 (each on a shard grid of its own): every input page is read through its accessor either way. The
+output is always DRAM interleaved (spec R5). Elements of the output's tile padding
 are not written; their values are undefined (they are not part of the output's data).
 
 Registry model: INPUT_TAGGERS (the specification's AXES), SUPPORTED, EXCLUSIONS, validate(). The specification
@@ -33,14 +35,17 @@ INPUT_TAGGERS = AXES
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED: the specification's PHASE0, axis for axis
+# 2. SUPPORTED: the specification's PHASE0, widened by the refinements of op_requirements.md
 # ---------------------------------------------------------------------------
+# sharding "height" (Refinement 10): every tensor height-sharded in L1, each on a shard grid of its own. The readers
+# reach every input page through the tensor's accessor, which maps a page to the core holding its shard, so the
+# kernels are the interleaved ones; DRAM x height is the specification's INVALID (the runner never builds it).
 
 SUPPORTED = {
     "dtype":         [ttnn.bfloat16],
     "layout":        [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "memory_config": ["DRAM", "L1"],
-    "sharding":      ["interleaved"],
+    "sharding":      ["interleaved", "height"],
     "dim":           [-1, -2],
     "count":         [2, 3],
     "alignment":     ["tile_aligned", "w_non_aligned", "h_non_aligned"],

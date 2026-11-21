@@ -9,6 +9,8 @@
 - a ragged last block (the block knob turned to a value that does not divide a core's share);
 - the work split: every output page on exactly one cluster;
 - one device session: the op after another program, after a tt-metal program, and before one (to_layout);
+- height sharding in L1 (Refinement 10): YOLOv8's neck join on two cores and on one, every regime in both layouts
+  with the tensors of a call on shard grids of their own; sharded calls in the device-session test;
 - placement (R5), refusals (R4) and malformed calls (X1..X4).
 
 Values are moved, never computed: every check is exact.
@@ -184,12 +186,27 @@ def test_programs_share_a_device_session(device):
     # Interleave: a ROW_MAJOR call after a TILE call and before one, both ROW_MAJOR regimes after each other.
     steps = [tile_steps[0], rm_steps[0], tile_steps[1], rm_steps[1], rm_steps[2], tile_steps[2], rm_steps[3]]
     steps += tile_steps[3:]
+    # Height-sharded calls (Refinement 10), each between tt-metal programs: page_copy and row_major_copy (implicit),
+    # row_major_runs and run_assembly (explicit), the tensors of a call on shard grids of different sizes.
+    sharded_steps = [
+        (PINNED[0][0], ttnn.TILE_LAYOUT),
+        (PINNED_RM[4][0], ttnn.ROW_MAJOR_LAYOUT),
+        (PINNED_RM[2][0], ttnn.ROW_MAJOR_LAYOUT),
+        (PINNED[1][0], ttnn.TILE_LAYOUT),
+    ]
+    steps = steps[:2] + [sharded_steps[0]] + steps[2:4] + [sharded_steps[1]] + steps[4:] + sharded_steps[2:]
+    sharded_seeds = {2, 5, len(steps) - 2, len(steps) - 1}
     for seed, (entry, layout) in enumerate(steps):
         dim, *shapes = entry
-        host, dev = _make(device, shapes, seed=seed, layout=layout)
-        # A tt-metal program before ours (an untilize, or a tilize, with plain transfers).
+        if seed in sharded_seeds:
+            host, dev = _make_height_sharded(device, shapes, layout, seed=seed)
+        else:
+            host, dev = _make(device, shapes, seed=seed, layout=layout)
+        # A tt-metal program before ours (an untilize, or a tilize, with plain transfers). tt-metal cannot change the
+        # layout of a row-major shard narrower than a tile, so a sharded step runs it on an interleaved copy.
         other_layout = ttnn.TILE_LAYOUT if layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.ROW_MAJOR_LAYOUT
-        before = ttnn.to_layout(dev[0], other_layout)
+        first = _make(device, shapes[:1], seed=seed, layout=layout)[1][0] if seed in sharded_seeds else dev[0]
+        before = ttnn.to_layout(first, other_layout)
         assert torch.equal(ttnn.to_torch(before), host[0])
         out = concat(dev, dim=dim)
         _check(out, host, dim)
@@ -229,18 +246,18 @@ def test_refused(device, dtype, entry):
 
 
 def test_sharded_refused_by_name(device):
-    """R6: a sharded tensor is refused through the `sharding` axis (eval.memory.memory_axes), by name.
+    """R6: a sharding outside SUPPORTED is refused through the `sharding` axis (eval.memory.memory_axes), by name.
 
-    The tensors are bfloat16 TILE and otherwise a PHASE0 call, so `sharding` is the only axis outside SUPPORTED.
-    YOLOv8's untraced calls: [1,1,64,64] + [1,1,64,32] height-sharded in L1, shard height 32 on two cores.
+    The tensors are bfloat16 TILE and otherwise a supported call, so `sharding` = "width" is the only axis outside
+    SUPPORTED ("height" is supported since Refinement 10).
     """
     shapes = [(1, 1, 64, 64), (1, 1, 64, 32)]
     dev = []
     for s in shapes:
         config = ttnn.create_sharded_memory_config(
-            shape=(32, s[-1]),
-            core_grid=ttnn.CoreGrid(y=1, x=2),
-            strategy=ttnn.ShardStrategy.HEIGHT,
+            shape=(64, 32),
+            core_grid=ttnn.CoreGrid(y=1, x=s[-1] // 32),
+            strategy=ttnn.ShardStrategy.WIDTH,
             use_height_and_width_as_shard_shape=True,
         )
         dev.append(
@@ -250,6 +267,78 @@ def test_sharded_refused_by_name(device):
         )
     with pytest.raises(NotImplementedError, match="sharding"):
         concat(dev, dim=-1)
+
+
+# --- height sharding in L1 (Refinement 10) ---
+
+
+def _make_height_sharded(device, shapes, layout, seed=0, cores=None):
+    """Each tensor height-sharded in L1 on a grid of its own, sized as the golden runner sizes it (eval.memory.place),
+    or on exactly `cores` cores (shard height = rows / cores) when given."""
+    from eval.memory import Sharded, place
+
+    torch.manual_seed(seed)
+    host = [torch.randn(*s, dtype=torch.bfloat16) for s in shapes]
+    dev = []
+    for t in host:
+        if cores is None:
+            config = place(Sharded("L1", "height"), t.shape, layout, device)
+        else:
+            rows = t.numel() // t.shape[-1]
+            config = ttnn.create_sharded_memory_config(
+                shape=(rows // cores, t.shape[-1]),
+                core_grid=ttnn.CoreGrid(y=1, x=cores),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+        dev.append(ttnn.from_torch(t, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=config))
+    return host, dev
+
+
+def _assert_dram_interleaved(out):
+    config = out.memory_config()
+    assert config.buffer_type == ttnn.BufferType.DRAM
+    assert config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+
+
+@pytest.mark.parametrize("cores,shard_rows", [(2, 32), (1, 64)], ids=["two_cores", "one_core"])
+def test_model_neck_join_height_sharded(device, cores, shard_rows):
+    """YOLOv8's neck join: concat([a, b], dim=-1) of a [1,1,64,64] and a [1,1,64,32] bfloat16 ROW_MAJOR tensor,
+    height-sharded in L1 (shards [32,64] + [32,32] on two cores, [64,64] + [64,32] on one): a [1,1,64,96] tensor in
+    DRAM, interleaved (R5), with every value exact."""
+    shapes = [(1, 1, 64, 64), (1, 1, 64, 32)]
+    host, dev = _make_height_sharded(device, shapes, ttnn.ROW_MAJOR_LAYOUT, cores=cores)
+    for d, s in zip(dev, shapes):
+        spec = d.memory_config().shard_spec
+        assert spec.grid.num_cores() == cores and tuple(spec.shape) == (shard_rows, s[-1])
+    out = concat(dev, dim=-1)
+    assert tuple(out.shape) == (1, 1, 64, 96)
+    _assert_dram_interleaved(out)
+    _check(out, host, -1, ttnn.ROW_MAJOR_LAYOUT)
+
+
+# Every regime, with the tensors of one call on shard grids of different sizes (32/16/4 cores, 2/1/1, 8/24/8), one
+# core, and grids that do not divide the cluster count (25 cores).
+SHARDED = [
+    (-1, (1, 1, 64, 64), (1, 1, 64, 80)),
+    (-2, (1, 64, 144), (1, 16, 144), (1, 4, 144)),
+    (-2, (1, 2, 400), (1, 2, 400)),
+    (-1, (1, 1, 32, 50), (1, 1, 32, 14)),
+    (-2, (1, 1, 17, 64), (1, 1, 15, 64)),
+    (-2, (2, 4, 32, 256), (2, 4, 96, 256), (2, 4, 32, 256)),
+    (-1, (2, 1, 100, 32), (2, 1, 100, 96)),
+]
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+@pytest.mark.parametrize("entry", SHARDED, ids=[_id(e) for e in SHARDED])
+def test_height_sharded(device, entry, layout):
+    dim, *shapes = entry
+    host, dev = _make_height_sharded(device, shapes, layout)
+    out = concat(dev, dim=dim)
+    _assert_dram_interleaved(out)
+    _check(out, host, dim, layout)
 
 
 def test_row_major_output_is_dram_interleaved(device):

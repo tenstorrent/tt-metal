@@ -7,3 +7,4 @@
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-21T09:32:47+00:00"}
 {"event":"test_run","status":"pass","test":"test_concat_regimes.py -k row_major or layout_matrix or session","passed":67,"ts":"2026-11-21T09:37:04+00:00"}
 {"event":"test_run","status":"pass","test":"golden slice RM in-SUPPORTED + TILE reps; unit dir","passed":"62/62; 147/147","ts":"2026-11-21T09:39:58+00:00"}
+{"event":"test_run","refinement":10,"result":"pass","details":"probe: 18 shapes x 2 layouts height-sharded exact with validate bypassed, no kernel change needed; golden slice 58/58 height + 4 interleaved reps; regimes file 150/150","ts":"2026-11-21T09:50:35+00:00"}

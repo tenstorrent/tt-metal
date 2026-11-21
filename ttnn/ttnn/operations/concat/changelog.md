@@ -66,3 +66,36 @@ Tests: acceptance 7/7; `test_concat_regimes.py` 67/67; golden suite 60 passed, 0
   `test_mixed_layouts_refused`; `test_programs_share_a_device_session` now runs both RM regimes interleaved with TILE
   calls, after a tt-metal program and before `to_layout(out, ROW_MAJOR)` / `to_layout(out, TILE)`.
   `test_row_major_refused` removed (ROW_MAJOR is supported now).
+
+## Refinement 10 — Height-sharded tensors in L1 (the YOLOv8 neck join)
+- Date: 2026-11-21
+- What was done: `"height"` added to `SUPPORTED["sharding"]` — every tensor of the list height-sharded in L1, each on
+  a shard grid of its own, in TILE and ROW_MAJOR, at every supported value of the other axes. The output stays DRAM
+  interleaved (R5); DRAM × height is the specification's INVALID (no EXCLUSION needed).
+  - Operator's question answered: the sibling-op hint holds for this op. The readers reach every input page through
+    its `TensorAccessor` (bound from the tensor's spec), which maps a logical page id to the cluster that holds its
+    shard; a probe with `validate()` bypassed (`probes/`, 18 shapes × both layouts, inputs placed by
+    `eval.memory.place` exactly as the golden runner places them) was bit-exact in all four regimes before any
+    change, including tensors of one call on different shard grids (32/16/4, 8/24/8, 2/1/1 cores), one-core grids
+    and 25-cluster grids. So no kernel or host-program change was made; the op does not depend on how many cores a
+    shard grid spans (nothing in the host program reads the shard spec).
+  - Data path kept, as the entry asks: a sharded input is read over the NoC like an L1-interleaved one, not consumed
+    in place; the output split (contiguous output pages over the whole grid) follows no input's shard grid. Native
+    per-shard reading remains a perf refinement of its own (ledger: data-movement budget, placement note).
+  - Reused: the whole kernel set, the program artifacts, `classify()` (memory_axes per tensor already compared
+    `(buffer, sharding)` only, so different shard grids pass as one placement). Added: the SUPPORTED value, tests,
+    ledger and docstring notes.
+- Accuracy achieved: bit-exact (PCC=1.0, relative RMS=0; `torch.equal`) on every sharded shape run, among them the
+  neck join `[1,1,64,64]+[1,1,64,32]` d-1 RM on two cores and one, `(1,64,144)+(1,16,144)+(1,4,144)` d-2,
+  `(1,2,400)×2` d-2, `(1,1,32,50)+(1,1,32,14)` d-1, `(4,8,32,47)+(…,100)+(…,50)` d-1, both layouts.
+- Golden test progress: targeted slice — 58/58 in-SUPPORTED `sharding=height` cells (bf16, L1, dim -1/-2, count 2/3,
+  rank 3/4, every alignment, TILE and ROW_MAJOR) pass, plus 4/4 interleaved L1 representatives; the full suite is the
+  harness's run. `verify_supported --queue`: 0 gaps.
+- Issues encountered: `ttnn.to_layout` (tt-metal) refuses to tilize a row-major shard narrower than a tile ("Physical
+  shard shape (1, 64) must be tile sized") — a limit of the tt-metal program the session test runs before ours, not
+  of concat; the session test runs that program on an interleaved copy for its sharded steps.
+- Tests added (test_concat_regimes.py): `test_model_neck_join_height_sharded` (the model's call, RM, two cores and
+  one: values, shard specs, `[1,1,64,96]` DRAM interleaved), `test_height_sharded` (7 entries × TILE/RM, runner
+  placement, every regime); `test_programs_share_a_device_session` gains four sharded calls (page_copy,
+  row_major_copy, row_major_runs, run_assembly) between tt-metal programs; `test_sharded_refused_by_name` now refuses
+  a width-sharded call (R6 by name; height is supported).

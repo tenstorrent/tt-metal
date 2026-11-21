@@ -47,6 +47,13 @@ Chosen split: contiguous ranges of flat output tiles over the full grid (`split_
 - DRAM write is `total_out_tiles · tile_bytes`.
 - Cross-core traffic is 0.
 - Core-local L1 traffic is the ring only: each byte is written once by the NoC and read once by the NoC.
+- Placement (Refinement 10): an input in L1 — interleaved, or height-sharded with a shard grid of its own — is read
+  through the same accessor, one NoC crossing per byte from the cluster that holds the page to the cluster that
+  assembles the output page, exactly as a DRAM page is. The counts above hold for every placement; for an L1 input
+  the "DRAM crossing" of its row is an L1-to-L1 NoC crossing instead. A sharded input is not consumed in place: the
+  output split (contiguous output pages over the whole grid) does not follow any input's shard grid, and a `dim=-1`
+  output page draws from every input's shard. Reading each shard on its own cluster is a perf refinement of its
+  own (op_requirements.md, Refinement 10, "Keep the data path"). The ring is unchanged, no CB is added.
 
 Transactions: 1 read and 1 write per output tile in `page_copy`; 1 read and 1 write per output stick in `row_major_copy`; `count` reads and 1 write per output stick in `row_major_runs` (one barrier per block of sticks). In `run_assembly` reads are 2–6 per tile (row-granular `dim=-2`), ≤ 8 per tile (face-granular `dim=-1`) or ~64–160 per tile (element-granular `dim=-1`), and writes stay 1 per tile.
 
