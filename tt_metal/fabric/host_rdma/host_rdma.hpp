@@ -19,6 +19,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <hostdevcommon/fabric_common.h>  // chan_id_t
@@ -41,35 +42,6 @@ class MeshDevice;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_fabric::host_rdma {
-
-// ---------------------------------------------------------------------------------------------------------------------
-// Router channels
-// ---------------------------------------------------------------------------------------------------------------------
-
-// A router's host_rdma channel, as a worker connection to it takes it (addresses in the router's L1).
-struct RouterChannel {
-    FabricNodeId src{MeshId{0}, 0};
-    chan_id_t eth_chan = 0;
-    ChipId chip = 0;
-    tt_metal::CoreCoord router_core;  // virtual
-    uint32_t channel = 0;             // its sender channel index (VC0's last)
-    uint32_t slots_base = 0;          // L1 address of slot 0
-    uint32_t num_slots = 0;
-    uint32_t slot_bytes = 0;                 // the slot stride
-    uint32_t free_slots_stream = 0;          // its free-slots stream
-    uint32_t connection_info_addr = 0;       // its EDMChannelWorkerLocationInfo
-    uint32_t connection_semaphore_addr = 0;  // its connection semaphore
-    uint32_t producer_cursor_addr = 0;       // its SenderChannelProducerCursor
-};
-
-// The host_rdma channel of the router on `src` at `eth_chan`, in `context`'s fabric.
-RouterChannel find_router_channel(tt::tt_metal::MetalContext& context, FabricNodeId src, chan_id_t eth_chan);
-// The Ethernet channel of the router on `src` that sends toward `dst` on link `link_idx` (2D: the first hop of the
-// route; 1D: the direction toward it).
-chan_id_t eth_chan_toward(
-    tt::tt_metal::MetalContext& context, FabricNodeId src, FabricNodeId dst, uint32_t link_idx = 0);
-// 1D fabrics: chips crossed from `src`, leaving through `eth_chan`, to `dst`.
-uint32_t hops_between(tt::tt_metal::MetalContext& context, FabricNodeId src, chan_id_t eth_chan, FabricNodeId dst);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // The request service
@@ -135,14 +107,17 @@ public:
 private:
     struct Channel {
         uint32_t entry = 0;
-        RouterChannel router;
+        chan_id_t eth_chan = 0;
+        fabric_connection_info_t
+            router;             // the router's host_rdma channel (ControlPlane::get_host_rdma_connection_info)
         uint32_t produced = 0;  // requests posted
         uint32_t consumed = 0;  // the kernel's count, as last read
     };
 
     HostRdmaService(std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device, tt_metal::CoreCoord logical_core);
-    size_t channel_toward(FabricNodeId dst);  // the channel's index in channels_, opened on first use
-    service_abi::Request encode(const WriteRequest& request, const Channel& ch) const;
+    size_t channel_toward(FabricNodeId dst);  // its index in channels_; resolved (and opened) on first use
+    size_t channel_on(chan_id_t eth_chan);    // the channel to the router at eth_chan, opened on first use
+    service_abi::Request encode(const WriteRequest& request) const;
     void post(Channel& ch, std::span<const service_abi::Request> requests);
     uint32_t channel_addr(uint32_t entry) const;
     uint32_t read_word(uint32_t addr) const;
@@ -155,9 +130,9 @@ private:
     ChipId chip_ = 0;
     FabricNodeId node_{MeshId{0}, 0};
     tt_metal::CoreCoord core_;  // virtual
-    bool is_2d_ = false;
     uint32_t layout_addr_ = 0;
     std::vector<Channel> channels_;
+    std::unordered_map<FabricNodeId, size_t> channel_toward_;  // channel_toward(), by destination
 };
 
 }  // namespace tt::tt_fabric::host_rdma

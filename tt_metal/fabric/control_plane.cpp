@@ -62,6 +62,8 @@
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
+#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 
 namespace tt::tt_fabric {
@@ -3506,6 +3508,53 @@ void ControlPlane::populate_fabric_connection_info(
     } else {
         dispatcher_connection_info = worker_connection_info;
     }
+}
+
+tt::tt_fabric::fabric_connection_info_t ControlPlane::get_host_rdma_connection_info(
+    FabricNodeId fabric_node_id, chan_id_t eth_chan) const {
+    const auto& builder_context = this->get_fabric_context().get_builder_context();
+    TT_FATAL(
+        builder_context.requires_host_rdma(),
+        "The fabric was built without host_rdma channels: set TT_METAL_ENABLE_FABRIC_HOST_RDMA=1 before fabric init");
+    // VC0's last sender channel, as the router lays it out.
+    const auto& layout = builder_context.get_router_channel_layout(fabric_node_id, eth_chan);
+    TT_FATAL(!layout.senders[0].empty(), "Router {} eth chan {} has no VC0 senders", fabric_node_id, eth_chan);
+    const auto sender_channel = static_cast<uint32_t>(layout.senders[0].size() - 1);
+    TT_FATAL(
+        sender_channel != get_worker_connected_sender_channel(),
+        "Router {} eth chan {}: the host_rdma channel must not be the worker channel ({})",
+        fabric_node_id,
+        eth_chan,
+        sender_channel);
+
+    const ChipId physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
+    tt::tt_fabric::fabric_connection_info_t info{};
+    fill_connection_info_fields(
+        info,
+        this->cluster_.get().get_virtual_eth_core_from_channel(physical_chip_id, eth_chan),
+        builder_context.get_fabric_router_config(),
+        sender_channel,
+        builder_context.get_stream_assignment(fabric_node_id.mesh_id)
+            .id(StreamRole::SENDER_FREE_SLOTS, 0, sender_channel));
+    info.edm_direction = static_cast<uint8_t>(this->get_eth_chan_direction(fabric_node_id, eth_chan));
+    TT_FATAL(
+        info.edm_buffer_base_addr == layout.senders[0].back().base_address &&
+            info.num_buffers_per_channel == layout.senders[0].back().num_slots && info.num_buffers_per_channel > 0,
+        "Router {} eth chan {}: the host_rdma channel's allocation ({} slots at {:#x}) does not match its layout ({} "
+        "slots at {:#x})",
+        fabric_node_id,
+        eth_chan,
+        info.num_buffers_per_channel,
+        info.edm_buffer_base_addr,
+        layout.senders[0].back().num_slots,
+        layout.senders[0].back().base_address);
+    TT_FATAL(
+        info.edm_worker_location_info_addr != 0 && info.edm_connection_handshake_addr != 0,
+        "Router {} eth chan {}: the router config set aside no connection words for sender channel {}",
+        fabric_node_id,
+        eth_chan,
+        sender_channel);
+    return info;
 }
 
 // UDM-specific: write per-worker connection info to each worker core's L1

@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
-#include <limits>
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -41,93 +40,6 @@ constexpr std::chrono::seconds kServiceTimeout{10};
 }  // namespace
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Router channels
-// ---------------------------------------------------------------------------------------------------------------------
-
-RouterChannel find_router_channel(tt::tt_metal::MetalContext& context, FabricNodeId src, chan_id_t eth_chan) {
-    const auto& hal = context.hal();
-    TT_FATAL(
-        hal.get_arch() == tt::ARCH::BLACKHOLE,
-        "Host-initiated RDMA is supported on Blackhole only (it encodes NoC addresses with coordinate virtualization)");
-    const auto& control_plane = context.get_control_plane();
-    const auto& builder_context = control_plane.get_fabric_context().get_builder_context();
-    TT_FATAL(
-        builder_context.requires_host_rdma(),
-        "The fabric was built without host_rdma channels: set TT_METAL_ENABLE_FABRIC_HOST_RDMA=1 before fabric init");
-    const auto& cluster = context.get_cluster();
-
-    RouterChannel rc;
-    rc.src = src;
-    rc.eth_chan = eth_chan;
-    rc.chip = control_plane.get_physical_chip_id_from_fabric_node_id(src);
-    rc.router_core = cluster.get_virtual_eth_core_from_channel(rc.chip, eth_chan);
-
-    // The channel: the router's last VC0 sender, laid out by the router itself.
-    const auto& layout = builder_context.get_router_channel_layout(src, eth_chan);
-    TT_FATAL(!layout.senders[0].empty(), "Router {} channel {} has no VC0 senders", src, eth_chan);
-    rc.channel = static_cast<uint32_t>(layout.senders[0].size() - 1);
-    // A worker channel of its own: never the one the fabric's worker connection APIs hand out.
-    TT_FATAL(
-        rc.channel != get_worker_connected_sender_channel(),
-        "Router {} channel {}: the host_rdma channel must not be the fabric's worker channel ({})",
-        src,
-        eth_chan,
-        rc.channel);
-    rc.slots_base = layout.senders[0].back().base_address;
-    rc.num_slots = layout.senders[0].back().num_slots;
-    const auto& edm_config = builder_context.get_fabric_router_config();
-    rc.slot_bytes = static_cast<uint32_t>(edm_config.channel_buffer_size_bytes);
-    rc.connection_info_addr =
-        static_cast<uint32_t>(edm_config.sender_channels_worker_conn_info_base_address[rc.channel]);
-    rc.connection_semaphore_addr =
-        static_cast<uint32_t>(edm_config.sender_channels_connection_semaphore_address[rc.channel]);
-    rc.producer_cursor_addr =
-        static_cast<uint32_t>(edm_config.sender_channels_buffer_index_semaphore_address[rc.channel]);
-    rc.free_slots_stream =
-        builder_context.get_stream_assignment(src.mesh_id).id(StreamRole::SENDER_FREE_SLOTS, 0, rc.channel);
-    TT_FATAL(
-        rc.num_slots > 0 && rc.slot_bytes > 0, "Router {} channel {} has an empty host_rdma channel", src, eth_chan);
-    TT_FATAL(
-        rc.connection_info_addr != 0 && rc.connection_semaphore_addr != 0,
-        "Router {} channel {}: the router config set aside no connection words for sender channel {}",
-        src,
-        eth_chan,
-        rc.channel);
-    return rc;
-}
-
-chan_id_t eth_chan_toward(tt::tt_metal::MetalContext& context, FabricNodeId src, FabricNodeId dst, uint32_t link_idx) {
-    TT_FATAL(src != dst, "A host_rdma write goes to another chip (src and dst are both {})", src);
-    const auto& control_plane = context.get_control_plane();
-    const std::optional<RoutingDirection> direction = control_plane.get_forwarding_direction(src, dst);
-    TT_FATAL(direction.has_value(), "No forwarding direction from {} to {}", src, dst);
-    const auto eth_chans = control_plane.get_active_fabric_eth_channels_in_direction(src, *direction);
-    TT_FATAL(
-        link_idx < eth_chans.size(),
-        "Link {} is out of range: {} has {} links toward {}",
-        link_idx,
-        src,
-        eth_chans.size(),
-        dst);
-    return eth_chans[link_idx];
-}
-
-uint32_t hops_between(tt::tt_metal::MetalContext& context, FabricNodeId src, chan_id_t eth_chan, FabricNodeId dst) {
-    const auto route = context.get_control_plane().get_fabric_route(src, dst, eth_chan);
-    // The route lists each router it passes (two per chip crossed); count the chip changes.
-    uint32_t hops = 0;
-    FabricNodeId previous = src;
-    for (const auto& [node, chan] : route) {
-        if (node != previous) {
-            hops++;
-            previous = node;
-        }
-    }
-    TT_FATAL(hops > 0, "No route from {} eth chan {} to {}", src, eth_chan, dst);
-    return hops;
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
 // HostRdmaService
 // ---------------------------------------------------------------------------------------------------------------------
 
@@ -150,7 +62,6 @@ HostRdmaService::HostRdmaService(
     chip_ = mesh_device_->get_devices().front()->id();
     node_ = context_.get_control_plane().get_fabric_node_id_from_physical_chip_id(chip_);
     core_ = mesh_device_->worker_core_from_logical_core(logical_core);
-    is_2d_ = fabric_context.is_2D_routing_enabled();
 
     // L1 of the service core from the unreserved base: the layout (header, channel table), then the staging slots,
     // one packet each.
@@ -227,9 +138,23 @@ void HostRdmaService::write_word(uint32_t addr, uint32_t value) {
 }
 
 size_t HostRdmaService::channel_toward(FabricNodeId dst) {
-    const chan_id_t eth_chan = eth_chan_toward(context_, node_, dst);
+    if (const auto it = channel_toward_.find(dst); it != channel_toward_.end()) {
+        return it->second;
+    }
+    TT_FATAL(dst != node_, "A host_rdma write goes to another chip (the destination is the source, {})", node_);
+    // Resolving a route walks the routing tables; requests take the cached result.
+    const auto eth_chans = context_.get_control_plane().get_forwarding_eth_chans_to_chip(node_, dst);
+    TT_FATAL(!eth_chans.empty(), "No router on {} forwards toward {}", node_, dst);
+    const chan_id_t eth_chan = eth_chans.front();
+    const size_t index = channel_on(eth_chan);
+    channel_toward_.emplace(dst, index);
+    return index;
+}
+
+size_t HostRdmaService::channel_on(chan_id_t eth_chan) {
+    const auto& control_plane = context_.get_control_plane();
     for (size_t i = 0; i < channels_.size(); i++) {
-        if (channels_[i].router.eth_chan == eth_chan) {
+        if (channels_[i].eth_chan == eth_chan) {
             return i;
         }
     }
@@ -238,36 +163,28 @@ size_t HostRdmaService::channel_toward(FabricNodeId dst) {
         "The host_rdma service on chip {} serves at most {} routers",
         chip_,
         sabi::MAX_CHANNELS);
-    const auto& fabric_context = context_.get_control_plane().get_fabric_context();
+    const auto& fabric_context = control_plane.get_fabric_context();
     Channel ch;
     ch.entry = static_cast<uint32_t>(channels_.size());
-    ch.router = find_router_channel(context_, node_, eth_chan);
-    // The kernel's connection object keeps the slot count in 8 bits and the slot stride in 16.
-    TT_FATAL(
-        ch.router.num_slots <= std::numeric_limits<uint8_t>::max() &&
-            ch.router.slot_bytes <= std::numeric_limits<uint16_t>::max(),
-        "Router {} eth chan {}: {} slots of {} B do not fit a fabric connection",
-        node_,
-        eth_chan,
-        ch.router.num_slots,
-        ch.router.slot_bytes);
+    ch.eth_chan = eth_chan;
+    ch.router = control_plane.get_host_rdma_connection_info(node_, eth_chan);
     const uint32_t max_payload = static_cast<uint32_t>(std::min<size_t>(
         fabric_context.get_fabric_max_payload_size_bytes(),
-        ch.router.slot_bytes - fabric_context.get_fabric_packet_header_size_bytes()));
+        ch.router.buffer_size_bytes - fabric_context.get_fabric_packet_header_size_bytes()));
 
     // The entry, inactive, then active (the kernel then opens the connection).
     sabi::Channel entry{};
     std::memset(static_cast<void*>(&entry), 0, sizeof(entry));
     entry.max_payload = max_payload & ~15u;
-    entry.router_x = static_cast<uint32_t>(ch.router.router_core.x);
-    entry.router_y = static_cast<uint32_t>(ch.router.router_core.y);
-    entry.slots_base = ch.router.slots_base;
-    entry.num_slots = ch.router.num_slots;
-    entry.slot_bytes = ch.router.slot_bytes;
-    entry.free_slots_stream = ch.router.free_slots_stream;
-    entry.connection_semaphore_addr = ch.router.connection_semaphore_addr;
-    entry.connection_info_addr = ch.router.connection_info_addr;
-    entry.producer_cursor_addr = ch.router.producer_cursor_addr;
+    entry.router_x = ch.router.edm_noc_x;
+    entry.router_y = ch.router.edm_noc_y;
+    entry.slots_base = ch.router.edm_buffer_base_addr;
+    entry.num_slots = ch.router.num_buffers_per_channel;
+    entry.slot_bytes = ch.router.buffer_size_bytes;
+    entry.free_slots_stream = ch.router.worker_free_slots_stream_id;
+    entry.connection_semaphore_addr = ch.router.edm_connection_handshake_addr;
+    entry.connection_info_addr = ch.router.edm_worker_location_info_addr;
+    entry.producer_cursor_addr = ch.router.buffer_index_semaphore_id;
     cluster_.write_core(&entry, offsetof(sabi::Channel, queue), tt_cxy_pair(chip_, core_), channel_addr(ch.entry));
     cluster_.l1_barrier(chip_, {core_});
     write_word(channel_addr(ch.entry) + offsetof(sabi::Channel, active), 1);
@@ -284,7 +201,7 @@ size_t HostRdmaService::channel_toward(FabricNodeId dst) {
     return channels_.size() - 1;
 }
 
-sabi::Request HostRdmaService::encode(const WriteRequest& request, const Channel& ch) const {
+sabi::Request HostRdmaService::encode(const WriteRequest& request) const {
     TT_FATAL(request.size > 0, "A host_rdma write needs data");
     TT_FATAL(request.dst != node_, "A host_rdma write goes to another chip (the destination is the source, {})", node_);
     TT_FATAL(
@@ -306,7 +223,6 @@ sabi::Request HostRdmaService::encode(const WriteRequest& request, const Channel
     r.size = request.size;
     r.dst_dev_id = static_cast<uint16_t>(request.dst.chip_id);
     r.dst_mesh_id = static_cast<uint16_t>(*request.dst.mesh_id);
-    r.hops = is_2d_ ? 0 : hops_between(context_, node_, ch.router.eth_chan, request.dst);
     if (request.completion.has_value()) {
         r.completion = {
             static_cast<uint32_t>(request.completion->addr),
@@ -364,7 +280,7 @@ void HostRdmaService::write_batch(std::span<const WriteRequest> requests) {
             by_channel.emplace_back(index, std::vector<sabi::Request>{});
             it = std::prev(by_channel.end());
         }
-        it->second.push_back(encode(request, channels_[index]));
+        it->second.push_back(encode(request));
     }
     for (auto& [index, encoded] : by_channel) {
         post(channels_[index], encoded);
@@ -396,7 +312,7 @@ std::string HostRdmaService::describe() const {
         cluster_.read_core(&entry, offsetof(sabi::Channel, queue), tt_cxy_pair(chip_, core_), channel_addr(ch.entry));
         out += fmt::format(
             "; eth chan {}: produced {} (host {}), consumed {}, router credits {} ({} slots)",
-            ch.router.eth_chan,
+            ch.eth_chan,
             entry.produced,
             ch.produced,
             entry.consumed,

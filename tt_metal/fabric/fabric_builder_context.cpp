@@ -413,6 +413,9 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
         TT_FATAL(
             fabric_context_.get_hal().get_arch() == tt::ARCH::BLACKHOLE,
             "TT_METAL_ENABLE_FABRIC_HOST_RDMA is supported on Blackhole only");
+        TT_FATAL(
+            fabric_context_.is_2D_routing_enabled(),
+            "TT_METAL_ENABLE_FABRIC_HOST_RDMA is supported on 2D fabrics only");
         const auto tensix_config = fabric_context_.get_fabric_tensix_config();
         TT_FATAL(
             tensix_config == FabricTensixConfig::DISABLED,

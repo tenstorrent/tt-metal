@@ -106,18 +106,13 @@ FORCE_INLINE abi::Request load_request(const volatile abi::Request& r) {
     q.completion_inc = r.completion_inc;
     q.dst_dev_id = r.dst_dev_id;
     q.dst_mesh_id = r.dst_mesh_id;
-    q.hops = r.hops;
     return q;
 }
 
 // The header of the next packet of `s.req` (`payload` bytes at offset s.off), in the staging slot at `addr`.
 FORCE_INLINE void form_header(uint32_t addr, const ChannelState& s, uint32_t payload, bool last) {
     auto* hdr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(addr);
-#if defined(FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE)  // 2D fabric (FabricContext::get_fabric_kernel_defines)
     fabric_set_unicast_route(hdr, s.req.dst_dev_id, s.req.dst_mesh_id);
-#else
-    fabric_set_unicast_route<false>(hdr, static_cast<uint16_t>(s.req.hops));
-#endif
     const uint64_t dst = get_noc_addr(s.req.dst.x, s.req.dst.y, s.req.dst.addr + s.off);
     if (last && s.req.completion_inc != 0) {
         hdr->to_noc_fused_unicast_write_atomic_inc(
