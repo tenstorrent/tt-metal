@@ -132,12 +132,12 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
     // second intermediate CB
     const uint32_t tilize_reduce_cb_1 = next_cb_index++;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = in_cb_pagesize * 4 * buffering_factor,
+        .total_size = in1_cb_pagesize * 4 * buffering_factor,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tilize_reduce_cb_1),
             .data_format = input_cb_data_format,
-            .page_size = in_cb_pagesize,
+            .page_size = in1_cb_pagesize,
             .face_geometry = FaceGeometry{.face_r_dim = 4, .num_faces = 2},
         }}},
     });

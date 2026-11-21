@@ -28,8 +28,8 @@ UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
         return UpsampleBilinearProgramFactory{};
     }
 
-    operations::pool::upsample::UpsamplePath path =
-        operations::pool::upsample::select_upsample_path(input, args.scale_factor_h, args.scale_factor_w, args.mode);
+    operations::pool::upsample::UpsamplePath path = operations::pool::upsample::select_upsample_path(
+        input, args.scale_factor_h, args.scale_factor_w, args.mode, args.output_mem_config);
 
     if (path == operations::pool::upsample::UpsamplePath::INTEGER_OPTIMIZED) {
         if (input.is_sharded()) {
@@ -75,8 +75,8 @@ void UpsampleOperation::validate_on_program_cache_miss(const operation_attribute
     }
 
     // Path validation with detailed error message
-    operations::pool::upsample::UpsamplePath path =
-        operations::pool::upsample::select_upsample_path(input, args.scale_factor_h, args.scale_factor_w, args.mode);
+    operations::pool::upsample::UpsamplePath path = operations::pool::upsample::select_upsample_path(
+        input, args.scale_factor_h, args.scale_factor_w, args.mode, args.output_mem_config);
     TT_FATAL(
         path != operations::pool::upsample::UpsamplePath::UNSUPPORTED,
         "{}",
@@ -129,10 +129,23 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
 
     const auto& input_mc = input.memory_config();
 
-    // ND sharded → float path (always)
-    if (input_mc.is_sharded() && input_mc.created_with_nd_shard_spec()) {
-        return make_spec(operations::pool::upsample::compute_nd_output_mem_config(
-            input_mc, args.scale_factor_h, args.scale_factor_w));
+    // Bilinear primitive always produces a HEIGHT_SHARDED L1 output on the input shard grid;
+    // upsample.cpp converts to the caller's target output_mem_config afterwards if needed.
+    if (args.mode == "bilinear") {
+        if (input_mc.is_sharded() &&
+            input_mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+            !input_mc.created_with_nd_shard_spec() && input_mc.shard_spec().has_value()) {
+            return make_spec(operations::pool::upsample::compute_integer_output_mem_config(
+                args.output_mem_config,
+                input,
+                args.mode,
+                args.scale_factor_h,
+                args.scale_factor_w,
+                out_n,
+                out_h,
+                out_w));
+        }
+        return make_spec(args.output_mem_config);
     }
 
     // Non-sharded output
@@ -140,19 +153,29 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
         return make_spec(args.output_mem_config);
     }
 
-    // Sharded output - need input to be sharded too
-    TT_FATAL(input_mc.is_sharded(), "Output memory config is sharded but input memory config is not sharded");
+    // ND sharded output
+    if (args.output_mem_config.created_with_nd_shard_spec()) {
+        if (input_mc.is_sharded() && input_mc.created_with_nd_shard_spec() && args.output_mem_config == input_mc) {
+            return make_spec(operations::pool::upsample::compute_nd_output_mem_config(
+                input_mc, args.scale_factor_h, args.scale_factor_w));
+        }
+        return make_spec(args.output_mem_config);
+    }
 
     // Determine path and compute output mem config accordingly
-    operations::pool::upsample::UpsamplePath path =
-        operations::pool::upsample::select_upsample_path(input, args.scale_factor_h, args.scale_factor_w, args.mode);
+    operations::pool::upsample::UpsamplePath path = operations::pool::upsample::select_upsample_path(
+        input, args.scale_factor_h, args.scale_factor_w, args.mode, args.output_mem_config);
 
     if (path == operations::pool::upsample::UpsamplePath::INTEGER_OPTIMIZED) {
         return make_spec(operations::pool::upsample::compute_integer_output_mem_config(
             args.output_mem_config, input, args.mode, args.scale_factor_h, args.scale_factor_w, out_n, out_h, out_w));
     }
 
-    return make_spec(operations::pool::upsample::compute_float_output_mem_config(input_mc, out_n, out_h, out_w));
+    if (input_mc.is_sharded() && !input_mc.created_with_nd_shard_spec() && args.output_mem_config == input_mc) {
+        return make_spec(operations::pool::upsample::compute_float_output_mem_config(input_mc, out_n, out_h, out_w));
+    }
+
+    return make_spec(args.output_mem_config);
 }
 
 UpsampleOperation::tensor_return_value_t UpsampleOperation::create_output_tensors(

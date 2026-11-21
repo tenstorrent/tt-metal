@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -18,7 +19,12 @@ uint32_t compute_num_cores_nhw(const tt::tt_metal::ShardSpec& shard_spec, tt::tt
 
 enum class UpsamplePath { INTEGER_OPTIMIZED, FLOAT_GENERAL, UNSUPPORTED };
 
-UpsamplePath select_upsample_path(const Tensor& input, float scale_h, float scale_w, const std::string& mode);
+UpsamplePath select_upsample_path(
+    const Tensor& input,
+    float scale_h,
+    float scale_w,
+    const std::string& mode,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt);
 
 // For ND sharded tensors (float path only)
 tt::tt_metal::MemoryConfig compute_nd_output_mem_config(
