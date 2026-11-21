@@ -709,12 +709,20 @@ void TestContext::process_traffic_config(TestConfig& config) {
     this->allocator_->allocate_resources(config);
     log_debug(tt::LogTest, "Resource allocation complete");
 
-    // Use unified connection manager when BOTH sync AND flow control are enabled
-    // - This ensures sync and credit returns use the same link tracking for correct mux detection
-    // - When only sync is enabled (no flow control), separate managers avoid mux overhead
-    if (config.enable_flow_control && config.global_sync) {
+    // With sync, a device uses the unified connection manager whenever its sync core can share a link with another
+    // client that needs a mux there, so the sync core goes through that mux rather than claiming the router channel the
+    // mux holds:
+    // - flow control: receivers return credits over the senders' links (every device)
+    // - senders sharing a link (e.g. the pieces of a split sender): they reach that link through a mux (only the
+    //   devices where this happens)
+    // The other devices keep separate managers, which avoid the mux overhead.
+    if (config.global_sync) {
+        const auto links_shared_by_senders =
+            tt::tt_fabric::fabric_tests::DynamicPolicyManager::find_links_shared_by_senders(config);
         for (auto& [_, device] : test_devices_) {
-            device.set_use_unified_connection_manager(true);
+            if (config.enable_flow_control || links_shared_by_senders.contains(device.get_node_id())) {
+                device.set_use_unified_connection_manager(true);
+            }
         }
     }
 
