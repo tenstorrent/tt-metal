@@ -19,7 +19,7 @@ from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils imp
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import (
     tilize_with_val_padding as pytorch_tilize_with_val_padding,
 )
-from tt_py_test_utils_common.utility_functions import is_blackhole, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 torch.manual_seed(0)
 
@@ -899,7 +899,6 @@ def _assert_program_cache_reuse_across_new_allocations(
             ), "tilize_with_val_padding must reuse the cached program on a hit"
 
 
-@skip_for_blackhole("BH LLK Issue with tilize, #14609")
 def test_tilize_with_val_padding_program_cache_addr_change_sharded(device):
     """Sharded factory: the input and output shards back borrowed-memory dataflow buffers."""
     tensor_shape = (50, 256)
