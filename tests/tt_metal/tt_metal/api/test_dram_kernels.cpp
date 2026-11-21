@@ -69,8 +69,8 @@ protected:
     void run_workload(Program program) {
         distributed::MeshWorkload workload;
         workload.add_program(device_range_, std::move(program));
-        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device_->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), workload, false);
+        distributed::Finish(mesh_device_->mesh_command_queue(0));
     }
 
     // Reads the two-word (lo, hi) timestamp written by kernels at noc_addr.

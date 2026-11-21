@@ -46,9 +46,9 @@ bool runTest(
             .compile_args = compile_args,
         });
     workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
 
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::Finish(mesh_device->mesh_command_queue(0));
 
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
     auto noc_xy = mesh_device->worker_core_from_logical_core(coord);

@@ -375,10 +375,10 @@ public:
             return;
         }
 
-        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, false);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *mesh_workload_, false);
     }
 
-    void wait_for_programs() { tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue()); }
+    void wait_for_programs() { tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue(0)); }
 
     void close_devices() {
         if (!are_devices_open_) {
@@ -673,7 +673,7 @@ public:
 
         // Start non-blocking read
         tt::tt_metal::distributed::ReadShard(
-            mesh_device_->mesh_command_queue(),
+            mesh_device_->mesh_command_queue(0),
             data,
             mesh_buffer,
             device_coord,
@@ -742,7 +742,7 @@ public:
             } else {
                 results_out[logical_core] = std::vector<uint32_t>(num_elements, 0);
             }
-            dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue())
+            dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue(0))
                 .enqueue_read_shard_from_core(
                     tt::tt_metal::distributed::DeviceMemoryAddress{device_coord, virtual_core, address},
                     results_out.at(logical_core).data(),
@@ -751,7 +751,7 @@ public:
         }
     }
 
-    void barrier_reads() const { mesh_device_->mesh_command_queue().finish(); }
+    void barrier_reads() const { mesh_device_->mesh_command_queue(0).finish(); }
 
     void write_buffer_to_ethernet_cores(
         const MeshCoordinate& device_coord,
@@ -762,14 +762,14 @@ public:
         for (const auto& logical_core : cores) {
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
 
-            dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue())
+            dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue(0))
                 .enqueue_write_shard_to_core(
                     tt::tt_metal::distributed::DeviceMemoryAddress{device_coord, virtual_core, address},
                     data.data(),
                     data.size(),
                     false);
         }
-        mesh_device_->mesh_command_queue().finish();
+        mesh_device_->mesh_command_queue(0).finish();
     }
 
     void zero_out_buffer_on_cores(
@@ -782,7 +782,7 @@ public:
         const auto total_size = size_bytes * cores.size();
         std::vector<uint32_t> zero_buffer(total_size / sizeof(uint32_t), 0);
         tt::tt_metal::distributed::WriteShard(
-            mesh_device_->mesh_command_queue(), mesh_buffer, zero_buffer, device_coord, true);
+            mesh_device_->mesh_command_queue(0), mesh_buffer, zero_buffer, device_coord, true);
     }
 
     // Local runtime args function - writes args to local args buffer instead of using SetRuntimeArgs
@@ -799,7 +799,7 @@ public:
         all_args_buffer.insert(all_args_buffer.end(), args.begin(), args.end());
 
         tt::tt_metal::distributed::WriteShard(
-            mesh_device_->mesh_command_queue(), mesh_buffer, all_args_buffer, device_coord, true);
+            mesh_device_->mesh_command_queue(0), mesh_buffer, all_args_buffer, device_coord, true);
     }
 
     // ======================================================================================

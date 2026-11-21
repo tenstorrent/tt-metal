@@ -104,7 +104,7 @@ TEST(SubDeviceSetupBatchTest, ResetAndFirstSetupFetchBoundary) {
 TEST_F(MeshSubDeviceTestSuite, SetupCacheEvictsLeastRecentlyUsedConfiguration) {
     using Accessor = SubDeviceSetupCacheTestAccessor;
     std::vector<SubDeviceManagerId> managers;
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
     const auto capacity = Accessor::capacity();
     // Distinct single-core partitions also exercise changing mailbox mappings with identical counts.
     for (size_t i = 0; i < capacity; ++i) {
@@ -164,13 +164,13 @@ TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {
     syncer_mesh_workload.add_program(devices, std::move(syncer_program));
     incrementer_mesh_workload.add_program(devices, std::move(incrementer_program));
     for (uint32_t i = 0; i < num_iters; i++) {
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), waiter_mesh_workload, false);
         mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, true);
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), syncer_mesh_workload, true);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), incrementer_mesh_workload, false);
         mesh_device_->reset_sub_device_stall_group();
     }
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 }
 
 TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
@@ -237,15 +237,15 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
 
     for (int i = 0; i < 50; i++) {
         mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, false);
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), datacopy_mesh_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), syncer_mesh_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), datacopy_mesh_workload, false);
 
         std::vector<uint32_t> src_vec(input_buf->size() / sizeof(uint32_t));
         std::iota(src_vec.begin(), src_vec.end(), i);
         // Block after this write on host, since the global semaphore update starting the
         // program goes through an independent path (UMD) and can go out of order wrt the
         // buffer data
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(0), input_buf, src_vec, true);
 
         for (auto device_id : mesh_device_->get_device_ids()) {
             MetalContext::instance().get_cluster().write_core(
@@ -256,7 +256,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
             for (std::size_t logical_y = 0; logical_y < output_buf->device()->num_rows(); logical_y++) {
                 std::vector<uint32_t> dst_vec;
                 ReadShard(
-                    mesh_device_->mesh_command_queue(), dst_vec, output_buf, MeshCoordinate(logical_y, logical_x));
+                    mesh_device_->mesh_command_queue(0), dst_vec, output_buf, MeshCoordinate(logical_y, logical_x));
                 EXPECT_EQ(dst_vec, src_vec);
             }
         }
@@ -302,20 +302,20 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceSwitching) {
     // Load SubDevice configs, run corresponding workloads, reset ... repeat
     for (uint32_t i = 0; i < num_iters; i++) {
         mesh_device_->load_sub_device_manager(sub_device_manager_0);
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), waiter_mesh_workload, false);
         mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, true);
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), syncer_mesh_workload, true);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), incrementer_mesh_workload, false);
         mesh_device_->reset_sub_device_stall_group();
 
         mesh_device_->load_sub_device_manager(sub_device_manager_1);
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload_1, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), waiter_mesh_workload_1, false);
         mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload_1, true);
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload_1, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), syncer_mesh_workload_1, true);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), incrementer_mesh_workload_1, false);
         mesh_device_->reset_sub_device_stall_group();
     }
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 }
 
 // Switching sub device managers resets the worker GO mailboxes and remaps each core's go message index,
@@ -399,24 +399,24 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {
 
     // Run programs on sub-device manager 1
     for (uint32_t i = 0; i < k_num_iters; i++) {
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), waiter_mesh_workload, false);
         mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, true);
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), syncer_mesh_workload, true);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), incrementer_mesh_workload, false);
         mesh_device_->reset_sub_device_stall_group();
     }
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 
     // Rerun programs on sub-device manager 2
     mesh_device_->load_sub_device_manager(sub_device_manager_2);
     for (uint32_t i = 0; i < k_num_iters; i++) {
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), waiter_mesh_workload, false);
         mesh_device_->set_sub_device_stall_group({{SubDeviceId{1}}});
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, true);
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), syncer_mesh_workload, true);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), incrementer_mesh_workload, false);
         mesh_device_->reset_sub_device_stall_group();
     }
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 }
 }  // namespace tt::tt_metal
 }  // namespace

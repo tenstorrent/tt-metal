@@ -75,7 +75,7 @@ std::vector<uint32_t> generate_rt_args(
 
 TEST_F(MeshDeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
     for (const auto& mesh_device : this->devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;

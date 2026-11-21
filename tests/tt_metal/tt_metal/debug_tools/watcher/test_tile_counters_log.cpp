@@ -127,7 +127,7 @@ void RunTest(
     Program program(*mesh_device, spec);
     workload.add_program(device_range, std::move(program));
 
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
 
     std::string mode_name = use_remapper ? "remapper" : "bypass";
     log_info(
@@ -163,7 +163,7 @@ void RunTest(
     auto release_threads = [&]() {
         std::vector<uint32_t> release_data = {1};
         slow_dispatch::WriteToL1(*mesh_device, logical_core, tensix_sync_addr, release_data);
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::Finish(mesh_device->mesh_command_queue(0));
     };
 
     constexpr uint32_t timeout_ms = 30000;

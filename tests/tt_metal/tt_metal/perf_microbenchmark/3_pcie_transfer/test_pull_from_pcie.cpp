@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
         uint32_t host_write_ptr = 0;
 
         uint32_t prefetch_q_base = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-            CommandQueueDeviceAddrType::UNRESERVED, device->mesh_command_queue().id());
+            CommandQueueDeviceAddrType::UNRESERVED, device->mesh_command_queue(0).id());
 
         uint32_t reg_addr = prefetch_q_base;
         uint32_t num_reg_entries = 128;
@@ -327,8 +327,8 @@ int main(int argc, char** argv) {
             // Execute application
             std::thread t1([&]() {
                 if (enable_kernel_read) {
-                    tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
-                    tt_metal::distributed::Finish(device->mesh_command_queue());
+                    tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), mesh_workload, false);
+                    tt_metal::distributed::Finish(device->mesh_command_queue(0));
                 }
             });
 

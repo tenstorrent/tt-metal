@@ -321,8 +321,8 @@ Program& persistent_run_on_mesh_device(
     const auto device_range = persistent_unit_mesh_device_range();
     workload_out = distributed::MeshWorkload{};
     workload_out.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload_out, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload_out, false);
+    distributed::Finish(mesh_device->mesh_command_queue(0));
     return workload_out.get_programs().at(device_range);
 }
 
@@ -378,11 +378,11 @@ void persistent_run_overlapping_programs(
         const auto device_range = persistent_unit_mesh_device_range();
         distributed::MeshWorkload first_workload;
         first_workload.add_program(device_range, std::move(first_program));
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), first_workload, false);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), first_workload, false);
         distributed::MeshWorkload second_workload;
         second_workload.add_program(device_range, std::move(second_program));
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), second_workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), second_workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue(0));
     }
     if (!fast_dispatch) {
         experimental::DispatchContext::get().disable_asynchronous_slow_dispatch(mesh_device.get());
@@ -477,14 +477,14 @@ uint32_t run_persistent_1toN_cross_program(
         // can enqueue the consumer while the producer is live, then let both drain.
         distributed::MeshWorkload sender_workload;
         sender_workload.add_program(persistent_unit_mesh_device_range(), std::move(sender_program));
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), sender_workload, false);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), sender_workload, false);
 
         mesh_device->set_sub_device_stall_group({{SubDeviceId{1}}});
         distributed::MeshWorkload receiver_workload;
         receiver_workload.add_program(persistent_unit_mesh_device_range(), std::move(receiver_program));
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), receiver_workload, false);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), receiver_workload, false);
         mesh_device->reset_sub_device_stall_group();
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::Finish(mesh_device->mesh_command_queue(0));
     } else {
         // Two programs so producer/consumer overlap when the ring would otherwise fill before
         // the consumer is launched. (Do not merge into one Program when sender/receiver use
@@ -3067,7 +3067,7 @@ bool run_coordinated_resize(
 
     distributed::MeshWorkload workload_a;
     workload_a.add_program(persistent_unit_mesh_device_range(), std::move(program_a));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload_a, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload_a, false);
 
     // Subsequent FD work waits for SD1 idle (not long-running A on SD0).
     mesh_device->set_sub_device_stall_group({{SubDeviceId{1}}});
@@ -3110,7 +3110,7 @@ bool run_coordinated_resize(
     program_b.set_program_run_args(pipe_run_args(pipe));
     distributed::MeshWorkload workload_b;
     workload_b.add_program(persistent_unit_mesh_device_range(), std::move(program_b));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload_b, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload_b, false);
 
     if (pad_room == ResizePadRoom::PENDING) {
         EXPECT_TRUE(poll_sem_set(device, sender_core, resized_sem.address(), 10000))
@@ -3121,7 +3121,7 @@ bool run_coordinated_resize(
     Program program_c = make_receiver_program(device, pipe, e2, total_entries_e2);
     distributed::MeshWorkload workload_c;
     workload_c.add_program(persistent_unit_mesh_device_range(), std::move(program_c));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload_c, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload_c, false);
 
     // Release A to push at E2; C is already bound/running on the peer sub-device.
     MetalContext::instance().get_cluster().write_core(
@@ -3131,7 +3131,7 @@ bool run_coordinated_resize(
         go_sem.address());
 
     mesh_device->reset_sub_device_stall_group();
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::Finish(mesh_device->mesh_command_queue(0));
 
     // E2 entries start at the first E2 grid point at or after the E1 cursor and wrap at the usable limit.
     // Their expected counter values continue after the E1 entries.

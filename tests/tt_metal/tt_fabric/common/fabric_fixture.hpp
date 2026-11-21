@@ -153,7 +153,7 @@ public:
 
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void WaitForSingleProgramDone(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device) {
-        tt::tt_metal::distributed::Finish(device->mesh_command_queue());
+        tt::tt_metal::distributed::Finish(device->mesh_command_queue(0));
         pending_async_workloads_.erase(device.get());
     }
 

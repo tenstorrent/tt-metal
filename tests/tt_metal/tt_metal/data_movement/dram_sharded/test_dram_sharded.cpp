@@ -156,7 +156,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DramShardedConfig& test_
     // Launch program and record outputs
     vector<uint32_t> packed_output;
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, mesh_buffer, packed_input);
 
     auto mesh_workload = distributed::MeshWorkload();

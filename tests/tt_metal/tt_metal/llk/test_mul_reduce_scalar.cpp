@@ -144,7 +144,7 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
         val = (static_cast<uint32_t>(one_u16) << 16) | one_u16;
     }
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, packed_input0, /*blocking=*/true);
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, packed_input1, /*blocking=*/true);
 

@@ -1146,7 +1146,7 @@ protected:
         send_to_all_ = cfg_.send_to_all;
 
         // Initialize common pointers
-        auto& mcq = mesh_device_->mesh_command_queue();
+        auto& mcq = mesh_device_->mesh_command_queue(0);
         fdcq_ = &dynamic_cast<distributed::FDMeshCommandQueue&>(mcq);
         device_ = mesh_device_->impl().get_devices()[0];
         mgr_ = &device_->sysmem_manager();  // Use Chip 0's SystemMemoryManager
@@ -1373,7 +1373,7 @@ protected:
 
         // Wait for completion of the issued commands
         if (wait_for_completion) {
-            distributed::Finish(mesh_device_->mesh_command_queue());
+            distributed::Finish(mesh_device_->mesh_command_queue(0));
         } else if (wait_for_host_writes) {
             uint32_t total_expected_cq_payload = device_data.size() * sizeof(uint32_t);
             // For host writes, wait until expected data is written into completion queue by dispatcher

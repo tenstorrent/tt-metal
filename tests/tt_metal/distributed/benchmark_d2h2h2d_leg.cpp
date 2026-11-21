@@ -338,7 +338,7 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
         dist::MeshWorkload workload;
         workload.add_program(dist::MeshCoordinateRange(mesh_->shape()), build_program());
         // Non-blocking, so the poll loop below can feed the receiver to `iters`.
-        EnqueueMeshWorkload(mesh_->mesh_command_queue(), workload, /*blocking=*/false);
+        EnqueueMeshWorkload(mesh_->mesh_command_queue(0), workload, /*blocking=*/false);
 
         // `retired`, not `sent`: stopping at QUEUED leaves the tail un-put.
         const auto done = [&] {
@@ -379,7 +379,7 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
             return;
         }
 
-        Finish(mesh_->mesh_command_queue());
+        Finish(mesh_->mesh_command_queue(0));
         if (const std::string be = sock_->barrier(); !be.empty()) {
             fail(state, "barrier: " + be);
             return;

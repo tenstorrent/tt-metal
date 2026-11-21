@@ -151,12 +151,12 @@ TEST_F(CommandListTensorPrefetcherFixture, EveryReplayResendsTheRecordedRequest)
         builder.add_tensor_prefetcher_request(prefetch.pipe_refs(), std::nullopt, prefetch.inputs());
         auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
             device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
-        builder.add(device_->mesh_command_queue(), validator);
-        auto command_list = builder.build(device_->mesh_command_queue());
+        builder.add(device_->mesh_command_queue(0), validator);
+        auto command_list = builder.build(device_->mesh_command_queue(0));
         builder.deallocate();
 
         for (uint32_t i = 0; i < kReplayCount; ++i) {
-            metal_exp::EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true);
+            metal_exp::EnqueueCommandList(device_->mesh_command_queue(0), command_list, /*blocking=*/true);
         }
         command_list.deallocate();
     }
@@ -170,23 +170,23 @@ TEST_F(CommandListTensorPrefetcherFixture, RecordedRequestsDoNotOutliveThePrefet
     builder.add_tensor_prefetcher_request(prefetch.pipe_refs(), std::nullopt, prefetch.inputs());
     auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
         device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
-    builder.add(device_->mesh_command_queue(), validator);
-    auto command_list = builder.build(device_->mesh_command_queue());
+    builder.add(device_->mesh_command_queue(0), validator);
+    auto command_list = builder.build(device_->mesh_command_queue(0));
     metal_exp::StopTensorPrefetcher(*device_);
 
     metal_exp::StartTensorPrefetcher(*device_, {});
     // The list's requests were serialized for the stopped run, so replay refuses before enqueueing anything.
-    EXPECT_ANY_THROW(metal_exp::EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true));
+    EXPECT_ANY_THROW(metal_exp::EnqueueCommandList(device_->mesh_command_queue(0), command_list, /*blocking=*/true));
     // So does recording more next to them, until clear() drops them.
     EXPECT_ANY_THROW(builder.add_tensor_prefetcher_request(prefetch.pipe_refs(), std::nullopt, prefetch.inputs()));
     builder.clear();
     builder.add_tensor_prefetcher_request(prefetch.pipe_refs(), std::nullopt, prefetch.inputs());
-    builder.add(device_->mesh_command_queue(), validator);
+    builder.add(device_->mesh_command_queue(0), validator);
     command_list.deallocate();
-    command_list = builder.build(device_->mesh_command_queue());
+    command_list = builder.build(device_->mesh_command_queue(0));
     builder.deallocate();
 
-    metal_exp::EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true);
+    metal_exp::EnqueueCommandList(device_->mesh_command_queue(0), command_list, /*blocking=*/true);
     command_list.deallocate();
     metal_exp::StopTensorPrefetcher(*device_);
 }
@@ -203,17 +203,18 @@ TEST_F(CommandListTensorPrefetcherFixture, ReplayUnderAnotherSubDeviceManagerSen
         builder.add_tensor_prefetcher_request(prefetch.pipe_refs(), std::nullopt, prefetch.inputs());
         auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
             device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
-        builder.add(device_->mesh_command_queue(), validator);
-        auto command_list = builder.build(device_->mesh_command_queue());
+        builder.add(device_->mesh_command_queue(0), validator);
+        auto command_list = builder.build(device_->mesh_command_queue(0));
         builder.deallocate();
 
         device_->load_sub_device_manager(other_manager);
-        EXPECT_ANY_THROW(metal_exp::EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true));
+        EXPECT_ANY_THROW(
+            metal_exp::EnqueueCommandList(device_->mesh_command_queue(0), command_list, /*blocking=*/true));
         device_->clear_loaded_sub_device_manager();
 
         // Had the rejected replay sent its request, this replay's consumer would read the stale copy, and the copy
         // it leaves behind would still be in the pipes at stop.
-        metal_exp::EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true);
+        metal_exp::EnqueueCommandList(device_->mesh_command_queue(0), command_list, /*blocking=*/true);
         command_list.deallocate();
     }
     metal_exp::StopTensorPrefetcher(*device_);

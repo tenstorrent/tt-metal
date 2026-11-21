@@ -40,7 +40,7 @@ After standard device and command queue initialization, the matrix dimensions M,
     uint32_t Kt = K / TILE_WIDTH;
     uint32_t Nt = N / TILE_WIDTH;
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     Program program = CreateProgram(*mesh_device);
     CoreCoord core({0, 0});  // Single core at position {0, 0}
 

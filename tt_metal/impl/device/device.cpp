@@ -850,14 +850,12 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
     return default_allocator_->get_lowest_occupied_l1_address(0);
 }
 
-HWCommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
+HWCommandQueue& Device::command_queue(uint8_t cq_id) {
     MetalContext::instance(this->get_context_id()).device_manager()->check_dispatch_mode(using_fast_dispatch_);
     TT_FATAL(using_fast_dispatch_, "Fast dispatch must be enabled to use command_queue");
-    // An explicit id never consults the (deprecated) thread-local selection.
-    const uint8_t actual_cq_id = cq_id.has_value() ? *cq_id : MetalContext::current_command_queue_id_for_thread();
-    TT_FATAL(actual_cq_id < command_queues_.size(), "cq_id {} is out of range", actual_cq_id);
+    TT_FATAL(cq_id < command_queues_.size(), "cq_id {} is out of range", cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
-    return *command_queues_[actual_cq_id];
+    return *command_queues_[cq_id];
 }
 
 SystemMemoryManager& Device::sysmem_manager() {

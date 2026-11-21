@@ -70,7 +70,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TriscL1CacheRuntimeArgNotStale) {
             program.update_program_run_args(params);
         }
 
-        distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
+        distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(0), workload, /*blocking=*/true);
 
         tt_driver_atomics::mfence();
         std::vector<uint32_t> results;

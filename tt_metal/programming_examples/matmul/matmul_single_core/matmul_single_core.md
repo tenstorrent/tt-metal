@@ -31,7 +31,7 @@ We will go through sections of the `matmul_single_core` function:
 We want a just a single core, so we will restrict the core range to be just one core at (0, 0).
 
 ``` cpp
-distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 Program program = CreateProgram(*mesh_device);

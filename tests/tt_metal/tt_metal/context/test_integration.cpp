@@ -93,7 +93,7 @@ void PerformDeviceWork(
     std::vector<uint32_t> write_data(kElementsPerShard * num_devices);
     std::iota(write_data.begin(), write_data.end(), data_pattern);
 
-    auto& mesh_cq = mesh_device->mesh_command_queue();
+    auto& mesh_cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(mesh_cq, mesh_buffer, write_data, false);
 
     std::vector<uint32_t> read_data;
@@ -252,7 +252,7 @@ void RunNoOpProgram(distributed::MeshDevice& target, const std::string& label) {
 
     distributed::MeshWorkload workload;
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(target.mesh_command_queue(), workload, true);
+    distributed::EnqueueMeshWorkload(target.mesh_command_queue(0), workload, true);
     log_info(tt::LogTest, "Successfully enqueued no-op program on {}", label);
 }
 
@@ -518,7 +518,7 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         // Test command queue operations. Source vector is sized to fill the entire buffer so
         // EnqueueWriteMeshBuffer's precondition (src bytes >= mesh buffer bytes, added in #43429)
         // is satisfied; the prior 16-element vector was a pre-#43429 leftover.
-        auto& cq = mock_device->mesh_command_queue();
+        auto& cq = mock_device->mesh_command_queue(0);
         constexpr size_t num_elements = buffer_size / sizeof(uint32_t);
         std::vector<uint32_t> write_data(num_elements);
         std::iota(write_data.begin(), write_data.end(), 0xDEADBEEFu);
@@ -636,7 +636,7 @@ TEST(MetalContextIntegrationTest, MockMetal2ProgramEnqueueOnOwningMesh) {
 
     ProgramSpec spec = MakeMinimalNoOpProgramSpec();
     distributed::MeshWorkload workload(*mesh_device, spec);
-    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true));
+    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, /*blocking=*/true));
 }
 
 // A Metal 2.0 program built on one MeshDevice must not compile on a MeshDevice from a different
@@ -676,7 +676,7 @@ TEST(MetalContextIntegrationTest, MockCreateProgramBindsToMeshDeviceContext) {
         distributed::MeshWorkload workload;
         workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
         EXPECT_NO_THROW(
-            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true));
+            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, /*blocking=*/true));
     }
 
     EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
@@ -751,7 +751,7 @@ TEST(MetalContextIntegrationTest, MockProgramFromDescriptorBindsToMeshDeviceCont
         distributed::MeshWorkload workload;
         workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
         EXPECT_NO_THROW(
-            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true));
+            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, /*blocking=*/true));
     }
 
     EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));

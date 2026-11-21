@@ -147,11 +147,11 @@ void benchmark_args_combinations_single_core(
         // Launch program
         auto mesh_work_load = tt::tt_metal::distributed::MeshWorkload();
         mesh_work_load.add_program((tt::tt_metal::distributed::MeshCoordinateRange)mesh_coordinate, std::move(program));
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_work_load, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_work_load, false);
 
         // Wait for program to finish
         log_info(tt::LogTest, "Program launched!");
-        Finish(mesh_device_->mesh_command_queue());
+        Finish(mesh_device_->mesh_command_queue(0));
         log_info(tt::LogTest, "Program finished!");
     }
     tt::tt_metal::ReadMeshDeviceProfilerResults(*mesh_device_);

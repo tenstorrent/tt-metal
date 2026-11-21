@@ -69,7 +69,7 @@ void run_block_max8(distributed::MeshDevice& mesh, bool fpu) {
     }
     const auto packed = pack_bfloat16_vec_into_uint32_vec(input);
     const auto golden = pack_bfloat16_vec_into_uint32_vec(expected);
-    auto& cq = mesh.mesh_command_queue();
+    auto& cq = mesh.mesh_command_queue(0);
     const CoreCoord core{0, 0};
     Program program = CreateProgram(mesh);
     const uint32_t tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);

@@ -146,7 +146,7 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
             0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
     }
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, packed_input, /*blocking=*/true);
 
     LaunchProgram(mesh_device, std::move(program));

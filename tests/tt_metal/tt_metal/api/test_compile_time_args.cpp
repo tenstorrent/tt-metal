@@ -32,7 +32,7 @@ using CompileTimeArgsTest = MeshDevice1x1Fixture;
 TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
     for (const auto& mesh_device : this->devices_) {
         CoreCoord core = {0, 0};
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord);
         distributed::MeshWorkload workload;
@@ -73,7 +73,7 @@ TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
 TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgs) {
     auto mesh_device = get_mesh_device();
     CoreCoord core = {0, 0};
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     distributed::MeshWorkload workload;
     Program program = CreateProgram(*mesh_device);
@@ -128,7 +128,7 @@ TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgs) {
 TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgsExceedingArgvLimit) {
     auto mesh_device = get_mesh_device();
     CoreCoord core = {0, 0};
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     distributed::MeshWorkload workload;
     Program program = CreateProgram(*mesh_device);

@@ -38,7 +38,7 @@ Initializing Metalium is almost the same as before. To recap, we need to
     constexpr int device_id = 0;
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 
     Program program = CreateProgram(*mesh_device);
 

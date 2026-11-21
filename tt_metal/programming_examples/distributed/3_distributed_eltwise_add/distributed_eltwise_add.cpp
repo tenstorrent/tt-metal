@@ -130,7 +130,7 @@ int main() {
     std::vector<uint32_t> b_data = create_constant_vector_of_bfloat16(distributed_buffer_size_bytes, val_to_add);
 
     // Write data to distributed buffers
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     EnqueueWriteMeshBuffer(cq, a, a_data, false /* blocking */);
     EnqueueWriteMeshBuffer(cq, b, b_data, false /* blocking */);
 

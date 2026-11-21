@@ -230,7 +230,7 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
     for (uint32_t iter = 0; iter < num_iterations; ++iter) {
-        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
     }
 
     std::vector<uint32_t> output;

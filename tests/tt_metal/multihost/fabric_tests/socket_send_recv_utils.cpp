@@ -160,7 +160,7 @@ bool test_socket_send_recv(
                 mesh_core_coords.insert(connection.sender_core);
                 auto sender_core = connection.sender_core.core_coord;
                 WriteShard(
-                    mesh_device_->mesh_command_queue(),
+                    mesh_device_->mesh_command_queue(0),
                     sender_data_buffer,
                     src_vec,
                     connection.sender_core.device_coord);
@@ -207,8 +207,8 @@ bool test_socket_send_recv(
                     MeshCoordinateRange(connection.sender_core.device_coord), std::move(sender_program));
             }
             // Run workload performing Data Movement over the socket
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), sender_mesh_workload, false);
-            Finish(mesh_device_->mesh_command_queue());
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), sender_mesh_workload, false);
+            Finish(mesh_device_->mesh_command_queue(0));
         } else {
             auto recv_data_shard_params = ShardSpecBuffer(
                 recv_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {recv_core_range_set.num_cores(), 1});
@@ -256,7 +256,7 @@ bool test_socket_send_recv(
                     MeshCoordinateRange(connection.receiver_core.device_coord), std::move(recv_program));
             }
             // Run receiver workload using the created socket
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), recv_mesh_workload, false);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), recv_mesh_workload, false);
             const auto& core_to_core_id =
                 recv_data_buffer->get_device_buffer(mesh_device_->get_view().get_local_mesh_coord_range().start_coord())
                     ->get_buffer_page_mapping()
@@ -266,7 +266,7 @@ bool test_socket_send_recv(
                 if (mesh_device_->is_local(connection.receiver_core.device_coord)) {
                     // Only read back data on devices owned by this host
                     ReadShard(
-                        mesh_device_->mesh_command_queue(),
+                        mesh_device_->mesh_command_queue(0),
                         recv_data_readback,
                         recv_data_buffer,
                         connection.receiver_core.device_coord);

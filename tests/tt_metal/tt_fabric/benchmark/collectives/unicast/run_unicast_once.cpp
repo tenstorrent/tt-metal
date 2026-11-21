@@ -127,7 +127,7 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     std::vector<uint32_t> zeros(n_words, 0u);
 
     // Mesh CQ (needed for shard I/O and later trace)
-    auto& mcq = mesh->mesh_command_queue();
+    auto& mcq = mesh->mesh_command_queue(0);
     // Initialize shards on specific src/dst devices (pass CQ, use vectors)
     Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
     Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);

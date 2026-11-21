@@ -79,8 +79,8 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
 
     distributed::MeshWorkload workload;
     workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue(0));
 
     // Check results
     for (CoreCoord core : core_range) {

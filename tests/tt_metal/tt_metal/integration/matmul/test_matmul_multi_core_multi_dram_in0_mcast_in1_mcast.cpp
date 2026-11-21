@@ -548,7 +548,7 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(const std::shared_ptr<dist
 
     log_debug(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
     log_debug(LogTest, "Matmul test done");

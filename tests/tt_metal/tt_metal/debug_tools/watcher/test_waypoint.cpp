@@ -151,7 +151,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     workload.add_program(device_range, std::move(program));
 
     // Dispatch non-blocking: kernels post waypoint then spin on sync flag
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
 
     // Get processor counts from HAL and build expected waypoint strings.
     uint32_t num_tensix = hal.get_num_risc_processors(HalProgrammableCoreType::TENSIX);
@@ -194,7 +194,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             slow_dispatch::WriteToL1(*mesh_device, CoreCoord{x, y}, tensix_sync_addr, release_data);
         }
     }
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::Finish(mesh_device->mesh_command_queue(0));
 
     log_info(tt::LogTest, "Verifying: {} waypoints/TENSIX", num_tensix);
 
@@ -289,7 +289,7 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     workload.add_program(distributed::MeshCoordinateRange(zero_coord, zero_coord), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
 
     uint32_t num_idle_eth = hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
     std::string idle_eth_waypoints = build_waypoint_string(num_idle_eth);
@@ -323,7 +323,7 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
             tt::tt_metal::detail::WriteToDeviceL1(device, core, idle_eth_sync_addr, release_data, CoreType::ETH);
         }
     }
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::Finish(mesh_device->mesh_command_queue(0));
 
     auto check_core = [&](const CoreCoord& logical_core,
                           const CoreCoord& virtual_core,

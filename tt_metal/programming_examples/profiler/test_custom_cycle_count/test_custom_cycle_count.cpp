@@ -120,7 +120,7 @@ bool RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
 
     // Enqueue mesh workload (non-blocking) then read profiler results from the mesh device
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
     ReadMeshDeviceProfilerResults(*mesh_device);
 
     return pass;

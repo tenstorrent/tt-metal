@@ -14,7 +14,7 @@ int main() {
     using namespace tt::tt_metal::distributed;
 
     auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     // In a typical single-device fashion, instantiate a program with
     // an example compute kernel targeting a 2x2 core range.

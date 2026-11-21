@@ -564,7 +564,7 @@ void run_mixed_ack_device(tt::tt_metal::distributed::MeshDevice& device, NOC noc
         for (auto& [region, program] : workload.get_programs()) {
             program.set_program_run_args(invocation);
         }
-        EnqueueMeshWorkload(device.mesh_command_queue(), workload, true);
+        EnqueueMeshWorkload(device.mesh_command_queue(0), workload, true);
         for (const auto& core : corerange_to_cores(receivers)) {
             std::vector<uint32_t> address, results;
             tt::tt_metal::detail::ReadFromDeviceL1(physical, core, report_addr, 4, address);

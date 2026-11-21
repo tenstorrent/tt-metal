@@ -221,7 +221,7 @@ int main(int argc, char** argv) {
             .compile_args = {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2}});
 
     // copy data from host to L1 directly
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     EnqueueWriteMeshBuffer(cq, a, a_data, false);
     EnqueueWriteMeshBuffer(cq, b, b_data, false);
 

@@ -687,7 +687,7 @@ TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_EmptyFilter_NoChange) {
     copy_to_device(host_sent, device_tensor);
     CoreRangeSet empty_filter;
     ttnn::experimental::core_subset_write::copy_to_device_filtered(host_new, device_tensor, empty_filter);
-    mesh_device_->mesh_command_queue().finish();
+    mesh_device_->mesh_command_queue(0).finish();
     Tensor out = cpu(device_tensor);
     auto out_shards = get_device_tensors(out);
     ASSERT_FALSE(out_shards.empty());

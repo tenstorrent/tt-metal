@@ -36,7 +36,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DeinterleaveConfig& test
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram(mesh_device);
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
 
     for (int k = 0; k < test_config.dest_core_set.size(); k++) {
         // Kernels

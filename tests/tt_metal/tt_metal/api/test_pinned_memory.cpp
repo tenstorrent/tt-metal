@@ -69,7 +69,7 @@ TEST_F(PinnedMemoryTestSuite, EnqueueReadShardsWithReadOnlyPinnedMemoryUsesUnpin
     auto write_transfer = distributed::ShardDataTransfer{coord}
                               .host_data(static_cast<void*>(const_cast<uint32_t*>(src.data())))
                               .region(BufferRegion(0, bytes_per_device));
-    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+    mesh_device_->mesh_command_queue(0).enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
     auto dst = std::make_shared<vector_aligned<uint32_t>>(bytes_per_device / sizeof(uint32_t), 0);
     uint32_t* dst_ptr_aligned = reinterpret_cast<uint32_t*>(dst->data());
@@ -91,7 +91,7 @@ TEST_F(PinnedMemoryTestSuite, EnqueueReadShardsWithReadOnlyPinnedMemoryUsesUnpin
                              .host_data(static_cast<void*>(dst_ptr_aligned))
                              .region(BufferRegion(0, bytes_per_device));
     experimental::ShardDataTransferSetPinnedMemory(read_transfer, pinned_read_only);
-    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+    mesh_device_->mesh_command_queue(0).enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
 
     std::vector<uint32_t> dst_aligned(dst_ptr_aligned, dst_ptr_aligned + (bytes_per_device / sizeof(uint32_t)));
 

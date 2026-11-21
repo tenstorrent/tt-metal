@@ -297,7 +297,7 @@ void run_spec_device_contract(
         for (auto& [region, program] : workload.get_programs()) {
             program.set_program_run_args(invocation);
         }
-        EnqueueMeshWorkload(device.mesh_command_queue(), workload, true);
+        EnqueueMeshWorkload(device.mesh_command_queue(0), workload, true);
         for (auto node : placed) {
             SCOPED_TRACE(::testing::Message() << "run=" << run << " node=(" << node.x << "," << node.y << ")");
             std::vector<uint32_t> base, result;

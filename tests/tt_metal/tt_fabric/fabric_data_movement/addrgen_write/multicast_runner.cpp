@@ -117,7 +117,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     std::vector<uint32_t> zeros(n_words, 0u);
 
     // Blocking writes so data is resident before kernels run
-    auto& mcq = mesh->mesh_command_queue();
+    auto& mcq = mesh->mesh_command_queue(0);
     Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
     Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
 

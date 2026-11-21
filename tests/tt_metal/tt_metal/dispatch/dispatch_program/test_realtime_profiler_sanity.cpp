@@ -115,7 +115,7 @@ void enqueue_sanity_program(
 
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, /*blocking=*/false);
 }
 
 TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
@@ -320,7 +320,7 @@ TEST(RealtimeProfilerSanity, LastProgramRecordDeliveredOnFinish) {
         enqueue_sanity_program(mesh_device, i + 1, all_cores);
     }
 
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::Finish(mesh_device->mesh_command_queue(0));
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     UnregisterProgramRealtimeProfilerCallback(handle);
 

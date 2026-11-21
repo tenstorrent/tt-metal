@@ -236,12 +236,12 @@ void run_push_and_pop(
     {
         distributed::MeshWorkload sender_workload;
         sender_workload.add_program(distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(sender_program));
-        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), sender_workload, /*blocking=*/false);
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), sender_workload, /*blocking=*/false);
 
         distributed::MeshWorkload receiver_workload;
         receiver_workload.add_program(distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(receiver_program));
-        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), receiver_workload, /*blocking=*/false);
-        distributed::Finish(mesh_device.mesh_command_queue());
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), receiver_workload, /*blocking=*/false);
+        distributed::Finish(mesh_device.mesh_command_queue(0));
     }
     experimental::DispatchContext::get().disable_asynchronous_slow_dispatch(&mesh_device);
 }
@@ -813,7 +813,8 @@ TEST_F(PrefetcherPipeDramSenderFixture, DriscKernelReadsDramAndWorkerL1OverNoc) 
     for (uint32_t w = 0; w < dram_words.size(); ++w) {
         dram_words[w] = 0xD7A40000u | w;
     }
-    distributed::EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), dram_buffer, dram_words, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(
+        mesh_device_->mesh_command_queue(0), dram_buffer, dram_words, /*blocking=*/true);
 
     std::vector<uint32_t> worker_words(kPageBytes / sizeof(uint32_t));
     for (uint32_t w = 0; w < worker_words.size(); ++w) {
@@ -860,7 +861,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, DriscKernelReadsDramAndWorkerL1OverNoc) 
     }
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), workload, /*blocking=*/true);
 
     const uint32_t words_per_page = kPageBytes / sizeof(uint32_t);
     const auto dram_page = [&](uint32_t bank) {

@@ -185,7 +185,7 @@ static void run_dfb_size_override_test(
             tt_driver_atomics::mfence();
             ASSERT_EQ(rdback, input);
         }
-        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), mesh_workload, /*blocking=*/true);
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), mesh_workload, /*blocking=*/true);
 
         std::vector<uint32_t> output;
         slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
@@ -364,7 +364,7 @@ TEST_F(UnitMeshAnyDispatchFixture, DataflowBufferSizeOverrideReenqueue) {
     // {entry_size, stride_size, total_num_entries, total_size_bytes, local_num_entries, local_size_bytes,
     //  ring_span_bytes, ring_span_num_entries}.
     auto enqueue_and_expect_extent = [&](uint32_t entry_size, uint32_t num_entries) {
-        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), mesh_workload, /*blocking=*/true);
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), mesh_workload, /*blocking=*/true);
         const uint32_t total_size_bytes = entry_size * num_entries;
         const std::vector<uint32_t> expected = {
             entry_size,

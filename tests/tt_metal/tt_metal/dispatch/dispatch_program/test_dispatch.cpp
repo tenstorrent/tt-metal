@@ -532,7 +532,7 @@ TEST_F(MeshDispatchFixture, TensixCircularBufferInitFunction) {
 
 TEST_F(MeshDispatchFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
     for (auto& device : devices_) {
-        auto& cq = device->mesh_command_queue();
+        auto& cq = device->mesh_command_queue(0);
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);

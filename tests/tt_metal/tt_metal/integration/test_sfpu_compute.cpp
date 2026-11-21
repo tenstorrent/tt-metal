@@ -280,7 +280,7 @@ TEST_P(SingleCoreSingleCardSfpuParameterizedFixture, TensixSfpuCompute) {
             .sfpu_op = sfpu_op,
             .approx_mode = false};
         log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-        EXPECT_TRUE(run_sfpu_all_same_buffer(device_->mesh_command_queue(), test_config));
+        EXPECT_TRUE(run_sfpu_all_same_buffer(device_->mesh_command_queue(0), test_config));
     }
 }
 
@@ -328,7 +328,7 @@ TEST_P(SingleCoreSingleCardSfpuParameterizedApproxFixture, TensixSfpuCompute) {
             .sfpu_op = sfpu_op,
             .approx_mode = true};
         log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-        EXPECT_TRUE(run_sfpu_all_same_buffer(device_->mesh_command_queue(), test_config));
+        EXPECT_TRUE(run_sfpu_all_same_buffer(device_->mesh_command_queue(0), test_config));
     }
 }
 INSTANTIATE_TEST_SUITE_P(
@@ -378,7 +378,7 @@ TEST_P(MultiCoreSingleCardSfpuParameterizedApproxFixture, TensixAllCoreMultiTile
             .sfpu_op = sfpu_op,
             .approx_mode = true};
         log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-        EXPECT_TRUE(run_sfpu_all_same_buffer(device_->mesh_command_queue(), test_config));
+        EXPECT_TRUE(run_sfpu_all_same_buffer(device_->mesh_command_queue(0), test_config));
     }
 }
 

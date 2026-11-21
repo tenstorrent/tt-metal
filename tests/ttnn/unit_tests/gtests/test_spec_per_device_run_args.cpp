@@ -489,7 +489,7 @@ protected:
 
     void launch(const PerDeviceRunArgsOp::operation_attributes_t& attrs) {
         (void)ttnn::device_operation::launch<PerDeviceRunArgsOp>(attrs, input());
-        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
+        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue(0));
     }
 
     // Enqueues the cached workload for `attrs` as it is (no override call).
@@ -502,7 +502,8 @@ protected:
                              .get(lookup.key)
                              .cached_program.template get<Adapter::cached_mesh_workload_t>()
                              .workload;
-        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, /*blocking=*/true);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(
+            mesh_device_->mesh_command_queue(0), workload, /*blocking=*/true);
     }
 
     size_t cached_programs(const PerDeviceRunArgsOp::operation_attributes_t& attrs) {
@@ -588,14 +589,14 @@ protected:
         const Attrs miss{.call = 0, .bias_cores = {1}, .array_per_device = true, .with_extra = true, .ranges = ranges};
         clear_l1();
         (void)ttnn::device_operation::launch<FixedPerDeviceRunArgsOp>(miss, input());
-        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
+        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue(0));
         expect_values(miss);
         Attrs hit = miss;
         hit.call = 1;
         hit.bias_cores = {0};
         clear_l1();
         (void)ttnn::device_operation::launch<FixedPerDeviceRunArgsOp>(hit, input());
-        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
+        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue(0));
         expect_values(miss);
         EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 1u);
         const auto args = input();
@@ -643,11 +644,11 @@ protected:
         SCOPED_TRACE("nonce " + std::to_string(nonce));
         const Tensor first =
             ttnn::device_operation::launch<Op>(Attrs{.call = 0, .nonce = nonce, .ranges = ranges}, input());
-        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
+        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue(0));
         expect_tensor_values(first, nonce, 0);
         const Tensor second =
             ttnn::device_operation::launch<Op>(Attrs{.call = 1, .nonce = nonce, .ranges = ranges}, input());
-        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
+        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue(0));
         EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 1u);
         ASSERT_NE(first.mesh_buffer().address(), second.mesh_buffer().address());
         expect_tensor_values(second, nonce, fixed ? 0 : 1);

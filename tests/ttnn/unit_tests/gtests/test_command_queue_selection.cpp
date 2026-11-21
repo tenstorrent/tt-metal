@@ -49,7 +49,10 @@ TEST_F(CommandQueueSelectionFixture, ExplicitQueueWinsOverThreadScope) {
 // why every TTNN call site resolves its queue through current_mesh_command_queue.
 TEST_F(CommandQueueSelectionFixture, MetalNoArgQueueIsZeroInsideTtnnScope) {
     auto guard = ttnn::with_command_queue_id(QueueId(1));
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     EXPECT_EQ(device_->mesh_command_queue().id(), 0);
+#pragma GCC diagnostic pop
     EXPECT_EQ(ttnn::core::current_mesh_command_queue(*device_).id(), 1);
 }
 

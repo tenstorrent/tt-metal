@@ -51,7 +51,7 @@ TEST_F(UnitMeshAnyDispatchFixture, DataflowCb) {
     const uint32_t num_tiles = tiles_to_transfer_per_cb * total_cbs;
     const uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-    auto& cq = this->device().mesh_command_queue();
+    auto& cq = this->device().mesh_command_queue(0);
     distributed::DeviceLocalBufferConfig dram_config{.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
     distributed::ReplicatedBufferConfig global_config{.size = dram_buffer_size};
 
@@ -134,7 +134,7 @@ TEST_F(UnitMeshAnyDispatchFixture, DataflowDfb) {
     const uint32_t num_tiles = tiles_to_transfer_per_dfb * total_dfbs;
     const uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-    auto& cq = this->device().mesh_command_queue();
+    auto& cq = this->device().mesh_command_queue(0);
     distributed::DeviceLocalBufferConfig dram_config{.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
     distributed::ReplicatedBufferConfig global_config{.size = dram_buffer_size};
 

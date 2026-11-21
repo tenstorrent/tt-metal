@@ -50,7 +50,7 @@ void RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
 
         workload.add_program(device_range, std::move(program));
         // Enqueue the same mesh workload multiple times to generate profiler traffic
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
     }
 }
 

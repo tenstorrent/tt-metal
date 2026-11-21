@@ -266,9 +266,9 @@ void verify_transfer(
     // Load the sender backing tensor on every participating coord and make sure
     // the writes land before we trigger the sender.
     for (const auto& coord : coords) {
-        WriteShard(sender_mesh->mesh_command_queue(), sender_mesh_buffer, iota, coord);
+        WriteShard(sender_mesh->mesh_command_queue(0), sender_mesh_buffer, iota, coord);
     }
-    Finish(sender_mesh->mesh_command_queue());
+    Finish(sender_mesh->mesh_command_queue(0));
 
     // Simulate the sender worker grid: write num_workers into each coord's
     // data_ready_counter so (cur - 0) == num_workers triggers exactly one
@@ -293,7 +293,7 @@ void verify_transfer(
         all_match = true;
         for (const auto& coord : coords) {
             readback.clear();
-            ReadShard(receiver_mesh->mesh_command_queue(), readback, receiver_mesh_buffer, coord);
+            ReadShard(receiver_mesh->mesh_command_queue(0), readback, receiver_mesh_buffer, coord);
             if (readback != iota) {
                 all_match = false;
                 break;
@@ -613,8 +613,8 @@ void verify_stage_gate_remote_opener(
         ASSERT_EQ(h.released(coord), expected) << "transfer for closed gate " << gate << " was released";
 
         auto workload = make_remote_gate_opener_workload(opener_mesh, desc, gate, mode);
-        EnqueueMeshWorkload(opener_mesh->mesh_command_queue(), workload, /*blocking=*/false);
-        Finish(opener_mesh->mesh_command_queue());
+        EnqueueMeshWorkload(opener_mesh->mesh_command_queue(0), workload, /*blocking=*/false);
+        Finish(opener_mesh->mesh_command_queue(0));
 
         ++expected;
         ASSERT_TRUE(h.wait_released(expected, kGateReleaseTimeout))
@@ -751,8 +751,8 @@ void verify_metadata_sender_write(
 
     auto sender_workload = make_sender_worker_workload(
         sender.get(), sender_mesh, /*num_iters=*/1, /*fill_base=*/kMdValue, /*metadata_size_bytes=*/md_bytes);
-    EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
-    Finish(sender_mesh->mesh_command_queue());
+    EnqueueMeshWorkload(sender_mesh->mesh_command_queue(0), sender_workload, /*blocking=*/false);
+    Finish(sender_mesh->mesh_command_queue(0));
 
     std::vector<uint32_t> readback;
     for (const auto& coord : sender->get_backing_tensor().tensor_topology().mesh_coords()) {
@@ -788,7 +788,7 @@ void expect_receiver_backing_iota(
     std::vector<uint32_t> readback;
     for (const auto& coord : receiver->get_backing_tensor().tensor_topology().mesh_coords()) {
         readback.clear();
-        ReadShard(mesh->mesh_command_queue(), readback, mesh_buffer, coord);
+        ReadShard(mesh->mesh_command_queue(0), readback, mesh_buffer, coord);
         EXPECT_EQ(readback, expected) << "receiver backing mismatch at " << coord << " (iota base " << base << ")";
     }
 }
@@ -811,14 +811,14 @@ void verify_handshake(
     auto sender_workload = make_sender_worker_workload(sender.get(), sender_mesh, num_iters, /*fill_base=*/1);
 
     // Launch receivers first so they're ready to ack, then the senders produce.
-    EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
-    EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(0), receiver_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(sender_mesh->mesh_command_queue(0), sender_workload, /*blocking=*/false);
 
     // Wait for all num_iters on both sides. Finishing the receiver workers
     // guarantees the final transfer is durable in the backing tensor (the
     // service barriers its DRAM writes before mcasting data_ready_sem).
-    Finish(sender_mesh->mesh_command_queue());
-    Finish(receiver_mesh->mesh_command_queue());
+    Finish(sender_mesh->mesh_command_queue(0));
+    Finish(receiver_mesh->mesh_command_queue(0));
 
     expect_receiver_backing_iota(receiver.get(), receiver_mesh, num_iters);
 }
@@ -845,11 +845,11 @@ void verify_reuse(
         auto sender_workload =
             make_sender_worker_workload(sender.get(), sender_mesh, /*num_iters=*/1, /*fill_base=*/seed);
 
-        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
-        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(0), receiver_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(0), sender_workload, /*blocking=*/false);
 
-        Finish(sender_mesh->mesh_command_queue());
-        Finish(receiver_mesh->mesh_command_queue());
+        Finish(sender_mesh->mesh_command_queue(0));
+        Finish(receiver_mesh->mesh_command_queue(0));
 
         expect_receiver_backing_iota(receiver.get(), receiver_mesh, seed);
     }
@@ -881,8 +881,8 @@ void verify_fabric_lease(
         auto receiver_workload = make_receiver_worker_workload(receiver.get(), receiver_mesh, /*num_iters=*/1);
         auto sender_workload =
             make_sender_worker_workload(sender.get(), sender_mesh, /*num_iters=*/1, /*fill_base=*/seed);
-        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
-        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(0), receiver_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(0), sender_workload, /*blocking=*/false);
 
         // Fence: each service must hand its link back (link_grant == 0) before the next
         // round grants again — in production this is the point a fabric op would launch.
@@ -891,8 +891,8 @@ void verify_fabric_lease(
         receiver->wait_for_fabric_links();
 
         // Drain both queues before the host reads the landed tensor back.
-        Finish(sender_mesh->mesh_command_queue());
-        Finish(receiver_mesh->mesh_command_queue());
+        Finish(sender_mesh->mesh_command_queue(0));
+        Finish(receiver_mesh->mesh_command_queue(0));
 
         expect_receiver_backing_iota(receiver.get(), receiver_mesh, seed);
     };
@@ -928,15 +928,15 @@ void verify_fabric_lease_stress(
         auto receiver_workload = make_receiver_worker_workload(receiver.get(), receiver_mesh, /*num_iters=*/1);
         auto sender_workload =
             make_sender_worker_workload(sender.get(), sender_mesh, /*num_iters=*/1, /*fill_base=*/i + 1);
-        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
-        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(0), receiver_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(0), sender_workload, /*blocking=*/false);
 
         // Fence this transfer, then drain both queues before the worker workloads (loop
         // locals) go out of scope.
         sender->wait_for_fabric_links();
         receiver->wait_for_fabric_links();
-        Finish(sender_mesh->mesh_command_queue());
-        Finish(receiver_mesh->mesh_command_queue());
+        Finish(sender_mesh->mesh_command_queue(0));
+        Finish(receiver_mesh->mesh_command_queue(0));
     }
 
     expect_receiver_backing_iota(receiver.get(), receiver_mesh, num_iters);
@@ -955,8 +955,8 @@ void verify_fabric_lease_teardown_mid_transfer(
 
     receiver->release_fabric_links();
     sender->release_fabric_links();
-    Finish(receiver_mesh->mesh_command_queue());
-    Finish(sender_mesh->mesh_command_queue());
+    Finish(receiver_mesh->mesh_command_queue(0));
+    Finish(sender_mesh->mesh_command_queue(0));
 
     // Stand in for the sender workers: trigger one transfer.
     std::vector<uint32_t> trigger{core_range_volume(sender->get_worker_cores())};
@@ -994,7 +994,7 @@ void verify_fabric_lease_teardown_mid_transfer(
 
     // The sender gave its links back after shipping; the receiver still holds them.
     sender->wait_for_fabric_links();
-    Finish(sender_mesh->mesh_command_queue());
+    Finish(sender_mesh->mesh_command_queue(0));
     receiver->wait_for_fabric_links();
 
     // Must return: teardown hands the receiver's links back, which lets the wait finish.
@@ -1121,8 +1121,8 @@ void verify_stage_gate_lease_mode(
     cfg.share_fabric_links = true;
     auto [sender, receiver] = D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
     StageGateHarness h(sender.get(), receiver.get(), sender_mesh, receiver_mesh);
-    auto& receiver_cq = receiver_mesh->mesh_command_queue();
-    auto& sender_cq = sender_mesh->mesh_command_queue();
+    auto& receiver_cq = receiver_mesh->mesh_command_queue(0);
+    auto& sender_cq = sender_mesh->mesh_command_queue(0);
 
     receiver->release_fabric_links();
     sender->release_fabric_links();
@@ -1226,7 +1226,7 @@ public:
         }
 
         auto workload = make_workload(sender, static_cast<uint32_t>(chunks.size()));
-        EnqueueMeshWorkload(mesh_->mesh_command_queue(), workload, /*blocking=*/false);
+        EnqueueMeshWorkload(mesh_->mesh_command_queue(0), workload, /*blocking=*/false);
     }
 
     // Let the worker send chunks [0, n).
@@ -1239,7 +1239,7 @@ public:
     }
 
     // Wait for the worker to finish every chunk.
-    void finish() { Finish(mesh_->mesh_command_queue()); }
+    void finish() { Finish(mesh_->mesh_command_queue(0)); }
 
     // If a test bails out early, stop the worker and drain it before freeing its control block.
     ~StageGateProducer() {
@@ -1248,7 +1248,7 @@ public:
             tt::tt_metal::detail::WriteToDeviceL1(
                 tt::tt_metal::internal::get_device(*mesh_, coord), worker_, control_addr_ + sizeof(uint32_t), cancel);
         }
-        Finish(mesh_->mesh_command_queue());
+        Finish(mesh_->mesh_command_queue(0));
     }
     StageGateProducer(const StageGateProducer&) = delete;
     StageGateProducer& operator=(const StageGateProducer&) = delete;
@@ -1465,10 +1465,10 @@ void verify_metadata_end_to_end(
     auto receiver_workload = make_receiver_worker_workload(receiver.get(), receiver_mesh, /*num_iters=*/1);
     auto sender_workload =
         make_sender_worker_workload(sender.get(), sender_mesh, /*num_iters=*/1, /*fill_base=*/kFillBase, md_bytes);
-    EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
-    EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
-    Finish(sender_mesh->mesh_command_queue());
-    Finish(receiver_mesh->mesh_command_queue());
+    EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(0), receiver_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(sender_mesh->mesh_command_queue(0), sender_workload, /*blocking=*/false);
+    Finish(sender_mesh->mesh_command_queue(0));
+    Finish(receiver_mesh->mesh_command_queue(0));
 
     expect_metadata_everywhere(sender.get(), receiver.get(), sender_mesh, receiver_mesh, expected_md);
 }
@@ -1494,10 +1494,10 @@ void verify_metadata_reuse(
         auto receiver_workload = make_receiver_worker_workload(receiver.get(), receiver_mesh, /*num_iters=*/1);
         auto sender_workload =
             make_sender_worker_workload(sender.get(), sender_mesh, /*num_iters=*/1, /*fill_base=*/fill_base, md_bytes);
-        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
-        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
-        Finish(sender_mesh->mesh_command_queue());
-        Finish(receiver_mesh->mesh_command_queue());
+        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(0), receiver_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(0), sender_workload, /*blocking=*/false);
+        Finish(sender_mesh->mesh_command_queue(0));
+        Finish(receiver_mesh->mesh_command_queue(0));
 
         expect_metadata_everywhere(
             sender.get(), receiver.get(), sender_mesh, receiver_mesh, {static_cast<uint32_t>(-1), 0u, fill_base});
@@ -1586,7 +1586,7 @@ void expect_output_tensor_iota(
     std::vector<uint32_t> readback;
     for (const auto& coord : output_tensor.tensor_topology().mesh_coords()) {
         readback.clear();
-        ReadShard(mesh->mesh_command_queue(), readback, mesh_buffer, coord);
+        ReadShard(mesh->mesh_command_queue(0), readback, mesh_buffer, coord);
         EXPECT_EQ(readback, expected) << "output tensor mismatch at " << coord << " (iota base " << base << ")";
     }
 }
@@ -1777,8 +1777,8 @@ void verify_h2d_d2d_bridge(
     auto bridge_workload =
         make_bridge_workload(*h2d_service, sender.get(), sender_mesh, worker_cores, num_iters, metadata_size_bytes);
 
-    EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), consumer_workload, /*blocking=*/false);
-    EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), bridge_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(0), consumer_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(sender_mesh->mesh_command_queue(0), bridge_workload, /*blocking=*/false);
 
     const uint32_t num_u32 = static_cast<uint32_t>(global_shape.volume());
     for (uint32_t i = 0; i < num_iters; ++i) {
@@ -1794,8 +1794,8 @@ void verify_h2d_d2d_bridge(
         }
     }
     h2d_service->barrier();
-    Finish(sender_mesh->mesh_command_queue());
-    Finish(receiver_mesh->mesh_command_queue());
+    Finish(sender_mesh->mesh_command_queue(0));
+    Finish(receiver_mesh->mesh_command_queue(0));
 
     const uint32_t final_value = kFillBase + num_iters - 1;
     expect_output_tensor_iota(output_tensor, receiver_mesh, final_value);
@@ -1854,18 +1854,18 @@ void verify_three_stage_chain(
     auto stage0_workload =
         make_bridge_workload(*h2d_service, sender0.get(), stage0, worker_cores, num_iters, metadata_size_bytes);
 
-    EnqueueMeshWorkload(stage2->mesh_command_queue(), consumer_workload, /*blocking=*/false);
-    EnqueueMeshWorkload(stage1->mesh_command_queue(), middle_workload, /*blocking=*/false);
-    EnqueueMeshWorkload(stage0->mesh_command_queue(), stage0_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(stage2->mesh_command_queue(0), consumer_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(stage1->mesh_command_queue(0), middle_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(stage0->mesh_command_queue(0), stage0_workload, /*blocking=*/false);
 
     const uint32_t num_u32 = static_cast<uint32_t>(global_shape.volume());
     for (uint32_t i = 0; i < num_iters; ++i) {
         h2d_push_token_u32(*h2d_service, num_u32, kFillBase + i, metadata_size_bytes);
     }
     h2d_service->barrier();
-    Finish(stage0->mesh_command_queue());
-    Finish(stage1->mesh_command_queue());
-    Finish(stage2->mesh_command_queue());
+    Finish(stage0->mesh_command_queue(0));
+    Finish(stage1->mesh_command_queue(0));
+    Finish(stage2->mesh_command_queue(0));
 
     const uint32_t final_value = kFillBase + num_iters - 1;
     expect_output_tensor_iota(output_tensor, stage2, final_value);
@@ -1908,13 +1908,13 @@ void verify_h2d_d2d_bridge_reuse(
             make_receiver_consumer_workload(receiver.get(), receiver_mesh, output_tensor, /*num_iters=*/1);
         auto bridge_workload = make_bridge_workload(
             *h2d_service, sender.get(), sender_mesh, worker_cores, /*num_iters=*/1, metadata_size_bytes);
-        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), consumer_workload, /*blocking=*/false);
-        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), bridge_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(0), consumer_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(0), bridge_workload, /*blocking=*/false);
 
         h2d_push_token_u32(*h2d_service, num_u32, seed, metadata_size_bytes);
         h2d_service->barrier();
-        Finish(sender_mesh->mesh_command_queue());
-        Finish(receiver_mesh->mesh_command_queue());
+        Finish(sender_mesh->mesh_command_queue(0));
+        Finish(receiver_mesh->mesh_command_queue(0));
 
         expect_output_tensor_iota(output_tensor, receiver_mesh, seed);
         if (metadata_enabled) {
@@ -2641,12 +2641,12 @@ TEST_F(D2DStreamServiceTest, LeaseGroupPairsShareRouters) {
         sender->release_fabric_links();
         auto receiver_workload = make_receiver_worker_workload(receiver, receiver_mesh, /*num_iters=*/1);
         auto sender_workload = make_sender_worker_workload(sender, sender_mesh, /*num_iters=*/1, /*fill_base=*/seed);
-        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
-        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(0), receiver_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(0), sender_workload, /*blocking=*/false);
         sender->wait_for_fabric_links();
         receiver->wait_for_fabric_links();
-        Finish(sender_mesh->mesh_command_queue());
-        Finish(receiver_mesh->mesh_command_queue());
+        Finish(sender_mesh->mesh_command_queue(0));
+        Finish(receiver_mesh->mesh_command_queue(0));
         expect_receiver_backing_iota(receiver, receiver_mesh, seed);
     };
     run_turn(sender_a.get(), receiver_a.get(), 0x1111u);

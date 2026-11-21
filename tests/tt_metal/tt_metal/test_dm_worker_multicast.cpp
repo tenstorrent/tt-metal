@@ -63,7 +63,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmWorkerMulticast) {
     }
     MetalContext::instance().get_cluster().l1_barrier(this->device().get_device_ids()[0]);
 
-    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue(0);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(this->device().shape());
 

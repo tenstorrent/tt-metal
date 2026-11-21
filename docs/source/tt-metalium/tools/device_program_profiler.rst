@@ -62,7 +62,7 @@ After instrumenting your kernels, the profiling data is automatically collected 
 .. code-block:: c++
 
     // Run the workload
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     tt::tt_metal::distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     tt::tt_metal::distributed::Finish(cq);
 

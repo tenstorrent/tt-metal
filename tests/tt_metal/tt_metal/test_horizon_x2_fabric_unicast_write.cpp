@@ -92,8 +92,8 @@ void expect_fabric_unicast_write_with_checker(
     const CoreCoord& src_logical_core = CoreCoord{0, 0},
     const CoreCoord& tgt_logical_core = CoreCoord{0, 0}) {
     auto& cluster = MetalContext::instance().get_cluster();
-    distributed::MeshCommandQueue& src_cq = src_device.mesh_command_queue();
-    distributed::MeshCommandQueue& tgt_cq = tgt_device.mesh_command_queue();
+    distributed::MeshCommandQueue& src_cq = src_device.mesh_command_queue(0);
+    distributed::MeshCommandQueue& tgt_cq = tgt_device.mesh_command_queue(0);
 
     auto src_buf = fabric_unicast_2dev_l1_buffer(src_device, src_logical_core);
     auto recv_buf = fabric_unicast_2dev_l1_buffer(tgt_device, tgt_logical_core);

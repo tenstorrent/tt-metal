@@ -278,7 +278,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketConfigMetadataUsesPerCoreAddress) {
     // The receiver's on-device config must point read_ptr/fifo_addr at the receiver core's per-core address.
     std::vector<receiver_socket_md> recv_config_readback;
     distributed::ReadShard(
-        md->mesh_command_queue(),
+        md->mesh_command_queue(0),
         recv_config_readback,
         recv_socket.get_config_buffer(),
         distributed::MeshCoordinate(0, 0));
@@ -290,7 +290,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketConfigMetadataUsesPerCoreAddress) {
     // The sender's downstream_fifo_addr must match the same per-core address.
     std::vector<uint8_t> sender_config_bytes;
     distributed::ReadShard(
-        md->mesh_command_queue(),
+        md->mesh_command_queue(0),
         sender_config_bytes,
         send_socket.get_config_buffer(),
         distributed::MeshCoordinate(0, 0));
@@ -460,7 +460,7 @@ TEST_F(PerCoreAllocationTest, H2DSocketPerCoreEndToEndTransfer) {
 
     auto workload = distributed::MeshWorkload();
     workload.add_program(distributed::MeshCoordinateRange(recv_core.device_coord), std::move(recv_program));
-    distributed::EnqueueMeshWorkload(md->mesh_command_queue(), workload, false);
+    distributed::EnqueueMeshWorkload(md->mesh_command_queue(0), workload, false);
 
     const uint32_t page_size_words = page_size / sizeof(uint32_t);
     const uint32_t num_pages = data_size / page_size;

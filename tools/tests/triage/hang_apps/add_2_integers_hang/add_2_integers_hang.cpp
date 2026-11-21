@@ -70,7 +70,7 @@ int main() {
     // In Metalium, submitting operations to the device is done through a command queue. This includes
     // uploading/downloading data to/from the device, and executing programs.
     // A MeshCommandQueue is a software concept that allows developers to submit operations to a MeshDevice.
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 
     // We will only be using one Tensix node for this particular example. As Tenstorrent processors are a 2D grid of
     // nodes we can specify the node coordinates as (0, 0).

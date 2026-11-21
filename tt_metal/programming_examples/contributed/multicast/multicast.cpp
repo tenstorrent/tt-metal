@@ -162,7 +162,7 @@ int main(int /*argc*/, char** argv) {
     // MeshDevice that allows users to interface with a single physical device.
     int device_id = 0;
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     ////////// PROGRAM BLOCK //////////

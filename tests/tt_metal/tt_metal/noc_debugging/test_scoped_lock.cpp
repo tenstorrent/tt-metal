@@ -101,8 +101,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessIssue) {
 
         workload.add_program(device_range, std::move(program));
 
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         ReadMeshDeviceProfilerResults(*mesh_device);
 
@@ -205,8 +205,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockMultipleL1Issues) {
 
         workload.add_program(device_range, std::move(program));
 
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         ReadMeshDeviceProfilerResults(*mesh_device);
 
@@ -310,8 +310,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessNoIssue) {
 
         workload.add_program(device_range, std::move(program));
 
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         ReadMeshDeviceProfilerResults(*mesh_device);
 
@@ -401,8 +401,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBIssue) {
              locker_virtual_core.x,
              locker_virtual_core.y});
 
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue(0));
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         std::vector<uint32_t> published;
@@ -505,8 +505,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBNoIssue) {
              locker_virtual_core.x,
              locker_virtual_core.y});
 
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue(0));
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         for (auto device_id : mesh_device->get_device_ids()) {
@@ -642,8 +642,8 @@ std::vector<NOCDebugIssueType> run_sub_range_lock(
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue(0));
     ReadMeshDeviceProfilerResults(*mesh_device);
 
     std::vector<NOCDebugIssueType> locked_issues;
@@ -735,8 +735,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToOwnLockNoIssue) {
 
         workload.add_program(device_range, std::move(program));
 
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         ReadMeshDeviceProfilerResults(*mesh_device);
 
@@ -785,8 +785,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToUnlockedNoIssue) {
 
         workload.add_program(device_range, std::move(program));
 
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         ReadMeshDeviceProfilerResults(*mesh_device);
 
@@ -827,8 +827,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockNoWritesNoIssue) {
 
         workload.add_program(device_range, std::move(program));
 
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         ReadMeshDeviceProfilerResults(*mesh_device);
 
@@ -964,8 +964,8 @@ void run_dfb_scoped_lock_test(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue(0));
     ReadMeshDeviceProfilerResults(*mesh_device);
 
     if (expected == ExpectedDfbIssue::Locked) {
@@ -1080,8 +1080,8 @@ void run_dfb_region_cleared_between_launches_test(
     distributed::MeshWorkload writer_workload;
     const auto zero_coord = distributed::MeshCoordinate(0, 0);
     writer_workload.add_program(distributed::MeshCoordinateRange(zero_coord, zero_coord), std::move(writer_program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), writer_workload, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), writer_workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue(0));
     ReadMeshDeviceProfilerResults(*mesh_device);
 
     std::vector<NOCDebugIssueType> unlocked_issues;
@@ -1221,8 +1221,8 @@ void run_dfb_scoped_lock_xcore_test(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue(0));
     ReadMeshDeviceProfilerResults(*mesh_device);
 
     // The violation is recorded on the WRITER core (source of the NOC writes), with src = writer, dst = locker.
@@ -1353,8 +1353,8 @@ void run_dfb_mcast_loopback_unlocked_test(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue(0));
     ReadMeshDeviceProfilerResults(*mesh_device);
 
     // The violation is recorded on the producer core (source == destination for a loopback write).
@@ -1527,8 +1527,8 @@ void run_dfb_mcast_xcore_locked_test(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue(0));
     ReadMeshDeviceProfilerResults(*mesh_device);
 
     // The violation is recorded on the WRITER core (source of the mcast), with src = writer, dst = locker.
@@ -1825,8 +1825,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBIssue) {
              receiver_virtual_core.x,
              receiver_virtual_core.y});
 
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue(0));
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         std::vector<NOCDebugIssueType> locked_issues;
@@ -1932,8 +1932,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBNoIssue) {
              receiver_virtual_core.x,
              receiver_virtual_core.y});
 
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue(0));
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         for (auto device_id : mesh_device->get_device_ids()) {
@@ -2022,8 +2022,8 @@ void RunScopedLockStatefulWriteTest(
 
     workload.add_program(device_range, std::move(program));
 
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue(0));
 
     ReadMeshDeviceProfilerResults(*mesh_device);
 
@@ -2181,8 +2181,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockStatefulWriteLargeDestinationAddressRecord
 
         workload.add_program(device_range, std::move(program));
 
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        distributed::Finish(mesh_device->mesh_command_queue());
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue(0));
 
         ReadMeshDeviceProfilerResults(*mesh_device);
 

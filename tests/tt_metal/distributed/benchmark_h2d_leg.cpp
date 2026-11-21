@@ -363,7 +363,7 @@ BENCHMARK_DEFINE_F(H2DLegFixture, Bandwidth)(benchmark::State& state) {
 
         // Only after the rings have drained: Finish() before that is unbounded.
         if (frames >= total_frames_) {
-            Finish(mesh_->mesh_command_queue());
+            Finish(mesh_->mesh_command_queue(0));
         } else {
             // Nothing here can stop the kernel or close the shared device, and returning runs
             // ~H2DLeg and release() under pages it may still read. Leave them mapped.

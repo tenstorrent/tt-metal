@@ -89,7 +89,7 @@ void test_h2d_socket(
     auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices = MeshCoordinateRange(recv_core.device_coord);
     mesh_workload.add_program(devices, std::move(recv_program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, false);
 
     uint32_t num_writes = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
@@ -163,13 +163,13 @@ void test_d2h_socket(
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
-    WriteShard(mesh_device->mesh_command_queue(), sender_data_buffer, src_vec, sender_core.device_coord);
+    WriteShard(mesh_device->mesh_command_queue(0), sender_data_buffer, src_vec, sender_core.device_coord);
 
     auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices = MeshCoordinateRange(sender_core.device_coord);
     mesh_workload.add_program(devices, std::move(send_program));
 
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, false);
 
     if (consume_mode == D2HConsumeMode::Discard) {
         // Drop every page without reading the data region. discard_pending_pages() must
@@ -273,7 +273,7 @@ void test_hd_socket_loopback(
     MeshCoordinateRange devices = MeshCoordinateRange(socket_core.device_coord);
     mesh_workload.add_program(devices, std::move(send_program));
 
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, false);
 
     uint32_t page_size_words = page_size / sizeof(uint32_t);
     for (uint32_t i = 0; i < num_iterations; i++) {
@@ -326,7 +326,7 @@ void test_h2d_host_push_ordering_stress(
         H2DMode::HOST_PUSH);
     auto mesh_workload = MeshWorkload();
     mesh_workload.add_program(MeshCoordinateRange(socket_core.device_coord), std::move(program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, false);
 
     const uint32_t page_size_words = page_size / sizeof(uint32_t);
     std::vector<uint32_t> patterns(kNumPatterns * page_size_words);
@@ -450,7 +450,7 @@ void test_hd_socket_multithreaded_loopback(
     mesh_workload.add_program(devices, std::move(send_program));
 
     // Launch Loopback Kernel on device (copies data from H2D to D2H socket).
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, false);
 
     // Set Required Page Size for Socket.
     input_socket.set_page_size(page_size);
@@ -598,7 +598,7 @@ void test_hd_socket_staged_loopback(
     }
     auto mesh_workload = MeshWorkload();
     mesh_workload.add_program(MeshCoordinateRange(device_coord), std::move(program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, false);
 
     // The receiver would copy a page back as soon as it saw it counted; a staged page it can read is one that went
     // out unpublished.

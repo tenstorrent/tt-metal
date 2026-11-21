@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Running test using device ID {}", device_id);
 
         std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
-        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 
         log_info(
             LogTest,

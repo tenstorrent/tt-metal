@@ -70,7 +70,7 @@ void matmul_multicore_reuse(
      * Set up Mesh API constructs: command queue, workload, device range, and program.
      * We'll distribute work across multiple cores using the device's compute grid.
      */
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram(*mesh_device);

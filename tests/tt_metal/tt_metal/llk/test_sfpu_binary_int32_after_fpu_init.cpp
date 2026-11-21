@@ -83,7 +83,7 @@ std::vector<uint32_t> random_int32_words(size_t numel, const OpSpec& spec, uint3
 bool run(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const std::string& op_name, uint32_t num_tiles) {
     const OpSpec& spec = op_specs().at(op_name);
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;

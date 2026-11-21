@@ -461,7 +461,7 @@ void validation(
         auto* device =
             find_device_with_id(device_helper.devices, validate_receiver ? link.receiver.chip : link.sender.chip);
         tt_metal::distributed::ReadShard(
-            device->mesh_command_queue(),
+            device->mesh_command_queue(0),
             result_vec,
             buffer_to_validate,
             tt_metal::distributed::MeshCoordinate(0, 0),
@@ -625,7 +625,7 @@ void run(
                     std::move(program));
                 threads.emplace_back([&]() {
                     // Use distributed::EnqueueMeshWorkload instead of LaunchProgram
-                    tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+                    tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), mesh_workload, false);
                 });
             }
             for (auto& thread : threads) {
@@ -641,11 +641,11 @@ void run(
                     tt_metal::distributed::MeshCoordinateRange(
                         tt_metal::distributed::MeshCoordinate(0, 0), tt_metal::distributed::MeshCoordinate(0, 0)),
                     std::move(program));
-                tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+                tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), mesh_workload, false);
             }
             log_info(tt::LogTest, "Iteration {} Calling Finish", iteration);
             for (const auto& device : device_helper.devices) {
-                tt_metal::distributed::Finish(device->mesh_command_queue());
+                tt_metal::distributed::Finish(device->mesh_command_queue(0));
             }
         }
         dump_eth_link_stats(device_helper, iteration, sender_stats, receiver_stats, params.num_iterations, true);

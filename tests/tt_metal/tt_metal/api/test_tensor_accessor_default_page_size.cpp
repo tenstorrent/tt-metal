@@ -77,7 +77,7 @@ std::shared_ptr<distributed::MeshBuffer> create_output_dram_buffer(distributed::
 
 void verify_default_page_size(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const distributed::MeshBuffer& input_buffer) {
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -130,7 +130,7 @@ void verify_runtime_page_size(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const distributed::MeshBuffer& input_buffer,
     uint32_t sentinel_page_size) {
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);

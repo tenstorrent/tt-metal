@@ -237,8 +237,8 @@ int main(int argc, char** argv) {
 
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
-            tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
-            tt_metal::distributed::Finish(device->mesh_command_queue());
+            tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), mesh_workload, false);
+            tt_metal::distributed::Finish(device->mesh_command_queue(0));
             auto t_end = std::chrono::steady_clock::now();
             unsigned long elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             unsigned long elapsed_cc = clock_freq_mhz * elapsed_us;

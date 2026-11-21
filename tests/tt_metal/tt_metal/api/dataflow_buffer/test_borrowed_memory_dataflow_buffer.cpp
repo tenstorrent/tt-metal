@@ -268,7 +268,7 @@ void run_borrowed_memory_dfb_program(
     std::iota(input.begin(), input.end(), 0u);
     slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), input);
 
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
 
     // Assert the borrowed tensor's L1 address was used for the DFB ring. For a borrowed DFB this
     // stays PINNED across a size override (no reallocation).
@@ -416,7 +416,7 @@ void run_update_address_test(
         {TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_a}},
     };
     program.set_program_run_args(params1);
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
 
     EXPECT_EQ(
         program.impl().dataflow_buffers()[0]->uniform_alloc_addr(), static_cast<uint32_t>(ring_tensor_a.address()));
@@ -464,7 +464,7 @@ void run_update_address_test(
             {TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_b}},
         });
     }
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
 
     EXPECT_EQ(
         program.impl().dataflow_buffers()[0]->uniform_alloc_addr(), static_cast<uint32_t>(ring_tensor_b.address()));

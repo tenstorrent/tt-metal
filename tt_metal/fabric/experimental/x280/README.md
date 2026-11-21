@@ -66,9 +66,9 @@ const auto enqueued = runtime.enqueue(
 if (!enqueued.session) {
     throw std::runtime_error(x280::describe(enqueued));
 }
-EnqueueMeshWorkload(mesh->mesh_command_queue(), workload, /*blocking=*/false);
+EnqueueMeshWorkload(mesh->mesh_command_queue(0), workload, /*blocking=*/false);
 const auto result = runtime.session(enqueued.session).wait_until_result_ready(std::chrono::seconds(1));
-Finish(mesh->mesh_command_queue());
+Finish(mesh->mesh_command_queue(0));
 const auto cleaned = runtime.cleanup(enqueued.session, std::chrono::seconds(3));
 ```
 

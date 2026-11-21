@@ -143,8 +143,8 @@ TEST_F(KernelSizeTestBigBuffer, LargeKernelWorks) {
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
 
     workload.add_program(device_range_, std::move(program));
-    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false));
-    distributed::Finish(device->mesh_command_queue());
+    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload, false));
+    distributed::Finish(device->mesh_command_queue(0));
 }
 
 // Test 2: Verify that kernels exceeding kernel config buffer size are rejected
@@ -176,7 +176,7 @@ TEST_F(KernelSizeTestDefaultBuffer, LargeKernelFails) {
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
 
     workload.add_program(device_range_, std::move(program));
-    EXPECT_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false), std::runtime_error);
+    EXPECT_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload, false), std::runtime_error);
 
     log_info(LogTest, "Correctly rejected oversized kernel configuration");
 }
@@ -225,8 +225,8 @@ TEST_F(KernelSizeTestDefaultBuffer, KernelSizesBoundaryConditions) {
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
 
         workload.add_program(device_range_, std::move(program));
-        EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false));
-        distributed::Finish(device->mesh_command_queue());
+        EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload, false));
+        distributed::Finish(device->mesh_command_queue(0));
     }
 }
 
@@ -261,8 +261,8 @@ TEST_F(KernelSizeTestBigBuffer, BigKernelExecutionCorrectness) {
 
     // Execute the kernel
     workload.add_program(device_range_, std::move(program));
-    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false));
-    distributed::Finish(device->mesh_command_queue());
+    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload, false));
+    distributed::Finish(device->mesh_command_queue(0));
 
     // Read the result back directly from L1 using device API
     std::vector<uint32_t> result;

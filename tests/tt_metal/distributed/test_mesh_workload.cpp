@@ -290,7 +290,7 @@ TEST_F(MeshWorkloadTest4x8, UnusedDeviceKernelConfigNotOverwritten) {
     const MeshCoordinate victim_coord(last_row, last_col);
     const MeshCoordinateRange victim_range(victim_coord, victim_coord);
     const MeshCoordinateRange other_devices(MeshCoordinate(0, 0), MeshCoordinate(last_row, last_col - 1));
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
     auto* victim = mesh_device_->impl().get_device(victim_coord);
 
     // Program circular buffers start at the unreserved base and grow up, so the flags go just past the probe's.
@@ -505,23 +505,23 @@ TEST_P(MeshWorkloadTestSuiteSubmeshFixture, QuiesceSubmeshesAllowsAlternatingWor
     parent_workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(parent_program));
 
     // 1) Run on submesh (non-blocking)
-    EnqueueMeshWorkload(submesh->mesh_command_queue(), submesh_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(submesh->mesh_command_queue(0), submesh_workload, /*blocking=*/false);
 
     // Enqueue a record event to ensure the last event ID is higher on the submesh than on the parent mesh.
-    submesh->mesh_command_queue().enqueue_record_event();
+    submesh->mesh_command_queue(0).enqueue_record_event();
 
     // 2) Quiesce all submeshes from the parent
     mesh_device_->quiesce_devices();
 
     // 3) Run on parent (non-blocking)
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), parent_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), parent_workload, /*blocking=*/false);
 
     // 4) Quiesce again
     mesh_device_->quiesce_devices();
 
     // 5) Run again on the same submesh (non-blocking) and finish to ensure completion
-    EnqueueMeshWorkload(submesh->mesh_command_queue(), submesh_workload, /*blocking=*/false);
-    Finish(submesh->mesh_command_queue());
+    EnqueueMeshWorkload(submesh->mesh_command_queue(0), submesh_workload, /*blocking=*/false);
+    Finish(submesh->mesh_command_queue(0));
 }
 
 INSTANTIATE_TEST_SUITE_P(QuiesceSubmeshIndex, MeshWorkloadTestSuiteSubmeshFixture, ::testing::Values(0, 1));
@@ -558,7 +558,7 @@ TEST_F(MeshWorkloadTestSuite, SubmeshAndParentAlternationRunsEveryProgramOnce) {
         mesh_device_.get());
     const uint32_t counter_addr = counters->address();
     EnqueueWriteMeshBuffer(
-        mesh_device_->mesh_command_queue(),
+        mesh_device_->mesh_command_queue(0),
         counters,
         std::vector<uint32_t>(num_cores * page_words, 0),
         /*blocking=*/true);
@@ -588,11 +588,11 @@ TEST_F(MeshWorkloadTestSuite, SubmeshAndParentAlternationRunsEveryProgramOnce) {
         const uint32_t runs = round + 1;
         runs_per_mesh += runs;
         for (uint32_t i = 0; i < runs; ++i) {
-            EnqueueMeshWorkload(submesh->mesh_command_queue(), submesh_workload, /*blocking=*/false);
+            EnqueueMeshWorkload(submesh->mesh_command_queue(0), submesh_workload, /*blocking=*/false);
         }
         mesh_device_->quiesce_devices();
         for (uint32_t i = 0; i < runs; ++i) {
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), parent_workload, /*blocking=*/false);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), parent_workload, /*blocking=*/false);
         }
         mesh_device_->quiesce_devices();
     }
@@ -602,7 +602,7 @@ TEST_F(MeshWorkloadTestSuite, SubmeshAndParentAlternationRunsEveryProgramOnce) {
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         const uint32_t expected = runs_per_mesh * (coord == submesh_coord ? 2 : 1);
         std::vector<uint32_t> pages;
-        ReadShard(mesh_device_->mesh_command_queue(), pages, counters, coord);
+        ReadShard(mesh_device_->mesh_command_queue(0), pages, counters, coord);
         ASSERT_EQ(pages.size(), num_cores * page_words);
         for (uint32_t i = 0; i < num_cores; ++i) {
             EXPECT_EQ(pages[i * page_words], expected) << "chip " << coord << " counter page " << i;
@@ -632,7 +632,7 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
                 workload->add_program(MeshCoordinateRange(device_coord, device_coord), std::move(*programs[0]));
             }
         }
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
         workloads.push_back(workload);
     }
     for (int i = 0; i < num_iters; i++) {
@@ -640,10 +640,10 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
             log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
         for (auto& workload : workloads) {
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
         }
     }
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 }
 
 TEST_F(MeshWorkloadTestSuite, OverlappingProgramRanges) {
@@ -694,7 +694,7 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
             random_workload->add_program(devices_0, std::move(*programs[i]));
             random_workload->add_program(devices_1, std::move(*programs[i + 1]));
         }
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
     programs = tt::tt_metal::distributed::test::utils::create_random_programs(
@@ -709,7 +709,7 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
         random_workload->add_program(devices_1, std::move(*programs[i + 1]));
         random_workload->add_program(devices_2, std::move(*programs[i + 2]));
         random_workload->add_program(devices_3, std::move(*programs[i + 3]));
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
     programs = tt::tt_metal::distributed::test::utils::create_random_programs(
@@ -733,7 +733,7 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
         random_workload->add_program(devices_5, std::move(*programs[i + 5]));
         random_workload->add_program(devices_6, std::move(*programs[i + 6]));
         random_workload->add_program(devices_7, std::move(*programs[i + 7]));
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
 
@@ -742,10 +742,10 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
             log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
         for (auto& workload : mesh_workloads) {
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
         }
     }
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 }
 
 // 4x8 benchmark: 32 unique programs on 32 devices (1:1 mapping)
@@ -770,9 +770,9 @@ TEST_F(MeshDeviceFixture4x8DispatchAgnostic, ParallelizationBenchmark) {
     }
 
     auto t0 = std::chrono::steady_clock::now();
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), workload, false);
     auto t1 = std::chrono::steady_clock::now();
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
     auto t2 = std::chrono::steady_clock::now();
 
     auto enqueue_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -808,7 +808,7 @@ TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
         MeshCoordinateRange devices_1(MeshCoordinate{2, 0}, MeshCoordinate{3, 7});
         random_workload->add_program(devices_0, std::move(*programs[i]));
         random_workload->add_program(devices_1, std::move(*programs[i + 1]));
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
 
@@ -821,7 +821,7 @@ TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
         MeshCoordinateRange devices_1(MeshCoordinate{0, 4}, MeshCoordinate{3, 7});
         random_workload->add_program(devices_0, std::move(*programs[i]));
         random_workload->add_program(devices_1, std::move(*programs[i + 1]));
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
 
@@ -839,7 +839,7 @@ TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
         random_workload->add_program(devices_1, std::move(*programs[i + 1]));
         random_workload->add_program(devices_2, std::move(*programs[i + 2]));
         random_workload->add_program(devices_3, std::move(*programs[i + 3]));
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
 
@@ -864,7 +864,7 @@ TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
         random_workload->add_program(devices_5, std::move(*programs[i + 5]));
         random_workload->add_program(devices_6, std::move(*programs[i + 6]));
         random_workload->add_program(devices_7, std::move(*programs[i + 7]));
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
     for (int i = 0; i < num_iterations; i++) {
@@ -872,10 +872,10 @@ TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
             log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
         for (auto& workload : mesh_workloads) {
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
         }
     }
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 }
 
 TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
@@ -901,7 +901,7 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
         MeshCoordinateRange device_range(MeshCoordinate{0, 0}, MeshCoordinate{gen_row(rng) - 1, gen_col(rng) - 1});
         auto random_workload = std::make_shared<MeshWorkload>();
         random_workload->add_program(device_range, std::move(*programs[i]));
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
     for (int i = 0; i < num_iterations; i++) {
@@ -909,11 +909,11 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
             log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
         for (auto& workload : mesh_workloads) {
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
         }
     }
     log_info(tt::LogTest, "Calling Finish");
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 }
 
 TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
@@ -944,15 +944,15 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
             EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), src0_bufs[(col_idx * worker_grid_size.y) + row_idx], src0_vec);
+                mesh_device_->mesh_command_queue(0), src0_bufs[(col_idx * worker_grid_size.y) + row_idx], src0_vec);
             EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), src1_bufs[(col_idx * worker_grid_size.y) + row_idx], src1_vec);
+                mesh_device_->mesh_command_queue(0), src1_bufs[(col_idx * worker_grid_size.y) + row_idx], src1_vec);
         }
     }
 
     // Run workload multiple times
     for (int i = 0; i < 1000; i++) {
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload, false);
     }
 
     for (const auto& device_coord : MeshCoordinateRange(mesh_device_->shape())) {
@@ -960,7 +960,7 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
             for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
                 std::vector<bfloat16> dst_vec = {};
                 ReadShard(
-                    mesh_device_->mesh_command_queue(),
+                    mesh_device_->mesh_command_queue(0),
                     dst_vec,
                     output_bufs[(col_idx * worker_grid_size.y) + row_idx],
                     device_coord);
@@ -1053,7 +1053,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
             EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), input_buffers[(col_idx * worker_grid_size.y) + row_idx], src_vec);
+                mesh_device_->mesh_command_queue(0), input_buffers[(col_idx * worker_grid_size.y) + row_idx], src_vec);
         }
     }
 
@@ -1066,13 +1066,13 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
                 rtas[core.x][core.y].at(4) = ((iter % 2) + 1) * add_factor;
             }
         }
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload, false);
         for (const auto& device_coord : devices_0) {
             for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
                 for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
                     std::vector<bfloat16> dst_vec = {};
                     ReadShard(
-                        mesh_device_->mesh_command_queue(),
+                        mesh_device_->mesh_command_queue(0),
                         dst_vec,
                         output_buffers[(col_idx * worker_grid_size.y) + row_idx],
                         device_coord);
@@ -1123,8 +1123,8 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     MeshCoordinateRange devices(mesh_device_->shape());
 
     mesh_workload.add_program(devices, std::move(*program));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
-    Finish(mesh_device_->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue(0));
     verify_cb_config(mesh_device_, mesh_workload, cb_config_vector, cr_set);
     verify_cb_config_report(mesh_device_, cr_set, report_addr, cb_config_vector[updated_cb_index]);
 
@@ -1135,15 +1135,15 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
         const uint32_t cb_size = cb_config.num_pages * cb_config.page_size;
         UpdateCircularBufferTotalSize(mesh_workload.get_programs().at(devices), cb_handles[cb_id], cb_size);
     }
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
-    Finish(mesh_device_->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue(0));
     verify_cb_config(mesh_device_, mesh_workload, updated_cb_config_vector, cr_set);
     verify_cb_config_report(mesh_device_, cr_set, report_addr, updated_cb_config_vector[updated_cb_index]);
 
     // Populate the trace command cache before updating page size so the update must refresh both command caches.
-    const MeshTraceId initial_trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue());
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
-    mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(), initial_trace_id);
+    const MeshTraceId initial_trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload, false);
+    mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), initial_trace_id);
     mesh_device_->release_mesh_trace(initial_trace_id);
 
     CBConfig& updated_cb_config = updated_cb_config_vector[updated_cb_index];
@@ -1153,17 +1153,17 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     UpdateCircularBufferPageSize(
         workload_program, cb_handles[updated_cb_index], updated_cb_config.cb_id, updated_cb_config.page_size);
 
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
-    Finish(mesh_device_->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue(0));
     verify_cb_config(mesh_device_, mesh_workload, updated_cb_config_vector, cr_set);
     verify_cb_config_report(mesh_device_, cr_set, report_addr, updated_cb_config);
 
-    const MeshTraceId updated_trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue());
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
-    mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(), updated_trace_id);
+    const MeshTraceId updated_trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload, false);
+    mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), updated_trace_id);
     clear_cb_config_report(mesh_device_, cr_set, report_addr);
-    mesh_device_->replay_mesh_trace(mesh_device_->mesh_command_queue(), updated_trace_id, false);
-    Finish(mesh_device_->mesh_command_queue());
+    mesh_device_->replay_mesh_trace(mesh_device_->mesh_command_queue(0), updated_trace_id, false);
+    Finish(mesh_device_->mesh_command_queue(0));
     verify_cb_config_report(mesh_device_, cr_set, report_addr, updated_cb_config);
     mesh_device_->release_mesh_trace(updated_trace_id);
 
@@ -1183,8 +1183,8 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
         // First dispatch refreshes the payload; the second reuses the unchanged generation.
         for (int repeat = 0; repeat < 2; ++repeat) {
             clear_cb_config_report(mesh_device_, cr_set, report_addr);
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
-            Finish(mesh_device_->mesh_command_queue());
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload, false);
+            Finish(mesh_device_->mesh_command_queue(0));
             verify_cb_config_report(mesh_device_, cr_set, report_addr, updated_cb_config, expected_address);
         }
     };
@@ -1268,8 +1268,8 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {
     auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices(mesh_device_->shape());
     mesh_workload.add_program(devices, std::move(program));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
-    Finish(mesh_device_->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue(0));
 
     for (auto* const device : mesh_device_->impl().get_devices()) {
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values);
@@ -1302,8 +1302,8 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
 
     mesh_workload.add_program(devices_0, std::move(program0));
     mesh_workload.add_program(devices_1, std::move(program1));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
-    Finish(mesh_device_->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue(0));
 
     for (const auto& device_coord : devices_0) {
         if (!mesh_device_->impl().is_local(device_coord)) {
@@ -1350,7 +1350,7 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkloadMultiThread) {
                     MeshCoordinate{0, 0}, MeshCoordinate{gen_row(rng) - 1, gen_col(rng) - 1});
                 auto random_workload = std::make_shared<MeshWorkload>();
                 random_workload->add_program(device_range, std::move(*programs[i]));
-                EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
+                EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *random_workload, false);
                 mesh_workloads.push_back(random_workload);
             }
             for (int i = 0; i < num_iterations; i++) {
@@ -1358,7 +1358,7 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkloadMultiThread) {
                     log_info(tt::LogTest, "Run MeshWorkloads thread {} for iteration {}", thread_idx, i);
                 }
                 for (auto& workload : mesh_workloads) {
-                    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+                    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
                 }
             }
         }));
@@ -1368,7 +1368,7 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkloadMultiThread) {
     }
 
     log_info(tt::LogTest, "Calling Finish");
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 }
 
 }  // namespace

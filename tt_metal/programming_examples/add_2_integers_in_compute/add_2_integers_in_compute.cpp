@@ -32,7 +32,7 @@ int main() {
     // In Metalium, submitting operations to the device is done through a command queue. This includes
     // uploading/downloading data to/from the device, and executing programs.
     // A MeshCommandQueue is a software concept that allows developers to submit operations to a MeshDevice.
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 
     // A MeshWorkload is a collection of programs that are executed on a MeshDevice.
     // The specific physical devices that the workload is executed on are determined by the MeshCoordinateRange.

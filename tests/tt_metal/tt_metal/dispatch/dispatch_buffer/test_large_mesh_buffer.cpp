@@ -237,8 +237,8 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
         output_shards.emplace_back(distributed::ShardDataTransfer{coord}.host_data(dst_vec[coord].data()));
     }
 
-    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, false);
-    mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, mesh_buffer, true);
+    mesh_device_->mesh_command_queue(0).enqueue_write_shards(mesh_buffer, input_shards, false);
+    mesh_device_->mesh_command_queue(0).enqueue_read_shards(output_shards, mesh_buffer, true);
 
     for (auto& dst : dst_vec) {
         std::string context =
@@ -503,8 +503,8 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
         output_shards.emplace_back(distributed::ShardDataTransfer{coord}.host_data(dst_vec[coord].data()));
     }
 
-    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, false);
-    mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, mesh_buffer, true);
+    mesh_device_->mesh_command_queue(0).enqueue_write_shards(mesh_buffer, input_shards, false);
+    mesh_device_->mesh_command_queue(0).enqueue_read_shards(output_shards, mesh_buffer, true);
 
     for (auto& dst : dst_vec) {
         std::string context =

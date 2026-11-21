@@ -985,10 +985,7 @@ tt_fabric::FabricNodeId MeshDeviceImpl::get_fabric_node_id(const MeshCoordinate&
     return view_->get_fabric_node_id(coord);
 }
 
-MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_id) const {
-    // An explicit id never consults the (deprecated) thread-local selection.
-    const uint8_t id = cq_id.has_value() ? *cq_id : MetalContext::current_command_queue_id_for_thread();
-
+MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(uint8_t id) const {
     // If the mesh device has no local devices, return the dummy mesh command queue.
     if (local_devices_.empty()) {
         return *mesh_command_queues_[0];
@@ -1000,10 +997,7 @@ MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_i
     return *command_queue;
 }
 
-MeshCommandQueueBase& MeshDeviceImpl::mesh_command_queue_base(std::optional<uint8_t> cq_id) const {
-    // An explicit id never consults the (deprecated) thread-local selection.
-    const uint8_t id = cq_id.has_value() ? *cq_id : MetalContext::current_command_queue_id_for_thread();
-
+MeshCommandQueueBase& MeshDeviceImpl::mesh_command_queue_base(uint8_t id) const {
     // If the mesh device has no local devices, return the dummy mesh command queue.
     if (local_devices_.empty()) {
         return *mesh_command_queues_[0];
@@ -2418,8 +2412,10 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const MeshShape& submesh_shape) {
     return pimpl_->create_submeshes(shared_from_this(), submesh_shape);
 }
+MeshCommandQueue& MeshDevice::mesh_command_queue(uint8_t cq_id) const { return pimpl_->mesh_command_queue(cq_id); }
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::optional<uint8_t> cq_id) const {
-    return pimpl_->mesh_command_queue(cq_id);
+    // Deprecated implicit selection; the thread-local lookup lives only here and is removed with this overload.
+    return pimpl_->mesh_command_queue(cq_id.has_value() ? *cq_id : MetalContext::current_command_queue_id_for_thread());
 }
 void MeshDevice::enqueue_to_thread_pool(ttsl::move_only_function<void()>&& f) {
     pimpl_->enqueue_to_thread_pool(std::move(f));

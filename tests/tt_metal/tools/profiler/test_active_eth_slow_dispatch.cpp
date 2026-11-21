@@ -45,7 +45,7 @@ void RunActiveEthKernels(const std::shared_ptr<distributed::MeshDevice>& mesh_de
 
     workload.add_program(device_range, std::move(program));
     for (int i = 0; i < enqueue_times; i++) {
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
     }
 }
 

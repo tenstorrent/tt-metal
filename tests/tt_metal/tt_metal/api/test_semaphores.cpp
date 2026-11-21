@@ -88,7 +88,7 @@ void create_and_read_max_num_semaphores(
     std::shared_ptr<distributed::MeshDevice> mesh_device,
     distributed::MeshWorkload& workload,
     const CoreRange& core_range) {
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);

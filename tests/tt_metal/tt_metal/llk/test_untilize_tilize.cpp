@@ -213,7 +213,7 @@ static void validate_result(
 //   - UntilizeType::PACK / DST (compute kernels: pack_untilize (optionally with FAST_UNTILIZE) / dst_untilize)
 //   - TilizeType::UNPACK_A (compute kernel: tilize.cpp, optionally with FAST_TILIZE)
 void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const TestConfig& test_config) {
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     const NodeCoord node{0, 0};
 
     const std::uint32_t num_tiles = test_config.num_tiles_r * test_config.num_tiles_c;
@@ -458,7 +458,7 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
 // On Quasar, llk_unpack_tilizeA_B is only compatible with the math reduce kernel, not eltwise
 // binary add, so the caller (`TensixComputeUnpackTilizeA_B`) skips on Quasar.
 void run_single_core_unpack_tilizeA_B_program(distributed::MeshDevice& mesh_device, const TestConfig& test_config) {
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     Program program = tt::tt_metal::CreateProgram(mesh_device);
 
     CoreCoord core = {0, 0};
@@ -947,7 +947,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_BNarrowTile) {
         const std::uint32_t tile_bytes = tile.get_tile_size(tt::DataFormat::Float16_b);
         for (const auto& [num_tiles_r, num_tiles_c] : {std::pair<std::uint32_t, std::uint32_t>{1, 1}, {2, 4}}) {
             auto& mesh_device = *this->devices_.at(0);
-            auto& cq = mesh_device.mesh_command_queue();
+            auto& cq = mesh_device.mesh_command_queue(0);
             Program program = CreateProgram(*this->devices_[0]);
             const CoreCoord core = {0, 0};
             const std::uint32_t num_tiles = num_tiles_r * num_tiles_c;
@@ -1069,7 +1069,7 @@ static void run_quasar_tilize_untilize_test(
     bool unpack_to_dest = false) {
     bool is_tilize = (mode == QuasarTestMode::TILIZE);
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     const NodeCoord node{0, 0};
 
     constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;

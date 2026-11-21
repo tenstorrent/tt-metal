@@ -70,7 +70,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWriteReadDRAM) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue(0);
     std::shared_ptr<distributed::MeshBuffer> buf = make_interleaved_mesh_buffer(BufferType::DRAM, devices_[0].get());
 
     std::vector<uint32_t> src(num_elems);
@@ -91,7 +91,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsDRAM)
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue(0);
     std::shared_ptr<distributed::MeshBuffer> buf = make_interleaved_mesh_buffer(BufferType::DRAM, devices_[0].get());
 
     for (uint32_t round = 0; round < 10; round++) {
@@ -113,7 +113,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWriteReadL1) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue(0);
     std::shared_ptr<distributed::MeshBuffer> buf = make_interleaved_mesh_buffer(BufferType::L1, devices_[0].get());
 
     std::vector<uint32_t> src(num_elems);
@@ -134,7 +134,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsL1) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue(0);
     std::shared_ptr<distributed::MeshBuffer> buf = make_interleaved_mesh_buffer(BufferType::L1, devices_[0].get());
 
     for (uint32_t round = 0; round < 10; round++) {
@@ -192,7 +192,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferHeightShardedL1) {
     std::vector<uint32_t> src(num_nodes * 32 * 32);
     std::iota(src.begin(), src.end(), 0x5a5a0000u);
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, buffer, src);
     std::vector<uint32_t> dst;
     distributed::EnqueueReadMeshBuffer(cq, dst, buffer, /*blocking=*/true);
@@ -217,7 +217,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWidthShardedL1) {
     std::vector<uint32_t> src(num_nodes * 32 * 32);
     std::iota(src.begin(), src.end(), 0x5a5a0000u);
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, buffer, src);
     std::vector<uint32_t> dst;
     distributed::EnqueueReadMeshBuffer(cq, dst, buffer, /*blocking=*/true);

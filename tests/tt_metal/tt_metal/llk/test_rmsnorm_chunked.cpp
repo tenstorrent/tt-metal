@@ -35,7 +35,7 @@ std::vector<float> run_rmsnorm_chunked(
     const std::uint32_t output_tile_bytes = tile_elements * (fp32_dest ? sizeof(float) : sizeof(bfloat16));
     const std::uint32_t output_tiles = rows * (clear_only ? capacity * (capacity - 1) : 1);
     Program program = CreateProgram(mesh);
-    auto& cq = mesh.mesh_command_queue();
+    auto& cq = mesh.mesh_command_queue(0);
     auto make_buffer = [&](std::uint32_t bytes) {
         return distributed::MeshBuffer::create(
             distributed::ReplicatedBufferConfig{.size = bytes},

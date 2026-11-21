@@ -62,12 +62,12 @@ TensorParameter MakeDramTileTensorParameter(std::string name, const Shape& logic
 
 void WriteConstantBf16(distributed::MeshDevice& mesh_device, MeshTensor& tensor, float value) {
     std::vector<bfloat16> data(tensor.logical_volume(), bfloat16(value));
-    mesh_device.mesh_command_queue().enqueue_write_tensor(
+    mesh_device.mesh_command_queue(0).enqueue_write_tensor(
         HostTensor::from_vector(std::move(data), tensor.tensor_spec()), tensor);
 }
 
 std::vector<bfloat16> ReadBf16(distributed::MeshDevice& mesh_device, const MeshTensor& tensor) {
-    return mesh_device.mesh_command_queue().enqueue_read_tensor(tensor).to_vector<bfloat16>();
+    return mesh_device.mesh_command_queue(0).enqueue_read_tensor(tensor).to_vector<bfloat16>();
 }
 
 }  // namespace
@@ -232,7 +232,7 @@ void kernel_main() {
     std::vector<uint32_t> zero_report(2, 0u);
     slow_dispatch::WriteToL1(*mesh_device, node, kLlkReportAddr, zero_report);
 
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, /*blocking=*/true);
 
     std::vector<uint32_t> reported;
     slow_dispatch::ReadFromL1(*mesh_device, node, kLlkReportAddr, 2 * sizeof(uint32_t), reported);
@@ -319,7 +319,7 @@ void kernel_main() {
     WriteConstantBf16(*mesh_device, b_tensor, kB);
     WriteConstantBf16(*mesh_device, c_tensor, 0.0f);
 
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, /*blocking=*/true);
 
     const auto output = ReadBf16(*mesh_device, c_tensor);
     EXPECT_EQ(output, std::vector<bfloat16>(c_tensor.logical_volume(), bfloat16(kA * kB)));
@@ -454,7 +454,7 @@ void kernel_main() {
     constexpr float kB = 5.0f;
     WriteConstantBf16(*mesh_device, c_tensor, 0.0f);
 
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, /*blocking=*/true);
 
     const auto output = ReadBf16(*mesh_device, c_tensor);
     EXPECT_EQ(output, std::vector<bfloat16>(c_tensor.logical_volume(), bfloat16(kA * kB)));

@@ -192,7 +192,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSingleWorkloadNonBlockingEnqueueFi
     std::vector<uint32_t> zeros(kWorkloadOutputCount, 0);
     slow_dispatch::WriteToL1(this->device(), node, base_address, zeros);
 
-    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue(0);
     distributed::MeshWorkload workload =
         create_workload(this->device(), node, dm_base_address, dm_base_value, compute_address, "k0");
 
@@ -233,7 +233,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestMultipleWorkloadsNonBlockingEnqueu
     std::vector<uint32_t> zeros(kNumWorkloads * 2 * kL1CacheLineBytes / sizeof(uint32_t), 0);
     slow_dispatch::WriteToL1(this->device(), node, base_address, zeros);
 
-    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue(0);
     std::vector<distributed::MeshWorkload> workloads;
     workloads.reserve(kNumWorkloads);
     for (uint32_t w = 0; w < kNumWorkloads; w++) {
@@ -368,7 +368,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestWorkloadAcrossMultipleWorkerNodes)
     distributed::MeshWorkload workload =
         create_multi_node_workload(this->device(), node_range, dm_addresses_0, dm_values[0], compute_addresses_0);
     Program& program = workload.get_programs().at(device_range);
-    auto& cq = this->device().mesh_command_queue();
+    auto& cq = this->device().mesh_command_queue(0);
 
     for (uint32_t round = 0; round < kNumRounds; ++round) {
         auto [dm_addresses, compute_addresses] = addresses_for_round(round);
@@ -457,7 +457,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestMeshDeviceCloseDrainsNonBlockingWo
     const ChipId device_id = this->device().get_device_ids()[0];
     const CoreCoord virtual_core = this->device().worker_core_from_logical_core(CoreCoord(node.x, node.y));
 
-    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, false);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(0), workload, false);
     const auto close_start = std::chrono::steady_clock::now();
     this->device().close();
     const auto close_ms =
@@ -481,7 +481,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestMeshDeviceCloseDrainsNonBlockingWo
     slow_dispatch::WriteToL1(this->device(), node, dm_base_address, zeros);
     distributed::MeshWorkload after_reopen =
         create_workload(this->device(), node, dm_base_address, dm_base_value, compute_address, "reopen");
-    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), after_reopen, true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(0), after_reopen, true);
 
     std::vector<uint32_t> dm_output(kNumUserDMThreads, 0);
     slow_dispatch::ReadFromL1(this->device(), node, dm_base_address, kNumUserDMThreads * sizeof(uint32_t), dm_output);

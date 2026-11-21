@@ -127,7 +127,7 @@ TEST_F(MeshTraceTestSuite, Sanity) {
             auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
                 *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), seed);
             workload->add_program(all_devices, std::move(*programs[0]));
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
             mesh_workloads.push_back(workload);
         }
 
@@ -136,7 +136,7 @@ TEST_F(MeshTraceTestSuite, Sanity) {
             auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
             for (int workload_idx = 0; workload_idx < num_workloads_per_trace; workload_idx++) {
                 EnqueueMeshWorkload(
-                    mesh_device_->mesh_command_queue(),
+                    mesh_device_->mesh_command_queue(0),
                     *mesh_workloads[(trace_idx * num_workloads_per_trace) + workload_idx],
                     false);
             }
@@ -149,7 +149,7 @@ TEST_F(MeshTraceTestSuite, Sanity) {
                 mesh_device_->replay_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id, false);
             }
         }
-        Finish(mesh_device_->mesh_command_queue());
+        Finish(mesh_device_->mesh_command_queue(0));
 
         for (auto trace_id : trace_ids) {
             mesh_device_->release_mesh_trace(trace_id);
@@ -203,20 +203,20 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
             EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), src0_bufs[(col_idx * worker_grid_size.y) + row_idx], src0_vec);
+                mesh_device_->mesh_command_queue(0), src0_bufs[(col_idx * worker_grid_size.y) + row_idx], src0_vec);
             EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), src1_bufs[(col_idx * worker_grid_size.y) + row_idx], src1_vec);
+                mesh_device_->mesh_command_queue(0), src1_bufs[(col_idx * worker_grid_size.y) + row_idx], src1_vec);
         }
     }
     // Compile workloads
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload_1, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload_2, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload_1, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload_2, false);
     // Capture trace
     auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload_1, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload_2, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload_1, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload_2, false);
     mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id);
 
     // Run workload multiple times
@@ -231,7 +231,7 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
                 for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
                     std::vector<bfloat16> dst_vec = {};
                     ReadShard(
-                        mesh_device_->mesh_command_queue(),
+                        mesh_device_->mesh_command_queue(0),
                         dst_vec,
                         output_bufs[(col_idx * worker_grid_size.y) + row_idx],
                         MeshCoordinate(logical_y, logical_x));
@@ -302,45 +302,45 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
     incrementer_2.add_program(all_devices, std::move(incrementer_program_2));
 
     // Compile all MeshWorkloads
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_0, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), waiter_0, false);
     mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_0, true);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_0, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), syncer_0, true);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), incrementer_0, false);
     mesh_device_->reset_sub_device_stall_group();
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_1, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), waiter_1, false);
     mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_1, true);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_1, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), syncer_1, true);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), incrementer_1, false);
     mesh_device_->reset_sub_device_stall_group();
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_2, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), waiter_2, false);
     mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_2, true);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_2, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), syncer_2, true);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), incrementer_2, false);
     mesh_device_->reset_sub_device_stall_group();
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 
     // Capture trace
     auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_0, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_0, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_0, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_1, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_1, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_1, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_2, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_2, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_2, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), waiter_0, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), syncer_0, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), incrementer_0, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), waiter_1, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), syncer_1, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), incrementer_1, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), waiter_2, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), syncer_2, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), incrementer_2, false);
     mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id);
 
     // Run trace on all SubDevices in the Mesh
     for (uint32_t i = 0; i < num_iters; i++) {
         mesh_device_->replay_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id, false);
     }
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
     mesh_device_->release_mesh_trace(trace_id);
 }
 
@@ -464,9 +464,9 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
 
     // Compile and load workloads
     mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), datacopy_mesh_workload, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), syncer_mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), datacopy_mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), add_mesh_workload, false);
 
     for (auto device_id : mesh_device_->get_device_ids()) {
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -475,9 +475,9 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
 
     // Capture Trace
     auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), datacopy_mesh_workload, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), syncer_mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), datacopy_mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), add_mesh_workload, false);
     mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id);
     // Run trace and verify outputs
     for (int i = 0; i < 50; i++) {
@@ -489,7 +489,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         // program goes through an independent path (UMD) and can go out of order wrt the
         // buffer data
         mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(0), input_buf, src_vec, true);
 
         for (auto device_id : mesh_device_->get_device_ids()) {
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -498,13 +498,13 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         mesh_device_->reset_sub_device_stall_group();
         for (const auto& device_coord : left_col) {
             std::vector<uint32_t> dst_vec;
-            ReadShard(mesh_device_->mesh_command_queue(), dst_vec, output_buf, device_coord);
+            ReadShard(mesh_device_->mesh_command_queue(0), dst_vec, output_buf, device_coord);
             EXPECT_EQ(dst_vec, src_vec);
         }
 
         for (const auto& device_coord : right_col) {
             std::vector<uint32_t> dst_vec;
-            ReadShard(mesh_device_->mesh_command_queue(), dst_vec, output_buf, device_coord);
+            ReadShard(mesh_device_->mesh_command_queue(0), dst_vec, output_buf, device_coord);
             for (int j = 0; j < dst_vec.size(); j++) {
                 EXPECT_EQ(dst_vec[j], src_vec[j] + 3);
             }
@@ -525,14 +525,14 @@ TEST_F(MeshTraceTestSuite, MeshTraceAsserts) {
     workload->add_program(all_devices, std::move(*programs[0]));
     auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
     try {
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, true);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, true);
         FAIL() << "Expected EnqueueMeshWorkload to fail while tracing uncached program binaries";
     } catch (const std::runtime_error& e) {
         const std::string error_message = e.what();
         EXPECT_NE(error_message.find("Cannot load new binaries during trace capture."), std::string::npos);
         EXPECT_NE(error_message.find("Warm up before capturing a trace."), std::string::npos);
     }
-    EXPECT_THROW(Finish(mesh_device_->mesh_command_queue()), std::runtime_error);
+    EXPECT_THROW(Finish(mesh_device_->mesh_command_queue(0)), std::runtime_error);
     mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id);
 }
 
@@ -549,19 +549,19 @@ TEST_F(MeshTraceTest2x4, NonConvexGridTrace) {
     mesh_workload->add_program(bottom_right_corner, std::move(*programs[1]));
 
     // Compile workload first
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload, false);
-    Finish(mesh_device_->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue(0));
 
     // Capture trace with non-convex grid
     auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *mesh_workload, false);
     mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id);
 
     // Replay trace multiple times to ensure it works correctly
     for (int i = 0; i < 100; i++) {
         mesh_device_->replay_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id, false);
     }
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 
     // Cleanup
     mesh_device_->release_mesh_trace(trace_id);
@@ -576,17 +576,17 @@ TEST_F(MeshTraceTest2x4, SingleDeviceTraceReplay) {
     mesh_workload->add_program(MeshCoordinateRange({0, 0}, {0, 0}), std::move(*programs[0]));
 
     // Compile workload first
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload, false);
-    Finish(mesh_device_->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue(0));
 
     auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *mesh_workload, false);
     mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id);
 
     for (int i = 0; i < 100; i++) {
         mesh_device_->replay_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id, false);
     }
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 
     mesh_device_->release_mesh_trace(trace_id);
 }
@@ -612,19 +612,19 @@ void run_heterogenous_trace_sweep(
                     *mesh_device, 1, mesh_device->compute_with_storage_grid_size(), seed);
                 workload->add_program(program_grid, std::move(*programs[0]));
             }
-            EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false);
+            EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), *workload, false);
             mesh_workloads.push_back(workload);
         }
     }
     auto trace_id = mesh_device->begin_mesh_trace(mesh_device->mesh_command_queue(0));
     for (auto& workload : mesh_workloads) {
-        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false);
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), *workload, false);
     }
     mesh_device->end_mesh_trace(mesh_device->mesh_command_queue(0), trace_id);
     for (int i = 0; i < 50; i++) {
         mesh_device->replay_mesh_trace(mesh_device->mesh_command_queue(0), trace_id, false);
     }
-    Finish(mesh_device->mesh_command_queue());
+    Finish(mesh_device->mesh_command_queue(0));
     mesh_device->release_mesh_trace(trace_id);
 }
 
@@ -820,14 +820,14 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, BasicTraceWithZeroTraceRegion) {
         auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
             *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 42);
         workload->add_program(all_devices, std::move(*programs[0]));
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
         mesh_workloads.push_back(workload);
     }
 
     // Capture trace
     auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
     for (auto& workload : mesh_workloads) {
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
     }
     mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id);
 
@@ -835,7 +835,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, BasicTraceWithZeroTraceRegion) {
     for (uint32_t i = 0; i < num_replays; i++) {
         mesh_device_->replay_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id, false);
     }
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 
     mesh_device_->release_mesh_trace(trace_id);
 }
@@ -849,7 +849,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithSmallAllocationsDuringCaptu
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 123);
     workload->add_program(all_devices, std::move(*programs[0]));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
 
     // Begin trace capture
     auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
@@ -865,7 +865,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithSmallAllocationsDuringCaptu
     };
     auto small_buffer = MeshBuffer::create(global_buffer_config, device_local_config, mesh_device_.get());
 
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
 
     // End trace capture (should succeed - no overlap)
     mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id);
@@ -873,7 +873,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithSmallAllocationsDuringCaptu
     // Deallocate buffer and replay trace
     small_buffer.reset();
     mesh_device_->replay_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id, false);
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 
     mesh_device_->release_mesh_trace(trace_id);
 }
@@ -891,17 +891,17 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, MultipleLiveTracesValidateAgainstMax
     auto sub_device_manager = mesh_device_->create_sub_device_manager({sub_device}, 0);
 
     // Warm up the workload under both managers before trace capture.
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
-    Finish(mesh_device_->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), workload, false);
+    Finish(mesh_device_->mesh_command_queue(0));
     mesh_device_->load_sub_device_manager(sub_device_manager);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
-    Finish(mesh_device_->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), workload, false);
+    Finish(mesh_device_->mesh_command_queue(0));
     mesh_device_->clear_loaded_sub_device_manager();
 
     // First measure where an otherwise identical trace is placed and how much per-bank address space it occupies.
     // Releasing this calibration trace restores the allocator to the state used by the traces under test.
     auto calibration_trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), workload, false);
     mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), calibration_trace_id);
     auto calibration_trace = mesh_device_->get_mesh_trace(calibration_trace_id);
     const DeviceAddr trace_buffer_address = calibration_trace->mesh_buffer->address();
@@ -924,7 +924,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, MultipleLiveTracesValidateAgainstMax
 
     // Trace A records a high water mark at the start of its own top-down trace buffer. This is valid for A.
     auto trace_a_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), workload, false);
     auto hwm_buffer = MeshBuffer::create(hwm_buffer_config, lowest_address_config, mesh_device_.get());
     hwm_buffer.reset();
     mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), trace_a_id);
@@ -933,7 +933,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, MultipleLiveTracesValidateAgainstMax
     // A's, inside A's replay footprint.
     mesh_device_->load_sub_device_manager(sub_device_manager);
     auto trace_b_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), workload, false);
     EXPECT_THAT(
         [&]() { mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), trace_b_id); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("maximum live trace high water mark")));
@@ -953,14 +953,14 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 456);
     workload->add_program(all_devices, std::move(*programs[0]));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
 
     // Begin trace capture - this starts high water mark tracking
     auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
 
     // Record many command iterations to make the trace buffer larger
     for (uint32_t i = 0; i < 1000; i++) {
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
     }
 
     // Allocate as many buffers as possible DURING trace capture (bottom-up, like tensor allocations)
@@ -1033,14 +1033,14 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithTopDownAllocationsDetectsOv
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 789);
     workload->add_program(all_devices, std::move(*programs[0]));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
 
     // Begin trace capture - this starts high water mark tracking
     auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
 
     // Record many command iterations to make the trace buffer large
     for (uint32_t i = 0; i < 1000; i++) {
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
     }
 
     // Allocate a large top-down DRAM buffer during trace capture
@@ -1096,7 +1096,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocations
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         *this->mesh_device_, 1, mesh_device_->compute_with_storage_grid_size(), 999);
     workload->add_program(all_devices, std::move(*programs[0]));
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
 
     // Allocate buffers BEFORE trace capture starts
     // These will NOT be tracked initially since tracking hasn't started yet
@@ -1138,7 +1138,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocations
 
     // Record many command iterations to make the trace buffer larger
     for (uint32_t i = 0; i < 1000; i++) {
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *workload, false);
     }
 
     // Deallocate all buffers (both pre-existing and during-trace) BEFORE ending trace
@@ -1190,7 +1190,7 @@ CounterWorkload make_counter_workload(MeshDevice& mesh_device, const CoreRange& 
             .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED)},
         &mesh_device);
     EnqueueWriteMeshBuffer(
-        mesh_device.mesh_command_queue(),
+        mesh_device.mesh_command_queue(0),
         counters,
         std::vector<uint32_t>(num_cores * page_words, 0),
         /*blocking=*/true);
@@ -1214,7 +1214,7 @@ void expect_counts(
     const uint32_t page_words = hal::get_l1_alignment() / sizeof(uint32_t);
     for (const auto& coord : MeshCoordinateRange(mesh_device.shape())) {
         std::vector<uint32_t> pages;
-        ReadShard(mesh_device.mesh_command_queue(), pages, counters, coord);
+        ReadShard(mesh_device.mesh_command_queue(0), pages, counters, coord);
         ASSERT_EQ(pages.size(), num_cores * page_words);
         for (uint32_t i = 0; i < num_cores; ++i) {
             EXPECT_EQ(pages[i * page_words], expected) << "chip " << coord << " core " << i;

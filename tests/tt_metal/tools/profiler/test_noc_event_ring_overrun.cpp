@@ -165,7 +165,7 @@ int main(int argc, char** argv) {
 
         distributed::MeshWorkload workload;
         workload.add_program(device_range, std::move(program));
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, true);
 
         ReadMeshDeviceProfilerResults(*mesh_device);
         pass &= mesh_device->close();

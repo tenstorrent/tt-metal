@@ -30,7 +30,7 @@ int main() {
     constexpr int device_id = 0;
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     Program program = CreateProgram(*mesh_device);
 
     distributed::MeshWorkload workload;

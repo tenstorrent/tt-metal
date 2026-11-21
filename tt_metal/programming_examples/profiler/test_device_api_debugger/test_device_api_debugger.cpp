@@ -60,7 +60,7 @@ void RunFillUpAllBuffers(const std::shared_ptr<distributed::MeshDevice>& mesh_de
             .defines = defines});
 
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
     ReadMeshDeviceProfilerResults(*mesh_device);
 }
 

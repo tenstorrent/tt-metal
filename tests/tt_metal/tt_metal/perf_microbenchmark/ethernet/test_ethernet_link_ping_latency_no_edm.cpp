@@ -176,21 +176,21 @@ void run(
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         // For slow dispatch mode, use threads with mesh workloads
         std::thread th2 = std::thread([&] {
-            tt::tt_metal::distributed::EnqueueMeshWorkload(device0->mesh_command_queue(), mesh_workload0, true);
+            tt::tt_metal::distributed::EnqueueMeshWorkload(device0->mesh_command_queue(0), mesh_workload0, true);
         });
         std::thread th1 = std::thread([&] {
-            tt::tt_metal::distributed::EnqueueMeshWorkload(device1->mesh_command_queue(), mesh_workload1, true);
+            tt::tt_metal::distributed::EnqueueMeshWorkload(device1->mesh_command_queue(0), mesh_workload1, true);
         });
 
         th2.join();
         th1.join();
     } else {
-        tt::tt_metal::distributed::EnqueueMeshWorkload(device0->mesh_command_queue(), mesh_workload0, false);
-        tt::tt_metal::distributed::EnqueueMeshWorkload(device1->mesh_command_queue(), mesh_workload1, false);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(device0->mesh_command_queue(0), mesh_workload0, false);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(device1->mesh_command_queue(0), mesh_workload1, false);
 
         std::cout << "Calling Finish" << std::endl;
-        tt::tt_metal::distributed::Finish(device0->mesh_command_queue());
-        tt::tt_metal::distributed::Finish(device1->mesh_command_queue());
+        tt::tt_metal::distributed::Finish(device0->mesh_command_queue(0));
+        tt::tt_metal::distributed::Finish(device1->mesh_command_queue(0));
     }
     tt::tt_metal::ReadMeshDeviceProfilerResults(*device0);
     tt::tt_metal::ReadMeshDeviceProfilerResults(*device1);

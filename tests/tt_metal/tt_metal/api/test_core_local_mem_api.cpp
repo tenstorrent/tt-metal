@@ -77,7 +77,7 @@ void RunTest(tt::tt_metal::distributed::MeshDevice* mesh_device) {
             .compile_args = compile_args});
     workload.add_program(device_range, std::move(program));
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
+    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, true);
 
     uint64_t cycles_elapsed = 0;
     auto virtual_core = mesh_device->worker_core_from_logical_core(core);

@@ -395,7 +395,7 @@ int main(int argc, char* argv[]) {
     try {
         constexpr int device_id = 0;
         auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
 
         auto max_core_grid = mesh_device->compute_with_storage_grid_size();
         const uint32_t max_x = max_core_grid.x;

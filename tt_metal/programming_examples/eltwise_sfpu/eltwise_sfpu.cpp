@@ -31,7 +31,7 @@ int main() {
 
         // In Metalium, submitting operations to the device is done through a command queue. This includes
         // uploading/downloading data to/from the device, and executing programs.
-        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a given time. Metalium allows you to run different kernels on different cores
         // simultaneously.

@@ -107,8 +107,8 @@ void run_launcher(
 
     auto mesh_workload = MeshWorkload();
     mesh_workload.add_program(MeshCoordinateRange(socket_core.device_coord), std::move(program));
-    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
-    Finish(mesh_device->mesh_command_queue());
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, false);
+    Finish(mesh_device->mesh_command_queue(0));
 }
 
 void run_launcher(const std::shared_ptr<MeshDevice>& mesh_device, H2DMode h2d_mode, const LoopbackConfig& cfg) {

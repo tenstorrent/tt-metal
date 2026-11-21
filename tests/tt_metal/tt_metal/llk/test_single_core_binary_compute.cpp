@@ -413,7 +413,7 @@ bool single_core_binary(
     TT_FATAL(!(test_config.col_broadcast && test_config.row_broadcast), "Only one broadcast type may be selected");
     const bool is_quasar = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR;
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     const NodeCoord node{
         static_cast<std::uint32_t>(test_config.core.x), static_cast<std::uint32_t>(test_config.core.y)};

@@ -201,7 +201,7 @@ CreateKernel(
 // 5. Dispatch the kernel. The workload is enqueued non-blocking; the kernel
 //    begins running once the dispatch queue reaches it and will poll bytes_sent
 //    waiting for the host to produce data.
-EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload, false);
 
 // 6. Host transfer loop: write one page at a time.
 //    write() blocks if the FIFO is full (FIFO size - (bytes_sent - bytes_acked) < page_size).

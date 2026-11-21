@@ -28,7 +28,7 @@ int main(int /*argc*/, char** /*argv*/) {
         auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         // Submit work via the mesh command queue: uploads/downloads and program execution.
-        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a given time. Metalium allows you to run different kernels on different cores
         // simultaneously.

@@ -164,12 +164,12 @@ void build_and_run_program(
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         log_info(tt::LogTest, "Running program1 {} of {}", i + 1, NUM_PROGRAMS);
         if (i % 2 == 0) {
-            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload1, false);
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload1, false);
         } else {
-            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload2, false);
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload2, false);
         }
     }
-    distributed::Finish(device->mesh_command_queue());
+    distributed::Finish(device->mesh_command_queue(0));
 }
 
 void build_and_run_program_ethernet(
@@ -393,12 +393,12 @@ void build_and_run_program_ethernet(
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         log_info(tt::LogTest, "Running ethernet program {} of {}", i + 1, NUM_PROGRAMS);
         if (i % 2 == 0) {
-            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload1, false);
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload1, false);
         } else {
-            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload2, false);
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload2, false);
         }
     }
-    distributed::Finish(device->mesh_command_queue());
+    distributed::Finish(device->mesh_command_queue(0));
 }
 
 TEST_F(MeshDispatchFixture, TestDynamicNoCOneProgram) {

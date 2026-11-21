@@ -84,7 +84,7 @@ bool vecadd_multi_core(
     CoreCoord end_core = {0, 3};
     CoreRange cores(start_core, end_core);
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     const uint32_t tile_size = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     const uint32_t tiles_per_core = n_tiles / num_core;
 

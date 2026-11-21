@@ -168,7 +168,7 @@ struct RunConfig {
 // Returns true iff the narrow-row matrix is exactly right.
 bool run_narrow_row(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const Buffers& buffers, const RunConfig& cfg) {
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     const NodeCoord node{0, 0};
 
     // Outgrowing the buffers is silent otherwise: the stimulus resize() below would TRUNCATE

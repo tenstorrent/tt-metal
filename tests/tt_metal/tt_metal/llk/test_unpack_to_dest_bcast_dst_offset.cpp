@@ -105,7 +105,7 @@ const char* bcast_dim_name(BcastDim dim) {
 }
 
 bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::MeshDevice>& mesh_device, BcastDim dim) {
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 

@@ -32,7 +32,7 @@ The host-side setup for this custom SFPI example follows the standard pattern: d
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
     // Submit work via the mesh command queue: uploads/downloads and program execution
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     // Allocate mesh buffers: two inputs + one output (replicated across mesh)
     auto src0_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
     auto src1_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());

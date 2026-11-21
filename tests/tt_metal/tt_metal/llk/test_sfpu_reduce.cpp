@@ -327,7 +327,7 @@ double reduce_tolerance(const SfpuReduceConfig& config, std::uint32_t cols, doub
 
 void run_single_core_sfpu_reduce(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuReduceConfig& config) {
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     const NodeCoord node{0, 0};
 
     const std::uint32_t elem_bytes = datum_bytes(config.format);

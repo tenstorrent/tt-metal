@@ -22,7 +22,7 @@ namespace tt::tt_metal {
 namespace {
 
 void run_sdpa_recip(distributed::MeshDevice& mesh, std::uint32_t fidelity, std::uint32_t granularity) {
-    auto& cq = mesh.mesh_command_queue();
+    auto& cq = mesh.mesh_command_queue(0);
     const CoreCoord core{0, 0};
     constexpr std::uint32_t tiles = 3;
     constexpr std::uint32_t tile_bytes = 2048;
@@ -109,7 +109,7 @@ void run_sdpa_tail(
     bool fp32_dest_acc,
     bool full_sync,
     std::uint32_t num_blocks) {
-    auto& cq = mesh.mesh_command_queue();
+    auto& cq = mesh.mesh_command_queue(0);
     const CoreCoord core{0, 0};
     constexpr std::uint32_t rounds = 3;
     constexpr std::uint32_t block_size = 2;
@@ -277,7 +277,7 @@ void run_sdpa_tail(
 // chunk_tiles is the K-chunk length in tiles, which is also the OV matmul's kt_dim.
 template <bool test_correction_fidelity = false, std::uint32_t chunk_tiles = 2>
 void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, bool full_sync) {
-    auto& cq = mesh.mesh_command_queue();
+    auto& cq = mesh.mesh_command_queue(0);
     const CoreCoord core{0, 0};
     constexpr std::uint32_t rounds = 3;
     constexpr std::uint32_t chunks = test_correction_fidelity ? 3 : 2;

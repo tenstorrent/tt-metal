@@ -116,8 +116,8 @@ void compile_and_cache_dummy_workload(MeshDevice& mesh, const program_cache::det
 
     MeshWorkload workload;
     workload.add_program(MeshCoordinateRange(mesh.shape()), std::move(program));
-    EnqueueMeshWorkload(mesh.mesh_command_queue(), workload, false);
-    Finish(mesh.mesh_command_queue());
+    EnqueueMeshWorkload(mesh.mesh_command_queue(0), workload, false);
+    Finish(mesh.mesh_command_queue(0));
 
     program_cache::detail::CachedMeshWorkload<int> cached(std::move(workload), /*shared_variables=*/0);
     mesh.get_program_cache().insert(key, program_cache::detail::CachedProgramFactory(std::move(cached), 0));

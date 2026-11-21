@@ -348,7 +348,7 @@ protected:
     void release_core_and_finish(const TCoreType& core) {
         std::vector<uint32_t> release_word{release_value_};
         EXPECT_TRUE(detail::WriteToDeviceL1(device(), core, release_addr_, release_word));
-        Finish(devices_.at(0)->mesh_command_queue());
+        Finish(devices_.at(0)->mesh_command_queue(0));
     }
 
     void reset_worker_l1_state(const CoreCoord& core) {
@@ -595,7 +595,7 @@ TEST_F(DispatchTelemetryHostL1WaitTest, ReadInfoFromSeparateProcessWhileDeviceIn
         << "A MetalContext was created during test registration (e.g. by an INSTANTIATE_TEST_SUITE_P generator); "
            "the observer child would block on the CHIP_IN_USE lock this process holds";
 
-    auto& cq = devices_.at(0)->mesh_command_queue();
+    auto& cq = devices_.at(0)->mesh_command_queue(0);
     const CoreCoord worker_core{0, 0};
     reset_worker_l1_state(worker_core);
 
@@ -785,7 +785,7 @@ TEST_F(DispatchTelemetrySlowDispatchTest, ReadInfoReturnsNulloptButVersionIsVali
 }
 
 TEST_F(DispatchTelemetryReadApiTest, DispatchCoreProgramCount) {
-    auto& cq = devices_.at(0)->mesh_command_queue();
+    auto& cq = devices_.at(0)->mesh_command_queue(0);
     constexpr size_t total_runs = 10;
     constexpr size_t num_blank_programs = 16;
 
@@ -830,7 +830,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchCoreProgramCountForTraceReplay) {
     }
 
     auto mesh_device = devices_.at(0);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     int num_programs = 0;
     const CoreRangeSet worker_cores{CoreRange(CoreCoord{0, 0}, CoreCoord{1, 1})};
 
@@ -876,7 +876,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchCoreProgramCountForTraceReplay) {
 }
 
 TEST_F(DispatchTelemetryReadApiTest, PrefetchCommandCountIncrementsAfterProgramRuns) {
-    auto& cq = devices_.at(0)->mesh_command_queue();
+    auto& cq = devices_.at(0)->mesh_command_queue(0);
     constexpr size_t num_blank_programs = 4;
     const CoreRangeSet worker_cores{CoreRange(CoreCoord{0, 0}, CoreCoord{1, 1})};
 
@@ -904,7 +904,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchCoreEfficiencyIsNulloptWhenWorkerDi
     }
 
     // Create the device, single-core stream, blank program, and telemetry object.
-    auto& cq = devices_.at(0)->mesh_command_queue();
+    auto& cq = devices_.at(0)->mesh_command_queue(0);
     const CoreRangeSet worker_core{CoreRange(CoreCoord{0, 0})};
     Program program = create_blank_program(*this->devices_.at(0), worker_core);
     DispatchTelemetry telemetry(tt_device());
@@ -927,7 +927,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchUtilizationIsEmptyWhenWorkerDispatc
     }
 
     // Create the device, single-core stream, blank program, and telemetry object.
-    auto& cq = devices_.at(0)->mesh_command_queue();
+    auto& cq = devices_.at(0)->mesh_command_queue(0);
     const CoreRangeSet worker_core{CoreRange(CoreCoord{0, 0})};
     Program program = create_blank_program(*this->devices_.at(0), worker_core);
     DispatchTelemetry telemetry(tt_device());
@@ -948,7 +948,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchUtilizationIsEmptyWhenWorkerDispatc
 
 TEST_F(DispatchTelemetryHostL1WaitTest, WorkerWaitReportsUpstreamBlockedState) {
     IDevice* device = this->device();
-    auto& cq = devices_.at(0)->mesh_command_queue();
+    auto& cq = devices_.at(0)->mesh_command_queue(0);
     const CoreCoord worker_core{0, 0};
     reset_worker_l1_state(worker_core);
 
@@ -1032,7 +1032,7 @@ TEST_F(DispatchTelemetryHostL1WaitTest, DispatchSTelemetryTracksWorkerRuntime) {
         GTEST_SKIP() << "Requires worker dispatch and dispatch_s to be enabled";
     }
 
-    auto& cq = devices_.at(0)->mesh_command_queue();
+    auto& cq = devices_.at(0)->mesh_command_queue(0);
     const CoreCoord worker_core{0, 0};
     reset_worker_l1_state(worker_core);
 
@@ -1198,7 +1198,7 @@ TEST_F(DispatchTelemetryHostL1WaitTest, DispatchSTelemetryDoesNotOvercountComple
         GTEST_SKIP() << "Requires dispatch_s to be enabled";
     }
 
-    auto& cq = devices_.at(0)->mesh_command_queue();
+    auto& cq = devices_.at(0)->mesh_command_queue(0);
     auto mesh_device = devices_.at(0);
     const CoreCoord worker_core{0, 0};
 
@@ -1283,7 +1283,7 @@ TEST_F(DispatchTelemetryHostL1WaitTest, DispatchSTelemetryTracksMultipleSubDevic
     }
 
     auto mesh_device = devices_.at(0);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     const CoreCoord grid_size = device()->compute_with_storage_grid_size();
     if (grid_size.x * grid_size.y < 2) {
         GTEST_SKIP() << "Requires at least two worker cores";
@@ -1366,7 +1366,7 @@ TEST_F(DispatchTelemetryReadApiTest, LastWorkLaunchTimestampIncrementsPerSubDevi
     }
 
     auto mesh_device = devices_.at(0);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     const CoreRangeSet all_worker_cores = [&] {
         const CoreCoord grid_size = device()->compute_with_storage_grid_size();
         return CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{grid_size.x - 1, grid_size.y - 1}));
@@ -1474,7 +1474,7 @@ TEST_F(DispatchTelemetryReadApiTest, InactiveWorkersIncrementCompleteSem) {
 
     IDevice* device = this->device();
     auto mesh_device = devices_.at(0);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     const CoreRangeSet all_worker_cores = [&] {
         const CoreCoord grid_size = device->compute_with_storage_grid_size();
         return CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{grid_size.x - 1, grid_size.y - 1}));
@@ -1561,7 +1561,7 @@ TEST_F(DispatchTelemetryHostL1WaitTest, DispatchCoreEfficiencyAndUtilization) {
 
     IDevice* device = this->device();
     auto mesh_device = devices_.at(0);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     const CoreRangeSet all_worker_cores = [&] {
         const CoreCoord grid_size = device->compute_with_storage_grid_size();
         return CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{grid_size.x - 1, grid_size.y - 1}));

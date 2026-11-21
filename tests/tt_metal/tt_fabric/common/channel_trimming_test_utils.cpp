@@ -141,7 +141,7 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
     // prefetch its kernel binaries after LaunchProgramAsync returns.
     auto receiver_workload = tt_metal::LaunchProgramAsync(*receiver_device, std::move(receiver_program));
     tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
-    tt::tt_metal::distributed::Finish(receiver_device->mesh_command_queue());
+    tt::tt_metal::distributed::Finish(receiver_device->mesh_command_queue(0));
 
     // Validate sender/receiver status
     std::vector<uint32_t> sender_status;

@@ -159,8 +159,8 @@ PlantedResident plant_one_page_per_core(
     resident.buffer = MeshBuffer::create(global, cfg, mesh);
     resident.pattern.resize(grid.num_cores() * page_size / sizeof(uint32_t));
     std::iota(resident.pattern.begin(), resident.pattern.end(), salt);
-    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), resident.buffer, resident.pattern);
-    Finish(mesh->mesh_command_queue());
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(0), resident.buffer, resident.pattern);
+    Finish(mesh->mesh_command_queue(0));
     return resident;
 }
 
@@ -177,8 +177,8 @@ void run_forced_session_with_traffic(MeshDevice* mesh) {
     experimental::FastDispatchSetupOptions force{.allow_destructive = true};
     experimental::DispatchContext::get().initialize_fast_dispatch(mesh, force);
     auto traffic = MeshBuffer::create(dram_global, dram, mesh);
-    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), traffic, payload);
-    Finish(mesh->mesh_command_queue());
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(0), traffic, payload);
+    Finish(mesh->mesh_command_queue(0));
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh);
 }
 
@@ -190,17 +190,17 @@ void expect_slow_dispatch_dram_round_trip(MeshDevice* mesh, uint32_t salt) {
     auto probe = MeshBuffer::create(dram_global, dram, mesh);
     std::vector<uint32_t> src(page_size / sizeof(uint32_t));
     std::iota(src.begin(), src.end(), salt);
-    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), probe, src);
-    Finish(mesh->mesh_command_queue());
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(0), probe, src);
+    Finish(mesh->mesh_command_queue(0));
     std::vector<uint32_t> dst;
-    ReadShard(mesh->mesh_command_queue(), dst, probe, MeshCoordinate(0, 0));
+    ReadShard(mesh->mesh_command_queue(0), dst, probe, MeshCoordinate(0, 0));
     EXPECT_EQ(dst, src) << "Slow Dispatch DRAM round trip failed after the refusal.";
 }
 
 void expect_resident_intact(MeshDevice* mesh, const PlantedResident& resident, const char* what) {
     for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
         std::vector<uint32_t> dst;
-        ReadShard(mesh->mesh_command_queue(), dst, resident.buffer, coord);
+        ReadShard(mesh->mesh_command_queue(0), dst, resident.buffer, coord);
         EXPECT_EQ(dst, resident.pattern) << what << " changed at " << coord;
     }
 }
@@ -287,10 +287,10 @@ TEST_F(DispatchContextFixture, RefusesResidentL1OnDispatchCores) {
     auto probe = MeshBuffer::create(dram_global, dram, mesh.get());
     std::vector<uint32_t> src(page_size / sizeof(uint32_t));
     std::iota(src.begin(), src.end(), 7);
-    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), probe, src);
-    Finish(mesh->mesh_command_queue());
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(0), probe, src);
+    Finish(mesh->mesh_command_queue(0));
     std::vector<uint32_t> dst;
-    ReadShard(mesh->mesh_command_queue(), dst, probe, MeshCoordinate(0, 0));
+    ReadShard(mesh->mesh_command_queue(0), dst, probe, MeshCoordinate(0, 0));
     EXPECT_EQ(dst, src);
 
     // A later clean session must succeed.
@@ -326,15 +326,15 @@ TEST_F(DispatchContextFixture, AllowDestructiveProceedsAndOverwritesResidentL1) 
 
     std::vector<uint32_t> src(2 * page_size / sizeof(uint32_t));
     std::iota(src.begin(), src.end(), 0x12340000);
-    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), resident, src);
-    Finish(mesh->mesh_command_queue());
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(0), resident, src);
+    Finish(mesh->mesh_command_queue(0));
 
     experimental::FastDispatchSetupOptions options{.allow_destructive = true};
     ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get(), options));
     ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
 
     std::vector<uint32_t> dst;
-    ReadShard(mesh->mesh_command_queue(), dst, resident, MeshCoordinate(0, 0));
+    ReadShard(mesh->mesh_command_queue(0), dst, resident, MeshCoordinate(0, 0));
     EXPECT_NE(dst, src) << "The destructive override did not expose the expected dispatch-core overwrite.";
 }
 
@@ -465,8 +465,8 @@ TEST_F(DispatchContextFixture, AllowsLockstepResidentWithNoDataOnDispatchCores) 
 
     std::vector<uint32_t> src(control_grid.num_cores() * page_size / sizeof(uint32_t));
     std::iota(src.begin(), src.end(), 0x20190000);
-    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), resident, src);
-    Finish(mesh->mesh_command_queue());
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(0), resident, src);
+    Finish(mesh->mesh_command_queue(0));
 
     // 1. Ground truth, independent of the guard: force the session, push DRAM
     //    traffic through the dispatch cores (the canary's blast radius grows under traffic), tear
@@ -480,13 +480,13 @@ TEST_F(DispatchContextFixture, AllowsLockstepResidentWithNoDataOnDispatchCores) 
     experimental::FastDispatchSetupOptions force{.allow_destructive = true};
     ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get(), force));
     auto traffic = MeshBuffer::create(dram_global, dram, mesh.get());
-    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), traffic, payload);
-    Finish(mesh->mesh_command_queue());
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(0), traffic, payload);
+    Finish(mesh->mesh_command_queue(0));
     ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
 
     for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
         std::vector<uint32_t> dst;
-        ReadShard(mesh->mesh_command_queue(), dst, resident, coord);
+        ReadShard(mesh->mesh_command_queue(0), dst, resident, coord);
         ASSERT_EQ(dst, src) << "resident with no data on a dispatch core was corrupted at " << coord
                             << "; the premise of this test is wrong, re-check the footprint model";
     }
@@ -957,8 +957,8 @@ TEST_F(DispatchContextFixture, LedgerGuardIsBlindToFixedAddressAndRawWrites) {
         std::vector<uint32_t> payload(traffic_pages * page_size / sizeof(uint32_t));
         std::iota(payload.begin(), payload.end(), 1);
         auto traffic = MeshBuffer::create(dram_global, dram, mesh.get());
-        EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), traffic, payload);
-        Finish(mesh->mesh_command_queue());
+        EnqueueWriteMeshBuffer(mesh->mesh_command_queue(0), traffic, payload);
+        Finish(mesh->mesh_command_queue(0));
     }
     ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
 
@@ -1240,10 +1240,10 @@ TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {
 
     for (std::size_t logical_x = 0; logical_x < mesh_buffer->device()->num_cols(); logical_x++) {
         for (std::size_t logical_y = 0; logical_y < mesh_buffer->device()->num_rows(); logical_y++) {
-            WriteShard(mesh_device_->mesh_command_queue(), mesh_buffer, src_vec, MeshCoordinate(logical_y, logical_x));
+            WriteShard(mesh_device_->mesh_command_queue(0), mesh_buffer, src_vec, MeshCoordinate(logical_y, logical_x));
         }
     }
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 
     // Turn off FD for running a workload and issuing reads.
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
@@ -1259,13 +1259,13 @@ TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {
                 MeshCoordinate{0, 0},
                 MeshCoordinate{mesh_buffer->device()->num_rows() - 1, mesh_buffer->device()->num_cols() - 1}),
             std::move(*programs[i]));
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, true);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *random_workload, true);
     }
 
     for (std::size_t logical_x = 0; logical_x < mesh_buffer->device()->num_cols(); logical_x++) {
         for (std::size_t logical_y = 0; logical_y < mesh_buffer->device()->num_rows(); logical_y++) {
             std::vector<uint32_t> dst_vec = {};
-            ReadShard(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer, MeshCoordinate(logical_y, logical_x));
+            ReadShard(mesh_device_->mesh_command_queue(0), dst_vec, mesh_buffer, MeshCoordinate(logical_y, logical_x));
             EXPECT_EQ(dst_vec, src_vec);
         }
     }
@@ -1293,7 +1293,7 @@ TEST_F(DispatchContextFixture, TerminateRefusedWhileSubmeshCaptures) {
     dispatch_context.initialize_fast_dispatch(mesh.get());
 
     auto submesh = mesh->create_submesh(MeshShape(1, 1));
-    auto& cq = submesh->mesh_command_queue();
+    auto& cq = submesh->mesh_command_queue(0);
     const MeshTraceId trace_id = submesh->begin_mesh_trace(cq);
     EXPECT_THROW(dispatch_context.terminate_fast_dispatch(mesh.get()), std::runtime_error);
 
@@ -1321,7 +1321,7 @@ TEST_F(DispatchContextFixture, MockDeviceFdSdToggleIsNoOp) {
     // SD -> FD -> SD toggle should not crash and should leave the device usable.
     experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
-    Finish(mesh_device_->mesh_command_queue());
+    Finish(mesh_device_->mesh_command_queue(0));
 }
 
 TEST(DispatchContext, DoubleInitWithoutTerminateShouldThrow) {
@@ -1408,12 +1408,12 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         auto fd_buf = MeshBuffer::create(fd_l1_global, fd_l1_config, mesh_device_.get());
         std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
         std::iota(fd_src_vec.begin(), fd_src_vec.end(), base + 100);
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), fd_buf, fd_src_vec);
-        Finish(mesh_device_->mesh_command_queue());
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(0), fd_buf, fd_src_vec);
+        Finish(mesh_device_->mesh_command_queue(0));
 
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
             std::vector<uint32_t> dst;
-            ReadShard(mesh_device_->mesh_command_queue(), dst, fd_buf, coord);
+            ReadShard(mesh_device_->mesh_command_queue(0), dst, fd_buf, coord);
             EXPECT_EQ(dst, fd_src_vec) << "Cycle " << cycle << ": sharded L1 readback failed in FD mode at " << coord;
         }
 
@@ -1423,7 +1423,7 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         // Verify FD-written sharded buffer is still readable after FD->SD transition.
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
             std::vector<uint32_t> dst;
-            ReadShard(mesh_device_->mesh_command_queue(), dst, fd_buf, coord);
+            ReadShard(mesh_device_->mesh_command_queue(0), dst, fd_buf, coord);
             EXPECT_EQ(dst, fd_src_vec) << "Cycle " << cycle << ": sharded L1 data mismatch after FD->SD transition at "
                                        << coord;
         }
@@ -1433,12 +1433,12 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         auto sd_buf = MeshBuffer::create(sd_l1_global, sd_l1_config, mesh_device_.get());
         std::vector<uint32_t> sd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
         std::iota(sd_src_vec.begin(), sd_src_vec.end(), base + 200);
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), sd_buf, sd_src_vec);
-        Finish(mesh_device_->mesh_command_queue());
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(0), sd_buf, sd_src_vec);
+        Finish(mesh_device_->mesh_command_queue(0));
 
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
             std::vector<uint32_t> dst;
-            ReadShard(mesh_device_->mesh_command_queue(), dst, sd_buf, coord);
+            ReadShard(mesh_device_->mesh_command_queue(0), dst, sd_buf, coord);
             EXPECT_EQ(dst, sd_src_vec) << "Cycle " << cycle << ": SD interleaved L1 verification failed at " << coord;
         }
 
@@ -1451,14 +1451,14 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
                 MeshCoordinateRange(
                     MeshCoordinate{0, 0}, MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1}),
                 std::move(*programs[i]));
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, true);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), *random_workload, true);
         }
-        Finish(mesh_device_->mesh_command_queue());
+        Finish(mesh_device_->mesh_command_queue(0));
 
         // Verify SD buffer is uncorrupted after running workloads.
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
             std::vector<uint32_t> dst;
-            ReadShard(mesh_device_->mesh_command_queue(), dst, sd_buf, coord);
+            ReadShard(mesh_device_->mesh_command_queue(0), dst, sd_buf, coord);
             EXPECT_EQ(dst, sd_src_vec) << "Cycle " << cycle << ": SD buffer corrupted after running workloads at "
                                        << coord;
         }
@@ -1476,15 +1476,15 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         std::iota(fd2_src_vec.begin(), fd2_src_vec.end(), base + 300);
         for (std::size_t y = 0; y < mesh_device_->num_rows(); y++) {
             for (std::size_t x = 0; x < mesh_device_->num_cols(); x++) {
-                WriteShard(mesh_device_->mesh_command_queue(), fd2_buf, fd2_src_vec, MeshCoordinate(y, x));
+                WriteShard(mesh_device_->mesh_command_queue(0), fd2_buf, fd2_src_vec, MeshCoordinate(y, x));
             }
         }
-        Finish(mesh_device_->mesh_command_queue());
+        Finish(mesh_device_->mesh_command_queue(0));
 
         for (std::size_t y = 0; y < mesh_device_->num_rows(); y++) {
             for (std::size_t x = 0; x < mesh_device_->num_cols(); x++) {
                 std::vector<uint32_t> dst;
-                ReadShard(mesh_device_->mesh_command_queue(), dst, fd2_buf, MeshCoordinate(y, x));
+                ReadShard(mesh_device_->mesh_command_queue(0), dst, fd2_buf, MeshCoordinate(y, x));
                 EXPECT_EQ(dst, fd2_src_vec)
                     << "Cycle " << cycle << ": DRAM readback failed in FD mode at (" << y << "," << x << ")";
             }

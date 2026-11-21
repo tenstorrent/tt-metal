@@ -52,7 +52,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmStatefulLoopback) {
     slow_dispatch::WriteToDRAMChannel(this->device(), 0, dram_out_address, poison);
     MetalContext::instance().get_cluster().dram_barrier(this->device().get_device_ids()[0]);
 
-    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue(0);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(this->device().shape());
 

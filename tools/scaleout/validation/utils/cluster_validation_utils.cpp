@@ -456,7 +456,7 @@ WorkloadResult execute_workloads(
     for (auto& [device_id, mesh_workload] : mesh_workloads) {
         futures.push_back(std::async(std::launch::async, [device_id, &mesh_workload, &devices]() {
             tt::tt_metal::distributed::EnqueueMeshWorkload(
-                devices.at(device_id)->mesh_command_queue(), mesh_workload, true);
+                devices.at(device_id)->mesh_command_queue(0), mesh_workload, true);
         }));
     }
 

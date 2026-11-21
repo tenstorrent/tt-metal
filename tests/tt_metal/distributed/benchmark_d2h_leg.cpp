@@ -342,7 +342,7 @@ BENCHMARK_DEFINE_F(D2HLegFixture, Bandwidth)(benchmark::State& state) {
 
         // Only after the FIFO has drained: Finish() before that is unbounded.
         if (frames >= total_frames_) {
-            Finish(mesh_->mesh_command_queue());
+            Finish(mesh_->mesh_command_queue(0));
         } else {
             // Nothing here can stop the kernel or close the shared device, and returning
             // runs ~D2HLeg and release() under pages it may still write. Leave them mapped.

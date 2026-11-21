@@ -60,7 +60,7 @@ std::shared_ptr<distributed::MeshBuffer> create_result_buffer(
     auto result_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
     std::vector<DataT> init_data(RESULT_BUFFER_SIZE / sizeof(DataT), 0);
     distributed::WriteShard(
-        mesh_device->mesh_command_queue(), result_buffer, init_data, distributed::MeshCoordinate(0, 0));
+        mesh_device->mesh_command_queue(0), result_buffer, init_data, distributed::MeshCoordinate(0, 0));
     return result_buffer;
 }
 
@@ -101,7 +101,7 @@ static const std::vector<DataT> EXPECTED_RESULT = {WRAP_WRITE_VALUE, WRAP_WRITE_
  */
 TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
     auto mesh_device = devices_.at(0);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -142,7 +142,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
  */
 TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
     auto mesh_device = devices_.at(0);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -205,7 +205,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
     static constexpr DataT SUCCESS_TOKEN = 0xC0FFEE;
 
     auto mesh_device = devices_.at(0);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -259,7 +259,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingBack) {
     static constexpr DataT SUCCESS_TOKEN = 0xBABE;
 
     auto mesh_device = devices_.at(0);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);

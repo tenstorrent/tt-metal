@@ -184,7 +184,7 @@ void EnqueueAndCheckScratchpad(
     const auto coordinate = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     ClearScratchpadReport(mesh_device, coordinate);
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
     CheckScratchpad(mesh_device, coordinate, kScratchpadBytes);
@@ -275,7 +275,7 @@ TEST_F(MeshWorkloadFactoryHWTest, MakeMeshWorkloadFromSpecSupportsDfbResizeBetwe
         {.page_size = kBufferBytes, .buffer_type = BufferType::DRAM},
         mesh_device.get());
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     // Resize the DFB between enqueues and verify each loopback result.
     for (uint32_t dfb_num_entries : {2u, 4u, 6u}) {
@@ -331,7 +331,7 @@ TEST_F(MeshWorkloadFactory1x2HWTest, MakeMeshWorkloadFromSpecsRunsDistinctSpecsO
     }
     ClearScratchpadReport(mesh_device_, first);
     ClearScratchpadReport(mesh_device_, second);
-    distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), workload, /*blocking=*/true);
 
     CheckScratchpad(mesh_device_, first, kScratchpadBytes);
     CheckScratchpad(mesh_device_, second, kLargeScratchpadBytes);

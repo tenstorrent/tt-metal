@@ -587,7 +587,7 @@ protected:
 
 private:
     distributed::MeshTraceId capture_trace() {
-        auto& mesh_command_queue = this->device_->mesh_command_queue();
+        auto& mesh_command_queue = this->device_->mesh_command_queue(0);
 
         // Create a zero coordinate and range for the device
         distributed::MeshCoordinate zero_coord =
@@ -605,7 +605,7 @@ private:
     }
 
     void run_trace(const distributed::MeshTraceId trace_id) {
-        auto& mesh_command_queue = this->device_->mesh_command_queue();
+        auto& mesh_command_queue = this->device_->mesh_command_queue(0);
         for (uint32_t i = 0; i < NUM_TRACE_ITERATIONS; i++) {
             if (i % 10 == 0) {
                 log_info(tt::LogTest, "Replaying trace iteration {}", i);

@@ -176,7 +176,7 @@ bool run_dm_neighbour(distributed::MeshDevice& mesh_device, const DramNeighbourC
     program.set_runtime_id(runtime_host_id++);
 
     // LAUNCH PROGRAM - Use mesh workload approach
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, mesh_buffer, packed_input);
 
     auto mesh_workload = distributed::MeshWorkload();

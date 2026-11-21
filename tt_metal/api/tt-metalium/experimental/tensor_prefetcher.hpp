@@ -178,8 +178,8 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 //     request is captured into the trace instead of being sent, and is (re)sent on
 //     every replay of that trace (ReplayTrace / ttnn.execute_trace). Otherwise — a
 //     non-capturing queue, or null (the default) — the request is sent immediately,
-//     whatever any command queue is doing. Pass `&mesh_device.mesh_command_queue()`
-//     to opt into capture on the calling thread's current queue. To record a request
+//     whatever any command queue is doing. Pass `&mesh_device.mesh_command_queue(cq_id)`
+//     to opt into capture on that queue. To record a request
 //     into a CommandList, use CommandListBuilder::add_tensor_prefetcher_request.
 //
 // Further preconditions, all TT_FATAL with the offending values:

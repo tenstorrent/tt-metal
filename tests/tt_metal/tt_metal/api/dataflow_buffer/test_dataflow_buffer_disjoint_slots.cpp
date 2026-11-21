@@ -356,7 +356,7 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid16Plus16DFBsOnDevice) {
         {.kernel = KernelSpecName{"cons_b"}, .runtime_arg_values = cons_rtas(NodeCoord{1, 0})},
     };
     program.set_program_run_args(params);
-    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(0), workload, /*blocking=*/true);
 
     std::vector<uint32_t> left_slots(per_half), right_slots(per_half);
     for (uint32_t i = 0; i < per_half; ++i) {
@@ -607,7 +607,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerSlotReuseOnDevice) {
     program.set_program_run_args(params);
     distributed::MeshWorkload coord_worker_workload;
     coord_worker_workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), coord_worker_workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(0), coord_worker_workload, /*blocking=*/true);
 
     expect_touch_results(
         this->device(),
@@ -703,7 +703,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerGappedSlotsOnDevice) {
     program.set_program_run_args(params);
     distributed::MeshWorkload coord_worker_workload;
     coord_worker_workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), coord_worker_workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(0), coord_worker_workload, /*blocking=*/true);
 
     // Coordinator: slots 0 (coord-only) and 3 (wide); 1 and 2 unused.
     expect_touch_results(

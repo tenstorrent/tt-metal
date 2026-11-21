@@ -66,7 +66,7 @@ void matmul_single_core(
     uint32_t K,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up mesh command queue, workload, device range, and program. This is a single-core example using core {0,0}.
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram(*mesh_device);

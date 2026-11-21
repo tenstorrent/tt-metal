@@ -784,7 +784,7 @@ private:
 
         // Wait for completion of the issued commands
         if (wait_for_completion) {
-            distributed::Finish(mesh_device_->mesh_command_queue());
+            distributed::Finish(mesh_device_->mesh_command_queue(0));
         } else if (wait_for_host_writes) {
             uint32_t total_expected_cq_payload = device_data.size() * sizeof(uint32_t);
             // For host writes, wait until expected data is written into completion queue by dispatcher
@@ -4061,7 +4061,7 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
         mgr_->fetch_queue_reserve_back(fdcq_->id());
         mgr_->fetch_queue_write(sz, fdcq_->id());
     }
-    distributed::Finish(mesh_device_->mesh_command_queue());
+    distributed::Finish(mesh_device_->mesh_command_queue(0));
     const auto end = std::chrono::steady_clock::now();
 
     const std::chrono::duration<double> elapsed = end - start;

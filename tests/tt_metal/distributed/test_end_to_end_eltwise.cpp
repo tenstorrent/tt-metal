@@ -125,7 +125,7 @@ using ::testing::Eq;
 using ::testing::Pointwise;
 
 TEST_F(MeshEndToEnd2x4Tests, ProgramDispatchTest) {
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
 
     uint8_t cq_id = cq.id();
 
@@ -165,7 +165,7 @@ TEST_F(MeshEndToEnd2x4Tests, ProgramDispatchTest) {
 TEST_F(MeshEndToEnd2x4Tests, BufferRoundtripTest) {
     using tt::tt_metal::distributed::ShardedBufferConfig;
 
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
 
     EXPECT_GE(cq.id(), 0);
 
@@ -224,7 +224,7 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
         create_random_vector_of_bfloat16(distributed_buffer_size_bytes, 1 /* rand_max_float */, 0 /* seed */);
     std::vector<uint32_t> b_data = create_constant_vector_of_bfloat16(distributed_buffer_size_bytes, kValToAdd);
 
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
 
     EnqueueWriteMeshBuffer(cq, a_buffer, a_data, false /* blocking */);
     EnqueueWriteMeshBuffer(cq, b_buffer, b_data, true /* blocking */);
@@ -296,7 +296,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
 
     mesh_workload.add_program(device_range, std::move(*program));
 
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
 
     EnqueueMeshWorkload(cq, mesh_workload, true /* blocking */);
 
@@ -361,7 +361,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
 
     mesh_workload.add_program(device_range, std::move(*program));
 
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device_->mesh_command_queue(0);
 
     EnqueueMeshWorkload(cq, mesh_workload, true /* blocking */);
 
@@ -482,12 +482,12 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     multiply_and_subtract_mesh_workload.add_program(
         bottom_row, std::move(*subtract_program));  // Subtraction runs on the bottom row (sub device 2)
 
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, true);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), multiply_and_subtract_mesh_workload, true);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), add_mesh_workload, true);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), multiply_and_subtract_mesh_workload, true);
 
     auto trace_id = mesh_device_->begin_mesh_trace(workload_cq);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), multiply_and_subtract_mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), add_mesh_workload, false);
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), multiply_and_subtract_mesh_workload, false);
     mesh_device_->end_mesh_trace(workload_cq, trace_id);
 
     uint32_t workload_0_src0_val = 2;

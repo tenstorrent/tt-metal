@@ -174,7 +174,7 @@ void enqueue_single_device_mesh_program(
     tt::tt_metal::distributed::MeshWorkload workload;
     workload.add_program(device_range, std::move(program));
 
-    auto& command_queue = mesh_device->mesh_command_queue();
+    auto& command_queue = mesh_device->mesh_command_queue(0);
     tt::tt_metal::distributed::EnqueueMeshWorkload(command_queue, workload, false);
     tt::tt_metal::distributed::Finish(command_queue);
 }

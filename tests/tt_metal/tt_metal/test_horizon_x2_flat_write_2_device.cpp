@@ -79,8 +79,8 @@ void expect_flat_write_2dev_with_checker(
     size_t access_point_index,
     bool posted) {
     auto& cluster = MetalContext::instance().get_cluster();
-    distributed::MeshCommandQueue& src_cq = src_device.mesh_command_queue();
-    distributed::MeshCommandQueue& tgt_cq = tgt_device.mesh_command_queue();
+    distributed::MeshCommandQueue& src_cq = src_device.mesh_command_queue(0);
+    distributed::MeshCommandQueue& tgt_cq = tgt_device.mesh_command_queue(0);
 
     auto src_buf = flat_write_2dev_l1_buffer(src_device);
     auto recv_buf = flat_write_2dev_l1_buffer(tgt_device);

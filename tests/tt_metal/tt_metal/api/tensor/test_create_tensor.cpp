@@ -53,8 +53,8 @@ TEST_P(CreateTensorTest, Tile) {
     std::vector<bfloat16> host_data(input_shape.volume(), bfloat16(1.0f));
 
     auto host_tensor = HostTensor::from_vector(host_data, tensor_spec);
-    auto device_tensor = mesh_device_->mesh_command_queue().enqueue_write_tensor(host_tensor);
-    auto readback_tensor = mesh_device_->mesh_command_queue().enqueue_read_tensor(device_tensor);
+    auto device_tensor = mesh_device_->mesh_command_queue(0).enqueue_write_tensor(host_tensor);
+    auto readback_tensor = mesh_device_->mesh_command_queue(0).enqueue_read_tensor(device_tensor);
 
     auto readback_data = readback_tensor.to_vector<bfloat16>();
 

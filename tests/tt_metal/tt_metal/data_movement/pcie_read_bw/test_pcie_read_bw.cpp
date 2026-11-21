@@ -94,7 +94,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const PCIeReadBwConfig& test_c
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate({0, 0}));
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
 
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);
@@ -170,7 +170,7 @@ TEST_F(UnitMeshFastDispatchFixture, PCIeHostReadBandwidthSweep) {
     // Remove GTEST_SKIP to run the test
     GTEST_SKIP() << "Skipping: CLI timeout with large iteration count";
     auto device_coord = distributed::MeshCoordinate(0, 0);
-    auto& cq = this->device().mesh_command_queue();
+    auto& cq = this->device().mesh_command_queue(0);
 
     constexpr uint32_t page_size = 4096;
     constexpr uint32_t num_iterations = 100000;

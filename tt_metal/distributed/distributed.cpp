@@ -206,7 +206,7 @@ void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<co
         return;
     }
     if (cq_id.has_value()) {
-        Synchronize(*device, device->mesh_command_queue(cq_id), sub_device_ids);
+        Synchronize(*device, device->mesh_command_queue(*cq_id), sub_device_ids);
     } else {
         Synchronize(*device, std::nullopt, sub_device_ids);
     }

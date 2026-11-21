@@ -116,7 +116,7 @@ void run_custom_mm_operands(
             }
         }
     }
-    auto& cq = mesh.mesh_command_queue();
+    auto& cq = mesh.mesh_command_queue(0);
     distributed::EnqueueWriteMeshBuffer(cq, a_buffer, pack_bfloat16_vec_into_uint32_vec(activations), true);
     auto packed_weights =
         mode == 1 ? pack_as_bfp8_tiles<bfloat16>(weights, false, false) : pack_bfloat16_vec_into_uint32_vec(weights);

@@ -212,7 +212,7 @@ TEST_F(MeshDeviceFixture, TensixDirectedStreamRegWriteRead) {
     const uint32_t stream_reg = 4;
 
     for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
@@ -276,7 +276,7 @@ TEST_F(MeshDeviceFixture, TensixIncrementStreamRegWrite) {
     const uint32_t stream_id = 1;
 
     for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
@@ -332,7 +332,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWrite4BAlignment) {
     CoreCoord receiver_core(0, 1);
     uint32_t value_to_write = 39;
     for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
@@ -375,7 +375,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNoc) {
     uint32_t value_to_write = 39;
 
     for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
@@ -432,7 +432,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNocMisaligned) {
     uint32_t num_writes = 8;
 
     for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
@@ -486,7 +486,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDynamicNoc) {
     uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
-        auto& cq = mesh_device->mesh_command_queue();
+        auto& cq = mesh_device->mesh_command_queue(0);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
@@ -562,7 +562,7 @@ void run_local_noc_stream_reg_inc(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreCoord& core,
     const HalProgrammableCoreType& hal_programmable_core_type) {
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
 
     // Set up program and command queue
     distributed::MeshWorkload workload;
@@ -735,8 +735,8 @@ TEST_F(BlackholeSingleCardFixture, DramKernelTensixWritesDriscStreamReg) {
 
     distributed::MeshWorkload workload;
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue(0));
 
     std::vector<uint32_t> result;
     slow_dispatch::ReadFromL1(
@@ -781,8 +781,8 @@ TEST_F(BlackholeSingleCardFixture, DramKernelDriscWritesTensixStreamReg) {
 
     distributed::MeshWorkload workload;
     workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue(0));
 
     uint64_t read_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     std::vector<uint32_t> result(1, 0);

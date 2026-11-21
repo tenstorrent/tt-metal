@@ -102,7 +102,7 @@ ProgramState init_program() {
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device =
         tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
     // Ordering of operations in the mesh is managed by a command queue.
-    tt::tt_metal::distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    tt::tt_metal::distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
     // MeshWorkload represents a collection of programs to be executed across the mesh.
     tt::tt_metal::distributed::MeshWorkload workload;
     // Each program in the workload is associated with a range of devices where it should run.

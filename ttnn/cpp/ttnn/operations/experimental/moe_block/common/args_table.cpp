@@ -182,7 +182,7 @@ ArgsTable convert_runtime_args_to_dram(
         for (size_t c = 0; c < N; ++c) {
             writes.push_back(tt::tt_metal::distributed::ShardDataTransfer{chips[c].first}.host_data(data[c].data()));
         }
-        mesh.mesh_command_queue().enqueue_write_shards(table, writes, /*blocking=*/true);
+        mesh.mesh_command_queue(0).enqueue_write_shards(table, writes, /*blocking=*/true);
 
         // (a block in a CB: the kernel reads the CB's address, the common arg stays 0 - the same layout either way)
         const uint32_t block_address = kk.block_cb ? 0u : block_base + kk.l1_offset;

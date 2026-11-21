@@ -112,7 +112,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventSynchronize) {
     std::vector<uint32_t> zeros(1, 0);
     slow_dispatch::WriteToL1(this->device(), node, address, zeros);
 
-    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue(0);
     distributed::MeshWorkload workload = make_l1_write_workload(this->device(), node, address, value, "cq_kernel");
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::MeshEvent event = cq.enqueue_record_event_to_host();
@@ -131,7 +131,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventQuery) {
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue(0);
 
     distributed::MeshEvent event = cq.enqueue_record_event_to_host();
 
@@ -158,7 +158,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventBetweenWorkloads) {
     std::vector<uint32_t> zeros(2, 0);
     slow_dispatch::WriteToL1(this->device(), node, address_1, zeros);
 
-    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue(0);
 
     auto wl1 = make_l1_write_workload(this->device(), node, address_1, value_1, "dm_kernel_1");
     auto wl2 = make_l1_write_workload(this->device(), node, address_2, value_2, "dm_kernel_2");

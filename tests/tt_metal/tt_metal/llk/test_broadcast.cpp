@@ -258,7 +258,7 @@ auto CreateDramBufferForPageSize(
 }
 
 void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const BroadcastConfig& test_config) {
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
@@ -523,7 +523,7 @@ struct SubBcastColCustomConfig {
 };
 
 void run_sub_bcast_col_custom(distributed::MeshDevice& mesh_device, const SubBcastColCustomConfig& test_config) {
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;

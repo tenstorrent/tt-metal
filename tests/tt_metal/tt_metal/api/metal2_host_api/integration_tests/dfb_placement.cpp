@@ -320,7 +320,7 @@ protected:
             auto completed = LaunchProgram(fixture_device(), std::move(program));
             program = std::move(completed.get_programs().at(range));
         } else {
-            distributed::EnqueueMeshWorkload(fixture_device().mesh_command_queue(), workload, true);
+            distributed::EnqueueMeshWorkload(fixture_device().mesh_command_queue(0), workload, true);
         }
     }
 };

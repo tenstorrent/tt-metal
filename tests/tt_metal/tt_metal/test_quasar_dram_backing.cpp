@@ -37,7 +37,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DramStaysInsideTheEmulatorBacking) {
     auto round_trip = [&](std::shared_ptr<distributed::MeshBuffer>& buf) {
         std::vector<uint32_t> src(page_size / sizeof(uint32_t));
         std::iota(src.begin(), src.end(), 0x1000u);
-        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
         distributed::EnqueueWriteMeshBuffer(cq, buf, src);
         std::vector<uint32_t> dst;
         distributed::EnqueueReadMeshBuffer(cq, dst, buf, /*blocking=*/true);

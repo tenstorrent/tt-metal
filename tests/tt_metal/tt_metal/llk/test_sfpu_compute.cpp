@@ -2435,7 +2435,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
     const SfpuConfig& test_config,
     const std::map<std::string, std::string>& defines,
     const std::vector<uint32_t>& packed_input) {
-    auto& cq = mesh_device.mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue(0);
     const size_t in_bytes = test_config.num_tiles * tt::tile_size(test_config.l1_input_data_format);
     const size_t num_output_tiles =
         test_config.num_output_tiles != 0 ? test_config.num_output_tiles : test_config.num_tiles;
@@ -3572,7 +3572,7 @@ bool run_sfpu_ternary_three_input_buffer(distributed::MeshDevice& mesh_device, c
             {{input0_dram_buffer, &packed_in0}, {input1_dram_buffer, &packed_in1}, {input2_dram_buffer, &packed_in2}},
             output_dram_buffer);
     } else {
-        auto& cq = mesh_device.mesh_command_queue();
+        auto& cq = mesh_device.mesh_command_queue(0);
         tt_metal::Program program = tt_metal::CreateProgram(mesh_device);
 
         // reader_binary.cpp with LOAD_BUF2_DATA:

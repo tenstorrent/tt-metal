@@ -493,7 +493,7 @@ int main(int argc, char** argv) {
     }
 
     log_info(tt::LogTest, "Launching programs");
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue(0);
     mesh_workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 

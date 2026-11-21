@@ -51,7 +51,7 @@ bool test_cb_config_written_to_core(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
 
     vector<uint32_t> cb_config_vector;
 
@@ -123,7 +123,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
     CreateCircularBuffer(program_, cr_set, actual_config);
 
     for (auto& device : this->devices_) {
-        distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false);
+        distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload, false);
         EXPECT_TRUE(test_cb_config_written_to_core(workload, device, cr_set, golden_cb_config));
     }
 }
@@ -219,7 +219,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferWithTooManyPages) {
 
 TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
     for (auto& device : this->devices_) {
-        auto& cq = device->mesh_command_queue();
+        auto& cq = device->mesh_command_queue(0);
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
