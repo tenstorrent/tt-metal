@@ -2645,6 +2645,19 @@
   "top5_overlap": 1.0,
   "top5_overlap_limit": 0.994286
  },
+ "PB.8RP": {
+  "glued_segment_equiv_max_abs_diff": 0.0,
+  "glued_slot_digest_mismatches": 0,
+  "ids_uploads_per_chunk": 0.0,
+  "ids_uploads_per_chunk_tagentic_cc": 0.0,
+  "packed_alone_vs_today_max_abs_diff": 0.0,
+  "packed_determinism_max_abs_diff": 0.0,
+  "packed_lane_equiv_max_abs_diff": 0.0,
+  "packed_serving_tok_s_4x2k_p139264_tagentic_cc": 65958.1,
+  "packed_slot_digest_mismatches": 0,
+  "program_builds_after_warmup_serving": 0,
+  "program_builds_after_warmup_serving_tagentic_cc": 0
+ },
  "PB.9F": {
   "glued_5x1600_fresh_tok_s": 48084.6,
   "glued_5x1600_fresh_tok_s_tagentic_cc": 48084.6,

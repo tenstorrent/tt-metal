@@ -84,6 +84,104 @@
   },
   "waiting": null
  },
+ "PB.8RP": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "628f0d7f358fe3d2f590d08789272f6c76673794",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "496e0930-9aee-4cae-a169-c2a6fc097e9b"
+  },
+  "attempt": 2,
+  "attempts": 2,
+  "duration_s": 62.2,
+  "history": [
+   {
+    "reused": [
+     "PB.8RP#test_determinism"
+    ],
+    "s": 1327.1,
+    "status": "FAIL",
+    "t": "2026-11-21T05:03:52"
+   },
+   {
+    "status": "ABORTED",
+    "t": "2026-11-21T05:04:10",
+    "why": "gate failure was the one-load rule (F283) refusing test_packed_walls in a shared process: a gate configuration issue (overseer), not the model; no agent work needed"
+   },
+   {
+    "attempt": 2,
+    "from": "RUNNING",
+    "role": "fix",
+    "status": "RESUMED",
+    "t": "2026-11-21T05:05:15"
+   },
+   {
+    "reused": [
+     "PB.8RP#test_determinism",
+     "PB.8RP#test_packed_oracle",
+     "PB.8RP#test_glued_oracle"
+    ],
+    "s": 228.3,
+    "status": "FAIL",
+    "t": "2026-11-21T05:10:21"
+   },
+   {
+    "status": "STOPPED",
+    "t": "2026-11-21T05:10:22"
+   },
+   {
+    "reused": [
+     "PB.8RP#test_determinism",
+     "PB.8RP#test_packed_oracle",
+     "PB.8RP#test_glued_oracle"
+    ],
+    "s": 62.2,
+    "status": "PASS",
+    "t": "2026-11-21T05:12:11"
+   }
+  ],
+  "last_run": "2026-11-21T05:12:08",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/PB.8RP.log",
+  "rc": 0,
+  "reason": [],
+  "role": "fix",
+  "stamp": {
+   "reused": [
+    "PB.8RP#test_determinism",
+    "PB.8RP#test_packed_oracle",
+    "PB.8RP#test_glued_oracle"
+   ],
+   "units": {
+    "PB.8RP#test_determinism": "8c12cf47f8c0fa7b",
+    "PB.8RP#test_glued_oracle": "0d2e26dd30061e3f",
+    "PB.8RP#test_no_rebuild": "759943c4492405a5",
+    "PB.8RP#test_packed_oracle": "2210b740a788a0d2",
+    "PB.8RP#test_packed_walls": "b5b40495d0f60b35"
+   }
+  },
+  "started": "2026-11-21T05:11:06",
+  "status": "PASS",
+  "units": {
+   "PB.8RP#test_determinism": "PASS",
+   "PB.8RP#test_glued_oracle": "PASS",
+   "PB.8RP#test_no_rebuild": "PASS",
+   "PB.8RP#test_packed_oracle": "PASS",
+   "PB.8RP#test_packed_walls": "PASS"
+  },
+  "waiting": null
+ },
  "PB.9X": {
   "ab_pending": null,
   "agent": {
