@@ -80,7 +80,6 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
     }
 
     const uint32_t total_output_sticks = input_batch * input_height * input_width;
-    const bool is_input_sharded = input_tensor.is_sharded();
     const bool is_output_sharded = output_tensor.is_sharded();
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
@@ -88,33 +87,13 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
     tt::tt_metal::CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_cores = 0;
     uint32_t num_sticks_per_core_group_1 = 0, num_sticks_per_core_group_2 = 0;
-    uint32_t input_nsticks_per_core = 0;
     uint32_t output_nsticks_per_core = 0;
     std::vector<CoreCoord> logical_cores;
-    bool is_block_sharded = false;
-    bool is_width_sharded = false;
-    uint32_t num_cores_x = 0;
 
-    if (is_input_sharded) {
-        const auto input_shard_spec = input_tensor.shard_spec().value();
-        all_cores = input_shard_spec.grid;
-        num_cores = input_shard_spec.num_cores();
-        input_nsticks_per_core = input_shard_spec.shape[0];
-        output_nsticks_per_core =
-            is_output_sharded ? output_tensor.shard_spec().value().shape[0] : input_nsticks_per_core;
-        logical_cores = corerange_to_cores(
-            all_cores, num_cores, input_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
-        is_block_sharded =
-            input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
-        is_width_sharded =
-            input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
-        num_cores_x = input_shard_spec.grid.bounding_box().grid_size().x;
-        num_sticks_per_core_group_1 = input_nsticks_per_core;
-        core_group_1 = all_cores;
-    } else if (is_output_sharded) {
+    if (is_output_sharded) {
         const auto output_shard_spec = output_tensor.shard_spec().value();
         output_nsticks_per_core = output_shard_spec.shape[0];
-        num_cores = (total_output_sticks + output_nsticks_per_core - 1) / output_nsticks_per_core;
+        num_cores = output_shard_spec.num_cores();
         all_cores = output_shard_spec.grid;
         logical_cores = corerange_to_cores(
             all_cores, num_cores, output_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
@@ -132,8 +111,6 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
         num_sticks_per_core_group_2 = num_sticks_2;
         logical_cores = corerange_to_cores(all_cores, num_cores, true);
     }
-
-    const bool any_sharded = is_input_sharded || is_output_sharded;
 
     const uint32_t element_size = input_tensor.element_size();
     const uint32_t input_stick_nbytes = input_channels * element_size;
@@ -199,7 +176,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
         static_cast<uint32_t>(std::ceil(static_cast<float>(output_shape[-1]) / tt::constants::FACE_WIDTH));
     const uint32_t output_cb_page_size = tt::constants::FACE_WIDTH * element_size;
     const uint32_t output_cb_pages =
-        any_sharded ? output_nsticks_per_core * out_ntiles_c : out_ntiles_c * BUFFERING_FACTOR;
+        is_output_sharded ? output_nsticks_per_core * out_ntiles_c : out_ntiles_c * BUFFERING_FACTOR;
     const uint32_t output_cb_index = cb_idx++;
     desc.cbs.push_back(CBDescriptor{
         .total_size = output_cb_pages * output_cb_page_size,
@@ -211,7 +188,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
             .tile = output_tile,
             .face_geometry = output_face_geometry,
         }}},
-        .buffer = any_sharded ? output_tensor.buffer() : nullptr,
+        .buffer = is_output_sharded ? output_tensor.buffer() : nullptr,
     });
 
     const bool fill_is_zero = (fill_value_bits == 0);
@@ -305,17 +282,17 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
 
     std::optional<KernelDescriptor> compute_desc_group_1;
     std::optional<KernelDescriptor> compute_desc_group_2;
-    if (any_sharded || core_group_1.num_cores() > 0) {
+    if (is_output_sharded || core_group_1.num_cores() > 0) {
         compute_desc_group_1 = make_compute_kernel_descriptor(
-            any_sharded ? all_cores : core_group_1,
-            any_sharded ? output_nsticks_per_core : num_sticks_per_core_group_1);
+            is_output_sharded ? all_cores : core_group_1,
+            is_output_sharded ? output_nsticks_per_core : num_sticks_per_core_group_1);
     }
-    if (!any_sharded && core_group_2.num_cores() > 0) {
+    if (!is_output_sharded && core_group_2.num_cores() > 0) {
         compute_desc_group_2 = make_compute_kernel_descriptor(core_group_2, num_sticks_per_core_group_2);
     }
 
     std::optional<KernelDescriptor> writer_desc;
-    if (!any_sharded) {
+    if (!is_output_sharded) {
         const uint32_t output_stick_size = input_channels * element_size;
         std::vector<uint32_t> writer_compile_time_args = {output_cb_index, output_stick_size, out_ntiles_c};
         auto* output_buffer = output_tensor.buffer();
@@ -343,17 +320,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
         uint32_t num_sticks;
         uint32_t start_stick_id;
 
-        if (is_input_sharded) {
-            num_sticks = input_nsticks_per_core;
-            if (is_width_sharded) {
-                start_stick_id = 0;
-            } else if (is_block_sharded) {
-                uint32_t core_y = i / num_cores_x;
-                start_stick_id = core_y * input_nsticks_per_core;
-            } else {
-                start_stick_id = i * input_nsticks_per_core;
-            }
-        } else if (is_output_sharded) {
+        if (is_output_sharded) {
             num_sticks = output_nsticks_per_core;
             start_stick_id = sticks_processed;
         } else {
@@ -374,7 +341,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
                 static_cast<uint32_t>(fill_value_bits),
             });
 
-        if (!any_sharded && writer_desc.has_value()) {
+        if (!is_output_sharded && writer_desc.has_value()) {
             writer_desc->emplace_runtime_args(
                 core,
                 {
