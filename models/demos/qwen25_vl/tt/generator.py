@@ -420,7 +420,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     )
                     model_inst = self._ttt_generator.model[model_id]
                     logits = model_inst.process_logits_after_prefill_trace(tt_hidden, last_token_idx)
-                    out_list.append((logits.cpu(blocking=False), model_id))
+                    out_list.append((idx, logits.cpu(blocking=False), model_id))
                 else:
                     if page_table is not None:
                         page_table_user = self._ttt_generator._get_prefill_user_page_table(
@@ -441,10 +441,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     output_logits[idx] = logits
 
             if out_list:
-                used_model_ids = set(mid for _, mid in out_list)
+                used_model_ids = set(mid for _, _, mid in out_list)
                 for mid in used_model_ids:
                     ttnn.synchronize_device(self._ttt_generator.model[mid].mesh_device)
-                for idx, (out, mid) in enumerate(out_list):
+                for idx, out, mid in out_list:
                     seq_len = int(prompt_lens[idx])
                     last_token_idx = seq_len - 1
                     model_inst = self._ttt_generator.model[mid]
