@@ -115,7 +115,7 @@ Each counter bank `<X>` (`FPU`, `TDMA_PACK`, `TDMA_UNPACK`, `L1`, `INSTRN_THREAD
 | `RISCV_DEBUG_REG_PERF_CNT_OUT_L_<X>` | `ref_cnt` (elapsed cycles between start and stop). |
 | `RISCV_DEBUG_REG_PERF_CNT_OUT_H_<X>` | `req_cnt` if control bit [16]=0, otherwise `grant_cnt`. |
 
-Because the software must toggle bit [16] and re-read to get both `req` and `grant`, each counter is read twice (the grant entries in the tables carry selects of 256 and up, which is bit [16] after the shift). Every mode-register write is followed by a readback poll (`llk::perf::select`) so the hardware has committed the new selection before the output registers are sampled; `volatile` reads alone do not provide MMIO ordering guarantees on RISC-V. The tt-llk harness bounds the poll at 1024 reads; the BRISC firmware polls without a bound because it sits a few bytes under its size limit.
+Because the software must toggle bit [16] and re-read to get both `req` and `grant`, each counter is read twice (the grant entries in the tables carry selects of 256 and up, which is bit [16] after the shift). Every mode-register write is followed by a readback poll (`llk::perf::select`) so the hardware has committed the new selection before the output registers are sampled; `volatile` reads alone do not provide MMIO ordering guarantees on RISC-V. The tt-llk harness bounds the poll at `MODE_REG_POLL_LIMIT` (1024) reads on BH/WH; on Quasar TRISCs access the local debug-register window and RISC-V store-then-load ordering guarantees the write is visible on the first read, so `SELECT_POLL_LIMIT` is 1. The BRISC firmware polls without a bound because it sits a few bytes under its size limit.
 
 ### Quasar windows
 
