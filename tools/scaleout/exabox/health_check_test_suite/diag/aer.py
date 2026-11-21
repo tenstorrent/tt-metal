@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from .model import FAIL, PASS, WARN, Check
-from .naming import chip
+from .naming import blamed, chip
 
 PCI_DEVICES = Path("/sys/bus/pci/devices")
 TENSTORRENT_VENDOR = "0x1e52"
@@ -91,6 +91,7 @@ def aer_check(new: dict, hours: float, chips: int = 0) -> Check:
             "hours": hours,
             "new": [{**chip(b), **d} for b, d in new.items()],
             "flagged": [{**chip(b), **d} for b, d in named.items()],
+            "blamed_chips": blamed(named),
         },
         ip="pcie",
     )

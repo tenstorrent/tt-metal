@@ -39,7 +39,7 @@ from typing import Sequence
 
 from .common import emit_result, emit_running, log, run_with_timeout, write_command_log
 from .galaxy import EXPECTED_CHIP_COUNT, QSFP_PORT_IDS, UBB_ETH_PORT_OF, UBB_ETH_PORTS, format_bdf, parse_bdf_physical
-from .naming import link_end, port_name as _port_name
+from .naming import blamed, link_end, port_name as _port_name
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 
 TRIAGE_SCRIPT = "tools/triage/triage.py"
@@ -178,6 +178,7 @@ def pcie_gate_check(functions: list[PcieFunction]) -> Check:
         "expected": EXPECTED_CHIP_COUNT,
         "dropped": [{"bdf": f.bdf, "vendor": f"0x{f.vendor:04x}", "command": f"0x{f.command:04x}"} for f in dropped],
         "unverified": [f.bdf for f in unverified],
+        "blamed_chips": blamed(f.bdf for f in dropped + unverified),
     }
     unread = f"{len(unverified)} more could not be checked: {_listing([format_bdf(f.bdf) for f in unverified])}"
     if not functions:
