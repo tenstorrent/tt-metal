@@ -180,10 +180,13 @@ Tensor create_config_tensor(
                 per_core_start_idx = config_vector.size();
             }
             for (; j < dst_core_end_idx_map[ind]; ++j) {
-                core_coords = device.worker_core_from_logical_core(
-                    is_height_sharded
-                        ? CoreCoord(logical_core_to_stick_map[j].core_x, logical_core_to_stick_map[j].core_y)
-                        : CoreCoord(i, logical_core_to_stick_map[j].core_y));
+                CoreCoord src_core(logical_core_to_stick_map[j].core_x, logical_core_to_stick_map[j].core_y);
+                if (!is_height_sharded) {
+                    const std::uint16_t nhw_core = logical_core_to_stick_map[j].core_y;
+                    src_core = shard_spec.orientation == ShardOrientation::ROW_MAJOR ? CoreCoord(i, nhw_core)
+                                                                                     : CoreCoord(nhw_core, i);
+                }
+                core_coords = device.worker_core_from_logical_core(src_core);
                 // Combine the x and y coordinates of the core into a single 16-bit value.
                 config_vector.push_back(core_coords.x);
                 config_vector.push_back(core_coords.y);
@@ -309,7 +312,9 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
 
     // extra limitation to avoid post upsample step of resharding
     if (input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        ncores_x = all_cores.ranges().begin()->end_coord.x - all_cores.ranges().begin()->start_coord.x + 1;
+        const auto& range = *all_cores.ranges().begin();
+        ncores_x = shard_spec.orientation == ShardOrientation::ROW_MAJOR ? range.end_coord.x - range.start_coord.x + 1
+                                                                         : range.end_coord.y - range.start_coord.y + 1;
         input_stick_nbytes = input_stick_nbytes / ncores_x;
         output_stick_nbytes = output_stick_nbytes / ncores_x;
     }
@@ -330,8 +335,10 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
     const auto shard_shape =
         std::array<std::uint32_t, 2>({1, static_cast<std::uint32_t>(config_tensor.logical_shape()[-1])});
     const auto config_tensor_shard_orientation =
-        input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ? ShardOrientation::COL_MAJOR
-                                                                                   : shard_spec.orientation;
+        input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
+            ? (shard_spec.orientation == ShardOrientation::ROW_MAJOR ? ShardOrientation::COL_MAJOR
+                                                                     : ShardOrientation::ROW_MAJOR)
+            : shard_spec.orientation;
     // Use cores_with_work for config tensor sharding - only cores that have actual work need config data
     const ShardSpec config_shard_spec(cores_with_work, shard_shape, config_tensor_shard_orientation);
     const MemoryConfig config_memory_config{
