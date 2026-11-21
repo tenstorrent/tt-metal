@@ -13,8 +13,9 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
-from helpers.llk_params import MathOperation, format_dict
+from helpers.llk_params import MathOperation
 from helpers.param_config import (
+    flat_axes,
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
@@ -35,7 +36,7 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Safety factor applied to format maxima when clamping square operands.
 # Keeps x² comfortably within the output format and |x| within the input format.
@@ -59,14 +60,16 @@ SFPU_SQUARE_COMBINATIONS = [
 ]
 
 
+SFPU_SQUARE_FLAT_NAMES = ("formats", "dest_acc", "input_dimensions")
+
+
 @pytest.mark.quasar
-@parametrize(formats_dest_acc_input_dims=SFPU_SQUARE_COMBINATIONS)
-def test_isolate_sfpu_square_quasar(formats_dest_acc_input_dims):
+@parametrize(**flat_axes(SFPU_SQUARE_FLAT_NAMES, SFPU_SQUARE_COMBINATIONS))
+def test_isolate_sfpu_square_quasar(formats, dest_acc, input_dimensions):
     """
     Test isolated SFPU square: UNPACK2 (UNP_S) -> SrcS -> SFPU -> PACK1 -> L1.
     No MATH kernel (stub only).
     """
-    formats, dest_acc, input_dimensions = formats_dest_acc_input_dims[0]
 
     torch.manual_seed(42)
 
@@ -145,7 +148,5 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_input_dims):
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(golden_tensor)
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

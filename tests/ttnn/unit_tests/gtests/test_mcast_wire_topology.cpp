@@ -717,7 +717,7 @@ TEST_F(McastHostFixture, McastSerializationAndRouting) {
             }
             auto mcast = make_mcast(device_, groups, cfg);
             auto bound_mcast = mcast;
-            tt::tt_metal::Program program;
+            tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device_);
             bind_for_inspection(bound_mcast, program, {});
             ASSERT_EQ(emitted_metadata(compile_args(mcast)).mcast.rectangle_capacity, 3u);
             EXPECT_EQ(allocated_semaphores(mcast).size(), 2u);
@@ -725,15 +725,13 @@ TEST_F(McastHostFixture, McastSerializationAndRouting) {
                 check_group(device_, mcast, groups[i]);
                 EXPECT_EQ(decoded_args(mcast, first[i]).rectangles.size(), i + 1u);
                 EXPECT_EQ(decoded_args(mcast, first[i]).ack, i == 2 ? 1u : 0u);
-                std::vector<uint32_t> appended{99};
-                bound_mcast.append_runtime_args_to(appended, first[i]);
+                const auto appended = attach_on_core(bound_mcast, program, first[i], {99});
                 auto expected = runtime_args(mcast, first[i]);
                 expected.insert(expected.begin(), 99);
                 EXPECT_EQ(appended, expected);
             }
             EXPECT_EQ(mcast.sender_only_cores(), rotating ? cores(outside) : CoreRangeSet{});
-            std::vector<uint32_t> appended{42};
-            bound_mcast.append_compile_time_args_to(appended);
+            const auto appended = attach_unplaced(bound_mcast, program, {42});
             auto expected = compile_args(mcast);
             expected.insert(expected.begin(), 42);
             EXPECT_EQ(appended, expected);
@@ -872,21 +870,22 @@ TEST_F(McastHostFixture, ChainMcastUsesOneCompileTimeTransportForEveryGeometry) 
     EXPECT_EQ(local_rt[layout.chain_neighbors + wire::SUCCESSOR_X], dataflow_kernel_lib::NO_CHAIN_NEIGHBOR);
     EXPECT_EQ(local_rt[layout.chain_neighbors + wire::INCLUDES_SENDER], 1u);
     auto bound_mcast = mcast;
-    tt::tt_metal::Program program;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device_);
     bind_for_inspection(bound_mcast, program, {});
     for (auto core : std::vector<CoreCoord>{{0, 0}, {1, 0}, {0, 2}, {2, 2}, {6, 0}, {7, 7}}) {
         const auto rt = runtime_args(mcast, core);
         ASSERT_EQ(rt.size(), 8u);  // Dynamic role, head coordinates, and neighbors; no transport selector.
-        std::vector<uint32_t> args{123};
-        bound_mcast.append_runtime_args_to(args, core);
-        bound_mcast.append_runtime_args_to(args, core);
+        // Two channels attached to one kernel follow the operation prefix in turn.
+        tt::tt_metal::DataMovementConfig config{.noc = emitted_noc(ct)};
+        std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> kernel_args{{core, {123}}};
+        bound_mcast.attach(program, CoreRangeSet(CoreRange(core, core)), config, "first", kernel_args);
+        bound_mcast.attach(program, CoreRangeSet(CoreRange(core, core)), config, "second", kernel_args);
+        const auto& args = kernel_args.at(0).second;
         EXPECT_EQ(args.size(), 1 + 2 * rt.size());
         EXPECT_TRUE(std::equal(rt.begin(), rt.end(), args.begin() + 1));
         EXPECT_TRUE(std::equal(rt.begin(), rt.end(), args.begin() + 1 + rt.size()));
     }
-    std::vector<uint32_t> appended;
-    bound_mcast.append_compile_time_args_to(appended);
-    EXPECT_EQ(appended, ct);
+    EXPECT_EQ(attach_unplaced(bound_mcast, program), ct);
     EXPECT_EQ(allocated_semaphores(mcast).size(), 3u);
     EXPECT_EQ(allocated_semaphores(mcast)[2].core_ranges, mcast.participating_cores());
 }

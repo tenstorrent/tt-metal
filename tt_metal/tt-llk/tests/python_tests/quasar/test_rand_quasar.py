@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import struct
 from dataclasses import dataclass
 
 import pytest
@@ -20,6 +19,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     QuasarSfpuVariant,
+    flat_axes,
     generate_quasar_sfpu_format_variants,
     input_output_formats,
     parametrize,
@@ -41,6 +41,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     TYPECAST_FORMATS,
     UNPACKER_ENGINE_SEL,
+    fp32_bits,
 )
 from helpers.tile_constants import (
     DEFAULT_TILE_C_DIM,
@@ -48,6 +49,7 @@ from helpers.tile_constants import (
     FACE_C_DIM,
     MAX_NUM_FACES,
 )
+from helpers.utils import result_tensor
 
 
 # rand has no element-wise golden, so these check its properties: range, uniformity, per-lane and
@@ -100,10 +102,6 @@ _RAND_COL_MIN_DISTINCT_DIVISOR = 4
 _RAND_CORR_MAX_ROW_OFFSET = 8
 _RAND_CORR_MAX_COL_OFFSET = 4
 _RAND_MAX_OFFSET_CORRELATION = 0.08
-
-
-def _fp32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def generate_rand_combinations():
@@ -265,8 +263,8 @@ def _rand_config(
                 DEST_SYNC(dest_sync),
                 TYPECAST_FORMATS(),
                 RAND_RANGE(
-                    rand_from_bits=_fp32_bits(case.from_value),
-                    rand_scale_bits=_fp32_bits(case.scale),
+                    rand_from_bits=fp32_bits(case.from_value),
+                    rand_scale_bits=fp32_bits(case.scale),
                 ),
                 RAND_SEED(rand_seed=seed),
             ],
@@ -298,19 +296,21 @@ def _rand_config(
 
 def _run_rand(configuration, format_variant: QuasarSfpuVariant, element_count: int):
     res_from_L1 = configuration.run().result
-    values = torch.tensor(
-        res_from_L1, dtype=format_dict[format_variant.formats.output_format]
-    ).to(torch.float64)
+    values = result_tensor(res_from_L1, format_variant.formats.output_format).to(
+        torch.float64
+    )
     assert (
         values.numel() == element_count
     ), f"result has {values.numel()} elements, expected {element_count}"
     return values
 
 
+RAND_FLAT_NAMES = ("case", "format_variant", "dest_sync", "input_dimensions")
+
+
 @pytest.mark.quasar
-@parametrize(rand_case_formats_sync_dims=generate_rand_combinations())
-def test_rand_quasar(rand_case_formats_sync_dims):
-    case, format_variant, dest_sync, input_dimensions = rand_case_formats_sync_dims[0]
+@parametrize(**flat_axes(RAND_FLAT_NAMES, generate_rand_combinations()))
+def test_rand_quasar(case, format_variant, dest_sync, input_dimensions):
     configuration = _rand_config(case, format_variant, dest_sync, input_dimensions)
     values = _run_rand(
         configuration, format_variant, input_dimensions[0] * input_dimensions[1]

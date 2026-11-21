@@ -4,7 +4,7 @@
 
 #pragma once
 #include <cstdint>
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_unpack_common_api.h"
 #include "experimental/llk_unpack_AB_reduce_runtime_custom.h"
 
@@ -37,8 +37,10 @@ inline void llk_unpack_AB_reduce_block_max_row_init_runtime(
     const ckernel::TensorShape& tensor_shape) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    const std::uint8_t bfd_a = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandA_id);
-    const std::uint8_t bfd_b = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
+    llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP0>(operandA_id);
+    constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP0;
+    llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP1>(operandB_id);
+    constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
 
     _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(
         block_ct_dim, respect_trigger, bfd_a, bfd_b, tensor_shape);
@@ -65,12 +67,12 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     const bool respect_trigger = false,
     const bool overlap_first_half = false) {
     LLK_REINIT_GUARD_ASSERT_MATCHES(
-        ckernel::trisc::BfdResource::Unp0,
+        ckernel::trisc::BFD_ID_UNP0,
         operandA,
         "unpack_AB_reduce_block_max_row_runtime operandA DFB differs from the one "
         "llk_unpack_AB_reduce_block_max_row_init_runtime programmed");
     LLK_REINIT_GUARD_ASSERT_MATCHES(
-        ckernel::trisc::BfdResource::Unp1,
+        ckernel::trisc::BFD_ID_UNP1,
         operandB,
         "unpack_AB_reduce_block_max_row_runtime operandB DFB differs from the one "
         "llk_unpack_AB_reduce_block_max_row_init_runtime programmed");
@@ -85,13 +87,13 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
 
     WAYPOINT("URBW");
     // block_ct_dim is baked into the MOP by init; the lib ignores this execute-time argument.
-    // The scaler UNPACR1 uses the Unp1 BFD id allocated at init (referenced via bfd_current, not the
-    // DFB id) -- the wrap contract (re-init before re-execute) keeps it valid.
+    // The scaler UNPACR1 uses the Unp1 BFD id programmed at init (BFD_ID_UNP1, not the
+    // DFB id) -- re-init before re-execute keeps it valid.
     _llk_unpack_AB_reduce_block_max_row_runtime_(
         0 /*block_ct_dim*/,
         l1_tile_index_a,
         l1_tile_index_b,
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+        ckernel::trisc::BFD_ID_UNP1,
         tensor_shape,
         respect_trigger,
         overlap_first_half);

@@ -19,13 +19,20 @@ import torch
 from conftest import blackhole_only
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import HadamardH128Golden, get_golden_generator
-from helpers.llk_params import DestAccumulation, DestSync, MathFidelity
+from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
+    DestAccumulation,
+    DestSync,
+    MathFidelity,
+)
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk, with_functional_defaults
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import StimuliMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     HADAMARD,
+    LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
     TILE_COUNT,
@@ -41,15 +48,6 @@ FACE_ELEMENTS = 16 * 16
 TILE_SLOT_ELEMENTS = 1024
 
 NORM_SCALE = 1.0 / math.sqrt(128.0)
-
-# All four fidelities. LoFi issues one MVMUL per matmul pass; HiFi2/3/4 all issue two with the
-# asymmetric phase step, so they are expected to be indistinguishable in most tests.
-FIDELITIES = [
-    MathFidelity.LoFi,
-    MathFidelity.HiFi2,
-    MathFidelity.HiFi3,
-    MathFidelity.HiFi4,
-]
 
 
 def _sylvester(order):
@@ -106,15 +104,15 @@ def _config(
         _h16_tile()
     ]
 
-    return TestConfig(
-        "sources/hadamard_test.cpp",
-        formats,
+    return dict(
+        test_name="sources/hadamard_test.cpp",
+        formats=formats,
         templates=[
             HADAMARD(hadamard_normalize=normalize, h16_tile_index=h16_tile_index),
             MATH_FIDELITY(fidelity),
             DEST_SYNC(dest_sync),
         ],
-        runtimes=[TILE_COUNT(num_tiles), NUM_FACES(1, 1, 1)],
+        runtimes=[LOOP_FACTOR(1), TILE_COUNT(num_tiles), NUM_FACES(1, 1, 1)],
         variant_stimuli=StimuliConfig(
             torch.cat(h16_tiles),
             formats.input_format,
@@ -130,19 +128,45 @@ def _config(
     )
 
 
-def _run(*configurations):
+def _run(
+    *configurations,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """Run one or more variants and return their results as [num_tiles, 128] each.
 
     This exists for test_hadamard_h128_fidelity_precision, since it compares two variants
     against each other: every variant has to be built before any of them runs.
     """
-    if len(configurations) > 1 and TestConfig.STIMULI_MODE != StimuliMode.INLINE:
+    if is_perf:
+        for kwargs in configurations:
+            execute_llk(
+                is_perf=True,
+                perf_report=perf_report,
+                run_types=run_types,
+                loop_factor=loop_factor,
+                test_config_kwargs=kwargs,
+            )
+        return None
+    if len(configurations) == 1:
+        outcome = execute_llk(
+            is_perf=False,
+            loop_factor=loop_factor,
+            test_config_kwargs=configurations[0],
+        )
+        return _transforms(outcome.result)
+    if TestConfig.STIMULI_MODE != StimuliMode.INLINE:
         # The stimuli cache keys on the pytest node id, one slot per test, so this would
         # collapse into comparing a stimulus with itself under that.
         pytest.skip("this test cannot use the stimuli cache")
-    for configuration in configurations:
+    configs = [
+        TestConfig(**with_functional_defaults(kwargs)) for kwargs in configurations
+    ]
+    for configuration in configs:
         configuration.prepare()
-    results = [_transforms(c.run().result) for c in configurations]
+    results = [_transforms(c.run().result) for c in configs]
     return results[0] if len(results) == 1 else results
 
 
@@ -177,11 +201,29 @@ def _assert_close(device, expected, output_format, what):
     )
 
 
-@parametrize(fidelity=FIDELITIES, normalize=[False, True], num_tiles=[1, 8])
-def test_hadamard_h128(fidelity, normalize, num_tiles):
+# LoFi issues one MVMUL per matmul pass; HiFi2/3/4 issue two with the asymmetric
+# phase step, so they are expected to be indistinguishable in most tests.
+def _run_hadamard_h128(
+    fidelity,
+    normalize,
+    num_tiles,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     inputs = _signs(seed=101, count=num_tiles)
 
-    device = _run(_config(inputs, normalize=normalize, fidelity=fidelity))
+    device = _run(
+        _config(inputs, normalize=normalize, fidelity=fidelity),
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
+    if is_perf:
+        return
 
     if normalize:
         _assert_close(
@@ -192,6 +234,11 @@ def test_hadamard_h128(fidelity, normalize, num_tiles):
         )
     else:
         _assert_exact(device, inputs)
+
+
+@parametrize(fidelity=ALL_MATH_FIDELITIES, normalize=[False, True], num_tiles=[1, 8])
+def test_hadamard_h128(fidelity, normalize, num_tiles):
+    _run_hadamard_h128(fidelity, normalize, num_tiles)
 
 
 @parametrize(
@@ -214,12 +261,26 @@ def test_hadamard_h128_ignores_l1_padding():
 # The unpack init preprograms config context 1's SrcA base from base + tile_size * h16_tile_index
 # once, and phase 2 then streams H_16 from it with no per-tile CFG write. Putting H_16 at index 1
 # exercises the address arithmetic.
-def test_hadamard_h128_h16_tile_index():
+def _run_hadamard_h128_h16_tile_index(
+    *, is_perf=False, perf_report=None, run_types=None, loop_factor=1
+):
     inputs = _signs(seed=505, count=2)
 
-    device = _run(_config(inputs, normalize=False, h16_tile_index=1))
+    device = _run(
+        _config(inputs, normalize=False, h16_tile_index=1),
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
+    if is_perf:
+        return
 
     _assert_exact(device, inputs)
+
+
+def test_hadamard_h128_h16_tile_index():
+    _run_hadamard_h128_h16_tile_index()
 
 
 # Full bf16 mantissa, so fidelity is relevant. LoFi keeps 4 of SrcA's 7 stored mantissa bits on MM1
@@ -253,14 +314,27 @@ def test_hadamard_h128_fidelity_precision():
 
 # The configuration the Compute API documents: bfp8_b out, and both DEST sync modes. bfp8_b shares
 # one exponent per 16 datums, so this is a tolerance check even for the +-1 stimuli.
-@parametrize(dest_sync=[DestSync.Half, DestSync.Full], normalize=[False, True])
-def test_hadamard_h128_shipping_config(dest_sync, normalize):
+def _run_hadamard_h128_shipping_config(
+    dest_sync,
+    normalize,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b)
     inputs = _signs(seed=707, count=2)
 
     device = _run(
-        _config(inputs, normalize=normalize, dest_sync=dest_sync, formats=formats)
+        _config(inputs, normalize=normalize, dest_sync=dest_sync, formats=formats),
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
+    if is_perf:
+        return
 
     _assert_close(
         device,
@@ -270,14 +344,25 @@ def test_hadamard_h128_shipping_config(dest_sync, normalize):
     )
 
 
+@parametrize(dest_sync=[DestSync.Half, DestSync.Full], normalize=[False, True])
+def test_hadamard_h128_shipping_config(dest_sync, normalize):
+    _run_hadamard_h128_shipping_config(dest_sync, normalize)
+
+
 FP32_FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32)
 
 
 # 32-bit DEST is reachable from the Compute API: hadamard_h128_init takes fp32_dest_acc_en and defaults
 # it to DST_ACCUM_MODE, so any kernel built with fp32 accumulation lands here. The matmul half of the op
 # is correct under it, which is what this covers. `normalize` is unsupported for this configuration.
-@parametrize(num_tiles=[1, 2, 4])
-def test_hadamard_h128_dest_acc(num_tiles):
+def _run_hadamard_h128_dest_acc(
+    num_tiles,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     (num_tiles,) = num_tiles
     inputs = _signs(seed=808, count=num_tiles)
 
@@ -287,7 +372,18 @@ def test_hadamard_h128_dest_acc(num_tiles):
             normalize=False,
             dest_acc=DestAccumulation.Yes,
             formats=FP32_FORMATS,
-        )
+        ),
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
+    if is_perf:
+        return
 
     _assert_exact(device, inputs)
+
+
+@parametrize(num_tiles=[1, 2, 4])
+def test_hadamard_h128_dest_acc(num_tiles):
+    _run_hadamard_h128_dest_acc(num_tiles)

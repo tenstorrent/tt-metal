@@ -5,12 +5,13 @@
 #pragma once
 
 #include "concat_device_operation_types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::prim {
 
 struct ConcatBlockShardedProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value);
 };
 

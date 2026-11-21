@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <optional>
+#include <tt-metalium/program_descriptors.hpp>
+
 #include "metal/ttnn_all_includes.hpp"
 #include "polynorm_bw_device_operation_types.hpp"
 
@@ -11,29 +14,19 @@ namespace ttml::metal::ops::polynorm3_bw::device {
 
 // Program factory for PolyNorm3 backward (reader/compute/writer kernels + runtime args).
 struct PolyNorm3BackwardProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id{};
-        tt::tt_metal::KernelHandle dL_dx_writer_kernel_id{};
-        tt::tt_metal::KernelHandle compute_kernel_group_1_id{};
-        tt::tt_metal::KernelHandle compute_kernel_group_2_id{};
-        tt::tt_metal::CoreRangeSet core_group_1;
-        tt::tt_metal::CoreRangeSet core_group_2;
-        uint32_t num_cores{};
-        uint32_t num_cores_y{};
-    };
-
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const PolyNorm3BWAttributes& operation_attributes,
         const PolyNorm3BWTensorArgs& tensor_args,
         PolyNorm3BWTensorReturn& tensor_return_value);
 
+    // The only thing a cache hit runs: rewrites the buffer addresses on every core. Every other runtime arg follows
+    // from the program hash.
     static void override_runtime_arguments(
-        cached_program_t& cached_program,
+        tt::tt_metal::Program& program,
         const PolyNorm3BWAttributes& operation_attributes,
         const PolyNorm3BWTensorArgs& tensor_args,
-        PolyNorm3BWTensorReturn& tensor_return_value);
+        PolyNorm3BWTensorReturn& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 };
 
 }  // namespace ttml::metal::ops::polynorm3_bw::device

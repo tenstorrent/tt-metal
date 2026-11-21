@@ -12,6 +12,9 @@ Not collected by pytest: the module deliberately has no `test_` prefix.
 """
 
 import math
+import os
+import pathlib
+import time
 
 import torch
 
@@ -94,6 +97,37 @@ def _act(act_type):
     return [ttnn.UnaryWithParam(act_type)] if act_type is not None else []
 
 
+# Resolve the inspector output the way the runtime does: <logs_dir>/generated/inspector, where
+# logs_dir is TT_METAL_LOGS_PATH if set, else the root dir (TT_METAL_HOME, else cwd). See
+# tt_metal/llrt/rtoptions.cpp. A hardcoded absolute path would be the only one in this directory and
+# would silently miss the file under any relocated logs dir.
+_LOGS_ROOT = pathlib.Path(os.environ.get("TT_METAL_LOGS_PATH") or os.environ.get("TT_METAL_HOME") or os.getcwd())
+INSPECTOR_YAML = _LOGS_ROOT / "generated" / "inspector" / "kernels.yaml"
+
+# Wall-clock at module import. pytest imports every test module during collection, and this module with them,
+# strictly before any fixture runs, so kernels.yaml -- created when the `device` fixture opens the device -- is
+# necessarily newer than this. See bound_kernel_sources() for why that matters.
+_IMPORT_TIME = time.time()
+
+
+def bound_kernel_sources():
+    """Kernel `source:` lines from THIS process's inspector output.
+
+    Do NOT unlink kernels.yaml first: the inspector opens it once with std::ios::trunc at device
+    creation and holds the handle, and the `device` fixture runs before the test body -- so deleting the
+    path unlinks a live inode and it never reappears. Truncate-at-open is what makes the contents this
+    process's; the mtime assertion is what rejects a stale leftover, which for the fallback arm would
+    otherwise be a false green (a previous run's file holds exactly the kernels_dfb sources it asserts).
+    """
+    mtime = INSPECTOR_YAML.stat().st_mtime
+    assert mtime >= _IMPORT_TIME, (
+        f"{INSPECTOR_YAML} predates this process (mtime {mtime} < import {_IMPORT_TIME}); it is a stale "
+        "leftover, so it proves nothing about this run. Is the inspector disabled?"
+    )
+    text = INSPECTOR_YAML.read_text()
+    return [ln.split("source:", 1)[1].strip() for ln in text.splitlines() if "source:" in ln]
+
+
 # The largest ULP distance from torch's result on the device's operands, per dtype and op, on Quasar (fp32 as measured
 # on ttsim); the Wormhole and Blackhole runs share these bounds. bf16 takes production's bound of 1: on Quasar the SFPU
 # multiply truncates and the FPU add rounds twice. maximum and minimum select an operand, so they are exact.
@@ -118,21 +152,39 @@ def _fpu_add_bf16(a, b):
     return torch.where((a == 0) | (b == 0), (a + b).float().to(torch.bfloat16), rounded)
 
 
-# The bf16 sum as each Quasar target rounds it: twice on the hardware and on ttsim, once on craq-sim. An element is
-# right when it matches either.
-# TODO: keep only _fpu_add_bf16 when craq-sim rounds the FPU add as the hardware does.
-_FPU_ADD_ROUNDINGS = (_fpu_add_bf16, lambda a, b: (a.float() + b.float()).to(torch.bfloat16))
+def _truncate_to_bf16(x):
+    """bfloat16 of float32 values with their low 16 bits dropped, as Quasar's SFPU multiply gives its result. The
+    Wormhole and Blackhole LLKs round to nearest even instead."""
+    assert x.dtype == torch.float32, f"the truncation model takes float32 values, not {x.dtype}"
+    return (x.contiguous().view(torch.int32) & -65536).view(torch.float32).to(torch.bfloat16)
+
+
+def _sfpu_multiply_bf16(a, b):
+    """bf16 a * b as Quasar's SFPU multiply gives it out of fast mode: the float32 product, truncated to bf16. The
+    product of two bf16 values is exact in float32, so only the truncation rounds."""
+    return _truncate_to_bf16(a.float() * b.float())
+
+
+# The bf16 sum as Quasar rounds it: twice, as the hardware and ttsim do.
+_FPU_ADD_ROUNDINGS = (_fpu_add_bf16,)
 
 
 def _add_goldens(ta, tb):
-    """The oracles of a bf16 add, on the operands as the device holds them."""
+    """The oracles of a bf16 add (one today), on the operands as the device holds them."""
     a, b = ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()
     return [rounding(a, b) for rounding in _FPU_ADD_ROUNDINGS]
 
 
 def _matches_none(got, goldens, bound=0):
-    """Per element: True where `got` is more than `bound` ULP from every golden."""
-    return torch.stack([ulp_distance(got, golden) > bound for golden in goldens]).all(dim=0)
+    """Per element: True where `got` is more than `bound` ULP from every golden. As assert_with_ulp's allow_nonfinite
+    treats them, a NaN matches a NaN whatever its payload, and an inf matches only an inf of the same sign."""
+
+    def differs(golden):
+        far = ulp_distance(got, golden) > bound
+        inf_differs = (got.isinf() | golden.isinf()) & (got != golden)
+        return (far | inf_differs) & ~(got.isnan() & golden.isnan())
+
+    return torch.stack([differs(golden) for golden in goldens]).all(dim=0)
 
 
 # Activations that keep the golden exact: RELU, and SQUARE in fp32.
@@ -390,8 +442,8 @@ def _run_scalar(
 ):
     # Tensor-SCALAR sibling of _run: operand A is a tensor, the RHS is a Python number (not a tensor),
     # and the golden uses that same scalar. Same op->torch map, PCC thresholds, and degenerate-constant
-    # guard as _run. On Quasar the DFB path is the only path that can run (the descriptor throws as
-    # unsupported), so a passing PCC here is itself the proof the op routed to the v2/DFB tensor-scalar
+    # guard as _run. On Quasar a DFB factory is the only path that can run (an op outside the native and Metal 2.0
+    # slices raises an error), so a passing PCC here is itself the proof the op routed to the v2/DFB tensor-scalar
     # factory -- the same implicit v2-routing check the no-broadcast / subtile-broadcast suites rely on
     # (there is no explicit DFB-path assertion helper in this module). The scalar is passed as the second
     # positional arg, which the nanobind binding routes to the tensor-scalar overload.

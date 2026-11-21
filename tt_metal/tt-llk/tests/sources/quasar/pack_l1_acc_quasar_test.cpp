@@ -16,7 +16,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -55,8 +55,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(
             ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
             _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
@@ -181,7 +182,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
             {
             }
-            else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+            else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
             {
                 const std::uint32_t src_handshake_iters = LOOP_FACTOR * num_blocks * tiles_in_block;
                 if constexpr (is_fp32_dest_acc_en)
@@ -229,7 +230,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -251,9 +252,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
+        // PACK_ISOLATE packs without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
@@ -269,8 +270,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
             ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         const ckernel::ReluConfig relu_config = ckernel::ReluConfig::from_packed(RELU_CONFIG);
         _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
@@ -285,7 +287,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)

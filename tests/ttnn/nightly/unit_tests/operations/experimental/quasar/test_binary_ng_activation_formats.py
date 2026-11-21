@@ -6,8 +6,9 @@
 
 Every case runs on Quasar and on WH/BH. See
 QUASAR_PARITY_GAPS.md for the factory capability boundary. On Quasar, the
-no-broadcast tensor-tensor cases that the native gate admits run on the
-Quasar-native factory, unless TTNN_QSR_NATIVE=0.
+cases that the native gate admits run on the Quasar-native factory, unless
+TTNN_QSR_NATIVE=0: the no-broadcast tensor-tensor cases, and the bf16 ROW, COL,
+SCALAR and mixed shapes of _SHAPES.
 Passing on WH/BH does not validate Quasar-specific LLKs or packers.
 """
 
@@ -18,6 +19,11 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
+
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
 
 _GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
 _FULL = (1, 1, 96, 96)

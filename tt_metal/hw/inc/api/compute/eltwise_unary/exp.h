@@ -57,8 +57,7 @@ ALWI void exp_tile_init() {
  * - approx: LREG12..14 (vConstFloatPrgm0..2) and, unless DISABLE_SFPLOADMACRO, the load macros, on
  *   Wormhole and Blackhole;
  * - accurate on a bf16 DEST: LREG12..13 (vConstFloatPrgm0..1), on Wormhole and Blackhole;
- * - accurate on an fp32 DEST: LREG12..14 (vConstFloatPrgm0..2) on Blackhole; the Wormhole path loads
- *   every constant as an immediate and reads none of them.
+ * - accurate on an fp32 DEST: LREG12..14 (vConstFloatPrgm0..2), on Wormhole and Blackhole.
  * So call exp_tile_init again after any other SFPU init before the next exp_tile. Interleaving ops
  * without their inits silently returns wrong values; there is no assert.
  *
@@ -99,6 +98,7 @@ ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint1
 /**
  * Pack-thread variant of exp_tile_init. Runs the init on the pack thread
  * to enable FPU/SFPU overlap with math-thread matmul operations.
+ * The programmable registers it loads are shared with the math thread's SFPU ops; see exp_tile_init.
  */
 template <
     bool approx = false,

@@ -39,7 +39,15 @@ constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(15
 constexpr ProgrammableCoreType CORE_TYPE = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(16));
 constexpr bool wait_for_fabric_endpoint = get_compile_time_arg_val(17) == 1;
 
-constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 18;
+// In program-local L1 (FabricMuxConfig::place_in_program_local_l1), the mux's addresses above, and the regions to
+// clear in the runtime args, are offsets into the circular buffer at program_local_l1_cb_index; the mux publishes
+// that buffer's address in semaphore l1_base_semaphore_id for its clients. fabric_router_status_address is the
+// router's, so it stays absolute.
+constexpr bool in_program_local_l1 = get_compile_time_arg_val(18) == 1;
+constexpr uint32_t program_local_l1_cb_index = get_compile_time_arg_val(19);
+constexpr uint32_t l1_base_semaphore_id = get_compile_time_arg_val(20);
+
+constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 21;
 
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
@@ -137,7 +145,12 @@ void kernel_main() {
     set_l1_data_cache<true>();
     size_t rt_args_idx = 0;
 
-    auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
+    size_t l1_base = 0;
+    if constexpr (in_program_local_l1) {
+        l1_base = get_write_ptr(program_local_l1_cb_index);
+    }
+
+    auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_base + status_address);
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
 
     // clear out memory regions
@@ -145,7 +158,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_regions_to_clear; i++) {
         auto address = get_arg_val<uint32_t>(rt_args_idx++);
         auto size = get_arg_val<uint32_t>(rt_args_idx++);
-        zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
+        zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(l1_base + address), size);
     }
 
     auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
@@ -171,10 +184,10 @@ void kernel_main() {
     constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> channel_stream_ids =
         fill_array_with_next_n_args<uint32_t, CHANNEL_STREAM_IDS_START_IDX, NUM_TOTAL_CHANNELS>();
 
-    size_t channel_base_address = channels_base_l1_address;
-    size_t connection_info_address = connection_info_base_address;
-    size_t connection_handshake_address = connection_handshake_base_address;
-    size_t sender_flow_control_address = sender_flow_control_base_address;
+    size_t channel_base_address = l1_base + channels_base_l1_address;
+    size_t connection_info_address = l1_base + connection_info_base_address;
+    size_t connection_handshake_address = l1_base + connection_handshake_base_address;
+    size_t sender_flow_control_address = l1_base + sender_flow_control_base_address;
 
     for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
@@ -205,7 +218,7 @@ void kernel_main() {
     }
 
     volatile auto termination_signal_ptr =
-        reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
+        reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(l1_base + termination_signal_address);
 
     // wait for fabric router to be ready before setting up the connection
     if constexpr (wait_for_fabric_endpoint) {
@@ -213,13 +226,18 @@ void kernel_main() {
             fabric_connection.edm_noc_x,
             fabric_connection.edm_noc_y,
             fabric_router_status_address,
-            local_fabric_router_status_address);
+            l1_base + local_fabric_router_status_address);
     }
 
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     fabric_connection.open<use_worker_allocated_credit_address>();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
+    if constexpr (in_program_local_l1) {
+        // Clients wait for a non-zero value here (poll_fabric_mux_l1_base); dispatch zeroes the semaphore at
+        // every launch, so they cannot see a previous launch's address.
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(l1_base_semaphore_id)) = l1_base;
+    }
 
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
