@@ -350,10 +350,10 @@ __attribute__((noinline)) void two_level_unit_maxima(
 
 // Stage 2 of one row: its block maxima from the maxima tensor through the input CB, one chunk per reserve so a chunk
 // never wraps. Past the row's blocks a chunk is -inf. With done_words (the row's done words, per_row of them), the row
-// runs before its maxima are complete: each chunk waits for the units it covers, and a unit still missing
-// repair_after after it is known to be claimed is computed here (see two_level_run's claims). A unit seen unclaimed
-// (the claimed count, read by claimed_count, not past it) is waited for until it is claimed, which a core that finishes
-// its rows does, and from then on as long again.
+// runs before its maxima are complete: each chunk waits for the units it covers, and a unit still missing after
+// repair_after and claimed by then is computed here (see two_level_run's claims; one claimed just before is only done
+// twice). A unit seen unclaimed (the claimed count, read by claimed_count, not past it) is waited for until it is
+// claimed, which a core that finishes its rows does, and from then on repair_after again.
 template <typename InputAccessor, typename MaxAccessor, typename ClaimedCount>
 FORCE_INLINE void two_level_stage2(
     const Noc& noc,
