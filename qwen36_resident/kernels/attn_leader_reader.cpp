@@ -72,13 +72,12 @@ void kernel_main() {
     {
         const InterleavedAddrGen<true> tok{
             .bank_base_address = tok_addr, .page_size = rope_off + 3 * batch * groups * kTile};
-        cb_reserve_back(cb_rope, kRopePages);
+        cb_reserve_back(cb_rope, kRopeLead);
         noc_async_read(tok.get_noc_addr(0, rope_off), get_write_ptr(cb_rope), 3 * batch * groups * kTile);
         noc_async_read_barrier();
         if constexpr (packed) {
             build_packed_rope(get_write_ptr(cb_rope));
         }
-        cb_push_back(cb_rope, kRopePages);
     }
     uint32_t mask = ~0u;
     if constexpr (rows_mode) {
@@ -91,6 +90,27 @@ void kernel_main() {
     }
     const ActiveRows<kUsers> act(mask);
     const uint32_t n_act = act.n;
+    if constexpr (kLeadBatched) {
+        // the passes' per-row rope tiles: row j * heads + h of pass p from active user p * kQPerPass + j's page
+        const uint32_t base = get_write_ptr(cb_rope);
+        volatile tt_l1_ptr uint32_t* z = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + kRopeQPass * kTile);
+        for (uint32_t w = 0; w < 3 * kQPasses * kTile / 4; w++) {
+            z[w] = 0;
+        }
+        for (uint32_t a = 0; a < n_act; a++) {
+            const uint32_t p = a / kQPerPass, j = a % kQPerPass;
+            for (uint32_t kk = 0; kk < 3; kk++) {
+                const uint32_t from = base + (3 * act.row[a] + kk) * kTile;
+                for (uint32_t h = 0; h < heads; h++) {
+                    const uint32_t to = base + (kRopeQPass + 3 * p + kk) * kTile + row_offset(j * heads + h);
+                    noc_async_read(get_noc_addr(from), to, kFaceRow);
+                    noc_async_read(get_noc_addr(from + kFace), to + kFace, kFaceRow);
+                }
+            }
+        }
+        noc_async_read_barrier();
+    }
+    cb_push_back(cb_rope, kRopeLead);
 
     constexpr uint32_t gate0 = heads * Dt;
     // pass u: row (r, h) = r * heads + h of q / gate from row u * group_rows + r (one row per pass: row h)
@@ -119,6 +139,44 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_gate, Dt);
     };
+    // kLeadBatched: the q rows of the active users a0 .. a0 + kQPerPass - 1 into rows j * heads + h of one tile set
+    auto place_pass = [&](uint32_t a0) {
+        cb_reserve_back(cb_qraw, Dt);
+        const uint32_t q = get_write_ptr(cb_qraw);
+        for (uint32_t j = 0; j < kQPerPass && a0 + j < n_act; j++) {
+            const uint32_t ug = act.row[a0 + j];
+            const uint32_t rows = rows_base + (ug / users) * row_tiles * kRowTile;
+            for (uint32_t h = 0; h < heads; h++) {
+                for (uint32_t d = 0; d < Dt; d++) {
+                    place_row(rows + (h * Dt + d) * kRowTile, ug % users, q + d * kTile, j * heads + h);
+                }
+            }
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_qraw, Dt);
+    };
+    auto place_gate = [&](uint32_t ug) {
+        cb_reserve_back(cb_gate, Dt);
+        const uint32_t g = get_write_ptr(cb_gate);
+        const uint32_t rows = rows_base + (ug / users) * row_tiles * kRowTile;
+        for (uint32_t h = 0; h < heads; h++) {
+            for (uint32_t d = 0; d < Dt; d++) {
+                place_row(rows + (gate0 + h * Dt + d) * kRowTile, ug % users, g + d * kTile, h);
+            }
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_gate, Dt);
+    };
+    auto place_user = [&](uint32_t ka) {
+        if constexpr (kLeadBatched) {
+            if (ka % kQPerPass == 0) {
+                place_pass(ka);
+            }
+            place_gate(act.row[ka]);
+        } else {
+            place(act.row[ka]);
+        }
+    };
     for (uint32_t i = 0; i < layers * n_act; i++) {
         const uint32_t l = i / n_act, k = i % n_act;
         if (k == 0) {
@@ -130,12 +188,12 @@ void kernel_main() {
             cb_push_back(cb_qw, Dt);
             noc_semaphore_wait_min(rows_sem, num_streamers * (l + 1));
             mark(l, 1);
-            place(act.row[0]);
+            place_user(0);
             mark(l, 2);
         }
         // the next user's rows go in before this user's partials arrive, so compute prepares its q meanwhile
         if (k + 1 < n_act) {
-            place(act.row[k + 1]);
+            place_user(k + 1);
         }
 
         noc_semaphore_wait_min(part_sem, children * (i + 1));

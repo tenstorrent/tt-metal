@@ -140,13 +140,41 @@ void kernel_main() {
         mark(l, 7);
     };
 
+    // kLeadBatched: cb_q_mc holds a pass of kQPerPass users (user j in rows j * heads + h); the user's rows go into
+    // the staging q (rows 0 .. heads - 1, the rest zero) and the pass is popped after its last user
+    uint32_t qstage = 0;
+    if constexpr (kLeadBatched) {
+        auto& qs = get_local_cb_interface(cb_qstage);
+        qstage = qs.fifo_limit - qs.fifo_size;
+        volatile tt_l1_ptr uint32_t* z = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(qstage);
+        for (uint32_t w = 0; w < Dt * kTile / 4; w++) {
+            z[w] = 0;
+        }
+    }
     auto send_q = [&](uint32_t i) {
         cb_wait_front(cb_q_mc, Dt);
-        noc_async_write_multicast(get_read_ptr(cb_q_mc), mc_q, Dt * kTile, mc_dests);
+        uint32_t src = get_read_ptr(cb_q_mc);
+        const uint32_t ka = i % n_act;
+        if constexpr (kLeadBatched) {
+            const uint32_t j = ka % kQPerPass;
+            for (uint32_t h = 0; h < heads; h++) {
+                for (uint32_t d = 0; d < Dt; d++) {
+                    const uint32_t from = src + d * kTile + row_offset(j * heads + h);
+                    const uint32_t to = qstage + d * kTile + row_offset(h);
+                    noc_async_read(get_noc_addr(from), to, kFaceRow);
+                    noc_async_read(get_noc_addr(from + kFace), to + kFace, kFaceRow);
+                }
+            }
+            noc_async_read_barrier();
+            src = qstage;
+        }
+        noc_async_write_multicast(src, mc_q, Dt * kTile, mc_dests);
         noc_async_write_barrier();
         *q_sem = i + 1;
         noc_semaphore_set_multicast(get_semaphore(sem_q), mc_q_sem, mc_dests);
-        cb_pop_front(cb_q_mc, Dt);
+        if (!kLeadBatched || ka % kQPerPass == kQPerPass - 1 || ka + 1 == n_act) {
+            cb_pop_front(cb_q_mc, Dt);
+        }
     };
     for (uint32_t i = 0; i < layers * n_act; i++) {
         const uint32_t l = i / n_act, k = i % n_act, u = act.row[k];

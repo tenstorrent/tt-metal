@@ -1324,11 +1324,17 @@ class ResidentModel:
                 cb(13, prep_grid, Dt),
                 cb(14, prep_grid, 2),
                 # (row groups: + the tail core's per-row rope tiles, attn_common.hpp kTailBatched)
-                cb(17, prep_grid, 3 * LR + (3 * attn_users + 3 if packed else 0) + (3 if groups > 1 else 0)),
+                cb(
+                    17,
+                    prep_grid,
+                    3 * LR + (3 * attn_users + 3 if packed else 0)
+                    # (row groups: the leader's q-pass rope tiles / the tail core's per-row rope tiles)
+                    + (max(3, 3 * -(-LR // (TILE // heads_a))) if groups > 1 else 0),
+                ),
                 T(29, mean_t),
                 # leader
                 cb(2, lead_grid, 1, page=groups * heads_a * Dt * 64 * B),
-                cb(9, lead_grid, Dt),
+                cb(9, lead_grid, Dt if groups == 1 else 2 * Dt),  # (row groups: q passes, attn_common.hpp)
                 cb(10, lead_grid, 2 * Dt),
                 cb(15, lead_grid, Dt),
                 cb(24, lead_grid, 2 * Dt),
@@ -1336,6 +1342,7 @@ class ResidentModel:
                 cb(27, lead_grid, Dt),
                 cb(30, lead_grid, 1),
                 *([cb(7, lead_grid, 1, ttnn.uint32, 64)] if self.rows else []),  # the token state head
+                *([cb(41, lead_grid, Dt)] if groups > 1 else []),  # (row groups: the staged q, attn_common.hpp)
                 # tail core
                 cb(11, tail_grid, Dt),
                 cb(12, tail_grid, 4 if packed else 2 * LR),

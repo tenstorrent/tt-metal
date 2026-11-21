@@ -86,7 +86,7 @@ void kernel_main() {
     const uint32_t children = get_arg_val<uint32_t>(0);
     compute_kernel_hw_startup(cb_qraw, cb_qraw, cb_sq);
     cb_wait_front(cb_mean, 1);
-    cb_wait_front(cb_rope, kRopePages);
+    cb_wait_front(cb_rope, kRopeLead);
     uint32_t mask = ~0u;
     if constexpr (rows_mode) {
         constexpr uint32_t cb_lead_active = 7;
@@ -101,7 +101,14 @@ void kernel_main() {
         cb_wait_front(cb_qw, Dt);
         auto prep = [&](uint32_t k) {
             const uint32_t u = act.row[k];
-            norm_rope(cb_qraw, cb_qw, 0, cb_q_mc, cb_q_mc, packed ? kRopeQ + 3 * u : 3 * u);
+            if constexpr (kLeadBatched) {
+                // the pass of active users k .. k + kQPerPass - 1 at once (the writer takes each user's rows)
+                if (k % kQPerPass == 0) {
+                    norm_rope(cb_qraw, cb_qw, 0, cb_q_mc, cb_q_mc, kRopeQPass + 3 * (k / kQPerPass));
+                }
+            } else {
+                norm_rope(cb_qraw, cb_qw, 0, cb_q_mc, cb_q_mc, packed ? kRopeQ + 3 * u : 3 * u);
+            }
             gate_sigmoid();
             if (k + 1 == n_act) {
                 cb_pop_front(cb_qw, Dt);

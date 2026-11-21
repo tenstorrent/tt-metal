@@ -161,6 +161,15 @@ constexpr bool kTailBatched = rows_mode && groups > 1 && !verify;
 static_assert(!kTailBatched || kUsers <= 32, "a user per tile row");
 constexpr uint32_t kRopeRows = 3 * batch * groups;
 constexpr uint32_t kRopeTail = kRopePages + (kTailBatched ? 3 : 0);  // the tail core's cb_rope pages
+// row groups (rows mode): the leader normalizes and ropes q for a pass of kQPerPass active users at once (user j of
+// the pass in rows j * heads + h, per-row rope tiles at kRopeQPass + 3 p of cb_rope, built by the leader reader); the
+// writer extracts each user's heads rows into cb_qstage (rows 0 .. heads - 1) and multicasts that
+constexpr bool kLeadBatched = rows_mode && groups > 1 && !verify;
+constexpr uint32_t kQPerPass = 32 / heads;
+constexpr uint32_t kQPasses = (kUsers + kQPerPass - 1) / kQPerPass;
+constexpr uint32_t kRopeQPass = 3 * batch * groups;
+constexpr uint32_t kRopeLead = kRopePages + (kLeadBatched ? 3 * kQPasses : 0);  // the leader's cb_rope pages
+constexpr uint32_t cb_qstage = 41;  // leader writer: one user's q rows for the multicast (kLeadBatched)
 constexpr uint32_t cb_knew = 18;    // normalized + rotated k row (row 0)
 constexpr uint32_t cb_tail8 = 31;   // tail core: tail k | v tiles as read from DRAM (2 Dt bf8)
 constexpr uint32_t cb_rowsel = 12;  // tail core: per user R (ones in row r), 1 - R (packed: per tail tile the
