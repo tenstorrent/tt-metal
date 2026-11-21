@@ -33,36 +33,80 @@ import yaml
 from loguru import logger
 from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_validator
 
-TT_RUN_PREFIX = "[tt-run]"
-DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
-INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
+# =====================================================================================================================
+# Constants. Every timeout and grace tt-run uses is here, in seconds. "default" marks a value that can be overridden,
+# and says how; "fixed" marks one that cannot (change it here).
+# =====================================================================================================================
 
-# The overall job wall clock (teardown plan P5) is the --timeout given through --mpi-args ("--timeout N"); tt-run adds
-# no clock of its own, so a long-running job is never cut off. tt-run makes it graceful: at N seconds every rank gets
-# SIGTERM (as for Ctrl-C), and only after the stop grace is the job forced. PRRTE's own --timeout, which kills every
-# rank at once, stays on the line as a backstop at N + the grace + TIMEOUT_BACKSTOP_S. Either way tt-run returns
-# PRTE_TIMEOUT_EXIT_CODE. A specific collective that hangs is bounded in the DistributedContext instead (the per-call
-# operation timeout, plan P16).
-PRTE_TIMEOUT_EXIT_CODE = 241
-TIMEOUT_BACKSTOP_S = 30.0
+# --- timeouts and graces (seconds) -----------------------------------------------------------------------------------
+#
+# The job's own wall clock is the --timeout given through --mpi-args ("--timeout N"); there is none by default, so a
+# long-running job is never cut off. A collective that hangs is bounded in the DistributedContext instead (the per-call
+# operation timeout, TT_METAL_OPERATION_TIMEOUT_SECONDS, plan P16). The guard tt-run starts next to the launcher
+# (tt-run-rank --guard, tools/scaleout/src/tt_run_rank.cpp) uses STOP_GRACE_S too, read from TT_RUN_STOP_GRACE_S.
 
-# A stop at tt-run (SIGINT/SIGTERM) reaches every rank on every host as SIGTERM through PRRTE job control
-# (PMIX_JOB_CTRL_SIGNAL): each host's daemon kill()s its own ranks, prterun does not abort the job and starts no
-# SIGKILL clock. A signal sent to prterun itself is its kill path instead: SIGCONT, SIGTERM, then SIGKILL 250 ms
-# later (hardcoded in PRRTE's odls; no MCA parameter) — that is tt-run's force. STOP_GRACE_S (TT_RUN_STOP_GRACE_S) is
-# the one grace of every graceful shutdown: the ranks' time to exit after a stop (tt-run's, a rank's, the --timeout)
-# and the time a process still exiting after the launcher returned is waited for. Past it tt-run forces, with a
-# warning; a second signal at tt-run forces at once. The ranks read it too (it is forwarded as a TT_ variable).
+# default 120, override: TT_RUN_STOP_GRACE_S. The one grace of every graceful shutdown: the ranks' time to exit after a
+# stop (Ctrl-C or SIGTERM at tt-run, a rank that stopped the job, the --timeout), and the time a process still exiting
+# after a clean launcher exit is waited for. A stop reaches every rank on every host as SIGTERM through PRRTE job control
+# (PMIX_JOB_CTRL_SIGNAL): each host's daemon kill()s its own ranks, prterun does not abort the job and starts no SIGKILL
+# clock. Past the grace tt-run forces, with a warning; a second signal at tt-run forces at once. The force is a signal
+# to prterun itself, its kill path: SIGCONT, SIGTERM, then SIGKILL 250 ms later (hardcoded in PRRTE's odls; no MCA
+# parameter). The ranks read the grace too (forwarded as a TT_ variable).
 STOP_GRACE_S = 120.0
 
-# How long the launcher may ignore the force (SIGTERM to prterun) before tt-run SIGKILLs it. Only ever armed by a
+# fixed. PRRTE's own --timeout, which kills every rank at once, stays on the launch line as a backstop at N + the stop
+# grace + this; tt-run stops the job gracefully at N itself. Either way tt-run returns PRTE_TIMEOUT_EXIT_CODE.
+TIMEOUT_BACKSTOP_S = 30.0
+
+# fixed. How long the launcher may ignore the force (SIGTERM to prterun) before tt-run SIGKILLs it. Only ever armed by a
 # force, so it never acts on a job nobody asked to stop.
 SIGNAL_FORWARD_GRACE_S = 10.0
 
-# tt-run-signal (tools/scaleout/src/tt_run_signal.cpp, built with the ULFM install's PMIx) asks prterun for the
-# job-wide SIGTERM. TT_RUN_SIGNAL_HELPER overrides where tt-run looks for it.
+# fixed. One call of tt-run-signal (tools/scaleout/src/tt_run_signal.cpp, built with the ULFM install's PMIx), which
+# asks prterun for the job-wide signal. TT_RUN_SIGNAL_HELPER overrides where tt-run looks for it.
 SIGNAL_HELPER_TIMEOUT_S = 5.0
 
+# fixed. How long the launcher may linger after a rank's MPI_Abort before tt-run ends it (the prrte#2815 guard). Armed
+# only once prterun has printed its abort banner (_MPI_ABORT_BANNER), i.e. PRRTE already committed to ending the job,
+# never on a healthy one. prterun prints the banner on the launch host for a rank on ANY host, so it is multi-host-safe.
+ABORT_HANG_GRACE_S = 15.0
+
+# fixed. After the launcher exited, a process still in its session gets the stop grace (a clean finish) or
+# STOPPED_JOB_SETTLE_S (a job that was stopped, forced or aborted) to leave on its own: a rank, or a UMD helper child
+# it spawned, can still be in its exit path, and on hardware a rank in uninterruptible sleep (D) releasing
+# /dev/tenstorrent can take several seconds. Only a process that OUTLASTS it gets SIGTERM, then SIGKILL
+# SURVIVOR_TERM_GRACE_S later.
+STOPPED_JOB_SETTLE_S = 10.0
+SURVIVOR_TERM_GRACE_S = 10.0
+
+# fixed. Minimum age of an unmapped /dev/shm segment before the leftover sweep removes it. Below this it may be a
+# concurrent same-user job's segment that is created but not yet mapped (uncertain ownership), so it is preserved; a
+# genuine leak from a job that is gone has sat unmapped far longer. A short job's own leak is cleared by the next
+# launch's pre-launch sweep.
+SHM_MIN_STALE_AGE_S = 30.0
+
+# fixed. Teardown when tt-run leaves wait() by an exception with the launcher still running: SIGTERM, then SIGKILL this
+# long later.
+LAUNCHER_TEARDOWN_GRACE_S = 5.0
+
+# fixed. How long the guard (tt-run-rank --guard) may take to exit after tt-run told it the job is over.
+GUARD_EXIT_TIMEOUT_S = 5.0
+
+# fixed. How long tt-run waits for the launcher's stderr to drain once the launcher has exited.
+LAUNCHER_STDERR_DRAIN_S = 2.0
+
+# fixed. `mpirun --version`, run to tell Open MPI's major version (the rankfile syntax).
+MPI_VERSION_PROBE_TIMEOUT_S = 10.0
+
+# fixed. Poll intervals: wait() checks the launcher, signals and clocks this often; the survivor sweep rechecks /proc.
+WAIT_POLL_S = 0.2
+SURVIVOR_POLL_S = 0.1
+
+# --- exit codes ------------------------------------------------------------------------------------------------------
+INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
+PRTE_TIMEOUT_EXIT_CODE = 241  # PRRTE's code for a job that reached its --timeout; tt-run keeps it for its own stop too
+
+# --- signals ---------------------------------------------------------------------------------------------------------
 # Signals at tt-run that are not a stop: passed on to every rank unchanged through the same job control, the job goes
 # on (what a rank does with one is the rank's business). SIGTSTP (Ctrl-Z) pauses the ranks and then tt-run itself, so
 # the shell's fg / bg resumes tt-run, whose SIGCONT resumes the ranks. A stop (SIGINT, SIGTERM) still reaches the ranks
@@ -76,6 +120,129 @@ PASSED_SIGNALS = (
     signal.SIGCONT,
     signal.SIGWINCH,
 )
+
+# --- the ranks' environment ------------------------------------------------------------------------------------------
+# default, override: LD_LIBRARY_PATH in tt-run's environment ({home} is the launch directory).
+DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
+
+# default, override: --tracy "-t <port>" (or --port). Rank r's Tracy server listens on the base port + r.
+DEFAULT_TRACY_BASE_PORT = 8087
+
+# A launched rank's MPI_Init adds PMIX_MCA_psec (PMIx's client init), IPATH_NO_BACKTRACE and HFI_NO_BACKTRACE (Open MPI)
+# to the environment when they are missing. Adding a variable can move glibc's environ array while the Tracy profiler's
+# threads, started when libtracy loads, are reading it: a segfault in getenv (tt-metal #64717), seen in phase 1 on busy
+# CI runners where a rank's Tracy threads start late. Set already, nothing is added. The values are the ones MPI writes.
+MPI_INIT_PRESET_ENV = {"PMIX_MCA_psec": "native", "IPATH_NO_BACKTRACE": "1", "HFI_NO_BACKTRACE": "1"}
+
+# The TCP interface selection is either an include list or an exclude list; Open MPI aborts a job that sees both
+# (MPI_Init: no usable BTL, exit 14). A site profile can export one of them (OMPI_MCA_btl_tcp_if_exclude on the
+# exabox hosts) while the launch line sets the other (--tcp-interface, or --mpi-args).
+_TCP_IF_PAIR = (("btl_tcp_if_include", "btl_tcp_if_exclude"), ("btl_tcp_if_exclude", "btl_tcp_if_include"))
+
+# Environment variable that carries the Factory System Descriptor (FSD) path. tt-run sets this per-rank from
+# --factory-system-descriptor (managed the same way as TT_METAL_MOCK_CLUSTER_DESC_PATH: set explicitly in
+# get_rank_environment() and blocklisted from parent-env passthrough). It is propagated to both Phase 1
+# (generate_rank_bindings) and Phase 2 (the workload binary), where it is consumed via RTOptions
+# (RunTimeOptions::get_factory_system_descriptor_path()).
+FACTORY_SYSTEM_DESCRIPTOR_ENV_VAR = "TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH"
+
+# Environment variable prefixes that should be automatically passed through to MPI processes
+ENV_PASSTHROUGH_PREFIXES = (
+    "TT_",  # TT-Metal/TTNN variables
+    "ARCH_",  # Architecture variables (e.g., ARCH_NAME)
+    "WH_",  # Wormhole-specific variables (e.g., WH_ARCH_YAML)
+    "TTNN_",  # TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
+    "RELIABILITY_MODE",  # Fabric reliability mode: the one rtoptions env var without a TT_ prefix
+    "DEEPSEEK_",  # DeepSeek model vars (e.g., DEEPSEEK_V3_HF_MODEL, DEEPSEEK_V3_CACHE)
+    "MESH_",  # Mesh config (e.g., MESH_DEVICE)
+)
+
+# Environment variables that should NOT be passed through even if they match ENV_PASSTHROUGH_PREFIXES.
+# These are either:
+# 1. Explicitly managed by tt-run and derived from rank bindings (not parent environment)
+# 2. Should only be set via rank binding env_overrides (e.g., TT_VISIBLE_DEVICES)
+#
+# TT_VISIBLE_DEVICES: Controls which PCIe devices are visible to a process. This must be set
+# per-rank via env_overrides in rank bindings to ensure each MPI process sees only its assigned
+# devices. Passing through from the parent environment would override per-rank device assignments
+# configured by cluster descriptors and rank bindings, causing incorrect device visibility.
+# See: tech_reports/Programming_Multiple_Meshes/Programming_Multiple_Meshes.md Section 5.2
+#      scripts/scaleout/README_generate_cluster_descriptors.md
+#
+# Note: TT_METAL_HOME, TT_METAL_RUNTIME_ROOT, and TT_METAL_CACHE are NOT blocklisted because
+# they are read from the parent environment (with fallbacks) and should be passed through to
+# support NFS-based distributed workloads where all MPI ranks share the same python_venv.
+ENV_BLOCKLIST = frozenset(
+    {
+        # Managed by tt-run - values derived from rank bindings, not parent environment
+        "TT_MESH_ID",  # Mesh identifier from rank binding
+        "TT_MESH_HOST_RANK",  # Host rank within mesh from rank binding
+        "TT_MESH_GRAPH_DESC_PATH",  # Path to mesh graph descriptor from config
+        "TT_RUN_ORIGINAL_CWD",  # Always set to ORIGINAL_CWD by tt-run
+        "TT_RUN_RANK",  # Global MPI world rank from rank binding
+        "TT_RUN_SUBCONTEXT_ID",  # Set when using merged rank-bindings mapping
+        "TT_RUN_SUBCONTEXT_SIZES",
+        "TT_METAL_MOCK_CLUSTER_DESC_PATH",  # Mock cluster path for testing
+        "TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH",  # FSD path - set from --factory-system-descriptor, not parent env
+        # Cluster id is the phase-1 PSD hostname, written into rank-binding env_overrides.
+        "TT_METAL_CLUSTER_ID",
+        # Should only come from rank binding env_overrides
+        "TT_VISIBLE_DEVICES",  # Per-rank device visibility - must be set via rank bindings
+    }
+)
+
+# Store the original working directory at module load time to preserve it
+# across mpirun process launches (critical for SLURM/sbatch environments)
+ORIGINAL_CWD = Path.cwd().resolve()
+
+# --- what tt-run prints and reads ------------------------------------------------------------------------------------
+TT_RUN_PREFIX = "[tt-run]"
+PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
+
+# The line a rank (tt-metal's DistributedContext::request_job_stop) or its wrapper (tt-run-rank) prints when it stops
+# the job: tt-run names that rank and returns its code.
+_STOP_LINE = re.compile(r"\[tt-stop\] rank (\S+) on (\S+) \(pid (\d+)\): (.*?); stopping the job \(exit (\d+)\)")
+
+# prterun's banner when a rank called MPI_Abort (the ABORT_HANG_GRACE_S guard keys on it).
+_MPI_ABORT_BANNER = "MPI_ABORT was invoked"
+
+_KILLED_OTHERS = (
+    "the launcher then killed the other ranks (SIGTERM, then SIGKILL 250 ms later), so devices may be left unhealthy"
+)
+
+RANKFILE_LINE_PATTERN = re.compile(r"^\s*rank\s+\d+\s*=\s*([^\s]+)\s+slot\s*=.*$", re.IGNORECASE)
+MPI_HOST_FLAGS = ("--host", "-host", "--hostfile", "-hostfile", "--default-hostfile")
+# mpirun --version / stderr (OpenMPI 4.x and 5.x)
+_OPENMPI_VERSION_RE = re.compile(
+    r"(?:Open\s*MPI|OpenMPI)[^\d]*(\d+)\.(\d+)",
+    re.IGNORECASE,
+)
+
+# Phase 2 troubleshooting (after new_mode_flow → legacy_flow).
+PHASE2_TROUBLESHOOTING_HINT_NEW_MODE = (
+    "If the run failed or hung during physical discovery, or expected files are missing, your rank bindings "
+    "cache may be stale. Retry with --force-rediscovery to regenerate Phase 1 outputs."
+)
+
+# Phase 2 troubleshooting when only --rank-binding was used (no mesh-graph-descriptor / Phase 1 cache).
+PHASE2_TROUBLESHOOTING_HINT_LEGACY_MODE = (
+    "If device/ASIC mapping or discovery failed (e.g. golden file mismatch), verify cluster descriptors and "
+    "golden YAML under tests/tt_metal/tt_fabric/golden_mapping_files/ match this system. "
+    "If you use tt-run new mode (--mesh-graph-descriptor), retry with --force-rediscovery to refresh rank bindings."
+)
+
+# --- files tt-run writes and reads -----------------------------------------------------------------------------------
+# Key must match C++ :cpp:expr:`kSubcontextMgdMappingYamlKey` in
+# :file:`tools/scaleout/src/generate_rank_bindings_helpers.hpp`
+SUBCONTEXT_MGD_MAPPING_YAML_KEY = "subcontext_id_to_mesh_graph_descriptor"
+
+PHASE2_MOCK_MAPPING_FILENAME = "phase2_mock_mapping.yaml"
+# Written by ``generate_rank_bindings`` for multi-MGD (matches :func:`parse_rank_bindings_mapping`).
+RANK_BINDINGS_MAPPING_FILENAME = "rank_bindings_mapping.yaml"
+PHASE1_CACHE_KEY_FILENAME = ".phase1_cache_key"
+
+# Short prefix of SHA-256 for cache directory names (balance: path length vs collision risk for local cache).
+PHASE1_CACHE_ID_HEX_LEN = 16
 
 
 def _stop_grace_s() -> float:
@@ -130,19 +297,6 @@ def with_timeout_backstop(cmd: List[str], backstop_s: float) -> List[str]:
     return out
 
 
-# The TCP interface selection is either an include list or an exclude list; Open MPI aborts a job that sees both
-# (MPI_Init: no usable BTL, exit 14). A site profile can export one of them (OMPI_MCA_btl_tcp_if_exclude on the
-# exabox hosts) while the launch line sets the other (--tcp-interface, or --mpi-args).
-_TCP_IF_PAIR = (("btl_tcp_if_include", "btl_tcp_if_exclude"), ("btl_tcp_if_exclude", "btl_tcp_if_include"))
-
-
-# A launched rank's MPI_Init adds PMIX_MCA_psec (PMIx's client init), IPATH_NO_BACKTRACE and HFI_NO_BACKTRACE (Open MPI)
-# to the environment when they are missing. Adding a variable can move glibc's environ array while the Tracy profiler's
-# threads, started when libtracy loads, are reading it: a segfault in getenv (tt-metal #64717), seen in phase 1 on busy
-# CI runners where a rank's Tracy threads start late. Set already, nothing is added. The values are the ones MPI writes.
-MPI_INIT_PRESET_ENV = {"PMIX_MCA_psec": "native", "IPATH_NO_BACKTRACE": "1", "HFI_NO_BACKTRACE": "1"}
-
-
 def with_mpi_init_preset_env(cmd: List[str]) -> List[str]:
     """The launch line with MPI_INIT_PRESET_ENV forwarded to every rank (-x, before the first app context, so every
     context and every host gets it), unless the line already sets it."""
@@ -184,11 +338,6 @@ def find_rank_wrapper() -> Optional[str]:
     return str(candidate) if os.access(candidate, os.X_OK) else shutil.which("tt-run-rank")
 
 
-# The line a rank (tt-metal's DistributedContext::request_job_stop) or its wrapper (tt-run-rank) prints when it stops
-# the job: tt-run names that rank and returns its code.
-_STOP_LINE = re.compile(r"\[tt-stop\] rank (\S+) on (\S+) \(pid (\d+)\): (.*?); stopping the job \(exit (\d+)\)")
-
-
 def _is_peer_failure(m: re.Match) -> bool:
     """A [tt-stop] line whose reason is MPI reporting a failed peer: the consequence of another rank's death."""
     return "MPI_ERR_PROC_FAILED" in m.group(4)
@@ -214,11 +363,6 @@ def job_hosts(cmd: List[str]) -> str:
         if a in ("--host", "-host", "-H") and i + 1 < len(cmd):
             return ",".join(dict.fromkeys(h.split(":")[0] for h in cmd[i + 1].split(",") if h))
     return socket.gethostname()
-
-
-_KILLED_OTHERS = (
-    "the launcher then killed the other ranks (SIGTERM, then SIGKILL 250 ms later), so devices may be left unhealthy"
-)
 
 
 def describe_rank_failure(launcher_stderr: str, rc: int, hosts: str) -> Tuple[str, str]:
@@ -254,27 +398,6 @@ def describe_rank_failure(launcher_stderr: str, rc: int, hosts: str) -> Tuple[st
         f"tt-run returns {rc}.",
         "",
     )
-
-
-# How long the launcher may linger after a rank's MPI_Abort before tt-run ends it (the prrte#2815 guard). Armed
-# only once prterun has printed its abort banner below — i.e. PRRTE already committed to ending the job, never on
-# a healthy one. prterun prints the banner on the launch host for a rank on ANY host, so the guard is multi-host-safe.
-ABORT_HANG_GRACE_S = 15.0
-_MPI_ABORT_BANNER = "MPI_ABORT was invoked"
-
-# Minimum age of an unmapped /dev/shm segment before the leftover sweep removes it. Below this it may be a
-# concurrent same-user job's segment that is created but not yet mapped (uncertain ownership), so it is preserved;
-# a genuine leak from a job that is gone has sat unmapped far longer. A short job's own leak is instead cleared by
-# the next launch's pre-launch sweep.
-SHM_MIN_STALE_AGE_S = 30.0
-
-# A process still in the launcher's session when the launcher has just exited is given the stop grace to leave on its
-# own before tt-run acts on it. A rank (or a UMD helper child it spawned) can still be in its exit path after the
-# launcher returns — a graceful finish, not a leftover — and on real hardware a rank in uninterruptible sleep (D)
-# releasing /dev/tenstorrent can take several seconds. Only a process that OUTLASTS the grace gets SIGTERM, then
-# SIGKILL SURVIVOR_TERM_GRACE_S later. After a job that was stopped, forced or aborted the wait is STOPPED_JOB_SETTLE_S.
-SURVIVOR_TERM_GRACE_S = 10.0
-STOPPED_JOB_SETTLE_S = 10.0  # the same wait after a job that was already stopped, forced or aborted
 
 
 def remove_stale_launcher_leftovers() -> int:
@@ -462,7 +585,7 @@ class LaunchedJob:
     def launcher_stderr(self) -> str:
         """The launcher's last stderr lines, once its pipe is drained."""
         if self._pump is not None:
-            self._pump.join(timeout=2.0)
+            self._pump.join(timeout=LAUNCHER_STDERR_DRAIN_S)
         return "".join(self._stderr_tail)
 
     def _rank_stopped(self, m: re.Match) -> None:
@@ -523,7 +646,7 @@ class LaunchedJob:
             self._guard_fd = None
         if self._guard is not None:
             try:
-                self._guard.wait(timeout=5.0)
+                self._guard.wait(timeout=GUARD_EXIT_TIMEOUT_S)
             except subprocess.TimeoutExpired:
                 self._guard.kill()
                 self._guard.wait()
@@ -605,7 +728,7 @@ class LaunchedJob:
         for s, h in self._previous_handlers.items():
             signal.signal(s, h)
 
-    def _shutdown_launcher(self, grace_s: float = 5.0) -> None:
+    def _shutdown_launcher(self, grace_s: float = LAUNCHER_TEARDOWN_GRACE_S) -> None:
         """Teardown step: if the launcher is still running — we left ``wait()`` by an exception (a pytest timeout,
         KeyboardInterrupt, ...) rather than a normal return — signal it and wait, bounded, so it tears its own job
         down (its remote ranks included) before we sweep local survivors. A no-op on the normal path, where
@@ -645,7 +768,7 @@ class LaunchedJob:
         handled = 0  # stop signals acted on so far
         while True:
             try:
-                rc = self.proc.wait(timeout=0.2)
+                rc = self.proc.wait(timeout=WAIT_POLL_S)
                 return 128 - rc if rc < 0 else rc
             except subprocess.TimeoutExpired:
                 pass
@@ -754,7 +877,7 @@ class LaunchedJob:
             )
         deadline = time.time() + settle_s
         while survivors and time.time() < deadline:  # let a rank still in its exit path leave on its own
-            time.sleep(0.1)
+            time.sleep(SURVIVOR_POLL_S)
             survivors = self._survivors()
         if not survivors:
             return
@@ -782,7 +905,7 @@ class LaunchedJob:
                     pass
             end = time.time() + grace_s
             while time.time() < end and any(_still_running(pid) for pid in survivors):
-                time.sleep(0.1)
+                time.sleep(SURVIVOR_POLL_S)
             survivors = [pid for pid in survivors if _still_running(pid)]
             if not survivors:
                 return
@@ -864,30 +987,8 @@ def run_launcher(cmd: List[str], cwd: Path) -> int:
     return rc
 
 
-PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
-RANKFILE_LINE_PATTERN = re.compile(r"^\s*rank\s+\d+\s*=\s*([^\s]+)\s+slot\s*=.*$", re.IGNORECASE)
-MPI_HOST_FLAGS = ("--host", "-host", "--hostfile", "-hostfile", "--default-hostfile")
-# mpirun --version / stderr (OpenMPI 4.x and 5.x)
-_OPENMPI_VERSION_RE = re.compile(
-    r"(?:Open\s*MPI|OpenMPI)[^\d]*(\d+)\.(\d+)",
-    re.IGNORECASE,
-)
-
 # How to extend Phase 2 failure messages (see legacy_flow phase2_failure_hint).
 Phase2FailureHint = Optional[Literal["stale_phase1_cache", "legacy"]]
-
-# Phase 2 troubleshooting (after new_mode_flow → legacy_flow).
-PHASE2_TROUBLESHOOTING_HINT_NEW_MODE = (
-    "If the run failed or hung during physical discovery, or expected files are missing, your rank bindings "
-    "cache may be stale. Retry with --force-rediscovery to regenerate Phase 1 outputs."
-)
-
-# Phase 2 troubleshooting when only --rank-binding was used (no mesh-graph-descriptor / Phase 1 cache).
-PHASE2_TROUBLESHOOTING_HINT_LEGACY_MODE = (
-    "If device/ASIC mapping or discovery failed (e.g. golden file mismatch), verify cluster descriptors and "
-    "golden YAML under tests/tt_metal/tt_fabric/golden_mapping_files/ match this system. "
-    "If you use tt-run new mode (--mesh-graph-descriptor), retry with --force-rediscovery to refresh rank bindings."
-)
 
 
 def _phase2_troubleshooting_hint_text(hint: Phase2FailureHint) -> Optional[str]:
@@ -948,11 +1049,6 @@ def log_phase2_exit_reason(
             )
             return
     _emit_phase2_troubleshooting_hint(hint)
-
-
-# Store the original working directory at module load time to preserve it
-# across mpirun process launches (critical for SLURM/sbatch environments)
-ORIGINAL_CWD = Path.cwd().resolve()
 
 
 class RankfileSyntax(Enum):
@@ -1112,7 +1208,7 @@ def _get_openmpi_runtime_version(mpi_launcher: str, _subprocess_run=subprocess.r
             [exe, "--version"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=MPI_VERSION_PROBE_TIMEOUT_S,
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
@@ -1270,11 +1366,6 @@ def find_generate_rank_bindings_executable() -> Path:
     )
 
 
-# Key must match C++ :cpp:expr:`kSubcontextMgdMappingYamlKey` in
-# :file:`tools/scaleout/src/generate_rank_bindings_helpers.hpp`
-SUBCONTEXT_MGD_MAPPING_YAML_KEY = "subcontext_id_to_mesh_graph_descriptor"
-
-
 def _resolve_mgd_path_for_subcontext_mapping(path_str: str, base_dir: Path, tt_metal_home: Optional[str]) -> Path:
     """Resolve one MGD path the same way as C++ :cpp:func:`load_subcontext_id_to_mesh_graph_descriptor_mapping`."""
     mgd = Path(path_str)
@@ -1386,22 +1477,6 @@ def phase1_rank_bindings_input_path(run_dir: Path, mgd_path_is_mapping_yaml: boo
     if mgd_path_is_mapping_yaml:
         return run_dir / RANK_BINDINGS_MAPPING_FILENAME
     return run_dir / "rank_bindings.yaml"
-
-
-PHASE2_MOCK_MAPPING_FILENAME = "phase2_mock_mapping.yaml"
-# Written by ``generate_rank_bindings`` for multi-MGD (matches :func:`parse_rank_bindings_mapping`).
-RANK_BINDINGS_MAPPING_FILENAME = "rank_bindings_mapping.yaml"
-PHASE1_CACHE_KEY_FILENAME = ".phase1_cache_key"
-
-# Short prefix of SHA-256 for cache directory names (balance: path length vs collision risk for local cache).
-PHASE1_CACHE_ID_HEX_LEN = 16
-
-# Environment variable that carries the Factory System Descriptor (FSD) path. tt-run sets this per-rank from
-# --factory-system-descriptor (managed the same way as TT_METAL_MOCK_CLUSTER_DESC_PATH: set explicitly in
-# get_rank_environment() and blocklisted from parent-env passthrough). It is propagated to both Phase 1
-# (generate_rank_bindings) and Phase 2 (the workload binary), where it is consumed via RTOptions
-# (RunTimeOptions::get_factory_system_descriptor_path()).
-FACTORY_SYSTEM_DESCRIPTOR_ENV_VAR = "TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH"
 
 
 def compute_phase1_cache_fingerprint_full(
@@ -2360,9 +2435,6 @@ def parse_binding_config(
     return config
 
 
-DEFAULT_TRACY_BASE_PORT = 8087
-
-
 @dataclass
 class TracyConfig:
     output_root: Path
@@ -2539,52 +2611,6 @@ def parse_rank_bindings_mapping(
         merged.mock_cluster_rank_binding = resolved_mock_bindings
 
     return merged
-
-
-# Environment variable prefixes that should be automatically passed through to MPI processes
-ENV_PASSTHROUGH_PREFIXES = (
-    "TT_",  # TT-Metal/TTNN variables
-    "ARCH_",  # Architecture variables (e.g., ARCH_NAME)
-    "WH_",  # Wormhole-specific variables (e.g., WH_ARCH_YAML)
-    "TTNN_",  # TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
-    "RELIABILITY_MODE",  # Fabric reliability mode: the one rtoptions env var without a TT_ prefix
-    "DEEPSEEK_",  # DeepSeek model vars (e.g., DEEPSEEK_V3_HF_MODEL, DEEPSEEK_V3_CACHE)
-    "MESH_",  # Mesh config (e.g., MESH_DEVICE)
-)
-
-# Environment variables that should NOT be passed through even if they match ENV_PASSTHROUGH_PREFIXES.
-# These are either:
-# 1. Explicitly managed by tt-run and derived from rank bindings (not parent environment)
-# 2. Should only be set via rank binding env_overrides (e.g., TT_VISIBLE_DEVICES)
-#
-# TT_VISIBLE_DEVICES: Controls which PCIe devices are visible to a process. This must be set
-# per-rank via env_overrides in rank bindings to ensure each MPI process sees only its assigned
-# devices. Passing through from the parent environment would override per-rank device assignments
-# configured by cluster descriptors and rank bindings, causing incorrect device visibility.
-# See: tech_reports/Programming_Multiple_Meshes/Programming_Multiple_Meshes.md Section 5.2
-#      scripts/scaleout/README_generate_cluster_descriptors.md
-#
-# Note: TT_METAL_HOME, TT_METAL_RUNTIME_ROOT, and TT_METAL_CACHE are NOT blocklisted because
-# they are read from the parent environment (with fallbacks) and should be passed through to
-# support NFS-based distributed workloads where all MPI ranks share the same python_venv.
-ENV_BLOCKLIST = frozenset(
-    {
-        # Managed by tt-run - values derived from rank bindings, not parent environment
-        "TT_MESH_ID",  # Mesh identifier from rank binding
-        "TT_MESH_HOST_RANK",  # Host rank within mesh from rank binding
-        "TT_MESH_GRAPH_DESC_PATH",  # Path to mesh graph descriptor from config
-        "TT_RUN_ORIGINAL_CWD",  # Always set to ORIGINAL_CWD by tt-run
-        "TT_RUN_RANK",  # Global MPI world rank from rank binding
-        "TT_RUN_SUBCONTEXT_ID",  # Set when using merged rank-bindings mapping
-        "TT_RUN_SUBCONTEXT_SIZES",
-        "TT_METAL_MOCK_CLUSTER_DESC_PATH",  # Mock cluster path for testing
-        "TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH",  # FSD path - set from --factory-system-descriptor, not parent env
-        # Cluster id is the phase-1 PSD hostname, written into rank-binding env_overrides.
-        "TT_METAL_CLUSTER_ID",
-        # Should only come from rank binding env_overrides
-        "TT_VISIBLE_DEVICES",  # Per-rank device visibility - must be set via rank bindings
-    }
-)
 
 
 def _parent_env_prefix_from_environ() -> Dict[str, str]:
