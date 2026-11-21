@@ -638,20 +638,24 @@ def configure_conv2d(
     *,
     slice_params: dict[tuple[int, ...], dict[tuple[int, int, int, int], int]] | None = None,
     config_tensors_in_dram: bool | None = None,
+    replace: bool = False,
 ) -> None:
     """Configure every Conv2d in ``module``'s tree.
 
     ``slice_params`` (same layout as ``Conv2d.slice_params``) is added on top of the shared table for
-    each mesh shape it names, for these instances only. ``config_tensors_in_dram`` overrides the
-    class default for them.
+    each mesh shape it names, for these instances only; with ``replace`` it takes the place of the
+    shared entries for those mesh shapes. ``config_tensors_in_dram`` overrides the class default for them.
     """
     if isinstance(module, Conv2d):
         if slice_params is not None:
             table = dict(Conv2d.slice_params)
             for mesh_shape, entries in slice_params.items():
-                table[mesh_shape] = {**Conv2d.slice_params.get(mesh_shape, Conv2d.slice_default), **entries}
+                shared = {} if replace else Conv2d.slice_params.get(mesh_shape, Conv2d.slice_default)
+                table[mesh_shape] = {**shared, **entries}
             module.slice_params = table
         if config_tensors_in_dram is not None:
             module.config_tensors_in_dram = config_tensors_in_dram
     for _, child in module.named_children():
-        configure_conv2d(child, slice_params=slice_params, config_tensors_in_dram=config_tensors_in_dram)
+        configure_conv2d(
+            child, slice_params=slice_params, config_tensors_in_dram=config_tensors_in_dram, replace=replace
+        )

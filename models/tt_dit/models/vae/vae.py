@@ -43,6 +43,9 @@ class VaeContext:
     w_mesh_axis: int | None = None
     w_factor: int = 1
     use_conv3d: bool = False
+    # VaeAttention computes only each device's own query rows (its H partition, split over tp_axis where even).
+    local_query_attention: bool = False
+    group_norm_max_block_rows: int | None = None
 
 
 @dataclass(frozen=True)
@@ -599,14 +602,44 @@ class VaeAttention(Module):
 
         del x
 
+        program_config = self._sdpa_program_config
+        h_local = h // self._ctx.h_factor
+        tp_split = self._tp_factor > 1 and h_local % self._tp_factor == 0 and h_local // self._tp_factor * w % 32 == 0
+        local = (
+            self._ctx.local_query_attention
+            and self._ctx.w_factor == 1
+            and (tp_split or (self._ctx.h_factor > 1 and h_local * w % 32 == 0))
+        )
+        if local:
+            q = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
+            if self._ctx.h_factor > 1:
+                q = ttnn.mesh_partition(q, dim=2, cluster_axis=self._ctx.h_mesh_axis, memory_config=q.memory_config())
+            if tp_split:
+                q = ttnn.mesh_partition(q, dim=2, cluster_axis=self._tp_axis, memory_config=q.memory_config())
+            q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
+            rows = q.shape[2]
+            if rows % program_config.q_chunk_size:
+                program_config = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=program_config.compute_with_storage_grid_size,
+                    q_chunk_size=max(d for d in range(32, program_config.q_chunk_size + 1, 32) if rows % d == 0),
+                    k_chunk_size=program_config.k_chunk_size,
+                    exp_approx_mode=program_config.exp_approx_mode,
+                )
+
         x = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
             is_causal=False,
-            program_config=self._sdpa_program_config,
+            program_config=program_config,
             compute_kernel_config=self._sdpa_compute_kernel_config,
         )
+
+        if local:
+            if tp_split:
+                x = self._ccl_manager.all_gather(x, dim=2, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)
+            return x.reshape([n, h_local, w, -1]) + identity
 
         x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)
 
@@ -835,6 +868,7 @@ def _norm(
             mesh_axis=ctx.tp_axis,
             mesh_device=ctx.device,
             activation_fn=activation_fn,
+            max_block_rows=ctx.group_norm_max_block_rows,
         )
     if isinstance(norm, VaeNormDescRms):
         # VaeRmsNorm normalizes per spatial position over the channel dim → SP-safe as-is.
