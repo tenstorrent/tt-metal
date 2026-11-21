@@ -1,0 +1,35 @@
+{
+  "op": "plus_one",
+  "spec": "/localdev/iwrosz/tt-metal-q6/eval/specs/plus_one/spec.py",
+  "sha256": "d1f61efdcd4fe85ebe096aa8d5eb03187f8f4494746441217cb42880af51587a",
+  "status": "passed",
+  "errors": 0,
+  "unresolved": 4,
+  "findings": [
+    {
+      "check": "cell_count",
+      "level": "info",
+      "message": "176 cells = 22 INPUTS x 8 combinations; 0 skipped by INVALID; 28 in PHASE0; 0 loose, 0 numeric, 0 rejection test(s)"
+    },
+    {
+      "check": "open_items",
+      "level": "unresolved",
+      "message": "DEFINITION['tt_regen_spec']['row'] is UNRESOLVED"
+    },
+    {
+      "check": "open_items",
+      "level": "unresolved",
+      "message": "DEFINITION['tt_regen_spec']['governs'] is UNRESOLVED"
+    },
+    {
+      "check": "open_items",
+      "level": "unresolved",
+      "message": "PERFORMANCE['bar'] is UNRESOLVED"
+    },
+    {
+      "check": "open_items",
+      "level": "unresolved",
+      "message": "PERFORMANCE['measure'] is UNRESOLVED"
+    }
+  ]
+}
