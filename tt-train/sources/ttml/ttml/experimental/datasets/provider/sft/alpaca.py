@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...utils.sft.templates.alpaca import ALPACA_PROMPT_TEMPLATE, ALPACA_PROMPT_TEMPLATE_NO_INPUT
+from ...utils.sft.templates.alpaca import alpaca_prompt
 from .base import DatasetProvider
 
 
@@ -22,10 +22,4 @@ class AlpacaProvider(DatasetProvider):
         return load_dataset("tatsu-lab/alpaca", split="train")
 
     def _prompt_and_response(self, example: dict) -> tuple[str, str]:
-        instruction = example["instruction"]
-        input_text = example.get("input", "")
-        if input_text.strip():
-            prompt = ALPACA_PROMPT_TEMPLATE.substitute(instruction=instruction, input=input_text)
-        else:
-            prompt = ALPACA_PROMPT_TEMPLATE_NO_INPUT.substitute(instruction=instruction)
-        return prompt, example["output"]
+        return alpaca_prompt(example["instruction"], example.get("input", "")), example["output"]

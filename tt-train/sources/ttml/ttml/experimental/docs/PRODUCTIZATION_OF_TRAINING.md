@@ -119,6 +119,25 @@ Instruct models are trained without their chat template, on this plain Alpaca an
 sends those same plain prompts at inference time. The datasets here are examples; tt-inference-server applies the
 same template in move-to-inference.
 
+**Inference contract.** A prompt has to match training byte for byte. The Alpaca prompt (`alpaca` and `custom`) is
+Stanford Alpaca's, ending in `### Response:` and one newline. An example has an input when `input.strip()` is not
+empty; the instruction and the input go in as they are, not stripped:
+
+```python
+# With an input:
+"Below is an instruction that describes a task, paired with an input that provides further context. "
+"Write a response that appropriately completes the request.\n\n"
+"### Instruction:\n{instruction}\n\n### Input:\n{input}\n\n### Response:\n"
+
+# Without one:
+"Below is an instruction that describes a task. Write a response that appropriately completes the request.\n\n"
+"### Instruction:\n{instruction}\n\n### Response:\n"
+```
+
+The SST-2 prompt is `"Review: {sentence}\nOutput:"`. The prompt is tokenized with the tokenizer's special tokens (one
+BOS for Llama), and the response ends in `tokenizer.eos_token`, the token generation stops at. The prompts are in
+`ttml/experimental/datasets/utils/sft/templates/`.
+
 Other datasets plug in as dataset providers (see [Adding a dataset](#adding-a-dataset)).
 
 ---

@@ -7,32 +7,9 @@ each template reads."""
 
 from __future__ import annotations
 
-from string import Template
 from typing import Mapping, Optional
 
-CUSTOM_ALPACA_PROMPT_INTRO = (
-    "Below is an instruction that describes a task, paired with an optional input that provides further context. "
-    "Write a response that appropriately completes the request."
-)
-
-CUSTOM_ALPACA_INPUT_BLOCK_TEMPLATE = Template(
-    """### Input:
-$input
-"""
-)
-
-CUSTOM_ALPACA_PROMPT_TEMPLATE = Template(
-    f"""
-{CUSTOM_ALPACA_PROMPT_INTRO}
-
-### Instruction:
-$instruction
-
-$input_section
-
-### Response:
-"""
-)
+from .alpaca import alpaca_prompt
 
 # The example fields each custom template reads; a column mapping maps them to dataset columns.
 CUSTOM_TEMPLATE_KEYS = {"alpaca": {"required": {"instruction", "output"}, "optional": {"input"}}}
@@ -53,9 +30,7 @@ def custom_prompt_and_response(example: Mapping, template: str, column_mapping: 
     # Rows that omit the optional input column load as None once the file has any row that includes it.
     input_text = example[input_column] if input_column else ""
     input_text = "" if input_text is None else str(input_text)
-    input_section = CUSTOM_ALPACA_INPUT_BLOCK_TEMPLATE.substitute(input=input_text) if input_text.strip() else ""
-    prompt = CUSTOM_ALPACA_PROMPT_TEMPLATE.substitute(instruction=instruction, input_section=input_section)
-    return prompt, example[column_mapping["output"]]
+    return alpaca_prompt(instruction, input_text), example[column_mapping["output"]]
 
 
 def resolve_column_mapping(
