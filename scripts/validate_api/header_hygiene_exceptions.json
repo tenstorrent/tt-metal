@@ -75,5 +75,19 @@
     "owner": "@tenstorrent/metalium-api-owners",
     "reason": "Including advanced options from the experimental folder allows FAFO and WIP work on Metal 2.0 without introducing it into the main stable API surface. Unlike other parts of the API, which use PImpl to hide these features, advanced options structs are needed because most Metal 2.0 specifications cannot use PImpl.",
     "remove_when": "Metal 2.0 has productized all advanced options and no longer has any experimental extensions."
+  },
+  {
+    "source": "tt-metalium/workload/specification/fabric_connection_spec.hpp",
+    "include": "tt-metalium/experimental/fabric/fabric_types.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "The Metal 2.0 fabric connection spec names its targets with the experimental fabric type FabricNodeId.",
+    "remove_when": "FabricNodeId moves to the stable API, or the fabric connection spec moves to the experimental API."
+  },
+  {
+    "source": "tt-metalium/workload/specification/fabric_connection_spec.hpp",
+    "include": "tt-metalium/experimental/fabric/mesh_graph.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "The Metal 2.0 fabric connection spec names its targets with the experimental fabric type RoutingDirection.",
+    "remove_when": "RoutingDirection moves to the stable API, or the fabric connection spec moves to the experimental API."
   }
 ]

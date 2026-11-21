@@ -17,6 +17,7 @@
 #include <tt-metalium/workload/specification/compute_hardware_config.hpp>
 #include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/fabric_connection_spec.hpp>
 #include <tt-metalium/workload/specification/global_semaphore_parameter.hpp>
 #include <tt-metalium/workload/specification/semaphore_spec.hpp>
 #include <tt-metalium/workload/specification/scratchpad_spec.hpp>
@@ -173,6 +174,17 @@ struct KernelSpec {
     };
     Group<ScratchpadBinding> scratchpad_bindings;
 
+    // Fabric connection bindings (data-movement kernels only)
+    // Declares that this kernel opens the fabric connections of a FabricConnectionSpec
+    // (declared at the ProgramSpec level) on its nodes in the spec's links.
+    // The kernel builds a fabric sender or a connection manager from the binding token:
+    //   WorkerToFabricEdmSender::build_from_binding(fabric::<accessor_name>)
+    struct FabricConnectionBinding {
+        FabricConnectionSpecName fabric_connection_spec_name;  // identify the spec within the ProgramSpec
+        std::string accessor_name;  // fabric connection accessor name (used in the kernel source code)
+    };
+    Group<FabricConnectionBinding> fabric_connection_bindings;
+
     ///////////////////////////////////////////////////////////////////
     // Program parameter bindings (user-managed resources)
     ///////////////////////////////////////////////////////////////////
@@ -279,6 +291,7 @@ using TensorBinding = KernelSpec::TensorBinding;
 using GlobalSemaphoreBinding = KernelSpec::GlobalSemaphoreBinding;
 using SemaphoreBinding = KernelSpec::SemaphoreBinding;
 using ScratchpadBinding = KernelSpec::ScratchpadBinding;
+using FabricConnectionBinding = KernelSpec::FabricConnectionBinding;
 
 //------------------------------------------------
 // Convenience factories for DFBBinding

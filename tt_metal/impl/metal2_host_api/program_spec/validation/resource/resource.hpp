@@ -92,6 +92,11 @@ void ValidateComputeSemaphores(const ValidationContext& ctx);
 void ValidateGlobalSemaphoreBindings(const KernelSpec& kernel);
 void ValidateGlobalSemaphoreParametersUsed(const ValidationContext& ctx);
 
+// fabric_connection.cpp
+void ValidateFabricConnectionSpec(const FabricConnectionSpec& connection);
+void ValidateFabricConnectionBindings(const KernelSpec& kernel, tt::ARCH arch);
+void ValidateFabricConnectionsUsed(const ValidationContext& ctx);
+
 // tensor.cpp
 void ValidateTensorBindings(const KernelSpec& kernel);
 void ValidateTensorParametersUsed(const ValidationContext& ctx);

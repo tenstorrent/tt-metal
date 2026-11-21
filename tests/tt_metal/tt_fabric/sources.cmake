@@ -48,6 +48,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_data_movement/test_basic_fabric_mux_v2.cpp
     fabric_data_movement/test_fabric_traffic_generator_kernel.cpp
     fabric_data_movement/test_global_semaphore_fabric.cpp
+    fabric_data_movement/test_metal2_fabric_connection.cpp
     fabric_router/test_physical_descriptor_builder.cpp
     fabric_router/test_control_plane_link_health.cpp
     fabric_router/test_fsd_host_filter.cpp

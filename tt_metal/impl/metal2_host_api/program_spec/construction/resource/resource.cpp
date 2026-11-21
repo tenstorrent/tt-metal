@@ -71,6 +71,7 @@ WatcherNodeRanges MakeWatcherNodeRanges(
 
 ProgramResources RegisterResources(
     distributed::MeshDevice& mesh_device,
+    const std::optional<distributed::MeshCoordinate>& device,
     const ProgramSpec& spec,
     const CollectedSpecData& collected,
     const KernelRiscMaskMap& risc_masks,
@@ -96,6 +97,7 @@ ProgramResources RegisterResources(
 
     WireDFBAliases(spec, resources.dfbs.id, program_impl);
     resources.semaphores = RegisterSemaphores(spec, collected, metal_env, program_impl);
+    resources.fabric_connections = RegisterFabricConnections(mesh_device, device, spec, program_impl);
     resources.watcher_node_ranges = MakeWatcherNodeRanges(mesh_device, spec, collected, metal_env);
     return resources;
 }

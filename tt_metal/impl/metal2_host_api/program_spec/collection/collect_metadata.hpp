@@ -28,6 +28,7 @@ struct CollectedSpecData {
     std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*> scratchpad_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
     std::unordered_map<GlobalSemaphoreParamName, const GlobalSemaphoreParameter*> global_semaphore_parameter_by_name;
+    std::unordered_map<FabricConnectionSpecName, const FabricConnectionSpec*> fabric_connection_by_name;
     std::unordered_map<experimental::SRAMArenaParamName, const experimental::SRAMArenaParameter*>
         sram_arena_parameter_by_name;
     std::unordered_map<experimental::PrefetcherPipeParamName, const experimental::PrefetcherPipeParameter*>
@@ -59,6 +60,17 @@ struct CollectedSpecData {
     // - Every kernel in a vector has a scratchpad binding naming this key
     //   (some k->scratchpad_bindings entry has scratchpad_spec_name == key).
     std::unordered_map<ScratchpadSpecName, std::vector<const KernelSpec*>> scratchpad_binders;
+
+    // Fabric connection binders (derived from kernel fabric connection bindings).
+    // Tracks which kernels bind a given FabricConnectionSpec.
+    //
+    // Invariants:
+    // - Every key is a key in fabric_connection_by_name.
+    // - Every vector is non-empty.
+    // - Every pointer is non-nullptr.
+    // - Every pointer k is the registered kernel: kernel_by_name[k->unique_id] == k.
+    // - Every kernel in a vector has a fabric connection binding naming this key.
+    std::unordered_map<FabricConnectionSpecName, std::vector<const KernelSpec*>> fabric_connection_binders;
 
     // DFB endpoint info (derived from kernel bindings).
     //

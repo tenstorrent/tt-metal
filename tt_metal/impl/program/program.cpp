@@ -842,7 +842,8 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
         const size_t crta_words =
             static_cast<size_t>(layout.vararg_section_offset) + schema->num_common_runtime_varargs;
 
-        // Per-node RTAs: [ named | per-node tensor bindings | varargs ], with the vararg count from the schema.
+        // Per-node RTAs: [ named | per-node tensor bindings | fabric connections | varargs ], with the vararg count
+        // from the schema.
         const size_t rta_vararg_offset = kernel->get_rta_layout().vararg_section_offset;
 
         // Reserve unique RTAs first so set_common_runtime_args can validate against
@@ -865,6 +866,8 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
             std::vector<uint32_t> zeros(rta_words, 0u);
             kernel->set_runtime_args(core, zeros);
         }
+        // Fabric connection words are fixed at construction, so they do not depend on Program::set_program_run_args.
+        kernel->write_fabric_connection_runtime_args();
 
         if (crta_words == 0) {
             continue;

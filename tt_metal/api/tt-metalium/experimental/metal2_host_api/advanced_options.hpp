@@ -85,7 +85,23 @@ struct ProgramAdvancedOptions {
     // AdvancedProgramRunArgs::prefetcher_pipe_args. A kernel's sender/receiver role is
     // derived from its WorkUnitSpec node coverage; see prefetcher_pipe_parameter.hpp.
     Group<PrefetcherPipeParameter> prefetcher_pipe_parameters;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Fabric connection options
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Relaxations of the checks on the Program's fabric connections (ProgramSpec::fabric_connections).
+    struct FabricConnectionAdvancedOptions {
+        // Turns off the check that, on each device, each (direction, link) is used by at most one
+        // fabric connection of the Program.
+        // The op must then make sure that its kernels share each fabric router correctly,
+        // for example by having only one connection to a router open at a time.
+        bool disable_exclusive_fabric_link_check = false;
+    };
+    FabricConnectionAdvancedOptions fabric_connection_options;
 };
+
+using FabricConnectionAdvancedOptions = ProgramAdvancedOptions::FabricConnectionAdvancedOptions;
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////

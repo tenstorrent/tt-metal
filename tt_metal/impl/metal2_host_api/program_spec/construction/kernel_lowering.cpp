@@ -19,6 +19,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
+#include "fabric/fabric_context.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
 
@@ -405,6 +406,15 @@ LoweredKernel LowerKernel(
     ta_bindings.crta_layout.global_semaphore_section_words =
         static_cast<uint32_t>(kernel_spec.global_semaphore_bindings.size());
 
+    // Fabric connection bindings: their per-node RTA section follows the per-node TensorBinding section and
+    // precedes the RTA varargs.
+    FabricConnectionBindingsForKernel fc_bindings = ResolveFabricConnectionBindingsForKernel(
+        kernel_spec,
+        resources.fabric_connections,
+        /*fabric_connection_base_rta_word=*/ta_bindings.rta_layout.vararg_section_offset);
+    ta_bindings.rta_layout.fabric_connection_section_words = fc_bindings.section_words;
+    ta_bindings.rta_layout.vararg_section_offset += fc_bindings.section_words;
+
     // Positional CTAs: [ user CTA varargs | TensorBinding CTA payloads ]
     std::vector<uint32_t> compile_args = cta_varargs;
     compile_args.insert(compile_args.end(), ta_bindings.cta_words.begin(), ta_bindings.cta_words.end());
@@ -464,6 +474,11 @@ LoweredKernel LowerKernel(
                  MetalContext::instance(context_id).get_control_plane().get_fabric_kernel_defines()) {
                 config.defines.emplace(name, value);
             }
+            // A kernel that binds a fabric connection compiles its 2D fabric code exactly when the fabric is 2D.
+            if (!kernel_spec.fabric_connection_bindings.empty() &&
+                MetalContext::instance(context_id).get_control_plane().get_fabric_context().is_2D_routing_enabled()) {
+                config.defines.emplace("FABRIC_2D", "1");
+            }
             kernel = std::make_shared<DataMovementKernel>(
                 context_id,
                 kernel_src,
@@ -503,6 +518,7 @@ LoweredKernel LowerKernel(
     kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
 
     kernel->set_global_semaphore_binding_handles(std::move(global_semaphore_handles));
+    kernel->set_fabric_connection_binding_handles(std::move(fc_bindings.handles));
 
     // PrefetcherPipe accessors -> program slot ids (also part of the kernel cache key).
     if (!resource_bindings.prefetcher_pipes.empty()) {
