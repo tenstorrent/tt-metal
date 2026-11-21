@@ -43,3 +43,11 @@ PASS/FAIL only, a gate unit, never a throughput number. The performance number i
 REAL fixed histories 51200 / 131072 / 139264 (AgentX p50) / 262144 / 524288 / 786432 / 1024000, every segment of a packed chunk
 at that same history (no murky "mixed history" definitions, owner 2026-11-21); steady wall ms, tok/s, resumed wall ms, device ms, exposed host ms),
 one table per path, counted only when the no-rebuild check passes on the same code. AgentX-mix walls are a diagnostic, never a headline.
+
+CHIP-ALIGNED LANES (owner 2026-11-21): rows of two requests never share a chip. A packed chunk's segments each own whole chips
+(256 rows a chip on the 8x4: starts, lengths and splits multiples of 256, last chip padded, 1..32 chips a segment). The per-row
+glued form, the fixed 2048-row lanes and the per-segment fallback are removed (an experiment on this branch; serving needs
+tt-d-gen's packer to agree to 256-aligned segments).
+NO SLOW FALLBACK IN SERVING (owner 2026-11-21): a path that cannot run a segment kind serving sends (replay / prefix-hit
+segments included) is not useful; an unsupported case raises, it never falls back to a slower path. Every accept gate measures
+resumed (prefix-hit) chunks next to steady ones.

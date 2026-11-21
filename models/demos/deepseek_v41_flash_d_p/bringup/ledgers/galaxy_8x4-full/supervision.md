@@ -1193,3 +1193,15 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   (04c14a09d00): same at 50k-256k, SLOWER at 512k+ (+1.7 / +4.2 / +4.1 ms wall, device +1.4 / +2.0 / +2.7 ms). Its
   no-rebuild PASS ran in a held process (0 s): re-run cold in PB.NR. Applied the PB.NR patch (also fills the report's
   5120 table, + the 5120 no-rebuild cold unit). Resumed until PB.9G.
+- 07:15 heartbeat: no-rebuild cold task (PB.NR) agent active; glued fix (PB.9G) brief rewrite pending the owner's yes (replay in the fast path, fallback out of serving, aligned per-chip form within ~2 ms of lanes, then delete the fixed-lane path); apply at PB.NR's stop.
+- 07:20 OWNER yes: glued fix (PB.9G) rewritten (patch_9g, applied at PB.NR's stop; pause requested): replay segments in the one call, fallback raises (out of serving), no build on any layout, chip-aligned (256-row) segments in a per-chip form within ~2 ms of fixed lanes (steady <= 117, resumed <= 150 ms at 139264), forms separable so a later 256-alignment agreement with tt-d-gen just deletes the per-row form; then delete the fixed-lane path. Also at the stop: rule 'no slow fallback in serving; resumed chunks in every accept gate' into the skill + PACKED_RULES.md.
+- 07:25 OWNER: kill the per-row glued form (rows of two requests on one chip: cost, complexity, leakage risk); go with
+  CHIP-ALIGNED LANES (each segment owns whole chips, 256-row aligned starts / splits, 1..32 chips; replay in the one call;
+  0 builds; per-row glued, fixed 2048 lanes and the per-segment fallback removed). PB.9G rewritten accordingly (gate:
+  oracle bit-identical incl. replay / split / 1-chip, cold strict no-rebuild PASS, aligned 4x2k <= 117 / 150 ms steady /
+  resumed at 139264, 4x1.6k + split ladder); PB.T shrunk to slot isolation at chip boundaries; PB.9H (67k) judged on the
+  aligned-lane 4x2k ladder. Rules recorded (PACKED_RULES.md: chip-aligned lanes, no slow fallback; skill: no slow fallback
+  in serving, check which request kinds the walls covered before accepting). 1.6k math: 7 chips each -> 4 whole (6400
+  tokens, 78%) or ~7424 with a 1024-row split piece (91%) vs glued 8000 (98%).
+- 07:20 PB.NR's cold run (agent): glued5x1600 13 builds, glued4x2k 16 (14 on the resumed rows) -> DS41-360's "5x1.6k: 0"
+  contradicted (it came from a held process). Agent done; the task paused before its quick A/B.

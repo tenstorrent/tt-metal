@@ -439,6 +439,11 @@ Standing owner decisions (moved here from private memory, 2026-10-30):
   history" cases, owner 2026-11-21); columns steady wall ms, tok/s, resumed wall ms, device ms, exposed host ms), one table per path,
   and it counts only when the no-rebuild check passes on the same code. AgentX-mix walls are a diagnostic, never a
   headline.
+- No slow fallback in serving (owner, 2026-11-21, DeepSeek-V4.1): a serving path that cannot run a case the server sends
+  (e.g. prefix-hit / replay segments) is not useful; an unsupported case raises, never falls back to a slower path, and
+  every accept gate measures that case (resumed chunks next to steady). Before accepting a serving-path change, check
+  which request kinds its walls covered (DeepSeek-V4.1 PB.9X: glued routing accepted on steady walls only; prefix-hit
+  chunks ran 3.4x slower through a fallback).
 - Serving never rebuilds (owner, 2026-11-20): every program a server can need is built once at startup from a finite
   set (chunk size, segment counts, the accepted switches, layer kinds); after warm-up nothing builds on the request
   path: positions, history lengths, slots, segment boundaries and table contents are runtime args / device data, never
