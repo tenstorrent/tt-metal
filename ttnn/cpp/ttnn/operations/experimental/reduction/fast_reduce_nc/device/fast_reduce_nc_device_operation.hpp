@@ -22,6 +22,8 @@ struct FastReduceNCDeviceOperation {
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
@@ -37,7 +39,9 @@ Tensor fast_reduce_nc(
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    const std::optional<DataType>& output_dtype = std::nullopt);
+    const std::optional<DataType>& output_dtype = std::nullopt,
+    bool use_sfpu_reduce = false,
+    float post_mul_scaler = 1.0f);
 
 std::vector<Tensor> fast_reduce_nc_split(
     const Tensor& input,

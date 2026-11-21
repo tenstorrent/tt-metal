@@ -394,6 +394,13 @@ def test_moreh_sum_backward(input_shape, dim, keepdim, compute_kernel_options, d
     assert passing
 
 
+@pytest.mark.parametrize("dim", [0, None])
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_moreh_sum_backward_rank1(dim, keepdim, device):
+    passing = moreh_sum_backward([5], dim, keepdim, True, False, device)
+    assert passing
+
+
 @pytest.mark.parametrize(
     "input_shape",
     (([3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1]),),
@@ -597,3 +604,17 @@ def test_moreh_sum_large_integer_magnitude(input_shape, dim, device):
     logger.debug(f"{torch.equal(torch_output, tt_output_cpu)}")
 
     assert torch.equal(torch_output, tt_output_cpu)
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16], ids=["bf16_output"])
+def test_moreh_sum_int32_rejects_other_output_dtype(device, output_dtype, expect_error):
+    # The int32 factories size every buffer from the output dtype, so a bf16 output reads int32 tiles as bf16.
+    x = ttnn.from_torch(
+        torch.randint(-50, 50, (1, 1, 64, 96), dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    out = ttnn.from_torch(torch.zeros(1, 1, 64, 1), dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must match the input dtype"):
+        ttnn.moreh_sum(x, dim=3, keepdim=True, output=out)

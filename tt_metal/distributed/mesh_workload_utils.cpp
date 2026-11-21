@@ -9,17 +9,16 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "llrt/hal.hpp"
 #include <cstdint>
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 
-#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -28,7 +27,6 @@ namespace tt::tt_metal::distributed {
 namespace {
 
 struct GoSignalSequenceConfig {
-    uint8_t cq_id;
     MeshDevice* mesh_device;
     SubDeviceId sub_device_id;
     uint32_t expected_num_workers_completed;
@@ -112,7 +110,6 @@ void populate_go_signal_sequence(DeviceCommand<HugepageWrite>& commands, const G
 }  // namespace
 
 HostMemDeviceCommand build_go_signal_sequence(
-    uint8_t cq_id,
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     uint32_t expected_num_workers_completed,
@@ -121,7 +118,6 @@ HostMemDeviceCommand build_go_signal_sequence(
     const program_dispatch::ProgramDispatchMetadata& dispatch_metadata,
     std::optional<uint32_t> config_ring_sync_count) {
     const GoSignalSequenceConfig config{
-        .cq_id = cq_id,
         .mesh_device = mesh_device,
         .sub_device_id = sub_device_id,
         .expected_num_workers_completed = expected_num_workers_completed,
@@ -138,17 +134,15 @@ HostMemDeviceCommand build_go_signal_sequence(
 // In the MeshWorkload context, a go signal must be sent to each device when
 // a workload is dispatched, in order to maintain consistent global state.
 void write_go_signal_sequence(
-    uint8_t cq_id,
+    CommandSink& sink,
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
-    SystemMemoryManager& sysmem_manager,
     uint32_t expected_num_workers_completed,
     bool send_mcast,
     uint32_t go_ring_slot,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md,
     std::optional<uint32_t> config_ring_sync_count) {
     const GoSignalSequenceConfig config{
-        .cq_id = cq_id,
         .mesh_device = mesh_device,
         .sub_device_id = sub_device_id,
         .expected_num_workers_completed = expected_num_workers_completed,
@@ -157,19 +151,16 @@ void write_go_signal_sequence(
         .dispatch_metadata = dispatch_md,
         .config_ring_sync_count = config_ring_sync_count};
     const uint32_t cmd_sequence_sizeB = go_signal_sequence_size(config);
-    void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
+    void* cmd_region = sink.issue_queue_reserve(cmd_sequence_sizeB);
     HugepageDeviceCommand go_signal_cmd_sequence(mesh_device->impl().metal_context(), cmd_region, cmd_sequence_sizeB);
     populate_go_signal_sequence(go_signal_cmd_sequence, config);
 
-    sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
-
-    sysmem_manager.fetch_queue_reserve_back(cq_id);
-    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+    sink.publish(cmd_sequence_sizeB);
 }
 
 void write_rt_profiler_flush(
     uint8_t cq_id, SubDeviceId sub_device_id, SystemMemoryManager& sysmem_manager, uint32_t wait_count) {
-    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
+    MetalContext& metal_ctx = sysmem_manager.metal_context();
     DeviceCommandCalculator calculator(metal_ctx);
     calculator.add_dispatch_rt_profiler_flush();
     uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();

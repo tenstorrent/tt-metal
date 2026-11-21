@@ -8,11 +8,16 @@ import torch
 import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import packed_rope_columns
-from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity, ring_sdpa_chunk_sizes
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
+    GlobalRingKVCache,
+    ring_cache_capacity,
+    ring_sdpa_chunk_sizes,
+)
 from models.demos.gemma4_d_p.tt.ccl import ccl_allgather, ccl_partition_rows
+from models.demos.gemma4_d_p.tt.dflash_config import DEFAULT_DFLASH_MODEL
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
-from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
+from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillLanes, PrefillMetadata
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 
@@ -94,6 +99,9 @@ class Gemma4Model:
         max_local_batch_size=1,
         num_layers=None,
         ring_kv_caches=None,
+        dflash_enabled=False,
+        dflash_checkpoint_path=DEFAULT_DFLASH_MODEL,
+        dflash_kv_cache=None,
     ):
         assert state_dict and any(
             key.startswith("model.language_model.") for key in state_dict
@@ -127,10 +135,42 @@ class Gemma4Model:
 
         # When True the caller refreshes the ring metadata itself, outside any trace.
         self.prefill_metadata = PrefillMetadata(mesh_config)
+        self._lane_prefill_metadata = [self.prefill_metadata]
+        self._lane_vectors = {}
         self._prefill_metadata_external = False
         self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
         n_layers = num_layers or hf_config.num_hidden_layers
+
+        self.dflash = None
+        if dflash_kv_cache is not None and not dflash_enabled:
+            raise ValueError("DFlash caches require dflash_enabled=True")
+        if dflash_enabled:
+            from models.demos.gemma4_d_p.tt.dflash import DFlashPrefill, allocate_dflash_kv_cache
+            from models.demos.gemma4_d_p.tt.dflash_config import load_dflash_weights
+
+            draft_config, draft_state = load_dflash_weights(dflash_checkpoint_path)
+            draft_config.validate(mesh_config, max_seq_len, hidden_size=self.hidden_size, num_layers=n_layers)
+            num_users = max_local_batch_size
+            if ring_kv_caches is not None:
+                first_cache = ring_kv_caches[0]
+                first_tensor = first_cache.kv if isinstance(first_cache, GlobalRingKVCache) else first_cache.k
+                num_users = first_tensor.shape[0]
+            if dflash_kv_cache is None:
+                dflash_kv_cache = allocate_dflash_kv_cache(
+                    mesh_config, draft_config, num_users=num_users, max_seq_len=self.ring_cache_max_seq_len
+                )
+            if dflash_kv_cache.num_users != num_users:
+                raise ValueError("Target and DFlash caches must have the same number of user slots")
+            self.dflash = DFlashPrefill(
+                mesh_config,
+                draft_config,
+                draft_state,
+                ccl_manager,
+                dflash_kv_cache,
+                max_seq_len=max_seq_len,
+                chunk_size=prefill_chunk_size,
+            )
 
         mlp_dtype = precision.get("shared_mlp", dtype)
         attention_dtype = precision.get("attention", dtype)
@@ -218,6 +258,24 @@ class Gemma4Model:
         """Attach the segmented trace controller used for per-layer migration acks."""
         self._prefill_trace_controller = controller
 
+    def lane_vector_metadata(self, num_lanes):
+        """The B-element slot / prefix tensors of a num_lanes step, for the lanes ring SDPA.
+
+        Allocates device tensors on first use, so call it before capturing a trace that uses them.
+        """
+        if num_lanes not in self._lane_vectors:
+            self._lane_vectors[num_lanes] = PrefillMetadata(self.mesh_config, num_lanes)
+        return self._lane_vectors[num_lanes]
+
+    def lane_prefill_metadata(self, num_lanes):
+        """Per-request metadata for a batched step of num_lanes requests; lane 0 is prefill_metadata.
+
+        Allocates new device scalars, so call it before capturing a trace that uses them.
+        """
+        while len(self._lane_prefill_metadata) < num_lanes:
+            self._lane_prefill_metadata.append(PrefillMetadata(self.mesh_config))
+        return self._lane_prefill_metadata[:num_lanes]
+
     def set_prefill_rope_positions(self, position_idx):
         """Set the CP-sharded absolute positions that the caller updates before each replay."""
         self._rope_prefill_positions = position_idx
@@ -230,43 +288,66 @@ class Gemma4Model:
         on_layer_complete=None,
         d2h_service=None,
         metadata_msg=None,
+        prefill_metadata=None,
     ):
         """Prefill one user's chunk and return its final decoder hidden states.
 
         ``hidden_states`` holds this TP device's 1/TP of the chunk's rows, as
         ``transform_and_embed_prefill_inputs_device`` returns them. The caller owns
         trace staging. Migration acknowledgements follow each layer's KV writes.
+
+        A batched step passes prefill_metadata as a PrefillLanes of lane_prefill_metadata's entries, one per request,
+        with the requests' rows stacked request-major (each request's CP-local slab in turn). The caller then stages
+        every lane's metadata and the stacked positions itself.
         """
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
             raise ValueError("Ring prefill processes one user per call")
         if d2h_service is not None and metadata_msg is None:
             raise ValueError("metadata_msg is required for D2H layer acknowledgements")
-        if not self._prefill_metadata_external:
-            self.prefill_metadata.update(slot_idx=user_id, kv_actual_global=chunk_start_idx)
+        if prefill_metadata is None:
+            prefill_metadata = self.prefill_metadata
+            if not self._prefill_metadata_external:
+                self.prefill_metadata.update(slot_idx=user_id, kv_actual_global=chunk_start_idx)
+        elif isinstance(prefill_metadata, PrefillLanes) and self._rope_prefill_positions is None:
+            raise ValueError("a batched step needs per-row RoPE positions (set_prefill_rope_positions)")
 
         # Each layer type's RoPE lanes are looked up once per chunk and shared by all its layers.
         packed_rope_by_type = {
             layer_type: self.lookup_packed_rope(layer_type)
             for layer_type in set(self.hf_config.layer_types[: len(self.layers)])
         }
+        draft_accumulator = None
+
+        def acknowledge(layer_idx):
+            if d2h_service is not None:
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
+            elif on_layer_complete is not None:
+                if self._prefill_trace_controller is not None:
+                    self._prefill_trace_controller.layer_ack(layer_idx)
+                else:
+                    ttnn.synchronize_device(self.mesh_device)
+                    on_layer_complete(layer_idx)
+
         for i, layer in enumerate(self.layers):
             layer_type = self.hf_config.layer_types[i]
             packed_rope = packed_rope_by_type[layer_type]
             hidden_states = layer(
                 hidden_states,
-                prefill_metadata=self.prefill_metadata,
+                prefill_metadata=prefill_metadata,
                 chunk_start_idx=chunk_start_idx,
                 packed_global_rope=packed_rope if layer_type == "full_attention" else None,
                 packed_sliding_rope=packed_rope if layer_type == "sliding_attention" else None,
             )
-            if d2h_service is not None:
-                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
-            elif on_layer_complete is not None:
-                if self._prefill_trace_controller is not None:
-                    self._prefill_trace_controller.layer_ack(i)
-                else:
-                    ttnn.synchronize_device(self.mesh_device)
-                    on_layer_complete(i)
+            if self.dflash is not None and i in self.dflash.fc:
+                draft_accumulator = self.dflash.tap(hidden_states, i, draft_accumulator, sequence_parallel=True)
+            acknowledge(i)
+        if self.dflash is not None:
+            self.dflash.write_kv(
+                draft_accumulator,
+                self.prefill_metadata,
+                positions=self._rope_prefill_positions,
+                on_layer_complete=lambda idx: acknowledge(len(self.layers) + idx),
+            )
         if hidden_states.is_sharded():
             # The layers keep the residual block-sharded between norms.
             sharded = hidden_states

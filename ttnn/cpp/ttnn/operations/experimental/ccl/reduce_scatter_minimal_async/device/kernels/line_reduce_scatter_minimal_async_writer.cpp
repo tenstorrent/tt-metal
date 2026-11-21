@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -38,11 +39,11 @@ constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(2);
 constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
 constexpr uint32_t page_size = get_compile_time_arg_val(4);
 constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(5);
-constexpr uint32_t input_num_pages = get_compile_time_arg_val(6);
-constexpr uint32_t input_batch_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(8);
-constexpr uint32_t output_batch_num_pages = get_compile_time_arg_val(9);
-constexpr uint32_t output_channel_num_pages = get_compile_time_arg_val(10);
+constexpr uint32_t ct_input_num_pages = get_compile_time_arg_val(6);
+constexpr uint32_t ct_input_batch_num_pages = get_compile_time_arg_val(7);
+constexpr uint32_t ct_input_channel_num_pages = get_compile_time_arg_val(8);
+constexpr uint32_t ct_output_batch_num_pages = get_compile_time_arg_val(9);
+constexpr uint32_t ct_output_channel_num_pages = get_compile_time_arg_val(10);
 constexpr uint32_t input_tensor_B = get_compile_time_arg_val(11);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(12);
 constexpr uint32_t slice_C = get_compile_time_arg_val(13);
@@ -52,12 +53,15 @@ constexpr uint32_t dim = get_compile_time_arg_val(16);
 constexpr bool sync_with_other_direction = get_compile_time_arg_val(17);
 constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(18);
 constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(19);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(20);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(21);
+// The mux sits in program-local L1: its addresses here and in the runtime args are offsets from the map
+// address it publishes in semaphore fabric_mux_l1_base_semaphore_id.
+constexpr uint32_t fabric_mux_l1_base_semaphore_id = get_compile_time_arg_val(20);
+constexpr size_t fabric_mux_termination_signal_offset = get_compile_time_arg_val(21);
 constexpr uint32_t num_mux_clients = get_compile_time_arg_val(22);
 constexpr uint32_t barrier_target_count = get_compile_time_arg_val(23);
+constexpr bool runtime_rows = get_compile_time_arg_val(24);
 
-constexpr uint32_t num_ct_args = 24;
+constexpr uint32_t num_ct_args = 25;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -106,15 +110,17 @@ void kernel_main() {
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_channel_base_offset = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_connection_info_offset = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_connection_handshake_offset = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_flow_control_offset = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_buffer_index_offset = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_sync_id = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_sync_address = get_semaphore(termination_sync_id);
@@ -182,30 +188,33 @@ void kernel_main() {
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
+    uint32_t fabric_mux_l1_base = 0;
     if (mux_connection_valid) {
-        mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
-            fabric_mux_x,
-            fabric_mux_y,
-            fabric_mux_channel_id,
-            fabric_mux_num_buffers_per_channel,
-            fabric_mux_channel_buffer_size_bytes,
-            fabric_mux_channel_base_address,
-            fabric_mux_connection_info_address,
-            fabric_mux_connection_handshake_address,
-            fabric_mux_flow_control_address,
-            fabric_mux_buffer_index_address,
-            local_flow_control_address,
-            local_teardown_address,
-            local_buffer_index_address);
+        // Waits for the mux to be ready to accept connections.
+        mux_connection =
+            tt::tt_fabric::build_connection_to_program_local_fabric_mux<fabric_mux_num_buffers_per_channel>(
+                fabric_mux_x,
+                fabric_mux_y,
+                fabric_mux_channel_id,
+                fabric_mux_num_buffers_per_channel,
+                fabric_mux_channel_buffer_size_bytes,
+                fabric_mux_l1_base_semaphore_id,
+                fabric_mux_channel_base_offset,
+                fabric_mux_connection_info_offset,
+                fabric_mux_connection_handshake_offset,
+                fabric_mux_flow_control_offset,
+                fabric_mux_buffer_index_offset,
+                local_flow_control_address,
+                local_teardown_address,
+                local_buffer_index_address,
+                local_fabric_mux_status_address,
+                fabric_mux_l1_base);
         mux_connection_handle = &mux_connection;
     } else {
         mux_connection_handle = nullptr;
     }
 
     if (mux_connection_valid) {
-        // need to wait for fabric mux to be ready to accept connections
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
-            fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
         tt::tt_fabric::fabric_client_connect_start(*mux_connection_handle);
     }
 
@@ -276,7 +285,31 @@ void kernel_main() {
                 static_cast<uint32_t>(1)});  // increment 1
     }
 
-    const uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
+    uint32_t input_num_pages = ct_input_num_pages;
+    uint32_t input_batch_num_pages = ct_input_batch_num_pages;
+    uint32_t input_channel_num_pages = ct_input_channel_num_pages;
+    uint32_t output_batch_num_pages = ct_output_batch_num_pages;
+    uint32_t output_channel_num_pages = ct_output_channel_num_pages;
+    uint32_t tiles_read_begin = start_tiles_read;
+    uint32_t tiles_read_end = start_tiles_to_read;
+    uint32_t pages_in_row_begin = start_pages_read_in_row;
+    uint32_t row_offset_begin = start_row_offset;
+    uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
+    if constexpr (runtime_rows) {
+        const uint32_t input_Ht = get_common_arg_val<uint32_t>(ttnn::ccl::ReduceScatterCommonArgs::input_Ht);
+        const uint32_t intermediate_half_pages =
+            get_common_arg_val<uint32_t>(ttnn::ccl::ReduceScatterCommonArgs::intermediate_half_pages);
+        input_num_pages = input_Ht * input_tensor_Wt;
+        input_batch_num_pages = input_num_pages;
+        input_channel_num_pages = input_num_pages;
+        output_channel_num_pages = input_Ht * slice_Wt;
+        output_batch_num_pages = output_channel_num_pages;
+        tiles_read_begin = ttnn::runtime_length::balanced_start(worker_id, output_channel_num_pages, num_workers);
+        tiles_read_end = ttnn::runtime_length::balanced_end(worker_id, output_channel_num_pages, num_workers);
+        pages_in_row_begin = tiles_read_begin % slice_Wt;
+        row_offset_begin = tiles_read_begin / slice_Wt * input_tensor_Wt;
+        intermediate_full_offset = is_forward ? 0 : intermediate_half_pages;
+    }
 
     uint32_t chunk_count = 0;
     for (uint32_t b = 0; b < input_tensor_B; b++) {
@@ -299,11 +332,11 @@ void kernel_main() {
                 ASSERT(false);
             }
             for (uint32_t c = 0; c < slice_C; ++c) {
-                uint32_t intermediate_pages_read_in_row = start_pages_read_in_row;
-                uint32_t intermediate_row_offset = start_row_offset;
+                uint32_t intermediate_pages_read_in_row = pages_in_row_begin;
+                uint32_t intermediate_row_offset = row_offset_begin;
 
-                uint32_t tiles_read = start_tiles_read;
-                uint32_t tiles_to_read = start_tiles_to_read;
+                uint32_t tiles_read = tiles_read_begin;
+                uint32_t tiles_to_read = tiles_read_end;
 
                 // Write to remote intermediate buffer
                 while (tiles_read < tiles_to_read) {
@@ -392,8 +425,8 @@ void kernel_main() {
             // Write output
             uint32_t output_tile_id_start = b * output_batch_num_pages;
             for (uint32_t c = 0; c < slice_C; ++c) {
-                uint32_t tiles_read = start_tiles_read;
-                uint32_t tiles_to_read = start_tiles_to_read;
+                uint32_t tiles_read = tiles_read_begin;
+                uint32_t tiles_to_read = tiles_read_end;
 
                 while (tiles_read < tiles_to_read) {
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
@@ -435,7 +468,8 @@ void kernel_main() {
         if (is_termination_master) {
             Semaphore<> termination_sync(termination_sync_id);
             termination_sync.wait(num_mux_clients - 1);
-            tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+            tt::tt_fabric::fabric_endpoint_terminate(
+                fabric_mux_x, fabric_mux_y, fabric_mux_l1_base + fabric_mux_termination_signal_offset);
         } else {
             uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);

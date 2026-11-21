@@ -5,7 +5,8 @@ name: Blaze Merge Gate
 # caught while the release is being cut rather than by the next uplift.
 #
 # Scope is tt-blaze's whole gate -- unit + P150 + craq-sim + every gate-tier BH
-# Loudbox bucket
+# Loudbox bucket. With `selected-buckets` set it instead runs tt-blaze's
+# bh-loudbox-intermittent.yaml for just those BH Loudbox buckets.
 #
 # tt-blaze cannot build tt-metal itself -- its CI consumes prebuilt tarball+wheel
 # artifacts. So this workflow does NOT hand tt-blaze a branch to go resolve: it
@@ -67,6 +68,15 @@ on:
         required: false
         type: number
         default: 180
+      selected-buckets:
+        description: >-
+          Comma-separated tt-blaze BH Loudbox bucket ids. Empty (the default) runs
+          tt-blaze's full merge gate (ci.yaml). Set, it runs tt-blaze's
+          bh-loudbox-intermittent.yaml instead with run-all off, so only these
+          buckets run. An unknown id fails the tt-blaze run.
+        required: false
+        type: string
+        default: ""
     outputs:
       blaze-run-url:
         description: "URL of the tt-blaze run this gate waited on (empty if none was ever found)."
@@ -81,7 +91,7 @@ permissions:
 
 jobs:
   blaze-ci:
-    name: tt-blaze CI (full merge gate)
+    name: ${{ inputs.selected-buckets == '' && 'tt-blaze CI (full merge gate)' || 'tt-blaze BH Loudbox Intermittent (selected buckets)' }}
     runs-on: ubuntu-latest
     # The 3-hour deadline plus slack: the poll loop must outlive its own deadline
     # so it can report WHY it gave up. If the runner killed it first, the failure
@@ -91,9 +101,9 @@ jobs:
       blaze-run-url: ${{ steps.dispatch.outputs.blaze-run-url }}
     env:
       BLAZE_REPO: tenstorrent/tt-blaze
-      BLAZE_WORKFLOW: ci.yaml
+      BLAZE_WORKFLOW: ${{ inputs.selected-buckets == '' && 'ci.yaml' || 'bh-loudbox-intermittent.yaml' }}
     steps:
-      - name: Dispatch tt-blaze ci.yaml and wait for it
+      - name: Dispatch tt-blaze ${{ env.BLAZE_WORKFLOW }} and wait for it
         id: dispatch
         env:
           GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
@@ -101,6 +111,7 @@ jobs:
           METAL_REF: ${{ inputs.metal-ref }}
           BLAZE_REF: ${{ inputs.blaze-ref }}
           DEV_IMAGE: ${{ inputs.dev-image }}
+          SELECTED_BUCKETS: ${{ inputs.selected-buckets }}
           TIMEOUT_MINUTES: ${{ inputs.wait-timeout-minutes }}
         shell: bash
         run: |
@@ -131,11 +142,19 @@ jobs:
           DISPATCH_ID="metal-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "dispatch-id: ${DISPATCH_ID}"
 
-          # Scope: tt-blaze's WHOLE merge gate. Its `bh-loudbox-run-all` and
-          # `p150-run-all` selectors both default to true, so passing only the
-          # plumbing inputs below is what asks for every gate-tier bucket. To
-          # narrow it again, pass the `bh-loudbox-*` / `p150-*` booleans from
-          # tt-blaze's ci.yaml explicitly.
+          # Scope: with no selected-buckets, tt-blaze's WHOLE merge gate. Its
+          # `bh-loudbox-run-all` and `p150-run-all` selectors both default to
+          # true, so passing only the plumbing inputs below is what asks for
+          # every gate-tier bucket.
+          # With selected-buckets, bh-loudbox-intermittent.yaml with run-all off:
+          # its category toggles and warm-kernel-cache all default to false, so
+          # only the listed buckets run.
+          SCOPE_ARGS=()
+          SCOPE="full merge gate"
+          if [ -n "$SELECTED_BUCKETS" ]; then
+            SCOPE_ARGS=(-f bh-loudbox-run-all=false -f bh-loudbox-selected-buckets="$SELECTED_BUCKETS")
+            SCOPE="selected buckets: ${SELECTED_BUCKETS}"
+          fi
           # Preflight the token before dispatching. tt-blaze is PRIVATE, and
           # GitHub answers 404 (never 403) for anything a token cannot see there,
           # so `gh workflow run` reports a missing workflow when the real fault is
@@ -174,13 +193,14 @@ jobs:
             -f metal-run-id="$METAL_RUN_ID" \
             -f metal-ref="$METAL_REF" \
             -f dispatch-id="$DISPATCH_ID" \
-            -f dev-image="$DEV_IMAGE"; then
-            echo "::error::Dispatch of ${BLAZE_WORKFLOW} on ${BLAZE_REPO}@${BLAZE_REF} failed. The token can read the workflow (checked above), so the usual causes are: no actions:write on ${BLAZE_REPO}; ${BLAZE_REF} does not carry every input passed here (an input this workflow sends but ${BLAZE_REF}'s ci.yaml does not declare is rejected outright -- the tt-blaze side must land FIRST); or ${BLAZE_REF} does not exist."
+            -f dev-image="$DEV_IMAGE" \
+            "${SCOPE_ARGS[@]}"; then
+            echo "::error::Dispatch of ${BLAZE_WORKFLOW} on ${BLAZE_REPO}@${BLAZE_REF} failed. The token can read the workflow (checked above), so the usual causes are: no actions:write on ${BLAZE_REPO}; ${BLAZE_REF} does not carry every input passed here (an input this workflow sends but ${BLAZE_REF}'s ${BLAZE_WORKFLOW} does not declare is rejected outright -- the tt-blaze side must land FIRST); or ${BLAZE_REF} does not exist."
             echo "- ❌ tt-blaze — dispatch rejected" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-          echo "Dispatched ${BLAZE_REPO} ${BLAZE_WORKFLOW} on ${BLAZE_REF} (full merge gate)"
+          echo "Dispatched ${BLAZE_REPO} ${BLAZE_WORKFLOW} on ${BLAZE_REF} (${SCOPE})"
           echo "  tt-metal commit:  ${METAL_REF}"
           echo "  tt-metal build:   https://github.com/${GITHUB_REPOSITORY}/actions/runs/${METAL_RUN_ID}"
 

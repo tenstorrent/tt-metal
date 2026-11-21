@@ -13,6 +13,14 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.config import MeshConfig, ModeConfig
+from models.demos.gemma4.tt.ccl import (
+    CCLManager,
+    ccl_allreduce,
+    ccl_lane_gather_rows,
+    ccl_lane_scatter_rows,
+    ccl_semaphores_in_l1_small,
+)
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
@@ -250,7 +258,8 @@ def test_single_layer_model(mesh_device, layer_group, reset_seeds, request):
     base_config = _create_hf_text_config(vocab_size=256, num_layers=num_layers)
     is_moe = getattr(base_config, "enable_moe_block", False)
     if is_moe:
-        base_config.num_experts = 4
+        # Small for speed, but whole experts shard over every chip (ep*tp), so never fewer than that.
+        base_config.num_experts = max(4, mesh_device.get_num_devices() if hasattr(mesh_device, "shape") else 1)
         base_config.top_k_experts = 2
     hf_text_config = base_config
     hf_model = _create_hf_model(hf_text_config)
@@ -314,6 +323,22 @@ def test_single_layer_model(mesh_device, layer_group, reset_seeds, request):
 
 
 @pytest.mark.gemma4_hf_direct_parity
+def _hf_forward(model_path, input_ids_padded):
+    """The bf16 HF reference forward on the host (the test's original reference), fp32 logits."""
+    import gc
+
+    from transformers import AutoModelForCausalLM
+
+    logger.info(f"Loading HF reference model from {model_path}...")
+    hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
+    hf_model.eval()
+    with torch.no_grad():
+        logits = hf_model(input_ids_padded).logits.float()  # [1, padded_len, vocab_size]
+    del hf_model
+    gc.collect()
+    return logits
+
+
 @parametrize_mesh_with_fabric()
 def test_full_model(mesh_device, reset_seeds, request):
     """Test full model (all layers, real weights) against HuggingFace reference.
@@ -327,8 +352,9 @@ def test_full_model(mesh_device, reset_seeds, request):
     import os
 
     import torch.nn.functional as F
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
+    from models.demos.gemma4.tests.hf_reference_cache import hf_reference_logits
     from models.demos.gemma4.tt.common import create_tt_model
 
     model_path = os.getenv("HF_MODEL") or os.getenv(
@@ -346,13 +372,17 @@ def test_full_model(mesh_device, reset_seeds, request):
         pytest.skip(f"Model too large for single device (hidden={hf_config_check.hidden_size})")
 
     # ── HF reference ─────────────────────────────────────────────────
-    logger.info(f"Loading HF reference model from {model_path}...")
-    hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
-    hf_model.eval()
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
-    prompt = "The capital of France is"
+    prompt = os.environ.get("GEMMA4_TEST_PROMPT_TEXT") or "The capital of France is"  # another base sentence on request
     input_ids = tokenizer.encode(prompt, return_tensors="pt")  # [1, seq_len]
+    want = int(
+        os.environ.get("GEMMA4_TEST_PROMPT_TOKENS", "0")
+    )  # a long prefill on request (the HF reference on the host)
+    if want > input_ids.shape[1]:
+        body = tokenizer.encode(" " + prompt.lower(), add_special_tokens=False, return_tensors="pt")
+        reps = (want - input_ids.shape[1]) // body.shape[1] + 1
+        input_ids = torch.cat([input_ids, body.repeat(1, reps)], dim=1)[:, :want]
     seq_len = input_ids.shape[1]
     padded_len = ((seq_len + 31) // 32) * 32
     if padded_len > seq_len:
@@ -362,20 +392,15 @@ def test_full_model(mesh_device, reset_seeds, request):
 
     logger.info(f"Prompt: '{prompt}' -> {seq_len} tokens (padded to {padded_len})")
 
-    with torch.no_grad():
-        hf_out = hf_model(input_ids_padded)
-        hf_logits = hf_out.logits.float()  # [1, padded_len, vocab_size]
+    # The bf16 HF forward of the 31B on the CI runner's CPU is ~8 min per run (the TT side is ~20 s), so the reference
+    # logits are cached by (model, exact padded token ids, dtype) under GEMMA4_HF_REF_CACHE, default
+    # TT_CACHE_PATH/hf_reference (the shared weight cache the CI jobs mount); no cache dir means compute every time.
+    hf_logits = hf_reference_logits(model_path, input_ids_padded, lambda: _hf_forward(model_path, input_ids_padded))
 
     # Note: HF Gemma4ForConditionalGeneration already applies softcapping internally,
     # so no need to apply it again here. TT model also applies it internally.
 
     logger.info(f"HF logits shape: {hf_logits.shape}, range: [{hf_logits.min():.4f}, {hf_logits.max():.4f}]")
-
-    # Free HF model GPU memory (we only need state_dict for TT)
-    del hf_model
-    import gc
-
-    gc.collect()
 
     # ── TT model ─────────────────────────────────────────────────────
     tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
@@ -442,6 +467,35 @@ def test_full_model(mesh_device, reset_seeds, request):
 
     passing, pcc_msg = compare_tensors(tt_compare, hf_compare, pcc_threshold=get_pcc_threshold(request))
     logger.info(f"Full model PCC (seq_len={seq_len}): {pcc_msg}")
+    dump = os.environ.get(
+        "GEMMA4_TEST_DUMP_LOGITS"
+    )  # diagnostics: both logit tensors + the ids for an offline per-position read
+    if dump:
+        torch.save({"tt": tt_compare.cpu(), "hf": hf_compare.cpu(), "input_ids": input_ids.cpu()}, dump)
+        logger.info(f"Full model logits dumped to {dump}")
+    # the last-token logits (the first generated token's distribution) and its top-1: the prefill gate of a long prompt
+    last_tt, last_hf = tt_compare[0, seq_len - 1].float(), hf_compare[0, seq_len - 1].float()
+    last_pcc = torch.corrcoef(torch.stack([last_tt, last_hf]))[0, 1].item()
+    top1_match = int(last_tt.argmax()) == int(last_hf.argmax())
+    logger.info(
+        f"Full model last-token PCC (seq_len={seq_len}): {last_pcc:.5f}, top-1 match {top1_match} "
+        f"(TT {int(last_tt.argmax())} vs HF {int(last_hf.argmax())})"
+    )
+    # GEMMA4_TEST_PROMPT_TOKENS: the long-prefill gate on the last token (bar GEMMA4_TEST_LAST_PCC, default 0.98). For
+    # the 12B the repeated-sentence prompt is a near-tie trajectory (its 1024-token last-token top-1 flips between
+    # prompts under either SDPA configuration) and the natural-prose gate (tests/test_prose_accuracy.py) is the bar,
+    # so this check is report-only there (dump and per-band read kept); GEMMA4_TEST_LAST_GATE=1 asserts it anyway.
+    repeated_prompt_is_a_bar = "12b" not in str(model_path).lower() or os.environ.get("GEMMA4_TEST_LAST_GATE") == "1"
+    if want and repeated_prompt_is_a_bar:
+        last_bar = float(os.environ.get("GEMMA4_TEST_LAST_PCC", "0.98"))
+        assert last_pcc >= last_bar, f"last-token logits PCC {last_pcc:.5f} < {last_bar} at {seq_len} tokens"
+        assert (
+            top1_match
+        ), f"last-token top-1 differs at {seq_len} tokens: TT {int(last_tt.argmax())} vs HF {int(last_hf.argmax())}"
+    elif want:
+        logger.info(
+            f"12B repeated-prompt last-token gate is report-only (PCC {last_pcc:.5f}, top-1 match {top1_match})"
+        )
 
     # Per-token PCC — shows which prompt positions drag down the full-sequence metric.
     from models.common.utility_functions import comp_pcc
@@ -466,7 +520,11 @@ def test_full_model(mesh_device, reset_seeds, request):
         f"TT={tt_last_tok} ('{tokenizer.decode([tt_last_tok])}')"
     )
 
-    assert passing, f"Full model PCC too low: {pcc_msg}"
+    if want:  # the long prefill (GEMMA4_TEST_PROMPT_TOKENS): the full-logits PCC over all rows is informational
+        logger.info(f"Full model PCC over {seq_len} rows not gated (long-prompt mode): {pcc_msg}")
+
+    else:
+        assert passing, f"Full model PCC too low: {pcc_msg}"
 
 
 # ── Full Model DECODE PCC Test ───────────────────────────────────────────
@@ -1076,3 +1134,43 @@ def test_single_decode(mesh_device, reset_seeds, request):
     assert torch.isfinite(out).all(), "decode produced non-finite logits"
     next_token = int(out.argmax().item())
     logger.info(f"Single decode complete (TP={tp}, pos={decode_pos + 1}); next token id = {next_token}")
+
+
+# ===== merged from tests/unit/test_ccl_semaphores.py: Collective semaphores must not land in worker L1 after the model is built.
+L1_SMALL_SIZE = 65536
+
+
+def _l1_allocated(mesh_device, buffer_type):
+    ttnn.synchronize_device(mesh_device)
+    return int(ttnn.get_memory_view(mesh_device, buffer_type).total_bytes_allocated_per_bank)
+
+
+def _lane_tensor(mesh_device, mesh_config, rows, width):
+    mapper = mesh_config.lane_shard_mapper(mesh_device, tensor_dim=2)
+    hidden = torch.randn(1, 1, mesh_device.shape[0] * rows, width, dtype=torch.bfloat16)
+    return ttnn.from_torch(hidden, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper)
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4)], device_params_extra={"l1_small_size": L1_SMALL_SIZE})
+def test_first_time_collectives_keep_worker_l1(mesh_device, reset_seeds):
+    tp, ep = mesh_device.shape[1], mesh_device.shape[0]
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp, ep=ep), prefill=ModeConfig(tp=tp, ep=ep))
+    mesh_config.lane_sharded = True
+    ccl_manager = CCLManager(mesh_device, num_links=1)
+    assert ccl_semaphores_in_l1_small(mesh_device)
+
+    # Model built (manager semaphores allocated); from here on nothing may grow worker L1 persistently.
+    l1_before = _l1_allocated(mesh_device, ttnn.BufferType.L1)
+    small_before = _l1_allocated(mesh_device, ttnn.BufferType.L1_SMALL)
+
+    for rows, width in ((32, 1024), (64, 1024), (128, 2048)):  # three never-seen shapes = fresh programs
+        x = _lane_tensor(mesh_device, mesh_config, rows, width)
+        gathered = ccl_lane_gather_rows(x, mesh_config)
+        scattered = ccl_lane_scatter_rows(gathered, mesh_config, ccl_manager=ccl_manager)
+        reduced = ccl_allreduce(scattered, mesh_config, ccl_manager)
+        reduced.deallocate(True)
+
+    l1_after = _l1_allocated(mesh_device, ttnn.BufferType.L1)
+    small_after = _l1_allocated(mesh_device, ttnn.BufferType.L1_SMALL)
+    assert l1_after == l1_before, f"first-time collectives left {l1_after - l1_before} B per bank in worker L1"
+    assert small_after > small_before, "collective semaphores were expected in L1_SMALL"

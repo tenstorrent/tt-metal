@@ -31,7 +31,7 @@ Run on Wormhole / Blackhole:
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py
 
 Run on the Quasar simulator (one config per process; a sim-side hang ignores pytest --timeout):
-    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \\
+    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 \\
         TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FORCE_JIT_COMPILE=1 \\
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py -k <case>
 
@@ -44,6 +44,11 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
 
 qsr = ttnn._ttnn.operations.experimental.quasar
 
@@ -1607,4 +1612,141 @@ def test_auto_config_batched_a_unbatched_b(device, sharded_out):
         assert out.memory_config().shard_spec is not None
 
     # The issue's K=1024 shape reaches PCC ~0.99984 and ~4% max error (bf16 accumulation), looser than _check defaults.
+    _check(ttnn.to_torch(out), _golden(a, b), rtol=0.05, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape, expected_shard_shape",
+    [
+        ((1, 400, 32), (1, 32, 400), (416, 416)),
+        ((1, 400, 32), (1, 32, 128), (416, 128)),
+        ((1, 512, 32), (1, 32, 512), (512, 512)),
+        # Fused M = 4 * 13 = 52 tiles keeps the per-batch cap (4 block rows) and fits every Quasar grid (<= 4 rows).
+        ((4, 400, 32), (32, 400), (416, 416)),
+        # Fused M = 5 * 13 = 65 tiles needs five block rows to get the 416-row shard (skipped on 4-row grids).
+        pytest.param(
+            (5, 400, 32),
+            (32, 400),
+            (416, 416),
+            marks=pytest.mark.requires_grid_size((1, 5)),
+        ),
+        ((1, 320, 32), (1, 32, 64), (320, 64)),
+        ((1, 128, 32), (1, 32, 128), (128, 128)),
+        ((16, 32, 32), (32, 512), (512, 512)),
+    ],
+    ids=[
+        "400x400",
+        "400x128",
+        "512x512",
+        "batch4_broadcast_b",
+        "batch5_broadcast_b",
+        "320x64_10x2tiles",
+        "128x128_4x4tiles",
+        "batch16_small_m_exceeds_grid_rows",
+    ],
+)
+def test_auto_config_block_sharded_caps_per_core_to_output(device, a_shape, b_shape, expected_shard_shape):
+    """BLOCK_SHARDED output, no program_config: the shard shape must follow the output size, not the L1 ladder.
+
+    The auto-config used to start per_core_M/N at 16 tiles and never cap them to the output, so a 13x13 tile output
+    came back with a 512x512 shard.
+    """
+    torch.manual_seed(0)
+    a, b = _randn(*a_shape), _randn(*b_shape)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            expected_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    out = ttnn.experimental.quasar.matmul(a_t, b_t, memory_config=out_mem, compute_kernel_config=_hifi4(device))
+
+    mem = out.memory_config()
+    assert mem.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    assert tuple(mem.shard_spec.shape) == expected_shard_shape
+    _check(ttnn.to_torch(out), _golden(a, b), rtol=0.05, pcc=0.999)
+
+
+def test_auto_config_block_sharded_fp32_dest_acc_needs_partials_unpack_mode(device, expect_error):
+    """fp32 accumulation takes the fp32 branch of the subblock search (h * w <= 4), but the Quasar 2D factory gives the
+    fp32 partials DFB no unpack_modes entry, so the kernel config is rejected (#61018). Once this stops raising, fold
+    the case back into test_auto_config_block_sharded_caps_per_core_to_output."""
+    torch.manual_seed(0)
+    a, b = _randn(1, 128, 32), _randn(1, 32, 128)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            (128, 128),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    with expect_error(RuntimeError, "provides no unpack_modes entry for this DFB"):
+        ttnn.experimental.quasar.matmul(
+            a_t, b_t, memory_config=out_mem, compute_kernel_config=_hifi4(device, fp32_dest_acc_en=True)
+        )
+
+
+def test_auto_config_block_sharded_keeps_l1_sharded_b_width(device):
+    """An L1 WIDTH_SHARDED B fixes per_core_N (validator: per_core_N == B shard width in tiles), so the auto-config
+    must not cap it to the output's tile count (13 for N=400) when B's shard is padded to 16 tiles."""
+    torch.manual_seed(0)
+    a, b = _randn(1, 512, 32), _randn(1, 32, 400)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            (32, 512),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=b_mem)
+    out_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            (512, 512),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    out = ttnn.experimental.quasar.matmul(a_t, b_t, memory_config=out_mem, compute_kernel_config=_hifi4(device))
+    assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    # per_core_N stays at B's 16-tile shard width (not capped to Nt = 13).
+    assert tuple(out.memory_config().shard_spec.shape) == (512, 512)
+    _check(ttnn.to_torch(out), _golden(a, b), rtol=0.05, pcc=0.999)
+
+
+def test_auto_config_block_sharded_n_cap_keeps_output_tile_alignment(device):
+    """With B on a narrow (32, 16) tile and a wider (16, 32) output tile, per_core_N must stay a multiple of the
+    output/in1 tile width ratio (2). B=208 columns is 13 narrow tiles (odd), so capping to Nt=13 would break it."""
+    torch.manual_seed(0)
+    a, b = _randn(1, 128, 32), _randn(1, 32, 208)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, tile=ttnn.Tile((16, 32)))
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, tile=ttnn.Tile((32, 16)))
+    out_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            (128, 224),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    out = ttnn.experimental.quasar.matmul(
+        a_t, b_t, memory_config=out_mem, output_tile=ttnn.Tile((16, 32)), compute_kernel_config=_hifi4(device)
+    )
+    assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    # per_core_N is rounded up to 14 (7 wide tiles * 2), not capped to the odd Nt = 13.
+    assert tuple(out.memory_config().shard_spec.shape) == (128, 224)
     _check(ttnn.to_torch(out), _golden(a, b), rtol=0.05, pcc=0.999)

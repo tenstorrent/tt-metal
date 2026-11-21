@@ -21,11 +21,13 @@ from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import 
     TOKEN_SHAPES,
     hidden_states,
     load_reference,
+    selection_of,
     to_block_layout,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.common import flatten_tokens, to_device
+from models.experimental.nomic_embed_text_v2_moe.tt.experts import routed_windows
 from models.experimental.nomic_embed_text_v2_moe.tt.router import TtNomicRouter
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
 
@@ -62,15 +64,20 @@ def flat_input(x: torch.Tensor, device) -> ttnn.Tensor:
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
 def test_router_probabilities(device, config, reference, tt_router, batch, seqlen):
-    """The fp32 softmax over all eight experts, before any selection."""
+    """The fp32 softmax over the eight experts, before any selection."""
     x = hidden_states(batch, seqlen, config.hidden_size)
 
-    probabilities, _, _ = tt_router.select(flat_input(x, device))
+    routing, rows = tt_router(flat_input(x, device))
+    ttnn.deallocate(rows)
 
     with torch.no_grad():
         ref, _, _ = reference(x)
-    assert probabilities.dtype == ttnn.float32
-    assert_with_pcc(ref.reshape(1, 1, batch * seqlen, config.num_experts), probabilities, MODULE_PCC)
+    assert routing.scores.dtype == ttnn.float32
+    # The experts' width: the softmax masks the tile's padded columns over it (TtNomicRouter.forward).
+    assert routing.scores.shape[-1] == config.num_experts
+    scored = ttnn.to_torch(routing.scores)
+    routing.deallocate()
+    assert_with_pcc(ref.reshape(1, 1, batch * seqlen, config.num_experts), scored, MODULE_PCC)
 
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
@@ -84,11 +91,12 @@ def test_selection_agrees_with_torch(device, config, reference, tt_router, batch
     x = hidden_states(batch, seqlen, config.hidden_size)
     tokens = batch * seqlen
 
-    _, values, indices = tt_router.select(flat_input(x, device))
+    routing, rows = tt_router(flat_input(x, device))
+    ttnn.deallocate(rows)
 
     with torch.no_grad():
         probabilities, ref_values, ref_indices = reference(x)
-    selected = ttnn.to_torch(indices).long().reshape(tokens, config.moe_top_k)
+    selected_values, selected = selection_of(routing, config.moe_top_k, config.num_experts)
 
     assert int(selected.max()) < config.num_experts
     agreeing = torch.zeros(tokens, dtype=torch.bool)
@@ -110,57 +118,85 @@ def test_selection_agrees_with_torch(device, config, reference, tt_router, batch
         )
 
     # On the tokens that agree, the weights themselves must match.
-    agreeing_values = ttnn.to_torch(values).float().reshape(tokens, config.moe_top_k)[agreeing]
+    agreeing_values = selected_values[agreeing]
+    routing.deallocate()
     assert_with_pcc(ref_values[agreeing], agreeing_values, MODULE_PCC)
 
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
-def test_dense_routing_weights(device, config, tt_config, reference, tt_router, batch, seqlen):
-    """forward's dense (1, 1, T, E) output, which is what the expert gate multiply consumes."""
-    x = hidden_states(batch, seqlen, config.hidden_size)
-    tokens = batch * seqlen
-
-    dense = tt_router(flat_input(x, device))
-
-    with torch.no_grad():
-        _, ref_values, ref_indices = reference(x)
-    ref = reference.dense_weights(ref_values, ref_indices)
-    got = ttnn.to_torch(dense).float().reshape(tokens, config.num_experts)
-
-    # bfloat16, the gate multiply's dtype, and the cast lands after the selection so the routing
-    # decision itself is still made in fp32.
-    assert dense.dtype == tt_config.activation_dtype
-    assert torch.equal((got != 0).sum(-1), torch.full((tokens,), config.moe_top_k))
-    assert_with_pcc(ref.reshape(1, 1, tokens, config.num_experts), dense, MODULE_PCC)
-
-
-@pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
-def test_weights_reach_the_gate_unrenormalized(device, config, tt_router, batch, seqlen):
-    """moe_normalize_expert_weights is false, so the routed weights must sum below 1.
+def test_routed_weights_are_not_renormalized(device, config, tt_router, batch, seqlen):
+    """moe_normalize_expert_weights is false, so each token's top-k weights must sum below 1.
 
     Dividing by the top-k sum is what Mixtral and Switch do and the reflex to copy here; it
     still scores about 0.993 PCC end to end, which sits right on a typical gate.
     """
     x = hidden_states(batch, seqlen, config.hidden_size)
 
-    dense = tt_router(flat_input(x, device))
+    routing, rows = tt_router(flat_input(x, device))
+    ttnn.deallocate(rows)
 
-    row_sums = ttnn.to_torch(dense).float().reshape(batch * seqlen, config.num_experts).sum(-1)
-    assert (row_sums < 1.0).all(), f"a routed row summed to {float(row_sums.max()):.4f}"
+    row_sums = selection_of(routing, config.moe_top_k, config.num_experts)[0].sum(-1)
+    routing.deallocate()
+    assert (row_sums < 1.0).all(), f"a token's weights summed to {float(row_sums.max()):.4f}"
+
+
+@pytest.mark.parametrize("batch, seqlen", [*TOKEN_SHAPES, (16, 512)])
+def test_routing_metadata_from_the_router(device, config, tt_router, batch, seqlen):
+    """The routed pass's metadata, selected on device from the router's own scores, in its passes:
+    the oracle's for the scores' top-k, and bit for bit what ttnn.topk's selection of them gives.
+
+    16x512 puts the scores in DRAM and splits them into two passes; 2x37 leaves the scores' tile
+    padding rows inside the pass's last tile row.
+    """
+    # Imported here, so a moved op test tree fails this test alone rather than the module.
+    from models.experimental.nomic_embed_text_v2_moe.routing_metadata_reference import (
+        assert_matches_reference,
+    )
+
+    tokens = batch * seqlen
+    routing, rows = tt_router(flat_input(hidden_states(batch, seqlen, config.hidden_size), device))
+    ttnn.deallocate(rows)
+    values, indices = selection_of(routing, config.moe_top_k, config.num_experts)
+    # stable=True: routing_metadata breaks exact fp32 ties toward the lower expert, which default topk does not.
+    topk_values, topk_indices = ttnn.topk(routing.scores, k=config.moe_top_k, dim=-1, stable=True)
+
+    for token_start, num_tokens in routed_windows(tokens):
+        window = dict(num_experts=config.num_experts, token_start=token_start, num_tokens=num_tokens)
+        routing_metadata = ttnn.experimental.nomic_embed_text_v2_moe.routing_metadata
+        outputs = routing_metadata(scores=routing.scores, top_k=config.moe_top_k, **window)
+        assert_matches_reference(outputs, indices, values, config.num_experts, token_start, num_tokens)
+        for got, want in zip(outputs, routing_metadata(topk_indices, topk_values, **window)):
+            assert torch.equal(ttnn.to_torch(got).view(torch.int32), ttnn.to_torch(want).view(torch.int32))
 
 
 def test_one_call_covers_the_largest_batches(device, config, reference, tt_router):
-    """The router takes a whole batch in one call, so its rows per core grow without bound.
+    """The router takes a whole batch in one call, so a core's 32-token blocks grow without bound with it.
 
-    The experts split the token axis into passes; the router does not. At 131,072 tokens, 256
-    texts of 512, each core holds 38 tile rows, and K blocks of 8 tiles raise at program build
-    because the circular buffers no longer fit L1. The program config takes blocks of 4 there for
-    the 64 scored columns.
+    The experts split the token axis into passes; the router does not. router_front_end runs a core's blocks one
+    after another through fixed buffers, so 131,072 tokens, 256 texts of 512 and about 38 blocks a core, fit L1
+    as one block does.
     """
     x = hidden_states(256, 512, config.hidden_size)
 
-    logits = ttnn.to_torch(tt_router.logits(flat_input(x, device))).float()
+    routing, rows = tt_router(flat_input(x, device))
+    ttnn.deallocate(rows)
+    scores = ttnn.to_torch(routing.scores).float()
+    routing.deallocate()
 
     with torch.no_grad():
-        ref = reference.layer(x)
-    assert_with_pcc(ref.reshape(1, 1, -1, config.num_experts), logits[..., : config.num_experts], MODULE_PCC)
+        ref, _, _ = reference(x)
+    assert_with_pcc(ref.reshape(1, 1, -1, config.num_experts), scores, MODULE_PCC)
+
+
+@pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
+def test_rows_are_the_input_untilized(device, config, tt_router, batch, seqlen):
+    """The dispatch table the router writes beside its scores: the input's rows bit for bit, its tile padding left
+    out."""
+    x_tt = flat_input(hidden_states(batch, seqlen, config.hidden_size), device)
+
+    routing, rows = tt_router(x_tt)
+    routing.deallocate()
+
+    assert list(rows.shape) == [1, 1, batch * seqlen, config.hidden_size]
+    assert rows.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert torch.equal(ttnn.to_torch(rows), ttnn.to_torch(x_tt))

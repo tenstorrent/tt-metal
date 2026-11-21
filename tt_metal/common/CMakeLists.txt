@@ -14,7 +14,6 @@ target_include_directories(
     PUBLIC
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
-        ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(
@@ -29,10 +28,7 @@ target_link_libraries(
         Taskflow::Taskflow
     PRIVATE
         BLAKE3::blake3
-        Metalium::Metal::Hardware
         Tracy::TracyClient
-        TT::Metalium::HostDevCommon
         yaml-cpp::yaml-cpp
-        Boost::asio
         tt-logger::tt-logger
 )
