@@ -199,11 +199,12 @@ class TtK3KdaAttention(LightweightModule):
     address for the life of the run, or a captured trace could not advance the recurrence with no
     host in the loop. That somewhere is the migration slab itself, the way MLA's KV cache is its own
     migration format. The slabs store each head once on the mesh, so per chunk the layer loads its
-    slot's carry into the slabs' one scratch carry (a copy and an SP all-gather), the convolution,
-    the SP relay and the final carry read the scratch and replace it in place, and the layer stores
-    this chip's heads of it back; the copies read the slot on device. `ttKDA.forward_slot` is that
-    whole per-chunk layer (load, TP all-gather, KDA, reduce-scatter, store), so it is what the
-    layer's perf test measures; `ttKDA.forward` stays the functional core.
+    slot's carry into the slabs' one scratch carry (a copy and an SP all-gather), the convolution
+    and the SP relay (which also forms the final carry) read the scratch and replace it in place, and
+    the layer stores this chip's heads of it back; the copies read the slot on device.
+    `ttKDA.forward_slot` is that whole per-chunk layer (TP all-gather and input projection, load, KDA,
+    reduce-scatter, store), so it is what the layer's perf test measures; `ttKDA.forward` stays the
+    functional core.
     """
 
     writes_kv = False
@@ -240,9 +241,9 @@ class TtK3KdaAttention(LightweightModule):
         # `[1, 1, T, d/tp]` -> `[1, T, d/tp]`: ttKDA takes three dimensions, and the leading one is batch.
         # The squeeze is a view over `normed`, which the block frees after this returns.
         hidden = ttnn.squeeze(normed, dim=0)
-        # The whole per-chunk layer: load this slot's carry into the slabs' scratch with an SP all-gather (the ops
-        # start from zeros at a request head), TP all-gather, KDA, output projection + reduce-scatter, store this
-        # chip's heads of the replacement carry.
+        # The whole per-chunk layer: TP all-gather and input projection, load this slot's carry into the slabs'
+        # scratch with an SP all-gather (the ops start from zeros at a request head), KDA, output projection +
+        # reduce-scatter, store this chip's heads of the replacement carry.
         output = self.kda.forward_slot(
             hidden, ctx.kda_states, scalars.slot, self.layer_idx, actual_start=scalars.start, actual_end=scalars.end
         )
