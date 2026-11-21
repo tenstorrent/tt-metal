@@ -47,7 +47,9 @@ ProgramDescriptor MoeExpertTokenRemapDeviceOperation::Multicore::create_descript
     const auto aligned_topk_page_size_bytes = tt::align(topk_page_size_bytes, l1_alignment);
 
     const auto output_mapping_page_size_bytes = output_mapping_tensor.tensor_spec().compute_page_size_bytes();
+    const auto aligned_output_mapping_page_size_bytes = tt::align(output_mapping_page_size_bytes, l1_alignment);
     const auto output_reduced_page_size_bytes = output_reduced_tensor.tensor_spec().compute_page_size_bytes();
+    const auto aligned_output_reduced_page_size_bytes = tt::align(output_reduced_page_size_bytes, l1_alignment);
 
     ProgramDescriptor desc;
 
@@ -122,12 +124,12 @@ ProgramDescriptor MoeExpertTokenRemapDeviceOperation::Multicore::create_descript
     const auto output_mapping_data_format = datatype_to_dataformat_converter(output_mapping_tensor.dtype());
     const auto output_mapping_cb_id = tt::CBIndex::c_4;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = output_mapping_page_size_bytes,
+        .total_size = aligned_output_mapping_page_size_bytes,
         .core_ranges = total_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_mapping_cb_id),
             .data_format = output_mapping_data_format,
-            .page_size = output_mapping_page_size_bytes,
+            .page_size = aligned_output_mapping_page_size_bytes,
         }}},
     });
 
@@ -135,12 +137,12 @@ ProgramDescriptor MoeExpertTokenRemapDeviceOperation::Multicore::create_descript
     const auto output_reduced_data_format = datatype_to_dataformat_converter(output_reduced_tensor.dtype());
     const auto output_reduced_cb_id = tt::CBIndex::c_5;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = output_reduced_page_size_bytes,
+        .total_size = aligned_output_reduced_page_size_bytes,
         .core_ranges = total_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_reduced_cb_id),
             .data_format = output_reduced_data_format,
-            .page_size = output_reduced_page_size_bytes,
+            .page_size = aligned_output_reduced_page_size_bytes,
         }}},
     });
 

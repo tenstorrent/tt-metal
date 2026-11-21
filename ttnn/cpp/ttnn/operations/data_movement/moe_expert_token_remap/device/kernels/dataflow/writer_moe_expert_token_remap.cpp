@@ -125,5 +125,9 @@ void kernel_main() {
     // Final drain: the per-iteration guards above only flush (depart); land all mapping/reduced
     // writes before the kernel returns so the downstream op can't read not-yet-landed output.
     noc.async_write_barrier();
+    output_mapping_dfb.wait_front(1);
+    output_mapping_dfb.pop_front(1);
+    output_reduced_dfb.wait_front(1);
+    output_reduced_dfb.pop_front(1);
     local_experts_dfb.pop_front(1);
 }

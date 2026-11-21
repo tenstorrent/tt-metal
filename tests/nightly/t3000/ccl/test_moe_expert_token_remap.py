@@ -111,7 +111,7 @@ def gen_tensors(devices, experts, batch, seq, selected_experts_k, mesh_shape, re
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("num_iters", [2])
 @pytest.mark.parametrize("seq", [1, 2])
-@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("experts_per_device", [4, 8])
 @pytest.mark.parametrize("selected_experts_k", [8])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("scheme", ["sequential", "random"])
@@ -502,3 +502,71 @@ def test_moe_expert_token_remap_matmul(
         # Compare with output tensor
         expected_pcc = 0.999
         assert_with_pcc(pt_out, matmul_out_torch[dev, b, 0, e, :, :], expected_pcc)
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+def test_moe_expert_token_remap_rejects_mismatched_seq_and_preallocated_outputs(mesh_device, mesh_shape, expect_error):
+    """Negative validation tests for seq mismatch and invalid preallocated output tensors."""
+    devices = prod(mesh_shape)
+    batch = devices * 8
+    seq = 1
+    experts = devices * 8
+    selected_experts_k = 8
+
+    expert_mapping, metadata_tensor, topk_tensor, _, _ = gen_tensors(
+        devices, experts, batch, seq, selected_experts_k, mesh_shape, REDUCTION_SIZE, "random"
+    )
+    tt_topk = ttnn.from_torch(
+        topk_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    tt_expert_mapping = ttnn.from_torch(
+        expert_mapping,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_metadata = ttnn.from_torch(
+        metadata_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    # Mismatched sequence length between metadata (seq=2) and topk (seq=1)
+    bad_metadata = ttnn.from_torch(
+        metadata_tensor.repeat(1, 1, 2, 1),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    with expect_error(RuntimeError, "Expected metadata dim 2 to be equal to topk dim 2"):
+        ttnn.moe_expert_token_remap(tt_topk, tt_expert_mapping, bad_metadata, reduction_size=REDUCTION_SIZE)
+
+    # Mismatched preallocated optional_output_reduced_tensor shape (last dim 4 != 8)
+    bad_reduced = ttnn.from_torch(
+        torch.zeros((devices, 1, (batch * seq) // REDUCTION_SIZE, 4), dtype=torch.int16),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    with expect_error(RuntimeError, "Invalid optional_output_reduced_tensor spec"):
+        ttnn.moe_expert_token_remap(
+            tt_topk,
+            tt_expert_mapping,
+            tt_metadata,
+            reduction_size=REDUCTION_SIZE,
+            optional_output_reduced_tensor=bad_reduced,
+        )
