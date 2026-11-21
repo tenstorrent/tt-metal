@@ -15,7 +15,7 @@ reassembled tensor against what the first rank sent.
 Launch with a binding from models/demos/deepseek_v3_d_p/utils/rr_pipeline_binding.py (sc2 template, 4 ranks):
 
     tt-run --rank-binding <binding.yaml> --mpi-args "--map-by rankfile:file=<rankfile>" \\
-        pytest tests/ttnn/distributed/test_rr_prefill_d2d_seam.py
+        pytest models/demos/deepseek_v3_d_p/tests/test_rr_prefill_d2d_seam.py
 """
 
 import pytest
