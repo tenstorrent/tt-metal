@@ -620,8 +620,8 @@ FORCE_INLINE void two_level_run(
                 constexpr uint32_t chunk_units =
                     chunk_bytes / sizeof(uint16_t) /
                     (get_named_compile_time_arg_val("tl_stage1_batch") * (tile_keys / block_keys));
-                // The last wave's owners leave at most wave_rows cores' worth of claims, and the rest keep the DRAM
-                // busy.
+                // At most wave_rows owners leave the claims early; the guard leaves other cores to claim, not a
+                // guarantee that they are free to (a unit left unclaimed waits for its repair).
                 const bool stream_early = search_len >= stream_early_from && num_cores >= 3 * wave_rows;
                 const uint32_t last_wave = (units.total - 1) / (wave_rows * units.per_row);
                 uint32_t best_parts = 0;
