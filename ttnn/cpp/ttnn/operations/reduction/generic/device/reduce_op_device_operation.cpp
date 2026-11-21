@@ -35,8 +35,8 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Operands to reduce need to be on device! Got storage type: {}",
         tensor_args.storage_type());
     TT_FATAL(tensor_args.is_allocated(), "Operands to reduce need to be allocated in buffers on device!");
-    // Dense RM path is only selected on the host for ttnn.mean-style dispatch (AVG over W/H on 4D BF16/FLOAT32,
-    // interleaved I/O). It is lowered to PoolType::SUM + scaler before launch; see reduce_op.cpp.
+    // The host selects the dense RM path for SUM/AVG/MAX/MIN over W/H on 4D BF16/FLOAT32 with interleaved I/O.
+    // AVG is lowered to PoolType::SUM + scaler before launch; see reduce_op.cpp.
     TT_FATAL(
         !(operation_attributes.row_major_w_dense_path && operation_attributes.row_major_h_dense_path),
         "Only one of row_major_w_dense_path / row_major_h_dense_path may be set");
@@ -90,7 +90,7 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM ||
                 operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX ||
                 operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MIN,
-            "{}: math_op must be SUM (mean lowered from AVG), or MAX/MIN as the TILE H-split's stage 2, got {}",
+            "{}: math_op must be SUM (mean lowered from AVG), MAX or MIN, got {}",
             path_name,
             operation_attributes.math_op);
         TT_FATAL(

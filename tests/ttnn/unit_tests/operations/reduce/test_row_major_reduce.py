@@ -423,10 +423,28 @@ _SUM_METRICS_FP32 = dict(
 _OPS = {
     "mean": (torch.mean, ttnn.mean),
     "sum": (torch.sum, ttnn.sum),
+    "max": (torch.amax, ttnn.max),
+    "min": (torch.amin, ttnn.min),
 }
 
+# MAX/MIN select an input value, so the result is exact.
+_SELECT_METRICS = dict(rtol=0, atol=0, check_frobenius=False, check_pcc=False)
 
-def _metrics(dtype, op):
+
+def _is_quasar(device):
+    return device.arch() == ttnn.device.Arch.QUASAR
+
+
+def _select_metrics(device, dtype):
+    # Quasar has no FLOAT32 SFPU reduce, and its FPU reads FLOAT32 as tf32.
+    if dtype == ttnn.float32 and _is_quasar(device):
+        return dict(rtol=1e-3, atol=1e-2, check_frobenius=False, check_pcc=False)
+    return _SELECT_METRICS
+
+
+def _metrics(dtype, op, device):
+    if op in ("max", "min"):
+        return _select_metrics(device, dtype)
     if op == "mean":
         return _MEAN_METRICS_FP32 if dtype == ttnn.float32 else _MEAN_METRICS_BF16
     return _SUM_METRICS_FP32 if dtype == ttnn.float32 else _SUM_METRICS_BF16
@@ -436,6 +454,32 @@ def _torch_dtype(ttnn_dtype):
     return torch.float32 if ttnn_dtype == ttnn.float32 else torch.bfloat16
 
 
+def _rand_input(shape, dtype, op):
+    """torch.rand for sum/mean; one-signed for max/min (negative / positive), so a zero leaking from
+    padding or an accumulator reload wins the selection and shows up."""
+    x = torch.rand(shape, dtype=_torch_dtype(dtype))
+    if op == "max":
+        return -(x + 1)
+    if op == "min":
+        return x + 1
+    return x
+
+
+def _takes_rm_path(device, op, dim, dtype):
+    """On Quasar a max along -1 cannot reload its FPU accumulator, and a FLOAT32 min lowers to -MAX(-x);
+    both tilize. Everything else here takes the dense RM path."""
+    if not _is_quasar(device) or op in ("sum", "mean"):
+        return True
+    if op == "max":
+        return dim != -1
+    return dtype != ttnn.float32
+
+
+def _natural_layout(device, op, dim, dtype):
+    """Default output layout of a ROW_MAJOR reduce."""
+    return ttnn.ROW_MAJOR_LAYOUT if _takes_rm_path(device, op, dim, dtype) else ttnn.TILE_LAYOUT
+
+
 def _golden(input_torch_bf_or_fp, op, dim, keepdim):
     """Reference reduction in float32 to reduce accumulation noise vs the device's mixed-precision path."""
     torch_fn, _ = _OPS[op]
@@ -443,7 +487,7 @@ def _golden(input_torch_bf_or_fp, op, dim, keepdim):
 
 
 # The W writer emits ROW_MAJOR only, so a TILE request runs the tilized path instead — skipped below.
-@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("reduce_op", ["mean", "sum", "max", "min"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("keepdim", [False, True])
 @pytest.mark.parametrize(
@@ -467,7 +511,7 @@ def test_rm_reduce_w_interleaved_tile_aligned(device, reduce_op, dtype, keepdim,
     if output_layout == ttnn.TILE_LAYOUT:
         pytest.skip("TILE output clears use_rm_dense_w; runs the tilized path, not the RM one")
     torch.manual_seed(0)
-    torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
+    torch_input = _rand_input(shape, dtype, reduce_op)
     torch_ref = _golden(torch_input, reduce_op, dim=-1, keepdim=keepdim)
 
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -475,14 +519,14 @@ def test_rm_reduce_w_interleaved_tile_aligned(device, reduce_op, dtype, keepdim,
 
     ttnn_op = _OPS[reduce_op][1]
     tt_output = ttnn_op(tt_input, dim=-1, keepdim=keepdim, output_layout=output_layout)
-    # None keeps the dense RM path's natural ROW_MAJOR output.
-    assert tt_output.layout == (output_layout or ttnn.ROW_MAJOR_LAYOUT)
+    # None keeps the path's natural layout.
+    assert tt_output.layout == (output_layout or _natural_layout(device, reduce_op, -1, dtype))
     output = ttnn.to_torch(tt_output)
 
-    assert_numeric_metrics(torch_ref, output, **_metrics(dtype, reduce_op))
+    assert_numeric_metrics(torch_ref, output, **_metrics(dtype, reduce_op, device))
 
 
-@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("reduce_op", ["mean", "sum", "max", "min"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("keepdim", [False, True])
 @pytest.mark.parametrize(
@@ -504,7 +548,7 @@ def test_rm_reduce_w_interleaved_tile_aligned(device, reduce_op, dtype, keepdim,
 def test_rm_reduce_w_interleaved_non_tile_aligned(device, reduce_op, dtype, keepdim, shape):
     """W reduce on ROW_MAJOR interleaved input, W NOT a multiple of tile_width."""
     torch.manual_seed(0)
-    torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
+    torch_input = _rand_input(shape, dtype, reduce_op)
     torch_ref = _golden(torch_input, reduce_op, dim=-1, keepdim=keepdim)
 
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -514,10 +558,10 @@ def test_rm_reduce_w_interleaved_non_tile_aligned(device, reduce_op, dtype, keep
     tt_output = ttnn_op(tt_input, dim=-1, keepdim=keepdim)
     output = ttnn.to_torch(tt_output)
 
-    assert_numeric_metrics(torch_ref, output, **_metrics(dtype, reduce_op))
+    assert_numeric_metrics(torch_ref, output, **_metrics(dtype, reduce_op, device))
 
 
-@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("reduce_op", ["mean", "sum", "max", "min"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
     "mem_cfg",
@@ -538,7 +582,7 @@ def test_rm_reduce_w_interleaved_non_tile_aligned(device, reduce_op, dtype, keep
 def test_rm_reduce_w_interleaved_memory_configs(device, reduce_op, dtype, mem_cfg, shape):
     """W reduce, sweep DRAM vs L1 for the interleaved RM input/output."""
     torch.manual_seed(0)
-    torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
+    torch_input = _rand_input(shape, dtype, reduce_op)
     torch_ref = _golden(torch_input, reduce_op, dim=-1, keepdim=False)
 
     tt_input = ttnn.from_torch(
@@ -553,11 +597,11 @@ def test_rm_reduce_w_interleaved_memory_configs(device, reduce_op, dtype, mem_cf
     tt_output = ttnn_op(tt_input, dim=-1, keepdim=False, memory_config=mem_cfg)
     output = ttnn.to_torch(tt_output)
 
-    assert_numeric_metrics(torch_ref, output, **_metrics(dtype, reduce_op))
+    assert_numeric_metrics(torch_ref, output, **_metrics(dtype, reduce_op, device))
 
 
 # Covers the RM H writer's TILE branch: only num_h_slices == 1 emits TILE directly.
-@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("reduce_op", ["mean", "sum", "max", "min"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("keepdim", [False, True])
 @pytest.mark.parametrize(
@@ -579,7 +623,7 @@ def test_rm_reduce_w_interleaved_memory_configs(device, reduce_op, dtype, mem_cf
 def test_rm_reduce_h_interleaved_tile_aligned(device, reduce_op, dtype, keepdim, output_layout, shape):
     """H reduce on ROW_MAJOR interleaved input, H a multiple of tile_height=32."""
     torch.manual_seed(0)
-    torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
+    torch_input = _rand_input(shape, dtype, reduce_op)
     torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=keepdim)
 
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -587,14 +631,14 @@ def test_rm_reduce_h_interleaved_tile_aligned(device, reduce_op, dtype, keepdim,
 
     ttnn_op = _OPS[reduce_op][1]
     tt_output = ttnn_op(tt_input, dim=-2, keepdim=keepdim, output_layout=output_layout)
-    # None keeps the dense RM path's natural ROW_MAJOR output.
-    assert tt_output.layout == (output_layout or ttnn.ROW_MAJOR_LAYOUT)
+    # None keeps the path's natural layout.
+    assert tt_output.layout == (output_layout or _natural_layout(device, reduce_op, -2, dtype))
     output = ttnn.to_torch(tt_output)
 
-    assert_numeric_metrics(torch_ref, output, **_metrics(dtype, reduce_op))
+    assert_numeric_metrics(torch_ref, output, **_metrics(dtype, reduce_op, device))
 
 
-@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("reduce_op", ["mean", "sum", "max", "min"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("keepdim", [False, True])
 @pytest.mark.parametrize(
@@ -616,7 +660,7 @@ def test_rm_reduce_h_interleaved_tile_aligned(device, reduce_op, dtype, keepdim,
 def test_rm_reduce_h_interleaved_non_tile_aligned(device, reduce_op, dtype, keepdim, shape):
     """H reduce on ROW_MAJOR interleaved input, H NOT a multiple of tile_height."""
     torch.manual_seed(0)
-    torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
+    torch_input = _rand_input(shape, dtype, reduce_op)
     torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=keepdim)
 
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -626,10 +670,10 @@ def test_rm_reduce_h_interleaved_non_tile_aligned(device, reduce_op, dtype, keep
     tt_output = ttnn_op(tt_input, dim=-2, keepdim=keepdim)
     output = ttnn.to_torch(tt_output)
 
-    assert_numeric_metrics(torch_ref, output, **_metrics(dtype, reduce_op))
+    assert_numeric_metrics(torch_ref, output, **_metrics(dtype, reduce_op, device))
 
 
-@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("reduce_op", ["mean", "sum", "max", "min"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
     "mem_cfg",
@@ -650,7 +694,7 @@ def test_rm_reduce_h_interleaved_non_tile_aligned(device, reduce_op, dtype, keep
 def test_rm_reduce_h_interleaved_memory_configs(device, reduce_op, dtype, mem_cfg, shape):
     """H reduce, sweep DRAM vs L1 for the interleaved RM input/output."""
     torch.manual_seed(0)
-    torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
+    torch_input = _rand_input(shape, dtype, reduce_op)
     torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=False)
 
     tt_input = ttnn.from_torch(
@@ -665,10 +709,10 @@ def test_rm_reduce_h_interleaved_memory_configs(device, reduce_op, dtype, mem_cf
     tt_output = ttnn_op(tt_input, dim=-2, keepdim=False, memory_config=mem_cfg)
     output = ttnn.to_torch(tt_output)
 
-    assert_numeric_metrics(torch_ref, output, **_metrics(dtype, reduce_op))
+    assert_numeric_metrics(torch_ref, output, **_metrics(dtype, reduce_op, device))
 
 
-@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("reduce_op", ["mean", "sum", "max", "min"])
 @pytest.mark.parametrize(
     "shape, dim",
     [
@@ -684,7 +728,7 @@ def test_rm_reduce_interleaved_program_cache(device, reduce_op, shape, dim):
     ttnn_op = _OPS[reduce_op][1]
 
     def run_once(seed_offset):
-        torch_input = torch.rand(shape, dtype=torch.bfloat16) + seed_offset
+        torch_input = _rand_input(shape, ttnn.bfloat16, reduce_op) + seed_offset
         tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         tt_output = ttnn_op(tt_input, dim=dim, keepdim=False)
         return torch_input, ttnn.to_torch(tt_output)
@@ -696,13 +740,14 @@ def test_rm_reduce_interleaved_program_cache(device, reduce_op, shape, dim):
 
     ref1 = _golden(in1, reduce_op, dim=dim, keepdim=False)
     ref2 = _golden(in2, reduce_op, dim=dim, keepdim=False)
-    metrics = _metrics(ttnn.bfloat16, reduce_op)
+    metrics = _metrics(ttnn.bfloat16, reduce_op, device)
     assert_numeric_metrics(ref1, out1, **metrics)
     assert_numeric_metrics(ref2, out2, **metrics)
 
 
-# Ht_rm >= 16 splits the H reduce into FP32 partials collapsed by a second stage.
-@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+# Ht_rm >= 16 splits the H reduce into partials (FP32 sums, or MAX/MIN in the input dtype) collapsed by a
+# second stage.
+@pytest.mark.parametrize("reduce_op", ["mean", "sum", "max", "min"])
 @pytest.mark.parametrize("fast_and_approximate_mode", [False, True])
 @pytest.mark.parametrize(
     "output_layout", [None, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["default", "rm", "tile"]
@@ -718,8 +763,10 @@ def test_rm_reduce_interleaved_program_cache(device, reduce_op, shape, dim):
 )
 def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, output_layout, shape):
     """H reduce on tall ROW_MAJOR input — exercises the multi-shard H-axis-split + combine path."""
+    if reduce_op == "min" and fast_and_approximate_mode:
+        pytest.skip("ttnn.min rejects fast_and_approximate_mode on FLOAT32")
     torch.manual_seed(0)
-    torch_input = torch.rand(shape, dtype=torch.float32)
+    torch_input = _rand_input(shape, ttnn.float32, reduce_op)
     torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=False)
 
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -733,13 +780,15 @@ def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, ou
         "fast_and_approximate_mode": fast_and_approximate_mode,
     }
     tt_output = ttnn_op(tt_input, **op_kwargs)
-    # None keeps the dense RM path's natural ROW_MAJOR output.
-    assert tt_output.layout == (output_layout or ttnn.ROW_MAJOR_LAYOUT)
+    # None keeps the path's natural layout.
+    assert tt_output.layout == (output_layout or _natural_layout(device, reduce_op, -2, ttnn.float32))
     output = ttnn.to_torch(tt_output)
 
     # Accurate FP32 uses SFPU; fast mode and Quasar use the tf32 FPU bound.
     fpu = fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR
     rtol, atol = (0.004, 1e-3) if fpu else (1e-5, 1e-5)
+    # One-signed max/min results cluster near +-1, leaving PCC nothing to correlate.
+    selects = reduce_op in ("max", "min")
     assert_numeric_metrics(
         torch_ref,
         output,
@@ -748,6 +797,8 @@ def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, ou
         atol=atol,
         frobenius_threshold=0.003,
         check_ulp=False,
+        check_pcc=not selects,
+        check_frobenius=not selects,
     )
 
 
@@ -776,7 +827,7 @@ def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, ou
 def test_tile_reduce_h_axis_split(device, reduce_op, dtype, fast_and_approximate_mode, output_layout, shape):
     """H reduce on tall TILE input — tiled stage 1, RM stage 2. TILE input defaults to TILE output."""
     torch.manual_seed(0)
-    torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
+    torch_input = _rand_input(shape, dtype, reduce_op)
     torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=False)
 
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -807,8 +858,8 @@ def test_tile_reduce_h_axis_split(device, reduce_op, dtype, fast_and_approximate
 
 
 # Block-float formats only exist in TILE layout: an RM output would have to widen to BFLOAT16, so
-# sum/mean reject the request instead of silently changing the dtype.
-@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+# the op rejects the request instead of silently changing the dtype.
+@pytest.mark.parametrize("reduce_op", ["mean", "sum", "max", "min"])
 @pytest.mark.parametrize("dim", [-1, -2])
 def test_rm_reduce_row_major_output_rejected_for_block_float(device, reduce_op, dim, expect_error):
     torch_input = torch.rand((1, 1, 64, 128))
@@ -827,7 +878,7 @@ def test_rm_reduce_row_major_output_rejected_for_block_float(device, reduce_op, 
 # A padded ROW_MAJOR tensor keeps its dim-1 slices H_padded rows apart, but the dense readers and the
 # tilize into the tile path both step by H_logical, so every slice after the first reads pad rows.
 # reduce refuses instead of returning a plausible wrong answer.
-@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("reduce_op", ["mean", "sum", "max", "min"])
 @pytest.mark.parametrize("dim", [-1, -2])
 @pytest.mark.parametrize(
     "shape",
@@ -847,3 +898,159 @@ def test_rm_reduce_padded_h_slices_rejected(device, reduce_op, dim, shape, expec
 
     with expect_error(RuntimeError, "only supported when N and C fold to a single"):
         _OPS[reduce_op][1](tt_input, dim=dim, keepdim=True)
+
+
+def _device_ops(fn):
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    out = fn()
+    trace = ttnn.graph.end_graph_capture()
+    names = [n["params"]["name"] for n in trace if n.get("node_type") == "function_start"]
+    return out, [n.removesuffix("DeviceOperation") for n in names if n.endswith("DeviceOperation")]
+
+
+# The reduced axis spans more than the 8-tile RM chunk (W) or runs un-split past it (H), so the compute
+# kernel folds chunks through Accumulate; one-signed data makes a zero leaking from the reload win.
+@pytest.mark.parametrize("reduce_op", ["max", "min"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize(
+    "shape, dim, num_ops",
+    [
+        ((1, 1, 64, 1000), -1, 1),  # Wt=32: four W chunks
+        ((2, 3, 37, 300), -1, 1),  # Wt=10, padded H and W, NC=6
+        ((1, 4, 450, 300), -2, 1),  # Ht_rm=15 never H-splits, on any grid: two H chunks, partial last H tile
+        ((1, 1, 33, 33), -2, 1),
+        ((1, 1, 2048, 64), -2, 2),  # H-axis split
+    ],
+)
+def test_rm_reduce_minmax_chunked(device, reduce_op, dtype, shape, dim, num_ops):
+    if not _takes_rm_path(device, reduce_op, dim, dtype):
+        pytest.skip("takes the tilize path on Quasar")
+    torch.manual_seed(0)
+    torch_input = _rand_input(shape, dtype, reduce_op)
+    torch_ref = _golden(torch_input, reduce_op, dim=dim, keepdim=True)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    tt_output, ops = _device_ops(lambda: _OPS[reduce_op][1](tt_input, dim=dim, keepdim=True))
+
+    assert ops == ["Reduce"] * num_ops, f"expected the dense RM path without a tilize, got {ops}"
+    assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert_numeric_metrics(torch_ref, ttnn.to_torch(tt_output), **_select_metrics(device, dtype))
+
+
+# ttnn.max(x, scalar=s) is max(s * x): a negative s flips max <-> min, applied after the selection.
+@pytest.mark.parametrize("reduce_op", ["max", "min"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize("scalar", [2.5, -2.5])
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_rm_reduce_minmax_scalar(device, reduce_op, dtype, scalar, dim):
+    torch.manual_seed(0)
+    torch_input = torch.randn((2, 3, 70, 300), dtype=_torch_dtype(dtype))
+    # ttnn applies the scalar before selecting: max(s * x), which is s * min(x) for s < 0.
+    torch_ref = _golden(torch_input.float() * scalar, reduce_op, dim=dim, keepdim=True)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    tt_output = _OPS[reduce_op][1](tt_input, dim=dim, keepdim=True, scalar=scalar)
+
+    selected_op = reduce_op if scalar > 0 else {"max": "min", "min": "max"}[reduce_op]
+    assert tt_output.layout == _natural_layout(device, selected_op, dim, dtype)
+    if dtype == ttnn.float32 and _is_quasar(device):
+        metrics = _select_metrics(device, dtype)
+    else:
+        # The post-multiply rounds once to the output dtype.
+        rtol = 1e-2 if dtype == ttnn.bfloat16 else 1e-6
+        metrics = dict(rtol=rtol, atol=0, check_frobenius=False, check_pcc=False)
+    assert_numeric_metrics(torch_ref, ttnn.to_torch(tt_output).float(), **metrics)
+
+
+# These FLOAT32 calls cannot take the SFPU MIN reduce, so they lower to -MAX(-x) on the tilize path
+# and keep its TILE output; an explicit output_layout is still honored.
+@pytest.mark.parametrize(
+    "reduce_op, scalar, fast_and_approximate_mode, fp32_dest_acc_en",
+    [("min", 1.0, False, False), ("max", -1.0, False, False)],
+    ids=["min_acc_off", "max_negscalar_acc_off"],
+)
+@pytest.mark.parametrize("output_layout", [None, ttnn.ROW_MAJOR_LAYOUT], ids=["default", "rm"])
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_rm_reduce_minmax_negate_fallback(
+    device, reduce_op, scalar, fast_and_approximate_mode, fp32_dest_acc_en, output_layout, dim
+):
+    torch.manual_seed(0)
+    torch_input = torch.randn((1, 2, 64, 96), dtype=torch.float32)
+    torch_ref = _golden(torch_input * scalar, reduce_op, dim=dim, keepdim=True)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest_acc_en
+    )
+
+    tt_output, ops = _device_ops(
+        lambda: _OPS[reduce_op][1](
+            tt_input,
+            dim=dim,
+            keepdim=True,
+            scalar=scalar,
+            fast_and_approximate_mode=fast_and_approximate_mode,
+            compute_kernel_config=config,
+            output_layout=output_layout,
+        )
+    )
+
+    assert ops[0] == "TilizeWithValPadding", ops
+    assert tt_output.layout == (output_layout or ttnn.TILE_LAYOUT)
+    # The FPU reads FLOAT32 as tf32, and fp32_dest_acc_en=False narrows DEST to 16 bits.
+    assert_numeric_metrics(
+        torch_ref, ttnn.to_torch(tt_output), rtol=1e-2, atol=0, check_frobenius=False, check_pcc=False
+    )
+
+
+# A negative scalar turns max into a min, which runs on the SFPU whatever fast_and_approximate_mode says,
+# so it stays on the dense RM path and exact.
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_rm_reduce_max_negative_scalar_fast_mode(device, dim):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar has no FLOAT32 SFPU reduce")
+    torch.manual_seed(0)
+    torch_input = torch.randn((2, 3, 70, 300), dtype=torch.float32)
+    torch_ref = torch.amax(torch_input * -2.5, dim=dim, keepdim=True)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    tt_output, ops = _device_ops(
+        lambda: ttnn.max(tt_input, dim=dim, keepdim=True, scalar=-2.5, fast_and_approximate_mode=True)
+    )
+
+    assert ops == ["Reduce"], f"expected the dense RM path without a tilize, got {ops}"
+    assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert torch.equal(ttnn.to_torch(tt_output), torch_ref)
+
+
+# ±inf is a legal value, not padding: it must win (or lose) exactly as in torch.
+@pytest.mark.parametrize("reduce_op", ["max", "min"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_rm_reduce_minmax_infinities(device, reduce_op, dtype, dim):
+    torch.manual_seed(0)
+    torch_input = torch.randn((1, 2, 40, 300), dtype=torch.float32)
+    torch_input[0, 0, 3, 7] = float("inf")
+    torch_input[0, 0, 5, 9] = float("-inf")
+    torch_input[0, 1, :, 11] = float("inf")
+    torch_input[0, 1, 13, :] = float("-inf")
+    torch_input = torch_input.to(_torch_dtype(dtype))
+    torch_ref = _golden(torch_input, reduce_op, dim=dim, keepdim=True)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    tt_output = _OPS[reduce_op][1](tt_input, dim=dim, keepdim=True)
+
+    assert_numeric_metrics(torch_ref.float(), ttnn.to_torch(tt_output).float(), **_select_metrics(device, dtype))
+
+
+# 1 + 2^-20 needs 20 mantissa bits and tf32 keeps 10, so any SrcA pass over the RM rows returns 1.0.
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_rm_reduce_sum_fp32_keeps_full_precision(device, dim):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar has no accurate FLOAT32 SFPU reduce")
+    torch_input = torch.zeros((1, 1, 64, 1000), dtype=torch.float32)
+    torch_input[0, 0, 0, 0] = 1.0 + 2.0**-20
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    tt_output = ttnn.sum(tt_input, dim=dim, keepdim=True)
+
+    assert torch.equal(ttnn.to_torch(tt_output), torch_input.sum(dim=dim, keepdim=True))

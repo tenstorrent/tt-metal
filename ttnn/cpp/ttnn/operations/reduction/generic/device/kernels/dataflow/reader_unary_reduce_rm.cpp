@@ -88,7 +88,7 @@ void reduce_rm_reader() {
     // Stage one h-tile slab (TILE_HEIGHT entries) for the given W chunk:
     //   reserve → bulk identity-fill the whole slab → async_read real_rows real rows → barrier → push.
     // Padded rows past `real_rows` and padded columns past `valid_bytes` retain the identity (0 for
-    // SUM) from the fill, contributing nothing to the running sum.
+    // SUM, -inf for MAX, +inf for MIN) from the fill, so they never change the result.
     auto stage_slab = [&](uint32_t slab_first_global_row, uint32_t real_rows, const RmWChunkBytes& w_range) {
         dfb_rm.reserve_back(rm_rows_per_tile);
         rm_fill_page_with_clear_template(
