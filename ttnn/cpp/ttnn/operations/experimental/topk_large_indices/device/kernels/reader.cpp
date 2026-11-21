@@ -67,7 +67,7 @@ FORCE_INLINE void two_level_push_stage1(uint32_t last_store) {
         .push_back(1 + get_named_compile_time_arg_val("tl_stage1_batch"));
 }
 
-// One phase-1 unit: its 32 tiles of 1024 keys. The last live block's keys past the search length are -inf; the tiles
+// One phase-1 unit: its 32 tiles of 1024 keys. The last live block's keys past the search length are -inf; the blocks
 // past it keep stale keys, whose maxima the writer does not send.
 template <typename InputAccessor>
 FORCE_INLINE void two_level_unit(
@@ -114,7 +114,8 @@ __attribute__((noinline)) void gather_read(uint32_t src, uint32_t dst, uint32_t 
 }
 
 // A non-posted atomic add to `target` on command buffer `cmd_buf`, returning the old value to `return_word` (see
-// two_level_run on what that value is worth), and the wait for its acknowledgement. Out of line, like gather_read.
+// two_level_run on what that value is worth), and, with `wait`, the wait for its acknowledgement. Out of line, like
+// gather_read.
 __attribute__((noinline)) void atomic_add(
     uint8_t noc_id, uint32_t cmd_buf, uint64_t target, uint32_t increment, uint32_t return_word, bool wait = true) {
     noc_fast_atomic_increment<noc_mode, true>(
@@ -310,7 +311,8 @@ __attribute__((noinline)) void two_level_gather(
 // Wall-clock ticks (about 150 us) a core waits for one of its rows' units once every unit is claimed, or in a streamed
 // stage 2 from a look at the claimed count that found it claimed, before it does the unit itself. A claimed unit is
 // usually done well within it (its core may first finish a row's last chunks); a repair that comes too early only does
-// a unit twice.
+// a unit twice. Past it, a core with nothing else to do leaves the first time a pass finds no unit for it, even with
+// claim marks left to scan.
 constexpr uint32_t repair_after = 200000;
 // Wall-clock ticks (about 10 us) between looks at the claimed count while a streamed stage 2 waits for a unit not yet
 // claimed (see two_level_stage2).
@@ -536,17 +538,14 @@ FORCE_INLINE void two_level_run(
     //   claim returns), for at most claim_timeout. A wrong or missing value is a unit done twice, which its done word
     //   absorbs, or a unit nobody does, which its row's owner repairs (see below). A value that lands after the
     //   counter ran out is still taken.
-    // - The other atomics (the cleared count and the row counter) use the register-write buffer, unused by this kernel
-    //   otherwise, with rows_word as its return address, so their values never land in claim_word. The row counter's
-    //   value is only the cap's estimate.
+    // - The other atomics (the cleared count, the row counter and the claim marks) use the register-write buffer,
+    //   unused by this kernel otherwise, returning to rows_word or mark_return, so their values never land in
+    //   claim_word. The row counter's value is only the cap's estimate.
     static_assert(noc_mode == DM_DEDICATED_NOC);
     constexpr uint32_t claim_timeout = 200000;  // wall-clock ticks, about 150 us
     uint32_t last_claimed = 0xFFFFFFFFu;
-    const auto claim = [&](uint32_t increment, uint32_t return_word) {
-        atomic_add(noc.get_noc_id(), write_at_cmd_buf, counter, increment, return_word);
-        if (return_word != claim_word) {
-            return true;
-        }
+    const auto claim = [&]() {
+        atomic_add(noc.get_noc_id(), write_at_cmd_buf, counter, 1, claim_word);
         const uint32_t start = get_timestamp_32b();
         do {
             invalidate_l1_cache();
@@ -568,9 +567,10 @@ FORCE_INLINE void two_level_run(
     const uint64_t cleared_count = on_coordinator(get_semaphore(get_named_compile_time_arg_val("tl_cleared_sem")));
     // The claim marks: the core that takes a unit's claim sets its bit on the coordinator, once the coordinator has
     // cleared them (counted in the cleared count). The atomic's value returns to mark_return, never read. A value
-    // delivered to two cores clears its bit and carries up into the next clear one of the same word (none past bit
-    // 31): the cleared units are done twice, and the unit whose bit the carry sets, if lost, is left to its owner's
-    // repair. A late value of a mark can land in rows_word, which only throws off the row cap's estimate.
+    // delivered to two cores clears its bit and every set bit above it up to the next clear one, which it sets (within
+    // the 32-bit word; a carry past bit 31 is dropped): the cleared units are done twice, and the unit whose bit the
+    // carry sets, if lost, is left to its owner's repair. A late value of a mark can land in rows_word, which only
+    // throws off the row cap's estimate.
     const uint64_t marks = on_coordinator(reinterpret_cast<uint32_t>(done_words) + marks_offset);
     bool marks_cleared = false;
     const auto mark = [&](uint32_t unit) {
@@ -737,7 +737,8 @@ FORCE_INLINE void two_level_run(
                 // At most wave_rows owners leave the claims early; the guard leaves other cores to claim, not a
                 // guarantee that they are free to (a unit left unclaimed waits for its repair).
                 const bool stream_early = search_len >= stream_early_from && num_cores >= 3 * wave_rows;
-                const uint32_t last_wave = (units.total - 1) / (wave_rows * units.per_row);
+                // Read only with stream_early, whose search length leaves units.per_row nonzero.
+                const uint32_t last_wave = stream_early ? (units.total - 1) / (wave_rows * units.per_row) : 0;
                 uint32_t best_parts = 0;
                 for (uint32_t candidate = 0; candidate < local_rows; ++candidate) {
                     const bool split = split_owner && candidate == local_whole_rows;
@@ -832,7 +833,7 @@ FORCE_INLINE void two_level_run(
                 }
             }
             if (unit >= units.total) {
-                if (claim(1, claim_word) && last_claimed < units.total) {
+                if (claim() && last_claimed < units.total) {
                     unit = last_claimed;
                     claimed_unit = true;
                 } else {
@@ -911,8 +912,8 @@ FORCE_INLINE void two_level_run(
             if (!idle) {
                 idle = true;
                 idle_since = now;
-            } else if (!units_left && now - idle_since > repair_after) {
-                repairing = read_counter() >= units.total;
+            } else if (now - idle_since > repair_after) {
+                repairing = true;
                 repair_next = 0;
                 idle = false;
             }
@@ -921,7 +922,7 @@ FORCE_INLINE void two_level_run(
     if constexpr (!has_block_max) {
         // Point the atomic buffer's returns back at the default word, and the register-write buffer's target back at
         // this core, as the kernels that run after expect.
-        claim(0, MEM_NOC_ATOMIC_RET_VAL_ADDR);
+        atomic_add(noc.get_noc_id(), write_at_cmd_buf, counter, 0, MEM_NOC_ATOMIC_RET_VAL_ADDR);
         NOC_CMD_BUF_WRITE_REG(noc.get_noc_id(), write_reg_cmd_buf, NOC_TARG_ADDR_MID, 0);
         NOC_CMD_BUF_WRITE_REG(noc.get_noc_id(), write_reg_cmd_buf, NOC_TARG_ADDR_COORDINATE, local_coordinate);
     }

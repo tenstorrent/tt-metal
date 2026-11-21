@@ -136,8 +136,9 @@ FORCE_INLINE void two_level_unit(
     auto* dense = reinterpret_cast<uint32_t*>(staging);
     for (uint32_t g = 0; g < stage1_batch / group_tiles; ++g) {
         red_cb.wait_front(1);
-        // Plain loads, fenced on both sides: after the compute's pack, before the slot is released.
-        asm volatile("" ::: "memory");
+        // Plain loads: the invalidate drops cached lines of the slot's earlier contents, and the barrier before the
+        // pop keeps the loads ahead of the slot's release.
+        invalidate_l1_cache();
         const auto* reduced = reinterpret_cast<const uint32_t*>(red_cb.get_read_ptr());
 #pragma GCC unroll 4
         for (uint32_t j = 0; j < rows_per_tile; ++j) {
@@ -409,6 +410,7 @@ void kernel_main() {
         };
         CircularBuffer mailbox_cb(get_named_compile_time_arg_val("tl_cb_writer_mailbox"));
         mailbox_cb.wait_front(1);
+        invalidate_l1_cache();
         const auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_cb.get_read_ptr());
         const bool two_level_mode = words[writer_mailbox_mode_word] != 0;
         const uint32_t search_len = words[writer_mailbox_search_length_word];
@@ -459,6 +461,7 @@ void kernel_main() {
             bool cleared = false;
             while (true) {
                 mailbox_cb.wait_front(1);
+                invalidate_l1_cache();
                 const auto* header = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_cb.get_read_ptr());
                 const uint32_t code = header[writer_header_code_word];
                 uint32_t row = header[writer_header_row_word];

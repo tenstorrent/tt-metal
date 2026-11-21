@@ -989,15 +989,17 @@ void kernel_main() {
                 if (!has_split) {
                     return;
                 }
-                if (!half_done) {
-                    // This core's half of the split row's 32 candidate chunks, on the split-row path: only programs
-                    // without the segmented split body come here (with it, both cores sort their half above).
-                    num_chunks = topk_two_level::candidate_keys / K;
-                    tail_elements = K;
-                    const auto half = half_bounds({num_chunks, tail_elements}, K, second_half);
-                    split_num_chunks = half.num_chunks;
-                    split_tail_elements = half.tail_elements;
-                    split_first_chunk = half.first_chunk;
+                // This core's half of the split row's 32 candidate chunks, on the split-row path. With the segmented
+                // split body both cores sort their half above.
+                if constexpr (!segmented_split) {
+                    if (!half_done) {
+                        num_chunks = topk_two_level::candidate_keys / K;
+                        tail_elements = K;
+                        const auto half = half_bounds({num_chunks, tail_elements}, K, second_half);
+                        split_num_chunks = half.num_chunks;
+                        split_tail_elements = half.tail_elements;
+                        split_first_chunk = half.first_chunk;
+                    }
                 }
             }
 #endif
