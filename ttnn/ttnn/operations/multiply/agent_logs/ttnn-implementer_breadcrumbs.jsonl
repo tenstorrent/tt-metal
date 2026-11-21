@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/multiply/test_multiply.py","detail":"13/13, both regimes, first run","ts":"2026-11-21T07:02:48+00:00"}
