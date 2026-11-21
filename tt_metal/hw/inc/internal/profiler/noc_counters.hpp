@@ -29,6 +29,7 @@ constexpr uint16_t NOC_COUNTERS_MAX_PAIRS = 16;
 // path.
 #if defined(PROFILE_NOC_COUNTERS) && defined(PROFILE_KERNEL) && !defined(PROFILE_STREAMING) && \
     defined(NOC_COUNTERS_CORE)
+#define NOC_COUNTERS_CAPTURE 1
 
 #include <array>
 
@@ -70,16 +71,6 @@ __attribute__((noinline)) void begin() {
 // One header marker and kTotal / 2 pair markers behind one buffer-room check and one timestamp; the counters are read
 // as the pairs are written. A full buffer drops the whole capture.
 __attribute__((noinline)) void end() {
-#if !defined(ARCH_QUASAR)
-    // The window spans the launch, so the BRISC kernel waits for NCRISC and the TRISCs as the firmware does after it.
-    auto* sync = reinterpret_cast<volatile tt_l1_ptr subordinate_map_t*>(GET_MAILBOX_ADDRESS_DEV(subordinate_sync.map));
-    while (sync->all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
-#if defined(ARCH_WORMHOLE)
-        asm volatile("nop; nop; nop; nop; nop");
-#endif
-        invalidate_l1_cache();
-    }
-#endif
     // Every worker gets a go signal; a launch without a kernel publishes nothing.
     if (get_profiler_zone_invalid()) {
         return;

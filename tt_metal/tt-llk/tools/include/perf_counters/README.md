@@ -37,6 +37,19 @@ DRAM channel tile counters (read by the host, not by a core), namespace `llk::pe
 
 Reference: `docs/performance_counters/dram_counters.md`.
 
+NoC router counters (per output or input port and virtual channel), namespace `llk::perf::router`:
+
+- `router_counters_types.h`: `RouterPort` (names), `CountKind`, `Bank` = `{port, offset}`, `NUM_VCS` and the layout of the
+  profiler option mask.
+- `router_counters_blackhole.h`, `router_counters_wormhole.h`, `router_counters_quasar.h`: the `router_banks` table in
+  capture order plus `ROUTER_REGS_BASE`, `ROUTER_NOC_STRIDE`, `ROUTER_NOCS`, `ROUTER_VC_STRIDE`, `COUNTER_BITS` and
+  `COUNT_KIND`. Wormhole's table is empty.
+- `router_counters_inventory.h`: picks the arch table from `ARCH_*`, `selected_bank_offsets<Option>()`,
+  `selected_vcs<Option>()`, `value_count(option)`.
+- `router_counters_hw.h`: `read(noc, bank_offset, vc)`.
+
+Reference: `docs/performance_counters/router_counters.md`.
+
 A profiler record carries the raw mhpmevent select, not an ordinal, so `PmcEvent` is only for names: append new
 names, the host decodes a select by looking it up in the arch table. Reference: `docs/performance_counters/riscv_pmc.md`.
 

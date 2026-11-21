@@ -17,6 +17,7 @@ try:
     from tt_llk_perf import metrics as _mc
     from tt_llk_perf import noc_counters as _noc_counters
     from tt_llk_perf import riscv_pmc as _riscv_pmc
+    from tt_llk_perf import router_counters as _router_counters
     from tt_llk_perf.headers import counter_type_names, num_neos
 except ModuleNotFoundError:
     # A source tree puts the repo root and tools/ on PYTHONPATH; the package lives under tt-llk.
@@ -24,6 +25,7 @@ except ModuleNotFoundError:
     from tt_llk_perf import metrics as _mc
     from tt_llk_perf import noc_counters as _noc_counters
     from tt_llk_perf import riscv_pmc as _riscv_pmc
+    from tt_llk_perf import router_counters as _router_counters
     from tt_llk_perf.headers import counter_type_names, num_neos
 
 OpDict = Dict[str, Any]
@@ -313,6 +315,46 @@ def decode_noc_counter_markers(rows: List[Dict[str, Any]], device_arch: str) -> 
                     "record time": time,
                     "noc": noc,
                     "word_bytes": decoded["word_bytes"],
+                    **counts,
+                    **decoded["metrics"][noc],
+                }
+            )
+    return pd.DataFrame(out) if out else None
+
+
+def decode_router_counter_markers(rows: List[Dict[str, Any]], device_arch: str) -> Optional[pd.DataFrame]:
+    """One row per tile launch and NoC from the router counter markers (ids 9120 to 9136) of a device log.
+
+    Each row is a dict with run_host_id, core_x, core_y, risc_type, marker_id, record_time and data. The markers of a
+    launch share one timestamp. A launch with a pair missing (a full profiler buffer) is skipped. The result has one
+    column per captured port, or per port and virtual channel, the output and input totals and what one count is.
+    """
+    out = []
+    for (run_host_id, core_x, core_y, risc_type, time), by_id in _router_counters.group_launches(rows).items():
+        if not _router_counters.capture_core(device_arch, risc_type) or _router_counters.HEADER_MARKER_ID not in by_id:
+            continue
+        pairs = {
+            marker_id - _router_counters.PAIR_MARKER_ID_BASE: data
+            for marker_id, data in by_id.items()
+            if marker_id != _router_counters.HEADER_MARKER_ID
+        }
+        try:
+            decoded = _router_counters.decode_router_launch(
+                device_arch, _router_counters.unpack_launch(by_id[_router_counters.HEADER_MARKER_ID], pairs)
+            )
+        except ValueError as e:
+            logger.warning("Skipping router counter launch at {} core {},{}: {}", time, core_x, core_y, e)
+            continue
+        for noc, counts in decoded["counts"].items():
+            out.append(
+                {
+                    "run_host_id": run_host_id,
+                    "core_x": core_x,
+                    "core_y": core_y,
+                    "risc_type": risc_type,
+                    "record time": time,
+                    "noc": noc,
+                    "count_kind": decoded["count_kind"],
                     **counts,
                     **decoded["metrics"][noc],
                 }
