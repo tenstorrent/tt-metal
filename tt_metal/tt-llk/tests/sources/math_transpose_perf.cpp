@@ -89,7 +89,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
 
-        _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         PROFILER_SYNC();
     }
@@ -101,7 +101,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
 
-            _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+            _llk_math_wait_for_dest_available_<dest_sync>();
 
             _llk_math_eltwise_unary_datacopy_init_wrapper_<
                 DataCopyType::A2D,
@@ -111,19 +111,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
             for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
             {
-                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                     block_tile, formats.math, formats.math);
             }
 
             _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
             for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
             {
-                LLK_ASSERT(
-                    (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "block_tile exceeds max dest tiles");
+                LLK_ASSERT((block_tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "block_tile exceeds max dest tiles");
                 _llk_math_transpose_dest_wrapper_<is_fp32_dest_acc_en, MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>(block_tile);
             }
 
-            _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
 
         PROFILER_SYNC();
@@ -150,7 +149,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
-        _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
     {
@@ -163,11 +162,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_packer_wait_for_math_done_();
             for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
             {
-                LLK_ASSERT(
-                    (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "block_tile exceeds max dest tiles");
-                _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
+                LLK_ASSERT((block_tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "block_tile exceeds max dest tiles");
+                _llk_pack_<dest_sync, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
             }
-            _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
         PROFILER_SYNC();
     }

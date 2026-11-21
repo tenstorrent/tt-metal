@@ -76,6 +76,6 @@ SliceDeviceOperation::tensor_return_value_t slice(
     bool output_mem_config_inherited = false);
 
 // Row-major factories retain keyed scalar assignments and refresh only tensor bindings.
-tt::tt_metal::experimental::ProgramRunArgs slice_row_major_run_args(const SliceInputs& tensor_args, Tensor& output);
+tt::tt_metal::ProgramRunArgs slice_row_major_run_args(const SliceInputs& tensor_args, Tensor& output);
 
 }  // namespace ttnn::prim

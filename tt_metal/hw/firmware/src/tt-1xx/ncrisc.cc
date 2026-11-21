@@ -56,7 +56,9 @@ bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used)
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+#ifdef ARCH_BLACKHOLE
 uint32_t tensor_prefetcher_signal_noc_xy[NUM_DRAM_BANKS] __attribute__((used));
+#endif
 
 // These arrays are used to store the worker logical to virtual coordinate mapping
 uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)] __attribute__((used));
@@ -88,6 +90,7 @@ inline __attribute__((always_inline)) void wait_for_brisc_notification() {
         asm volatile("nop; nop; nop; nop; nop");
 #endif
         invalidate_l1_cache();
+        __builtin_riscv_pause();  // waiting; see trisc.cc
     }
 }
 
@@ -114,7 +117,9 @@ int main(int argc, char* argv[]) {
     do_crt1((uint32_t tt_l1_ptr*)MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
     noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+#ifdef ARCH_BLACKHOLE
     tensor_prefetcher_signal_table_init(MEM_BANK_TO_NOC_SCRATCH);
+#endif
     noc_worker_logical_to_virtual_map_init(MEM_LOGICAL_TO_VIRTUAL_SCRATCH);
 
     risc_init();

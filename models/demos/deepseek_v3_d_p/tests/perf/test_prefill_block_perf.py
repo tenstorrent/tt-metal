@@ -53,9 +53,10 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
     [
         pytest.param(
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4-2link and layer3 and gate_device and no_ref and isl_1280'",
-            7_689_682,  # Re-cut 2026-11-04 for MLA's fused matmul + reduce-scatter: mean of 2 CI LoudBox
-            # (bh_loudbox, 8xP150) runs, 41639734017 and 41671662767 (7,684,412-7,694,952 ns), down from
-            # main's 7,984,916-8,035,174 ns (4 runs, 2026-11-02/03).
+            7_448_980,  # Re-cut 2026-11-06 for the matmul_reduce_scatter_prefill 2D-grid changes: CI LoudBox
+            # (bh_loudbox, 8xP150, f01cs02) run 42132807624 read 7,448,980 ns, down from 7,689,682 ns (re-cut
+            # 2026-11-04 for MLA's fused matmul + reduce-scatter from runs 41639734017 and 41671662767), itself
+            # down from main's 7,984,916-8,035,174 ns (4 runs, 2026-11-02/03).
             # Keep cutting this gate on the CI runner -- bh-lb-15 read the old value 23% high.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe_fabric2d",

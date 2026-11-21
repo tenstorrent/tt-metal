@@ -25,6 +25,8 @@ The ``ttnn_mesh_device`` fixture itself comes from ``tests/conftest.py`` one lev
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch  # noqa: F401
 
@@ -74,8 +76,12 @@ def assert_pcc(torch_ref: torch.Tensor, tt_out: ttnn.Tensor = None, *, pcc=0.99,
 
 
 def with_default_mesh(*shapes):
-    """Parametrize the ``ttnn_mesh_device`` fixture (indirect) with PDL's L1_SMALL size."""
-    params = [{"mesh_shape": shape, "l1_small_size": PDL_L1_SMALL_SIZE} for shape in (shapes or [DEFAULT_MESH])]
+    """Parametrize the ``ttnn_mesh_device`` fixture (indirect) with PDL's L1_SMALL size.
+
+    ``TTNN_GRAPH_OPS_L1_SMALL_SIZE=<bytes>`` overrides it (debug: small grids need more, see QUASAR_GAPS G4).
+    """
+    l1_small = int(os.environ.get("TTNN_GRAPH_OPS_L1_SMALL_SIZE", PDL_L1_SMALL_SIZE))
+    params = [{"mesh_shape": shape, "l1_small_size": l1_small} for shape in (shapes or [DEFAULT_MESH])]
     return pytest.mark.parametrize("ttnn_mesh_device", params, indirect=True)
 
 
@@ -111,3 +117,54 @@ _DEFAULT_KWARGS = {"ttnn.conv2d": {"compute_config": _conv_compute_config}}
 def default_kwargs(op_name, mesh_device):
     """Keyword arguments the model passed to ``op_name`` that the capture could not record."""
     return {name: build(mesh_device) for name, build in _DEFAULT_KWARGS.get(op_name, {}).items()}
+
+
+# Ops whose mainline implementation fails on Quasar with "DataMovementKernel is not supported on
+# Quasar" (legacy ProgramDescriptor ops) and whose Metal 2.0 copy under ``ttnn.experimental.quasar``
+# takes the same arguments — measured on craq-sim 8x4 with this suite. The same routing as
+# ``tests/yolo_ops/op_utils.py`` (#60455). Only ops that fail on mainline are routed, so the suite
+# keeps reporting which mainline ops work on Quasar; everything else runs the mainline op.
+# ``ttnn.matmul`` is routed because the mainline 1D-mcast matmul hangs on craq-sim (QUASAR_GAPS Q9);
+# its captured program config is rebuilt with the fork's own class (``quasar_program_config_class``).
+# ``TTNN_GRAPH_OPS_QUASAR_FORKS=1|0`` forces either choice (the forks also run on WH/BH).
+_QUASAR_FORKED_OPS = (
+    "ttnn.conv2d",
+    "ttnn.add",
+    "ttnn.multiply",
+    "ttnn.max_pool2d",
+    "ttnn.avg_pool2d",
+    "ttnn.move",
+    "ttnn.matmul",
+)
+
+
+def quasar_forks_enabled() -> bool:
+    v = os.environ.get("TTNN_GRAPH_OPS_QUASAR_FORKS", "auto").lower()
+    if v in ("1", "true", "yes"):
+        return True
+    if v in ("0", "false", "no"):
+        return False
+    return "quasar" in ttnn.get_arch_name()
+
+
+def quasar_routed(op_name, op):
+    """``ttnn.experimental.quasar``'s copy of ``op`` when it is routed (see above), else ``op``."""
+    if op_name not in _QUASAR_FORKED_OPS or not quasar_forks_enabled():
+        return op
+    return getattr(ttnn.experimental.quasar, op_name.removeprefix("ttnn."))
+
+
+# Program-config fields the mainline class has but the ``ttnn.experimental.quasar`` copy does not,
+# with the mainline default. A captured value equal to the default is dropped; any other value skips.
+QUASAR_CONFIG_DROPPED_FIELDS = {"MatmulMultiCoreReuseMultiCast1DProgramConfig": {"stream_in1": False}}
+
+
+def quasar_program_config_class(op_name, kind):
+    """The quasar fork's own program-config class ``kind`` when ``op_name`` is routed, else None.
+
+    The forked matmul takes ``ttnn._ttnn.operations.experimental.quasar.<kind>``, a separate C++ type
+    from ``ttnn.<kind>``, so a routed op's captured config must be rebuilt with that class.
+    """
+    if op_name not in _QUASAR_FORKED_OPS or not quasar_forks_enabled():
+        return None
+    return getattr(ttnn._ttnn.operations.experimental.quasar, kind, None)
