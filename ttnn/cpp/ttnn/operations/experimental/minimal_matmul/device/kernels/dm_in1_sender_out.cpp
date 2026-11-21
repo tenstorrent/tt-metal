@@ -184,7 +184,7 @@ void kernel_main() {
     uint32_t num_rs_readers = 0;
 #endif
     if constexpr (is_output_writer) {
-        srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
+        srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx, Crta::Dm::out_addr + N_chunks);
         // Per-core signaling: base L1 address of the RS cores' per-core progress counter array
         mm_progress_counters_base = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
 #ifdef MM_WINDOW_BLOCKS
