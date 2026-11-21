@@ -10,6 +10,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -1653,10 +1654,72 @@ ProgramDescriptor build_program_descriptor(
     return desc;
 }
 
+ttsl::SmallVector<uint32_t> common_arg_values(const CommonArgs& slots) {
+    ttsl::SmallVector<uint32_t> values;
+    values.reserve(slots.size());
+    for (const auto& slot : slots) {
+        values.push_back(common_arg_value(slot));
+    }
+    return values;
+}
+
+// The kernel set and core layout come from the cached program, never from a fresh compute_sizing: sizing reads
+// inputs outside the program hash (WAN_RMSNORM_WORKER_CAP), so recomputing it here could disagree with the cache.
+void record_arg_slots(
+    Program& program,
+    const DitFusedDistributedRmsnormParams& args,
+    size_t num_reader_args,
+    size_t num_writer_args,
+    DitFusedDistributedRmsnormMeshWorkloadFactory::ArgSlots& slots) {
+    // Only worker cores carry reader runtime args, and num_links is part of the program hash.
+    const uint32_t num_forwarders =
+        is_local_norm(args)
+            ? 0u
+            : forwarder_count(args.num_links, count_cores_with_runtime_args(program, dyn::kReaderKernelIdx));
+    const auto common_args = [&program](uint32_t kernel_idx, size_t num_args) {
+        auto& common = tt::tt_metal::GetCommonRuntimeArgs(program, kernel_idx);
+        TT_FATAL(
+            common.size() >= num_args,
+            "dit_fused_distributed_rmsnorm kernel {} has {} common runtime args, expected at least {}",
+            kernel_idx,
+            common.size(),
+            num_args);
+        return &common;
+    };
+    slots.reader = common_args(dyn::kReaderKernelIdx, num_reader_args);
+    slots.writer = common_args(dyn::kWriterKernelIdx, num_writer_args);
+    slots.rows = {common_args(dyn::compute_kernel_idx(num_forwarders), 1)};  // dyn::kComputeRowsSlot
+    for (uint32_t f = 0; f < num_forwarders; f++) {
+        const uint32_t kernel_idx = dyn::kFirstForwarderKernelIdx + f;
+        slots.rows.push_back(common_args(kernel_idx, 1));  // dyn::kForwarderRowsSlot
+        const size_t num_recorded = slots.forwarders.size();
+        for (auto& args_by_y : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
+            for (auto& forwarder_args : args_by_y) {
+                if (forwarder_args.size() == 0) {
+                    continue;
+                }
+                TT_FATAL(
+                    forwarder_args.size() > dyn::kForwarderOutReadySemArg,
+                    "dit_fused_distributed_rmsnorm forwarder kernel {} has {} runtime args, expected more than {}",
+                    kernel_idx,
+                    forwarder_args.size(),
+                    dyn::kForwarderOutReadySemArg);
+                slots.forwarders.push_back(&forwarder_args);
+            }
+        }
+        TT_FATAL(
+            slots.forwarders.size() == num_recorded + 1,
+            "dit_fused_distributed_rmsnorm forwarder kernel {} has runtime args on {} cores, expected 1",
+            kernel_idx,
+            slots.forwarders.size() - num_recorded);
+    }
+    slots.recorded = true;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-tt::tt_metal::WorkloadDescriptor DitFusedDistributedRmsnormMeshWorkloadFactory::create_workload_descriptor(
+tt::tt_metal::WorkloadDescriptor DitFusedDistributedRmsnormProgramFactory::create_workload_descriptor(
     const DitFusedDistributedRmsnormParams& operation_attributes,
     const DitFusedDistributedRmsnormInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value,
@@ -1693,78 +1756,63 @@ tt::tt_metal::WorkloadDescriptor DitFusedDistributedRmsnormMeshWorkloadFactory::
     return workload_descriptor;
 }
 
+DitFusedDistributedRmsnormMeshWorkloadFactory::cached_mesh_workload_t
+DitFusedDistributedRmsnormMeshWorkloadFactory::create_mesh_workload(
+    const DitFusedDistributedRmsnormParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const DitFusedDistributedRmsnormInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
+    auto descriptor_cached =
+        descriptor_adapter_t::create_mesh_workload(operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (auto& [range, descriptor] : descriptor_cached.shared_variables) {
+        shared_variables[range].descriptor = std::move(descriptor);
+    }
+    return {std::move(descriptor_cached.workload), std::move(shared_variables)};
+}
+
 void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
-    tt::tt_metal::Program& program,
+    cached_mesh_workload_t& cached_workload,
     const DitFusedDistributedRmsnormParams& operation_attributes,
     const DitFusedDistributedRmsnormInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    std::vector<Tensor>& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
-    // The kernel set and core layout come from the cached program, never from a fresh compute_sizing: sizing reads
-    // inputs outside the program hash (WAN_RMSNORM_WORKER_CAP), so recomputing it here could disagree with the cache.
     const bool use_mux = !is_local_norm(operation_attributes);
     // The live tile-row count is excluded from the program hash (a cached program serves every row count up to
     // its capacity), so every kernel's rows word is re-applied here along with the addresses.
     const auto& input = tensor_args.input;
     const uint32_t num_tile_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
-    // Only worker cores carry reader runtime args, and num_links is part of the program hash.
-    const uint32_t num_forwarders =
-        use_mux ? forwarder_count(
-                      operation_attributes.num_links, count_cores_with_runtime_args(program, dyn::kReaderKernelIdx))
-                : 0u;
-
-    const auto patch_common_args = [&program](uint32_t kernel_idx, const CommonArgs& slots) {
-        auto& common_args = tt::tt_metal::GetCommonRuntimeArgs(program, kernel_idx);
-        TT_ASSERT(
-            common_args.size() >= slots.size(),
-            "dit_fused_distributed_rmsnorm kernel {} has {} common runtime args, expected at least {}",
-            kernel_idx,
-            common_args.size(),
-            slots.size());
-        for (size_t slot = 0; slot < slots.size(); ++slot) {
-            common_args[slot] = common_arg_value(slots[slot]);
-        }
-    };
-    patch_common_args(dyn::kReaderKernelIdx, reader_common_args(operation_attributes, tensor_args, num_tile_rows));
-    patch_common_args(
-        dyn::kWriterKernelIdx, writer_common_args(tensor_args, tensor_return_value, use_mux, num_tile_rows));
-    patch_common_args(dyn::compute_kernel_idx(num_forwarders), CommonArgs{num_tile_rows});  // dyn::kComputeRowsSlot
-
+    // Every program takes the same values, so they are derived once per hit.
+    const auto reader_values = common_arg_values(reader_common_args(operation_attributes, tensor_args, num_tile_rows));
+    const auto writer_values =
+        common_arg_values(writer_common_args(tensor_args, tensor_return_value, use_mux, num_tile_rows));
     // Forwarders read the stats DRAM scratch base and the out_ready GlobalSemaphore
     // address. BOTH must be refreshed on cache hits: the caller ping-pongs a distinct
     // semaphore per launch and the semaphore is NOT part of compute_program_hash, so a
     // cache hit that skipped this refresh would silently keep using the semaphore baked
     // at first compile — defeating the ping-pong isolation and racing the in-kernel sem
     // reset against peers' in-flight fabric atomic-incs (AG desync / hang).
-    if (use_mux) {
-        const uint32_t stats_address = address_of(stats_scratch_buffer(tensor_return_value));
-        const uint32_t out_ready_sem_address = out_ready_semaphore_address(operation_attributes);
-        for (uint32_t f = 0; f < num_forwarders; f++) {
-            const uint32_t kernel_idx = dyn::kFirstForwarderKernelIdx + f;
-            patch_common_args(kernel_idx, CommonArgs{num_tile_rows});  // dyn::kForwarderRowsSlot
-            uint32_t patched_cores = 0;
-            for (auto& args_by_y : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
-                for (auto& forwarder_args : args_by_y) {
-                    if (forwarder_args.size() == 0) {
-                        continue;
-                    }
-                    TT_ASSERT(
-                        forwarder_args.size() > dyn::kForwarderOutReadySemArg,
-                        "dit_fused_distributed_rmsnorm forwarder kernel {} has {} runtime args, expected more than {}",
-                        kernel_idx,
-                        forwarder_args.size(),
-                        dyn::kForwarderOutReadySemArg);
-                    forwarder_args[dyn::kForwarderStatsAddrArg] = stats_address;
-                    forwarder_args[dyn::kForwarderOutReadySemArg] = out_ready_sem_address;
-                    ++patched_cores;
-                }
-            }
-            TT_ASSERT(
-                patched_cores == 1,
-                "dit_fused_distributed_rmsnorm forwarder kernel {} has runtime args on {} cores, expected 1",
-                kernel_idx,
-                patched_cores);
+    const uint32_t stats_address = use_mux ? address_of(stats_scratch_buffer(tensor_return_value)) : 0u;
+    const uint32_t out_ready_sem_address = use_mux ? out_ready_semaphore_address(operation_attributes) : 0u;
+
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        auto& slots = cached_workload.shared_variables.at(coordinate_range).slots;
+        if (!slots.recorded) {
+            record_arg_slots(program, operation_attributes, reader_values.size(), writer_values.size(), slots);
+        }
+        for (size_t slot = 0; slot < reader_values.size(); ++slot) {
+            (*slots.reader)[slot] = reader_values[slot];
+        }
+        for (size_t slot = 0; slot < writer_values.size(); ++slot) {
+            (*slots.writer)[slot] = writer_values[slot];
+        }
+        for (auto* rows : slots.rows) {
+            (*rows)[0] = num_tile_rows;
+        }
+        for (auto* forwarder_args : slots.forwarders) {
+            (*forwarder_args)[dyn::kForwarderStatsAddrArg] = stats_address;
+            (*forwarder_args)[dyn::kForwarderOutReadySemArg] = out_ready_sem_address;
         }
     }
 }

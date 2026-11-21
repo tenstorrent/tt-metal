@@ -10,10 +10,12 @@
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operation.hpp"
 #include "dit_fused_distributed_rmsnorm_device_operation_types.hpp"
 
@@ -43,7 +45,18 @@ inline constexpr uint32_t kComputeRowsSlot = 0;
 inline constexpr uint32_t kForwarderRowsSlot = 0;
 }  // namespace dit_fused_distributed_rmsnorm_dynamic
 
-struct DitFusedDistributedRmsnormMeshWorkloadFactory {
+namespace detail {
+
+struct DitFusedDistributedRmsnormDescriptorAdapterOperation {
+    using operation_attributes_t = DitFusedDistributedRmsnormParams;
+    using tensor_args_t = DitFusedDistributedRmsnormInputs;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
+};
+
+}  // namespace detail
+
+struct DitFusedDistributedRmsnormProgramFactory {
     // Local normalization (ring_size == 1 or per_head_norm) shares one ProgramDescriptor per range; the
     // all-gather path builds one per coordinate (device index and fabric neighbors depend on it).
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
@@ -51,6 +64,34 @@ struct DitFusedDistributedRmsnormMeshWorkloadFactory {
         const DitFusedDistributedRmsnormInputs& tensor_args,
         std::vector<Tensor>& tensor_return_value,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
+};
+
+struct DitFusedDistributedRmsnormMeshWorkloadFactory {
+    using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
+        detail::DitFusedDistributedRmsnormDescriptorAdapterOperation>::
+        DescriptorMeshWorkloadAdapter<DitFusedDistributedRmsnormProgramFactory>;
+    // The runtime args a cache hit rewrites, recorded on the first hit; dispatch updates the RuntimeArgsData objects
+    // in place, so the pointers stay valid.
+    struct ArgSlots {
+        bool recorded = false;
+        tt::tt_metal::RuntimeArgsData* reader = nullptr;
+        tt::tt_metal::RuntimeArgsData* writer = nullptr;
+        // The compute and forwarder kernels' common args, whose one word is the tile-row count.
+        std::vector<tt::tt_metal::RuntimeArgsData*> rows;
+        // Each forwarder core's args (stats scratch address, out_ready semaphore address).
+        std::vector<tt::tt_metal::RuntimeArgsData*> forwarders;
+    };
+    struct shared_variables_t {
+        typename descriptor_adapter_t::shared_variables_t descriptor;
+        ArgSlots slots;
+    };
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+
+    static cached_mesh_workload_t create_mesh_workload(
+        const DitFusedDistributedRmsnormParams& operation_attributes,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const DitFusedDistributedRmsnormInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value);
 
     // Re-applies the caller-supplied out_ready GlobalSemaphore address and the live tile-row count, which
     // DitFusedDistributedRmsnormDeviceOperation::compute_program_hash excludes from the key, and every tensor
@@ -58,11 +99,12 @@ struct DitFusedDistributedRmsnormMeshWorkloadFactory {
     // example weight and bias, or rope_cos and rope_sin), binding resolution yields no bindings, and the
     // workload path has no rebuild fallback.
     static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
+        cached_mesh_workload_t& cached_workload,
         const DitFusedDistributedRmsnormParams& operation_attributes,
         const DitFusedDistributedRmsnormInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+        std::vector<Tensor>& tensor_return_value);
 };
+
+static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<DitFusedDistributedRmsnormMeshWorkloadFactory>);
 
 }  // namespace ttnn::experimental::prim
