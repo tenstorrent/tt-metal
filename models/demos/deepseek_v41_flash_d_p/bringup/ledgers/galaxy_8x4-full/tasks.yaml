@@ -6662,13 +6662,20 @@ tasks:
       is recorded, not hidden (the lane path is off in serving since PB.9X). (3) write models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/packed_ladder_20261121.md:
       one table per path (rows = histories; the owner''s columns; a column with the earlier number at that history and its
       source / date / commit, ''-'' where none exists), the no-rebuild PASS/FAIL per path above each table, and below each
-      table the serving entry''s extra host (adapter.prefill_chunk / prefill_packed vs the harness wall) at 139264. Declare
-      LADDER_POS in BATCH_POS_VARS and LADDER_CASES in BATCH_ITEM_VARS of both walls tests (F288 / F279) so the gate''s four
-      units share ONE executed-layers load (F283): `python -m models.demos.common.bringup validate --spec $BRINGUP_SPEC` must
-      print ''valid'' (today it reports PB.9C / PB.9H needing 2-3 loads only because those variables are not declared yet).
-      The 5120 single-request ladder runs in PB.9C5 (one geometry a gate, F283): leave a placeholder table the overseer fills
-      from PB.9C5. OWNER RULES FOR EVERY PB TASK (binding): read models/demos/deepseek_v41_flash_d_p/bringup/PACKED_RULES.md
-      first, and rule 20 of models/demos/common/bringup/agents/bringup-engineer.md.'
+      table the serving entry''s extra host (adapter.prefill_chunk / prefill_packed vs the harness wall) at 139264. OWNER
+      2026-11-21: MEASURE AND EXPLAIN the serving entry''s 5-7 ms a chunk over the harness wall (PB.MB, MB.2): host-profile
+      one prefill_chunk (single 8192 and 5120) and one prefill_packed (glued 4x2k) at 139264 and split it item by item with
+      measured ms: the ids readback (_host_ids: to_torch per SP row + un-shuffle), note_tokens, reorder_ids, begin_chunk''s
+      engram lookup on host ids, anything else in _run, and the per-layer d2h device-op ack tt-d-gen uses (outbound_socket_service_sync;
+      the walls today run with no ack at all). Every ms named and measured, nothing unattributed; table in the report. Each
+      ladder table also gets a ''serving wall'' column measured through the serving entry with the d2h ack (the harness wall
+      stays the headline column). Also: every timed ladder chunk redoes its full per-chunk work (history gathered, inputs
+      uploaded): no memoised history buffers between repeats (state it). Declare LADDER_POS in BATCH_POS_VARS and LADDER_CASES
+      in BATCH_ITEM_VARS of both walls tests (F288 / F279) so the gate''s four units share ONE executed-layers load (F283):
+      `python -m models.demos.common.bringup validate --spec $BRINGUP_SPEC` must print ''valid'' (today it reports PB.9C /
+      PB.9H needing 2-3 loads only because those variables are not declared yet). The 5120 single-request ladder runs in PB.9C5
+      (one geometry a gate, F283): leave a placeholder table the overseer fills from PB.9C5. OWNER RULES FOR EVERY PB TASK
+      (binding): read models/demos/deepseek_v41_flash_d_p/bringup/PACKED_RULES.md first, and rule 20 of models/demos/common/bringup/agents/bringup-engineer.md.'
   gate:
     cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
       DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on

@@ -1140,3 +1140,9 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   b3decade3d8+, POS_DYNAMIC on), switch back, then PB.T and PB.9H.
 - 03:35 OWNER: this overseer stays on dnijemcevic/model_bringup_batching; the model_bringup ladder (pasted note, point 4) is NOT this session's: dropped from the plan (nothing was queued there). Answered the owner: ladder + no-rebuild PASS/FAIL are complementary (a fixed-history ladder is warm and cannot see rebuilds; the check says nothing about speed); open choice offered: harness wall (kept as headline, the 11-19 method) vs serving-entry wall (+5-7 ms host a chunk at 8192), one line under each table.
 - 03:45 heartbeat: last-gate check of the glued routing (PB.9X) running its remaining units on the resident runner; watch armed. Queued note for PB.9C (apply at the next stop): measure the serving entry's 5-7 ms item by item (ids readback, note_tokens, device reorder, + the d2h device-op ack tt-d-gen uses); owner: ladder fixes go to model_bringup at the end (switch, ledger task, its 5120 ladder, switch back).
+- 03:48 glued routing (PB.9X) gate PASS -> 670579b7d9d (all units; determinism kept). Paused before the mhc re-apply to
+  edit the 8192 ladder task (PB.9C): measure and explain the serving entry's 5-7 ms item by item (readback, note_tokens,
+  reorder, engram lookup, rest of _run, the d2h device-op ack tt-d-gen uses; the walls today run with NO ack), a
+  'serving wall' column per ladder table, and no memoised history between timed repeats.
+  Owner (03:40): the walls test sets no sink and no d2h service -> no acks at all (checked in code); the 5-7 ms is the
+  serving entry's own host work (readback + note_tokens + device reorder), real in serving; split unmeasured -> PB.9C.
