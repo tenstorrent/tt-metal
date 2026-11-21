@@ -1,11 +1,10 @@
 # Generate Cluster Descriptors Script
 
-This script generates cluster descriptor files from multiple hosts using MPI and the UMD topology tool. It supports both simple hostname-based execution and rankfile-based execution with environment variable configuration from rank bindings files.
+This script generates cluster descriptor files from multiple hosts using MPI and the UMD topology tool. It requires a rankfile and supports environment variable configuration from rank bindings files.
 
 ## Overview
 
-The script runs the topology discovery tool on multiple hosts in parallel using MPI, generating a cluster descriptor file for each host/rank. It can optionally:
-- Use a rankfile to specify exact rank-to-host/slot mappings
+The script runs the topology discovery tool on multiple hosts in parallel using MPI, generating a cluster descriptor file for each host/rank. A rankfile specifies the rank-to-host/slot mappings. The script can optionally:
 - Set environment variables (like `TT_VISIBLE_DEVICES`) per rank from a rank bindings YAML file
 - Generate a mapping file that maps rank numbers to cluster descriptor file paths
 
@@ -25,8 +24,7 @@ The script runs the topology discovery tool on multiple hosts in parallel using 
   --mapping-file <output_mapping.yaml> \
   --output-dir <output_directory> \
   --base-name <base_name> \
-  [--rankfile <rankfile>] \
-  [--hostnames <host1,host2,...>] \
+  --rankfile <rankfile> \
   [--rank-bindings-file <rank_bindings.yaml>] \
   [--topology-tool <path>] \
   [--mpi-launcher <mpirun|mpirun-ulfm>] \
@@ -38,11 +36,10 @@ The script runs the topology discovery tool on multiple hosts in parallel using 
 - `--mapping-file <file>`: Output YAML file path that maps rank numbers to cluster descriptor file paths
 - `--output-dir <dir>`: Directory where cluster descriptor files will be saved. **Must be a shared filesystem** (e.g. NFS) when running multi-host so all hosts can read/write the same directory.
 - `--base-name <name>`: Base name for cluster descriptor files (e.g., `my_cluster_desc`)
+- `--rankfile <file>`: MPI rankfile specifying rank-to-host/slot mappings
 
 ### Optional Parameters
 
-- `--rankfile <file>`: MPI rankfile specifying rank-to-host/slot mappings (required if `--hostnames` not provided)
-- `--hostnames <list>`: Comma-separated list of hostnames (required if `--rankfile` not provided)
 - `--rank-bindings-file <file>`: YAML file with rank bindings and environment variable overrides
 - `--topology-tool <path>`: Path to topology tool (default: auto-detect from `./build/tools/umd/topology`)
 - `--mpi-launcher <cmd>`: MPI launcher command (default: `mpirun`)
@@ -54,18 +51,27 @@ The script runs the topology discovery tool on multiple hosts in parallel using 
 
 Generate cluster descriptors for 3 hosts without rank bindings:
 
+Create `rankfile.txt` with one rank per host, replacing the names with the
+hostnames reported by `hostname` on your hosts:
+
+```text
+rank 0=host1 slot=0
+rank 1=host2 slot=0
+rank 2=host3 slot=0
+```
+
 ```bash
 ./scripts/scaleout/generate_cluster_descriptors.sh \
-  --hostnames "host1,host2,host3" \
+  --rankfile rankfile.txt \
   --mapping-file cluster_mapping.yaml \
   --output-dir ./cluster_descriptors \
   --base-name my_cluster_desc
 ```
 
 This will create:
-- `my_cluster_desc_rank_0.yaml` (on host1)
-- `my_cluster_desc_rank_1.yaml` (on host2)
-- `my_cluster_desc_rank_2.yaml` (on host3)
+- `my_cluster_desc_host1_rank_0.yaml` (on host1)
+- `my_cluster_desc_host2_rank_1.yaml` (on host2)
+- `my_cluster_desc_host3_rank_2.yaml` (on host3)
 - `cluster_mapping.yaml` mapping ranks to files
 
 ### Example 2: Using Rankfile with Rank Bindings
@@ -106,9 +112,9 @@ rank_bindings:
 mesh_graph_desc_path: "path/to/mesh_graph_descriptor.textproto"
 ```
 
-This will create files named with hostname and slot:
-- `my_cluster_desc_bh-glx-b08u02_slot_0.yaml`
-- `my_cluster_desc_bh-glx-b08u08_slot_0.yaml`
+This will create files named with hostname and rank:
+- `my_cluster_desc_bh-glx-b08u02_rank_0.yaml`
+- `my_cluster_desc_bh-glx-b08u08_rank_1.yaml`
 - etc.
 
 ### Example 3: BH 2x4 Split Configuration
@@ -147,12 +153,12 @@ rank 3=bh-glx-b09u08 slot=0
 
 ## How It Works
 
-1. **Parse Inputs**: The script parses the rankfile (or hostnames) and rank bindings file
+1. **Parse Inputs**: The script parses the rankfile and optional rank bindings file
 2. **Determine Rank Count**:
    - If rank bindings file is provided, uses the number of ranks from that file
-   - Otherwise, uses the number of hosts or ranks from the rankfile
+   - Otherwise, uses the number of ranks from the rankfile
 3. **Build MPI Command**:
-   - Uses `--rankfile` if provided, otherwise uses `--host` with hostname:N format
+   - Uses `--rankfile` to place ranks on hosts
    - Adds `--oversubscribe` if multiple processes per host
    - Sets `-np` to the total number of ranks
 4. **Execute**: Runs MPI command that:
@@ -163,11 +169,9 @@ rank 3=bh-glx-b09u08 slot=0
 
 ## File Naming Conventions
 
-- **With rankfile**: Files are named `{base_name}_{hostname}_slot_{slot}.yaml`
-  - Example: `my_cluster_desc_bh-glx-b08u02_slot_0.yaml`
-
-- **Without rankfile**: Files are named `{base_name}_rank_{rank}.yaml`
-  - Example: `my_cluster_desc_rank_0.yaml`
+- Files are named `{base_name}_{hostname}_rank_{rank}.yaml`, where `hostname`
+  is the hostname reported by the host on which the MPI rank runs.
+  - Example: `my_cluster_desc_bh-glx-b08u02_rank_0.yaml`
 
 ## Rank Bindings File Format
 

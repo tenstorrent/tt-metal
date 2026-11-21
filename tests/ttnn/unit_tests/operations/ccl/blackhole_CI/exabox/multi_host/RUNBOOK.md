@@ -3,7 +3,7 @@
 End-to-end instructions for running the CCL collective tests in this folder
 on the BH Galaxy cluster. These are the "everyday" CCL exabox tests
 (`all_gather`, `all_reduce`, `reduce_scatter`, `broadcast`, `all_to_all_*`)
-parametrized over the SINGLE_BH / DUAL_BH / QUAD_BH mesh sizes. Sister
+parametrized over the DUAL_BH / QUAD_BH mesh sizes. Sister
 folders cover specialized scenarios:
 
 - `../deepseek_pipeline_tests/` — deepseek-v3 pipeline framework smoke test.
@@ -24,8 +24,10 @@ folders cover specialized scenarios:
 | `test_all_to_all_combine_exabox.py` | `ttnn.experimental.all_to_all_combine` (MoE combine) |
 | `_a2a_moe_helpers.py` | shared `run_all_to_all_*_test` helpers used by both A2A tests |
 
-Each test file has variants per mesh size — `test_*_8x4`, `test_*_16x4`,
-`test_*_32x4` — selected by the mesh size you're running on.
+Each test file has variants per mesh size — `test_*_16x4` (DUAL_BH) and
+`test_*_32x4` (QUAD_BH) — selected by the mesh size you're running on.
+There are no SINGLE_BH (`_8x4`) tests in this folder. The launcher rejects
+`MESH_DEVICE=SINGLE_BH`; use DUAL_BH or QUAD_BH for this suite.
 
 ---
 
@@ -40,11 +42,10 @@ needed for these tests). Existing build directory works.
 
 | Mesh | Devices | Hosts | `MESH_DEVICE` env |
 |---|---|---|---|
-| SINGLE_BH | 8×4 = 32 | 1 | `SINGLE_BH` |
 | DUAL_BH | 16×4 = 64 | 2 | `DUAL_BH` |
 | QUAD_BH | 32×4 = 128 | 4 | `QUAD_BH` |
 
-Rank-bindings (used for DUAL/QUAD only):
+Rank-bindings:
 
 - `tests/tt_metal/distributed/config/16x4_dual_bh_galaxy_rank_bindings.yaml`
 - `tests/tt_metal/distributed/config/32x4_quad_bh_galaxy_rank_bindings.yaml`
@@ -97,13 +98,6 @@ MESH_DEVICE=DUAL_BH HOSTS="hostA,hostB" \
   bash tests/.../multi_host/scripts/run_multi_host_ccl_tests.sh
 ```
 
-### SINGLE_BH (1 host, no MPI)
-
-```bash
-MESH_DEVICE=SINGLE_BH \
-  bash tests/.../multi_host/scripts/run_multi_host_ccl_tests.sh
-```
-
 ### Run a single test
 
 ```bash
@@ -137,16 +131,6 @@ tt-run \
 Substitute the binding (`16x4_dual_bh_…`), the host list, `MESH_DEVICE=DUAL_BH`,
 and `-k _16x4`.
 
-### SINGLE_BH
-
-No `tt-run`:
-
-```bash
-source python_env/bin/activate
-MESH_DEVICE=SINGLE_BH pytest --timeout=240 -v -k _8x4 \
-  tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/multi_host/
-```
-
 ---
 
 ## 6. Per-op mesh / fabric notes
@@ -176,7 +160,7 @@ bash tests/.../multi_host/scripts/reset_chips.sh
 ```
 
 The script runs `tt-smi -glx_reset_auto` in parallel on every host in
-your `HOSTS` (or locally for `SINGLE_BH`). Honors the same
+your `HOSTS`. Honors the same
 `MESH_DEVICE`/`HOSTS` env vars as the runner.
 
 ### 7.2 PCC ≈ 0.5 with high ATOL on multi-host runs
@@ -247,7 +231,6 @@ grep -aE 'PASSED|FAILED' "$LOG" | sort -u
 ```
 multi_host/
 ├── RUNBOOK.md                            ← this file
-├── __init__.py                           ← marks the dir as a Python package
 ├── _a2a_moe_helpers.py                   ← shared all_to_all helpers
 ├── test_all_broadcast_exabox.py          ← all_broadcast
 ├── test_all_gather_exabox.py             ← all_gather

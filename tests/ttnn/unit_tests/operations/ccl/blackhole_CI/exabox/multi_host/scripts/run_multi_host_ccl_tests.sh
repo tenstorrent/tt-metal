@@ -15,7 +15,7 @@
 #   - test_all_to_all_dispatch_exabox.py
 #   - test_all_to_all_combine_exabox.py
 #
-# Each test file has variants per mesh size (test_*_8x4 / _16x4 / _32x4),
+# Each test file has variants per mesh size (test_*_16x4 / _32x4),
 # selected by MESH_DEVICE.
 
 set -uo pipefail
@@ -33,7 +33,7 @@ Arguments:
   TEST_NODEID      Optional. Pytest node ID(s) to run, e.g.
                      test_all_gather_exabox.py::test_all_gather_32x4
                    With no positional args, runs all tests whose name
-                   matches the MESH_DEVICE suffix (_8x4 / _16x4 / _32x4)
+                   matches the MESH_DEVICE suffix (_16x4 / _32x4)
                    under the multi_host/ folder.
 
   -h, --help       Show this message and exit.
@@ -43,8 +43,7 @@ Required environment:
                    Example: export TT_METAL_HOME=/path/to/tt-metal
 
 Optional environment:
-  MESH_DEVICE      One of SINGLE_BH | DUAL_BH | QUAD_BH. Default: QUAD_BH.
-                     SINGLE_BH (8×4, 1 host)  → runs without tt-run/MPI
+  MESH_DEVICE      One of DUAL_BH | QUAD_BH. Default: QUAD_BH.
                      DUAL_BH   (16×4, 2 hosts) → tt-run, 16x4 binding, _16x4 tests
                      QUAD_BH   (32×4, 4 hosts) → tt-run, 32x4 binding, _32x4 tests
 
@@ -52,7 +51,6 @@ Optional environment:
                    Default for QUAD_BH: ${DEFAULT_QUAD_HOSTS}
                    Default for DUAL_BH: ${DEFAULT_DUAL_HOSTS}
                    *** OVERRIDE THIS for a different cluster. ***
-                   Ignored for SINGLE_BH.
 
   PYTEST_TIMEOUT   Per-test timeout (seconds). Default: 240.
 
@@ -62,9 +60,6 @@ Examples:
 
   # DUAL_BH on the user's 2-host subset
   MESH_DEVICE=DUAL_BH HOSTS="hostA,hostB" bash $0
-
-  # SINGLE_BH (no MPI launch)
-  MESH_DEVICE=SINGLE_BH bash $0
 
   # One specific test (file-relative path; mesh suffix must match)
   bash $0 test_all_gather_exabox.py::test_all_gather_32x4
@@ -104,11 +99,6 @@ PYTEST_TIMEOUT="${PYTEST_TIMEOUT:-240}"
 TEST_DIR="tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/multi_host"
 
 case "${MESH_DEVICE}" in
-    SINGLE_BH)
-        RANK_BINDING=""
-        HOSTS=""
-        TEST_SUFFIX="_8x4"
-        ;;
     DUAL_BH)
         RANK_BINDING="${TT_METAL_HOME}/tests/tt_metal/distributed/config/16x4_dual_bh_galaxy_rank_bindings.yaml"
         HOSTS="${HOSTS:-${DEFAULT_DUAL_HOSTS}}"
@@ -120,7 +110,7 @@ case "${MESH_DEVICE}" in
         TEST_SUFFIX="_32x4"
         ;;
     *)
-        echo "[error] unsupported MESH_DEVICE='${MESH_DEVICE}'. Use SINGLE_BH, DUAL_BH, or QUAD_BH." >&2
+        echo "[error] unsupported MESH_DEVICE='${MESH_DEVICE}'. Use DUAL_BH or QUAD_BH." >&2
         exit 2
         ;;
 esac
@@ -152,7 +142,7 @@ fi
 # --- pre-flight banner ----------------------------------------------------
 
 echo "[info] MESH_DEVICE     = ${MESH_DEVICE}"
-echo "[info] HOSTS           = ${HOSTS:-(none — single-host run)}"
+echo "[info] HOSTS           = ${HOSTS}"
 case "${MESH_DEVICE}" in
     QUAD_BH) [ "${HOSTS}" = "${DEFAULT_QUAD_HOSTS}" ] && echo "[info]                   (default — override with HOSTS=h1,h2,h3,h4 for another cluster)" ;;
     DUAL_BH) [ "${HOSTS}" = "${DEFAULT_DUAL_HOSTS}" ] && echo "[info]                   (default — override with HOSTS=h1,h2 for another cluster)" ;;
@@ -164,15 +154,9 @@ echo
 
 # --- launch ---------------------------------------------------------------
 
-if [ "${MESH_DEVICE}" = "SINGLE_BH" ]; then
-    # No tt-run / MPI for single-host runs.
-    source "${TT_METAL_HOME}/python_env/bin/activate"
-    MESH_DEVICE=SINGLE_BH pytest --timeout=${PYTEST_TIMEOUT} -v ${PYTEST_KEYWORD} ${PYTEST_TARGETS}
-else
-    tt-run \
-        --rank-binding "${RANK_BINDING}" \
-        --mpi-args "--host ${HOSTS}" \
-        bash -c "source ${TT_METAL_HOME}/python_env/bin/activate && \
-                 MESH_DEVICE=${MESH_DEVICE} \
-                 pytest --timeout=${PYTEST_TIMEOUT} -v ${PYTEST_KEYWORD} ${PYTEST_TARGETS}"
-fi
+tt-run \
+    --rank-binding "${RANK_BINDING}" \
+    --mpi-args "--host ${HOSTS}" \
+    bash -c "source ${TT_METAL_HOME}/python_env/bin/activate && \
+             MESH_DEVICE=${MESH_DEVICE} \
+             pytest --timeout=${PYTEST_TIMEOUT} -v ${PYTEST_KEYWORD} ${PYTEST_TARGETS}"

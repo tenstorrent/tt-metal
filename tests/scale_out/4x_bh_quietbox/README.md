@@ -55,6 +55,9 @@ tests/scale_out/4x_bh_quietbox/
 ├── README.md                          # This file
 ├── CMakeLists.txt                     # Build configuration
 ├── test_sanity.cpp                    # System health tests
+├── test_sanity.py                     # Pytest mesh sanity test
+├── validate_cluster_health.py         # Cluster validation and reset retries
+├── distributed_reset.sh               # Synchronized reset across hosts
 ├── cabling_descriptors/               # Physical cabling topology
 │   └── 4x_bh_quietbox.textproto
 ├── deployment_descriptors/            # Host deployment information
@@ -76,8 +79,9 @@ tests/scale_out/4x_bh_quietbox/
 │   ├── 2x4.txt
 │   └── 4x4.txt
 └── images/                            # Documentation images
-    └── cablegen.png                   # Emitted cabling visualization from ttCableGen tool
-    └── port-cabling.png               # Physical cabling diagram
+    ├── cablegen.png                   # Emitted cabling visualization from ttCableGen tool
+    ├── cluster_cabling.jpg            # Physical cabling diagram
+    └── validate_cluster_health_output.png # Example validation output
 ```
 
 ## Getting Started
@@ -87,6 +91,8 @@ Let's make sure we have a healthy 4xBH QB system with all connected ethernet lin
 The following command will validate the cluster health and report any issues. If any issues are reported, the script will attempt to reset the system and retry the validation.
 
 If you need to reset the system because of a failure, the same command should also be run to issue a distributed reset across all hosts.
+The validation script invokes `distributed_reset.sh` for synchronized resets;
+check its host list and tt-smi path when adapting this setup to another cluster.
 ```
 python tests/scale_out/4x_bh_quietbox/validate_cluster_health.py
 ```
@@ -94,8 +100,19 @@ python tests/scale_out/4x_bh_quietbox/validate_cluster_health.py
 An example output of the validate_cluster_health.py script is shown below:
 ![Validate Cluster Health Output](images/validate_cluster_health_output.png)
 
-Once the system is healthy, you can run the following sanity test which executes a 4x4 big-mesh sanity test.
-This test will instantiate a 4x4 mesh with 2D-torus topology and perform a sanity test on the mesh.
-```
-./tests/scale_out/run_tests.sh
+Once the system is healthy, run the pytest sanity test from the tt-metal root
+with the Python environment activated on every host. This uses the same host
+order, rankfile, rank bindings and TCP interface as `validate_cluster_health.py`.
+Adjust the host addresses and interface for your cluster; all hosts must have
+the same checkout and environment paths.
+
+The rank bindings select the 4x4 2D-torus mesh descriptor. The test opens that
+mesh, runs GELU on a tensor sharded across it, and checks the result against PyTorch.
+
+```bash
+tt-run \
+  --rank-binding tests/scale_out/4x_bh_quietbox/rank_bindings/4x4.yaml \
+  --tcp-interface enp10s0f1np1 \
+  --mpi-args "--host 10.140.20.237,10.140.20.239,10.140.20.238,10.140.20.240 --map-by rankfile:file=tests/scale_out/4x_bh_quietbox/rankfile/4x4.txt" \
+  -- python -m pytest tests/scale_out/4x_bh_quietbox/test_sanity.py::test_multihost_sanity -v
 ```
