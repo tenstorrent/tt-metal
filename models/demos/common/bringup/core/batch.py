@@ -107,6 +107,11 @@ ITEM_MARK = re.compile(r"^BATCH_ITEM_VARS\s*=\s*\(([^)]*)\)", re.M)
 # the chunk starts it measures (comma-separated) with ``BATCH_POS_VARS = ("SKIP_POS",)``; a plan's model is loaded
 # for the furthest of them (``hints``), never past deploy.seq (where such a test stops itself)
 POS_MARK = re.compile(r"^BATCH_POS_VARS\s*=\s*\(([^)]*)\)", re.M)
+# F297 (2026-11-21, DeepSeek-V4.1 PB.9C: test_no_rebuild FAILED with 153 / 16 builds in a fresh process, then PASSED in 18 s
+# in the held resident process on the same code: the earlier run's programs were still cached): a test that counts
+# program builds after its own warm-up declares ``BATCH_COLD = True``; it runs in a fresh process (a cold program cache)
+# and first in its batch after the determinism check, so no other run's traffic warms programs it must find cold
+COLD_MARK = re.compile(r"^BATCH_COLD\s*=\s*True\b", re.M)
 DECLARED_ITEM_VARS: set = set()
 SAFE_RUN = re.compile(r"^((?:\w+=\S*\s+)*)scripts/run_safe_pytest\.sh\s+(.+)$", re.S)
 ASSIGN = re.compile(r"^(\w+)=(\S*)$")
@@ -189,6 +194,17 @@ def parse_all(cmd: str) -> list[dict] | None:
     """Every segment of ``cmd`` as a batch run, or None if any cannot share a process."""
     runs = [parse(s) for s in cmd.split("&&") if s.strip()]
     return runs if runs and all(runs) else None
+
+
+def cold(run: dict, repo: Path | None = None) -> bool:
+    """F297: a run of a test file that declares ``BATCH_COLD = True`` (it needs a cold program cache)."""
+    for t in run["args"]:
+        try:
+            if COLD_MARK.search(((repo or _REPO) / t.split("::")[0]).read_text(errors="replace")):
+                return True
+        except OSError:
+            pass
+    return False
 
 
 def phase(run: dict) -> int:
@@ -478,7 +494,8 @@ def gate_entries(group: list[tuple[str, str]], env: dict, unit_env: dict, logs: 
                     key=model_key({**env, **r["env"]}, names),
                 )
             )
-    entries.sort(key=lambda e: -1 if phase(e) == -1 else 0)  # (stable: the gate's order otherwise)
+    # (stable: the gate's order otherwise; F297: a cold run right after the determinism check)
+    entries.sort(key=lambda e: -2 if phase(e) == -1 else (-1 if cold(e) else 0))
     return entries
 
 
@@ -562,8 +579,10 @@ def _drive_resident(d: Path, plan: Path, env: dict, echo) -> int:
             e["log"] = f"{plan}.{e['name']}.log"
             own.append(e["log"])
     plan.write_text(json.dumps(data, indent=1) + "\n")
-    fresh = any(phase(e) == -1 for e in data["entries"])
-    echo(f"# F281: the plan runs on the resident runner ({d}){' in a fresh process (determinism)' if fresh else ''}\n")
+    fresh = any(phase(e) == -1 or cold(e) for e in data["entries"])  # F297: a cold run too
+    echo(
+        f"# F281: the plan runs on the resident runner ({d}){' in a fresh process (determinism / cold, F297)' if fresh else ''}\n"
+    )
     r = resident.submit_plan(d, plan, {**env, **(data.get("hints") or {})}, fresh=fresh)
     for log in own:
         if Path(log).exists():
