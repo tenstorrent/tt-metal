@@ -40,10 +40,13 @@ inline void calculate_mish() {
     constexpr float SAT_HI = 8.0f;
 
     // The exp's constants, loaded once and kept in LRegs across the loop (sfpi (through 7.89.0) never hoists a literal
-    // out of a loop by itself); 1/ln2 is vConstFloatPrgm1 from mish_init. Only the exact fp32 arm runs the
-    // Juffa exp, and with x and u live it has LRegs for two of its three constants (p1 stays a per-row
-    // literal); the other three arms run exp_21f.
-    constexpr bool juffa_exp = !APPROXIMATION_MODE && is_fp32_dest_acc_en;
+    // out of a loop by itself); 1/ln2 is vConstFloatPrgm1 from mish_init. Both accurate arms run the
+    // Juffa fp32 exp, and with x and u live it has LRegs for two of its three constants (p1 stays a
+    // per-row literal); the two fast arms run exp_21f. u is an intermediate: the accurate arm keeps it in
+    // fp32 regardless of the Dst format, otherwise its bf16 rounding (2^-9 relative) propagates ~1:1 into
+    // the result and flips the final rounding of a few percent of inputs. Only the result is rounded to
+    // bf16, below.
+    constexpr bool juffa_exp = !APPROXIMATION_MODE;
     HoistedIf<!juffa_exp> c0 = EXP_21F_C0, c1 = EXP_21F_C1, c2 = EXP_21F_C2;
     HoistedIf<juffa_exp> neg_ln2_hi = EXP_FP32_NEG_LN2_HI, p0 = EXP_FP32_P0;
     constexpr float p1 = EXP_FP32_P1;
@@ -104,7 +107,7 @@ inline void mish_init() {
     // so the SFPLOADMACRO fast-path init is not needed. But, we need sfpu_reciprocal_init's
     // vConstFloatPrgm0 = 2.0f for the inline NR step. So, call sfpu_reciprocal_init directly.
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
-    // Prgm1 = 1/ln2 for the exp; the exact fp32 arm's Juffa exp reads it too (same bit pattern).
+    // Prgm1 = 1/ln2 for the exp; both accurate arms' Juffa exp reads it too (same bit pattern).
     _init_exp_hoisted_prgm_consts_();
 }
 

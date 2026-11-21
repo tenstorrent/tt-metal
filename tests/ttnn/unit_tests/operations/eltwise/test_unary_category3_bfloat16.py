@@ -6,7 +6,7 @@ import torch
 import pytest
 import torch.nn.functional as F
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc, assert_allclose
+from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc, assert_allclose, ulp_distance
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     assert_all_nonfinite,
     assert_finite_matches_golden,
@@ -371,3 +371,62 @@ def test_mish(device, fast):
     result = ttnn.to_torch(ttnn.mish(tt_in, fast_and_approximate_mode=fast)).to(torch.bfloat16)
 
     assert_allclose(expected_result=golden, actual_result=result, rtol=1e-5, atol=0.02)
+
+
+# Largest fraction of probe-band inputs whose accurate-mode result may be 1 ulp
+# off the correctly rounded value. The fp32 pipeline's own residual (fp32 exp,
+# one Newton step of the reciprocal) flips ~1.2% of bfloat16 roundings on
+# Wormhole (36 of 2991); an exp intermediate rounded to bfloat16 (2^-9
+# relative) flips ~17.5% (523 of 2991).
+MISH_MAX_ONE_ULP_FRACTION = 0.03
+# Below this |x|, mish(x) = 0.6x to bfloat16 resolution (tanh(softplus(x)) =
+# 0.6 + 0.4x + O(x^2)), so those inputs only re-test the rounding of one
+# constant across the 128 bfloat16 mantissas and say nothing about exp.
+MISH_PROBE_MIN_ABS_X = 2.0**-7
+# The kernel returns x unchanged for x >= 8 (its saturation bound), so those
+# lanes never go through exp and are kept out of the probe band.
+MISH_SAT_HI = 8.0
+
+
+def test_mish_accurate_keeps_exp_in_fp32(device):
+    """Accurate mode on a bfloat16 destination must evaluate the exp intermediate
+    in fp32 and round only the final result.
+
+    mish(x) = x * u (u + 2) / (u^2 + 2u + 2) with u = exp(x). If u is rounded
+    to bfloat16 before the rational function, its 2^-9 relative error propagates
+    ~1:1 into the result (mish(x) ~ x * u for x < 0) and flips the final
+    bfloat16 rounding of a few percent of inputs, so the result is 1 ulp away
+    from F.mish evaluated in fp32 and rounded once. Gate: every reliable element
+    within 1 ulp, and the fraction that is 1 ulp off within
+    MISH_MAX_ONE_ULP_FRACTION on the probe band MISH_PROBE_MIN_ABS_X <= |x|,
+    x < MISH_SAT_HI (the lanes that actually go through exp).
+
+    Excluded as unreliable (the SFPU flushes fp32 subnormals to zero, so the
+    device returns 0 there in every implementation): x < -87.3, where exp(x) is
+    subnormal in fp32, and inputs whose result is subnormal in fp32 before the
+    final rounding (bfloat16 rounding can carry such a value up to the smallest
+    normal, so the mask is on the fp32 golden, not the rounded one)."""
+    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)  # all normals; specials->0
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    x = input_tensor.float()
+    golden_fp32 = F.mish(x)
+    golden = golden_fp32.to(torch.bfloat16)
+    result = ttnn.to_torch(ttnn.mish(tt_in, fast_and_approximate_mode=False)).to(torch.bfloat16)
+
+    reliable = (golden_fp32.abs() >= SMALLEST_NORMAL_BF16) & (torch.exp(x) >= SMALLEST_NORMAL_BF16)
+    assert_with_ulp(expected_result=golden[reliable], actual_result=result[reliable], ulp_threshold=1)
+
+    probe = reliable & (x.abs() >= MISH_PROBE_MIN_ABS_X) & (x < MISH_SAT_HI)
+    one_ulp_off = ulp_distance(golden[probe], result[probe]) == 1
+    fraction = one_ulp_off.float().mean().item()
+    worst = torch.nonzero(one_ulp_off)[:3].flatten().tolist()
+    examples = ", ".join(
+        f"x={x[probe][i].item():.6g}: got {result[probe][i].item():.6g}, want {golden[probe][i].item():.6g}"
+        for i in worst
+    )
+    assert fraction <= MISH_MAX_ONE_ULP_FRACTION, (
+        f"accurate mish is 1 ulp off the fp32-rounded-once value for {int(one_ulp_off.sum().item())} of "
+        f"{int(probe.sum().item())} probe-band inputs ({fraction:.2%} > {MISH_MAX_ONE_ULP_FRACTION:.0%}): "
+        f"the exp intermediate is being rounded to bfloat16 before the rational function. e.g. {examples}"
+    )
