@@ -615,16 +615,19 @@ KHR_DEPTH = 4  # gathered-block FIFO, in three-tap units
 _BH_RING_ROWS = 12
 
 
-def l1_cb_budget_bytes(resident_shard_bytes=0, l1_small_bytes=0):
+def l1_cb_budget_bytes(resident_shard_bytes=0, l1_small_bytes=0, l1_cb_ceiling_bytes=None):
     """CB bytes per core. `resident_shard_bytes` is one call's input plus output shard on a core; `l1_small_bytes` is
     the device's L1_SMALL region, carved off the top of the L1 bank that the CBs grow into (a model opening the device
-    with l1_small_size=64 KB, like FLUX.2's VAE, otherwise gets CBs reaching into it)."""
-    return (
+    with l1_small_size=64 KB, like FLUX.2's VAE, otherwise gets CBs reaching into it). `l1_cb_ceiling_bytes` is the
+    room from the CB base (the L1 allocator base) to the lowest live L1 buffer, less this call's output shard: L1
+    tensors grow down from the top, and a model keeps tensors (skip-connection features) resident across ops."""
+    budget = (
         ttnn.get_max_worker_l1_unreserved_size()
         - L1_TENSOR_HEADROOM_BYTES
         - l1_small_bytes
         - RESIDENT_SHARD_SETS * resident_shard_bytes
     )
+    return budget if l1_cb_ceiling_bytes is None else min(budget, l1_cb_ceiling_bytes)
 
 
 def _div_up(a, b):
@@ -667,6 +670,8 @@ class Conv3x3Geometry:
     block_rows: int = 0
     # The device's L1_SMALL region size (l1_cb_budget_bytes).
     l1_small_bytes: int = 0
+    # Room from the CB base to the lowest live L1 buffer, less the output shard (l1_cb_budget_bytes); None: no cap.
+    l1_cb_ceiling_bytes: int | None = None
     # DRAM-interleaved ROW_MAJOR input with one pixel per page (no padded lanes): the bank-run reads apply (rm ring).
     bank_run_input: bool = False
     # C_out fold (COUT_FOLD): the walk's K is (kh, c) and its N lanes (kw, c_out); see cout_fold_capable.
@@ -3267,7 +3272,13 @@ def create_program_descriptor(
         if g.sharded_output and g.tile_input
         else 0
     )
-    kwf_args = (g, b, has_bias, l1_cb_budget_bytes(resident, g.l1_small_bytes), compute_kernel_config.math_fidelity)
+    kwf_args = (
+        g,
+        b,
+        has_bias,
+        l1_cb_budget_bytes(resident, g.l1_small_bytes, g.l1_cb_ceiling_bytes),
+        compute_kernel_config.math_fidelity,
+    )
     kwf = kw_fold_mode(*kwf_args)
     # Row-streamed whole-K walk (see ROWSTREAM_ROWS): its ring, output depth and unit K extent replace the blocking's
     # (the reader's too).
@@ -3278,7 +3289,7 @@ def create_program_descriptor(
             g,
             b,
             has_bias,
-            l1_cb_budget_bytes(resident, g.l1_small_bytes),
+            l1_cb_budget_bytes(resident, g.l1_small_bytes, g.l1_cb_ceiling_bytes),
             compute_kernel_config.math_fidelity,
         )
     )
@@ -3365,7 +3376,12 @@ def create_program_descriptor(
         old_bytes = slab_cb.total_size
         new_bytes = max(old_bytes, pad_bytes)
         given_back = (b.im2col_rm_depth_rows - 1) * bk * TILE_BYTES_BF16 + _src_table_bytes(b.im2col_rm_depth_rows)
-        leftover = l1_cb_budget_bytes(resident, g.l1_small_bytes) - b.footprint_bytes + given_back - RING_TOKEN_BYTES
+        leftover = (
+            l1_cb_budget_bytes(resident, g.l1_small_bytes, g.l1_cb_ceiling_bytes)
+            - b.footprint_bytes
+            + given_back
+            - RING_TOKEN_BYTES
+        )
         if new_bytes - old_bytes <= leftover:
             padded_slab = True
             if b.shared_slab_bytes:
@@ -3431,7 +3447,7 @@ def create_program_descriptor(
             + s2_in0_tiles * g.in0_tile_bytes
             + b.slab_tile_rows * g.c_in_tiles * g.in0_tile_bytes
         )
-        s2_taps = new - old <= l1_cb_budget_bytes(resident, g.l1_small_bytes) - b.footprint_bytes
+        s2_taps = new - old <= l1_cb_budget_bytes(resident, g.l1_small_bytes, g.l1_cb_ceiling_bytes) - b.footprint_bytes
         if s2_taps and not b.shared_slab_bytes:
             slab_cb = _cb(CB_HALO_SLAB, ttnn.bfloat16, TILE_BYTES_BF16, 1, cores)
         if s2_taps:
@@ -3790,7 +3806,8 @@ def create_program_descriptor(
             all(m_blocks_per_index[i] == most for _, i, _ in work)
             and 2 <= rounds <= 32
             and len(sem_ids) + rounds <= MAX_SEMAPHORES
-            and sum(cb.total_size for cb in cbs) + extra <= l1_cb_budget_bytes(resident, g.l1_small_bytes)
+            and sum(cb.total_size for cb in cbs) + extra
+            <= l1_cb_budget_bytes(resident, g.l1_small_bytes, g.l1_cb_ceiling_bytes)
         ):
             spread_rounds = rounds
             spread_flag_sem0 = len(sem_ids)

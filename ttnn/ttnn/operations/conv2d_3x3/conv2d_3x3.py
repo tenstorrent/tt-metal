@@ -579,6 +579,14 @@ def validate(
 # ---------------------------------------------------------------------------
 
 
+def _l1_room_below_tensors(device):
+    """Bytes from the L1 allocator base, where program CBs start, to the lowest live L1 buffer. L1 tensors are
+    allocated top down; the memory view's block addresses are relative to that base."""
+    view = ttnn.device.get_memory_view(device, ttnn.BufferType.L1)
+    allocated = [int(block["address"]) for block in view.block_table if block.get("allocated") == "yes"]
+    return min(allocated) if allocated else view.total_bytes_per_bank
+
+
 def conv2d_3x3(
     input_tensor,
     weight_tensor,
@@ -634,6 +642,7 @@ def conv2d_3x3(
         sharded_output=input_memory_config.is_sharded(),
         k_cols=channel_slices(c_in, input_tensor.layout, input_memory_config),
         l1_small_bytes=ttnn.device.get_memory_view(device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank,
+        l1_cb_ceiling_bytes=_l1_room_below_tensors(device),
         bank_run_input=(
             input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
             and input_memory_config.memory_layout == _ML.INTERLEAVED
@@ -659,6 +668,10 @@ def conv2d_3x3(
             input_shard_pages * input_tensor.buffer_aligned_page_size()
             + core_m_tiles * n_tiles * geometry.out_tile_bytes
         )
+        geometry = dataclasses.replace(
+            geometry,
+            l1_cb_ceiling_bytes=geometry.l1_cb_ceiling_bytes - core_m_tiles * n_tiles * geometry.out_tile_bytes,
+        )
         if block_sharded and geometry.k_split:
             # The K split's M split may run down more grid rows than the shard grid has; the output keeps the input's
             # shard grid and the shard rows' split.
@@ -673,7 +686,7 @@ def conv2d_3x3(
                     spare_blocking = select_blocking(
                         spare_geometry,
                         (rows + spare, 1),
-                        l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes),
+                        l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes, geometry.l1_cb_ceiling_bytes),
                     )
                 except ValueError:
                     spare_blocking = None
@@ -689,7 +702,7 @@ def conv2d_3x3(
                 geometry,
                 groups,
                 tuple(_core_m_ranges(geometry.tensor_m_tiles, core_m_tiles)),
-                l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes),
+                l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes, geometry.l1_cb_ceiling_bytes),
             )
             if balanced is not None:
                 ranges, remote = balanced
@@ -705,13 +718,19 @@ def conv2d_3x3(
         work_grid = (grid.x, grid.y)
         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
         resident_shard_bytes = 0
-    blocking = select_blocking(geometry, work_grid, l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes))
+    blocking = select_blocking(
+        geometry,
+        work_grid,
+        l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes, geometry.l1_cb_ceiling_bytes),
+    )
     if cout_fold_capable(geometry):
         # C_out fold (COUT_FOLD): kw in the N lanes, on the ROW_MAJOR ring walk with resident weights.
         fold_geometry = dataclasses.replace(geometry, fold=True)
         try:
             fold_blocking = select_blocking(
-                fold_geometry, work_grid, l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes)
+                fold_geometry,
+                work_grid,
+                l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes, geometry.l1_cb_ceiling_bytes),
             )
         except ValueError:
             fold_blocking = None
