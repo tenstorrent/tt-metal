@@ -567,3 +567,29 @@ def test_sdpa_decode_head_dim_not_divisible_by_dst_size(device, d, reset_seeds):
         sharded_out=False,
         override_k_chunk_size=128,
     )
+
+
+@pytest.mark.parametrize("cur_pos_tensor", [False, True])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, dtype, grid_size, q_dtype",
+    [
+        (4, 8, 1, 256, 128, ttnn.bfloat16, (8, 8), ttnn.bfloat16),
+        (8, 8, 1, 2048, 128, ttnn.bfloat8_b, (8, 8), ttnn.bfloat16),
+    ],
+)
+def test_sdpa_decode_share_cache(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, cur_pos_tensor):
+    run_test_sdpa_decode_single_iter(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        dtype,
+        grid_size,
+        q_dtype,
+        cur_pos_tensor=cur_pos_tensor,
+        sharded_in=False,
+        sharded_out=False,
+        share_cache=True,
+    )
