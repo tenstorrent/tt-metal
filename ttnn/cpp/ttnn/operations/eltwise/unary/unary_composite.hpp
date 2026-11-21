@@ -16,8 +16,8 @@ Tensor std_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_con
 Tensor normalize_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor clip(
     const Tensor& input_a,
-    std::optional<float> min = std::nullopt,
-    std::optional<float> max = std::nullopt,
+    std::optional<std::variant<float, std::int32_t>> min = std::nullopt,
+    std::optional<std::variant<float, std::int32_t>> max = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor clip(
     const Tensor& input_a,
