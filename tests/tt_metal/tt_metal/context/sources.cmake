@@ -8,3 +8,10 @@ set(UNIT_TESTS_CONTEXT_SMOKE_SOURCES
     test_mesh_device_properties.cpp
     test_simulator_termination.cpp
 )
+
+if(TT_UMD_BUILD_GRENDEL_JTAG)
+    set(UNIT_TESTS_GRENDEL_EMU_SOURCES
+        grendel_emu_gate.cpp
+        test_mimir_emu.cpp
+    )
+endif()

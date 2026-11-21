@@ -58,7 +58,13 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #elif defined(COMPILE_FOR_IDLE_ERISC)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_IERISC_MAILBOX_BASE)->x))
 #elif defined(COMPILE_FOR_DRISC)
+#if defined(ARCH_QUASAR)
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)(MEM_DRISC_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->x))
+#define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_DRISC_MAILBOX_BASE)->x))
+#else
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_DRISC_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MIMIR_CCE_MAILBOX_BASE)->x))
+#endif
 #elif defined(ARCH_QUASAR)
 #if !defined(HAL_BUILD)
 #include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
@@ -176,8 +182,8 @@ struct kernel_config_msg_t {
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[MaxProcessorsPerCoreType];
-    volatile uint8_t mode;     // dispatch mode host/dev
-    volatile uint8_t pad2;     // CODEGEN:skip — align cross_node_dfb_offset
+    volatile uint8_t mode;  // dispatch mode host/dev
+    volatile uint8_t pad2;  // CODEGEN:skip — align cross_node_dfb_offset
     // Byte offset of CrossNodeDFB kernel-config region from kernel_config_base.
     // REMOTE_DFB_OFFSET_NONE (0xFF) means no CrossNodeDFBs on this launch.
     // Valid offsets are L1-aligned and therefore never equal 0xFF. Region layout:

@@ -22,6 +22,8 @@
 #include "profiler_state_manager.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/hal.hpp"
+#include <tt-umd/coordinates/grendel_noc_address_resolver.hpp>
+#include <tt-umd/soc_arch_descriptor.hpp>
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -162,6 +164,42 @@ void default_quasar_noc_att_from_path(llrt::RunTimeOptions& rtoptions) {
         rtoptions.get_simulator_name());
 }
 
+// Quasar CCE / DRAM-core firmware is opt-in per dram_view.programmable in the SoC YAML, so
+// Tensix Quasar descriptors without the key stay GDDR-only.
+bool should_enable_quasar_dram_programmable_cores(const Cluster& cluster) {
+    if (cluster.arch() != tt::ARCH::QUASAR) {
+        return false;
+    }
+    for (ChipId chip_id : cluster.all_chip_ids()) {
+        if (cluster.get_soc_desc(chip_id).has_programmable_dram_views()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Package ATT uses the real CCE SRAM window as the DRAM-core l1_noc_offset. A Mimir-local package
+// keeps the 0x2000000000 tag, which create_dram_mem_map applies when this returns 0.
+uint64_t quasar_drisc_l1_noc_offset_for_hal(const Cluster& cluster) {
+    bool saw_package = false;
+    bool saw_mimir_local = false;
+    for (ChipId chip_id : cluster.all_chip_ids()) {
+        const metal_SocDescriptor& desc = cluster.get_soc_desc(chip_id);
+        if (!desc.has_programmable_dram_views()) {
+            continue;
+        }
+        if (desc.get_arch_descriptor().get_grendel_address_space() == tt::umd::GrendelAddressSpace::FullPackage) {
+            saw_package = true;
+        } else {
+            saw_mimir_local = true;
+        }
+    }
+    TT_FATAL(!(saw_package && saw_mimir_local), "A cluster cannot mix Mimir-local and FullPackage programmable DRAM.");
+    if (!saw_package) {
+        return 0;
+    }
+    return tt::umd::GrendelAddressWindows{}.dram_l1_noc_offset;
+}
 }  // namespace
 
 void MetalEnvImpl::initialize_base_objects() {
@@ -210,7 +248,9 @@ void MetalEnvImpl::initialize_base_objects() {
         should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_),
         this->rtoptions_->get_eth_ptp_trace(),
         // just take the descriptor of the first device
-        this->cluster_->get_quasar_ip_variant());
+        this->cluster_->get_quasar_ip_variant(),
+        should_enable_quasar_dram_programmable_cores(*this->cluster_),
+        quasar_drisc_l1_noc_offset_for_hal(*this->cluster_));
     if (platform_arch == tt::ARCH::QUASAR) {
         log_info(tt::LogMetal, "Quasar IP variant: {}", this->cluster_->get_quasar_ip_variant());
     }

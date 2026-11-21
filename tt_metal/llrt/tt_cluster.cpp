@@ -724,15 +724,17 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
         this->virtual_pcie_cores_[chip_id] = {};
         this->virtual_dram_cores_[chip_id] = {};
         this->virtual_dram_hw_cores_[chip_id] = {};
+        if (this->arch_ == ARCH::BLACKHOLE ||
+            this->hal_->has_programmable_core_type(tt_metal::HalProgrammableCoreType::DRAM)) {
+            for (const tt::umd::CoreCoord& core :
+                 get_soc_desc(chip_id).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+                this->virtual_dram_hw_cores_[chip_id].insert({core.x, core.y});
+            }
+        }
         if (this->arch_ == ARCH::BLACKHOLE) {
             for (const tt::umd::CoreCoord& core :
                  get_soc_desc(chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED)) {
                 this->virtual_pcie_cores_[chip_id].insert({core.x, core.y});
-            }
-
-            for (const tt::umd::CoreCoord& core :
-                 get_soc_desc(chip_id).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-                this->virtual_dram_hw_cores_[chip_id].insert({core.x, core.y});
             }
 
             for (uint32_t noc = 0; noc < this->num_nocs_; noc++) {
@@ -931,6 +933,12 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(core.chip);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
     this->driver_->assert_risc_reset(core.chip, core_coord, soft_resets);
+}
+
+void Cluster::release_cce_uncore_for_firmware_load(const tt_cxy_pair& core) const {
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(core.chip);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->get_chip(core.chip)->release_cce_uncore_for_firmware_load(core_coord);
 }
 
 void Cluster::write_dram_vec(

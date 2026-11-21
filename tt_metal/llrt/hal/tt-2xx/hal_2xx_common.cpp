@@ -80,6 +80,12 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             defines.push_back("COMPILE_FOR_DISPATCH_ENGINE=1");
             break;
         }
+        case HalProgrammableCoreType::DRAM: {
+            TT_ASSERT(params.processor_class == HalProcessorClassType::DM);
+            defines.push_back(fmt::format("COMPILE_FOR_DM={}", params.processor_id));
+            defines.push_back("COMPILE_FOR_DRISC");
+            break;
+        }
         default:
             TT_ASSERT(
                 false,
@@ -152,6 +158,13 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
                 case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
             }
             break;
+        case HalProgrammableCoreType::DRAM:
+            if (params.is_fw) {
+                srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/drisc.cc");
+            } else {
+                srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/drisck.cc");
+            }
+            break;
         default:
             TT_ASSERT(
                 false, "Unsupported programmable core type {} to query srcs", enchantum::to_string(params.core_type));
@@ -176,6 +189,9 @@ std::string HalJitBuildQueryBase::target_name(const HalJitBuildQueryInterface::P
         case HalProgrammableCoreType::DISPATCH:
             TT_ASSERT(params.processor_class == HalProcessorClassType::DM);
             return fmt::format("dispatch_dm{}", params.processor_id);
+        case HalProgrammableCoreType::DRAM:
+            TT_ASSERT(params.processor_class == HalProcessorClassType::DM);
+            return params.is_fw ? "drisc" : fmt::format("drisc{}", params.processor_id);
         default:
             TT_THROW(
                 "Unsupported programmable core type {} to query target name", enchantum::to_string(params.core_type));
@@ -188,6 +204,9 @@ std::string HalJitBuildQueryBase::weakened_firmware_target_name(const HalJitBuil
     }
     if (params.core_type == HalProgrammableCoreType::DISPATCH && params.processor_class == HalProcessorClassType::DM) {
         return "dispatch_dm0";
+    }
+    if (params.core_type == HalProgrammableCoreType::DRAM && params.processor_class == HalProcessorClassType::DM) {
+        return "drisc";
     }
     if (params.core_type == HalProgrammableCoreType::TENSIX &&
         params.processor_class == HalProcessorClassType::COMPUTE) {

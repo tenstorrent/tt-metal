@@ -4,6 +4,7 @@ set(QA_HAL_SOURCES
     quasar/qa_hal_dispatch.cpp
     quasar/qa_hal_active_eth.cpp
     quasar/qa_hal_idle_eth.cpp
+    quasar/qa_hal_dram.cpp
 )
 
 set(QA_HAL_VARIANT_L1_SOURCES

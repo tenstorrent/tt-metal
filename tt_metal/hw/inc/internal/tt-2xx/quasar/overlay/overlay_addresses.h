@@ -17,7 +17,12 @@
 #define MEM_L1_SIZE MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_SIZE
 // Note: RISC-V LR/SC and AMO atomics don't work with uncached L1 (they hang).
 // Both require the cache coherence system. Only plain loads/stores with fences work uncached.
+// A Keraunos CCE (idle-eth build) has its own uncached alias per CCE, which dev_mem_map.h defines. Everywhere
+// else this register-derived value wins over dev_mem_map.h's worker-window fallback.
+#if !defined(COMPILE_FOR_IDLE_ERISC)
+#undef MEM_L1_UNCACHED_BASE
 #define MEM_L1_UNCACHED_BASE MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR
+#endif
 
 // =============================================================================
 // L2 Cache Controller Registers

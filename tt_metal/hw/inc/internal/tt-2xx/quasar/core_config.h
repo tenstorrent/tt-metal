@@ -58,7 +58,17 @@ enum class DispatchEngineProcessorTypes : uint8_t {
     COUNT = 8
 };
 
-enum class DramProcessorTypes : uint8_t { DM0 = 0, COUNT = 1 };
+enum class DramProcessorTypes : uint8_t {
+    DM0 = 0,
+    DM1 = 1,
+    DM2 = 2,
+    DM3 = 3,
+    DM4 = 4,
+    DM5 = 5,
+    DM6 = 6,
+    DM7 = 7,
+    COUNT = 8
+};
 
 union subordinate_map_t {
     // Quasar: expanded structure for multiple DM cores

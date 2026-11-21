@@ -39,6 +39,7 @@
 #include "fabric/fabric_context.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/math.hpp>
+#include "tt_align.hpp"
 #include <tt-umd/types/blackhole_eth.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
@@ -46,6 +47,19 @@
 namespace tt::tt_metal {
 
 namespace {
+
+tt::umd::RiscType dram_core_reset_riscs(ARCH arch) {
+    // Harts only. RiscType::ALL also holds the CCE uncore and, on deassert, reprograms the DMRISC
+    // remap. SMC firmware owns both on full Grendel, and chippy owns both on the Mimir-local path.
+    return arch == ARCH::QUASAR ? tt::umd::RiscType::ALL_NEO_DMS : tt::umd::RiscType::BRISC;
+}
+
+// At exit, reset only the CCE harts and leave the uncore running, matching the state chippy bring-up leaves.
+// A full reset would also reset the uncore, and then TL1 and the DMRISC remap stay unreachable to the host
+// until another process's CreateDevice releases the uncore again.
+tt::umd::RiscType dram_core_teardown_reset_riscs(ARCH arch) {
+    return arch == ARCH::QUASAR ? tt::umd::RiscType::ALL_DATA_MOVEMENT : tt::umd::RiscType::BRISC;
+}
 
 // Mock devices reuse the on-disk firmware sources of a real arch's package.
 // We only ship sources for Wormhole and Blackhole today; Quasar mock has
@@ -469,12 +483,12 @@ void RiscFirmwareInitializer::assert_inactive_ethernet_cores(tt::ChipId device_i
     }
 }
 
-void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
+void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id, tt::umd::RiscType riscs) {
     bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM);
     if (has_dram_fw) {
         const auto& soc_d = cluster_.get_soc_desc(device_id);
         for (const auto& virtual_core : soc_d.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
-            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), riscs);
         }
     }
 }
@@ -569,7 +583,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
     }
 
     assert_tensix_workers_impl(device_id);
-    assert_dram_cores(device_id);
+    assert_dram_cores(device_id, dram_core_reset_riscs(cluster_.arch()));
     assert_dispatch_cores(device_id);
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         assert_inactive_ethernet_cores(device_id);
@@ -583,7 +597,7 @@ void RiscFirmwareInitializer::assert_cores(tt::ChipId device_id) {
         assert_active_ethernet_cores_to_reset(device_id);
     }
     assert_inactive_ethernet_cores(device_id);
-    assert_dram_cores(device_id);
+    assert_dram_cores(device_id, dram_core_teardown_reset_riscs(cluster_.arch()));
     assert_dispatch_cores(device_id);
 }
 
@@ -1417,10 +1431,11 @@ void RiscFirmwareInitializer::initialize_firmware(
             break;
         }
         case HalProgrammableCoreType::DRAM: {
-            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            cluster_.assert_risc_reset_at_core(
+                tt_cxy_pair(device_id, virtual_core), dram_core_reset_riscs(cluster_.arch()));
             if (not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                    auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
+                    auto num_build_states = hal_.get_processor_class_num_fw_binaries(core_type_idx, processor_class);
                     for (uint32_t drisc_id = 0; drisc_id < num_build_states; drisc_id++) {
                         auto fw_path = build_env_manager.get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, drisc_id);
@@ -1447,6 +1462,14 @@ void RiscFirmwareInitializer::initialize_firmware(
                 hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
             uint64_t go_message_index_addr =
                 hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG_INDEX);
+            const auto factory = hal_.get_dev_msgs_factory(HalProgrammableCoreType::DRAM);
+            const uint64_t mailbox_addr =
+                hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::MAILBOX);
+            const uint64_t subordinate_sync_addr =
+                mailbox_addr + factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::subordinate_sync);
+            const uint64_t fw_shared_globals_ready_addr =
+                mailbox_addr +
+                factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::fw_shared_globals_ready);
             cluster_.write_core(
                 init_launch_msg_data.data(),
                 init_launch_msg_data.size(),
@@ -1456,6 +1479,18 @@ void RiscFirmwareInitializer::initialize_firmware(
             uint32_t zero = 0;
             cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_rd_ptr_addr);
             cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
+            const uint64_t subordinate_init = dev_msgs::RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT;
+            cluster_.write_core(
+                &subordinate_init,
+                sizeof(subordinate_init),
+                tt_cxy_pair(device_id, virtual_core),
+                subordinate_sync_addr);
+            const uint8_t shared_globals_wait = dev_msgs::SHARED_GLOBALS_READY_WAIT;
+            cluster_.write_core(
+                &shared_globals_wait,
+                sizeof(shared_globals_wait),
+                tt_cxy_pair(device_id, virtual_core),
+                fw_shared_globals_ready_addr);
 
             // Write reset PC (register address, no L1 NOC offset needed)
             cluster_.write_reg(
@@ -1697,7 +1732,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
     for (const auto& dram_core : dram_not_done_cores) {
-        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
+        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), dram_core_reset_riscs(cluster_.arch()));
     }
     for (const auto& dispatch_core : dispatch_not_done_cores) {
         cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dispatch_core), tt::umd::RiscType::ALL);

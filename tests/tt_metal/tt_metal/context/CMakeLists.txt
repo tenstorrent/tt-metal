@@ -42,3 +42,31 @@ target_link_libraries(
         test_metal_common_libs
         TTNN::CPP
 )
+
+# Grendel (Mimir and Keraunos) emulator tests. They need an emulator or JTAG server, so this binary is
+# left out of the metal_tests aggregate and the CI test lists, and skips every test when no server is set.
+if(TT_UMD_BUILD_GRENDEL_JTAG)
+    add_executable(unit_tests_grendel_emu)
+    TT_ENABLE_UNITY_BUILD(unit_tests_grendel_emu)
+    target_sources(unit_tests_grendel_emu PRIVATE ${UNIT_TESTS_GRENDEL_EMU_SOURCES})
+    target_include_directories(
+        unit_tests_grendel_emu
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/tests
+            ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-2xx/quasar
+    )
+    set_target_properties(
+        unit_tests_grendel_emu
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/tt_metal
+    )
+    target_link_libraries(
+        unit_tests_grendel_emu
+        PRIVATE
+            test_metal_common_libs
+            TTNN::CPP
+    )
+endif()

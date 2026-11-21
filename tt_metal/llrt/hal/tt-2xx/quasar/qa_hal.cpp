@@ -93,7 +93,7 @@ namespace tt::tt_metal {
 
 class HalJitBuildQueryQuasar : public hal_2xx::HalJitBuildQueryBase {
 public:
-    using HalJitBuildQueryBase::HalJitBuildQueryBase;
+    explicit HalJitBuildQueryQuasar(const Hal& hal) : HalJitBuildQueryBase(hal) {}
     std::string linker_flags(const Params& params) const override {
         std::string flags;
         // Quasar XIP (QuasarDataMovementKernel::read_binaries -> ElfFile::Impl::XIPify) pairs each
@@ -103,7 +103,29 @@ public:
         // relaxation so HI20/LO12 stay paired/adjacent. The assembler still emits R_RISCV_RELAX relocs
         // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
         flags += "-Wl,--no-relax ";
-        if (params.processor_class == HalProcessorClassType::DM) {
+        if (params.core_type == HalProgrammableCoreType::DRAM) {
+            const DeviceAddr eth_cce_text = MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_FIRMWARE_BASE;
+            const DeviceAddr eth_cce_data = MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_GLOBAL_BASE;
+            const DeviceAddr eth_cce_tls = MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_LOCAL_BASE;
+            if (params.is_fw) {
+                flags += fmt::format("-Wl,--defsym=__fw_text={} ", eth_cce_text);
+                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_MIMIR_CCE_FIRMWARE_SIZE);
+            } else {
+                const DeviceAddr eth_cce_kn_text =
+                    MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_KERNEL_BASE + params.processor_id * MEM_MIMIR_CCE_KERNEL_SIZE;
+                flags += fmt::format("-Wl,--defsym=__kn_text={} ", eth_cce_kn_text);
+                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_MIMIR_CCE_KERNEL_SIZE);
+                flags += fmt::format(
+                    "-Wl,--defsym=__kn_data={} ", eth_cce_data + MEM_MIMIR_CCE_GLOBAL_SIZE * (1 + params.processor_id));
+            }
+            flags += fmt::format("-Wl,--defsym=__fw_data={} ", eth_cce_data);
+            flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_MIMIR_CCE_GLOBAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__fw_tls={} ", eth_cce_tls);
+            flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_MIMIR_CCE_LOCAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_MIMIR_CCE_STACK_MIN_SIZE);
+            flags += fmt::format("-Wl,--defsym=__local_base={} ", eth_cce_tls);
+            flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_MIMIR_CCE_LOCAL_SIZE);
+        } else if (params.processor_class == HalProcessorClassType::DM) {
             const DeviceAddr dm_global_base = params.core_type == HalProgrammableCoreType::DISPATCH
                                                   ? MEM_DISPATCH_DM_GLOBAL_BASE
                                                   : MEM_DM_GLOBAL_BASE;
@@ -355,6 +377,7 @@ public:
                     case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
                 }
                 break;
+            case HalProgrammableCoreType::DRAM: break;
             default:
                 TT_THROW(
                     "Unsupported programmable core type {} to query includes", enchantum::to_string(params.core_type));
@@ -431,6 +454,12 @@ public:
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
         }
+        if (params.core_type == HalProgrammableCoreType::DRAM ||
+            params.core_type == HalProgrammableCoreType::IDLE_ETH) {
+            // A hart addresses its own SRAM from 0, so low addresses are real memory here and a
+            // store through one must not be folded away as a null dereference.
+            cflags += "-fno-delete-null-pointer-checks ";
+        }
         return cflags;
     }
 
@@ -453,6 +482,9 @@ public:
                "-fno-tree-vectorize -fno-tree-slp-vectorize -Wno-error=array-bounds ";
     }
 
+    // kernel_*.ld places the firmware's .tdata/.tbss and .data/.bss via *_object.o input specs, so
+    // the weakened firmware must be a relocatable object. --just-symbols cannot bind the kernel's TLS
+    // references (hw_thread_idx, rta_l1_base, ...) to the firmware's TLS block.
     bool firmware_is_kernel_object(const Params&) const override { return true; }
     std::string linker_script(const Params& params) const override {
         switch (params.core_type) {
@@ -488,6 +520,12 @@ public:
                     }
                     case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
                 }
+                break;
+            case HalProgrammableCoreType::DRAM:
+                if (params.processor_class == HalProcessorClassType::DM) {
+                    return fmt::format("runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
+                }
+                TT_THROW("CCE kernels are data-movement only");
             default:
                 TT_THROW(
                     "Unsupported programmable core type {} to query linker script",
@@ -528,7 +566,11 @@ std::uint32_t get_l1_size(IpVariant variant) {
 }  // namespace quasar
 
 void Hal::initialize_qa(
-    std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq, IpVariant quasar_arch_variant) {
+    std::uint32_t profiler_dram_bank_size_per_risc_bytes,
+    bool enable_dram_backed_cq,
+    IpVariant quasar_arch_variant,
+    bool enable_dram_programmable_cores,
+    uint64_t drisc_l1_noc_offset) {
     using namespace quasar;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -543,6 +585,10 @@ void Hal::initialize_qa(
     this->core_info_.push_back(quasar::create_active_eth_mem_map());
     this->core_info_.push_back(quasar::create_idle_eth_mem_map());
     ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
+    if (enable_dram_programmable_cores) {
+        this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DRAM)] =
+            quasar::create_dram_mem_map(drisc_l1_noc_offset);
+    }
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)] =
         quasar::create_dispatch_mem_map(quasar_arch_variant);
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::TENSIX)].num_physical_riscs_ =
@@ -605,6 +651,8 @@ void Hal::initialize_qa(
             // Move addresses in the local memory range to l1 (copied by kernel)
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
         }
+        // CCE firmware is linked against the hart's own view of its SRAM, which is 0-based, so a
+        // CCE address is already the offset the L1 NOC tag expects and needs no relocation.
 
         // Note: Quasar does not have IRAM
 

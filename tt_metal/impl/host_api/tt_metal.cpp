@@ -779,10 +779,17 @@ static KernelHandle CreateDramKernel(
     Program& program, const KernelSource& kernel_src, const CoreRangeSet& core_range_set, const DramConfig& config) {
     const ContextId context_id = program.impl().get_context_id();
     auto& metal_context = MetalContext::instance(context_id);
-    TT_FATAL(metal_context.get_cluster().arch() == ARCH::BLACKHOLE, "DramKernel is only supported on Blackhole.");
+    const ARCH arch = metal_context.get_cluster().arch();
+    TT_FATAL(arch != ARCH::WORMHOLE_B0, "DramKernel is not supported on Wormhole.");
     TT_FATAL(
         metal_context.hal().has_programmable_core_type(HalProgrammableCoreType::DRAM),
-        "DRAM programmable cores are not enabled; they auto-enable on Blackhole with firmware >= 19.12.0.0.");
+        "DRAM programmable cores are not enabled; they auto-enable on Blackhole with firmware >= 19.12.0.0 and on "
+        "Quasar when the SoC descriptor marks a dram_view programmable.");
+    TT_FATAL(
+        ttsl::as_underlying_type<DataMovementProcessor>(config.processor) <
+            metal_context.hal().get_num_risc_processors(HalProgrammableCoreType::DRAM),
+        "DramKernel creation failure: DRAM core only has {} processors.",
+        metal_context.hal().get_num_risc_processors(HalProgrammableCoreType::DRAM));
     std::shared_ptr<Kernel> kernel = std::make_shared<DramKernel>(context_id, kernel_src, core_range_set, config);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::DRAM);
 }
