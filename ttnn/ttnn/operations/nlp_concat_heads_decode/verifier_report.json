@@ -1,0 +1,426 @@
+{
+  "summary": {
+    "total": 38,
+    "supported_pass": 12,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 18,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 8
+  },
+  "by_category": {
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_rejection[X3]",
+        "test_name": "test_rejection[X3]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_rejection[X4]",
+        "test_name": "test_rejection[X4]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op_loose[NOTSET]",
+        "test_name": "test_op_loose[NOTSET]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_rejection[X5]",
+        "test_name": "test_rejection[X5]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_rejection[X1]",
+        "test_name": "test_rejection[X1]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_rejection[X6]",
+        "test_name": "test_rejection[X6]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_rejection[X2]",
+        "test_name": "test_rejection[X2]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_rejection[X7]",
+        "test_name": "test_rejection[X7]",
+        "status": "passed"
+      }
+    ],
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x256_heads32-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x17x32_heads17-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x64_heads1-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x17x32_heads17-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x8x64_heads8-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x160_heads8-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x128_heads1-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x128_heads32-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x64_heads2-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x8x64_heads8-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x64_heads4-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x12x128_heads2-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x256_heads16-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x32_heads1-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x128_heads2-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x64_heads32-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x12x128_heads2-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "h_non_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x96_heads3-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      }
+    ],
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x64_heads2-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x160_heads8-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x128_heads32-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x128_heads1-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x64_heads4-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x256_heads16-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x32_heads1-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x64_heads32-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x128_heads2-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x96_heads3-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x64_heads1-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/nlp_concat_heads_decode/test_golden.py::test_op[1x1x32x256_heads32-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=height-users=1]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "height",
+          "users": 1,
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      }
+    ]
+  }
+}
