@@ -88,7 +88,7 @@ void kernel_main() {
     constexpr uint32_t total_tiles = num_tiles_k * out_w;
     constexpr bool use_barrier = COMPRESSED_MM_IMPL == 3 || COMPRESSED_MM_IMPL == 4 || COMPRESSED_MM_IMPL == 5;
     constexpr bool transpose = false;
-    constexpr bool clear_src = true;
+    constexpr bool clear_src = false;
     // Tiles sit 32 rows apart. IMPL 0-5 drive the plain custom_mm math, which accumulates the second k-face apart and
     // finalizes; the compressed API of IMPL 6 has no split accumulation.
 #if COMPRESSED_MM_IMPL != 6
