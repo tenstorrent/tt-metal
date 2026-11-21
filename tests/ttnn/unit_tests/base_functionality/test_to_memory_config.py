@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 import pytest
 import torch
@@ -2855,3 +2856,22 @@ def test_create_sharded_memory_config_height_sharded_tile_layout_pads_to_tiles(d
         torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
     )
     assert_equal(torch_input, ttnn.to_torch(tensor))
+
+
+def test_shard_spec_str_grid_is_json():
+    spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 2)),
+                ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 1)),
+            ]
+        ),
+        (32, 64),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    text = str(spec)
+    grid = json.loads(text[text.index("grid=") + len("grid=") : text.index(", shape=")])
+    assert grid == [
+        {"start": {"x": 0, "y": 0}, "end": {"x": 1, "y": 2}},
+        {"start": {"x": 3, "y": 0}, "end": {"x": 3, "y": 1}},
+    ]
