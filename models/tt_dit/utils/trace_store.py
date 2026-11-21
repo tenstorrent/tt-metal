@@ -41,11 +41,12 @@ _used: dict[str, str] = {}
 _key_parts: dict[str, dict[str, str]] = {}
 stats = {"restored": 0, "stored": 0, "captured": 0, "refused": {}, "restore_s": 0.0, "dump_s": 0.0}
 
-# Environment variables that change nothing a trace holds (logging, this switch).
+# Environment variables that change nothing a trace holds (logging, this switch, the device broker's
+# settings: it exports a per-job TT_DEVICE_MCP_JOB_TAG, which would change the key every start).
 # Per-start paths and secrets: they change nothing a trace holds.
 _ENV_IGNORED_WORDS = ("SCRATCH", "LOG", "TOKEN", "KEY", "SECRET")
 _HEX_ID = re.compile(r"at 0x[0-9a-fA-F]+")
-_ENV_IGNORED = ("TT_DIT_TRACE_STORE", "TT_LOGGER_", "TT_METAL_LOGGER_")
+_ENV_IGNORED = ("TT_DIT_TRACE_STORE", "TT_LOGGER_", "TT_METAL_LOGGER_", "TT_DEVICE_MCP_")
 
 
 def enabled() -> bool:
