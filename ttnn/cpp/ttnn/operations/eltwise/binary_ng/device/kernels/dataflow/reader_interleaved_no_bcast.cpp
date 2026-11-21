@@ -25,6 +25,10 @@ void kernel_main() {
     const uint32_t Ht = get_arg_val<uint32_t>(12);
     const uint32_t Wt = get_arg_val<uint32_t>(13);
     const uint32_t cND = get_arg_val<uint32_t>(14);  // collapsed dims > 5
+    // The input's own tile-row width. It may be padded wider than the output (e.g. a caller over-pads via
+    // tilize_with_val_padding), so its per-row page-id advance must use its own Wt, not the output's Wt (arg 13,
+    // used below only to derive per-core start/end tile coordinates in output space).
+    const uint32_t src_row_wt = get_arg_val<uint32_t>(21);
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
 
@@ -59,8 +63,8 @@ void kernel_main() {
 
     // this is the INPUT tile offset
     uint32_t tile_offset =
-        start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride + start_th * Wt;
-    uint32_t next_c_shift = c_stride - HtWt;
+        start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride + start_th * src_row_wt;
+    uint32_t next_c_shift = c_stride - Ht * src_row_wt;
     uint32_t next_n_shift = n_stride - c_stride * C;
     uint32_t next_d_shift = d_stride - n_stride * N;
     uint32_t next_nd_shift = nD_stride - d_stride * D;
@@ -83,7 +87,7 @@ void kernel_main() {
                             // next row of tiles should start at the first column
                             start_tw = 0;
                         }
-                        tile_offset += Wt;
+                        tile_offset += src_row_wt;
                     }
                     tile_offset += next_c_shift;
                 }
