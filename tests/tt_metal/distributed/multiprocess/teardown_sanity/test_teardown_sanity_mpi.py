@@ -220,6 +220,85 @@ def _ttrun_stop(sig, case, mpi_prefix=None):
     assert "tt-smi -r" in r.log and "outcome=forced" in r.log, r.log[-3000:]
 
 
+def _ranks_got(r, signum: int) -> set:
+    return {int(m.group(1)) for m in re.finditer(rf"\[probe r=(\d+) [^\]]*\] got signal {signum};", r.log)}
+
+
+@pytest.mark.parametrize(
+    "sig",
+    [signal.SIGUSR1, signal.SIGUSR2, signal.SIGALRM, signal.SIGQUIT, signal.SIGWINCH, signal.SIGCONT],
+    ids=lambda s: signal.Signals(s).name,
+)
+def test_ttrun_passes_signals_on(sig):
+    """A signal at tt-run that is not a stop reaches every rank unchanged, through job control and each rank's
+    wrapper, and the job goes on: every rank reports it and keeps running; a stop (SIGTERM) then ends the job."""
+    r = run_case(
+        f"ttrun_pass_{signal.Signals(sig).name}",
+        {**NP, "PROBE_SCENARIO": "all_hang"},
+        DEADLINE_HANG,
+        cmd=ttrun_mpi_cmd(),
+        launcher_signal=sig,
+        launcher_ready=(0, "ready"),
+        signal_after=1,
+        then_signals=[(signal.SIGTERM, 0.5)],
+    )
+    fault_delivered(r)
+    ended(r)
+    clean(r)
+    assert _ranks_got(r, sig) == {0, 1, 2}, f"every rank must get {signal.Signals(sig).name}\n{r.log[-3000:]}"
+    assert f"{signal.Signals(sig).name} received: passed it on to all ranks" in r.log, r.log[-3000:]
+    after = re.findall(r"ranks: ([^;]*)", r.signal_sent)[0]
+    assert "gone" not in after and "=T" not in after, f"the {signal.Signals(sig).name} ended or paused a rank: {r}"
+    got_term = {int(m.group(1)) for m in re.finditer(r"\[probe r=(\d+) [^\]]*\] caught signal 15\b", r.log)}
+    assert got_term == {0, 1, 2} and r.exit == 128 + signal.SIGTERM, f"the stop after it did not end the job: {r}"
+
+
+def test_ttrun_ctrl_z_pauses_and_resumes_the_ranks():
+    """Ctrl-Z (SIGTSTP) at tt-run pauses every rank and tt-run itself; SIGCONT (the shell's fg / bg) resumes tt-run,
+    which passes it on and resumes every rank; the job then stops on SIGTERM as usual."""
+    r = run_case(
+        "ttrun_ctrl_z",
+        {**NP, "PROBE_SCENARIO": "all_hang"},
+        DEADLINE_HANG,
+        cmd=ttrun_mpi_cmd(),
+        launcher_signal=signal.SIGTSTP,
+        launcher_ready=(0, "ready"),
+        signal_after=1,
+        then_signals=[(signal.SIGCONT, 1.0), (signal.SIGTERM, 0.5)],
+    )
+    fault_delivered(r)
+    ended(r)
+    clean(r)
+    paused, resumed = re.findall(r"ranks: ([^;]*)", r.signal_sent)[:2]
+    assert paused == "rank_0=T rank_1=T rank_2=T", f"SIGTSTP did not pause every rank: {paused!r}\n{r}"
+    assert "=T" not in resumed and "gone" not in resumed, f"SIGCONT did not resume every rank: {resumed!r}\n{r}"
+    assert _ranks_got(r, signal.SIGCONT) == {0, 1, 2}, r.log[-3000:]
+    assert "the job is paused" in r.log and r.exit == 128 + signal.SIGTERM, r.log[-3000:]
+
+
+def test_ttrun_killed_stops_the_ranks():
+    """tt-run itself is SIGKILLed (or aborts, or crashes) while the job runs: it can do nothing, but its guard
+    (tt-run-rank --guard) sees it gone and stops the job as tt-run would, SIGTERM to every rank through job control.
+    Every rank receives it and the job ends; nothing is left, the guard included."""
+    r = run_case(
+        "ttrun_sigkill",
+        {**NP, "PROBE_SCENARIO": "all_hang"},
+        DEADLINE_HANG,
+        cmd=ttrun_mpi_cmd(),
+        launcher_signal=signal.SIGKILL,
+        launcher_ready=(0, "ready"),
+        signal_after=1,
+    )
+    fault_delivered(r)
+    ended(r)
+    clean(r)
+    got = {int(m.group(1)) for m in re.finditer(r"\[probe r=(\d+) [^\]]*\] caught signal 15\b", r.log)}
+    assert got == {0, 1, 2}, f"every rank must receive SIGTERM (signal 15); got it: {sorted(got)}\n{r.log[-3000:]}"
+    assert "[tt-run guard] sent SIGTERM to all ranks" in r.log, r.log[-3000:]
+    assert "[tt-run guard] the job ended after the stop" in r.log, r.log[-3000:]
+    assert "job forced down" not in r.log, r.log[-3000:]
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # group E: one-variable departures from the production mpirun line, through tt-run; each needs a known teardown shape
 # production line: pml ob1, --mca btl self,tcp, --mca btl_tcp_if_include <nic>. Departures go through --mpi-args.

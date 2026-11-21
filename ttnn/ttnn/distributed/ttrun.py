@@ -63,6 +63,20 @@ SIGNAL_FORWARD_GRACE_S = 10.0
 # job-wide SIGTERM. TT_RUN_SIGNAL_HELPER overrides where tt-run looks for it.
 SIGNAL_HELPER_TIMEOUT_S = 5.0
 
+# Signals at tt-run that are not a stop: passed on to every rank unchanged through the same job control, the job goes
+# on (what a rank does with one is the rank's business). SIGTSTP (Ctrl-Z) pauses the ranks and then tt-run itself, so
+# the shell's fg / bg resumes tt-run, whose SIGCONT resumes the ranks. A stop (SIGINT, SIGTERM) still reaches the ranks
+# as SIGTERM. Each rank's tt-run-rank wrapper passes the same set on to its program.
+PASSED_SIGNALS = (
+    signal.SIGQUIT,
+    signal.SIGUSR1,
+    signal.SIGUSR2,
+    signal.SIGALRM,
+    signal.SIGTSTP,
+    signal.SIGCONT,
+    signal.SIGWINCH,
+)
+
 
 def _stop_grace_s() -> float:
     try:
@@ -356,6 +370,9 @@ class LaunchedJob:
         self.sid = -1
         self.pgid = -1
         self.forwarded: List[int] = []  # stop signals tt-run received (SIGINT/SIGTERM), first one decides the code
+        self.passed: List[int] = []  # other signals tt-run received, not yet passed on to the ranks (PASSED_SIGNALS)
+        self._guard: Optional[subprocess.Popen] = None  # tt-run-rank --guard: stops the job if tt-run is killed
+        self._guard_fd: Optional[int] = None  # the write end of the guard's stdin
         self.ended: List[int] = []  # ranks the teardown had to end itself (the launcher should have)
         self._previous_handlers: dict = {}
         self._teardown = contextlib.ExitStack()
@@ -401,6 +418,8 @@ class LaunchedJob:
         # the teardown read: restore handlers, stop the launcher if it is still alive, end survivors, then sweep
         # this job's leftovers (its launcher is gone by now, so its session dir is swept too).
         try:
+            self._teardown.callback(self._release_guard)  # last: the job is over, whatever the teardown had to do
+            self._start_guard()
             self._teardown.callback(remove_stale_launcher_leftovers)
             self._teardown.callback(self._end_survivors)
             self._teardown.callback(self._shutdown_launcher)
@@ -411,6 +430,7 @@ class LaunchedJob:
             except (ProcessLookupError, OSError):
                 self.sid = self.pgid = self.proc.pid
             self._previous_handlers = {s: signal.signal(s, self._relay) for s in (signal.SIGINT, signal.SIGTERM)}
+            self._previous_handlers.update({s: signal.signal(s, self._pass) for s in PASSED_SIGNALS})
             self._teardown.callback(self._restore_handlers)
         except BaseException:
             self._teardown.close()  # the launcher is already running; do not leak it if __enter__ fails
@@ -465,14 +485,87 @@ class LaunchedJob:
                 f"sent SIGTERM; waiting up to {_stop_grace_s():g} s for them to exit (Ctrl-C to force)"
             )
 
+    def _start_guard(self) -> None:
+        """Start ``tt-run-rank --guard`` next to a prterun launcher, in a session of its own (a kill of tt-run's
+        process group does not reach it). If tt-run is killed (SIGKILL, an abort, a crash), the guard's stdin closes
+        without "done" and it stops the job as tt-run would: SIGTERM to every rank, the stop grace, then the force.
+        Best effort: without the wrapper binary there is no guard, and a tt-run killed outright leaves its job running.
+        """
+        if not os.path.basename(self.cmd[0]).startswith(("mpirun", "prterun", "mpiexec")):
+            return
+        wrapper = find_rank_wrapper()
+        if wrapper is None:
+            logger.debug(f"{TT_RUN_PREFIX} no tt-run-rank: the job is not guarded against tt-run being killed")
+            return
+        read_fd, write_fd = os.pipe()
+        try:
+            self._guard = subprocess.Popen(
+                [wrapper, "--guard", str(self.proc.pid)] + ([self._helper] if self._helper else []),
+                stdin=read_fd,
+                start_new_session=True,
+            )
+        except OSError as e:
+            os.close(write_fd)
+            logger.warning(f"{TT_RUN_PREFIX} could not start the tt-run-rank guard: {e}")
+            return
+        finally:
+            os.close(read_fd)
+        self._guard_fd = write_fd
+
+    def _release_guard(self) -> None:
+        """Teardown step, the last: tell the guard the job is over, so it exits without acting."""
+        if self._guard_fd is not None:
+            try:
+                os.write(self._guard_fd, b"done\n")
+            except OSError:
+                pass
+            os.close(self._guard_fd)
+            self._guard_fd = None
+        if self._guard is not None:
+            try:
+                self._guard.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                self._guard.kill()
+                self._guard.wait()
+
     def _relay(self, signum, frame) -> None:
         # Only record it: the first stop signal makes wait() send SIGTERM to every rank, a second one makes it force.
         # The original signal is kept for the exit-code contract (128 + it).
         self.forwarded.append(signum)
 
+    def _pass(self, signum, frame) -> None:
+        # Only record it: wait() passes it on to every rank (PASSED_SIGNALS).
+        self.passed.append(signum)
+
+    def _pass_on(self) -> None:
+        """Pass the signals tt-run received since the last poll on to every rank, in order (a burst of one signal, a
+        window being resized, goes once). After SIGTSTP tt-run pauses itself too, as Ctrl-Z expects."""
+        pending, self.passed[:] = list(self.passed), []
+        for i, signum in enumerate(pending):
+            if i > 0 and pending[i - 1] == signum:
+                continue
+            name = signal.Signals(signum).name
+            why = self._signal_ranks(signum)
+            if why:
+                logger.warning(f"{TT_RUN_PREFIX} {name} received, could not pass it on to the ranks: {why}")
+                continue
+            logger.info(f"{TT_RUN_PREFIX} {name} received: passed it on to all ranks")
+            if signum == signal.SIGTSTP:
+                logger.warning(f"{TT_RUN_PREFIX} the job is paused; fg or bg resumes it (the ranks get SIGCONT)")
+                self._pause_self()
+
+    @staticmethod
+    def _pause_self() -> None:
+        """Pause tt-run as Ctrl-Z would have without the handler; the shell's fg / bg sends SIGCONT."""
+        os.kill(os.getpid(), signal.SIGSTOP)
+
     def _stop_ranks(self) -> str:
         """SIGTERM to every rank on every host through PRRTE job control (prterun does not abort, no SIGKILL
         follows). Returns "" when sent, else why it could not be."""
+        return self._signal_ranks(signal.SIGTERM)
+
+    def _signal_ranks(self, signum: int) -> str:
+        """``signum`` to every rank on every host through PRRTE job control. Returns "" when sent, else why not."""
         if self._helper is None:
             return self._helper_why
         uri = prterun_tool_uri(self.proc.pid)
@@ -480,7 +573,7 @@ class LaunchedJob:
             return f"no rendezvous file for prterun pid {self.proc.pid}"
         try:
             r = subprocess.run(
-                [self._helper, "--uri", uri, "--signal", str(int(signal.SIGTERM))],
+                [self._helper, "--uri", uri, "--signal", str(int(signum))],
                 capture_output=True,
                 text=True,
                 timeout=SIGNAL_HELPER_TIMEOUT_S,
@@ -557,6 +650,8 @@ class LaunchedJob:
             except subprocess.TimeoutExpired:
                 pass
             now = time.time()
+            if self.passed:
+                self._pass_on()
             if len(self.forwarded) > handled:  # a stop signal arrived since the last poll
                 handled = len(self.forwarded)
                 name = signal.Signals(self.forwarded[-1]).name

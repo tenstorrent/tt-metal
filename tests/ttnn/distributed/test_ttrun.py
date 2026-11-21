@@ -1652,6 +1652,131 @@ class TestJobOwnership:
         if case == "launcher_ignores_force":
             assert "did not exit" in text and "SIGKILL" in text, text
 
+    def _fake_job(self, tmp_path, monkeypatch, stop_ends_ranks: bool = True):
+        """A fake prterun (rendezvous file, ends once the "ranks" are gone) and a fake tt-run-signal that records its
+        arguments and, for SIGTERM, ends the ranks. Returns the record directory."""
+        import tempfile
+
+        rec = tmp_path / "rec"
+        rec.mkdir()
+        helper = tmp_path / "tt-run-signal"
+        helper.write_text(
+            f'#!/bin/bash\necho "$@" >> "{rec}/helper.args"\n'
+            + (f'[ "$4" = 15 ] && touch "{rec}/ranks_gone"\n' if stop_ends_ranks else "")
+            + "exit 0\n"
+        )
+        helper.chmod(0o755)
+        monkeypatch.setenv("REC", str(rec))
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+        monkeypatch.setenv("TT_RUN_SIGNAL_HELPER", str(helper))
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "60")
+        monkeypatch.setenv("IGNORE_TERM", "0")
+        return rec
+
+    @pytest.mark.parametrize("sig", ["SIGUSR1", "SIGUSR2", "SIGALRM", "SIGQUIT", "SIGWINCH", "SIGCONT", "SIGTSTP"])
+    def test_run_launcher_passes_other_signals_on_to_the_ranks(self, sig, tmp_path, monkeypatch):
+        import signal
+        import threading
+        import time
+
+        from ttnn.distributed import ttrun as m
+
+        # A signal at tt-run that is not a stop goes to every rank unchanged through job control (the helper with that
+        # signal number, never the launcher) and the job goes on; after SIGTSTP tt-run pauses itself too. A stop
+        # (SIGTERM) then ends the job as usual.
+        rec = self._fake_job(tmp_path, monkeypatch)
+        paused = []
+        monkeypatch.setattr(m.LaunchedJob, "_pause_self", staticmethod(lambda: paused.append(True)))
+        signum = getattr(signal, sig)
+        running = threading.Event()
+
+        def send():
+            time.sleep(0.5)
+            if running.is_set():
+                os.kill(os.getpid(), signum)
+            time.sleep(0.7)
+            if running.is_set():
+                os.kill(os.getpid(), signal.SIGTERM)
+
+        def launch():
+            running.set()
+            try:
+                return m.run_launcher(["bash", "-c", self._FAKE_PRTERUN], cwd=Path.cwd())
+            finally:
+                running.clear()
+
+        threading.Thread(target=send, daemon=True).start()
+        text, rc = self._logged_rc(launch)
+        calls = (rec / "helper.args").read_text().splitlines()
+
+        assert rc == 128 + signal.SIGTERM, text
+        assert [c.split()[-1] for c in calls] == [str(int(signum)), "15"], f"helper calls: {calls}\n{text}"
+        assert all(c.startswith("--uri fake-uri-") for c in calls), calls
+        assert f"{sig} received: passed it on to all ranks" in text, text
+        assert not (rec / "launcher.signals").exists(), "a passed signal must not reach the launcher (its kill path)"
+        assert paused == ([True] if sig == "SIGTSTP" else []), paused
+        assert "job end: outcome=stopped exit=143" in text, text
+
+    @pytest.mark.parametrize("case", ["done", "ttrun_died", "ranks_ignore_the_stop", "no_helper"])
+    def test_rank_wrapper_guard_stops_the_job_when_tt_run_dies(self, case, tmp_path, monkeypatch):
+        import glob
+        import subprocess
+        import time
+
+        from ttnn.distributed import ttrun as m
+
+        # tt-run-rank --guard, started by tt-run next to the launcher: while tt-run lives (its "done" at the end) it
+        # does nothing. When its stdin closes without "done" (tt-run was SIGKILLed, aborted, crashed) and the launcher
+        # still runs, it stops the job as tt-run would: SIGTERM to every rank through job control, then, if the ranks
+        # do not exit within the stop grace (or it cannot reach prterun), the force through the launcher.
+        monkeypatch.delenv("TT_RUN_RANK_WRAPPER")  # the built one, not the autouse "none"
+        wrapper = m.find_rank_wrapper()
+        if wrapper is None:
+            pytest.skip("tt-run-rank is not built")
+        rec = self._fake_job(tmp_path, monkeypatch, stop_ends_ranks=case == "ttrun_died")
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1")
+        launcher = subprocess.Popen(["bash", "-c", self._FAKE_PRTERUN])
+        try:
+            end = time.time() + 10
+            while not glob.glob(f"{tmp_path}/prterun.*.{launcher.pid}.*/pmix.*.tool.{launcher.pid}"):
+                assert time.time() < end, "the fake launcher did not publish its rendezvous file"
+                time.sleep(0.05)
+            read_fd, write_fd = os.pipe()
+            helper = [] if case == "no_helper" else [os.environ["TT_RUN_SIGNAL_HELPER"]]
+            guard = subprocess.Popen(
+                [wrapper, "--guard", str(launcher.pid)] + helper, stdin=read_fd, stderr=subprocess.PIPE, text=True
+            )
+            os.close(read_fd)
+            if case == "done":
+                os.write(write_fd, b"done\n")
+            os.close(write_fd)
+            _, said = guard.communicate(timeout=30)
+            if case == "done":
+                assert guard.returncode == 0 and said == "", said
+                assert launcher.poll() is None, "the guard must leave a job whose tt-run said done alone"
+                assert not (rec / "helper.args").exists()
+                return
+            launcher.wait(timeout=15)
+        finally:
+            if launcher.poll() is None:
+                launcher.kill()
+                launcher.wait()
+        calls = (rec / "helper.args").read_text() if (rec / "helper.args").exists() else ""
+        launcher_signals = (rec / "launcher.signals").read_text() if (rec / "launcher.signals").exists() else ""
+        assert f"tt-run (pid {os.getpid()}) ended while its job was still running" in said, said
+        if case == "ttrun_died":
+            assert guard.returncode == 0, said
+            assert "--signal 15" in calls and "--uri fake-uri-" in calls, calls
+            assert "sent SIGTERM to all ranks" in said and "the job ended after the stop" in said, said
+            assert launcher_signals == "", "a graceful stop must not signal the launcher (PRRTE's kill path)"
+            return
+        assert guard.returncode == 1, said
+        assert "TERM" in launcher_signals, "the force did not signal the launcher"
+        assert "job forced down" in said and "tt-smi -r" in said, said
+        why = {"ranks_ignore_the_stop": "ranks did not exit within the stop grace", "no_helper": "no tt-run-signal"}
+        assert why[case] in said, said
+
     def test_run_launcher_ends_leftovers_and_fails_the_job(self, monkeypatch, unreaped_orphans):
         import time
 

@@ -309,6 +309,7 @@ def run_case(
     launcher_signal: int | None = None,
     signal_after: float = 0.0,
     launcher_ready: tuple | None = None,  # (rank, marker): wait for this rank's phase marker before the launcher signal
+    then_signals: list | None = None,  # [(signal, seconds after the previous one)] to tt-run after launcher_signal
     rank_signal: tuple | None = None,  # (rank, signal, seconds after the rank is ready)
     signal_on_marker: str | None = None,  # gate rank_signal on this phase marker file (e.g. "open_enter") not the pid
     phase1_kill: bool = False,  # SIGKILL the first generate_rank_bindings process that appears (new mode)
@@ -360,6 +361,18 @@ def run_case(
             time.sleep(0.05)
         raise RuntimeError(f"rank {rank} never reached marker {name!r}")
 
+    def rank_states() -> str:
+        """Each rank's process state (R/S/T/Z, gone) from its pid file: T is a rank paused by SIGTSTP."""
+        out = []
+        for f in sorted(Path(piddir).glob("rank_*.pid")):
+            try:
+                pid = int(f.read_text().strip())
+                with open(f"/proc/{pid}/stat") as fh:
+                    out.append(f"{f.stem}={fh.read().rsplit(')', 1)[1].split()[0]}")
+            except (OSError, ValueError, IndexError):
+                out.append(f"{f.stem}=gone")
+        return " ".join(out)
+
     def worker():
         try:
             if launcher_signal is not None:
@@ -371,6 +384,12 @@ def run_case(
                 time.sleep(signal_after)
                 os.kill(proc.pid, launcher_signal)
                 sent.append(f"{signal.Signals(launcher_signal).name} to tt-run {where}")
+                for sig, after in then_signals or []:
+                    time.sleep(1.0)  # let the signal reach the ranks before reading their state
+                    sent.append(f"ranks: {rank_states()}")
+                    time.sleep(after)
+                    os.kill(proc.pid, sig)
+                    sent.append(f"{signal.Signals(sig).name} to tt-run")
             if rank_signal is not None:
                 r, sig, after = rank_signal
                 pid = pid_of(r)

@@ -16,6 +16,15 @@
 //     job once the other ranks have closed and exited (at most TT_METAL_STOP_TIMEOUT_S), so this exit does not make
 //     the launcher kill them mid-close.
 // A program killed by a signal is reported with exit 128 + the signal.
+//
+//   tt-run-rank --guard <prterun pid> [<tt-run-signal>]
+//
+// The guard tt-run starts next to the launcher, so the job still stops gracefully when tt-run itself is killed
+// (SIGKILL, an abort, a crash): tt-run cannot act then, and the launcher outlives it in a session of its own. tt-run
+// holds the write end of the guard's stdin and writes "done" once the job is over. If stdin closes without it, tt-run
+// died: while the launcher still runs, send SIGTERM to every rank through PRRTE job control (tt-run-signal), wait the
+// stop grace (TT_RUN_STOP_GRACE_S, 120 s by default) for the job to end, then force it through the launcher
+// (SIGTERM, which kills every rank: SIGTERM, then SIGKILL 250 ms later), as tt-run would have.
 
 #include <pmix.h>
 
@@ -27,13 +36,16 @@
 #include <string>
 
 #include <fcntl.h>
+#include <glob.h>
 #include <sys/prctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 namespace {
 
-constexpr int kForwarded[] = {SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2, SIGCONT};
+// Every signal tt-run passes on to the ranks. Caught here so it reaches the program, not this wrapper: SIGALRM would
+// kill the wrapper (and its program with it) and SIGTSTP would pause only the wrapper.
+constexpr int kForwarded[] = {SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2, SIGALRM, SIGTSTP, SIGCONT, SIGWINCH};
 volatile pid_t g_child = -1;
 volatile sig_atomic_t g_stop_signal = 0;  // a stop signal (SIGTERM, SIGINT, SIGHUP) the launcher sent this rank
 
@@ -77,9 +89,174 @@ bool core_dumping(pid_t pid) {
     return dumping;
 }
 
+// The process start time (/proc/<pid>/stat field 22), 0 when the process is gone or a zombie: with the pid, it tells
+// the launcher this guard watches from an unrelated process that reused its pid.
+unsigned long long start_time(pid_t pid) {
+    char path[64];
+    std::snprintf(path, sizeof path, "/proc/%d/stat", static_cast<int>(pid));
+    FILE* f = std::fopen(path, "r");
+    if (f == nullptr) {
+        return 0;
+    }
+    char buf[1024] = {};
+    const size_t n = std::fread(buf, 1, sizeof buf - 1, f);
+    std::fclose(f);
+    buf[n] = '\0';
+    const char* p = std::strrchr(buf, ')');  // the command name can hold spaces and parentheses
+    if (p == nullptr || p[1] == '\0' || p[2] == 'Z') {
+        return 0;
+    }
+    p += 2;  // field 3, the state
+    for (int field = 3; field < 22 && p != nullptr; ++field) {
+        p = std::strchr(p, ' ');
+        p = p != nullptr ? p + 1 : nullptr;
+    }
+    return p != nullptr ? std::strtoull(p, nullptr, 10) : 0;
+}
+
+// prterun's PMIx server URI for tools: the first line of <tmpdir>/prterun.<host>.<pid>.<uid>/pmix.<host>.tool.<pid>
+// (ttrun.py prterun_tool_uri), empty while it is not there.
+std::string tool_uri(pid_t pid) {
+    const char* tmp = std::getenv("TMPDIR");
+    const std::string pattern = std::string(tmp != nullptr && *tmp != '\0' ? tmp : "/tmp") + "/prterun.*." +
+                                std::to_string(pid) + ".*/pmix.*.tool." + std::to_string(pid);
+    std::string uri;
+    glob_t found{};
+    if (::glob(pattern.c_str(), 0, nullptr, &found) == 0) {
+        for (size_t i = 0; i < found.gl_pathc && uri.empty(); ++i) {
+            if (FILE* f = std::fopen(found.gl_pathv[i], "r")) {
+                char line[1024] = {};
+                if (std::fgets(line, sizeof line, f) != nullptr) {
+                    uri = line;
+                    uri.erase(uri.find_last_not_of(" \r\n") + 1);
+                }
+                std::fclose(f);
+            }
+        }
+    }
+    ::globfree(&found);
+    return uri;
+}
+
+// Run tt-run-signal to send SIGTERM to every rank; "" when sent, else why not. Bounded like tt-run's own call.
+std::string stop_ranks(const char* helper, pid_t launcher) {
+    if (helper == nullptr || *helper == '\0') {
+        return "no tt-run-signal";
+    }
+    std::string uri;
+    for (int i = 0; i < 50 && uri.empty(); ++i) {  // a launcher started a moment ago may not have published it yet
+        uri = tool_uri(launcher);
+        if (uri.empty()) {
+            ::usleep(100000);
+        }
+    }
+    if (uri.empty()) {
+        return "no rendezvous file for prterun pid " + std::to_string(launcher);
+    }
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+        return std::string("fork: ") + std::strerror(errno);
+    }
+    if (pid == 0) {
+        ::execl(helper, helper, "--uri", uri.c_str(), "--signal", "15", static_cast<char*>(nullptr));
+        ::_exit(127);
+    }
+    int status = 0;
+    for (int i = 0; i < 100; ++i) {  // 10 s
+        if (::waitpid(pid, &status, WNOHANG) == pid) {
+            return WIFEXITED(status) && WEXITSTATUS(status) == 0
+                       ? ""
+                       : "tt-run-signal exited " + std::to_string(WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+        }
+        ::usleep(100000);
+    }
+    ::kill(pid, SIGKILL);
+    ::waitpid(pid, &status, 0);
+    return "tt-run-signal timed out";
+}
+
+int guard(int argc, char** argv) {
+    if (argc < 3) {
+        std::fprintf(stderr, "usage: %s --guard <prterun pid> [<tt-run-signal>]\n", argv[0]);
+        return 2;
+    }
+    const pid_t launcher = static_cast<pid_t>(std::atoi(argv[2]));
+    const char* helper = argc > 3 ? argv[3] : nullptr;
+    const pid_t ttrun = ::getppid();
+    const unsigned long long started = start_time(launcher);
+    ::signal(SIGPIPE, SIG_IGN);
+    ::signal(SIGHUP, SIG_IGN);
+    ::signal(SIGINT, SIG_IGN);  // a stop at tt-run is tt-run's; this guard acts only when tt-run is gone
+
+    // Block until tt-run says the job is over ("done") or its end of the pipe closes.
+    std::string said;
+    char buf[64];
+    for (;;) {
+        const ssize_t n = ::read(STDIN_FILENO, buf, sizeof buf);
+        if (n > 0) {
+            said.append(buf, static_cast<size_t>(n));
+            if (said.find("done") != std::string::npos) {
+                return 0;
+            }
+            continue;
+        }
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+    const auto launcher_running = [&] { return started != 0 && start_time(launcher) == started; };
+    if (!launcher_running()) {
+        return 0;  // tt-run ended with its job
+    }
+
+    const char* g = std::getenv("TT_RUN_STOP_GRACE_S");
+    const double grace = (g != nullptr && *g != '\0') ? std::atof(g) : 120.0;
+    std::fprintf(
+        stderr,
+        "[tt-run guard] tt-run (pid %d) ended while its job was still running (prterun pid %d): stopping the job\n",
+        static_cast<int>(ttrun),
+        static_cast<int>(launcher));
+    const std::string why = stop_ranks(helper, launcher);
+    if (why.empty()) {
+        std::fprintf(
+            stderr,
+            "[tt-run guard] sent SIGTERM to all ranks; waiting up to %g s for them to exit, then forcing\n",
+            grace);
+        for (double waited = 0.0; waited < grace; waited += 0.2) {
+            if (!launcher_running()) {
+                std::fprintf(stderr, "[tt-run guard] the job ended after the stop\n");
+                return 0;
+            }
+            ::usleep(200000);
+        }
+    }
+    if (!launcher_running()) {
+        return 0;
+    }
+    std::fprintf(
+        stderr,
+        "[tt-run guard] job forced down (%s): the launcher kills every rank (SIGTERM, then SIGKILL 250 ms later) "
+        "without "
+        "a graceful shutdown, so devices may be left unhealthy. Run tt-smi -r on the job's hosts before the next "
+        "run.\n",
+        why.empty() ? "ranks did not exit within the stop grace" : why.c_str());
+    ::kill(launcher, SIGTERM);
+    for (int i = 0; i < 100 && launcher_running(); ++i) {  // 10 s, tt-run's SIGNAL_FORWARD_GRACE_S
+        ::usleep(100000);
+    }
+    if (launcher_running()) {
+        ::kill(launcher, SIGKILL);
+    }
+    return 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc > 1 && std::strcmp(argv[1], "--guard") == 0) {
+        return guard(argc, argv);
+    }
     int first = 1;
     if (first < argc && std::strcmp(argv[first], "--") == 0) {
         ++first;

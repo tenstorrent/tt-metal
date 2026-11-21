@@ -25,7 +25,12 @@ rank); how a tt-metal rank then closes its devices is the rank side, in #64546.
 | the job reaches its `--timeout N` | SIGTERM to every rank at N s, as for Ctrl-C; PRRTE's own `--timeout` stays only as a backstop at N + the grace + 30 s | 241 | `test_ttrun_hang_timeout` |
 | Ctrl-C (or SIGTERM) a second time | forces at once: SIGTERM to the launcher, which kills every rank still running (SIGTERM, then SIGKILL 250 ms later), with a warning to run `tt-smi -r` | 128 + the first signal | `test_ttrun.py::test_run_launcher_stops_the_ranks_with_sigterm[second_signal]` |
 | ranks still running when the stop grace runs out | forced the same way, with the same warning | 128 + the signal | `test_ttrun.py::test_run_launcher_stops_the_ranks_with_sigterm[grace_expired]` |
-| an uncaught C++ exception in a rank | the rank calls `MPI_Abort` (main's terminate handler): PRRTE kills every rank (SIGTERM, then SIGKILL ~200 ms later) before tt-run can act; tt-run names the rank from prterun's banner and ends a launcher that lingers after it (openpmix/prrte#2815) | the abort code | `test_ttrun_abort_ends`, `test_ttrun.py::test_wait_ends_a_launcher_that_lingers_after_an_mpi_abort` |
+| tt-run itself killed (SIGKILL, an abort, a crash) | tt-run cannot act; its guard (`tt-run-rank --guard`, started next to the launcher in a session of its own) sees tt-run gone and stops the job as tt-run would: SIGTERM to every rank, the grace, then the force; with tt-metal ranks, their mesh close is #64546 | (tt-run is gone) | `test_ttrun_killed_stops_the_ranks`, `test_ttrun.py::test_rank_wrapper_guard_stops_the_job_when_tt_run_dies`, `test_teardown_sanity.py::test_ttrun_killed_ranks_close_their_mesh` (strict xfail until #64546) |
+| SIGQUIT, SIGUSR1, SIGUSR2, SIGALRM, SIGWINCH, SIGCONT at tt-run | passed on to every rank unchanged (job control, then each rank's wrapper); the job goes on. A rank with no handler for it dies of it, and its wrapper stops the job as for any killed rank | the job's own | `test_ttrun_passes_signals_on`, `test_ttrun.py::test_run_launcher_passes_other_signals_on_to_the_ranks` |
+| Ctrl-Z (SIGTSTP) at tt-run | passed on to every rank, which pauses; then tt-run pauses itself. `fg` / `bg` resumes tt-run, which passes the SIGCONT on and the ranks resume | the job's own | `test_ttrun_ctrl_z_pauses_and_resumes_the_ranks`, `test_teardown_sanity.py::test_ctrl_z_pauses_and_resumes_the_job` |
+| SIGHUP at tt-run (its terminal closed) | not handled yet: tt-run dies and the job goes on under its guard's watch, which stops it as for a killed tt-run | (tt-run is gone) | |
+| an uncaught C++ exception in a rank | `std::terminate` aborts the rank (SIGABRT); its wrapper stops the job as for any killed rank and tt-run names it. The other ranks leave without closing their mesh: on the failed collective (MPI_ERR_PROC_FAILED) or on the SIGTERM, which they do not handle yet | 134 | `test_teardown_sanity.py::test_uncaught_cxx_exception_stops_the_job` (strict xfail until #64546) |
+| a Python exception or `sys.exit(1)` in a rank | nothing until the rank exits, and it does not: the exception unwinds into `MPI_Finalize`, which waits on the other ranks, still in their collectives; the job hangs until `--timeout` | 241 with `--timeout` | `test_teardown_sanity.py` (`test_raise_after_open`, `test_exit1_stops_the_job`, `test_thread_exception_stops_the_job`, `test_bad_shape`; strict xfails until #64546) |
 | a process still exiting after the launcher returned | waited for up to the grace after a clean finish (10 s after a stop), then SIGTERM, then SIGKILL; a zombie counts as ended | 0 if it exits in time | `test_ttrun.py` (`TestJobOwnership`) |
 | clean | normal finalize | 0 | `test_ttrun_clean` |
 
@@ -35,6 +40,13 @@ warning to run `tt-smi -r`.
 
 A raw MPI program that exits non-zero while still inside `MPI_Finalize` cannot be seen by the wrapper
 (`test_ttrun_error_exit_fails_fast_not_hang`, a strict xfail).
+
+Left to the rank side (#64546), each a strict xfail in `tests/ttnn/distributed/teardown_sanity/test_teardown_sanity.py`
+that turns red (XPASS) when it is fixed:
+- a failing rank stops the job itself (a Python exception, `sys.exit(1)`, a worker thread's exception, a TT_FATAL
+  raised in Python, an uncaught C++ exception), and every other rank closes its mesh on the SIGTERM;
+- the ranks of a job whose tt-run was killed close their mesh on the guard's SIGTERM;
+- a pause (Ctrl-Z) longer than a per-collective operation timeout must not fail the collective it paused.
 
 ---
 

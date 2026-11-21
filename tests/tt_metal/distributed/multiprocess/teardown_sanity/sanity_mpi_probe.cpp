@@ -41,6 +41,12 @@ static double g_t0;
 static volatile sig_atomic_t g_caught_signal = 0;
 static void on_terminate_signal(int signum) { g_caught_signal = signum; }
 
+// all_hang only: the signals tt-run passes on to the ranks unchanged (ttrun.py PASSED_SIGNALS, SIGTSTP aside, which
+// keeps its default and pauses the rank). Each one is recorded and reported, and the rank goes on.
+static constexpr int kPassedSignals[] = {SIGQUIT, SIGUSR1, SIGUSR2, SIGALRM, SIGCONT, SIGWINCH};
+static volatile sig_atomic_t g_passed_signal[65] = {};
+static void on_passed_signal(int signum) { g_passed_signal[signum] = 1; }
+
 static double now_s() {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
@@ -156,6 +162,9 @@ int main(int argc, char** argv) {
         // signal delivered straight to the rank.
         std::signal(SIGINT, on_terminate_signal);
         std::signal(SIGTERM, on_terminate_signal);
+        for (const int s : kPassedSignals) {
+            std::signal(s, on_passed_signal);
+        }
         // Poll on a short granularity: sleep_for does not return early on a signal, so a long sleep would let the
         // launcher escalate to SIGKILL before this loop noticed the flag. 100 ms keeps the catch well inside the
         // launcher's SIGTERM->SIGKILL grace. Heartbeat stays ~5 s (every 50 ticks).
@@ -164,6 +173,12 @@ int main(int argc, char** argv) {
                 mark("caught signal %d; exiting gracefully", (int)g_caught_signal);
                 mark("main_exit");
                 return 0;  // atexit -> MPI_Finalize: a graceful exit, not a kill
+            }
+            for (const int s : kPassedSignals) {
+                if (g_passed_signal[s]) {
+                    g_passed_signal[s] = 0;
+                    mark("got signal %d; going on", s);
+                }
             }
             if (i % 50 == 0) {
                 mark("all_hang heartbeat");
