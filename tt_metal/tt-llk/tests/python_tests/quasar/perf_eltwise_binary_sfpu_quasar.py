@@ -104,13 +104,13 @@ def test_perf_eltwise_binary_sfpu_float_quasar(
 )
 def test_perf_eltwise_binary_sfpu_bf16_rne_quasar(
     perf_report,
-    binary_op_mathop,
+    mathop,
     run_types,
     loop_factor,
     is_perf,
 ):
     _func.test_eltwise_binary_sfpu_bf16_rne_quasar(
-        binary_op_mathop,
+        mathop,
         _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )
@@ -157,7 +157,7 @@ def test_perf_eltwise_binary_sfpu_max_min_float_quasar(
     perf_report,
     formats,
     dest_acc,
-    is_max_op,
+    mathop,
     input_dimensions,
     run_types,
     loop_factor,
@@ -166,7 +166,7 @@ def test_perf_eltwise_binary_sfpu_max_min_float_quasar(
     _func.test_eltwise_binary_sfpu_max_min_float_quasar(
         formats,
         dest_acc,
-        is_max_op,
+        mathop,
         input_dimensions,
         _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
@@ -183,7 +183,7 @@ def test_perf_eltwise_binary_sfpu_max_min_int32_quasar(
     perf_report,
     formats,
     dest_acc,
-    is_max_op,
+    mathop,
     input_dimensions,
     run_types,
     loop_factor,
@@ -192,7 +192,7 @@ def test_perf_eltwise_binary_sfpu_max_min_int32_quasar(
     _func.test_eltwise_binary_sfpu_max_min_int32_quasar(
         formats,
         dest_acc,
-        is_max_op,
+        mathop,
         input_dimensions,
         _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
@@ -207,14 +207,14 @@ def test_perf_eltwise_binary_sfpu_max_min_int32_quasar(
 )
 def test_perf_eltwise_binary_sfpu_quant_quasar(
     perf_report,
-    binary_op,
+    mathop,
     sign_magnitude,
     run_types,
     loop_factor,
     is_perf,
 ):
     _func.test_eltwise_binary_sfpu_quant_quasar(
-        binary_op,
+        mathop,
         sign_magnitude,
         _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
