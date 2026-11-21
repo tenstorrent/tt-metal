@@ -258,13 +258,17 @@ inline void write_perf_hot_detail(uint32_t result_buffer_base) {
     }
 }
 
-// The hot sender's per-packet summary timers, off while the steps are sampled.
+// The hot sender's per-packet summary and send-detail timers, off while the steps are sampled.
 #define PERF_BD_HOT_NOW() uint64_t{0}
 #define PERF_BD_HOT_ADD_SINCE(slot, t0) ((void)(t0))
+#define PERF_BD_HOT_DETAIL_NOW() uint64_t{0}
+#define PERF_BD_HOT_DETAIL_ADD_SINCE(slot, t0) ((void)(t0))
 #else
 #define PERF_HOT(...)
 #define PERF_BD_HOT_NOW() PERF_BD_NOW()
 #define PERF_BD_HOT_ADD_SINCE(slot, t0) PERF_BD_ADD_SINCE(slot, t0)
+#define PERF_BD_HOT_DETAIL_NOW() PERF_BD_DETAIL_NOW()
+#define PERF_BD_HOT_DETAIL_ADD_SINCE(slot, t0) PERF_BD_DETAIL_ADD_SINCE(slot, t0)
 #endif
 
 // Per-config result entry for per-endpoint progress tracking.
@@ -1616,7 +1620,9 @@ struct SenderKernelTrafficConfig {
     FORCE_INLINE HotSendResult send_one_packet_hot(SenderHotState& h, [[maybe_unused]] uint32_t& slot_budget) {
         PERF_HOT(perf_hot_begin();)
         if (h.flow_control && h.credits == 0) {
+            [[maybe_unused]] uint64_t credit_t0 = PERF_BD_HOT_DETAIL_NOW();
             h.credits = credit_manager_.take_available_credits();
+            PERF_BD_HOT_DETAIL_ADD_SINCE(0, credit_t0);  // SD_CREDIT_CHECK
             if (h.credits == 0) {
                 PERF_BD_SUMMARY_INC(5);  // S_CREDIT_BLOCKED
                 PERF_HOT(perf_hot_step(HS_CREDIT);)
@@ -1630,8 +1636,10 @@ struct SenderKernelTrafficConfig {
                 sender_batch_flush();
                 PERF_HOT(perf_hot_step(HS_FLUSH);)
             }
+            [[maybe_unused]] uint64_t post_t0 = PERF_BD_HOT_DETAIL_NOW();
             advance_hot_header(h);
             h.header_stale = 0;
+            PERF_BD_HOT_DETAIL_ADD_SINCE(7, post_t0);  // SD_POST (its flush is in S_FLUSH)
             PERF_HOT(perf_hot_step(HS_POST);)
         }
         if (slot_budget == 0) {
@@ -1730,10 +1738,14 @@ private:
             PERF_HOT(perf_hot_step(HS_SLOT);)
         }
         if (h.payload_size > 0) {
+            [[maybe_unused]] uint64_t payload_t0 = PERF_BD_HOT_DETAIL_NOW();
             conn->send_payload_without_header_non_blocking_from_address(payload_address, h.payload_size);
+            PERF_BD_HOT_DETAIL_ADD_SINCE(5, payload_t0);  // SD_PAYLOAD_SEND
             PERF_HOT(perf_hot_step(HS_PAYLOAD);)
         }
+        [[maybe_unused]] uint64_t header_t0 = PERF_BD_HOT_DETAIL_NOW();
         conn->send_payload_flush_non_blocking_from_address(h.header_addr, sizeof(PACKET_HEADER_TYPE));
+        PERF_BD_HOT_DETAIL_ADD_SINCE(6, header_t0);  // SD_HEADER_SEND
         PERF_HOT(perf_hot_step(HS_HEADER);)
     }
 
