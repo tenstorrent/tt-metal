@@ -18,6 +18,7 @@ system temporary directory otherwise. Without ``tt-run`` the module skips; ``tes
 under tt-run, which is how CI runs it.
 """
 
+import gc
 import os
 import random
 import shutil
@@ -57,6 +58,16 @@ def two_ranks():
 @pytest.fixture(autouse=True)
 def _ranks_in_step(request, two_ranks):
     ranks_in_step(request.node.nodeid)
+
+
+@pytest.fixture(autouse=True)
+def ranks_in_lockstep():
+    """Ranks that share a mesh must make the same device allocations and frees in the same order. A test can leave
+    device tensors to the cyclic garbage collector, whose runs differ between the ranks (an exception's traceback
+    holds the frames that raised it), so every test ends with a collection on each rank before the next one starts."""
+    yield
+    gc.collect()
+    ttnn.distributed_context_barrier()
 
 
 def test_ranks_write_their_coordinates(two_ranks):
@@ -138,9 +149,11 @@ def test_rank_failing_mid_save_stops_every_rank(two_ranks, expect_error):
     model, params, opt = fresh_tp(DIM)
     path = os.path.join(root, "refused")
     # On rank 1 a model that disagrees with rank 0's description of the same keys: rank 0's merge refuses it, and
-    # every rank raises with rank 0's message.
-    other = TPBlock(DIM * 2) if rank == 1 else model
-    other.parameters()  # materializes the weights
+    # every rank raises with rank 0's message. Both ranks build it: ranks sharing a mesh must make the same device
+    # allocations in the same order, or the buffers of every later tensor sit at different addresses on their devices.
+    wider = TPBlock(DIM * 2)
+    wider.parameters()  # materializes the weights
+    other = wider if rank == 1 else model
     with expect_error(
         dcp.CheckpointError,
         r"merging the plan parts failed on rank\(s\) \[0\] of 2: rank 0: CheckpointError: .* rank 1 describes it",
@@ -263,32 +276,41 @@ def test_ranks_reading_different_checkpoints_at_one_path_are_refused(two_ranks, 
 
 
 def test_a_rank_that_placed_its_tensors_says_so_when_another_rank_fails(two_ranks, monkeypatch, expect_error):
-    """Rank 1 fails placing its first tensor, after rank 0 placed all of its own. Rank 0's error says how many tensors
-    it placed and that its model and optimizer are partly restored; rank 1's, which placed none, does not."""
+    """Rank 1 places every tensor, as rank 0 does (ranks sharing a mesh must make the same device allocations in the
+    same order), but reports a failure at its last one. Rank 0's error then says that it placed all of its tensors and
+    that its model is partly restored; rank 1's message counts its own tensors, once."""
     rank, local, root = two_ranks
     model, params, opt = fresh_tp(DIM)
     train_step(model, opt, DIM)
     path = os.path.join(root, "placed_on_rank0")
-    dcp.save(path, model=model, optimizer=opt)
-    fresh, fresh_params, fresh_opt = fresh_tp(DIM)
+    dcp.save(path, model=model)
+    fresh, fresh_params, _ = fresh_tp(DIM)
+    n = len(fresh_params)
     if rank == 1:
+        real_place = _load._place
+        placed = []
 
-        def fail(live, *args):
-            raise RuntimeError("simulated device out of memory")
+        def place_then_fail_at_the_last(live, *args):
+            real_place(live, *args)
+            placed.append(live.key)
+            if len(placed) == n:
+                raise RuntimeError("simulated device out of memory")
 
-        monkeypatch.setattr(_load, "_place", fail)
+        monkeypatch.setattr(_load, "_place", place_then_fail_at_the_last)
     pattern = (
-        r"^reading and placing the shards failed on rank\(s\) \[1\] of 2: rank 1: RuntimeError: simulated device out of "
-        r"memory"
+        r"^reading and placing the shards failed on rank\(s\) \[1\] of 2: rank 1: CheckpointError: load failed at "
+        rf".*\(RuntimeError: simulated device out of memory\) after {n - 1} of {n} tensors were placed"
     )
-    if rank == 0:
-        pattern += (
-            r"; rank 0 had placed (\d+) of \1 tensors, so the model and optimizer are partly restored: load again"
-        )
-    with expect_error(dcp.CheckpointError, pattern) as raised:
-        dcp.load(path, model=fresh, optimizer=fresh_opt)
-    assert rank == 0 or "partly restored" not in str(raised.value), "rank 1 placed nothing"
-    ttnn.distributed_context_barrier()
+    try:
+        with expect_error(dcp.CheckpointError, pattern) as raised:
+            dcp.load(path, model=fresh)
+        message = str(raised.value)
+        if rank == 0:
+            assert f"; rank 0 had placed {n} of {n} tensors, so the model and optimizer are partly restored" in message
+        else:
+            assert "rank 1 had placed" not in message, "a failing rank's own message already counts its tensors"
+    finally:
+        ttnn.distributed_context_barrier()
 
 
 def test_differing_dataloaders_are_stored_per_rank(two_ranks, expect_error):
