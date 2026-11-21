@@ -32,8 +32,11 @@ Edits that cannot change how a test executes do not need hardware:
 
   * owner_id / team    Ownership metadata.
 
-Anything else -- cmd, timeout, adding or removing a SKU, arch, dispatch_mode,
-tier, shard layout, model fields -- is treated as behaviour-affecting.
+Anything else -- cmd, timeout, arch, dispatch_mode, tier, shard layout, model fields --
+is entry-wide and scopes every SKU the entry currently declares.
+
+A change confined to `skus` is diffed per SKU instead: only the SKU(s) added,
+removed or reconfigured are scoped -- an untouched sibling SKU is not.
 
 `timeout` counts: verify_time_budget.py only proves it fits the team's budget, not
 that the test still finishes inside it. Lowering one is how a leg starts timing out.
@@ -570,9 +573,17 @@ def index_entries(entries, path, strict=True):
 def behavioural_view(entry):
     """The parts of an entry that can change how a test executes.
 
-    Everything under `skus` counts, `timeout` included.
+    Everything under `skus` counts, `timeout` included. See
+    entry_fields_excluding_skus for the entry-wide subset of this.
     """
     return {k: copy.deepcopy(v) for k, v in entry.items() if k not in METADATA_FIELDS}
+
+
+def entry_fields_excluding_skus(entry):
+    """behavioural_view() minus `skus`: the fields shared by every SKU leg."""
+    view = behavioural_view(entry)
+    view.pop("skus", None)
+    return view
 
 
 def resolve_profile(path, tracy_files):
@@ -727,19 +738,40 @@ def scope_file(
             raise
         return skip
 
+    # sku_filter: None = every SKU the entry currently declares; a set = just those keys.
     touched = []
     for key, entry in new_index.items():
         previous = old_index.get(key)
         if previous is None:
-            touched.append((key, entry, "added"))
-        elif canonical(behavioural_view(previous)) != canonical(behavioural_view(entry)):
-            touched.append((key, entry, "changed"))
-    # Removed entries are ignored: no test left to prove. Metadata-only edits fall
-    # out here too, since behavioural_view() excludes them.
+            touched.append((key, entry, "added", None))
+            continue
 
-    # Entries already touched above keep their reason and are not added twice.
+        if canonical(entry_fields_excluding_skus(previous)) != canonical(entry_fields_excluding_skus(entry)):
+            touched.append((key, entry, "changed", None))
+            continue
+
+        old_skus, new_skus = previous.get("skus"), entry.get("skus")
+        if not isinstance(old_skus, dict) or not isinstance(new_skus, dict):
+            # Malformed either side: scope the whole entry so the check below fails closed.
+            if canonical(old_skus) != canonical(new_skus):
+                touched.append((key, entry, "changed", None))
+            continue
+
+        added_skus = {sku for sku in new_skus if sku not in old_skus}
+        changed_skus = {
+            sku for sku in new_skus if sku in old_skus and canonical(new_skus[sku]) != canonical(old_skus[sku])
+        } - added_skus  # guard: keep these disjoint even if the conditions above are ever loosened.
+        # Removed SKUs need nothing proven; an untouched sibling SKU needs nothing either.
+        if added_skus:
+            touched.append((key, entry, "added", added_skus))
+        if changed_skus:
+            touched.append((key, entry, "changed", changed_skus))
+    # Removed entries are ignored: no test left to prove. Metadata-only edits fall
+    # out here too, since entry_fields_excluding_skus() excludes them.
+
+    # Entries already touched above keep their reason(s) and are not added twice.
     if changed_src and os.path.basename(path) not in source_scan_exempt_files:
-        already = {key for key, _, _ in touched}
+        already = {key for key, _, _, _ in touched}
         for key, entry in new_index.items():
             if key in already:
                 continue
@@ -762,18 +794,23 @@ def scope_file(
                 gitlinks or frozenset(),
             )
             if hits:
-                touched.append((key, entry, "source:" + ",".join(hits)))
+                # A source reference names the whole cmd, shared by every SKU.
+                touched.append((key, entry, "source:" + ",".join(hits), None))
 
     run_legs, dropped = [], []
-    for key, entry, reason in touched:
+    for key, entry, reason, sku_filter in touched:
         skus = entry.get("skus")
         if not isinstance(skus, dict) or not skus:
             raise GateError(f"{path}: entry '{key_str(key)}' has no skus mapping; cannot resolve any leg to run")
 
+        in_scope = skus if sku_filter is None else {sku: cfg for sku, cfg in skus.items() if sku in sku_filter}
+
         # Counted, never gated on, so a touched galaxy entry does not read as
         # "nothing to prove". Who may merge it stays CODEOWNERS' business.
-        runnable = [sku for sku in skus if sku not in unsupported_skus]
-        dropped.extend({"file": path, "name": entry.get("name"), "sku": sku} for sku in skus if sku in unsupported_skus)
+        runnable = [sku for sku in in_scope if sku not in unsupported_skus]
+        dropped.extend(
+            {"file": path, "name": entry.get("name"), "sku": sku} for sku in in_scope if sku in unsupported_skus
+        )
         if not runnable:
             continue
 
