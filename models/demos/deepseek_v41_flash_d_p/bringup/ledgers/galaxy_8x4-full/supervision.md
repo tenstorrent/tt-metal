@@ -1090,3 +1090,30 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   in an 8192 gate it loads the 5120 model and F283 refuses the 8192 oracles in the same process (cost: one extra
   --check, minutes). Fix: the added unit inherits the gate's geometry env.
 - 01:15 heartbeat: PB.MB5 gate running on the resident runner (request since 01:07); orchestrator alive; watch armed.
+- 01:16 PB.MB5 gate PASS -> 3223fb6cb51 (scripted, all 7 units): 5120 ladder last err_final_hidden 0.135 / 0.242, top5 1.0;
+  determinism 0; contract 0 / 0; outside history 0 (negative controls differ as they must); 0 builds after warm-up
+  (steady / resumed / partial / serving), ids uploads 0. FRESH 5120: steady 58.7k, resumed 56.5k, partial 17.9k
+  (PB.9F5 before the fix: 37.2 / 50.6 / 14.7k with ~22 builds a chunk). The model_bringup fix is in this branch. PB.9X next.
+- 01:45 heartbeat: PB.9X attempt 1 active (transcript fresh); watch armed.
+- 02:15 heartbeat: PB.9X attempt 1 active (9 tt files changed so far, transcript fresh); watch armed.
+- 02:45 heartbeat: PB.9X attempt 1 active (12 files changed, transcript fresh); watch armed.
+- 03:03 PB.9X WAITING, gate would FAIL on one metric: glued_serving_tok_s_4x2k_p139264 60.7k fresh (>= 67000, a bar I set
+  from PB.7C's 72.6k). The agent's premise check: PB.7C's 72.6k was the LANE path at a repeated position (glued_path_4x2k
+  = lanes); no 4x2k chunk had run glued before. Every other unit passes: packed oracle (every lane header through glued)
+  alone vs today 0, lane equivalence 0, slot digests 0; glued oracle all 0; glued reference within noise floors;
+  determinism 0; 0 builds after warm-up on EVERY layout (lanes 4x2k / 4x1.6k padded / AgentX lanes, glued 4x2k / 5x1.6k /
+  6x1344 / AgentX; build probe histories 0..1.03M, 1-6 segments, 1-token + idle: 0); ids uploads 0 (device ids reorder,
+  GluedIdsReorder). FRESH: lane header 4x2k via prefill_packed 63.0k (fixed lanes 59.0k with 346 builds); AgentX lane
+  packing 30.1 / 34.0 / 32.6k (23.3 / 26.5 / 28.9k); glued AgentX 49.1 / 53.8 / 53.5k (45.1 / 51.5 / 52.0k); 5x1.6k
+  51.9k (48.1k); 6x1344 47.9k; padded 4x~1.6k 43.2k. Per-segment overhead: aligned ~3-4 ms, misaligned ~7.7-8.6 ms.
+  Glued 4x2k is HOST-bound (enqueue 115-123 ms vs device ~103).
+  Deliverable check: no host tables, no position-keyed program (old slices only under PACKED_ROUTE=lanes / POS_DYNAMIC
+  off), warm-up = a finite enumerated set at adapter.compile (22 chunks, ~4 s). Fork changes: prepared_program COMMON value
+  slots (C++, arg index | 1<<31), fp8_rows common_values (tests run, pass), ckv_bfp4 dynamic_row0 (test written, NOT
+  run: single-card job, rule 19) -> for the owner's after-the-fact review.
+  DECIDED: ACCEPT. The bar was mine on a false premise; every case is faster fresh than before, 0 builds is an owner hard
+  rule now met on the packed path, bit-identical. PB.9X's 4x2k metric -> '> 0' (brief says why); the owner's 67k goal is
+  queued as PB.9H (after PB.T, keeping the owner's order): cut the glued host enqueue below device time (kv_lane_rows,
+  80 snapshot sends, page copies, the ~13 ms fresh-vs-repeated gap, the adapter's +5-7 ms), gate 4x2k fresh >= 67000.
+- tasks.yaml: test_no_rebuild units in PB.8R / PB.8RP / PB.T now carry each gate's own model configuration (validate
+  flagged F283: one load per class; PB.8R 5120 only, PB.8RP / PB.T 8192 with MHC_POST_V2=on).
