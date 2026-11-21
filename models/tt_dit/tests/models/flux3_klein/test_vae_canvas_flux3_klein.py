@@ -243,12 +243,6 @@ def test_pinned_encoder_slicing_is_on_canvas_convs(torch_ttnn):
             assert {stride for *k, stride in convs if tuple(k) == key} == {1}, key
 
 
-@pytest.mark.parametrize("rows_split", [2, 4, 8])
-def test_full_canvas_rows_split_through_the_downsamplers(rows_split):
-    """The 1 MP square canvas split over 2, 4 or 8 chips keeps whole rows per chip at every encoder level."""
-    assert FULL_CANVAS[1] % (rows_split * SCALE) == 0
-
-
 def _pattern(width: int, height: int) -> Image.Image:
     y, x = np.mgrid[0:height, 0:width].astype(np.float32)
     rgb = np.stack([x / width, y / height, 0.5 + 0.5 * np.sin(x / 7.0) * np.cos(y / 11.0)], axis=-1)

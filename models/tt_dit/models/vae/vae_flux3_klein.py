@@ -31,7 +31,7 @@ SCALE = 8
 PATCH = 2
 LATENT_CHANNELS = 128
 # A reference that fills the 1 MP square canvas (the served square reference, every square multi-reference canvas)
-# runs the plain encoder with its rows split over h_axis: 0.053 s per reference (job 189638), 0.26 s TP alone (226769)
+# runs the plain encoder with its rows split over h_axis: 0.063-0.067 s per reference, 0.26 s TP alone (226987 / 226769)
 FULL_CANVAS = (1024, 1024)
 BLOCK_OUT_CHANNELS = (128, 256, 512, 512)
 Z_CHANNELS = 32
