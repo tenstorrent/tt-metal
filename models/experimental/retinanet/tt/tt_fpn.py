@@ -98,7 +98,7 @@ class resnet50Fpn:
             stride=1,
             padding=0,
             parameters=parameters["inner_blocks"].get("0", {}).get("0", None),
-            kernel_fidelity=model_config,
+            model_config=model_config,
             activation=None,
             **layer_optimisations.conv1,
         )
@@ -108,7 +108,7 @@ class resnet50Fpn:
             stride=1,
             padding=0,
             parameters=parameters["inner_blocks"].get("1", {}).get("0", None),
-            kernel_fidelity=model_config,
+            model_config=model_config,
             activation=None,
             **layer_optimisations.conv2,
         )
@@ -118,7 +118,7 @@ class resnet50Fpn:
             stride=1,
             padding=0,
             parameters=parameters["inner_blocks"].get("2", {}).get("0", None),
-            kernel_fidelity=model_config,
+            model_config=model_config,
             activation=None,
             **layer_optimisations.conv3,
         )
@@ -128,7 +128,7 @@ class resnet50Fpn:
             stride=1,
             padding=1,
             parameters=parameters["layer_blocks"].get("0", {}).get("0", None),
-            kernel_fidelity=model_config,
+            model_config=model_config,
             activation=None,
             **layer_optimisations.conv4,
         )
@@ -138,7 +138,7 @@ class resnet50Fpn:
             stride=1,
             padding=1,
             parameters=parameters["layer_blocks"].get("1", {}).get("0", None),
-            kernel_fidelity=model_config,
+            model_config=model_config,
             activation=None,
             **layer_optimisations.conv5,
         )
@@ -148,7 +148,7 @@ class resnet50Fpn:
             stride=1,
             padding=1,
             parameters=parameters["layer_blocks"].get("2", {}).get("0", None),
-            kernel_fidelity=model_config,
+            model_config=model_config,
             activation=None,
             **layer_optimisations.conv6,
         )
@@ -158,7 +158,7 @@ class resnet50Fpn:
             stride=2,
             padding=1,
             parameters=getattr(parameters.extra_blocks, "p6", None),
-            kernel_fidelity=model_config,
+            model_config=model_config,
             activation=None,
             **layer_optimisations.conv7,
         )
@@ -168,7 +168,7 @@ class resnet50Fpn:
             stride=2,
             padding=1,
             parameters=getattr(parameters.extra_blocks, "p7", None),
-            kernel_fidelity=model_config,
+            model_config=model_config,
             activation=None,
             **layer_optimisations.conv8,
         )

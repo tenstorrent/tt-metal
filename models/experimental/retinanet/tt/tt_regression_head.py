@@ -2,11 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from typing import List, Optional
+from models.experimental.retinanet.tt.utils import (
+    Conv2dNormActivation,
+    bbox_reg_slice_config,
+    conv2d_with_level_weights,
+    group_norm_grid,
+    head_conv_config,
+)
+from typing import List
 from dataclasses import dataclass
-from loguru import logger
-import tt_lib.fallback_ops as fallback_ops
-import os
 
 
 @dataclass
@@ -102,172 +106,6 @@ retinanet_head_optimizations = {
 }
 
 
-class Conv2dNormActivation:
-    """
-    TTNN implementation of Conv2d + GroupNorm + ReLU block.
-    """
-
-    def __init__(
-        self,
-        parameters: dict,
-        device: ttnn.Device,
-        in_channels: int = 256,
-        out_channels: int = 256,
-        kernel_size: tuple = (3, 3),
-        stride: tuple = (1, 1),
-        padding: tuple = (1, 1),
-        num_groups: int = 32,
-        grid_size: Optional[ttnn.CoreGrid] = None,
-        input_mask: Optional[ttnn.Tensor] = None,
-        model_config: dict = None,
-        compute_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
-        conv_config: Optional[ttnn.Conv2dConfig] = None,
-    ):
-        """
-        Args:
-            parameters: Dict with keys 'weight', 'norm_weight', 'norm_bias'
-            device: TTNN device
-            in_channels: Number of input channels
-            out_channels: Number of output channels
-            kernel_size: Convolution kernel size
-            stride: Convolution stride
-            padding: Convolution padding
-            num_groups: Number of groups for GroupNorm
-            grid_size: CoreGrid for GroupNorm (defaults to 8x8)
-            input_mask: Pre-created input mask for GroupNorm
-        """
-        self.device = device
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.padding = padding
-        self.num_groups = num_groups
-        self.model_config = model_config
-        self.compute_config = compute_config
-        self.conv_config = conv_config
-        self.conv_weight = parameters["weight"]
-        self.conv_bias = parameters["bias"]
-        self.norm_weight = parameters["norm_weight"]
-        self.norm_bias = parameters["norm_bias"]
-        # GroupNorm fallback flag
-        self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "1") == "1"
-        self.grid_size = grid_size if grid_size is not None else ttnn.CoreGrid(y=8, x=8)
-
-        self.input_mask = input_mask
-
-        self.slice_config = ttnn.Conv2dSliceConfig(
-            slice_type=ttnn.Conv2dDRAMSliceHeight,
-        )
-
-    def __call__(
-        self,
-        x: ttnn.Tensor,
-        batch_size: int,
-        input_height: int,
-        input_width: int,
-        fpn_level: int = None,
-        conv_block_idx: int = None,
-    ) -> ttnn.Tensor:
-        """
-        Forward pass: Conv2d -> GroupNorm -> ReLU
-
-        Args:
-            x: Input tensor in NHWC format
-            batch_size: Batch size
-            input_height: Input height
-            input_width: Input width
-            fpn_level: FPN level
-            conv_block_idx: Index of the convolution block
-
-        Returns:
-            Output tensor after Conv2d + GroupNorm + ReLU
-        """
-
-        prefix = (
-            f"[FPN{fpn_level}][Conv{conv_block_idx}]"
-            if fpn_level is not None and conv_block_idx is not None
-            else "[Conv]"
-        )
-
-        x, [H_out, W_out], [prepared_weight, prepared_bias] = ttnn.conv2d(
-            input_tensor=x,
-            weight_tensor=self.conv_weight,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            device=self.device,
-            bias_tensor=self.conv_bias,
-            kernel_size=list(self.kernel_size),
-            stride=list(self.stride),
-            padding=list(self.padding),
-            batch_size=batch_size,
-            input_height=input_height,
-            input_width=input_width,
-            slice_config=self.slice_config,
-            compute_config=self.compute_config,
-            conv_config=self.conv_config,
-            return_output_dim=True,
-            return_weights_and_bias=True,
-        )
-
-        N, H_out, W_out, C = x.shape
-
-        if self.fallback_on_groupnorm:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.reshape(x, (N, H_out, W_out, C))
-            x = ttnn.permute(x, (0, 3, 1, 2))
-
-            x = fallback_ops.group_norm(
-                x,
-                num_groups=self.num_groups,
-                weight=self.norm_weight,
-                bias=self.norm_bias,
-            )
-            x = x.to(self.device)
-            x = ttnn.permute(x, (0, 2, 3, 1))  # NCHW -> NHWC
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-
-        else:
-            # Use TTNN native GroupNorm (when FALLBACK_ON_GROUPNORM=0)
-            logger.debug(f"{prefix} Using TTNN native GroupNorm")
-
-            spatial_size = H_out * W_out
-            required_size = ((spatial_size + self.grid_size.y * 32 - 1) // (self.grid_size.y * 32)) * (
-                self.grid_size.y * 32
-            )
-
-            if spatial_size != required_size:
-                pad_amount = required_size - spatial_size
-                x_flat = ttnn.reshape(x, (N, 1, spatial_size, C))
-                x_padded = ttnn.pad(x_flat, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
-            else:
-                x_padded = ttnn.reshape(x, (N, 1, spatial_size, C))
-
-            # Apply GroupNorm
-            x_normalized = ttnn.group_norm(
-                x_padded,
-                num_groups=self.num_groups,
-                input_mask=self.input_mask,
-                weight=self.norm_weight,
-                bias=self.norm_bias,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                core_grid=self.grid_size,
-                inplace=False,
-                compute_kernel_config=self.compute_config,
-            )
-
-            if spatial_size != required_size:
-                x_normalized = x_normalized[:, :, :spatial_size, :]
-
-            x = ttnn.reshape(x_normalized, (N, input_height, input_width, C))
-
-        # ReLU activation
-        x = ttnn.relu(x)
-
-        return x
-
-
-# Usage in ttnn_retinanet_regression_head
 def ttnn_retinanet_regression_head(
     feature_maps: List[ttnn.Tensor],
     parameters: dict,
@@ -279,6 +117,9 @@ def ttnn_retinanet_regression_head(
     model_config: dict = None,
     optimization_profile: str = "optimized",
 ) -> ttnn.Tensor:
+    """The regression head on ``feature_maps``, the five pyramid levels as NHWC TILE tensors.
+    ``parameters`` come from preprocess_regression_head_parameters for the same device; the head
+    runs as many conv blocks as they hold. Returns the box deltas, [1, anchors, 4]."""
     opt_config = retinanet_head_optimizations[optimization_profile]
 
     fpn_conv_configs = [
@@ -299,7 +140,7 @@ def ttnn_retinanet_regression_head(
 
     all_bbox_regression = []
 
-    grid_size = ttnn.CoreGrid(y=8, x=8)
+    grid_size = group_norm_grid(device)
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -315,13 +156,10 @@ def ttnn_retinanet_regression_head(
         conv_blocks_config = fpn_conv_configs[fpn_idx]
         final_conv_config = fpn_final_configs[fpn_idx]
 
-        if conv_blocks_config is not None:
-            conv_config = ttnn.Conv2dConfig(**conv_blocks_config)
-        else:
-            conv_config = None
+        conv_config = head_conv_config(device, conv_blocks_config)
 
         conv_blocks = []
-        for conv_idx in range(4):
+        for conv_idx in range(len(parameters["conv"])):
             conv_block = Conv2dNormActivation(
                 parameters=parameters["conv"][conv_idx],
                 device=device,
@@ -332,7 +170,6 @@ def ttnn_retinanet_regression_head(
                 padding=(1, 1),
                 num_groups=32,
                 grid_size=grid_size,
-                model_config=model_config,
                 compute_config=compute_config,
                 conv_config=conv_config,
             )
@@ -342,31 +179,25 @@ def ttnn_retinanet_regression_head(
         x = feature_map
         for conv_idx, conv_block in enumerate(conv_blocks):
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-            x = conv_block(
-                x, batch_size=batch_size, input_height=H, input_width=W, fpn_level=fpn_idx, conv_block_idx=conv_idx
-            )
+            x = conv_block(x, batch_size=batch_size, input_height=H, input_width=W, level=fpn_idx)
 
         # Final bbox_reg conv layer with config
-        bbox_reg_slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4)
-        if final_conv_config is not None:
-            bbox_reg_config = ttnn.Conv2dConfig(**final_conv_config)
-        else:
-            bbox_reg_config = None
+        bbox_reg_config = head_conv_config(device, final_conv_config)
 
-        bbox_regression = ttnn.conv2d(
+        bbox_regression, _, _ = conv2d_with_level_weights(
+            parameters["bbox_reg"],
+            fpn_idx,
             input_tensor=x,
-            weight_tensor=parameters["bbox_reg"]["weight"],
             in_channels=in_channels,
             out_channels=num_anchors * 4,
             device=device,
-            bias_tensor=parameters["bbox_reg"]["bias"],
             kernel_size=(3, 3),
             stride=(1, 1),
             padding=(1, 1),
             batch_size=batch_size,
             input_height=H,
             input_width=W,
-            slice_config=bbox_reg_slice_config,
+            slice_config=bbox_reg_slice_config(device),
             compute_config=compute_config,
             conv_config=bbox_reg_config,
         )
