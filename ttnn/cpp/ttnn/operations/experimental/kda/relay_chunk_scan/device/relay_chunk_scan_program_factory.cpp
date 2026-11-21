@@ -177,10 +177,10 @@ tt::tt_metal::ProgramDescriptor build_program(
     const auto connection_node = fabric_2d ? destination_node : mesh->get_fabric_node_id(first_hop);
     const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, source_node, connection_node);
 
-    // The ranks this rank's final carry reaches each way: on a ring the whole ring behind, on the links the relay's
-    // stream (which runs ahead) leaves free, else to either end of the line.
-    const uint32_t ahead = ring ? 0 : sp_size - 1 - sp_rank;
-    const uint32_t behind = sp_size - 1 - ahead;
+    // The ranks this rank's final carry reaches each way: on a ring the whole ring both ways (a head's carry goes one
+    // way, see carry_mask), else to either end of the line.
+    const uint32_t ahead = ring ? sp_size - 1 : sp_size - 1 - sp_rank;
+    const uint32_t behind = ring ? sp_size - 1 : sp_size - 1 - ahead;
     const auto [batch_heads, key_dim] = relay_state_geometry(in);
     const uint32_t kt = key_dim / tt::constants::TILE_HEIGHT;
     const uint32_t state_tiles = kt * kt;
@@ -261,6 +261,13 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t relay_range = unicast_peers ? carry_senders[0].peers : successor_forward ? ahead : behind;
     const bool back_sender = unicast_peers ? carry_senders[1].peers != 0 : successor_forward && behind != 0;
     const uint32_t back_range = unicast_peers ? carry_senders[1].peers : back_sender ? behind : 0;
+    // The senders that carry head h's final carry (bit 0 the relay's, bit 1 the second): on a ring each reaches every
+    // rank, so they alternate a link's heads between them and each streams half; else both, each to its own ranks.
+    const bool alternate = !unicast_peers && ring && relay_range != 0 && back_range != 0;
+    const auto carry_mask = [&](uint32_t h) {
+        return alternate ? 1u << (h / attrs.num_links % 2)
+                         : uint32_t(relay_range != 0) | uint32_t(back_range != 0) << 1;
+    };
 
     const std::vector<CoreCoord> correction_cores(
         attrs.cores.begin(), attrs.cores.begin() + batch_heads * cores_per_head);
@@ -756,8 +763,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     relay_reader_args.push_back(arrival_address);
     relay_reader_args.push_back(final_address);
     relay_reader.emplace_common_runtime_args(relay_reader_args);
-    relay_writer.emplace_common_runtime_args(
-        {carry.buffer(), uint32_t(relay_range != 0) | uint32_t(back_sender) << 1, in.landing.buffer(), final_address});
+    relay_writer.emplace_common_runtime_args({carry.buffer(), in.landing.buffer(), final_address});
     for (uint32_t r = 0; r < relay_cores.size(); ++r) {
         const auto& heads = relay_core_heads[r];
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt, writer_rt;
@@ -774,6 +780,7 @@ tt::tt_metal::ProgramDescriptor build_program(
             writer_rt.push_back(first_notify_semaphore_id + h / attrs.num_links);
             writer_rt.push_back(xy(mesh->worker_core_from_logical_core(sender_cores[link])));
             writer_rt.push_back(xy(mesh->worker_core_from_logical_core(sender_cores[attrs.num_links + link])));
+            writer_rt.push_back(carry_mask(h));
         }
         relay_reader.emplace_runtime_args(relay_cores[r], reader_rt);
         relay_writer.emplace_runtime_args(relay_cores[r], writer_rt);
@@ -802,12 +809,13 @@ tt::tt_metal::ProgramDescriptor build_program(
         links.size(),
         back_links.size());
     for (uint32_t link = 0; link < attrs.num_links; ++link) {
-        std::vector<uint32_t> heads, notify, head_slots;
+        std::vector<uint32_t> heads, notify, head_slots, masks;
         for (uint32_t h = link; h < batch_heads; h += attrs.num_links) {
             const auto [relay_core, slot] = relay_chunk_scan_relay_slot(h, batch_heads, attrs.num_links);
             heads.push_back(xy(mesh->worker_core_from_logical_core(relay_cores[relay_core])));
             notify.push_back(first_notify_semaphore_id + h / attrs.num_links);
             head_slots.push_back(slot);
+            masks.push_back(carry_mask(h));
         }
         for (uint32_t direction = 0; direction < 2; ++direction) {
             const bool backward = direction == 1;
@@ -824,6 +832,10 @@ tt::tt_metal::ProgramDescriptor build_program(
             sender_rt.append(heads);
             sender_rt.append(notify);
             sender_rt.append(head_slots);
+            // Whether this sender carries each head's final carry.
+            for (const uint32_t mask : masks) {
+                sender_rt.push_back(mask >> direction & 1);
+            }
             sender_rt.push_back(uint32_t(!backward));
             sender_rt.push_back(backward ? back_range : relay_range);
             // An idle second sender is given the relay's connection, which it never opens.

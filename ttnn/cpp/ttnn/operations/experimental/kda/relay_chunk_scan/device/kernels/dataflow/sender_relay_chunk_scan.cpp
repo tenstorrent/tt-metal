@@ -63,6 +63,8 @@ void kernel_main() {
     arg += num_heads;
     const size_t slot_args = arg;  // then each head's slot on its relay core
     arg += num_heads;
+    const size_t carries_args = arg;  // then whether this sender carries each head's final carry
+    arg += num_heads;
     // The relay's own sender, else the link's second carry sender, which sends towards the predecessor.
     const bool relay = get_arg_val<uint32_t>(arg++);
     const uint8_t carry_range = get_arg_val<uint32_t>(arg++);
@@ -100,11 +102,21 @@ void kernel_main() {
         const uint32_t xy = head_xy(u);
         noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, get_semaphore(first_ack_semaphore_id + head_slot(u))), 1);
     };
-    // Streams the units through the slots: each once its relay core's writer has counted it (its column, after
-    // `counted` earlier ones, in the head's count semaphore on this core), read under its slot's transaction id so a
-    // unit waits only for its own read; send(u, buffer) puts it on the fabric. A head's slot is released once its last
-    // column has been read.
-    const auto stream = [&](uint32_t counted, const auto& send) {
+    // Streams the units of the heads `selected` picks through the slots: each once its relay core's writer has counted
+    // it (its column, after `counted` earlier ones, in the head's count semaphore on this core), read under its slot's
+    // transaction id so a unit waits only for its own read; send(u, buffer) puts it on the fabric. A head's slot is
+    // released once its last column has been read.
+    const auto stream = [&](uint32_t counted, const auto& selected, const auto& send) {
+        uint32_t picked[16];  // a sender serves at most relay_chunk_scan_max_heads_per_link heads
+        uint32_t picks = 0;
+        for (uint32_t h = 0; h < num_heads; ++h) {
+            if (selected(h)) {
+                picked[picks++] = h;
+            }
+        }
+        const uint32_t units = picks * kt;
+        // The k-th streamed unit is column k % kt of the picked head k / kt.
+        const auto unit = [&](uint32_t k) { return picked[k / kt] * kt + k % kt; };
         // Blackhole's data-movement RISCs cache L1: invalidate before each poll, as noc_semaphore_wait_min does.
         const auto ready = [&](uint32_t u) {
             invalidate_l1_cache();
@@ -112,28 +124,30 @@ void kernel_main() {
                        get_semaphore(get_arg_val<uint32_t>(notify_args + u / kt)))[0] >= counted + u % kt + 1;
         };
         uint32_t fetched = 0;
-        for (uint32_t u = 0; u < units; ++u) {
-            // Issue every read the free slots allow, waiting only for unit u itself.
-            while (fetched < units && fetched < u + slots && (fetched == u || ready(fetched))) {
-                while (!ready(fetched)) {
+        for (uint32_t k = 0; k < units; ++k) {
+            // Issue every read the free slots allow, waiting only for unit k itself.
+            while (fetched < units && fetched < k + slots && (fetched == k || ready(unit(fetched)))) {
+                while (!ready(unit(fetched))) {
                 }
                 if (fetched >= slots) {
                     // Unit fetched - slots last used this slot: its packets must have left L1.
                     noc_async_writes_flushed();
                 }
-                const uint32_t xy = head_xy(fetched);
+                const uint32_t u = unit(fetched);
+                const uint32_t xy = head_xy(u);
                 noc_async_read_set_trid(1 + fetched % slots);
                 noc_async_read(
-                    get_noc_addr(xy & 0xFFFF, xy >> 16, eout_address + column_offset(fetched)),
+                    get_noc_addr(xy & 0xFFFF, xy >> 16, eout_address + column_offset(u)),
                     stage + (fetched % slots) * unit_bytes,
                     unit_bytes);
                 ++fetched;
             }
-            noc_async_read_barrier_with_trid(1 + u % slots);
+            noc_async_read_barrier_with_trid(1 + k % slots);
+            const uint32_t u = unit(k);
             if (u % kt == kt - 1) {
                 release(u);
             }
-            send(u, stage + (u % slots) * unit_bytes);
+            send(u, k % slots, stage + (k % slots) * unit_bytes);
         }
         noc_async_read_set_trid(0);
         noc_async_writes_flushed();
@@ -157,34 +171,38 @@ void kernel_main() {
         }
         const uint32_t landing = last ? final_landing : ein_landing;
         const uint32_t landed_semaphore = last ? final_semaphore : arrival_semaphore;
-        stream(0, [&](uint32_t u, uint32_t buffer) {
-            const uint32_t xy = head_xy(u);
-            const uint32_t column = landing + column_offset(u);
-            for (uint32_t c = 0; c < chunks; ++c) {
-                const uint64_t dst = get_noc_addr(xy & 0xFFFF, xy >> 16, column + c * chunk_bytes);
-                // 1D routing: the connection leaves towards the successor's side of the line (2D ignores the hops).
-                if (c + 1 == chunks) {
-                    fabric_unicast_noc_fused_unicast_with_atomic_inc(
-                        to_successor,
-                        hdrs[u % slots][c],
-                        buffer + c * chunk_bytes,
-                        chunk_size(c),
-                        NocUnicastAtomicIncFusedCommandHeader{
-                            dst, get_noc_addr(xy & 0xFFFF, xy >> 16, landed_semaphore), 1, true},
-                        successor_hops);
-                } else {
-                    fabric_unicast_noc_unicast_write(
-                        to_successor,
-                        hdrs[u % slots][c],
-                        buffer + c * chunk_bytes,
-                        chunk_size(c),
-                        NocUnicastCommandHeader{dst},
-                        successor_hops);
+        stream(
+            0,
+            [](uint32_t) { return true; },
+            [&](uint32_t u, uint32_t slot, uint32_t buffer) {
+                const uint32_t xy = head_xy(u);
+                const uint32_t column = landing + column_offset(u);
+                for (uint32_t c = 0; c < chunks; ++c) {
+                    const uint64_t dst = get_noc_addr(xy & 0xFFFF, xy >> 16, column + c * chunk_bytes);
+                    // 1D routing: the connection leaves towards the successor's side of the line (2D ignores the hops).
+                    if (c + 1 == chunks) {
+                        fabric_unicast_noc_fused_unicast_with_atomic_inc(
+                            to_successor,
+                            hdrs[slot][c],
+                            buffer + c * chunk_bytes,
+                            chunk_size(c),
+                            NocUnicastAtomicIncFusedCommandHeader{
+                                dst, get_noc_addr(xy & 0xFFFF, xy >> 16, landed_semaphore), 1, true},
+                            successor_hops);
+                    } else {
+                        fabric_unicast_noc_unicast_write(
+                            to_successor,
+                            hdrs[slot][c],
+                            buffer + c * chunk_bytes,
+                            chunk_size(c),
+                            NocUnicastCommandHeader{dst},
+                            successor_hops);
+                    }
                 }
-            }
-        });
+            });
     }
 
+    const auto carries = [&](uint32_t h) { return get_arg_val<uint32_t>(carries_args + h) != 0; };
     if (position == 0 && carry_range != 0) {
         // The final carry, a head's columns after its relay's on the relay's sender: each column into the head's
         // final-state slot of its relay core on every rank this sender reaches (the same core everywhere), counted
@@ -200,7 +218,7 @@ void kernel_main() {
         if constexpr (unicast_peers) {
             // Unicast: a slot's headers per unit and rank in flight, rerouted to the next rank once flushed.
             uint32_t group = 0;
-            stream(relay ? kt : 0, [&](uint32_t u, uint32_t buffer) {
+            stream(relay ? kt : 0, carries, [&](uint32_t u, uint32_t slot, uint32_t buffer) {
                 for (uint32_t peer = 0; peer < carry_range; ++peer) {
                     if (group != 0 && group % slots == 0) {
                         noc_async_writes_flushed();
@@ -252,18 +270,18 @@ void kernel_main() {
                 }
             }
             auto* sender = &fabric.get(0).sender;
-            stream(relay ? kt : 0, [&](uint32_t u, uint32_t buffer) {
+            stream(relay ? kt : 0, carries, [&](uint32_t u, uint32_t slot, uint32_t buffer) {
                 for (uint32_t c = 0; c < chunks; ++c) {
                     const auto command = destination(u, c);
                     if (c + 1 == chunks) {
                         fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
                             UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
                             UnicastFusedAtomicIncUpdateMask::SemaphoreAddr>(
-                            sender, hdrs[u % slots][c], buffer + c * chunk_bytes, command);
+                            sender, hdrs[slot][c], buffer + c * chunk_bytes, command);
                     } else {
                         fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                             sender,
-                            hdrs[u % slots][c],
+                            hdrs[slot][c],
                             buffer + c * chunk_bytes,
                             NocUnicastCommandHeader{command.noc_address});
                     }

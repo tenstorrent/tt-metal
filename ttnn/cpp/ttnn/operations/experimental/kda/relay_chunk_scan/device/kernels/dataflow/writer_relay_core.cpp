@@ -30,12 +30,10 @@ constexpr uint32_t state_tiles = kt * kt;
 // other rank it writes each head's carry once the first rank's senders have landed it in the head's final slot.
 void kernel_main() {
     const uint32_t heads = get_arg_val<uint32_t>(0);
-    const auto head_arg = [](uint32_t s, uint32_t i) { return get_arg_val<uint32_t>(1 + 4 * s + i); };
-    // Which of the head's link's senders carry the final carry: the relay's (bit 0), the second (bit 1).
-    const uint32_t carry_senders = get_common_arg_val<uint32_t>(1);
+    const auto head_arg = [](uint32_t s, uint32_t i) { return get_arg_val<uint32_t>(1 + 5 * s + i); };
     // The landing buffer's final slots, and the persistent count of the columns landed there.
-    const uint32_t final_landing = get_common_arg_val<uint32_t>(2) + relay_heads * state_tiles * get_tile_size(cb_eout);
-    const uint32_t final_semaphore = get_common_arg_val<uint32_t>(3);
+    const uint32_t final_landing = get_common_arg_val<uint32_t>(1) + relay_heads * state_tiles * get_tile_size(cb_eout);
+    const uint32_t final_semaphore = get_common_arg_val<uint32_t>(2);
 
     // The reader's chronology: this rank's position, and the slab index.
     cb_wait_front(cb_chron, 1);
@@ -47,9 +45,12 @@ void kernel_main() {
     cb_pop_front(cb_chron, 1);
 
     // Hand each tile column of the heads' states compute forms in cb_eout, head after head, to the heads' sender(s) as
-    // it is packed (a count on the sender's core).
-    const auto hand_on = [&](uint32_t senders) {
+    // it is packed (a count on the sender's core): the relay's sender, or for the final carry the head's carrying
+    // senders.
+    const auto senders_of = [&](uint32_t s, bool carry) { return carry ? head_arg(s, 4) : 1u; };
+    const auto hand_on = [&](bool carry) {
         for (uint32_t s = 0; s < heads; ++s) {
+            const uint32_t senders = senders_of(s, carry);
             const uint32_t notify_semaphore = get_semaphore(head_arg(s, 1));
             for (uint32_t j = 0; j < kt; ++j) {
                 cb_wait_front(cb_eout, s * state_tiles + (j + 1) * kt);
@@ -62,11 +63,14 @@ void kernel_main() {
             }
         }
     };
-    // Each head's slot is free again once its senders have read its last column.
-    const auto release = [&](uint32_t releases) {
+    // Each head's slot is free again once its senders have read its last column: the relay's, then for the final
+    // carry each carrying sender's.
+    const auto release = [&](bool carry) {
         for (uint32_t s = 0; s < heads; ++s) {
+            const uint32_t senders = senders_of(s, true);
             noc_semaphore_wait_min(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(first_ack_semaphore_id + s)), releases);
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(first_ack_semaphore_id + s)),
+                1 + (carry ? (senders & 1) + (senders >> 1) : 0));
         }
         cb_wait_front(cb_eout, relay_heads * state_tiles);
         cb_pop_front(cb_eout, relay_heads * state_tiles);
@@ -87,16 +91,16 @@ void kernel_main() {
         }
         noc_async_write_barrier();
     };
-    hand_on(1);
-    release(1);
+    hand_on(false);
+    release(false);
 
     if (position == 0) {
         // The final carries: hand their columns to the senders, then write them out.
-        hand_on(carry_senders);
+        hand_on(true);
         cb_wait_front(cb_eout, heads * state_tiles);
         write_carry(get_read_ptr(cb_eout));
         // The relay's release, then each carry sender's.
-        release(1 + (carry_senders & 1) + (carry_senders >> 1));
+        release(true);
     } else {
         // Each carry column out as it lands; the call ends once the whole carry has arrived, which separates
         // consecutive calls across the SP line.
