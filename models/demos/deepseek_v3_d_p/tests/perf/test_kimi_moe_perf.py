@@ -3,18 +3,15 @@
 
 """Kimi-K3 / Kimi-K3.1 MoE perf gate: host time of one MoE layer forward on the MoE block, as the models run it.
 
-One MoE layer through the model adapter (TtMoEBlockFfn: MoE head -> sparse dispatch -> flat experts + combine -> MoE
-tail; K3's seeded random weights, block_cases.MODELS) at each model's stage and chunk:
+One MoE layer through the model adapter (TtMoEBlockFfn, K3's seeded random weights from block_cases.MODELS):
 
-* kimi_k3-8x4-5120: K3 on one 8x4 Galaxy (the runners' *_8x4 configs), 5,120-token chunk.
-* kimi_k3_1-4x4-sp1-2560: K3.1's production stage, one tray half (SP=4 on mesh axis 1, TP=4 on axis 0), 2,560-token
-  chunk, the mesh opened with K3.1's L1_SMALL_SIZE. Needs the Galaxy narrowed to the tray half: run it through
-  tests/run_4x4_stage_tests.sh (unnarrowed, the system mesh is 8x4 and the case skips; the 8x4 case skips the other way).
+* kimi_k3-8x4-5120: K3 on one 8x4 Galaxy, 5,120-token chunk.
+* kimi_k3_1-4x4-sp1-2560: K3.1's production stage, one tray half (SP=4 on mesh axis 1), 2,560-token chunk, K3.1's
+  L1_SMALL_SIZE. Run it through tests/run_4x4_stage_tests.sh; on the full Galaxy it skips.
 
-The gate is host time as tests/measure measures it (the Kimi perf tests' gate): untraced fastest of 10 after 10
-warm-up, traced one replay, the CPU clock held; each two-sided against PERF_TARGETS_MS ± MARGIN[mode] (a case without
-targets only reports), and the traced output must match the untraced one. Per-op device time of the same calls is
-test_moe_block_models.py::test_moe_block_perf (BLOCK_US), which the CI leg runs next to this.
+Host time from measure_host (untraced fastest of 10 after 10 warm-up, traced one replay, CPU clock held), gated
+two-sided against TARGETS_MS ± MARGIN[mode]; the traced output must match the untraced one. Per-op device time of the
+same calls is test_moe_block_models.py::test_moe_block_perf (BLOCK_US).
 
     python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k kimi_k3-8x4
     models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- \\
@@ -24,16 +21,14 @@ test_moe_block_models.py::test_moe_block_perf (BLOCK_US), which the CI leg runs 
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_pcc, is_blackhole, skip_with_llk_assert, skip_with_watcher
+from models.common.utility_functions import is_blackhole, skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.tests.measure.gate import MARGIN, band_failure, gate
-from models.demos.deepseek_v3_d_p.tests.measure.timing import time_untraced
-from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, time_traced
+from models.demos.deepseek_v3_d_p.tests.measure.trace import measure_host
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
@@ -42,8 +37,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "tests/ttnn/unit_te
 from block_cases import MESH_SP_AXIS, MESHES, MODELS  # noqa: E402
 
 MODES = ("untraced", "traced")
-# Traced output must match the untraced output of the same forward.
-TRACE_PCC = 0.9999
 
 
 @dataclass(frozen=True)
@@ -51,21 +44,23 @@ class MoEPerfCase:
     model: str  # block_cases.MODELS key
     mesh: str  # block_cases.MESHES key
     chunk: int  # tokens a forward (the whole mesh's)
-    # Host ms of one MoE layer forward through a device sync on a 14 kW CI Galaxy (bh_sc1_high_power), as the CI leg
-    # runs it: (untraced fastest of 10, traced one replay). None: measured and reported, not gated.
-    targets_ms: Optional[tuple] = None
 
     @property
     def id(self) -> str:
         return f"{self.model}-{self.mesh}-{self.chunk}"
 
+    @property
+    def sp_axis(self) -> int:
+        return MESH_SP_AXIS.get(self.mesh, 0)
 
-# Targets on 14 kW CI Galaxies: untraced the fastest run, traced the mean of the runs (as test_sparse_mla_perf's).
-CASES = [
-    MoEPerfCase("kimi_k3", "8x4", 5120, targets_ms=(2.38, 2.27)),
-    MoEPerfCase("kimi_k3_1", "4x4-sp1", 2560, targets_ms=(3.63, 3.54)),
-]
-PERF_TARGETS_MS = {(c.id, mode): ms for c in CASES if c.targets_ms is not None for mode, ms in zip(MODES, c.targets_ms)}
+
+CASES = [MoEPerfCase("kimi_k3", "8x4", 5120), MoEPerfCase("kimi_k3_1", "4x4-sp1", 2560)]
+# Host ms of one MoE layer forward (untraced, traced) by case id, on a 14 kW CI Galaxy (bh_sc1_high_power): untraced the
+# fastest run, traced the mean of the runs. A case without targets only reports.
+TARGETS_MS = {
+    "kimi_k3-8x4-5120": (2.38, 2.27),
+    "kimi_k3_1-4x4-sp1-2560": (3.63, 3.54),
+}
 
 
 def _params():
@@ -84,19 +79,14 @@ def _params():
     return out
 
 
-def _device_tensors(tensor):
-    return [ttnn.to_torch(t) for t in ttnn.get_device_tensors(tensor)]
-
-
 def _setup(case: MoEPerfCase, mesh_device):
-    """One MoE layer on the block (weights made on its first call) and its input on the device, as
-    test_moe_block_models sets a random-weight case up."""
+    """One MoE layer on the block (weights made on its first call) and its input on the device."""
     from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import MoEBlockFfnOptions, TtMoEBlockFfn
 
     m = MODELS[case.model]
     R, C = tuple(mesh_device.shape)
     H = m.cfg.EMB_SIZE
-    sp_axis = MESH_SP_AXIS.get(case.mesh, 0)
+    sp_axis = case.sp_axis
     ffn = TtMoEBlockFfn(
         mesh_device,
         m.cfg,
@@ -127,27 +117,17 @@ def test_kimi_moe_perf(request, case, mesh_device, device_params):
     require_high_power(f"{label} perf")
     ffn, x_tt = _setup(case, mesh_device)
 
-    def step():
-        return ffn(x_tt)
-
     clock = hold_full_cpu_clock()
     request.addfinalizer(clock.restore)
     print(f"{label} host: {clock.status}")
-
-    samples = {}
-    samples["untraced"], out = time_untraced(step, lambda: ttnn.synchronize_device(mesh_device))
-    eager = _device_tensors(out)
-    ttnn.deallocate(out)
-    with TracedStep(mesh_device, step) as traced:
-        traced.capture()
-        samples["traced"] = time_traced(traced)
-        replayed = _device_tensors(traced.output)
-    trace_pcc = min(comp_pcc(a, b, TRACE_PCC)[1] for a, b in zip(eager, replayed))
+    untraced, traced, trace_pcc = measure_host(mesh_device, lambda: ffn(x_tt))
+    samples = {"untraced": untraced, "traced": traced}
+    targets = dict(zip(MODES, TARGETS_MS.get(case.id, (None, None))))
 
     shape = tuple(mesh_device.shape)
     results = {}
     for mode in MODES:
-        measured, target = min(samples[mode]), PERF_TARGETS_MS.get((case.id, mode))
+        measured, target = min(samples[mode]), targets[mode]
         results[mode] = (samples[mode], measured, target, MARGIN[mode])
         emit_perf_metrics(
             f"{case.id.replace('-', '_')}_moe_block_{mode}",
@@ -155,7 +135,7 @@ def test_kimi_moe_perf(request, case, mesh_device, device_params):
             {
                 "model": case.model,
                 "mesh": f"{shape[0]}x{shape[1]}",
-                "sp_axis": MESH_SP_AXIS.get(case.mesh, 0),
+                "sp_axis": case.sp_axis,
                 "chunk_tokens": case.chunk,
                 "fabric": device_params["fabric_config"].name,
                 "weights": "random",

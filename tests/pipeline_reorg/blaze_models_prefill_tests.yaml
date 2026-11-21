@@ -479,13 +479,9 @@
 
 
 - name: "(Kimi-K3-2.8T, Kimi-K3.1) MoE block perf 8x4 5k, 4x4 2.5k"
-  # One MoE layer on the MoE block at each model's stage: K3 on the 8x4 Galaxy at 5,120 tokens, K3.1's production 4x4
-  # stage (top tray half, SP=4 on mesh axis 1) at 2,560. Each gates host time (test_kimi_moe_perf: untraced fastest of
-  # 10, traced one replay, two-sided bands) and the block's per-op traced device time (test_moe_block_perf, BLOCK_US).
-  # Every check runs and reports even if one before it fails; each must pass at least one test, so a case that skips
-  # (a mesh-topology mismatch) fails the leg rather than turning it green with nothing measured.
-  # test_tags carries k3_mla_perf so the dispatch's "K3 > k3_mla_perf" checkbox selects every K3 perf leg (the
-  # workflow is at GitHub's 25-input limit, so this leg has no checkbox of its own).
+  # Host time (test_kimi_moe_perf) and per-op device time (test_moe_block_perf) of one MoE block layer: K3 on 8x4 at
+  # 5,120 tokens, K3.1's 4x4 stage (top tray half) at 2,560. Every check runs; one that passes no test (skipped) fails.
+  # Tagged k3_mla_perf: the dispatch is at GitHub's 25-input limit, so that checkbox selects every K3 perf leg.
   fabric_profile: torus_xy
   cmd: |
     export TT_METAL_SHM_TRACKING_DISABLED=1

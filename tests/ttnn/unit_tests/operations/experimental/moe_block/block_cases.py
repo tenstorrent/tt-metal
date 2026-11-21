@@ -256,8 +256,7 @@ class BlockModel:
 MODELS = {
     "glm53": BlockModel("glm53", GLM53Config, _glm_weights, _glm_reference, pcc=0.982, layer=6, x_scale=0.5),
     "kimi_k3": BlockModel("kimi_k3", KimiK3Config, _k3_weights, _k3_reference, pcc=0.965, weka=True),
-    # K3.1: K3's MoE (same dims, weights and reference) through K3.1's adapter, its mesh opened with K3.1's larger
-    # L1_SMALL_SIZE (the DSA layers' CCLs), which is the L1 the block's planner has left at K3.1's stages
+    # K3.1: K3's MoE through K3.1's adapter, with K3.1's L1_SMALL_SIZE
     "kimi_k3_1": BlockModel("kimi_k3_1", KimiK31Config, _k3_weights, _k3_reference, pcc=0.965),
     "dsv41_flash": BlockModel("dsv41_flash", DeepSeekV41FlashConfig, _dsv41_weights, _dsv41_reference, pcc=0.98),
     "minimax_m3": BlockModel("minimax_m3", MiniMaxM3BlockConfig, _m3_weights, _m3_reference, pcc=0.98, layer=3),
