@@ -15,7 +15,6 @@ target_link_libraries(
         # those symbols are hidden in libtt_metal.so (see tools/scaleout/CMakeLists.txt), so link explicitly.
         TT::ScaleoutTools
         test_common_libs
-        yaml-cpp::yaml-cpp
         protobuf::libprotobuf
         cadical::cadical
 )
@@ -55,8 +54,6 @@ target_link_libraries(
     PRIVATE
         tt_metal
         test_common_libs
-        yaml-cpp::yaml-cpp
-        spdlog::spdlog
 )
 
 target_include_directories(
@@ -66,6 +63,16 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+
+# yaml-cpp is a static library that is already inside libtt_metal.so / libtt-umd.so (both linked here) and exported
+# from them. Linking it again would embed a second copy in this executable, which ASan reports as an ODR violation, so
+# take only its headers. (The same applies to spdlog, which this target does not use directly.)
+target_include_directories(
+    test_physical_discovery
+    SYSTEM
+    PRIVATE
+        $<TARGET_PROPERTY:yaml-cpp::yaml-cpp,INTERFACE_INCLUDE_DIRECTORIES>
 )
 
 set_target_properties(
@@ -168,11 +175,12 @@ target_link_libraries(
         TT::ScaleoutTools
         tt_metal
         test_common_libs
-        yaml-cpp::yaml-cpp
 )
 
 # Redundant with the link above for the include path itself, but kept so these headers stay marked
 # SYSTEM (link-propagated interface directories are not) and do not raise warnings here.
+# (yaml-cpp is deliberately not linked into this target: it is already inside libtt_metal.so / libtt-umd.so, and a
+# second copy is an ODR violation under ASan. Its headers arrive through TT::ScaleoutTools.)
 target_include_directories(
     test_tt_fabric
     SYSTEM
