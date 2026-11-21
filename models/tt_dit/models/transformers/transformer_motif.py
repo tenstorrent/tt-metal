@@ -226,6 +226,7 @@ class MotifTransformer(Module):
                 attention_k_chunk_size=self.get_k_chunk_size(sp_factor),
                 attention_q_chunk_size=self.Q_CHUNK_SIZE,
                 attention_exp_approx_mode=self.SDPA_EXP_APPROX_MODE,
+                norm_eps=1e-5,  # nn.LayerNorm default in the reference
             )
             for i in range(config.num_layers)
         )
