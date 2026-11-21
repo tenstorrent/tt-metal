@@ -596,8 +596,8 @@ def load_tp_block(directory: str) -> list[str]:
     TPBlock on this process's single device, and compare every parameter with the global array rebuilt from the
     shards the two ranks dumped next to it (``shards_<rank>.npz``): sharded parameters by concatenating the four
     devices' shards in TP order, replicated ones as the device that wrote them held them (the index names its file's
-    coordinate). A save writes one copy of a replicated tensor, so replicas that differ (an all-reduce whose result
-    differs in the last bit across devices) load back as that copy; a note says when they do. Nothing here goes
+    coordinate). Every device must have held the same copy of a replicated parameter: a save writes one copy and does
+    not check that the others agree, and copies that differ mean the ranks did not train alike. Nothing here goes
     through DCP's topology."""
     shards: dict[str, dict[tuple[int, ...], np.ndarray]] = {}
     for rank in (0, 1):
@@ -619,9 +619,9 @@ def load_tp_block(directory: str) -> list[str]:
             (chunk,) = index.entries[f"model/{name}"].chunks
             writer = tuple(index.files[chunk.file].coord)
             expected = by_coord[writer]
-            spread = max(float(np.max(np.abs(a - expected))) for a in by_coord.values())
-            if spread:
-                print(f"NOTE: {name}: the devices' replicas differ by up to {spread}; the checkpoint holds {writer}'s")
+            differing = sorted(c for c, copy in by_coord.items() if not np.array_equal(copy, expected))
+            if differing:
+                problems.append(f"{name}: the copies of {differing} differ from {writer}'s, which the checkpoint holds")
         else:
             expected = np.concatenate([by_coord[c] for c in sorted(by_coord)], axis=dim)
         if not np.array_equal(loaded[name][0], expected):
