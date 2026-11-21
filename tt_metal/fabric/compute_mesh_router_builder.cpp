@@ -23,7 +23,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include "tt_metal/hw/inc/hostdev/cce_spa_routes.h"
+#include "tt_metal/hw/inc/hostdev/keraunos_tile_counter.h"
 #include "tt_metal.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
@@ -1001,7 +1001,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             const auto& keraunos = soc_desc.get_arch_descriptor().get_keraunos();
             TT_FATAL(keraunos.tile_stride.has_value(), "Chip {} SoC descriptor has no keraunos tile_stride", device_id);
             const uint64_t master_counter = cce_tile_counter_posted_system_addr(
-                master.hsio, *keraunos.tile_stride, master.cce, k_local_handshake_tile_counter);
+                master.hsio, *keraunos.tile_stride, master.eth_cce, k_local_handshake_tile_counter);
             named_ct_args["LOCAL_HANDSHAKE_TILE_COUNTER"] = k_local_handshake_tile_counter;
             named_ct_args["LOCAL_HANDSHAKE_MASTER_COUNTER_ADDR_LO"] = static_cast<uint32_t>(master_counter);
             named_ct_args["LOCAL_HANDSHAKE_MASTER_COUNTER_ADDR_HI"] = static_cast<uint32_t>(master_counter >> 32);

@@ -339,6 +339,17 @@ __attribute__((noinline, optimize("Os"))) void run_handshakes() {
     if constexpr (enable_ethernet_handshake) {
         const auto& routing_table = l1_routing_table();
         auto* termination = termination_signal();
+#ifdef KERAUNOS_CCE
+        if constexpr (wait_for_host_signal && is_local_handshake_master) {
+            // A subordinate adds to the counter only once armed: an add that landed before this reset would be lost.
+            internal_::cce_tile_counter::reset(local_handshake_tile_counter, num_local_edms - 1);
+            notify_subordinate_routers(
+                edm_channels_mask,
+                local_handshake_master_eth_chan,
+                router_l1_offset(edm_local_sync_ptr_addr),
+                local_handshake_counter_armed);
+        }
+#endif
         if constexpr (is_handshake_sender) {
             erisc::datamover::handshake::fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
                 handshake_addr,
@@ -365,14 +376,20 @@ __attribute__((noinline, optimize("Os"))) void run_handshakes() {
             // Another router's word is named by its plain offset; this router polls its own through its own view.
             const uint32_t sync = edm_local_sync_ptr_addr;
             if constexpr (is_local_handshake_master) {
-                wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(sync, num_local_edms - 1, termination);
+                wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
+                    local_handshake_count_addr, num_local_edms - 1, termination);
                 // The master's notification to itself goes through its own view, not the plain offset: on a Keraunos
                 // CCE that store must be uncached, as its line also holds the termination word, and the NoC routes
                 // take the other routers' words from the SRAM offset of either view.
                 notify_subordinate_routers(
                     edm_channels_mask, std::numeric_limits<uint32_t>::max(), sync, num_local_edms);
             } else {
+#ifdef KERAUNOS_CCE
+                wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(sync, local_handshake_counter_armed, termination);
+                internal_::cce_tile_counter::add(local_handshake_master_counter_addr, 1);
+#else
                 notify_master_router(local_handshake_master_eth_chan, router_l1_offset(sync));
+#endif
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(sync, num_local_edms, termination);
             }
             *edm_status() = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
