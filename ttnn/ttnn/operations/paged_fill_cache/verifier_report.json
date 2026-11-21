@@ -1,0 +1,642 @@
+{
+  "summary": {
+    "total": 62,
+    "supported_pass": 15,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 36,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 11
+  },
+  "by_category": {
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x16x32x64+1x16x64x64+4x2_user2-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[2x1x32x8192+1x1x32x8192+2x1_user1-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x2x32x64+1x2x96x64+2x4_user1-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[6x3x64x96+1x3x96x96+3x2_user2-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[16x1x32x256+1x1x160x256+3x5_user1-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[128x8x32x64+1x8x512x64+1x16_user0-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x16x32x64+1x16x64x64+4x2_user2-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[2x1x32x8192+1x1x32x8192+2x1_user1-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x2x32x64+1x2x96x64+2x4_user1-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[6x3x64x96+1x3x96x96+3x2_user2-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[16x1x32x256+1x1x160x256+3x5_user1-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x2x32x128+1x2x64x128+1x4_user0-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x2x32x128+1x2x64x128+1x4_user0-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[4x1x32x32+1x1x32x32+1x4_user0-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[2x1x32x4096+1x1x32x4096+1x2_user0-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x2x32x128+1x2x64x128+1x4_user0-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x4x64x64+1x4x128x64+4x2_user3-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[12x2x96x32+1x2x288x32+2x6_user1-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[4x1x32x32+1x1x32x32+1x4_user0-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[4x8x128x64+1x8x32x64+2x2_user0-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[2x1x32x4096+1x1x32x4096+1x2_user0-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x4x64x64+1x4x128x64+4x2_user3-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[12x2x96x32+1x2x288x32+2x6_user1-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[4x1x32x32+1x1x32x32+1x4_user0-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[4x8x128x64+1x8x32x64+2x2_user0-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[2x1x32x4096+1x1x32x4096+1x2_user0-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x4x64x64+1x4x128x64+4x2_user3-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[12x2x96x32+1x2x288x32+2x6_user1-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[4x8x128x64+1x8x32x64+2x2_user0-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x2x32x64+1x2x96x64+2x4_user1-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[128x8x32x64+1x8x512x64+1x16_user0-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[2x1x32x8192+1x1x32x8192+2x1_user1-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[6x3x64x96+1x3x96x96+3x2_user2-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[16x1x32x256+1x1x160x256+3x5_user1-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[128x8x32x64+1x8x512x64+1x16_user0-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x16x32x64+1x16x64x64+4x2_user2-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=L1-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "L1",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "xfail"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_rejection[X4]",
+        "test_name": "test_rejection[X4]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_rejection[X5]",
+        "test_name": "test_rejection[X5]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_rejection[X6]",
+        "test_name": "test_rejection[X6]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_rejection[X7]",
+        "test_name": "test_rejection[X7]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_rejection[X8]",
+        "test_name": "test_rejection[X8]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_rejection[X9]",
+        "test_name": "test_rejection[X9]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_rejection[X1]",
+        "test_name": "test_rejection[X1]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_rejection[X10]",
+        "test_name": "test_rejection[X10]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_rejection[X2]",
+        "test_name": "test_rejection[X2]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_rejection[X11]",
+        "test_name": "test_rejection[X11]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_rejection[X3]",
+        "test_name": "test_rejection[X3]",
+        "status": "passed"
+      }
+    ],
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x2x32x128+1x2x64x128+1x4_user0-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[4x1x32x32+1x1x32x32+1x4_user0-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[2x1x32x4096+1x1x32x4096+1x2_user0-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op_loose[8x2x32x64+1x2x96x64+1x4_user0-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x4x64x64+1x4x128x64+4x2_user3-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[12x2x96x32+1x2x288x32+2x6_user1-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[4x8x128x64+1x8x32x64+2x2_user0-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op_loose[8x2x32x32+1x2x64x32+2x4_user1-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op_loose[8x2x32x128+1x2x64x128+1x4_user0-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[128x8x32x64+1x8x512x64+1x16_user0-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x2x32x64+1x2x96x64+2x4_user1-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[2x1x32x8192+1x1x32x8192+2x1_user1-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[6x3x64x96+1x3x96x96+3x2_user2-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[16x1x32x256+1x1x160x256+3x5_user1-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/paged_fill_cache/test_golden.py::test_op[8x16x32x64+1x16x64x64+4x2_user2-alignment=tile_aligned-dtype=BFLOAT16-layout=TILE-memory_config=DRAM-sharding=interleaved]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_config": "DRAM",
+          "sharding": "interleaved",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      }
+    ]
+  }
+}
