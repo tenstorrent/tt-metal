@@ -75,15 +75,16 @@ Tensor topk_large_indices(
     // preferred DRAM-read NoC. Pick the NoC a concurrently running program uses less.
     std::optional<tt::tt_metal::NOC> dram_read_noc = std::nullopt,
     // Two-level selection for long rows: 32 picks the top 2048 of the 32-key block maxima first, then the exact
-    // top k among the keys of those blocks. Requires k = 2048 and a last dimension in [65536, 2097152] that is
-    // a multiple of 32. two_level_cutover is the search length from which the program runs two-level (default:
-    // 98304). block_max_tensor supplies the block maxima (skips stage 1).
+    // top k among the keys of those blocks. Applies to k = 2048 and a last dimension in [65536, 2097152] that is
+    // a multiple of 32; other inputs run single-level, and two_level_cutover or block_max_tensor on them raises.
+    // two_level_cutover is the search length from which the program runs two-level (default: 98304).
+    // block_max_tensor supplies the block maxima (skips stage 1).
     std::optional<uint32_t> block_select = std::nullopt,
     std::optional<uint32_t> two_level_cutover = std::nullopt,
     const std::optional<Tensor>& block_max_tensor = std::nullopt);
 
 // Testing only: topk_large_indices that also writes the two-level program's block maxima to block_max_output and
-// 1 to mode_output when it ran two-level.
+// to mode_output 1 when it ran two-level, else 0.
 Tensor topk_large_indices_with_test_outputs(
     const Tensor& input_tensor,
     uint32_t k,

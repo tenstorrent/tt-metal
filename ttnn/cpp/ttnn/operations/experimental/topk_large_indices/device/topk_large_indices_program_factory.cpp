@@ -4,7 +4,6 @@
 
 #include "topk_large_indices_program_factory.hpp"
 #include "kernels/topk_large_indices_runtime_args.hpp"
-#include "kernels/topk_large_indices_two_level.hpp"
 
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/constants.hpp>
@@ -194,8 +193,7 @@ void set_two_level_fixed_args(
         TT_FATAL(noc.x < 256 && noc.y < 256, "topk_large_indices packs NoC coordinates in 8 bits, got {}", noc);
         auto& word = writer_args[topk_common_args::writer_two_level_core_coords + core / 2];
         const uint32_t shift = core % 2 * 16;
-        word = (word & ~(0xFFFFu << shift)) |
-               ((static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 8)) << shift);
+        word |= (static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 8)) << shift;
     }
 }
 

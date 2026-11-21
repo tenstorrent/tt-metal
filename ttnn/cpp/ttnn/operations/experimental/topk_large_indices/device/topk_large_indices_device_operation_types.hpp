@@ -67,7 +67,7 @@ struct tensor_args_t {
     bool has_valid_end_metadata() const { return valid_end_tensor.has_value(); }
     // Two-level only. block_max_tensor: the caller's [rows, ceil(n/32)] bf16 block maxima, so stage 1 is skipped
     // (hashed by presence). block_max_output / mode_output: test outputs for the stage-1 maxima and the mode the
-    // program ran in (1 = two-level).
+    // program ran in (1 = two-level, 0 = single-level).
     std::optional<Tensor> block_max_tensor{std::nullopt};
     std::optional<Tensor> block_max_output{std::nullopt};
     std::optional<Tensor> mode_output{std::nullopt};

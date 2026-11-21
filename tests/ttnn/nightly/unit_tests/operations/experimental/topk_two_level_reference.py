@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host reference, oracle and input generators for the two-level topk_large_indices mode.
+"""Oracle and input generators for the two-level topk_large_indices mode.
 
 Values are compared the way topk_large_indices loads them on device: subnormals of either sign and -0 are the same
 value as +0 (the load path flushes subnormals, and the sort ranks every member of that class equal, breaking ties by
@@ -34,25 +34,12 @@ def block_maxima(row: torch.Tensor, n: int, block: int = BLOCK) -> torch.Tensor:
     return padded.reshape(num_blocks, block).amax(dim=1)
 
 
-def two_level_reference(row: torch.Tensor, n: int, k: int = K, block: int = BLOCK) -> torch.Tensor:
-    """Indices chosen by the two-level algorithm for one row: block maxima over [0, n), top-k blocks, exact top-k of
-    the keys in those blocks. Tie choice is not modelled; the result is checked by value only."""
+def exact_topk(row: torch.Tensor, n: int, k: int = K) -> torch.Tensor:
+    """An exact top-k index list for one row in the device's load order, padded with sentinels."""
     x = normalize(row[:n])
-    maxima = block_maxima(row, n, block)
-    take = min(k, maxima.numel())
-    selected = torch.topk(maxima, take, sorted=False).indices
-    selected = selected[maxima[selected] != float("-inf")]
-    if selected.numel() == 0:
-        return torch.empty(0, dtype=torch.int64)
-    selected = torch.sort(selected).values
-    candidates = (selected.unsqueeze(1) * block + torch.arange(block)).reshape(-1)
-    candidates = candidates[candidates < n]
-    cand_values = x[candidates]
-    live = cand_values != float("-inf")
-    candidates, cand_values = candidates[live], cand_values[live]
-    take = min(k, candidates.numel())
-    order = torch.topk(cand_values, take, sorted=True).indices
-    return candidates[order]
+    order = torch.topk(x, min(k, n), sorted=True).indices
+    order = order[x[order] != float("-inf")]
+    return torch.cat([order, torch.full((k - order.numel(),), SENTINEL, dtype=torch.int64)])
 
 
 def expected_sentinels(row: torch.Tensor, n: int, k: int = K) -> int:
