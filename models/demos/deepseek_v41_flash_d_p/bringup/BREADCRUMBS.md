@@ -1267,3 +1267,42 @@
   /tmp/pb_nc_noconv.json).
 - Gate `gate PB.NC --check` (devjob pbnc_gate1, after the last test edit, hooks clean): PASS PB.NC. The probe unit was
   reused (same code); determinism 0.0; fast tier passed; every noconv wall > 0; noconv max |diff| 0.0 on both paths.
+
+## PB.AR perf (attempt 1): ANALYSIS, the sparse attention's roofline over the top-k rows (probes only)
+- Read first: OV-3 / OV-58 / OV-61, rule 20, perf_guide, X.7_roofline.md, DS41-307 (the P.81 sdpa probe), DS41-68.
+- Expected before any device run (from the code): per chip per compressed layer at chunk 8192 (S = 256 query rows a
+  chip, 64 heads, d 512, MQA: one KV row per key for all 64 heads, [window 128 bf16 | top-k 512 bfp4 records]):
+  4 x 64 x 256 x 640 x 512 = 21.5 GFLOP; DRAM reads 256 x (128 x 1024 B + 512 x 320 B) = 75.5 MB (window 33.6 +
+  records 41.9). Roofline (X.7: HiFi2 297 TFLOP/s on 110 cores, 512 GB/s): compute 0.072 ms, DRAM 0.147 ms ->
+  DRAM-bound at ~0.15-0.18 ms a layer, ~2.7-3.3 ms a chunk over the 18 compressed layers that run (DECODER_SKIP=
+  decode: layers 2-19). Expected measured (DS41-307 scaled 160 -> 256 rows: 3 queries on the busiest core instead of 2):
+  ~0.45 ms a layer, ~8 ms a chunk: ~3x the roofline, per-query bound (not DRAM). No serving change: device / host saving
+  of this step 0 (analysis); the ranked list in results/PB.AR_attention_roofline.md says what each fix would save.
+- Load reason: none ("mesh only: every probe is one op on synthetic tensors at the model's per-chip shapes; no model").
+- DECIDED (OV-58): no Setting and no `orchestrator measure` (no model switch exists to A/B; the brief: no model change).
+- What (tests only): tests/perf/test_attention_roofline_probe.py (BATCH_SHARED, mesh only, 0 model loads): (a) plain
+  matmuls of the sdpa's FLOPs at HiFi2 + fp32 DEST (bmm at the sdpa's shapes, shared-in1 reuse, 2D mcast, a K 4096
+  peak), (b) ttnn.bringup.sparse_sdpa at the model's shapes (S 110 / 160 / 220 / 256, top-k 128 / 256 / 512, ids
+  random / clustered / shared over a 524288-row table or 32768, 4 chip-aligned lanes with kv_lane_map_runtime, the
+  window-only BF16 call), (c) a gather-only probe kernel (ttnn.generic_op, the sdpa's 110 cores and ids). Knobs
+  ATTN_CASES (tag prefixes), ATTN_ITERS, ATTN_OUT.
+- Measured (gate run; report results/PB.AR_attention_roofline.md): S 256 sdpa 0.467 ms a layer = 46 TFLOP/s, 236 GB/s:
+  32 % of the DRAM roofline (0.147 ms), 16 % of the paper HiFi2 peak; the measured matmul peak at these settings is
+  147.7 TFLOP/s on 100 cores (55 % of paper); a plain bmm of the same shapes 0.527 ms (41 TFLOP/s, slower than the
+  sdpa). Gather alone 0.209 ms (362 GB/s; 320 B records 267 GB/s, 1 KB window rows 457). Fit: ~47 us a query + ~21.6 us
+  a 128-key chunk; time = busiest core's queries (ceil(256/110) = 3) x ~0.16 ms. Lanes / table size / id locality
+  +-2 %. 8192 chunk: 8.8 ms of sparse_sdpa vs 2.8 at roofline. DS41-378.
+- 4 x 2k at 1M: the op is not slower (lanes 0.466 vs 0.467; per-chip spread 3-4 % on identical work on every case);
+  its +11 ms attention section at 1M vs single is outside the sdpa (gather-hide traffic in that section; inference).
+- Ranked (report s6): k-split balance -1.0..-1.3 ms a chunk; records straight into the unpacker -1.0..-1.2; window-block
+  reuse -0.8..-1.3; TILE q / out -0.6..-1.0; lazy rescale -0.3..-0.6.
+- Gotchas: MatmulMultiCoreReuseProgramConfig refuses a broadcast in1 with batched in0 (!broadcast_batch) and N splits
+  (N == per_core_N): the shared-in1 case is in0 reshaped to [1, 1, B x 64, K]. The first 2D-mcast baseline used
+  in0_block_w 2 and spilled fp32 partials (48 TFLOP/s; K-51); the whole K a block with out_block_h 4: 74. bmm with a
+  bf16 in1 does not fit L1 (1.8 MB of CBs): dropped.
+- Per-chunk values (rule 20): none touched (no model code).
+- Gate `gate PB.AR --check` (devjob pbar_gate1, after the last test edit, hooks clean): PASS PB.AR; every ar_* > 0,
+  determinism_max_abs_diff 0.0.
+- Re-run: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "BRINGUP_CHUNK=8192
+  [ATTN_CASES=sdpa_,gather,mm_] scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_attention_roofline_probe.py"`.

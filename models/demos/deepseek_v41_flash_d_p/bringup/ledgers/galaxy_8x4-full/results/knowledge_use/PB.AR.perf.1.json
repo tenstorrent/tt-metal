@@ -1,0 +1,78 @@
+{
+ "used": [
+  {
+   "id": "DS41-307",
+   "how": "the P.81 sdpa probe's per-query / per-chunk finding and its 5.5 us record-copy stub number: the probe set (S and top-k sweeps) and the where-it-goes split build on it",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-51",
+   "how": "the large-M matmul baseline first spilled fp32 partials (in0_block_w 2: 48 TFLOP/s); rebuilt with the whole K a block and out_block_h < per_core_M (74 TFLOP/s)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-57",
+   "how": "every probe on the whole 8x4 mesh through the resident runner, no single-card job",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-68",
+   "how": "fidelity is not the lever (HiFi2 vs HiFi4 moved the chunk 1 %): LoFi not proposed, fp32 DEST probed only as a reference",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-333",
+   "how": "cross-chip imbalance on 4x2k is the indexer's longest lane, not the sdpa: the probe checks the sdpa's lanes and per-chip spread only",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the Blackhole matmul peak actually reachable with fp32 DEST at HiFi2 (147.7 TFLOP/s on 100 cores, 55 % of the paper 2.7 TF a core): X.7 assumed 70 % of 297",
+  "the DRAM read rate of scattered 320 B rows vs 1 KB rows on 110 cores (267 vs 457 GB/s)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "analysis only: no model or fork change, nothing padded"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; DECIDED lines in BREADCRUMBS (no Setting, no orchestrator measure: no model switch exists)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "the probe is mesh only (0 model loads, BATCH_SHARED, BATCH_LAYERS executed); the gate's determinism unit is the common test as listed"
+  }
+ ],
+ "cited_only": [
+  "DS41-375",
+  "DS41-378"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.AR",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T21:28:41",
+  "head": "d17bddfafaf",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.AR.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.AR_attention_roofline.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.AR.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_attention_roofline_probe.py"
+  ]
+ }
+}
