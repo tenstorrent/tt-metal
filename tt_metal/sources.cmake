@@ -33,6 +33,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/allocation_context.hpp
     api/tt-metalium/experimental/allocator.hpp
     api/tt-metalium/experimental/dispatch_telemetry.hpp
+    api/tt-metalium/experimental/dram_geometry.hpp
     api/tt-metalium/experimental/mesh_device_properties.hpp
     api/tt-metalium/experimental/mesh_workload_runtime_args.hpp
     api/tt-metalium/experimental/trace_allocation_tracker.hpp
