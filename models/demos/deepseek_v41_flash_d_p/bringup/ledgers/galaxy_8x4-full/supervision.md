@@ -1161,3 +1161,19 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   (oracles bit-identical: all 0). DECIDED: bars removed (owner 2026-11-21: performance = the ladder, no mixed-history case;
   the 67k goal is PB.9H on the ladder); 4x2k kept as '> 0' for the record. The F269 refuse-then-fresh note above was a
   red herring (the fresh run's verdict is used). gate --continue.
+- 05:25 PB.8RP gate PASS -> 7d755180024 (walls + no-rebuild 0 builds; 4x2k@139264 66.0k harness). No framework bug after all (the earlier F269 line is normal: the fresh process's verdict counts). Resumed: the 8192 ladder task.
+- 05:15 heartbeat: 8192 ladder (PB.9C) agent attempt 1 active; watch armed.
+- 05:45 heartbeat: 8192 ladder agent active (4 test files changed, +443 lines); watch armed.
+- 06:15 heartbeat: 8192 ladder agent still active (no report yet); watch armed.
+- 06:40 8192 ladder (PB.9C) WAITING; gate units all PASS except test_no_rebuild's glued4x2k = FAIL (honest: a real build in
+  the shipped glued path). Report results/packed_ladder_20261121.md (tests-only change, checked). Findings: single 8192
+  ladder 82.1k @51k .. 62.2k @1M (no-rebuild PASS); glued 5x1.6k 58.1k .. 37.9k (PASS); glued 4x2k 66.7k .. 46.0k (FAIL: 1
+  build + 1 prepare, GluedSend keyed on the carry-source mix, DS41-360); fixed lanes 74.3k .. 52.8k (FAIL, 153 builds, off
+  in serving). RESUMED glued chunks 3.1-3.4x steady (410-553 ms) because the one-call path refuses encoder-replay segments
+  -> path (b) (DS41-357): PB.9X's routing made prefix-hit chunks slower than the fixed lanes (143 ms) - its walls never
+  measured resumed. Serving entry explained: single 8192 +2.3 ms ids handling (readback 1.8, un-shuffle 0.5, reorder
+  0.3, note_tokens 0.07, minus the harness upload 0.4) + 21 D2H acks 4.3 ms enqueue (~half exposed); glued 4x2k: the 84
+  acks, 16.7 ms enqueue, all exposed (host-bound).
+  DECIDED: accept PB.9C (the measurement; glued4x2k no-rebuild recorded as FAIL, >= 0), QUEUE PB.9G (before PB.T): GluedSend
+  carry-source mix as runtime data + replay segments in the one-call glued path; gate oracles 0, no-rebuild glued PASS,
+  resumed 4x2k @139264 <= 160 ms. The ack cost goes to PB.9H (host).
