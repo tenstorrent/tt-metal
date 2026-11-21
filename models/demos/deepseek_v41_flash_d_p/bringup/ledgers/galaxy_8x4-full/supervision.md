@@ -1263,3 +1263,4 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   -0.7..+1.0 ms, noise); chip-aligned 4x2k 151.9 -> 150.2 ms (-0.3..+1.7, noise). The conversion costs 0.5 ms device + 1 ms
   host (single), 2 ms device + 2.5 ms host (4x2k) but runs hidden (engram wait / gather-hide regions); a 4-bit served cache
   gains ~1% prefill at 1M. Next: model_bringup MB.5 (the same at 5120).
+- 17:15 switching to model_bringup for MB.5.
