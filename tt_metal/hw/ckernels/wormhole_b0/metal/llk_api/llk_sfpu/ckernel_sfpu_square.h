@@ -8,15 +8,13 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "ckernel_sfpu_row_pair.h"
 
 namespace ckernel::sfpu {
 
 inline void square_init() {
-    // The paired store walks dest through physical addr_mod slot 6, advancing by the two
-    // rows the loop just wrote (one sfpi row is two dest counter steps), so the loop body
-    // needs no separate increment. Unary SFPU sets addr_mod_base, so the store names
-    // ADDR_MOD_2, which maps to physical slot 6.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+    // The two-row body advances Dest from its second store (see ckernel_sfpu_row_pair.h).
+    _init_sfpu_row_pair_();
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     sfpi::vConstIntPrgm0 = 1;
@@ -36,6 +34,26 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATI
 inline void calculate_square() {
     static_assert(ITERATIONS % 2 == 0, "calculate_square() processes dest rows in pairs.");
 
+#if defined(MM_THROTTLE) && MM_THROTTLE > 0
+    // A throttled matmul owns replay entries 16+, and a pair body with its Dest increment needs 19.
+    // Addressing the rows absolutely keeps the increment out of the repeated body. Dest is left
+    // where it was: the face walk advances from the counter's CR copy, which TTINCRWC never moves.
+    static_assert(ITERATIONS <= 32, "calculate_square() unrolls the throttled walk fully.");
+#pragma GCC unroll 16
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        sfpi::vFloat v0 = sfpi::dst_reg[d];
+        sfpi::vFloat v1 = sfpi::dst_reg[d + 1];
+        sfpi::vFloat r0 = v0 * v0;
+        sfpi::vFloat r1 = v1 * v1;
+        if constexpr (!is_fp32_dest_acc_en) {
+            r0 = float32_to_bf16_rne_prgm(r0);
+            r1 = float32_to_bf16_rne_prgm(r1);
+        }
+        sfpi::dst_reg[d] = r0;
+        sfpi::dst_reg[d + 1] = r1;
+    }
+    return;
+#endif
 #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d += 2) {
         sfpi::vFloat v0 = sfpi::dst_reg[0];
@@ -47,7 +65,8 @@ inline void calculate_square() {
             r1 = float32_to_bf16_rne_prgm(r1);
         }
         sfpi::dst_reg[0] = r0;
-        sfpi::dst_reg[1].mode(ADDR_MOD_2) = r1;
+        _sfpu_row_pair_store_second_(r1);
+        _sfpu_row_pair_end_();
     }
 }
 
