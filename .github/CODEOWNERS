@@ -862,6 +862,7 @@ tt-train/sources/ttml/ops/** @tenstorrent/tt-train @lgalasTT
 tt-train/tests/** @tenstorrent/tt-train @lgalasTT @abustamanteTT
 # Files related to the experimental features. Currently only scope trainer, so limited access.
 tt-train/sources/ttml/ttml/experimental/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
+tt-train/tests/python/experimental/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 # Last on purpose: CODEOWNERS is last-match-wins, so this must follow the directory rules
 # above for infra to keep co-ownership of every CMakeLists.txt.
 tt-train/**/CMakeLists.txt @tenstorrent/tt-train @lgalasTT @abustamanteTT @tenstorrent/metalium-developers-infra

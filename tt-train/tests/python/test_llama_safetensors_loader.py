@@ -2,10 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the Llama safetensors loader."""
+"""Tests for the Llama safetensors loader, and the HF export that inverts it."""
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import ml_dtypes
@@ -15,9 +16,19 @@ import pytest
 import ttnn
 import ttml
 from bf16_ulp import assert_within_bf16_ulp
-from ttml.common.utils import build_causal_mask, unpermute_proj_rows
+from ttml.common.utils import build_causal_mask, permute_proj_rows, unpermute_proj_rows
 from ttml.models import EmbeddingPlacement, WeightTyingType
-from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors, safetensors_loader
+from ttml.models.llama import (
+    HfTensor,
+    HfTensors,
+    Llama,
+    LlamaConfig,
+    LlamaRopeScalingConfig,
+    export_hf_model,
+    hf_layout,
+    load_from_safetensors,
+    safetensors_loader,
+)
 from ttml.models.llama.safetensors_loader import (
     COL_DIM,
     ROW_DIM,
@@ -31,11 +42,13 @@ from ttml.models.llama.safetensors_loader import (
     _check_coverage,
     _check_sources,
     _export_dtype,
+    _hf_name,
     _load_plan,
     _pad_to,
     _rules,
     _sharded_dim,
     _tp_axis,
+    split_hf_tensors,
 )
 
 HEAD_DIM = 8  # even: RoPE splits each head into two halves
@@ -303,6 +316,32 @@ class TestHelpers:
         """Qwen3 unpermutes its 1-D Q/K biases with the same helper."""
         w = np.arange(12, dtype=np.float32).reshape(12, 1)
         assert np.array_equal(unpermute_proj_rows(w[:, 0], 2), unpermute_proj_rows(w, 2)[:, 0])
+
+    @pytest.mark.parametrize("shape", [(24, 3), (24,), (24, 2, 5)], ids=["2-D", "1-D", "3-D"])
+    @pytest.mark.parametrize("n_heads", [1, 2, 3])
+    def test_permute_inverts_unpermute(self, shape, n_heads):
+        w = np.random.default_rng(0).standard_normal(shape)
+        assert np.array_equal(permute_proj_rows(unpermute_proj_rows(w, n_heads), n_heads), w)
+        assert np.array_equal(unpermute_proj_rows(permute_proj_rows(w, n_heads), n_heads), w)
+
+    def test_permute_matches_the_explicit_definition(self):
+        """out[i] = w[2i], out[half+i] = w[2i+1], per head: HF's halves back from TTML's pairs."""
+        n_heads, per_head, cols = 3, 6, 2
+        w = np.arange(n_heads * per_head * cols, dtype=np.float32).reshape(n_heads * per_head, cols)
+        got, half = permute_proj_rows(w, n_heads), per_head // 2
+        for head in range(n_heads):
+            base = head * per_head
+            for i in range(half):
+                assert np.array_equal(got[base + i], w[base + 2 * i])
+                assert np.array_equal(got[base + half + i], w[base + 2 * i + 1])
+
+    def test_permute_rejects_rows_that_do_not_split_into_heads(self, expect_error):
+        with expect_error(RuntimeError, "not divisible by n_heads"):
+            permute_proj_rows(np.zeros((6, 2)), 4)
+
+    def test_permute_rejects_heads_of_odd_rows(self, expect_error):
+        with expect_error(RuntimeError, "must be even"):
+            permute_proj_rows(np.zeros((6, 2)), 2)
 
 
 class TestExportDtype:
@@ -957,6 +996,184 @@ class TestLoadIntoTensorParallelModel:
     def test_logits_match_hugging_face(self, tmp_path):
         """Tied and vocab-parallel, as LoRA loads Llama 3.2 1B, with the fused blocks interleaved per device."""
         assert_logits_match_hf(tmp_path, tied=True, use_tp=True, embedding_placement=EmbeddingPlacement.VocabParallel)
+
+
+# ── Export: the HF checkpoint back from a loaded model ──
+
+
+def held_by(param: str, hf: dict[str, np.ndarray], **config_overrides) -> HfTensors:
+    """What ``hf_layout`` says *param* holds, read off the loader's rules and the checkpoint *hf*, without a model."""
+    config = coverage_config(**config_overrides)
+    rule = next(rule for rule in _rules(config, param_names(_PER_LAYER_FUSED)) if rule.param == param)
+    tensors = tuple(HfTensor(_hf_name(source), hf[_hf_name(source)].shape) for source in rule.sources)
+    return HfTensors(tensors, transform=rule.transform, inverse=rule.inverse)
+
+
+class TestSplitHfTensors:
+    """Device-free: ``split_hf_tensors`` undoes how the loader assembles a parameter from its HF tensors."""
+
+    @pytest.mark.parametrize(
+        "param",
+        ["Llama/blocks/0/attention/qkv_linear/weight", "Llama/blocks/1/mlp/w_gate_up/weight"],
+        ids=["qkv", "gate_up"],
+    )
+    def test_splits_a_fused_parameter_into_its_tensors(self, param):
+        """q and k come back in HF's row order, which the loader permutes for RoPE."""
+        hf = hf_tensors()
+        held = held_by(param, hf)
+        split = split_hf_tensors(expected_value(param, hf, tp_size=1, tied=False), held)
+        assert list(split) == [tensor.name for tensor in held.tensors]
+        for name, value in split.items():
+            assert np.array_equal(value, hf[name]), f"{name}: not the checkpoint's"
+
+    def test_drops_the_vocab_padding(self):
+        vocab = VOCAB - 8
+        hf = hf_tensors(vocab=vocab)
+        embedding = hf["model.embed_tokens.weight"]
+        padded = np.concatenate([embedding, np.ones((8, MODEL_HIDDEN), np.float32)])
+        split = split_hf_tensors(padded, held_by("Llama/tok_emb/weight", hf, vocab_size=vocab))
+        assert np.array_equal(split["model.embed_tokens.weight"], embedding)
+
+    def test_gives_a_norm_back_as_1d(self):
+        hf = hf_tensors()
+        split = split_hf_tensors(hf["model.norm.weight"].reshape(1, -1), held_by("Llama/ln_fc/gamma", hf))
+        assert split["model.norm.weight"].shape == (MODEL_HIDDEN,)
+        assert np.array_equal(split["model.norm.weight"], hf["model.norm.weight"])
+
+    def test_copies_out_of_the_parameter(self):
+        hf = hf_tensors()
+        name = "model.layers.0.mlp.down_proj.weight"
+        values = hf[name].copy()
+        split = split_hf_tensors(values, held_by("Llama/blocks/0/mlp/w2/weight", hf))
+        values[:] = 0.0
+        assert np.array_equal(split[name], hf[name]), "the split tensor is a view of the parameter's values"
+
+    def test_needs_the_rows_of_every_tensor(self, expect_error):
+        hf = hf_tensors()
+        held = held_by("Llama/blocks/0/attention/qkv_linear/weight", hf)
+        rows = sum(tensor.rows for tensor in held.tensors)
+        with expect_error(RuntimeError, f"need a 2-D array of at least {rows} rows"):
+            split_hf_tensors(np.zeros((rows - 1, MODEL_HIDDEN), np.float32), held)
+
+
+@pytest.mark.requires_device
+class TestHfLayout:
+    @pytest.mark.parametrize("tying", TYINGS, ids=lambda v: v.name)
+    def test_names_every_tensor_of_the_checkpoint_once(self, tying):
+        hf = hf_tensors(tied=tying == WeightTyingType.Enabled)
+        layout = hf_layout(Llama(e2e_config(False, EmbeddingPlacement.Replicated, tying)))
+        tensors = [tensor for held in layout.values() for tensor in held.tensors]
+        assert sorted(tensor.name for tensor in tensors) == sorted(hf)
+        assert {tensor.name: tensor.shape for tensor in tensors} == {name: value.shape for name, value in hf.items()}
+
+    def test_holds_the_vocab_without_its_padding(self):
+        vocab = VOCAB - 8
+        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated, vocab_size=vocab))
+        assert model.padded_vocab_size > vocab, "premise: the model rounds the vocab up"
+        layout = hf_layout(model)
+        for param in ("Llama/tok_emb/weight", "Llama/fc/weight"):
+            (tensor,) = layout[param].tensors
+            assert tensor.shape == (vocab, MODEL_HIDDEN), param
+
+    def test_only_qkv_reorders_its_rows(self):
+        layout = hf_layout(Llama(e2e_config(False, EmbeddingPlacement.Replicated)))
+        reordered = {param for param, held in layout.items() if held.transform is not None}
+        assert reordered == {f"Llama/blocks/{i}/attention/qkv_linear/weight" for i in range(N_LAYERS)}
+        assert all((held.transform is None) == (held.inverse is None) for held in layout.values())
+
+
+def read_safetensors_dir(directory) -> dict[str, np.ndarray]:
+    """Every tensor of every .safetensors file in *directory*."""
+    load_file = pytest.importorskip("safetensors.numpy").load_file
+    tensors: dict[str, np.ndarray] = {}
+    for path in sorted(directory.glob("*.safetensors")):
+        tensors.update(load_file(str(path)))
+    return tensors
+
+
+def assert_same_tensors(got: dict[str, np.ndarray], expected: dict[str, np.ndarray]) -> None:
+    """The same names, and each tensor of the same dtype, shape and bits."""
+    assert sorted(got) == sorted(expected)
+    for name, value in expected.items():
+        assert (got[name].dtype, got[name].shape) == (value.dtype, value.shape), name
+        assert got[name].tobytes() == value.tobytes(), f"{name}: other values than the checkpoint's"
+
+
+def loaded_model(directory, dtype=ml_dtypes.bfloat16, stored=None, **config_overrides):
+    """A model, its parameters stored as *stored* (the model's default if None), loaded from a synthetic checkpoint of
+    *dtype* written to *directory*; and that checkpoint's tensors."""
+    directory.mkdir()
+    vocab = config_overrides.get("vocab_size", VOCAB)
+    tied = config_overrides.get("weight_tying") == WeightTyingType.Enabled
+    hf = write_hf_checkpoint(directory, hf_tensors(vocab=vocab, dtype=dtype, tied=tied))
+    model = Llama(coverage_config(**config_overrides))
+    if stored is not None:
+        store_as(model, stored)
+    load_from_safetensors(model, directory)
+    return model, hf
+
+
+# A few tensors of the synthetic checkpoint each: it is about 450 kB of bf16.
+SHARD_BYTES = 100_000
+
+
+@pytest.mark.requires_device
+class TestExportHfModel:
+    @pytest.mark.parametrize("tied", [False, True], ids=["untied", "tied"])
+    def test_reproduces_a_save_pretrained_checkpoint(self, tmp_path, tied):
+        """bf16 in, bf16 out: the export of a loaded model is its checkpoint bit for bit, a tied embedding written once
+        as HF writes it, with the config and tokenizer files copied alongside."""
+        source = tmp_path / "source"
+        hf_llama(source, tied)
+        model = Llama(LlamaConfig.from_hf(source, max_position_embeddings=SEQ_LEN))
+        load_from_safetensors(model, source)
+
+        export = export_hf_model(model, tmp_path / "export", hf_source_dir=source)
+
+        exported = read_safetensors_dir(export)
+        assert_same_tensors(exported, read_safetensors_dir(source))
+        assert ("lm_head.weight" in exported) != tied
+        copied = [name for name in safetensors_loader._HF_CONFIG_FILES if (source / name).is_file()]
+        assert "config.json" in copied
+        for name in copied:
+            assert (export / name).read_bytes() == (source / name).read_bytes(), name
+
+    def test_drops_the_vocab_padding(self, tmp_path):
+        model, hf = loaded_model(tmp_path / "source", vocab_size=VOCAB - 8)
+        assert model.padded_vocab_size > VOCAB - 8, "premise: the model rounds the vocab up"
+        assert_same_tensors(read_safetensors_dir(export_hf_model(model, tmp_path / "export")), hf)
+
+    def test_writes_an_fp32_model_as_fp32(self, tmp_path):
+        model, hf = loaded_model(tmp_path / "source", dtype=np.float32, stored=ttnn.DataType.FLOAT32)
+        assert_same_tensors(read_safetensors_dir(export_hf_model(model, tmp_path / "export")), hf)
+
+    def test_writes_the_dtype_it_is_asked_for(self, tmp_path):
+        model, hf = loaded_model(tmp_path / "source")
+        exported = read_safetensors_dir(export_hf_model(model, tmp_path / "export", dtype=np.float32))
+        assert_same_tensors(exported, {name: value.astype(np.float32) for name, value in hf.items()})
+
+    def test_writes_shards_that_load_back(self, tmp_path):
+        """Shards, an index naming every tensor's, and nothing left of an earlier export into the directory, which
+        the loader would read too. Loading them gives back the model's values."""
+        model, hf = loaded_model(tmp_path / "source")
+        export = tmp_path / "export"
+        export_hf_model(model, export)
+        assert (export / "model.safetensors").is_file(), "premise: the first export is one file"
+
+        export_hf_model(model, export, max_shard_size=SHARD_BYTES)
+
+        shards = sorted(path.name for path in export.glob("*.safetensors"))
+        assert len(shards) > 1 and "model.safetensors" not in shards, shards
+        index = json.loads((export / "model.safetensors.index.json").read_text())
+        assert sorted(index["weight_map"]) == sorted(hf)
+        assert sorted(set(index["weight_map"].values())) == shards
+        assert_same_tensors(read_safetensors_dir(export), hf)
+
+        reloaded = Llama(coverage_config())
+        load_from_safetensors(reloaded, export)
+        for name, param in model.parameters().items():
+            expected = param.to_numpy(ttnn.DataType.FLOAT32)
+            assert np.array_equal(reloaded.parameters()[name].to_numpy(ttnn.DataType.FLOAT32), expected), name
 
 
 if __name__ == "__main__":
