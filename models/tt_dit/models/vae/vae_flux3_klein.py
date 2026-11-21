@@ -4,8 +4,9 @@
 
 """The FLUX.2 32-channel KL autoencoder on the FLUX 3 Klein mesh: Flux2VaeDecoder splits the image's rows over one
 mesh axis and its columns over the other, Flux2VaeEncoder is tensor-parallel and replicated on fixed reference
-canvases (canvas_flux3_klein). One instance of each serves every shape (a Conv2d keeps its prepared weights per
-input shape); their conv slicing is set per instance."""
+canvases (canvas_flux3_klein) and also splits the rows of the 1 MP square canvas over the decoder's row axis. One
+instance of each serves every shape (a Conv2d keeps its prepared weights per input shape); their conv slicing is set
+per instance."""
 
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ SCALE = 8
 PATCH = 2
 LATENT_CHANNELS = 128
 # A reference that fills the 1 MP square canvas (the served square reference, every square multi-reference canvas)
-# runs the plain encoder: fused GroupNorms, no masks, 4x faster there (0.053 vs 0.21 s, jobs 189638 / 226340)
+# runs the plain encoder with its rows split over h_axis: 0.053 s per reference (job 189638), 0.26 s TP alone (226769)
 FULL_CANVAS = (1024, 1024)
 BLOCK_OUT_CHANNELS = (128, 256, 512, 512)
 Z_CHANNELS = 32
@@ -170,9 +171,10 @@ class Flux3KleinVae:
         encoder_slices = ENCODER_SLICE_PARAMS.get(mesh_shape, {})
         configure_conv2d(self._encoder, slice_params={mesh_shape: encoder_slices}, replace=True)
         load(self._encoder, encoder_parallel, "vae_encoder_canvas")
-        self._full_encoder = Flux2VaeEncoder(parallel_config=encoder_parallel, **common)
-        configure_conv2d(self._full_encoder, slice_params={mesh_shape: encoder_slices}, replace=True)
-        load(self._full_encoder, encoder_parallel, "vae_encoder_full")
+        full_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=h_axis, w_axis=None)
+        self._full_encoder = Flux2VaeEncoder(parallel_config=full_parallel, **common)
+        configure_conv2d(self._full_encoder, slice_params={mesh_shape: {}}, replace=True)
+        load(self._full_encoder, full_parallel, "vae_encoder_full")
 
         state = state_dict()
         self._bn_mean = state["bn.running_mean"].float()
@@ -214,10 +216,15 @@ class Flux3KleinVae:
         cw, ch = canvas_for(width, height)
         x = torch.zeros(1, ch, cw, 3)
         x[0, :height, :width] = torch.from_numpy(np.asarray(image)).float() / 127.5 - 1.0
+        full = (width, height) == FULL_CANVAS
         x = tensor.from_torch(
-            x, device=self._device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_axes=[None] * 4
+            x,
+            device=self._device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_axes=[None, self.h_axis if full else None, None, None],
         )
-        if (width, height) == FULL_CANVAS:
+        if full:
             out = self._full_encoder.forward(x)
         else:
             masks = CanvasMasks(self._device, canvas=(cw, ch), image=(width, height))
