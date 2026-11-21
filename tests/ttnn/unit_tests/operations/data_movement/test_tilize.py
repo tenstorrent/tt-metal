@@ -1446,17 +1446,20 @@ def _architecture_xfail(dtype, buffer_type, tile_height):
     """None for an input the ttnn.tilize docstring supports on this architecture, else (reason, run) for an xfail.
 
     The docstring's architecture rules: on Blackhole, BFLOAT16, UINT16 and UINT8 inputs need a tile height of 2 or
-    more, and a UINT8 input must be in DRAM; on Quasar, a FLOAT32 input needs a tile height of 32. An input outside a
-    rule runs and is expected to fail, except a UINT8 input in L1 on Blackhole and a FLOAT32 input on Quasar, which
-    don't run.
+    more, and a UINT8 input must be in DRAM; on Quasar, the input must be BFLOAT16, FLOAT32 or INT32, and FLOAT32 and
+    INT32 inputs need a tile height of 32. An input outside a rule runs and is expected to fail, except a UINT8 input in
+    L1 on Blackhole and an input outside the Quasar rule, which don't run.
     """
     if is_blackhole():
         if dtype == ttnn.uint8 and buffer_type != ttnn.BufferType.DRAM:
             return "the docstring asks for UINT8 inputs in DRAM on Blackhole", False
         if dtype in (ttnn.bfloat16, ttnn.uint16, ttnn.uint8) and tile_height < 2:
             return f"the docstring asks for a tile height of 2 or more for {dtype} inputs on Blackhole", True
-    if is_quasar() and dtype == ttnn.float32 and tile_height != 32:
-        return "the docstring asks for a tile height of 32 for FLOAT32 inputs on Quasar", False
+    if is_quasar():
+        if dtype not in (ttnn.bfloat16, ttnn.float32, ttnn.int32):
+            return "the docstring lists only BFLOAT16, FLOAT32 and INT32 inputs on Quasar", False
+        if dtype in (ttnn.float32, ttnn.int32) and tile_height != 32:
+            return f"the docstring asks for a tile height of 32 for {dtype} inputs on Quasar", False
     return None
 
 
