@@ -270,21 +270,21 @@ Erf:
 - {input: Float16_b, output: Float16, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 15}]}
 - {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16_b, output: Float16_b, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float16_b, output: Float16_b, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 2}]}
+- {input: Float16_b, output: Float16_b, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16_b, output: Float16_b, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
 - {input: Float16_b, output: Float32, approx: 'No', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
 - {input: Float16_b, output: Float32, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 53695}]}
-- {input: Float16_b, output: Float32, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 131072}]}
+- {input: Float16_b, output: Float32, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
 - {input: Float16_b, output: Float32, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 124104}]}
 - {input: Float32, output: Float16, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 7}]}
 - {input: Float32, output: Float16, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 14}]}
 - {input: Float32, output: Float16_b, approx: 'No', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float32, output: Float16_b, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float32, output: Float16_b, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 2}]}
+- {input: Float32, output: Float16_b, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float32, output: Float16_b, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
 - {input: Float32, output: Float32, approx: 'No', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
 - {input: Float32, output: Float32, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 53715}]}
-- {input: Float32, output: Float32, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 131072}]}
+- {input: Float32, output: Float32, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
 - {input: Float32, output: Float32, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 118679}]}
 Erfc:
 - {input: Float16, output: Float16, dest: 'Yes', near_zero_atol: 9.846687316894531e-05, domains: [{low: -.inf, high: .inf, ulp: 11}]}
