@@ -18,7 +18,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from models.common.utility_functions import comp_pcc
 
 SIDE = 4
 NUM_LINKS = 2
