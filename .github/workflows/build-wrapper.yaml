@@ -173,6 +173,11 @@ jobs:
       enable-lto: ${{ matrix.config.enable-lto || false }}
       publish-artifact: false
       publish-package: false
+      # Only the Ubuntu 24.04 clang-20 libstdcpp config (nearest to the release build)
+      # runs CPack. The others run `cmake --install` to keep install-rule coverage.
+      # This is an expression, not a matrix key, because matrix keys change the job names.
+      skip-package: ${{ !(matrix.config.platform == 'Ubuntu 24.04' &&
+        matrix.config.toolchain == 'cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake') }}
       skip-tt-train: false
       tracy: false
       runs-on: ${{ inputs['runs-on'] }}
