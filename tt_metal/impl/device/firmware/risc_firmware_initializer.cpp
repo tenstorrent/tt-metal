@@ -609,7 +609,7 @@ void RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(tt::ChipId d
     for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-        if (rtoptions_.get_enable_2_erisc_mode() && !quasar_ethernet) {
+        if (rtoptions_.get_enable_2_erisc_mode() && hal_.has_eth_base_firmware()) {
             llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(
                 descriptor_->env_impl(), device_id, virtual_core);
         }
@@ -1539,7 +1539,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                     }
                 }
             }
-            launch_msg.kernel_config().mode() = (!rtoptions_.get_fast_dispatch() or is_idle_eth or quasar_ethernet)
+            launch_msg.kernel_config().mode() = (!rtoptions_.get_fast_dispatch() or is_idle_eth or !hal_.has_eth_base_firmware())
                                                     ? dev_msgs::DISPATCH_MODE_HOST
                                                     : dev_msgs::DISPATCH_MODE_DEV;
             prepare_initial_launch_msg();
@@ -1827,8 +1827,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     const bool has_quasar_ethernet = quasar_device_has_ethernet_cores(cluster_, device_id);
     std::unordered_set<CoreCoord> multi_risc_active_eth_cores;
 
-    // APP_SYNC_INFO is base Ethernet firmware's; a Quasar Ethernet core (a Keraunos CCE) has none.
-    if (!has_quasar_ethernet) {
+    // APP_SYNC_INFO is base Ethernet firmware's.
+    if (hal_.has_eth_base_firmware()) {
         for (const auto& eth_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
             static std::vector<uint32_t> zero_vec_erisc_init(
                 hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) /
