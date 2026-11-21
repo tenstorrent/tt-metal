@@ -11,7 +11,6 @@
 
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -26,7 +25,9 @@ struct ExpRingJointSDPAParams {
     std::size_t ring_size = 0;
     tt::tt_metal::MemoryConfig output_memory_config;
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
-    DeviceComputeKernelConfig compute_kernel_config;
+    // The precision recipe (device/recipe/sdpa_precision_policy.hpp) that owns the numerics; STANDARD unless the
+    // caller names one.
+    ttnn::operations::transformer::SDPAPrecision precision = ttnn::operations::transformer::SDPAPrecision::STANDARD;
     // Flattened CCL (all-gather) params
     int32_t dim;
     uint32_t num_links;
@@ -44,7 +45,7 @@ struct ExpRingJointSDPAParams {
         std::size_t ring_size,
         tt::tt_metal::MemoryConfig output_memory_config,
         std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-        DeviceComputeKernelConfig compute_kernel_config,
+        ttnn::operations::transformer::SDPAPrecision precision,
         int32_t dim,
         uint32_t num_links,
         ttnn::ccl::Topology topology,
@@ -59,7 +60,7 @@ struct ExpRingJointSDPAParams {
         ring_size(ring_size),
         output_memory_config(std::move(output_memory_config)),
         program_config(std::move(program_config)),
-        compute_kernel_config(compute_kernel_config),
+        precision(precision),
         dim(dim),
         num_links(num_links),
         topology(topology),
@@ -76,7 +77,7 @@ struct ExpRingJointSDPAParams {
         "scale",
         "logical_n",
         "ring_size",
-        "compute_kernel_config",
+        "precision",
         "program_config",
         "dim",
         "num_links",
@@ -89,7 +90,7 @@ struct ExpRingJointSDPAParams {
             scale,
             logical_n,
             ring_size,
-            compute_kernel_config,
+            precision,
             program_config,
             dim,
             num_links,

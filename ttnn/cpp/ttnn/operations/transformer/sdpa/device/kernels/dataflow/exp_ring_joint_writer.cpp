@@ -11,18 +11,21 @@
 #include "dataflow_common.hpp"
 #include "metadata_scalar_read.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/recipe_ring_cbs.hpp"
 #include "exp_fused_op_indexer.hpp"
-
-namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
-
-#ifdef USE_MUX
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+
+// Exp ring joint SDPA writer (compute: exp_ring_joint_sdpa.cpp, the precision recipes). It generates the recipe's
+// reduce scaler and column identity, drains each pass's normalized output, and on the two MUX client columns
+// (named arg use_mux) forwards the K/V chunks the reader fetched to the next device over the fabric MUX (the fused
+// all-gather). Both writer kernels take the same compile-time args.
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 using namespace tt::tt_fabric::linear::experimental;
-#endif
 
 struct QChunkInfo {
     bool is_joint_q;
@@ -84,22 +87,21 @@ void kernel_main() {
     constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(11);
     constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(12);
     constexpr uint32_t num_q_chunks = get_compile_time_arg_val(13);
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(14);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(15);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(16);
-    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(17);
-    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(18);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(19);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(14);
+    // Output Q tile rows per drain: the row groups compute normalizes (two rows when the Q chunk is a whole number of
+    // pairs, else one).
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(15);
     // Trace-safe logical_n: when set, logical_n_ct above is only the worst-case placeholder.
-    constexpr bool has_logical_n_tensor = get_compile_time_arg_val(20) == 1;
+    constexpr bool has_logical_n_tensor = get_compile_time_arg_val(16) == 1;
+    // The MUX client columns forward K/V over the fabric (the fused all-gather).
+    constexpr bool use_mux = get_named_compile_time_arg_val("use_mux") == 1;
 
     // Sits ahead of the output accessors so the offsets below (and the MUX/AG block chaining off
     // joint_out_args) keep deriving normally in both modes.
-    constexpr auto logical_n_args = TensorAccessorArgs<21>();
+    constexpr auto logical_n_args = TensorAccessorArgs<17>();
     constexpr auto out_args = TensorAccessorArgs<logical_n_args.next_compile_time_args_offset()>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
-#ifdef USE_MUX
     constexpr uint32_t mux_ct_base = joint_out_args.next_compile_time_args_offset();
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(mux_ct_base + 0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(mux_ct_base + 1);
@@ -115,7 +117,6 @@ void kernel_main() {
     constexpr uint32_t ag_page_size = get_compile_time_arg_val(ag_ct_base + 1);
     constexpr auto ag_gathered_k_args = TensorAccessorArgs<ag_ct_base + 2>();
     constexpr auto ag_gathered_v_args = TensorAccessorArgs<ag_gathered_k_args.next_compile_time_args_offset()>();
-#endif
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -124,59 +125,60 @@ void kernel_main() {
     const uint32_t q_base = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_stride = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_count = get_arg_val<uint32_t>(argidx++);
-    // One Q chunk per pass, and at most kMaxPasses passes (see the program factory).
-    ASSERT(q_count <= 3);
-
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
 
-#ifdef USE_MUX
-
-    // Parse fabric MUX client connection RT args (17 values).
+    // Fabric MUX client connection RT args (17 values, MUX writers only):
     // mux_connection_valid, is_termination_master, mux_x, mux_y,
     // channel_base_address, connection_info_address, connection_handshake_address,
     // flow_control_address, buffer_index_address, channel_credits_stream_id,
     // 5 local semaphores, termination_master_noc_x, termination_master_noc_y
-    const bool mux_connection_valid = get_arg_val<uint32_t>(argidx++) == 1;
-    const bool is_termination_master = get_arg_val<uint32_t>(argidx++) == 1;
-    const uint8_t fabric_mux_x = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
-    const uint8_t fabric_mux_y = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
-    const uint32_t fabric_mux_channel_base_offset = get_arg_val<uint32_t>(argidx++);
-    const uint32_t fabric_mux_connection_info_offset = get_arg_val<uint32_t>(argidx++);
-    const uint32_t fabric_mux_connection_handshake_offset = get_arg_val<uint32_t>(argidx++);
-    const uint32_t fabric_mux_flow_control_offset = get_arg_val<uint32_t>(argidx++);
-    const uint32_t fabric_mux_buffer_index_offset = get_arg_val<uint32_t>(argidx++);
-    const uint8_t fabric_mux_channel_id = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
-    const uint32_t termination_sync_sem_id = get_arg_val<uint32_t>(argidx++);
-    const uint32_t local_fabric_mux_status_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    const uint32_t local_flow_control_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    const uint32_t local_teardown_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    const uint32_t local_buffer_index_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
-    const uint8_t termination_master_noc_x = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
-    const uint8_t termination_master_noc_y = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
-
+    bool mux_connection_valid = false;
+    bool is_termination_master = false;
+    uint8_t fabric_mux_x = 0, fabric_mux_y = 0, fabric_mux_channel_id = 0;
+    uint8_t termination_master_noc_x = 0, termination_master_noc_y = 0;
+    uint32_t termination_sync_sem_id = 0;
     // Connection object at outer scope (lifetime spans the ring loop and teardown).
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_conn;
     uint32_t fabric_mux_l1_base = 0;
-    if (mux_connection_valid) {
-        // Waits for the mux to be ready to accept connections.
-        mux_conn = tt::tt_fabric::build_connection_to_program_local_fabric_mux<fabric_mux_num_buffers_per_channel>(
-            fabric_mux_x,
-            fabric_mux_y,
-            fabric_mux_channel_id,
-            fabric_mux_num_buffers_per_channel,
-            fabric_mux_channel_buffer_size_bytes,
-            fabric_mux_l1_base_semaphore_id,
-            fabric_mux_channel_base_offset,
-            fabric_mux_connection_info_offset,
-            fabric_mux_connection_handshake_offset,
-            fabric_mux_flow_control_offset,
-            fabric_mux_buffer_index_offset,
-            local_flow_control_addr,
-            local_teardown_addr,
-            local_buffer_index_addr,
-            local_fabric_mux_status_addr,
-            fabric_mux_l1_base);
-        tt::tt_fabric::fabric_client_connect(mux_conn);
+    if constexpr (use_mux) {
+        mux_connection_valid = get_arg_val<uint32_t>(argidx++) == 1;
+        is_termination_master = get_arg_val<uint32_t>(argidx++) == 1;
+        fabric_mux_x = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
+        fabric_mux_y = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
+        const uint32_t fabric_mux_channel_base_offset = get_arg_val<uint32_t>(argidx++);
+        const uint32_t fabric_mux_connection_info_offset = get_arg_val<uint32_t>(argidx++);
+        const uint32_t fabric_mux_connection_handshake_offset = get_arg_val<uint32_t>(argidx++);
+        const uint32_t fabric_mux_flow_control_offset = get_arg_val<uint32_t>(argidx++);
+        const uint32_t fabric_mux_buffer_index_offset = get_arg_val<uint32_t>(argidx++);
+        fabric_mux_channel_id = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
+        termination_sync_sem_id = get_arg_val<uint32_t>(argidx++);
+        const uint32_t local_fabric_mux_status_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+        const uint32_t local_flow_control_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+        const uint32_t local_teardown_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+        const uint32_t local_buffer_index_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+        termination_master_noc_x = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
+        termination_master_noc_y = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
+        if (mux_connection_valid) {
+            // Waits for the mux to be ready to accept connections.
+            mux_conn = tt::tt_fabric::build_connection_to_program_local_fabric_mux<fabric_mux_num_buffers_per_channel>(
+                fabric_mux_x,
+                fabric_mux_y,
+                fabric_mux_channel_id,
+                fabric_mux_num_buffers_per_channel,
+                fabric_mux_channel_buffer_size_bytes,
+                fabric_mux_l1_base_semaphore_id,
+                fabric_mux_channel_base_offset,
+                fabric_mux_connection_info_offset,
+                fabric_mux_connection_handshake_offset,
+                fabric_mux_flow_control_offset,
+                fabric_mux_buffer_index_offset,
+                local_flow_control_addr,
+                local_teardown_addr,
+                local_buffer_index_addr,
+                local_fabric_mux_status_addr,
+                fabric_mux_l1_base);
+            tt::tt_fabric::fabric_client_connect(mux_conn);
+        }
     }
 
     // ---- MUX writer setup: parsed by all MUX writers with valid connections ----
@@ -202,7 +204,7 @@ void kernel_main() {
     uint32_t num_muxes_in_direction = 1, my_mux_index = 0;
     // Split-head forwarding dedup: when set, this row is the follower of a pair sharing one head —
     // the leader row's clients send byte-identical packets, so this client skips all fabric data
-    // and semincs (it still drains c_14/c_15 to keep the reader's CB pacing unchanged).
+    // and semincs (it still drains its K/V handles to keep the reader's CB pacing unchanged).
     bool dedup_skip_forward = false;
 
     if (mux_connection_valid) {
@@ -268,12 +270,11 @@ void kernel_main() {
 
     const auto gathered_k_writer = TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt);
     const auto gathered_v_writer = TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt);
-#endif
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_k_writer_in = tt::CBIndex::c_14;
-    constexpr uint32_t cb_v_writer_in = tt::CBIndex::c_15;
+    // The recipe CB layout (recipe_ring_cbs.hpp); the MUX writer pops its own handles on the K and V CBs.
+    constexpr uint32_t cb_out = recipe_ring_cb::out;
+    constexpr uint32_t cb_k_writer_in = recipe_ring_cb::k_writer;
+    constexpr uint32_t cb_v_writer_in = recipe_ring_cb::v_writer;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
     CircularBuffer cb_k_w(cb_k_writer_in);
@@ -287,79 +288,51 @@ void kernel_main() {
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
     const auto joint_out_generator = PaddedAddrGenerator(joint_out_writer, joint_tile_logical);
 
-    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
-    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
-
-    generate_bcast_unary_scalar(CircularBuffer(cb_scale_in), scale_val);
-    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
+    // The recipe's reduce scaler and column identity (as the dense recipe reader, reader_recipe.cpp).
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_identity_scale_in,
+        recipe_ring_cb::identity_scale,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+    generate_bcast_col_scalar_zeroed(CircularBuffer(recipe_ring_cb::col_identity), 0x3f803f80);
 
-    // Read the live length ONCE, before the ring loop. This kernel is a protocol participant, not just a
-    // mask producer: the MUX forwarding loop below skips chunks on the same predicate as the reader and
-    // sends one per-link atomic_inc per forwarded chunk, which is exactly what the reader's injector gate
-    // counts. Reader and writer must therefore derive identical values from the same tensor.
+    // Read the live length ONCE, before the ring loop. This kernel is a protocol participant: the MUX forwarding loop
+    // below skips chunks on the same predicate as the reader and sends one per-link atomic_inc per forwarded chunk,
+    // which is exactly what the reader's injector gate counts. Reader and writer must therefore derive identical
+    // values from the same tensor.
     uint32_t logical_n = logical_n_ct;
     uint32_t logical_nt = logical_nt_ct;
-    [[maybe_unused]] uint32_t global_n_partial_col_live = global_n_partial_col;
     if constexpr (has_logical_n_tensor) {
-        // Borrow cb_mask_in's L1 as read scratch: this runs before the mask tiles are generated into it.
+        // Borrow the output CB's L1 as read scratch: this runs before compute pushes any output into it.
         logical_n = trace_metadata::read_metadata_scalar_u32(
-            noc, logical_n_args, get_common_arg_val<uint32_t>(0), CircularBuffer(cb_mask_in).get_write_ptr());
+            noc, logical_n_args, get_common_arg_val<uint32_t>(0), CircularBuffer(cb_out).get_write_ptr());
         ASSERT(logical_n >= 1);
         logical_nt = ring_joint::tiles_for(logical_n);
-        global_n_partial_col_live = ring_joint::tile_partial_col(logical_n);
-    }
-
-    // Lightweight mask: generate all mask tiles once into single CB before the ring loop.
-    // Only needed when any K/joint dimension has padding that doesn't fill a chunk.
-    constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
-    constexpr bool global_n_has_padding =
-        has_logical_n_tensor || (logical_n_ct % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0);
-    constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-    constexpr bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
-    // partial_tile_present keeps tile presence in lock-step with the factory's CB sizing and compute's tile
-    // indices. A present tile needs a non-zero template column (fall back to 1) so
-    // generate_lightweight_mask_tiles allocates the slot; the stamped live column may still be 0, which
-    // compute ignores.
-    constexpr uint32_t global_n_partial_col_layout =
-        ring_joint::partial_tile_present(global_n_partial_col, has_logical_n_tensor)
-            ? (global_n_partial_col > 0 ? global_n_partial_col : 1u)
-            : 0u;
-    if constexpr (needs_lightweight_mask) {
-        generate_lightweight_mask_tiles<global_n_partial_col_layout, joint_l_partial_col, cb_mask_in>(
-            noc, global_n_partial_col_live, joint_l_partial_col);
     }
 
     const uint32_t last_active_ring_iter =
         find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_nt, L);
 
-    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+    // Pass-outer, ring-inner, as the reader and compute: pass p handles head-segment (p * rows + my_row) over the whole
+    // ring. The AG forwarding below and the output drain are parameterized per chunk and per pass.
+    for (uint32_t pass = 0; pass < q_count; ++pass) {
+        RingIdSequencer order = fused_op_indexer.seq;
+        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+            const uint32_t ring_id = order.get_next_ring_id([](uint32_t, uint32_t) {});
 
-        const bool do_joint_kv = ring_id == ring_size - 1;
-        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
+            const bool do_joint_kv = ring_id == ring_size - 1;
+            const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
-        const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile < logical_nt;
-        const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
-        if (!ring_iter_does_work) {
-            continue;
-        }
+            const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
+            const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile < logical_nt;
+            const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+            if (!ring_iter_does_work) {
+                continue;
+            }
 
-        {
-            // Accumulators persist in L1 (single Q-chunk per core).
-            // Write final normalized output on last ring iteration.
-            const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
-
-            // Serial passes, same order as the reader and compute: pass p handles head
-            // (p * rows + my_row). Both the AG forwarding below and the output drain are already
-            // parameterized per chunk, so they are correct per pass with no addressing change.
-            for (uint32_t pass = 0; pass < q_count; ++pass) {
+            {
+                // The pass's state stays resident in L1; its last active ring iteration writes the normalized output.
+                const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
                 const uint32_t global_q_chunk = q_base + pass * q_stride;
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
@@ -368,7 +341,6 @@ void kernel_main() {
                 const auto qi = get_q_chunk_info(
                     q_chunk, nb, nq, ring_id, num_local_q_chunks, Sq_chunk_t, DHt, Lt, local_padded_Nt);
 
-#ifdef USE_MUX
                 uint32_t KV_chunks_processed_in_iter = 0;
                 constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
                 constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;
@@ -556,15 +528,7 @@ void kernel_main() {
                             noc.async_writes_flushed();
                         }
                     }
-
-                    if (KV_chunks_processed_in_iter % 2 == 0) {
-                        cb_k_w.wait_front(k_chunk_tiles);
-                        cb_v_w.wait_front(v_chunk_tiles);
-                        cb_k_w.pop_front(k_chunk_tiles);
-                        cb_v_w.pop_front(v_chunk_tiles);
-                    }
                 }
-#endif
 
                 // On last ring iteration, drain normalized output to DRAM.
                 if (is_last_ring_iter) {
@@ -580,11 +544,19 @@ void kernel_main() {
                         /*flush_trid=*/0);
                     noc.async_write_barrier();
                 }
+                // The reader's phase-alignment K/V pair, after the output drain: with one K and one V entry (the
+                // factory's L1 fallback) the reader can push it only once compute has released the last chunk, which
+                // compute does after normalizing into the output CB that this drain empties.
+                if (mux_connection_valid && KV_chunks_processed_in_iter % 2 == 0) {
+                    cb_k_w.wait_front(k_chunk_tiles);
+                    cb_v_w.wait_front(v_chunk_tiles);
+                    cb_k_w.pop_front(k_chunk_tiles);
+                    cb_v_w.pop_front(v_chunk_tiles);
+                }
             }
         }
     }
 
-#ifdef USE_MUX
     if (mux_connection_valid) {
         noc.async_atomic_barrier();
         tt::tt_fabric::fabric_client_disconnect(mux_conn);
@@ -598,6 +570,5 @@ void kernel_main() {
             noc.async_atomic_barrier();
         }
     }
-#endif
     noc.async_write_barrier();
 }

@@ -13,6 +13,7 @@
 #include "exp_fused_op_indexer.hpp"
 #include "metadata_scalar_read.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/recipe_ring_cbs.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -35,6 +36,8 @@ void kernel_main() {
     constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(13);
     constexpr uint32_t num_q_chunks = get_compile_time_arg_val(14);
     constexpr uint32_t ring_size = get_compile_time_arg_val(15);
+    // Q tile rows per push: compute starts its QK on each pushed row group (one row for the FP32 recipes and for a
+    // paired recipe's odd Q chunk, else two).
     constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(16);
 
     constexpr auto q_args = TensorAccessorArgs<17>();
@@ -78,8 +81,7 @@ void kernel_main() {
     const uint32_t num_links = get_arg_val<uint32_t>(argidx++);
     volatile tt_l1_ptr uint32_t* per_link_sem_ptrs[2] = {nullptr, nullptr};
     for (uint32_t lnk = 0; lnk < num_links; ++lnk) {
-        per_link_sem_ptrs[lnk] =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(argidx++));
+        per_link_sem_ptrs[lnk] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(argidx++));
     }
 
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
@@ -97,29 +99,28 @@ void kernel_main() {
     const uint32_t receiver_semaphore_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 1);
     const uint32_t valid_semaphore_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 2);
     constexpr bool mcast_enabled = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 3) == 1;
-    // Streamed Q (host fallback when resident Q does not fit L1): cb_q_in holds one chunk, so each
-    // pass's Q is re-read every ring iteration and compute pops it at the end of the pass.
-    constexpr bool stream_q = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 4) == 1;
+    // K and V CB entries: two, or one each (the factory's L1 fallback).
+    constexpr uint32_t kv_cb_entries = get_named_compile_time_arg_val("kv_cb_entries");
     // Ping-pong valid flag: K broadcasts land on receiver_semaphore_id, V broadcasts on this one.
     // Separate flags per channel let a receiver post its credit (reserve + flag reset + ack) for
     // chunk n+1 immediately after consuming chunk n, so the injector never waits a post-receipt
     // round trip between consecutive mcasts (V of chunk n and K of chunk n+1 overlap in flight).
-    const uint32_t receiver_semaphore_b_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 5);
+    const uint32_t receiver_semaphore_b_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 4);
     // V-channel ack counter, separate from the K-channel counter (sender_semaphore_id). K and V
     // ack totals MUST be counted independently: K credits run one chunk ahead of V credits, so a
     // combined total would let fast receivers' K(n+1) credits mask a slow receiver's missing V(n)
     // credit, releasing the V(n) mcast before that receiver reset its V flag (lost VALID ->
     // deadlock). Per channel, a receiver is at most one credit ahead — exactly the awaited event.
-    const uint32_t sender_semaphore_v_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 6);
+    const uint32_t sender_semaphore_v_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 5);
     // Split-head forwarding dedup buddy gate (see the AG gate below).
-    const uint32_t buddy_gate_semaphore_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 7);
+    const uint32_t buddy_gate_semaphore_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 6);
 
     // When set, logical_n_ct/logical_nt_ct are worst-case placeholders; the live value is read below.
     constexpr bool has_logical_n_tensor =
-        get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 8) == 1;
-    constexpr auto logical_n_args = TensorAccessorArgs<joint_v_args.next_compile_time_args_offset() + 9>();
+        get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 7) == 1;
+    constexpr auto logical_n_args = TensorAccessorArgs<joint_v_args.next_compile_time_args_offset() + 8>();
 
-    constexpr uint32_t cb_derived = tt::CBIndex::c_13;
+    constexpr uint32_t cb_derived = recipe_ring_cb::derived;
 
     // Read the live length ONCE, before the ring loop, into locals. Every logical_n-dependent quantity
     // below derives from these — including the chunk-skip predicate that sets this kernel's credit caps
@@ -162,11 +163,12 @@ void kernel_main() {
         }
     }
 
-    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
-    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
-    constexpr uint32_t cb_k_writer_in = tt::CBIndex::c_14;
-    constexpr uint32_t cb_v_writer_in = tt::CBIndex::c_15;
+    // The recipe CB layout (recipe_ring_cbs.hpp); the MUX writer pops its own handles on the K and V CBs.
+    constexpr uint32_t cb_q_in = recipe_ring_cb::q;
+    constexpr uint32_t cb_k_in = recipe_ring_cb::k;
+    constexpr uint32_t cb_v_in = recipe_ring_cb::v;
+    constexpr uint32_t cb_k_writer_in = recipe_ring_cb::k_writer;
+    constexpr uint32_t cb_v_writer_in = recipe_ring_cb::v_writer;
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -199,53 +201,51 @@ void kernel_main() {
     const auto joint_k_generator = PaddedAddrGenerator(joint_k_reader, joint_input_tile_logical);
     const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, joint_input_tile_logical);
 
-    // Number of Q chunks already pushed to cb_q_in. Q is identical across ring iterations; with
-    // resident Q each pass reads its head's chunk exactly once (on the first active ring iteration)
-    // and all q_count chunks stay resident until compute pops them after the last pass of the last
-    // iteration. With streamed Q (stream_q) every pass re-reads its chunk every active iteration.
+    // Number of Q chunks already pushed to cb_q_in. Each pass reads its chunk exactly once, on its first active ring
+    // iteration, into the single-slot Q CB; compute pops it once the pass's last ring iteration is done.
     uint32_t q_chunks_pushed = 0;
 
     uint32_t chunks_signaled_by_remote = 0;
 
     /**
-     * Iterate over ring indices.
-     * On the first iteration, read from local K, V.
-     * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
+     * Pass-outer, ring-inner (as compute and the writer): pass p attends head-segment (p * rows + my_row) over the
+     * whole ring, keeping one Q chunk and one recurrent state resident. Every device, row and MUX writer walks the same
+     * (pass, ring iteration, chunk) order, so the cumulative per-link forwarding counts, multicast credits, dedup
+     * relays and phase-alignment pairs stay matched, and every core of a row runs the same passes, which keeps the
+     * row's K/V CB pointers in lockstep for the mcast. On a pass's first ring iteration K/V come from the local shard;
+     * later ones from the gathered K/V, gated per chunk on the fused all-gather's semaphores.
      */
-    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        // find out which is the latest ring_id that synchronized
-        uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
-        // Iterate over KV blocks gathered on ring.
-        // Only the last ring ID will append joint_K, joint_V to K, V.
-        const bool do_joint_kv = ring_id == ring_size - 1;
-        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
+    for (uint32_t pass = 0; pass < q_count; ++pass) {
+        RingIdSequencer order = fused_op_indexer.seq;
+        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+            const uint32_t ring_id = order.get_next_ring_id([](uint32_t, uint32_t) {});
+            // Iterate over KV blocks gathered on ring.
+            // Only the last ring ID will append joint_K, joint_V to K, V.
+            const bool do_joint_kv = ring_id == ring_size - 1;
+            const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
-        const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile < logical_nt;
-        const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+            const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
+            const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile < logical_nt;
+            const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
 
-        if (!ring_iter_does_work) {
-            continue;
-        }
-
-        // Non-skipped KV chunk count this ring iteration (identical for every pass — the skip
-        // predicate depends only on ring_id). Caps the ping-pong credit pre-posting so a receiver
-        // never acks a chunk the injector will not send: a stale credit would let a later mcast
-        // bypass its receiver handshake and clobber an unconsumed CB slot.
-        uint32_t chunks_this_iter = 0;
-        for (uint32_t kc = 0; kc < num_kv_chunks; ++kc) {
-            const bool kc_is_joint = kc >= num_local_k_chunks;
-            const uint32_t kc_global_start_tile = local_padded_Nt * ring_id + kc * Sk_chunk_t;
-            if (!kc_is_joint && kc_global_start_tile >= logical_nt) {
+            if (!ring_iter_does_work) {
                 continue;
             }
-            chunks_this_iter++;
-        }
 
-        // Passes are serial within a ring iteration: pass p attends head (p * rows + my_row) against
-        // this iteration's K/V shard. Every core of a row runs the same number of passes in the same
-        // order, which is what keeps the row's K/V CB pointers in lockstep for the mcast.
-        for (uint32_t pass = 0; pass < q_count; ++pass) {
+            // Non-skipped KV chunk count this ring iteration (identical for every pass — the skip
+            // predicate depends only on ring_id). Caps the ping-pong credit pre-posting so a receiver
+            // never acks a chunk the injector will not send: a stale credit would let a later mcast
+            // bypass its receiver handshake and clobber an unconsumed CB slot.
+            uint32_t chunks_this_iter = 0;
+            for (uint32_t kc = 0; kc < num_kv_chunks; ++kc) {
+                const bool kc_is_joint = kc >= num_local_k_chunks;
+                const uint32_t kc_global_start_tile = local_padded_Nt * ring_id + kc * Sk_chunk_t;
+                if (!kc_is_joint && kc_global_start_tile >= logical_nt) {
+                    continue;
+                }
+                chunks_this_iter++;
+            }
+
             const uint32_t global_q_chunk = q_base + pass * q_stride;
             // Counted per pass: compute drains its phase-alignment padding per pass too.
             uint32_t KV_chunks_processed_in_iter = 0;
@@ -313,10 +313,9 @@ void kernel_main() {
                 }
             }
 
-            // Resident Q: read this pass's chunk exactly once, on the first active ring iteration.
-            // Streamed Q: read it every pass, every active iteration (the reserve blocks until
-            // compute's pass-end pop frees the single slot — a bounded stall, never a deadlock).
-            const bool need_q_read = stream_q || (q_chunks_pushed <= pass);
+            // Read this pass's chunk exactly once, on its first active ring iteration (the reserve waits for compute
+            // to pop the previous pass's chunk).
+            const bool need_q_read = q_chunks_pushed <= pass;
 
             for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
                 /**
@@ -477,8 +476,10 @@ void kernel_main() {
                 }
                 // Credit the NEXT K chunk now (reserve after push keeps the CB cursor correct),
                 // so the injector's next K mcast is released before this core reaches its wait.
-                if (k_mcast_receive) {
-                    post_k_credit();
+                if constexpr (kv_cb_entries == 2) {
+                    if (k_mcast_receive) {
+                        post_k_credit();
+                    }
                 }
 
                 // Download Q on the first processed K chunk — after K is downloaded and forwarded.
@@ -604,15 +605,22 @@ void kernel_main() {
                     cb_v_writer.push_back(v_chunk_tiles);
                     ASSERT(cb_v.get_write_ptr() == cb_v_writer.get_write_ptr());
                 }
+                // With one K entry, credit the next K chunk only now: its reserve waits for compute to pop this K
+                // chunk, and compute may need this V chunk first (the recipe overlaps a Q row group's PV with the next
+                // one's QK).
+                if constexpr (kv_cb_entries == 1) {
+                    if (k_mcast_receive) {
+                        post_k_credit();
+                    }
+                }
                 // Credit the NEXT V chunk (see the K credit above).
                 if (v_mcast_receive) {
                     post_v_credit();
                 }
             }
 
-            // Phase-alignment padding, per pass. Compute pads once per pass (one sdpa_ring_v2 call
-            // per pass, each ending in dummy_kv_chunks_for_phase_alignment), so the reader must pad
-            // at the same granularity or the K/V CB phases diverge. The exchange is core-local:
+            // Phase-alignment padding, per (pass, ring iteration): compute pops one pair after each pass's ring
+            // iteration with an even chunk count, so the K/V CB phases never diverge. The exchange is core-local:
             // reserve/push on our own CBs, no fetch and no mcast.
             if (KV_chunks_processed_in_iter % 2 == 0) {
                 CircularBuffer cb_k(cb_k_in);
