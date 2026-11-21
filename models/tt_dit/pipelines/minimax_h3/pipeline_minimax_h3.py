@@ -25,9 +25,9 @@ already gated bit-exact against the reference --- the layout, the fp64 rotary gr
 timestep plan, both schedulers. That split is deliberate: those values are checkpoint contracts
 where a reassociation is a silent desync between audio and video, and they cost nothing on host.
 
-The scheduler steps run on host too, which is a bringup choice rather than a design one: the two
-velocity read-backs are ~7 MB against a ~0.9 s step, and a host loop is debuggable. Moving them to
-device is a perf question and out of scope here.
+The scheduler coefficients are computed on host, but the Euler update itself runs in place on
+device (`multiply_` + `add_` on the bfloat16 latents), so the velocities are never read back; the
+latents return to host once, after the last step.
 
 Residency
 ---------
