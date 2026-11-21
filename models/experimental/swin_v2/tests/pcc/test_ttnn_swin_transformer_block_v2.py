@@ -6,7 +6,7 @@ import torch
 from models.experimental.swin_v2.reference.swin_transformer_block_v2 import SwinTransformerBlockV2
 from models.experimental.swin_v2.reference.shifted_window_attention_v2 import ShiftedWindowAttentionV2
 from models.experimental.swin_v2.tt.tt_swin_transformer_block_v2 import TtSwinTransformerBlockV2
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_layernorm_parameter
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight, preprocess_linear_bias

@@ -16,6 +16,10 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/matmul/device/kernels/dataflow/prefetcher_pipe_in1_window.hpp"
 
+#ifdef ARCH_QUASAR
+#error "PrefetcherPipe weight delivery into this matmul has not been brought up on Quasar"
+#endif
+
 void kernel_main() {
     constexpr auto in1_block_num_tiles = get_arg(args::in1_block_num_tiles);
     constexpr auto num_blocks = get_arg(args::num_blocks);
@@ -24,6 +28,11 @@ void kernel_main() {
     constexpr bool in1_in_ring_order = get_arg(args::in1_in_ring_order);
     // In K order: the K-blocks of the pipe's ring past the layer.
     constexpr auto rest_of_ring_blocks = get_arg(args::rest_of_ring_blocks);
+
+    // A core that only fills out the ring's rectangle: no pipe reaches it, so it must not construct one.
+    if (get_arg(args::is_worker_core) == 0) {
+        return;
+    }
     // This worker's position in the gather ring.
     const uint32_t ring_idx = get_arg(args::ring_idx);
 

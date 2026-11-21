@@ -28,9 +28,9 @@ from helpers.golden_generators import (
     truncate_to_bfloat16,
 )
 from helpers.llk_params import DestAccumulation, format_dict
-from helpers.param_config import parametrize
+from helpers.param_config import max_dest_tiles, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import ROPE, TILE_COUNT
 
 pytestmark = blackhole_only
@@ -98,6 +98,38 @@ def _heads(stride, wt):
     return sorted({1, 2, fitting[-1]})
 
 
+ROPE_LAYOUT_SWEEP = dict(
+    stride=[TILE_SLOT_STRIDE, DENSE_STRIDE],
+    wt=[1, 2],
+    ht=_heads,
+)
+
+ROPE_FUSED_COS_SIN_SWEEP = dict(
+    tile_h=[1, 2, 4, 8, 16, 32],
+    # Dense matmul slots hold the top two faces; 32 live rows need a full tile slot.
+    x_stride=lambda tile_h: (
+        [TILE_SLOT_STRIDE, DENSE_STRIDE] if tile_h <= 16 else [TILE_SLOT_STRIDE]
+    ),
+    per_row=[False, True],
+    scale=[None, 0.0, -2.0],
+)
+
+ROPE_FUSED_DEST_PRECISION_SWEEP = dict(
+    # (heads, width tiles, x stride, height, per-row phase, scale, phases first)
+    case=[
+        (2, 1, TILE_SLOT_STRIDE, 1, False, None, False),
+        (1, 2, TILE_SLOT_STRIDE, 2, True, -2.0, False),
+        (2, 1, DENSE_STRIDE, 4, False, -2.0, False),
+        (1, 2, DENSE_STRIDE, 8, True, None, False),
+        (1, 2, TILE_SLOT_STRIDE, 16, False, 0.0, False),
+        (1, 2, TILE_SLOT_STRIDE, 32, True, None, False),
+        (1, 1, TILE_SLOT_STRIDE, 32, False, -2.0, True),
+        (1, 2, TILE_SLOT_STRIDE, 32, True, 0.0, False),
+    ],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
 def _stimuli(geometry, tiles, seed):
     """Dest containing cos/sin over the rows read and random everywhere else."""
     generator = torch.Generator().manual_seed(seed)
@@ -125,8 +157,13 @@ def _run(
     tile_h=1,
     cos_sin_per_row=False,
     dest_acc=DestAccumulation.No,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
-    max_tiles = 4 if dest_acc == DestAccumulation.Yes else MAX_DEST_TILES
+    max_tiles = max_dest_tiles(dest_acc)
     assert tiles <= max_tiles, f"{tiles} tiles is past the Dest half"
     formats = InputOutputFormat(
         DataFormat.Float16_b,
@@ -137,36 +174,41 @@ def _run(
         ),
     )
 
-    configuration = TestConfig(
-        "sources/rope_test.cpp",
-        formats,
-        dest_acc=dest_acc,
-        templates=[
-            ROPE(
-                fused_cos_sin=fused_cos_sin,
-                tile_h=tile_h,
-                cos_sin_per_row=cos_sin_per_row,
-                has_scale=scale_fp32 is not None,
-                scale_fp32=0 if scale_fp32 is None else scale_fp32,
-                **geometry,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/rope_test.cpp",
+            formats=formats,
+            dest_acc=dest_acc,
+            templates=[
+                ROPE(
+                    fused_cos_sin=fused_cos_sin,
+                    tile_h=tile_h,
+                    cos_sin_per_row=cos_sin_per_row,
+                    has_scale=scale_fp32 is not None,
+                    scale_fp32=0 if scale_fp32 is None else scale_fp32,
+                    **geometry,
+                ),
+            ],
+            runtimes=[TILE_COUNT(tiles)],
+            variant_stimuli=StimuliConfig(
+                dest.flatten(),
+                formats.input_format,
+                torch.zeros(ELEMENTS_PER_TILE, dtype=torch.bfloat16),
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tiles,
+                tile_count_B=1,
+                tile_count_res=tiles,
             ),
-        ],
-        runtimes=[TILE_COUNT(tiles)],
-        variant_stimuli=StimuliConfig(
-            dest.flatten(),
-            formats.input_format,
-            torch.zeros(ELEMENTS_PER_TILE, dtype=torch.bfloat16),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tiles,
-            tile_count_B=1,
-            tile_count_res=tiles,
         ),
     )
-
-    result = torch.tensor(
-        configuration.run().result, dtype=format_dict[formats.output_format]
-    )
+    if is_perf:
+        return None
+    result = torch.tensor(outcome.result, dtype=format_dict[formats.output_format])
     return result.reshape(-1, ROW_DATUMS)
 
 
@@ -205,47 +247,114 @@ def _bf16_bits(value: float) -> int:
     ) & 0xFFFFFFFF
 
 
-@parametrize(stride=[TILE_SLOT_STRIDE, DENSE_STRIDE], wt=[1, 2], ht=_heads)
-def test_rope(stride, wt, ht):
+def _run_rope_case(
+    stride,
+    wt,
+    ht,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     geometry = _geometry(ht, wt, stride)
     tiles = _dest_tiles(geometry)
     dest = _stimuli(geometry, tiles, seed=101)
 
-    device = _run(geometry, tiles, dest)
+    device = _run(
+        geometry,
+        tiles,
+        dest,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
+    if is_perf:
+        return
 
     _assert_rotation(geometry, dest, device)
 
 
+@parametrize(**ROPE_LAYOUT_SWEEP)
+def test_rope(stride, wt, ht):
+    _run_rope_case(stride, wt, ht)
+
+
 # Case where x isn't placed into row 0 of Dest.
-def test_rope_nonzero_x_base():
+def _run_rope_nonzero_x_base(
+    *, is_perf=False, perf_report=None, run_types=None, loop_factor=1
+):
     geometry = _geometry(ht=2, wt=2, stride=TILE_SLOT_STRIDE, operands_first=True)
     assert geometry["x_base"] != 0
 
     tiles = _dest_tiles(geometry)
     dest = _stimuli(geometry, tiles, seed=202)
 
-    device = _run(geometry, tiles, dest)
+    device = _run(
+        geometry,
+        tiles,
+        dest,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
+    if is_perf:
+        return
 
     _assert_rotation(geometry, dest, device)
 
 
-def test_rope_scale():
+def test_rope_nonzero_x_base():
+    _run_rope_nonzero_x_base()
+
+
+def _run_rope_scale(*, is_perf=False, perf_report=None, run_types=None, loop_factor=1):
     geometry = _geometry(ht=2, wt=2, stride=TILE_SLOT_STRIDE)
     tiles = _dest_tiles(geometry)
     dest = _stimuli(geometry, tiles, seed=303)
 
-    device = _run(geometry, tiles, dest, scale_fp32=_bf16_bits(-2.0))
+    device = _run(
+        geometry,
+        tiles,
+        dest,
+        scale_fp32=_bf16_bits(-2.0),
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
+    if is_perf:
+        return
 
     _assert_rotation(geometry, dest, device, scale=-2.0)
 
 
+def test_rope_scale():
+    _run_rope_scale()
+
+
 # Has to zero out the rows.
-def test_rope_zero_scale():
+def _run_rope_zero_scale(
+    *, is_perf=False, perf_report=None, run_types=None, loop_factor=1
+):
     geometry = _geometry(ht=2, wt=2, stride=TILE_SLOT_STRIDE)
     tiles = _dest_tiles(geometry)
     dest = _stimuli(geometry, tiles, seed=404)
 
-    device = _run(geometry, tiles, dest, scale_fp32=_bf16_bits(0.0))
+    device = _run(
+        geometry,
+        tiles,
+        dest,
+        scale_fp32=_bf16_bits(0.0),
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
+    if is_perf:
+        return
 
     _assert_rotation(geometry, dest, device, scale=0.0)
 
@@ -253,6 +362,10 @@ def test_rope_zero_scale():
     assert bool(
         (device[rotated].to(torch.float32) == 0.0).all()
     ), f"scale=0 must zero every rotated row:\n{device[rotated]}"
+
+
+def test_rope_zero_scale():
+    _run_rope_zero_scale()
 
 
 # A rotation by 90 degrees: cos=0, sin=1 sends (e, o) to (-o, e).
@@ -293,6 +406,11 @@ def _check_fused_cos_sin(
     x_base=0,
     cs_base=256,
     dest_acc=DestAccumulation.No,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     geometry = dict(
         ht=ht,
@@ -318,6 +436,23 @@ def _check_fused_cos_sin(
                 angle = 0.07 * row + 0.19 * pair + 0.3 * w
                 dest[cs_base + 64 * w + row, 2 * pair] = math.cos(angle)
                 dest[cs_base + 64 * w + row, 2 * pair + 1] = math.sin(angle)
+    device = _run(
+        geometry,
+        tiles,
+        dest,
+        scale_fp32=None if scale is None else _bf16_bits(scale),
+        fused_cos_sin=True,
+        tile_h=tile_h,
+        cos_sin_per_row=per_row,
+        dest_acc=dest_acc,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
+    if is_perf:
+        return
+
     output_dtype = torch.float32 if dest_acc == DestAccumulation.Yes else torch.bfloat16
     golden = dest.to(output_dtype).clone()
     effective_scale = 1.0 if scale is None else scale
@@ -339,50 +474,49 @@ def _check_fused_cos_sin(
                             odd
                         )
                     golden[x_row, 0::2], golden[x_row, 1::2] = even, odd
-    device = _run(
-        geometry,
-        tiles,
-        dest,
-        scale_fp32=None if scale is None else _bf16_bits(scale),
-        fused_cos_sin=True,
-        tile_h=tile_h,
-        cos_sin_per_row=per_row,
-        dest_acc=dest_acc,
-    )
     # BF16 SFPSTORE truncates; FP32 SFPSTORE preserves the LREG result. Compare
     # every row, including phase tiles and untouched padding in partial-height tiles.
     assert torch.equal(device, golden)
 
 
-@parametrize(
-    tile_h=[1, 2, 4, 8, 16, 32],
-    # Dense matmul slots hold the top two faces; 32 live rows need a full tile slot.
-    x_stride=lambda tile_h: (
-        [TILE_SLOT_STRIDE, DENSE_STRIDE] if tile_h <= 16 else [TILE_SLOT_STRIDE]
-    ),
-    per_row=[False, True],
-    scale=[None, 0.0, -2.0],
-)
-def test_rope_fused_cos_sin(tile_h, x_stride, per_row, scale):
+def _run_rope_fused_cos_sin(
+    tile_h,
+    x_stride,
+    per_row,
+    scale,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """Fused phases for copy-tile and dense matmul layouts, including untouched rows."""
-    _check_fused_cos_sin(tile_h, x_stride, per_row, scale)
+    _check_fused_cos_sin(
+        tile_h,
+        x_stride,
+        per_row,
+        scale,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
 
 
-@parametrize(
-    # (heads, width tiles, x stride, height, per-row phase, scale, phases first)
-    case=[
-        (2, 1, TILE_SLOT_STRIDE, 1, False, None, False),
-        (1, 2, TILE_SLOT_STRIDE, 2, True, -2.0, False),
-        (2, 1, DENSE_STRIDE, 4, False, -2.0, False),
-        (1, 2, DENSE_STRIDE, 8, True, None, False),
-        (1, 2, TILE_SLOT_STRIDE, 16, False, 0.0, False),
-        (1, 2, TILE_SLOT_STRIDE, 32, True, None, False),
-        (1, 1, TILE_SLOT_STRIDE, 32, False, -2.0, True),
-        (1, 2, TILE_SLOT_STRIDE, 32, True, 0.0, False),
-    ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
-def test_rope_fused_dest_precision(case, dest_acc):
+@parametrize(**ROPE_FUSED_COS_SIN_SWEEP)
+def test_rope_fused_cos_sin(tile_h, x_stride, per_row, scale):
+    _run_rope_fused_cos_sin(tile_h, x_stride, per_row, scale)
+
+
+def _run_rope_fused_dest_precision(
+    case,
+    dest_acc,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """BF16 inputs unpacked into either DEST representation, within its half capacity."""
     ht, wt, x_stride, tile_h, per_row, scale, phases_first = case
     x_base = wt * TILE_ROWS if phases_first else 0
@@ -397,4 +531,13 @@ def test_rope_fused_dest_precision(case, dest_acc):
         x_base=x_base,
         cs_base=cs_base,
         dest_acc=dest_acc,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
+
+
+@parametrize(**ROPE_FUSED_DEST_PRECISION_SWEEP)
+def test_rope_fused_dest_precision(case, dest_acc):
+    _run_rope_fused_dest_precision(case, dest_acc)

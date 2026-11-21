@@ -14,6 +14,8 @@
 #include "api/core_local_mem.h"
 #include "api/scratchpad.h"
 #include "api/tensor/local_tensor_accessor.h"
+#include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 #ifdef ARCH_QUASAR
@@ -30,9 +32,10 @@ FORCE_INLINE uint32_t l1_uncached(uint32_t addr) {
 #endif
 
 // A K block within one activation shard is strided in M. Multicast its row slices
-// directly, avoiding a staging copy. Whole shards and gathered blocks are contiguous.
-template <bool IncludeSource>
-FORCE_INLINE void multicast_block(const Noc& noc, uint32_t src, uint32_t dst) {
+// directly, avoiding a staging copy. Whole shards and gathered blocks are contiguous. The block lands dst_offset
+// bytes past dst's write pointer.
+template <bool IncludeSource, typename DFB>
+FORCE_INLINE void multicast_block(const Noc& noc, uint32_t src, const DFB& dst, uint32_t dst_offset) {
     constexpr uint32_t tile_bytes = get_tile_size(dfb::in0);
     constexpr uint32_t row_bytes = get_arg(args::in0_block_w) * tile_bytes;
     constexpr uint32_t source_stride =
@@ -42,17 +45,19 @@ FORCE_INLINE void multicast_block(const Noc& noc, uint32_t src, uint32_t dst) {
     constexpr uint32_t transfers = contiguous ? 1 : rows;
     constexpr uint32_t bytes = contiguous ? get_arg(args::in0_block_size_bytes) : row_bytes;
     constexpr uint32_t cores = get_arg(args::in0_mcast_num_cores);
-    const MulticastEndpoint endpoint;
     for (uint32_t row = 0; row < transfers; ++row) {
 #ifdef ARCH_QUASAR
         if constexpr (IncludeSource && cores == 1) {
-            local_l1_copy(l1_uncached(dst + row * row_bytes), l1_uncached(src + row * source_stride), bytes);
+            local_l1_copy(
+                l1_uncached(dst.get_write_ptr() + dst_offset + row * row_bytes),
+                l1_uncached(src + row * source_stride),
+                bytes);
         } else
 #endif
             if constexpr (IncludeSource) {
             noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                 CoreLocalMem<uint32_t>(src + row * source_stride),
-                endpoint,
+                dst,
                 bytes,
                 cores,
                 {},
@@ -60,12 +65,12 @@ FORCE_INLINE void multicast_block(const Noc& noc, uint32_t src, uint32_t dst) {
                  .noc_y_start = get_arg(args::in0_mcast_dest_noc_start_y),
                  .noc_x_end = get_arg(args::in0_mcast_dest_noc_end_x),
                  .noc_y_end = get_arg(args::in0_mcast_dest_noc_end_y),
-                 .addr = dst + row * row_bytes},
+                 .offset_bytes = dst_offset + row * row_bytes},
                 true);
         } else {
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(src + row * source_stride),
-                endpoint,
+                dst,
                 bytes,
                 cores - 1,
                 {},
@@ -73,7 +78,7 @@ FORCE_INLINE void multicast_block(const Noc& noc, uint32_t src, uint32_t dst) {
                  .noc_y_start = get_arg(args::in0_mcast_dest_noc_start_y),
                  .noc_x_end = get_arg(args::in0_mcast_dest_noc_end_x),
                  .noc_y_end = get_arg(args::in0_mcast_dest_noc_end_y),
-                 .addr = dst + row * row_bytes},
+                 .offset_bytes = dst_offset + row * row_bytes},
                 true);
         }
     }
@@ -140,41 +145,38 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in0);
     // The resident in0 width shard: only its L1 base address is needed (no FIFO traffic).
     const LocalTensorAccessor<uint32_t> in0_shard(tensor::in0_shard);
-    Semaphore sender_sem(sem::in0_mcast_sender);
-    Semaphore receiver_sem(sem::in0_mcast_receiver);
+    // The same tensor addressed by shard: the multi-shard gather reads other storage cores' shards through it.
+    const auto in0_accessor = TensorAccessor(tensor::in0_shard);
+    const ShardView in0_shards(in0_accessor);
+    Semaphore<> sender_sem(sem::in0_mcast_sender);
+    Semaphore<> receiver_sem(sem::in0_mcast_receiver);
 #ifdef IN0_MULTISHARD
     // A storage core that does no compute assembles its multi-shard block here: its in0 slot is
     // inside the multicast rectangle and receives the other senders' blocks.
     Scratchpad<uint32_t> stage(scratch::in0_stage);
 #endif
 
-    uint32_t l1_write_addr_in0;
-
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     receiver_sem.set(VALID);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
 
-    // Raw address needed: the shard sits at the same L1 address on every core, so this core's base is also the
-    // remote read address of the other storage cores' shards; it is a pad_last_ktile / local_l1_copy operand too.
+    // Raw address needed: this core's shard base is a pad_last_ktile / local_l1_copy / multicast source operand.
     uint32_t local_read_addr = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(in0_shard.local_mem()));
-    const uint32_t shard_base = local_read_addr;
 
-    // Gather the shards_per_block shards of this sender's block from the storage cores (this one
-    // included; the shard buffer sits at the same L1 address on every core) into dst_addr. The
-    // reads are issued before the receiver handshake so they overlap it; the caller barriers.
+    // Gather the shards_per_block shards of this sender's block (in0 shards sender_id.., this core's
+    // own included; storage core i holds in0 shard i, see the factory) into dst_addr. A K block within
+    // one shard is strided in M, so each row is its own read. The reads are issued before the receiver
+    // handshake so they overlap it; the caller barriers.
     auto gather_block_shards = [&](uint32_t dst_addr) {
-        const UnicastEndpoint src_core;
         for (uint32_t j = 0; j < shards_per_block; ++j) {
             const uint32_t src_idx = sender_id + j;
             for (uint32_t row = 0; row < in0_block_h; ++row) {
                 noc.async_read(
-                    src_core,
+                    in0_shards,
                     CoreLocalMem<uint32_t>(dst_addr + row * in0_block_row_bytes + j * in0_shard_width_bytes),
                     in0_shard_width_bytes,
-                    {.noc_x = get_vararg(sender_noc_x_base + src_idx),
-                     .noc_y = get_vararg(sender_noc_y_base + src_idx),
-                     .addr = shard_base + row * in0_shard_width_bytes},
+                    {.shard_id = src_idx, .offset_bytes = row * in0_shard_width_bytes},
                     {});
             }
         }
@@ -189,12 +191,9 @@ void kernel_main() {
             const uint32_t block_id = (sender_block_id / shards_per_block) + i;
 
             // Operand 0
-            l1_write_addr_in0 = dfb_in0.get_write_ptr();
-            if (block_id % 2 != 0) {  // double buffer
-                l1_write_addr_in0 += in0_block_size_bytes;
-            }
-
-            // copy start address of block, to be used for mcasting
+            // This core never reserves dfb_in0, so its write pointer stays put; the block alternates between its
+            // two halves, as the receivers' double buffer does.
+            const uint32_t in0_block_offset = block_id % 2 != 0 ? in0_block_size_bytes : 0;
 
 #ifdef IN0_MULTISHARD
             // The gather overlaps the credit wait below.
@@ -237,7 +236,7 @@ void kernel_main() {
 
 #ifndef SKIP_MCAST
             // num_dests must not include source, since we are NOT really doing a local copy!
-            multicast_block<false>(noc, local_read_addr, l1_write_addr_in0);
+            multicast_block<false>(noc, local_read_addr, dfb_in0, in0_block_offset);
 #endif
 
             receiver_sem.set_multicast(
@@ -303,9 +302,9 @@ void kernel_main() {
 #ifndef SKIP_MCAST
                 if constexpr (shards_per_block > 1) {
                     // The gathered block already sits in this core's slot: multicast to the others only.
-                    multicast_block<false>(noc, local_read_addr, mcast_l1_write_addr_in0);
+                    multicast_block<false>(noc, local_read_addr, dfb_in0, 0);
                 } else {
-                    multicast_block<true>(noc, local_read_addr, mcast_l1_write_addr_in0);
+                    multicast_block<true>(noc, local_read_addr, dfb_in0, 0);
                 }
 #endif
                 // Set local semaphore to VALID. For single-core configurations, this is all we need.

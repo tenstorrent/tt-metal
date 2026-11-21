@@ -54,7 +54,7 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
 
     auto check = [&](const Tensor& t, const char* name, std::initializer_list<uint32_t> expected) {
         TT_FATAL(
-            t.storage_type() == StorageType::DEVICE && t.buffer() != nullptr,
+            t.storage_type() == StorageType::DEVICE && t.is_allocated(),
             "fused_recurrent_gated_delta_rule: {} must be allocated on device",
             name);
         TT_FATAL(t.device() == device, "fused_recurrent_gated_delta_rule: {} must be on the same device as q", name);
@@ -88,7 +88,7 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
     check(in.q, "q", {BHT, 1u, K});
     check(in.k, "k", {BHT, 1u, K});
     check(in.v, "v", {BHT, 1u, V});
-    check(in.decay, "decay", {BHT, 1u, 1u});
+    check(in.g, "g", {BHT, 1u, 1u});  // the log decay; the kernel takes exp(g)
     check(in.beta, "beta", {BHT, 1u, 1u});
     // Ring mode: initial_state is the [BH*T,K,V] ring (also the in-place state output); otherwise [BH,K,V].
     const bool ring = in.initial_state_block_idx.has_value();
@@ -104,7 +104,7 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
             "fused_recurrent_gated_delta_rule: initial_state_block_idx requires output_per_token_state");
         const Tensor& idx = *in.initial_state_block_idx;
         TT_FATAL(
-            idx.storage_type() == StorageType::DEVICE && idx.buffer() != nullptr,
+            idx.storage_type() == StorageType::DEVICE && idx.is_allocated(),
             "fused_recurrent_gated_delta_rule: initial_state_block_idx must be allocated on device");
         TT_FATAL(
             idx.device() == device,
@@ -169,7 +169,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     const Tensor& q,
     const Tensor& k,
     const Tensor& v,
-    const Tensor& decay,
+    const Tensor& g,
     const Tensor& beta,
     const std::optional<Tensor>& initial_state,
     const std::optional<Tensor>& initial_state_block_idx,
@@ -205,7 +205,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
         .q = q,
         .k = k,
         .v = v,
-        .decay = decay,
+        .g = g,
         .beta = beta,
         .initial_state = initial_state,
         .initial_state_block_idx = initial_state_block_idx,
