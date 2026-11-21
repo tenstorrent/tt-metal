@@ -26,6 +26,12 @@ class. While a save or load runs, no other point-to-point MPI traffic may be out
 other code may use the MPI tag ``DCP_TAG`` (``0x7DC0``) on the world communicator: the ranks' metadata travels under
 it. A single process is the group of one and takes the same path.
 
+Every failure of ``save`` and ``load``, on one process as on many, is a ``CheckpointError`` or one of its subclasses
+(``MissingKeyError``, ``IncompleteCheckpointError``, ...). An error from outside this package (an ``OSError`` for a
+full disk, a ``TypeError`` for a bad argument) is raised as a ``CheckpointError`` that names the step that failed and
+the error, which is its ``__cause__`` on the rank where it was raised. A ``CheckpointFatalError`` means the ranks can no
+longer agree: end the job (see its docstring).
+
 Topology labels are trusted. The one fact a label cannot carry, the segment order inside a fused projection, is
 declared by the layer that fuses it (``ColumnParallelLinear(fused_segments=...)``), and a padded vocab weight
 declares its logical row count; see ``_layouts``.

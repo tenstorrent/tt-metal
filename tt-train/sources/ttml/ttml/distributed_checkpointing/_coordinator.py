@@ -15,8 +15,10 @@ rank so learns whether any rank's step failed, and either all of them go on to t
 that class (``IncompleteCheckpointError``, ``MissingKeyError``, ...) and a message naming the phase and the ranks that
 failed. Between phases the ranks only move bytes, rank 0 gathering the ranks' parts or broadcasting its own; those
 transfers do no local work that could fail on one rank alone. A single process is the group of one, a ``Group`` on a
-``LoopbackTransport``: its phases just run, letting their errors propagate as raised, and its transfers return their
-input, so save and load take the same path on one process and on many.
+``LoopbackTransport``: its phases just run, and its transfers return their input, so save and load take the same path
+on one process and on many. On any number of ranks a failure surfaces as a ``CheckpointError``: the class a failing
+rank reported, or ``CheckpointError`` itself for an error from outside this package (an ``OSError``, a ``TypeError``
+for a bad argument), which is then the ``__cause__`` on the rank where it was raised.
 
 An error raised by a collective itself, a peer that died under ULFM, is fatal: ``CheckpointFatalError`` propagates and
 the transport, one per process, records it, so neither this save or load nor any later one attempts another exchange.
@@ -223,12 +225,19 @@ class Group:
 
     def phase(self, name: str, fn: Callable[[], Any]) -> Any:
         """Run ``fn`` on this rank, then exchange its outcome: every rank raises when any rank failed. The group of
-        one has no other rank to tell, so its phases run ``fn`` and let its errors propagate as raised.
+        one has no other rank to tell, so its phases run ``fn``; a ``CheckpointError`` propagates as raised, and any
+        other error is raised as a ``CheckpointError`` naming the phase, with the error as its cause, as it would be on
+        many ranks, so one handler serves both.
 
         An interrupt (``KeyboardInterrupt``, ``SystemExit``) is exchanged like any failure, so the other ranks raise
         instead of waiting for this one in the next collective, and is then re-raised here as it was."""
         if self.size == 1:
-            return fn()
+            try:
+                return fn()
+            except CheckpointError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                raise CheckpointError(f"{name} failed: {describe_error(err)}") from err
         status, err = 0, None
         try:
             result = fn()

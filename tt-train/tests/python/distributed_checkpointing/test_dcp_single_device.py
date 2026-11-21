@@ -264,8 +264,9 @@ def test_a_failed_write_stops_the_save(tmp_path, monkeypatch, expect_error):
 
     monkeypatch.setattr(_save, "pwrite_all", failing_second_write)
     open_fds = len(os.listdir("/proc/self/fd"))
-    with expect_error(OSError, "injected: no space left on device"):
+    with expect_error(dcp.CheckpointError, r"writing the shards failed: OSError: .*injected: no space left") as raised:
         dcp.save(str(tmp_path / "step_0000001"), model=model, optimizer=opt, max_inflight_bytes=1)
+    assert raised.value.__cause__.errno == errno.ENOSPC
     assert len(calls) == 2, f"{len(calls)} writes: nothing may be written after the failed one"
     assert len(os.listdir("/proc/self/fd")) == open_fds, "every descriptor the save opened is closed"
     assert os.listdir(tmp_path) == [], "no checkpoint and no staging directory left"

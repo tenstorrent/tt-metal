@@ -255,18 +255,20 @@ def test_a_lazy_parameter_is_named_by_its_key(expect_error):
 
 
 def test_argument_errors_come_first(tmp_path, expect_error):
-    """Argument errors are TypeErrors and ValueErrors, raised before anything is touched."""
+    """Argument errors are raised before anything is touched, as CheckpointErrors naming the step that failed, with
+    the TypeError or ValueError as their cause, as they are on every rank of a multi-rank world."""
     path = str(tmp_path / "step_0000001")
-    with expect_error(TypeError, "save needs a model and/or an optimizer"):
-        dcp.save(path)
-    with expect_error(TypeError, "pass model= as well"):
-        dcp.load(path, optimizer=object())
-    with expect_error(TypeError, "header must be a dict, not list"):
-        dcp.save(path, model=object(), header=[1])
-    with expect_error(ValueError, "threads must be at least 1, got 0"):
-        dcp.save(path, model=object(), threads=0)
-    with expect_error(ValueError, "max_inflight_bytes must be positive, got 0"):
-        dcp.save(path, model=object(), max_inflight_bytes=0)
-    with expect_error(ValueError, "threads must be at least 1, got -1"):
-        dcp.load(path, model=object(), threads=-1)
+    save, load = "collecting the live tensors", "checking the arguments"
+    cases = [
+        (lambda: dcp.save(path), save, TypeError, "save needs a model and/or an optimizer"),
+        (lambda: dcp.load(path, optimizer=object()), load, TypeError, r"optimizer state .*; pass model= as well"),
+        (lambda: dcp.save(path, model=object(), header=[1]), save, TypeError, "header must be a dict, not list"),
+        (lambda: dcp.save(path, model=object(), threads=0), save, ValueError, "threads must be at least 1, got 0"),
+        (lambda: dcp.save(path, model=object(), max_inflight_bytes=0), save, ValueError, "max_inflight_bytes must"),
+        (lambda: dcp.load(path, model=object(), threads=-1), load, ValueError, "threads must be at least 1, got -1"),
+    ]
+    for call, step, cause, message in cases:
+        with expect_error(dcp.CheckpointError, rf"^{step} failed: {cause.__name__}: {message}") as raised:
+            call()
+        assert type(raised.value) is dcp.CheckpointError and type(raised.value.__cause__) is cause, message
     assert os.listdir(tmp_path) == []

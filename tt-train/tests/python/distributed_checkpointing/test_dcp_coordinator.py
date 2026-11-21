@@ -632,9 +632,20 @@ def test_one_rank_sub_context_keeps_its_world_rank(monkeypatch):
 
 
 def test_group_of_one_runs_phases_directly(expect_error):
-    """The group of one runs its phases directly and keeps their error types."""
+    """The group of one runs its phases directly. A CheckpointError keeps its class, any other error is raised as a
+    CheckpointError naming the phase with the error as its cause, as on many ranks, and an interrupt passes as is."""
     group = Group(LoopbackTransport())
     assert group.phase("x", lambda: 5) == 5 and group.gather(b"p") == [b"p"] and group.broadcast(b"q") == b"q"
     assert group.agree("x", 3) == [3] and group.allgather(4) == [4] and group.is_coordinator
-    with expect_error(ValueError, "raw"):
-        group.phase("x", lambda: (_ for _ in ()).throw(ValueError("raw")))
+
+    def raising(err):
+        return lambda: (_ for _ in ()).throw(err)
+
+    with expect_error(CheckpointError, r"^reading failed: ValueError: raw$") as raised:
+        group.phase("reading", raising(ValueError("raw")))
+    assert type(raised.value) is CheckpointError and type(raised.value.__cause__) is ValueError
+    with expect_error(IncompleteCheckpointError, r"^no index$") as raised:
+        group.phase("reading", raising(IncompleteCheckpointError("no index")))
+    assert raised.value.__cause__ is None, "a CheckpointError propagates as raised"
+    with expect_error(KeyboardInterrupt, ""):
+        group.phase("reading", raising(KeyboardInterrupt()))

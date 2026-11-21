@@ -340,8 +340,9 @@ def test_save_refuses_bad_state_before_writing_and_leaks_nothing(tp_mesh, tmp_pa
         return real_create(path, header, data_bytes)
 
     monkeypatch.setattr(_save, "create_file", failing_create)
-    with expect_error(OSError, "simulated EDQUOT"):
+    with expect_error(dcp.CheckpointError, r"^writing the shards failed: OSError: simulated EDQUOT$") as raised:
         dcp.save(str(tmp_path / "quota"), model=model, optimizer=opt)
+    assert type(raised.value.__cause__) is OSError
     monkeypatch.setattr(_save, "create_file", real_create)
     assert len(os.listdir("/proc/self/fd")) == open_fds
     assert os.listdir(tmp_path) == [], "the staging directory is removed"
@@ -373,9 +374,11 @@ def test_failed_load_says_model_is_partly_restored(tp_mesh, tmp_path, monkeypatc
         raise RuntimeError("simulated device out of memory")
 
     monkeypatch.setattr(_load, "_place", fail)
-    with expect_error(RuntimeError, "simulated device out of memory") as raised:
+    with expect_error(
+        dcp.CheckpointError, r"^reading and placing the shards failed: RuntimeError: simulated device out of memory$"
+    ) as raised:
         dcp.load(path, model=model2, optimizer=opt2)
-    assert type(raised.value) is RuntimeError, "nothing was placed: the error as it was raised"
+    assert type(raised.value.__cause__) is RuntimeError, "nothing was placed: no partly-restored note"
 
 
 def test_truncated_data_file_is_refused_first(tp_mesh, tmp_path, expect_error):
