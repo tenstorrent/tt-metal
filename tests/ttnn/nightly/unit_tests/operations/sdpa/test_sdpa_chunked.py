@@ -312,10 +312,10 @@ def test_sdpa_chunked(
     )
 
 
-def test_chunked_sdpa_legacy_scalar_chunk_start_idx_program_cache_key(device):
+def test_chunked_sdpa_legacy_scalar_chunk_start_idx_shares_program(device):
     """
-    Legacy scalar chunk_start_idx changes chunked SDPA's compile-time effective
-    K length, so different scalar offsets must not share one program cache entry.
+    Legacy scalar chunk_start_idx only moves the effective K length, a runtime
+    argument, so every scalar offset shares one program cache entry.
     """
     b, nh, nkv, q_chunk_size, k_chunk_size, page_block_size, d = 1, 1, 1, 128, 128, 128, 128
     num_pages = 2
@@ -369,9 +369,9 @@ def test_chunked_sdpa_legacy_scalar_chunk_start_idx_program_cache_key(device):
             )
             ttnn.synchronize_device(device)
 
-        assert device.num_program_cache_entries() == 2, (
-            "Legacy scalar chunk_start_idx changes chunked SDPA program geometry and must be part of "
-            f"the cache key, got {device.num_program_cache_entries()} entries"
+        assert device.num_program_cache_entries() == 1, (
+            "Legacy scalar chunk_start_idx is a runtime argument and must not fork the cache key, "
+            f"got {device.num_program_cache_entries()} entries"
         )
     finally:
         device.disable_and_clear_program_cache()
@@ -427,7 +427,8 @@ def test_sdpa_chunked_iterate_batch(
             grid_size=(1, 1),
         )
 
-    expected_entries = s // prefill_chunk_size
+    # The legacy scalar chunk_start_idx is a runtime argument, so every chunk of every pass shares one program.
+    expected_entries = 1
     assert (
         device.num_program_cache_entries() == expected_entries
     ), "Program cache should have {} entry/entries but has {}".format(
