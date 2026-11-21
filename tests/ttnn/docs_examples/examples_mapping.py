@@ -400,6 +400,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.untilize_with_unpadding": data_movement.test_untilize_with_unpadding,
     "ttnn.indexed_fill": data_movement.test_indexed_fill,
     "ttnn.gather": data_movement.test_gather,
+    "ttnn.reshard": data_movement.test_reshard,
     "ttnn.sort": data_movement.test_sort,
     "ttnn.moe_expert_token_remap": data_movement.test_moe_expert_token_remap,
     "ttnn.narrow": data_movement.test_narrow,
