@@ -3584,7 +3584,17 @@ def legacy_flow(
                 # If a specific interface is requested, use include instead of exclude
                 multihost_args.extend(["--mca", "btl_tcp_if_include", tcp_interface])
         elif not user_has_tcp_include and not user_has_tcp_exclude:
-            multihost_args.extend(["--mca", "btl_tcp_if_exclude", "docker0,lo"])
+            # The site's own choice (a profile exporting OMPI_MCA_btl_tcp_if_include, as the exabox hosts do) wins over
+            # this default: replacing it lets the ranks pick an interface they cannot reach each other on.
+            env_choice = [
+                f"OMPI_MCA_{k}" for k in ("btl_tcp_if_include", "btl_tcp_if_exclude") if os.environ.get(f"OMPI_MCA_{k}")
+            ]
+            if env_choice:
+                logger.info(
+                    f"{TT_RUN_PREFIX} TCP interface selection left to the environment ({', '.join(env_choice)})"
+                )
+            else:
+                multihost_args.extend(["--mca", "btl_tcp_if_exclude", "docker0,lo"])
 
         # Prepend multihost args so user-provided --mpi-args can override if needed
         effective_mpi_args = multihost_args + effective_mpi_args

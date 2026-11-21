@@ -2011,6 +2011,24 @@ class TestJobOwnership:
         assert time.time() - t0 < 8, f"waited {time.time() - t0:.0f} s for a zombie\n{text}"
         assert "a leak" not in text and "job end: outcome=clean exit=0" in text, text
 
+    @pytest.mark.parametrize("site_include", [None, "eth3"], ids=["no_site_choice", "site_include"])
+    def test_default_tcp_exclude_yields_to_the_environment(self, site_include, sample_rank_binding_yaml, monkeypatch):
+        from click.testing import CliRunner
+
+        from ttnn.distributed.ttrun import main
+
+        # tt-run's default (exclude lo,docker0) applies only when nothing chose the TCP interface. A site profile that
+        # exports OMPI_MCA_btl_tcp_if_include (the exabox hosts) keeps its choice: replacing it made every rank on SC4
+        # pick an interface the others could not reach (MPI_Comm_dup: MPI_ERR_PROC_FAILED).
+        monkeypatch.delenv("OMPI_MCA_btl_tcp_if_exclude", raising=False)
+        if site_include:
+            monkeypatch.setenv("OMPI_MCA_btl_tcp_if_include", site_include)
+        else:
+            monkeypatch.delenv("OMPI_MCA_btl_tcp_if_include", raising=False)
+        result = CliRunner().invoke(main, ["--rank-binding", str(sample_rank_binding_yaml), "--dry-run", "echo", "x"])
+        assert result.exit_code == 0, result.output
+        assert ("btl_tcp_if_exclude" in result.output) == (site_include is None), result.output
+
     def test_launch_env_drops_a_tcp_interface_variable_the_line_contradicts(self, monkeypatch):
         from ttnn.distributed.ttrun import launch_env
 
