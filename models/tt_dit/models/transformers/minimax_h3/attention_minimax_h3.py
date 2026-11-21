@@ -810,6 +810,7 @@ class MiniMaxH3Attention(Module):
                 mode=self._sol_prepass_mode,
                 emit_bias=not (self._sol_compact_family or self.sol_mode == "resident"),
                 row_max=False,
+                force_first_chunk=not (self._NO_FORCE_BLOCK0 and self.sol_mode == "resident"),
                 partial_prefix=self._sol_sparse_resident() and self._PREFIX_PARTIAL and self.sol_prefix_mode == "fused",
                 **extra,
             )
@@ -1211,6 +1212,10 @@ class MiniMaxH3Attention(Module):
     # block, the logical_n tail) exactly instead of through their pooled entry; sparse ring op only, whose reader
     # takes kept partial blocks. Default off.
     _PREFIX_PARTIAL = os.environ.get("MINIMAX_H3_SOL_PREFIX_PARTIAL", "0") == "1"
+    # Resident mode: the pre-pass does not force block 0 of every shard exact. Neither resident kernel needs it: the
+    # sparse ring op attends exactly the mask's blocks, and the ring-joint reader forces block 0 itself (with its
+    # bias) when a Q chunk keeps nothing on a shard. Default off.
+    _NO_FORCE_BLOCK0 = os.environ.get("MINIMAX_H3_SOL_NO_FORCE_BLOCK0", "0") == "1"
 
     def _sol_sparse_resident(self) -> bool:
         """Whether the Sol path runs the sparse ring op (resident mode)."""

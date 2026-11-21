@@ -97,11 +97,17 @@ def _check_fused(
     v,
     compare_ttnn=True,
     partial_prefix=False,
+    force_block0=True,
 ):
     S = geo.shards
     scale = D**-0.5
     consts = build_constants(
-        geo, band=1, sink_tokens=sink_tokens, force_first_chunk=True, scale=scale, partial_prefix=partial_prefix
+        geo,
+        band=1,
+        sink_tokens=sink_tokens,
+        force_first_chunk=force_block0,
+        scale=scale,
+        partial_prefix=partial_prefix,
     )
     ref = torch_reference(q, k, v, geo, consts, tau=tau, scale=scale)
     compare_ttnn = compare_ttnn and mode != "compact"
@@ -121,6 +127,7 @@ def _check_fused(
         tau=tau,
         mode=mode,
         partial_prefix=partial_prefix,
+        force_first_chunk=force_block0,
     )
     pre.prepare(geo, sink_tokens, scale)
 
@@ -165,6 +172,7 @@ def _check_fused(
             tau=tau,
             mode=mode,
             partial_prefix=partial_prefix,
+            force_first_chunk=force_block0,
         )
         pre_ttnn.prepare(geo, sink_tokens, scale)
         out2 = pre_ttnn(tq, tk, tv, scale=scale, report_density=True)
@@ -214,17 +222,30 @@ def _partial_blocks(geo):
     ids=["mid_shard_cut", "sink_two_shards"],
 )
 @pytest.mark.parametrize("mode", ["gather", "compact"])
+@pytest.mark.parametrize("force_block0", [True, False], ids=["force0", "noforce0"])
 def test_sol_prepass_fused_partial_prefix(
-    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, sink_tokens, mode, reset_seeds
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    is_fsdp,
+    rows,
+    logical_n,
+    sink_tokens,
+    mode,
+    force_block0,
+    reset_seeds,
 ):
     """partial_prefix (MINIMAX_H3_SOL_PREFIX_PARTIAL): the sink Q blocks keep every valid block, partial ones
-    included; the other Q blocks keep full blocks only. Fused and ttnn-op pre-pass vs the torch mirror."""
+    included; the other Q blocks keep full blocks only. With and without block 0 of every shard forced exact
+    (MINIMAX_H3_SOL_NO_FORCE_BLOCK0). Fused and ttnn-op pre-pass vs the torch mirror."""
     S = tuple(mesh_device.shape)[sp_axis]
     geo = SolGeometry(shards=S, rows=rows, logical_n=logical_n, q_chunk=64, k_chunk=512)
     q, k, v = _structured_qkv(S, rows)
     scale = D**-0.5
     consts = build_constants(
-        geo, band=1, sink_tokens=sink_tokens, force_first_chunk=True, scale=scale, partial_prefix=True
+        geo, band=1, sink_tokens=sink_tokens, force_first_chunk=force_block0, scale=scale, partial_prefix=True
     )
     ref = torch_reference(q, k, v, geo, consts, tau=1.0, scale=scale)["block_mask"]
     part = _partial_blocks(geo)
@@ -246,6 +267,7 @@ def test_sol_prepass_fused_partial_prefix(
         k=k,
         v=v,
         partial_prefix=True,
+        force_block0=force_block0,
     )
     bar = max(0.985, r["agree_ttnn_ref"] - 0.002) if "agree_ttnn_ref" in r else 0.985
     assert r["agree_real"] >= bar, (r, bar)
