@@ -73,6 +73,7 @@ class Qwen36GatedAttention:
                 page_table=page_table,
                 paged_kv_cache_key=self.paged_kv_cache_key,
                 paged_kv_cache_value=self.paged_kv_cache_value,
+                ternary=getattr(self, "ternary", None),
             )
         elif self.use_paged_attention and T > 1 and chunk_page_table is not None:
             # Branch A — paged prefill
