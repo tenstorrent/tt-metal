@@ -64,6 +64,7 @@ void softplus_init();
 void softshrink_init();
 void square_init();
 void softcap_init();
+void threshold_init();
 void tiled_prod_init();
 void unary_eq_init();
 void unary_ge_init();
@@ -102,8 +103,6 @@ inline void isposinf_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 inline void negative_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 inline void silu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
-inline void threshold_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 inline void typecast_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
