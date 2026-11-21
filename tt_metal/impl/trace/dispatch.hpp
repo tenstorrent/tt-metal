@@ -18,7 +18,7 @@
 
 namespace tt::tt_metal {
 class LaunchMessageRingBufferState;
-class SystemMemoryManager;
+class HostCq;
 class WorkerConfigBufferMgr;
 namespace distributed {
 class MeshDevice;
@@ -52,9 +52,8 @@ struct TraceDispatchMetadata {
 
 void issue_trace_commands(
     distributed::MeshDevice* mesh_device,
-    SystemMemoryManager& sysmem_manager,
+    HostCq& cq,
     const TraceDispatchMetadata& dispatch_md,
-    uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state);
 

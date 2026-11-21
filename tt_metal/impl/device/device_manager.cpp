@@ -30,7 +30,7 @@
 
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/topology.hpp"
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/host_cq.hpp"
 
 #include <device.hpp>
 #include "device_impl.hpp"
@@ -613,7 +613,7 @@ std::unordered_map<ChipId, std::vector<uint32_t>> DeviceManager::get_all_command
             const auto num_hw_cqs = device->num_hw_cqs();
             vec.resize(num_hw_cqs);
             for (size_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-                const auto event_id = device->sysmem_manager().get_last_issued_event(static_cast<uint8_t>(cq_id));
+                const auto event_id = host_cq(*device, static_cast<uint8_t>(cq_id)).last_issued_event();
                 vec[cq_id] = event_id;
             }
         }

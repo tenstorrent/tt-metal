@@ -26,7 +26,7 @@
 #include "context/context_descriptor.hpp"
 #include "debug/inspector/inspector.hpp"
 #include <tt-umd/types/xy_pair.hpp>
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/host_cq.hpp"
 
 #include "device/device_manager.hpp"
 #include "fabric/fabric_context.hpp"
@@ -120,11 +120,11 @@ void DispatchKernel::GenerateStaticConfigs() {
         device_->num_hw_cqs());
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t command_queue_start_addr = device_->sysmem_manager().backing().cq_base_addr(cq_id_, channel);
+        uint32_t command_queue_start_addr = cq_backing(*device_).cq_base_addr(cq_id_, channel);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
+        uint32_t issue_queue_size = host_cq(*device_, cq_id_).issue_queue_size();
         uint32_t completion_queue_start_addr = issue_queue_start_addr + issue_queue_size;
-        uint32_t completion_queue_size = device_->sysmem_manager().get_completion_queue_size(cq_id_);
+        uint32_t completion_queue_size = host_cq(*device_, cq_id_).completion_queue_size();
 
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
         static_config_.dispatch_cb_log_page_size = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
@@ -162,11 +162,11 @@ void DispatchKernel::GenerateStaticConfigs() {
         // DISPATCH_H services a remote chip, and so has a different channel
         channel = descriptor_.cluster().get_assigned_channel_for_device(servicing_device_id_);
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t command_queue_start_addr = device_->sysmem_manager().backing().cq_base_addr(cq_id_, channel);
+        uint32_t command_queue_start_addr = cq_backing(*device_).cq_base_addr(cq_id_, channel);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
+        uint32_t issue_queue_size = host_cq(*device_, cq_id_).issue_queue_size();
         uint32_t completion_queue_start_addr = issue_queue_start_addr + issue_queue_size;
-        uint32_t completion_queue_size = device_->sysmem_manager().get_completion_queue_size(cq_id_);
+        uint32_t completion_queue_size = host_cq(*device_, cq_id_).completion_queue_size();
 
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
         static_config_.dispatch_cb_log_page_size = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
@@ -473,7 +473,7 @@ void DispatchKernel::CreateKernel() {
         {"DISPATCH_D_SHUTDOWN_SEM_ID", std::to_string(dependent_config_.dispatch_d_shutdown_sem_id.value())},
         {"DISPATCH_CB_BLOCKS", std::to_string(static_config_.dispatch_cb_blocks.value())},
         {"UPSTREAM_SYNC_SEM", std::to_string(dependent_config_.upstream_sync_sem.value())},
-        {"IS_CQ_DRAM_BACKED", std::to_string(device_->sysmem_manager().is_dram_backed())},
+        {"IS_CQ_DRAM_BACKED", std::to_string(cq_backing(*device_).is_dram_backed())},
         {"COMMAND_QUEUE_BASE_ADDR", std::to_string(static_config_.command_queue_base_addr.value())},
         {"COMPLETION_QUEUE_BASE_ADDR", std::to_string(static_config_.completion_queue_base_addr.value())},
         {"COMPLETION_QUEUE_SIZE", std::to_string(static_config_.completion_queue_size.value())},
@@ -555,7 +555,7 @@ void DispatchKernel::CreateKernel() {
             defines["FABRIC_2D"] = "1";
         }
     }
-    if (device_->sysmem_manager().is_dram_backed()) {
+    if (cq_backing(*device_).is_dram_backed()) {
         defines["DRAM_BACKED_CQ_BANK_ID"] = std::to_string(CqBacking::kDramBankId);
     }
     // Runtime args offsets

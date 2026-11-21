@@ -17,7 +17,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
-#include "impl/dispatch/system_memory_manager.hpp"
+#include "impl/dispatch/host_cq.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -37,7 +37,7 @@ protected:
             *env_,
             distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}),
             distributed::OpenMeshDeviceOptions{.num_command_queues = kNumCqs});
-        manager_ = &mesh_device_->get_devices().at(0)->sysmem_manager();
+        device_ = mesh_device_->get_devices().at(0);
     }
 
     void TearDown() override {
@@ -49,34 +49,34 @@ protected:
     // every reservation stays inside [region_start, region_start + kMockIssueQueueSize).
     void write_laps(uint8_t cq_id, char* region_start, uint32_t laps, char fill) {
         for (uint32_t i = 0; i < laps * kChunksPerLap; i++) {
-            auto* cmd = static_cast<char*>(manager_->issue_queue_reserve(kChunkSize, cq_id));
+            auto* cmd = static_cast<char*>(host_cq(*device_, cq_id).issue_queue_reserve(kChunkSize));
             EXPECT_GE(cmd, region_start) << "CQ " << int(cq_id) << " chunk " << i;
             EXPECT_LE(cmd + kChunkSize, region_start + kMockIssueQueueSize) << "CQ " << int(cq_id) << " chunk " << i;
             std::memset(cmd, fill, kChunkSize);
-            manager_->issue_queue_push_back(kChunkSize, cq_id);
+            host_cq(*device_, cq_id).issue_queue_push_back(kChunkSize);
         }
     }
 
     std::unique_ptr<MetalEnv> env_;
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
-    SystemMemoryManager* manager_ = nullptr;
+    IDevice* device_ = nullptr;
 };
 
 TEST_F(MockTwoCqRingsTest, CPU_EachCqHasItsOwnRing) {
     std::vector<char*> region_starts;
     std::vector<uint32_t> start_ptrs;
     for (uint8_t cq_id = 0; cq_id < kNumCqs; cq_id++) {
-        EXPECT_EQ(manager_->get_issue_queue_size(cq_id), kMockIssueQueueSize);
-        EXPECT_EQ(manager_->get_completion_queue_size(cq_id), kMockIssueQueueSize);
-        const uint32_t write_ptr = manager_->get_issue_queue_write_ptr(cq_id);
+        EXPECT_EQ(host_cq(*device_, cq_id).issue_queue_size(), kMockIssueQueueSize);
+        EXPECT_EQ(host_cq(*device_, cq_id).completion_queue_size(), kMockIssueQueueSize);
+        const uint32_t write_ptr = host_cq(*device_, cq_id).issue_queue_write_ptr();
         // Each CQ is idle at the start of its region, so the first reservation is the region start.
-        ASSERT_EQ(manager_->get_issue_queue_limit(cq_id) - write_ptr, kMockIssueQueueSize)
+        ASSERT_EQ(host_cq(*device_, cq_id).issue_queue_limit() - write_ptr, kMockIssueQueueSize)
             << "CQ " << int(cq_id) << " wasn't idle at the start";
         EXPECT_EQ(
-            manager_->get_completion_queue_limit(cq_id) - manager_->get_completion_queue_read_ptr(cq_id),
+            host_cq(*device_, cq_id).completion_queue_limit() - host_cq(*device_, cq_id).completion_queue_read_ptr(),
             kMockIssueQueueSize);
         start_ptrs.push_back(write_ptr);
-        region_starts.push_back(static_cast<char*>(manager_->issue_queue_reserve(kChunkSize, cq_id)));
+        region_starts.push_back(static_cast<char*>(host_cq(*device_, cq_id).issue_queue_reserve(kChunkSize)));
     }
 
     // The two issue queues don't overlap.
@@ -87,7 +87,7 @@ TEST_F(MockTwoCqRingsTest, CPU_EachCqHasItsOwnRing) {
     for (uint8_t cq_id = 0; cq_id < kNumCqs; cq_id++) {
         write_laps(cq_id, region_starts[cq_id], /*laps=*/2, static_cast<char>(cq_id + 1));
         // After whole laps the write pointer is back at the CQ's own start.
-        EXPECT_EQ(manager_->get_issue_queue_write_ptr(cq_id), start_ptrs[cq_id]);
+        EXPECT_EQ(host_cq(*device_, cq_id).issue_queue_write_ptr(), start_ptrs[cq_id]);
     }
 
     // Neither CQ wrote into the other's queue.
@@ -102,9 +102,10 @@ TEST_F(MockTwoCqRingsTest, CPU_CqsCanBeWrittenFromTwoThreads) {
     for (uint8_t cq_id = 0; cq_id < kNumCqs; cq_id++) {
         // Each CQ is idle at the start of its region, so the first reservation is the region start.
         ASSERT_EQ(
-            manager_->get_issue_queue_limit(cq_id) - manager_->get_issue_queue_write_ptr(cq_id), kMockIssueQueueSize)
+            host_cq(*device_, cq_id).issue_queue_limit() - host_cq(*device_, cq_id).issue_queue_write_ptr(),
+            kMockIssueQueueSize)
             << "CQ " << int(cq_id) << " wasn't idle at the start";
-        region_starts.push_back(static_cast<char*>(manager_->issue_queue_reserve(kChunkSize, cq_id)));
+        region_starts.push_back(static_cast<char*>(host_cq(*device_, cq_id).issue_queue_reserve(kChunkSize)));
     }
 
     // One thread per CQ, as with a dispatch thread per mesh command queue.
@@ -126,31 +127,31 @@ TEST_F(MockTwoCqRingsTest, CPU_CqsCanBeWrittenFromTwoThreads) {
 
 // A max-size prefetch command fits each CQ's issue queue, including after the write pointer wraps.
 TEST_F(MockTwoCqRingsTest, CPU_MaxSizeCommandFitsTheIssueQueue) {
-    const uint32_t max_command_size_B = manager_->metal_context().dispatch_mem_map().max_prefetch_command_size();
+    const uint32_t max_command_size_B = cq_backing(*device_).context().dispatch_mem_map().max_prefetch_command_size();
     for (uint8_t cq_id = 0; cq_id < kNumCqs; cq_id++) {
-        auto* region_start = static_cast<char*>(manager_->issue_queue_reserve(kChunkSize, cq_id));
+        auto* region_start = static_cast<char*>(host_cq(*device_, cq_id).issue_queue_reserve(kChunkSize));
         for (int i = 0; i < 3; i++) {
-            auto* cmd = static_cast<char*>(manager_->issue_queue_reserve(max_command_size_B, cq_id));
+            auto* cmd = static_cast<char*>(host_cq(*device_, cq_id).issue_queue_reserve(max_command_size_B));
             EXPECT_GE(cmd, region_start) << "CQ " << int(cq_id) << " command " << i;
             EXPECT_LE(cmd + max_command_size_B, region_start + kMockIssueQueueSize)
                 << "CQ " << int(cq_id) << " command " << i;
-            manager_->issue_queue_push_back(max_command_size_B, cq_id);
+            host_cq(*device_, cq_id).issue_queue_push_back(max_command_size_B);
         }
     }
 }
 
-// Each CQ of the lazily created mock manager has its own event counters.
+// Each lazily created mock CQ has its own event counters.
 TEST_F(MockTwoCqRingsTest, CPU_EachCqHasItsOwnEventCounters) {
-    ASSERT_EQ(manager_->num_cqs(), kNumCqs);
-    manager_->set_last_issued_event(1, 7);
-    manager_->set_last_completed_event(1, 5);
-    EXPECT_EQ(manager_->get_last_issued_event(1), 7);
-    EXPECT_EQ(manager_->get_last_completed_event(1), 5);
-    EXPECT_EQ(manager_->get_last_issued_event(0), 0);
-    EXPECT_EQ(manager_->get_last_completed_event(0), 0);
-    manager_->reset_events(1, 0);
-    EXPECT_EQ(manager_->get_last_issued_event(1), 0);
-    EXPECT_EQ(manager_->get_last_completed_event(1), 0);
+    ASSERT_EQ(device_->num_hw_cqs(), kNumCqs);
+    host_cq(*device_, 1).set_last_issued_event(7);
+    host_cq(*device_, 1).set_last_completed_event(5);
+    EXPECT_EQ(host_cq(*device_, 1).last_issued_event(), 7);
+    EXPECT_EQ(host_cq(*device_, 1).last_completed_event(), 5);
+    EXPECT_EQ(host_cq(*device_, 0).last_issued_event(), 0);
+    EXPECT_EQ(host_cq(*device_, 0).last_completed_event(), 0);
+    host_cq(*device_, 1).reset_events(0);
+    EXPECT_EQ(host_cq(*device_, 1).last_issued_event(), 0);
+    EXPECT_EQ(host_cq(*device_, 1).last_completed_event(), 0);
 }
 
 }  // namespace

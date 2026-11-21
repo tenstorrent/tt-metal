@@ -8,7 +8,7 @@
 #include <device.hpp>
 #include "dispatch_settings.hpp"
 #include "impl/context/metal_context.hpp"
-#include "system_memory_manager.hpp"
+#include "host_cq.hpp"
 #include "program/dispatch.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt_stl/assert.hpp>
@@ -25,7 +25,7 @@ enum NOC : uint8_t;
 namespace tt::tt_metal {
 
 HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC /*noc_index*/) :
-    id_(id), manager_(device->sysmem_manager()), device_(device) {
+    id_(id), cq_(device->host_cq(id)), device_(device) {
     TTZoneScopedDN(DISPATCH, "CommandQueue_constructor");
 
     MetalContext& metal_ctx = MetalContext::instance(device_->get_context_id());
@@ -52,10 +52,10 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC /*noc_index*/) :
 
 uint32_t HWCommandQueue::id() const { return this->id_; }
 
-SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager_; }
+HostCq& HWCommandQueue::host_cq() { return this->cq_; }
 
 void HWCommandQueue::set_dispatch_sems(uint32_t num_dispatch_sems, ttsl::Span<const uint32_t> workers_per_sub_device) {
-    program_dispatch::set_num_worker_sems_on_dispatch(this->manager_, id_, num_dispatch_sems, workers_per_sub_device);
+    program_dispatch::set_num_worker_sems_on_dispatch(this->cq_, num_dispatch_sems, workers_per_sub_device);
 }
 
 Device* HWCommandQueue::device() { return this->device_; }
@@ -73,27 +73,21 @@ void HWCommandQueue::terminate() {
     uint32_t cmd_sequence_sizeB = metal_ctx.hal().get_alignment(HalMemType::HOST);
 
     // dispatch and prefetch terminate commands each needs to be a separate fetch queue entry
-    void* cmd_region = this->manager_.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
+    void* cmd_region = this->cq_.issue_queue_reserve(cmd_sequence_sizeB);
     HugepageDeviceCommand dispatch_d_command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     dispatch_d_command_sequence.add_dispatch_terminate(DispatcherSelect::DISPATCH_MASTER);
-    this->manager_.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
-    this->manager_.fetch_queue_reserve_back(this->id_);
-    this->manager_.fetch_queue_write(cmd_sequence_sizeB, this->id_);
+    this->cq_.publish(cmd_sequence_sizeB);
     if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
         // Terminate dispatch_s if enabled
-        cmd_region = this->manager_.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
+        cmd_region = this->cq_.issue_queue_reserve(cmd_sequence_sizeB);
         HugepageDeviceCommand dispatch_s_command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
         dispatch_s_command_sequence.add_dispatch_terminate(DispatcherSelect::DISPATCH_SUBORDINATE);
-        this->manager_.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
-        this->manager_.fetch_queue_reserve_back(this->id_);
-        this->manager_.fetch_queue_write(cmd_sequence_sizeB, this->id_);
+        this->cq_.publish(cmd_sequence_sizeB);
     }
-    cmd_region = this->manager_.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
+    cmd_region = this->cq_.issue_queue_reserve(cmd_sequence_sizeB);
     HugepageDeviceCommand prefetch_command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     prefetch_command_sequence.add_prefetch_terminate();
-    this->manager_.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
-    this->manager_.fetch_queue_reserve_back(this->id_);
-    this->manager_.fetch_queue_write(cmd_sequence_sizeB, this->id_);
+    this->cq_.publish(cmd_sequence_sizeB);
 }
 
 }  // namespace tt::tt_metal

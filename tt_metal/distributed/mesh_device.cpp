@@ -74,7 +74,7 @@
 #include <tt-umd/types/xy_pair.hpp>
 #include "context/metal_context.hpp"
 #include <experimental/context/metal_env.hpp>
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/host_cq.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include "mesh_device_view_impl.hpp"
@@ -84,14 +84,9 @@
 #include "emule_mesh_command_queue.hpp"
 #endif
 
-namespace tt::tt_metal {
-class SystemMemoryManager;
-
-namespace program_cache::detail {
+namespace tt::tt_metal::program_cache::detail {
 struct ProgramCache;
-}  // namespace program_cache::detail
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::program_cache::detail
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -1690,10 +1685,7 @@ uint32_t MeshDeviceImpl::get_noc_multicast_encoding(uint8_t noc_index, const Cor
 }
 
 // System memory and command queue management
-SystemMemoryManager& MeshDeviceImpl::sysmem_manager() {
-    TT_THROW("sysmem_manager() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->sysmem_manager();
-}
+SystemMemoryManager& MeshDeviceImpl::sysmem_manager() { TT_THROW("SystemMemoryManager was removed (tt-metal#64081)"); }
 
 void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
     TracyTTMetalReleaseMeshTrace(*this, this->get_device_ids(), *trace_id);
@@ -2148,10 +2140,8 @@ void MeshDeviceImpl::quiesce_devices() {
     for (auto& command_queue : mesh_command_queues_) {
         for (auto& device : get_devices()) {
             TT_ASSERT(
-                device->sysmem_manager().get_last_completed_event(command_queue->id()) == 0,
-                "Last completed event is not 0");
-            TT_ASSERT(
-                device->sysmem_manager().get_last_issued_event(command_queue->id()) == 0, "Last issued event is not 0");
+                host_cq(*device, command_queue->id()).last_completed_event() == 0, "Last completed event is not 0");
+            TT_ASSERT(host_cq(*device, command_queue->id()).last_issued_event() == 0, "Last issued event is not 0");
         }
     }
 }
@@ -2301,7 +2291,7 @@ uint32_t MeshDevice::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord
 uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const {
     return pimpl_->get_noc_multicast_encoding(noc_index, cores);
 }
-SystemMemoryManager& MeshDevice::sysmem_manager() { return pimpl_->sysmem_manager(); }
+SystemMemoryManager& MeshDevice::sysmem_manager() { TT_THROW("SystemMemoryManager was removed (tt-metal#64081)"); }
 MeshTraceId MeshDevice::begin_mesh_trace(MeshCommandQueue& cq) {
     TT_FATAL(cq.device() == this, "MeshCommandQueue belongs to a different MeshDevice");
     return pimpl_->begin_mesh_trace(static_cast<uint8_t>(cq.id()));

@@ -10,7 +10,7 @@
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
-class SystemMemoryManager;
+class HostCq;
 enum NOC : uint8_t;
 class Device;
 }  // namespace tt::tt_metal
@@ -29,7 +29,7 @@ public:
 
     uint32_t id() const;
 
-    SystemMemoryManager& sysmem_manager();
+    HostCq& host_cq();
 
     Device* device();
 
@@ -38,7 +38,7 @@ public:
 
 private:
     uint32_t id_;
-    SystemMemoryManager& manager_;
+    HostCq& cq_;
 
     Device* device_;
 

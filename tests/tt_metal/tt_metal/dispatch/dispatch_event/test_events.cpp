@@ -18,7 +18,7 @@
 #include <tt-metalium/device.hpp>
 #include "device/device_manager.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
-#include "impl/dispatch/system_memory_manager.hpp"
+#include "impl/dispatch/host_cq.hpp"
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
@@ -47,7 +47,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
     for (const DataMovementMode data_movement_mode : {DataMovementMode::READ, DataMovementMode::WRITE}) {
         auto start = std::chrono::system_clock::now();
 
-        uint32_t completion_queue_base = device->sysmem_manager().get_completion_queue_read_ptr(0);
+        uint32_t completion_queue_base = host_cq(*device, 0).completion_queue_read_ptr();
 
         vector<std::shared_ptr<distributed::MeshBuffer>> buffers;
         for (size_t i = 0; i < num_buffers; i++) {
@@ -72,7 +72,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
             for (size_t i = 0; i < num_buffers; i++) {
                 uint32_t host_addr =
                     last_read_address + (i * completion_queue_page_size) + completion_queue_event_offset;
-                device->sysmem_manager().backing().read_cq_memory(&event, sizeof(uint32_t), host_addr);
+                cq_backing(*device).read_cq_memory(&event, sizeof(uint32_t), host_addr);
                 EXPECT_EQ(event, ++expected_event_id);  // Event ids start at 1
             }
         } else if (data_movement_mode == DataMovementMode::READ) {
@@ -80,7 +80,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
                 // Extra entry in the completion queue is from the buffer read data.
                 uint32_t host_addr =
                     completion_queue_base + ((2 * i + 1) * completion_queue_page_size) + completion_queue_event_offset;
-                device->sysmem_manager().backing().read_cq_memory(&event, sizeof(uint32_t), host_addr);
+                cq_backing(*device).read_cq_memory(&event, sizeof(uint32_t), host_addr);
                 EXPECT_EQ(event, ++expected_event_id);  // Event ids start at 1
                 last_read_address = host_addr - completion_queue_event_offset + completion_queue_page_size;
             }
@@ -234,7 +234,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
 
     auto start = std::chrono::system_clock::now();
 
-    uint32_t completion_queue_base = device->sysmem_manager().get_completion_queue_read_ptr(0);
+    uint32_t completion_queue_base = host_cq(*device, 0).completion_queue_read_ptr();
     for (size_t i = 0; i < num_buffers; i++) {
         log_debug(tt::LogTest, "i: {} - Going to record event, write, wait, synchronize.", i);
         auto event = std::make_shared<distributed::MeshEvent>(cq.enqueue_record_event_to_host());
@@ -259,7 +259,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
     uint32_t event_id;
     for (size_t i = 0; i < num_buffers * num_events_per_cq; i++) {
         uint32_t host_addr = completion_queue_base + (i * completion_queue_page_size) + completion_queue_event_offset;
-        device->sysmem_manager().backing().read_cq_memory(&event_id, sizeof(uint32_t), host_addr);
+        cq_backing(*device).read_cq_memory(&event_id, sizeof(uint32_t), host_addr);
         EXPECT_EQ(event_id, ++expected_event_id);
     }
 
