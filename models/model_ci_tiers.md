@@ -63,6 +63,7 @@ it is classified differently on different systems.
 | Llama3.1-8B-DP | WH Galaxy |
 | Llama3.3-70B | WH Galaxy |
 | Qwen3-32B | WH Galaxy, BH Galaxy |
+| GLM-5.3-Flash | BH Galaxy, BH P150 (host suites) |
 | Qwen3.6-27B | BH QuietBox 2 |
 | Qwen3.6-35B-A3B | BH QuietBox 2 |
 | GPT-OSS 120B | WH LLMBox, WH Galaxy, BH QuietBox 2, BH Galaxy |
