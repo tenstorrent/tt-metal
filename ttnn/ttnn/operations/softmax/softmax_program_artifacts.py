@@ -82,9 +82,9 @@ def _fits(bc, depth, Ht, tile_in, C, budget):
     )
 
 
-def select_regime(x, threads=THREAD_PLAN):
+def select_regime(x, threads=None):
     """`column_resident` iff a whole column fits one ring with one block of one column; else refuse."""
-    C = threads[1]
+    C = (threads or THREAD_PLAN)[1]
     Ht, _, _, _ = _geometry(x)
     tile_in = x.buffer_page_size()
     if not _fits(1, 1, Ht, tile_in, C, _budget()):
@@ -133,7 +133,8 @@ def _dm_config(make, explicit_rings):
     return hw
 
 
-def create_program_artifacts(x, out, compute_config, *, threads=THREAD_PLAN):
+def create_program_artifacts(x, out, compute_config, *, threads=None):
+    threads = threads or THREAD_PLAN  # read at call time: the one place the plan is stated
     validate_thread_plan(threads)
     R, C, W = threads
     Ht, Wt, NC, h_valid_last = _geometry(x)
