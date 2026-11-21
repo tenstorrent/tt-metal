@@ -67,6 +67,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
+    SFPU_COMPUTE_API_KERNELS,
     SFPU_DROPOUT_PARAMS,
     SFPU_UNARY_MAX_MIN_SCALAR,
     SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE,
@@ -1256,10 +1257,12 @@ def run_eltwise_unary_sfpu_quasar(
     max_min_scalar=None,
     max_min_sign_magnitude=False,
     format_variant=None,
+    compute_api_kernels=False,
 ):
     """Shared unary SFPU runner for the functional and perf tests.
 
     *format_variant* overrides the resolved route, for routes the resolver never picks.
+    *compute_api_kernels* runs exp through ``calculate_exponential`` instead of the op type.
     """
     if format_variant is None:
         format_variant = resolve_quasar_sfpu_variant(mathop, formats, dest_acc)
@@ -1403,6 +1406,7 @@ def run_eltwise_unary_sfpu_quasar(
                 if is_max_min and max_min_sign_magnitude
                 else []
             ),
+            *([SFPU_COMPUTE_API_KERNELS(True)] if compute_api_kernels else []),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -1556,6 +1560,39 @@ def test_eltwise_unary_sfpu_quasar(
         approx_mode,
         input_dimensions,
         dest_sync,
+    )
+
+
+# exp_tile reaches the kernel through calculate_exponential, which takes the HW-implied Dest format. The
+# sweeps above run exp through the ExpDest op type with an explicit layout, so this keeps that entry covered.
+_EXP_COMPUTE_API_FORMATS = [
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+]
+
+
+def _exp_compute_api_dest_acc(formats):
+    """A 16-bit Dest for Float16_b, a 32-bit Dest for Float32."""
+    if formats.output_format == DataFormat.Float32:
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No]
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=[MathOperation.Exp],
+    formats=_EXP_COMPUTE_API_FORMATS,
+    dest_acc=_exp_compute_api_dest_acc,
+)
+def test_exp_compute_api_kernel_quasar(mathop, formats, dest_acc):
+    """exp through calculate_exponential, the kernel exp_tile calls, on a 16-bit and a 32-bit Dest."""
+    run_eltwise_unary_sfpu_quasar(
+        formats,
+        dest_acc,
+        mathop,
+        ApproximationMode.No,
+        [64, 64],
+        compute_api_kernels=True,
     )
 
 

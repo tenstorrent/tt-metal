@@ -501,6 +501,22 @@ class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
 
 
 @dataclass
+class SFPU_COMPUTE_API_KERNELS(TemplateParameter):
+    """Quasar: run exp / float ADD through ``calculate_exponential`` / ``calculate_sfpu_binary``, the
+    kernels ``exp_tile`` / ``add_binary_tile`` call (HW-implied Dest format), not the op types.
+
+    A macro because sfpu_operations_quasar.h selects on ``#ifdef``, like SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE.
+    """
+
+    compute_api_kernels: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if not self.compute_api_kernels:
+            return ""
+        return "#define SFPU_COMPUTE_API_KERNELS 1"
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 
