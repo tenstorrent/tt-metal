@@ -258,8 +258,12 @@ class Group:
             raise cls(f"{name} failed on rank(s) {failed} of {self.size}: {messages}") from err
         return result
 
-    def gather(self, payload: bytes) -> list[bytes] | None:
-        """Every rank's payload at rank 0 (in rank order); ``None`` elsewhere. Pure transfer: it cannot desync."""
+    def gather(self, payload: Any) -> list[Any] | None:
+        """Every rank's payload at rank 0 (in rank order); ``None`` elsewhere. Pure transfer: it cannot desync. The
+        group of one returns its own payload, whatever it is, so a part ``outgoing`` kept as an object passes through.
+        """
+        if self.size == 1:
+            return [payload]
         sizes = self.allgather(len(payload))
         try:
             if self.rank == 0:
@@ -269,8 +273,10 @@ class Group:
         except Exception as err:  # noqa: BLE001
             raise self._fatal(f"point-to-point transfer failed ({err})") from err
 
-    def broadcast(self, payload: bytes | None) -> bytes:
-        """Rank 0's payload on every rank. Pure transfer."""
+    def broadcast(self, payload: Any) -> Any:
+        """Rank 0's payload on every rank. Pure transfer. The group of one returns its payload as it is."""
+        if self.size == 1:
+            return payload
         size = self.allgather(len(payload) if self.rank == 0 else 0)[0]
         try:
             if self.rank == 0:
@@ -281,6 +287,17 @@ class Group:
             return self.transport.recv_bytes(size, 0)
         except Exception as err:  # noqa: BLE001
             raise self._fatal(f"point-to-point transfer failed ({err})") from err
+
+    def outgoing(self, part: Any, what: str) -> Any:
+        """What this rank sends of ``part`` (a plan part, the election or a result part). On several ranks its bytes,
+        size-checked, so call it inside a phase: a part too large to send then fails every rank. The group of one sends
+        nothing and keeps the object, since encoding and decoding it would only cost time and a second copy of every
+        tensor's description."""
+        return part if self.size == 1 else checked_payload(part.to_bytes(), what)
+
+    def incoming(self, data: Any, cls: type) -> Any:
+        """A part ``outgoing`` sent, as a ``cls``: decoded on several ranks, the object itself on the group of one."""
+        return data if self.size == 1 else cls.from_bytes(data)
 
     def agree(self, name: str, value: int, shown: Any = None) -> list[int]:
         """Every rank's ``value``; raises when they differ, naming what this rank has: ``shown``, the thing ``value``

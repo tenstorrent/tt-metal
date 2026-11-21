@@ -25,6 +25,7 @@ from tp_block import make_adamw, train_step
 import ttml
 import ttml.distributed_checkpointing as dcp
 from ttml.distributed_checkpointing import _load, _save
+from ttml.distributed_checkpointing._coordinator import Election, PlanPart, ResultPart
 from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(900)]
@@ -270,6 +271,20 @@ def test_a_failed_write_stops_the_save(tmp_path, monkeypatch, expect_error):
     assert len(calls) == 2, f"{len(calls)} writes: nothing may be written after the failed one"
     assert len(os.listdir("/proc/self/fd")) == open_fds, "every descriptor the save opened is closed"
     assert os.listdir(tmp_path) == [], "no checkpoint and no staging directory left"
+
+
+def test_one_process_keeps_its_parts_as_objects(tmp_path, monkeypatch):
+    """The group of one has no peer to send its plan part, election or result part to, so it keeps them as objects:
+    encoding and decoding them would only cost time and a copy of every tensor's description."""
+    model, opt = _trained_pair()
+    for cls in (PlanPart, Election, ResultPart):
+        monkeypatch.setattr(
+            cls, "to_bytes", lambda self: pytest.fail(f"the group of one encoded a {type(self).__name__}")
+        )
+    path = str(tmp_path / "step_0000001")
+    dcp.save(path, model=model, optimizer=opt)
+    monkeypatch.undo()
+    assert dcp.load(path, model=model, optimizer=opt).missing == []
 
 
 def test_missing_file_or_bad_spec_is_refused_first(tmp_path, monkeypatch, expect_error):

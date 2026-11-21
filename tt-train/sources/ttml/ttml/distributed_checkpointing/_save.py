@@ -21,6 +21,7 @@ import time
 import zlib
 from dataclasses import dataclass, field
 from math import prod
+from typing import Any
 
 import numpy as np
 import ttnn
@@ -30,7 +31,6 @@ from ._coordinator import (
     PlanPart,
     RankRecord,
     ResultPart,
-    checked_payload,
     current_group,
     merge_plan_parts,
     merge_results,
@@ -329,9 +329,9 @@ def save(
             live.extend(state_live)
         shared_state = {k: v for k, v in train_state.items() if k != "rng"}
         record = RankRecord.from_json(rank_record(rank, world_rank))
-        part = PlanPart(record, [lt.info for lt in live], state_hash(shared_state)).to_bytes()
+        part = PlanPart(record, [lt.info for lt in live], state_hash(shared_state))
         progress = {k: v for k, v in scalars.items() if not is_structural_scalar(k)}
-        payload = checked_payload(part, "this rank's plan part")
+        payload = group.outgoing(part, "this rank's plan part")
         return target, live, scalars, progress, user_header, train_state, record, payload
 
     # Even the local work runs inside a phase: on a multi-rank world a rank that fails here stops every rank instead
@@ -378,16 +378,16 @@ def save(
         t1 = time.perf_counter()
         gathered = group.gather(part)
 
-        def merge_parts() -> bytes | None:
+        def merge_parts() -> Any:
             if not group.is_coordinator:
                 return None
-            parts = [PlanPart.from_bytes(b) for b in gathered]
-            return checked_payload(merge_plan_parts(parts).to_bytes(), "the owner election")
+            parts = [group.incoming(p, PlanPart) for p in gathered]
+            return group.outgoing(merge_plan_parts(parts), "the owner election")
 
-        election = Election.from_bytes(group.broadcast(group.phase("merging the plan parts", merge_parts)))
+        election = group.incoming(group.broadcast(group.phase("merging the plan parts", merge_parts)), Election)
         stats["plan_s"] = time.perf_counter() - t1
 
-        def write() -> tuple[SavePlan, bytes]:
+        def write() -> tuple[SavePlan, Any]:
             plan = create_save_plan(
                 [lt.info for lt in live],
                 file_for_coord=lambda c: data_file_name(world_rank, record.mesh_id, c),
@@ -411,15 +411,16 @@ def save(
                 user_header if first else {},
                 shared_state if first else {},
             )
-            return plan, checked_payload(result.to_bytes(), "this rank's result part")
+            return plan, group.outgoing(result, "this rank's result part")
 
-        plan, result_bytes = group.phase("writing the shards", write)
-        gathered = group.gather(result_bytes)
+        plan, result = group.phase("writing the shards", write)
+        gathered = group.gather(result)
 
         def finalize() -> None:
             if not group.is_coordinator:
                 return
-            index, header_json = merge_results([ResultPart.from_bytes(b) for b in gathered], election, name)
+            results = [group.incoming(p, ResultPart) for p in gathered]
+            index, header_json = merge_results(results, election, name)
             for record_ in index.files:
                 fd = os.open(os.path.join(staging, record_.path), os.O_RDONLY)  # by exact name: fresh attributes
                 try:
