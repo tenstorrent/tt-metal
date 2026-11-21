@@ -39,17 +39,20 @@ victim_rank=$((num_hosts - 1))               # one rank per host, so the last ra
 # uses your own account and keys.
 REMOTE_USER="${TEARDOWN_REMOTE_USER:-}"
 rtarget() { if [ -n "$REMOTE_USER" ]; then printf '%s@%s' "$REMOTE_USER" "$1"; else printf '%s' "$1"; fi; }
+# The CI runner holds no host keys for the peers, so a strict check fails before anything runs; the same options as
+# setup-multihost-job's own ssh to them.
+SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
 # A command on a host: ssh, or srun --overlap inside a Slurm allocation (TEARDOWN_REMOTE=srun). remote_sh_stdin
 # runs a script read from stdin there.
 remote_sh() {
   local host="$1"; shift
   if [ "${TEARDOWN_REMOTE:-ssh}" = srun ]; then srun --overlap -N1 -n1 -w "$host" bash -c "$*"
-  else ssh -o BatchMode=yes -o ConnectTimeout=5 "$(rtarget "$host")" "$*"; fi
+  else ssh "${SSH_OPTS[@]}" -o ConnectTimeout=5 "$(rtarget "$host")" "$*"; fi
 }
 remote_sh_stdin() {
   local host="$1"; shift
   if [ "${TEARDOWN_REMOTE:-ssh}" = srun ]; then srun --overlap -N1 -n1 -w "$host" env "$@" bash -s
-  else ssh -o BatchMode=yes "$(rtarget "$host")" "$* bash -s"; fi
+  else ssh "${SSH_OPTS[@]}" "$(rtarget "$host")" "$* bash -s"; fi
 }
 
 # --------------------------------------------------------------------------------------------------------------
@@ -65,7 +68,7 @@ for host in $(host_names); do
   remote_sh "$host" "mkdir -p '$(dirname "$probe")'" \
     || { echo "::error::could not create the probe directory on $host"; exit 1; }
   if [ "${TEARDOWN_REMOTE:-ssh}" != srun ]; then  # under srun the temp dir is on a shared filesystem (TMPDIR)
-    scp -q "$probe" "$(rtarget "$host"):$probe" 2>/dev/null || true  # a no-op on the compile host; verified next
+    scp -q "${SSH_OPTS[@]}" "$probe" "$(rtarget "$host"):$probe" 2>/dev/null || true  # a no-op on the compile host; verified next
   fi
   remote_sh "$host" "test -x '$probe'" \
     || { echo "::error::the probe is not staged/executable on $host ($probe)"; exit 1; }
