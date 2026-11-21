@@ -142,16 +142,19 @@ class LowRankDown(Module):
             state["weight"] = F.pad(a.float(), (0, 0, 0, self.width - a.shape[0])).T
 
     def forward(self, x: ttnn.Tensor, *, dtype=None, use_persistent_buffer: bool = True) -> ttnn.Tensor:
+        """`dtype`: the output dtype; the reduce-scatter itself always moves bf16 partials."""
         p = _linear(
             x,
             self.weight.data,
             bias=None,
             mesh_device=self.mesh_device,
             compute_kernel_config=self.compute_config,
-            dtype=dtype,
+            dtype=ttnn.bfloat16 if self.reduce else dtype,
         )
         if self.reduce:
             p = self.ccl_manager.reduce_scatter(
                 p, dim=-1, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
             )
+            if dtype is not None and dtype != p.dtype:
+                p = ttnn.typecast(p, dtype)
         return p

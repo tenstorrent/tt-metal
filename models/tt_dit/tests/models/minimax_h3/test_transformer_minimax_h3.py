@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import functools
 import json
 import os
 import time
@@ -1073,7 +1074,25 @@ def _random_side_adapter(model: TorchMiniMaxH3Block, rank: int, ratio: float = 0
     return adapter
 
 
+def _bf8_dit(block: MiniMaxH3TransformerBlock, *, weights_only: bool = False) -> None:
+    """The serving driver's default DiT precision on a loaded block: qkv / ff1 / ff2 weights BFP8, the norms (so the
+    gathered qkv / ff1 inputs) and the to_out input BFP8, bf16 outputs pinned. `weights_only` after a reload."""
+    for param in (block.attn.to_qkv.weight, block.ff.ff1.weight, block.ff.ff2.weight):
+        bf16 = param.data
+        param.dtype = ttnn.bfloat8_b
+        param.data = ttnn.typecast(bf16, ttnn.bfloat8_b)
+        ttnn.deallocate(bf16)
+    if weights_only:
+        return
+    for norm in (block.norm1, block.norm2):
+        norm.forward = functools.partial(norm.forward, dtype=ttnn.bfloat8_b)
+    block.attn.to_out.activation_dtype = ttnn.bfloat8_b
+    for linear in (block.attn.to_qkv, block.attn.to_out, block.ff.ff1):
+        linear.pin_output_bf16 = True
+
+
 @GALAXY_RING
+@pytest.mark.parametrize("bf8_dit", [pytest.param(False, id="tree_defaults"), pytest.param(True, id="bf8_dit")])
 def test_minimax_h3_transformer_block_lora_side(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -1081,11 +1100,13 @@ def test_minimax_h3_transformer_block_lora_side(
     num_links: int,
     is_fsdp: bool,
     topology: ttnn.Topology,
+    bf8_dit: bool,
     reset_seeds,
 ) -> None:
     """The unmerged LoRA side branch (rank 128) on one block against the fp32 `W + B @ A` reference: the whole
     output, and the adapter's own contribution (side-branch block minus base block) against the reference's, which
-    must also beat the same contribution from merged weights on device (the merge rounds B @ A onto W's grid)."""
+    must also beat the same contribution from merged weights on device (the merge rounds B @ A onto W's grid).
+    Under the tree's default switches, and `bf8_dit` also with the serving driver's BFP8 DiT weights and activations."""
     rank = 128
     skip_if_unsupported_num_links(mesh_device, num_links)
 
@@ -1113,12 +1134,18 @@ def test_minimax_h3_transformer_block_lora_side(
 
     tt_side = MiniMaxH3TransformerBlock(**fixture.block_kwargs, lora_rank=rank)
     tt_side.load_torch_state_dict({**base.state_dict(), **adapter})
+    if bf8_dit:
+        _bf8_dit(tt_side)
     side_out = fixture.run(tt_side)
     tt_side.deallocate_weights()
     tt_base = MiniMaxH3TransformerBlock(**fixture.block_kwargs)
     tt_base.load_torch_state_dict(base.state_dict())
+    if bf8_dit:
+        _bf8_dit(tt_base)
     base_out = fixture.run(tt_base)
     tt_base.load_torch_state_dict(merged.state_dict())
+    if bf8_dit:
+        _bf8_dit(tt_base, weights_only=True)
     merged_out = fixture.run(tt_base)
 
     def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -1127,8 +1154,8 @@ def test_minimax_h3_transformer_block_lora_side(
     reference_delta = fixture.torch_out - torch_base
     side_pcc, merged_pcc = pcc(reference_delta, side_out - base_out), pcc(reference_delta, merged_out - base_out)
     logger.info(f"adapter contribution PCC vs fp32: side branch {side_pcc:.5f}, merged weights {merged_pcc:.5f}")
-    assert_quality(fixture.torch_out, side_out, pcc=0.9995)
-    assert side_pcc >= 0.98 and side_pcc > merged_pcc, (side_pcc, merged_pcc)
+    assert_quality(fixture.torch_out, side_out, pcc=0.999 if bf8_dit else 0.9995)
+    assert side_pcc >= (0.97 if bf8_dit else 0.98) and side_pcc > merged_pcc, (side_pcc, merged_pcc)
 
 
 @GALAXY_RING
