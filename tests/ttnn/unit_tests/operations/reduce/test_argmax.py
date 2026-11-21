@@ -440,6 +440,13 @@ def test_argmax_reduce_all_sub_core_grids_idle_cores(device):
     assert got == int(torch.argmax(t.reshape(-1))), f"reduce_all mismatch: got {got}"
 
 
+def test_argmax_empty_sub_core_grids(device, expect_error):
+    # The multicore factory divides the work by the sub_core_grids core count.
+    t = ttnn.from_torch(torch.randn(8, 64, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "sub_core_grids must contain at least one core"):
+        ttnn.argmax(t, dim=-1, sub_core_grids=ttnn.CoreRangeSet([]))
+
+
 def test_argmax_dm_split_ties_smallest_index_wins(device):
     """ROW_MAJOR last-dim ties must return the smallest index.
 
