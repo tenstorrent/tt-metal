@@ -1187,3 +1187,9 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   model_bringup's MB.2) are suspect until re-run cold. Queued (patch, applied when the orchestrator stops after the 5120
   ladder): PB.NR, tests only: BATCH_COLD on test_no_rebuild, record/strict mode per packed path; then the 5120 ladder's
   no-rebuild unit is re-run cold. Paused after the 5120 ladder.
+- 07:00 5120 ladder (PB.9C5) gate PASS -> a63bb5fcd30. Steady wall ms / tok/s / resumed ms / device ms: 51200 73.9 / 69.3k /
+  77.8 / 61.1; 131072 77.8 / 65.8k / 79.9 / 62.9; 139264 77.1 / 66.4k / 81.8 / 63.8; 262144 76.7 / 66.8k / 79.9 / 65.5;
+  524288 81.2 / 63.1k / 85.0 / 71.2; 786432 89.1 / 57.5k / 91.7 / 79.5; 1024000 91.5 / 56.0k / 93.8 / 83.0. vs 11-19
+  (04c14a09d00): same at 50k-256k, SLOWER at 512k+ (+1.7 / +4.2 / +4.1 ms wall, device +1.4 / +2.0 / +2.7 ms). Its
+  no-rebuild PASS ran in a held process (0 s): re-run cold in PB.NR. Applied the PB.NR patch (also fills the report's
+  5120 table, + the 5120 no-rebuild cold unit). Resumed until PB.9G.
