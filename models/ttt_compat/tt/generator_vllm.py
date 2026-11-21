@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from types import SimpleNamespace
 from typing import List, Mapping, Union
 
 import torch
@@ -438,14 +437,40 @@ class DummyInputsBuilder(BaseDummyInputsBuilder):
         raise NotImplementedError
 
 
-class CustomNamespace(SimpleNamespace):
-    def __contains__(self, key):
-        return key in self.__dict__
+class Mistral3TTProcessingInfo(Mistral3ProcessingInfo):
+    def get_supported_mm_limits(self):
+        # The TT vision tower gives every image of a call the patches of the first image (#64646),
+        # so vLLM must refuse a request with more than one image.
+        return {"image": 1}
+
+
+def _mistral3_vision_inputs(pixel_values):
+    """Convert the vLLM image inputs of each request to the inputs of the Mistral vision tower.
+
+    vllm-tt-plugin passes one pixel_values entry per request: None, or a list with one [C, H, W]
+    tensor, which vLLM's Mistral3 processor cuts to the size of the image. Mistral3TTProcessingInfo
+    allows one image per request. The vision tower takes a (1, C, H, W) tensor and [[height, width]]
+    per user. Returns (None, None) when no request has an image.
+    """
+    user_pixel_values, user_image_sizes = [], []
+    for images in pixel_values or []:
+        images = [image for image in images or [] if image is not None]
+        if not images:
+            user_pixel_values.append(None)
+            user_image_sizes.append(None)
+            continue
+        if len(images) > 1:
+            raise ValueError(f"Mistral3 on TT takes one image per request, not {len(images)} (#64646)")
+        user_pixel_values.append(images[0].unsqueeze(0))
+        user_image_sizes.append([[images[0].shape[-2], images[0].shape[-1]]])
+    if all(user_pixels is None for user_pixels in user_pixel_values):
+        return None, None
+    return user_pixel_values, user_image_sizes
 
 
 @MULTIMODAL_REGISTRY.register_processor(
     Mistral3MultiModalProcessor,
-    info=Mistral3ProcessingInfo,
+    info=Mistral3TTProcessingInfo,
     dummy_inputs=Mistral3DummyInputsBuilder,
 )
 class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
@@ -507,28 +532,43 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
 
         tokens = kwargs["tokens"]
         prompt_lens = kwargs["prompt_lens"]
-        inputs = CustomNamespace()
-        inputs.input_ids = tokens
-        data = kwargs.get("images", None)
         for i in range(tokens.shape[0]):
             tokens[i][prompt_lens[i] :] = pad_token_id
-        pixel_values, image_sizes = None, None
 
-        if data and hasattr(data[0], "pixel_values"):
-            pixel_values = [im.pixel_values for im in data if hasattr(im, "pixel_values")]
-            image_sizes = [im.image_sizes for im in data if hasattr(im, "image_sizes")]
-
+        pixel_values, image_sizes = _mistral3_vision_inputs(kwargs.get("pixel_values"))
         page_table = kwargs.get("page_table", None)
         kv_cache = kwargs.get("kv_cache", None)
 
-        return super().prefill_forward_text(
-            tokens=inputs.input_ids,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            prompt_lens=prompt_lens,
-            pixel_values=pixel_values if pixel_values else None,
-            image_sizes=image_sizes if image_sizes else None,
-        )
+        if pixel_values is None:
+            return super().prefill_forward_text(
+                tokens=tokens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+                enable_trace=kwargs.get("enable_trace", True),
+                pixel_values=None,
+                image_sizes=None,
+            )
+
+        # A batch with images runs one request per prefill call, without trace:
+        # - A batched prefill gives the images of the first request to all the requests.
+        # - A traced prefill embeds the token ids inside the trace, so it cannot take image features.
+        # empty_slots=[i] gives request i the same user id as the per-user loop of the generator.
+        logits = []
+        for i in range(tokens.shape[0]):
+            logits.append(
+                super().prefill_forward_text(
+                    tokens=tokens[i : i + 1],
+                    page_table=None if page_table is None else page_table[i : i + 1],
+                    kv_cache=kv_cache,
+                    prompt_lens=prompt_lens[i : i + 1],
+                    empty_slots=[i],
+                    enable_trace=False,
+                    pixel_values=pixel_values[i : i + 1],
+                    image_sizes=image_sizes[i : i + 1],
+                )
+            )
+        return torch.cat(logits)
 
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward(*args, **kwargs)
