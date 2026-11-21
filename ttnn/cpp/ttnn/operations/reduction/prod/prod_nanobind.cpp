@@ -57,7 +57,7 @@ void bind_reduction_prod_operation(nb::module_& mod) {
                       - layout
                     * - BFLOAT16, FLOAT32
                       - TILE, ROW_MAJOR
-                    * - BFLOAT8_B, BFLOAT4_B
+                    * - BFLOAT8_B, BFLOAT4_B (full product only; BFLOAT4_B rejected when dim is given)
                       - TILE
 
                 The :attr:`output_tensor` will be in the following data type and layout:
@@ -69,7 +69,7 @@ void bind_reduction_prod_operation(nb::module_& mod) {
                       - layout
                     * - BFLOAT16, FLOAT32
                       - TILE
-                    * - BFLOAT8_B, BFLOAT4_B
+                    * - BFLOAT8_B, BFLOAT4_B (full product only; BFLOAT4_B rejected when dim is given)
                       - TILE
 
             Memory Support:

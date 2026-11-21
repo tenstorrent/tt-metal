@@ -662,7 +662,7 @@ def open_mesh_device(
             The conv and pool unit tests use 16384 or 32768; model demos under ``models/`` use 8192 to 131072.
         trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
         num_command_queues (int, optional): Number of command queues. Defaults to 1.
-        dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
+        dispatch_core_config (ttnn.DispatchCoreConfig, optional): dispatch core config. Defaults to None (DispatchCoreConfig()).
         offset (ttnn.MeshCoordinate, optional): Offset in logical mesh coordinates for the mesh device. Defaults to None.
         physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to [].
         worker_l1_size (int, optional): Size of the usable worker L1 memory. Defaults to ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE.
@@ -773,8 +773,8 @@ def distribute(default: Union[ttnn.CppTensorToMesh, ReplicateTensorToMeshWrapper
     Invocations of ttnn.to_torch(..) will use the mesh_composer as defined by the default in ttnn.distribute.
 
     Args:
-        mesh_mapper_or_composer (Union[ttnn.CppTensorToMesh, ReplicateTensorToMeshWrapper, MeshToTensor]): An instance of either TensorToMesh or MeshToTensor
-            used to map tensors to a mesh or compose tensors from a mesh.
+        default (Union[ttnn.CppTensorToMesh, ReplicateTensorToMeshWrapper, ttnn.CppMeshToTensor]): An instance of either TensorToMesh or MeshToTensor
+            used as the from_torch/to_torch default to map tensors to a mesh or compose tensors from a mesh.
 
     Example:
         with distribute(ShardTensorToMesh(mesh_device, dim=3)):
