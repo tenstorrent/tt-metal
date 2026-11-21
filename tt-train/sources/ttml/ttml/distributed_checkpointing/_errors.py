@@ -13,9 +13,21 @@ class CheckpointFatalError(CheckpointError):
     """An exchange between the ranks failed (a peer died); the operation cannot be completed in this process, and
     the staging directory is left in place.
 
-    It subclasses ``CheckpointError`` so that one handler catches every checkpoint failure. Retrying is harmless but
-    pointless: once an exchange has failed, every later save or load in this process raises ``CheckpointFatalError`` at
-    once, without reaching the other ranks."""
+    The ranks are out of step: a peer may still wait in a collective this rank left, and it waits forever. End the job
+    instead of continuing: a handler that catches ``CheckpointError`` and keeps training also catches this one, and
+    even a normal exit waits for that peer in ``MPI_Finalize``. Flush the logs and call ``os._exit(1)``, which skips
+    ``MPI_Finalize`` so the launcher ends every rank (as the GRPO trainer's ``exit_on_error`` does)::
+
+        try:
+            dcp.save(ckpt_dir, model=model, optimizer=optimizer)
+        except dcp.CheckpointFatalError:
+            traceback.print_exc()
+            sys.stderr.flush()
+            os._exit(1)
+
+    It subclasses ``CheckpointError`` so that one handler catches every checkpoint failure. Retrying cannot help: once
+    an exchange has failed, every later save or load in this process raises ``CheckpointFatalError`` at once, without
+    reaching the other ranks."""
 
 
 class IncompleteCheckpointError(CheckpointError):
