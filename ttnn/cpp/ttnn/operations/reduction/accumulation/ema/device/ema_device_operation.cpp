@@ -33,8 +33,11 @@ void EmaDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_shape.rank() == 4, "EMA input must be 4D [1, B, C, T], got rank {}", input_shape.rank());
     TT_FATAL(input_shape[0] == 1, "EMA expects leading dimension to be 1, got {}", input_shape[0]);
 
-    // This OP produces as many elements in output as there are in input
-    // Thus, the volume must be the same to avoid writing outside the output buffer
+    // This OP produces as many elements in output as there are in input, and the docstring
+    // requires the preallocated output to have the input's shape. The kernel writes the EMA stream
+    // by flat tile index, so checking only the volume accepted a same-volume output with different
+    // dimensions and returned a wrongly shaped tensor. cumsum/cumprod enforce the same rule in
+    // accumulation_common.cpp validate_output_tensor.
     if (tensor_args.optional_output_tensor.has_value()) {
         const auto& output_tensor = tensor_args.optional_output_tensor.value();
         TT_FATAL(
@@ -51,10 +54,15 @@ void EmaDeviceOperation::validate_on_program_cache_miss(
             "Output tensor must have TILE layout, got: {}",
             output_tensor.layout());
         TT_FATAL(
-            input_tensor.padded_shape().volume() == output_tensor.padded_shape().volume(),
-            "Input and output must have the same volume, input: {}, output: {}",
-            input_tensor.padded_shape().volume(),
-            output_tensor.padded_shape().volume());
+            input_tensor.logical_shape() == output_tensor.logical_shape(),
+            "Input and output must have the same logical shape, input: {}, output: {}",
+            input_tensor.logical_shape(),
+            output_tensor.logical_shape());
+        TT_FATAL(
+            input_tensor.padded_shape() == output_tensor.padded_shape(),
+            "Input and output must have the same padded shape, input: {}, output: {}",
+            input_tensor.padded_shape(),
+            output_tensor.padded_shape());
     }
 
     // Alpha validation
