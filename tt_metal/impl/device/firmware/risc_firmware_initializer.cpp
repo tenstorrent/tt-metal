@@ -233,18 +233,6 @@ KeraunosNocChannels keraunos_noc_channels(const Cluster& cluster, ChipId chip) {
     return channels;
 }
 
-// Whether a Mock device of `arch` builds firmware. Quasar Mock skips kernel JIT (ProgramImpl::compile), which is
-// what links against the firmware, so it builds firmware only when TT_METAL_QUASAR_MOCK_JIT lifts that skip.
-// Real silicon devices bypass this check.
-bool mock_builds_firmware_for(tt::ARCH arch, const llrt::RunTimeOptions& rtoptions) {
-    switch (arch) {
-        case tt::ARCH::WORMHOLE_B0:
-        case tt::ARCH::BLACKHOLE: return true;
-        case tt::ARCH::QUASAR: return rtoptions.get_quasar_mock_jit();
-        default: return false;
-    }
-}
-
 int firmware_wait_timeout_ms(const llrt::RunTimeOptions& rtoptions) {
     // Default timeout for real silicon.
     constexpr int kDefaultTimeoutMs = 10'000;
@@ -390,13 +378,11 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             // depend on -- without them, JIT-compiling kernels on a mock device fails with
             // "non constant or forward reference address expression". So we run it for mock as
             // well as real devices, with two exceptions:
-            //   1. Mock devices of an arch that skips kernel JIT on Mock (Quasar, unless
-            //      TT_METAL_QUASAR_MOCK_JIT is set); see mock_builds_firmware_for.
+            //   1. Mock devices that skip kernel JIT (Cluster::mock_skips_kernel_jit()).
             //   2. Emule devices on any arch. Emule's kernel JIT uses an x86 toolchain, so the
             //      riscv firmware ELFs are never linked or consumed.
-            const bool skip_fw_build = cluster_.get_target_device_type() == tt::TargetDevice::Emule ||
-                                       (cluster_.get_target_device_type() == tt::TargetDevice::Mock &&
-                                        !mock_builds_firmware_for(cluster_.arch(), rtoptions_));
+            const bool skip_fw_build =
+                cluster_.get_target_device_type() == tt::TargetDevice::Emule || cluster_.mock_skips_kernel_jit();
             if (!skip_fw_build) {
                 build_env_manager.build_firmware(device_id);
             }

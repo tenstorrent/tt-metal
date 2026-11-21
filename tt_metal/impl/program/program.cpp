@@ -96,7 +96,6 @@
 #include <tt-metalium/experimental/op_profiler_support.hpp>
 #include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
-#include <llrt/llrt.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/allocator/allocator.hpp"
 #include <internal/service/service_core_manager.hpp>
@@ -3380,9 +3379,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     Inspector::program_compile_started(this, device, build_env.build_key());
 
-    // JIT on Quasar Mock is opt-in: TT_METAL_QUASAR_MOCK_JIT.
-    if (cluster.get_target_device_type() == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR &&
-        !MetalContext::instance(device_context_id).rtoptions().get_quasar_mock_jit()) {
+    if (cluster.mock_skips_kernel_jit()) {
         compiled_.insert(build_env.build_key());
         Inspector::program_compile_finished(this, device, build_env.build_key());
         return;
