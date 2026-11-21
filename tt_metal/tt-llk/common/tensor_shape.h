@@ -190,6 +190,32 @@ constexpr bool validate_matmul_tensor_shapes_(const TensorShape src_b_shape, con
 }
 
 /**
+ * @brief Returns whether the Wormhole/Blackhole matmul MOP supports this in0 (SrcB) x in1 (SrcA) tile-shape pair.
+ *
+ * Supported: in0 1/2/4/8/16/32x32 with in1 32x32 or 32x16, and in0 32x16 or 16x16 with in1 16x32. Rejected:
+ * - in0 columns != in1 rows (the contraction dims must match);
+ * - in1 shorter than a full 16-row face (MVMUL reads 16 SrcA rows per face);
+ * - in1 16x16: no MOP path, it falls into the 32x32 one (32x16 x 16x16 gives wrong results on
+ *   Wormhole and Blackhole; also covers the existing 16x16 x 16x16 assert);
+ * - in0 with 16 columns and fewer than 16 rows (1/2/4/8x16): the recorded MOP does not match
+ *   the replay length; on Wormhole the math thread hangs, on Blackhole the results are wrong.
+ *
+ * Differs from the Quasar @ref validate_matmul_tensor_shapes_ on two pairs only: 16x16 x 16x32 (supported
+ * here, not on Quasar) and 16x16 x 16x16 (supported on Quasar, rejected here).
+ *
+ * @param in0_tensor_shape: Tile shape of in0 (loaded to SrcB).
+ * @param in1_tensor_shape: Tile shape of in1 (loaded to SrcA).
+ */
+constexpr bool matmul_supports_tensor_shapes(const TensorShape& in0_tensor_shape, const TensorShape& in1_tensor_shape)
+{
+    const bool k_dims_match   = in0_tensor_shape.num_faces_c_dim == in1_tensor_shape.num_faces_r_dim;
+    const bool in1_full_faces = in1_tensor_shape.face_r_dim == MAX_FACE_R_DIM;
+    const bool in1_is_16x16   = (in1_tensor_shape.num_faces_r_dim == 1) && (in1_tensor_shape.num_faces_c_dim == 1);
+    const bool in0_short_k16  = (in0_tensor_shape.num_faces_c_dim == 1) && (in0_tensor_shape.face_r_dim != MAX_FACE_R_DIM);
+    return k_dims_match && in1_full_faces && !in1_is_16x16 && !in0_short_k16;
+}
+
+/**
  * @brief Construct a TensorShape from the legacy (face_r_dim, num_faces) pair.
  *
  * Same argument order, mapping, and limitations as @ref tensor_shape_from_num_faces: num_faces == 2
