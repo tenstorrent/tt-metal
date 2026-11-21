@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any, Callable, Optional
 
 from ..configs import CheckpointConfig
+from ..utils import checkpoint_exists
 
 HISTORY_FILE = "checkpoint_history.json"
 
@@ -34,8 +35,8 @@ class CheckpointManager:
         self.checkpoint_dir = os.path.join(config.save_strategy.project_dir, "checkpoints")
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         self.history_file = os.path.join(self.checkpoint_dir, HISTORY_FILE)
-        # A run only rotates away the checkpoints it saved itself: an earlier run's in the same project_dir, such as
-        # the one this run started from, are never deleted.
+        # A run only rotates away or overwrites the checkpoints it saved itself: an earlier run's in the same
+        # project_dir, such as the one this run started from, are kept.
         if os.path.exists(self.history_file):
             self.logger.warning(f"Starting a new checkpoint history; {self.history_file} is replaced on the first save")
         # The checkpoints of this run that rotation kept, oldest first.
@@ -52,7 +53,11 @@ class CheckpointManager:
         metrics: Optional[dict[str, float]] = None,
         name: Optional[str] = None,
     ) -> str:
-        """Save a checkpoint named ``name`` (by default from the step, epoch and time); return its path."""
+        """Save a checkpoint named ``name`` (by default from the step, epoch and time); return its path.
+
+        A run never overwrites a checkpoint it didn't save, such as an earlier run's ``final`` it started from: a
+        ``name`` taken by one gets the time appended, as ``final_20260101_120000``.
+        """
         metrics = metrics or {}
         rotation = self.config.rotation_strategy
         if rotation.type == "best" and rotation.metric not in metrics:
@@ -64,6 +69,14 @@ class CheckpointManager:
         if name is None:
             name = f"checkpoint_step{step}_epoch{epoch}_{timestamp:%Y%m%d_%H%M%S}"
         path = os.path.join(self.checkpoint_dir, name)
+        if checkpoint_exists(path) and all(entry["path"] != path for entry in self.history):
+            taken, name = path, f"{name}_{timestamp:%Y%m%d_%H%M%S}"
+            unique, n = name, 1
+            while checkpoint_exists(os.path.join(self.checkpoint_dir, unique)):
+                n += 1
+                unique = f"{name}_{n}"
+            name, path = unique, os.path.join(self.checkpoint_dir, unique)
+            self.logger.warning(f"{taken} is not this run's checkpoint; saving to {name} instead of overwriting it")
         metadata = {"step": step, "epoch": epoch, "metrics": metrics, "timestamp": timestamp.isoformat()}
 
         self._save(path, metadata)

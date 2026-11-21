@@ -290,7 +290,9 @@ one checkpoint, the final one.
 | `none` | Every checkpoint. |
 
 Rotation never deletes the checkpoint just saved, and only deletes checkpoints of the same run: an earlier run's in the
-same `project_dir`, such as the one a run started from, are kept. `<project_dir>/checkpoints/checkpoint_history.json`
+same `project_dir`, such as the one a run started from, are kept. Nor does a save overwrite them: when an earlier run's
+checkpoint already has the name, such as `final`, the time is appended (`final_20260101_120000`), with a warning, and
+`checkpoint_history.json` and the log give the path. `<project_dir>/checkpoints/checkpoint_history.json`
 lists the run's checkpoints that are kept, with their step, epoch and metrics. A checkpoint is written to a staging
 directory and moved into place when complete, so a failed save leaves the previous one intact.
 

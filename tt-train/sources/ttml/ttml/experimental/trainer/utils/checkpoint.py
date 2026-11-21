@@ -29,6 +29,17 @@ def _remove(path: Path) -> None:
         path.unlink()
 
 
+def _previous(path: Path) -> Path:
+    return path.with_name(path.name + ".old")
+
+
+def checkpoint_exists(path: PathLike) -> bool:
+    """Whether ``path`` holds a checkpoint, counting the one an interrupted ``staged_directory`` save left aside, which
+    the next save to ``path`` restores and then replaces."""
+    path = Path(path)
+    return path.exists() or _previous(path).exists()
+
+
 @contextmanager
 def staged_directory(path: PathLike) -> Iterator[Path]:
     """A directory to write a checkpoint into, which replaces ``path`` only once it is complete.
@@ -38,7 +49,7 @@ def staged_directory(path: PathLike) -> Iterator[Path]:
     """
     final = Path(path)
     staging = final.with_name(final.name + ".tmp")
-    previous = final.with_name(final.name + ".old")
+    previous = _previous(final)
     # A crash after the previous checkpoint was renamed aside, and before the new one took its name,
     # leaves the last complete checkpoint at ``previous``.
     if not final.exists() and previous.exists():

@@ -18,7 +18,8 @@ class StepSave(BaseModel):
     frequency: int = Field(default=100, ge=1)
     # Checkpoints go to <project_dir>/checkpoints/.
     project_dir: str = "runs"
-    # The name of the checkpoint of the run's last step.
+    # The name of the checkpoint of the run's last step. When an earlier run's checkpoint has it, the time is
+    # appended, as "final_20260101_120000", so that one is kept.
     final_checkpoint_name: str = "final"
 
 

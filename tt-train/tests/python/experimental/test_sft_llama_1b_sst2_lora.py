@@ -11,6 +11,7 @@ Downloads ``meta-llama/Llama-3.2-1B-Instruct``, a gated repo (``HF_TOKEN``), and
 import gc
 import json
 import math
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -152,9 +153,10 @@ def test_the_final_checkpoint_is_a_peft_adapter(recipe):
 
 def test_a_run_initialized_from_the_checkpoint_starts_from_its_adapters(recipe, tmp_path):
     """One step at a learning rate of 0 keeps the weights the run loaded, so its final checkpoint is the one it
-    started from."""
-    init = recipe.checkpoints / "final"
-    run_recipe(
+    started from. The run saves to the project_dir it started from, and keeps that checkpoint."""
+    init = tmp_path / "checkpoints" / "final"
+    shutil.copytree(recipe.checkpoints / "final", init)
+    logged = run_recipe(
         [
             "stopping_criteria.limit=1",
             "optimizer.lr=0",
@@ -164,7 +166,13 @@ def test_a_run_initialized_from_the_checkpoint_starts_from_its_adapters(recipe, 
         ]
     )
 
-    started_from, saved = read_adapter(init), read_adapter(tmp_path / "checkpoints" / "final")
+    (saved_path,) = [
+        m.removeprefix("Saved checkpoint: ") for m in logged.messages if m.startswith("Saved checkpoint: ")
+    ]
+    assert Path(saved_path).parent == init.parent and Path(saved_path).name.startswith("final_"), saved_path
+    started_from, saved = read_adapter(recipe.checkpoints / "final"), read_adapter(saved_path)
     assert sorted(saved.tensors) == sorted(started_from.tensors)
     for name, value in started_from.tensors.items():
         np.testing.assert_array_equal(saved.tensors[name], value, err_msg=name)
+    # The saved adapters equal the ones it started from, so the step-2 trainer_state tells the kept checkpoint apart.
+    assert (init / TRAINER_STATE).read_text() == (recipe.checkpoints / "final" / TRAINER_STATE).read_text()
