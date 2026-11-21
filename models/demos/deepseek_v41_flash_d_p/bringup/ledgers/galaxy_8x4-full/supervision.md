@@ -1265,3 +1265,13 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   gains ~1% prefill at 1M. Next: model_bringup MB.5 (the same at 5120).
 - 17:15 switching to model_bringup for MB.5.
 - 21:10 back on batching (model_bringup: 4 commits after the owner's push, its records stashed). OWNER: (a) a read-only analysis agent (Agent tool, no device) on the indexer: algorithm, core split, top-k selection at 1M, early pruning; (b) QUEUED PB.AR (ledger, device probes through the resident runner): sparse-attention roofline at the shipped fidelity, DRAM vs compute bound, utilization vs plain matmuls. Launched --until PB.AR.
+- 21:35 PB.AR accepted (analysis + probes, tests only). Sparse sdpa per compressed layer at S 256: 0.465 ms = 46 TF/s,
+  236 GB/s a chip (32 % of the DRAM roofline 0.147 ms; DRAM-bound at roofline, intensity 284 < ridge 580; the gather
+  alone 0.209 ms practical floor); 8.8 ms of sdpa a chunk vs 2.8 at roofline. A plain bmm of the same shapes reaches only
+  41 TF/s (the sdpa is already above it: small M). Time = busiest core's queries (3 on 36 cores: ~22 % imbalance) x
+  ~0.16 ms; a 128-key chunk: ~50 % matmul, ~25 % record->tile copy, ~25 % softmax / rescale; window chunk gather-bound.
+  4x2k's +11 ms at 1M is outside the sdpa op (the gather-hide regions' contention). Proposals: k-split load balance
+  (-1.0..-1.3 ms), records straight into the unpacker (-1.0..-1.2), window-block reuse (-0.8..-1.3), TILE q / out
+  (-0.6..-1.0), lazy rescale (-0.3..-0.6): ~-4 of 8.8 ms together. Indexer agent (read-only) reported too (summary to
+  the owner): block-max pre-selection, key ring to owning chips, 110-core scoring.
+- 21:50 OWNER: try block-max pre-selection. QUEUED PB.BM (ab INDEXER_BLOCK_SELECT off/on): top-512 blocks by block max (B 8 / 32), then top-512 keys over their keys; prototype with block_max_out, compute-side block max if the writer cost dominates; gate = fast tier, oracle, selection-set test (mismatches == 0 beyond 512th-value ties), ladder single + 4x2k at 139264 / 1024000, cold strict no-rebuild. Launched --until PB.BM.
