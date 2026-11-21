@@ -8,8 +8,13 @@
 //     tiles of user u's shard of the height-sharded cos / sin outputs (the rotary op broadcasts row 0, rows 1..31 are
 //     not read).
 //
+// EMB_VSHARD = Vd (vocab-sharded table, fused_decode/embed.py): the local row is tokens[0] - d Vd when that is < Vd (d
+// Vd: entry 0 of the offsets tensor), else row Vd (zeros); it goes to the flat partial of the first layer boundary's
+// all-reduce (value h at byte 2 h, boundary core) instead of emb, a fresh flat residual is zeroed, and the boundary's
+// fabric sender (sending_program, site "entry") is notified.
+//
 // runtime args: [tok_addr, emb_table_addr, emb_addr, rot_addr, cos_table_addr, sin_table_addr, cos_addr, sin_addr,
-//                (noc_x, noc_y) x users]
+//                (noc_x, noc_y) x users] (+ EMB_VSHARD: [off_addr, partial_addr, residual_addr])
 
 #include <stdint.h>
 
@@ -38,6 +43,16 @@ void kernel_main() {
     constexpr auto ct_args = TensorAccessorArgs<rot_args.next_compile_time_args_offset()>();
     constexpr auto st_args = TensorAccessorArgs<ct_args.next_compile_time_args_offset()>();
     constexpr uint32_t tile = 2048;
+#ifdef EMB_VSHARD
+    constexpr auto off_args = TensorAccessorArgs<st_args.next_compile_time_args_offset()>();
+    constexpr auto part_args = TensorAccessorArgs<off_args.next_compile_time_args_offset()>();
+    constexpr auto res_args = TensorAccessorArgs<part_args.next_compile_time_args_offset()>();
+    constexpr uint32_t vx = res_args.next_compile_time_args_offset();
+    constexpr uint32_t flat_bytes = get_compile_time_arg_val(vx);  // the flat residual's pages
+    constexpr uint32_t notify_x = get_compile_time_arg_val(vx + 1);
+    constexpr uint32_t notify_y = get_compile_time_arg_val(vx + 2);
+    constexpr uint32_t notify_sem = get_compile_time_arg_val(vx + 3);
+#endif
 
     const auto s_tok = TensorAccessor(tok_args, tok_addr, tok_page);
     const auto s_et = TensorAccessor(et_args, emb_table_addr, row_bytes);
@@ -58,8 +73,20 @@ void kernel_main() {
 
     noc_async_read(s_tok.get_noc_addr(0), scr, tok_page);
     noc_async_read(s_rot.get_noc_addr(0), scr + off_rot, rot_page);
+#ifdef EMB_VSHARD
+    constexpr uint32_t off_vs = off_sin + users * rope_row;  // offsets page (128 B), then flat_bytes of zeros
+    const uint32_t a_users = 8 + 2 * users;
+    const auto s_off = TensorAccessor(off_args, get_arg_val<uint32_t>(a_users), 128);
+    noc_async_read(s_off.get_noc_addr(0), scr + off_vs, 128);
+#endif
     noc_async_read_barrier();
+#ifdef EMB_VSHARD
+    const uint32_t local = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr)[0] -
+                           reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr + off_vs)[0];
+    const uint32_t token = local < EMB_VSHARD ? local : EMB_VSHARD;
+#else
     const uint32_t token = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr)[0];
+#endif
     volatile tt_l1_ptr uint32_t* rot = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr + off_rot);
 
     noc_async_read(s_et.get_noc_addr(token), scr + off_row, row_bytes);
@@ -68,7 +95,21 @@ void kernel_main() {
         noc_async_read(s_st.get_noc_addr(rot[u]), scr + off_sin + u * rope_row, rope_row);
     }
     noc_async_read_barrier();
+#ifdef EMB_VSHARD
+    {
+        const auto s_part = TensorAccessor(part_args, get_arg_val<uint32_t>(a_users + 1), tile);
+        const auto s_res = TensorAccessor(res_args, get_arg_val<uint32_t>(a_users + 2), tile);
+        // the flat layouts are one core's contiguous tile pages: value h at byte 2 h from page 0
+        noc_async_write(scr + off_row, s_part.get_noc_addr(0), row_bytes);
+        volatile tt_l1_ptr uint32_t* z = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr + off_vs + 128);
+        for (uint32_t i = 0; i < flat_bytes / 4; ++i) {
+            z[i] = 0;
+        }
+        noc_async_write(scr + off_vs + 128, s_res.get_noc_addr(0), flat_bytes);
+    }
+#else
     noc_async_write(scr + off_row, s_emb.get_noc_addr(0), row_bytes);
+#endif
 
     for (uint32_t u = 0; u < users; ++u) {
         const uint32_t x = get_arg_val<uint32_t>(8 + 2 * u);
@@ -84,4 +125,9 @@ void kernel_main() {
         }
     }
     noc_async_write_barrier();
+#ifdef EMB_VSHARD
+    // the partial is written: the boundary's fabric sender (sending_program) may send it
+    noc_semaphore_inc(get_noc_addr(notify_x, notify_y, get_semaphore(notify_sem)), 1);
+    noc_async_atomic_barrier();
+#endif
 }

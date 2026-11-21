@@ -457,6 +457,12 @@ def prefill_forward(
 
     # Chunk processing for very long sequences
     chunk_size = program_config.sequence_chunk_size
+    if tp > 1 and weights.gate_proj.dtype == ttnn.bfloat8_b:
+        from ..fused_decode.config import ND_BFP8_PREFILL_CHUNK
+
+        # BFP8 experts at TP > 1 are the shared ND copy of gpt-oss-120b (~31 GB per device): a smaller chunk bounds the
+        # [1, E, chunk, I] expert intermediates
+        chunk_size = min(chunk_size, ND_BFP8_PREFILL_CHUNK)
     if hidden_states.shape[seq_dim] > chunk_size:
         hidden_states_chunks = ttnn.split(hidden_states, chunk_size, dim=seq_dim)
         hidden_states.deallocate(True)
