@@ -17,6 +17,9 @@ struct SystemMemoryCQInterface {
     SystemMemoryCQInterface(
         uint16_t channel, uint8_t cq_id, uint32_t cq_size, uint32_t cq_start, uint32_t alignment, uint32_t base = 0);
 
+    // Issue queue at region_offset, then the completion queue; for backings that lay out their CQs themselves.
+    SystemMemoryCQInterface(uint8_t cq_id, uint32_t region_offset, uint32_t issue_size_B, uint32_t completion_size_B);
+
     // Percentage of the command queue that is dedicated for issuing commands. Issue queue size is rounded to be 32B
     // aligned and remaining space is dedicated for completion queue Smaller issue queues can lead to more stalls for
     // applications that send more work to device than readback data.
