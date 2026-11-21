@@ -43,3 +43,13 @@ Tier: "input tier" = DRAM for a DRAM tensor, the interleaved L1 banks for an L1 
 Totals per tier: input tier = `input_bytes` (+ ≤ 31 × `page_bytes` halo in `tile_row_shift`, ≤ 62 KiB bf16) read, `input_logical_pages × page_bytes` written; core-local = `output_bytes` (tile_row_shift only); cross-core = 0.
 
 > Cheapest-traffic split considered: whole tile columns dealt to cores (`tile_row_shift`) — saves the ≤ (cores − 1)-tile halo (≤ 62 KiB bf16 at 32 cores; 13 tiles = 26 KiB on the traced `[1,4,400]`), adds nothing, but engages only `outer × tensor_w_tiles` cores (13 of 32 on `[1,4,400]`, 2 on `[1,32,50]`). Implemented: contiguous ranges of the column-major output-tile walk, which equals whole columns whenever ranges are column-multiples (`(2,6,512)`, `(1,34,4096)`). Deferred because the halo is bounded by the core count, not the tensor, and buys full occupancy on narrow tensors; the grid-synchronization perf lamp measures the two (`op_design.md` Perf lamps). For `page_remap` the implemented split is also the cheapest (each tensor crosses once).
+
+## Implementation notes (Phase 0, ttnn-implementer)
+
+Implemented as inventoried: one ring `cb_output_pages` (`RING_DEPTH × reader_threads` entries of
+`input.buffer_aligned_page_size()`) in both regimes, and the `scratch_input_window` scratchpad
+(`WINDOW_TILES × page_bytes`, `WINDOW_TILES = BLOCK_H_TILES + 1`) in `tile_row_shift` only. No CB added,
+resized, merged or removed; the data-movement budget above holds as written (each input page read once in
+`page_remap`; once per column segment plus ≤ 1 halo tile per core in `tile_row_shift`; each chunk page written
+once). The self-aimed window → ring copies take the Scratchpad itself as the NoC source (its typed loopback
+endpoint) rather than `dataflow_kernel_lib::local_addr(raw address)`: same transfer, bounds-checked.

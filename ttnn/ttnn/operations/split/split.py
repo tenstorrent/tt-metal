@@ -115,11 +115,15 @@ def split(
 ) -> list:
     """Cut `input_tensor` along `dim` into ceil(shape[dim] / split_size) chunks; returns a list of tensors."""
     axes = validate(input_tensor, split_size, dim)
-    d = _check_call(input_tensor, split_size, dim)
+    return _dispatch(input_tensor, split_size, _check_call(input_tensor, split_size, dim), _chunk_memory_config(axes))
 
+
+def _dispatch(input_tensor, split_size, d, memory_config):
+    """Allocate every chunk and run the one program that writes them. `d` is the canonical (negative) dim.
+    Below validate(): the tests call it directly to exercise chunk counts the kernels handle before SUPPORTED
+    claims them."""
     shape = [int(s) for s in input_tensor.shape]
     extent = shape[d]
-    memory_config = _chunk_memory_config(axes)
     device = input_tensor.device()
 
     chunks = []
