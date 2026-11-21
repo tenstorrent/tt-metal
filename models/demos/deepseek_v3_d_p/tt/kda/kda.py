@@ -367,8 +367,9 @@ class ttKDA:
             self.active_seq_len_local,
             self.config.head_k_dim,
             decay_width,
-            # The bounded gate's sigmoid runs in the projection after its fused offset add (_compute_decay).
-            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if self._bounded_gate else None,
+            # The bounded gate's sigmoid runs in the projection after its fused offset add (_compute_decay). The gate
+            # leaves in BF16, so the sigmoid takes its exact BF16-accurate path (params: full tile, mode 2).
+            fused_activation=(ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 0.0, 2.0) if self._bounded_gate else None),
         )
         # The prepared chunk terms read the decay gate; L1 spares its DRAM round trip.
         self.decay_memory_config = l1_when_it_fits(
