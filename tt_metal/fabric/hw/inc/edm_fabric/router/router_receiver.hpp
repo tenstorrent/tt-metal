@@ -429,6 +429,28 @@ FORCE_INLINE bool handle(
     return true;
 }
 
+// What a packet's handling starts from: its header word (payload size, send type and source channel in one load, kept
+// packed until the packet is handled), its route word, and the command buffers' ready states.
+struct PacketLoads {
+    uint32_t header_word;
+    uint32_t route_word;
+    CommandBuffersReady ready;
+};
+
+// The next slot's loads, in program order header, route, command buffers (all volatile), so all are in flight together.
+template <size_t VC>
+FORCE_INLINE PacketLoads load_packet(const ReceiverChannelProgress& progress, const ChipCoordinates& my_chip) {
+    auto* const header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(progress.next_slot_addr);
+    PacketLoads loads;
+    loads.header_word = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load_word(header);
+    loads.route_word = 0;
+    if constexpr (ReceiverChannel<VC>::forwards) {
+        loads.route_word = ReceiverChannel<VC>::Routing::read(header, my_chip);
+    }
+    loads.ready = read_command_buffers_ready<VC>();
+    return loads;
+}
+
 // Handles one packet when one is ready: acked under first-level acks, else counted in `arrived` (the register's count
 // at pass start). Returns whether it handled one.
 template <size_t VC, typename Connections>
@@ -449,16 +471,8 @@ FORCE_INLINE bool receive(
             }
         }
     }
-    auto* const header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(progress.next_slot_addr);
-    // Payload size, send type and source channel in one load, kept packed until the packet is handled.
-    const uint32_t header_word = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load_word(header);
-    uint32_t route_word = 0;
-    if constexpr (ReceiverChannel<VC>::forwards) {
-        route_word = ReceiverChannel<VC>::Routing::read(header, my_chip);
-    }
-    // After the header loads in program order (all volatile), so all are in flight together.
-    const CommandBuffersReady ready = read_command_buffers_ready<VC>();
-    return handle<VC>(progress, sources, downstreams, header_word, route_word, ready);
+    const PacketLoads loads = load_packet<VC>(progress, my_chip);
+    return handle<VC>(progress, sources, downstreams, loads.header_word, loads.route_word, loads.ready);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -824,7 +838,11 @@ FORCE_INLINE void preset_forward_commands(const RuntimeArgs& args) {
 
 // The receiver loop: rounds of passes until termination. A function of its own so its code depends only on this body;
 // once-per-round work is out of line (router_round.hpp).
-__attribute__((noinline)) void run(DownstreamConnections& downstreams) {
+__attribute__((noinline)) void run(DownstreamConnections& downstreams_in_memory) {
+    // A copy local to the loop, its address never taken, so the compiler can keep a downstream's progress (free slots,
+    // next slot) in registers across passes instead of loading and storing it per forward; with many downstreams it
+    // spills what it cannot hold, as the reference did. Nothing reads the connections after the loop.
+    DownstreamConnections downstreams = downstreams_in_memory;
     const auto& routing_table = l1_routing_table();
     const ChipCoordinates my_chip{
         routing_table.my_mesh_coord_y, routing_table.my_mesh_coord_x, routing_table.my_mesh_id};

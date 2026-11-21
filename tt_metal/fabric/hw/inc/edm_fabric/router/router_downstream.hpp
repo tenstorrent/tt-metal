@@ -314,11 +314,11 @@ struct FullPresetForwards {
     }
 
 private:
-    // Whether a forward sets its credit register: where several VCs share the preset (their credit registers differ),
-    // and on deadlock-avoiding routers, where every forward re-programs it to the address the preset holds
-    // (conservative: not shown to be needed).
-    static constexpr bool credit_register_varies =
-        enable_deadlock_avoidance || popcount(CommandBuffers::vcs_on_forward_pair(VC)) > 1;
+    // Whether a forward sets its credit register: where several VCs share the preset (their credit registers differ).
+    // Deadlock-avoiding routers (rings, tori) used to re-program it on every forward to the address the preset already
+    // holds; nothing else writes this buffer (a preset buffer carries one kind of command, CommandBuffers), so the
+    // preset's address stands, and the credit command goes out three instructions sooner.
+    static constexpr bool credit_register_varies = popcount(CommandBuffers::vcs_on_forward_pair(VC)) > 1;
 };
 
 // Several destinations: the buffers keep the fields no forward changes, preset at init: the data write's control

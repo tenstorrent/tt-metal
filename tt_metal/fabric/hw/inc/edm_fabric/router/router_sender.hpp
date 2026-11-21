@@ -591,11 +591,6 @@ FORCE_INLINE bool send(
     const uint32_t status_after = read_txq_status(sender_txq_id);
     const uint32_t reported =
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SenderChannel<CH>::completion_counter_addr);
-    uint32_t reported_acks = 0;
-    if constexpr (SenderChannel<CH>::first_level_ack) {
-        reported_acks =
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SenderChannel<CH>::first_level_ack_counter_addr);
-    }
     end_read_group();
 
     increment_local_update_ptr_val<SenderChannel<CH>::free_slots_stream>(1);
@@ -605,6 +600,13 @@ FORCE_INLINE bool send(
     }
     // The remote router's packets-received register +1: after the data, on the same TX queue.
     remote_update_ptr_val<RemoteReceiverChannel<VC>::packets_received_stream, sender_txq_id>(1);
+    // First-level acks: the ack count is read after the register update, so its L1 load is not queued ahead of the
+    // update's TX-queue stores (the packet's handoff); read after the completion count, it is never below it.
+    uint32_t reported_acks = 0;
+    if constexpr (SenderChannel<CH>::first_level_ack) {
+        reported_acks =
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SenderChannel<CH>::first_level_ack_counter_addr);
+    }
     sent++;
     if constexpr (telemetry::counts_sent) {
         telemetry::note_sent(size);
