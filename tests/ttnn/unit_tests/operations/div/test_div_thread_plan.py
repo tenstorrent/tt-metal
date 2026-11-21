@@ -105,6 +105,18 @@ def test_int_divisor_equals_float(device):
     assert torch.equal(got_int, (ta.float() / 2))
 
 
+def test_number_kinds(device):
+    """A numpy scalar is a number divisor like the float; an int past the float range saturates to +-inf
+    (a / inf = 0) instead of raising OverflowError on the host."""
+    import numpy as np
+
+    ta, _ = _inputs((1, 2, 400))
+    a = _put(ta, device)
+    assert torch.equal(ttnn.to_torch(div(a, np.float32(2.0))).float(), ttnn.to_torch(div(a, 2.0)).float())
+    for huge in (10**400, -(10**400)):
+        assert torch.all(ttnn.to_torch(div(a, huge)).float() == 0)
+
+
 def test_output_in_first_operand_buffer(device):
     """R13: the output lives in a's buffer, interleaved."""
     ta, tb = _inputs((1, 1, 32, 64))

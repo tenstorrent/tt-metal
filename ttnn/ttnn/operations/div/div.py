@@ -10,6 +10,9 @@ travels to the compute kernel as a runtime argument (its float32 bit pattern) an
 
 from __future__ import annotations
 
+import math
+import numbers
+
 import torch
 
 import ttnn
@@ -66,9 +69,24 @@ def default_compute_kernel_config():
     )
 
 
+def _resolve_config(compute_kernel_config):
+    """`compute_kernel_config`, with None resolved through the one default factory (rule R3)."""
+    return compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
+
+
 def _is_number(value) -> bool:
-    # R8: an int (bool included) is the number divisor exactly like the float of the same value.
-    return isinstance(value, (int, float))
+    # R8: an int (bool included) is the number divisor exactly like the float of the same value; a numpy
+    # scalar is a number too (numbers.Real covers int, float, bool and numpy's real scalars).
+    return isinstance(value, numbers.Real)
+
+
+def _number_value(value) -> float:
+    """The number divisor as a Python float. An int past the float range saturates to +-inf (the float32
+    transport saturates the same way past FLT_MAX) instead of raising."""
+    try:
+        return float(value)
+    except OverflowError:
+        return math.inf if value > 0 else -math.inf
 
 
 def validate(input_tensor_a, input_tensor_b, *, rounding_mode=None, dtype=None, compute_kernel_config=None):
@@ -88,8 +106,7 @@ def validate(input_tensor_a, input_tensor_b, *, rounding_mode=None, dtype=None, 
         except RuntimeError as err:
             raise ValueError(f"div: shapes {list(a_shape)} and {list(b_shape)} do not broadcast") from err
 
-    config = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
-    fp32_dest = bool(config.fp32_dest_acc_en)
+    fp32_dest = bool(_resolve_config(compute_kernel_config).fp32_dest_acc_en)
 
     # R1 / R2: hold in every phase, independently of SUPPORTED.
     if input_tensor_a.dtype == ttnn.float32 and not fp32_dest:
@@ -108,20 +125,20 @@ def validate(input_tensor_a, input_tensor_b, *, rounding_mode=None, dtype=None, 
                 f"div: operands of different layouts ({input_tensor_a.layout}, {input_tensor_b.layout})"
             )
 
+    # R14: every tensor operand's placement is derived with memory_axes and gated, b's as well as a's.
+    placements = [memory_axes(input_tensor_a)] + ([] if number else [memory_axes(input_tensor_b)])
     axes = {
         "dtype":            input_tensor_a.dtype,
         "layout":           input_tensor_a.layout,
         "fp32_dest_acc_en": fp32_dest,
         "rounding_mode":    rounding_mode,
         "output_dtype":     dtype,
-        **memory_axes(input_tensor_a),
+        **placements[0],
     }
     inputs = (a_shape, b_shape)
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger(inputs, axes)
 
-    # R14: every tensor operand's placement is gated, b's as well as a's.
-    placements = [memory_axes(input_tensor_a)] + ([] if number else [memory_axes(input_tensor_b)])
     for placed in placements:
         for axis in ("memory_config", "sharding"):
             if placed[axis] not in SUPPORTED[axis]:
@@ -159,7 +176,7 @@ def div(
         dtype=dtype,
         compute_kernel_config=compute_kernel_config,
     )
-    config = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
+    config = _resolve_config(compute_kernel_config)
 
     number = _is_number(input_tensor_b)
     a_shape = tuple(input_tensor_a.shape)
@@ -178,7 +195,7 @@ def div(
         input_tensor_a,
         None if number else input_tensor_b,
         output,
-        divisor=float(input_tensor_b) if number else None,
+        divisor=_number_value(input_tensor_b) if number else None,
         rounding_mode=rounding_mode,
         compute_kernel_config=config,
     )
