@@ -1,2 +1,7 @@
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/add/test_add.py","detail":"7/7 acceptance cells, first run","ts":"2026-11-21T07:06:17+00:00"}
 {"event":"friction","what":"none","ts":"2026-11-21T07:14:35+00:00"}
+{"event":"hypothesis","refinement":0,"detail":"Phase 0 TensorAccessor page walk already reaches shards; output from a.spec keeps the shard spec (R9). Only SUPPORTED + evidence owed.","ts":"2026-11-21T09:11:37+00:00"}
+{"event":"fix_applied","refinement":0,"detail":"SUPPORTED[sharding] += height; comments; ledger note","ts":"2026-11-21T09:11:37+00:00"}
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/add/test_add_sharded.py","result":"13 passed","ts":"2026-11-21T09:11:38+00:00"}
+{"event":"test_run","status":"pass","test":"test_add.py + test_add_plan.py","result":"29 passed","ts":"2026-11-21T09:11:38+00:00"}
+{"event":"test_run","status":"pass","test":"golden slice: 40 height cells + 6 interleaved reps + 1 refused","result":"45 passed, 1 skipped (runner OOM 1x2x33600), 1 xfailed","ts":"2026-11-21T09:11:39+00:00"}

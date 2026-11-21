@@ -27,7 +27,8 @@ from .add_program_artifacts import create_program_artifacts
 INPUT_TAGGERS = AXES
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED: the first phase (= the specification's PHASE0, axis for axis).
+# 2. SUPPORTED: the first phase (= the specification's PHASE0, axis for axis), widened by
+#    Refinement 0: "height" (both operands height-sharded in L1; R9, R10).
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
@@ -35,7 +36,7 @@ SUPPORTED = {
     "fp32_dest_acc_en": [True],
     "layout":           [ttnn.TILE_LAYOUT],
     "memory_config":    ["DRAM", "L1"],
-    "sharding":         ["interleaved"],
+    "sharding":         ["interleaved", "height"],
     "alignment":        ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank":             [2, 3, 4],
     "broadcast":        ["none"],
@@ -140,7 +141,10 @@ def add(
 ) -> ttnn.Tensor:
     validate(input_tensor_a, input_tensor_b, dtype=dtype, compute_kernel_config=compute_kernel_config)
     config = _resolve_config(compute_kernel_config)
-    # R9: the output lives where the operands live (a's spec carries its memory config), interleaved.
+    # R9: the output lives where the first operand lives: a's spec carries its memory config, so an interleaved
+    # a gives an interleaved output in a's buffer, and a height-sharded a an output height-sharded with a's
+    # shard shape and cores. The kernels address every tensor through its TensorAccessor by logical page id, so
+    # neither the work split nor the kernels depend on how many cores a shard grid spans.
     output = ttnn.allocate_tensor_on_device(input_tensor_a.spec, input_tensor_a.device())
     spec, run_args, tensor_indices = create_program_artifacts(input_tensor_a, input_tensor_b, output, config)
     return ttnn.generic_op([input_tensor_a, input_tensor_b, output], spec, run_args, tensor_indices)

@@ -38,7 +38,7 @@
 
 Omitted: SUPPORTED["dtype"] bfloat8_b — no path for block floats on Quasar (target page, *Family facts*: unbuildable on quasar, its cells skip; refuse in validate(), queue no refinement).
 
-### [ ] Refinement 0 — Height-sharded operands in L1 (the YOLOv8 bottleneck add)
+### [x] Refinement 0 — Height-sharded operands in L1 (the YOLOv8 bottleneck add)
 
 **Goal**: add `"height"` to SUPPORTED["sharding"]: both operands height-sharded in L1, at the Phase 0 values of every other axis. The specification's TARGET gained this value after Phase 0 (rules R9 and R10, the INVALID entry DRAM x height, the DECISIONS entry of 2026-11-21). The result is allocated where the first operand is: height-sharded in L1 with that operand's shard shape and cores (R9).
 
