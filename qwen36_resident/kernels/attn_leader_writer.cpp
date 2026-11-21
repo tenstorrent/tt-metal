@@ -61,6 +61,9 @@ void kernel_main() {
                     get_semaphore(sem_raddr)),
                 rows);
         }
+        // and to the tail core, which reads its k / v rows from here (args 6, 7: its coordinates)
+        noc_inline_dw_write(
+            get_noc_addr(get_arg_val<uint32_t>(6), get_arg_val<uint32_t>(7), get_semaphore(sem_raddr)), rows);
         noc_async_write_barrier();
     }
     constexpr uint32_t children_base = peers_base + 2 * num_streamers;

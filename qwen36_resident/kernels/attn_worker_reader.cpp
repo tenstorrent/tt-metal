@@ -40,10 +40,16 @@ FORCE_INLINE void push_resident(uint32_t cb, uint32_t n) {
     cb_push_back(cb, n);
 }
 
+// (row groups: the tail core reads its k / v rows from the leader's row buffer, which it has no copy of)
+uint32_t rows_x = 0, rows_y = 0;
+FORCE_INLINE uint64_t row_noc(uint32_t addr) {
+    return groups > 1 ? get_noc_addr(rows_x, rows_y, addr) : get_noc_addr(addr);
+}
+
 // copy a user's face rows of a batch x 32 tile (src: its face 0 row) into row `row` of a 32x32 bf16 tile
 FORCE_INLINE void place_row(uint32_t src, uint32_t tile, uint32_t row) {
-    noc_async_read(get_noc_addr(src), tile + row_offset(row), kFaceRow);
-    noc_async_read(get_noc_addr(src + batch * kFaceRow), tile + kFace + row_offset(row), kFaceRow);
+    noc_async_read(row_noc(src), tile + row_offset(row), kFaceRow);
+    noc_async_read(row_noc(src + batch * kFaceRow), tile + kFace + row_offset(row), kFaceRow);
 }
 
 FORCE_INLINE void place_row0(uint32_t src, uint32_t tile) { place_row(src, tile, 0); }
@@ -135,8 +141,18 @@ void kernel_main() {
         .page_size = kTile,
         .data_format = DataFormat::Float16_b};
     if (role == 2) {
-        rows = groups > 1 ? get_local_cb_interface(kCbRows).fifo_limit - get_local_cb_interface(kCbRows).fifo_size
-                          : get_arg_val<uint32_t>(9);
+        rows = get_arg_val<uint32_t>(9);
+        if constexpr (groups > 1) {
+            // row groups: the leader's row buffer (its address from the leader, its NOC coordinates the last args)
+            rows_x = get_arg_val<uint32_t>(12);
+            rows_y = get_arg_val<uint32_t>(13);
+            volatile tt_l1_ptr uint32_t* raddr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_raddr));
+            while (*raddr == 0) {
+                invalidate_l1_cache();
+            }
+            rows = *raddr;
+        }
         for (uint32_t cb : {cb_kraw, cb_vraw}) {
             volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base(cb));
             for (uint32_t i = 0; i < Dt * kTile / 4; i++) {

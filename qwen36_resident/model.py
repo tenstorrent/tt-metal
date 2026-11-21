@@ -101,6 +101,7 @@ HUB_LINKS = int(os.environ.get("RESIDENT_HUB_LINKS", "2"))  # fabric links per n
 # the per-group reservation estimate (act_bytes), which overstates what a second group takes
 RING_AUTO = os.environ.get("RESIDENT_RING_AUTO", "1") == "1"
 RING_MARGIN = 64 * 1024  # L1 left free below the lowest L1 buffer (later small allocations, e.g. global semaphores)
+RING_MIN = 96 * 1024  # a smaller weight ring is refused (row groups), not run slowly
 HUB_MC_NOCS = int(os.environ.get("RESIDENT_HUB_MC_NOCS", "2"))  # NOCs the hub multicasts x over (mlp_hub.cpp mc_nocs)
 TOK_PREV = 14  # token state word: the previous verify step's accepted drafts (chunked GDN; none: 0xFFFFFFFF)
 TOK_X0 = 64
@@ -588,8 +589,8 @@ class ResidentModel:
         each active row its own token (mlp_hub.cpp rows mode; per-row sampling parameters, set_sampling rows=).
         groups (rows mode, kernels/active_rows.hpp): row groups of `batch` rows that one launch carries, the weights
         streamed once for all of them (custom_mm takes at most 8 rows, so more users per launch come as groups).
-        groups > 1: exactly 8 * groups users (st), one launch; rows mode, paged KV, no fc / verify / taps. 1 or 2 so far
-        (4 needs the hub's slot-free handshake); anything else raises rather than running as more launches."""
+        groups > 1: exactly 8 * groups users (st), one launch; rows mode, paged KV and the hub feed, no fc / verify /
+        taps; 1, 2 or 4. Anything else raises rather than running as more launches."""
         self.mesh, self.d, self.layers, self.interval, self.lm_head = mesh, d, layers, interval, lm_head
         R = 0 if not verify else (2 if verify is True else int(verify))
         assert R in (0, 2, 4, 8), "verify runs 2, 4 or 8 rows"
@@ -599,11 +600,8 @@ class ResidentModel:
         assert len(self.taps) <= 5
         self.rows = rows
         assert not rows or not verify, "rows mode: independent users"
-        if groups not in (1, 2):
-            raise NotImplementedError(
-                f"row groups per launch: groups={groups} is not implemented (1 or 2; 4 needs the hub's slot-free "
-                "handshake, PLAN.md E4)"
-            )
+        if groups not in (1, 2, 4):
+            raise NotImplementedError(f"row groups per launch: groups={groups} (1, 2 or 4)")
         if groups > 1 and not (
             rows and kv_pool_blocks is not None and embed is not None and fc is None and not verify and not taps
         ):
@@ -977,6 +975,8 @@ class ResidentModel:
         # per streamer (order key, vocab index) of its largest logit, written by the streamer writers
         # (sample: its top-k list, sampling.hpp)
         rec_words = S * LR * (2 * TOP_K if self.sample else 4)  # (sampling: B = 1, or rows mode)
+        # (row groups: the records live in the hub's parity-0 slots instead, mlp_hub.cpp; this L1 tensor would take its
+        # range on every core: 262 KB at 32 sampled rows)
         self.argmax_t = (
             l1(
                 torch.zeros(1, rec_words, dtype=torch.int32),
@@ -985,7 +985,7 @@ class ResidentModel:
                 ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
-            if lm_head
+            if lm_head and groups == 1
             else None
         )
         # feed: the hubs' candidate slots, their semaphore and launch counters, the rope table (a compact page per
@@ -999,7 +999,8 @@ class ResidentModel:
             assert (feed_peer is not None) == verify
             self.embed, self.feed_peer = embed, feed_peer
             fed_rows = LR if rows else 2 if verify else 1  # tokens per launch (mlp_hub.cpp kCandWords)
-            cand_words = n * (2 * TOP_K * fed_rows if self.sample else max(4, 2 * fed_rows))
+            self._cand_words = 2 * TOP_K * fed_rows if self.sample else max(4, 2 * fed_rows)  # per chip
+            cand_words = n * self._cand_words
             self.cand_t = l1(
                 torch.zeros(1, cand_words, dtype=torch.int32),
                 hub_grid,
@@ -1156,7 +1157,7 @@ class ResidentModel:
                 )
 
             cbs = [
-                ring_cb(ring_bytes),
+                ring_cb(max(ring_bytes, lcm)),  # (row groups: resized from the L1 left below; the estimate may be < 0)
                 cb(7, grid, 1, ttnn.uint32, 16),
                 cb(8, grid, groups * d.It, page=64 * B, tiny_tile=True),
                 tiny_cb(9, groups * nd_max),
@@ -1185,12 +1186,15 @@ class ResidentModel:
             x_views = HIDDEN * B // (TILE * TILE)
             cbs.append(cb(0, hub_grid, 2 * n * x_views))
             cbs.append(cb(2, hub_grid, x_views))
-            cbs.append(cb(1, hub_grid, 1, page=(hub_headers + 2 * self.feed) * 160 + 16))
+            # (the feed: its candidates in fabric packets, mlp_hub.cpp cand_packets)
+            cand_packets = -(-4 * self._cand_words // packet_bytes) if self.feed else 0
+            cbs.append(cb(1, hub_grid, 1, page=(hub_headers + 2 * cand_packets) * 160 + 16))
             if groups > 1:
                 # the hub compute's sub-round count; the streamers' active-group mask (reader -> compute); the mixers'
                 # row buffer (E4.2, kernels/active_rows.hpp kCbRows)
                 cbs += [cb(3, hub_grid, 1, ttnn.uint32, 16), cb(37, grid, 1, ttnn.uint32, 16)]
-                cbs.append(cb(40, mixer_grid, groups * (row_w // TILE), page=64 * B, tiny_tile=True))
+                # (not on the tail core: it reads its k / v rows from the leader's)
+                cbs.append(cb(40, head_grid.merge(lead_grid), groups * (row_w // TILE), page=64 * B, tiny_tile=True))
             if B > 1:
                 cbs += [cb(32, grid, 1), cb(33, grid, 1), cb(34, grid, 2, *f32), cb(35, grid, 1, *f32), cb(38, grid, 1)]
             if lm_head:
@@ -1326,6 +1330,10 @@ class ResidentModel:
                 # ring, never less than the estimate
                 room = (l1_low_water(mesh) or 0) - cb_bytes_on(cbs[1:], [(c.x, c.y) for c in cores]) - RING_MARGIN
                 ring_bytes = max(ring_bytes, min(ring_one, (room // lcm) * lcm))
+                if ring_bytes < RING_MIN:
+                    raise RuntimeError(
+                        f"row groups={groups}: the streamers' L1 leaves a {ring_bytes} B weight ring (< {RING_MIN} B)"
+                    )
                 cbs[0] = ring_cb(ring_bytes)
                 self.ring_bytes = ring_bytes
                 logger.info(f"row groups: weight ring {ring_bytes} B (L1 room {room} B, one-group ring {ring_one} B)")
@@ -1338,7 +1346,7 @@ class ResidentModel:
             ]
             sems.append(ttnn.SemaphoreDescriptor(id=SEM_GROUP, core_ranges=head_grid, initial_value=0))
             if groups > 1:
-                sems.append(ttnn.SemaphoreDescriptor(id=SEM_RADDR, core_ranges=grid.merge(lead_grid), initial_value=0))
+                sems.append(ttnn.SemaphoreDescriptor(id=SEM_RADDR, core_ranges=grid.merge(prep_grid), initial_value=0))
 
             # every kernel: multi-user rows mode (active_rows.hpp)
             # (row_tiles: batch x 32 tiles per row group in the mixers' row buffer, gdn_head_reader.cpp)
@@ -1508,7 +1516,7 @@ class ResidentModel:
                         + [lead_p.x, lead_p.y, tail_p.x, tail_p.y]
                         + peers
                         + [ts_addr]
-                        + [sub["argmax"].buffer_address() if lm_head else 0]
+                        + [(sub["argmax"].buffer_address() if groups == 1 else 1) if lm_head else 0]
                         + [max(0, min(nvv * TILE, d.vocab_chip - v0)), chip * d.vocab_chip + v0, i]
                         + [len(runs[i])]
                         + [v for r in runs[i] for v in r]
@@ -1532,7 +1540,7 @@ class ResidentModel:
                 hub_ct += [self.hub_links, HUB_MC_NOCS]
                 if self.feed:
                     hub_args += [
-                        sub["argmax"].buffer_address(),
+                        sub["argmax"].buffer_address() if groups == 1 else 0,
                         self.cand_t.buffer_address(),
                         *[ttnn.get_global_semaphore_address(s) for s in self.feed_sems],
                         tok_addr,
@@ -1609,6 +1617,7 @@ class ResidentModel:
                         + [kv_stride, len(ch), 0, tok_addr, self.rope_off]
                         + ([rows_addr, kw_t.buffer_address()] if is_tail else [])
                         + ([sub["pt"].buffer_address()] if self.kv_paged else [])
+                        + ([lead_p.x, lead_p.y] if is_tail and groups > 1 else [])  # (the leader's row buffer)
                     )
                     aw[c.x][c.y] = (
                         [role, w_i, lead_p.x, lead_p.y, m_slots_t.buffer_address(), pp.x, pp.y, slot, len(ch)]
@@ -1703,7 +1712,7 @@ class ResidentModel:
             io += [taps_t, sub["hist"], sub["state"], norm_t, qw_t, kw_t, sub["K"], sub["V"], sub["tok"]]
             io += self._keep
             if lm_head:
-                io += [sub["logits"], sub["argmax"]]
+                io += [sub["logits"]] + ([sub["argmax"]] if sub["argmax"] is not None else [])
             if self.kv_paged:
                 io.append(sub["pt"])
             if self.feed:
@@ -2402,6 +2411,10 @@ class ResidentModel:
     def argmax(self):
         """vocab index of the largest logit (the first one on ties) from the streamers' candidates; a list
         per user for batch > 1"""
+        if self.groups > 1:
+            raise NotImplementedError(
+                "row groups: the streamers' records live in the hub's slots (use fed_token / logits)"
+            )
         out = []
         for sub in self.subs:
             raw = ttnn.to_torch(sub["argmax"], mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))

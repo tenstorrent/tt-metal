@@ -119,10 +119,13 @@ constexpr uint32_t kListWords = 2 * sampling::kTopK;
 // a chip's candidate slot: per row a list (sampling) or (key, index) (at least 16 B)
 constexpr uint32_t kCandWords = sample ? kFeedRows * kListWords : (2 * kFeedRows > 4 ? 2 * kFeedRows : 4);
 constexpr uint32_t cand_bytes = 4 * kCandWords;
-// the candidates go to the other hubs as one fabric packet (32 sampled rows' lists would need two: row groups of 4)
-static_assert(cand_bytes <= packet_bytes, "a chip's candidates exceed one fabric packet");
+// the candidates go to the other hubs in fabric packets of packet_bytes (32 sampled rows' lists: two)
+constexpr uint32_t cand_packets = (cand_bytes + packet_bytes - 1) / packet_bytes;
 static_assert(
     groups == 1 || (feed && cand_bytes >= 64), "row groups run with the feed (their active groups, CCL bases)");
+static_assert(
+    groups == 1 || num_streamers * kFeedRows * (sample ? sampling::kListBytes : 16) <= num_chips * vector_bytes,
+    "row groups: the records fit the parity-0 slots");
 constexpr uint32_t n_taps = get_compile_time_arg_val(22);
 static_assert(n_taps <= 5 && (n_taps == 0 || published), "taps are written from the summed x");
 constexpr uint32_t tap_rounds[5] = {
@@ -156,7 +159,7 @@ void write_tap(uint32_t x, uint32_t addr) {
 constexpr uint32_t packets_per_vector = (vector_bytes + packet_bytes - 1) / packet_bytes;
 constexpr uint32_t kRopeEntry = 128;  // compact rope table page: cos[32] | sin[32] bf16
 static_assert(rope_bytes == 3 * 2048, "the token state's rope tiles: cos, sin, -sin");
-constexpr uint32_t num_headers = 2 * packets_per_vector * 2 + (feed ? 2 : 0);
+constexpr uint32_t num_headers = 2 * packets_per_vector * 2 + (feed ? 2 * cand_packets : 0);
 constexpr bool pooled = num_headers <= NUM_PACKET_HEADERS / MaxDMProcessorsPerCoreType;
 
 // row `row` (row_bytes, in L1) as row u of the R x 32 tiles at `dst` (face rows of 32 B)
@@ -378,17 +381,21 @@ void kernel_main() {
             }
         }
     }
-    volatile PACKET_HEADER_TYPE* cand_hdr[2] = {nullptr, nullptr};
+    volatile PACKET_HEADER_TYPE* cand_hdr[cand_packets][2] = {};
     if constexpr (feed) {
-        const uint64_t dst = get_noc_addr(my_x[0], my_y[0], cand_addr + chip * cand_bytes);
         const uint64_t sem = get_noc_addr(my_x[0], my_y[0], cand_sem_addr);
-        for (uint32_t dir = 0; dir < 2; dir++) {
-            volatile PACKET_HEADER_TYPE* h = allocate();
-            h->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
-                1, static_cast<uint8_t>(dir == 0 ? num_chips - 1 - chip : chip)});
-            h->to_noc_fused_unicast_write_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst, sem, 1, true}, cand_bytes);
-            cand_hdr[dir] = h;
+        for (uint32_t p = 0; p < cand_packets; p++) {
+            const uint32_t off = p * packet_bytes;
+            const uint32_t bytes = off + packet_bytes <= cand_bytes ? packet_bytes : cand_bytes - off;
+            const uint64_t dst = get_noc_addr(my_x[0], my_y[0], cand_addr + chip * cand_bytes + off);
+            for (uint32_t dir = 0; dir < 2; dir++) {
+                volatile PACKET_HEADER_TYPE* h = allocate();
+                h->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
+                    1, static_cast<uint8_t>(dir == 0 ? num_chips - 1 - chip : chip)});
+                h->to_noc_fused_unicast_write_atomic_inc(
+                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst, sem, 1, true}, bytes);
+                cand_hdr[p][dir] = h;
+            }
         }
     }
     if (fabric.is_logically_connected()) {
@@ -562,7 +569,10 @@ void kernel_main() {
             wait_half(gather, 0, num_streamers * ((layers * ag.n + 1) / 2 + 1));  // (the records: the low half)
         }
         invalidate_l1_cache();
-        volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(argmax_addr);
+        // (row groups: the records are in the parity-0 slots; a peer starts the next launch, whose round 0 writes
+        // there, only after this hub has sent its candidates, i.e. read its records)
+        volatile tt_l1_ptr uint32_t* rec =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(groups > 1 ? slots : argmax_addr);
         volatile tt_l1_ptr uint32_t* cand = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cand_addr);
         auto better = [](uint32_t k, uint32_t i, uint32_t bk, uint32_t bi) { return k > bk || (k == bk && i < bi); };
         // per row u: record of streamer s at rec[4 (s rows + u)]; candidate words 2u, 2u + 1 (sampling: the row's
@@ -588,16 +598,20 @@ void kernel_main() {
             cand[kCandWords * chip + 2 * u + 1] = bi;
         }
         if constexpr (num_chips > 1) {
-            if (fabric.has_forward_connection()) {
-                perform_payload_send(
-                    fabric.get_forward_connection(), cand_addr + chip * cand_bytes, cand_bytes, cand_hdr[0]);
-            }
-            if (fabric.has_backward_connection()) {
-                perform_payload_send(
-                    fabric.get_backward_connection(), cand_addr + chip * cand_bytes, cand_bytes, cand_hdr[1]);
+            for (uint32_t p = 0; p < cand_packets; p++) {
+                const uint32_t off = p * packet_bytes;
+                const uint32_t bytes = off + packet_bytes <= cand_bytes ? packet_bytes : cand_bytes - off;
+                const uint32_t src = cand_addr + chip * cand_bytes + off;
+                if (fabric.has_forward_connection()) {
+                    perform_payload_send(fabric.get_forward_connection(), src, bytes, cand_hdr[p][0]);
+                }
+                if (fabric.has_backward_connection()) {
+                    perform_payload_send(fabric.get_backward_connection(), src, bytes, cand_hdr[p][1]);
+                }
             }
             noc_semaphore_wait_min(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cand_sem_addr), (launch + 1) * (num_chips - 1));
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cand_sem_addr),
+                (launch + 1) * (num_chips - 1) * cand_packets);
             invalidate_l1_cache();
         }
         for (uint32_t u = 0; !sample && u < kFeedRows; u++) {

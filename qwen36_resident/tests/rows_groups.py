@@ -25,10 +25,21 @@ import ttnn
 from qwen36_resident.model import HIDDEN, Dims, ResidentModel, State, is_attn, random_weights
 from qwen36_resident.tests.e0_bringup import close_mesh, open_mesh, shuffled_tables
 
-USERS, VOCAB = 16, 4096
-EMPTY = (3, 11, 13, 14)  # nobody in these rows: one in group 0, three in group 1
-PROBE = (0, 9)  # slots whose state is read back
-PATTERNS = ["all", "g0", "g1", "all", "g1", "g1", "g0", "all", "g0", "g0"]  # who runs, step by step
+VOCAB = 4096
+# per user count (16: G=2 vs two launches, 32: G=4 vs four): rows with nobody (16: one in group 0, three in group 1;
+# 32: and group 3 down to its last row), slots whose state is read back, who runs step by step ("gIJ": groups I, J)
+SETUP = {
+    16: dict(
+        empty=(3, 11, 13, 14), probe=(0, 9), patterns=["all", "g0", "g1", "all", "g1", "g1", "g0", "all", "g0", "g0"]
+    ),
+    32: dict(
+        empty=(3, 11, 13, 14, 19, 22, 24, 25, 26, 27, 28, 29, 30),
+        probe=(0, 9, 31),
+        patterns=["all", "g0", "g3", "g12", "all", "g2", "g13", "g0", "all", "g01"],
+    ),
+}
+USERS = 16
+EMPTY, PROBE, PATTERNS = SETUP[16]["empty"], SETUP[16]["probe"], SETUP[16]["patterns"]
 
 
 def run(a):
@@ -131,7 +142,7 @@ def run(a):
         toks, pos, plg = list(first), list(start), []
 
         def runs(pat):
-            return [active[u] and (pat == "all" or (u < 8) == (pat == "g0")) for u in range(USERS)]
+            return [active[u] and (pat == "all" or str(u // 8) in pat[1:]) for u in range(USERS)]
 
         def launches_of(run):
             return None if m.n_sub == 1 else [k for k in range(m.n_sub) if any(run[k * 8 : (k + 1) * 8])]
@@ -190,7 +201,7 @@ def compare(got, ref):
     res["fed_sampled_identical"] = got["fed_sampled"] == ref["fed_sampled"]
     res["fed_matches_host"] = [got["fed_matches_host"], ref["fed_matches_host"]]
     slots = {}
-    for s in PROBE:
+    for s in ref["slots"]:
         slots[s] = {k: bool(torch.equal(got["slots"][s][k], ref["slots"][s][k])) for k in ref["slots"][s]}
     res["slots_identical"] = slots
     res["pattern_logits_identical"] = all(
@@ -220,7 +231,13 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--ref")
     ap.add_argument("--json")
+    ap.add_argument("--users", type=int, default=16, choices=sorted(SETUP))
     a = ap.parse_args()
+    global USERS, EMPTY, PROBE, PATTERNS
+    USERS = a.users
+    EMPTY, PROBE, PATTERNS = SETUP[USERS]["empty"], SETUP[USERS]["probe"], SETUP[USERS]["patterns"]
+    if USERS > 16:
+        a.max_pos = max(a.max_pos, 2048)  # (the users' start positions reach past 1024)
     faulthandler.dump_traceback_later(300, repeat=True, file=sys.stderr)
     rec = run(a)
     torch.save(rec, a.out)

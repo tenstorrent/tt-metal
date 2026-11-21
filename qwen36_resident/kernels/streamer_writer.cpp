@@ -137,7 +137,10 @@ void kernel_main() {
     // group g's partial goes to the hub's slot of sub-round s = round * groups + g (parity s & 1). Two parities keep
     // a slot free for up to 2 groups: a group's slot is summed before the round's last multicast, which the next
     // round's partials wait for. More groups need a slot-free signal from the hub (static_assert below).
-    static_assert(groups <= 2, "row groups > 2 reuse a hub slot within a round: needs a slot-free handshake");
+    // More groups (G > 2) reuse a slot inside one round: group k + 2's partial waits until the hub has multicast
+    // sub-round sr - 2's x (it summed that slot first; the hub sets the slots semaphore to s + 1 after sub-round s).
+    // Against the peer hubs two slots suffice for any G: a hub's send of sub-round t follows its wait for the peers'
+    // t - 1, which they send after finishing t - 2.
     static_assert(groups == 1 || o_tiles == Ot, "the mixers' o block per group is the out projection's K");
     auto send_partial = [&](uint32_t round) {
         for (uint32_t g = 0, k = 0; g < groups; g++) {
@@ -151,6 +154,11 @@ void kernel_main() {
                 hub_slots = *hub_addr_sem;
             }
             const uint32_t sr = round * ag.n + k++;  // the hub's sub-round: the k-th active group of the round
+            if constexpr (groups > 2) {
+                if (sr >= 2) {
+                    noc_semaphore_wait_min(slots_sem, sr - 1);
+                }
+            }
             const uint32_t dst = hub_slots + (((sr & 1) * num_chips + chip) * Ht + pout_off) * kTileBytes;
             noc_async_write(get_read_ptr(cb_pout), get_noc_addr(hub_x, hub_y, dst), nd * kTileBytes);
             noc_async_write_barrier();
@@ -161,13 +169,16 @@ void kernel_main() {
     };
     // (row groups: group gr's projection block at gr * kBlk tiles of cb_qkvz_out goes to block gr of the mixers' row
     // buffer, row_tiles tiles per group; one rows semaphore increment per layer once every group is written)
+    // (row groups: the attention row goes to the leader only — the tail core reads its k / v rows there — but both
+    // get the rows semaphore increment)
     auto send_row = [&](uint32_t first, uint32_t count, uint32_t nq, uint32_t q_off) {
+        const uint32_t writes = groups > 1 ? 1 : count;
         for (uint32_t gr = 0; gr < groups; gr++) {
             if (!ag.has(gr)) {
                 continue;
             }
             const uint32_t row = get_read_ptr(cb_qkvz_out) + gr * kBlk * kTileBytes;
-            for (uint32_t i = 0; i < count; i++) {
+            for (uint32_t i = 0; i < writes; i++) {
                 const uint32_t hx = get_arg_val<uint32_t>(first + 2 * i);
                 const uint32_t hy = get_arg_val<uint32_t>(first + 2 * i + 1);
                 noc_async_write(
@@ -342,6 +353,16 @@ void kernel_main() {
     }
     if constexpr (lm_head) {
         take_slots(2 * layers + kRound0);
+        // (row groups: the records go to the hub's parity-0 slots, free once every sub-round is summed; argmax_addr is
+        // then only the on / off flag)
+        uint32_t rec_addr = argmax_addr;
+        if constexpr (groups > 1) {
+            while (hub_slots == 0) {
+                invalidate_l1_cache();
+                hub_slots = *hub_addr_sem;
+            }
+            rec_addr = hub_slots;
+        }
         if (argmax_addr) {
             // bf16 bits -> unsigned key in the order of the values; per row, record slot core * kRecRows + row.
             // Column c of user u: tile c / 32, face (c % 32) / 16, face row u (row groups: group gr's logits at
@@ -383,7 +404,7 @@ void kernel_main() {
                         const uint32_t r = gr * batch + u;
                         noc_async_write(
                             get_write_ptr(cb_pout) + u * sampling::kListBytes,
-                            get_noc_addr(hub_x, hub_y, argmax_addr + (r * num_streamers + core) * sampling::kListBytes),
+                            get_noc_addr(hub_x, hub_y, rec_addr + (r * num_streamers + core) * sampling::kListBytes),
                             sampling::kListBytes);
                     }
                 }
@@ -411,9 +432,7 @@ void kernel_main() {
                     rec[4 * r + 1] = first_index + best_i;
                 }
                 noc_async_write(
-                    get_write_ptr(cb_pout),
-                    get_noc_addr(hub_x, hub_y, argmax_addr + core * kRecRows * 16),
-                    kRecRows * 16);
+                    get_write_ptr(cb_pout), get_noc_addr(hub_x, hub_y, rec_addr + core * kRecRows * 16), kRecRows * 16);
             }
             noc_async_write_barrier();
             noc_semaphore_inc(hub_gather_sem, 1);  // the record is on the hub (a feeding hub waits for it)
