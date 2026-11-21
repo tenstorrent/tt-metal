@@ -42,9 +42,19 @@ void kernel_main() {
         for (uint32_t b = 0; b < num_blocks_per_col; ++b) {
             dfb_in0.wait_front(block_ct_dim);
             tile_regs_acquire();
+#ifdef ARCH_QUASAR
+            if constexpr (UnpackToDestEn) {
+                tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
+            }
+#endif
             for (uint32_t i = 0; i < block_ct_dim; ++i) {
                 copy_tile(dfb::in, i, i);
             }
+#ifdef ARCH_QUASAR
+            if constexpr (UnpackToDestEn) {
+                tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
+            }
+#endif
             tile_regs_commit();
             tile_regs_wait();
             pack_untilize_dest<block_ct_dim, full_ct_dim>(dfb::out, 1, b);

@@ -5,6 +5,9 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
+#ifdef ARCH_QUASAR
+#include "llk_dest_borrow.h"
+#endif
 #ifdef TRISC_PACK
 #include "llk_pack_common_api.h"
 #endif
@@ -30,7 +33,6 @@ namespace ckernel {
  */
 [[deprecated("Use tile_regs_acquire() instead")]]
 ALWI void acquire_dst() {
-    UNPACK((llk_unpack_wait_for_dest_available()));
     MATH((llk_math_wait_for_dest_available()));
 
     PACK((llk_packer_wait_for_math_done()));
@@ -43,17 +45,9 @@ ALWI void acquire_dst() {
  * This register is an array of 16 tiles of 32x32 elements each.
  * This is a blocking function, i.e. this function will wait until the lock is acquired.
  *
- * NOTE: On Quasar with unpack-to-dest the UNPACK thread also opens its DST section here. Every unpack-to-dest
- * copy_tile / copy_block / transpose_tile of the section must come after this call and before tile_regs_commit,
- * each at its own DST index; MATH does not start on the section before that commit.
+ * NOTE: On Quasar, use tile_regs_borrow to lend the acquired section before unpack writes to Dest.
  */
-ALWI void tile_regs_acquire() {
-    // The UNPACK step is a no-op except where the unpacker writes DEST under a per-section handshake (Quasar
-    // unpack-to-dest). There it opens the unpack thread's DEST section, so every copy_tile / copy_block /
-    // transpose_tile between acquire and commit lands in one section.
-    UNPACK((llk_unpack_wait_for_dest_available()));
-    MATH((llk_math_wait_for_dest_available()));
-}
+ALWI void tile_regs_acquire() { MATH((llk_math_wait_for_dest_available())); }
 
 /**
  * Acquire an exclusive lock on the DST register for the PACK thread.
@@ -80,7 +74,6 @@ ALWI void tile_regs_wait() {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated("Use tile_regs_release() instead")]]
 ALWI void release_dst() {
-    UNPACK((llk_unpack_dest_section_done<is_fp32_dest_acc_en>()));
     MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
     PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
 }
@@ -90,12 +83,10 @@ ALWI void release_dst() {
 /**
  * Release lock on DST register by MATH thread. The lock had to be previously acquired with tile_regs_acquire.
  *
- * NOTE: On Quasar with unpack-to-dest the UNPACK thread also closes its DST section here, handing it to MATH.
+ * Return any borrowed section before committing it.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tile_regs_commit() {
-    // UNPACK step: no-op except on Quasar unpack-to-dest, where it closes the unpack thread's DEST section.
-    UNPACK((llk_unpack_dest_section_done<is_fp32_dest_acc_en>()));
     MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
 }
 
@@ -106,5 +97,25 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tile_regs_release() {
     PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
 }
+
+#ifdef ARCH_QUASAR
+/**
+ * @brief Borrow a Dest bank from its owner.
+ *
+ * Each thread can hold only one loan at a time, and the lender must wait for its return before using the bank again.
+ */
+template <DstClient FROM, DstClient TO>
+ALWI void tile_regs_borrow() {
+    _llk_tile_regs_borrow_<FROM, TO>();
+}
+
+/**
+ * @brief Return the borrowed DST section and make the lender wait until the borrower has finished.
+ */
+template <DstClient FROM, DstClient TO>
+ALWI void tile_regs_return() {
+    _llk_tile_regs_return_<FROM, TO>();
+}
+#endif
 
 }  // namespace ckernel

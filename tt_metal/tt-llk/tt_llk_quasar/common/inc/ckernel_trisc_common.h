@@ -289,26 +289,12 @@ inline void _update_dest_register_offset_()
 // Semaphores mapping and trisc space -> tensix space conversion
 struct semaphore
 {
-    // The math thread is the middleman, for regular unpack and for unpack_to_dest.
-    // When unpacking to dest, math thread doesn't produce data, it just bridges UNPACK_MATH -> MATH_PACK.
-    // Packer only listens on MATH_PACK, so something has to translate the unpack completion into a
-    // pack-visible event. Math being the forwarder is also what makes future fused ops cheap:
-    // SFPU/FPU work slots in between the UNPACK_MATH get and the MATH_PACK post.
-    // UNPACK_MATH carries data-ready from unpack to math; MATH_PACK carries it from math to pack and, as in the
-    // regular path, throttles math behind pack (math stalls on its max). Neither gates the unpacker. What keeps the
-    // unpacker from overwriting a DEST bank the packer still reads is UNPACK_PACK: unpack posts it per section written,
-    // pack gets it per section released, and unpack stalls on its max (= number of DEST banks). Two separate counters
-    // cannot express that sum.
-    //
-    // Keep pairwise naming with producer_consumer direction:
-    // - MATH_PACK = math->pack
-    // - UNPACK_MATH = unpack->math
-    // - UNPACK_PACK = unpack->pack
-    // - PACK_UNPACK = pack->unpack
-    constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
-    constexpr static std::uint32_t UNPACK_PACK = 3; // unpack -> pack: DEST sections unpacked and not yet released by pack
-    constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
-    constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
+    constexpr static std::uint32_t MATH_PACK      = 1; // math <-> pack sync on Dest
+    constexpr static std::uint32_t MATH_UNPACK    = 3; // math <-> unpack sync for borrowing Dest
+    constexpr static std::uint32_t MATH_SFPU      = 4; // math <-> sfpu sync for borrowing Dest
+    constexpr static std::uint32_t PACK_UNPACK    = 5; // pack <-> unpack sync for borrowing Dest
+    constexpr static std::uint32_t PACK_SFPU      = 6; // pack <-> sfpu sync for borrowing Dest
+    constexpr static std::uint32_t PACK_UNPACK_L1 = 7; // pack <-> unpack sync on L1 memory
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {
