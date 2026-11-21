@@ -369,9 +369,9 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
     bool exponent_padding = (subtile_rows * subtiles_in_tile_col * subtiles_in_tile_row) < l1_alignment;
 
-    int num_float_in_tile = tile_HW;
+    const size_t num_float_in_tile = tile_HW;
     TT_ASSERT(input_data.size() % num_float_in_tile == 0);
-    uint32_t num_tiles = input_data.size() / num_float_in_tile;
+    const size_t num_tiles = input_data.size() / num_float_in_tile;
 
     // Encode directly into the final allocation. The old converter allocates
     // vectors per face row and tile, then concatenates every worker's result.
@@ -410,7 +410,7 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     }
 
     // Lambda to process a range of tiles
-    auto process_tile_range = [&](int start_tile, int end_tile) -> std::vector<uint32_t> {
+    auto process_tile_range = [&](size_t start_tile, size_t end_tile) -> std::vector<uint32_t> {
         const int rows_per_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows;
         const int mantissa_dwords_per_tile = num_float_in_tile / num_mantissas_in_dword;
         const int exp_dwords_per_tile =
@@ -426,13 +426,14 @@ std::vector<uint32_t> pack_as_bfp_tiles(
         std::vector<uint32_t> data;
         data.reserve(num_mantissas_in_dword);
 
-        for (int tile_index = start_tile; tile_index < end_tile; ++tile_index) {
+        for (size_t tile_index = start_tile; tile_index < end_tile; ++tile_index) {
             std::vector<uint32_t> packed_data;
             packed_data.reserve(mantissa_dwords_per_tile);
             std::vector<uint8_t> exponents_with_padding;
             exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
 
-            size_t fp32_element_base = row_major_input ? 0 : (tile_index * num_float_in_tile);
+            // 64-bit: tensors can exceed 2^31 elements.
+            const size_t tile_element_base = tile_index * num_float_in_tile;
 
             for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
                 for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
@@ -443,10 +444,9 @@ std::vector<uint32_t> pack_as_bfp_tiles(
                         for (int j = 0; j < subtile_cols; ++j) {
                             size_t data_index;
                             if (row_major_input) {
-                                data_index =
-                                    (tr * face_H + i) * tile_W + (tc * face_W + j) + (num_float_in_tile * tile_index);
+                                data_index = tile_element_base + (tr * face_H + i) * tile_W + (tc * face_W + j);
                             } else {
-                                data_index = fp32_element_base +
+                                data_index = tile_element_base +
                                              (tr * subtiles_in_tile_col + tc) * (subtile_rows * subtile_cols) +
                                              i * subtile_cols + j;
                             }
@@ -505,13 +505,13 @@ std::vector<uint32_t> pack_as_bfp_tiles(
 
     // Determine how many parallel work items to split the tiles into.
     // Only parallelize if we have enough tiles to justify the overhead.
-    constexpr uint32_t MIN_TILES_PER_CHUNK = 4;
-    uint32_t max_chunks = std::thread::hardware_concurrency();
+    constexpr size_t MIN_TILES_PER_CHUNK = 4;
+    size_t max_chunks = std::thread::hardware_concurrency();
     if (max_chunks == 0) {
         max_chunks = 1;
     }
-    uint32_t num_chunks = std::min(max_chunks, num_tiles / MIN_TILES_PER_CHUNK);
-    num_chunks = std::max(1u, num_chunks);
+    size_t num_chunks = std::min(max_chunks, num_tiles / MIN_TILES_PER_CHUNK);
+    num_chunks = std::max(size_t{1}, num_chunks);
 
     if (num_chunks == 1 || tt::tt_metal::detail::GetExecutor().this_worker_id() != -1) {
         // A nested legacy conversion must not wait on its own executor.
@@ -526,11 +526,11 @@ std::vector<uint32_t> pack_as_bfp_tiles(
         num_tiles / num_chunks);
 
     std::vector<std::vector<uint32_t>> chunk_results(num_chunks);
-    const uint32_t tiles_per_chunk = num_tiles / num_chunks;
-    const uint32_t remainder = num_tiles % num_chunks;
+    const size_t tiles_per_chunk = num_tiles / num_chunks;
+    const size_t remainder = num_tiles % num_chunks;
     ttsl::run_joined_tasks(num_chunks, [&](size_t chunk) {
-        const uint32_t start_tile = chunk * tiles_per_chunk + std::min<size_t>(chunk, remainder);
-        const uint32_t end_tile = start_tile + tiles_per_chunk + (chunk < remainder ? 1 : 0);
+        const size_t start_tile = chunk * tiles_per_chunk + std::min<size_t>(chunk, remainder);
+        const size_t end_tile = start_tile + tiles_per_chunk + (chunk < remainder ? 1 : 0);
         return tt::tt_metal::detail::async(
             [&, chunk, start_tile, end_tile] { chunk_results[chunk] = process_tile_range(start_tile, end_tile); });
     });
