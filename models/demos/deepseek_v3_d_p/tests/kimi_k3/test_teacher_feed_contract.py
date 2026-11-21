@@ -18,7 +18,9 @@ from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.dsa_teacher_feed import BARS, NRMSE_GROWTH, score
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed import (
     TOP_K,
+    WEIGHT_FAMILIES,
     HostMoE,
+    block_float,
     owner_positions,
     route,
     routing_window,
@@ -234,6 +236,34 @@ def test_router_and_host_moe_match_the_model_reference():
         got = host(x)
     assert torch.allclose(got, ref_out, atol=1e-5, rtol=1e-5), (got - ref_out).abs().max()
     assert len(host.experts) == int(ids.unique().numel())
+
+
+def test_block_float_shares_exponents_as_the_device_holds_the_weight():
+    """The device holds a Linear weight W [out, in] as W^T [in, out] tiles, so the 16 elements sharing a bfp exponent
+    are 16 consecutive out rows of one in column. By hand: 1.0 at W[0, 0] among 2^-10 values. In bfloat8_b (7 mantissa
+    bits under the shared exponent) the 2^-10 values of column 0, rows 1-15, flush to 0; row 0's other columns (other
+    exponent groups) and column 0's rows 16-31 (the next face) keep theirs exactly."""
+    w = torch.full((32, 32), 2.0**-10)
+    w[0, 0] = 1.0
+    got = block_float(w, "BFLOAT8_B")
+    assert got[0, 0] == 1.0
+    assert (got[1:16, 0] == 0).all(), got[1:16, 0]
+    assert (got[0, 1:] == 2.0**-10).all() and (got[16:, 0] == 2.0**-10).all()
+
+
+def test_host_moe_formats_hold_only_their_family():
+    """``HostMoE.with_formats`` holds exactly the named family's weights in the device format and keeps the rest at
+    the checkpoint's values; no format is the plain fp32 MoE."""
+    block = _tiny_moe()
+    w = {n: p.detach() for n, p in block.named_parameters() if not n.startswith("experts.")}
+    experts = lambda e: tuple(getattr(block.experts[e], m).weight.detach() for m in ("w1", "w3", "w2"))  # noqa: E731
+    host = HostMoE(w, experts, top_k=4)
+    shared = host.with_formats({"shared": "BFLOAT8_B"})
+    for n, t in w.items():
+        want = block_float(t, "BFLOAT8_B") if n in WEIGHT_FAMILIES["shared"] else t.float()
+        assert torch.equal(shared.w[n], want), n
+        assert torch.equal(host.with_formats({}).w[n], t.float()), n
+    assert any(not torch.equal(shared.w[n], w[n].float()) for n in WEIGHT_FAMILIES["shared"])
 
 
 def test_routing_window_by_hand():
