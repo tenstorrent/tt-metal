@@ -13,6 +13,7 @@ from tracy import signpost
 from transformers import AutoConfig
 
 import ttnn
+from models.common.incremental_detokenizer import IncrementalDetokenizer
 from models.common.model_capabilities import ModelCapabilitiesMixin
 from models.common.sampling.generator import (
     SAMPLING_PARAM_FIELDS,
@@ -1897,6 +1898,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         token_trace: bool,
         early_print_first_user: bool,
     ) -> _MtpDecodeLoopResult:
+        first_user_detok = IncrementalDetokenizer(self.tokenizer, skip_special_tokens=True)
         use_interleaved = prompt_user_ids is not None and spec_user_ids is not None
         verify_offset_default = self.batch_size_per_row // 2
         verify_offset = verify_offset_default if use_interleaved else num_of_prompts
@@ -2008,7 +2010,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     logger.info(f"TOKTRACE prompt={i} gen_idx={int(generated_counts[i].item())-1} token={next_value}")
                 if early_print_first_user and i == 0:
                     if self.tokenizer is not None:
-                        print(self.tokenizer.decode(next_value, skip_special_tokens=True), end="", flush=True)
+                        print(first_user_detok.push(next_value), end="", flush=True)
                     else:
                         print(f"{next_value} ", end="", flush=True)
 
@@ -2031,11 +2033,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                             )
                         if early_print_first_user and i == 0:
                             if self.tokenizer is not None:
-                                print(
-                                    self.tokenizer.decode(next_after_spec_value, skip_special_tokens=True),
-                                    end="",
-                                    flush=True,
-                                )
+                                print(first_user_detok.push(next_after_spec_value), end="", flush=True)
                             else:
                                 print(f"{next_after_spec_value} ", end="", flush=True)
                     if finished is None or not finished[i]:
@@ -2120,6 +2118,9 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     accepted_committed_second_token,
                 )
             )
+
+        if early_print_first_user and self.tokenizer is not None:
+            print(first_user_detok.flush(), end="", flush=True)
 
         return _MtpDecodeLoopResult(
             mtp_accept_rate=mtp_accept_rate,
@@ -2477,6 +2478,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 logger.info(f"Generating {max_new_tokens} tokens for {num_of_prompts} user(s)...")
                 if early_print_first_user:
                     logger.info("===== Generation for first user =====")
+                first_user_detok = IncrementalDetokenizer(self.tokenizer, skip_special_tokens=True)
 
                 # First generated token comes from prefill's last-position logits,
                 # or from random IDs when profiling decode only.
@@ -2520,7 +2522,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         logger.info(f"TOKTRACE prompt={i} gen_idx=0 token={token_value}")
                     if early_print_first_user and i == 0:
                         if self.tokenizer is not None:
-                            print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
+                            print(first_user_detok.push(token_value), end="", flush=True)
                         else:
                             print(f"{token_value} ", end="", flush=True)
 
@@ -2609,9 +2611,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                                 )
                             if early_print_first_user and i == 0:
                                 if self.tokenizer is not None:
-                                    print(
-                                        self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True
-                                    )
+                                    print(first_user_detok.push(token_value), end="", flush=True)
                                 else:
                                     print(f"{token_value} ", end="", flush=True)
                         decode_step_active_masks.append(step_active_mask)
@@ -2623,6 +2623,8 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 decode_step_user_tokens_for_stats = decode_step_user_tokens
 
             if early_print_first_user:
+                if self.tokenizer is not None and max_new_tokens > 0:
+                    print(first_user_detok.flush(), end="", flush=True)
                 logger.info("\n===== Done =====")
 
         # Trace path: deallocate once after replay loop completes.
