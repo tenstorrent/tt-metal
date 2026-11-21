@@ -217,14 +217,14 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
     if (!row_major) {
         TT_FATAL(
             W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0,
-            "Tiled tensor H {} W {} must be a multiple of TILE HEIGHT {} and TILE WIDTH",
+            "Tiled tensor H {} W {} must be a multiple of TILE HEIGHT {} and TILE WIDTH {}",
             H,
             W,
             TILE_HEIGHT,
             TILE_WIDTH);
         TT_FATAL(
             input_tensor.physical_volume() % TILE_HW == 0,
-            "Tiled tensor volume {} must be a multiple of TILE HEIGHT * TILE WIDTH",
+            "Tiled tensor volume {} must be a multiple of TILE HEIGHT * TILE WIDTH ({})",
             input_tensor.physical_volume(),
             TILE_HW);
     }

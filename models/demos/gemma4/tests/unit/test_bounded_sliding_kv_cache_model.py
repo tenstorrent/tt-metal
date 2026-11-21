@@ -497,7 +497,7 @@ def test_bounded_pool_rejects_without_modulo(device, expect_error):
 
     # page_table.shape[1] (max_blocks=16) > cache.shape[0] (sliding_blocks=4) → strict check fires
     assert max_blocks > cache_blocks
-    with expect_error(RuntimeError, "max_num_blocks_per_seq must be less than max_num_blocks"):
+    with expect_error(RuntimeError, "max_num_blocks_per_seq must not exceed max_num_blocks"):
         ttnn.experimental.paged_update_cache(
             cache_tt,
             xt,

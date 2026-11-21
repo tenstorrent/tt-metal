@@ -23,7 +23,7 @@ void MorehNllLossBackwardDeviceOperation::validate_inputs(
 
     TT_FATAL(output_grad_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_FATAL(output_grad_tensor.is_allocated(), "Operands to nll_loss need to be allocated in buffers on device!");
-    TT_FATAL((output_grad_tensor.layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
+    TT_FATAL((output_grad_tensor.layout() == Layout::TILE), "output_grad_tensor to nll_loss must be tilized");
     TT_FATAL(
         output_grad_tensor.dtype() == DataType::BFLOAT16,
         "Invalid output_grad_tensor dtype {}",
@@ -36,7 +36,7 @@ void MorehNllLossBackwardDeviceOperation::validate_inputs(
         TT_FATAL(
             input_grad_tensor.value().is_allocated(),
             "Operands to nll_loss need to be allocated in buffers on device!");
-        TT_FATAL((input_grad_tensor.value().layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
+        TT_FATAL((input_grad_tensor.value().layout() == Layout::TILE), "input_grad_tensor to nll_loss must be tilized");
         TT_FATAL(
             input_grad_tensor.value().dtype() == DataType::BFLOAT16,
             "Invalid input_grad_tensor dtype {}",

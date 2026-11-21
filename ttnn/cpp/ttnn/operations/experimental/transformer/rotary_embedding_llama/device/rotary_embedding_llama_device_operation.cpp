@@ -67,7 +67,7 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         head_dim <= 128 || operation_attributes.compute_kernel_config.fp32_dest_acc_en == false,
         "If head_dim is > 128, fp32_dest_acc_en must be False");
-    TT_FATAL(head_dim <= 256, "Head dim must be less than 256");
+    TT_FATAL(head_dim <= 256, "Head dim must be at most 256");
 
     TT_FATAL(
         input_tensor.dtype() == cos.dtype() && cos.dtype() == sin.dtype() && sin.dtype() == trans_mat.dtype() &&

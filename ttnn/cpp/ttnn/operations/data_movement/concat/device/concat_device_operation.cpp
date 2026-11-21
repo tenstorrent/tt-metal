@@ -144,7 +144,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
 
     const auto& first_input = input_tensors[0];
     auto shape_first = first_input.logical_shape();
-    TT_FATAL(args.dim < shape_first.rank(), "ConcatDeviceOperation dim specified is larger than input tensor rank.");
+    TT_FATAL(args.dim < shape_first.rank(), "ConcatDeviceOperation dim must be less than the input tensor rank.");
     shape_first[args.dim] = 0;
     bool shard_first = input_tensors[0].is_sharded();
     bool warn_about_alignment = false;

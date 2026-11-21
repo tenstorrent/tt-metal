@@ -158,7 +158,7 @@ Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, 
         case DataType::FLOAT32: return _transform_weights_for_conv_transpose2d<float>(to_mirror_tensor, mirror_kernel);
         case DataType::UINT32:
             return _transform_weights_for_conv_transpose2d<uint32_t>(to_mirror_tensor, mirror_kernel);
-        default: TT_THROW("Unsupported data type for transform_weights_for_conv_transpose2d", to_mirror_tensor.dtype());
+        default: TT_THROW("Unsupported data type for transform_weights_for_conv_transpose2d: {}", to_mirror_tensor.dtype());
     }
 };
 

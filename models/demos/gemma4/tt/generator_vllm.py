@@ -3815,7 +3815,7 @@ def dflash_width_set(max_context, num_blocks, horizon=None, verify=None, max_run
     ``max_num_blocks_per_seq < max_num_blocks``, so a width past the per-request
     block budget kills the engine during warmup:
 
-        max_num_blocks_per_seq must be less than max_num_blocks:
+        max_num_blocks_per_seq must not exceed max_num_blocks:
         max_num_blocks_per_seq=4144, max_num_blocks=4128
 
     which is the ladder's top rung (265216 = round_up_1024(262144 + 2118)) on a

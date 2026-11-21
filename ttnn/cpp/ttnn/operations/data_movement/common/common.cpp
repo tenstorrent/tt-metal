@@ -144,7 +144,7 @@ ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& shape) { return squeeze_shape
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor, const std::optional<CoreRangeSet>& sub_core_grids) {
     auto shape = tensor.logical_shape();
     auto rank = shape.rank();
-    TT_FATAL(shape.rank() >= 4, "Tensor has to be of rank larger than 4! Instead is {}", shape.rank());
+    TT_FATAL(shape.rank() >= 4, "Tensor has to be of rank at least 4! Instead is {}", shape.rank());
     if (rank == 4) {
         return tensor;
     }
