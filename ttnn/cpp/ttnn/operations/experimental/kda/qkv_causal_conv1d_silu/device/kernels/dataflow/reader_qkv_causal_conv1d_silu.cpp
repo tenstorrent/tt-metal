@@ -274,6 +274,13 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t sp_rank) {
         previous_work = work;
         parity ^= 1;
     };
+    // Tile row 0 waits for the predecessor's rows only where it takes them: the first rank reads its history instead, so
+    // its first rows run first and the slab's carry is consumed early (the exchange core replaces it after).
     for_each_work_item(
-        wi_start, wi_count, Mt, exchange, process, exchange ? local_split_row / tt::constants::TILE_HEIGHT : 0);
+        wi_start,
+        wi_count,
+        Mt,
+        exchange && initial_from_predecessor,
+        process,
+        exchange ? local_split_row / tt::constants::TILE_HEIGHT : 0);
 }

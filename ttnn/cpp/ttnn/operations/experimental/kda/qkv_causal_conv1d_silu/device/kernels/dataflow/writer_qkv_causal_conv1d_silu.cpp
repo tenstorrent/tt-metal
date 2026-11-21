@@ -40,6 +40,8 @@ TT_KERNEL void writer(
     Noc noc;
 
     uint32_t split_row = 0;
+    // The reader's order: tile row 0 deferred only off the first rank (reader_qkv_causal_conv1d_silu.cpp).
+    bool defer_first_rows = false;
     // With the fabric exchange, stage this core's share of the rows the exchange core sends, channel tiles
     // [ct_start, ct_start + ct_count) of this rank's outgoing rows and, on the final segment's owner, its end rows.
     // The writer has nothing to write until compute's first output, so staging first does not delay the convolution.
@@ -51,6 +53,7 @@ TT_KERNEL void writer(
         const uint32_t offset = base - scratch_base;
         const auto interval = read_chronology<has_actual_end, sp_size, local_rows>(noc, base, sp_rank);
         split_row = interval.local_split ? interval.head_rows / tt::constants::TILE_HEIGHT : 0;
+        defer_first_rows = interval.rank != interval.first_rank;
 
         const auto stage_exchanged_rows = [&](uint32_t ct_start, uint32_t ct_count) {
             const auto input = TensorAccessor(tensor::input);
@@ -141,5 +144,5 @@ TT_KERNEL void writer(
             }
         }
     };
-    for_each_work_item(wi_start, wi_count, Mt, exchange, process, split_row);
+    for_each_work_item(wi_start, wi_count, Mt, defer_first_rows, process, split_row);
 }
