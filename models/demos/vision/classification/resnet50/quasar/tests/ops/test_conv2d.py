@@ -235,6 +235,21 @@ def _run_conv2d(
             True,
             id="layer3_3x3_256to256_block_14",
         ),
+        # Host row-major activation whose channel count is not a multiple of the shard width, sharded
+        # block-wise: the host -> device move must keep the sharded row-major alignment valid.
+        pytest.param(
+            1,
+            48,
+            64,
+            32,
+            32,
+            (1, 1),
+            (1, 1),
+            (0, 0),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            False,
+            id="host_rm_1x1_48to64_block_32",
+        ),
     ],
 )
 def test_quasar_conv2d(

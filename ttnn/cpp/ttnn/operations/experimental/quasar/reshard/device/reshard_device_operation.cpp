@@ -50,6 +50,48 @@ bool is_valid_for_legacy_reshard(const Tensor& input_tensor, const MemoryConfig&
     }
     return true;
 }
+
+bool is_height_to_height(const Tensor& input_tensor, const MemoryConfig& out_mem_config) {
+    return input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+           out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+}
+
+bool is_row_major_width_to_width(const Tensor& input_tensor, const MemoryConfig& out_mem_config) {
+    return input_tensor.layout() == Layout::ROW_MAJOR &&
+           input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+           out_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+}
+
+bool has_width_padding(const Tensor& input_tensor, const MemoryConfig& out_mem_config) {
+    CoreCoord input_shard_grid = input_tensor.buffer()->shard_spec().grid().ranges()[0].grid_size();
+    CoreCoord output_shard_grid = out_mem_config.shard_spec().value().grid.ranges()[0].grid_size();
+    uint32_t input_num_shard_cores = input_shard_grid.x == 1 ? input_shard_grid.y : input_shard_grid.x;
+    uint32_t output_num_shard_cores = output_shard_grid.x == 1 ? output_shard_grid.y : output_shard_grid.x;
+    uint32_t input_shard_width = input_tensor.buffer()->shard_spec().shape()[1];
+    uint32_t output_shard_width = out_mem_config.shard_spec().value().shape[1];
+    return input_num_shard_cores * input_shard_width > input_tensor.logical_shape()[-1] ||
+           output_num_shard_cores * output_shard_width > input_tensor.logical_shape()[-1];
+}
+
+// Whether select_program_factory picks a legacy factory; otherwise the ND factories (and their validation) apply.
+// ReshardGenericFactory's reader issues raw NOC reads against a single shard base address, which is only valid
+// for L1-sharded buffers, so any case that would need it with DRAM on either side takes the ND path instead.
+bool selects_legacy_factory(const Tensor& input_tensor, const MemoryConfig& out_mem_config) {
+    if (!is_valid_for_legacy_reshard(input_tensor, out_mem_config)) {
+        return false;
+    }
+    const bool dram_involved = input_tensor.memory_config().buffer_type() == BufferType::DRAM ||
+                               out_mem_config.buffer_type() == BufferType::DRAM;
+    if (is_height_to_height(input_tensor, out_mem_config)) {
+        return true;
+    }
+    if (is_row_major_width_to_width(input_tensor, out_mem_config)) {
+        const bool needs_generic =
+            out_mem_config.buffer_type() == BufferType::L1 && has_width_padding(input_tensor, out_mem_config);
+        return !(needs_generic && dram_involved);
+    }
+    return !dram_involved;
+}
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -59,29 +101,16 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
     auto output_tensor_spec = compute_output_specs(args, tensor_args);
     const auto& out_mem_config = output_tensor_spec.memory_config();
 
-    if (CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, out_mem_config)) {
-        if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
-            out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+    if (CMAKE_UNIQUE_NAMESPACE::selects_legacy_factory(input_tensor, out_mem_config)) {
+        if (CMAKE_UNIQUE_NAMESPACE::is_height_to_height(input_tensor, out_mem_config)) {
             if (out_mem_config.buffer_type() == BufferType::L1) {
                 return ReshardSameWidthFactory</*local_is_output*/ true>{};
             }
             return ReshardSameWidthFactory</*local_is_output*/ false>{};
         }
-        if (input_tensor.layout() == Layout::ROW_MAJOR &&
-            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-            out_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        if (CMAKE_UNIQUE_NAMESPACE::is_row_major_width_to_width(input_tensor, out_mem_config)) {
             if (out_mem_config.buffer_type() == BufferType::L1) {
-                bool has_padding = false;
-                CoreCoord input_shard_grid = input_tensor.buffer()->shard_spec().grid().ranges()[0].grid_size();
-                CoreCoord output_shard_grid = out_mem_config.shard_spec().value().grid.ranges()[0].grid_size();
-                uint32_t input_num_shard_cores = input_shard_grid.x == 1 ? input_shard_grid.y : input_shard_grid.x;
-                uint32_t output_num_shard_cores = output_shard_grid.x == 1 ? output_shard_grid.y : output_shard_grid.x;
-                uint32_t input_shard_width = input_tensor.buffer()->shard_spec().shape()[1];
-                uint32_t output_shard_width = out_mem_config.shard_spec().value().shape[1];
-                has_padding = input_num_shard_cores * input_shard_width > input_tensor.logical_shape()[-1];
-                has_padding =
-                    has_padding || output_num_shard_cores * output_shard_width > input_tensor.logical_shape()[-1];
-                if (has_padding) {
+                if (CMAKE_UNIQUE_NAMESPACE::has_width_padding(input_tensor, out_mem_config)) {
                     return ReshardGenericFactory{};
                 }
                 return ReshardSameHeightFactory</*local_is_output*/ true>{};
@@ -164,13 +193,32 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
         return {false, "output must be sharded"};
     }
 
-    // ReshardSameWidthFactory (height↔height) has explicit unaligned handling,
-    // but all other legacy and ND factories require L1-aligned shard widths for correct NOC transfers.
+    // DRAM banks form a 1D grid, so a legacy 2D-grid BLOCK_SHARDED layout collides on bank id. Block-shaped
+    // DRAM shards are expressed via an ND shard spec (ND_SHARDED), which is not caught here.
+    if ((input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+         input_tensor.memory_config().buffer_type() == BufferType::DRAM) ||
+        (out_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+         out_mem_config.buffer_type() == BufferType::DRAM)) {
+        return {false, "We don't support DRAM block sharding"};
+    }
+
+    // Two reshard paths handle unaligned shard widths and so don't need the alignment check:
+    //  1. The height->height same-width factory (selected when at least one buffer is in L1): its
+    //     reader path (L1 output) re-strides via a scratch buffer and its writer path (non-L1
+    //     output) re-strides row-by-row.
+    //  2. The DRAM->DRAM ND copy-pages factory (selected when both buffers are in DRAM): it copies
+    //     each page whole at aligned_page_size, so per-row padding is carried along transparently.
+    // Every other legacy/ND path requires L1-aligned shard widths for correct NOC transfers.
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         bool is_height_to_height = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
                                    out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+        bool one_buffer_in_l1 = input_tensor.memory_config().buffer_type() == BufferType::L1 ||
+                                out_mem_config.buffer_type() == BufferType::L1;
+        bool both_in_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM &&
+                            out_mem_config.buffer_type() == BufferType::DRAM;
+        bool has_unaligned_handling = (is_height_to_height && one_buffer_in_l1) || both_in_dram;
 
-        if (!is_height_to_height) {
+        if (!has_unaligned_handling) {
             const uint32_t alignment = hal::get_l1_alignment();
 
             uint32_t input_page_size = input_tensor.mesh_buffer().page_size();
@@ -183,7 +231,7 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
                         "which must be aligned to {} bytes for reshard",
                         input_tensor.memory_config().shard_spec().has_value()
                             ? input_tensor.memory_config().shard_spec().value().shape[1]
-                            : 0,
+                            : input_tensor.memory_config().nd_shard_spec().value().shard_shape[-1],
                         input_tensor.dtype(),
                         input_page_size,
                         alignment)};
@@ -209,7 +257,7 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
     }
 
     auto output_tensor_spec = compute_output_specs(args, tensor_args);
-    if (!CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, output_tensor_spec.memory_config())) {
+    if (!CMAKE_UNIQUE_NAMESPACE::selects_legacy_factory(input_tensor, output_tensor_spec.memory_config())) {
         auto input_buffer_type = input_tensor.memory_config().buffer_type();
         auto output_buffer_type = output_tensor_spec.memory_config().buffer_type();
         if (input_buffer_type != BufferType::DRAM && input_buffer_type != BufferType::L1) {
