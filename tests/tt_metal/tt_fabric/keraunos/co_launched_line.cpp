@@ -46,8 +46,6 @@ constexpr auto kTimeout = std::chrono::minutes(20);
 const std::string kTxKernel = "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_tx.cpp";
 const std::string kRxKernel = "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp";
 
-bool is_mock() { return MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock; }
-
 Worker worker_beside_router(FabricNodeId node, FabricNodeId toward) {
     const auto& control_plane = MetalContext::instance().get_control_plane();
     const auto chans = control_plane.get_forwarding_eth_chans_to_chip(node, toward);
@@ -209,29 +207,6 @@ std::vector<uint32_t> read_results(const Worker& worker, const WorkerMemMap& map
     return words;
 }
 
-// Every fabric router of every open device, in the form BaseFabricFixture reads EDM status from.
-std::vector<BaseFabricFixture::MasterRouter> all_routers() {
-    const auto& control_plane = MetalContext::instance().get_control_plane();
-    const auto& cluster = MetalContext::instance().get_cluster();
-    const auto ready =
-        control_plane.get_fabric_context().get_builder_context().get_fabric_router_ready_address_and_signal();
-    TT_FATAL(ready.has_value(), "The fabric config has no READY_FOR_TRAFFIC handshake");
-    std::vector<BaseFabricFixture::MasterRouter> routers;
-    for (const auto& [chip, mesh] : BaseFabricFixture::devices_map_) {
-        const auto node = control_plane.get_fabric_node_id_from_physical_chip_id(chip);
-        for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(node)) {
-            const CoreCoord logical =
-                cluster.get_soc_desc(chip).get_eth_core_for_channel(chan, tt::CoordSystem::LOGICAL);
-            routers.push_back(
-                {chip,
-                 logical,
-                 cluster.get_virtual_coordinate_from_logical_coordinates(chip, logical, CoreType::ETH),
-                 ready->first});
-        }
-    }
-    return routers;
-}
-
 }  // namespace
 
 Line line_ends() {
@@ -317,7 +292,7 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links, cons
     // Fabric is up, so this run launched every router, and none has been told to terminate. A router's status word
     // survives from the case before on the same server, so TERMINATED here is that case's, and without this check the
     // TERMINATED after close below could be too.
-    const auto routers = all_routers();
+    const auto routers = get_routers(/*masters_only=*/false);
     for (const auto& router : routers) {
         EXPECT_NE(read_edm_status(router), static_cast<uint32_t>(tt::tt_fabric::EDMStatus::TERMINATED))
             << "chip " << router.chip << " router " << router.logical.str() << " reads TERMINATED as fabric comes up";
@@ -330,7 +305,7 @@ void KeraunosCoLaunchedWorkers::run_line_unicast(const NocLinks& noc_links, cons
     EXPECT_EQ(
         static_cast<size_t>(std::count_if(prepared.begin(), prepared.end(), [](const auto& r) { return r.noc; })),
         2 * noc_links.size());
-    const auto prepared_router = [&](const BaseFabricFixture::MasterRouter& router) {
+    const auto prepared_router = [&](const Router& router) {
         const auto it = std::find_if(prepared.begin(), prepared.end(), [&](const PreparedRouter& r) {
             return r.chip == router.chip && r.virtual_core == router.virtual_core;
         });

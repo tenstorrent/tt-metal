@@ -127,7 +127,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver.logical, receiver_runtime_args);
 
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (BaseFabricFixture::is_mock()) {
         sender_program.impl().compile(&tt_metal::slow_dispatch::physical_device_from_unit_mesh(*sender_device));
         receiver_program.impl().compile(&tt_metal::slow_dispatch::physical_device_from_unit_mesh(*receiver_device));
         GTEST_SKIP() << "Mock: kernels compiled. MockChip reads and writes are no-ops, so nothing launches.";
@@ -174,7 +174,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     if (BaseFabricFixture::workers_on_ethernet_cores(sender_device)) {
         constexpr auto kTerminateTimeout = std::chrono::minutes(10);
         const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-        const auto routers = BaseFabricFixture::get_master_routers();
+        const auto routers = BaseFabricFixture::get_routers(/*masters_only=*/true);
         BaseFabricFixture::DoTearDownTestSuite();
         for (const auto& router : routers) {
             ASSERT_EQ(

@@ -43,6 +43,8 @@
 namespace tt::tt_metal {
 namespace {
 
+using tt::tt_fabric::fabric_router_tests::BaseFabricFixture;
+
 // HSIO 0's global window is 0x1204000000 and CCE SRAM begins 0x02800000 above it
 // (Keraunos-E100 Table 14). Same constant as test_mimir_emu.cpp.
 constexpr uint64_t kHsioGlobalSramBase = KERAUNOS_HSIO0_SYSTEM_BASE + 0x02800000ULL;
@@ -53,10 +55,6 @@ constexpr uint32_t kProbeSem = 2;
 constexpr uint32_t kObservedSem = 3;
 constexpr uint32_t kWrittenSem = 4;
 constexpr uint32_t kStageDone = 0x5E00000F;
-
-bool is_mock() {
-    return MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
-}
 
 // One Keraunos Ethernet core of a chip: its logical coordinate, HAL slot, and HSIO tile and CCE.
 struct EthCore {
@@ -181,7 +179,7 @@ TEST(KeraunosEthSemaphore, CreateSemaphoreOnIdleAndActiveEth) {
     for (const auto& core : cores) {
         expect_in_kernel_config(core, semaphore_address(device, program, core, kCounterSem));
     }
-    if (is_mock()) {
+    if (BaseFabricFixture::is_mock()) {
         GTEST_SKIP() << "Mock: addresses checked. MockChip reads and writes are no-ops, so nothing launches.";
     }
 
@@ -281,7 +279,7 @@ TEST_P(KeraunosCrossTileSemaphore, IncrementPeerCounter) {
              semaphore_address(device, program, peer, kWrittenSem)});
     }
 
-    if (is_mock()) {
+    if (BaseFabricFixture::is_mock()) {
         GTEST_SKIP() << "Mock: addresses and arguments checked. MockChip reads and writes are no-ops, so nothing "
                         "launches.";
     }
@@ -434,7 +432,7 @@ TEST(KeraunosTileCounter, CrossTileAdds) {
     const auto mesh_of = [&](const Hart& hart) -> distributed::MeshDevice& {
         return *meshes.at(static_cast<int>(devices[hart.chip]->id()));
     };
-    if (is_mock()) {
+    if (BaseFabricFixture::is_mock()) {
         GTEST_SKIP() << "Mock: kernels and arguments built. MockChip reads and writes are no-ops, so nothing launches.";
     }
     for (size_t chip = 0; chip < 2; chip++) {
@@ -510,13 +508,12 @@ TEST(KeraunosTileCounter, CrossTileAdds) {
 // (the teardown writes IMMEDIATELY_TERMINATE) and waits for TERMINATED; twice, so the second open
 // relaunches routers that terminated.
 TEST(KeraunosFabric, RouterTerminatesOnCloseAndReopens) {
-    using tt::tt_fabric::fabric_router_tests::BaseFabricFixture;
     constexpr auto kTerminateTimeout = std::chrono::minutes(10);
     for (int open = 0; open < 2; open++) {
         BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
         ASSERT_EQ(BaseFabricFixture::devices_.size(), 2u) << "open " << open;
-        const auto routers = BaseFabricFixture::get_master_routers();
-        if (is_mock()) {
+        const auto routers = BaseFabricFixture::get_routers(/*masters_only=*/true);
+        if (BaseFabricFixture::is_mock()) {
             BaseFabricFixture::DoTearDownTestSuite();
             continue;
         }
@@ -534,7 +531,7 @@ TEST(KeraunosFabric, RouterTerminatesOnCloseAndReopens) {
                 << fmt::format("open {} chip {} router {}", open, router.chip, router.logical.str());
         }
     }
-    if (is_mock()) {
+    if (BaseFabricFixture::is_mock()) {
         GTEST_SKIP() << "Mock: opened and closed twice. MockChip reads are no-ops, so router status is not checked.";
     }
 }
