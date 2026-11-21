@@ -11,6 +11,7 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/common/hash_without_rows.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -162,6 +163,9 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     const Tensor* bias_ptr = has_bias ? &tensor_args.bias_tensor.value() : nullptr;
     const auto& config = operation_attributes.config;
 
+    if (operation_attributes.output_dtype.has_value()) {
+        ttnn::operations::matmul::validate_matmul_output_dtype(operation_attributes.output_dtype.value());
+    }
     validate_operands_on_device(tensor_args);
 
     // Layout requirements: all inputs must be TILE layout

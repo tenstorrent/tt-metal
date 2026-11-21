@@ -6,6 +6,7 @@
 
 #include "tt-metalium/math.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "tt-metalium/work_split.hpp"
 
@@ -27,6 +28,9 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
+    if (operation_attributes.output_dtype.has_value()) {
+        ttnn::operations::matmul::validate_matmul_output_dtype(operation_attributes.output_dtype.value());
+    }
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Input tensor A must be in tile layout");
     TT_FATAL(input_tensor_b.layout() == Layout::TILE, "Input tensor B must be in tile layout");
     TT_FATAL(

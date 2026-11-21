@@ -12,6 +12,18 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"  // for DEFAULT_OUTPUT_MEMORY_CONFIG
 
+namespace ttnn::operations::matmul {
+// Matmul writes DEST (float) via the packer; an integer output_dtype reinterprets the float bits as
+// the integer value. Call from every matmul variant's validate. Issue #58372.
+inline void validate_matmul_output_dtype(tt::tt_metal::DataType output_dtype) {
+    TT_FATAL(
+        tt::tt_metal::is_floating_point(output_dtype),
+        "Matmul: integer output dtype {} would reinterpret float result bits; run matmul with a float dtype and "
+        "cast with ttnn.typecast.",
+        output_dtype);
+}
+}  // namespace ttnn::operations::matmul
+
 namespace ttnn::prim {
 
 struct MatmulParams {
