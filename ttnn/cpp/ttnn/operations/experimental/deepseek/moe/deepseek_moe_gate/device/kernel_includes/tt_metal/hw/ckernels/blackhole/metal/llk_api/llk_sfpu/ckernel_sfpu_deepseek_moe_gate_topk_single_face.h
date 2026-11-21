@@ -14,6 +14,16 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void deepseek_moe_gate_sigmoid_centered() {
+    _deepseek_moe_gate_sigmoid_centered_<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void deepseek_moe_gate_restore_scores() {
+    _deepseek_moe_gate_restore_scores_<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void deepseek_moe_gate_sum_top2() {
     _deepseek_moe_gate_sum_top2<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
 }
