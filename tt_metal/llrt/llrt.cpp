@@ -6,13 +6,16 @@
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
+#include <elf.h>
 #include <unistd.h>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -65,6 +68,22 @@ BinaryCache& binary_cache() {
     return cache;
 }
 
+#ifdef TT_METAL_USE_EMULE
+// True for an ELF built for the host (an emulated kernel), false for a RISC-V device image.
+bool is_host_binary(const std::string& path) {
+    constexpr std::uint16_t elf_machine_riscv = 243;  // EM_RISCV
+    std::array<unsigned char, EI_NIDENT + (2 * sizeof(std::uint16_t))> header{};
+    std::ifstream file(path, std::ios::binary);
+    if (!file.read(reinterpret_cast<char*>(header.data()), header.size())) {
+        return false;  // ReadImage reports the unreadable file
+    }
+    // e_machine follows e_ident and e_type, in the ELF's byte order; every binary here is little-endian.
+    const std::uint16_t machine =
+        static_cast<std::uint16_t>(header[EI_NIDENT + 2] | (static_cast<std::uint16_t>(header[EI_NIDENT + 3]) << 8));
+    return machine != elf_machine_riscv;
+}
+#endif
+
 // Common lookup-or-load: return the cached binary for PATH, reading + parsing + caching it on first use.
 // Both get_risc_binary and get_binary_metadata build on this and just return their own slice, so the two
 // share one cache and one read path. `loading` / `update_callback` are consulted only on first load.
@@ -82,8 +101,9 @@ const CachedBinary& get_cached_binary(
         lock.unlock();
         ll_api::ElfFile elf;
 #ifdef TT_METAL_USE_EMULE
-        // An emulated kernel's binary is the host shared object the emulator runs: only its metadata is read.
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_target_device() == tt::TargetDevice::Emule) {
+        // An emulated kernel's binary is the host shared object the emulator runs: only its metadata is read. The
+        // binary says which it is, so a mock or silicon context next to an emulated one keeps its device images.
+        if (is_host_binary(path)) {
             elf.ReadSections(path);
             auto* mutable_ptr = new CachedBinary{.image = {}, .metadata = ll_api::parse_binary_metadata(elf)};
             lock.lock();
@@ -121,7 +141,8 @@ const CachedBinary& get_cached_binary(
             cache.cvar.wait(lock, [=] { return bool(slot->second); });
         }
         ptr = slot->second.get();
-        TT_ASSERT(ptr->image.get_loading() == loading);
+        // A metadata-only entry (an emulated kernel's host binary) has no device image, so no loading mode.
+        TT_ASSERT(ptr->image.num_spans() == 0 || ptr->image.get_loading() == loading);
     }
 
     return *ptr;
@@ -416,8 +437,8 @@ std::string format_eth_fw_stage_slots(
     std::vector<std::string> entries;
     entries.reserve(slots.size());
     for (uint32_t slot = 0; slot < slots.size(); slot++) {
-        entries.push_back(fmt::format(
-            "erisc{}{}={}", slot, metal_slot[slot] ? "" : "(base)", eth_fw_stage_to_string(slots[slot])));
+        entries.push_back(
+            fmt::format("erisc{}{}={}", slot, metal_slot[slot] ? "" : "(base)", eth_fw_stage_to_string(slots[slot])));
     }
     return fmt::format("{}", fmt::join(entries, separator));
 }
