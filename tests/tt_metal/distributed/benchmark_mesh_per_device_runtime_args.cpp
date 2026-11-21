@@ -45,15 +45,14 @@
 #include <string>
 #include <vector>
 
+#include "benchmark_mesh_device.hpp"
+
 namespace {
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::distributed;
 
-MeshDevice& mesh_device() {
-    static std::shared_ptr<MeshDevice> device = MeshDevice::create(MeshDeviceConfig(std::nullopt));
-    return *device;
-}
+MeshDevice& mesh_device() { return distributed::test::benchmark_mesh_device(); }
 
 constexpr uint32_t kArgs = 16;
 const CoreRange kCores({0, 0}, {4, 2});  // 15 cores
