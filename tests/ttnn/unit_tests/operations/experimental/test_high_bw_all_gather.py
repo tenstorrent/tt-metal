@@ -1292,20 +1292,16 @@ _STAGE_4X4_PERF_NEEDS_16_CHIPS = pytest.mark.skipif(
     reason="needs a 16-chip stage mesh (TT_VISIBLE_DEVICES + a 4x4 descriptor: SUBTORUS_4X4_ENV or run_4x4_stage_tests.sh)",
 )
 
-# [RING, RING] floors per case, for the high-power (14 kW) Galaxies the GLM chunked perf leg runs on. Provisional: no
-# 14 kW run of this test exists yet.
-# The 55K floors are 95% of the lowest value on the 8 kW CI runners (GLM components leg), which read the 55K cases within
-# about 2% of each other. Lowest there: 147.8 / 139.6 / 151.4 / 135.3 GB/s (bf16 row-major, fp8, bf16 tiled, bfloat8).
-# The 512K cases read differently from runner to runner: bf16 row-major 170.0 / 163.9 / 150.3 on three 8 kW runners, and
-# the 8x4 whole-mesh 512K gather reads 160.3 to 171.1 (fp8) on two 14 kW runners. A development Galaxy (110-A) reads
-# 55K 156.9 / 145.6 / 156.7 / 141.5 and 512K 175.3 / 175.6 / 176.3 / 174.6. The 512K floors are 95% of 0.91 times the
-# development Galaxy's reading (0.91: the lower 14 kW runner's 8x4 whole-mesh 2M-row reading over the higher one's).
-# The same gather on a [LINE, RING] 4x4 reads 126 / 118 / 125 / 114 and 138 / 137 / 138 / 137, so each floor is above the
-# line layout's: a carve that falls back to the cylinder's cycles fails. Override every floor with
-# TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS when recalibrating.
+# [RING, RING] floors per case, for the high-power (14 kW) Galaxies the GLM chunked perf leg runs on: 95% of the lowest
+# reading over three runs on three 14 kW runners. Lowest: 55K 150.5 / 141.3 / 151.0 / 136.9 GB/s and 512K 170.4 / 166.6
+# / 167.8 / 166.3 (bf16 row-major, fp8, bf16 tiled, bfloat8). The runners agree within 2% at 55K; at 512K one reads
+# about 4% under the other two. The 8 kW runners read the 512K cases as low as 150, under these floors, which is why the
+# gates need a 14 kW host. The same gather on a [LINE, RING] 4x4 reads 126 / 118 / 125 / 114 and 138 / 137 / 138 / 137,
+# so each floor is above the line layout's: a carve that falls back to the cylinder's cycles fails. Override every
+# floor with TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS when recalibrating.
 _RING_RING_4X4_CI_MIN_BANDWIDTH_GBPS = {
-    55_040: {"bf16_row_major": 140.0, "fp8_row_major": 132.0, "bf16_tiled": 143.0, "bfloat8_tiled": 128.0},
-    512 * 1024: {"bf16_row_major": 151.0, "fp8_row_major": 151.0, "bf16_tiled": 152.0, "bfloat8_tiled": 150.0},
+    55_040: {"bf16_row_major": 143.0, "fp8_row_major": 134.0, "bf16_tiled": 143.0, "bfloat8_tiled": 130.0},
+    512 * 1024: {"bf16_row_major": 161.0, "fp8_row_major": 158.0, "bf16_tiled": 159.0, "bfloat8_tiled": 158.0},
 }
 if os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS") is not None:
     _RING_RING_4X4_CI_MIN_BANDWIDTH_GBPS = float(os.environ["TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS"])
