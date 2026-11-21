@@ -107,6 +107,10 @@ Keyword Args:
         power users needing a custom matrix.
     memory_config: Output memory configuration.  Defaults to the input memory
         config.  Must be interleaved -- sharded output is not supported.
+    wide_rows: When True, packs each row's sticks into one wide row, so the
+        outputs have the same bytes as (1,H,W*T), (1,H/2,W/2*T), (1,H/2,W/2*T)
+        (one DRAM page per row instead of per stick). Requires T <= 32.
+        Default False.
 )doc");
 }
 

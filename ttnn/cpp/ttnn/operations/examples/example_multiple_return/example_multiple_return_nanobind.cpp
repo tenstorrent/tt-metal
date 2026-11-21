@@ -17,6 +17,8 @@ void bind_example_multiple_return_operation(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): The input tensor.
+            return_output1 (bool, optional): whether to include the first output tensor in the returned list. Defaults to `True`.
+            return_output2 (bool, optional): whether to include the second output tensor in the returned list. Defaults to `True`. At least one of return_output1/return_output2 must be `True`.
 
         Returns:
             List[ttnn.Tensor]: List of output tensors.

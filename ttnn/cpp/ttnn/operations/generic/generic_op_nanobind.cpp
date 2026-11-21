@@ -64,7 +64,10 @@ void bind_generic_operation(nb::module_& mod) {
             program_descriptor (ttnn.ProgramDescriptor or ttnn.MeshProgramDescriptor): Descriptor containing
                 kernel specifications, computational buffer configurations, semaphores, and other execution
                 parameters. Use ProgramDescriptor for SPMD mode (same program on all devices) or
-                MeshProgramDescriptor for explicit per-device control.
+                MeshProgramDescriptor for explicit per-device control. The keyword argument is named
+                ``program_descriptor`` when passing a ``ttnn.ProgramDescriptor`` (SPMD mode) and
+                ``mesh_program_descriptor`` when passing a ``ttnn.MeshProgramDescriptor`` (per-device mode);
+                both can also be passed positionally.
 
         Returns:
             ttnn.Tensor: Handle to the output tensor, the last entry of io_tensors. When the tensors are not all on
