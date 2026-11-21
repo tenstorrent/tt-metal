@@ -167,6 +167,53 @@ inline uint32_t count_in_band(uint32_t count_value, uint32_t min_tokens, uint32_
     return (count_value < min_tokens || count_value > max_tokens) ? 0u : count_value;
 }
 
+// Expert groups (EXPERT_GROUPS = NG): the local experts group `group` runs, in run order; returns how many. Every
+// RISC of every core computes the same assignment from the device token counts: the experts in decreasing cost (ties:
+// lower local id) each go to the group with the least cost so far (the first such group on ties). A round-robin
+// split (experts g, g + NG, ...) left one of two groups ~7-15% longer than the other on skewed loads.
+// Cost: an expert's tile-rows plus kExpertFixedTiles for its fixed work (one ~45 us expert costs as much as ~16
+// tile-rows of 2 x 12x5 groups); an empty expert costs 1.
+inline constexpr uint32_t kExpertFixedTiles = 16;
+template <uint32_t E, uint32_t NG, typename P>
+inline uint32_t group_experts(
+    P counts, P idx, uint32_t min_tokens, uint32_t max_tokens, uint32_t group, uint8_t (&order)[E]) {
+    uint32_t cost[E];
+    uint8_t sorted[E];
+    for (uint32_t e = 0; e < E; ++e) {
+        const uint32_t tiles = (count_in_band(counts[idx[e]], min_tokens, max_tokens) + 31) / 32;
+        cost[e] = tiles ? tiles + kExpertFixedTiles : 1u;
+        sorted[e] = static_cast<uint8_t>(e);
+    }
+    // Insertion sort by decreasing cost; stable, so equal costs keep increasing local id.
+    for (uint32_t i = 1; i < E; ++i) {
+        const uint8_t v = sorted[i];
+        uint32_t j = i;
+        while (j > 0 && cost[sorted[j - 1]] < cost[v]) {
+            sorted[j] = sorted[j - 1];
+            --j;
+        }
+        sorted[j] = v;
+    }
+    uint32_t load[NG];
+    for (uint32_t g = 0; g < NG; ++g) {
+        load[g] = 0;
+    }
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < E; ++i) {
+        uint32_t g = 0;
+        for (uint32_t h = 1; h < NG; ++h) {
+            if (load[h] < load[g]) {
+                g = h;
+            }
+        }
+        load[g] += cost[sorted[i]];
+        if (g == group) {
+            order[n++] = sorted[i];
+        }
+    }
+    return n;
+}
+
 // Number of chunks for `count_tiles`: full chunks of max_chunk + one tail chunk.
 inline uint32_t num_chunks(uint32_t count_tiles, uint32_t max_chunk) {
     if (count_tiles < 1) {

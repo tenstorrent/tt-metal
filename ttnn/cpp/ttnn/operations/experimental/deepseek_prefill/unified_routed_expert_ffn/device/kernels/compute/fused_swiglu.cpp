@@ -1029,15 +1029,12 @@ constexpr bool kOutRowMajor = true;
 constexpr bool kOutRowMajor = false;
 #endif
 
-// EXPERT_GROUPS (program factory): this core's group runs local experts kExpertFirst, kExpertFirst + kExpertStride, ...
+// EXPERT_GROUPS (program factory): this core's group (kExpertGroup) runs the experts adaptive_chunk::group_experts
+// assigns it; without groups the core runs every local expert in id order.
 #ifdef EXPERT_GROUPS
-#define EXPERT_LOOP_SETUP                     \
-    constexpr uint32_t kExpertStride = EXPERT_GROUPS; \
-    const uint32_t kExpertFirst = get_arg_val<uint32_t>(EXPERT_GROUP_RT);
+#define EXPERT_LOOP_SETUP const uint32_t kExpertGroup = get_arg_val<uint32_t>(EXPERT_GROUP_RT);
 #else
-#define EXPERT_LOOP_SETUP                     \
-    constexpr uint32_t kExpertStride = 1;     \
-    constexpr uint32_t kExpertFirst = 0;
+#define EXPERT_LOOP_SETUP
 #endif
 
 void kernel_main() {
@@ -1179,10 +1176,33 @@ void kernel_main() {
     silu_tile_init();
 #endif
 
+    // This core's experts in run order (as the reader and writer compute them): UNPACK, which can read the counts,
+    // computes the list and mails its length to MATH / PACK, then the count of each expert in turn.
+    uint8_t expert_order[experts_per_chip];
+#ifdef EXPERT_GROUPS
+    uint32_t n_experts = 0;
+    UNPACK(({
+        const volatile tt_l1_ptr uint32_t* counts_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
+            get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4);
+        const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
+            get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4);
+        n_experts = adaptive_chunk::group_experts<experts_per_chip, EXPERT_GROUPS>(
+            counts_ptr, idx_ptr, min_active_tokens, max_active_tokens, kExpertGroup, expert_order);
+        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, n_experts);
+        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, n_experts);
+    }));
+    MATH(n_experts = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    PACK(n_experts = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+#else
+    constexpr uint32_t n_experts = experts_per_chip;
+    for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        expert_order[e] = static_cast<uint8_t>(e);
+    }
+#endif
+
     // ======================= per-local-expert loop =======================
     // Run the full gate/up/down FFN for every local expert in this program.
-    for (uint32_t local_expert_id = kExpertFirst; local_expert_id < experts_per_chip;
-         local_expert_id += kExpertStride) {
+    for (uint32_t ei = 0; ei < n_experts; ++ei) {
         // This expert's token count via the UNPACK→{MATH,PACK} mailbox (MATH/PACK
         // cannot read the counts/idx L1 via the CB interface).
         // count -> effective_chunks bounds this expert's chunk loop; count=0 => the
@@ -1195,7 +1215,7 @@ void kernel_main() {
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(counts_l1_addr);
             const volatile tt_l1_ptr uint32_t* idx_ptr =
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
-            const uint32_t global_expert_id = idx_ptr[local_expert_id];
+            const uint32_t global_expert_id = idx_ptr[expert_order[ei]];
             // Hybrid dispatch: experts outside this op's band belong to the other
             // routed-expert op and are dropped here exactly like a zero count.
             count_value =

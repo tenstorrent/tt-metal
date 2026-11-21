@@ -48,15 +48,12 @@ FORCE_INLINE void read_x_row_idx(
     }
 }
 
-// EXPERT_GROUPS (program factory): this core's group runs local experts kExpertFirst, kExpertFirst + kExpertStride, ...
+// EXPERT_GROUPS (program factory): this core's group (kExpertGroup) runs the experts adaptive_chunk::group_experts
+// assigns it; without groups the core runs every local expert in id order.
 #ifdef EXPERT_GROUPS
-#define EXPERT_LOOP_SETUP                     \
-    constexpr uint32_t kExpertStride = EXPERT_GROUPS; \
-    const uint32_t kExpertFirst = get_arg_val<uint32_t>(EXPERT_GROUP_RT);
+#define EXPERT_LOOP_SETUP const uint32_t kExpertGroup = get_arg_val<uint32_t>(EXPERT_GROUP_RT);
 #else
-#define EXPERT_LOOP_SETUP                     \
-    constexpr uint32_t kExpertStride = 1;     \
-    constexpr uint32_t kExpertFirst = 0;
+#define EXPERT_LOOP_SETUP
 #endif
 
 void kernel_main() {
@@ -484,12 +481,14 @@ void kernel_main() {
     bool next_prefetched = false;
 #ifdef WEIGHT_PAGES
     const uint32_t pages_row_bytes = pages_acc.get_aligned_page_size();
-    auto pages_slot = [&](uint32_t eid) { return pages_l1 + ((eid / kExpertStride) & 1) * pages_row_bytes; };
+    // Slot of the expert at run position pos: consecutive experts alternate, so the next expert's row can load while
+    // this expert's down phase still reads its own.
+    auto pages_slot = [&](uint32_t pos) { return pages_l1 + (pos & 1) * pages_row_bytes; };
     // Only the weight senders read weights; every read that uses the row is issued after this barrier.
-    auto read_pages = [&](uint32_t eid, bool wait) {
+    auto read_pages = [&](uint32_t eid, uint32_t pos, bool wait) {
         if (is_in1_sender) {
             noc_read.async_read(
-                pages_acc, CoreLocalMem<uint32_t>(pages_slot(eid)), pages_row_bytes, {.page_id = eid}, {});
+                pages_acc, CoreLocalMem<uint32_t>(pages_slot(pos)), pages_row_bytes, {.page_id = eid}, {});
             if (wait) {
                 noc_read.async_read_barrier();
             }
@@ -628,12 +627,27 @@ void kernel_main() {
     // The next expert's chunk-0 x-row ids were read before this expert's down phase.
     bool rows_prefetched_next = false;
 
+    // This core's experts in run order: its group's (adaptive_chunk::group_experts, the same on every core), or every
+    // local expert in id order.
+    uint8_t expert_order[experts_per_chip];
+#ifdef EXPERT_GROUPS
+    const uint32_t n_experts = adaptive_chunk::group_experts<experts_per_chip, EXPERT_GROUPS>(
+        counts_ptr, idx_ptr, min_active_tokens, max_active_tokens, kExpertGroup, expert_order);
+#else
+    constexpr uint32_t n_experts = experts_per_chip;
+    for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        expert_order[e] = static_cast<uint8_t>(e);
+    }
+#endif
+
     // ======================= per-local-expert loop =======================
     // Per expert we resolve its global id (idx_table[e]), token count
     // (counts[global_id]), region offset (start[global_id]) and per-expert
     // weight base addresses, then drive the same chunked matmul pipeline.
-    for (uint32_t local_expert_id = kExpertFirst; local_expert_id < experts_per_chip;
-         local_expert_id += kExpertStride) {
+    for (uint32_t ei = 0; ei < n_experts; ++ei) {
+        const uint32_t local_expert_id = expert_order[ei];
+        // The expert after this one in run order (experts_per_chip: none).
+        const uint32_t next_expert = ei + 1 < n_experts ? expert_order[ei + 1] : experts_per_chip;
         // Cross-expert prefetch: the previous expert loaded this one's table row, biases and chunk-0 x-row ids
         // between its last gate/up K-loop and its down phase (see "prefetch" below).
         const bool prefetched = next_prefetched;
@@ -649,9 +663,9 @@ void kernel_main() {
 #ifdef WEIGHT_PAGES
         // This expert's table row, in slot (expert % 2): the next expert's row loads into the other slot while this
         // expert's down phase still reads this one.
-        const uint32_t pages_e = pages_slot(local_expert_id);
+        const uint32_t pages_e = pages_slot(ei);
         if (!prefetched) {
-            read_pages(local_expert_id, /*wait=*/true);
+            read_pages(local_expert_id, ei, /*wait=*/true);
         }
         const auto gate_acc = unified_routed_expert_ffn::make_weight_table(gu_src_acc, pages_e, gu_k_stride);
         const auto up_acc = unified_routed_expert_ffn::make_weight_table(
@@ -1132,10 +1146,10 @@ void kernel_main() {
         // activation is too short to hide the reads (128 tokens per expert: 3 us). Per-core state only.
         {
             const bool same_expert = chunk + 1 < effective_chunks;
-            if (per_core_M >= 2 && (same_expert || local_expert_id + kExpertStride < experts_per_chip)) {
+            if (per_core_M >= 2 && (same_expert || next_expert < experts_per_chip)) {
                 uint32_t nc_tiles = count_tiles, nc_count = count_value, nc_stick = x_start_stick, nc_chunk = chunk + 1;
                 if (!same_expert) {
-                    const uint32_t ne_global = idx_ptr[local_expert_id + kExpertStride];
+                    const uint32_t ne_global = idx_ptr[next_expert];
                     nc_count = adaptive_chunk::count_in_band(counts_ptr[ne_global], min_active_tokens, max_active_tokens);
                     nc_tiles = adaptive_chunk::clamp_count_tiles(
                         (nc_count + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
@@ -1367,10 +1381,10 @@ void kernel_main() {
             // barrier: the next expert's start waits for them and pushes the biases). They land during this expert's
             // down phase instead of in front of the next expert's first K-block, where they cost ~10 us of every
             // expert on gpt-oss-20b's tensor-parallel experts (32 per chip per layer).
-            if (kb == 0 && chunk + 1 == effective_chunks && local_expert_id + kExpertStride < experts_per_chip) {
-                const uint32_t ne = local_expert_id + kExpertStride;
+            if (kb == 0 && chunk + 1 == effective_chunks && next_expert < experts_per_chip) {
+                const uint32_t ne = next_expert;
 #ifdef WEIGHT_PAGES
-                read_pages(ne, /*wait=*/false);
+                read_pages(ne, ei + 1, /*wait=*/false);
 #endif
 #ifdef FUSE_BIAS
                 issue_bias(ne);

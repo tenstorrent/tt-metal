@@ -44,15 +44,12 @@
 
 constexpr uint32_t TILE_HEIGHT = 32;
 
-// EXPERT_GROUPS (program factory): this core's group runs local experts kExpertFirst, kExpertFirst + kExpertStride, ...
+// EXPERT_GROUPS (program factory): this core's group (kExpertGroup) runs the experts adaptive_chunk::group_experts
+// assigns it; without groups the core runs every local expert in id order.
 #ifdef EXPERT_GROUPS
-#define EXPERT_LOOP_SETUP                     \
-    constexpr uint32_t kExpertStride = EXPERT_GROUPS; \
-    const uint32_t kExpertFirst = get_arg_val<uint32_t>(EXPERT_GROUP_RT);
+#define EXPERT_LOOP_SETUP const uint32_t kExpertGroup = get_arg_val<uint32_t>(EXPERT_GROUP_RT);
 #else
-#define EXPERT_LOOP_SETUP                     \
-    constexpr uint32_t kExpertStride = 1;     \
-    constexpr uint32_t kExpertFirst = 0;
+#define EXPERT_LOOP_SETUP
 #endif
 
 void kernel_main() {
@@ -290,13 +287,26 @@ void kernel_main() {
     // Gate/up blocks only, for the same cross-chunk reason down_seq exists.
     uint32_t mc_seq = 0;
 
+    // This core's experts in run order: its group's (adaptive_chunk::group_experts, the same on every core), or every
+    // local expert in id order.
+    uint8_t expert_order[experts_per_chip];
+#ifdef EXPERT_GROUPS
+    const uint32_t n_experts = adaptive_chunk::group_experts<experts_per_chip, EXPERT_GROUPS>(
+        counts_ptr, idx_ptr, min_active_tokens, max_active_tokens, kExpertGroup, expert_order);
+#else
+    constexpr uint32_t n_experts = experts_per_chip;
+    for (uint32_t e = 0; e < experts_per_chip; ++e) {
+        expert_order[e] = static_cast<uint8_t>(e);
+    }
+#endif
+
     // ======================= per-local-expert loop =======================
     // Drain every local expert's down-matmul output (and, for UP_SPLIT sender
     // cores, feed its `up` weights) into the shared output buffer at the
     // expert's region offset. The chunk-loop body below is unchanged from the
     // single-expert kernel — only the per-expert bindings differ.
-    for (uint32_t local_expert_id = kExpertFirst; local_expert_id < experts_per_chip;
-         local_expert_id += kExpertStride) {
+    for (uint32_t ei = 0; ei < n_experts; ++ei) {
+        const uint32_t local_expert_id = expert_order[ei];
 #ifdef WEIGHT_PAGES
         // This expert's table row (this RISC's own copy): only the up / down sender cores read weights here. The
         // previous expert's reads were all barriered before the row is overwritten.
