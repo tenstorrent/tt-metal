@@ -76,6 +76,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::NEG: return "SFPU_OP_NEG_INCLUDE";
         case UnaryOpType::SOFTPLUS: return "SFPU_OP_SOFTPLUS_INCLUDE";
         case UnaryOpType::XIELU: return "SFPU_OP_XIELU_INCLUDE";
+        case UnaryOpType::LOGIT: return "SFPU_OP_LOGIT_INCLUDE";
         case UnaryOpType::LOGSIGMOID: return "SFPU_OP_LOGSIGMOID_INCLUDE";
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::PRELU_SFPU: return "SFPU_OP_PRELU_INCLUDE";
@@ -1305,6 +1306,7 @@ std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
     std::string op_name;
     switch (op.type()) {
         case UnaryOpType::QUICK_GELU: op_name = arch == tt::ARCH::BLACKHOLE ? "quick_gelu" : ""; break;
+        case UnaryOpType::LOGIT: op_name = op.get_param_if<float>(0) == -1.0f ? "logit" : ""; break;
         default: return std::nullopt;
     }
     if (op_name.empty()) {
