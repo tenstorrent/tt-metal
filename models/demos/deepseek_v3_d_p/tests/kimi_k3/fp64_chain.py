@@ -70,8 +70,11 @@ C = KimiK31Config
 F64 = torch.float64
 KDA_LAYERS, MOE_LAYERS, DSA_LAYER = (0, 1, 2), (1, 2), 3
 # Bump when anything the run stores changes its bytes (math, rounding, layout of the payloads).
-PRODUCER_VERSION = 1
-KEY_BLOCK = 1 << 17  # keys per indexer score block: bounds the [rows, heads, keys] FP64 intermediate
+PRODUCER_VERSION = 2  # 2: buffered indexer blocks of 4096 keys (FP64 summation order of the scores)
+# Keys per indexer score block. Each block's [rows x heads, keys] FP64 scores go into one reused buffer: a fresh
+# allocation per block page-faults, and 4096 keys measured 48.7 M keys/s per row against 19.6 for unbuffered 128K
+# blocks (16 threads, logs/indexer-buffers-probe-*). The rate is then the FP64 matmul's.
+KEY_BLOCK = 4096
 QUERY_BLOCK = 16  # query rows per indexer block
 
 
@@ -105,16 +108,19 @@ def dense_mlp64(x: torch.Tensor, w: dict[str, torch.Tensor]) -> torch.Tensor:
 
 class MoE64:
     """A K3 latent MoE layer in FP64: sigmoid router with selection bias, top-k, weights renormalized x ROUTE_SCALE;
-    routed experts at the latent width (down-project, the experts' weighted sum, ``routed_expert_norm``, up-project)
-    plus the shared experts on the full hidden. The routed experts stay in their checkpoint dtype (bf16; FP64 for
-    all 896 of a layer would be ~237 GB) and each is cast to FP64 when it computes its rows, one expert at a time.
+        routed experts at the latent width (down-project, the experts' weighted sum, ``routed_expert_norm``, up-project)
+        plus the shared experts on the full hidden. The routed experts stay in their checkpoint dtype (bf16; FP64 for
+        all 896 of a layer would be ~237 GB) and each is cast to FP64 when it computes its rows, one expert at a time,
+    into reused buffers: a fresh 264 MB FP64 tensor per weight page-faults (35 ms per expert against 1.7 ms for a copy
+    into a buffer, logs/cast-probe-*), which made the casts cost ~24 s per layer and segment.
 
-    ``w``: the non-routed weights by their checkpoint names under ``block_sparse_moe.``; ``experts[e]``: routed
-    expert e's (w1 gate, w3 up, w2 down)."""
+        ``w``: the non-routed weights by their checkpoint names under ``block_sparse_moe.``; ``experts[e]``: routed
+        expert e's (w1 gate, w3 up, w2 down)."""
 
     def __init__(self, w: dict[str, torch.Tensor], experts: list[tuple[torch.Tensor, ...]], top_k: int, eps: float):
         self.w = {n: t.to(F64) for n, t in w.items()}
         self.experts, self.top_k, self.eps = experts, top_k, eps
+        self.buffers = [torch.empty(t.shape, dtype=F64) for t in experts[0]]
 
     def route(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """(ids ``[n, k]`` best first, weights ``[n, k]``, margin ``[n]``: k-th minus (k+1)-th choice score)."""
@@ -137,7 +143,7 @@ class MoE64:
         y = torch.zeros_like(latent)
         for e in ids.unique().tolist():
             rows, slot = (ids == e).nonzero(as_tuple=True)
-            w1, w3, w2 = (t.to(F64) for t in self.experts[e])
+            w1, w3, w2 = (b.copy_(t) for b, t in zip(self.buffers, self.experts[e]))
             h = situ64(latent[rows] @ w1.T, latent[rows] @ w3.T) @ w2.T
             y.index_add_(0, rows, h * weights[rows, slot].unsqueeze(-1))
         y = rms64(y, self.w["routed_expert_norm.weight"], self.eps) @ self.w["routed_expert_up_proj.weight"].T
@@ -155,11 +161,18 @@ def index_topk(
     n, heads, dim = index_q.shape
     causal = int(rows.max()) + 1
     scores = torch.empty(n, causal, dtype=F64)
-    q = index_q.reshape(n * heads, dim)
+    q, mix = index_q.reshape(n * heads, dim), index_w.unsqueeze(1)
+    full = (torch.empty(n * heads, KEY_BLOCK, dtype=F64), torch.empty(n, 1, KEY_BLOCK, dtype=F64))
     for lo in range(0, causal, KEY_BLOCK):
-        hi = min(lo + KEY_BLOCK, causal)
-        s = (q @ keys[lo:hi].T).view(n, heads, hi - lo).clamp_min_(0)
-        scores[:, lo:hi] = torch.bmm(index_w.unsqueeze(1), s).squeeze(1)
+        width = min(KEY_BLOCK, causal - lo)
+        s, o = (
+            full
+            if width == KEY_BLOCK
+            else (torch.empty(n * heads, width, dtype=F64), torch.empty(n, 1, width, dtype=F64))
+        )
+        torch.matmul(q, keys[lo : lo + width].T, out=s)
+        torch.bmm(mix, s.clamp_min_(0).view(n, heads, width), out=o)
+        scores[:, lo : lo + width] = o[:, 0]
     scores.masked_fill_(torch.arange(causal) > rows.unsqueeze(1), -float("inf"))
     top = scores.topk(min(topk, causal), dim=-1)
     indices = top.indices.masked_fill(top.values == -float("inf"), -1)
