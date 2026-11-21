@@ -24,6 +24,12 @@ from models.ttt_compat.tt.common import (
 )
 from typing import Tuple
 from models.common.utility_functions import nearest_32, is_blackhole
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import (
+    QWEN_OPT_MAX_SEQ_LEN,
+    prefill_total_len,
+    qwen_opt_seq_len_ok,
+    qwen_prefill_opt_ok,
+)
 from pathlib import Path
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     check_checkpoint_index,
@@ -55,6 +61,117 @@ def _build_galaxy_sub_core_grids(max_y=9):
             ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, max_y)),
         ]
     )
+
+
+RING_SDPA_Q_CHUNK_CANDIDATES = (64, 128, 160, 192, 256, 320)
+# Longest seq_len whose pick was measured (ring SDPA micro-benchmark, Qwen3-32B shapes, Wormhole Galaxy).
+# Longer prefills keep the default q_chunk until their picks are measured.
+RING_SDPA_MAX_MEASURED_SEQ_LEN = QWEN_OPT_MAX_SEQ_LEN
+
+
+def ring_sdpa_balanced_q_chunk(seq_len, n_local_heads, num_cores, ring_size=4, default_q_chunk=256):
+    """q_chunk_size for ring_distributed SDPA that minimizes the busiest core's Q rows.
+
+    The ring factory (ring_distributed_sdpa_program_factory.cpp) gives each device two Q slices of
+    seq_len / (2 * ring_size) rows, splits each into n_q = slice / q_chunk chunks per head, and hands each
+    core whole pairs of chunks (light + heavy, causal zigzag) out of n_local_heads * n_q / 2 pairs. Every
+    pair costs about the same (q_chunk rows x ~2 * seq_len keys over both phases), so the op time follows
+    the busiest core: ceil(pairs / num_cores) * 2 * q_chunk rows. With q_chunk 256 at seq_len 40960 that is
+    80 pairs on 70 cores -> 2 pairs on 10 cores, 1 on the rest (1024 rows max vs 585 mean).
+    Only q_chunk changes (k_chunk stays), so each output row sees the same K chunks in the same order.
+    Returns default_q_chunk unless a candidate cuts the busiest core's rows by >= 10%, and for
+    seq_len > RING_SDPA_MAX_MEASURED_SEQ_LEN.
+    """
+    if seq_len > RING_SDPA_MAX_MEASURED_SEQ_LEN:
+        return default_q_chunk
+    q_slice = seq_len // (2 * ring_size)
+
+    def busiest_core_rows(q):
+        n_q = q_slice // q
+        if n_q % 2 == 0:
+            return -(-(n_local_heads * n_q // 2) // num_cores) * 2 * q
+        return -(-(n_local_heads * n_q) // num_cores) * q
+
+    if q_slice % default_q_chunk != 0:
+        return default_q_chunk
+    # Even n_q keeps the factory's pair (zigzag) distribution, so the row count above is the work bound.
+    valid = [q for q in RING_SDPA_Q_CHUNK_CANDIDATES if q_slice % q == 0 and (q_slice // q) % 2 == 0]
+    if not valid:
+        return default_q_chunk
+    best = min(valid, key=lambda q: (busiest_core_rows(q), -q))
+    if busiest_core_rows(best) <= 0.9 * busiest_core_rows(default_q_chunk):
+        return best
+    return default_q_chunk
+
+
+# Prefill ring reduce-scatter (TT_CCL.ring_reduce_scatter -> reduce_scatter_minimal_async, 4 links) settings
+# for the untraced long prefills (> 4096 tokens, batch 1) on Wormhole, per buffer_key. Measured at 40960 tokens
+# (Qwen3-32B shapes, B=1): FF1/FF3 [S,3200] bf8, 4 workers/link + default sync/buffers 2.82 ms -> 6 workers/link,
+# 64 chunks per sync, 4 buffers per channel 2.45 ms; the all-reduce RS halves gain 9-10% with the same setting
+# (QKV [S,1280] bf8 axis 1 1.27 -> 1.15 ms, WO [S,1280] bf8 axis 0 1.30 -> 1.19, FF2 [S,1280] bf16 axis 0
+# 2.16 -> 2.04); outputs bit-identical. Other buffer keys keep the defaults.
+QWEN_PREFILL_RING_RS_TUNED_KEYS = ("FF1", "FF3", "QKV", "WO", "FF2")
+QWEN_PREFILL_RING_RS_MIN_SEQ_LEN = 4096
+# Ring all-gather (TT_CCL.ring_all_gather -> all_gather_async, 4 links) for the all-reduce AG halves, same
+# lengths: 6 workers/link, QKV [S,320] bf8 axis 1 0.96 -> 0.91 ms, FF2 [S,160] bf16 axis 0 1.77 -> 1.69 ms;
+# bit-identical. WO and the SDPA gathers gained < 3% and keep the defaults.
+QWEN_PREFILL_RING_AG_TUNED_KEYS = ("QKV", "FF2")
+
+
+def qwen_prefill_ring_rs_params(seq_len, buffer_key, total_len=None):
+    """reduce_scatter_minimal_async overrides for one Qwen prefill ring RS, or None to keep the defaults
+    (also for a total context total_len (default seq_len) > QWEN_OPT_MAX_SEQ_LEN: main's settings)."""
+    if (
+        seq_len <= QWEN_PREFILL_RING_RS_MIN_SEQ_LEN
+        or not qwen_opt_seq_len_ok(seq_len if total_len is None else total_len)
+        or buffer_key not in QWEN_PREFILL_RING_RS_TUNED_KEYS
+    ):
+        return None
+    return dict(num_workers_per_link=6, chunks_per_sync=64, num_buffers_per_channel=4)
+
+
+def qwen_prefill_ring_ag_params(seq_len, buffer_key, total_len=None):
+    """all_gather_async overrides for one Qwen prefill ring AG, or None to keep the defaults
+    (also for a total context total_len (default seq_len) > QWEN_OPT_MAX_SEQ_LEN: main's settings)."""
+    if (
+        seq_len <= QWEN_PREFILL_RING_RS_MIN_SEQ_LEN
+        or not qwen_opt_seq_len_ok(seq_len if total_len is None else total_len)
+        or buffer_key not in QWEN_PREFILL_RING_AG_TUNED_KEYS
+    ):
+        return None
+    return dict(num_workers_per_link=6)
+
+
+# Ring SDPA k_chunk for the measured long prefill (HiFi2 fp32 acc, exp_approx, q320, S=40960, sdpa_sweep job91):
+# k512 17.86 ms -> k640 17.08 ms. 640 must divide the ring slice (S / 8) so every K chunk is whole.
+RING_SDPA_LONG_K_CHUNK = 640
+
+
+def ring_sdpa_k_chunk(seq_len, default_k_chunk, ring_size=4):
+    """k_chunk_size for ring_distributed SDPA: RING_SDPA_LONG_K_CHUNK where measured and it divides the slice."""
+    if seq_len > RING_SDPA_MAX_MEASURED_SEQ_LEN or (seq_len // (2 * ring_size)) % RING_SDPA_LONG_K_CHUNK != 0:
+        return default_k_chunk
+    return RING_SDPA_LONG_K_CHUNK
+
+
+def qwen_ring_sdpa_program_config(base_program_config, seq_len, n_local_heads, exp_approx_mode):
+    """Ring SDPA program config: base_program_config (SDPA_PROGCFG for this seq_len) with q_chunk_size
+    replaced by ring_sdpa_balanced_q_chunk, k_chunk_size by ring_sdpa_k_chunk and exp_approx_mode set by the
+    caller. The grid comes from the base config, and the picker's core count is the base grid's, so the two
+    cannot drift apart."""
+    grid = base_program_config.compute_with_storage_grid_size
+    num_cores = grid.x * grid.y
+    cfg = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        exp_approx_mode=exp_approx_mode,
+        q_chunk_size=ring_sdpa_balanced_q_chunk(
+            seq_len, n_local_heads=n_local_heads, num_cores=num_cores, default_q_chunk=base_program_config.q_chunk_size
+        ),
+        k_chunk_size=ring_sdpa_k_chunk(seq_len, base_program_config.k_chunk_size),
+    )
+    out_grid = cfg.compute_with_storage_grid_size
+    assert out_grid.x * out_grid.y == num_cores, f"ring SDPA grid {out_grid} != {num_cores} cores used by the picker"
+    return cfg
 
 
 def set_tg_attention_config(
@@ -219,6 +336,16 @@ class TtQwenModelArgs(TtModelArgs):
 
         self.qk_norm = True
         self.is_qwen = True
+        # Prefill lengths above the traced buckets (> 4096) pad to a multiple of this instead of the
+        # next power of 2 (generator.get_padded_prefill_len), e.g. 40928 -> 40960 instead of 65536.
+        # 8192 keeps the bucket count small (8192, 16384, 24576, 32768, 40960 up to 40960), so the
+        # prefill warmup compiles every bucket and serving never compiles on a first request.
+        # Every multiple of 8192 meets the untraced prefill ops' constraints (multiples of 2048):
+        # - QKV matmul reshapes S > 2048 into [S // 2048, 2048] rows (llama_attention.forward_prefill);
+        # - ring_distributed SDPA (ring_size 4) needs S / (2 * 4) divisible by q_chunk_size
+        #   (SDPA_RING_PROGCFG; ring_distributed_sdpa_device_operation.cpp validate).
+        # Llama model args do not set it, so Llama keeps power-of-2 padding.
+        self.prefill_pad_multiple = 8192
         # The BH no-prefetch decode norm is the distributed (non-fused) RMSNorm, which does NOT
         # write the residual sum back in place. Relying on the fused residual path there silently
         # drops each layer's ff_out from the residual stream (only visible across >1 layer). Add
@@ -422,6 +549,15 @@ class TtQwenModelArgs(TtModelArgs):
                 fp32_dest_acc_en=True,
                 packer_l1_acc=False,
             )
+            # Ring SDPA of long prefill (llama_attention.forward_prefill, batch 1, seq_len > 8192, Wormhole only):
+            # HiFi2 instead of HiFi4 (Q/K/V are bf8), fp32 dest acc and packer_l1_acc kept. Measured at 40960 tokens
+            # (q320/k512, exp_approx on, 7x10): 24.24 -> 17.86 ms, output PCC 0.99995 vs HiFi4.
+            self.compute_kernel_config_ring_sdpa_long = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
 
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
             # core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(1, 0)
@@ -507,6 +643,39 @@ class TtQwenModelArgs(TtModelArgs):
                 if seqlen >= 2048
                 else min(64, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx)),
             )
+
+            # ring_distributed SDPA (llama_attention.forward_prefill, batch 1, no prefix) above the traced
+            # buckets (> 4096): same config but with a q_chunk that balances Q-chunk pairs over the 70 cores
+            # (ring_sdpa_balanced_q_chunk). Wormhole only (measured there); <= 4096 and Blackhole use SDPA_PROGCFG.
+            # exp_approx_mode=True: since #57180 the fp32-dest SDPA kernel honours False with the accurate SFPU
+            # exponential, ~20x the SFPU cost per QK tile; the approximate one is what Llama prefill uses
+            # (model_config.py SDPA_PROGCFG, #58262). HiFi4 and fp32 acc are unchanged.
+            def _opt_ok(seq_len):
+                # Qwen long-prefill configs: only while the running prefill's total context (cached + new tokens,
+                # recorded in model_config per prefill call; seq_len when none is recorded) is <= the cap.
+                return qwen_prefill_opt_ok(self.model_config, seq_len)
+
+            def _sdpa_ring_progcfg(seqlen, chunk_start_idx=0):
+                base = self.model_config["SDPA_PROGCFG"](seqlen, chunk_start_idx=chunk_start_idx)
+                if self.is_blackhole or seqlen <= 4096 or not _opt_ok(seqlen) or chunk_start_idx != 0:
+                    return base  # total context > QWEN_OPT_MAX_SEQ_LEN: main's SDPA_PROGCFG
+                return qwen_ring_sdpa_program_config(
+                    base, seqlen, n_local_heads=self.n_heads // self.n_kv_heads, exp_approx_mode=True
+                )
+
+            self.model_config["SDPA_RING_PROGCFG"] = _sdpa_ring_progcfg
+
+            # Ring reduce-scatter / all-gather overrides for long prefill (llama_ccl.TT_CCL.ring_reduce_scatter,
+            # ring_all_gather). Wormhole only
+            # (measured there); Blackhole keeps the defaults. Llama's model_config has no such key.
+            if not self.is_blackhole:
+                # Both capped on the running prefill's total context (prefill_total_len).
+                self.model_config["QWEN_PREFILL_RING_RS_PARAMS"] = lambda seq_len, key: qwen_prefill_ring_rs_params(
+                    seq_len, key, prefill_total_len(self.model_config, seq_len)
+                )
+                self.model_config["QWEN_PREFILL_RING_AG_PARAMS"] = lambda seq_len, key: qwen_prefill_ring_ag_params(
+                    seq_len, key, prefill_total_len(self.model_config, seq_len)
+                )
 
             # For flexible chunked SDPA (prefix caching with chunk_start_idx_tensor): chunk sizes must
             # match KV cache block_size so one trace works for any block-aligned chunk at replay.
@@ -784,7 +953,7 @@ class TtQwenModelArgs(TtModelArgs):
                         subblock_w=8,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
                     )
-                else:
+                elif seq_len <= 8192 or is_blackhole() or not qwen_prefill_opt_ok(self.model_config, seq_len):
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
                         K_block_size=8,
@@ -792,6 +961,17 @@ class TtQwenModelArgs(TtModelArgs):
                         subblock_h=4,
                         subblock_w=2,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+                else:  # Wormhole, 8192 < seq_len <= QWEN_OPT_MAX_SEQ_LEN (total context)
+                    # S=40960 isolated op 1.67 -> 1.24 ms, bit-identical output.
+                    # Subblock 2x2 (area 4) so the matmul can accumulate in fp32 dest (llama_attention.py WO).
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=16,
+                        K_block_size=8,
+                        N_block_size=4,
+                        subblock_h=2,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 10),
                     )
 
             self.model_config["WO_PREFILL_MINIMAL_PROGCFG"] = prefill_wo_minimal_matmul_config
@@ -825,12 +1005,16 @@ class TtQwenModelArgs(TtModelArgs):
                     )
                 else:  # For seq_len >= 16384, use the best config from sweep results
                     # This covers 16384, 32768, 65536, 131072
+                    # Wormhole: subblock 1x8 instead of 4x2 (same grid and blocks, bit-identical output);
+                    # isolated op at S=40960: 3.63 -> 3.01 ms. Blackhole and seq_len > QWEN_OPT_MAX_SEQ_LEN keep
+                    # main's 4x2.
+                    main_subblock = is_blackhole() or not qwen_prefill_opt_ok(self.model_config, seq_len)
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
                         K_block_size=8,
                         N_block_size=8,
-                        subblock_h=4,
-                        subblock_w=2,
+                        subblock_h=4 if main_subblock else 1,
+                        subblock_w=2 if main_subblock else 8,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
                     )
 
@@ -886,6 +1070,19 @@ class TtQwenModelArgs(TtModelArgs):
                 )
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
+
+            # Wormhole, batch 1, seq_len > 8192: FF2 as a bf8 4-link ring all-gather + minimal_matmul (bf16 out)
+            # instead of the fused AG+MM, whose gather buffer takes the output dtype (bf16) and runs on 3 links.
+            # Isolated at S=40960 (mm_sweep.py --suite ff2bf8): typecast + fused 8.34 ms -> AG 2.13 + MM = 5.19 ms.
+            # Subblock 1x4 (area 4) so the matmul can accumulate in fp32 dest (llama_mlp.py ff2_bf8_gather).
+            self.model_config["PREFILL_FF2_UNFUSED_MINIMAL_MATMUL_CONFIG"] = ttnn.MinimalMatmulConfig(
+                M_block_size=8,
+                K_block_size=5,
+                N_block_size=8,
+                subblock_h=1,
+                subblock_w=4,
+                compute_with_storage_grid_size=ttnn.CoreCoord(7, 10),
+            )
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * 8) == 0
             if self.num_devices == 32:
@@ -960,7 +1157,7 @@ class TtQwenModelArgs(TtModelArgs):
                         subblock_w=2,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
                     )
-                else:  # seqlen > 1024
+                elif seq_len <= 8192 or is_blackhole() or not qwen_prefill_opt_ok(self.model_config, seq_len):
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
                         K_block_size=8,
@@ -968,6 +1165,18 @@ class TtQwenModelArgs(TtModelArgs):
                         subblock_h=1,
                         subblock_w=8,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+                else:  # Wormhole, 8192 < seq_len <= QWEN_OPT_MAX_SEQ_LEN (total context)
+                    # Used by llama_attention.py QKV for Qwen long prefill.
+                    # HiFi2 with fp32 dest acc -> subblock area <= 4. S=40960 isolated op: ttnn.linear
+                    # (XQKV_PREFILL_PROGCFG) 2.64 ms -> 1.98 ms, bit-identical output.
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=2,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 10),
                     )
 
             self.model_config["XQKV_PREFILL_MINIMAL_PROGCFG"] = prefill_xqkv_minimal_matmul_config

@@ -6,6 +6,13 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_q_prep import qwen_q_prep
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import (
+    attach_prefill_opt_eps,
+    prefill_norm,
+    prefill_norm_eps,
+    qwen_prefill_opt_ok,
+)
 
 
 class TtLlamaAttention(LightweightModule):
@@ -116,6 +123,8 @@ class TtLlamaAttention(LightweightModule):
         self.compute_kernel_config_hifi2_fp16 = configuration.compute_kernel_config_hifi2_fp16
 
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
+        # Qwen Wormhole only (qwen_model_config.py); None elsewhere keeps HiFi4 for the ring SDPA.
+        self.compute_kernel_config_ring_sdpa_long = getattr(configuration, "compute_kernel_config_ring_sdpa_long", None)
 
         self.transformation_mats = transformation_mats
 
@@ -373,6 +382,12 @@ class TtLlamaAttention(LightweightModule):
                 sharded_program_config=self.norm_program_cfg,
                 sharded_output_config=self.reshape_output_k_mem_cfg,
             )
+
+            if self.is_qwen:
+                # Qwen3's HF rms_norm_eps (1e-06) for prefills of S <= QWEN_OPT_MAX_SEQ_LEN only (prefill_norm); decode
+                # and longer prefills keep the RMSNorm default eps, as on main. The twins share the weights.
+                attach_prefill_opt_eps(self.q_norm, configuration.norm_eps)
+                attach_prefill_opt_eps(self.k_norm, configuration.norm_eps)
 
             self.q_norm_weight = self.state_dict[q_norm_str + ".weight"]
             self.k_norm_weight = self.state_dict[k_norm_str + ".weight"]
@@ -1043,6 +1058,190 @@ class TtLlamaAttention(LightweightModule):
 
         return dense_out_reduced
 
+    def _qwen_local_q_setup(self, rot_mats, seq_len):
+        """Per-column helpers for _qwen_local_q_prep, built once per (seq_len, rot mats) and shared by all layers.
+
+        One entry per prefill bucket, so the warmup sweep builds every bucket before traces are captured and a
+        later request never allocates these persistent tensors behind live traces. The cache is reset only when
+        the rot mats themselves change (a new model)."""
+        cache = self.tt_ccl.__dict__.setdefault("_qwen_local_q_cache", {})
+        rot_key = (id(rot_mats[0]), id(rot_mats[1]))
+        if cache.get("rot_key") != rot_key:
+            cache.clear()
+            cache["rot_key"] = rot_key
+        if seq_len in cache:
+            return cache[seq_len]
+        rows, cols = list(self.mesh_device.shape)
+        sl = seq_len // 8  # ring SDPA slice length (2 * ring_size slices); column c owns slices c and 7 - c
+        col_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=(rows, cols))
+        replicate = ttnn.ReplicateTensorToMesh(self.mesh_device)
+
+        def per_column_i32(values):
+            return ttnn.from_torch(
+                torch.tensor(values, dtype=torch.int32).reshape(-1),
+                dtype=ttnn.int32,
+                device=self.mesh_device,
+                mesh_mapper=col_mapper,
+            )
+
+        starts = (
+            per_column_i32([[0, 0, c * sl, 0] for c in range(cols)]),
+            per_column_i32([[0, 0, (2 * cols - 1 - c) * sl, 0] for c in range(cols)]),
+        )
+        ends_q = ttnn.from_torch(
+            torch.tensor([1, self.n_local_heads, seq_len, self.head_dim], dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=replicate,
+        )
+        ends_rot = ttnn.from_torch(
+            torch.tensor([1, 1, seq_len, self.head_dim], dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=replicate,
+        )
+        # Local Q [1, H, 2*sl, D] viewed as 2*H blocks of sl rows (block 2h + j = head h, local slice j) is written
+        # into the full Q buffer viewed as 8*H blocks (block 8h + s = head h, slice s).
+        page_table = ttnn.from_torch(
+            torch.tensor(
+                [
+                    [8 * h + (c if j == 0 else 2 * cols - 1 - c) for h in range(self.n_local_heads) for j in range(2)]
+                    for c in range(cols)
+                ],
+                dtype=torch.int32,
+            ),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=col_mapper,
+        )
+        rot_local = []
+        for rot in rot_mats[:2]:
+            if rot.shape[-2] != seq_len:
+                rot = ttnn.slice(rot, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
+            parts = [ttnn.slice(rot, starts=st, ends=ends_rot, slice_dim=2, num_devices=8) for st in starts]
+            rot_local.append(ttnn.concat(parts, dim=2))
+            for t in parts:
+                ttnn.deallocate(t)
+        cache[seq_len] = (starts, ends_q, page_table, rot_local)
+        return cache[seq_len]
+
+    def _qwen_local_q_prep(self, q_pre_bf8, rot_mats, seq_len):
+        """Q prep on this column's two ring-SDPA slices only; returns the full bf8 Q buffer (other slices unused)."""
+        if self.qk_norm:
+            # One generic_op program per device (custom_ops/qwen_q_prep, bit-identical to the chain below): reads
+            # the owned slices and their cos/sin rows straight from the full buffers and rewrites the slices in place.
+            return qwen_q_prep(
+                q_pre_bf8,
+                rot_mats[0],
+                rot_mats[1],
+                self.transformation_mats["prefill"],
+                self.q_norm.weight,
+                eps=prefill_norm_eps(self.q_norm, seq_len, getattr(self, "model_config", None)),
+            )
+        return self._qwen_local_q_prep_stock(q_pre_bf8, rot_mats, seq_len)
+
+    def _qwen_local_q_prep_stock(self, q_pre_bf8, rot_mats, seq_len):
+        """The stock-op chain that qwen_q_prep replaces: slice x2 + concat, typecast, q_norm, RoPE, typecast, scatter
+        back with paged_fill_cache. The model runs it only when qk_norm is off; test_qwen_q_prep_op.py uses it as the
+        reference for the op."""
+        starts, ends_q, page_table, (cos_local, sin_local) = self._qwen_local_q_setup(rot_mats, seq_len)
+        sl = seq_len // 8
+        parts = [ttnn.slice(q_pre_bf8, starts=st, ends=ends_q, slice_dim=2, num_devices=8) for st in starts]
+        q_local = ttnn.concat(parts, dim=2)
+        for t in parts:
+            ttnn.deallocate(t)
+        q_local_bf16 = ttnn.typecast(q_local, dtype=ttnn.bfloat16)
+        ttnn.deallocate(q_local)
+        if self.qk_norm:
+            q_norm = prefill_norm(self.q_norm, seq_len, getattr(self, "model_config", None))
+            q_local_bf16 = q_norm(q_local_bf16, mode="prefill")
+        q_local_rot = ttnn.experimental.rotary_embedding_llama(
+            q_local_bf16,
+            cos_local,
+            sin_local,
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
+        )
+        ttnn.deallocate(q_local_bf16)
+        q_local_8b = ttnn.typecast(q_local_rot, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(q_local_rot)
+        ttnn.experimental.paged_fill_cache(
+            ttnn.reshape(q_pre_bf8, [8 * self.n_local_heads, 1, sl, self.head_dim]),
+            ttnn.reshape(q_local_8b, [1, 1, 2 * self.n_local_heads * sl, self.head_dim]),
+            page_table,
+            batch_idx=0,
+        )
+        ttnn.deallocate(q_local_8b)
+        return q_pre_bf8
+
+    def _k_prep_stock(self, k_heads_1KSD_pre_rot, rot_mats, seq_len=None):
+        """Prefill K prep with stock ops: typecast to bf16 (if needed), k_norm (if qk_norm), RoPE, typecast to bf8.
+        Every path that does not take qwen_q_prep(all_rows=True) runs this; test_qwen_k_prep_op.py uses it as the
+        reference for the op. seq_len: the prefill length S for the k_norm eps (prefill_norm, which also reads the
+        recorded total context and cached prefix from model_config when the attention has one); None means the K
+        rows."""
+        if seq_len is None:
+            seq_len = k_heads_1KSD_pre_rot.shape[-2]
+        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+            k_heads_1KSD_pre_rot_bf8 = k_heads_1KSD_pre_rot
+            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
+            ttnn.deallocate(k_heads_1KSD_pre_rot_bf8)
+
+        if self.qk_norm:
+            k_norm = prefill_norm(self.k_norm, seq_len, getattr(self, "model_config", None))
+            k_heads_1KSD_pre_rot = k_norm(k_heads_1KSD_pre_rot, mode="prefill")
+
+        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
+            k_heads_1KSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
+        )
+        ttnn.deallocate(k_heads_1KSD_pre_rot)
+
+        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(k_heads_1KSD)
+        return k_heads_1KSD_8b
+
+    def _qwen_qkv_prep_direct(self, xqkv_fused, rot_mats, seq_len):
+        """Qwen long prefill: Q, K and V straight from the fused [1, 1, S, (H + 2) * D] bf8 QKV buffer, without
+        nlp_create_qkv_heads. Q prep (this column's two ring slices) and K prep (all positions) are qwen_q_prep
+        programs that read their head columns from xqkv_fused and write fresh bf8 buffers; V is a tile-aligned
+        column slice. Bit-identical to nlp_create_qkv_heads + _qwen_local_q_prep + _k_prep_stock + the V typecast
+        (test_qwen_qkv_direct_op.py). The Q buffer's other slices are left unwritten: ring SDPA does not read them."""
+        H, D = self.n_local_heads, self.head_dim
+        q_8b = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, H, seq_len, D]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, self.mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        k_8b = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, seq_len, D]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, self.mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        qwen_q_prep(
+            q_8b,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            self.q_norm.weight,
+            eps=prefill_norm_eps(self.q_norm, seq_len, getattr(self, "model_config", None)),
+            src=xqkv_fused,
+            src_col=0,
+        )
+        qwen_q_prep(
+            k_8b,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            self.k_norm.weight,
+            eps=prefill_norm_eps(self.k_norm, seq_len, getattr(self, "model_config", None)),
+            all_rows=True,
+            src=xqkv_fused,
+            src_col=H * D,
+        )
+        v_8b = ttnn.slice(
+            xqkv_fused, [0, 0, 0, (H + 1) * D], [1, 1, seq_len, (H + 2) * D], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        return q_8b, k_8b, v_8b
+
     def forward_prefill(
         self,
         x_11SH,
@@ -1054,6 +1253,7 @@ class TtLlamaAttention(LightweightModule):
         chunk_start_idx_tensor=None,
         kv_cache=None,
         batch_size=1,
+        seq_parallel=False,
     ):
         if batch_size > 1:
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
@@ -1070,7 +1270,23 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
 
-        if self.use_prefetcher:
+        # Qwen long-prefill optimizations below apply for S > 8192 while the total context (cached prefix + S) is
+        # <= QWEN_OPT_MAX_SEQ_LEN only (qwen_opt_limits.py); longer contexts take main's ops and configs. The q/k norm
+        # eps is Qwen's only without a cached prefix within the cap (prefill_norm); otherwise main's.
+        qwen_long_opt = self.is_qwen and seq_len > 8192 and qwen_prefill_opt_ok(self.model_config, seq_len)
+        if qwen_long_opt and self.use_prefetcher and not self.is_blackhole and batch_size == 1:
+            # Qwen long prefill on Wormhole: minimal_matmul (fp32-dest-safe subblock, 7x10 grid) is faster than
+            # ttnn.linear with XQKV_PREFILL_PROGCFG and bit-identical. Same HiFi2 config and output dtype.
+            xqkv = ttnn.experimental.minimal_matmul(
+                input_tensor=ttnn.reshape(x_11SH, [1, 1, seq_len, x_11SH.shape[-1]]),
+                weight_tensor=self.wqkv_interleaved,
+                config=self.model_config["XQKV_PREFILL_MINIMAL_PROGCFG"](seq_len),
+                dtype=self.ccl_dtype,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            xqkv = ttnn.reshape(xqkv, [1, seq_len // 2048, 2048, xqkv.shape[-1]])
+        elif self.use_prefetcher:
             xqkv = ttnn.linear(
                 x_11SH,
                 self.wqkv_interleaved,
@@ -1119,18 +1335,36 @@ class TtLlamaAttention(LightweightModule):
         if batch_size > 1:
             xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
-        # split qkv into heads
-        (
-            q_heads_1QSD_pre_rot,
-            k_heads_1KSD_pre_rot,
-            v_heads_1VSD,
-        ) = ttnn.experimental.nlp_create_qkv_heads(
-            xqkv_fused,
-            num_heads=self.n_local_heads,
-            num_kv_heads=self.n_local_kv_heads,
-            transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # Qwen long prefill on Wormhole: Q/K/V prep reads the fused buffer directly (_qwen_qkv_prep_direct).
+        use_direct_qkv = (
+            qwen_long_opt
+            and self.use_prefetcher
+            and not self.is_blackhole
+            and batch_size == 1
+            and seq_len % 256 == 0
+            and (chunk_start_idx is None or chunk_start_idx == 0)
+            and self.qk_norm
+            and self.n_local_kv_heads == 1
+            and xqkv_fused.dtype == ttnn.bfloat8_b
+            and tuple(xqkv_fused.shape) == (1, 1, seq_len, (self.n_local_heads + 2) * self.head_dim)
         )
+        if use_direct_qkv:
+            q_heads_1QSD_8b, k_heads_1KSD_8b, v_heads_1VSD = self._qwen_qkv_prep_direct(xqkv_fused, rot_mats, seq_len)
+            ttnn.deallocate(xqkv_fused)
+            q_heads_1QSD_pre_rot = k_heads_1KSD_pre_rot = None
+        else:
+            # split qkv into heads
+            (
+                q_heads_1QSD_pre_rot,
+                k_heads_1KSD_pre_rot,
+                v_heads_1VSD,
+            ) = ttnn.experimental.nlp_create_qkv_heads(
+                xqkv_fused,
+                num_heads=self.n_local_heads,
+                num_kv_heads=self.n_local_kv_heads,
+                transpose_k_heads=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         # ttnn.deallocate(xqkv_fused)
 
@@ -1138,40 +1372,60 @@ class TtLlamaAttention(LightweightModule):
         # Rotary embeddings
         ###
 
-        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-            q_heads_1QSD_pre_rot_bf8 = q_heads_1QSD_pre_rot
-            q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
-            ttnn.deallocate(q_heads_1QSD_pre_rot_bf8)
-
-        if self.qk_norm:
-            q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
-
-        q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
-            q_heads_1QSD_pre_rot,
-            rot_mats[0],
-            rot_mats[1],
-            self.transformation_mats["prefill"],
-            is_decode_mode=False,
+        # Qwen long prefill on Wormhole: ring SDPA on mesh column c reads only Q slices c and 7-c of 8, so Q prep
+        # (typecast, q_norm, RoPE, typecast) runs on those two S/8 slices and is written back into the bf8 Q buffer.
+        use_local_q_prep = (
+            not use_direct_qkv
+            and qwen_long_opt
+            and self.use_prefetcher
+            and not self.is_blackhole
+            and batch_size == 1
+            and (chunk_start_idx is None or chunk_start_idx == 0)
+            and q_heads_1QSD_pre_rot.dtype == ttnn.bfloat8_b
         )
-        ttnn.deallocate(q_heads_1QSD_pre_rot)
+        if use_direct_qkv:
+            pass
+        elif use_local_q_prep:
+            q_heads_1QSD_8b = self._qwen_local_q_prep(q_heads_1QSD_pre_rot, rot_mats, seq_len)
+        else:
+            if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+                q_heads_1QSD_pre_rot_bf8 = q_heads_1QSD_pre_rot
+                q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+                ttnn.deallocate(q_heads_1QSD_pre_rot_bf8)
 
-        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-            k_heads_1KSD_pre_rot_bf8 = k_heads_1KSD_pre_rot
-            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
-            ttnn.deallocate(k_heads_1KSD_pre_rot_bf8)
+            if self.qk_norm:
+                q_heads_1QSD_pre_rot = prefill_norm(self.q_norm, seq_len, self.model_config)(
+                    q_heads_1QSD_pre_rot, mode="prefill"
+                )
 
-        if self.qk_norm:
-            k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
+            q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
+                q_heads_1QSD_pre_rot,
+                rot_mats[0],
+                rot_mats[1],
+                self.transformation_mats["prefill"],
+                is_decode_mode=False,
+            )
+            ttnn.deallocate(q_heads_1QSD_pre_rot)
 
-        # k_heads_1KSD = k_heads_1KSD_pre_rot
-        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
-            k_heads_1KSD_pre_rot,
-            rot_mats[0],
-            rot_mats[1],
-            self.transformation_mats["prefill"],
-            is_decode_mode=False,
+        # Same long-prefill path: K prep (typecast, k_norm, RoPE, typecast) as one qwen_q_prep program over all
+        # positions, in place on the bf8 K heads (bit-identical to _k_prep_stock, test_qwen_k_prep_op.py).
+        use_fused_k_prep = (
+            use_local_q_prep and self.qk_norm and k_heads_1KSD_pre_rot.dtype == ttnn.bfloat8_b and seq_len % 64 == 0
         )
-        ttnn.deallocate(k_heads_1KSD_pre_rot)
+        if use_direct_qkv:
+            pass
+        elif use_fused_k_prep:
+            k_heads_1KSD_8b = qwen_q_prep(
+                k_heads_1KSD_pre_rot,
+                rot_mats[0],
+                rot_mats[1],
+                self.transformation_mats["prefill"],
+                self.k_norm.weight,
+                eps=prefill_norm_eps(self.k_norm, seq_len, self.model_config),
+                all_rows=True,
+            )
+        else:
+            k_heads_1KSD_8b = self._k_prep_stock(k_heads_1KSD_pre_rot, rot_mats, seq_len)
 
         # Fill KV-Cache
         if kv_cache:
@@ -1179,14 +1433,14 @@ class TtLlamaAttention(LightweightModule):
         else:
             keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
-        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(k_heads_1KSD)
-
         k_fill = k_heads_1KSD_8b
 
-        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
-
-        ttnn.deallocate(v_heads_1VSD)
+        if (use_fused_k_prep or use_direct_qkv) and v_heads_1VSD.dtype == ttnn.bfloat8_b:
+            # bf8 -> bf8 typecast is the identity (test_qwen_k_prep_op.py); use V as is.
+            v_heads_1VSD_8b = v_heads_1VSD
+        else:
+            v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(v_heads_1VSD)
 
         v_fill = v_heads_1VSD_8b
 
@@ -1221,8 +1475,9 @@ class TtLlamaAttention(LightweightModule):
             )
 
         # SDPA
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(q_heads_1QSD)
+        if not use_local_q_prep and not use_direct_qkv:
+            q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(q_heads_1QSD)
 
         # Run ring_distributed_sdpa for > 1k seqlen because we are seeing worse perf for <=1k seqlen as compared to regular SDPA
         # ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
@@ -1230,14 +1485,19 @@ class TtLlamaAttention(LightweightModule):
         use_chunked_sdpa = chunk_start_idx is not None and chunk_start_idx > 0
 
         if ring_distributed_sdpa:
+            # Qwen sets SDPA_RING_PROGCFG (qwen_model_config.py); other models use SDPA_PROGCFG as before.
+            ring_sdpa_progcfg = self.model_config.get("SDPA_RING_PROGCFG", self.model_config["SDPA_PROGCFG"])
+            ring_sdpa_ckc = self.compute_kernel_config_hifi4
+            if qwen_long_opt and not self.is_blackhole and self.compute_kernel_config_ring_sdpa_long is not None:
+                ring_sdpa_ckc = self.compute_kernel_config_ring_sdpa_long
             attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
                 ring_size=4,  # Number of devices in the ring topology (4 devices per row in 8x4 mesh)
                 scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx=0),
+                compute_kernel_config=ring_sdpa_ckc,
+                program_config=ring_sdpa_progcfg(seq_len, chunk_start_idx=0),
                 page_table=None,
                 chunk_start_idx=None,
             )
@@ -1358,17 +1618,28 @@ class TtLlamaAttention(LightweightModule):
                 program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
             )
         else:
+            # Qwen long prefill on Wormhole: fp32 dest accumulation (S=40960 isolated op 1.25 -> 1.28 ms, error vs
+            # an fp32 reference of the same bf8 inputs 1.46e-2 -> 0.82e-2 relative L2; bf8 output rounding 0.79e-2).
+            wo_fp32_acc = qwen_long_opt and not self.is_blackhole and batch_size == 1
             output_11SH = ttnn.experimental.minimal_matmul(
                 input_tensor=attn_output_11SH,
                 weight_tensor=self.wo_interleaved,
                 config=self.model_config["WO_PREFILL_MINIMAL_PROGCFG"](seq_len),
-                compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+                compute_kernel_config=(
+                    self.compute_kernel_config_hifi2 if wo_fp32_acc else self.compute_kernel_config_hifi2_fp16
+                ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
+
+        if seq_parallel:
+            # Sequence-parallel residual (llama_model.py): keep only this mesh row's S/8 chunk of the sum.
+            output_11SH_reduced = self.tt_ccl.ring_reduce_scatter_seq(output_11SH, ttnn.DRAM_MEMORY_CONFIG, "WO")
+            output_11SH.deallocate()
+            return output_11SH_reduced
 
         # Reduce-scatter
         output_11SH_reduced = self.tt_ccl.line_all_reduce(
@@ -1395,6 +1666,7 @@ class TtLlamaAttention(LightweightModule):
         chunk_start_idx_tensor=None,
         kv_cache=None,
         batch_size=1,
+        seq_parallel=False,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -1407,6 +1679,7 @@ class TtLlamaAttention(LightweightModule):
                 chunk_start_idx_tensor=chunk_start_idx_tensor,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
+                seq_parallel=seq_parallel,
             )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
