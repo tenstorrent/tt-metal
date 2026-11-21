@@ -93,7 +93,7 @@ enum DataType : ubyte {
     MxInt8 = 15,
     MxInt4 = 16,
     MxInt2 = 17,
-    // One per GGUF format, in the order and at the numbers of tt::tt_metal::DataType::GGUF_*.
+    // One per GGUF format, then the expanded GGUF layouts.
     GgufQ8_0 = 19,
     GgufQ4_0 = 20,
     GgufIQ4_NL = 21,

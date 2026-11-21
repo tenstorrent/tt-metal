@@ -34,7 +34,7 @@ def test_round_trip(dtype):
     np.testing.assert_array_equal(out, blocks.reshape(-1))
 
 
-@pytest.mark.parametrize("dtype", [ttnn.gguf_q4_k, ttnn.gguf_iq2_xxs, ttnn.gguf_q8_0], ids=_name)
+@pytest.mark.parametrize("dtype", ttnn.GGUF_DTYPES + tuple(ttnn.GGUF_EXPANDED.values()), ids=_name)
 def test_dump_load(dtype, tmp_path):
     k = _k(dtype)
     blocks = _blocks(dtype, k, N)

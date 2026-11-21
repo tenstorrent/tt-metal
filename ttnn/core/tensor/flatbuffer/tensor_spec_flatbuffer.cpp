@@ -35,17 +35,7 @@ flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
     return flatbuffer::CreateCoreRangeSet(builder, ranges_vector);
 }
 
-// The GGUF values share their numbers with tt::tt_metal::DataType.
-static_assert(
-    static_cast<int>(flatbuffer::DataType::GgufQ8_0) == static_cast<int>(tt::tt_metal::DataType::GGUF_Q8_0) &&
-    static_cast<int>(flatbuffer::DataType::GgufTQ1_0_Expanded) ==
-        static_cast<int>(tt::tt_metal::DataType::GGUF_TQ1_0_EXPANDED) &&
-    flatbuffer::DataType::MAX == flatbuffer::DataType::GgufTQ1_0_Expanded);
-
 tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
-    if (type >= flatbuffer::DataType::GgufQ8_0) {
-        return static_cast<tt::tt_metal::DataType>(type);
-    }
     switch (type) {
         case flatbuffer::DataType::BFloat16: return tt::tt_metal::DataType::BFLOAT16;
         case flatbuffer::DataType::Float32: return tt::tt_metal::DataType::FLOAT32;
@@ -64,6 +54,39 @@ tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
         case flatbuffer::DataType::MxInt8: return tt::tt_metal::DataType::MXINT8;
         case flatbuffer::DataType::MxInt4: return tt::tt_metal::DataType::MXINT4;
         case flatbuffer::DataType::MxInt2: return tt::tt_metal::DataType::MXINT2;
+        case flatbuffer::DataType::GgufQ8_0: return tt::tt_metal::DataType::GGUF_Q8_0;
+        case flatbuffer::DataType::GgufQ4_0: return tt::tt_metal::DataType::GGUF_Q4_0;
+        case flatbuffer::DataType::GgufIQ4_NL: return tt::tt_metal::DataType::GGUF_IQ4_NL;
+        case flatbuffer::DataType::GgufMXFP4: return tt::tt_metal::DataType::GGUF_MXFP4;
+        case flatbuffer::DataType::GgufNVFP4: return tt::tt_metal::DataType::GGUF_NVFP4;
+        case flatbuffer::DataType::GgufQ6_K: return tt::tt_metal::DataType::GGUF_Q6_K;
+        case flatbuffer::DataType::GgufQ4_K: return tt::tt_metal::DataType::GGUF_Q4_K;
+        case flatbuffer::DataType::GgufQ5_K: return tt::tt_metal::DataType::GGUF_Q5_K;
+        case flatbuffer::DataType::GgufQ3_K: return tt::tt_metal::DataType::GGUF_Q3_K;
+        case flatbuffer::DataType::GgufQ2_K: return tt::tt_metal::DataType::GGUF_Q2_K;
+        case flatbuffer::DataType::GgufIQ4_XS: return tt::tt_metal::DataType::GGUF_IQ4_XS;
+        case flatbuffer::DataType::GgufTQ2_0: return tt::tt_metal::DataType::GGUF_TQ2_0;
+        case flatbuffer::DataType::GgufQ2_0: return tt::tt_metal::DataType::GGUF_Q2_0;
+        case flatbuffer::DataType::GgufQ1_0: return tt::tt_metal::DataType::GGUF_Q1_0;
+        case flatbuffer::DataType::GgufIQ2_XXS: return tt::tt_metal::DataType::GGUF_IQ2_XXS;
+        case flatbuffer::DataType::GgufIQ1_S: return tt::tt_metal::DataType::GGUF_IQ1_S;
+        case flatbuffer::DataType::GgufIQ2_S: return tt::tt_metal::DataType::GGUF_IQ2_S;
+        case flatbuffer::DataType::GgufIQ3_S: return tt::tt_metal::DataType::GGUF_IQ3_S;
+        case flatbuffer::DataType::GgufIQ3_XXS: return tt::tt_metal::DataType::GGUF_IQ3_XXS;
+        case flatbuffer::DataType::GgufIQ2_XS: return tt::tt_metal::DataType::GGUF_IQ2_XS;
+        case flatbuffer::DataType::GgufIQ1_M: return tt::tt_metal::DataType::GGUF_IQ1_M;
+        case flatbuffer::DataType::GgufQ4_1: return tt::tt_metal::DataType::GGUF_Q4_1;
+        case flatbuffer::DataType::GgufQ5_0: return tt::tt_metal::DataType::GGUF_Q5_0;
+        case flatbuffer::DataType::GgufQ5_1: return tt::tt_metal::DataType::GGUF_Q5_1;
+        case flatbuffer::DataType::GgufTQ1_0: return tt::tt_metal::DataType::GGUF_TQ1_0;
+        case flatbuffer::DataType::GgufIQ2_XXS_Expanded: return tt::tt_metal::DataType::GGUF_IQ2_XXS_EXPANDED;
+        case flatbuffer::DataType::GgufIQ1_S_Expanded: return tt::tt_metal::DataType::GGUF_IQ1_S_EXPANDED;
+        case flatbuffer::DataType::GgufIQ2_S_Expanded: return tt::tt_metal::DataType::GGUF_IQ2_S_EXPANDED;
+        case flatbuffer::DataType::GgufIQ3_S_Expanded: return tt::tt_metal::DataType::GGUF_IQ3_S_EXPANDED;
+        case flatbuffer::DataType::GgufIQ3_XXS_Expanded: return tt::tt_metal::DataType::GGUF_IQ3_XXS_EXPANDED;
+        case flatbuffer::DataType::GgufIQ2_XS_Expanded: return tt::tt_metal::DataType::GGUF_IQ2_XS_EXPANDED;
+        case flatbuffer::DataType::GgufIQ1_M_Expanded: return tt::tt_metal::DataType::GGUF_IQ1_M_EXPANDED;
+        case flatbuffer::DataType::GgufTQ1_0_Expanded: return tt::tt_metal::DataType::GGUF_TQ1_0_EXPANDED;
         case flatbuffer::DataType::Invalid: return tt::tt_metal::DataType::INVALID;
         default: break;
     }
@@ -71,9 +94,6 @@ tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
 }
 
 flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
-    if (tt::tt_metal::is_gguf(type)) {
-        return static_cast<flatbuffer::DataType>(type);
-    }
     switch (type) {
         case tt::tt_metal::DataType::BFLOAT16: return flatbuffer::DataType::BFloat16;
         case tt::tt_metal::DataType::FLOAT32: return flatbuffer::DataType::Float32;
@@ -93,6 +113,39 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
         case tt::tt_metal::DataType::MXINT8: return flatbuffer::DataType::MxInt8;
         case tt::tt_metal::DataType::MXINT4: return flatbuffer::DataType::MxInt4;
         case tt::tt_metal::DataType::MXINT2: return flatbuffer::DataType::MxInt2;
+        case tt::tt_metal::DataType::GGUF_Q8_0: return flatbuffer::DataType::GgufQ8_0;
+        case tt::tt_metal::DataType::GGUF_Q4_0: return flatbuffer::DataType::GgufQ4_0;
+        case tt::tt_metal::DataType::GGUF_IQ4_NL: return flatbuffer::DataType::GgufIQ4_NL;
+        case tt::tt_metal::DataType::GGUF_MXFP4: return flatbuffer::DataType::GgufMXFP4;
+        case tt::tt_metal::DataType::GGUF_NVFP4: return flatbuffer::DataType::GgufNVFP4;
+        case tt::tt_metal::DataType::GGUF_Q6_K: return flatbuffer::DataType::GgufQ6_K;
+        case tt::tt_metal::DataType::GGUF_Q4_K: return flatbuffer::DataType::GgufQ4_K;
+        case tt::tt_metal::DataType::GGUF_Q5_K: return flatbuffer::DataType::GgufQ5_K;
+        case tt::tt_metal::DataType::GGUF_Q3_K: return flatbuffer::DataType::GgufQ3_K;
+        case tt::tt_metal::DataType::GGUF_Q2_K: return flatbuffer::DataType::GgufQ2_K;
+        case tt::tt_metal::DataType::GGUF_IQ4_XS: return flatbuffer::DataType::GgufIQ4_XS;
+        case tt::tt_metal::DataType::GGUF_TQ2_0: return flatbuffer::DataType::GgufTQ2_0;
+        case tt::tt_metal::DataType::GGUF_Q2_0: return flatbuffer::DataType::GgufQ2_0;
+        case tt::tt_metal::DataType::GGUF_Q1_0: return flatbuffer::DataType::GgufQ1_0;
+        case tt::tt_metal::DataType::GGUF_IQ2_XXS: return flatbuffer::DataType::GgufIQ2_XXS;
+        case tt::tt_metal::DataType::GGUF_IQ1_S: return flatbuffer::DataType::GgufIQ1_S;
+        case tt::tt_metal::DataType::GGUF_IQ2_S: return flatbuffer::DataType::GgufIQ2_S;
+        case tt::tt_metal::DataType::GGUF_IQ3_S: return flatbuffer::DataType::GgufIQ3_S;
+        case tt::tt_metal::DataType::GGUF_IQ3_XXS: return flatbuffer::DataType::GgufIQ3_XXS;
+        case tt::tt_metal::DataType::GGUF_IQ2_XS: return flatbuffer::DataType::GgufIQ2_XS;
+        case tt::tt_metal::DataType::GGUF_IQ1_M: return flatbuffer::DataType::GgufIQ1_M;
+        case tt::tt_metal::DataType::GGUF_Q4_1: return flatbuffer::DataType::GgufQ4_1;
+        case tt::tt_metal::DataType::GGUF_Q5_0: return flatbuffer::DataType::GgufQ5_0;
+        case tt::tt_metal::DataType::GGUF_Q5_1: return flatbuffer::DataType::GgufQ5_1;
+        case tt::tt_metal::DataType::GGUF_TQ1_0: return flatbuffer::DataType::GgufTQ1_0;
+        case tt::tt_metal::DataType::GGUF_IQ2_XXS_EXPANDED: return flatbuffer::DataType::GgufIQ2_XXS_Expanded;
+        case tt::tt_metal::DataType::GGUF_IQ1_S_EXPANDED: return flatbuffer::DataType::GgufIQ1_S_Expanded;
+        case tt::tt_metal::DataType::GGUF_IQ2_S_EXPANDED: return flatbuffer::DataType::GgufIQ2_S_Expanded;
+        case tt::tt_metal::DataType::GGUF_IQ3_S_EXPANDED: return flatbuffer::DataType::GgufIQ3_S_Expanded;
+        case tt::tt_metal::DataType::GGUF_IQ3_XXS_EXPANDED: return flatbuffer::DataType::GgufIQ3_XXS_Expanded;
+        case tt::tt_metal::DataType::GGUF_IQ2_XS_EXPANDED: return flatbuffer::DataType::GgufIQ2_XS_Expanded;
+        case tt::tt_metal::DataType::GGUF_IQ1_M_EXPANDED: return flatbuffer::DataType::GgufIQ1_M_Expanded;
+        case tt::tt_metal::DataType::GGUF_TQ1_0_EXPANDED: return flatbuffer::DataType::GgufTQ1_0_Expanded;
         case tt::tt_metal::DataType::INVALID: return flatbuffer::DataType::Invalid;
         default: break;
     }
