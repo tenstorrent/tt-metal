@@ -9,8 +9,6 @@
 #include <system_error>
 #include <utility>
 
-#include <unistd.h>
-
 #include <tt_stl/assert.hpp>
 
 #include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_files.hpp"
@@ -20,18 +18,10 @@ namespace tt::tt_fabric::capture {
 
 namespace {
 
-// Where a file is written before it's moved to its name: beside it, so the move stays on one filesystem.
-std::filesystem::path make_temporary_path(const std::filesystem::path& path) {
-    return path.string() + ".tmp." + std::to_string(::getpid());
-}
-
-// Moves `from` to `to`, failing if `to` already exists. A hard link refuses an existing name, where a rename would
-// replace it.
+// Moves `from` to `to`, failing if `to` already exists: a capture never replaces another.
 void move_without_replacing(const std::filesystem::path& from, const std::filesystem::path& to) {
-    std::error_code error;
-    std::filesystem::create_hard_link(from, to, error);
+    const std::error_code error = visualizer::move_into_place(from, to, /*replace=*/false);
     TT_FATAL(!error, "Fabric capture: can't move {} to {}: {}", from.string(), to.string(), error.message());
-    std::filesystem::remove(from);
 }
 
 }  // namespace
@@ -56,7 +46,7 @@ CaptureFilePaths make_capture_file_paths(
 std::string make_capture_id() { return visualizer::get_utc_now_compact(); }
 
 CaptureBinWriter::CaptureBinWriter(std::filesystem::path bin_path) :
-    bin_path_(std::move(bin_path)), temporary_path_(make_temporary_path(bin_path_)) {
+    bin_path_(std::move(bin_path)), temporary_path_(visualizer::make_temporary_path(bin_path_)) {
     std::filesystem::create_directories(bin_path_.parent_path());
     out_.open(temporary_path_, std::ios::binary | std::ios::trunc);
     TT_FATAL(out_.is_open(), "Fabric capture: can't open {} to write", temporary_path_.string());
@@ -119,7 +109,7 @@ FinishedBin CaptureBinWriter::finish() {
 }
 
 void write_capture_record(const std::filesystem::path& record_path, const CaptureRecord& record) {
-    const std::filesystem::path temporary_path = make_temporary_path(record_path);
+    const std::filesystem::path temporary_path = visualizer::make_temporary_path(record_path);
     try {
         std::ofstream out;
         out.exceptions(std::ios::badbit | std::ios::failbit);
