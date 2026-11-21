@@ -42,6 +42,11 @@ struct MatmulDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
+    // The output's mesh label when an operand's Shard lands on another dim of the output than the one it names (a
+    // transposed operand, or one of lower rank); empty otherwise, which leaves launch() its default label.
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
     // NOTE: intentionally NOT named compute_program_hash so the device-operation framework does
     // NOT detect a custom program-cache hash (DeviceOperationWithCustomProgramCacheConcept) and
     // instead keys the program cache on the default hash (attributes + tensor_args). This helper is
