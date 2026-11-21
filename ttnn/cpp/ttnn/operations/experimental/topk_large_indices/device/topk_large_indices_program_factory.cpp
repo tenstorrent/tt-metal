@@ -161,38 +161,17 @@ void set_runtime_args(
     shared.num_chunks = num_chunks;
 }
 
-void set_two_level_common_args(
-    tt::tt_metal::Program& program,
-    TopkLargeIndicesSharedVariables& shared,
-    const operation_attributes_t& attrs,
-    const tensor_args_t& tensor_args) {
+// A two-level program's common args that its hash fixes (row count, width, grid): set once, at creation.
+void set_two_level_fixed_args(
+    tt::tt_metal::Program& program, const TopkLargeIndicesSharedVariables& shared, const tensor_args_t& tensor_args) {
     if (!shared.two_level) {
         return;
     }
     const auto& input = tensor_args.input_tensor;
     const uint32_t num_rows = flattened_rows_excluding_last_dim(input.logical_shape());
-    const uint32_t blocks = tt::div_up(input.logical_shape()[-1], two_level_block_keys);
+    const uint32_t row_bytes = tt::div_up(input.logical_shape()[-1], two_level_block_keys) * input.element_size();
     const uint32_t num_cores = static_cast<uint32_t>(shared.cores.size());
-    // The maxima stage 2 reads: the caller's, else the caller's maxima output, else the program's own. The row count
-    // and width are in the program hash, so the program's own is allocated once and keeps its address for as long as
-    // the program is cached (a captured trace that runs the program needs it cached).
-    const bool own_maxima = !tensor_args.block_max_tensor.has_value() && !tensor_args.block_max_output.has_value();
-    if (own_maxima && !shared.two_level_maxima.has_value()) {
-        shared.two_level_maxima = create_device_tensor(
-            tt::tt_metal::TensorSpec(
-                ttnn::Shape({num_rows, blocks}),
-                tt::tt_metal::TensorLayout(
-                    DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), DRAM_MEMORY_CONFIG)),
-            input.device());
-    }
-    const uint32_t maxima_address =
-        tensor_args.block_max_tensor.has_value()   ? tensor_args.block_max_tensor->mesh_buffer().address()
-        : tensor_args.block_max_output.has_value() ? tensor_args.block_max_output->mesh_buffer().address()
-                                                   : shared.two_level_maxima->mesh_buffer().address();
-    const uint32_t row_bytes = blocks * input.element_size();
     auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.reader_kernel_id);
-    reader_args[topk_common_args::two_level_cutover] = attrs.two_level_cutover.value_or(two_level_default_cutover);
-    reader_args[topk_common_args::block_max_address] = maxima_address;
     reader_args[topk_common_args::block_max_row_bytes] = row_bytes;
     reader_args[topk_common_args::two_level_num_input_rows] = num_rows;
     reader_args[topk_common_args::two_level_num_cores] = num_cores;
@@ -203,9 +182,6 @@ void set_two_level_common_args(
     auto& compute_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.compute_kernel_id);
     compute_args[topk_common_args::compute_two_level_num_input_rows] = num_rows;
     auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.writer_kernel_id);
-    writer_args[topk_common_args::writer_block_max_address] = maxima_address;
-    writer_args[topk_common_args::mode_output_address] =
-        tensor_args.mode_output.has_value() ? tensor_args.mode_output->mesh_buffer().address() : 0u;
     writer_args[topk_common_args::writer_block_max_row_bytes] = row_bytes;
     writer_args[topk_common_args::writer_two_level_num_input_rows] = num_rows;
     const auto coordinator = input.device()->worker_core_from_logical_core(shared.cores.front());
@@ -221,6 +197,43 @@ void set_two_level_common_args(
         word = (word & ~(0xFFFFu << shift)) |
                ((static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 8)) << shift);
     }
+}
+
+// A two-level program's common args that can change between calls: the cutover and the maxima and mode addresses.
+void set_two_level_call_args(
+    tt::tt_metal::Program& program,
+    TopkLargeIndicesSharedVariables& shared,
+    const operation_attributes_t& attrs,
+    const tensor_args_t& tensor_args) {
+    if (!shared.two_level) {
+        return;
+    }
+    const auto& input = tensor_args.input_tensor;
+    // The maxima stage 2 reads: the caller's, else the caller's maxima output, else the program's own. The row count
+    // and width are in the program hash, so the program's own is allocated once and keeps its address for as long as
+    // the program is cached (a captured trace that runs the program needs it cached).
+    const bool own_maxima = !tensor_args.block_max_tensor.has_value() && !tensor_args.block_max_output.has_value();
+    if (own_maxima && !shared.two_level_maxima.has_value()) {
+        shared.two_level_maxima = create_device_tensor(
+            tt::tt_metal::TensorSpec(
+                ttnn::Shape(
+                    {flattened_rows_excluding_last_dim(input.logical_shape()),
+                     tt::div_up(input.logical_shape()[-1], two_level_block_keys)}),
+                tt::tt_metal::TensorLayout(
+                    DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), DRAM_MEMORY_CONFIG)),
+            input.device());
+    }
+    const uint32_t maxima_address =
+        tensor_args.block_max_tensor.has_value()   ? tensor_args.block_max_tensor->mesh_buffer().address()
+        : tensor_args.block_max_output.has_value() ? tensor_args.block_max_output->mesh_buffer().address()
+                                                   : shared.two_level_maxima->mesh_buffer().address();
+    auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.reader_kernel_id);
+    reader_args[topk_common_args::two_level_cutover] = attrs.two_level_cutover.value_or(two_level_default_cutover);
+    reader_args[topk_common_args::block_max_address] = maxima_address;
+    auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.writer_kernel_id);
+    writer_args[topk_common_args::writer_block_max_address] = maxima_address;
+    writer_args[topk_common_args::mode_output_address] =
+        tensor_args.mode_output.has_value() ? tensor_args.mode_output->mesh_buffer().address() : 0u;
 }
 
 }  // namespace
@@ -699,7 +712,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         std::vector<uint32_t>(two_level ? topk_common_args::compute_two_level_num_input_rows + 1 : 1, 0));
     tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel, writer_common);
     set_runtime_args(program, shared, input, operation_attributes.valid_length);
-    set_two_level_common_args(program, shared, operation_attributes, tensor_args);
+    set_two_level_fixed_args(program, shared, tensor_args);
+    set_two_level_call_args(program, shared, operation_attributes, tensor_args);
 
     return cached_program_t{std::move(program), std::move(shared)};
 }
@@ -726,7 +740,7 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
     reader_args[topk_common_args::valid_end_address] =
         tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->mesh_buffer().address() : 0u;
     writer_args[topk_common_args::output_address] = tensor_return_value.mesh_buffer().address();
-    set_two_level_common_args(cached_program.program, shared, operation_attributes, tensor_args);
+    set_two_level_call_args(cached_program.program, shared, operation_attributes, tensor_args);
 
     // The cache key fixes k, dtype, grid and compute body mode. Shape and valid_length
     // are runtime controls: update their common arguments when either changes, and
