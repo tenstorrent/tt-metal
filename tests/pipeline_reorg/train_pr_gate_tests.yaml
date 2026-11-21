@@ -5,7 +5,7 @@
 #   cmd: The exact command to run for the test.
 #   skus: A mapping of SKU names to their configuration.
 #     Each SKU entry contains:
-#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#       timeout: Budget in minutes for the step that runs this test on that SKU (its timeout-minutes, not the job's).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
 #
