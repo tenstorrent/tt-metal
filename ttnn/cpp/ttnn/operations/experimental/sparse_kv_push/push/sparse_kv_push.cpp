@@ -43,15 +43,15 @@ Tensor sparse_kv_push(
         core_grid);
 }
 
-bool is_sparse_kv_push_supported(MeshDevice* mesh_device, uint32_t stripe_chunk, uint32_t max_rows) {
-    const auto& mesh_shape = mesh_device->shape();
-    // The push sends over all four torus links of every chip: each mesh axis wraps, with distinct neighbours.
-    const bool torus = tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY &&
-                       mesh_shape.dims() == 2 && mesh_shape[0] >= 3 && mesh_shape[1] >= 3;
+bool is_sparse_kv_push_supported(
+    MeshDevice* mesh_device, uint32_t stripe_chunk, uint32_t max_rows, uint32_t num_links) {
     const bool stripe = stripe_chunk > 0 && stripe_chunk % 32 == 0 && stripe_chunk <= ::sparse_push::kMaxStripeChunk &&
                         max_rows > 0 && max_rows % stripe_chunk == 0;
-    return torus && mesh_shape.mesh_size() <= ::sparse_push::plan_table::kMaxDevices && stripe &&
-           plan_fits(mesh_device, max_rows);
+    const bool links = num_links >= 1 && num_links <= 2;
+    // The routing check is the one validation makes: every chip sends on the fabric links it has, whether or not an
+    // axis wraps, as long as they cover every route.
+    return links && mesh_device->shape().mesh_size() <= ::sparse_push::plan_table::kMaxDevices && stripe &&
+           plan_fits(mesh_device, max_rows) && fabric_routes(mesh_device, num_links).ok();
 }
 
 tt::tt_metal::TensorSpec sparse_kv_push_output_spec(

@@ -30,10 +30,10 @@ class SparseKvPushPlan:
     max_rows: int
 
 
-def sparse_kv_push_supported(mesh_device, stripe_chunk: int, max_rows: int) -> bool:
-    """Whether the push can serve a cache of `max_rows` rows in blocks of `stripe_chunk` rows on this mesh (the ops'
-    own check); otherwise shared layers gather the whole prefix."""
-    return ttnn.experimental.is_sparse_kv_push_supported(mesh_device, stripe_chunk, max_rows)
+def sparse_kv_push_supported(mesh_device, stripe_chunk: int, max_rows: int, links: int) -> bool:
+    """Whether the push can serve a cache of `max_rows` rows in blocks of `stripe_chunk` rows on this mesh with `links`
+    fabric links (the ops' own check); otherwise shared layers gather the whole prefix."""
+    return ttnn.experimental.is_sparse_kv_push_supported(mesh_device, stripe_chunk, max_rows, links)
 
 
 def _replicated(mesh_device, host, dtype, layout):

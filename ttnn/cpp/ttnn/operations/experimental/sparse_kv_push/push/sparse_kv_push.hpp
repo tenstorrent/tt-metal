@@ -34,10 +34,13 @@ Tensor sparse_kv_push(
     uint32_t batch_slot_layer_idx = 0,
     const std::optional<CoreRangeSet>& core_grid = std::nullopt);
 
-// Whether the push and its plan can serve a cache of max_rows rows in blocks of stripe_chunk rows on this mesh: a 2D
-// torus fabric, at least 3 chips on each mesh axis and at most 32 in all, and a cache geometry the plan table and the
-// plan's reduce fit. When false the ops would raise, so callers gather the whole prefix instead.
-bool is_sparse_kv_push_supported(MeshDevice* mesh_device, uint32_t stripe_chunk, uint32_t max_rows);
+// Whether the push and its plan can serve a cache of max_rows rows in blocks of stripe_chunk rows on this mesh with
+// num_links links: a 2D fabric (FABRIC_2D or a torus on either or both axes) on a 2D mesh of 2 to 32 chips that every
+// chip can route on with num_links links (the push's own routing check), and a cache geometry the plan table and the
+// plan's reduce fit. When false the ops would raise, so callers gather the whole prefix instead. The core grid is the
+// caller's: it needs num_links * SPARSE_KV_PUSH_CORES_PER_LINK cores.
+bool is_sparse_kv_push_supported(
+    MeshDevice* mesh_device, uint32_t stripe_chunk, uint32_t max_rows, uint32_t num_links = 2);
 
 // The compact buffer sparse_kv_push writes for up to distinct_rows needed rows per chip (a requester's query rows x
 // top-k bounds them), for a cache of max_rows rows in blocks of stripe_chunk with rows of row_width dtype elements:
