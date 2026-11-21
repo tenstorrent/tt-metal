@@ -14,6 +14,7 @@
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_io_pack.h"
 #include "llk_size_mode.h"
 #include "llk_pack_block_tile.h"
 #include "llk_copy_kernel.h"
@@ -304,7 +305,7 @@ inline void llk_pack_reconfig_data_format_body(const std::uint32_t new_output) {
             pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
     // SDPA kernels: after a push of 8+ tiles (the k512 q chunk's QK row) the full reconfigure, whose GPR writes overlap the
     // packer drain; after a shorter one the immediates (joint_sdpa k512 bfp8 +0.7 % vs k128 gains).
-    if constexpr (llk_pack_reconfig_table_ok<is_fp32_dest_acc_en, gate>() && ckernel::packer::llk_pack_sdpa_api<gate * 0 + 1>::value) {
+    if constexpr (llk_pack_reconfig_table_ok<is_fp32_dest_acc_en, gate>() && ckernel::packer::llk_pack_sdpa_joint<gate * 0 + 1>()) {
         if (ckernel::packer::pack_sdpa_last_push >= 8) {
             _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, full_skip, inl, LLK_SIZE_MODE>(
                 pack_src_format[output_id],
@@ -466,7 +467,7 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct_gate
 
 template <bool is_fp32_dest_acc_en, std::uint32_t new_output>
 __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
-    if constexpr (!LLK_SIZE_MODE && ckernel::packer::llk_pack_sdpa_api<new_output * 0 + 1>::value) {
+    if constexpr (!LLK_SIZE_MODE && ckernel::packer::llk_pack_sdpa_joint<new_output * 0 + 1>()) {
         if (ckernel::packer::pack_sdpa_last_push >= 8) {
             llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_output);
             return;

@@ -16,6 +16,19 @@
 
 using namespace ckernel;
 
+namespace ckernel::packer {
+// An SDPA kernel with a CB at 24 or above (joint_sdpa's intermediates; the sdpa kernel uses 0-17): its reconfigure picks the
+// form by the last push (pack_sdpa_last_push).
+template <int dep>
+constexpr bool llk_pack_sdpa_joint() {
+    bool high = false;
+    for (std::uint32_t i = 24; i < sizeof(pack_dst_format); i++) {
+        high = high || pack_dst_format[i] != to_underlying(DataFormat::Invalid);
+    }
+    return llk_pack_sdpa_api<dep * 0 + 1>::value && high;
+}
+}  // namespace ckernel::packer
+
 // Blocking call to wait for free space needed to pack N tiles
 template <bool skip_sync = false, bool wait_for_blocks = false, bool brisc_pack = false>
 inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
@@ -83,7 +96,7 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
 template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
     SYNC_SIGNAL("SYNC-CB-PUSH", operand);
-    if constexpr (ckernel::packer::llk_pack_sdpa_api<push_blocks * 0 + 1>::value) {
+    if constexpr (ckernel::packer::llk_pack_sdpa_joint<push_blocks * 0 + 1>()) {
         ckernel::packer::pack_sdpa_last_push = num_tiles;
     }
     std::uint32_t output = operand;
