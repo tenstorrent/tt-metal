@@ -23,7 +23,7 @@ from ....parallel.manager import CCLManager
 from ....utils import cache as cache_module
 from ....utils.fuse_loras import LoraSpec, fuse_loras_into
 from ....utils.substate import pop_substate, rename_substate
-from ....utils.tensor import bf16_tensor
+from ....utils.tensor import bf16_tensor, float32_tensor
 from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
 from .quant_config import LtxQuantProfile
@@ -603,14 +603,14 @@ class LTXTransformerModel(Module):
             embedding_dim=self.inner_dim,
             embedding_coefficient=adaln_coeff,
             mesh_device=mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,
         )
         if cross_attention_adaln:
             self.prompt_adaln_single = LTXAdaLayerNormSingle(
                 embedding_dim=self.inner_dim,
                 embedding_coefficient=2,
                 mesh_device=mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
             )
         self.norm_out = DistributedLayerNorm(
             self.inner_dim,
@@ -642,14 +642,14 @@ class LTXTransformerModel(Module):
                 embedding_dim=self.audio_inner_dim,
                 embedding_coefficient=adaln_coeff,
                 mesh_device=mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
             )
             if cross_attention_adaln:
                 self.audio_prompt_adaln_single = LTXAdaLayerNormSingle(
                     embedding_dim=self.audio_inner_dim,
                     embedding_coefficient=2,
                     mesh_device=mesh_device,
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.float32,
                 )
             self.audio_norm_out = DistributedLayerNorm(
                 self.audio_inner_dim,
@@ -673,25 +673,25 @@ class LTXTransformerModel(Module):
                 embedding_dim=self.inner_dim,
                 embedding_coefficient=4,
                 mesh_device=mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
             )
             self.av_ca_audio_scale_shift_adaln_single = LTXAdaLayerNormSingle(
                 embedding_dim=self.audio_inner_dim,
                 embedding_coefficient=4,
                 mesh_device=mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
             )
             self.av_ca_a2v_gate_adaln_single = LTXAdaLayerNormSingle(
                 embedding_dim=self.inner_dim,
                 embedding_coefficient=1,
                 mesh_device=mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
             )
             self.av_ca_v2a_gate_adaln_single = LTXAdaLayerNormSingle(
                 embedding_dim=self.audio_inner_dim,
                 embedding_coefficient=1,
                 mesh_device=mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
             )
 
         video_ffn_dim = self.inner_dim * ffn_mult
@@ -807,12 +807,12 @@ class LTXTransformerModel(Module):
         video_1BNI = bf16_tensor(video_1BNI_torch, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2)
         B_size = video_1BNI_torch.shape[1]
         # Scalar timestep (1,1,B,1) drives audio / prompt / A<->V cross modulation.
-        timestep = bf16_tensor(timestep_torch.reshape(1, 1, B_size, 1) * 1000.0, device=self.mesh_device)
+        timestep = float32_tensor(timestep_torch.reshape(1, 1, B_size, 1) * 1000.0, device=self.mesh_device)
         # Per-token video timestep (1,1,B*N,1), SP-sharded on dim 2 to match video_1BNI (shard_dim=-2).
         video_timestep = None
         if self.image_conditioning:
             assert video_timestep_torch is not None, "video_timestep_torch required when image_conditioning=True"
-            video_timestep = bf16_tensor(
+            video_timestep = float32_tensor(
                 video_timestep_torch.reshape(1, 1, -1, 1) * 1000.0,
                 device=self.mesh_device,
                 mesh_axis=sp_axis,
