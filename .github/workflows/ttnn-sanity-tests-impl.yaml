@@ -2,6 +2,14 @@ name: "[internal] ttnn sanity tests impl"
 
 on:
   workflow_call:
+    # Declared so callers can pass these by name instead of "secrets: inherit".
+    secrets:
+      REDIS_CCACHE_PASSWORD:
+        required: false
+      TT_CHAT_API_KEY:
+        required: false
+      TT_CHAT_URL:
+        required: false
     inputs:
       enabled-skus:
         required: true

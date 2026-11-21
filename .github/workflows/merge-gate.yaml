@@ -46,13 +46,13 @@ concurrency:
         || github.ref }}
   cancel-in-progress: true
 
+# Least privilege: every job reads the repo only. A job that needs more names it
+# in its own block (a job block replaces this one, and a called workflow cannot
+# ask for more than the calling job grants).
+# The producer downloads the artifact via REST; a called workflow only downgrades.
+# (The build-*-image jobs grant actions: read in their own blocks for that.)
 permissions:
-  contents: write
-  pull-requests: write
-  checks: write
-  packages: write
-  # The producer downloads the artifact via REST; a called workflow only downgrades.
-  actions: read
+  contents: read
 
 jobs:
   # ===========================================================================
@@ -65,13 +65,19 @@ jobs:
     # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
+    permissions:
+      # The callee's pre-commit job declares these two. Needs the all-static-checks.yaml
+      # change that lowers that job from contents: write to contents: read.
+      contents: read
+      pull-requests: write
 
   # Build all Docker images ONCE at the start, then share with all downstream jobs
   docker-images:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/build-all-docker-images.yaml
-    secrets: inherit
+    permissions:
+      contents: read
+      packages: write
     with:
       runs-on-large: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       runs-on-medium: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-medium-prio-stable' || 'tt-ubuntu-2204-medium-stable' }}
@@ -135,7 +141,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-    secrets: inherit
+    secrets:
+      GARAGE_S3_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
@@ -167,7 +174,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-    secrets: inherit
+    secrets:
+      GARAGE_S3_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: TSan
@@ -199,7 +207,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-    secrets: inherit
+    secrets:
+      GARAGE_S3_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ASan
@@ -230,7 +239,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-    secrets: inherit
+    secrets:
+      GARAGE_S3_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       ubuntu-2204-ci-build-tag: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
@@ -286,7 +296,6 @@ jobs:
       contents: read
       packages: write
       actions: read
-    secrets: inherit
     with:
       artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
@@ -327,7 +336,6 @@ jobs:
       contents: read
       packages: write
       actions: read
-    secrets: inherit
     with:
       artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
       # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
@@ -361,7 +369,9 @@ jobs:
   triage-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
     if: ${{ !cancelled() && needs.build.result == 'success' && needs.resolve-docker-pull-refs.result == 'success' && needs.find-changes.result == 'success' }}
-    secrets: inherit
+    secrets:
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/triage-tests-impl.yaml
     with:
       test-category: merge_gate
@@ -390,7 +400,6 @@ jobs:
       contents: read
       packages: write
       actions: read
-    secrets: inherit
     with:
       artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
@@ -429,7 +438,6 @@ jobs:
       contents: read
       packages: write
       actions: read
-    secrets: inherit
     with:
       artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
       # Canonical ref: the producer is GitHub-hosted and cannot reach Harbor.
@@ -464,7 +472,8 @@ jobs:
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
     uses: ./.github/workflows/ttnn-smoke-tests-impl.yaml
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
     with:
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
@@ -483,7 +492,8 @@ jobs:
              needs.find-changes.outputs.tt-nn-changed == 'true' ||
              needs.find-changes.outputs.tt-metalium-changed == 'true'
         }}
-    secrets: inherit
+    secrets:
+      HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
     uses: ./.github/workflows/models-smoke-tests-impl.yaml
     with:
       enabled-skus: ALL_SKUS_IN_TESTS
@@ -506,8 +516,15 @@ jobs:
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-nn-changed == 'true'
         }}
-    secrets: inherit
+    secrets:
+      HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/tt-train-tests.yaml
+    permissions:
+      contents: read
+      packages: read
     with:
       test-category: merge_gate
       enabled-skus: ALL_SKUS_IN_TESTS
@@ -529,7 +546,6 @@ jobs:
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
-    secrets: inherit
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
@@ -543,7 +559,6 @@ jobs:
   scaleout-cpu-only-unit-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
     if: false
-    secrets: inherit
     uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
     with:
       tests-yaml-path: ./tests/pipeline_reorg/fabric_cpu_only_smoke_merge_gate_tests.yaml
@@ -583,6 +598,9 @@ jobs:
          needs.find-changes.outputs.llk-ci-changed == 'true')
       }}
     uses: ./.github/workflows/build-quasar-perf.yml
+    permissions:
+      contents: read
+      packages: read
     with:
       docker_image: ${{ needs.resolve-docker-pull-refs-llk.outputs.llk-ci-docker-image }}
       runs_on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
@@ -601,7 +619,9 @@ jobs:
          needs.find-changes.outputs.llk-unit-tests-changed == 'true' ||
          needs.find-changes.outputs.llk-ci-changed == 'true')
       }}
-    secrets: inherit
+    secrets:
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/llk-unit-tests-impl.yaml
     with:
       test-category: merge_gate
@@ -662,6 +682,11 @@ jobs:
     needs: [llk-perf-merge-gate-changes]
     if: needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
     uses: ./.github/workflows/llk-perf-impl.yaml
+    permissions:
+      contents: read
+      actions: read
+      checks: write
+      packages: write
     with:
       architecture: all
       tests-yaml: ./tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml
@@ -674,7 +699,11 @@ jobs:
       # Stage 2 runs on Blackhole only: same-code Wormhole runs are not repeatable yet (#62044).
       stage2-thresholds: >-
         ${{ format('{{"blackhole": {0}}}', toJSON(fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds).blackhole)) }}
-    secrets: inherit
+    secrets:
+      LLK_CI_STATUS_CHANNEL_ID: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
+      LLK_SLACK_REPORTING_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+      SFTP_LLK_PERF_WRITER_KEY: ${{ secrets.SFTP_LLK_PERF_WRITER_KEY }}
+      SWEEPS_SNOWFLAKE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY }}
 
   llk-perf-merge-gate:
     name: LLK perf merge gate (${{ matrix.arch }})
@@ -685,6 +714,11 @@ jobs:
       matrix:
         arch: [blackhole, wormhole]
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
+    permissions:
+      contents: read
+      actions: read
+      checks: write
+      pull-requests: write
     with:
       arch: ${{ matrix.arch }}
       gate_name: LLK perf merge gate
@@ -708,7 +742,10 @@ jobs:
       # llk-perf-merge-gate-notify posts one message for both arches, so each arch does not post.
       slack: false
       slack_on_pass: false
-    secrets: inherit
+    secrets:
+      LLK_PERF_GATE_SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
+      LLK_SLACK_REPORTING_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+      SWEEPS_SNOWFLAKE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY }}
 
   # The only LLK perf gate that posts to the regressions channel, and only a regression or a skip.
   # One message for both arches; a regression on one also shows the same points on the other.
@@ -826,7 +863,10 @@ jobs:
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true' ||
             needs.find-changes.outputs.ttsim-ci-changed == 'true')
         }}
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/ttsim-merge-gate-tests-impl.yaml
     with:
       # Canonical (non-Harbor-prefixed) ref: sim_quasar's runs_on is ubuntu-latest, a

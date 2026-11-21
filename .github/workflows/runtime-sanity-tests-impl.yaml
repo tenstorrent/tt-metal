@@ -2,6 +2,14 @@ name: "[internal] Runtime sanity tests impl"
 
 on:
   workflow_call:
+    # Declared so callers can pass these by name instead of "secrets: inherit".
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
+      TT_CHAT_API_KEY:
+        required: false
+      TT_CHAT_URL:
+        required: false
     inputs:
       docker-image:
         required: true

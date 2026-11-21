@@ -2,6 +2,10 @@ name: "Build TT-Metalium across all configs"
 
 on:
   workflow_call:
+    # Declared so callers can pass these by name instead of "secrets: inherit".
+    secrets:
+      GARAGE_S3_SECRET_KEY:
+        required: false
     inputs:
       # Pre-built Docker image tags (optional - if provided, skips docker build)
       ubuntu-2204-ci-build-tag:
