@@ -32,7 +32,7 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
 
               See `Root Mean Square Layer Normalization <https://arxiv.org/pdf/1910.07467>`_ for more details.
 
-              This operation computes :math:`\sum_{}^{}x` and :math:`\sum_{}^{}x^2` over the last dimension.
+              This operation computes :math:`\sum_{}^{}x^2` over the last dimension.
               Its output should be combined across devices with :func:`ttnn.all_gather`, then followed by :func:`ttnn.rms_norm_post_all_gather` to compute the RMS norm.
 
               Args:
