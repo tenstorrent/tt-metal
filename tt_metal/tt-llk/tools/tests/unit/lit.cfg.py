@@ -2,15 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""lit configuration for the tt-llk host unit tests.
+"""lit configuration for the tt-llk unit tests.
 
 Run with:
     lit -v tools/tests/unit
 
-The tests are host-side: the diagnostics suite is compile-only and the functional suite
-builds and runs a small binary, so nothing here needs a device. clang is required rather
-than merely preferred -- the tests use -verify and split-file, which are LLVM tools, and
-the kernel toolchain is clang anyway.
+The diagnostics suite is compile-only and the functional suite builds and runs host
+binaries. The HAL suite cross-compiles with SFPI; nothing needs a device.
+clang is required for the host tests' -verify diagnostics.
 
 Override the compiler with CXX, and the LLVM tool directory with LLVM_BIN:
     CXX=/path/to/clang++ LLVM_BIN=/usr/lib/llvm-20/bin lit -v tools/tests/unit
@@ -156,10 +155,19 @@ else:
     config.substitutions.append(("%{fmt_flags}", " ".join(_fmt_flags)))
     lit_config.note(f"libfmt: {' '.join(_fmt_flags) or 'system include path'}")
 
+# ---- HAL source roots -----------------------------------------------------------------
+# The HAL suite compiles LLK headers with the Tensix toolchain instead of the host clang,
+# so it needs source roots rather than one include directory. lit/hal/blackhole builds its
+# compile command from these; the toolchain itself is located there, not here, so a
+# checkout without it marks only that suite unsupported.
+tt_llk_root = os.path.abspath(os.path.join(config.test_source_root, "..", "..", ".."))
+blackhole_root = os.path.join(tt_llk_root, "tt_llk_blackhole")
+
 # ---- substitutions --------------------------------------------------------------------
-# Each test file builds its own command line out of DEFINE'd substitutions on top of
+# Host test files build their command lines out of DEFINE'd substitutions on top of
 # %clangxx, so the flags a case depends on -- -verify in particular -- stay visible in the
-# file being read rather than hidden here.
+# file being read rather than hidden here. HAL tests use architecture-local compiler
+# substitutions instead.
 #
 # The brace form is deliberate for the include path: a bare %sanitizer_include would be
 # eaten by lit's built-in %s substitution before it ever matched.
@@ -167,13 +175,22 @@ else:
 config.substitutions.append(("%clangxx", cxx))
 config.substitutions.append(("%split-file", split_file))
 config.substitutions.append(("%{sanitizer_include}", sanitizer_include))
+config.substitutions.append(("%{tt_llk_root}", tt_llk_root))
+config.substitutions.append(("%{blackhole_root}", blackhole_root))
 config.substitutions.append(
     (
-        "%{tt_llk_root}",
-        os.path.abspath(os.path.join(config.test_source_root, "..", "..", "..")),
+        "%{blackhole_common_include}",
+        os.path.join(blackhole_root, "common", "inc"),
+    )
+)
+config.substitutions.append(
+    (
+        "%{blackhole_llk_include}",
+        os.path.join(blackhole_root, "llk_lib"),
     )
 )
 
 lit_config.note(f"clang: {cxx}")
 lit_config.note(f"LLVM tools: {llvm_bin}")
 lit_config.note(f"sanitizer headers: {sanitizer_include}")
+lit_config.note(f"tt-llk root: {tt_llk_root}")

@@ -288,6 +288,18 @@ def run_command(command: list[str], *, env: dict[str, str], dry_run: bool) -> No
     subprocess.run(command, cwd=REPO_ROOT, env=env, check=True)
 
 
+def bh_galaxy_xy_torus_cabling_descriptor(*, env: dict[str, str], dry_run: bool) -> str:
+    # Torus cabling differs between BH Galaxy revisions, so pick the descriptor matching this system.
+    command = [str(REPO_ROOT / "build/tools/scaleout/detect_bh_galaxy_revision")]
+    print(f"+ {quote_command(command)}", flush=True)
+    if dry_run:
+        revision = "<bh_galaxy_rev>"
+    else:
+        result = subprocess.run(command, cwd=REPO_ROOT, env=env, text=True, capture_output=True, check=True)
+        revision = result.stdout.strip().splitlines()[-1].lower()
+    return f"tools/tests/scaleout/cabling_descriptors/{revision}_xy_torus.textproto"
+
+
 class CollectionError(RuntimeError):
     pass
 
@@ -323,7 +335,7 @@ def reset_validate_smoke(*, env: dict[str, str], dry_run: bool, run_smoke: bool)
                 [
                     str(REPO_ROOT / "build/tools/scaleout/run_cluster_validation"),
                     "--cabling-descriptor-path",
-                    "tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto",
+                    bh_galaxy_xy_torus_cabling_descriptor(env=env, dry_run=dry_run),
                     "--hard-fail",
                     "--send-traffic",
                     "--num-iterations",
