@@ -104,9 +104,19 @@ inline void llk_pack_rows(std::uint32_t dst_index, std::uint32_t base_ptr) {
 // the packer formats are correct regardless of the prior op (the CB-id path calls reconfig for the same
 // reason). tile_size is the one-tile L1 size derived from the descriptor via tile_stride_words (the id-free
 // stand-in for fifo_page_size): geometry-exact for linear formats, exp section included for block floats.
+// Sub-32-row (partial-height) block-float tiles are not supported (compile-time rejected), as in the 2.0
+// pack_init / pack_tile / pack_block.
 template <ckernel::experimental::LLKMemDescriptor DESC, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reconfig_data_format() {
     SAN_HOOK(unsupported());
+    // Same bound as the 2.0 pack_init / pack_tile: a partial-height block-float output is not supported on
+    // the BH compute datapath, so this reconfig never meets a short-face block-float tile (its single exponent
+    // chunk would hold at most FACE_R_DIM exponent rows).
+    static_assert(
+        !(ckernel::experimental::is_block_float_format(DESC.format) &&
+          ckernel::experimental::is_partial_height(DESC.shape)),
+        "pack: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath; "
+        "use a full 32-row tile.");
     constexpr std::uint8_t RegFmt = ckernel::infer_pack_reg_fmt(DESC.format, is_fp32_dest_acc_en);
     // tile_size in 16B words (fifo_page_size units) == a single tile's L1 size.
     constexpr std::uint32_t tile_size = ckernel::experimental::tile_stride_words(DESC.format, DESC.shape);
@@ -116,5 +126,6 @@ inline void llk_pack_reconfig_data_format() {
         tile_size,
         DESC.shape.total_col_dim(),
         DESC.shape.total_num_faces(),
-        false /* partial_face */);
+        // partial_face by face height: faces shorter than FACE_R_DIM rows carry one exponent chunk per tile.
+        DESC.shape.face_r_dim < ckernel::FACE_R_DIM);
 }
