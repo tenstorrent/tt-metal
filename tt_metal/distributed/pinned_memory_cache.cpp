@@ -4,9 +4,22 @@
 
 #include "pinned_memory_cache.hpp"
 
+#include <sys/mman.h>
+#include <linux/mman.h>
+
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <string_view>
+#include <thread>
+#include <unordered_map>
+
+#include <tt-logger/tt-logger.hpp>
+
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_env_impl.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -16,6 +29,214 @@
 namespace tt::tt_metal::experimental {
 
 using ChipId = int;
+
+namespace {
+
+constexpr size_t k_staging_align = 4096;
+constexpr size_t k_staging_copy_threads = 8;
+constexpr size_t k_staging_parallel_min = 64ull << 20;
+
+bool staging_enabled() {
+    static const bool enabled = [] {
+        const char* e = std::getenv("TT_METAL_PIN_STAGING");
+        return e == nullptr || std::string_view(e) != "0";
+    }();
+    return enabled;
+}
+
+size_t staging_ring_bytes() {
+    static const size_t bytes = [] {
+        const char* e = std::getenv("TT_METAL_PIN_STAGING_MB");
+        size_t mb = 1024;
+        if (e != nullptr && *e != '\0') {
+            mb = std::strtoull(e, nullptr, 10);
+        }
+        return tt::round_up(mb << 20, 2ull << 20);
+    }();
+    return bytes;
+}
+
+// memcpy into the ring on several threads: one thread copies at about half the DMA rate.
+void staging_copy(std::byte* dst, const std::byte* src, size_t n) {
+    if (n < k_staging_parallel_min) {
+        std::memcpy(dst, src, n);
+        return;
+    }
+    const size_t part = tt::round_up((n + k_staging_copy_threads - 1) / k_staging_copy_threads, k_staging_align);
+    std::vector<std::thread> threads;
+    threads.reserve(k_staging_copy_threads);
+    for (size_t off = part; off < n; off += part) {
+        const size_t len = std::min(part, n - off);
+        threads.emplace_back([=] { std::memcpy(dst + off, src + off, len); });
+    }
+    std::memcpy(dst, src, std::min(part, n));
+    for (auto& t : threads) {
+        t.join();
+    }
+}
+
+}  // namespace
+
+PinnedMemoryCache::StagingRing::~StagingRing() {
+    if (writes > 0 || too_big > 0) {
+        log_info(
+            tt::LogMetal,
+            "pin staging: {} writes, {:.2f} GB staged, copy {:.3f} s, {} writes too big for the {} MiB ring",
+            writes,
+            static_cast<double>(bytes) / 1e9,
+            copy_s,
+            too_big,
+            size >> 20);
+    }
+    pinned.reset();
+    if (base != nullptr) {
+        munmap(base, size);
+    }
+}
+
+PinnedMemoryCache::StagingRing* PinnedMemoryCache::get_staging_ring(distributed::MeshDevice& mesh_device) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (auto it = staging_rings_.find(&mesh_device); it != staging_rings_.end()) {
+        return it->second.get();
+    }
+    if (staging_unavailable_.contains(&mesh_device)) {
+        return nullptr;
+    }
+    const auto params = GetMemoryPinningParameters(mesh_device);
+    const size_t size = staging_ring_bytes();
+    if (params.max_pins == 0 || !params.can_map_to_noc || size == 0) {
+        staging_unavailable_.insert(&mesh_device);
+        return nullptr;
+    }
+
+    // 1 GiB pages where the ring is a whole number of them and some are free, else 2 MiB pages.
+    void* base = MAP_FAILED;
+    std::string_view page = "1 GiB";
+    if (size % (1ull << 30) == 0) {
+        base = mmap(
+            nullptr,
+            size,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_HUGE_1GB | MAP_POPULATE,
+            -1,
+            0);
+    }
+    if (base == MAP_FAILED) {
+        page = "2 MiB";
+        base = mmap(
+            nullptr,
+            size,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_HUGE_2MB | MAP_POPULATE,
+            -1,
+            0);
+    }
+    if (base == MAP_FAILED) {
+        log_info(
+            tt::LogMetal,
+            "pin staging: no free hugepages for a {} MiB ring ({}); weights upload on the per-tensor pin path",
+            size >> 20,
+            std::strerror(errno));
+        staging_unavailable_.insert(&mesh_device);
+        return nullptr;
+    }
+
+    const auto& view = mesh_device.get_view();
+    distributed::MeshCoordinateRangeSet local_range;
+    size_t local_chips = 0;
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
+        if (view.impl().is_local(coord)) {
+            local_range.merge(distributed::MeshCoordinateRange(coord, coord));
+            ++local_chips;
+        }
+    }
+
+    auto ring = std::make_unique<StagingRing>();
+    ring->base = base;
+    ring->size = size;
+    const auto t0 = std::chrono::steady_clock::now();
+    try {
+        HostBuffer host_buffer(ttsl::Span<std::byte>(static_cast<std::byte*>(base), size), MemoryPin());
+        ring->pinned = PinnedMemory::Create(
+            mesh_device,
+            local_range,
+            host_buffer,
+            /*map_to_noc=*/true,
+            params.supports_read_only ? PinnedMemoryDeviceAccess::ReadOnly : PinnedMemoryDeviceAccess::ReadWrite);
+        HostBufferSetPinnedMemory(host_buffer, nullptr);
+    } catch (const std::exception& e) {
+        log_info(
+            tt::LogMetal,
+            "pin staging: pinning the {} MiB ring failed ({}); weights upload on the per-tensor pin path",
+            size >> 20,
+            e.what());
+        staging_unavailable_.insert(&mesh_device);
+        return nullptr;  // ring's destructor unmaps
+    }
+    const double pin_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    log_info(
+        tt::LogMetal,
+        "pin staging: {} MiB ring on {} pages, pinned once for {} chips in {:.3f} s",
+        size >> 20,
+        page,
+        local_chips,
+        pin_s);
+    auto* raw = ring.get();
+    staging_rings_.emplace(&mesh_device, std::move(ring));
+    return raw;
+}
+
+std::optional<StagedWrite> PinnedMemoryCache::stage_for_write(
+    distributed::MeshDevice& mesh_device, const std::vector<StagingSource>& sources) {
+    if (!staging_enabled() || sources.empty()) {
+        return std::nullopt;
+    }
+    StagingRing* ring = get_staging_ring(mesh_device);
+    if (ring == nullptr) {
+        return std::nullopt;
+    }
+
+    // One ring slot per distinct source (a replicated weight is copied once for every chip).
+    std::unordered_map<const void*, size_t> offsets;
+    size_t total = 0;
+    for (const auto& src : sources) {
+        if (offsets.emplace(src.data, total).second) {
+            total += tt::round_up(src.size, k_staging_align);
+        }
+    }
+
+    StagedWrite staged{std::unique_lock<std::mutex>(ring->mutex), {}};
+    if (total > ring->size) {
+        ++ring->too_big;
+        return std::nullopt;
+    }
+
+    auto* base = static_cast<std::byte*>(ring->base);
+    const auto t0 = std::chrono::steady_clock::now();
+    for (const auto& [data, off] : offsets) {
+        size_t size = 0;
+        for (const auto& src : sources) {
+            if (src.data == data) {
+                size = src.size;
+                break;
+            }
+        }
+        staging_copy(base + off, static_cast<const std::byte*>(data), size);
+        ring->bytes += size;
+    }
+    ring->copy_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    ++ring->writes;
+
+    staged.transfers.reserve(sources.size());
+    for (const auto& src : sources) {
+        auto xfer = distributed::ShardDataTransfer{src.coord}
+                        .host_data(static_cast<void*>(base + offsets.at(src.data)))
+                        .region(BufferRegion(0, src.size));
+        ShardDataTransferSetPinnedMemory(xfer, ring->pinned);
+        staged.transfers.push_back(std::move(xfer));
+    }
+    return staged;
+}
 
 PinnedMemoryCache& PinnedMemoryCache::instance() {
     static PinnedMemoryCache cache;
@@ -308,6 +529,19 @@ void PinnedMemoryCache::release(const void* host_address) {
 }
 
 void PinnedMemoryCache::release_for_device(distributed::MeshDevice& mesh_device) {
+    {
+        // Unpin the staging ring while the mesh's chips are still open.
+        std::unique_ptr<StagingRing> ring;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (auto it = staging_rings_.find(&mesh_device); it != staging_rings_.end()) {
+                ring = std::move(it->second);
+                staging_rings_.erase(it);
+            }
+            staging_unavailable_.erase(&mesh_device);
+        }
+    }
+
     // Compute the set of MMIO device IDs for all chips in this MeshDevice.
     auto& cluster = mesh_device.impl().metal_env().get_cluster();
     std::set<ChipId> mmio_device_ids;
