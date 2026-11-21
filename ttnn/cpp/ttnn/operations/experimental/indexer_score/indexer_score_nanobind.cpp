@@ -294,6 +294,9 @@ void bind_indexer_score(nb::module_& mod) {
                 maximum of each 32-key block of every score row, the block maxima ``topk_large_indices`` takes
                 as ``block_max_tensor``. Entries past ceil(kv_len/32) are not written. Needs kv_len a multiple
                 of 32.
+            block_max_from_length: optional int (default 0). block_max_output is written only for dispatches whose
+                valid length, rounded up to whole tiles, is at least this: the length from which its consumer reads
+                it (topk_large_indices' two-level cutover). Decided on device, so a traced replay follows it.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -324,7 +327,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("index_cache_num_layers") = 1,
         nb::arg("index_cache_layer_idx") = 0,
         nb::arg("full_mesh_outer_axis") = 0,
-        nb::arg("block_max_output") = nb::none());
+        nb::arg("block_max_output") = nb::none(),
+        nb::arg("block_max_from_length") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

@@ -121,6 +121,9 @@ struct operation_attributes_t {
     // captured op instance. Only the per-REQUEST user id needs a tensor.
     uint32_t index_cache_num_layers{1};
     uint32_t index_cache_layer_idx{0};
+    // block_max_output only: the maxima are produced only for dispatches whose valid length (in whole tiles) is at
+    // least this, the length from which their consumer reads them (0: always). Hashed (a compile-time argument).
+    uint32_t block_max_from_length{0};
     // Runtime KV length: the valid prefix this dispatch (rest masked). NOT hashed, so growing kv_len <= T
     // reuses ONE program. grid/work-split/output width stay keyed on the hashed T. nullopt == T.
     std::optional<uint32_t> kv_len{std::nullopt};

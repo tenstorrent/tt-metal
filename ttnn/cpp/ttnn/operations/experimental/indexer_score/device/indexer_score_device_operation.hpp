@@ -187,6 +187,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     uint32_t full_mesh_outer_axis = 0,
     // Optional [B, 1, Sq, T/32] bf16 row-major DRAM tensor that also receives each score row's 32-key block maxima
     // (for topk_large_indices' block_max_tensor). Needs kv_len a multiple of 32.
-    const std::optional<ttnn::Tensor>& block_max_output = std::nullopt);
+    const std::optional<ttnn::Tensor>& block_max_output = std::nullopt,
+    // block_max_output is written only for dispatches whose valid length (whole tiles) is at least this (0: always).
+    uint32_t block_max_from_length = 0);
 
 }  // namespace ttnn::experimental

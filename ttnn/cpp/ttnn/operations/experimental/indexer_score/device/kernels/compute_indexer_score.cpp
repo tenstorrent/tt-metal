@@ -753,7 +753,9 @@ void kernel_main() {
                     }
                 } else {
 #ifdef INDEXER_BLOCK_MAX
-                    unit_block_maxima<cb_acc_strip, cb_scaler>();
+                    if (kv_len_tiles >= get_named_compile_time_arg_val("block_max_from_tiles")) {
+                        unit_block_maxima<cb_acc_strip, cb_scaler>();
+                    }
 #endif
                     compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(q_tiles_per_unit);
                 }

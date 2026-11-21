@@ -530,6 +530,10 @@ ProgramDescriptor build_ring_program_descriptor(
             kernel->defines.emplace_back("INDEXER_BLOCK_MAX", "1");
         }
         compute_kernel.named_compile_time_args.emplace_back("block_max_cb", cb_block_max);
+        const uint32_t block_max_from_tiles =
+            (args.block_max_from_length + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+        compute_kernel.named_compile_time_args.emplace_back("block_max_from_tiles", block_max_from_tiles);
+        writer_kernel.named_compile_time_args.emplace_back("block_max_from_tiles", block_max_from_tiles);
         writer_kernel.named_compile_time_args.emplace_back("block_max_cb", cb_block_max);
         writer_kernel.named_compile_time_args.emplace_back("block_max_args_offset", block_max_args_offset);
     }

@@ -1050,6 +1050,8 @@ class TtIndexerBase:
             # The per-device slab is this chip's Q rows.
             block_cyclic_chunk_local=q_dev.shape[2],
             block_max_output=block_max,
+            # topk_large_indices' default two-level cutover: below it top-k runs single-level and never reads them.
+            block_max_from_length=98_304,
             # The full mesh stripes the key cache over every device already.
             block_cyclic_cache_tp_sharded=False,
             compute_kernel_config=self._score_compute_kernel_config,

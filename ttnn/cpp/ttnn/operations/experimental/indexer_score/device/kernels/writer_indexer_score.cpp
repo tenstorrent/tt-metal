@@ -401,7 +401,8 @@ void kernel_main() {
             const uint32_t col_off_blocks = block_pool ? (k_tile0 / block_tiles) : 0;
             const uint32_t valid_blocks = block_pool ? (valid_w / block_tiles) : 0;  // == blocks_per_unit (no partial)
 #ifdef INDEXER_BLOCK_MAX
-            {
+            // Below the length from which the maxima are read, compute pushes none (see block_max_from_length).
+            if (kv_len_tiles >= get_named_compile_time_arg_val("block_max_from_tiles")) {
                 // The unit's runs of consecutive logical k-tiles (one plane: num_out_groups == 1).
                 uint32_t run_col[k_tiles_per_unit];
                 uint32_t run_logical[k_tiles_per_unit];

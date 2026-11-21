@@ -487,6 +487,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         tensor_args.has_cache_slot_metadata(),
         // The block maxima output adds compute, CBs and writer accessor arguments.
         tensor_args.has_block_max_output(),
+        attrs.block_max_from_length,
         // The block-cyclic layout bakes invP divisors into the reader as compile-time arguments, so sp/chunk_local
         // must be hashed (a contiguous vs block-cyclic read, or a different layout shape, is a different binary).
         attrs.has_block_cyclic(),
@@ -971,7 +972,8 @@ ttnn::Tensor launch_indexer_score(
     std::optional<ttnn::Tensor> cache_batch_idx_tensor = std::nullopt,
     uint32_t index_cache_num_layers = 1,
     uint32_t index_cache_layer_idx = 0,
-    std::optional<ttnn::Tensor> block_max_output = std::nullopt) {
+    std::optional<ttnn::Tensor> block_max_output = std::nullopt,
+    uint32_t block_max_from_length = 0) {
     // Decompose the seq-shard axes into the SP/TP roles the validation + causal geometry below reason about.
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
@@ -1201,6 +1203,7 @@ ttnn::Tensor launch_indexer_score(
     tensor_args.valid_end_tensor = std::move(valid_end_tensor);
     tensor_args.cache_batch_idx_tensor = std::move(cache_batch_idx_tensor);
     tensor_args.block_max_output = std::move(block_max_output);
+    operation_attributes.block_max_from_length = block_max_from_length;
     operation_attributes.index_cache_num_layers = index_cache_num_layers;
     operation_attributes.index_cache_layer_idx = index_cache_layer_idx;
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
@@ -1315,7 +1318,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     uint32_t index_cache_num_layers,
     uint32_t index_cache_layer_idx,
     uint32_t full_mesh_outer_axis,
-    const std::optional<ttnn::Tensor>& block_max_output) {
+    const std::optional<ttnn::Tensor>& block_max_output,
+    uint32_t block_max_from_length) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::experimental::indexer_score::FusedRingConfig fused_ring;
@@ -1428,7 +1432,8 @@ ttnn::Tensor ring_indexer_score_dsa(
         cache_batch_idx_tensor,
         index_cache_num_layers,
         index_cache_layer_idx,
-        block_max_output);
+        block_max_output,
+        block_max_from_length);
 }
 
 }  // namespace ttnn::experimental
