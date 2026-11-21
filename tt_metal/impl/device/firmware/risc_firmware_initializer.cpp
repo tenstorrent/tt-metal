@@ -5,7 +5,6 @@
 #include "risc_firmware_initializer.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <chrono>
 #include <future>
@@ -39,6 +38,7 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_context.hpp"
+#include "hostdev/eth_link.h"
 #include "hostdev/keraunos_noc_channels.h"
 #include "hostdev/keraunos_spa_routes.h"
 #include "hostdev/mimir_cce_spa_routes.h"
@@ -166,14 +166,13 @@ std::optional<uint32_t> dram_channel_for_translated_core(const metal_SocDescript
     return std::nullopt;
 }
 
-// The Ethernet-link slot (HalL1MemAddrType::ETH_LINK) of linked Quasar Ethernet core `logical_eth` on `chip`, laid out
-// as EthLink in hostdev/eth_link.h. When the cluster's link table has no peer for the
-// core, the valid word stays 0 and a warning is logged. Fatal when the peer has no keraunos.cores entry.
-std::array<uint32_t, 4> quasar_eth_link_slot(const Cluster& cluster, ChipId chip, const CoreCoord& logical_eth) {
-    constexpr uint32_t k_eth_link_valid = 0x4B4E494C;  // ETH_LINK_VALID in hostdev/eth_link.h
+// The Ethernet-link slot (HalL1MemAddrType::ETH_LINK) of linked Quasar Ethernet core `logical_eth` on `chip`. When the
+// cluster's link table has no peer for the core, the valid word stays 0 and a warning is logged. Fatal when the peer
+// has no keraunos.cores entry.
+EthLink quasar_eth_link_slot(const Cluster& cluster, ChipId chip, const CoreCoord& logical_eth) {
     const auto& soc = cluster.get_soc_desc(chip);
     const uint32_t chan = soc.logical_eth_core_to_chan_map.at(logical_eth);
-    std::array<uint32_t, 4> slot{};
+    EthLink slot{};
     const auto& connections = cluster.get_ethernet_connections();
     const auto chip_links = connections.find(chip);
     if (chip_links == connections.end() || !chip_links->second.contains(chan)) {
@@ -185,8 +184,8 @@ std::array<uint32_t, 4> quasar_eth_link_slot(const Cluster& cluster, ChipId chip
         return slot;
     }
     const auto& [peer_chip, peer_chan] = chip_links->second.at(chan);
-    slot[0] = cluster.get_soc_desc(peer_chip).get_keraunos_core_for_channel(peer_chan).hsio;
-    slot[1] = k_eth_link_valid;
+    slot.peer_tile = cluster.get_soc_desc(peer_chip).get_keraunos_core_for_channel(peer_chan).hsio;
+    slot.valid = ETH_LINK_VALID;
     return slot;
 }
 
@@ -1894,7 +1893,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
                 hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK),
                 sizeof(slot));
             cluster_.write_core_immediate(
-                slot.data(),
+                &slot,
                 sizeof(slot),
                 {static_cast<size_t>(device_id), virtual_core},
                 hal_.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK));

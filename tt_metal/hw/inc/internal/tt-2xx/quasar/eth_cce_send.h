@@ -93,7 +93,6 @@ inline void check_on_cce0() {
 // table; when that table has no peer for the core, valid stays 0. This CCE's own tile comes from hsio_tile(), not from
 // the slot.
 static_assert(sizeof(EthLink) == MEM_IERISC_FABRIC_ETH_LINK_SIZE);
-static_assert(ETH_LINK_VALID == MEM_IERISC_FABRIC_ETH_LINK_VALID);
 
 // The slot, once the host has written it. Without the valid word the peer tile is stale and a send would land in
 // another tile's SRAM, so this trips a watcher assert, and without watcher spins until the host writes the slot.

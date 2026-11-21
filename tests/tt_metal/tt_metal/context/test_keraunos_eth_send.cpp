@@ -40,6 +40,7 @@
 #include "impl/dispatch/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 #include "dev_mem_map.h"
+#include "hostdev/eth_link.h"
 #include "env_lib.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -121,9 +122,9 @@ public:
         return value;
     }
 
-    // hostdev/eth_link.h's EthLink: the link peer's HSIO tile, then the valid word.
     void write_eth_link(const KeraunosCore& core, const KeraunosCore& peer) {
-        write(core, MEM_IERISC_FABRIC_ETH_LINK_BASE, {peer.hsio, MEM_IERISC_FABRIC_ETH_LINK_VALID, 0, 0});
+        const EthLink link{.peer_tile = peer.hsio, .valid = ETH_LINK_VALID};
+        write_eth_sram(device_, core.logical, sram_noc_base_ + MEM_IERISC_FABRIC_ETH_LINK_BASE, &link, sizeof(link));
     }
 
     // Launches without blocking, polls each core's status word until it leaves kStatusRunning or the host timeout

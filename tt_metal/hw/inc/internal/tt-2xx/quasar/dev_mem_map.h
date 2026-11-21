@@ -528,7 +528,6 @@
 #define MEM_IERISC_FABRIC_KERNEL_HEARTBEAT_BASE (MEM_IERISC_FABRIC_TELEMETRY_BASE + MEM_IERISC_FABRIC_TELEMETRY_SIZE)
 // The Ethernet link of this CCE, written by the host before launch: EthLink (hostdev/eth_link.h).
 #define MEM_IERISC_FABRIC_ETH_LINK_SIZE 16
-#define MEM_IERISC_FABRIC_ETH_LINK_VALID 0x4B4E494C  // EthLink::valid once written: "LINK"
 #define MEM_IERISC_FABRIC_ETH_LINK_BASE \
     (MEM_IERISC_FABRIC_KERNEL_HEARTBEAT_BASE + MEM_IERISC_FABRIC_KERNEL_HEARTBEAT_SIZE)
 // The router's 8-byte staging word of each TX queue for a single-word send on a NOC link (eth_cce_send.h send_dword).
