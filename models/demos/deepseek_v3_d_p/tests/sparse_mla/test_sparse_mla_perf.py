@@ -61,12 +61,12 @@ MODES = ("untraced", "traced")
 # hosts. Galaxy 4x4 subtorus has no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
 _TARGETS_MS = {
     "Galaxy": {
-        "kimi_k3_1": (3.14, 2.82, 6.68, 6.37),
+        "kimi_k3_1": (3.05, 2.73, 6.68, 6.37),
         "glm_5_3": (3.01, 2.52, 6.46, 6.01),
         "glm_5_3-no_indexer": (2.34, 2.03, 2.39, 2.09),
     },
     "Galaxy 4x4": {
-        "kimi_k3_1": (3.45, 3.26, 7.45, 7.18),
+        "kimi_k3_1": (3.45, 3.16, 7.45, 7.18),
         "glm_5_3": (3.00, 2.78, 6.89, 6.62),
         "glm_5_3-no_indexer": (2.35, 2.32, 4.72, 4.63),
     },
