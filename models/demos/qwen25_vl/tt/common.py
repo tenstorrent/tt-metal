@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.llama_models import sample_top_p
 from models.tt_transformers.tt.load_checkpoints import convert_rope_style_hf_to_meta
 
 

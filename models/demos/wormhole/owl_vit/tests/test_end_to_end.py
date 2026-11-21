@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+import pytest
 import requests
 import torch
 from loguru import logger
