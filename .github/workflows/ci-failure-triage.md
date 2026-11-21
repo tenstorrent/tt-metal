@@ -24,12 +24,17 @@ on:
 # (e.g. manual testing), guard it too — a bare conclusion check evaluates false
 # for non-workflow_run events and would silently skip the manual run.
 #
+# The head repository check keeps triage off a run that a fork pull request
+# started (workflow_run.repository is this repository also then; the fork is
+# head_repository). The event check already stops such a run (its event is
+# pull_request); this is a second layer.
+#
 # The event check keeps triage off a failed dispatch. The monitored set holds
 # "T3K tests", which people dispatch against main often: the suites it merges
 # took 458 dispatches in the 90 days from 20 June 2026. A failed dispatch is a
 # person trying something, thus it is not a regression on main and it must not
 # file an issue.
-if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'schedule' }}
+if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'schedule' && github.event.workflow_run.head_repository.id == github.event.repository.id }}
 
 permissions:
   contents: read
@@ -52,12 +57,32 @@ concurrency:
 
 safe-outputs:
   mentions: false
+  # The tt-auto-triage issues token is short-lived: the safe_outputs job gets it
+  # from the OSPO Vault at run time (no AI step runs in that job). Role
+  # tenstorrent--tt-metal--auto-triage-issues, token
+  # tenstorrent--tt-metal--auto-triage-issues (issues write on tt-auto-triage
+  # only). The Vault gives it only to a job on main in the environment
+  # auto-triage-issues (branch rule main only), started by workflow_run.
+  # Changes to the role or the token go through an OSPO ticket.
+  # runs-on ubuntu-latest: the Vault step is not tested on ubuntu-slim.
+  # gh-aw has no step after the safe outputs, so this job cannot revoke the
+  # token; it expires within 1 hour.
+  environment: auto-triage-issues
+  id-token: write
+  runs-on: ubuntu-latest
+  steps:
+    - name: Get the tt-auto-triage issues token from the OSPO Vault
+      id: vault
+      uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+      with:
+        role: tenstorrent--tt-metal--auto-triage-issues
+        github-token: tenstorrent--tt-metal--auto-triage-issues
   create-issue:
-    # Shadow: write-only PAT → tt-auto-triage. Prod: target-repo=tt-metal, drop token (GITHUB_TOKEN), add issues:write.
+    # Shadow: short-lived Vault token → tt-auto-triage. Prod: target-repo=tt-metal, drop token (GITHUB_TOKEN), add issues:write.
     target-repo: "tenstorrent/tt-auto-triage"
     title-prefix: "[gh-aw-pilot] "
     labels: [gh-aw-pilot]
-    github-token: ${{ secrets.TT_AUTO_TRIAGE_PILOT_ISSUE_CREATION_TOKEN }}
+    github-token: ${{ steps.vault.outputs.token }}
     # A run may fail several jobs with distinct signatures; allow one issue per
     # distinct failure (default is 1, which would silently drop the rest).
     max: 5
@@ -71,7 +96,7 @@ safe-outputs:
     deduplicate-by-title: true
   add-comment:
     target-repo: "tenstorrent/tt-auto-triage"
-    github-token: ${{ secrets.TT_AUTO_TRIAGE_PILOT_ISSUE_CREATION_TOKEN }}
+    github-token: ${{ steps.vault.outputs.token }}
     max: 5
   # Shadow pilot must not write to tt-metal: disable the auto-enabled
   # framework outputs that would otherwise file issues in the source repo.
