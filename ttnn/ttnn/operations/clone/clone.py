@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import ttnn
 
-from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
+from ttnn.operations._op_contract import ExcludedCell, SupportRefusal, UnsupportedAxisValue
 
 from eval import memory
 from eval.specs.clone.spec import AXES, canonical_dtype, canonical_memory
@@ -94,10 +94,11 @@ def validate(input, *, dtype=None, memory_config=None):
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"clone: unsupported combination (refinement candidate): {exc}")
 
-    # Mechanism cap (op_design.md, Mechanism caps): the `oversized_page` regime is not built.
+    # Mechanism cap (op_design.md, Mechanism caps): the `oversized_page` regime is not built. A typed
+    # support refusal (a NotImplementedError), so the harness reads it as deliberate, like the two above.
     entry_bytes = entry_bytes_of(input)
     if entry_bytes > NOC_MAX_BURST_BYTES:
-        raise NotImplementedError(
+        raise SupportRefusal(
             f"clone: a page of {entry_bytes} B exceeds one NoC packet ({NOC_MAX_BURST_BYTES} B); "
             "the oversized-page regime is not built"
         )

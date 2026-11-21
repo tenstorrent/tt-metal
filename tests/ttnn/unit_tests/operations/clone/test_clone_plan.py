@@ -142,3 +142,13 @@ def test_sharded_refused_by_name(device):
         pytest.skip(f"cannot build a sharded input on this backend: {e}")
     with pytest.raises(NotImplementedError, match="sharding"):
         clone(xs, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+
+def test_oversized_page_refused(device):
+    """Mechanism cap (op_design.md): a ROW_MAJOR row above one NoC packet (65,536 B) is refused as a typed
+    support refusal, before any device work: the `oversized_page` regime is not built."""
+    from ttnn.operations._op_contract import SupportRefusal
+
+    x = _put(torch.zeros((2, 32800), dtype=torch.bfloat16), ttnn.ROW_MAJOR_LAYOUT, device=device)  # 65,600 B rows
+    with pytest.raises(SupportRefusal, match="NoC packet"):
+        clone(x, memory_config=ttnn.L1_MEMORY_CONFIG)
