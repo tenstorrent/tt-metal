@@ -522,22 +522,30 @@ class StreamPrefillLinear:
             plan = plan_work(
                 spec, m_tiles, grid.x * grid.y, x_tile, w_tile, o_tile, budget, out_tiles, (grid.x, grid.y)
             )
-            kernels, cbs, sems = self._descriptors(plan, x, stream, ones, out, out_dtype, grid)
+            kernels, cbs, sems, tables = self._descriptors(plan, x, stream, ones, out, out_dtype, grid)
             # The program is fixed by the key (the addresses are common runtime args, which the cache hit patches): a
             # custom hash skips hashing every core's runtime args on each call (the host time of a call at 1K).
             phash = hash(("StreamPrefillLinear", spec.k, spec.n, tuple(spec.order), self.math_fidelity) + key)
-            cached = self._programs[key] = (plan, kernels, cbs, sems, phash & ((1 << 64) - 1))
-        plan, kernels, cbs, sems, phash = cached
+            cached = self._programs[key] = (plan, kernels, cbs, sems, phash & ((1 << 64) - 1), tables)
+        plan, kernels, cbs, sems, phash, tables = cached
         # Only the buffer addresses change between calls (common runtime args; the program hash ignores their values).
-        kernels[0].common_runtime_args = [stream.buffer_address(), x.buffer_address(), ones.buffer_address()]
-        kernels[1].common_runtime_args = [out.buffer_address()]
+        # The kernels have no per-core runtime args (stream_prefill_args.hpp): a cache hit patches these 6 words.
+        kernels[0].common_runtime_args = [
+            stream.buffer_address(),
+            x.buffer_address(),
+            ones.buffer_address(),
+            tables[0].buffer_address(),
+        ]
+        kernels[1].common_runtime_args = [out.buffer_address(), tables[1].buffer_address()]
         desc = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
         desc.custom_program_hash = phash
         ttnn.generic_op([x, stream, ones, out], desc)
         return out
 
     def _descriptors(self, plan, x, stream, ones, out, out_dtype, grid):
-        """The kernels (addresses left to the caller: common runtime args) and circular buffers of one plan."""
+        """The kernels (addresses left to the caller: common runtime args), circular buffers, semaphores and the
+        reader's / writer's per-core argument tables of one plan."""
+        import torch
         import ttnn
 
         from .fused_decode.stream import TILE_BYTES
@@ -549,7 +557,7 @@ class StreamPrefillLinear:
             cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(last[0], last[1]))])
         else:
             cores = _core_ranges(ttnn, len(plan.items), grid.x)
-        cb_x, cb_w, cb_out, cb_zero = 0, 1, 16, 17
+        cb_x, cb_w, cb_out, cb_zero, cb_rargs, cb_wargs = 0, 1, 16, 17, 18, 19
         ready_sem, valid_sem = 0, 1  # x multicast handshake (plan.group)
         w_ready_sem, w_valid_sem = 2, 3  # weight multicast handshake (plan.w_mcast)
 
@@ -602,16 +610,29 @@ class StreamPrefillLinear:
             for bank, j0, cnt in it.segs:
                 args += [bank, j0 * spec.kt * w_tile, cnt]
             per_core["reader"][cx, cy] = args
-            per_core["compute"][cx, cy] = [it.cols, it.m_cnt]
+            per_core["compute"][cx, cy] = (it.cols, it.m_cnt)
             per_core["writer"][cx, cy] = [it.m0, it.m_cnt, it.cols, it.z0, it.z1] + it.columns(spec)
-        # One runtime-arg length per kernel (zero-padded to the longest core's; the kernels read only their own count):
-        # cores whose argument lists differ in length take a slow per-core path when the program is enqueued, which
-        # measured 0.5 ms of host time per o_proj call at 1K (84 cores; 4 cores: 0.07 ms).
-        reader_rt, compute_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for rt, table in ((reader_rt, per_core["reader"]), (compute_rt, per_core["compute"]), (writer_rt, per_core["writer"])):
-            width = max(len(a) for a in table.values())
-            for (cx, cy), a in table.items():
-                rt[cx][cy] = a + [0] * (width - len(a))
+        # The reader's / writer's per-core args: rows of two DRAM tables (row = y * grid.x + x), which the kernels read
+        # at start (stream_prefill_args.hpp) instead of per-core runtime args, the host cost of a call (~0.5 us per
+        # core and kernel on every call: 0.2-0.5 ms on 120 cores; with none 0.014 ms).
+        tables, table_ct = [], []
+        for name, cb_args in (("reader", cb_rargs), ("writer", cb_wargs)):
+            rows = per_core[name]
+            width = -(-max(len(a) for a in rows.values()) // 16) * 16  # 64-byte rows
+            data = torch.zeros(grid.x * grid.y, width, dtype=torch.int32)
+            for (cx, cy), a in rows.items():
+                data[cy * grid.x + cx, : len(a)] = torch.tensor(a, dtype=torch.int64).to(torch.int32)
+            t = ttnn.from_torch(
+                data,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            tables.append(t)
+            table_ct.append([cb_args, grid.x, width * 4] + ttnn.TensorAccessorArgs(t).get_compile_time_args())
+            cbs.append(cb(cb_args, ttnn.uint32, width * 4, 1))
         resident = int(plan.resident)
         reader_ct = [
             cb_x,
@@ -630,38 +651,45 @@ class StreamPrefillLinear:
         ]
         reader_ct += ttnn.TensorAccessorArgs(x).get_compile_time_args()
         reader_ct += ttnn.TensorAccessorArgs(ones).get_compile_time_args()
+        reader_ct += table_ct[0]
         compute_ct = [cb_x, cb_w, cb_out, spec.kt, plan.MB, plan.G, resident]
         writer_ct = [cb_out, cb_zero, out_tiles, plan.MB, plan.G] + ttnn.TensorAccessorArgs(out).get_compile_time_args()
+        writer_ct += table_ct[1]
         dm = ttnn.DataMovementConfigDescriptor
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "stream_prefill_reader.cpp"),
                 core_ranges=cores,
                 compile_time_args=reader_ct,
-                runtime_args=reader_rt,
-                common_runtime_args=[0, 0, 0],
+                common_runtime_args=[0, 0, 0, 0],
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "stream_prefill_writer.cpp"),
                 core_ranges=cores,
                 compile_time_args=writer_ct,
-                runtime_args=writer_rt,
-                common_runtime_args=[0],
+                common_runtime_args=[0, 0],
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
             ),
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "stream_prefill_compute.cpp"),
-                core_ranges=cores,
-                compile_time_args=compute_ct,
-                runtime_args=compute_rt,
-                config=ttnn.ComputeConfigDescriptor(
-                    math_fidelity=getattr(ttnn.MathFidelity, self.math_fidelity),
-                    fp32_dest_acc_en=True,
-                    math_approx_mode=False,
-                ),
-            ),
         ]
+        # The compute kernel's per-core values (columns, row tiles) as compile-time args: one kernel per distinct
+        # pair (a balanced plan has at most two of each).
+        by_shape = {}
+        for (cx, cy), shape in per_core["compute"].items():
+            by_shape.setdefault(shape, []).append(ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)))
+        for (cols, m_cnt), ranges in sorted(by_shape.items()):
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "stream_prefill_compute.cpp"),
+                    core_ranges=ttnn.CoreRangeSet(ranges),
+                    compile_time_args=compute_ct + [cols, m_cnt],
+                    config=ttnn.ComputeConfigDescriptor(
+                        math_fidelity=getattr(ttnn.MathFidelity, self.math_fidelity),
+                        fp32_dest_acc_en=True,
+                        math_approx_mode=False,
+                    ),
+                )
+            )
         sems = []
         if plan.group:
             sems = [
@@ -673,7 +701,7 @@ class StreamPrefillLinear:
                 ttnn.SemaphoreDescriptor(w_ready_sem, ttnn.CoreType.WORKER, cores, 0),
                 ttnn.SemaphoreDescriptor(w_valid_sem, ttnn.CoreType.WORKER, cores, 0),
             ]
-        return kernels, cbs, sems
+        return kernels, cbs, sems, tables
 
 
 def resplit_vocab(logits, tp, vd, per_device, cluster_axis):

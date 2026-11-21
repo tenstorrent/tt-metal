@@ -12,28 +12,33 @@
 // in two parts, the tiles up to the end and then the rest: taking it in one piece across the end wrote wrong tiles
 // (cores with 3, 5, 6 or 7 rows per column; 8K prefill and the all-position LM head gave NaN / garbage logits).
 //
-// common runtime args: [out_addr]
-// runtime args: [m0, m_cnt, cols, z0, z1, col[0], ..., col[cols - 1]]
-// compile-time args: [cb_out, cb_zero, NT, MB, G, accessor (out)]
+// common runtime args: [out_addr, args table addr]
+// per-core args (this core's row of the args table, stream_prefill_args.hpp): [m0, m_cnt, cols, z0, z1, col[0], ...,
+//                col[cols - 1]]
+// compile-time args: [cb_out, cb_zero, NT, MB, G, accessor (out), args table (stream_prefill_args.hpp)]
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "stream_prefill_args.hpp"
 
 void kernel_main() {
     constexpr uint32_t COL_ARG = 5;
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t m0 = get_arg_val<uint32_t>(0);
-    const uint32_t m_cnt = get_arg_val<uint32_t>(1);
-    const uint32_t cols = get_arg_val<uint32_t>(2);
-    const uint32_t z0 = get_arg_val<uint32_t>(3);
-    const uint32_t z1 = get_arg_val<uint32_t>(4);
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     constexpr uint32_t cb_zero = get_compile_time_arg_val(1);
     constexpr uint32_t NT = get_compile_time_arg_val(2);
     constexpr uint32_t MB = get_compile_time_arg_val(3);
     constexpr uint32_t G = get_compile_time_arg_val(4);
     constexpr auto out_args = TensorAccessorArgs<5>();
+    volatile tt_l1_ptr uint32_t* core_args =
+        read_core_args<out_args.next_compile_time_args_offset()>(get_common_arg_val<uint32_t>(1));
+    auto rt_arg = [core_args](uint32_t i) -> uint32_t { return core_args[i]; };
+    const uint32_t m0 = rt_arg(0);
+    const uint32_t m_cnt = rt_arg(1);
+    const uint32_t cols = rt_arg(2);
+    const uint32_t z0 = rt_arg(3);
+    const uint32_t z1 = rt_arg(4);
     constexpr uint32_t DST_TILES = 4;             // stream_prefill_compute.cpp
     constexpr uint32_t CB_PAGES = 2 * DST_TILES;  // cb_out pages (stream_prefill_linear.py: 2 * MAX_RT)
     const uint32_t tile = get_tile_size(cb_out);
@@ -78,7 +83,7 @@ void kernel_main() {
                         uint32_t l1 = get_read_ptr(cb_out);
                         for (uint32_t j = i; j < i + n; ++j) {
                             const uint32_t r = r0 + j / ct;
-                            const uint32_t col = get_arg_val<uint32_t>(COL_ARG + g * G + c0 + j % ct);
+                            const uint32_t col = rt_arg(COL_ARG + g * G + c0 + j % ct);
                             noc_async_write(l1, s_out.get_noc_addr((m0 + mb + r) * NT + col), tile);
                             l1 += tile;
                         }

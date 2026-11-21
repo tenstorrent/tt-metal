@@ -22,28 +22,23 @@
 // others (the weights read once per chunk, not once per row range: the row ranges' reads of the same bank were the
 // op's bottleneck), with the x handshake on its own two semaphores.
 //
-// common runtime args: [w_addr, x_addr, ones_addr]
-// runtime args: [cols, m0, m_cnt, is_sender, mcast x0, y0, x1, y1 (receivers' NOC rectangle), receivers, sender x, y
+// common runtime args: [w_addr, x_addr, ones_addr, args table addr]
+// per-core args (this core's row of the args table, stream_prefill_args.hpp): [cols, m0, m_cnt, is_sender, mcast x0, y0, x1, y1 (receivers' NOC rectangle), receivers, sender x, y
 //                (the multicast ones read only with MCAST), w_is_sender, w mcast x0, y0, x1, y1, w receivers,
 //                w sender x, y (read only with W_MCAST), n_segs, n_segs x (bank_id, byte offset of the segment's
 //                first slot in the bank, slots)]
 // compile-time args: [cb_x, cb_w, KX, w_tile_bytes, MB, G, RESIDENT, MCAST, ready_sem, valid_sem, W_MCAST,
-//                     w_ready_sem, w_valid_sem, accessors (x, ones)]
+//                     w_ready_sem, w_valid_sem, accessors (x, ones), args table (stream_prefill_args.hpp)]
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "stream_prefill_args.hpp"
 
 void kernel_main() {
     const uint32_t w_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t x_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t ones_addr = get_common_arg_val<uint32_t>(2);
-    const uint32_t cols = get_arg_val<uint32_t>(0);
-    const uint32_t m0 = get_arg_val<uint32_t>(1);
-    const uint32_t m_cnt = get_arg_val<uint32_t>(2);
-    constexpr uint32_t W_ARG = 11;
-    constexpr uint32_t SEG_ARG = 19;
-    [[maybe_unused]] const uint32_t n_segs = get_arg_val<uint32_t>(SEG_ARG);  // (the segments are walked by slot count)
 
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_w = get_compile_time_arg_val(1);
@@ -61,6 +56,14 @@ void kernel_main() {
     constexpr auto x_args = TensorAccessorArgs<13>();
     static_assert(!W_MCAST || (RESIDENT && MCAST), "weight multicast is for resident weights in a multicast plan");
     constexpr auto ones_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+    volatile tt_l1_ptr uint32_t* core_args =
+        read_core_args<ones_args.next_compile_time_args_offset()>(get_common_arg_val<uint32_t>(3));
+    auto rt_arg = [core_args](uint32_t i) -> uint32_t { return core_args[i]; };
+    const uint32_t cols = rt_arg(0);
+    const uint32_t m0 = rt_arg(1);
+    const uint32_t m_cnt = rt_arg(2);
+    constexpr uint32_t W_ARG = 11;
+    constexpr uint32_t SEG_ARG = 19;
     constexpr uint32_t KT = KX + 1;
     constexpr uint32_t col_bytes = KT * w_tile;
 
@@ -74,14 +77,14 @@ void kernel_main() {
     uint32_t mc_x0 = 0, mc_y0 = 0, mc_x1 = 0, mc_y1 = 0, n_recv = 0, snd_x = 0, snd_y = 0;
     uint32_t ready_addr = 0, valid_addr = 0;
     if constexpr (MCAST) {
-        is_sender = get_arg_val<uint32_t>(3) != 0;
-        mc_x0 = get_arg_val<uint32_t>(4);
-        mc_y0 = get_arg_val<uint32_t>(5);
-        mc_x1 = get_arg_val<uint32_t>(6);
-        mc_y1 = get_arg_val<uint32_t>(7);
-        n_recv = get_arg_val<uint32_t>(8);
-        snd_x = get_arg_val<uint32_t>(9);
-        snd_y = get_arg_val<uint32_t>(10);
+        is_sender = rt_arg(3) != 0;
+        mc_x0 = rt_arg(4);
+        mc_y0 = rt_arg(5);
+        mc_x1 = rt_arg(6);
+        mc_y1 = rt_arg(7);
+        n_recv = rt_arg(8);
+        snd_x = rt_arg(9);
+        snd_y = rt_arg(10);
         ready_addr = get_semaphore(ready_sem_id);
         valid_addr = get_semaphore(valid_sem_id);
     }
@@ -89,14 +92,14 @@ void kernel_main() {
     uint32_t wm_x0 = 0, wm_y0 = 0, wm_x1 = 0, wm_y1 = 0, w_recv = 0, wsnd_x = 0, wsnd_y = 0;
     uint32_t w_ready_addr = 0, w_valid_addr = 0;
     if constexpr (W_MCAST) {
-        w_sender = get_arg_val<uint32_t>(W_ARG) != 0;
-        wm_x0 = get_arg_val<uint32_t>(W_ARG + 1);
-        wm_y0 = get_arg_val<uint32_t>(W_ARG + 2);
-        wm_x1 = get_arg_val<uint32_t>(W_ARG + 3);
-        wm_y1 = get_arg_val<uint32_t>(W_ARG + 4);
-        w_recv = get_arg_val<uint32_t>(W_ARG + 5);
-        wsnd_x = get_arg_val<uint32_t>(W_ARG + 6);
-        wsnd_y = get_arg_val<uint32_t>(W_ARG + 7);
+        w_sender = rt_arg(W_ARG) != 0;
+        wm_x0 = rt_arg(W_ARG + 1);
+        wm_y0 = rt_arg(W_ARG + 2);
+        wm_x1 = rt_arg(W_ARG + 3);
+        wm_y1 = rt_arg(W_ARG + 4);
+        w_recv = rt_arg(W_ARG + 5);
+        wsnd_x = rt_arg(W_ARG + 6);
+        wsnd_y = rt_arg(W_ARG + 7);
         w_ready_addr = get_semaphore(w_ready_sem_id);
         w_valid_addr = get_semaphore(w_valid_sem_id);
     }
@@ -158,17 +161,17 @@ void kernel_main() {
             const uint32_t w_l1 = get_write_ptr(cb_w);
             // the segment holding the group's first column, and that column's index within it
             uint32_t seg = 0, in_seg = g * G;
-            while (in_seg >= get_arg_val<uint32_t>(SEG_ARG + 3 + 3 * seg)) {
-                in_seg -= get_arg_val<uint32_t>(SEG_ARG + 3 + 3 * seg);
+            while (in_seg >= rt_arg(SEG_ARG + 3 + 3 * seg)) {
+                in_seg -= rt_arg(SEG_ARG + 3 + 3 * seg);
                 ++seg;
             }
             for (uint32_t c = 0; c < gc; ++c) {
-                if (in_seg == get_arg_val<uint32_t>(SEG_ARG + 3 + 3 * seg)) {
+                if (in_seg == rt_arg(SEG_ARG + 3 + 3 * seg)) {
                     ++seg;
                     in_seg = 0;
                 }
-                const uint32_t bank_id = get_arg_val<uint32_t>(SEG_ARG + 1 + 3 * seg);
-                const uint32_t w_offset = get_arg_val<uint32_t>(SEG_ARG + 2 + 3 * seg);
+                const uint32_t bank_id = rt_arg(SEG_ARG + 1 + 3 * seg);
+                const uint32_t w_offset = rt_arg(SEG_ARG + 2 + 3 * seg);
                 const uint64_t src = get_noc_addr_from_bank_id<true>(bank_id, w_addr + w_offset + in_seg * col_bytes);
                 for (uint32_t k = 0; k < KT; ++k) {
                     noc_async_read(src + k * w_tile, w_l1 + (k * G + c) * w_tile, w_tile);

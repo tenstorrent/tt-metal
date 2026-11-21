@@ -8,8 +8,8 @@
 // blocks; each block packed one tile per push in row-major order. rt = min(rows of the M block, 4), ct = 4 / rt
 // (stream_prefill_linear.py block_shape / dst_blocks): an M block of 1 or 2 rows (K = 2880 fills L1) still fills DST.
 //
-// runtime args: [cols, m_cnt]
-// compile-time args: [cb_x, cb_w, cb_out, KT, MB, G, RESIDENT]
+// compile-time args: [cb_x, cb_w, cb_out, KT, MB, G, RESIDENT, cols, m_cnt] (one kernel per (cols, m_cnt) of the
+// plan's cores: no runtime args, stream_prefill_args.hpp)
 
 #include <cstdint>
 
@@ -28,8 +28,8 @@ void kernel_main() {
     constexpr uint32_t G = get_compile_time_arg_val(5);
     constexpr bool RESIDENT = get_compile_time_arg_val(6) != 0;
     constexpr uint32_t DST_TILES = 4;  // FP32 DST, half sync
-    const uint32_t cols = get_arg_val<uint32_t>(0);
-    const uint32_t m_cnt = get_arg_val<uint32_t>(1);
+    constexpr uint32_t cols = get_compile_time_arg_val(7);
+    constexpr uint32_t m_cnt = get_compile_time_arg_val(8);
     const uint32_t n_groups = (cols + G - 1) / G;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_out);
