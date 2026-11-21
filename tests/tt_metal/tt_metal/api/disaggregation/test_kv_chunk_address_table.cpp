@@ -12,6 +12,10 @@
 
 #include "internal/disaggregation/kv_chunk_address_table.hpp"
 #include "experimental/fabric/fabric_types.hpp"
+#include <tt-metalium/experimental/context/metal_env.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal::internal::disaggregation {
 namespace {
@@ -749,6 +753,31 @@ TEST(KvChunkAddressTable, CPU_SetStridedRowOnUnrolledConfigThrows) {
     auto g0 = table.add_device_group({make_fnid(0, 0)});
     EXPECT_EQ(table.compression(), ChunkCompression::kUnrolled);
     EXPECT_ANY_THROW(table.set_strided_row(0, 0, 64, {0x1}, {0x1}, {g0}));
+}
+
+TEST(KvChunkAddressTable, CPU_ReadDeviceChunkResolvesThroughMeshDeviceEnv) {
+    const bool default_existed_before = MetalContext::instance_exists(DEFAULT_CONTEXT_ID);
+
+    MetalEnv env_a({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    MetalEnv env_b({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    auto mesh_a =
+        distributed::MeshDevice::open_mesh_device(env_a, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    auto mesh_b =
+        distributed::MeshDevice::open_mesh_device(env_b, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+
+    KvChunkAddressTable table(std::map<std::string, KvChunkAddressTableConfig>{
+        {"kv", {.num_layers = 1, .max_sequence_length = 64, .num_slots = 1, .chunk_n_tokens = 32}},
+    });
+    const auto fnid = mesh_a->get_fabric_node_id(distributed::MeshCoordinate{0});
+    const auto g0 = table.add_device_group({fnid});
+    const auto g_bad = table.add_device_group({make_fnid(99, 0)});
+    table.set(0, 0, 0, make_location(0x10'0000, 64, g0), "kv");
+    table.set(0, 32, 0, make_location(0x10'0040, 64, g_bad), "kv");
+
+    EXPECT_EQ(table.read_device_chunk(*mesh_a, 0, 0, 0, 0u).size(), 64u);
+    EXPECT_EQ(table.read_device_chunk(*mesh_b, 0, 0, 0, "kv").size(), 64u);
+    EXPECT_ANY_THROW(table.read_device_chunk(*mesh_a, 0, 32, 0, "kv"));
+    EXPECT_EQ(MetalContext::instance_exists(DEFAULT_CONTEXT_ID), default_existed_before);
 }
 
 }  // namespace
