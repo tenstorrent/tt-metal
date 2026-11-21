@@ -348,10 +348,9 @@ tt::tt_metal::ProgramDescriptor build_program(
         gate_depth != 0,
         "relay_chunk_scan: the output gate's buffers do not fit gate_workspace's {} B per core",
         workspace_bytes);
-    uint32_t gate_kb = gate_depth;
-    while (gate_kb > 2 && fits(gate_kb / 2, gate_depth)) {
-        gate_kb /= 2;
-    }
+    // One K block spans the whole depth: each DST pass then runs kb K steps of matmuls per FP32 pack and L1
+    // accumulation, which halving kb made the bound (Kimi-K3 SP8xTP4: kb 4 -> 8, relay 182.8 -> 176.0 us).
+    const uint32_t gate_kb = gate_depth;
     // x is shared among the cores at a place of a batch's heads.
     const uint32_t batches = batch_heads / attrs.num_heads;
     const uint32_t gate_x_groups = batches * cores_per_head;
