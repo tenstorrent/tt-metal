@@ -107,6 +107,10 @@ inline void llk_unpack_tilize_block(
 
 /**
  * @brief No-op on Quasar — tilize teardown is not required.
+ *
+ * Every op sets the unpacker state it uses on entry instead: the tilize L1 source offset is only read by
+ * UNPACR_TILIZE, whose callers program it before each use, and unpack execute calls set the tile counters
+ * they read. Tilize itself leaves the face and row counters at zero.
  */
 inline void llk_unpack_tilize_uninit([[maybe_unused]] const std::uint32_t operand) {}
 
