@@ -150,8 +150,8 @@ def test_rank_failing_mid_save_stops_every_rank(two_ranks, expect_error):
 
 
 def test_a_rank_called_with_a_bad_argument_stops_every_rank(two_ranks, expect_error):
-    """A rank whose find_latest saw no checkpoint passes None. The arguments are checked inside the first phase, so
-    every rank raises, where the other rank used to wait in the first collective forever."""
+    """A rank whose find_latest saw no checkpoint passes None: every rank raises, naming that rank, in the first
+    phase of save and of load, and nothing is created."""
     rank, local, root = two_ranks
     model, params, opt = fresh_tp(DIM)
     path = os.path.join(root, "bad_argument") if rank == 0 else None
@@ -166,7 +166,7 @@ def test_a_rank_called_with_a_bad_argument_stops_every_rank(two_ranks, expect_er
 
 def test_ranks_whose_optimizers_differ_are_refused(two_ranks, expect_error):
     """The index holds one copy of the optimizer's scalars, rank 0's. Ranks whose learning rates differ, or of which
-    one passes no optimizer, are refused on every rank, where each rank used to load rank 0's values silently."""
+    one passes no optimizer, are refused on every rank, and nothing is written."""
     rank, local, root = two_ranks
     model, params, opt = fresh_tp(DIM)
     path = os.path.join(root, "optimizers_differ")
@@ -183,8 +183,8 @@ def test_ranks_whose_optimizers_differ_are_refused(two_ranks, expect_error):
 
 def test_truncated_file_on_one_rank_stops_all(two_ranks, expect_error):
     """Every rank opens and checks its data files while the load is planned, so a truncated file of rank 1's stops
-    every rank before any rank places anything. Rank 0 may read the file too (the election spreads replicated boxes
-    over both ranks' files) or not; either way it used to restore its tensors first."""
+    every rank before any rank places anything, whether or not rank 0 reads that file too (the election spreads
+    replicated boxes over both ranks' files)."""
     rank, local, root = two_ranks
     model, params, opt = fresh_tp(DIM)
     train_step(model, opt, DIM)
