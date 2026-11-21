@@ -1249,3 +1249,12 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 15:05 PB.FX ACCEPTED (oracle 0, fast tier strict 0 builds, cold no-rebuild PASS). Cause (agent; DS41-373 corrected): a lone segment after a PARTIAL chunk of its slot reads its window carry from the ring (attention._ring_carry_pages); programs position-free, the warm-up never ran that kind. Fix: PACKED_WARM_CONT1 adds that pair to warm_glued_chunks (finite warm-up); test_no_rebuild gains the layout + a 1600-token sibling. Not reachable on model_bringup's single path (a partial chunk is always a request's last).
 - 15:05 PB.FX gate PASS -> 2633a26c8ad. Next: PB.T's strict gate.
 - 15:10 heartbeat: PB.T strict gate running; watch armed.
+- 15:30 PB.T gate PASS -> 2fca7818e1a (strict: fast tier 0 builds, deep sweep 1180 s PASS, cold no-rebuild PASS). Next PB.HG (history to owning chips).
+- 15:40 heartbeat: PB.HG agent active; watch armed.
+- 16:10 heartbeat: PB.HG agent active; watch armed.
+- 16:40 heartbeat: PB.HG agent active; watch armed.
+- 16:45 PB.HG ACCEPTED (6 units PASS: fast tier strict, oracle 0, ladder, cold no-rebuild). tt/owned_gather.py: each segment's
+  history only to its owning chips, one prepared program a call (chip -> segment map + buffer addresses as runtime
+  values), a start fence; history buffers 4 -> 1 a source a chip. Chip-aligned 4x2k steady / resumed: 139264 112.6 /
+  112.6 ms (72.8k; PB.MB4 116.8), 1024000 151.9 / 151.6 ms (53.9k; was 161.2; device 135.6 vs 146.7). 4x1600s: 139264
+  116.7 (63.6k), 1M 159.9 (46.4k). History-gather device ms a chunk now 0.6-1.7. Single 8192 unchanged (100.1 / 127.6).

@@ -1149,3 +1149,81 @@
 - Not run: test_no_rebuild with PACKED_WARM_CONT1=off (a second cold load) to show the new paths fail without the fix;
   the orchestrator's off side of the A/B runs it.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.FX --spec $BRINGUP_SPEC --check` (devjob).
+
+## PB.HG perf (attempt 1): a segment's history only to the chips it owns (PACKED_HIST_OWNED on | off)
+
+- Read first: OV-3 / OV-58 / OV-61, PACKED_RULES.md (CHIP-ALIGNED LANES, SERVING NEVER REBUILDS, NO HOST TABLES), rule 20,
+  perf_guide.
+- Today (PB.9G / PB.MB4): every (KV source, segment) history is all-gathered over the whole mesh (two Hamiltonian
+  cycles) into the segment's own lane buffer on every chip: 4 x 2k = 4 histories into every chip (124 pieces of a chip's
+  rows received a chip a source), 4 lane buffers a source (owners x R x 320 B each).
+- Design (DECIDED, OV-58): tt/owned_gather.py, ONE Python-built prepared program a call: every chip sends its packed
+  records of every segment of the source straight to that segment's chips (fabric unicast, routed by the fabric's own
+  tables: each port core decodes the root direction of the route to every destination in the kernel, so no host routing
+  replica), into the same rows of the source's ONE history buffer (owner q at rows q R + [lo, hi)); each chip receives
+  exactly its own segment's 31 pieces + its own local copy. Destination map (chip -> segment, 4 bits a chip), the row
+  ranges and the record buffers' addresses are common value slots (rule 20: one program a geometry). Fence: every
+  destination signals "started" to every source before data moves (no write into a buffer a chip still reads); every
+  wait bounded. Idle chips (no segment) get segment 0's history: the sdpa's lane map reads lane 0 there today
+  (bit-identical pad rows). Tails go into place (no tail buffer, no page copies, no slice_write).
+- Expected saving per chunk (before any device run; perf_guide s1-4): DRAM written by the gathers a chip 4x less at 4
+  segments (31 vs 124 pieces); link traffic: unicast all-pairs ~24 piece-hops a directed link (8x4 torus,
+  dimension-order) vs ~31 today at 4 segments (a constant now: independent of the segment count; worse than today at 1-2
+  segments, which never take this path at 8192 except 2 x 4k); the gathers are mostly hidden already (exposed
+  history_gather 2.7 ms at 139264, 5.3 ms at 1M steady, PB.MB4). Device: -0.3..-1 ms at 139264 (the tails' slice_writes
+  and copies gone, less DRAM contention beside sdpa / indexer), -1..-3 ms at 1M (shorter gathers on the column, fewer
+  pieces overrunning). Host: -0.5..-1 ms (no tails_input / tails_finish page copies; one program a source region
+  instead of one a segment). History DRAM a chip: 4 lane buffers -> 1 a source (the lanes' buffers are never acquired).
+- Next lever if the unicast's link load shows: 2D multicast rectangles (fabric_set_2d_mcast_route) instead of
+  per-chip unicasts (a segment's chips are a chip-linear range: <= 3 rectangles).
+- What (PACKED_HIST_OWNED=on; off = PB.9G / PB.MB4 unchanged): tt/owned_gather.py (OwnedSend, the program: home core
+  + one port core a fabric direction and link, 1 + 4 x HIST_OWNED_LINKS cores of the gather column x = 11; 9 of 10 at
+  2 links: the Galaxy has 2 routing planes a direction, "4 eth channels, but only 2 routing planes" in the fabric log);
+  tt/history_gather.py owned_* (OwnedGroup: every segment's cache of one source; per-cache markers buf.own instead of
+  the buffer's pre / ready / owner; gather / holds / prefetch owned-aware; ``owned_begin`` from GluedCall with the
+  chip -> segment map, idle chips segment 0); tt/gather_hide.Hide (one item a source in owned chunks; the tails region
+  sends in place; OWNED_BYTES_MS = 24e6 for the long plan: the owned send's measured rate, not the high_bw gather's
+  64e6); tt/packed_glued.GluedCall.owned; tt/packed_device.bind (no lane history buffers when owned). Setting
+  PACKED_HIST_OWNED (on, call-time, batch_call_settings + batch_call_apply), HIST_OWNED_LINKS (2, load-time).
+- DS41-311 bit again (fast tier x2: "history_gather has no attribute owned_on" after the runner's in-place reload):
+  every top-level importer of history_gather (model, compressor, sparse_attention, gather_hide, packed_device) now
+  calls importlib.import_module(__package__ + ".history_gather") first, so the package attribute is the fresh module.
+- Per-chunk values this change touches (rule 20) and how they reach the device: the chip -> segment map (4 bits a
+  chip), every entry's row range [lo, hi) (prefetch [0, h), long-hide pieces [a, b) clipped to each entry's h, tails
+  [h, local rows)), the entries' record-buffer addresses: common value slots of ONE prepared program a (history
+  buffer, record buffer, R, axis) geometry (ttnn.bringup.run_prepared values; no program a layout: the op test's
+  program-cache count +0 over 8 layouts x 2 ranges, the fast tier 0 builds after warm-up). The packs keep MB.4's
+  ckv_bfp4_rows value slots. Nothing new is uploaded per chunk.
+- Load reasons: (1) tests/packed/test_owned_send_ops.py on the runner, mesh only: "the program's bytes on every layout
+  vs the host and its time vs the four gathers: op level". (2) PB.HG#test_packed_fast_tier (accuracy load): "the
+  owned path inside real packed chunks vs each request alone (bit-exact outputs / served / acks): needs the model".
+  (3) the gate (one accuracy + one perf load + the cold no-rebuild): the brief's ladder and oracle.
+- Op test (test_owned_send_ops, 8x4): every layout (4 x 8, 4 x 7 + 4 idle, 1 + 31, six mixed, full and mid-slot
+  ranges, R 64 / 2176, inside a gather region) byte-exact on every chip, nothing else written. Timing at a 1M slot's
+  R = 8192 rows (80 MiB a history a chip; the model's ratio-2 sources have 16384), 4 segments x 8 chips, host-timed
+  median of 5: on the gather column owned 3.52 ms vs four high_bw_all_gathers 5.57 ms; serial on the whole grid owned
+  3.35 vs 2.26 (the stock op's own workers next to every link). Link-bound: ~9 GB/s a channel of multi-hop unicast.
+- Fast tier (PB.HG#test_packed_fast_tier, owned on): PASS; 18 segments vs alone outputs 0 (max |diff| 0.0), served 0,
+  acks 0, bystanders 0, hide regions 18, builds after warm-up 0 in 22 serving calls.
+- Gate `gate PB.HG --check` (devjob pbhg_gate1, after the last code edit, hooks clean): PASS PB.HG. Oracle
+  packed_alone_vs_today 0.0, lane_equiv 0.0, slot digests 0, packed_determinism 0.0; determinism 0.0; fast tier 18
+  segments vs alone all 0, 0 builds; no_rebuild cold strict 0 builds on every path; single 8192 139264 100.1 ms, 1M
+  127.6 ms (unchanged). owned_begin's log: 3 gathered sources x 160 MiB = 480 MiB a chip (off: that a lane).
+- Ladder A/B on the same code and load (on: the gate's walls; off: the same test with DS41_PACKED_HIST_OWNED=off,
+  resident run 20261121-162834), steady wall off -> on: 4 x 2k 118.6 -> 112.6 (139264), 163.2 -> 151.9 (1M); 4 x 1600s
+  122.3 -> 116.7, 173.3 -> 159.9; device -4.1 / -13.6, -6.3 / -18.5 ms; resumed likewise (117.4 -> 112.6, 162.6 ->
+  151.6, 122.6 -> 116.5, 172.0 -> 160.4). Exposed history_gather section off -> on: 1.13 -> 0.88, 7.18 -> 1.46, 1.74 ->
+  0.66, 8.04 -> 1.65 ms; traced gather programs a chunk 15 -> 6, 32 -> 17, 18 -> 6, 36 -> 17; the indexer section
+  -3.8 / -6.6 / -5.1 / -9.1 ms (less gather traffic beside the decodes / top-k). Exposed host at 1M +2..5 ms (hidden
+  before behind the longer device time). Report: results/PB.HG_ladder.md.
+- Gathers alone (op test, gather column, 4 x 8 chips): 139264 (2176 rows an owner) owned 1.09 vs 4 gathers 1.62 ms;
+  1M (16384) 6.57 vs 10.79 ms. Whole grid serially the stock gather is faster (0.75 / 4.37 ms): link-bound unicasts.
+- Expected vs measured: expected device -0.3..-1 ms (139264) / -1..-3 ms (1M); measured -4.1 / -13.6 (4 x 2k). The
+  expectation missed the indexer: its decodes / top-k regions ran beside four histories' gathers (DRAM writes + link
+  traffic); now beside one.
+- Next lever (not built): a relay chip a (segment, column) to cut the unicasts' link bytes ~1.7-2.7x (DS41-375: a
+  same-mesh 2D multicast is rooted at its sender, so a tree needs the relay).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.HG --spec $BRINGUP_SPEC --check` (devjob); the
+  op test: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "BRINGUP_CHUNK=8192
+  [PBHG_ROWS=64 PBHG_TIME_ROWS=16384] scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/packed/test_owned_send_ops.py"`.

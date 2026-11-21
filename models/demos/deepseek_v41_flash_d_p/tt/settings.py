@@ -1478,6 +1478,26 @@ TABLE = {
         "copies, untilize, slice_write into the kept tail); no other kind reached it, so its 6 programs were built on "
         "the request path. off = the warm-up before PB.FX (the A/B's previous side). Warm-up only: no forward changes",
     ),
+    "PACKED_HIST_OWNED": Setting(
+        "on",
+        ("on", "off"),
+        "PB.HG (OWNER 2026-11-21), read per chunk (CALL-TIME, listed in bringup/hooks.py batch_call_settings and "
+        "refreshed in batch_call_apply). A chip-aligned packed chunk (PACKED_CHIPS=on) with its gathers hidden "
+        "(PACKED_GATHER_HIDE=on): on = each segment's compressed history (every KV source's prefetch, pieces and tail) "
+        "goes ONLY to the chips that segment owns (an idle chip: segment 0's, as the sdpa's lane map reads), every chip "
+        "receiving exactly one history into ONE buffer a source (the source's own; no lane buffers): every source chip "
+        "sends its records of every segment to that segment's chips in ONE program a source (tt/owned_gather.py: "
+        "fabric unicasts routed by the fabric's tables, the destination chips, row ranges and record buffers runtime "
+        "values from the chunk header; no program a layout); the tail lands in place (no tail buffer, no slice_write). "
+        "off = PB.9G / PB.MB4: every segment's history all-gathered to all chips into its lane's buffer. The same "
+        "bytes at the same rows of every chip's table (data moves)",
+    ),
+    "HIST_OWNED_LINKS": Setting(
+        "2",
+        ("2", "1"),
+        "PB.HG (PACKED_HIST_OWNED=on, tt/owned_gather.py): fabric links (port cores) a direction of the owned history "
+        "send (1 + 4 x links cores in the gather column; 2: 9 of the Galaxy's 10). Load-time (the sender's programs)",
+    ),
     "PACKED_CHIPS": Setting(
         "on",
         ("on", "off"),

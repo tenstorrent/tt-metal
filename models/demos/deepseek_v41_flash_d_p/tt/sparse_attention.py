@@ -51,10 +51,14 @@ the indexer's top-k is already the chip's own rows, so no mesh_partition). No hi
 
 from __future__ import annotations
 
+import importlib as _importlib
+
 import torch
 
 import ttnn
 
+# DS41-311 (PB.HG): the package attribute fresh after a runner reload
+_importlib.import_module(__package__ + ".history_gather")
 from . import ccl, history_gather
 from .attention import WINDOW, TtWindowAttention, TtWindowCache, WindowTables, _upload, attention_weights
 from .ccl import dealloc

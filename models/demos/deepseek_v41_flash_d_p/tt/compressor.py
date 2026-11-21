@@ -59,12 +59,15 @@ No host work in ``__call__`` / ``write``: the per-chunk inputs are integers (sta
 
 from __future__ import annotations
 
+import importlib as _importlib
 import math
 
 import torch
 
 import ttnn
 
+# DS41-311 (PB.HG): the package attribute fresh after a runner reload
+_importlib.import_module(__package__ + ".history_gather")
 from . import ccl, cores, history_gather, host_alloc, index_keys
 from . import mm_configs as mm
 from .ccl import dealloc

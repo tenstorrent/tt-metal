@@ -94,6 +94,9 @@ class HistoryBuffer:
         self.pre = None  # P.75: (id(cache), start, version, h) of a prefetched history (rows [q R, q R + h))
         self.view = None  # P.75: [1, owners, rows / owners, WIDTH], a view of ``tensor`` (the slice_write's operand)
         self.ready = None  # PB.3H: (id(cache), start, version, rows) of a gather completed ahead of its ``gather`` call
+        # PB.HG (PACKED_HIST_OWNED=on): id(cache) -> (kind "pre" | "ready", start, version, rows) of every segment's
+        # cache whose rows this buffer holds on that segment's chips (one buffer a source for every segment)
+        self.own: dict = {}
         if owners is not None:
             assert self.rows % owners == 0, (self.rows, owners)
             self.view = ttnn.reshape(self.tensor, [1, owners, self.rows // owners, self.width])
@@ -240,6 +243,9 @@ def gather(ckv_cache, local_rows: int, start: int) -> tuple[ttnn.Tensor, int]:
         f"HISTORY_GATHER=rows: no history buffer {_key(ckv_cache)} (acquired by tt/compressor.TtServedRows; "
         f"held: {list((_BUF.get(id(mesh)) or (None, {}))[1])})"
     )
+    if owned_active(ckv_cache):  # PB.HG: this segment's rows on its own chips only
+        _owned_complete(ckv_cache, buf, local_rows, start)
+        return buf.tensor, R
     ready, buf.ready = buf.ready, None
     if ready is not None and ready == (id(ckv_cache), start, ckv_cache.version, local_rows):
         buf.pre = None  # PB.3H: completed ahead (tail_finish: the same rows as the tail path below)
@@ -422,6 +428,8 @@ def new_chunk() -> None:
         for b in bufs.values():
             b.pre = None
             b.ready = None
+            b.own.clear()
+    owned_end()
 
 
 def prefetch(ckv_cache, start: int, chunk: int) -> bool:
@@ -433,6 +441,8 @@ def prefetch(ckv_cache, start: int, chunk: int) -> bool:
     owners, axis = owners_and_axis(ckv_cache.mesh, ckv_cache.tp_axis is not None)
     buf = _buffer(ckv_cache.mesh, ckv_cache.history_key)
     assert buf is not None, ("P.75: the source's buffer", ckv_cache.history_key)
+    if owned_active(ckv_cache):  # PB.HG without the gather sub-device: this segment's history to its chips, serially
+        return _owned_prefetch_one(ckv_cache, buf, int(start), int(chunk))
     buf.pre = None
     h = (int(start) // int(chunk)) * (ckv_cache.stripe // ckv_cache.ratio)
     if h == 0:
@@ -678,4 +688,239 @@ def holds(ckv_cache, start: int) -> bool:
     """The buffer of ``ckv_cache``'s size still holds its rows of this start and write version (a memo hit is
     valid: no other source of that size gathered since)."""
     buf = _buffer(ckv_cache.mesh, _key(ckv_cache))
+    if buf is not None and owned_active(ckv_cache):  # PB.HG: per segment's cache
+        st = buf.own.get(id(ckv_cache))
+        return st is not None and st[0] == "ready" and st[1:3] == (start, ckv_cache.version)
     return buf is not None and buf.owner == (id(ckv_cache), start, ckv_cache.version)
+
+
+# ---------------------------------------------------------------------------------------------- PB.HG owned histories
+# (tt/owned_gather.py: the program; tests/packed/test_owned_send_ops.py: its bytes on every layout, mesh only)
+# PACKED_HIST_OWNED=on (OWNER 2026-11-21): in a chip-aligned packed chunk every segment's history of a KV source goes only
+# to the chips that segment owns (tt/owned_gather.py), into the source's ONE buffer (no lane buffers): chip d's rows
+# q R + [0, local rows) are its own segment's, the bytes the lane buffer held there (the same packs, the same rows).
+_OWN_LOGGED: list = []
+_OWN: dict = {}  # the chunk's context: mesh, segs (SegRun, chip order of their entries), chip -> segment index
+
+
+def owned_on() -> bool:
+    """PACKED_HIST_OWNED=on (call-time; a chip-aligned chunk with HISTORY_FORMAT=bfp4 only)."""
+    from .settings import settings as _s
+
+    return _s.get("PACKED_HIST_OWNED") == "on" and bfp4_on()
+
+
+def owned_begin(mesh, segs: list, chip_seg: list) -> None:
+    """A chip-aligned packed chunk starts (tt/packed_glued.GluedCall): ``segs`` its computing segments, ``chip_seg``
+    per chip (chip-linear) the index of the segment it holds (idle chips: 0, the lane the sdpa's map reads there)."""
+    _OWN.clear()
+    ids = {}
+    for r in segs:
+        for i, c in r.state.compress.items():
+            if i in r.state.shared_compress or getattr(c.ckv, "history_rows", None) is None:
+                continue
+            if not isinstance(getattr(c.ckv, "history_key", None), tuple):
+                continue
+            ids[id(c.ckv)] = (i, r)
+    _OWN.update(mesh=mesh, segs=list(segs), chip=list(chip_seg), ids=ids)
+    if not _OWN_LOGGED:  # (once a process: the history DRAM a chip, for the report)
+        _OWN_LOGGED.append(1)
+        from loguru import logger
+
+        keys = sorted({c.ckv.history_key for r in segs for i, c in r.state.compress.items() if id(c.ckv) in ids})
+        mib = {
+            k: _buffer(mesh, k).rows * _buffer(mesh, k).width / 2**20 for k in keys if _buffer(mesh, k) is not None
+        }
+        logger.info(
+            f"PB.HG owned histories: one buffer a source {{(rows, layer): MiB a chip}} {mib}, total "
+            f"{sum(mib.values()):.1f} MiB a chip (off: the same a lane, x up to {len(segs)} lanes here)"
+        )
+
+
+def owned_end() -> None:
+    _OWN.clear()
+
+
+def owned_active(ckv_cache) -> bool:
+    return bool(_OWN) and id(ckv_cache) in _OWN["ids"]
+
+
+class OwnedGroup:
+    """PB.HG: every segment's compressed cache of KV source ``s`` in an owned chunk: one gather item
+    (tt/gather_hide.Hide), ``ckvs`` / ``starts`` in segment order, ``dest`` per chip its entry index."""
+
+    def __init__(self, s: int, ckvs: list, starts: list, dest: list):
+        self.s, self.ckvs, self.starts, self.dest = int(s), list(ckvs), [int(v) for v in starts], list(dest)
+        c0 = self.ckvs[0]
+        self.mesh, self.slab, self.stripe, self.ratio = c0.mesh, c0.slab, c0.stripe, c0.ratio
+        self.owners, self.tp_axis, self.history_key = c0.owners, c0.tp_axis, c0.history_key
+        self.version = c0.version
+
+
+class OwnedRun:
+    """The item's stand-in SegRun (gather_hide reads .start: the group's latest, its largest history; .lane)."""
+
+    def __init__(self, start: int):
+        self.start, self.lane = int(start), -1
+
+
+def owned_group(s: int) -> "OwnedGroup | None":
+    """Source s's group of the chunk (None: no owned cache of s)."""
+    if not _OWN:
+        return None
+    ckvs, starts, idx = [], [], {}
+    for r in _OWN["segs"]:
+        c = r.state.compress.get(s)
+        if c is None or id(c.ckv) not in _OWN["ids"]:
+            continue
+        if id(c.ckv) not in idx:
+            idx[id(c.ckv)] = len(ckvs)
+            ckvs.append(c.ckv)
+            starts.append(int(r.start))
+    if not ckvs:
+        return None
+    dest = []
+    for j in _OWN["chip"]:
+        c = _OWN["segs"][j].state.compress.get(s)
+        dest.append(idx.get(id(c.ckv)) if c is not None else None)
+    return OwnedGroup(s, ckvs, starts, dest)
+
+
+def _owned_axis(ckv) -> int:
+    _, axis = owners_and_axis(ckv.mesh, ckv.tp_axis is not None)
+    return 0 if axis is None else 1
+
+
+def _owned_send(buf: HistoryBuffer, R: int, ckv0, entries: list, dest: list, sub: dict | None = None) -> None:
+    from .owned_gather import sender
+
+    ents = [(t.tensor if isinstance(t, HistoryBuffer) else t, lo, hi) for t, lo, hi in entries]
+    with _Traced("gather", ckv0, -1):
+        sender(buf.mesh)(buf.tensor, R, _owned_axis(ckv0), ents, dest)
+
+
+class OwnedPlan:
+    """A group's prefetch: every entry's records [0, h) packed into its own record buffer."""
+
+    def __init__(self, group, buf, entries, owners):
+        self.group, self.buf, self.entries, self.owners = group, buf, entries, owners  # entries [(ckv, loc, h, start)]
+        self.h = max(e[2] for e in entries)
+
+
+def owned_prepare(group: OwnedGroup, chunk: int, locs: list) -> "OwnedPlan | None":
+    """``prefetch_prepare`` of a group: every entry's history [0, c hs) packed into ``locs[e]``; None when no entry has
+    a history (every segment's first chunk)."""
+    buf = _buffer(group.mesh, group.history_key)
+    assert buf is not None and buf.bfp4, ("PB.HG: the source's record buffer", group.history_key)
+    entries = []
+    for ckv, st, loc in zip(group.ckvs, group.starts, locs):
+        h = (int(st) // int(chunk)) * (ckv.stripe // ckv.ratio)
+        assert h <= ckv.slab.rows, (h, ckv.slab.rows)
+        buf.own.pop(id(ckv), None)
+        if h > 0:
+            with _Traced("pack", ckv, -1):
+                _pack(ckv, 0, h, loc)
+        entries.append((ckv, loc, h, int(st)))
+    if all(e[2] == 0 for e in entries):
+        return None
+    return OwnedPlan(group, buf, entries, int(group.owners))
+
+
+def owned_mark(plan: OwnedPlan) -> None:
+    """The prefetch markers (host only): each entry's rows [0, h) are (or will be, before its reader) in the buffer."""
+    for ckv, loc, h, st in plan.entries:
+        if h > 0:
+            plan.buf.own[id(ckv)] = ("pre", st, ckv.version, h)
+    plan.buf.owner = None
+    STATS["prefetch"] += 1
+
+
+def owned_range(plan: OwnedPlan, a: int, b: int | None = None, sub: dict | None = None) -> None:
+    """Rows [a, b) of every entry's history (clipped to its own [0, h)) to its segment's chips: ONE program."""
+    b = plan.h if b is None else b
+    ents = [(loc, min(a, h), min(b, h)) for ckv, loc, h, st in plan.entries]
+    R = int(plan.group.slab.rows)
+    _owned_send(plan.buf, R, plan.group.ckvs[0], ents, plan.group.dest, sub)
+
+
+def owned_prefetch(group: OwnedGroup, chunk: int, locs: list) -> bool:
+    """Serially (a flush): the group's whole prefetch."""
+    plan = owned_prepare(group, chunk, locs)
+    if plan is None:
+        return False
+    owned_range(plan, 0)
+    owned_mark(plan)
+    return True
+
+
+def owned_tails_prepare(group: OwnedGroup, chunk: int, locs: list):
+    """At the source layer, after its compressor's writes: every entry's rows past its prefetch [h, local rows) (all
+    of [0, local rows) when nothing was prefetched) packed into ``locs[e]``; returns the plan ``owned_tails_send``
+    takes (None: nothing to move)."""
+    buf = _buffer(group.mesh, group.history_key)
+    assert buf is not None and buf.bfp4, ("PB.HG: the source's record buffer", group.history_key)
+    ents = []
+    for ckv, st, loc in zip(group.ckvs, group.starts, locs):
+        nb = -(-(int(st) + int(chunk)) // int(chunk))
+        local_rows = nb * ckv.stripe // ckv.ratio
+        assert 0 < local_rows <= ckv.slab.rows, (local_rows, ckv.slab.rows)
+        pre = buf.own.get(id(ckv))
+        h = 0
+        if pre is not None and pre[0] == "pre" and pre[1] == st and 0 <= ckv.version - pre[2] <= 1:
+            h = pre[3]
+        if h < local_rows:
+            with _Traced("pack", ckv, -1):
+                _pack(ckv, h, local_rows, loc)
+        ents.append((ckv, loc, h, local_rows, st))
+    return (group, buf, ents)
+
+
+def owned_tails_send(plan, sub: dict | None = None) -> None:
+    """Every entry's rows [h, local rows) to its chips (ONE program), then its markers ready."""
+    group, buf, ents = plan
+    R = int(group.slab.rows)
+    _owned_send(buf, R, group.ckvs[0], [(loc, h, lr) for ckv, loc, h, lr, st in ents], group.dest, sub)
+    for ckv, loc, h, lr, st in ents:
+        buf.own[id(ckv)] = ("ready", st, ckv.version, lr)
+        STATS["tail"] += 1
+    buf.owner = None
+
+
+def _owned_one(ckv, buf: HistoryBuffer, lo: int, hi: int) -> None:
+    """Rows [lo, hi) of one owned cache (packed into the shared local record buffer) to its own chips."""
+    s, _ = _OWN["ids"][id(ckv)]
+    group = owned_group(s)
+    e = next(i for i, c in enumerate(group.ckvs) if c is ckv)
+    R = int(ckv.slab.rows)
+    loc = _buffer(ckv.mesh, ("loc", R))
+    with _Traced("pack", ckv, -1):
+        _pack(ckv, lo, hi, loc)
+    dest = [e if d == e else None for d in group.dest]
+    ents = [(loc, lo, hi) if i == e else (None, 0, 0) for i in range(len(group.ckvs))]
+    _owned_send(buf, R, ckv, ents, dest)
+
+
+def _owned_prefetch_one(ckv, buf: HistoryBuffer, start: int, chunk: int) -> bool:
+    h = (start // chunk) * (ckv.stripe // ckv.ratio)
+    buf.own.pop(id(ckv), None)
+    if h == 0:
+        return False
+    assert h <= ckv.slab.rows, (h, ckv.slab.rows)
+    _owned_one(ckv, buf, 0, h)
+    buf.own[id(ckv)] = ("pre", start, ckv.version, h)
+    STATS["prefetch"] += 1
+    return True
+
+
+def _owned_complete(ckv, buf: HistoryBuffer, local_rows: int, start: int) -> None:
+    """``gather`` of an owned cache: done when its rows are ready, else moved now (its own chips only)."""
+    st = buf.own.get(id(ckv))
+    if st is not None and st[0] == "ready" and st[1:] == (start, ckv.version, local_rows):
+        STATS["ready"] += 1
+        return
+    h = 0
+    if st is not None and st[0] == "pre" and st[1] == start and 0 <= ckv.version - st[2] <= 1 and st[3] < local_rows:
+        h = st[3]
+    _owned_one(ckv, buf, h, local_rows)
+    buf.own[id(ckv)] = ("ready", start, ckv.version, local_rows)
+    STATS["tail" if h else "full"] += 1

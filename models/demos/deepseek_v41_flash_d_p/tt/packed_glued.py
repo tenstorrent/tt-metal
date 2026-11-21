@@ -1026,6 +1026,14 @@ class GluedCall(OneCall):
 
             self.dv = derive(mesh, self.geo.chunk, int(getattr(pk.desc, "block", 64)), self.geo.align)
             self.dv.begin(pk.desc, getattr(pk, "header", None))
+        # PB.HG (PACKED_HIST_OWNED=on): every segment's history to its own chips only, one buffer a source (an idle
+        # chip: segment 0's, the lane the sdpa's map gives it); off: every lane's history to every chip
+        from . import history_gather
+
+        self.owned = bool(self.geo.align) and history_gather.owned_on()
+        if self.owned:
+            chip_seg = [(e[0] if e is not None else 0) for e in (self.geo.entry(q, 0) for q in range(self.geo.n))]
+            history_gather.owned_begin(mesh, self.geo.segs, chip_seg)
         self.hide = None
         from .gather_hide import Hide, Split, hide_on
 
@@ -1050,6 +1058,10 @@ class GluedCall(OneCall):
 
     def close(self) -> None:
         super().close()
+        if self.owned:
+            from . import history_gather
+
+            history_gather.owned_end()
         if self._tables is not None:
             self._tables.free()
         if self.dv is not None:

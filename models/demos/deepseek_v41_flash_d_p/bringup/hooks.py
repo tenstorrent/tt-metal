@@ -1408,7 +1408,8 @@ def batch_call_settings(env=None) -> tuple:
     # slices; batch_call_apply refreshes it in a load-time snapshot); PACKED_CHIPS (PB.9G: chip-aligned lanes, or PB.9X's
     # back-to-back glued layout) likewise, refreshed like POS_DYNAMIC; COMMON_VALUE_SLOTS (PB.9X) likewise; MHC_POST_V2
     # (PB.8R: tt/mhc.py reads it per mhc_post call; the fork keeps both programs) likewise, refreshed like POS_DYNAMIC
-    # PACKED_WARM_CONT1 (PB.FX: runtime.compile's packed warm-up set, read per compile call) likewise
+    # PACKED_WARM_CONT1 (PB.FX: runtime.compile's packed warm-up set, read per compile call) likewise; PACKED_HIST_OWNED
+    # (PB.HG: a segment's history to its own chips only, tt/owned_gather.py) likewise, refreshed like POS_DYNAMIC
     return (
         "PREFILL_END",
         "ENGRAM_DEVICE",
@@ -1426,6 +1427,7 @@ def batch_call_settings(env=None) -> tuple:
         "POS_DYNAMIC",
         "PACKED_CHIPS",
         "PACKED_WARM_CONT1",
+        "PACKED_HIST_OWNED",
         "COMMON_VALUE_SLOTS",
         "MHC_POST_V2",
     ) + (() if skip == "replay128" else ("DECODER_SKIP",))
@@ -1441,6 +1443,7 @@ def batch_call_apply(model) -> None:
         _settings.snap["POS_DYNAMIC"] = _settings._read("POS_DYNAMIC")
         _settings.snap["PACKED_CHIPS"] = _settings._read("PACKED_CHIPS")  # PB.9G: likewise
         _settings.snap["MHC_POST_V2"] = _settings._read("MHC_POST_V2")  # PB.8R: likewise
+        _settings.snap["PACKED_HIST_OWNED"] = _settings._read("PACKED_HIST_OWNED")  # PB.HG: likewise
     want = _settings.get("DECODER_SKIP")
     have = getattr(model, "skip_mode", None)
     if have is None or want == have or "replay128" in (want, have) or getattr(model, "tail_of", None) is not None:

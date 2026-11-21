@@ -49,11 +49,14 @@ nothing there (the serial path)."""
 
 from __future__ import annotations
 
+import importlib as _importlib
 from collections import defaultdict
 
 import ttnn
 from models.demos.common.bringup.testing import profiler
 
+# DS41-311 (PB.HG): the package attribute fresh after a runner reload
+_importlib.import_module(__package__ + ".history_gather")
 from . import history_gather
 from .cores import nonmm_on_mm_grid, worker_grid
 from .settings import settings
@@ -291,6 +294,10 @@ DEC_WEIGHT = 0.5  # the index-key decodes' region against an attention phase (PB
 # beside a 3.2 ms top-k: 0.00 past); the decodes (~200 rows/us on 11 x 10 cores, ~17.6 on 4 x 2; the region measured
 # 7.8 ms at 1M beside 1.75 ms of pieces, 0 past) at the alone rate.
 GATHER_FIXED_MS, GATHER_BYTES_MS = 0.15, 64e6
+# PB.HG (PACKED_HIST_OWNED=on): the owned send's rate in bytes a chip RECEIVES (one history, its own segment's): 4 x 8
+# chips at a 1M slot (80 MiB a chip) in 3.52 ms on the gather column (tests/packed/test_owned_send_ops.py; the four
+# whole-mesh gathers it replaces 5.57 ms): fabric unicasts, several hops each, link-bound
+OWNED_BYTES_MS = 24e6
 COVER_ATTN_MS, COVER_TAILS_MS = 1.6, 0.0
 DEC_COVER = 1.2  # the decodes' region measured 5.3-8.5 ms at 1M against ~3.9 ms of decodes
 # the items' packs (slice + tilize + ckv_bfp4 of a whole history: ~0.4 ms at 1M, DRAM-bound) as compute steps of an
@@ -344,7 +351,15 @@ class Hide:
         skipped = m._decoder_set if m.skip_mode == "decode" else frozenset()
         self.order = [i for i in sorted(m.blocks) if i not in skipped]  # (the layers whose attention phase runs)
         self.items = []  # (source, SegRun, compressed cache), source then lane order
+        # PB.HG (PACKED_HIST_OWNED=on, a chip-aligned chunk: GluedCall.owned): ONE item a source, every segment's cache
+        # (history_gather.OwnedGroup): one program moves every segment's rows to its own chips only
+        self.groups = {}
         for s in self.sources:
+            g = history_gather.owned_group(s) if getattr(oc, "owned", False) else None
+            if g is not None:
+                self.groups[s] = g
+                self.items.append((s, history_gather.OwnedRun(max(g.starts)), g))
+                continue
             for r in oc.pk.segs:
                 c = r.state.compress.get(s)
                 if c is not None and s not in r.state.shared_compress:
@@ -382,6 +397,41 @@ class Hide:
             self.mesh,
             lambda: history_gather.HistoryBuffer(self.mesh, R, None, True),
         )
+
+    def _locs(self, group, key) -> list:
+        """PB.HG: a group's record buffers (one an entry) for ``key`` (a region slot, an item, the tails)."""
+        R = int(group.slab.rows)
+        return [
+            _held(
+                _LOC,
+                (id(self.mesh), R, "own", key, e),
+                self.mesh,
+                lambda: history_gather.HistoryBuffer(self.mesh, R, None, True),
+            )
+            for e in range(len(group.ckvs))
+        ]
+
+    def _prep(self, ckv, start: int, key):
+        """``prefetch_prepare`` of an item (an owned group: every entry packed into its own record buffer)."""
+        if isinstance(ckv, history_gather.OwnedGroup):
+            return history_gather.owned_prepare(ckv, self.chunk, self._locs(ckv, key))
+        loc = self._loc_item(ckv, key[1]) if key[0] == "item" else self._loc(ckv, key[1])
+        return history_gather.prefetch_prepare(ckv, start, self.chunk, loc=loc)
+
+    @staticmethod
+    def _range(plan, a: int, b: int, sub=None) -> None:
+        if isinstance(plan, history_gather.OwnedPlan):
+            history_gather.owned_range(plan, a, b, sub)
+        else:
+            history_gather.prefetch_gather_range(plan, a, b, sub)
+
+    def _bw(self, j: int) -> float:
+        """Item j's planning rate (bytes a chip receives a ms)."""
+        return OWNED_BYTES_MS if isinstance(self.items[j][2], history_gather.OwnedGroup) else GATHER_BYTES_MS
+
+    @staticmethod
+    def _owners(plan) -> int:
+        return plan.owners if isinstance(plan, history_gather.OwnedPlan) else plan[4]
 
     def _small(self, plans: list):
         """The combined tail gather's output: [owners M, width] (M: every plan's rows together)."""
@@ -438,7 +488,7 @@ class Hide:
         items = self._take(i) if key is None else self._slot(key, i)
         plans = []
         for k, (s, r, ckv) in enumerate(items):
-            p = history_gather.prefetch_prepare(ckv, r.start, self.chunk, loc=self._loc(ckv, k))
+            p = self._prep(ckv, r.start, ("slot", k))
             if p is not None:
                 plans.append((r.lane, p))
         if not plans:
@@ -447,7 +497,15 @@ class Hide:
                 out = step(out)
             return out
         STATS["prefetch"] += len(plans)
-        gathers = [(lane, lambda sub, p=p: history_gather.prefetch_gather(p, sub)) for lane, p in plans]
+
+        def one(sub, p):
+            if isinstance(p, history_gather.OwnedPlan):  # PB.HG: every segment's whole history, its chips only
+                history_gather.owned_range(p, 0, None, sub)
+                history_gather.owned_mark(p)
+            else:
+                history_gather.prefetch_gather(p, sub)
+
+        gathers = [(lane, lambda sub, p=p: one(sub, p)) for lane, p in plans]
         return self.split.region(gathers, steps, "attention")
 
     def flush(self, s: int) -> None:
@@ -460,7 +518,10 @@ class Hide:
             return
         self.items = [it for it in self.items if it[0] != s]
         for _, r, ckv in rest:
-            history_gather.prefetch(ckv, r.start, self.chunk)
+            if isinstance(ckv, history_gather.OwnedGroup):
+                history_gather.owned_prefetch(ckv, self.chunk, self._locs(ckv, ("flush",)))
+            else:
+                history_gather.prefetch(ckv, r.start, self.chunk)
         STATS["flushed"] += len(rest)
 
     # ------------------------------------------------------------------ tails
@@ -486,6 +547,13 @@ class Hide:
                 self._pack(j)
         else:
             self.flush(s)
+        group = self.groups.get(s)
+        if group is not None:  # PB.HG: every segment's tail to its own chips, in place (no tail buffer / slice_write)
+            plan = history_gather.owned_tails_prepare(group, self.chunk, self._locs(group, ("tail",)))
+            pieces = [(lane, g) for lane, g, _ in self._long_gathers(("tails", i))] if self.long else []
+            STATS["tails"] += len(group.ckvs)
+            gathers = [(-1, lambda sub: history_gather.owned_tails_send(plan, sub))] + pieces
+            return self.split.region(gathers, steps, "indexer", after_last=self.long)
         plans = []
         for k, r in enumerate(self.oc.pk.segs):
             c = r.state.compress.get(s)
@@ -588,7 +656,7 @@ class Hide:
                         continue
                     while queue and len(lplan[key]) < REGION_GATHERS[key[0]]:
                         j, a, h, owners = queue[0]
-                        room = (left[key] - GATHER_FIXED_MS) * GATHER_BYTES_MS / (owners * rec)
+                        room = (left[key] - GATHER_FIXED_MS) * self._bw(j) / (owners * rec)
                         if not history_gather.bfp4_on():  # (a bf16 history moves whole: the slab is ND-sharded)
                             room = h - a if room >= (h - a) else 0
                         take = h - a if room >= h - a else int(room) // 32 * 32
@@ -597,7 +665,7 @@ class Hide:
                         if take < min(MIN_PIECE_ROWS, h - a):
                             break
                         lplan[key].append((j, a, a + take))
-                        left[key] -= GATHER_FIXED_MS + owners * take * rec / GATHER_BYTES_MS
+                        left[key] -= GATHER_FIXED_MS + owners * take * rec / self._bw(j)
                         if a + take >= h:
                             queue.pop(0)
                         else:
@@ -660,7 +728,8 @@ class Hide:
             if not isinstance(getattr(ckv, "history_key", None), tuple):
                 continue
             h = (int(r.start) // self.chunk) * (ckv.stripe // ckv.ratio)
-            if GATHER_FIXED_MS + int(ckv.owners) * h * history_gather.REC / GATHER_BYTES_MS > COVER_ATTN_MS:
+            bw = OWNED_BYTES_MS if isinstance(ckv, history_gather.OwnedGroup) else GATHER_BYTES_MS
+            if GATHER_FIXED_MS + int(ckv.owners) * h * history_gather.REC / bw > COVER_ATTN_MS:
                 return True
         return False
 
@@ -669,9 +738,12 @@ class Hide:
         if j in self.packs:
             return self.packs[j]
         s, r, ckv = self.items[j]
-        plan = history_gather.prefetch_prepare(ckv, r.start, self.chunk, loc=self._loc_item(ckv, j))
+        plan = self._prep(ckv, r.start, ("item", j))
         if plan is not None:
-            history_gather.prefetch_mark(plan)
+            if isinstance(plan, history_gather.OwnedPlan):
+                history_gather.owned_mark(plan)
+            else:
+                history_gather.prefetch_mark(plan)
         self.packs[j] = plan
         return plan
 
@@ -686,10 +758,10 @@ class Hide:
                 continue
 
             def g(sub, plan=plan, j=j, a=a, b=b):
-                history_gather.prefetch_gather_range(plan, a, b, sub)
+                self._range(plan, a, b, sub)
                 self.left[j] -= 1
 
-            ms = GATHER_FIXED_MS + plan[4] * (b - a) * self._rec / GATHER_BYTES_MS
+            ms = GATHER_FIXED_MS + self._owners(plan) * (b - a) * self._rec / self._bw(j)
             gathers.append((self.items[j][1].lane, g, ms))
         STATS["prefetch"] += len(gathers)
         return gathers
@@ -721,7 +793,7 @@ class Hide:
                     continue
                 plan = self._pack(j)
                 if plan is not None and self.left.get(j):
-                    history_gather.prefetch_gather_range(plan, a, b)
+                    self._range(plan, a, b)
                     self.left[j] -= 1
                     rest += 1
             self.lplan[key] = keep
@@ -732,7 +804,7 @@ class Hide:
                 continue
             plan = self._pack(j)
             if plan is not None and self.left.get(j):
-                history_gather.prefetch_gather_range(plan, a, b)
+                self._range(plan, a, b)
                 self.left[j] -= 1
                 rest += 1
         self.unplaced = keep

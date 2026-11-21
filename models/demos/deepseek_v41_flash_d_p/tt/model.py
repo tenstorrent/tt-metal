@@ -59,6 +59,8 @@ import torch
 import ttnn
 from models.demos.common.bringup.reference.interface import Ctx, run_block
 
+# DS41-311 (PB.HG): the package attribute fresh after a runner reload
+importlib.import_module(__package__ + ".history_gather")
 from . import ccl, ffn_feed, history_gather, host_alloc, index_keys, lean
 from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights, snapshot_cap, window_keep
 from .ccl import dealloc

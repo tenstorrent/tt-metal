@@ -19,10 +19,13 @@ removed: a chunk the one call cannot run raises.
 
 from __future__ import annotations
 
+import importlib as _importlib
 from dataclasses import dataclass, field
 
 import ttnn
 
+# DS41-311 (PB.HG): the package attribute fresh after a runner reload
+_importlib.import_module(__package__ + ".history_gather")
 from . import ccl, history_gather, index_keys
 from .common import DRAM, SP_AXIS, TP_AXIS
 from .settings import settings
@@ -264,6 +267,7 @@ class PackedChunk:
         """Every lane >= 1 reads its own history-gather and index-key buffers (lane 0: today's), bound to the slot's
         caches for this chunk (``unbind`` puts the keys back). Acquired once a process (v1: held until exit)."""
         mesh = self.model.mesh
+        owned = getattr(self.oc, "owned", False)  # PB.HG: one history buffer a source, no lane buffers
         for r in self.segs:
             if r.lane == 0:
                 continue
@@ -272,7 +276,7 @@ class PackedChunk:
                 if i in st.shared_compress:
                     continue
                 ckv = c.ckv
-                if getattr(ckv, "history_rows", None) is not None:
+                if getattr(ckv, "history_rows", None) is not None and not owned:
                     orig = ckv.history_key
                     key = (orig if orig is not None else ckv.history_rows, "lane", r.lane)
                     tag = (mesh.id(), "h", key)
