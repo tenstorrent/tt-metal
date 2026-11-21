@@ -68,6 +68,7 @@ set(SOURCES
     ops/profiler_no_op_test.cpp
     ops/program_cache_placement_test.cpp
     ops/cross_entropy_bw_op_test.cpp
+    ops/cross_entropy_collapse_test.cpp
     ops/rope_test.cpp
     ops/rmsnorm_op_test.cpp
     ops/polynorm_op_test.cpp
@@ -213,6 +214,7 @@ if(TARGET benchmark::benchmark)
         benchmark/adamw_benchmark.cpp
         benchmark/frobenius_normalize_benchmark.cpp
         benchmark/log_softmax_benchmark.cpp
+        benchmark/cross_entropy_benchmark.cpp
         benchmark/polynorm_fusion_benchmark.cpp
         benchmark/rmsnorm_benchmark.cpp
         benchmark/gram_matmul_benchmark.cpp

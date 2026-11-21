@@ -19,6 +19,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "log_softmax_sfpu.h"
 
+// Shared by the fused log_softmax and, with CROSS_ENTROPY, the fused cross-entropy (see row_softmax_program.hpp).
 // A work unit is one tile row restricted to tile columns [begin, end). With `chunks` > 1
 // the row is split across that many cores, each holding one unit; their partial statistics are exchanged
 // through DRAM (see the dataflow kernels) and every core of the row combines them redundantly.
@@ -36,9 +37,11 @@ constexpr uint32_t chunks = get_compile_time_arg_val(0);
 constexpr float kTileWidth = LOG_SOFTMAX_TILE_WIDTH;
 // exp_tile mode for the exponentials outside the custom SFPU passes, which use their own FP32 exponential.
 constexpr bool USE_APPROXIMATE_EXPONENTIAL = false;
+constexpr uint32_t scaler_bits = get_compile_time_arg_val(1);  // Cross-entropy backward: s.
 constexpr uint32_t cx = 0, cdy = 1, ccols = 2, cm = 3, cs = 4, cic = 5, ci = 6, cmax = 7, cstateout = 8, cstatein = 9,
                    cpivot = 10, ctail = 11, cd = 12, cnorm = 13, csum = 14, cothers = 15, cout = 16, cpart0 = 17,
-                   cpart1 = 18, cpart2 = 19, cpivotdy = 20, cpivotgrad = 21, cpartout = 23;
+                   cpart1 = 18, cpart2 = 19, cpivotdy = 20, cpivotgrad = 21, cpartout = 23, ctargetx = 25,
+                   cfirstcol = 27, cupstream = 29;
 // Any FP32 buffer: names the statistics format as the old or new operand of a source-A reconfiguration.
 constexpr uint32_t cfp32 = ccols;
 
@@ -74,7 +77,7 @@ inline void broadcast_column_tile(uint32_t cb, uint32_t index, uint32_t out) {
     tile_regs_release();
 }
 
-#ifndef BACKWARD
+#if !defined(BACKWARD) || defined(CROSS_ENTROPY)
 // The four steps of combine_lanes (below). Per lane: m (cb_m), i (cb_i), t (cb_t); per row: M, K, T.
 
 // M = max over lanes of m: cb_m -> cmax.
@@ -289,7 +292,159 @@ inline void row_statistics(uint32_t begin, uint32_t end) {
     }
     log_normalizer_tile();  // cnorm = l = log1p(T)
 }
+#endif
 
+#ifdef CROSS_ENTROPY
+// Loss of each row from its target logit x_t (column 0 of ctargetx; zero for an out-of-range target):
+// -y_t with y_t = (x_t - M) - l, computed exactly as the log_softmax output. When the target is
+// the selected maximum, x_t - M = 0 and the loss is l = log1p(T) itself, however small.
+// ctargetx, cmax, cnorm, cfirstcol -> cout. Pops ctargetx and the row statistics cmax, cpivot, cnorm.
+inline void cross_entropy_loss_tile() {
+    cb_wait_front(ctargetx, 1);
+    cb_wait_front(cmax, 1);
+    cb_wait_front(cnorm, 1);
+    tile_regs_acquire();
+    copy_init(ctargetx);
+    copy_tile(ctargetx, 0, 0);  // dst0 = x_t
+    copy_init(cmax);
+    copy_tile(cmax, 0, 1);  // dst1 = M
+    sfpu_bcast_col_init();
+    sfpu_sub_bcast_col(0, 1);  // dst0 = x_t - M
+    copy_init(cnorm);
+    copy_tile(cnorm, 0, 1);  // dst1 = l
+    sfpu_bcast_col_init();
+    sfpu_sub_bcast_col(0, 1);  // dst0 = y_t = (x_t - M) - l
+    negative_tile_init();
+    negative_tile(0);  // dst0 = loss = -y_t
+    // Keep column 0 only, so the loss tile's padding columns are zero.
+    copy_init(cfirstcol);
+    copy_tile(cfirstcol, 0, 1);  // dst1 = 1 in column 0, 0 elsewhere
+    mul_binary_tile_init();
+    mul_binary_tile(0, 1, 0);  // dst0 = loss in column 0 only
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_one_tile(0, cout);  // cout = loss
+    tile_regs_release();
+    cb_pop_front(ctargetx, 1);
+    cb_pop_front(cmax, 1);
+    cb_pop_front(cpivot, 1);
+    cb_pop_front(cnorm, 1);
+}
+
+#ifdef UPSTREAM_GRAD
+// Multiplies the column vector in DST tile `dst` by each row's upstream gradient g (cupstream, column 0), using DST
+// tile dst + 1. Part of a step: the caller holds DST.
+inline void multiply_by_upstream_tile(uint32_t dst) {
+    copy_init(cupstream);
+    copy_tile(cupstream, 0, dst + 1);  // dst[dst + 1] = g, the upstream gradient
+    mul_binary_tile_init();
+    mul_binary_tile(dst, dst + 1, dst);  // dst[dst] *= g
+}
+#endif
+
+// q = s * exp(-l) (times g with UPSTREAM_GRAD), so that dx = exp(x - M) * q = s * softmax(x): cnorm -> cd.
+inline void cross_entropy_scale_tile() {
+    cb_wait_front(cnorm, 1);
+#ifdef UPSTREAM_GRAD
+    cb_wait_front(cupstream, 1);
+#endif
+    tile_regs_acquire();
+    copy_init(cnorm);
+    copy_tile(cnorm, 0, 0);  // dst0 = l
+    negative_tile_init();
+    negative_tile(0);  // dst0 = -l
+    exp_tile_init<USE_APPROXIMATE_EXPONENTIAL>();
+    exp_tile<USE_APPROXIMATE_EXPONENTIAL>(0);  // dst0 = exp(-l) = 1 / (1 + T)
+    binop_with_scalar_tile_init();
+    mul_unary_tile(0, scaler_bits);  // dst0 = q = s * exp(-l)
+#ifdef UPSTREAM_GRAD
+    multiply_by_upstream_tile(0);  // dst0 = q * g
+#endif
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_one_tile(0, cd);  // cd = q
+    tile_regs_release();
+}
+
+// The target's gradient dx_t = s * (p_t - 1) = s * expm1(y_t) (times g), y_t = (x_t - M) - l: for a target at the
+// selected maximum that is -s * T / (1 + T), the sum of the other gradients (arXiv:2610.31642, Eq. 7), without
+// subtracting nearly equal values. ctargetx, cmax, cnorm -> cpivotgrad, which the writer substitutes. Pops ctargetx
+// (and cupstream).
+inline void target_gradient_tile() {
+    cb_wait_front(ctargetx, 1);
+    cb_wait_front(cmax, 1);
+    tile_regs_acquire();
+    copy_init(ctargetx);
+    copy_tile(ctargetx, 0, 0);  // dst0 = x_t
+    copy_init(cmax);
+    copy_tile(cmax, 0, 1);  // dst1 = M
+    sfpu_bcast_col_init();
+    sfpu_sub_bcast_col(0, 1);  // dst0 = x_t - M
+    copy_init(cnorm);
+    copy_tile(cnorm, 0, 1);  // dst1 = l
+    sfpu_bcast_col_init();
+    sfpu_sub_bcast_col(0, 1);  // dst0 = y_t = (x_t - M) - l
+    expm1_tile_init();
+    expm1_tile(0);  // dst0 = p_t - 1 = expm1(y_t)
+    binop_with_scalar_tile_init();
+    mul_unary_tile(0, scaler_bits);  // dst0 = s * (p_t - 1)
+#ifdef UPSTREAM_GRAD
+    multiply_by_upstream_tile(0);  // dst0 = s * (p_t - 1) * g
+#endif
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_one_tile(0, cpivotgrad);  // cpivotgrad = dx_t, the target's gradient
+    tile_regs_release();
+    cb_pop_front(ctargetx, 1);
+#ifdef UPSTREAM_GRAD
+    cb_pop_front(cupstream, 1);
+#endif
+}
+
+// dx = exp(x - M) * q over this unit's logits, with M (cm) and q (cs) broadcast across the row: cx -> cout. Pops
+// each logits tile.
+inline void cross_entropy_grad_tiles(uint32_t begin, uint32_t end) {
+    cb_wait_front(cm, 1);
+    cb_wait_front(cs, 1);
+    log_softmax_online_init();
+    for (uint32_t col = begin; col < end; ++col) {
+        cb_wait_front(cx, 1);
+        tile_regs_acquire();
+        copy_init(cm);
+        copy_tile(cm, 0, 1);  // dst1 = M
+        copy_init(cs);
+        copy_tile(cs, 0, 2);  // dst2 = q
+        reconfig_data_format_srca(cfp32, cx);
+        copy_init(cx);
+        copy_tile(cx, 0, 0);  // dst0 = x
+        reconfig_data_format_srca(cx, cfp32);
+        cross_entropy_grad(0);  // dst0 = dx = exp(x - M) * q
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_one_tile(0, cout);  // cout = dx
+        tile_regs_release();
+        cb_pop_front(cx, 1);
+    }
+}
+
+// One row of the cross-entropy gradient: dx = s * softmax(x), with the writer substituting the target's dx_t.
+// Consumes the row statistics cmax, cpivot, cnorm.
+inline void cross_entropy_grad_row(uint32_t begin, uint32_t end) {
+    cross_entropy_scale_tile();        // cd = q
+    broadcast_column_tile(cd, 0, cs);  // cs = q in every column
+    cb_pop_front(cd, 1);
+    target_gradient_tile();              // cpivotgrad = dx_t
+    broadcast_column_tile(cmax, 0, cm);  // cm = M in every column
+    cb_pop_front(cmax, 1);
+    cb_pop_front(cpivot, 1);
+    cb_pop_front(cnorm, 1);
+    cross_entropy_grad_tiles(begin, end);  // cout = dx
+    cb_pop_front(cm, 1);
+    cb_pop_front(cs, 1);
+}
+#endif
+
+#if !defined(BACKWARD) && !defined(CROSS_ENTROPY)
 // The row state (M, K, l) for the backward: cmax, cpivot, cnorm -> cstateout.
 inline void log_softmax_row_state_tiles() {
     cb_wait_front(cmax, 1);
@@ -349,7 +504,7 @@ inline void log_softmax_forward_row(uint32_t begin, uint32_t end) {
 }
 #endif
 
-#ifdef BACKWARD
+#if defined(BACKWARD) && !defined(CROSS_ENTROPY)
 // Pass 1 of the backward, per lane and then per row: A, the sum of the upstream gradient over this unit's columns
 // except the selected element (the reader zeroes it and hands it over separately in cpivotdy): cdy -> cothers. Pops
 // each gradient tile.
@@ -534,12 +689,25 @@ void kernel_main() {
     compute_kernel_hw_startup(cx, cx, cout);
     reconfig_data_format_srca(cx, cfp32);  // Steps start with source A set for the FP32 statistics.
     cb_wait_front(ccols, 1);
+#if defined(CROSS_ENTROPY) && !defined(BACKWARD)
+    cb_wait_front(cfirstcol, 1);
+#endif
     for (uint32_t row = 0; row < count; ++row) {
+#if defined(CROSS_ENTROPY)
+        row_statistics(begin, end);  // cmax, cpivot, cnorm = M, K, l
 #ifndef BACKWARD
+        cross_entropy_loss_tile();  // cout = loss
+#else
+        cross_entropy_grad_row(begin, end);
+#endif
+#elif !defined(BACKWARD)
         log_softmax_forward_row(begin, end);
 #else
         log_softmax_backward_row(begin, end);
 #endif
     }
+#if defined(CROSS_ENTROPY) && !defined(BACKWARD)
+    cb_pop_front(cfirstcol, 1);
+#endif
     cb_pop_front(ccols, 1);
 }

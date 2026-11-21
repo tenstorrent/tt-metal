@@ -13,7 +13,7 @@ namespace ttml::metal {
 ttnn::Tensor cross_entropy_bw(
     const ttnn::Tensor& input,   // logits : model output (N, 1, H, W)
     const ttnn::Tensor& target,  // target : ground truth (N, H)
-    const ttnn::Tensor& grad,    // grad : support only  (1, 1, 1, 1)
+    const ttnn::Tensor& grad,    // upstream gradient: (1, 1, 1, 1) or (N, 1, H, 1) are fused, others broadcast
     float scaler);
 
 }  // namespace ttml::metal
