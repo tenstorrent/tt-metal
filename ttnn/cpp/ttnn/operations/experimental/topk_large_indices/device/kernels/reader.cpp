@@ -287,10 +287,10 @@ __attribute__((noinline)) void two_level_gather(
 // repair that comes too early only does a unit twice.
 constexpr uint32_t repair_after = 200000;
 
-// From this search length a row of the last phase-1 wave can stream its stage 2 while units are still unclaimed (see
-// two_level_run). Below it the other cores may all be sorting rows meanwhile, and a unit nobody claims would leave the
-// streaming row waiting for its repair. (Measured on 108 and 99 cores, 160 rows: gains from 512K; at 131K-262K on 99
-// cores the repairs double the op.)
+// From this search length, on at least 3 * wave_rows cores, a row of the last phase-1 wave can stream its stage 2
+// while units are still unclaimed (see two_level_run). Below it the other cores may all be sorting rows meanwhile, and
+// a unit nobody claims would leave the streaming row waiting for its repair. (Measured on 108 and 99 cores, 160 rows:
+// gains from 512K; at 131K-262K on 99 cores the repairs double the op.)
 constexpr uint32_t stream_early_from = 393216;
 
 // The block maxima of phase-1 unit `part` of `row`, computed here instead of by the compute, into `dst` (slot b for
@@ -620,6 +620,10 @@ FORCE_INLINE void two_level_run(
                 constexpr uint32_t chunk_units =
                     chunk_bytes / sizeof(uint16_t) /
                     (get_named_compile_time_arg_val("tl_stage1_batch") * (tile_keys / block_keys));
+                // The last wave's owners leave at most wave_rows cores' worth of claims, and the rest keep the DRAM
+                // busy.
+                const bool stream_early = search_len >= stream_early_from && num_cores >= 3 * wave_rows;
+                const uint32_t last_wave = (units.total - 1) / (wave_rows * units.per_row);
                 uint32_t best_parts = 0;
                 for (uint32_t candidate = 0; candidate < local_rows; ++candidate) {
                     const bool split = split_owner && candidate == local_whole_rows;
@@ -627,8 +631,8 @@ FORCE_INLINE void two_level_run(
                         continue;
                     }
                     if (units_left &&
-                        (search_len < stream_early_from || complete_parts[candidate] < chunk_units ||
-                         units.unit_of(local_row_index(candidate), 0) + wave_rows * units.per_row < units.total)) {
+                        (!stream_early || complete_parts[candidate] < chunk_units ||
+                         units.unit_of(local_row_index(candidate), 0) / (wave_rows * units.per_row) != last_wave)) {
                         continue;
                     }
                     if (local_row == local_rows || complete_parts[candidate] > best_parts) {
