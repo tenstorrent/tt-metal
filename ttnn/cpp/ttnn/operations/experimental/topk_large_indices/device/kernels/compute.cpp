@@ -8,7 +8,8 @@
 //
 // Outlining shared code enlarges this kernel rather than shrinking it: the topk_xl MOP and replay-buffer
 // programming folds constants hard at each call site, so one generic copy is bigger than several specialised
-// ones. Delete a path with a compile-time argument instead.
+// ones. Delete a path with a compile-time argument instead. The exception is arm_untilize_pack, out of line in
+// two-level programs: every call site passes the same constants, so one copy folds them as well.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -544,7 +545,7 @@ FORCE_INLINE void reduce_split_segmented_row(
     }
 }
 
-// Arms the untilize pack of a row's indices. Out of line in two-level programs: four call sites, all passing the same
+// Arms the untilize pack of a row's indices. Out of line in two-level programs: every call site passes the same
 // constant CB, so the one copy loses no folding. Each passes its own line on to the compute-kernel sentinel's
 // diagnostics.
 #ifdef TOPK_TWO_LEVEL
@@ -633,8 +634,7 @@ FORCE_INLINE void two_level_unit() {
 // Runs the phase-1 units the reader sends until it announces anything else, which it returns: one of this core's rows
 // (header_row, or header_split for a split row's stage 2), its half of a split row (header_half), or the end
 // (header_end). Phase 1 runs on the ordinary schedule, so a split in progress is ended first.
-FORCE_INLINE uint32_t two_level_next_row(uint32_t input_cb, uint32_t total_units, bool& split_on) {
-    using namespace topk_two_level;
+FORCE_INLINE uint32_t two_level_next_row(uint32_t total_units, bool& split_on) {
     constexpr uint32_t cb_stage1 = get_named_compile_time_arg_val("tl_cb_stage1");
     constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
     CircularBuffer stage1(cb_stage1);
@@ -777,16 +777,15 @@ void kernel_main() {
     // ids (the split body decodes stamps per 32-chunk block and needs a row to start on one).
     bool shifted_half = false;
     if constexpr (split_whole_rows) {
+        const bool half_in_split = segmented_split && has_split && split_num_chunks >= min_split_chunks &&
+                                   (split_first_chunk & fused_chunk_id_mask) == 0;
 #ifdef TOPK_TWO_LEVEL
         // A two-level row is two items on this loop's split body, both read from input_cb: its block maxima (stage
         // 2), then its gathered candidates (stage 3). One call site keeps a single copy of the body in the binary.
-        const bool two_level_rows = two_level_mode;
         const uint32_t whole_row_chunks = num_chunks;
         const uint32_t whole_row_tail = tail_elements;
         // A two-level core runs its items until the reader's end header: two per row, between phase-1 units.
-        const bool half_in_split = segmented_split && has_split && split_num_chunks >= min_split_chunks &&
-                                   (split_first_chunk & fused_chunk_id_mask) == 0;
-        const uint32_t items = two_level_rows ? 0xFFFFFFFFu : num_whole_rows + (half_in_split ? 1 : 0);
+        const uint32_t items = two_level_mode ? 0xFFFFFFFFu : num_whole_rows + (half_in_split ? 1 : 0);
         const uint32_t maxima_chunks = topk_two_level::stage2_chunks(two_level_search_length);
         const uint32_t total_units =
             topk_two_level::Units::of(
@@ -795,26 +794,27 @@ void kernel_main() {
                 get_common_arg_val<uint32_t>(topk_common_args::compute_two_level_num_input_rows))
                 .total;
         bool split_on = false;
-        if (two_level_rows || half_in_split ||
+        if (two_level_mode || half_in_split ||
             (num_whole_rows > 0 && num_chunks >= min_split_chunks &&
              (num_chunks <= max_fused_chunks || segmented_split))) {
-            if (!two_level_rows) {
+            if (!two_level_mode) {
                 begin_thread_split();
                 split_on = true;
             }
-            const bool prefetch = !two_level_rows && !segmented_split && num_chunks <= max_fused_chunks &&
+            const bool prefetch = !two_level_mode && !segmented_split && num_chunks <= max_fused_chunks &&
                                   topk_xl_split_can_prefetch<K>(num_chunks);
-            // A split row's stage 2 runs here and its stage 3 in halves on the split-row path below.
+            // A split row's stage 2 runs here. Its stage 3 runs in halves here too with the segmented split body;
+            // only non-segmented programs take the split-row path below for it.
             bool stage2_only = false;
             for (uint32_t row = 0; row < items; ++row) {
-                const bool maxima_item = two_level_rows && (row & 1) == 0;
-                bool half_item = !two_level_rows && row == num_whole_rows;
+                const bool maxima_item = two_level_mode && (row & 1) == 0;
+                bool half_item = !two_level_mode && row == num_whole_rows;
                 if (maxima_item) {
-                    const uint32_t next = two_level_next_row(input_cb, total_units, split_on);
+                    const uint32_t next = two_level_next_row(total_units, split_on);
                     if (early_halves && next == topk_two_level::header_end) {
                         break;
                     }
-                    if (next == topk_two_level::header_end || (early_halves && next == topk_two_level::header_half)) {
+                    if (next == (early_halves ? topk_two_level::header_half : topk_two_level::header_end)) {
                         if constexpr (!segmented_split) {
                             break;
                         }
@@ -841,20 +841,18 @@ void kernel_main() {
                         begin_thread_split();
                         split_on = true;
                     }
-                } else if (two_level_rows && stage2_only) {
+                } else if (two_level_mode && stage2_only) {
                     continue;
                 }
                 // Shadow the row bounds with this item's: the call below is the single-level loop's.
                 const bool fused_join = num_chunks <= max_fused_chunks;
                 const uint32_t num_chunks =
                     half_item ? split_num_chunks
-                              : (!two_level_rows ? whole_row_chunks
+                              : (!two_level_mode ? whole_row_chunks
                                                  : (maxima_item ? maxima_chunks : topk_two_level::candidate_keys / K));
-                const uint32_t tail_elements = half_item ? split_tail_elements : (two_level_rows ? K : whole_row_tail);
+                const uint32_t tail_elements = half_item ? split_tail_elements : (two_level_mode ? K : whole_row_tail);
                 const bool prefetch_next = prefetch && row + 1 < num_whole_rows;
 #else
-        const bool half_in_split = segmented_split && has_split && split_num_chunks >= min_split_chunks &&
-                                   (split_first_chunk & fused_chunk_id_mask) == 0;
         if (half_in_split || (num_whole_rows > 0 && num_chunks >= min_split_chunks &&
                               (num_chunks <= max_fused_chunks || segmented_split))) {
             begin_thread_split();
@@ -891,9 +889,7 @@ void kernel_main() {
                     if (shifted_half) {
                         topk_xl_split_set_stamp_offset(0);
                     }
-#endif
-#ifdef TOPK_TWO_LEVEL
-                    if (half_item && early_halves && two_level_rows) {
+                    if (half_item && early_halves && two_level_mode) {
                         // The half's survivor leaves DEST raw: to the partner from the second core, into this core's
                         // own send CB until the end's join on the first.
                         topk_xl_split_end();
@@ -955,16 +951,15 @@ void kernel_main() {
                 // The split body leaves the packer in its last segment's mode; both output forms of the split-row
                 // path start from the untilize one. No settle: DEST holds the half's survivor.
                 arm_untilize_pack<K>(indices_cb);
+#ifdef TOPK_TWO_LEVEL
+            } else if (segmented_split || two_level_mode) {
+#else
             } else if constexpr (segmented_split) {
+#endif
                 settle_next_program(input_cb);
             }
 #ifdef TOPK_TWO_LEVEL
-            if constexpr (!segmented_split) {
-                if (two_level_rows) {
-                    settle_next_program(input_cb);
-                }
-            }
-            if (two_level_rows && early_halves) {
+            if (two_level_mode && early_halves) {
                 if (has_split && !second_half) {
                     // The split row's join: this core's parked half, then the partner's landed one merged into it.
                     arm_untilize_pack<K>(indices_cb);
@@ -990,7 +985,7 @@ void kernel_main() {
                 }
                 return;
             }
-            if (two_level_rows) {
+            if (two_level_mode) {
                 if (!has_split) {
                     return;
                 }

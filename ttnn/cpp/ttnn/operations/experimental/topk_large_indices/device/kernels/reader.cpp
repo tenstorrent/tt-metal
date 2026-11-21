@@ -18,10 +18,12 @@
 namespace {
 
 constexpr uint16_t neginf_bf16 = 0xFF80;
+// The mode and search length words follow the whole-row and split bounds in the compute's mailbox.
+static_assert(topk_two_level::mailbox_mode_word == 2 * topk_metadata_split_word_offset);
 
-// Returns the address of the last key stored. Its caller waits for the stores (topk_two_level::wait_l1_store) before
-// the CB push that hands them on.
-// num_elements is at least 1. Word stores past a leading odd key.
+// Stores -inf into num_elements (at least 1) keys from l1_addr: a leading odd key alone, then whole words. Returns the
+// address of the last key stored; the caller waits for the stores (topk_two_level::wait_l1_store) before the CB push
+// that hands them on.
 __attribute__((noinline)) uint32_t fill_neginf(uint32_t l1_addr, uint32_t num_elements) {
     const uint32_t end = l1_addr + num_elements * sizeof(uint16_t);
     uint32_t addr = l1_addr;
@@ -160,8 +162,9 @@ __attribute__((noinline)) uint32_t read_word(uint8_t noc_id, uint64_t addr) {
 // The staging area is the stage-1 CB, idle while a row gathers: reserving all of it waits until the compute has
 // consumed every page there, and nothing is pushed.
 //
-// Out of line: two call sites, and the kernel config buffer is tight. Each chunk waits for its page of the table: from
-// this core's writer through the table CB, or (from_partner) from the split pair's first core, counted by half_sem.
+// Out of line: several call sites, and the kernel config buffer is tight. Each chunk waits for its page of the table:
+// from this core's writer through the table CB, or (from_partner) from the split pair's first core, counted by
+// half_sem.
 template <typename InputAccessor>
 __attribute__((noinline)) void two_level_gather(
     const Noc& noc,
@@ -226,7 +229,7 @@ __attribute__((noinline)) void two_level_gather(
         // The last -inf stored into the chunk, if any.
         uint32_t last_fill = 0;
         uint32_t staged = staging;
-        uint32_t copies = 0;
+        bool copies = false;
         uint32_t slot = 0;
         while (slot < blocks_per_chunk) {
             const uint32_t block = chunk_table[slot];
@@ -264,7 +267,7 @@ __attribute__((noinline)) void two_level_gather(
                 }
                 copy_from[slot + i] = (staged + (member - block) * block_bytes) | (1u << 31);
             }
-            copies = 1;
+            copies = true;
             staged += span_bytes;
             slot += group;
         }
@@ -318,8 +321,8 @@ constexpr uint32_t lost_lag = 1024;
 
 // From this search length, on at least 3 * wave_rows cores, a row of the last phase-1 wave can stream its stage 2
 // while units are still unclaimed (see two_level_run). Below it the other cores may all be sorting rows meanwhile, and
-// the streaming row would wait for one of them to claim its units. (Measured on 108 and 99 cores, 160 rows: gains from
-// 512K.)
+// the streaming row would wait for one of them to claim its units. On 108 and 99 cores and 160 rows it is faster from
+// 512K.
 constexpr uint32_t stream_early_from = 393216;
 
 // The block maxima of phase-1 unit `part` of `row`, computed here instead of by the compute, into `dst` (slot b for
@@ -337,13 +340,14 @@ __attribute__((noinline)) void two_level_unit_maxima(
     stage1_cb.reserve_back(2 * (1 + stage1_batch));
     const uint32_t first_key = part * unit_keys;
     const uint32_t live = search_len - first_key < unit_keys ? search_len - first_key : unit_keys;
+    const uint32_t blocks = div_up(live, block_keys);
     const uint8_t noc_id = noc.get_noc_id();
     const uint64_t row_noc_addr = input.get_noc_addr(row, 0, noc_id);
     noc_async_read_set_state(row_noc_addr, noc_id);
     gather_read(
         static_cast<uint32_t>(row_noc_addr) + first_key * sizeof(uint16_t),
         stage1_cb.get_write_ptr(),
-        div_up(live, block_keys) * block_bytes,
+        blocks * block_bytes,
         noc_id);
     noc_async_read_barrier(noc_id);
     invalidate_l1_cache();
@@ -354,7 +358,6 @@ __attribute__((noinline)) void two_level_unit_maxima(
     const auto ordered = [](uint32_t bits) { return bits ^ ((0u - (bits >> 15)) & 0x7FFFu) ^ 0x8000u; };
     const auto* pairs = reinterpret_cast<const uint32_t*>(stage1_cb.get_write_ptr());
     auto* maxima = reinterpret_cast<uint16_t*>(dst);
-    const uint32_t blocks = div_up(live, block_keys);
     for (uint32_t block = 0; block < blocks; ++block) {
         uint32_t best0 = 0;
         uint32_t best1 = 0;
@@ -371,7 +374,7 @@ __attribute__((noinline)) void two_level_unit_maxima(
         const uint32_t bits = best & 0x8000u ? best & 0x7FFFu : ~best & 0xFFFFu;
         maxima[block] = (bits & 0x7F80u) == 0 ? 0 : bits;
     }
-    wait_l1_store(reinterpret_cast<uint32_t>(&maxima[div_up(live, block_keys) - 1]));
+    wait_l1_store(reinterpret_cast<uint32_t>(&maxima[blocks - 1]));
 }
 
 // Stage 2 of one row: its block maxima from the maxima tensor through the input CB, one chunk per reserve so a chunk
@@ -491,26 +494,29 @@ FORCE_INLINE void two_level_run(
     const topk_two_level::Units& units,
     uint32_t core_index,
     uint32_t num_cores,
-    uint32_t split_rows,
     bool has_split,
     bool second_half,
     uint32_t split_row) {
     using namespace topk_two_level;
     constexpr uint32_t chunk_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t half_chunks = selected_blocks / (chunk_bytes / block_bytes) / 2;
+    // A chunk is a table page (see two_level_gather), so half the table is half the chunks.
+    constexpr uint32_t half_chunks = table_pages / 2;
     constexpr bool has_block_max = get_named_compile_time_arg_val("tl_block_max_input") != 0;
+    const uint32_t split_rows = units.split_rows;
     const uint32_t whole_rows = units.num_rows - split_rows;
     const uint32_t local_whole_rows = core_index < whole_rows ? div_up(whole_rows - core_index, num_cores) : 0;
     // The first core of a split pair also owns the split row's stage 2, as its last local row.
     const bool split_owner = has_split && !second_half;
     const uint32_t local_rows = local_whole_rows + (split_owner ? 1 : 0);
-    auto* flags = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        CircularBuffer(get_named_compile_time_arg_val("tl_cb_ready_flags")).get_write_ptr());
-    const uint64_t counter = get_noc_addr(
-        get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_x),
-        get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_y),
-        get_semaphore(get_named_compile_time_arg_val("tl_unit_sem")),
-        noc.get_noc_id());
+    auto* done_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        CircularBuffer(get_named_compile_time_arg_val("tl_cb_done_words")).get_write_ptr());
+    // An L1 address on the coordinator.
+    const uint32_t coordinator_x = get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_x);
+    const uint32_t coordinator_y = get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_y);
+    const auto on_coordinator = [&](uint32_t addr) {
+        return get_noc_addr(coordinator_x, coordinator_y, addr, noc.get_noc_id());
+    };
+    const uint64_t counter = on_coordinator(get_semaphore(get_named_compile_time_arg_val("tl_unit_sem")));
     const uint32_t claim_word = get_semaphore(get_named_compile_time_arg_val("tl_claim_sem"));
     const auto* claimed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(claim_word);
     // With tl_early_halves a split row's halves of stage 3 run as soon as they can, rather than after the end: the
@@ -520,11 +526,7 @@ FORCE_INLINE void two_level_run(
     // The cores in row mode while units remain, counted on the coordinator: with split_rows_first about a cap of them
     // take rows (the count each core gets back is an estimate, see below), so the rest keep claiming units and phase 1
     // does not stall behind the rows.
-    const uint64_t rows_counter = get_noc_addr(
-        get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_x),
-        get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_y),
-        get_semaphore(get_named_compile_time_arg_val("tl_rows_sem")),
-        noc.get_noc_id());
+    const uint64_t rows_counter = on_coordinator(get_semaphore(get_named_compile_time_arg_val("tl_rows_sem")));
     const uint32_t row_cap = split_rows_first(early_halves, search_len) ? num_cores * row_cap_fifths / 5 : num_cores;
     // A non-posted atomic add returns the counter's old value to the return address of its command buffer. That value
     // is not reliable: the atomic barrier can complete before it lands, it goes to whatever return address the buffer
@@ -563,18 +565,13 @@ FORCE_INLINE void two_level_run(
         return aux_atomic_add(noc.get_noc_id(), target, increment);
     };
     const auto rows_add = [&](uint32_t increment) { return aux_add(rows_counter, increment); };
-    const uint64_t cleared_count = get_noc_addr(
-        get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_x),
-        get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_y),
-        get_semaphore(get_named_compile_time_arg_val("tl_cleared_sem")),
-        noc.get_noc_id());
+    const uint64_t cleared_count = on_coordinator(get_semaphore(get_named_compile_time_arg_val("tl_cleared_sem")));
     // The claim marks: the core that takes a unit's claim sets its bit on the coordinator, once the coordinator has
     // cleared them (counted in the cleared count). The atomic's value returns to mark_return, never read. A value
     // delivered to two cores clears its bit and carries up into the next clear one of the same word (none past bit
     // 31): the cleared units are done twice, and the unit whose bit the carry sets, if lost, is left to its owner's
     // repair. A late value of a mark can land in rows_word, which only throws off the row cap's estimate.
-    const uint64_t marks = counter - get_semaphore(get_named_compile_time_arg_val("tl_unit_sem")) +
-                           reinterpret_cast<uint32_t>(flags) + marks_offset;
+    const uint64_t marks = on_coordinator(reinterpret_cast<uint32_t>(done_words) + marks_offset);
     bool marks_cleared = false;
     const auto mark = [&](uint32_t unit) {
         if (unit >= units.total) {
@@ -588,7 +585,7 @@ FORCE_INLINE void two_level_run(
             write_reg_cmd_buf,
             marks + unit / 32 * sizeof(uint32_t),
             1u << (unit % 32),
-            reinterpret_cast<uint32_t>(flags) + mark_return_offset,
+            reinterpret_cast<uint32_t>(done_words) + mark_return_offset,
             false);
     };
     const bool capped = !has_block_max && row_cap < num_cores;
@@ -596,22 +593,21 @@ FORCE_INLINE void two_level_run(
         // The atomic sets the return address's low word; the rest points it at this core.
         NOC_CMD_BUF_WRITE_REG(noc.get_noc_id(), write_reg_cmd_buf, NOC_RET_ADDR_MID, 0);
         NOC_CMD_BUF_WRITE_REG(noc.get_noc_id(), write_reg_cmd_buf, NOC_RET_ADDR_COORDINATE, local_coordinate);
-        // Clear this run's done words, then count this core on the coordinator; no writer sends a done word before
-        // every core is counted.
-        // The coordinator (core 0) also clears the claim marks.
+        // Clear this run's done words (the coordinator, core 0, also the claim marks), then count this core on the
+        // coordinator; no writer sends a done word before every core is counted.
         const uint32_t clear_words =
-            core_index == 0 ? marks_offset / sizeof(uint32_t) + div_up(units.total, 32) : ready_flags_bytes / 4;
+            core_index == 0 ? marks_offset / sizeof(uint32_t) + div_up(units.total, 32) : done_words_bytes / 4;
         for (uint32_t word = 0; word < clear_words; ++word) {
-            flags[word] = 0;
+            done_words[word] = 0;
         }
-        wait_l1_store(reinterpret_cast<uint32_t>(&flags[clear_words - 1]));
+        wait_l1_store(reinterpret_cast<uint32_t>(&done_words[clear_words - 1]));
         aux_add(cleared_count, 1);
     }
     // A local row is ready when its first per_row done words are nonzero; complete_parts[r] counts those seen so far.
     uint8_t complete_parts[max_local_rows] = {};
     const auto row_ready = [&](uint32_t local_row) {
         uint32_t part = complete_parts[local_row];
-        while (part < units.per_row && flags[local_row * max_row_units + part] != 0) {
+        while (part < units.per_row && done_words[local_row * max_row_units + part] != 0) {
             ++part;
         }
         complete_parts[local_row] = part;
@@ -780,7 +776,7 @@ FORCE_INLINE void two_level_run(
                 block_max,
                 search_len,
                 row,
-                streaming ? flags + local_row * max_row_units : nullptr,
+                streaming ? done_words + local_row * max_row_units : nullptr,
                 units,
                 streaming ? row_unit[local_row] : 0,
                 streaming ? unit_stride[local_row] : 0,
@@ -882,7 +878,7 @@ FORCE_INLINE void two_level_run(
             for (; repair_next < local_rows * max_row_units && unit == units.total; ++repair_next) {
                 const uint32_t local_row = repair_next / max_row_units;
                 const uint32_t part = repair_next % max_row_units;
-                if (part < units.per_row && !(done_rows >> local_row & 1) && flags[repair_next] == 0) {
+                if (part < units.per_row && !(done_rows >> local_row & 1) && done_words[repair_next] == 0) {
                     unit = row_unit[local_row] + part * unit_stride[local_row];
                 }
             }
@@ -933,9 +929,7 @@ FORCE_INLINE void two_level_run(
     if (has_split && !early_halves) {
         // This core's half of the split row's candidates: the first core's by its own writer's table, the second
         // core's by the table half the first core's writer sends into its remote-table CB.
-        const uint32_t table_addr =
-            split_owner ? table_cb.get_read_ptr()
-                        : CircularBuffer(get_named_compile_time_arg_val("tl_cb_remote_table")).get_write_ptr();
+        const uint32_t table_addr = split_owner ? table_cb.get_read_ptr() : remote_table;
         two_level_gather(
             noc,
             input,
@@ -1026,27 +1020,22 @@ void kernel_main() {
         bounds = calculate_topk_bounds(search_len, llk_k);
         whole = whole_row_bounds(bounds);
         CoreLocalMem<TopkMetadataBounds> mailbox(scratch);
-#ifdef TOPK_TWO_LEVEL
-        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
-        words[topk_two_level::mailbox_mode_word] =
-            topk_two_level::two_level_mode_for(search_len, two_level_cutover) ? 1u : 0u;
-        words[topk_two_level::mailbox_search_length_word] = search_len;
-#endif
         mailbox->num_chunks = whole.num_chunks;
         mailbox->tail_elements = whole.tail_elements;
-        uint32_t last_store = reinterpret_cast<uint32_t>(&mailbox->tail_elements);
         if constexpr (row_split) {
             // The compute also needs this core's half of the split row.
             split = half_bounds(bounds, llk_k, second_half);
             CoreLocalMem<TopkMetadataBounds> split_mailbox(scratch + sizeof(TopkMetadataBounds));
             split_mailbox->num_chunks = split.num_chunks;
             split_mailbox->tail_elements = split.tail_elements;
-            last_store = reinterpret_cast<uint32_t>(&split_mailbox->tail_elements);
         }
 #ifdef TOPK_TWO_LEVEL
-        topk_two_level::wait_l1_store(last_store);
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+        words[topk_two_level::mailbox_mode_word] =
+            topk_two_level::two_level_mode_for(search_len, two_level_cutover) ? 1u : 0u;
+        words[topk_two_level::mailbox_search_length_word] = search_len;
+        topk_two_level::wait_l1_store(reinterpret_cast<uint32_t>(&words[topk_two_level::mailbox_search_length_word]));
 #else
-        (void)last_store;
         clobber_all_memory();
 #endif
         meta_cb_obj.push_back(1);
@@ -1103,7 +1092,7 @@ void kernel_main() {
         const auto block_max = TensorAccessor(
             block_max_args,
             get_common_arg_val<uint32_t>(topk_common_args::block_max_address),
-            get_common_arg_val<uint32_t>(topk_common_args::two_level_max_row_bytes));
+            get_common_arg_val<uint32_t>(topk_common_args::block_max_row_bytes));
         two_level_run(
             noc,
             input,
@@ -1117,7 +1106,6 @@ void kernel_main() {
                 topk_two_level::split_rows_first(get_named_compile_time_arg_val("tl_early_halves") != 0, search_len)),
             get_arg_val<uint32_t>(topk_core_args::reader_two_level_core_index),
             get_common_arg_val<uint32_t>(topk_common_args::two_level_num_cores),
-            get_common_arg_val<uint32_t>(topk_common_args::two_level_split_rows),
             has_split,
             second_half,
             split_row);

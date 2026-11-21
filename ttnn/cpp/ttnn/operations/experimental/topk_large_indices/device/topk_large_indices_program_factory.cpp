@@ -193,7 +193,7 @@ void set_two_level_common_args(
     auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.reader_kernel_id);
     reader_args[topk_common_args::two_level_cutover] = attrs.two_level_cutover.value_or(two_level_default_cutover);
     reader_args[topk_common_args::block_max_address] = maxima_address;
-    reader_args[topk_common_args::two_level_max_row_bytes] = row_bytes;
+    reader_args[topk_common_args::block_max_row_bytes] = row_bytes;
     reader_args[topk_common_args::two_level_num_input_rows] = num_rows;
     reader_args[topk_common_args::two_level_num_cores] = num_cores;
     // The rows the single-level assignment halves across core pairs; stage 3 of each runs in halves on its pair.
@@ -203,10 +203,10 @@ void set_two_level_common_args(
     auto& compute_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.compute_kernel_id);
     compute_args[topk_common_args::compute_two_level_num_input_rows] = num_rows;
     auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.writer_kernel_id);
-    writer_args[topk_common_args::two_level_max_address] = maxima_address;
+    writer_args[topk_common_args::writer_block_max_address] = maxima_address;
     writer_args[topk_common_args::mode_output_address] =
         tensor_args.mode_output.has_value() ? tensor_args.mode_output->mesh_buffer().address() : 0u;
-    writer_args[topk_common_args::writer_two_level_max_row_bytes] = row_bytes;
+    writer_args[topk_common_args::writer_block_max_row_bytes] = row_bytes;
     writer_args[topk_common_args::writer_two_level_num_input_rows] = num_rows;
     const auto coordinator = input.device()->worker_core_from_logical_core(shared.cores.front());
     reader_args[topk_common_args::reader_coordinator_noc_x] = static_cast<uint32_t>(coordinator.x);
@@ -455,7 +455,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     constexpr uint32_t cb_remote_table = tt::CBIndex::c_14;
     constexpr uint32_t cb_writer_mailbox = tt::CBIndex::c_15;
     constexpr uint32_t cb_split_table = tt::CBIndex::c_16;
-    constexpr uint32_t cb_ready_flags = tt::CBIndex::c_17;
+    constexpr uint32_t cb_done_words = tt::CBIndex::c_17;
     constexpr uint32_t stage1_batch = 32;
     if (two_level) {
         // Stage 3 reads 64 B blocks straight into candidate slots: the DRAM read rule needs the source and the L1
@@ -495,17 +495,17 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         }
         // The mode and search length, then a header per item (see topk_two_level::header_row).
         create_cb(cb_writer_mailbox, 4, 64, tt::DataFormat::UInt32);
-        // A done word per phase-1 unit of this core's rows (see topk_two_level::ready_flag_offset), then the claim
+        // A done word per phase-1 unit of this core's rows (see topk_two_level::done_word_offset), then the claim
         // marks (see topk_two_level::marks_offset).
         create_cb(
-            cb_ready_flags,
+            cb_done_words,
             1,
-            topk_two_level::ready_cb_bytes(static_cast<uint32_t>(cores.size())),
+            topk_two_level::done_cb_bytes(static_cast<uint32_t>(cores.size())),
             tt::DataFormat::UInt32);
     }
     // unit: on the coordinator, the next phase-1 unit to claim. claim: where a core's claims return the counter; it
     // starts at 0xFFFFFFFF, which no claim returns.
-    // cleared: on the coordinator, the cores whose ready flags are cleared for this run. scratch: a core's landing word
+    // cleared: on the coordinator, the cores whose done words are cleared for this run. scratch: a core's landing word
     // for its reads of the coordinator's counters.
     const uint32_t unit_semaphore_id = two_level ? tt::tt_metal::CreateSemaphore(program, all_cores, 0) : 0;
     const uint32_t claim_semaphore_id = two_level ? tt::tt_metal::CreateSemaphore(program, all_cores, 0xFFFFFFFFu) : 0;
@@ -536,7 +536,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         {"tl_cb_remote_table", cb_remote_table},
         {"tl_cb_writer_mailbox", cb_writer_mailbox},
         {"tl_cb_split_table", cb_split_table},
-        {"tl_cb_ready_flags", cb_ready_flags},
+        {"tl_cb_done_words", cb_done_words},
         {"tl_early_halves", early_halves ? 1u : 0u},
         {"tl_stage1_batch", stage1_batch},
         {"tl_block_max_input", tensor_args.block_max_tensor.has_value() ? 1u : 0u},

@@ -159,12 +159,7 @@ FORCE_INLINE void two_level_unit(
         {.page_id = row, .offset_bytes = first_block * sizeof(uint16_t)});
     noc.async_write_barrier();
     const uint32_t num_cores = get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_num_cores);
-    const RowOwner owner = row_owner(
-        row,
-        units.num_rows,
-        get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_split_rows),
-        num_cores,
-        extra_rows_first(search_len));
+    const RowOwner owner = row_owner(row, units.num_rows, units.split_rows, num_cores, extra_rows_first(search_len));
     if (!cleared) {
         // The coordinator counts the cores that have cleared; the staging word is free once the maxima are written.
         const uint32_t coordinator = get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_core_coords);
@@ -186,8 +181,8 @@ FORCE_INLINE void two_level_unit(
         get_noc_addr(
             coords & 0xFFFFu,
             coords >> 16,
-            CircularBuffer(get_named_compile_time_arg_val("tl_cb_ready_flags")).get_write_ptr() +
-                ready_flag_offset(owner.local_row, units.part(unit)),
+            CircularBuffer(get_named_compile_time_arg_val("tl_cb_done_words")).get_write_ptr() +
+                done_word_offset(owner.local_row, units.part(unit)),
             noc.get_noc_id()),
         1,
         noc.get_noc_id());
@@ -196,8 +191,14 @@ FORCE_INLINE void two_level_unit(
 // Stage 2 of one of this core's rows: the selected blocks, in any order, become the ascending block table the reader
 // gathers by, sentinels last; stage 3's remap reads it too. The table goes out a chunk's page at a
 // time, so the reader gathers each chunk as soon as its blocks are known. For a split row the pages of the table's
-// second half also go to the partner, which gathers by them.
-FORCE_INLINE void two_level_table(const Noc& noc, CircularBuffer& indices_cb, uint32_t search_len, bool split) {
+// second half also go to the partner (at partner_x, partner_y), which gathers by them.
+FORCE_INLINE void two_level_table(
+    const Noc& noc,
+    CircularBuffer& indices_cb,
+    uint32_t search_len,
+    bool split,
+    uint32_t partner_x,
+    uint32_t partner_y) {
     using namespace topk_two_level;
     CircularBuffer table_cb(get_named_compile_time_arg_val("tl_cb_table"));
     const uint32_t num_blocks = div_up(search_len, block_keys);
@@ -232,8 +233,6 @@ FORCE_INLINE void two_level_table(const Noc& noc, CircularBuffer& indices_cb, ui
     table_cb.reserve_back(table_pages);
     const uint32_t table_addr = table_cb.get_write_ptr();
     auto* table = reinterpret_cast<uint32_t*>(table_addr);
-    const uint32_t partner_x = split ? get_arg_val<uint32_t>(topk_core_args::writer_partner_noc_x) : 0;
-    const uint32_t partner_y = split ? get_arg_val<uint32_t>(topk_core_args::writer_partner_noc_y) : 0;
     uint32_t pushed = 0;
     const auto publish = [&](uint32_t entries) {
         if ((pushed + 1) * table_page_entries > entries) {
@@ -428,13 +427,13 @@ void kernel_main() {
             }
         }
         constexpr bool early_halves = get_named_compile_time_arg_val("tl_early_halves") != 0;
-        if (two_level_mode && early_halves && receives_survivor) {
-            // The landing slot is this pair's only use of it: free from the start, so the partner may send its half's
-            // survivor whenever it has it.
-            landing_cb.reserve_back(survivor_tiles);
-            credit_sem.up(noc, partner_noc_x, partner_noc_y, 1);
-        }
         if (two_level_mode) {
+            if (early_halves && receives_survivor) {
+                // The landing slot is this pair's only use of it: free from the start, so the partner may send its
+                // half's survivor whenever it has it.
+                landing_cb.reserve_back(survivor_tiles);
+                credit_sem.up(noc, partner_noc_x, partner_noc_y, 1);
+            }
             // The block flags start clear; each table's scan clears the flags it finds.
             auto* packed = reinterpret_cast<uint32_t*>(
                 CircularBuffer(get_named_compile_time_arg_val("tl_cb_block_flags")).get_write_ptr());
@@ -453,8 +452,8 @@ void kernel_main() {
                 TensorAccessorArgs<get_named_compile_time_arg_val("tl_max_out_args_offset")>();
             const auto max_out = TensorAccessor(
                 max_out_args,
-                get_common_arg_val<uint32_t>(topk_common_args::two_level_max_address),
-                get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_max_row_bytes));
+                get_common_arg_val<uint32_t>(topk_common_args::writer_block_max_address),
+                get_common_arg_val<uint32_t>(topk_common_args::writer_block_max_row_bytes));
             bool cleared = false;
             while (true) {
                 mailbox_cb.wait_front(1);
@@ -501,7 +500,7 @@ void kernel_main() {
                     landing_cb.push_back(survivor_tiles);
                     row = split_row;
                 } else if (code == header_row || code == header_split) {
-                    two_level_table(noc, indices_cb, search_len, code == header_split);
+                    two_level_table(noc, indices_cb, search_len, code == header_split, partner_noc_x, partner_noc_y);
                     if (code == header_split) {
                         if constexpr (early_halves) {
                             // Kept for the row's output at the end: the table CB holds the next row's table by then.

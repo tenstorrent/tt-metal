@@ -14,7 +14,7 @@
 //   stage 3: the selected blocks gathered into one 65,536-key candidate row (reader), its exact top-2048
 //            (compute), candidate positions mapped back to keys (writer).
 // The program decides once, from the search length, whether its rows run this way or the single-level way. The
-// two-level code compiles only with TOPK_TWO_LEVEL defined, so single-level programs build exactly as before.
+// two-level code compiles only with TOPK_TWO_LEVEL defined.
 
 #include <cstdint>
 
@@ -27,6 +27,8 @@ constexpr uint32_t candidate_keys = selected_blocks * block_keys;
 // Keys per stage-1 tile: a 32x32 tile whose rows are 32 consecutive keys.
 constexpr uint32_t tile_keys = 1024;
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
+// Keys per compute chunk (stage 2's maxima, stage 3's candidates).
+constexpr uint32_t chunk_keys = 2048;
 
 // The reader-to-compute mailbox of a two-level program: the single-level bounds (whole row, split half), then
 // the mode and the search length.
@@ -57,8 +59,6 @@ constexpr uint32_t flag_words(uint32_t search_len) { return div_up(div_up(search
 // across the rows first within a wave: each input row is one DRAM page in one bank, so the units in flight at once
 // spread over every bank, while each wave's rows finish early enough for their owners to start on them.
 constexpr uint32_t wave_rows = 16;
-// Which row the waves take as their o-th: in row order (the split rows last), or with split_first the split rows (the
-// last split_rows rows) first.
 struct Units {
     uint32_t total;
     uint32_t num_rows;
@@ -66,20 +66,26 @@ struct Units {
     uint32_t split_rows;
     bool split_first;
 
+    // Which row the waves take as their o-th: in row order (the split rows last), or with split_first the split rows
+    // (the last split_rows rows) first.
     constexpr uint32_t ordered_row(uint32_t o) const {
         if (!split_first) {
             return o;
         }
         return o < split_rows ? num_rows - split_rows + o : o - split_rows;
     }
+    // The rows of wave `wave`: wave_rows, fewer in the last.
+    constexpr uint32_t rows_in(uint32_t wave) const {
+        return num_rows - wave * wave_rows < wave_rows ? num_rows - wave * wave_rows : wave_rows;
+    }
     constexpr uint32_t row(uint32_t unit) const {
         const uint32_t wave = unit / (wave_rows * per_row);
-        const uint32_t rows = num_rows - wave * wave_rows < wave_rows ? num_rows - wave * wave_rows : wave_rows;
+        const uint32_t rows = rows_in(wave);
         return ordered_row(wave * wave_rows + (unit - wave * wave_rows * per_row) % rows);
     }
     constexpr uint32_t part(uint32_t unit) const {
         const uint32_t wave = unit / (wave_rows * per_row);
-        const uint32_t rows = num_rows - wave * wave_rows < wave_rows ? num_rows - wave * wave_rows : wave_rows;
+        const uint32_t rows = rows_in(wave);
         return (unit - wave * wave_rows * per_row) / rows;
     }
 
@@ -89,7 +95,7 @@ struct Units {
                            : row >= num_rows - split_rows ? row - (num_rows - split_rows)
                                                           : row + split_rows;
         const uint32_t wave = o / wave_rows;
-        const uint32_t rows = num_rows - wave * wave_rows < wave_rows ? num_rows - wave * wave_rows : wave_rows;
+        const uint32_t rows = rows_in(wave);
         return wave * wave_rows * per_row + part * rows + (o - wave * wave_rows);
     }
 
@@ -108,7 +114,7 @@ struct Units {
 // split_first_below the split rows' units come first, so their halves of stage 3 run during phase 1, and at most
 // row_cap_fifths / 5 of the cores sort rows while units remain, so phase 1 keeps going. From split_first_below up,
 // phase 1 is long enough to hide the whole rows, and a split row is the shortest work to leave for after it: its
-// units come last, without a cap. (Measured on 108 cores, 160 rows: split-first gains to 256K, loses from 512K.)
+// units come last, without a cap. On 108 cores and 160 rows split-first is faster to 256K and slower from 512K.
 constexpr uint32_t split_first_below = 393216;
 constexpr uint32_t row_cap_fifths = 3;
 constexpr bool split_rows_first(bool early_halves, uint32_t search_len) {
@@ -122,8 +128,7 @@ constexpr bool split_rows_first(bool early_halves, uint32_t search_len) {
 // belongs to core 2u, which runs its stage 2 and the first half of its stage 3 and merges in the second half that core
 // 2u + 1 sorts. A round's first split_rows positions are the cores 2u, then come the cores 2u + 1, then the cores
 // without a split row: the whole rows' units run in row order, so the cores 2u get their whole rows first, which frees
-// them earlier for their split rows when those come last (see split_rows_first). A row's DRAM bank still follows its
-// index.
+// them earlier for their split rows when those come last (see split_rows_first). A row's DRAM bank follows its index.
 constexpr uint32_t whole_row_core(uint32_t position, uint32_t split_rows) {
     if (position < split_rows) {
         return 2 * position;
@@ -134,22 +139,22 @@ constexpr uint32_t whole_row_core(uint32_t position, uint32_t split_rows) {
 constexpr uint32_t whole_row_position(uint32_t core, uint32_t split_rows) {
     return core >= 2 * split_rows ? core : (core % 2 == 0 ? core / 2 : split_rows + core / 2);
 }
-//
-// A row is ready when each of its units has a nonzero done word in its owner's ready-flags CB: a word per unit, at
+
+// A row is ready when each of its units has a nonzero done word in its owner's done-words CB: a word per unit, at
 // local_row * max_row_units + part. A unit done twice only makes its word 2, so the readiness does not rest on each
 // unit being claimed exactly once (see the reader's claims).
 constexpr uint32_t max_local_rows = 4;
 constexpr uint32_t max_row_units = 64;
-constexpr uint32_t ready_flags_bytes = max_local_rows * max_row_units * sizeof(uint32_t);
-constexpr uint32_t ready_flag_offset(uint32_t local_row, uint32_t part) {
+constexpr uint32_t done_words_bytes = max_local_rows * max_row_units * sizeof(uint32_t);
+constexpr uint32_t done_word_offset(uint32_t local_row, uint32_t part) {
     return (local_row * max_row_units + part) * sizeof(uint32_t);
 }
 // After the done words, in the same CB: a word where the claim marks' atomics return (see the reader's claims), then on
 // the coordinator a bit per unit, set by the core that takes the unit's claim (as many bits as units, at most
 // max_local_rows * max_row_units per core).
-constexpr uint32_t mark_return_offset = ready_flags_bytes;
-constexpr uint32_t marks_offset = ready_flags_bytes + 64;
-constexpr uint32_t ready_cb_bytes(uint32_t num_cores) {
+constexpr uint32_t mark_return_offset = done_words_bytes;
+constexpr uint32_t marks_offset = done_words_bytes + 64;
+constexpr uint32_t done_cb_bytes(uint32_t num_cores) {
     return marks_offset + div_up(num_cores * max_local_rows * max_row_units, 512) * 64;
 }
 struct RowOwner {
@@ -159,8 +164,8 @@ struct RowOwner {
 // Without split rows, when the whole rows leave a partial round and phase 1 is short (extra_first, below
 // extra_rows_first_below), the cores with one row more (the first whole_rows % num_cores) take the first rows,
 // round-robin among themselves, and the other cores the last ones: the cores with the most sorting get their rows
-// early. With a long phase 1 the plain round-robin, whose last rows go to cores already done with their first, measured
-// faster. Measured on 99 cores, 160 rows: the remap gains to 262K and loses at 512K.
+// early. With a long phase 1 the plain round-robin, whose last rows go to cores already done with their first, is
+// faster: on 99 cores and 160 rows the remap is faster to 262K and slower at 512K.
 constexpr uint32_t extra_rows_first_below = 393216;
 constexpr bool extra_rows_first(uint32_t search_len) { return search_len < extra_rows_first_below; }
 constexpr RowOwner whole_row_owner(
@@ -196,7 +201,7 @@ constexpr RowOwner row_owner(
     return {2 * (row - whole_rows), whole_rows / num_cores};
 }
 // The block table goes from the writer to the reader a candidate chunk's blocks at a time: 2048 keys, 64 blocks.
-constexpr uint32_t table_page_entries = 2048 / block_keys;
+constexpr uint32_t table_page_entries = chunk_keys / block_keys;
 constexpr uint32_t table_page_bytes = table_page_entries * sizeof(uint32_t);
 constexpr uint32_t table_pages = selected_blocks / table_page_entries;
 
@@ -219,7 +224,7 @@ constexpr bool two_level_mode_for(uint32_t search_len, uint32_t cutover) {
 // Stage-2 chunks of 2048 maxima for a search length: at least two, so every stage runs on the split body. Maxima
 // past the row's blocks are -inf.
 constexpr uint32_t stage2_chunks(uint32_t search_len) {
-    const uint32_t chunks = div_up(div_up(search_len, block_keys), 2048);
+    const uint32_t chunks = div_up(div_up(search_len, block_keys), chunk_keys);
     return chunks < 2 ? 2 : chunks;
 }
 
