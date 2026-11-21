@@ -1795,6 +1795,51 @@ def test_sort_tied_values_indices_are_a_permutation(descending, device):
     assert unique_count == n, f"{n - unique_count} duplicated indices"
 
 
+@pytest.mark.parametrize(
+    "shape, dim",
+    [
+        ([64, 64], 0),
+        ([2, 64, 64], 1),
+        ([2, 64, 64], 0),
+        ([1, 2, 64, 64], -2),
+        ([1, 1, 64, 64], -1),  # control: dim last
+    ],
+)
+@pytest.mark.parametrize("descending", [True, False])
+def test_sort_out_writes_into_caller_tensor(shape, dim, descending, device):
+    torch.manual_seed(0)
+    # Distinct small integers along the sort dim, exact in bfloat16, so the indices are unique.
+    input = torch.argsort(torch.rand(shape), dim=dim).to(torch.bfloat16)
+    torch_values, torch_indices = torch.sort(input, dim=dim, descending=descending)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    # Sentinels that no sorted value or index can equal, so an unwritten `out` cannot pass.
+    ttnn_values = ttnn.from_torch(
+        torch.full(shape, 12345.0, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    ttnn_indices = ttnn.from_torch(
+        torch.full(shape, 9999, dtype=torch.int32), ttnn.uint16, layout=ttnn.Layout.TILE, device=device
+    )
+    values_address = ttnn_values.buffer_address()
+    indices_address = ttnn_indices.buffer_address()
+    # A second handle on the same buffers, as a caller holding a view or alias of `out` would have.
+    values_alias = ttnn.reshape(ttnn_values, shape)
+    indices_alias = ttnn.reshape(ttnn_indices, shape)
+
+    returned_values, returned_indices = ttnn.sort(
+        ttnn_input, dim=dim, descending=descending, out=(ttnn_values, ttnn_indices)
+    )
+
+    assert ttnn_values.buffer_address() == values_address
+    assert ttnn_indices.buffer_address() == indices_address
+    assert returned_values.buffer_address() == values_address
+    assert returned_indices.buffer_address() == indices_address
+    assert_equal(torch_values, ttnn.to_torch(ttnn_values))
+    assert_equal(torch_indices, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(values_alias))
+    assert_equal(torch_indices, ttnn.to_torch(indices_alias, dtype=torch.int32).to(torch.int64))
+
+
 def assert_sorted(input_values, values, indices):
     """``values`` sorts the last dim of ``input_values``, and each one equals the input value at its index.
 
