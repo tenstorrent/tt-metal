@@ -346,6 +346,80 @@ inline void calculate_gelu() {
 //   0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
 // =============================================================================
 
+// 1 + tanh(u) for u < 0 without the cancellation: 1 + tanh(u) = 1 - tanh(|u|) = 1 / (t + 1) with
+// t = 0.5 * expm1(2 * |u|), the same t _sfpu_tanh_fp32_accurate_ builds. Summing 1 and tanh(u) loses every bit once
+// tanh(u) rounds to -1. Needs the tanh_init program constants. Valid while i = round(2 * |u| * log2(e)) stays
+// below 61 (|u| < 21), so t + 1 and its reciprocal are normal floats.
+sfpi_inline sfpi::vFloat _sfpu_one_plus_tanh_negative_fp32_(sfpi::vFloat u) {
+    sfpi::vFloat a, r, s, f, w, scale, bias0, j, t, rcp, x0, x1;
+    sfpi::vInt i, e, magic_seed;
+    sfpi::vMag m;
+
+    j = u * sfpi::vConstFloatPrgm0;  // j = u * 2 * log2(e)
+    a = u + u;
+    m = sfpi::convert<sfpi::vUInt8>(j, sfpi::RoundMode::Nearest);
+    i = m;
+    j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
+
+    a = sfpi::setsgn(a, 0);
+    f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)
+
+    // expm1(f)
+    r = 1.974105835e-04f;
+    r = r * f + 1.393318176e-3f;
+    r = r * f + 8.331298828e-3f;
+    r = r * f + 4.166680202e-2f;
+    s = f * f;
+    r = r * f + sfpi::vConstFloatPrgm2;
+    w = 0.5f;
+    r = __builtin_rvtt_sfpmad(r.get(), f.get(), w.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+
+    e = i + 126;
+    r = r * s + f;
+    scale = sfpi::setexp(0.0f, e);
+    bias0 = scale - w;
+    x0 = r * scale + bias0;
+    x1 = x0 + 1.0f;
+
+    // 1 / x1 from a seed and Newton steps. The seed is negative (its sign bit is set in the magic constant), so
+    // x1 * rcp + 1 is the small residual and the result is -1 / x1.
+    magic_seed = 0xfef30000;
+    rcp = sfpi::as<sfpi::vFloat>(magic_seed - sfpi::as<sfpi::vInt>(x1));
+    t = x1 * rcp + 1.0f;
+    t = t * t + t;
+    rcp = rcp * t + rcp;
+    t = x1 * rcp + 1.0f;
+    rcp = rcp * t + rcp;
+    return -rcp;
+}
+
+// u = sqrt(2/pi) * (x + 0.044715 * x^3) for the lane's current Dest value.
+sfpi_inline sfpi::vFloat _sfpu_gelu_tanh_u_() {
+    constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
+    constexpr float GELU_TANH_K = 0.044715f;
+    sfpi::vFloat x = sfpi::dst_reg[0];
+    sfpi::vFloat p = GELU_TANH_K * (x * x) + 1.0f;
+    return SQRT_2_OVER_PI * (x * p);
+}
+
+// GELU tanh for -13.375 < x < 0 without the 1 + tanh(u) cancellation: down to x = -6 it is 0.5 * x / (t + 1);
+// below that 1 + tanh(u) = 2 * exp(2u) / (1 + exp(2u)) is 2 * exp(2u) to fp32, so it is x * exp(2u) from the fused
+// tail helper that the derivative uses (0 once that falls under the smallest normal float). Reads the Dest value
+// itself, so only the result is live across the call; the lanes outside that range get 0.
+sfpi_inline sfpi::vFloat _sfpu_gelu_tanh_negative_fp32_() {
+    sfpi::vFloat out = 0.0f;
+    sfpi::vFloat x = sfpi::dst_reg[0];
+    v_if(x > -6.0f) {
+        out = _sfpu_one_plus_tanh_negative_fp32_(_sfpu_gelu_tanh_u_()) * (0.5f * sfpi::dst_reg[0]);
+    }
+    v_elseif(x > -13.375f) {
+        sfpi::vFloat u2 = _sfpu_gelu_tanh_u_() * 2.0f;
+        out = x_times_exp_negative_tail(sfpi::dst_reg[0], u2);
+    }
+    v_endif;
+    return out;
+}
+
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
@@ -367,6 +441,16 @@ inline void calculate_gelu_tanh() {
 
         sfpi::vFloat half_x = 0.5f * x;
         result = half_x * t + half_x;
+
+        // For x < 0, 1 + tanh(u) cancels as tanh(u) -> -1, so the sum above loses all its bits (exactly 0 for
+        // x < -6). The negative helper reads x from Dest again to keep few values live.
+        sfpi::vFloat negative_result = _sfpu_gelu_tanh_negative_fp32_();
+        x = sfpi::dst_reg[0];
+        v_if(x < 0.0f) {
+            v_if(x > -13.375f) { result = negative_result; }
+            v_endif;
+        }
+        v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
