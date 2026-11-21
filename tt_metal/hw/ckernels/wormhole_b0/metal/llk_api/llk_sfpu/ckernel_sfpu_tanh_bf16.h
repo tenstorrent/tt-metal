@@ -5,20 +5,6 @@
 #include <cstdint>
 
 namespace ckernel::sfpu {
-struct TanhBf16Config {
-    static constexpr uint32_t kDegree = 6u;
-    static constexpr uint32_t kCoefficientBits[] = {
-        0x00000000u, 0x3f800000u, 0x3cbfe000u, 0xbef28000u, 0x3e8a1bd5u, 0xbd8035c9u, 0x3bb0e52du};
-    static constexpr uint32_t kClampMaxBits = 0x3f800000u;
-    static constexpr bool kIntrinsicExceptional = true;
-    static constexpr bool kIntrinsicTerminal = true;
-    static constexpr uint32_t kTerminalBoundBits = 0x40a00000u;
-};
-}  // namespace ckernel::sfpu
-
-#include "ckernel_sfpu_tanh_bf16_cascade_signed_abs.h"
-
-namespace ckernel::sfpu {
 
 // The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format, as BF16 for
 // Float16_b and the block formats sharing its exponent.
@@ -33,12 +19,121 @@ inline bool bf16_dest_tanh() {
     return false;
 #endif
 }
+// The kernel's instructions in a stall-filling order, constants held in LRegs.
+inline void calculate_tanh_bf16_scheduled() {
+    TTI_SFPLOADI(6, 1, 0xb794);
+    TTI_SFPLOADI(7, 1, 0x25ff);
+// A loop, not unrolled: the body stays in the instruction cache.
+#pragma GCC unroll 1
+    for (int pass = 0; pass < 4; ++pass) {
+        TTI_SFPLOAD(4, 0, 3, 0);
+        TTI_SFPABS(0, 4, 0, 1);
+        TTI_SFPLOAD(2, 0, 3, 2);
+        TTI_SFPMAD(12, 0, 13, 1, 0);
+        TTI_SFPABS(0, 2, 5, 1);
+        TTI_SFPMAD(12, 5, 13, 3, 0);
+        TTI_SFPMAD(1, 0, 14, 1, 0);
+        TTI_SFPMAD(3, 5, 14, 3, 0);
+        TTI_SFPMAD(1, 0, 6, 1, 0);
+        TTI_SFPMAD(3, 5, 6, 3, 0);
+        TTI_SFPMAD(1, 0, 7, 1, 0);
+        TTI_SFPMAD(3, 5, 7, 3, 0);
+        TTI_SFPMAD(1, 0, 10, 1, 0);
+        TTI_SFPMAD(3, 5, 10, 3, 0);
+        TTI_SFPMAD(1, 0, 9, 1, 0);
+        TTI_SFPMAD(3, 5, 9, 0, 0);
+        TTI_SFPSWAP(0, 10, 1, 1);
+        TTI_SFPSWAP(0, 10, 0, 1);
+        TTI_SFPSETSGN(0, 1, 4, 0);
+        TTI_SFPSETSGN(0, 0, 2, 0);
+        TTI_SFP_STOCH_RND(0, 0, 0, 4, 4, 1);
+        TTI_SFP_STOCH_RND(0, 0, 0, 2, 2, 1);
+        TTI_SFPSTORE(4, 0, 3, 0);
+        TTI_SFPLOAD(4, 0, 3, 4);
+        TTI_SFPABS(0, 4, 0, 1);
+        TTI_SFPMAD(12, 0, 13, 1, 0);
+        TTI_SFPSTORE(2, 0, 3, 2);
+        TTI_SFPLOAD(2, 0, 3, 6);
+        TTI_SFPABS(0, 2, 5, 1);
+        TTI_SFPMAD(12, 5, 13, 3, 0);
+        TTI_SFPMAD(1, 0, 14, 1, 0);
+        TTI_SFPMAD(3, 5, 14, 3, 0);
+        TTI_SFPMAD(1, 0, 6, 1, 0);
+        TTI_SFPMAD(3, 5, 6, 3, 0);
+        TTI_SFPMAD(1, 0, 7, 1, 0);
+        TTI_SFPMAD(3, 5, 7, 3, 0);
+        TTI_SFPMAD(1, 0, 10, 1, 0);
+        TTI_SFPMAD(3, 5, 10, 3, 0);
+        TTI_SFPMAD(1, 0, 9, 1, 0);
+        TTI_SFPMAD(3, 5, 9, 0, 0);
+        TTI_SFPSWAP(0, 10, 1, 1);
+        TTI_SFPSWAP(0, 10, 0, 1);
+        TTI_SFPSETSGN(0, 1, 4, 0);
+        TTI_SFPSETSGN(0, 0, 2, 0);
+        TTI_SFP_STOCH_RND(0, 0, 0, 4, 4, 1);
+        TTI_SFP_STOCH_RND(0, 0, 0, 2, 2, 1);
+        TTI_SFPSTORE(4, 0, 3, 4);
+        TTI_SFPLOAD(4, 0, 3, 8);
+        TTI_SFPABS(0, 4, 0, 1);
+        TTI_SFPMAD(12, 0, 13, 1, 0);
+        TTI_SFPSTORE(2, 0, 3, 6);
+        TTI_SFPLOAD(2, 0, 3, 0xa);
+        TTI_SFPABS(0, 2, 5, 1);
+        TTI_SFPMAD(12, 5, 13, 3, 0);
+        TTI_SFPMAD(1, 0, 14, 1, 0);
+        TTI_SFPMAD(3, 5, 14, 3, 0);
+        TTI_SFPMAD(1, 0, 6, 1, 0);
+        TTI_SFPMAD(3, 5, 6, 3, 0);
+        TTI_SFPMAD(1, 0, 7, 1, 0);
+        TTI_SFPMAD(3, 5, 7, 3, 0);
+        TTI_SFPMAD(1, 0, 10, 1, 0);
+        TTI_SFPMAD(3, 5, 10, 3, 0);
+        TTI_SFPMAD(1, 0, 9, 1, 0);
+        TTI_SFPMAD(3, 5, 9, 0, 0);
+        TTI_SFPSWAP(0, 10, 1, 1);
+        TTI_SFPSWAP(0, 10, 0, 1);
+        TTI_SFPSETSGN(0, 1, 4, 0);
+        TTI_SFPSETSGN(0, 0, 2, 0);
+        TTI_SFP_STOCH_RND(0, 0, 0, 4, 4, 1);
+        TTI_SFP_STOCH_RND(0, 0, 0, 2, 2, 1);
+        TTI_SFPSTORE(4, 0, 3, 8);
+        TTI_SFPLOAD(4, 0, 3, 0xc);
+        TTI_SFPABS(0, 4, 0, 1);
+        TTI_SFPMAD(12, 0, 13, 1, 0);
+        TTI_SFPSTORE(2, 0, 3, 0xa);
+        TTI_SFPLOAD(2, 0, 3, 0xe);
+        TTI_SFPABS(0, 2, 5, 1);
+        TTI_SFPMAD(12, 5, 13, 3, 0);
+        TTI_SFPMAD(1, 0, 14, 1, 0);
+        TTI_SFPMAD(3, 5, 14, 3, 0);
+        TTI_SFPMAD(1, 0, 6, 1, 0);
+        TTI_SFPMAD(3, 5, 6, 3, 0);
+        TTI_SFPMAD(1, 0, 7, 1, 0);
+        TTI_SFPMAD(3, 5, 7, 3, 0);
+        TTI_SFPMAD(1, 0, 10, 1, 0);
+        TTI_SFPMAD(3, 5, 10, 3, 0);
+        TTI_SFPMAD(1, 0, 9, 1, 0);
+        TTI_SFPMAD(3, 5, 9, 0, 0);
+        TTI_SFPSWAP(0, 10, 1, 1);
+        TTI_SFPSWAP(0, 10, 0, 1);
+        TTI_SFPSETSGN(0, 1, 4, 0);
+        TTI_SFPSETSGN(0, 0, 2, 0);
+        TTI_SFP_STOCH_RND(0, 0, 0, 4, 4, 1);
+        TTI_SFP_STOCH_RND(0, 0, 0, 2, 2, 1);
+        TTI_SFPSTORE(4, 0, 3, 0xc);
+        TTI_SFPSTORE(2, 0, 3, 0xe);
+        TTI_INCRWC(0, 7, 0, 0);
+        TTI_INCRWC(0, 7, 0, 0);
+        TTI_INCRWC(0, 2, 0, 0);
+    }
+}
+
 template <int ITERATIONS = 32>
 inline void calculate_tanh_bf16_body() {
-    ckernel::sfpu::bf16::tanh::calculate_signed_abs_terminal<ckernel::sfpu::TanhBf16Config, ITERATIONS>();
+    static_assert(ITERATIONS == 32, "the BF16 kernel runs as one whole-tile call");
+    calculate_tanh_bf16_scheduled();
 }
 // The constants stock's init also sets hold the kernel's own values for its call only.
-// Each call records replay slots 0-25, overwriting what an init recorded there (from 16).
 template <int ITERATIONS = 32>
 __attribute__((noinline)) inline void calculate_tanh_bf16() {
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0x3bb0e52du);

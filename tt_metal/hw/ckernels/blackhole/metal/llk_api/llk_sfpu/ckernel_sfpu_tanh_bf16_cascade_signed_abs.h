@@ -83,7 +83,6 @@ constexpr std::uint32_t signed_abs_held_index() {
     return held;
 }
 
-// The negated (BH NaN) form reads only Prgm0 from its init: Prgm1 and Prgm2 are loaded by the call.
 template <typename Config, std::uint32_t Index, bool Negated = false>
 sfpi_inline sfpi::vFloat signed_abs_pair_coefficient() {
     if constexpr (!Negated && Index == Config::kDegree - 1u) {
