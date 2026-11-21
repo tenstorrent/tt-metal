@@ -10,18 +10,25 @@ show_help() {
     cat << EOF
 Usage: $0 --hosts <comma-separated-host-list> --image <docker-image> [OPTIONS]
 
-Run fabric tests on 4x8, 4x8wh, 4x32, or 8x16 cluster configuration.
+Run fabric tests on 4x8, 4x8wh, 4x32, or 8x16 cluster configuration (optionally with express links).
 
 Required Options:
-    --hosts <host-list>                 Comma-separated list of hosts (single host for 4x8/4x8wh)
+    --hosts <host-list>                 Comma-separated list of hosts (single host for 4x8/4x8wh/4x8express)
     --image <docker-image>              Docker image to use ("none" to use local build)
 
 Optional:
-    --config <4x8|4x8wh|4x32|8x16|4x8z|2x4x4z|4x32z|<N>x32x4|8x4x4z>  Mesh configuration (default: 4x32)
+    --config <4x8|4x8wh|4x8express|4x32|4x32express|8x16|4x8z|2x4x4z|4x32z|<N>x32x4|<N>x4x32express|8x4x4z>
+                                        Mesh configuration (default: 4x32)
                                         4x8   = single BlackHole galaxy as one 8x4 2D torus (single host).
                                         4x8wh = single Wormhole (WORMHOLE_B0) galaxy as one 8x4 2D torus
                                                 (single host); same single-mesh launch as 4x8 but with the
                                                 Wormhole galaxy descriptor and the WH neighbor-exchange config.
+                                        4x8express  = 4x8 with dim-0 express links (start 2, step 4) layered
+                                                      on the 8x4 torus (single host).
+                                        4x32express = 4x32 with dim-0 express links (start 2 step 4, and
+                                                      start 0 step 8) layered on the 32x4 torus (4 hosts).
+                                        <N>x4x32express (N in 2..9) = <N>x32x4 where every 32x4 mesh carries
+                                                      the same express links as 4x32express (4*N hosts).
                                         <N>x32x4 (N in 2..9) is a multi-mesh config of N fully-connected
                                         32x4 torus meshes. Each 32x4 mesh is built from 4 BH galaxies
                                         (host_topology 4x1), one galaxy per host, so it needs 4*N hosts
@@ -50,6 +57,9 @@ Optional:
                                                        (4 galaxies as 4 Z-connected 8x4 torus meshes)
                                         <N>x32x4 default: tt_metal/fabric/mesh_graph_descriptors/<N>_quad_bh_galaxy_<N>x32x4_torus_graph_descriptor.textproto
                                                        (N fully-connected 32x4 torus meshes; each mesh = 4 galaxies/hosts; N in 2..9)
+                                        4x8express default:  tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto
+                                        4x32express default: tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_32x4_mesh_graph_descriptor.textproto
+                                        <N>x4x32express default: tt_metal/fabric/mesh_graph_descriptors/<N>_quad_bh_galaxy_<N>x32x4_express_torus_graph_descriptor.textproto
                                         8x4x4z default: tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto
                                                        (8 Z-connected 4x4 meshes across 4 galaxies; even single-host, odd split 2x1)
     --test-binary <path>                Path to test binary
@@ -86,7 +96,7 @@ Optional:
                                         cabling+deployment for ring order resolution.
     --skip-reorder                      Use --hosts exactly as given; skip the canonical ring
                                         reordering for the multi-host quad configs (8x4x4z, 4x32z,
-                                        <N>x32x4). Use this when the serpentine r<rack>u<unit>
+                                        <N>x32x4, <N>x4x32express). Use this when the serpentine r<rack>u<unit>
                                         ordering does not match your hosts' physical cabling and you
                                         want to pass them in your own ring order.
     --help                              Display this help message and exit
@@ -106,6 +116,9 @@ MESH_GRAPH_DESC_PATH_4x8="tt_metal/fabric/mesh_graph_descriptors/single_bh_galax
 MESH_GRAPH_DESC_PATH_4x8wh="tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x32="tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_8x16="tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
+# Express-link variants of 4x8 / 4x32: same mesh shape and launch, plus intra-mesh express links.
+MESH_GRAPH_DESC_PATH_4x8express="tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto"
+MESH_GRAPH_DESC_PATH_4x32express="tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_32x4_mesh_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x8z="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x4x2_z_graph_descriptor.textproto"
 # 2x4x4z: single galaxy split into 2 Z-connected 4x4 meshes (dual_4x4 layout).
 MESH_GRAPH_DESC_PATH_2x4x4z="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_2x4x4_z_graph_descriptor.textproto"
@@ -115,6 +128,8 @@ MESH_GRAPH_DESC_PATH_4x32z="tt_metal/fabric/mesh_graph_descriptors/quad_bh_galax
 # 4*N hosts (4 ranks per mesh, one galaxy per host). The descriptor path is
 # derived from N below:
 #   tt_metal/fabric/mesh_graph_descriptors/<N>_quad_bh_galaxy_<N>x32x4_torus_graph_descriptor.textproto
+# <N>x4x32express is the same family with express links on every 32x4 mesh:
+#   tt_metal/fabric/mesh_graph_descriptors/<N>_quad_bh_galaxy_<N>x32x4_express_torus_graph_descriptor.textproto
 MESH_GRAPH_DESC_PATH_8x4x4z="tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto"
 CONFIG="4x32"
 MESH_GRAPH_DESC_PATH=""
@@ -166,9 +181,9 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             CONFIG="$2"
-            # The Nx32x4 family (2x32x4 .. 9x32x4) is matched by regex; everything else is an exact match.
-            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x8wh" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" && "$CONFIG" != "4x8z" && "$CONFIG" != "2x4x4z" && "$CONFIG" != "4x32z" && "$CONFIG" != "8x4x4z" && ! "$CONFIG" =~ ^[2-9]x32x4$ ]]; then
-                echo "Error: --config must be one of '4x8', '4x8wh', '4x32', '8x16', '4x8z', '2x4x4z', '4x32z', '8x4x4z', or '<N>x32x4' (N in 2..9)"
+            # The Nx32x4 / Nx4x32express families (N in 2..9) are matched by regex; everything else is an exact match.
+            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x8wh" && "$CONFIG" != "4x8express" && "$CONFIG" != "4x32" && "$CONFIG" != "4x32express" && "$CONFIG" != "8x16" && "$CONFIG" != "4x8z" && "$CONFIG" != "2x4x4z" && "$CONFIG" != "4x32z" && "$CONFIG" != "8x4x4z" && ! "$CONFIG" =~ ^[2-9]x32x4$ && ! "$CONFIG" =~ ^[2-9]x4x32express$ ]]; then
+                echo "Error: --config must be one of '4x8', '4x8wh', '4x8express', '4x32', '4x32express', '8x16', '4x8z', '2x4x4z', '4x32z', '8x4x4z', '<N>x32x4', or '<N>x4x32express' (N in 2..9)"
                 echo ""
                 show_help
                 exit 1
@@ -349,10 +364,15 @@ else
     exit 1
 fi
 
-# For the Nx32x4 family, capture the mesh/host count N (empty for all other configs).
+# For the Nx32x4 / Nx4x32express families, capture the mesh count N (empty for all
+# other configs). Both share the same multi-host launch; only the descriptor differs.
 NX32X4_NUM_MESHES=""
+NX32X4_EXPRESS=false
 if [[ "$CONFIG" =~ ^([2-9])x32x4$ ]]; then
     NX32X4_NUM_MESHES="${BASH_REMATCH[1]}"
+elif [[ "$CONFIG" =~ ^([2-9])x4x32express$ ]]; then
+    NX32X4_NUM_MESHES="${BASH_REMATCH[1]}"
+    NX32X4_EXPRESS=true
 fi
 
 # Set mesh graph descriptor path based on config if not explicitly provided
@@ -361,8 +381,12 @@ if [[ "$MESH_GRAPH_DESC_PATH_EXPLICIT" == false ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x8"
     elif [[ "$CONFIG" == "4x8wh" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x8wh"
+    elif [[ "$CONFIG" == "4x8express" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x8express"
     elif [[ "$CONFIG" == "4x32" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x32"
+    elif [[ "$CONFIG" == "4x32express" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x32express"
     elif [[ "$CONFIG" == "8x16" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_8x16"
     elif [[ "$CONFIG" == "4x8z" ]]; then
@@ -371,6 +395,8 @@ if [[ "$MESH_GRAPH_DESC_PATH_EXPLICIT" == false ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_2x4x4z"
     elif [[ "$CONFIG" == "4x32z" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x32z"
+    elif [[ -n "$NX32X4_NUM_MESHES" && "$NX32X4_EXPRESS" == true ]]; then
+        MESH_GRAPH_DESC_PATH="tt_metal/fabric/mesh_graph_descriptors/${NX32X4_NUM_MESHES}_quad_bh_galaxy_${NX32X4_NUM_MESHES}x32x4_express_torus_graph_descriptor.textproto"
     elif [[ -n "$NX32X4_NUM_MESHES" ]]; then
         MESH_GRAPH_DESC_PATH="tt_metal/fabric/mesh_graph_descriptors/${NX32X4_NUM_MESHES}_quad_bh_galaxy_${NX32X4_NUM_MESHES}x32x4_torus_graph_descriptor.textproto"
     elif [[ "$CONFIG" == "8x4x4z" ]]; then
@@ -645,14 +671,14 @@ fi
 # hosts; we launch one MPI rank per host and let OpenMPI round-robin the ranks
 # across the --host list. The rank count therefore equals the mesh's host count
 # (product of the descriptor's host_topology dims):
-#   4x32 -> host_topology 4x1 = 4 ranks
-#   8x16 -> host_topology 2x2 = 4 ranks
+#   4x32 / 4x32express -> host_topology 4x1 = 4 ranks
+#   8x16               -> host_topology 2x2 = 4 ranks
 NONZ_NUM_RANKS=4
 
 # mpirun --host treats each comma-separated entry as a single slot, so launching
 # NONZ_NUM_RANKS MPMD segments needs exactly that many hosts. Validate up-front to
 # fail with a clear message instead of an opaque mpirun "not enough slots" error.
-if [[ "$CONFIG" == "4x32" || "$CONFIG" == "8x16" ]]; then
+if [[ "$CONFIG" == "4x32" || "$CONFIG" == "4x32express" || "$CONFIG" == "8x16" ]]; then
     IFS=',' read -ra NONZ_HOSTS <<< "$HOSTS"
     if [[ "${#NONZ_HOSTS[@]}" -ne "$NONZ_NUM_RANKS" ]]; then
         echo "Error: --config $CONFIG requires exactly $NONZ_NUM_RANKS hosts in --hosts (got ${#NONZ_HOSTS[@]})"
@@ -1181,7 +1207,7 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n
     fi
 elif [[ "$DOCKER_IMAGE" == "none" ]]; then
     # No-docker path: invoke the MPI launcher directly against the local build.
-    if [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" ]]; then
+    if [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" || "$CONFIG" == "4x8express" ]]; then
         SINGLE_HOST="${HOSTS%%,*}"
         echo "Running single-host $CONFIG on: $SINGLE_HOST (no docker)"
         echo ""
@@ -1211,7 +1237,7 @@ elif [[ "$DOCKER_IMAGE" == "none" ]]; then
             --host "$HOSTS" \
             "${NONZ_SEGMENTS[@]}" |& tee "$LOG_FILE" | highlight_fabric_test_success
     fi
-elif [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" ]]; then
+elif [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" || "$CONFIG" == "4x8express" ]]; then
     SINGLE_HOST="${HOSTS%%,*}"
     echo "Running single-host $CONFIG on: $SINGLE_HOST"
     echo ""
