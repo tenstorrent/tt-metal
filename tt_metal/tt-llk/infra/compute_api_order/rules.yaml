@@ -1,0 +1,26 @@
+# Rule table for compute-kernel API ordering (prototype, tt-metal #62681)
+# Each op lists every init call that legally precedes it in the same function scope.
+# Any reconfig_data_format / pack_reconfig_data_format between init and op makes
+# the block-level init stale: the op is only legal again after a fresh init.
+ops:
+  add_tiles:        [add_init, binary_tiles_init, add_reuse_dest_init]
+  add_tiles_bcast:  [add_init, binary_tiles_init]
+  sub_tiles:        [sub_init, binary_tiles_init, sub_reuse_dest_init]
+  sub_tiles_bcast:  [sub_init, binary_tiles_init]
+  mul_tiles:        [mul_init, binary_tiles_init, mul_reuse_dest_init]
+  mul_tiles_bcast:  [mul_init, binary_tiles_init]
+  add_block:        [add_init, binary_tiles_init]
+  sub_block:        [sub_init, binary_tiles_init]
+  mul_block:        [mul_init, binary_tiles_init]
+  matmul_tiles:     [matmul_init, mm_init]
+  matmul_block:     [matmul_init, mm_init]
+  tilize_block:     [tilize_init, tilize_init_short]
+  untilize_block:   [untilize_init]
+  transpose_wh_tile: [transpose_init]
+  reduce:           [reduce_init]
+invalidate:
+  - reconfig_data_format
+  - pack_reconfig_data_format
+uninit_pairs:
+  tilize_init: tilize_uninit
+  untilize_init: untilize_uninit
