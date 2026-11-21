@@ -236,22 +236,29 @@ inline void calculate_nez_uint32() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
+    static_assert(
+        COMP_MODE == SfpuType::unary_eq || COMP_MODE == SfpuType::unary_ne,
+        "calculate_comp_unary_int supports only unary_eq and unary_ne");
+    // The Int32 Dest word and the host scalar are both two's complement, so the compare is on
+    // the raw word (sfpi's default vInt Dest access on Blackhole is DataLayout::I32; spelled
+    // out so the intent survives a default change). Per row: load, store the default result,
+    // SFPIADD + SFPSETCC for the equality, store the other result into the enabled lanes,
+    // SFPENCC, TTINCRWC. The 1 is loaded once per call rather than once per row.
+    const vInt s = scalar;
+    const vInt one = 1;
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0];
-        vInt val = 0;
-
-        // a[i] != scalar
-        if constexpr (COMP_MODE == SfpuType::unary_ne) {
-            v_if(v != scalar) { val = 1; }
+        const vInt v = dst_reg[0].mode<sfpi::DataLayout::I32>();
+        if constexpr (COMP_MODE == SfpuType::unary_eq) {
+            dst_reg[0].mode<sfpi::DataLayout::I32>() = vInt(0);
+            v_if(s == v) { dst_reg[0].mode<sfpi::DataLayout::I32>() = one; }
+            v_endif;
+        } else {
+            dst_reg[0].mode<sfpi::DataLayout::I32>() = one;
+            v_if(s == v) { dst_reg[0].mode<sfpi::DataLayout::I32>() = vInt(0); }
             v_endif;
         }
-        // a[i] == scalar
-        else if constexpr (COMP_MODE == SfpuType::unary_eq) {
-            v_if(v == scalar) { val = 1; }
-            v_endif;
-        }
-        dst_reg[0] = val;
         dst_reg++;
     }
 }
