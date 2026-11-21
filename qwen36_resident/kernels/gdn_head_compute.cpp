@@ -16,6 +16,13 @@
 // State decay/update and the gates run on SFPU in fp32 (UnpackToDestFp32 CBs); matmuls and the
 // row-sum reductions run on the FPU with fp32 accumulation, matching the unfused ttnn graph.
 //
+// Row groups (kBatched): per layer, the work that is per row runs once for this core's n active users, user k in row
+// k of the tiles (q / k norms, gates, decay * k and beta before the users; the gated RMSNorm and silu(z) after them).
+// The recurrence (delta, k^T, state update, o) stays per user, on row-0 tiles the reader extracts from the batched
+// ones (the same tiles the per-user path builds, bit for bit); the writer gathers each user's o into row k of cb_o_b.
+// Every batched op is row-wise (FPU elementwise / matmul rows, SFPU elementwise), so a user's results do not depend
+// on its row or on the other rows.
+//
 // Compile-time args: Nk, Nv, Kt, Vt, group, scale, l2_eps, rms_eps, inv_dv (floats as bits), layers x users
 
 #include <cstdint>
@@ -36,6 +43,10 @@
 #include "active_rows.hpp"
 
 namespace {
+
+constexpr uint32_t Kt = get_compile_time_arg_val(2);
+constexpr uint32_t Vt = get_compile_time_arg_val(3);
+constexpr uint32_t st = Kt * Vt;
 
 constexpr uint32_t cb_q_in = 0;
 constexpr uint32_t cb_k_in = 1;
@@ -67,17 +78,35 @@ constexpr uint32_t cb_sz = 27;
 constexpr uint32_t cb_out = 28;
 constexpr uint32_t cb_neg_a_full = 30;
 constexpr uint32_t cb_dt_bias_full = 31;
+// row groups (kBatched): batched results for the reader (row k = user k): decay (all columns), beta, q / k norms (cb_qn
+// / cb_kn), decay * k; compute's own copy of the k norms; the reader's row-0 extractions of user k's q / k norms and
+// decay * k (decay -> cb_decay, beta -> cb_beta_row0); the writer's gather of the users' o rows
+constexpr bool kBatched = groups > 1;
+constexpr uint32_t cb_decay_b = 32;
+constexpr uint32_t cb_betam_b = 33;
+constexpr uint32_t cb_kn_self = 34;
+constexpr uint32_t cb_kdec_b = 35;
+constexpr uint32_t cb_qn_u = 36;
+constexpr uint32_t cb_kn_u = 37;
+constexpr uint32_t cb_kdec_u = 38;
+constexpr uint32_t cb_o_b = 39;
+constexpr uint32_t kNoCb = 0xff;
 
 constexpr uint32_t kOneBits = 0x3f800000u;
+constexpr uint32_t kSoftplusThreshold = 0x41a00000u;  // 20.0f
 
 enum class Bin { Mul, Sub, MulBcastRows };
 
-// out[t] = a[t] OP b[b_single ? 0 : t] on the FPU, t in [0, n). Does not pop inputs.
+// out[t] = a[t] OP b[b_single ? 0 : t] on the FPU, t in [0, n) (also packed into cb_c2 unless kNoCb). Does not pop
+// inputs.
 __attribute__((noinline)) void fpu_binary(
-    Bin op, uint32_t cb_a, uint32_t cb_b, bool b_single, uint32_t n, uint32_t cb_c) {
+    Bin op, uint32_t cb_a, uint32_t cb_b, bool b_single, uint32_t n, uint32_t cb_c, uint32_t cb_c2 = kNoCb) {
     CircularBuffer(cb_a).wait_front(n);
     CircularBuffer(cb_b).wait_front(b_single ? 1 : n);
     CircularBuffer(cb_c).reserve_back(n);
+    if (cb_c2 != kNoCb) {
+        CircularBuffer(cb_c2).reserve_back(n);
+    }
     reconfig_data_format(cb_a, cb_b);
     pack_reconfig_data_format(cb_c);
     if (op == Bin::Mul) {
@@ -100,9 +129,15 @@ __attribute__((noinline)) void fpu_binary(
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, cb_c, t);
+        if (cb_c2 != kNoCb) {
+            pack_tile(0, cb_c2, t);
+        }
         tile_regs_release();
     }
     CircularBuffer(cb_c).push_back(n);
+    if (cb_c2 != kNoCb) {
+        CircularBuffer(cb_c2).push_back(n);
+    }
 }
 
 inline void matmul_setup(uint32_t in0, uint32_t in1, uint32_t out) {
@@ -161,11 +196,12 @@ __attribute__((noinline)) void inv_norm(uint32_t cb_x, uint32_t n, uint32_t pre,
     CircularBuffer(cb_sq).pop_front(n);
 }
 
-// L2-normalised copy of an input row vector: out = in * inv_norm(in). Padding rows are not masked
-// here; they are removed from the rank-1 state update by the row-masked beta.
-__attribute__((noinline)) void l2_normalize(uint32_t cb_in, uint32_t n, uint32_t eps, uint32_t post, uint32_t cb_c) {
+// L2-normalised copy of an input row vector: out = in * inv_norm(in) (also into cb_c2 unless kNoCb). Padding rows
+// are not masked here; they are removed from the rank-1 state update by the row-masked beta.
+__attribute__((noinline)) void l2_normalize(
+    uint32_t cb_in, uint32_t n, uint32_t eps, uint32_t post, uint32_t cb_c, uint32_t cb_c2 = kNoCb) {
     inv_norm(cb_in, n, kOneBits, eps, post);
-    fpu_binary(Bin::Mul, cb_in, cb_inv, true, n, cb_c);
+    fpu_binary(Bin::Mul, cb_in, cb_inv, true, n, cb_c, cb_c2);
     CircularBuffer(cb_in).pop_front(n);
     CircularBuffer(cb_inv).pop_front(1);
 }
@@ -176,21 +212,179 @@ inline void copy_to_dst(uint32_t cb, uint32_t tile, uint32_t dst) {
     copy_tile(cb, tile, dst);
 }
 
+// 2. Gates (fp32 SFPU): decay = exp(neg_exp_A * softplus(a + dt_bias)) -> cb_dec and (its FPU-side copy) cb_inv,
+//    beta = sigmoid(b) -> cb_beta.
+__attribute__((noinline)) void gates(uint32_t cb_dec) {
+    CircularBuffer(cb_a_full).wait_front(1);
+    CircularBuffer(cb_dt_bias_full).wait_front(1);
+    CircularBuffer(cb_neg_a_full).wait_front(1);
+    CircularBuffer(cb_dec).reserve_back(1);
+    CircularBuffer(cb_inv).reserve_back(1);
+    pack_reconfig_data_format(cb_dec);
+    tile_regs_acquire();
+    copy_to_dst(cb_a_full, 0, 0);
+    copy_to_dst(cb_dt_bias_full, 0, 1);
+    add_binary_tile_init();
+    add_binary_tile(0, 1, 0);
+    softplus_tile_init();
+    softplus_tile(0, kOneBits, kOneBits, kSoftplusThreshold);
+    copy_to_dst(cb_neg_a_full, 0, 1);
+    mul_binary_tile_init();
+    mul_binary_tile(0, 1, 0);
+    exp_tile_init();
+    exp_tile(0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_dec);
+    pack_tile(0, cb_inv);  // FPU-side copy of decay
+    tile_regs_release();
+    CircularBuffer(cb_dec).push_back(1);
+    CircularBuffer(cb_inv).push_back(1);
+    CircularBuffer(cb_a_full).pop_front(1);
+    CircularBuffer(cb_dt_bias_full).pop_front(1);
+    CircularBuffer(cb_neg_a_full).pop_front(1);
+
+    CircularBuffer(cb_b_full).wait_front(1);
+    CircularBuffer(cb_beta).reserve_back(1);
+    pack_reconfig_data_format(cb_beta);
+    tile_regs_acquire();
+    copy_to_dst(cb_b_full, 0, 0);
+    sigmoid_tile_init();
+    sigmoid_tile(0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_beta);
+    tile_regs_release();
+    CircularBuffer(cb_beta).push_back(1);
+    CircularBuffer(cb_b_full).pop_front(1);
+}
+
+// 3. delta = beta_row0 * (v - kdec @ S) for kdec = decay * k (row-0 tiles of cb_kdec).
+__attribute__((noinline)) void delta_step(uint32_t cb_kdec) {
+    row_matmul(cb_kdec, cb_s_mm, Kt, Vt, cb_vr);
+    CircularBuffer(cb_kdec).pop_front(Kt);
+    CircularBuffer(cb_s_mm).pop_front(st);
+    fpu_binary(Bin::Sub, cb_v_in, cb_vr, false, Vt, cb_scratch);
+    CircularBuffer(cb_v_in).pop_front(Vt);
+    CircularBuffer(cb_vr).pop_front(Vt);
+    fpu_binary(Bin::Mul, cb_scratch, cb_beta_row0, true, Vt, cb_delta);
+    CircularBuffer(cb_scratch).pop_front(Vt);
+    CircularBuffer(cb_beta_row0).pop_front(1);
+}
+
+// 4. k^T tiles (column vectors) for the rank-1 update, from the row-0 tiles of cb_k.
+__attribute__((noinline)) void kt_step(uint32_t cb_k) {
+    CircularBuffer(cb_k).wait_front(Kt);
+    CircularBuffer(cb_kt).reserve_back(Kt);
+    reconfig_data_format_srca(cb_k);
+    pack_reconfig_data_format(cb_kt);
+    transpose_init(cb_k);
+    for (uint32_t t = 0; t < Kt; t++) {
+        tile_regs_acquire();
+        transpose_tile(cb_k, t, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_kt, t);
+        tile_regs_release();
+    }
+    CircularBuffer(cb_kt).push_back(Kt);
+    CircularBuffer(cb_k).pop_front(Kt);
+}
+
+// 5. S' = decay * S + k^T (x) delta (decay: a full fp32 tile of cb_dec). Per DEST window: three state tiles and
+//    decay are copied in (fp32), scaled on SFPU, then the rank-1 tile k^T[kt] @ delta[vt] is accumulated onto them
+//    by the FPU (only column 0 of k^T and row 0 of delta are live). Packed twice: for the query matmul and for the
+//    writer.
+__attribute__((noinline)) void state_update(uint32_t cb_dec) {
+    constexpr uint32_t kWin = 3;
+    constexpr uint32_t kDecaySlot = 3;
+    CircularBuffer(cb_kt).wait_front(Kt);
+    CircularBuffer(cb_delta).wait_front(Vt);
+    CircularBuffer(cb_s_in).wait_front(st);
+    CircularBuffer(cb_dec).wait_front(1);
+    CircularBuffer(cb_s_new_mm).reserve_back(st);
+    CircularBuffer(cb_s_new_out).reserve_back(st);
+    for (uint32_t t0 = 0; t0 < st; t0 += kWin) {
+        const uint32_t n = (st - t0) < kWin ? (st - t0) : kWin;
+        tile_regs_acquire();
+        reconfig_data_format_srca(cb_s_in);
+        copy_init(cb_s_in);
+        for (uint32_t i = 0; i < n; i++) {
+            copy_tile(cb_s_in, t0 + i, i);
+        }
+        copy_to_dst(cb_dec, 0, kDecaySlot);
+        mul_binary_tile_init();
+        for (uint32_t i = 0; i < n; i++) {
+            mul_binary_tile(i, kDecaySlot, i);
+        }
+        matmul_setup(cb_kt, cb_delta, cb_s_new_mm);
+        for (uint32_t i = 0; i < n; i++) {
+            const uint32_t t = t0 + i;
+            matmul_tiles(cb_kt, cb_delta, t / Vt, t % Vt, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; i++) {
+            pack_tile(i, cb_s_new_mm, t0 + i);
+            pack_tile(i, cb_s_new_out, t0 + i);
+        }
+        tile_regs_release();
+    }
+    CircularBuffer(cb_s_new_mm).push_back(st);
+    CircularBuffer(cb_s_new_out).push_back(st);
+    CircularBuffer(cb_s_in).pop_front(st);
+    CircularBuffer(cb_dec).pop_front(1);
+    CircularBuffer(cb_kt).pop_front(Kt);
+    CircularBuffer(cb_delta).pop_front(Vt);
+}
+
+// 6. o = q @ S' (row-0 tiles of cb_q) -> cb_o.
+__attribute__((noinline)) void o_step(uint32_t cb_q) {
+    row_matmul(cb_q, cb_s_new_mm, Kt, Vt, cb_o);
+    CircularBuffer(cb_q).pop_front(Kt);
+    CircularBuffer(cb_s_new_mm).pop_front(st);
+}
+
+// 7. Gated RMSNorm: on = o * rsqrt(mean(o^2) + eps) * norm_w (o: cb_o_in); 8. out = on * silu(z) -> cb_out.
+__attribute__((noinline)) void gated_out(uint32_t cb_o_in, uint32_t inv_dv, uint32_t rms_eps) {
+    inv_norm(cb_o_in, Vt, inv_dv, rms_eps, kOneBits);
+    fpu_binary(Bin::Mul, cb_o_in, cb_inv, true, Vt, cb_on);
+    CircularBuffer(cb_o_in).pop_front(Vt);
+    CircularBuffer(cb_inv).pop_front(1);
+    fpu_binary(Bin::MulBcastRows, cb_on, cb_norm_w, false, Vt, cb_scratch);
+    CircularBuffer(cb_on).pop_front(Vt);
+    CircularBuffer(cb_norm_w).pop_front(Vt);
+    CircularBuffer(cb_z_in).wait_front(Vt);
+    CircularBuffer(cb_sz).reserve_back(Vt);
+    pack_reconfig_data_format(cb_sz);
+    for (uint32_t t = 0; t < Vt; t++) {
+        tile_regs_acquire();
+        copy_to_dst(cb_z_in, t, 0);
+        silu_tile_init();
+        silu_tile(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_sz, t);
+        tile_regs_release();
+    }
+    CircularBuffer(cb_sz).push_back(Vt);
+    CircularBuffer(cb_z_in).pop_front(Vt);
+    fpu_binary(Bin::Mul, cb_scratch, cb_sz, false, Vt, cb_out);
+    CircularBuffer(cb_scratch).pop_front(Vt);
+    CircularBuffer(cb_sz).pop_front(Vt);
+}
+
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t Kt = get_compile_time_arg_val(2);
-    constexpr uint32_t Vt = get_compile_time_arg_val(3);
     constexpr uint32_t scale_bits = get_compile_time_arg_val(5);
     constexpr uint32_t l2_eps_bits = get_compile_time_arg_val(6);
     constexpr uint32_t rms_eps_bits = get_compile_time_arg_val(7);
     constexpr uint32_t inv_dv_bits = get_compile_time_arg_val(8);
-    constexpr uint32_t st = Kt * Vt;
-    constexpr uint32_t kSoftplusThreshold = 0x41a00000u;  // 20.0f
 
     compute_kernel_hw_startup(cb_q_in, cb_row_mask, cb_scratch);
-    // (debug, RESIDENT_GDN_TS=1: the pack thread stamps the end of each step of the first 64 (layer, user) steps,
-    // 16 words each; runtime arg 0, 0 = off)
+    // (debug, RESIDENT_GDN_TS=1: the pack thread stamps the end of each step of the first 64 (layer, user) steps, or
+    // (kBatched) of the first 64 layers' phases, 16 words each; runtime arg 0, 0 = off)
     const uint32_t ts_addr = get_arg_val<uint32_t>(0);
     uint32_t it = 0;
     auto mark = [&](uint32_t k) {
@@ -203,176 +397,70 @@ void kernel_main() {
     };
     // (layer, user) steps: CT 9, or (rows mode) the GDN layers times this core's active users of the step
     uint32_t layers = get_compile_time_arg_val(9);
+    uint32_t n_users = 1;
     if constexpr (rows_mode) {
         constexpr uint32_t cb_active = 29;
         CircularBuffer(cb_active).wait_front(1);
-        layers = get_named_compile_time_arg_val("gdn_layers") * read_tile_value(cb_active, 0, 0);
+        n_users = read_tile_value(cb_active, 0, 0);
+        layers = get_named_compile_time_arg_val("gdn_layers") * n_users;
         CircularBuffer(cb_active).pop_front(1);
     }
     CircularBuffer(cb_ones).wait_front(1);
     CircularBuffer(cb_row_mask).wait_front(1);
-    for (uint32_t layer = 0; layer < layers; layer++, it++) {
-        mark(0);
-        // 1. Normalised query (with scale) and key.
-        l2_normalize(cb_q_in, Kt, l2_eps_bits, scale_bits, cb_qn);
-        l2_normalize(cb_k_in, Kt, l2_eps_bits, kOneBits, cb_kn);
-        mark(1);
-        // 2. Gates (fp32 SFPU): decay = exp(neg_exp_A * softplus(a + dt_bias)), beta = sigmoid(b).
-        CircularBuffer(cb_a_full).wait_front(1);
-        CircularBuffer(cb_dt_bias_full).wait_front(1);
-        CircularBuffer(cb_neg_a_full).wait_front(1);
-        CircularBuffer(cb_decay).reserve_back(1);
-        CircularBuffer(cb_inv).reserve_back(1);
-        pack_reconfig_data_format(cb_decay);
-        tile_regs_acquire();
-        copy_to_dst(cb_a_full, 0, 0);
-        copy_to_dst(cb_dt_bias_full, 0, 1);
-        add_binary_tile_init();
-        add_binary_tile(0, 1, 0);
-        softplus_tile_init();
-        softplus_tile(0, kOneBits, kOneBits, kSoftplusThreshold);
-        copy_to_dst(cb_neg_a_full, 0, 1);
-        mul_binary_tile_init();
-        mul_binary_tile(0, 1, 0);
-        exp_tile_init();
-        exp_tile(0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_decay);
-        pack_tile(0, cb_inv);  // FPU-side copy of decay
-        tile_regs_release();
-        CircularBuffer(cb_decay).push_back(1);
-        CircularBuffer(cb_inv).push_back(1);
-        CircularBuffer(cb_a_full).pop_front(1);
-        CircularBuffer(cb_dt_bias_full).pop_front(1);
-        CircularBuffer(cb_neg_a_full).pop_front(1);
-
-        CircularBuffer(cb_b_full).wait_front(1);
-        CircularBuffer(cb_beta).reserve_back(1);
-        pack_reconfig_data_format(cb_beta);
-        tile_regs_acquire();
-        copy_to_dst(cb_b_full, 0, 0);
-        sigmoid_tile_init();
-        sigmoid_tile(0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_beta);
-        tile_regs_release();
-        CircularBuffer(cb_beta).push_back(1);
-        CircularBuffer(cb_b_full).pop_front(1);
-        // beta restricted to row 0: zeroes the padding rows of delta, so they drop out of k^T (x) delta.
-        fpu_binary(Bin::Mul, cb_beta, cb_row_mask, true, 1, cb_beta_row0);
-        CircularBuffer(cb_beta).pop_front(1);
-        mark(2);
-        // 3. delta = beta_row0 * (v - (decay * k) @ S).
-        fpu_binary(Bin::Mul, cb_kn, cb_inv, true, Kt, cb_scratch);
-        CircularBuffer(cb_inv).pop_front(1);
-        row_matmul(cb_scratch, cb_s_mm, Kt, Vt, cb_vr);
-        CircularBuffer(cb_scratch).pop_front(Kt);
-        CircularBuffer(cb_s_mm).pop_front(st);
-        fpu_binary(Bin::Sub, cb_v_in, cb_vr, false, Vt, cb_scratch);
-        CircularBuffer(cb_v_in).pop_front(Vt);
-        CircularBuffer(cb_vr).pop_front(Vt);
-        fpu_binary(Bin::Mul, cb_scratch, cb_beta_row0, true, Vt, cb_delta);
-        CircularBuffer(cb_scratch).pop_front(Vt);
-        CircularBuffer(cb_beta_row0).pop_front(1);
-        mark(3);
-        // 4. k^T tiles (column vectors) for the rank-1 update.
-        CircularBuffer(cb_kn).wait_front(Kt);
-        CircularBuffer(cb_kt).reserve_back(Kt);
-        reconfig_data_format_srca(cb_kn);
-        pack_reconfig_data_format(cb_kt);
-        transpose_init(cb_kn);
-        for (uint32_t t = 0; t < Kt; t++) {
-            tile_regs_acquire();
-            transpose_tile(cb_kn, t, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, cb_kt, t);
-            tile_regs_release();
+    if constexpr (kBatched) {
+        const uint32_t n = n_users;
+        for (uint32_t l = 0; n && l < get_named_compile_time_arg_val("gdn_layers"); l++, it++) {
+            mark(0);
+            // 1. + 2. for the n users at once (rows 0 .. n - 1); beta * 1 and decay * k as the per-user path's
+            //    beta_row0 and kdec (the reader extracts user k's rows)
+            l2_normalize(cb_q_in, Kt, l2_eps_bits, scale_bits, cb_qn);
+            l2_normalize(cb_k_in, Kt, l2_eps_bits, kOneBits, cb_kn, cb_kn_self);
+            gates(cb_decay_b);
+            fpu_binary(Bin::Mul, cb_beta, cb_ones, true, 1, cb_betam_b);
+            CircularBuffer(cb_beta).pop_front(1);
+            fpu_binary(Bin::Mul, cb_kn_self, cb_inv, true, Kt, cb_kdec_b);
+            CircularBuffer(cb_kn_self).pop_front(Kt);
+            CircularBuffer(cb_inv).pop_front(1);
+            mark(1);
+            // 3. - 6. per user (o -> cb_o, gathered by the writer into row k of cb_o_b)
+            for (uint32_t k = 0; k < n; k++) {
+                delta_step(cb_kdec_u);
+                kt_step(cb_kn_u);
+                state_update(cb_decay);
+                o_step(cb_qn_u);
+            }
+            mark(2);
+            // 7. + 8. for the n users at once
+            gated_out(cb_o_b, inv_dv_bits, rms_eps_bits);
+            mark(3);
         }
-        CircularBuffer(cb_kt).push_back(Kt);
-        CircularBuffer(cb_kn).pop_front(Kt);
-        mark(4);
-        // 5. S' = decay * S + k^T (x) delta. Per DEST window: three state tiles and decay are copied in
-        //    (fp32), scaled on SFPU, then the rank-1 tile k^T[kt] @ delta[vt] is accumulated onto them
-        //    by the FPU (only column 0 of k^T and row 0 of delta are live). Packed twice: for the
-        //    query matmul and for the writer.
-        constexpr uint32_t kWin = 3;
-        constexpr uint32_t kDecaySlot = 3;
-        CircularBuffer(cb_kt).wait_front(Kt);
-        CircularBuffer(cb_delta).wait_front(Vt);
-        CircularBuffer(cb_s_in).wait_front(st);
-        CircularBuffer(cb_decay).wait_front(1);
-        CircularBuffer(cb_s_new_mm).reserve_back(st);
-        CircularBuffer(cb_s_new_out).reserve_back(st);
-        for (uint32_t t0 = 0; t0 < st; t0 += kWin) {
-            const uint32_t n = (st - t0) < kWin ? (st - t0) : kWin;
-            tile_regs_acquire();
-            reconfig_data_format_srca(cb_s_in);
-            copy_init(cb_s_in);
-            for (uint32_t i = 0; i < n; i++) {
-                copy_tile(cb_s_in, t0 + i, i);
-            }
-            copy_to_dst(cb_decay, 0, kDecaySlot);
-            mul_binary_tile_init();
-            for (uint32_t i = 0; i < n; i++) {
-                mul_binary_tile(i, kDecaySlot, i);
-            }
-            matmul_setup(cb_kt, cb_delta, cb_s_new_mm);
-            for (uint32_t i = 0; i < n; i++) {
-                const uint32_t t = t0 + i;
-                matmul_tiles(cb_kt, cb_delta, t / Vt, t % Vt, i);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < n; i++) {
-                pack_tile(i, cb_s_new_mm, t0 + i);
-                pack_tile(i, cb_s_new_out, t0 + i);
-            }
-            tile_regs_release();
+    } else {
+        for (uint32_t layer = 0; layer < layers; layer++, it++) {
+            mark(0);
+            // 1. Normalised query (with scale) and key.
+            l2_normalize(cb_q_in, Kt, l2_eps_bits, scale_bits, cb_qn);
+            l2_normalize(cb_k_in, Kt, l2_eps_bits, kOneBits, cb_kn);
+            mark(1);
+            gates(cb_decay);
+            // beta restricted to row 0: zeroes the padding rows of delta, so they drop out of k^T (x) delta.
+            fpu_binary(Bin::Mul, cb_beta, cb_row_mask, true, 1, cb_beta_row0);
+            CircularBuffer(cb_beta).pop_front(1);
+            mark(2);
+            // 3. delta = beta_row0 * (v - (decay * k) @ S).
+            fpu_binary(Bin::Mul, cb_kn, cb_inv, true, Kt, cb_scratch);
+            CircularBuffer(cb_inv).pop_front(1);
+            delta_step(cb_scratch);
+            mark(3);
+            kt_step(cb_kn);
+            mark(4);
+            state_update(cb_decay);
+            mark(5);
+            o_step(cb_qn);
+            mark(6);
+            mark(7);
+            gated_out(cb_o, inv_dv_bits, rms_eps_bits);
+            mark(8);
         }
-        CircularBuffer(cb_s_new_mm).push_back(st);
-        CircularBuffer(cb_s_new_out).push_back(st);
-        CircularBuffer(cb_s_in).pop_front(st);
-        CircularBuffer(cb_decay).pop_front(1);
-        CircularBuffer(cb_kt).pop_front(Kt);
-        CircularBuffer(cb_delta).pop_front(Vt);
-        mark(5);
-        // 6. o = q @ S'.
-        row_matmul(cb_qn, cb_s_new_mm, Kt, Vt, cb_o);
-        CircularBuffer(cb_qn).pop_front(Kt);
-        CircularBuffer(cb_s_new_mm).pop_front(st);
-        mark(6);
-        // 7. Gated RMSNorm: on = o * rsqrt(mean(o^2) + eps) * norm_w.
-        inv_norm(cb_o, Vt, inv_dv_bits, rms_eps_bits, kOneBits);
-        fpu_binary(Bin::Mul, cb_o, cb_inv, true, Vt, cb_on);
-        CircularBuffer(cb_o).pop_front(Vt);
-        CircularBuffer(cb_inv).pop_front(1);
-        fpu_binary(Bin::MulBcastRows, cb_on, cb_norm_w, false, Vt, cb_scratch);
-        CircularBuffer(cb_on).pop_front(Vt);
-        CircularBuffer(cb_norm_w).pop_front(Vt);
-        mark(7);
-        // 8. out = on * silu(z).
-        CircularBuffer(cb_z_in).wait_front(Vt);
-        CircularBuffer(cb_sz).reserve_back(Vt);
-        pack_reconfig_data_format(cb_sz);
-        for (uint32_t t = 0; t < Vt; t++) {
-            tile_regs_acquire();
-            copy_to_dst(cb_z_in, t, 0);
-            silu_tile_init();
-            silu_tile(0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, cb_sz, t);
-            tile_regs_release();
-        }
-        CircularBuffer(cb_sz).push_back(Vt);
-        CircularBuffer(cb_z_in).pop_front(Vt);
-        fpu_binary(Bin::Mul, cb_scratch, cb_sz, false, Vt, cb_out);
-        CircularBuffer(cb_scratch).pop_front(Vt);
-        CircularBuffer(cb_sz).pop_front(Vt);
-        mark(8);
     }
     CircularBuffer(cb_ones).pop_front(1);
     CircularBuffer(cb_row_mask).pop_front(1);

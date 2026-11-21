@@ -26,6 +26,10 @@
 //   that covers it), then the token state address
 // Rows mode (active_rows.hpp): only this core's active users run (iteration i = layer * n + k for the k-th of
 // its n active users); n goes to compute in cb_active.
+// Row groups (kBatched, gdn_head_compute.cpp): per layer the n users' q / k / z rows land in rows 0 .. n - 1 of one
+// tile set, a / b in rows 0 .. n - 1 (every column) of one fp32 tile each, the norm weight once; per user the reader
+// places its v in row 0 and streams the states one user ahead with no wait on compute (the writer extracts the other
+// per-user tiles from compute's batched results).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -57,8 +61,16 @@ constexpr uint32_t cb_neg_a_full = 30, cb_dt_bias_full = 31;
 constexpr uint32_t cb_active = 29;  // rows mode: this core's active users per step (one word, for compute)
 constexpr uint32_t kBf16Tile = 2048, kF32Tile = 4096, kFaceBytes = 512, kFaceRow = 32;
 constexpr uint32_t kRowTile = 64 * batch;  // a batch x 32 bf16 tile of the row buffer
+// row groups (gdn_head_compute.cpp kBatched): compute's batched results and the per-user row-0 tiles
+constexpr bool kBatched = groups > 1;
+constexpr uint32_t kF32Row = 64, kF32Face = 1024;
 
 inline uint32_t row0_offset(uint32_t c) { return c < 16 ? c : 256 + (c - 16); }
+// byte offset of row r's first half in a 32 x 32 tile (faces of face_bytes, rows of row_bytes); its second half is
+// one face further
+inline uint32_t row_at(uint32_t r, uint32_t face_bytes, uint32_t row_bytes) {
+    return (r / 16) * 2 * face_bytes + (r % 16) * row_bytes;
+}
 
 void fill_f32_tile(uint32_t l1_addr, uint32_t bits) {
     volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr);
@@ -78,17 +90,32 @@ void zero_bytes(uint32_t l1_addr, uint32_t bytes) {
     }
 }
 
+// row u of n row tiles starting at row tile `first` -> row dr of the n 32x32 bf16 tiles at dst (no barrier)
+void copy_rows(uint32_t dst, uint32_t rows, uint32_t first, uint32_t n, uint32_t u, uint32_t dr) {
+    const uint32_t d0 = dst + row_at(dr, kFaceBytes, kFaceRow);
+    for (uint32_t t = 0; t < n; t++) {
+        const uint32_t src = rows + (first + t) * kRowTile + u * kFaceRow;
+        noc_async_read(get_noc_addr(src), d0 + t * kBf16Tile, kFaceRow);
+        noc_async_read(get_noc_addr(src + batch * kFaceRow), d0 + t * kBf16Tile + kFaceBytes, kFaceRow);
+    }
+}
+
 // row u of n row tiles starting at row tile `first` -> row 0 of n 32x32 bf16 tiles of `cb`
 void place_rows(uint32_t cb, uint32_t rows, uint32_t first, uint32_t n, uint32_t u) {
     cb_reserve_back(cb, n);
-    const uint32_t dst = get_write_ptr(cb);
-    for (uint32_t t = 0; t < n; t++) {
-        const uint32_t src = rows + (first + t) * kRowTile + u * kFaceRow;
-        noc_async_read(get_noc_addr(src), dst + t * kBf16Tile, kFaceRow);
-        noc_async_read(get_noc_addr(src + batch * kFaceRow), dst + t * kBf16Tile + kFaceBytes, kFaceRow);
-    }
+    copy_rows(get_write_ptr(cb), rows, first, n, u, 0);
     noc_async_read_barrier();
     cb_push_back(cb, n);
+}
+
+// (kBatched) bits into row r (all 32 columns) of the fp32 tile at l1_addr
+void fill_f32_row(uint32_t l1_addr, uint32_t r, uint32_t bits) {
+    volatile tt_l1_ptr uint32_t* p =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr + row_at(r, kF32Face, kF32Row));
+    for (uint32_t c = 0; c < 16; c++) {
+        p[c] = bits;
+        p[256 + c] = bits;
+    }
 }
 
 void push_fill(uint32_t cb, uint32_t bits) {
@@ -202,7 +229,71 @@ void kernel_main() {
     };
     // element c of user u in a row tile
     auto elem = [](uint32_t c, uint32_t u) { return (c / 16) * 16 * batch + u * 16 + c % 16; };
-    for (uint32_t i = 0; i < layers * n; i++) {
+    // (kBatched) state i (user act[i % n] of GDN layer i / n) into the state CBs: the DRAM read, then the local copy
+    auto load_state = [&](uint32_t i) {
+        const uint32_t l = i / n, r = act[i % n];
+        if (l >= copies) {
+            noc_semaphore_wait_min(state_sem, i - copies * n + 1);
+        }
+        cb_reserve_back(cb_s_in, st);
+        const uint32_t first = (((l % copies) * num_heads + head) * kUsers + r) * st;
+        const uint32_t s_mm_at = get_write_ptr(cb_s_mm);
+        push_pages(cb_s_mm, state_dram, first, st, kF32Tile);
+        noc_async_read(get_noc_addr(s_mm_at), get_write_ptr(cb_s_in), st * kF32Tile);
+        noc_async_read_barrier();
+        cb_push_back(cb_s_in, st);
+    };
+    static_assert(!kBatched || !verify, "row groups run without verify");
+    if (kBatched && n) {
+        load_state(0);
+    }
+    for (uint32_t i = 0; kBatched && i < layers * n; i++) {
+        const uint32_t l = i / n, k = i % n, r = act[k], gr = r / batch, u = r % batch;
+        const uint32_t set = l % copies;
+        if (k == 0) {
+            // the layer's per-row inputs of the n users at once: q / k / z rows (row kk = user act[kk]), a / b in
+            // row kk (every column; the other rows 0), the copy's norm weight and gate constants
+            push_pages(cb_norm_w, norm_dram, set * Vt, Vt, kBf16Tile);
+            noc_semaphore_wait_min(rows_sem, row_writes * (l + 1));
+            if (ts_addr) {
+                ts[l * 4 + 0] = *clk;
+            }
+            cb_reserve_back(cb_q_in, Kt);
+            cb_reserve_back(cb_k_in, Kt);
+            cb_reserve_back(cb_z_in, Vt);
+            cb_reserve_back(cb_a_full, 1);
+            cb_reserve_back(cb_b_full, 1);
+            fill_f32_tile(get_write_ptr(cb_a_full), 0u);
+            fill_f32_tile(get_write_ptr(cb_b_full), 0u);
+            invalidate_l1_cache();  // a/b are read by the RISC: the row buffer is written by other cores
+            for (uint32_t kk = 0; kk < n; kk++) {
+                const uint32_t rk = act[kk], gk = rk / batch, uk = rk % batch;
+                const uint32_t rows_k = rows + gk * row_tiles * kRowTile;
+                copy_rows(get_write_ptr(cb_q_in), rows_k, q_tile, Kt, uk, kk);
+                copy_rows(get_write_ptr(cb_k_in), rows_k, k_tile, Kt, uk, kk);
+                copy_rows(get_write_ptr(cb_z_in), rows_k, z_tile, Vt, uk, kk);
+                fill_f32_row(get_write_ptr(cb_a_full), kk, static_cast<uint32_t>(a_row(gk)[elem(a_elem, uk)]) << 16);
+                fill_f32_row(get_write_ptr(cb_b_full), kk, static_cast<uint32_t>(b_row(gk)[elem(b_elem, uk)]) << 16);
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_q_in, Kt);
+            cb_push_back(cb_k_in, Kt);
+            cb_push_back(cb_a_full, 1);
+            push_fill(cb_dt_bias_full, get_arg_val<uint32_t>(gates_base + 2 * set));
+            push_fill(cb_neg_a_full, get_arg_val<uint32_t>(gates_base + 2 * set + 1));
+            cb_push_back(cb_b_full, 1);
+            cb_push_back(cb_z_in, Vt);
+        }
+        // user k's v (row 0), then the next user's state (one ahead; the writer extracts the other per-user tiles)
+        place_rows(cb_v_in, rows + gr * row_tiles * kRowTile, v_tile, Vt, u);
+        if (i + 1 < layers * n) {
+            load_state(i + 1);
+        }
+        if (ts_addr && k + 1 == n) {
+            ts[l * 4 + 1] = *clk;
+        }
+    }
+    for (uint32_t i = 0; !kBatched && i < layers * n; i++) {
         const uint32_t l = i / n, k = i % n, r = act[k], gr = r / batch, u = r % batch;
         const uint32_t grows = rows + gr * row_tiles * kRowTile;  // this user's group block of the row buffer
         const uint32_t set = l % copies;

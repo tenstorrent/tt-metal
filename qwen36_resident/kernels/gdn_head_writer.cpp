@@ -20,6 +20,10 @@
 // output rows are 0. A non-collector core with no active user sends nothing; the collector waits each layer for the
 // cores with one only (counting a core with none would let its count stand in for a busy core's rows) and zeroes the
 // idle cores' rows itself. The collector sends the head's output every layer, also when it has no active user.
+// Row groups (kBatched, gdn_head_compute.cpp): the writer extracts user k's rows of compute's batched results (q / k
+// norms, decay * k, beta) into row 0 of the per-user tiles and spreads its decay over a full fp32 tile (one user
+// ahead of compute), gathers each user's o (row 0 of cb_o) into row k of cb_o_b and writes its state back; compute's
+// output then holds the n users in rows 0 .. n - 1 of cb_out; the layer's last state write-back follows the output.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -41,6 +45,39 @@ constexpr uint32_t st = Kt * Vt;
 constexpr uint32_t cb_s_new_out = 24, cb_out = 28, cb_stage = 22;
 constexpr uint32_t kBf16Tile = 2048, kF32Tile = 4096, kFaceBytes = 512, kFaceRow = 32;
 constexpr uint32_t kRowTile = 64 * batch;
+// row groups (gdn_head_compute.cpp kBatched)
+constexpr bool kBatched = groups > 1;
+constexpr uint32_t cb_o = 25, cb_o_b = 39, cb_qn = 13, cb_kn = 14, cb_decay = 15, cb_beta_row0 = 19;
+constexpr uint32_t cb_decay_b = 32, cb_betam_b = 33, cb_kdec_b = 35, cb_qn_u = 36, cb_kn_u = 37, cb_kdec_u = 38;
+constexpr uint32_t kF32Row = 64, kF32Face = 1024;
+// byte offset of row r's first half in a 32 x 32 tile (its second half is one face further)
+inline uint32_t row_at(uint32_t r, uint32_t face_bytes, uint32_t row_bytes) {
+    return (r / 16) * 2 * face_bytes + (r % 16) * row_bytes;
+}
+
+// (kBatched) row k of the n fp32 tiles at cb_src's front (waited for by the caller) -> row 0 of n tiles of cb_dst
+void extract_f32(uint32_t cb_src, uint32_t cb_dst, uint32_t n, uint32_t k) {
+    cb_reserve_back(cb_dst, n);
+    const uint32_t src = get_read_ptr(cb_src) + row_at(k, kF32Face, kF32Row), dst = get_write_ptr(cb_dst);
+    for (uint32_t t = 0; t < n; t++) {
+        noc_async_read(get_noc_addr(src + t * kF32Tile), dst + t * kF32Tile, kF32Row);
+        noc_async_read(get_noc_addr(src + t * kF32Tile + kF32Face), dst + t * kF32Tile + kF32Face, kF32Row);
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_dst, n);
+}
+
+// (kBatched) bits over every element of the fp32 tile at l1_addr
+void fill_f32_tile(uint32_t l1_addr, uint32_t bits) {
+    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr);
+    for (uint32_t i = 0; i < 16; i++) {
+        p[i] = bits;
+    }
+    for (uint32_t bytes = 64; bytes < kF32Tile; bytes *= 2) {
+        noc_async_read(get_noc_addr(l1_addr), l1_addr + bytes, bytes);
+        noc_async_read_barrier();
+    }
+}
 // row groups (active_rows.hpp): the stage and the streamers' o_in hold one block per group (stage block Vt tiles,
 // o_in block o_tiles tiles); users are global rows g * batch + u; the state tensor holds groups * batch users
 constexpr uint32_t kUsers = batch * groups;
@@ -172,7 +209,122 @@ void kernel_main() {
         }
     };
 
-    for (uint32_t i = 0; i < layers * (n ? n : 1); i++) {
+    // (kBatched) state write-back i (user r) to DRAM. A write-back is acked lazily (before the next one is issued, so
+    // its latency stays off compute's path): sem_state counts the landed ones for the reader, which re-reads a copy's
+    // state only after its write-back; eager when the reader's next state may be the one just written (copies x n = 1).
+    const bool eager = copies * n <= 1;
+    uint32_t landed = 0;
+    auto write_state = [&](uint32_t i, uint32_t r) {
+        const uint32_t first = ((i / n % copies * num_heads + head) * kUsers + r) * st;
+        cb_wait_front(cb_s_new_out, st);
+        if (landed < i) {
+            noc_async_write_barrier();
+            landed = i;
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_state)) = landed;
+        }
+        for (uint32_t t = 0; t < st; t++) {
+            noc_async_write_page(first + t, state_dram, get_read_ptr(cb_s_new_out) + t * kF32Tile);
+        }
+        noc_async_writes_flushed();
+        cb_pop_front(cb_s_new_out, st);
+        if (eager) {
+            noc_async_write_barrier();
+            landed = i + 1;
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_state)) = landed;
+        }
+    };
+    // (kBatched) user k's row-0 tiles from compute's batched results, in the order compute frees them
+    auto extract = [&](uint32_t k) {
+        extract_f32(cb_kdec_b, cb_kdec_u, Kt, k);
+        extract_f32(cb_betam_b, cb_beta_row0, 1, k);
+        extract_f32(cb_kn, cb_kn_u, Kt, k);
+        cb_reserve_back(cb_decay, 1);
+        invalidate_l1_cache();  // written by this core's packer
+        fill_f32_tile(
+            get_write_ptr(cb_decay),
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_decay_b) + row_at(k, kF32Face, kF32Row))[0]);
+        cb_push_back(cb_decay, 1);
+        extract_f32(cb_qn, cb_qn_u, Kt, k);
+    };
+    if constexpr (kBatched) {
+        // the per-user row-0 tiles: only row 0 is ever written, the other rows stay 0 (they meet zero rows of beta /
+        // only row 0 of the results is used, so they must be finite); rows n .. 31 of the gathered o stay finite
+        // (compute's row-wise ops read them; nothing reads their results)
+        for (uint32_t cb : {cb_qn_u, cb_kn_u, cb_kdec_u, cb_beta_row0, cb_o_b}) {
+            auto& f = get_local_cb_interface(cb);
+            fill_f32_tile(f.fifo_limit - f.fifo_size, 0u);
+            for (uint32_t off = kF32Tile; off < f.fifo_size; off += kF32Tile) {
+                noc_async_read(get_noc_addr(f.fifo_limit - f.fifo_size), f.fifo_limit - f.fifo_size + off, kF32Tile);
+            }
+        }
+        noc_async_read_barrier();
+    }
+    for (uint32_t l = 0; kBatched && l < layers; l++) {
+        if (n == 0) {  // rows mode, no active user on this core: the collector still sends the head's output
+            if (collector) {
+                layer_out(l);
+            }
+            continue;
+        }
+        // compute's batched results of the layer (popped after the last user's extraction)
+        cb_wait_front(cb_qn, Kt);
+        cb_wait_front(cb_kn, Kt);
+        cb_wait_front(cb_kdec_b, Kt);
+        cb_wait_front(cb_decay_b, 1);
+        cb_wait_front(cb_betam_b, 1);
+        extract(0);
+        cb_reserve_back(cb_o_b, Vt);
+        for (uint32_t k = 0; k < n; k++) {
+            // the next user's tiles first (compute needs them right after this user's o), then this user's o and state
+            if (k + 1 < n) {
+                extract(k + 1);
+            } else {
+                cb_pop_front(cb_qn, Kt);
+                cb_pop_front(cb_kn, Kt);
+                cb_pop_front(cb_kdec_b, Kt);
+                cb_pop_front(cb_decay_b, 1);
+                cb_pop_front(cb_betam_b, 1);
+            }
+            cb_wait_front(cb_o, Vt);
+            const uint32_t src = get_read_ptr(cb_o), dst = get_write_ptr(cb_o_b) + row_at(k, kF32Face, kF32Row);
+            for (uint32_t t = 0; t < Vt; t++) {
+                noc_async_read(get_noc_addr(src + t * kF32Tile), dst + t * kF32Tile, kF32Row);
+                noc_async_read(get_noc_addr(src + t * kF32Tile + kF32Face), dst + t * kF32Tile + kF32Face, kF32Row);
+            }
+            noc_async_read_barrier();
+            cb_pop_front(cb_o, Vt);
+            if (k + 1 < n) {
+                if (ts_addr && k == 0) {
+                    ts[l * 4 + 2] = *clk;
+                }
+                write_state(l * n + k, act[k]);
+            }
+        }
+        cb_push_back(cb_o_b, Vt);
+        // the n users' output rows (rows 0 .. n - 1 of cb_out) into their stage rows
+        cb_wait_front(cb_out, Vt);
+        const uint32_t out = get_read_ptr(cb_out);
+        for (uint32_t k = 0; k < n; k++) {
+            const uint32_t r = act[k], u = r % batch, gblk = (r / batch) * Vt * kRowTile;
+            const uint32_t src = out + row_at(k, kFaceBytes, kFaceRow);
+            for (uint32_t t = 0; t < Vt; t++) {
+                const uint32_t dst = stage + gblk + t * kRowTile + u * kFaceRow;
+                noc_async_read(get_noc_addr(src + t * kBf16Tile), dst, kFaceRow);
+                noc_async_read(get_noc_addr(src + t * kBf16Tile + kFaceBytes), dst + batch * kFaceRow, kFaceRow);
+            }
+        }
+        noc_async_read_barrier();
+        cb_pop_front(cb_out, Vt);
+        layer_out(l);
+        if (ts_addr) {
+            ts[l * 4 + 3] = *clk;
+        }
+        write_state(l * n + n - 1, act[n - 1]);  // (the layer's last state after the output)
+    }
+    if constexpr (kBatched) {
+        noc_async_write_barrier();  // the last write-backs have landed before the next launch reads them
+    }
+    for (uint32_t i = 0; !kBatched && i < layers * (n ? n : 1); i++) {
         const uint32_t l = n ? i / n : i, k = n ? i % n : 0;
         if (n == 0) {  // rows mode, no active user on this core: the collector still sends the head's output
             if (collector) {

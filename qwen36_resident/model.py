@@ -1050,8 +1050,10 @@ class ResidentModel:
         # (debug: the attention leader's timeline per (layer, user) iteration, row groups)
         self.attn_ts_t = ts_buf(lead_grid, 1, max(1, self.n_attn) * LR * 8) if ATTN_TS and groups > 1 else None
         self.gdn_ts_t = ts_buf(head_grid, len(heads), 64 * 16) if GDN_TS and not self.gdn_chunk else None
+        # (and the head readers' / writers' per-layer words: [0] rows in, [1] inputs pushed, [2] first o, [3] output out)
+        self.gdn_io_ts_t = ts_buf(head_grid, len(heads), max(1, self.n_gdn) * 4) if self.gdn_ts_t is not None else None
         if self.gdn_ts_t is not None:
-            self.l1_addrs.append(self.gdn_ts_t.buffer_address())
+            self.l1_addrs += [self.gdn_ts_t.buffer_address(), self.gdn_io_ts_t.buffer_address()]
         if self.attn_ts_t is not None:
             self.l1_addrs.append(self.attn_ts_t.buffer_address())
 
@@ -1306,6 +1308,23 @@ class ResidentModel:
                 # row groups: the state CBs hold two states, so the reader fetches the next user's state (DRAM read +
                 # local copy) while compute works on this one
                 head_cb_spec = {**head_cb_spec, 5: (f4, 32), 17: (f4, 32)}
+                # and (gdn_head_compute.cpp kBatched) the batched results for the reader (decay, beta, decay * k),
+                # compute's copy of the k norms, the per-user row-0 tiles (q / k norms, decay * k), the gathered o
+                head_cb_spec.update(
+                    {
+                        32: (f4, 1),
+                        33: (f4, 1),
+                        34: (f4, 4),
+                        35: (f4, 4),
+                        36: (f4, 4),
+                        37: (f4, 4),
+                        38: (f4, 4),
+                        39: (f4, 4),
+                    }
+                )
+                # (the reader runs a user ahead: two users' v; the writer's write-back of a state overlaps the next
+                # user's update: two states)
+                head_cb_spec.update({2: (bf, 8), 24: (f4, 32)})
             for idx, ((dt, page), cnt) in head_cb_spec.items():
                 cbs.append(cb(idx, head_grid, cnt, dt, page))
             if not self.gdn_chunk:
@@ -1615,6 +1634,7 @@ class ResidentModel:
 
                 # GDN heads
                 hr, hw = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+                gdn_io_ts = self.gdn_io_ts_t.buffer_address() if getattr(self, "gdn_io_ts_t", None) is not None else 0
                 for hc, c in enumerate(heads):
                     hh, gi = divmod(hc, G)
                     nu = B // G
@@ -1643,13 +1663,13 @@ class ResidentModel:
                             hh,
                         ]
                         + gates
-                        + [0, gi * nu, nu, row_writes[hc], tok_addr]
+                        + [gdn_io_ts, gi * nu, nu, row_writes[hc], tok_addr]
                     )
                     col = head_p[hh * G]
                     hw[c.x][c.y] = (
                         [sub["state"].buffer_address(), o_in_addr, hh]
                         + peers
-                        + [0, gi * nu, nu, G, col.x, col.y, tok_addr]
+                        + [gdn_io_ts, gi * nu, nu, G, col.x, col.y, tok_addr]
                     )
                 head_ct = [4, 4, self.n_gdn, gdn_copies, S]
                 # (runtime arg 0: the debug per-step timeline, 0 = off)
@@ -1722,14 +1742,16 @@ class ResidentModel:
                             head_grid,
                             head_ct + [SEM_ROWS, d.nv, SEM_LOCAL, B, int(self.verify), SEM_ADDR],
                             hr,
-                            dm(NCRISC, NOC1),
+                            # (row groups: the head writers' state write-backs (8 x 64 KB per core and layer at 32
+                            # users) on NOC1, the readers on NOC0 — on NOC0 the write-backs ran at half the rate)
+                            dm(NCRISC, NOC0 if groups > 1 and not self.gdn_chunk else NOC1),
                         ),
                         kernel(
                             "gdn_chunk_writer.cpp" if self.gdn_chunk else "gdn_head_writer.cpp",
                             head_grid,
                             head_ct + [SEM_HEADS, d.nv, SEM_LOCAL, B, SEM_GROUP, int(self.verify), SEM_ADDR],
                             hw,
-                            dm(BRISC, NOC0),
+                            dm(BRISC, NOC1 if groups > 1 and not self.gdn_chunk else NOC0),
                         ),
                         kernel(
                             "gdn_chunk_compute.cpp" if self.gdn_chunk else "gdn_head_compute.cpp",
