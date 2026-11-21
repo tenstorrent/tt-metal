@@ -12,6 +12,8 @@
 
 #define TILE_WIDTH 32
 
+inline uint16_t float_to_bfloat16_rne(uint32_t u) { return uint16_t((u + 0x7FFF + ((u >> 16) & 1)) >> 16); }
+
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t tile_offset = get_arg_val<uint32_t>(1);
@@ -51,13 +53,13 @@ void kernel_main() {
             int32_t idx = w + tile_idx * TILE_WIDTH;
             value val;
             val.f = start_u.f + step_u.f * idx;
-            ptr[w] = uint16_t(val.u >> 16);
+            ptr[w] = float_to_bfloat16_rne(val.u);
         }
         for (uint32_t w = 0; w < 16; w++) {
             int32_t idx = (w + 16) + tile_idx * TILE_WIDTH;
             value val;
             val.f = start_u.f + step_u.f * idx;
-            ptr[w + 256] = uint16_t(val.u >> 16);
+            ptr[w + 256] = float_to_bfloat16_rne(val.u);
         }
 #endif
 #ifdef OUTPUT_DTYPE_INT32
