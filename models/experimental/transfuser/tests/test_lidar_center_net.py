@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import torch
 import pytest
 import numpy as np
 import ttnn
+from PIL import Image
 from collections import OrderedDict
 from typing import Dict, Any, List
 
@@ -264,6 +266,31 @@ def delete_incompatible_keys(state_dict: Dict[str, Any], keys_to_delete: List[st
             deleted_count += 1
 
     return new_state_dict
+
+
+def test_process_input_matches_dataset():
+    data_root = "Scenario3_Town01_curved_route0_11_23_20_02_59/"
+    frame = "0120"
+    config = GlobalConfig(setting="eval")
+    config.use_target_point_image = True
+    inputs = process_input(data_root, frame, config=config, normalize_image=False)
+
+    # The model was trained on the centre 704 columns of the 960-wide three-camera image.
+    rgb = np.array(Image.open(f"{data_root}rgb/{frame}.png").convert("RGB"))
+    expected_image = torch.from_numpy(rgb[:, 128:832].transpose(2, 0, 1).copy()).float()
+    assert torch.equal(inputs["image"][0], expected_image)
+
+    # The route target is the recorded command point rotated into the ego frame.
+    with open(f"{data_root}measurements/{frame}.json") as f:
+        measurements = json.load(f)
+    heading = np.pi / 2 + measurements["theta"]
+    dx = measurements["x_command"] - measurements["x"]
+    dy = measurements["y_command"] - measurements["y"]
+    expected_target = torch.tensor(
+        [[np.cos(heading) * dx + np.sin(heading) * dy, -np.sin(heading) * dx + np.cos(heading) * dy]],
+        dtype=torch.float32,
+    )
+    assert torch.allclose(inputs["target_point"], expected_target, atol=1e-4)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
