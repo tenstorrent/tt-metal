@@ -703,7 +703,7 @@ tests/ttnn/unit_tests/test_comparison_funcs.py @tenstorrent/metalium-developers-
 tests/ttnn/unit_tests/test_comp_pcc_fix.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/test_parametrize_id_stability.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 # Op bindings outside the op folders.
-ttnn/cpp/ttnn-nanobind/operations/copy.* @nsextonTT @tenstorrent/metalium-developers-ops-leads
+ttnn/cpp/ttnn-nanobind/operations/copy.* @nsextonTT @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-eltwise
 ttnn/cpp/ttnn-nanobind/activation.* @nsextonTT @tenstorrent/metalium-developers-eltwise
 # Bindings and tests for device and host streaming.
 ttnn/cpp/ttnn-nanobind/*_stream_service.* @nsextonTT
