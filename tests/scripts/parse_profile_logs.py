@@ -332,7 +332,6 @@ def clean_ops(ops):
         elif "reshape" in key:
             row = parse_reshape(key, val)
             add_to_list(row, cleaned_ops["reshape"])
-            cleaned_ops["reshape"].append(row)
         elif "full" in key:
             row = parse_full(key, val)
             add_to_list(row, cleaned_ops["full"])
