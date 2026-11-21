@@ -47,6 +47,7 @@ public:
     SDMeshCommandQueue(
         MeshDevice* mesh_device,
         uint32_t id,
+        std::shared_ptr<ThreadPool> dispatch_thread_pool,
         std::function<std::lock_guard<std::mutex>()> lock_api_function,
         std::shared_ptr<distributed::multihost::DistributedContext> distributed_context);
     ~SDMeshCommandQueue() override;
