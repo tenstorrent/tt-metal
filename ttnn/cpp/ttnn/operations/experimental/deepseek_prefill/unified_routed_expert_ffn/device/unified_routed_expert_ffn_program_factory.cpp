@@ -277,18 +277,27 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // 207.4 / 201.0 / 208.8 ms). m_tiles is the call's tokens / 32; a chip's 32 experts then average
     // tokens * 4 / 32 of them (top-4), so m_tiles >= 128 (4K tokens) is >= 512 per expert.
     uint32_t NG = 1;
+    uint32_t NGX = 1, NGY = 1;  // groups across x and y (NG = NGX * NGY)
     if (from_pages) {
+        // Heavy loads whose hidden slice splits evenly over half the grid width (the 24-tile stream experts on the
+        // 12-wide grid): two groups side by side, 4 hidden tiles per core instead of 2. gpt-oss-20b QuietBox 2,
+        // untraced 8K TTFT 183.5 -> 175.1 ms; v4 8K window KL unchanged (0.182). Not for light loads (traced 1K 44.9 ->
+        // 47.4 ms, and their 4-tile down K-blocks raised short-prompt KL 0.0727 -> 0.0754) nor for the 23-tile dense
+        // experts (batch-32 1K 725 -> 738 ms).
+        const bool tall = M_tiles_full >= kGroupTallFromMTiles;
+        NGX = tall && N_gate_tiles_full % (grid_size.x / 2) == 0 ? 2 : 1;
         // Heavy loads: two groups over every grid row (12x5 each on the 10-row Blackhole grid; 12x4 left two rows
         // idle). Untraced TTFT, 12x4 -> 12x5: 4K 114.3 -> 111.4 ms, 8K 200.1 -> 192.2, 16K 391.0 -> 374.4; 2K (light
         // load, 5 x 12x2) 68.5 vs 70.7 with 12x5.
-        GRID_Y = M_tiles_full >= kGroupTallFromMTiles ? std::max<uint32_t>(2, grid_size.y / 2) : 2;
-        NG = std::max<uint32_t>(1, std::min<uint32_t>(grid_size.y / GRID_Y, experts_per_chip));
+        GRID_Y = tall ? std::max<uint32_t>(2, grid_size.y / 2) : 2;
+        NGY = std::max<uint32_t>(1, std::min<uint32_t>(grid_size.y / GRID_Y, experts_per_chip));
+        NG = NGX * NGY;
     }
     const uint32_t kMaxChunkMTiles = 4 * GRID_Y;  // per_core_M <= 4 (see above)
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
     uint32_t in0_block_w_gu = 16;
     TT_FATAL(
-        grid_size.x >= kCoreGridX && grid_size.y >= GRID_Y * NG,
+        grid_size.x >= kCoreGridX && grid_size.y >= GRID_Y * NGY,
         "unified_routed_expert_ffn: expected at least {}x{} compute grid, got {}x{}",
         kCoreGridX,
         kCoreGridY,
@@ -298,12 +307,18 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // tiles): use the grid width that leaves the fewest phantom hidden columns, up to the device's width. On the
     // 11-wide default, 24 tiles round up to 3 per core and the last 3 grid columns hold only padding.
     if (from_pages) {
-        uint32_t best_pad = (N_gate_tiles_full + GRID_X - 1) / GRID_X * GRID_X;
-        for (uint32_t x = kCoreGridX + 1; x <= grid_size.x; ++x) {
-            const uint32_t pad = (N_gate_tiles_full + x - 1) / x * x;
-            if (pad < best_pad) {
-                best_pad = pad;
-                GRID_X = x;
+        if (NGX > 1) {
+            // Side-by-side groups: each takes its share of the width (24 tiles: 4 per core; dense TP's 23: 4, the
+            // last core one phantom tile).
+            GRID_X = grid_size.x / NGX;
+        } else {
+            uint32_t best_pad = (N_gate_tiles_full + GRID_X - 1) / GRID_X * GRID_X;
+            for (uint32_t x = kCoreGridX + 1; x <= grid_size.x; ++x) {
+                const uint32_t pad = (N_gate_tiles_full + x - 1) / x * x;
+                if (pad < best_pad) {
+                    best_pad = pad;
+                    GRID_X = x;
+                }
             }
         }
     }
@@ -689,7 +704,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     const uint32_t d_out_block_num_tiles = per_core_M * per_core_N_d;
 
     // -------------------------- compute grid ------------------------------
-    const CoreRange core_range({0, 0}, {GRID_X - 1, NG * GRID_Y - 1});
+    const CoreRange core_range({0, 0}, {NGX * GRID_X - 1, NGY * GRID_Y - 1});
     const CoreRangeSet core_range_set{core_range};
 
     // Representative expert-0 buffers: one TensorAccessorArgs layout descriptor
@@ -1381,9 +1396,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     std::vector<CoreCoord> cores;
     uint32_t reader_group_rt = 0, writer_group_rt = 0;
     cores.reserve(GRID_X * GRID_Y * NG);
-    for (uint32_t y = 0; y < NG * GRID_Y; ++y) {
-        for (uint32_t gx = 0; gx < GRID_X; ++gx) {
-            cores.push_back(CoreCoord{gx, y});
+    for (uint32_t y = 0; y < NGY * GRID_Y; ++y) {
+        for (uint32_t x = 0; x < NGX * GRID_X; ++x) {
+            cores.push_back(CoreCoord{x, y});
         }
     }
 
@@ -1391,11 +1406,13 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
 
     for (uint32_t idx = 0; idx < cores.size(); ++idx) {
         const auto& core = cores[idx];
-        // Expert group of the core and its row within the group: every multicast below stays in the group.
-        const uint32_t group = idx / (GRID_X * GRID_Y);
-        const uint32_t y0 = group * GRID_Y;
-        const uint32_t gy = (idx / GRID_X) % GRID_Y;
-        const uint32_t gx = idx % GRID_X;
+        // Expert group of the core, its origin and the core's place within it: every multicast below stays in the
+        // group.
+        const uint32_t group = (core.y / GRID_Y) * NGX + core.x / GRID_X;
+        const uint32_t x0 = core.x / GRID_X * GRID_X;
+        const uint32_t y0 = core.y / GRID_Y * GRID_Y;
+        const uint32_t gy = core.y % GRID_Y;
+        const uint32_t gx = core.x % GRID_X;
         const uint32_t my_mt = gy;
         const uint32_t my_nt_gu = gx;
         const uint32_t my_nt_d = gx;
@@ -1427,14 +1444,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
             gy);
 
         const bool is_in1_sender = (gy == in1_sender_row);
-        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, y0 + in1_sender_row});
+        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{x0 + gx, y0 + in1_sender_row});
         // The rectangle spans the WHOLE column, sender included: a multicast rectangle
         // must be contiguous and the sender is no longer on an edge row, so "everything
         // but the sender" is not expressible as one rectangle. The non-loopback
         // multicast drops the sender's own copy (it already holds the block), so
         // num_dests stays GRID_Y - 1.
-        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, y0});
-        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, y0 + GRID_Y - 1});
+        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{x0 + gx, y0});
+        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{x0 + gx, y0 + GRID_Y - 1});
         const uint32_t in1_num_receivers = GRID_Y - 1;
         const uint32_t in1_mcast_nx_start = first_recv_noc.x;
         const uint32_t in1_mcast_ny_start = first_recv_noc.y;
@@ -1446,9 +1463,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // x (in0) multicast: per M-row, sender at in0_sender_col; the rectangle spans
         // the whole row for the same reason as the weight column above.
         const bool is_in0_sender = (gx == in0_sender_col);
-        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{in0_sender_col, y0 + gy});
-        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{0, y0 + gy});
-        const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, y0 + gy});
+        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{x0 + in0_sender_col, y0 + gy});
+        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{x0, y0 + gy});
+        const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{x0 + GRID_X - 1, y0 + gy});
         const uint32_t in0_num_receivers = GRID_X - 1;
         const uint32_t in0_mcast_nx_start = in0_first_recv_noc.x;
         const uint32_t in0_mcast_ny_start = in0_first_recv_noc.y;
@@ -1497,7 +1514,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // own copy, so num_dests is one less than the grid.
         {
             const auto grid_first = device->worker_core_from_logical_core(CoreCoord{0, 0});
-            const auto grid_last = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, NG * GRID_Y - 1});
+            const auto grid_last = device->worker_core_from_logical_core(CoreCoord{NGX * GRID_X - 1, NGY * GRID_Y - 1});
             reader_args.push_back(static_cast<uint32_t>(idx == 0));  // is_counts_reader
             reader_args.push_back(static_cast<uint32_t>(grid_first.x));
             reader_args.push_back(static_cast<uint32_t>(grid_first.y));
@@ -1517,7 +1534,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // phase-4 K-block (kb=0..K_down_tiles_padded-1) to find the sender's
         // NoC addr and to build the M-row mcast rectangle.
         for (uint32_t gxi = 0; gxi < GRID_X; ++gxi) {
-            const auto noc = device->worker_core_from_logical_core(CoreCoord{gxi, y0 + gy});
+            const auto noc = device->worker_core_from_logical_core(CoreCoord{x0 + gxi, y0 + gy});
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
