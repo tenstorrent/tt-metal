@@ -221,8 +221,11 @@ void kernel_main() {
             cb_push_back(cb_s_mm, st);
         } else {
             const uint32_t first = ((set * num_heads + head) * kUsers + (verify ? cur : r)) * st;
+            // (the copy's source is where this state lands: with room for two states the CB's front may still hold
+            // the previous user's)
+            const uint32_t s_mm_at = get_write_ptr(cb_s_mm);
             push_pages(cb_s_mm, state_dram, first, st, kF32Tile);  // then a local copy: one DRAM read per state
-            noc_async_read(get_noc_addr(get_read_ptr(cb_s_mm)), get_write_ptr(cb_s_in), st * kF32Tile);
+            noc_async_read(get_noc_addr(s_mm_at), get_write_ptr(cb_s_in), st * kF32Tile);
             noc_async_read_barrier();
         }
         cb_push_back(cb_s_in, st);

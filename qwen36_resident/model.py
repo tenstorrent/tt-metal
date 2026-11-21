@@ -1297,6 +1297,10 @@ class ResidentModel:
                     30: (bf, 4),
                     31: (f4, 10),
                 }
+            if groups > 1 and not self.gdn_chunk:
+                # row groups: the state CBs hold two states, so the reader fetches the next user's state (DRAM read +
+                # local copy) while compute works on this one
+                head_cb_spec = {**head_cb_spec, 5: (f4, 32), 17: (f4, 32)}
             for idx, ((dt, page), cnt) in head_cb_spec.items():
                 cbs.append(cb(idx, head_grid, cnt, dt, page))
             if not self.gdn_chunk:
