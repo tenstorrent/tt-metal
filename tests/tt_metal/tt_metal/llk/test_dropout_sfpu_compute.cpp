@@ -26,6 +26,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
+#include "single_node_dfb_program.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
@@ -97,6 +98,63 @@ bool check_dropout(
     return pass;
 }
 
+// Unpacks the source and result tiles and checks the dropout rate and the scaling of the kept elements.
+bool check_result(
+    const std::vector<uint32_t>& src0_vec,
+    const std::vector<uint32_t>& result_vec,
+    float probability,
+    float scale_factor,
+    bool fpu_add_input,
+    std::vector<bfloat16>& res_vec) {
+    auto transform_identity = [](const bfloat16& a) { return a; };
+    std::vector<bfloat16> src0_vec_bfloat16 = unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_identity);
+    res_vec = unpack_uint32_vec_into_bfloat16_vec(result_vec, transform_identity);
+    // The kernel's add_tiles(in, in) feeds dropout twice the source value.
+    constexpr float fpu_add_input_gain = 2.0f;
+    const float input_gain = fpu_add_input ? fpu_add_input_gain : 1.0f;
+    return check_dropout(src0_vec_bfloat16, res_vec, probability, scale_factor, input_gain);
+}
+
+// Quasar: the same dropout program over the 2.0 host API.
+bool test_dropout_standalone_quasar(
+    distributed::MeshDevice& mesh_device,
+    float probability,
+    uint32_t seed,
+    float const_bias,
+    std::vector<bfloat16>& res_vec,
+    bool fpu_add_input) {
+    const uint32_t int_probability = probability * (double)INT_MAX;
+    const float scale_factor_f = 1.0f / (1.0f - probability);
+    uint32_t scale_factor;
+    std::memcpy(&scale_factor, &scale_factor_f, sizeof(uint32_t));
+
+    constexpr uint32_t single_tile_size = 2 * 1024;
+    constexpr uint32_t num_tiles = 128;
+    const std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(single_tile_size * num_tiles, const_bias);
+
+    namespace sn = unit_tests::llk::single_node_dfb;
+    const std::vector<uint32_t> result_vec = sn::run(
+        mesh_device,
+        {.name = "dropout",
+         .inputs =
+             {{.data = src0_vec,
+               .format = tt::DataFormat::Float16_b,
+               .num_tiles = num_tiles,
+               .accessor = "in",
+               .num_entries = 2}},
+         .output = {.format = tt::DataFormat::Float16_b, .num_tiles = num_tiles, .accessor = "out", .num_entries = 2},
+         .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/dropout_sfpu_2_0.cpp",
+         .compile_time_args =
+             {{"num_tiles", num_tiles},
+              {"seed", seed},
+              {"int_probability", int_probability},
+              {"int_scale_factor", scale_factor},
+              {"fpu_add_input", fpu_add_input ? 1u : 0u}},
+         .hw_config = ComputeHardwareConfig{}});
+
+    return check_result(src0_vec, result_vec, probability, scale_factor_f, fpu_add_input, res_vec);
+}
+
 bool test_dropout_standalone(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     float probability,
@@ -104,6 +162,9 @@ bool test_dropout_standalone(
     float const_bias,
     std::vector<bfloat16>& res_vec,
     bool fpu_add_input) {
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        return test_dropout_standalone_quasar(*mesh_device, probability, seed, const_bias, res_vec, fpu_add_input);
+    }
     bool pass = true;
     uint32_t int_probability = probability * (double)INT_MAX;
     float scale_factor_f = 1.0f / (1.0f - probability);
@@ -228,16 +289,7 @@ bool test_dropout_standalone(
         std::vector<uint32_t> result_vec;
         distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
-        auto transform_identity = [](const bfloat16& a) { return a; };
-
-        // Unpack source and result vectors.
-        std::vector<bfloat16> src0_vec_bfloat16 = unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_identity);
-        std::vector<bfloat16> result_vec_bfloat16 = unpack_uint32_vec_into_bfloat16_vec(result_vec, transform_identity);
-        res_vec = result_vec_bfloat16;
-        // The kernel's add_tiles(c_0, c_0) feeds dropout twice the source value.
-        constexpr float fpu_add_input_gain = 2.0f;
-        const float input_gain = fpu_add_input ? fpu_add_input_gain : 1.0f;
-        pass &= check_dropout(src0_vec_bfloat16, result_vec_bfloat16, probability, scale_factor_f, input_gain);
+        pass &= check_result(src0_vec, result_vec, probability, scale_factor_f, fpu_add_input, res_vec);
     } catch (const std::exception& e) {
         log_error(tt::LogTest, "Test failed with exception!");
         log_error(tt::LogTest, "{}", e.what());
@@ -288,9 +340,6 @@ void test_dropout(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
 }  // namespace unit_tests::compute::sfpu::dropout
 
 TEST_F(LLKMeshDeviceFixture, TensixComputeDropout) {
-    if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP() << "Not implemented on Quasar";
-    }
     srand(0);
     int num_tests = 5;
     float fill_constant = 9.0;
@@ -309,9 +358,6 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeDropout) {
 // ADDR_MOD_3 with a Dest increment; dropout's SFPLOAD/SFPSTORE must step Dest only through dst_reg++
 // (no-increment addressing), so every kept element must still read back as 2 * fill * scale.
 TEST_F(LLKMeshDeviceFixture, TensixComputeDropoutAfterFpuAdd) {
-    if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP() << "Not implemented on Quasar";
-    }
     srand(0);
     int num_tests = 5;
     float fill_constant = 9.0;
