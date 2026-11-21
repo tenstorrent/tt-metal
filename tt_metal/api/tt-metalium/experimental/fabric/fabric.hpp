@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 #include <optional>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <hostdevcommon/fabric_common.h>
 
 namespace tt::tt_metal {
@@ -123,6 +124,19 @@ uint32_t append_routing_plane_connection_manager_rt_args(
     const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     FabricApiType api_type = FabricApiType::Linear,
+    CoreType core_type = CoreType::WORKER);
+
+// KernelSpec overload: use when the kernel is created via MakeProgramFromSpec.
+// Only supported for flat-addressing architectures (Horizon/ATT crossbar).
+void append_routing_plane_connection_manager_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const FabricNodeId& src_fabric_node_id,
+    const std::vector<FabricNodeId>& dst_nodes,
+    const std::vector<uint32_t>& connection_link_indices,
+    tt::tt_metal::KernelSpec& kernel_spec,
+    const tt::tt_metal::CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    FabricApiType api_type = FabricApiType::Mesh,
     CoreType core_type = CoreType::WORKER);
 
 // returns which links on a given src chip are available for forwarding the data to a dst chip

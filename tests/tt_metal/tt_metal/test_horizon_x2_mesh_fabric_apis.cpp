@@ -335,3 +335,124 @@ TEST_F(HorizonX2MeshFabricApiFixture, HorizonX2MeshScatterWriteStateful) {
     EXPECT_EQ(got_c, first_half) << "recv_buf_c mismatch (scatter stateful, second send, chunk 0)";
     EXPECT_EQ(got_d, second_half) << "recv_buf_d mismatch (scatter stateful, second send, chunk 1)";
 }
+
+// ===========================================================================
+// Test 4: ConnectionManager unicast write — two route_ids, both pointing to
+// chip 1.  route_id=0 writes to recv_buf_0, route_id=1 writes to recv_buf_1.
+// Verifies that connection_manager.get(route_id) correctly indexes each slot.
+// ===========================================================================
+TEST_F(HorizonX2MeshFabricApiFixture, HorizonX2MeshConnectionManagerUnicastWrite) {
+    auto& cluster = MetalContext::instance().get_cluster();
+    ChipId src_chip = 0, tgt_chip = 1;
+    CoreCoord logical_core{0, 0};
+    const CoreCoord tgt_virt =
+        cluster.get_virtual_coordinate_from_logical_coordinates(tgt_chip, logical_core, CoreType::WORKER);
+
+    auto src_buf = make_l1_buffer(*devices_[src_chip], logical_core);
+    auto recv_buf_0 = make_l1_buffer(*devices_[tgt_chip], logical_core);
+    auto recv_buf_1 = make_l1_buffer(*devices_[tgt_chip], logical_core);
+
+    const uint32_t base = 0xC0FE0100u;
+    auto pattern = make_pattern(base);
+    distributed::MeshCommandQueue& src_cq = devices_[src_chip]->mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(src_cq, src_buf, pattern, true);
+    zero_l1(tgt_chip, tgt_virt, recv_buf_0->address());
+    zero_l1(tgt_chip, tgt_virt, recv_buf_1->address());
+
+    // Fixed args (indices 0-5); CM args (indices 6-19) appended by helper below.
+    std::vector<uint32_t> sender_runtime_args = {
+        src_buf->address(),
+        static_cast<uint32_t>(tgt_virt.x),
+        static_cast<uint32_t>(tgt_virt.y),
+        recv_buf_0->address(),
+        recv_buf_1->address(),
+        TEST_BYTES,
+    };
+
+    auto src_node = tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, src_chip);
+    auto dst_node = tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, tgt_chip);
+
+    const KernelSpecName SENDER{"mesh_cm_unicast_write_sender"};
+    KernelSpec sender_kernel_spec{
+        .unique_id = SENDER,
+        .source = OVERRIDE_KERNEL_PREFIX
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/"
+        "horizon_mesh_connection_manager_unicast_write_sender.cpp",
+        .num_threads = 1,
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {
+                     // Fixed args (0-5)
+                     "src_l1_addr",
+                     "dst_noc_x",
+                     "dst_noc_y",
+                     "dst_l1_addr_0",
+                     "dst_l1_addr_1",
+                     "size",
+                     // CM slot 0: tag, eth_ch, teardown_sem, buf_idx (6-9)
+                     "cm_s0_w0",
+                     "cm_s0_w1",
+                     "cm_s0_w2",
+                     "cm_s0_w3",
+                     // CM slot 1: (10-13)
+                     "cm_s1_w0",
+                     "cm_s1_w1",
+                     "cm_s1_w2",
+                     "cm_s1_w3",
+                     // FABRIC_2D suffix: my_chip, my_mesh (14-15)
+                     "cm_my_chip",
+                     "cm_my_mesh",
+                     // Per-slot dst ids: slot 0 (16-17), slot 1 (18-19)
+                     "cm_s0_dst_dev",
+                     "cm_s0_dst_mesh",
+                     "cm_s1_dst_dev",
+                     "cm_s1_dst_mesh",
+                 }},
+        .hw_config = DataMovementHardwareConfig{},
+    };
+
+    // Appends 14 CM RT arg words (8 zeros for ETH fields + 6 for FABRIC_2D suffix)
+    // and injects API_TYPE_Mesh + FABRIC_2D into sender_kernel_spec.compiler_options.defines.
+    tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+        *devices_[src_chip],
+        src_node,
+        {dst_node, dst_node},
+        {},
+        sender_kernel_spec,
+        logical_core,
+        sender_runtime_args,
+        tt::tt_fabric::FabricApiType::Mesh);
+
+    ProgramSpec sender_spec{
+        .name = "horizon_mesh_cm_unicast_write",
+        .kernels = {std::move(sender_kernel_spec)},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {SENDER}, .target_nodes = logical_core}},
+    };
+    Program sender_prog = experimental::MakeProgramFromSpec(*devices_[src_chip], sender_spec);
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = SENDER,
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+            logical_core, {{"src_l1_addr", sender_runtime_args[0]},    {"dst_noc_x", sender_runtime_args[1]},
+                           {"dst_noc_y", sender_runtime_args[2]},      {"dst_l1_addr_0", sender_runtime_args[3]},
+                           {"dst_l1_addr_1", sender_runtime_args[4]},  {"size", sender_runtime_args[5]},
+                           {"cm_s0_w0", sender_runtime_args[6]},       {"cm_s0_w1", sender_runtime_args[7]},
+                           {"cm_s0_w2", sender_runtime_args[8]},       {"cm_s0_w3", sender_runtime_args[9]},
+                           {"cm_s1_w0", sender_runtime_args[10]},      {"cm_s1_w1", sender_runtime_args[11]},
+                           {"cm_s1_w2", sender_runtime_args[12]},      {"cm_s1_w3", sender_runtime_args[13]},
+                           {"cm_my_chip", sender_runtime_args[14]},    {"cm_my_mesh", sender_runtime_args[15]},
+                           {"cm_s0_dst_dev", sender_runtime_args[16]}, {"cm_s0_dst_mesh", sender_runtime_args[17]},
+                           {"cm_s1_dst_dev", sender_runtime_args[18]}, {"cm_s1_dst_mesh", sender_runtime_args[19]}}),
+    }};
+    experimental::SetProgramRunArgs(sender_prog, run_args);
+
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange(devices_[src_chip]->shape()), std::move(sender_prog));
+    distributed::EnqueueMeshWorkload(src_cq, workload, true);
+
+    auto got_0 = read_l1(tgt_chip, tgt_virt, recv_buf_0->address());
+    auto got_1 = read_l1(tgt_chip, tgt_virt, recv_buf_1->address());
+    EXPECT_EQ(got_0, pattern) << "recv_buf_0 mismatch (ConnectionManager route_id=0)";
+    EXPECT_EQ(got_1, pattern) << "recv_buf_1 mismatch (ConnectionManager route_id=1)";
+}

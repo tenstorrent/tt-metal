@@ -17,6 +17,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include <optional>
@@ -531,6 +532,62 @@ void append_routing_plane_connection_manager_rt_args(
         worker_args,
         core_type);
     inject_fabric_kernel_defines(control_plane.get_fabric_context(), worker_program_or_desc, kernel_id, api_type);
+}
+
+static void append_routing_plane_connection_manager_rt_args_flat_addr_impl(
+    const FabricContext& fabric_context,
+    const FabricNodeId& src_fabric_node_id,
+    const std::vector<FabricNodeId>& dst_nodes,
+    std::vector<uint32_t>& worker_args) {
+    // Per-slot: tag, eth_channel, teardown_sem, buffer_index_sem (all unused in flat-addressing).
+    // Push zeros so build_from_args reads them without fault.
+    for (size_t i = 0; i < dst_nodes.size(); ++i) {
+        worker_args.push_back(0u);
+        worker_args.push_back(0u);
+        worker_args.push_back(0u);
+        worker_args.push_back(0u);
+    }
+    // FABRIC_2D suffix -- the only fields Horizon's impl actually uses.
+    if (fabric_context.is_2D_routing_enabled()) {
+        worker_args.push_back(src_fabric_node_id.chip_id);
+        worker_args.push_back(src_fabric_node_id.mesh_id.get());
+        for (const auto& dst_node : dst_nodes) {
+            worker_args.push_back(static_cast<uint16_t>(dst_node.chip_id));
+            worker_args.push_back(static_cast<uint16_t>(*dst_node.mesh_id));
+        }
+    }
+}
+
+void append_routing_plane_connection_manager_rt_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const FabricNodeId& src_fabric_node_id,
+    const std::vector<FabricNodeId>& dst_nodes,
+    const std::vector<uint32_t>& connection_link_indices,
+    tt::tt_metal::KernelSpec& kernel_spec,
+    const tt::tt_metal::CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    FabricApiType api_type,
+    CoreType core_type) {
+    (void)connection_link_indices;
+    (void)worker_core;
+    (void)core_type;
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
+    TT_FATAL(
+        control_plane.fabric_uses_flat_addressing(),
+        "KernelSpec overload of append_routing_plane_connection_manager_rt_args requires a "
+        "flat-addressing architecture (Horizon). Use the Program or ProgramDescriptor overload "
+        "for EDM-based architectures.");
+    const auto& fabric_context = control_plane.get_fabric_context();
+    append_routing_plane_connection_manager_rt_args_flat_addr_impl(
+        fabric_context, src_fabric_node_id, dst_nodes, worker_args);
+    switch (api_type) {
+        case FabricApiType::Linear: kernel_spec.compiler_options.defines.emplace("API_TYPE_Linear", "1"); break;
+        case FabricApiType::Mesh: kernel_spec.compiler_options.defines.emplace("API_TYPE_Mesh", "1"); break;
+        default: TT_FATAL(false, "Unsupported FabricApiType: {}", static_cast<int>(api_type));
+    }
+    if (fabric_context.is_2D_routing_enabled()) {
+        kernel_spec.compiler_options.defines.emplace("FABRIC_2D", "1");
+    }
 }
 
 std::vector<uint32_t> get_forwarding_link_indices(
