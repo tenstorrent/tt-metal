@@ -13,7 +13,7 @@
 #include <tt_stl/fmt.hpp>
 
 #include <host_api.hpp>
-#include "env_lib.hpp"
+#include "common/env_lib.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "trace/trace_buffer.hpp"
 #include <tt-metalium/device.hpp>

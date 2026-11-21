@@ -52,6 +52,10 @@ public:
     explicit __attribute__((always_inline)) Semaphore(SemaphoreBindingToken token) :
         handle_(semaphore_detail::sem_l1_offset<core_type>(token.id, token.scope)) {
         set_scope(token.scope);
+#if defined(DEBUG_SANITIZE_NOC_ENABLED)
+        node_ranges_ = token.node_ranges;
+        num_node_ranges_ = token.num_node_ranges;
+#endif
     }
 
     // Non-Metal-2.0: a bare id carries no host-resolved mechanism, so it is the plain word.
@@ -247,6 +251,8 @@ public:
         std::uint32_t num_dests,
         bool linked = false) {
         ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);  // multicast is unavailable on a cached semaphore
+        sanitize_multicast(
+            noc, noc_x_start, noc_y_start, noc_x_end, noc_y_end, handle_, has_flag(opts, NocOptions::MCAST_INCL_SRC));
         semaphore_detail::set_multicast<opts>(
             handle_, noc, noc_x_start, noc_y_start, noc_x_end, noc_y_end, num_dests, linked);
     }
@@ -281,6 +287,8 @@ public:
         bool linked = false) {
         ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);          // relay is unavailable on a cached semaphore
         ASSERT(dst_sem.scope_ != SemScope::DM_LOCAL_CACHED);  // and cannot target one
+        dst_sem.sanitize_multicast(
+            noc, noc_x_start, noc_y_start, noc_x_end, noc_y_end, handle_, has_flag(opts, NocOptions::MCAST_INCL_SRC));
         semaphore_detail::relay_multicast<opts>(
             handle_, dst_sem.handle_, noc, noc_x_start, noc_y_start, noc_x_end, noc_y_end, num_dests, linked);
     }
@@ -306,6 +314,7 @@ public:
         std::uint32_t value,
         std::uint32_t num_dests) {
         ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);  // multicast is unavailable on a cached semaphore
+        sanitize_multicast(noc, noc_x_start, noc_y_start, noc_x_end, noc_y_end, handle_, /*includes_sender=*/false);
         semaphore_detail::inc_multicast(handle_, noc, noc_x_start, noc_y_start, noc_x_end, noc_y_end, value, num_dests);
     }
 #endif
@@ -326,5 +335,35 @@ private:
     static constexpr SemScope scope_ = SemScope::LOCAL_NONATOMIC;
 #endif
     __attribute__((always_inline)) void set_scope(SemScope scope) { ASSERT(scope == scope_); }
+#endif
+#if !defined(COMPILE_FOR_TRISC)
+    // Watcher: the multicast rectangle must stay within the nodes this semaphore exists on. Only a semaphore built
+    // from a binding token knows them; one built from a bare id is not checked.
+    void sanitize_multicast(
+        const Noc& noc,
+        std::uint32_t noc_x_start,
+        std::uint32_t noc_y_start,
+        std::uint32_t noc_x_end,
+        std::uint32_t noc_y_end,
+        std::uintptr_t src_l1_offset,
+        bool includes_sender) const {
+#if defined(DEBUG_SANITIZE_NOC_ENABLED)
+        DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(
+            noc.get_noc_id(),
+            ::get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, handle_, noc.get_noc_id()),
+            src_l1_offset,
+            sizeof(std::uint32_t),
+            noc_x_start,
+            noc_y_start,
+            noc_x_end,
+            noc_y_end,
+            (DebugMulticastNodeSet{.ranges = node_ranges_, .num_ranges = num_node_ranges_}),
+            includes_sender);
+#endif
+    }
+#endif
+#if defined(DEBUG_SANITIZE_NOC_ENABLED)
+    const DebugNodeRange* node_ranges_ = nullptr;
+    std::uint32_t num_node_ranges_ = 0;
 #endif
 };

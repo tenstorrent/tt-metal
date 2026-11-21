@@ -43,9 +43,7 @@ struct ReaderRtArgs {
     uint32_t dram_counts;
     uint32_t dram_region;
     uint32_t dram_expert_offsets;
-#ifdef CMBF2D_OVERLAPPED
-    uint32_t dram_expert_table;
-#endif
+    uint32_t dram_expert_table;  // zero when there is no table
 
 private:
     friend struct ReaderRtArgManager;
@@ -58,13 +56,8 @@ private:
         dram_meta(get_rt_arg(3)),
         dram_counts(get_rt_arg(4)),
         dram_region(get_rt_arg(5)),
-        dram_expert_offsets(get_rt_arg(6))
-#ifdef CMBF2D_OVERLAPPED
-        ,
-        dram_expert_table(get_rt_arg(7))
-#endif
-    {
-    }
+        dram_expert_offsets(get_rt_arg(6)),
+        dram_expert_table(get_rt_arg(7)) {}
 #else
     ReaderRtArgs() = default;
 #endif
@@ -77,9 +70,10 @@ struct ReaderRtArgManager {
     void setup_rt_args(tt::tt_metal::KernelDescriptor& kernel_desc, const tt::tt_metal::CoreCoord& core) const {
         std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> args{
             dram_.in, dram_.out, dram_.fwd, dram_.meta, dram_.counts, dram_.region, dram_.expert_offsets};
-        // Appended only when there is one; the kernel reads it only in the overlapped build.
         if (dram_.expert_table != nullptr) {
-            args.push_back(dram_.expert_table);
+            args.emplace_back(dram_.expert_table);
+        } else {
+            args.emplace_back(0u);
         }
         kernel_desc.emplace_runtime_args(core, args);
     }

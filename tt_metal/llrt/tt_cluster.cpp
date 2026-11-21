@@ -7,7 +7,7 @@
 #include "tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
 
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
@@ -29,7 +29,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "get_platform_architecture.hpp"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
@@ -244,6 +244,11 @@ bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type)
 }
 
 bool Cluster::is_iommu_enabled() const { return this->iommu_enabled_; }
+
+bool Cluster::needs_d2h_hugepage_fallback() const {
+    TT_ASSERT(this->hal_ != nullptr, "Hal is not set. Need to call set_hal() first.");
+    return !this->hal_->get_supports_64_bit_pcie_addressing() && !this->iommu_enabled_;
+}
 
 bool Cluster::is_read_only_page_pinning_supported() const { return this->read_only_page_pinning_supported_; }
 
@@ -523,10 +528,10 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .num_host_mem_ch_per_mmio_device = 1,
-                .sdesc_path = sdesc_path,
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),
                 .serve_simulation_devices_over_sockets = rtoptions_.get_simulator_serve_over_sockets(),
+                .topology_discovery_options = {.soc_descriptor_path = sdesc_path},
             });
         } else {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
@@ -545,8 +550,8 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,
-            .sdesc_path = sdesc_path,
             .cluster_descriptor = mock_cluster_desc.get(),
+            .topology_discovery_options = {.soc_descriptor_path = sdesc_path},
         });
     } else if (this->target_type_ == TargetDevice::Emule) {
 #ifdef TT_METAL_USE_EMULE
@@ -555,8 +560,8 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::SWEMULE,
-            .sdesc_path = sdesc_path,
             .cluster_descriptor = mock_cluster_desc.get(),
+            .topology_discovery_options = {.soc_descriptor_path = sdesc_path},
         });
 #else
         TT_FATAL(false, "TargetDevice::Emule requires building with TT_METAL_USE_EMULE=ON");

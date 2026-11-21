@@ -187,7 +187,7 @@ int run() {
     }
     clear_flags(worker_l1, cores);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     const auto kernel = CreateKernel(
         program,
         std::string(kKernelDir) + "host_poke_dm.cpp",
@@ -310,7 +310,7 @@ distributed::MeshWorkload make_multicast(
     const CoreCoord virtual_low = mesh.worker_core_from_logical_core(low);
     const CoreCoord virtual_high = mesh.worker_core_from_logical_core(high);
     const uint32_t num_dests = static_cast<uint32_t>(cores.size() - 1);
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh);
     program.set_runtime_id(runtime_id);
     const auto kernel = CreateKernel(
         program,
@@ -540,7 +540,7 @@ distributed::MeshWorkload build_workload(
     uint32_t runtime_id) {
     std::map<ChipId, Program> programs;
     for (const ChipId chip : std::views::keys(chips)) {
-        programs.emplace(chip, CreateProgram()).first->second.set_runtime_id(runtime_id);
+        programs.emplace(chip, CreateProgram(mesh_device)).first->second.set_runtime_id(runtime_id);
     }
     for (const Pair& pair : pairs) {
         for (uint32_t index = 0; index < pair.size(); index++) {

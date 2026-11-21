@@ -18,40 +18,50 @@ namespace nb = nanobind;
 void bind_bcast(nb::module_& mod) {
     const char* doc =
         R"doc(
-            Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
+            Applies `math_op` elementwise to `input_a` and `input_b`, broadcasting `input_b` over the last two
+            dimensions of `input_a` as `dim` sets. For an `input_a` of shape ``[..., H, W]``:
 
-            Let tensor ``input_a`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``input_b`` shape ``[W1, Z1, Y1, X1]``. ``dim`` determines the type of broadcast performed.
+            - ``ttnn.BcastOpDim.H``: `input_b` has shape ``[..., 1, W]``. Its row is applied to every row of `input_a`.
+            - ``ttnn.BcastOpDim.W``: `input_b` has shape ``[..., H, 1]``. Its column is applied to every column of `input_a`.
+            - ``ttnn.BcastOpDim.HW``: `input_b` has shape ``[..., 1, 1]``. Its value is applied to every element of `input_a`.
 
-            For ``dim=BcastOpDim::W`` broadcast is performed on dimension ``X``. ``Y0`` and ``Y1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
-
-            For ``dim=BcastOpDim::H`` broadcast is performed on dimension  ``Y``. ``X0`` and ``X1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
-
-            For ``dim=BcastOpDim::HW`` broadcast is performed on dimensions ``X`` and ``Y``. Either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1) must hold for input shapes.
-
-            Both input tensors must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input_a", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0]", "Yes"
-                "input_b", "Input tensor to broadcast", "Tensor", "Tensor of shape [W1, Z1, Y1, X1]", "Yes"
-                "math_op", "Aggregating math operation", " BcastOpMath", "ADD, SUB, MUL", "Yes"
-                "dim", "Dimension on which to broadcast", "BcastOpDim", "W, H, HW", "Yes"
-                "memory_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional preallocated output tensor", "Tensor", "Default is None", "No"
+            The dimensions of `input_b` before the last two are either all 1, which applies the same `input_b` to every
+            batch of `input_a`, or equal to those of `input_a`, which applies each batch of `input_b` to the same batch
+            of `input_a`.
 
             Args:
-                * :attr:`input_tensor_a`: First Input Tensor for bcast.
-                * :attr:`input_tensor_b`: Second Input Tensor for bcast.
-                * :attr:`math_op`: Operation to be performed during broadcasting.
-                * :attr:`dim`: the dimension to reduce. If None, the bcast of the flattened input is returned
+                input_a (ttnn.Tensor): the first operand, of rank 2, 3 or 4.
+                input_b (ttnn.Tensor): the operand to broadcast, with the shape that `dim` sets and the same dtype and layout as `input_a`.
+                math_op (ttnn.BcastOpMath): the operation. ``ttnn.BcastOpMath.ADD`` computes `input_a` + `input_b`, ``ttnn.BcastOpMath.SUB`` computes `input_a` - `input_b`, and ``ttnn.BcastOpMath.MUL`` computes `input_a` * `input_b`.
+                dim (ttnn.BcastOpDim): how `input_b` is broadcast: ``ttnn.BcastOpDim.H``, ``ttnn.BcastOpDim.W`` or ``ttnn.BcastOpDim.HW``, as described above.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor
-                * :attr:`output_tensor`: Preallocated output tensor
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output. Defaults to `None`, which uses the memory configuration of `input_a`. For an interleaved `input_a` it must be interleaved, and for a sharded `input_a` it must be `None` or the memory configuration of `input_a`. When `output_tensor` is given, it must be `None` or the memory configuration of `output_tensor`.
+                output_tensor (ttnn.Tensor, optional): Preallocated output tensor for an interleaved `input_a`. It must be interleaved and in TILE layout, with the shape and dtype of `input_a`. Defaults to `None`.
 
+            Returns:
+                ttnn.Tensor: the output tensor, in TILE layout with the shape and dtype of `input_a`. When `output_tensor` is given, it is returned with the output written to it.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16
+                     - TILE, ROW_MAJOR
+                   * - BFLOAT8_B
+                     - TILE
+
+                `input_a` and `input_b` must have the same dtype and layout, and their values must be finite.
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Sharded, with ``ttnn.BcastOpDim.H``: a TILE `input_a` that is WIDTH_SHARDED in L1 on one row of cores starting at core (0, 0), or BLOCK_SHARDED in L1 on a rectangular core grid starting at core (0, 0)
+                - Sharded, with ``ttnn.BcastOpDim.HW``: a TILE `input_a` that is HEIGHT_SHARDED in L1
+                - A sharded `input_a` needs an interleaved `input_b` whose dimensions before the last two are all 1, and gives an output with the same sharding
         )doc";
 
     ttnn::bind_function<"bcast">(
