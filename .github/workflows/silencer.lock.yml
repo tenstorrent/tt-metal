@@ -2015,7 +2015,7 @@ jobs:
                           "mobilenetv3",
                           "retinanet",
                           "ssd512",
-                          "vadv2",
+                          "vad",
                           "openpdn-mnist",
                           "yunet",
                           "xtts-v2",
