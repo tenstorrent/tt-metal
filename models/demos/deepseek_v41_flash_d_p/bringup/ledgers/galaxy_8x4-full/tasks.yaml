@@ -1743,9 +1743,6 @@ tasks:
       && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
       && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
       && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
-    # F283 (overseer 2026-11-19, option b): the profile unit runs at the other units' engram table mode (mmap, the test
-    # value) so the gate is one model load; FIX.13 judges accuracy, not the wall; rows are bit-identical between modes
-    # (tests/test_engram_table_modes.py). X.3's own gate and the resident default are unchanged.
     metrics:
       contract_checks_failed: == 0
       acks_early: == 0
@@ -5076,19 +5073,19 @@ tasks:
   deps:
   - FIX.39
   brief:
-    details: 'Owner 2026-11-18: after the rebase onto main 8a317f39a8d, Marko''s MoE block with split rows (hang fix),
-      non-matmul ops on 120 cores, STATIC_TABLES=off + the hidden history gather (item 4), INDEX_K_SOURCE=served
-      (item 3), the outside-history test (FIX.39) and the framework''s one-model-per-process batches (F269): X.3''s set
-      plus the serving checks, on the final tree.'
+    details: 'Owner 2026-11-18: after the rebase onto main 8a317f39a8d, Marko''s MoE block with split rows (hang fix), non-matmul
+      ops on 120 cores, STATIC_TABLES=off + the hidden history gather (item 4), INDEX_K_SOURCE=served (item 3), the outside-history
+      test (FIX.39) and the framework''s one-model-per-process batches (F269): X.3''s set plus the serving checks, on the
+      final tree.'
   gate:
     cmd: DS41_ENGRAM_TABLE=resident BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py
-      && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && DS41_DECODER_SKIP=decode
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
       && DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_positions.py
     metrics:
@@ -5109,32 +5106,34 @@ tasks:
       pos_chunk: '>= 1'
   device: true
 - id: X.6
-  title: 'OWNER 2026-11-18: packed-equivalent prefill throughput at AgentX shape (full 5120-token chunks at history
-    32k / 64k / 95k / 142k / 256k), the current default tree, DECODER_SKIP=decode, STATIC_TABLES=off'
+  title: 'OWNER 2026-11-18: packed-equivalent prefill throughput at AgentX shape (full 5120-token chunks at history 32k /
+    64k / 95k / 142k / 256k), the current default tree, DECODER_SKIP=decode, STATIC_TABLES=off'
   step: perf
   deps:
   - X.5
   brief:
-    details: 'Owner 2026-11-18, for a comparison with another team''s DSv4.1 prefill bench (tt-lab-private
-      dsv41f-next-prefill) at the AgentX shape. No code change: the committed default tree (rebased onto main
-      8a317f39a8d; Marko''s MoE block with split rows, 6208 B payload; STATIC_TABLES=off with the hidden history gather;
-      INDEX_K_SOURCE=served; non-matmul ops on 120 cores), DECODER_SKIP=decode (layers 0-19 + layer 20''s KV head).
-      One full 5120-token chunk (a steady chunk: not the request''s last, BRINGUP_CHUNK_LAST=0) at each history
-      position p = 32768, 65536, 97280, 145408, 262144 (32k, 64k, 95k, 142k, 256k; chunk starts, multiples of 32);
-      a full chunk stands for a packed chunk (packing several requests into one chunk is not built). Per position:
-      the clean wall (device profiler off, BRINGUP_PROFILE_WALL=1, chunk_wall_clean = 1: the gate adds that run) and
-      the device time per section from the program real-time profiler, plus test_skip_positions'' steady / resumed
-      walls at the same points (SKIP_POS) as a cross-check. Report tok/s = 5120 / steady chunk wall at each point (and
-      5120 / device ms as the device-bound ceiling). Determinism checked (bit-identical repeats). The overseer records
-      the unaccounted host RAM before and after the run.'
+    details: 'Owner 2026-11-18, for a comparison with another team''s DSv4.1 prefill bench (tt-lab-private dsv41f-next-prefill)
+      at the AgentX shape. No code change: the committed default tree (rebased onto main 8a317f39a8d; Marko''s MoE block with
+      split rows, 6208 B payload; STATIC_TABLES=off with the hidden history gather; INDEX_K_SOURCE=served; non-matmul ops
+      on 120 cores), DECODER_SKIP=decode (layers 0-19 + layer 20''s KV head). One full 5120-token chunk (a steady chunk: not
+      the request''s last, BRINGUP_CHUNK_LAST=0) at each history position p = 32768, 65536, 97280, 145408, 262144 (32k, 64k,
+      95k, 142k, 256k; chunk starts, multiples of 32); a full chunk stands for a packed chunk (packing several requests into
+      one chunk is not built). Per position: the clean wall (device profiler off, BRINGUP_PROFILE_WALL=1, chunk_wall_clean
+      = 1: the gate adds that run) and the device time per section from the program real-time profiler, plus test_skip_positions''
+      steady / resumed walls at the same points (SKIP_POS) as a cross-check. Report tok/s = 5120 / steady chunk wall at each
+      point (and 5120 / device ms as the device-bound ceiling). Determinism checked (bit-identical repeats). The overseer
+      records the unaccounted host RAM before and after the run.'
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
-      && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=32768 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
-      && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=65536 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
-      && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=97280 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
-      && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=145408 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
-      && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=262144 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
-      && DS41_DECODER_SKIP=decode SKIP_POS=32768,65536,97280,145408,262144 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=32768 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0
+      BRINGUP_POS=65536 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=97280 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0
+      BRINGUP_POS=145408 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=262144 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && DS41_DECODER_SKIP=decode SKIP_POS=32768,65536,97280,145408,262144
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
       determinism_max_abs_diff_decoder_skip: == 0
       chunk_wall_ms_p32768_nonlast: '> 0'
@@ -5149,8 +5148,8 @@ tasks:
       steady_wall_ms_p262144: '> 0'
   device: true
 - id: P.77
-  title: 'OWNER DECISION 2026-11-18: 4-bit compressed-KV attention history on prefill''s own path (packed from the
-    SERVED bf16 rows every chunk, pack-before-gather, sparse attention reads 4-bit records); the served format stays bf16'
+  title: 'OWNER DECISION 2026-11-18: 4-bit compressed-KV attention history on prefill''s own path (packed from the SERVED
+    bf16 rows every chunk, pack-before-gather, sparse attention reads 4-bit records); the served format stays bf16'
   step: perf
   role: perf
   device: true
@@ -5163,30 +5162,28 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER DECISION 2026-11-18: everything we optimize from now on is on a 4-bit compressed-KV path, as the
-      DeepSeek reference does (fp4 e2m1 with an e4m3 scale per 16 values: reference/ds41_ref.py:78,
-      reference/official_checks.py:14). This task is part (a), prefill''s own path. Today (STATIC_TABLES=off, the
-      default) every chunk all-gathers each KV source''s compressed history [0, start) from the SERVED bf16
-      compress_kv cache (1 KiB a row) into persistent buffers (tt/history_gather.py, prefetched during the engram wait,
-      P.74 / P.75), and sparse attention reads bf16 rows. Change it so that: each chip packs ITS OWN served bf16 shard
-      into 4-bit records BEFORE the gather (P.11-style pack-before-gather: CKV_PACK_BEFORE_GATHER, the per-chip pack
-      that existed for the old table), the all-gather moves the 4-bit records (3.2x fewer bytes: 320 B a row as
-      bfp4_rows, or the reference''s e2m1 + e4m3-per-16 if a fork does it as cheaply), and sparse attention reads the
-      4-bit records (the sdpa fork''s ROW_BFP4 read, as with CKV_FORMAT=bfp4_rows before P.38; ttnn.bringup.ckv_bfp4
-      packs bf16 tiles to those records). Derived from the served rows EVERY chunk: no private per-slot copy, correct
-      whoever wrote the slot (tests/test_outside_history.py must stay bit-identical under the new default). The chunk''s
-      own new rows: packed the same way before their tail gather. The served cache format stays bf16 (decode reads it;
-      part (b) is an owner decision, do not change it). Check INDEX first (ttnn/ttnn/bringup/INDEX.md: ckv_bfp4, the sdpa
-      fork''s ROW_BFP4, CKV_PACK_BEFORE_GATHER, P.11 / FIX.8 / P.38 history in BREADCRUMBS): reuse, do not rebuild.
-      Note the device stores the compressed KV unquantized in bf16 (compressor.py:14: the reference''s fp4 q-dq is not
-      emulated), so 4-bit is lossy vs today''s 16-bit path: the accuracy gate judges it (limits are the reference''s
-      own drift x 2: do not loosen any). Behind a switch (e.g. HISTORY_FORMAT=bf16|bfp4); keep bf16 working; the accept ships bfp4 as the default (owner decision: every later optimization is baselined on it).
-      Bit-identical determinism. Every Python-built op through ttnn.bringup.prepare_program / run_prepared; matmuls
-      within 110 cores; no weight rebuild; no fork regression suites. Measure and report: gathered bytes a chunk and
-      gather device ms per source at 142k and 1M, DRAM per chip (persistent buffers), accuracy vs the ladder limits and
-      vs the 16-bit path. Stop after your checks (decoder skip test, determinism, outside-history test); the
-      orchestrator measures both sides. Stop rule: if accuracy misses a limit, report the evidence and stop (no
-      precision raise beyond the reference''s 4 bits).'
+    details: 'OWNER DECISION 2026-11-18: everything we optimize from now on is on a 4-bit compressed-KV path, as the DeepSeek
+      reference does (fp4 e2m1 with an e4m3 scale per 16 values: reference/ds41_ref.py:78, reference/official_checks.py:14).
+      This task is part (a), prefill''s own path. Today (STATIC_TABLES=off, the default) every chunk all-gathers each KV source''s
+      compressed history [0, start) from the SERVED bf16 compress_kv cache (1 KiB a row) into persistent buffers (tt/history_gather.py,
+      prefetched during the engram wait, P.74 / P.75), and sparse attention reads bf16 rows. Change it so that: each chip
+      packs ITS OWN served bf16 shard into 4-bit records BEFORE the gather (P.11-style pack-before-gather: CKV_PACK_BEFORE_GATHER,
+      the per-chip pack that existed for the old table), the all-gather moves the 4-bit records (3.2x fewer bytes: 320 B a
+      row as bfp4_rows, or the reference''s e2m1 + e4m3-per-16 if a fork does it as cheaply), and sparse attention reads the
+      4-bit records (the sdpa fork''s ROW_BFP4 read, as with CKV_FORMAT=bfp4_rows before P.38; ttnn.bringup.ckv_bfp4 packs
+      bf16 tiles to those records). Derived from the served rows EVERY chunk: no private per-slot copy, correct whoever wrote
+      the slot (tests/test_outside_history.py must stay bit-identical under the new default). The chunk''s own new rows: packed
+      the same way before their tail gather. The served cache format stays bf16 (decode reads it; part (b) is an owner decision,
+      do not change it). Check INDEX first (ttnn/ttnn/bringup/INDEX.md: ckv_bfp4, the sdpa fork''s ROW_BFP4, CKV_PACK_BEFORE_GATHER,
+      P.11 / FIX.8 / P.38 history in BREADCRUMBS): reuse, do not rebuild. Note the device stores the compressed KV unquantized
+      in bf16 (compressor.py:14: the reference''s fp4 q-dq is not emulated), so 4-bit is lossy vs today''s 16-bit path: the
+      accuracy gate judges it (limits are the reference''s own drift x 2: do not loosen any). Behind a switch (e.g. HISTORY_FORMAT=bf16|bfp4);
+      keep bf16 working; the accept ships bfp4 as the default (owner decision: every later optimization is baselined on it).
+      Bit-identical determinism. Every Python-built op through ttnn.bringup.prepare_program / run_prepared; matmuls within
+      110 cores; no weight rebuild; no fork regression suites. Measure and report: gathered bytes a chunk and gather device
+      ms per source at 142k and 1M, DRAM per chip (persistent buffers), accuracy vs the ladder limits and vs the 16-bit path.
+      Stop after your checks (decoder skip test, determinism, outside-history test); the orchestrator measures both sides.
+      Stop rule: if accuracy misses a limit, report the evidence and stop (no precision raise beyond the reference''s 4 bits).'
   ab:
     env:
       HISTORY_FORMAT: bf16
@@ -5197,11 +5194,11 @@ tasks:
   - last
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py
-      && DS41_DECODER_SKIP=decode SKIP_POS=51200,145408,262144,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && DS41_DECODER_SKIP=decode SKIP_POS=51200,145408,262144,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -5214,27 +5211,29 @@ tasks:
       steady_wall_ms_p145408: '> 0'
       steady_wall_ms_p1024000: '> 0'
 - id: X.7
-  title: 'OWNER 2026-11-18: one profile of a full 5120-token chunk at ~142k history on the default tree: device time
-    per op group and host time per chunk (input to the roofline)'
+  title: 'OWNER 2026-11-18: one profile of a full 5120-token chunk at ~142k history on the default tree: device time per op
+    group and host time per chunk (input to the roofline)'
   step: perf
   deps:
   - P.77
   brief:
-    details: 'Owner 2026-11-18. Not for walls (X.6 has the clean walls). One steady chunk (BRINGUP_CHUNK_LAST=0,
-      DECODER_SKIP=decode) at BRINGUP_POS=145408 on the committed default tree (with P.77''s 4-bit history: the owner baselines every optimization on it), with the program real-time profiler
-      and per-op rows (BRINGUP_PROFILE_OPS=1) for every layer, and the host cProfile (BRINGUP_PROFILE_HOST=1): device
-      ms per op and per section, the per-chip timeline (idle gaps), and host ms per chunk. The overseer groups the rows
-      (MoE dispatch / experts / combine / shared expert / router; attention: window, sparse sdpa, q / kv / output
-      projections; indexer: score ring, top-k; history gather (prefetch + tail); norms and mHC; other CCLs; engram) for
-      the roofline.'
+    details: 'Owner 2026-11-18. Not for walls (X.6 has the clean walls). One steady chunk (BRINGUP_CHUNK_LAST=0, DECODER_SKIP=decode)
+      at BRINGUP_POS=145408 on the committed default tree (with P.77''s 4-bit history: the owner baselines every optimization
+      on it), with the program real-time profiler and per-op rows (BRINGUP_PROFILE_OPS=1) for every layer, and the host cProfile
+      (BRINGUP_PROFILE_HOST=1): device ms per op and per section, the per-chip timeline (idle gaps), and host ms per chunk.
+      The overseer groups the rows (MoE dispatch / experts / combine / shared expert / router; attention: window, sparse sdpa,
+      q / kv / output projections; indexer: score ring, top-k; history gather (prefetch + tail); norms and mHC; other CCLs;
+      engram) for the roofline.'
   gate:
-    cmd: DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=145408 BRINGUP_PROFILE_OPS=1 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    cmd: DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=145408 BRINGUP_PROFILE_OPS=1 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       device_ms_total_p145408_nonlast: '> 0'
       op_rows_p145408_nonlast: '>= 1'
   device: true
 - id: X.8
-  title: 'OWNER 2026-11-18: chunk-size sweep at ~142k history (1536 / 2560 / 5120 / 8192-token chunks) on the default tree: steady wall, tok/s and device ms per section'
+  title: 'OWNER 2026-11-18: chunk-size sweep at ~142k history (1536 / 2560 / 5120 / 8192-token chunks) on the default tree:
+    steady wall, tok/s and device ms per section'
   step: perf
   role: script
   device: true
@@ -5247,11 +5246,27 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - ttnn/ttnn/bringup
   brief:
-    details: 'Owner 2026-11-18 (pointer 4 of the perf brief). A measurement: the committed default tree, DECODER_SKIP=decode, one steady full chunk (BRINGUP_CHUNK_LAST=0) of 1536 / 2560 / 5120 / 8192 tokens at a history near 142k that is a multiple of the chunk where possible (145920 / 143360 / 145408 / 147456). BRINGUP_CHUNK (F271) sets the run''s chunk (spec target.chunk; the model is built for it); it is a measurement, not the serving chunk (serving.max_chunk 5120 stays: a larger serving chunk is an owner decision with tt-d-gen). Per size: the steady wall from test_skip_positions (tok/s = chunk / steady wall), the device ms per section from test_profile, and determinism at 8192. 1536 / 2560 do not load on 8x4 (DS41-297: chunk % (32 x 32 chips) == 0); the agent measured 2048 at p145408 and 3072 at p144384 by hand instead (BREADCRUMBS X.8). Roofline expectation (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.7_roofline.md, ''Chunk size''): 18 ms a chunk of weights are read whatever the chunk, so 8192 should gain >= 20 % tok/s over 5120 and 1536 / 2560 lose. If a size does not run (a matmul config, a fork limit, DRAM), fix it in the model / fork without changing the 5120 path (bit-identical at 5120), or stop and report the limit with evidence.'
+    details: 'Owner 2026-11-18 (pointer 4 of the perf brief). A measurement: the committed default tree, DECODER_SKIP=decode,
+      one steady full chunk (BRINGUP_CHUNK_LAST=0) of 1536 / 2560 / 5120 / 8192 tokens at a history near 142k that is a multiple
+      of the chunk where possible (145920 / 143360 / 145408 / 147456). BRINGUP_CHUNK (F271) sets the run''s chunk (spec target.chunk;
+      the model is built for it); it is a measurement, not the serving chunk (serving.max_chunk 5120 stays: a larger serving
+      chunk is an owner decision with tt-d-gen). Per size: the steady wall from test_skip_positions (tok/s = chunk / steady
+      wall), the device ms per section from test_profile, and determinism at 8192. 1536 / 2560 do not load on 8x4 (DS41-297:
+      chunk % (32 x 32 chips) == 0); the agent measured 2048 at p145408 and 3072 at p144384 by hand instead (BREADCRUMBS X.8).
+      Roofline expectation (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.7_roofline.md, ''Chunk
+      size''): 18 ms a chunk of weights are read whatever the chunk, so 8192 should gain >= 20 % tok/s over 5120 and 1536
+      / 2560 lose. If a size does not run (a matmul config, a fork limit, DRAM), fix it in the model / fork without changing
+      the 5120 path (bit-identical at 5120), or stop and report the limit with evidence.'
   gate:
-    cmd: BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && BRINGUP_CHUNK=5120 DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && BRINGUP_CHUNK=5120 DS41_DECODER_SKIP=decode SKIP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_CHUNK=8192 DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=147456 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && BRINGUP_CHUNK=8192 DS41_DECODER_SKIP=decode SKIP_POS=147456 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    cmd: BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
+      && BRINGUP_CHUNK=5120 DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=145408 scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/common/bringup/tests/test_profile.py && BRINGUP_CHUNK=5120 DS41_DECODER_SKIP=decode SKIP_POS=145408
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=8192 DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=147456 scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/common/bringup/tests/test_profile.py && BRINGUP_CHUNK=8192 DS41_DECODER_SKIP=decode SKIP_POS=147456
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
-      determinism_max_abs_diff: '== 0'
+      determinism_max_abs_diff: == 0
       steady_wall_ms_p145408: '> 0'
       device_ms_total_p145408_nonlast: '> 0'
       steady_wall_ms_p147456: '> 0'
@@ -5270,26 +5285,48 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - ttnn/ttnn/bringup
   brief:
-    details: 'Roofline gap 1 (~23 ms a chunk): clean wall 106.5 ms vs device 82.2 ms at 142k. Under the profiler the host spends ~55 ms a chunk launching 836 ops (decorators __call__, ~66 us a launch) and the device waits at the chunk start (the token-id readback) and at the engram wait (layer 1: the host n-gram hash + table lookup after the ids arrive). First measure where the 24 ms of device idle sit in a CLEAN run (device timeline gaps, no device profiler; the engram wait, the chunk start, launches outpaced by the device). Then remove the biggest: candidates the owner named are metal trace (replay the device-only stretches: the layers after the engram rows land; static addresses, persistent buffers already exist) or overlap (start the engram host work at the chunk''s arrival from host-side ids on a worker thread, launch ahead so the queue never drains). Target: wall within 3 ms of the device time (<= ~86 ms at 142k). Stop rule: when the exposed host time is < 5 ms, or if two designs each gain < 5 ms: stop and report the measured idle map. Read the roofline first (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.7_roofline.md: hardware numbers, floors, the X.7 per-op rows in results/X.7_ops.json.gz). Derive the design from the roofline and our code; do not copy another stack. Behind the named switch, off = today; the accept ships it on. Precision unchanged (HiFi2 matmuls, the reference''s formats; the accuracy limits are the reference''s own drift x 2: do not loosen any). Bit-identical determinism. Matmuls within 110 cores (PSU rule); non-matmul ops may use 120. Every Python-built op through ttnn.bringup.prepare_program / run_prepared. No weight rebuild, no fork regression suites, no soaks. Fork changes per the bringup-fork-op skill (INDEX.md first). Report: the group''s device ms a chunk before / after at 142k (program real-time profiler, BRINGUP_PROFILE_OPS=1), the steady wall, and what bound the result (bytes moved / FLOPs vs the floor). Stop after your checks; the orchestrator measures both sides.'
+    details: 'Roofline gap 1 (~23 ms a chunk): clean wall 106.5 ms vs device 82.2 ms at 142k. Under the profiler the host
+      spends ~55 ms a chunk launching 836 ops (decorators __call__, ~66 us a launch) and the device waits at the chunk start
+      (the token-id readback) and at the engram wait (layer 1: the host n-gram hash + table lookup after the ids arrive).
+      First measure where the 24 ms of device idle sit in a CLEAN run (device timeline gaps, no device profiler; the engram
+      wait, the chunk start, launches outpaced by the device). Then remove the biggest: candidates the owner named are metal
+      trace (replay the device-only stretches: the layers after the engram rows land; static addresses, persistent buffers
+      already exist) or overlap (start the engram host work at the chunk''s arrival from host-side ids on a worker thread,
+      launch ahead so the queue never drains). Target: wall within 3 ms of the device time (<= ~86 ms at 142k). Stop rule:
+      when the exposed host time is < 5 ms, or if two designs each gain < 5 ms: stop and report the measured idle map. Read
+      the roofline first (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.7_roofline.md: hardware
+      numbers, floors, the X.7 per-op rows in results/X.7_ops.json.gz). Derive the design from the roofline and our code;
+      do not copy another stack. Behind the named switch, off = today; the accept ships it on. Precision unchanged (HiFi2
+      matmuls, the reference''s formats; the accuracy limits are the reference''s own drift x 2: do not loosen any). Bit-identical
+      determinism. Matmuls within 110 cores (PSU rule); non-matmul ops may use 120. Every Python-built op through ttnn.bringup.prepare_program
+      / run_prepared. No weight rebuild, no fork regression suites, no soaks. Fork changes per the bringup-fork-op skill (INDEX.md
+      first). Report: the group''s device ms a chunk before / after at 142k (program real-time profiler, BRINGUP_PROFILE_OPS=1),
+      the steady wall, and what bound the result (bytes moved / FLOPs vs the floor). Stop after your checks; the orchestrator
+      measures both sides.'
   ab:
     env:
-      HOST_HIDE: off
+      HOST_HIDE: false
     change:
-      HOST_HIDE: on
+      HOST_HIDE: true
   ab_mode: full
   ab_rungs:
   - last
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
-      err_layer_L*: '<= limit'
-      err_state_*_L*: '<= limit'
-      err_final_hidden: '<= limit'
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
       top5_overlap: '>= limit'
-      determinism_max_abs_diff: '== 0'
-      contract_checks_failed: '== 0'
-      contract_checks_failed_decoder_skip: '== 0'
-      outside_history_max_abs_diff: '== 0'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      contract_checks_failed_decoder_skip: == 0
+      outside_history_max_abs_diff: == 0
       steady_wall_ms_p145408: '> 0'
       steady_wall_ms_p1024000: '> 0'
 - id: P.79
@@ -5306,26 +5343,46 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - ttnn/ttnn/bringup
   brief:
-    details: 'Roofline gap 2 (~13 ms): routed_experts_combine (ttnn/ttnn/bringup/moe_block_main_ttnn: flat_routed_expert + routed_experts_combine, one program a chip) takes 26.4 ms a chunk; its floor is the expert weights, 4.50 GB a chunk a chip (12 experts x 3 x 5120 x 2304 x 0.53 B fp4, 20 layers) = 11.0 ms at 80 % of 512 GB/s, with compute (6.5 ms HiFi2) overlapped and ~2 ms of combine. Today it streams ~170 GB/s (33 % of peak). Find what holds the weight stream (reads in flight a reader core, number and placement of reader cores against the 8 DRAM banks, the fp4 decode in the unpacker, the combine serialized behind the experts, per-expert M of ~80 rows) and fix that. Target <= 15 ms. Stop rule: if the weight stream reaches >= 75 % of peak and the time is still > 15 ms, or two designs gain < 3 ms each: stop and report the bound with evidence. Read the roofline first (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.7_roofline.md: hardware numbers, floors, the X.7 per-op rows in results/X.7_ops.json.gz). Derive the design from the roofline and our code; do not copy another stack. Behind the named switch, off = today; the accept ships it on. Precision unchanged (HiFi2 matmuls, the reference''s formats; the accuracy limits are the reference''s own drift x 2: do not loosen any). Bit-identical determinism. Matmuls within 110 cores (PSU rule); non-matmul ops may use 120. Every Python-built op through ttnn.bringup.prepare_program / run_prepared. No weight rebuild, no fork regression suites, no soaks. Fork changes per the bringup-fork-op skill (INDEX.md first). Report: the group''s device ms a chunk before / after at 142k (program real-time profiler, BRINGUP_PROFILE_OPS=1), the steady wall, and what bound the result (bytes moved / FLOPs vs the floor). Stop after your checks; the orchestrator measures both sides.'
+    details: 'Roofline gap 2 (~13 ms): routed_experts_combine (ttnn/ttnn/bringup/moe_block_main_ttnn: flat_routed_expert +
+      routed_experts_combine, one program a chip) takes 26.4 ms a chunk; its floor is the expert weights, 4.50 GB a chunk
+      a chip (12 experts x 3 x 5120 x 2304 x 0.53 B fp4, 20 layers) = 11.0 ms at 80 % of 512 GB/s, with compute (6.5 ms HiFi2)
+      overlapped and ~2 ms of combine. Today it streams ~170 GB/s (33 % of peak). Find what holds the weight stream (reads
+      in flight a reader core, number and placement of reader cores against the 8 DRAM banks, the fp4 decode in the unpacker,
+      the combine serialized behind the experts, per-expert M of ~80 rows) and fix that. Target <= 15 ms. Stop rule: if the
+      weight stream reaches >= 75 % of peak and the time is still > 15 ms, or two designs gain < 3 ms each: stop and report
+      the bound with evidence. Read the roofline first (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.7_roofline.md:
+      hardware numbers, floors, the X.7 per-op rows in results/X.7_ops.json.gz). Derive the design from the roofline and our
+      code; do not copy another stack. Behind the named switch, off = today; the accept ships it on. Precision unchanged (HiFi2
+      matmuls, the reference''s formats; the accuracy limits are the reference''s own drift x 2: do not loosen any). Bit-identical
+      determinism. Matmuls within 110 cores (PSU rule); non-matmul ops may use 120. Every Python-built op through ttnn.bringup.prepare_program
+      / run_prepared. No weight rebuild, no fork regression suites, no soaks. Fork changes per the bringup-fork-op skill (INDEX.md
+      first). Report: the group''s device ms a chunk before / after at 142k (program real-time profiler, BRINGUP_PROFILE_OPS=1),
+      the steady wall, and what bound the result (bytes moved / FLOPs vs the floor). Stop after your checks; the orchestrator
+      measures both sides.'
   ab:
     env:
-      MOE_EXPERT_STREAM: off
+      MOE_EXPERT_STREAM: false
     change:
-      MOE_EXPERT_STREAM: on
+      MOE_EXPERT_STREAM: true
   ab_mode: full
   ab_rungs:
   - last
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
-      err_layer_L*: '<= limit'
-      err_state_*_L*: '<= limit'
-      err_final_hidden: '<= limit'
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
       top5_overlap: '>= limit'
-      determinism_max_abs_diff: '== 0'
-      contract_checks_failed: '== 0'
-      contract_checks_failed_decoder_skip: '== 0'
-      outside_history_max_abs_diff: '== 0'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      contract_checks_failed_decoder_skip: == 0
+      outside_history_max_abs_diff: == 0
       steady_wall_ms_p145408: '> 0'
       steady_wall_ms_p1024000: '> 0'
 - id: P.80
@@ -5342,30 +5399,51 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - ttnn/ttnn/bringup
   brief:
-    details: 'Roofline gap 3 (6 ms bf16, 9 ms fp8): sparse_dispatch_2d moves 160 tokens x 6 picks x 10 KB (bf16 hidden 5120) a chip a layer = 9.5 MB; on the 8x4 torus (2 links a neighbour, 25 GB/s a link a direction, X ring 2 hops on average) the floor is 5.8 ms a chunk at 66 % of line rate in bf16, 3.1 ms in fp8. The experts quantize their input to fp8 e4m3 with block scales anyway (the reference''s act-quant): quantize BEFORE the dispatch (on the token''s owner) and send fp8 + scales (5120 B + scales: one packet of the 6208 B payload instead of two split rows), the experts read the fp8 rows directly. If the expert input quantization is identical, this is bit-identical to today; check it. Keep the 6208 B payload limit (the hang fix). Target <= 7 ms. Stop rule: if the fp8 rows are not bit-identical to the experts'' own quantization and the accuracy limits are missed, stop and report. Read the roofline first (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.7_roofline.md: hardware numbers, floors, the X.7 per-op rows in results/X.7_ops.json.gz). Derive the design from the roofline and our code; do not copy another stack. Behind the named switch, off = today; the accept ships it on. Precision unchanged (HiFi2 matmuls, the reference''s formats; the accuracy limits are the reference''s own drift x 2: do not loosen any). Bit-identical determinism. Matmuls within 110 cores (PSU rule); non-matmul ops may use 120. Every Python-built op through ttnn.bringup.prepare_program / run_prepared. No weight rebuild, no fork regression suites, no soaks. Fork changes per the bringup-fork-op skill (INDEX.md first). Report: the group''s device ms a chunk before / after at 142k (program real-time profiler, BRINGUP_PROFILE_OPS=1), the steady wall, and what bound the result (bytes moved / FLOPs vs the floor). Stop after your checks; the orchestrator measures both sides.'
+    details: 'Roofline gap 3 (6 ms bf16, 9 ms fp8): sparse_dispatch_2d moves 160 tokens x 6 picks x 10 KB (bf16 hidden 5120)
+      a chip a layer = 9.5 MB; on the 8x4 torus (2 links a neighbour, 25 GB/s a link a direction, X ring 2 hops on average)
+      the floor is 5.8 ms a chunk at 66 % of line rate in bf16, 3.1 ms in fp8. The experts quantize their input to fp8 e4m3
+      with block scales anyway (the reference''s act-quant): quantize BEFORE the dispatch (on the token''s owner) and send
+      fp8 + scales (5120 B + scales: one packet of the 6208 B payload instead of two split rows), the experts read the fp8
+      rows directly. If the expert input quantization is identical, this is bit-identical to today; check it. Keep the 6208
+      B payload limit (the hang fix). Target <= 7 ms. Stop rule: if the fp8 rows are not bit-identical to the experts'' own
+      quantization and the accuracy limits are missed, stop and report. Read the roofline first (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.7_roofline.md:
+      hardware numbers, floors, the X.7 per-op rows in results/X.7_ops.json.gz). Derive the design from the roofline and our
+      code; do not copy another stack. Behind the named switch, off = today; the accept ships it on. Precision unchanged (HiFi2
+      matmuls, the reference''s formats; the accuracy limits are the reference''s own drift x 2: do not loosen any). Bit-identical
+      determinism. Matmuls within 110 cores (PSU rule); non-matmul ops may use 120. Every Python-built op through ttnn.bringup.prepare_program
+      / run_prepared. No weight rebuild, no fork regression suites, no soaks. Fork changes per the bringup-fork-op skill (INDEX.md
+      first). Report: the group''s device ms a chunk before / after at 142k (program real-time profiler, BRINGUP_PROFILE_OPS=1),
+      the steady wall, and what bound the result (bytes moved / FLOPs vs the floor). Stop after your checks; the orchestrator
+      measures both sides.'
   ab:
     env:
-      MOE_DISPATCH_FP8: off
+      MOE_DISPATCH_FP8: false
     change:
-      MOE_DISPATCH_FP8: on
+      MOE_DISPATCH_FP8: true
   ab_mode: full
   ab_rungs:
   - last
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
-      err_layer_L*: '<= limit'
-      err_state_*_L*: '<= limit'
-      err_final_hidden: '<= limit'
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
       top5_overlap: '>= limit'
-      determinism_max_abs_diff: '== 0'
-      contract_checks_failed: '== 0'
-      contract_checks_failed_decoder_skip: '== 0'
-      outside_history_max_abs_diff: '== 0'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      contract_checks_failed_decoder_skip: == 0
+      outside_history_max_abs_diff: == 0
       steady_wall_ms_p145408: '> 0'
       steady_wall_ms_p1024000: '> 0'
 - id: X.9
-  title: 'OWNER 2026-11-19: the hot-expert census over several texts (is the hot set stable chunk to chunk and across texts?) and the 142k steady wall as a spread over texts'
+  title: 'OWNER 2026-11-19: the hot-expert census over several texts (is the hot set stable chunk to chunk and across texts?)
+    and the 142k steady wall as a spread over texts'
   step: perf
   role: perf
   device: true
@@ -5379,10 +5457,40 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
   - ttnn/ttnn/bringup
   brief:
-    prior_work: 'P.79 (expert census, DS41-299: routed_experts_combine = 205 us + 6.77 us x the busiest chip''s tiles); replica branches'' P.45 counts (novel + code prompts, /scratch/dnijemcevic/replication/counts): within-prompt learning kept 78-89 % of the in-sample gain; never across texts.'
-    details: 'Owner 2026-11-19 (item 1a and 2). A measurement; no model change. Texts (F276, reference/texts.py, BRINGUP_POS_TOKENS; built from files on this machine, cached in $ART/input/texts): agentic (the bring-up agents'' own tool-use sessions: AgentX-like), prose (the canonical prompt), code (repo op sources), math (sympy / mpmath docstrings), multilingual (zh / ja / ru / de man pages). Picking texts: prose, code, math; held-out texts: agentic, multilingual (every later choice is picked on the first and validated on the second). Extend tests/perf/test_expert_load_census.py (P.79''s) with CENSUS_CHUNKS=k consecutive chunks of one prompt from CENSUS_POS (the real previous chunk first, as now) and record, per text (metrics carry _t<text> by F276): per layer and chunk the routed rows per expert and per chip, the busiest chip''s tiles and the program us (DS41-299''s fit), and the stability of the hot set: for the top-8 hottest experts of a layer, their overlap between consecutive chunks of one text and between texts (write the per-text routing counts to a side JSON so the cross-text overlap is computed from the five runs; the last run or a small script under tests/perf may do it). Metrics at least: census_experts_ms (sum over layers, the fit or the measured program time), census_tiles_max_sum, census_tiles_balanced_sum (the busiest chip''s tiles if the rows were spread evenly), census_hot8_overlap_chunks (mean over layers). Then the steady wall at 142k on each text (test_skip_positions). Report a table per text and the hot-set stability; state whether a static replica set (chosen on the picking texts) would cover the held-out texts'' hot experts, with numbers. No device time beyond these runs.'
+    prior_work: 'P.79 (expert census, DS41-299: routed_experts_combine = 205 us + 6.77 us x the busiest chip''s tiles); replica
+      branches'' P.45 counts (novel + code prompts, /scratch/dnijemcevic/replication/counts): within-prompt learning kept
+      78-89 % of the in-sample gain; never across texts.'
+    details: 'Owner 2026-11-19 (item 1a and 2). A measurement; no model change. Texts (F276, reference/texts.py, BRINGUP_POS_TOKENS;
+      built from files on this machine, cached in $ART/input/texts): agentic (the bring-up agents'' own tool-use sessions:
+      AgentX-like), prose (the canonical prompt), code (repo op sources), math (sympy / mpmath docstrings), multilingual (zh
+      / ja / ru / de man pages). Picking texts: prose, code, math; held-out texts: agentic, multilingual (every later choice
+      is picked on the first and validated on the second). Extend tests/perf/test_expert_load_census.py (P.79''s) with CENSUS_CHUNKS=k
+      consecutive chunks of one prompt from CENSUS_POS (the real previous chunk first, as now) and record, per text (metrics
+      carry _t<text> by F276): per layer and chunk the routed rows per expert and per chip, the busiest chip''s tiles and
+      the program us (DS41-299''s fit), and the stability of the hot set: for the top-8 hottest experts of a layer, their
+      overlap between consecutive chunks of one text and between texts (write the per-text routing counts to a side JSON so
+      the cross-text overlap is computed from the five runs; the last run or a small script under tests/perf may do it). Metrics
+      at least: census_experts_ms (sum over layers, the fit or the measured program time), census_tiles_max_sum, census_tiles_balanced_sum
+      (the busiest chip''s tiles if the rows were spread evenly), census_hot8_overlap_chunks (mean over layers). Then the
+      steady wall at 142k on each text (test_skip_positions). Report a table per text and the hot-set stability; state whether
+      a static replica set (chosen on the picking texts) would cover the held-out texts'' hot experts, with numbers. No device
+      time beyond these runs.'
   gate:
-    cmd: BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode CENSUS_POS=145408 CENSUS_CHUNKS=4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_expert_load_census.py && BRINGUP_POS_TOKENS=prose DS41_DECODER_SKIP=decode CENSUS_POS=145408 CENSUS_CHUNKS=4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_expert_load_census.py && BRINGUP_POS_TOKENS=code DS41_DECODER_SKIP=decode CENSUS_POS=145408 CENSUS_CHUNKS=4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_expert_load_census.py && BRINGUP_POS_TOKENS=math DS41_DECODER_SKIP=decode CENSUS_POS=145408 CENSUS_CHUNKS=4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_expert_load_census.py && BRINGUP_POS_TOKENS=multilingual DS41_DECODER_SKIP=decode CENSUS_POS=145408 CENSUS_CHUNKS=4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_expert_load_census.py && BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode SKIP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=prose DS41_DECODER_SKIP=decode SKIP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=code DS41_DECODER_SKIP=decode SKIP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=math DS41_DECODER_SKIP=decode SKIP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=multilingual DS41_DECODER_SKIP=decode SKIP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    cmd: BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode CENSUS_POS=145408 CENSUS_CHUNKS=4 scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_expert_load_census.py && BRINGUP_POS_TOKENS=prose
+      DS41_DECODER_SKIP=decode CENSUS_POS=145408 CENSUS_CHUNKS=4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_expert_load_census.py
+      && BRINGUP_POS_TOKENS=code DS41_DECODER_SKIP=decode CENSUS_POS=145408 CENSUS_CHUNKS=4 scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_expert_load_census.py && BRINGUP_POS_TOKENS=math
+      DS41_DECODER_SKIP=decode CENSUS_POS=145408 CENSUS_CHUNKS=4 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_expert_load_census.py
+      && BRINGUP_POS_TOKENS=multilingual DS41_DECODER_SKIP=decode CENSUS_POS=145408 CENSUS_CHUNKS=4 scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_expert_load_census.py && BRINGUP_POS_TOKENS=agentic
+      DS41_DECODER_SKIP=decode SKIP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_POS_TOKENS=prose DS41_DECODER_SKIP=decode SKIP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=code DS41_DECODER_SKIP=decode
+      SKIP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_POS_TOKENS=math DS41_DECODER_SKIP=decode SKIP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=multilingual DS41_DECODER_SKIP=decode
+      SKIP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
       census_experts_ms_t*: '> 0'
       census_tiles_max_sum_t*: '> 0'
@@ -5392,7 +5500,8 @@ tasks:
       steady_wall_ms_p145408_tmath: '> 0'
       steady_wall_ms_p145408_tmultilingual: '> 0'
 - id: P.84
-  title: 'OWNER 2026-11-19 perf: STATIC expert replicas for agentic workloads (one extra expert a chip, chosen offline, loaded at startup): -4.5 ms a chunk on agentic held-out by the offline fit'
+  title: 'OWNER 2026-11-19 perf: STATIC expert replicas for agentic workloads (one extra expert a chip, chosen offline, loaded
+    at startup): -4.5 ms a chunk on agentic held-out by the offline fit'
   step: perf
   role: perf
   device: true
@@ -5406,8 +5515,30 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
   - ttnn/ttnn/bringup
   brief:
-    prior_work: 'dnijemcevic/moe_replication P.46 (MOE_REPLICAS: one extra expert slot a chip filled at load from a static table, a replicated expert''s tokens split evenly over its holders; in-sample oracle quick wall 181.7 -> 167.1 ms, bit-identical), P.48 (online / frozen-after-chunk-0: rejected, frozen = off within noise), P.47 (runtime slot copy: not needed here); bringup/deepseek_v41_flash_d_p/moe_replication @ b9a45fb0b80 P.52-P.62b (replicas on the old MoE block: extra slot + routing, P.55c planner split, P.56 previous chunk), P.69-P.71; FIX.33 (owner 2026-11-15: replication off model_bringup, reversed 2026-11-19 for a STATIC set only). X.9 (no stable hot set across texts) and the offline result below.'
-    details: 'OWNER 2026-11-19 (reopened): STATIC expert replicas for an agentic (AgentX-like) workload: 32 replicas a layer = one extra expert a chip (13 experts a chip instead of 12), chosen OFFLINE, loaded at startup with the weights, never copied at run time. No dynamic placement, no previous-chunk learning (parked on tt-d-gen). The replica set is given: results/P.84_replicas.json (per layer {expert: replica chip}; chosen on code + 4 agentic sessions; results/P.84_offline.{txt,py}, P.84_sessions.json). Offline (DS41-299 fit, 14 agentic positions x 4 chunks, one load): agentic held-out sessions 15.6 -> 11.1 ms a chunk with the best split of each replicated expert''s rows between its home and replica chips (12.6 with an even split), code 16.6 -> 11.3, prose 21.8 -> 20.5, multilingual 20.3 -> 18.5: no text slower. Implement: (1) the 13th expert slot a chip, filled at load from the table (reuse the replica branch''s slot / placement / dispatch code: read it first, port only what fits Marko''s moe_block_main block: sparse_dispatch_2d routes a token''s pick of a replicated expert to home or replica, routed_experts_combine computes both slots, the combine sums them); (2) the split of a replicated expert''s rows between its two chips decided per chunk on the device (or in the fused head) as a pure function of the chunk''s routing counts (balance the two chips'' tiles: best split; the even split is the fallback if the best split costs more than it saves): determinism = bit-identical repeats; outputs within the accuracy limits (the same expert weights wherever a row runs; the combine''s summation order must stay fixed). Replica DRAM: 17.9 MiB a layer a chip: 0.35 GiB a chip for layers 0-19 (the prefill path), 0.70 GiB for 40: state it measured. Behind MOE_REPLICAS (off = today, bit-identical). Gate walls: agentic held-out sessions (positions 145408 and 770048 are in held-out sessions P.53 / P.55c) and prose at 142k and 1M. Stop rule: if the agentic held-out wall at 142k gains < 3 ms, or any text gets slower beyond noise, stop and report. One model load per gate.'
+    prior_work: 'dnijemcevic/moe_replication P.46 (MOE_REPLICAS: one extra expert slot a chip filled at load from a static
+      table, a replicated expert''s tokens split evenly over its holders; in-sample oracle quick wall 181.7 -> 167.1 ms, bit-identical),
+      P.48 (online / frozen-after-chunk-0: rejected, frozen = off within noise), P.47 (runtime slot copy: not needed here);
+      bringup/deepseek_v41_flash_d_p/moe_replication @ b9a45fb0b80 P.52-P.62b (replicas on the old MoE block: extra slot +
+      routing, P.55c planner split, P.56 previous chunk), P.69-P.71; FIX.33 (owner 2026-11-15: replication off model_bringup,
+      reversed 2026-11-19 for a STATIC set only). X.9 (no stable hot set across texts) and the offline result below.'
+    details: 'OWNER 2026-11-19 (reopened): STATIC expert replicas for an agentic (AgentX-like) workload: 32 replicas a layer
+      = one extra expert a chip (13 experts a chip instead of 12), chosen OFFLINE, loaded at startup with the weights, never
+      copied at run time. No dynamic placement, no previous-chunk learning (parked on tt-d-gen). The replica set is given:
+      results/P.84_replicas.json (per layer {expert: replica chip}; chosen on code + 4 agentic sessions; results/P.84_offline.{txt,py},
+      P.84_sessions.json). Offline (DS41-299 fit, 14 agentic positions x 4 chunks, one load): agentic held-out sessions 15.6
+      -> 11.1 ms a chunk with the best split of each replicated expert''s rows between its home and replica chips (12.6 with
+      an even split), code 16.6 -> 11.3, prose 21.8 -> 20.5, multilingual 20.3 -> 18.5: no text slower. Implement: (1) the
+      13th expert slot a chip, filled at load from the table (reuse the replica branch''s slot / placement / dispatch code:
+      read it first, port only what fits Marko''s moe_block_main block: sparse_dispatch_2d routes a token''s pick of a replicated
+      expert to home or replica, routed_experts_combine computes both slots, the combine sums them); (2) the split of a replicated
+      expert''s rows between its two chips decided per chunk on the device (or in the fused head) as a pure function of the
+      chunk''s routing counts (balance the two chips'' tiles: best split; the even split is the fallback if the best split
+      costs more than it saves): determinism = bit-identical repeats; outputs within the accuracy limits (the same expert
+      weights wherever a row runs; the combine''s summation order must stay fixed). Replica DRAM: 17.9 MiB a layer a chip:
+      0.35 GiB a chip for layers 0-19 (the prefill path), 0.70 GiB for 40: state it measured. Behind MOE_REPLICAS (off = today,
+      bit-identical). Gate walls: agentic held-out sessions (positions 145408 and 770048 are in held-out sessions P.53 / P.55c)
+      and prose at 142k and 1M. Stop rule: if the agentic held-out wall at 142k gains < 3 ms, or any text gets slower beyond
+      noise, stop and report. One model load per gate.'
   ab:
     env:
       MOE_REPLICAS: 'off'
@@ -5417,22 +5548,30 @@ tasks:
   ab_rungs:
   - last
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode SKIP_POS=145408,770048 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=prose DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode
+      SKIP_POS=145408,770048 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_POS_TOKENS=prose DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
-      err_layer_L*: '<= limit'
-      err_state_*_L*: '<= limit'
-      err_final_hidden: '<= limit'
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
       top5_overlap: '>= limit'
-      determinism_max_abs_diff: '== 0'
-      contract_checks_failed: '== 0'
-      contract_checks_failed_decoder_skip: '== 0'
-      outside_history_max_abs_diff: '== 0'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      contract_checks_failed_decoder_skip: == 0
+      outside_history_max_abs_diff: == 0
       steady_wall_ms_p145408_tagentic: '> 0'
       steady_wall_ms_p770048_tagentic: '> 0'
       steady_wall_ms_p145408_tprose: '> 0'
       steady_wall_ms_p1024000_tprose: '> 0'
 - id: X.10
-  title: 'OWNER 2026-11-19: host profile at 142k on the agentic text (one load): exposed host time split engram vs launch / other, and the estimate for an on-device engram table'
+  title: 'OWNER 2026-11-19: host profile at 142k on the agentic text (one load): exposed host time split engram vs launch
+    / other, and the estimate for an on-device engram table'
   step: perf
   role: perf
   device: true
@@ -5443,10 +5582,27 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   brief:
-    prior_work: 'P.78 (HOST_HIDE: idle map at 142k, tests/perf/test_host_idle_map.py: layer 1''s engram wait ~11 ms, layers 2-4 contention ~15 ms, fixed by the numba hash + threaded gather + deferring layer 14''s job: wall 108.1 -> 93.4); P.6 ENGRAM_ASYNC (rows looked up and uploaded off the critical path); FIX.10 (ENGRAM_TABLE=resident on the Galaxy host); bringup/ENGRAM_HOST_PATH.md, engram_handoff.md; X.9 walls per text (agentic 79.7 ms, host ~14 ms).'
-    details: 'OWNER 2026-11-19. A measurement, no code change. At 142k (p145408, steady chunk, decoder skip) on the agentic text, ONE model load: break the exposed host time a chunk (wall - device, ~13-16 ms on X.9''s texts) into engram (per engram layer 1 and 14: n-gram hash, row gather from the host table, upload; and how much of each is exposed, i.e. the device idles for it) vs program launch / dispatch (ttnn op launches, CCL setup) vs other host work (Python glue, frees, chunk start / id readback). Use tests/perf/test_host_idle_map.py (P.78: device idle gaps charged to the host segment that launched the program ending them) with IDLE_POS=145408, and test_profile''s host cProfile (BRINGUP_PROFILE_HOST=1) at the same point. Then the estimate for moving the 98 GB engram table onto the Galaxy (~3.1 GB a chip, hash + row gather on device): exposed host ms removed a chunk, device ms added a chunk (the hash: ids x n-gram orders; the gather: rows a chunk x row bytes from DRAM, the all-gather / exchange to the rows'' owners over the 8x4 torus at the X.7 roofline''s link numbers), DRAM a chip (table shard + buffers; vs the 1M budget). Say whether it is worth building and what it would take (ops: hash on SFPU or host-precomputed ids, a sharded row gather; tt-d-gen impact: none if the ids come with the chunk, ask 2). Report a table; no code change to the model.'
+    prior_work: 'P.78 (HOST_HIDE: idle map at 142k, tests/perf/test_host_idle_map.py: layer 1''s engram wait ~11 ms, layers
+      2-4 contention ~15 ms, fixed by the numba hash + threaded gather + deferring layer 14''s job: wall 108.1 -> 93.4); P.6
+      ENGRAM_ASYNC (rows looked up and uploaded off the critical path); FIX.10 (ENGRAM_TABLE=resident on the Galaxy host);
+      bringup/ENGRAM_HOST_PATH.md, engram_handoff.md; X.9 walls per text (agentic 79.7 ms, host ~14 ms).'
+    details: 'OWNER 2026-11-19. A measurement, no code change. At 142k (p145408, steady chunk, decoder skip) on the agentic
+      text, ONE model load: break the exposed host time a chunk (wall - device, ~13-16 ms on X.9''s texts) into engram (per
+      engram layer 1 and 14: n-gram hash, row gather from the host table, upload; and how much of each is exposed, i.e. the
+      device idles for it) vs program launch / dispatch (ttnn op launches, CCL setup) vs other host work (Python glue, frees,
+      chunk start / id readback). Use tests/perf/test_host_idle_map.py (P.78: device idle gaps charged to the host segment
+      that launched the program ending them) with IDLE_POS=145408, and test_profile''s host cProfile (BRINGUP_PROFILE_HOST=1)
+      at the same point. Then the estimate for moving the 98 GB engram table onto the Galaxy (~3.1 GB a chip, hash + row gather
+      on device): exposed host ms removed a chunk, device ms added a chunk (the hash: ids x n-gram orders; the gather: rows
+      a chunk x row bytes from DRAM, the all-gather / exchange to the rows'' owners over the 8x4 torus at the X.7 roofline''s
+      link numbers), DRAM a chip (table shard + buffers; vs the 1M budget). Say whether it is worth building and what it would
+      take (ops: hash on SFPU or host-precomputed ids, a sharded row gather; tt-d-gen impact: none if the ids come with the
+      chunk, ask 2). Report a table; no code change to the model.'
   gate:
-    cmd: BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode IDLE_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_host_idle_map.py && BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode BRINGUP_CHUNK_LAST=0 BRINGUP_POS=145408 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    cmd: BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode IDLE_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/deepseek_v41_flash_d_p/tests/perf/test_host_idle_map.py && BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode
+      BRINGUP_CHUNK_LAST=0 BRINGUP_POS=145408 BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/common/bringup/tests/test_profile.py
     metrics:
       device_ms_total_p145408_nonlast_tagentic: '> 0'
 - id: P.81
@@ -5463,27 +5619,69 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - ttnn/ttnn/bringup
   brief:
-    prior_work: 'P.9 ATTN_SP32_PROJ (wq_b / wo_a / wo_b on the chip''s own 160 rows, full weights: why every chip reads all projection weights), P.10 ATTN_SP32, P.22 ROPE_CHAINS (RoPE chains as single fork ops), FIX.7 (GEMM inputs at the reference''s precision), FIX.15 (110-core cap), FIX.13 (TODO: P.9''s window-KV rise). Read their BREADCRUMBS entries before changing the projections or RoPE.'
-    details: 'Roofline gap 4 (~13.6 ms). Measured at 142k: projections 10.3 ms (linear wq_b / wo_b 6.8 + matmul wo_a 3.5; every chip holds the whole weights for its 160 rows: 2.5 GB a chunk = 6.1 ms floor, DRAM-bound at M = 160), sparse_sdpa 6.5 ms (13.4 GFLOP a layer = 1.7 ms floor), q RoPE 2.4 ms on the whole 160 x 32768 q (RoPE touches 64 of 512 dims a head: fuse it or rotate only those), glue (slices, slice_write, untilize, concat, multiply, add) ~2.7 ms. Take the largest first: projections to the DRAM roofline (matmul configs that keep all DRAM banks streaming at M = 160: DRAM-sharded weights, in0 reuse), then sdpa, then RoPE and glue. Target <= 13 ms. OWNER 2026-11-19: kernel work is the job, not a reason to stop: no sub-step stops at ''at its floor as a separate pass'' or ''needs a kernel redesign''. Attempt 2 builds, in forks (bringup-fork-op skill): (1) sparse_sdpa: balance the 160 queries over the cores (k-split with a combine, or a query split so no core takes two rounds) and read the bfp4 row records directly in the matmul unpack (no row -> tile copy); (2) wo_a: a program that spreads the 8 per-group weights over all DRAM banks / readers; (3) RoPE fused: q rope in wq_b''s output (epilogue) or in sparse_sdpa''s q read, the output rope in sparse_sdpa''s writer or wo_a''s input. Each behind its own switch, bit-identical or within the accuracy limits, measured on the runner. DESIGN (overseer, from attempt 1''s probes, DS41-306 / 307): (1) sparse_sdpa query balance (~1.5 ms a chunk): today 160 queries over 110 cores, 50 cores take two rounds (makespan 2 vs ideal 1.45); split each query''s 5 key chunks (window 128 + 4 x 128 top-k) as work units over the cores with a flash-style combine of the partial (max, sum, out) states (a second small pass or an in-L1 merge on the owner core): 800 units / 110 cores, makespan 8 vs 7.3. (2) sparse_sdpa direct bfp4 read (~0.9 ms): the compute copies the bfp4 row records to tiles before the matmul (stubbing the copy: 0.292 -> 0.248 ms a call); unpack the records in the matmul''s input path instead. (3) wo_a weight spread (~1.7 ms): 2.0x its DRAM floor, 11 weight readers for the 8 per-group weights; a program that spreads every group''s weights over all 8 banks / more readers. (4) RoPE last (~0.5-1 ms): both rope_chain passes also convert layout (wq_b TILE -> sdpa ROW_MAJOR q; sdpa ROW_MAJOR o -> wo_a grouped bfp8 tiles), so fusing the rope math into sparse_sdpa removes the math, not the pass; only do it if (1)-(3) are in. Keep a kernel only if it saves >= 1 ms of device time a chunk at 142k (judge by the device profile). No sub-ms config tuning. Pick on the picking texts (prose, code, math); the gate validates on the held-out texts (agentic, multilingual; F276), report walls as a spread over texts. Read the roofline first (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.7_roofline.md: hardware numbers, floors, the X.7 per-op rows in results/X.7_ops.json.gz). Derive the design from the roofline and our code; do not copy another stack. Behind the named switch, off = today; the accept ships it on. Precision unchanged (HiFi2 matmuls, the reference''s formats; the accuracy limits are the reference''s own drift x 2: do not loosen any). Bit-identical determinism. Matmuls within 110 cores (PSU rule); non-matmul ops may use 120. Every Python-built op through ttnn.bringup.prepare_program / run_prepared. No weight rebuild, no fork regression suites, no soaks. Fork changes per the bringup-fork-op skill (INDEX.md first). Report: the group''s device ms a chunk before / after at 142k (program real-time profiler, BRINGUP_PROFILE_OPS=1), the steady wall, and what bound the result (bytes moved / FLOPs vs the floor). Stop after your checks; the orchestrator measures both sides.'
+    prior_work: 'P.9 ATTN_SP32_PROJ (wq_b / wo_a / wo_b on the chip''s own 160 rows, full weights: why every chip reads all
+      projection weights), P.10 ATTN_SP32, P.22 ROPE_CHAINS (RoPE chains as single fork ops), FIX.7 (GEMM inputs at the reference''s
+      precision), FIX.15 (110-core cap), FIX.13 (TODO: P.9''s window-KV rise). Read their BREADCRUMBS entries before changing
+      the projections or RoPE.'
+    details: 'Roofline gap 4 (~13.6 ms). Measured at 142k: projections 10.3 ms (linear wq_b / wo_b 6.8 + matmul wo_a 3.5;
+      every chip holds the whole weights for its 160 rows: 2.5 GB a chunk = 6.1 ms floor, DRAM-bound at M = 160), sparse_sdpa
+      6.5 ms (13.4 GFLOP a layer = 1.7 ms floor), q RoPE 2.4 ms on the whole 160 x 32768 q (RoPE touches 64 of 512 dims a
+      head: fuse it or rotate only those), glue (slices, slice_write, untilize, concat, multiply, add) ~2.7 ms. Take the largest
+      first: projections to the DRAM roofline (matmul configs that keep all DRAM banks streaming at M = 160: DRAM-sharded
+      weights, in0 reuse), then sdpa, then RoPE and glue. Target <= 13 ms. OWNER 2026-11-19: kernel work is the job, not a
+      reason to stop: no sub-step stops at ''at its floor as a separate pass'' or ''needs a kernel redesign''. Attempt 2 builds,
+      in forks (bringup-fork-op skill): (1) sparse_sdpa: balance the 160 queries over the cores (k-split with a combine, or
+      a query split so no core takes two rounds) and read the bfp4 row records directly in the matmul unpack (no row -> tile
+      copy); (2) wo_a: a program that spreads the 8 per-group weights over all DRAM banks / readers; (3) RoPE fused: q rope
+      in wq_b''s output (epilogue) or in sparse_sdpa''s q read, the output rope in sparse_sdpa''s writer or wo_a''s input.
+      Each behind its own switch, bit-identical or within the accuracy limits, measured on the runner. DESIGN (overseer, from
+      attempt 1''s probes, DS41-306 / 307): (1) sparse_sdpa query balance (~1.5 ms a chunk): today 160 queries over 110 cores,
+      50 cores take two rounds (makespan 2 vs ideal 1.45); split each query''s 5 key chunks (window 128 + 4 x 128 top-k) as
+      work units over the cores with a flash-style combine of the partial (max, sum, out) states (a second small pass or an
+      in-L1 merge on the owner core): 800 units / 110 cores, makespan 8 vs 7.3. (2) sparse_sdpa direct bfp4 read (~0.9 ms):
+      the compute copies the bfp4 row records to tiles before the matmul (stubbing the copy: 0.292 -> 0.248 ms a call); unpack
+      the records in the matmul''s input path instead. (3) wo_a weight spread (~1.7 ms): 2.0x its DRAM floor, 11 weight readers
+      for the 8 per-group weights; a program that spreads every group''s weights over all 8 banks / more readers. (4) RoPE
+      last (~0.5-1 ms): both rope_chain passes also convert layout (wq_b TILE -> sdpa ROW_MAJOR q; sdpa ROW_MAJOR o -> wo_a
+      grouped bfp8 tiles), so fusing the rope math into sparse_sdpa removes the math, not the pass; only do it if (1)-(3)
+      are in. Keep a kernel only if it saves >= 1 ms of device time a chunk at 142k (judge by the device profile). No sub-ms
+      config tuning. Pick on the picking texts (prose, code, math); the gate validates on the held-out texts (agentic, multilingual;
+      F276), report walls as a spread over texts. Read the roofline first (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.7_roofline.md:
+      hardware numbers, floors, the X.7 per-op rows in results/X.7_ops.json.gz). Derive the design from the roofline and our
+      code; do not copy another stack. Behind the named switch, off = today; the accept ships it on. Precision unchanged (HiFi2
+      matmuls, the reference''s formats; the accuracy limits are the reference''s own drift x 2: do not loosen any). Bit-identical
+      determinism. Matmuls within 110 cores (PSU rule); non-matmul ops may use 120. Every Python-built op through ttnn.bringup.prepare_program
+      / run_prepared. No weight rebuild, no fork regression suites, no soaks. Fork changes per the bringup-fork-op skill (INDEX.md
+      first). Report: the group''s device ms a chunk before / after at 142k (program real-time profiler, BRINGUP_PROFILE_OPS=1),
+      the steady wall, and what bound the result (bytes moved / FLOPs vs the floor). Stop after your checks; the orchestrator
+      measures both sides.'
   ab:
     env:
-      ATTN_ROOFLINE: off
+      ATTN_ROOFLINE: false
     change:
-      ATTN_ROOFLINE: on
+      ATTN_ROOFLINE: true
   ab_mode: full
   ab_rungs:
   - last
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=multilingual DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=multilingual
+      DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
-      err_layer_L*: '<= limit'
-      err_state_*_L*: '<= limit'
-      err_final_hidden: '<= limit'
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
       top5_overlap: '>= limit'
-      determinism_max_abs_diff: '== 0'
-      contract_checks_failed: '== 0'
-      contract_checks_failed_decoder_skip: '== 0'
-      outside_history_max_abs_diff: '== 0'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      contract_checks_failed_decoder_skip: == 0
+      outside_history_max_abs_diff: == 0
       steady_wall_ms_p145408: '> 0'
       steady_wall_ms_p1024000: '> 0'
       steady_wall_ms_p145408_tagentic: '> 0'
@@ -5502,33 +5700,57 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - ttnn/ttnn/bringup
   brief:
-    prior_work: 'DS41-131 (one prepared fused-head program a layer slower than one patched program for all 40), DS41-211 (the fused head''s shared-expert x / h in bf16 under MOE_BLOCK_SRC=main), P.63 on the replica branches (one program for the whole mesh for the fused head and the combine). Read them first.'
-    details: 'Roofline gap 5 (~7.3 ms): moe_block_main''s fused_head takes 8.9 ms a chunk; its work is the router (5120 x 384, negligible), the shared expert (0.23 TF a chunk a chip = 1.1 ms HiFi2; weights 0.5 ms) and the token-owner tables. Break the 8.9 ms down (zones inside the program), find what is not the shared expert''s matmuls, and remove it. Target <= 3 ms. Stop rule: two designs gaining < 1.5 ms each: stop and report the breakdown. Pick on the picking texts (prose, code, math); the gate validates on the held-out texts (agentic, multilingual; F276), report walls as a spread over texts. Read the roofline first (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.7_roofline.md: hardware numbers, floors, the X.7 per-op rows in results/X.7_ops.json.gz). Derive the design from the roofline and our code; do not copy another stack. Behind the named switch, off = today; the accept ships it on. Precision unchanged (HiFi2 matmuls, the reference''s formats; the accuracy limits are the reference''s own drift x 2: do not loosen any). Bit-identical determinism. Matmuls within 110 cores (PSU rule); non-matmul ops may use 120. Every Python-built op through ttnn.bringup.prepare_program / run_prepared. No weight rebuild, no fork regression suites, no soaks. Fork changes per the bringup-fork-op skill (INDEX.md first). Report: the group''s device ms a chunk before / after at 142k (program real-time profiler, BRINGUP_PROFILE_OPS=1), the steady wall, and what bound the result (bytes moved / FLOPs vs the floor). Stop after your checks; the orchestrator measures both sides.'
+    prior_work: DS41-131 (one prepared fused-head program a layer slower than one patched program for all 40), DS41-211 (the
+      fused head's shared-expert x / h in bf16 under MOE_BLOCK_SRC=main), P.63 on the replica branches (one program for the
+      whole mesh for the fused head and the combine). Read them first.
+    details: 'Roofline gap 5 (~7.3 ms): moe_block_main''s fused_head takes 8.9 ms a chunk; its work is the router (5120 x
+      384, negligible), the shared expert (0.23 TF a chunk a chip = 1.1 ms HiFi2; weights 0.5 ms) and the token-owner tables.
+      Break the 8.9 ms down (zones inside the program), find what is not the shared expert''s matmuls, and remove it. Target
+      <= 3 ms. Stop rule: two designs gaining < 1.5 ms each: stop and report the breakdown. Pick on the picking texts (prose,
+      code, math); the gate validates on the held-out texts (agentic, multilingual; F276), report walls as a spread over texts.
+      Read the roofline first (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.7_roofline.md:
+      hardware numbers, floors, the X.7 per-op rows in results/X.7_ops.json.gz). Derive the design from the roofline and our
+      code; do not copy another stack. Behind the named switch, off = today; the accept ships it on. Precision unchanged (HiFi2
+      matmuls, the reference''s formats; the accuracy limits are the reference''s own drift x 2: do not loosen any). Bit-identical
+      determinism. Matmuls within 110 cores (PSU rule); non-matmul ops may use 120. Every Python-built op through ttnn.bringup.prepare_program
+      / run_prepared. No weight rebuild, no fork regression suites, no soaks. Fork changes per the bringup-fork-op skill (INDEX.md
+      first). Report: the group''s device ms a chunk before / after at 142k (program real-time profiler, BRINGUP_PROFILE_OPS=1),
+      the steady wall, and what bound the result (bytes moved / FLOPs vs the floor). Stop after your checks; the orchestrator
+      measures both sides.'
   ab:
     env:
-      MOE_HEAD_FAST: off
+      MOE_HEAD_FAST: false
     change:
-      MOE_HEAD_FAST: on
+      MOE_HEAD_FAST: true
   ab_mode: full
   ab_rungs:
   - last
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=multilingual DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=multilingual
+      DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
-      err_layer_L*: '<= limit'
-      err_state_*_L*: '<= limit'
-      err_final_hidden: '<= limit'
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
       top5_overlap: '>= limit'
-      determinism_max_abs_diff: '== 0'
-      contract_checks_failed: '== 0'
-      contract_checks_failed_decoder_skip: '== 0'
-      outside_history_max_abs_diff: '== 0'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      contract_checks_failed_decoder_skip: == 0
+      outside_history_max_abs_diff: == 0
       steady_wall_ms_p145408: '> 0'
       steady_wall_ms_p1024000: '> 0'
       steady_wall_ms_p145408_tagentic: '> 0'
       steady_wall_ms_p145408_tmultilingual: '> 0'
 - id: P.87
-  title: 'OWNER 2026-11-19 perf: engram tables on the Galaxy (hash + row gather on the device, no ids readback): ~-5 ms a chunk at 142k'
+  title: 'OWNER 2026-11-19 perf: engram tables on the Galaxy (hash + row gather on the device, no ids readback): ~-5 ms a
+    chunk at 142k'
   step: perf
   role: perf
   device: true
@@ -5541,8 +5763,31 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - ttnn/ttnn/bringup
   brief:
-    prior_work: 'X.10 (exposed host 14.5 ms at 142k agentic: engram ~5.2 = layer-1 wait 1.85 + prefetch launches at the wait 1.43 + main thread slowed by the engram job 1.92; + the serving ids readback 1.53 ms a chunk, tests/perf/test_ids_readback.py), P.78 HOST_HIDE (numba hash + threaded gather, layer 14 deferred), P.6 ENGRAM_ASYNC, FIX.10 (ENGRAM_TABLE=resident on the host), bringup/ENGRAM_HOST_PATH.md, engram_handoff.md, P.74 / P.75 / P.77 (the history all-gather hidden in the engram wait: ~1.1 ms at 142k, ~5-6 ms at 1M for 3 sources), tt-d-gen ask 2 (host ids with every chunk: the alternative to on-device ids).'
-    details: 'OWNER 2026-11-19: move the engram n-gram tables onto the Galaxy. Today: the engine''s ids are on the device, prefill reads them back (adapter._host_ids: 8 blocking reads, 1.53 ms a chunk), hashes them on the host and gathers rows from the host tables (98 GB a table, two tables: layers 1 and 14), uploads them. Build: (1) the two tables sharded over the 32 chips in the rows'' current format (~6.1-6.5 GB a chip; check the 1M DRAM budget with the persistent history buffers), uploaded ONCE at startup (one-time load cost, measured); (2) the n-gram hash on the device from the engine''s device ids and the slot''s 3-id tail (bit-identical to reference/ngram.EngramHasher / the numba hash); (3) a sharded row gather + exchange to the chips that own the tokens (8x4 torus); (4) embed and every engram layer read device ids: no readback on the critical path; (5) OWNER 2026-11-19: ONE FUSED kernel does the engram lookup (hash, sharded row gather, exchange to the token owners) AND the KV-history all-gather (P.74 / P.75 / P.77: the 3 sources'' 4-bit records into the persistent buffers, today hidden in the engram wait: ~1.1 ms at 142k, ~5-6 ms at 1M), so the history transfer runs on the fabric while the lookup reads DRAM; no separate gather op left on the critical path. Report the fused kernel''s time vs the two separate (lookup alone, gather alone). Behind ENGRAM_DEVICE=off|on, a CALL-time switch (both paths available in one load: the tables are loaded when the switch exists). Engram rows bit-identical to the host path. TESTING, owner rule, utmost priority: no full model loads to test. Correctness by op-level tests on the mesh alone (hash, gather, exchange vs the host path on real ids: agentic / prose texts, the slot tail); timing only through the resident runner already holding layers 0-20 (one request, both switch values, no reload); never more than 2 device opens in this task; before any load write in BREADCRUMBS why the question cannot be answered on the host or with fewer layers. Target: steady wall at 142k agentic -5 ms (14.5 + 1.5 ms exposed today, engram share ~6.7); report 1M too. Keep only at >= 2 ms wall. Kernel work is the job.'
+    prior_work: 'X.10 (exposed host 14.5 ms at 142k agentic: engram ~5.2 = layer-1 wait 1.85 + prefetch launches at the wait
+      1.43 + main thread slowed by the engram job 1.92; + the serving ids readback 1.53 ms a chunk, tests/perf/test_ids_readback.py),
+      P.78 HOST_HIDE (numba hash + threaded gather, layer 14 deferred), P.6 ENGRAM_ASYNC, FIX.10 (ENGRAM_TABLE=resident on
+      the host), bringup/ENGRAM_HOST_PATH.md, engram_handoff.md, P.74 / P.75 / P.77 (the history all-gather hidden in the
+      engram wait: ~1.1 ms at 142k, ~5-6 ms at 1M for 3 sources), tt-d-gen ask 2 (host ids with every chunk: the alternative
+      to on-device ids).'
+    details: 'OWNER 2026-11-19: move the engram n-gram tables onto the Galaxy. Today: the engine''s ids are on the device,
+      prefill reads them back (adapter._host_ids: 8 blocking reads, 1.53 ms a chunk), hashes them on the host and gathers
+      rows from the host tables (98 GB a table, two tables: layers 1 and 14), uploads them. Build: (1) the two tables sharded
+      over the 32 chips in the rows'' current format (~6.1-6.5 GB a chip; check the 1M DRAM budget with the persistent history
+      buffers), uploaded ONCE at startup (one-time load cost, measured); (2) the n-gram hash on the device from the engine''s
+      device ids and the slot''s 3-id tail (bit-identical to reference/ngram.EngramHasher / the numba hash); (3) a sharded
+      row gather + exchange to the chips that own the tokens (8x4 torus); (4) embed and every engram layer read device ids:
+      no readback on the critical path; (5) OWNER 2026-11-19: ONE FUSED kernel does the engram lookup (hash, sharded row gather,
+      exchange to the token owners) AND the KV-history all-gather (P.74 / P.75 / P.77: the 3 sources'' 4-bit records into
+      the persistent buffers, today hidden in the engram wait: ~1.1 ms at 142k, ~5-6 ms at 1M), so the history transfer runs
+      on the fabric while the lookup reads DRAM; no separate gather op left on the critical path. Report the fused kernel''s
+      time vs the two separate (lookup alone, gather alone). Behind ENGRAM_DEVICE=off|on, a CALL-time switch (both paths available
+      in one load: the tables are loaded when the switch exists). Engram rows bit-identical to the host path. TESTING, owner
+      rule, utmost priority: no full model loads to test. Correctness by op-level tests on the mesh alone (hash, gather, exchange
+      vs the host path on real ids: agentic / prose texts, the slot tail); timing only through the resident runner already
+      holding layers 0-20 (one request, both switch values, no reload); never more than 2 device opens in this task; before
+      any load write in BREADCRUMBS why the question cannot be answered on the host or with fewer layers. Target: steady wall
+      at 142k agentic -5 ms (14.5 + 1.5 ms exposed today, engram share ~6.7); report 1M too. Keep only at >= 2 ms wall. Kernel
+      work is the job.'
   ab:
     env:
       ENGRAM_DEVICE: 'off'
@@ -5552,19 +5797,27 @@ tasks:
   ab_rungs:
   - last
   gate:
-    cmd: BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=prose DS41_DECODER_SKIP=decode SKIP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py
+    cmd: BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=prose DS41_DECODER_SKIP=decode
+      SKIP_POS=145408 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py
     metrics:
-      err_layer_L*: '<= limit'
-      err_state_*_L*: '<= limit'
-      err_final_hidden: '<= limit'
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
       top5_overlap: '>= limit'
-      determinism_max_abs_diff: '== 0'
-      contract_checks_failed: '== 0'
-      outside_history_max_abs_diff: '== 0'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      outside_history_max_abs_diff: == 0
       steady_wall_ms_p145408_tagentic: '> 0'
       steady_wall_ms_p145408_tprose: '> 0'
 - id: P.83
-  title: 'OWNER 2026-11-19 perf: mhc_post to its DRAM roofline (7.8 -> <= 3 ms a chunk at 142k; ~40 us a call vs 137-169 us measured)'
+  title: 'OWNER 2026-11-19 perf: mhc_post to its DRAM roofline (7.8 -> <= 3 ms a chunk at 142k; ~40 us a call vs 137-169 us
+    measured)'
   step: perf
   role: perf
   device: true
@@ -5577,33 +5830,56 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - ttnn/ttnn/bringup
   brief:
-    prior_work: 'P.16 FORK_OUT_BUFFERS, P.23 OWN_ROWS (streams on the chip''s own 160 rows), P.34 POST_COLLAPSE (mhc_post writes the next collapsed input), P.35 NORM_IN_MHC, DS41-104 (bf16 mHC streams: -4.4 ms device, errors unchanged: check whether it shipped), DS41-222 (BRISC transposes on the collapse''s critical path). Read them first.'
-    details: 'Owner pointer 2026-11-19: the MoE block takes most of L1, so the streams cannot stay resident across the MoE sublayer: no L1 residency work unless a measured L1 map shows the room (now ~6.6 MB a chip: the streams are bf16) at that point; residency only around the attention sublayer, if its L1 allows. Both of the owner''s first two leads already shipped: POST_COLLAPSE=on (P.34: mhc_post writes the next sublayer''s collapsed input in the same pass) and BF16_ACTIVATIONS=on (P.20 / DS41-104: bf16 streams, -4.4 ms device). So the bytes are already halved; the gap is the kernel''s efficiency: X.7 at 142k, mhc_post 137-169 us a call (40 calls: attn 3.47 + ffn 2.58 ms, + 1.71 ms ''other'' in ffn_residual), moving ~16.4 MB a call (bf16 streams 160 x 4 x 5120 in and out = 2 x 6.55 MB, x and the collapsed output 2 x 1.6 MB) = ~40 us at 80 % of 512 GB/s: ~25-30 % of DRAM bandwidth. Find what bounds it with device zones (DRAM read / write, the fp32 hc mixes and Sinkhorn on the SFPU, DS41-222''s BRISC word-copy transposes on the collapse''s critical path: 3 x 5.6-8.2 us a call; per-core work split, cores used vs the 120 a non-matmul op may use) and fix the largest; then the 1.71 ms ''other'' rows next to it. Target <= 3 ms a chunk (floor ~1.6 ms). Stop rule: two designs each gaining < 1 ms: stop and report the zone breakdown. L1 residency around the attention sublayer only after the kernel is near its DRAM floor and only with a measured L1 map.'
+    prior_work: 'P.16 FORK_OUT_BUFFERS, P.23 OWN_ROWS (streams on the chip''s own 160 rows), P.34 POST_COLLAPSE (mhc_post
+      writes the next collapsed input), P.35 NORM_IN_MHC, DS41-104 (bf16 mHC streams: -4.4 ms device, errors unchanged: check
+      whether it shipped), DS41-222 (BRISC transposes on the collapse''s critical path). Read them first.'
+    details: 'Owner pointer 2026-11-19: the MoE block takes most of L1, so the streams cannot stay resident across the MoE
+      sublayer: no L1 residency work unless a measured L1 map shows the room (now ~6.6 MB a chip: the streams are bf16) at
+      that point; residency only around the attention sublayer, if its L1 allows. Both of the owner''s first two leads already
+      shipped: POST_COLLAPSE=on (P.34: mhc_post writes the next sublayer''s collapsed input in the same pass) and BF16_ACTIVATIONS=on
+      (P.20 / DS41-104: bf16 streams, -4.4 ms device). So the bytes are already halved; the gap is the kernel''s efficiency:
+      X.7 at 142k, mhc_post 137-169 us a call (40 calls: attn 3.47 + ffn 2.58 ms, + 1.71 ms ''other'' in ffn_residual), moving
+      ~16.4 MB a call (bf16 streams 160 x 4 x 5120 in and out = 2 x 6.55 MB, x and the collapsed output 2 x 1.6 MB) = ~40
+      us at 80 % of 512 GB/s: ~25-30 % of DRAM bandwidth. Find what bounds it with device zones (DRAM read / write, the fp32
+      hc mixes and Sinkhorn on the SFPU, DS41-222''s BRISC word-copy transposes on the collapse''s critical path: 3 x 5.6-8.2
+      us a call; per-core work split, cores used vs the 120 a non-matmul op may use) and fix the largest; then the 1.71 ms
+      ''other'' rows next to it. Target <= 3 ms a chunk (floor ~1.6 ms). Stop rule: two designs each gaining < 1 ms: stop
+      and report the zone breakdown. L1 residency around the attention sublayer only after the kernel is near its DRAM floor
+      and only with a measured L1 map.'
   ab:
     env:
-      MHC_POST_FAST: off
+      MHC_POST_FAST: false
     change:
-      MHC_POST_FAST: on
+      MHC_POST_FAST: true
   ab_mode: full
   ab_rungs:
   - last
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=multilingual DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_POS_TOKENS=agentic DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_POS_TOKENS=multilingual
+      DS41_DECODER_SKIP=decode SKIP_POS=145408,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
-      err_layer_L*: '<= limit'
-      err_state_*_L*: '<= limit'
-      err_final_hidden: '<= limit'
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
       top5_overlap: '>= limit'
-      determinism_max_abs_diff: '== 0'
-      contract_checks_failed: '== 0'
-      contract_checks_failed_decoder_skip: '== 0'
-      outside_history_max_abs_diff: '== 0'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      contract_checks_failed_decoder_skip: == 0
+      outside_history_max_abs_diff: == 0
       steady_wall_ms_p145408: '> 0'
       steady_wall_ms_p1024000: '> 0'
       steady_wall_ms_p145408_tagentic: '> 0'
       steady_wall_ms_p145408_tmultilingual: '> 0'
 - id: MB.1
-  title: 'OWNER 2026-11-20: honest 5120 walls on the shipped branch (fresh positions / slots / last chunks every timed chunk, program builds counted per op)'
+  title: 'OWNER 2026-11-20: honest 5120 walls on the shipped branch (fresh positions / slots / last chunks every timed chunk,
+    program builds counted per op)'
   step: perf
   role: perf
   device: true
@@ -5615,24 +5891,31 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.1_fresh_walls.md
   brief:
-    prior_work: 'Batching branch dnijemcevic/model_bringup_batching: PB.9F (a72c8c6918d) added WALLS_FRESH=1 to tests/test_skip_positions.py with tests/packed/fresh_common.py (fresh AgentX draws, disjoint
-      warm-up / timed slot pools, misses counted, a probe naming every op that built); PB.9F5 (83c7ee814cf) measured THIS path at 5120: steady 63.2k warm -> 37.2k fresh, resumed 61.2 -> 50.6k, partial last
-      chunks 19.2 -> 14.7k, ~20-23 builds a chunk, host 33-35 ms vs 12-16; builders: ttnn.slice @ served.py:155 (history slice_rows: slot x position), compressor.py:181 + rope.py:451 (RoPE rows), served.py:211
-      (DeviceScalars), history_gather.py:376 (tail), attention.py:488 (srv_row). 8192 measured 0 builds (unexplained). Audit with file:line: /data/dnijemcevic/bringup/handoff_20261119/../deepseek_v41_flash_d_p?
-      see supervision.md 2026-11-20 20:05 and note OV-68 on the batching ledger.'
-    details: 'OWNER 2026-11-20 (binding): measure the shipped single-request path honestly on THIS branch. Tests only (no tt/ change): bring PB.9F''s single-request fresh mode over from a72c8c6918d (git
-      show a72c8c6918d:models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py and tests/packed/fresh_common.py; keep only what the single-request path needs; place the helper under tests/ as fresh_common.py),
-      and run 5120 fresh vs warm: steady, resumed (write_start > start, a replay), partial last chunks, fresh slots; builds after warm-up per op with the attribute that changed; host ms a chunk. Also explain
-      why PB.9F measured 0 builds at 8192 (run the same at BRINGUP_CHUNK=8192 through the runner, report only). Write models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.1_fresh_walls.md.
-      Read rule 20 of models/demos/common/bringup/agents/bringup-engineer.md (serving reality: no program build in serving, no host tables, fresh-traffic walls only, no impractical shortcuts) and the skill''s
-      standing decisions of 2026-11-20.'
+    prior_work: 'Batching branch dnijemcevic/model_bringup_batching: PB.9F (a72c8c6918d) added WALLS_FRESH=1 to tests/test_skip_positions.py
+      with tests/packed/fresh_common.py (fresh AgentX draws, disjoint warm-up / timed slot pools, misses counted, a probe
+      naming every op that built); PB.9F5 (83c7ee814cf) measured THIS path at 5120: steady 63.2k warm -> 37.2k fresh, resumed
+      61.2 -> 50.6k, partial last chunks 19.2 -> 14.7k, ~20-23 builds a chunk, host 33-35 ms vs 12-16; builders: ttnn.slice
+      @ served.py:155 (history slice_rows: slot x position), compressor.py:181 + rope.py:451 (RoPE rows), served.py:211 (DeviceScalars),
+      history_gather.py:376 (tail), attention.py:488 (srv_row). 8192 measured 0 builds (unexplained). Audit with file:line:
+      /data/dnijemcevic/bringup/handoff_20261119/../deepseek_v41_flash_d_p? see supervision.md 2026-11-20 20:05 and note OV-68
+      on the batching ledger.'
+    details: 'OWNER 2026-11-20 (binding): measure the shipped single-request path honestly on THIS branch. Tests only (no
+      tt/ change): bring PB.9F''s single-request fresh mode over from a72c8c6918d (git show a72c8c6918d:models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      and tests/packed/fresh_common.py; keep only what the single-request path needs; place the helper under tests/ as fresh_common.py),
+      and run 5120 fresh vs warm: steady, resumed (write_start > start, a replay), partial last chunks, fresh slots; builds
+      after warm-up per op with the attribute that changed; host ms a chunk. Also explain why PB.9F measured 0 builds at 8192
+      (run the same at BRINGUP_CHUNK=8192 through the runner, report only). Write models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.1_fresh_walls.md.
+      Read rule 20 of models/demos/common/bringup/agents/bringup-engineer.md (serving reality: no program build in serving,
+      no host tables, fresh-traffic walls only, no impractical shortcuts) and the skill''s standing decisions of 2026-11-20.'
   gate:
-    cmd: BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode WALLS_FRESH=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    cmd: BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode WALLS_FRESH=1
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
       program_builds_after_warmup_*: '>= 0'
       single*_fresh_tok_s*: '> 0'
 - id: MB.2
-  title: 'OWNER 2026-11-20: no program build in serving on the single-request path (every per-chunk value a runtime value), ids reordered on the device; a permanent no-rebuild test in every accept gate'
+  title: 'OWNER 2026-11-20: no program build in serving on the single-request path (every per-chunk value a runtime value),
+    ids reordered on the device; a permanent no-rebuild test in every accept gate'
   step: perf
   role: perf
   device: true
@@ -5655,27 +5938,41 @@ tasks:
   ab_rungs:
   - last
   brief:
-    prior_work: 'Batching branch dnijemcevic/model_bringup_batching: PB.9F (a72c8c6918d) added WALLS_FRESH=1 to tests/test_skip_positions.py with tests/packed/fresh_common.py (fresh AgentX draws, disjoint
-      warm-up / timed slot pools, misses counted, a probe naming every op that built); PB.9F5 (83c7ee814cf) measured THIS path at 5120: steady 63.2k warm -> 37.2k fresh, resumed 61.2 -> 50.6k, partial last
-      chunks 19.2 -> 14.7k, ~20-23 builds a chunk, host 33-35 ms vs 12-16; builders: ttnn.slice @ served.py:155 (history slice_rows: slot x position), compressor.py:181 + rope.py:451 (RoPE rows), served.py:211
-      (DeviceScalars), history_gather.py:376 (tail), attention.py:488 (srv_row). 8192 measured 0 builds (unexplained). Audit with file:line: /data/dnijemcevic/bringup/handoff_20261119/../deepseek_v41_flash_d_p?
-      see supervision.md 2026-11-20 20:05 and note OV-68 on the batching ledger. MB.1''s table (results/MB.1_fresh_walls.md). Batching branch pieces to reuse: PB.7C (ce4e3bc674f) tt/glued_derive.py (per-chunk
-      tables derived on device from a header), tt/page_copy.py (pages_of instead of position-keyed slices), prepared-program values (ttnn.bringup.prepare_program / run_prepared).'
-    details: 'OWNER 2026-11-20 (binding): serving never rebuilds. On the single-request path (5120 and 8192), make every per-chunk value a runtime value: the RoPE / compressed-RoPE row slices by start,
-      DeviceScalars k = start//32 and ceil(end/32) of a last chunk, the history slice_rows by slot x layer x start, the history tail slices, srv_row, replay offsets (write_start - start), SnapshotSend patterns
-      at last-chunk caps, the partial-chunk masks, the unpack_fp8_rows core counts: whatever MB.1''s probe lists. Means: runtime-arg slices / page copies / prepared-program values / device tables (reuse
-      the batching branch''s pieces); the program-cache key depends on shapes and switches only; warm-up is a finite enumerable set. Also: no second upload of the token ids: reorder the engine''s input
-      into natural order ON THE DEVICE (the host keeps only the readback for the engram hash; engrams stay on the HOST, owner decision). Behind ONE call-time switch POS_DYNAMIC=off|on (batch_call_settings).
-      Bit-identical to today. Add a PERMANENT test models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py (BATCH_SHARED, layers 0-20, <= ~3 min): after warm-up, N fresh chunks (new starts, new slots,
-      a partial last chunk, a replay) on the shipped switches; metric program_builds_after_warmup_serving == 0 and ids_uploads_per_chunk == 0. Report fresh vs warm per case in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.2_fresh_walls.md
-      (target: fresh ~= warm). Read rule 20 of models/demos/common/bringup/agents/bringup-engineer.md (serving reality: no program build in serving, no host tables, fresh-traffic walls only, no impractical
-      shortcuts) and the skill''s standing decisions of 2026-11-20.'
+    prior_work: 'Batching branch dnijemcevic/model_bringup_batching: PB.9F (a72c8c6918d) added WALLS_FRESH=1 to tests/test_skip_positions.py
+      with tests/packed/fresh_common.py (fresh AgentX draws, disjoint warm-up / timed slot pools, misses counted, a probe
+      naming every op that built); PB.9F5 (83c7ee814cf) measured THIS path at 5120: steady 63.2k warm -> 37.2k fresh, resumed
+      61.2 -> 50.6k, partial last chunks 19.2 -> 14.7k, ~20-23 builds a chunk, host 33-35 ms vs 12-16; builders: ttnn.slice
+      @ served.py:155 (history slice_rows: slot x position), compressor.py:181 + rope.py:451 (RoPE rows), served.py:211 (DeviceScalars),
+      history_gather.py:376 (tail), attention.py:488 (srv_row). 8192 measured 0 builds (unexplained). Audit with file:line:
+      /data/dnijemcevic/bringup/handoff_20261119/../deepseek_v41_flash_d_p? see supervision.md 2026-11-20 20:05 and note OV-68
+      on the batching ledger. MB.1''s table (results/MB.1_fresh_walls.md). Batching branch pieces to reuse: PB.7C (ce4e3bc674f)
+      tt/glued_derive.py (per-chunk tables derived on device from a header), tt/page_copy.py (pages_of instead of position-keyed
+      slices), prepared-program values (ttnn.bringup.prepare_program / run_prepared).'
+    details: 'OWNER 2026-11-20 (binding): serving never rebuilds. On the single-request path (5120 and 8192), make every per-chunk
+      value a runtime value: the RoPE / compressed-RoPE row slices by start, DeviceScalars k = start//32 and ceil(end/32)
+      of a last chunk, the history slice_rows by slot x layer x start, the history tail slices, srv_row, replay offsets (write_start
+      - start), SnapshotSend patterns at last-chunk caps, the partial-chunk masks, the unpack_fp8_rows core counts: whatever
+      MB.1''s probe lists. Means: runtime-arg slices / page copies / prepared-program values / device tables (reuse the batching
+      branch''s pieces); the program-cache key depends on shapes and switches only; warm-up is a finite enumerable set. Also:
+      no second upload of the token ids: reorder the engine''s input into natural order ON THE DEVICE (the host keeps only
+      the readback for the engram hash; engrams stay on the HOST, owner decision). Behind ONE call-time switch POS_DYNAMIC=off|on
+      (batch_call_settings). Bit-identical to today. Add a PERMANENT test models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+      (BATCH_SHARED, layers 0-20, <= ~3 min): after warm-up, N fresh chunks (new starts, new slots, a partial last chunk,
+      a replay) on the shipped switches; metric program_builds_after_warmup_serving == 0 and ids_uploads_per_chunk == 0. Report
+      fresh vs warm per case in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.2_fresh_walls.md
+      (target: fresh ~= warm). Read rule 20 of models/demos/common/bringup/agents/bringup-engineer.md (serving reality: no
+      program build in serving, no host tables, fresh-traffic walls only, no impractical shortcuts) and the skill''s standing
+      decisions of 2026-11-20.'
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident DS41_POS_DYNAMIC=on BRINGUP_POS_TOKENS=agentic_cc
-      DS41_DECODER_SKIP=decode WALLS_FRESH=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && DS41_ENGRAM_TABLE=resident DS41_POS_DYNAMIC=on
-      BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident
+      DS41_POS_DYNAMIC=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode WALLS_FRESH=1 scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && DS41_ENGRAM_TABLE=resident
+      DS41_POS_DYNAMIC=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -5688,3 +5985,42 @@ tasks:
       program_builds_after_warmup_*: == 0
       ids_uploads_per_chunk*: == 0
       single*_fresh_tok_s*: '> 0'
+- id: MB.3
+  title: 'OWNER 2026-11-21: the shipped branch''s performance = the 5120 LADDER at real fixed histories, and the no-rebuild
+    check PASS/FAIL against a COLD program cache (MB.2''s PASS ran in a held process)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - MB.2
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/ladder_5120_20261121.md
+  brief:
+    prior_work: 'Batching branch dnijemcevic/model_bringup_batching (local, not pushed): PB.9C 8d18418226c + PB.NR 21de88e33ad
+      changed tests/test_skip_positions.py (the ladder: steady / resumed walls, device ms, exposed host, a serving-wall column
+      through adapter.prefill_chunk with tt-d-gen''s per-layer D2H ack, the host split, no memoised history between timed
+      repeats) and tests/test_no_rebuild.py (BATCH_COLD = True: framework F297, a fresh process, first in its batch; why cold
+      in its docstring). There, cold: single5120 and single8192 0 builds (PASS). Its 5120 ladder (PB.9C5, a63bb5fcd30): 73.9
+      ms / 69.3k at 51200 .. 91.5 / 56.0k at 1024000. Earlier: results/agentx_ladder_20261119.md (04c14a09d00).'
+    details: 'OWNER 2026-11-21 (binding): performance = the standard ladder (agentx_ladder_20261119''s method: agentic_cc,
+      steady chunk, DECODER_SKIP=decode, layers 0-20, resident runner) at REAL fixed histories 51200,131072,139264,262144,524288,786432,1024000
+      (139264 = AgentX p50); columns steady wall ms, tok/s, resumed wall ms, device ms, exposed host ms, serving wall ms;
+      the no-rebuild check is PASS/FAIL only and runs COLD. TESTS ONLY (no model change): take the batching branch''s SINGLE-REQUEST
+      parts of tests/test_skip_positions.py and tests/test_no_rebuild.py (git show dnijemcevic/model_bringup_batching:<file>;
+      leave every packed / glued / lanes part out: this branch has no packed path), BATCH_COLD = True on test_no_rebuild.
+      Write models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/ladder_5120_20261121.md: the table,
+      the 11-19 numbers beside (source / commit), the batching branch''s PB.9C5 row for comparison, the cold no-rebuild result,
+      and the serving entry''s extra host item by item at 139264. Read rule 20 of models/demos/common/bringup/agents/bringup-engineer.md.'
+  gate:
+    cmd: BRINGUP_CHUNK=5120 DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode
+      SKIP_POS=51200,131072,139264,262144,524288,786432,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=5120 DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    metrics:
+      steady_tok_s_p*: '> 0'
+      resumed_wall_ms_p*: '> 0'
+      program_builds_after_warmup_serving*: == 0
+      ids_uploads_per_chunk*: == 0

@@ -638,3 +638,16 @@
   POS_DYNAMIC default ON (owner). Fresh 5120: steady 61.4k (was 53.6k fresh, 63.4k warm), resumed 59.4k (54.6 / 61.6k).
   tests/test_no_rebuild.py is permanent (skill: in every accept / perf gate of this model). Not pushed.
 - 23:35 UTC handing the folder to the batching overseer: start_overseer_batch.sh (tmux overseer_batch).
+
+### Batching overseer (session 9b97aa56) on model_bringup, 2026-11-21 07:45 UTC (owner: model_bringup is the hot path)
+- Switched from dnijemcevic/model_bringup_batching (stopped after PB.NR 21de88e33ad; its ledger records committed, its
+  dashboards stashed 'batching ledger dashboards'); popped 'model_bringup ledger local records'. Resident runner stopped.
+- Framework parity from the batching branch (7792863dc5e, 5939229a5d7): F296 (the added determinism check keeps the
+  gate's chunk), F297 (build-counting tests BATCH_COLD: fresh process, first in batch), skill rules of 2026-11-21
+  (performance = the ladder at real fixed histories, no-rebuild PASS/FAIL; no slow fallback in serving).
+- WHY: MB.2's test_no_rebuild PASS ran in a held resident process; on the batching branch the same check passed falsely
+  in a held process (fixed-seed draws hit cached programs). Cold on the batching branch's merged code: single 5120 /
+  8192 0 builds (PASS) - expected to hold here; MB.3 checks it on this branch.
+- QUEUED MB.3 (tests only): the single-request parts of the batching branch's ladder + cold no-rebuild tests; gate =
+  the 5120 ladder at 51200 / 131072 / 139264 / 262144 / 524288 / 786432 / 1024000 + test_no_rebuild cold;
+  report results/ladder_5120_20261121.md (11-19 numbers beside). Then the owner gets the branch to push.
