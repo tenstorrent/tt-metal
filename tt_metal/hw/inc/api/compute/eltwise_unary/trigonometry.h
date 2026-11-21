@@ -195,7 +195,7 @@ ALWI void atanh_tile(uint32_t idst) {
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             calculate_atanh,
-            (APPROX, is_fp32_dest_acc_en, 32),
+            (APPROX, is_fp32_dest_acc_en, 32 /*ITERATIONS*/),
             idst,
             VectorMode::None);
         return;
