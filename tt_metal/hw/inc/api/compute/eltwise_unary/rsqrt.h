@@ -52,7 +52,7 @@ ALWI void rsqrt_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
                 DST_SYNC_MODE,
                 is_fp32_dest_acc_en,
                 calculate_rsqrt,
-                (APPROX, 32, is_fp32_dest_acc_en, FAST_APPROX),
+                (APPROX, 32 /*ITERATIONS*/, is_fp32_dest_acc_en, FAST_APPROX),
                 idst,
                 VectorMode::None);
             return;
