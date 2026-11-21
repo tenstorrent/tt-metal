@@ -25,6 +25,13 @@
 //
 // One K-block (face-direct whole K): no partials reload; with a bias the single K-block is the interleaved last one.
 //
+// row_groups (runtime, at most in0_num_subblocks): the row groups this M-block multiplies, packs and bias-adds. A
+// core's last M-block holds only its valid tile-rows rounded up to whole subblocks: the padding row groups are never
+// computed and never pushed to the output CB (the writer drains row_groups). Every other CB count stays nominal: in0 is
+// waited for and popped per K-block whole (the producer pushes the padding pages unwritten), the partials region is
+// reserved whole, and with a bias the region's unpushed tail is pushed and popped after the bias pass, so the next
+// M-block's region starts where a full block's would.
+//
 // Raw LLK (capability): compute_kernel_lib::matmul_block's caller_owns_pack_target is static_assert'ed to the Interm
 // target and its last K-block offers no per-row-group hook, so it can neither reload from a caller-owned region (Out)
 // nor push the last K-block's partials row group by row group for an interleaved consumer; compute_kernel_lib::
@@ -88,7 +95,8 @@ ALWI void walk(
     const PreKBlockFn& pre_k_block,
     const In0SourceFn& in0_source,
     const In1BaseOffsetFn& in1_offset,
-    const In0IndexFn& in0_indexed = {}) {
+    const In0IndexFn& in0_indexed = {},
+    uint32_t row_groups = in0_num_subblocks) {
     static_assert(!has_bias || groups >= 1);
     constexpr bool in0_ring = is_in0_indexed<In0IndexFn>::value;
     // A ring tile index addresses one tile per subblock row: one-row subblocks only.
@@ -184,7 +192,7 @@ ALWI void walk(
         }
         uint32_t in0_sub = 0;
         uint32_t biased = 0;  // row groups through the bias pass so far (last K-block, with a bias)
-        for (uint32_t i0 = 0; i0 < in0_num_subblocks; ++i0) {
+        for (uint32_t i0 = 0; i0 < row_groups; ++i0) {
             if (out_last) {
                 cb_reserve_back(out_cb, row_group_tiles);
             }
@@ -242,7 +250,14 @@ ALWI void walk(
         }
         if constexpr (has_bias) {
             if (last) {
-                bias_rows(in0_num_subblocks - biased, a_cb, block);
+                bias_rows(row_groups - biased, a_cb, block);
+                if (row_groups < in0_num_subblocks) {
+                    // The region's unpacked tail: pushed and popped unread, so the CB's pointers advance a whole block.
+                    const uint32_t tail = (in0_num_subblocks - row_groups) * row_group_tiles;
+                    cb_push_back(partials_cb, tail);
+                    cb_wait_front(partials_cb, tail);
+                    cb_pop_front(partials_cb, tail);
+                }
             }
         }
         if constexpr (reload) {

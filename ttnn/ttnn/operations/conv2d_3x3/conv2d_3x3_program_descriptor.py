@@ -3880,6 +3880,22 @@ def create_program_descriptor(
     bias_addr = bias_tensor.buffer_address() if has_bias else 0
     output_addr = output_tensor.buffer_address()
     device = input_tensor.device()
+    # Ragged tail (kernels: RAGGED_ARG): on the K-blocked walk with the writer's interleaved store, a core's last M-block
+    # tilizes (tap-direct), multiplies, bias-adds and packs only its valid tile-rows rounded up to whole subblocks, and
+    # the writer drains only those row groups; kh reuse's band order ends at the core's valid tile-rows. RAGGED_ARG is
+    # the compute runtime arg holding the core's valid tile-rows (after the TILE ring's per-M-block args).
+    ragged = (
+        not kwf
+        and not g.k_split
+        and not b.nslice
+        and not slab_direct
+        and not g.fold
+        and not g.sharded_output
+        and not g.remote_output
+        and b.in0_stream_rows >= bm
+    )
+    assert ragged or not khr, "kh reuse's band order needs the ragged tail"
+    ragged_arg = None
     store_route = (
         bool(b.rm_ring_px)
         and not g.fold
@@ -4120,6 +4136,11 @@ def create_program_descriptor(
             ub = b.untilize_batch_rows
             for _, _, new_rows in ring_plan(g, b.core_m_tiles, bm)[m_index]:
                 compute_args += [new_rows, -new_rows % ub]
+        if ragged:
+            arg = len(compute_args) - (2 * num_m_blocks_this_core if b.ring else 0)
+            assert ragged_arg in (None, arg), (ragged_arg, arg)
+            ragged_arg = arg
+            compute_args.append(actual_m_tiles)
         compute_rt[core.x][core.y] = compute_args
         writer_cores, writer_rt = writer_groups.setdefault(
             (_slice_channels(g, col), bool(split_cores)), ([], ttnn.RuntimeArgs())
@@ -4325,6 +4346,7 @@ def create_program_descriptor(
         [("CONV2D_3X3_HOST_FILL", "1"), ("HOST_FILL_WRITER_WINDOW", str(HOST_FILL_WRITER_WINDOW))] if host_fill else []
     )
     _wr_defines = [("WEIGHTS_RESIDENT", "1")] if b.weights_resident else []
+    _ragged_defines = [("RAGGED_ARG", str(ragged_arg))] if ragged_arg is not None else []
     _fold_defines = []
     if g.fold:
         assert b.weights_resident and b.rm_ring_px and b.num_k_blocks == 3 and bk == g.c_in_tiles and bn == 1
@@ -4427,6 +4449,7 @@ def create_program_descriptor(
             + _wr_defines
             + _store_defines
             + _fold_defines
+            + _ragged_defines
             + (_rm_ring_defines if rm_split else [])
             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
             + (
@@ -4458,7 +4481,8 @@ def create_program_descriptor(
         + _ring_arrival_defines
         + _wr_defines
         + _fold_defines
-        + _khr_defines,
+        + _khr_defines
+        + _ragged_defines,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=compute_kernel_config.math_fidelity,
             math_approx_mode=compute_kernel_config.math_approx_mode,

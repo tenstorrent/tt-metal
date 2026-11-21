@@ -795,7 +795,7 @@ void kernel_main() {
     };
 #ifdef KH_REUSE
     // kh reuse (the compute kernel's kh_reuse::Tilize): one three-tap unit (kw = 0, 1, 2 of kernel row 0) per virtual
-    // tile-row J, over the rows compute tilizes (J in [m_tile_start, m_tile_start + nmb * bm + 2 wt)), in the
+    // tile-row J, over the rows compute tilizes (J in [m_tile_start, m_tile_start + actual_m_tiles + 2 wt)), in the
     // band-first order compute tilizes them (conv2d_3x3_khr_band_order.hpp). Tap (kh, kw) of output tile-row t is unit
     // t + kh * wt's tap kw. A row no in-range output tile-row reads (past the core's bands) is the zero unit. The fill
     // (RmBandRing) is the order's virtual stream (KhrBandRuns: each run's pixels once, a run's first halo pixels again

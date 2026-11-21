@@ -1,0 +1,365 @@
+diff -ru '--exclude=__pycache__' op_base/conv2d_3x3_program_descriptor.py op_copy/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-21 11:54:26.976965035 +0000
++++ op_copy/conv2d_3x3_program_descriptor.py	2026-11-21 11:57:54.107979872 +0000
+@@ -3887,6 +3887,22 @@
+     bias_addr = bias_tensor.buffer_address() if has_bias else 0
+     output_addr = output_tensor.buffer_address()
+     device = input_tensor.device()
++    # Ragged tail (kernels: RAGGED_ARG): on the K-blocked walk with the writer's interleaved store, a core's last M-block
++    # tilizes (tap-direct), multiplies, bias-adds and packs only its valid tile-rows rounded up to whole subblocks, and
++    # the writer drains only those row groups; kh reuse's band order ends at the core's valid tile-rows. RAGGED_ARG is
++    # the compute runtime arg holding the core's valid tile-rows (after the TILE ring's per-M-block args).
++    ragged = (
++        not kwf
++        and not g.k_split
++        and not b.nslice
++        and not slab_direct
++        and not g.fold
++        and not g.sharded_output
++        and not g.remote_output
++        and b.in0_stream_rows >= bm
++    )
++    assert ragged or not khr, "kh reuse's band order needs the ragged tail"
++    ragged_arg = None
+     store_route = (
+         bool(b.rm_ring_px)
+         and not g.fold
+@@ -4127,6 +4143,11 @@
+             ub = b.untilize_batch_rows
+             for _, _, new_rows in ring_plan(g, b.core_m_tiles, bm)[m_index]:
+                 compute_args += [new_rows, -new_rows % ub]
++        if ragged:
++            arg = len(compute_args) - (2 * num_m_blocks_this_core if b.ring else 0)
++            assert ragged_arg in (None, arg), (ragged_arg, arg)
++            ragged_arg = arg
++            compute_args.append(actual_m_tiles)
+         compute_rt[core.x][core.y] = compute_args
+         writer_cores, writer_rt = writer_groups.setdefault(
+             (_slice_channels(g, col), bool(split_cores)), ([], ttnn.RuntimeArgs())
+@@ -4332,6 +4353,7 @@
+         [("CONV2D_3X3_HOST_FILL", "1"), ("HOST_FILL_WRITER_WINDOW", str(HOST_FILL_WRITER_WINDOW))] if host_fill else []
+     )
+     _wr_defines = [("WEIGHTS_RESIDENT", "1")] if b.weights_resident else []
++    _ragged_defines = [("RAGGED_ARG", str(ragged_arg))] if ragged_arg is not None else []
+     _fold_defines = []
+     if g.fold:
+         assert b.weights_resident and b.rm_ring_px and b.num_k_blocks == 3 and bk == g.c_in_tiles and bn == 1
+@@ -4434,6 +4456,7 @@
+             + _wr_defines
+             + _store_defines
+             + _fold_defines
++            + _ragged_defines
+             + (_rm_ring_defines if rm_split else [])
+             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
+             + (
+@@ -4465,7 +4488,8 @@
+         + _ring_arrival_defines
+         + _wr_defines
+         + _fold_defines
+-        + _khr_defines,
++        + _khr_defines
++        + _ragged_defines,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_compute.cpp op_copy/kernels/conv2d_3x3_compute.cpp
+--- op_base/kernels/conv2d_3x3_compute.cpp	2026-11-21 11:54:26.979965078 +0000
++++ op_copy/kernels/conv2d_3x3_compute.cpp	2026-11-21 11:57:00.354197307 +0000
+@@ -784,6 +784,10 @@
+     DataflowBuffer* tiles;
+     // Tap-direct: the unit entry FIFO (cb_src_table).
+     DataflowBuffer* table;
++    // Ragged tail (tap-direct, no center slots): the tile-rows the walk multiplies in this M-block (null: every one).
++    // The reader's entries past them are zero units (no gathered pages): popped untilized, and their in0 pages pushed
++    // unwritten, so the walk's per-K-block in0 wait and pop stay whole blocks.
++    const uint32_t* rows = nullptr;
+ 
+     ALWI void operator()(uint32_t block, uint32_t /*num_k_blocks*/, bool is_last) const {
+         if constexpr (center_mode == CENTER_K_BLOCK) {
+@@ -812,6 +816,7 @@
+         } else if constexpr (tap_direct) {
+             // Includes the unpacker's per-unit wait on the reader.
+             MaybeDeviceZoneScope("compute_tilize");
++            const uint32_t units = rows != nullptr ? *rows : block_m_tiles;
+             fifo_tilize<
+                 tilize_width_tiles,
+                 block_k_tiles / tilize_width_tiles,
+@@ -819,7 +824,15 @@
+                 cb_im2col_rm,
+                 cb_im2col_tiles,
+                 cb_table,
+-                windows>(*rm, *tiles, *table, block_m_tiles);
++                windows>(*rm, *tiles, *table, units);
++            if (units < block_m_tiles) {
++                for (uint32_t u = units; u < block_m_tiles; ++u) {
++                    table->wait_front(1);
++                    table->pop_front(1);
++                }
++                tiles->reserve_back((block_m_tiles - units) * block_k_tiles);
++                tiles->push_back((block_m_tiles - units) * block_k_tiles);
++            }
+         } else {
+             // Includes the unpacker's per-tile-row wait on the reader's gather.
+             MaybeDeviceZoneScope("compute_tilize");
+@@ -921,7 +934,7 @@
+     uint32_t kh_pos[3] = {0, 0, 0};    // ring row of m_row0 + kh * wt
+     uint32_t lane_hw[3] = {0, 0, 0};   // lane l's next row
+     uint32_t lane_pos[3] = {0, 0, 0};  // its ring row
+-    uint32_t lane_end2 = 0;            // lane 2's end (the core's last row + 1)
++    uint32_t lane_end2 = 0;            // lane 2's end (the core's last valid row + 1)
+     uint32_t ring_base = 0;            // the ring CB's base (packer, 16 B units)
+ };
+ 
+@@ -944,9 +957,10 @@
+     State* st;
+     using Order = conv2d_3x3::KhrBandOrder<wt, bm>;
+ 
+-    // Kernel start: the lanes' first rows and ring rows, lane 2's end, the ring CB's base.
+-    ALWI void init(uint32_t num_m_blocks) const {
+-        st->lane_end2 = num_m_blocks * bm + 2 * wt;
++    // Kernel start: the lanes' first rows and ring rows, lane 2's end (the core's last valid tile-row + 2 wt + 1: the
++    // rows past it only feed the ragged tail's padding rows, which the walk never multiplies), the ring CB's base.
++    ALWI void init(uint32_t actual_m_tiles) const {
++        st->lane_end2 = actual_m_tiles + 2 * wt;
+         for (uint32_t l = 0; l < 3; ++l) {
+             st->lane_hw[l] = l * wt;
+             st->lane_pos[l] = l * wt < ring_rows ? l * wt : l * wt - ring_rows;
+@@ -1385,11 +1399,25 @@
+         tap_direct_windows,
+         cb_src_table>;
+     DataflowBuffer src_table_dfb(cb_src_table);
++    // Ragged tail (the descriptor's RAGGED_ARG: the K-blocked walk with the writer's interleaved store): a core's last
++    // M-block runs only its valid tile-rows, rounded up to whole subblocks (ragged_groups row groups, ragged_rows
++    // tile-rows): the tap-direct tilize, the matmul K-blocks, the bias pass and the output packs. Runtime arg
++    // RAGGED_ARG (after the TILE ring's per-M-block args): the core's valid output tile-rows.
++#ifdef RAGGED_ARG
++    const uint32_t ragged_actual =
++        get_arg_val<uint32_t>(RAGGED_ARG + (ring_slab ? 2 * get_arg_val<uint32_t>(0) : 0));
++    constexpr bool ragged = true;
++#else
++    const uint32_t ragged_actual = get_arg_val<uint32_t>(0) * block_m_tiles;
++    constexpr bool ragged = false;
++#endif
++    uint32_t ragged_rows = block_m_tiles;
++    uint32_t ragged_groups = in0_num_subblocks;
+     auto make_pre_k_block = [&]() {
+         if constexpr (face_direct) {
+             return ckl::NoPreKBlock{};
+         } else {
+-            return TilizeFn{&im2col_rm_dfb, &im2col_tiles_dfb, &src_table_dfb};
++            return TilizeFn{&im2col_rm_dfb, &im2col_tiles_dfb, &src_table_dfb, ragged ? &ragged_rows : nullptr};
+         }
+     };
+     const auto pre_k_block = make_pre_k_block();
+@@ -1518,6 +1546,7 @@
+         kb_tap_direct && !tile_input && !k_split && center_mode == 0 && block_k_tiles == c_in_tiles &&
+             num_k_blocks == 9 && out_subblock_h == 1,
+         "kh reuse: the interleaved K-blocked tap-direct walk, one tap per K-block");
++    static_assert(ragged, "kh reuse: the reader's band order ends lane 2 at the core's valid tile-rows");
+     kh_reuse::State khr_state{};
+     using KhrPre = kh_reuse::Tilize<
+         c_in_tiles,
+@@ -1530,7 +1559,7 @@
+         false,
+         relu_on_last_matmul_pack>;
+     const KhrPre khr_pre{&im2col_rm_dfb, &im2col_tiles_dfb, &src_table_dfb, &khr_state};
+-    khr_pre.init(num_m_blocks_this_core);
++    khr_pre.init(ragged_actual);
+ #endif
+ #ifdef CONV2D_3X3_COUT_FOLD
+     // C_out fold (conv2d_3x3_cout_fold.hpp): the core's first output tile-row and walk tile-rows (runtime args 3, 4).
+@@ -1540,6 +1569,11 @@
+     PACK((conv2d_3x3::cout_fold::mask_tables_init((1u << FOLD_COUT) - 1)));
+ #endif
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
++        if constexpr (ragged) {
++            const uint32_t left = ragged_actual - m_block_idx * block_m_tiles;
++            ragged_groups = left < block_m_tiles ? (left + out_subblock_h - 1) / out_subblock_h : in0_num_subblocks;
++            ragged_rows = ragged_groups * out_subblock_h;
++        }
+         [[maybe_unused]] const uint32_t valid_rows =
+             rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx) : block_m_tiles;
+         [[maybe_unused]] const uint32_t slab_rows =
+@@ -2440,7 +2474,8 @@
+                 out_subblock_h,
+                 out_subblock_w,
+                 block_k_tiles,
+-                num_k_blocks>(khr_hook, CenterTapIn0<center_mode, cb_center_tiles>{}, khr_in1, khr_in0);
++                num_k_blocks>(
++                khr_hook, CenterTapIn0<center_mode, cb_center_tiles>{}, khr_in1, khr_in0, ragged_groups);
+ #elif defined(WEIGHTS_RESIDENT)
+             // Weights resident (see ResidentIn1Offset): the rounds stay fronted across the M-blocks.
+             constexpr uint32_t wr_round_tiles = block_k_tiles * block_n_tiles;
+@@ -2476,7 +2511,11 @@
+                 out_subblock_w,
+                 block_k_tiles,
+                 num_k_blocks>(
+-                wr_pre, CenterTapIn0<center_mode, cb_center_tiles>{}, ResidentIn1Offset<wr_round_tiles>{});
++                wr_pre,
++                CenterTapIn0<center_mode, cb_center_tiles>{},
++                ResidentIn1Offset<wr_round_tiles>{},
++                conv2d_3x3::kblock_walk::In0Fifo{},
++                ragged_groups);
+ #endif
+ #else
+             conv2d_3x3::kblock_walk::walk<
+@@ -2495,7 +2534,12 @@
+                 out_subblock_h,
+                 out_subblock_w,
+                 block_k_tiles,
+-                num_k_blocks>(pre_k_block, CenterTapIn0<center_mode, cb_center_tiles>{}, ckl::NoIn1BaseOffset{});
++                num_k_blocks>(
++                pre_k_block,
++                CenterTapIn0<center_mode, cb_center_tiles>{},
++                ckl::NoIn1BaseOffset{},
++                conv2d_3x3::kblock_walk::In0Fifo{},
++                ragged_groups);
+ #endif
+         }
+ 
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_kblock_walk.hpp op_copy/kernels/conv2d_3x3_kblock_walk.hpp
+--- op_base/kernels/conv2d_3x3_kblock_walk.hpp	2026-11-21 11:54:26.980965093 +0000
++++ op_copy/kernels/conv2d_3x3_kblock_walk.hpp	2026-11-21 11:56:48.796029089 +0000
+@@ -25,6 +25,13 @@
+ //
+ // One K-block (face-direct whole K): no partials reload; with a bias the single K-block is the interleaved last one.
+ //
++// row_groups (runtime, at most in0_num_subblocks): the row groups this M-block multiplies, packs and bias-adds. A
++// core's last M-block holds only its valid tile-rows rounded up to whole subblocks: the padding row groups are never
++// computed and never pushed to the output CB (the writer drains row_groups). Every other CB count stays nominal: in0 is
++// waited for and popped per K-block whole (the producer pushes the padding pages unwritten), the partials region is
++// reserved whole, and with a bias the region's unpushed tail is pushed and popped after the bias pass, so the next
++// M-block's region starts where a full block's would.
++//
+ // Raw LLK (capability): compute_kernel_lib::matmul_block's caller_owns_pack_target is static_assert'ed to the Interm
+ // target and its last K-block offers no per-row-group hook, so it can neither reload from a caller-owned region (Out)
+ // nor push the last K-block's partials row group by row group for an interleaved consumer; compute_kernel_lib::
+@@ -88,7 +95,8 @@
+     const PreKBlockFn& pre_k_block,
+     const In0SourceFn& in0_source,
+     const In1BaseOffsetFn& in1_offset,
+-    const In0IndexFn& in0_indexed = {}) {
++    const In0IndexFn& in0_indexed = {},
++    uint32_t row_groups = in0_num_subblocks) {
+     static_assert(!has_bias || groups >= 1);
+     constexpr bool in0_ring = is_in0_indexed<In0IndexFn>::value;
+     // A ring tile index addresses one tile per subblock row: one-row subblocks only.
+@@ -184,7 +192,7 @@
+         }
+         uint32_t in0_sub = 0;
+         uint32_t biased = 0;  // row groups through the bias pass so far (last K-block, with a bias)
+-        for (uint32_t i0 = 0; i0 < in0_num_subblocks; ++i0) {
++        for (uint32_t i0 = 0; i0 < row_groups; ++i0) {
+             if (out_last) {
+                 cb_reserve_back(out_cb, row_group_tiles);
+             }
+@@ -242,7 +250,14 @@
+         }
+         if constexpr (has_bias) {
+             if (last) {
+-                bias_rows(in0_num_subblocks - biased, a_cb, block);
++                bias_rows(row_groups - biased, a_cb, block);
++                if (row_groups < in0_num_subblocks) {
++                    // The region's unpacked tail: pushed and popped unread, so the CB's pointers advance a whole block.
++                    const uint32_t tail = (in0_num_subblocks - row_groups) * row_group_tiles;
++                    cb_push_back(partials_cb, tail);
++                    cb_wait_front(partials_cb, tail);
++                    cb_pop_front(partials_cb, tail);
++                }
+             }
+         }
+         if constexpr (reload) {
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_khr_band_order.hpp op_copy/kernels/conv2d_3x3_khr_band_order.hpp
+--- op_base/kernels/conv2d_3x3_khr_band_order.hpp	2026-11-21 11:54:26.979965078 +0000
++++ op_copy/kernels/conv2d_3x3_khr_band_order.hpp	2026-11-21 11:57:19.623477755 +0000
+@@ -10,7 +10,8 @@
+ // its 3 bm rows only, instead of every row up to 2 wt + bm (the whole first window, which all cores fetch from DRAM at
+ // once), and the rows between its bands come in behind compute, bm per lane per M-block, until lanes 0 and 1 are
+ // complete and the order is the monotone one. Rows no K-block reads (lanes 0 and 1 past nmb bm when a core spans less
+-// than an image row) are never produced.
++// than an image row) are never produced, nor lane 2's rows past the core's valid tile-rows (2 wt + actual): only the
++// ragged last M-block's padding rows read them, and the walk never multiplies those.
+ 
+ #pragma once
+ 
+@@ -21,13 +22,13 @@
+ template <uint32_t wt, uint32_t bm>
+ struct KhrBandOrder {
+     uint32_t hw[3] = {0, wt, 2 * wt};  // lane l's next row
+-    uint32_t end2 = 2 * wt;            // lane 2's end: the core's last row + 1
++    uint32_t end2 = 2 * wt;            // lane 2's end: the core's last valid row + 1
+ 
+-    inline __attribute__((always_inline)) void init(uint32_t num_m_blocks) {
++    inline __attribute__((always_inline)) void init(uint32_t actual_m_tiles) {
+         hw[0] = 0;
+         hw[1] = wt;
+         hw[2] = 2 * wt;
+-        end2 = num_m_blocks * bm + 2 * wt;
++        end2 = actual_m_tiles + 2 * wt;
+     }
+ 
+     // Lane l's rows needed by K-block (m, kh, 0) (m0 = m bm, lane 2 ending at e2): up to (excluding) the returned row.
+@@ -39,12 +40,6 @@
+     inline __attribute__((always_inline)) uint32_t target(uint32_t m, uint32_t kh, uint32_t l) const {
+         return target_of(m * bm, kh, l, end2);
+     }
+-
+-    // Rows the order produces in total.
+-    static inline __attribute__((always_inline)) uint32_t count(uint32_t num_m_blocks) {
+-        const uint32_t rows = num_m_blocks * bm;
+-        return 2 * (rows < wt ? rows : wt) + rows;
+-    }
+ };
+ 
+ }  // namespace conv2d_3x3
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_reader.cpp op_copy/kernels/conv2d_3x3_reader.cpp
+--- op_base/kernels/conv2d_3x3_reader.cpp	2026-11-21 11:54:26.979965078 +0000
++++ op_copy/kernels/conv2d_3x3_reader.cpp	2026-11-21 11:57:23.780538265 +0000
+@@ -795,7 +795,7 @@
+     };
+ #ifdef KH_REUSE
+     // kh reuse (the compute kernel's kh_reuse::Tilize): one three-tap unit (kw = 0, 1, 2 of kernel row 0) per virtual
+-    // tile-row J, over the rows compute tilizes (J in [m_tile_start, m_tile_start + nmb * bm + 2 wt)), in the
++    // tile-row J, over the rows compute tilizes (J in [m_tile_start, m_tile_start + actual_m_tiles + 2 wt)), in the
+     // band-first order compute tilizes them (conv2d_3x3_khr_band_order.hpp). Tap (kh, kw) of output tile-row t is unit
+     // t + kh * wt's tap kw. A row no in-range output tile-row reads (past the core's bands) is the zero unit. The fill
+     // (RmBandRing) is the order's virtual stream (KhrBandRuns: each run's pixels once, a run's first halo pixels again
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_rm_ring.hpp op_copy/kernels/conv2d_3x3_rm_ring.hpp
+--- op_base/kernels/conv2d_3x3_rm_ring.hpp	2026-11-21 11:54:26.980965093 +0000
++++ op_copy/kernels/conv2d_3x3_rm_ring.hpp	2026-11-21 11:57:15.728421066 +0000
+@@ -666,7 +666,7 @@
+     uint32_t step_id = 0xFFFFFFFFu;
+ 
+     FORCE_INLINE void init(uint32_t first_row, uint32_t actual_rows, uint32_t num_m_blocks) {
+-        order.init(num_m_blocks);
++        order.init(actual_rows);
+         nmb = num_m_blocks;
+         c0 = first_row;
+         actual = actual_rows;
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_writer.cpp op_copy/kernels/conv2d_3x3_writer.cpp
+--- op_base/kernels/conv2d_3x3_writer.cpp	2026-11-21 11:54:26.980965093 +0000
++++ op_copy/kernels/conv2d_3x3_writer.cpp	2026-11-21 11:57:07.531301764 +0000
+@@ -2739,12 +2739,21 @@
+             }
+         }
+         if constexpr (!output_sharded) {
+-            // ---- store_block: valid output tile-rows only; the ragged tail keeps nominal CB counts.
++            // ---- store_block: valid output tile-rows only. Ragged tail (RAGGED_ARG): compute packs only the row groups
++            // that hold a valid tile-row; otherwise the ragged tail keeps nominal CB counts.
+             MaybeDeviceZoneScope("writer_store");
+             const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
+             const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
+             const uint32_t block_tile0 = m_block_idx * block_m_tiles;
+-            for (uint32_t row_group = 0; row_group < row_groups_per_block; ++row_group) {
++#ifdef RAGGED_ARG
++            const uint32_t block_left = actual_m_tiles - block_tile0;
++            const uint32_t block_row_groups = block_left < block_m_tiles
++                                                  ? (block_left + out_subblock_h - 1) / out_subblock_h
++                                                  : row_groups_per_block;
++#else
++            constexpr uint32_t block_row_groups = row_groups_per_block;
++#endif
++            for (uint32_t row_group = 0; row_group < block_row_groups; ++row_group) {
+ #ifdef RM_SPLIT
+                 // The split fill's writer part while compute works towards the output.
+                 while (!cb_pages_available_at_front(cb_output_tiles, row_group_tiles)) {

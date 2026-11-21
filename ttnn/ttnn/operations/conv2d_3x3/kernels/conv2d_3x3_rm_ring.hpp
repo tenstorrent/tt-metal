@@ -666,7 +666,7 @@ struct KhrBandRuns {
     uint32_t step_id = 0xFFFFFFFFu;
 
     FORCE_INLINE void init(uint32_t first_row, uint32_t actual_rows, uint32_t num_m_blocks) {
-        order.init(num_m_blocks);
+        order.init(actual_rows);
         nmb = num_m_blocks;
         c0 = first_row;
         actual = actual_rows;

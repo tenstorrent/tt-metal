@@ -2739,12 +2739,20 @@ void kernel_main() {
             }
         }
         if constexpr (!output_sharded) {
-            // ---- store_block: valid output tile-rows only; the ragged tail keeps nominal CB counts.
+            // ---- store_block: valid output tile-rows only. Ragged tail (RAGGED_ARG): compute packs only the row
+            // groups that hold a valid tile-row; otherwise the ragged tail keeps nominal CB counts.
             MaybeDeviceZoneScope("writer_store");
             const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
             const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
             const uint32_t block_tile0 = m_block_idx * block_m_tiles;
-            for (uint32_t row_group = 0; row_group < row_groups_per_block; ++row_group) {
+#ifdef RAGGED_ARG
+            const uint32_t block_left = actual_m_tiles - block_tile0;
+            const uint32_t block_row_groups =
+                block_left < block_m_tiles ? (block_left + out_subblock_h - 1) / out_subblock_h : row_groups_per_block;
+#else
+            constexpr uint32_t block_row_groups = row_groups_per_block;
+#endif
+            for (uint32_t row_group = 0; row_group < block_row_groups; ++row_group) {
 #ifdef RM_SPLIT
                 // The split fill's writer part while compute works towards the output.
                 while (!cb_pages_available_at_front(cb_output_tiles, row_group_tiles)) {

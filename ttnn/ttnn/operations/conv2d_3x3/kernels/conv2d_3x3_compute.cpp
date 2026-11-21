@@ -784,6 +784,10 @@ struct TilizeIm2colKBlock {
     DataflowBuffer* tiles;
     // Tap-direct: the unit entry FIFO (cb_src_table).
     DataflowBuffer* table;
+    // Ragged tail (tap-direct, no center slots): the tile-rows the walk multiplies in this M-block (null: every one).
+    // The reader's entries past them are zero units (no gathered pages): popped untilized, and their in0 pages pushed
+    // unwritten, so the walk's per-K-block in0 wait and pop stay whole blocks.
+    const uint32_t* rows = nullptr;
 
     ALWI void operator()(uint32_t block, uint32_t /*num_k_blocks*/, bool is_last) const {
         if constexpr (center_mode == CENTER_K_BLOCK) {
@@ -812,6 +816,7 @@ struct TilizeIm2colKBlock {
         } else if constexpr (tap_direct) {
             // Includes the unpacker's per-unit wait on the reader.
             MaybeDeviceZoneScope("compute_tilize");
+            const uint32_t units = rows != nullptr ? *rows : block_m_tiles;
             fifo_tilize<
                 tilize_width_tiles,
                 block_k_tiles / tilize_width_tiles,
@@ -819,7 +824,15 @@ struct TilizeIm2colKBlock {
                 cb_im2col_rm,
                 cb_im2col_tiles,
                 cb_table,
-                windows>(*rm, *tiles, *table, block_m_tiles);
+                windows>(*rm, *tiles, *table, units);
+            if (units < block_m_tiles) {
+                for (uint32_t u = units; u < block_m_tiles; ++u) {
+                    table->wait_front(1);
+                    table->pop_front(1);
+                }
+                tiles->reserve_back((block_m_tiles - units) * block_k_tiles);
+                tiles->push_back((block_m_tiles - units) * block_k_tiles);
+            }
         } else {
             // Includes the unpacker's per-tile-row wait on the reader's gather.
             MaybeDeviceZoneScope("compute_tilize");
@@ -921,7 +934,7 @@ struct State {
     uint32_t kh_pos[3] = {0, 0, 0};    // ring row of m_row0 + kh * wt
     uint32_t lane_hw[3] = {0, 0, 0};   // lane l's next row
     uint32_t lane_pos[3] = {0, 0, 0};  // its ring row
-    uint32_t lane_end2 = 0;            // lane 2's end (the core's last row + 1)
+    uint32_t lane_end2 = 0;            // lane 2's end (the core's last valid row + 1)
     uint32_t ring_base = 0;            // the ring CB's base (packer, 16 B units)
 };
 
@@ -944,9 +957,10 @@ struct Tilize {
     State* st;
     using Order = conv2d_3x3::KhrBandOrder<wt, bm>;
 
-    // Kernel start: the lanes' first rows and ring rows, lane 2's end, the ring CB's base.
-    ALWI void init(uint32_t num_m_blocks) const {
-        st->lane_end2 = num_m_blocks * bm + 2 * wt;
+    // Kernel start: the lanes' first rows and ring rows, lane 2's end (the core's last valid tile-row + 2 wt + 1: the
+    // rows past it only feed the ragged tail's padding rows, which the walk never multiplies), the ring CB's base.
+    ALWI void init(uint32_t actual_m_tiles) const {
+        st->lane_end2 = actual_m_tiles + 2 * wt;
         for (uint32_t l = 0; l < 3; ++l) {
             st->lane_hw[l] = l * wt;
             st->lane_pos[l] = l * wt < ring_rows ? l * wt : l * wt - ring_rows;
@@ -1385,11 +1399,24 @@ void kernel_main() {
         tap_direct_windows,
         cb_src_table>;
     DataflowBuffer src_table_dfb(cb_src_table);
+    // Ragged tail (the descriptor's RAGGED_ARG: the K-blocked walk with the writer's interleaved store): a core's last
+    // M-block runs only its valid tile-rows, rounded up to whole subblocks (ragged_groups row groups, ragged_rows
+    // tile-rows): the tap-direct tilize, the matmul K-blocks, the bias pass and the output packs. Runtime arg
+    // RAGGED_ARG (after the TILE ring's per-M-block args): the core's valid output tile-rows.
+#ifdef RAGGED_ARG
+    const uint32_t ragged_actual = get_arg_val<uint32_t>(RAGGED_ARG + (ring_slab ? 2 * get_arg_val<uint32_t>(0) : 0));
+    constexpr bool ragged = true;
+#else
+    const uint32_t ragged_actual = get_arg_val<uint32_t>(0) * block_m_tiles;
+    constexpr bool ragged = false;
+#endif
+    uint32_t ragged_rows = block_m_tiles;
+    uint32_t ragged_groups = in0_num_subblocks;
     auto make_pre_k_block = [&]() {
         if constexpr (face_direct) {
             return ckl::NoPreKBlock{};
         } else {
-            return TilizeFn{&im2col_rm_dfb, &im2col_tiles_dfb, &src_table_dfb};
+            return TilizeFn{&im2col_rm_dfb, &im2col_tiles_dfb, &src_table_dfb, ragged ? &ragged_rows : nullptr};
         }
     };
     const auto pre_k_block = make_pre_k_block();
@@ -1518,6 +1545,7 @@ void kernel_main() {
         kb_tap_direct && !tile_input && !k_split && center_mode == 0 && block_k_tiles == c_in_tiles &&
             num_k_blocks == 9 && out_subblock_h == 1,
         "kh reuse: the interleaved K-blocked tap-direct walk, one tap per K-block");
+    static_assert(ragged, "kh reuse: the reader's band order ends lane 2 at the core's valid tile-rows");
     kh_reuse::State khr_state{};
     using KhrPre = kh_reuse::Tilize<
         c_in_tiles,
@@ -1530,7 +1558,7 @@ void kernel_main() {
         false,
         relu_on_last_matmul_pack>;
     const KhrPre khr_pre{&im2col_rm_dfb, &im2col_tiles_dfb, &src_table_dfb, &khr_state};
-    khr_pre.init(num_m_blocks_this_core);
+    khr_pre.init(ragged_actual);
 #endif
 #ifdef CONV2D_3X3_COUT_FOLD
     // C_out fold (conv2d_3x3_cout_fold.hpp): the core's first output tile-row and walk tile-rows (runtime args 3, 4).
@@ -1540,6 +1568,11 @@ void kernel_main() {
     PACK((conv2d_3x3::cout_fold::mask_tables_init((1u << FOLD_COUT) - 1)));
 #endif
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+        if constexpr (ragged) {
+            const uint32_t left = ragged_actual - m_block_idx * block_m_tiles;
+            ragged_groups = left < block_m_tiles ? (left + out_subblock_h - 1) / out_subblock_h : in0_num_subblocks;
+            ragged_rows = ragged_groups * out_subblock_h;
+        }
         [[maybe_unused]] const uint32_t valid_rows =
             rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx) : block_m_tiles;
         [[maybe_unused]] const uint32_t slab_rows =
@@ -2440,7 +2473,7 @@ void kernel_main() {
                 out_subblock_h,
                 out_subblock_w,
                 block_k_tiles,
-                num_k_blocks>(khr_hook, CenterTapIn0<center_mode, cb_center_tiles>{}, khr_in1, khr_in0);
+                num_k_blocks>(khr_hook, CenterTapIn0<center_mode, cb_center_tiles>{}, khr_in1, khr_in0, ragged_groups);
 #elif defined(WEIGHTS_RESIDENT)
             // Weights resident (see ResidentIn1Offset): the rounds stay fronted across the M-blocks.
             constexpr uint32_t wr_round_tiles = block_k_tiles * block_n_tiles;
@@ -2476,7 +2509,11 @@ void kernel_main() {
                 out_subblock_w,
                 block_k_tiles,
                 num_k_blocks>(
-                wr_pre, CenterTapIn0<center_mode, cb_center_tiles>{}, ResidentIn1Offset<wr_round_tiles>{});
+                wr_pre,
+                CenterTapIn0<center_mode, cb_center_tiles>{},
+                ResidentIn1Offset<wr_round_tiles>{},
+                conv2d_3x3::kblock_walk::In0Fifo{},
+                ragged_groups);
 #endif
 #else
             conv2d_3x3::kblock_walk::walk<
@@ -2495,7 +2532,12 @@ void kernel_main() {
                 out_subblock_h,
                 out_subblock_w,
                 block_k_tiles,
-                num_k_blocks>(pre_k_block, CenterTapIn0<center_mode, cb_center_tiles>{}, ckl::NoIn1BaseOffset{});
+                num_k_blocks>(
+                pre_k_block,
+                CenterTapIn0<center_mode, cb_center_tiles>{},
+                ckl::NoIn1BaseOffset{},
+                conv2d_3x3::kblock_walk::In0Fifo{},
+                ragged_groups);
 #endif
         }
 

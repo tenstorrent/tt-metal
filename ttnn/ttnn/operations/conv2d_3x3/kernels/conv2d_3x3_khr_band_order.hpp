@@ -10,7 +10,8 @@
 // its 3 bm rows only, instead of every row up to 2 wt + bm (the whole first window, which all cores fetch from DRAM at
 // once), and the rows between its bands come in behind compute, bm per lane per M-block, until lanes 0 and 1 are
 // complete and the order is the monotone one. Rows no K-block reads (lanes 0 and 1 past nmb bm when a core spans less
-// than an image row) are never produced.
+// than an image row) are never produced, nor lane 2's rows past the core's valid tile-rows (2 wt + actual): only the
+// ragged last M-block's padding rows read them, and the walk never multiplies those.
 
 #pragma once
 
@@ -21,13 +22,13 @@ namespace conv2d_3x3 {
 template <uint32_t wt, uint32_t bm>
 struct KhrBandOrder {
     uint32_t hw[3] = {0, wt, 2 * wt};  // lane l's next row
-    uint32_t end2 = 2 * wt;            // lane 2's end: the core's last row + 1
+    uint32_t end2 = 2 * wt;            // lane 2's end: the core's last valid row + 1
 
-    inline __attribute__((always_inline)) void init(uint32_t num_m_blocks) {
+    inline __attribute__((always_inline)) void init(uint32_t actual_m_tiles) {
         hw[0] = 0;
         hw[1] = wt;
         hw[2] = 2 * wt;
-        end2 = num_m_blocks * bm + 2 * wt;
+        end2 = actual_m_tiles + 2 * wt;
     }
 
     // Lane l's rows needed by K-block (m, kh, 0) (m0 = m bm, lane 2 ending at e2): up to (excluding) the returned row.
@@ -38,12 +39,6 @@ struct KhrBandOrder {
     }
     inline __attribute__((always_inline)) uint32_t target(uint32_t m, uint32_t kh, uint32_t l) const {
         return target_of(m * bm, kh, l, end2);
-    }
-
-    // Rows the order produces in total.
-    static inline __attribute__((always_inline)) uint32_t count(uint32_t num_m_blocks) {
-        const uint32_t rows = num_m_blocks * bm;
-        return 2 * (rows < wt ? rows : wt) + rows;
     }
 };
 
