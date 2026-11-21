@@ -19,8 +19,7 @@ import os
 import sys
 
 import pytest
-from dcp_driver import MESH_OPEN_FAILED
-from dcp_harness import MGD_DIR, output_lines, run_world
+from dcp_harness import MGD_DIR, run_checked
 
 # As in test_dcp_cross_world: a hung child fails after 10 minutes, so one hang leaves a 25-minute CI leg the time to
 # report the tests after it.
@@ -56,18 +55,8 @@ def _world_args(name: str) -> list[str]:
 
 
 def _run(args: list[str], what: str) -> str:
-    env = dict(os.environ)
-    env.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    proc = run_world(DRIVER + args, env, CHILD_TIMEOUT_S)
-    lines = output_lines(proc)
-    # Only the descriptor-fabric mismatch (see dcp_driver) is a skip: the driver re-raises any
-    # other failure to open the mesh.
-    if proc.returncode == MESH_OPEN_FAILED or any("MESH_OPEN_FAILED" in ln for ln in lines):
-        reason = next((ln for ln in lines if "MESH_OPEN_FAILED" in ln), "no reason given")
-        pytest.skip(f"{what}: this host cannot open the mesh: {reason}")
-    tail = "\n".join(lines[-60:])
-    assert proc.returncode == 0, f"{what} failed with exit {proc.returncode}:\n{tail}"
-    return proc.stdout
+    lines = run_checked(DRIVER + args, what, CHILD_TIMEOUT_S, needs_tt_run=False, save=args[0] == "save")
+    return "\n".join(lines)
 
 
 _SAVED: dict[str, str] = {}
