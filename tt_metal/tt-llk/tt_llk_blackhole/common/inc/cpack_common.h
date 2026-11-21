@@ -1348,6 +1348,25 @@ struct llk_pack_reconfig_imm_t
     std::uint32_t format, section, lf8, threshold, dstacc, ystride, zwstride;
 };
 
+// compute_mpwi's CB format signature: UInt16 CB 3, one index format (UInt16 or UInt32) on CBs 6 and 8-12, Float16_b CBs 0, 4, 7
+template <std::size_t n>
+constexpr bool llk_pack_mpwi_cbs(const unsigned char (&f)[n])
+{
+    if (n < 13)
+    {
+        return false;
+    }
+    constexpr std::uint32_t f16b = to_underlying(DataFormat::Float16_b);
+    const std::uint32_t idx      = f[6];
+    bool ok = f[3] == to_underlying(DataFormat::UInt16) && (idx == to_underlying(DataFormat::UInt16) || idx == to_underlying(DataFormat::UInt32)) &&
+              f[0] == f16b && f[4] == f16b && f[7] == f16b;
+    for (std::size_t i = 8; i <= 12; i++)
+    {
+        ok = ok && f[i] == idx;
+    }
+    return ok;
+}
+
 template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n, bool gate = true, typename S>
 constexpr llk_pack_reconfig_imm_t llk_pack_reconfig_imm(
     const S& pack_src_format, const unsigned char (&pack_dst_format)[n], const unsigned char (&pack_num_faces)[n], const unsigned char (&pack_partial_face)[n])
@@ -1397,7 +1416,9 @@ constexpr llk_pack_reconfig_imm_t llk_pack_reconfig_imm(
         m.zwstride |= z ^ z0;
     }
     m.ok = any;
-    if (gate && llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, sync>())
+    // compute_mpwi keeps the full reconfigure (4x8 window +0.13 % with the immediates); its 3x3 rows lose 5-9 % with it, but the
+    // window size is a kernel compile arg the LLK cannot see
+    if ((gate && llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, sync>()) || ((pack_fast_tilize_linked<sync> || pack_strides_writer<4>) && llk_pack_mpwi_cbs(pack_dst_format)))
     {
         m.ok = false;
         return m;
