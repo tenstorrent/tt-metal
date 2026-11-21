@@ -223,6 +223,11 @@ void kernel_main() {
     const uint32_t n_act = act.n;
     if (role == 1) {
         compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_s);
+        // (kSkipZeroParts: per user the children with KV tiles, from the reader)
+        uint32_t cmask[kUsers];
+        for (uint32_t u = 0; u < kUsers; u++) {
+            cmask[u] = kSkipZeroParts && children > 0 ? read_tile_value(cb_ntiles, 0, kChildMaskOff / 4 + u) : ~0u;
+        }
         for (uint32_t i = 0; i < layers * n_act; i++) {
             const uint32_t n_tiles = n_of[act.row[i % n_act]];
             cb_wait_front(cb_q, Dt);
@@ -243,7 +248,7 @@ void kernel_main() {
                 cb_pop_front(cb_M, 1);
             }
             if (children > 0) {
-                sum_partials<true>(children);
+                sum_partials<true>(children, cmask[act.row[i % n_act]]);
             }
             cb_pop_front(cb_q, Dt);
         }
@@ -293,6 +298,22 @@ void kernel_main() {
                 cb_pop_front(cb_kw, Dt);
                 cb_wait_front(cb_knew, Dt);
                 cb_wait_front(cb_vraw, Dt);
+            }
+            if (!tail_takes(role, ka)) {
+                // (kTails: the other tail's user — a chunk worker without a chunk)
+                cb_wait_front(cb_q, Dt);
+                cb_wait_front(cb_M, 1);
+                zero_partial();
+                cb_pop_front(cb_M, 1);
+                if (children > 0) {
+                    sum_partials<true>(children);
+                }
+                cb_pop_front(cb_q, Dt);
+                if (ka + 1 == n_act) {
+                    cb_pop_front(cb_knew, Dt);
+                    cb_pop_front(cb_vraw, Dt);
+                }
+                continue;
             }
             update_tail_user(2 * u);
         } else {

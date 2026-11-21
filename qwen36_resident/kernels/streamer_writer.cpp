@@ -63,7 +63,9 @@ void kernel_main() {
     const uint32_t gdn_copies = get_arg_val<uint32_t>(16);
     constexpr uint32_t heads_base = 18;
     constexpr uint32_t attn_base = heads_base + 2 * gdn_heads;
-    constexpr uint32_t peers_base = attn_base + 4;
+    // (the attention leader and its tail core(s): named arg attn_tails, attn_common.hpp kTails)
+    constexpr uint32_t attn_tails = get_named_compile_time_arg_val("attn_tails");
+    constexpr uint32_t peers_base = attn_base + 2 + 2 * attn_tails;
     const uint32_t ts_addr = get_arg_val<uint32_t>(peers_base + 2 * num_streamers);
     const uint32_t argmax_addr = get_arg_val<uint32_t>(peers_base + 2 * num_streamers + 1);
     const uint32_t valid_cols = get_arg_val<uint32_t>(peers_base + 2 * num_streamers + 2);
@@ -267,7 +269,7 @@ void kernel_main() {
         cb_wait_front(cb_qkvz_out, groups * kBlk);
         mark(l, 1);
         if (attn) {
-            send_row(attn_base, 2, nq_attn, q_off_attn);
+            send_row(attn_base, 1 + attn_tails, nq_attn, q_off_attn);
             o_expected += 1;
         } else {
             send_runs(q_off_gdn);

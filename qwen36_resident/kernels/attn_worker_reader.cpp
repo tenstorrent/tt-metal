@@ -108,13 +108,21 @@ void kernel_main() {
     const ActiveRows<kUsers> act(mask);
     Chunk chs[kRows];
     uint32_t tail_rs[kRows], tps[kRows];
+    // (kTails: whether this tail core takes row u — by its active index)
+    bool takes[kRows];
+    for (uint32_t u = 0; u < kRows; u++) {
+        takes[u] = kTails == 1;
+    }
+    for (uint32_t k = 0; kTails > 1 && role >= 2 && k < act.n; k++) {
+        takes[act.row[k]] = tail_takes(role, k);
+    }
     for (uint32_t u = 0; u < kRows; u++) {
         const uint32_t pos = groups == 1 ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[1 + u]
                                          : reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + kPosScratch)[u];
         const uint32_t tp = pos / 32;
         tps[u] = tp;
         tail_rs[u] = pos % 32;
-        chs[u] = role == 2 ? Chunk{tp, 1, 1} : chunk_of(w, tp);
+        chs[u] = role >= 2 ? (takes[u] ? Chunk{tp, 1, 1} : Chunk{0, 1, 0}) : chunk_of(w, tp);
     }
     // packed: every pass takes the tiles below row 0's; the tail core row 0's tile and the next one if a row reaches it
     const uint32_t n_tail = packed && tps[batch - 1] != tps[0] ? 2 : 1;
@@ -123,7 +131,7 @@ void kernel_main() {
     }
     if constexpr (kv_paged) {
         // the pages of this core's tiles (the writer's tail pages too: it reads them after the cb_ntiles push)
-        const uint32_t pt_addr = get_arg_val<uint32_t>(role == 2 ? 11 : 9);
+        const uint32_t pt_addr = get_arg_val<uint32_t>(role >= 2 ? 11 : 9);
         for (uint32_t k = 0; k < act.n; k++) {
             const uint32_t u = act.row[k];
             translate_chunk(pt_addr, verify ? 0 : u, u, chs[u], chs[u].n);
@@ -132,16 +140,30 @@ void kernel_main() {
     for (uint32_t u = 0; u < kUsers; u++) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[u] = chs[u].n;
     }
+    // (kSkipZeroParts, a group head: per active user the children with KV tiles — chunk worker c: its chunk; a tail:
+    // one tile when it takes the user — children are the next workers w + 1 .. w + children)
+    static_assert(!kSkipZeroParts || kChildMaskOff + 4 * kUsers <= (groups == 1 ? 640 : 1088), "cb_ntiles page");
+    static_assert(groups == 1 || kNegInfOff + kMRows0 <= kPosScratch, "-inf rows overlap the positions");
+    for (uint32_t k = 0; kSkipZeroParts && children > 0 && k < act.n; k++) {
+        const uint32_t u = act.row[k];
+        uint32_t cm = 0;
+        for (uint32_t c = 0; c < children; c++) {
+            const uint32_t cw = w + 1 + c;
+            const bool tiles = cw < kChunkWorkers ? chunk_of(cw, tps[u]).n > 0 : tail_takes(2 + (workers - 1 - cw), k);
+            cm |= (tiles ? 1u : 0u) << c;
+        }
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + kChildMaskOff)[u] = cm;
+    }
     static_assert((kMaskWord + 1) * 4 <= kNegInfOff, "the active mask overlaps the -inf rows");
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[kMaskWord] = mask;
     cb_push_back(cb_ntiles, 1);
 
     uint32_t rows = 0;
     const InterleavedAddrGenFast<true> kw_dram{
-        .bank_base_address = role == 2 ? get_arg_val<uint32_t>(10) : 0,
+        .bank_base_address = role >= 2 ? get_arg_val<uint32_t>(10) : 0,
         .page_size = kTile,
         .data_format = DataFormat::Float16_b};
-    if (role == 2) {
+    if (role >= 2) {
         rows = get_arg_val<uint32_t>(9);
         if constexpr (groups > 1) {
             // row groups: the leader's row buffer (its address from the leader, its NOC coordinates the last args)
@@ -326,15 +348,20 @@ void kernel_main() {
                 cb_push_back(cb_vraw, Dt);
             }
         } else {
+            // (kTails: only for the users this tail takes; the others run as a chunk worker without a chunk)
+            const bool mine = takes[u];
             // the user's tail of this copy was written back by its previous use (verify: by row u - 1, same tile)
-            if (verify && u > 0 && tps[u] == tps[u - 1]) {
+            if (!mine) {
+            } else if (verify && u > 0 && tps[u] == tps[u - 1]) {
                 noc_semaphore_wait_min(tail_sem, i);
             } else if (l >= copies) {
                 noc_semaphore_wait_min(tail_sem, i - copies * n_act + 1);
             }
-            cb_reserve_back(cb_tail8, 2 * Dt);
-            read_rows(ch, k_addr, 0, 1, get_write_ptr(cb_tail8), pages, copy_page);
-            read_rows(ch, v_addr, 0, 1, get_write_ptr(cb_tail8) + kKvRow, pages, copy_page);
+            if (mine) {
+                cb_reserve_back(cb_tail8, 2 * Dt);
+                read_rows(ch, k_addr, 0, 1, get_write_ptr(cb_tail8), pages, copy_page);
+                read_rows(ch, v_addr, 0, 1, get_write_ptr(cb_tail8) + kKvRow, pages, copy_page);
+            }
             // (kTailBatched: the k norm weight and every user's new rows once per layer)
             const bool per_user = !kTailBatched || ka == 0;
             if (per_user) {
@@ -344,7 +371,9 @@ void kernel_main() {
                 }
             }
             noc_async_read_barrier();
-            cb_push_back(cb_tail8, 2 * Dt);
+            if (mine) {
+                cb_push_back(cb_tail8, 2 * Dt);
+            }
             if (per_user) {
                 cb_push_back(cb_kw, Dt);
             }

@@ -123,9 +123,10 @@ FORCE_INLINE void probs_and_partial(uint32_t v_cb, uint32_t v_base, uint32_t n_t
     cb_pop_front(cb_p, chunk_max);
 }
 
-// cb_osum = own partial (cb_o; the leader has none) + the first `children` partials of cb_parts
+// cb_osum = own partial (cb_o; the leader has none) + the first `children` partials of cb_parts, those with their bit
+// in `mask` (kSkipZeroParts: the children with KV tiles for the user)
 template <bool own>
-FORCE_INLINE void sum_partials(uint32_t children) {
+FORCE_INLINE void sum_partials(uint32_t children, uint32_t mask = ~0u) {
     if constexpr (own) {
         cb_wait_front(cb_o, kPart);
     }
@@ -139,7 +140,9 @@ FORCE_INLINE void sum_partials(uint32_t children) {
         copy_tile(own ? cb_o : cb_parts, d, 0);
         add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_parts);
         for (uint32_t c = own ? 0 : 1; c < children; c++) {
-            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_parts, c * kPart + d, 0);
+            if ((mask >> c) & 1) {
+                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_parts, c * kPart + d, 0);
+            }
         }
         tile_regs_commit();
         tile_regs_wait();

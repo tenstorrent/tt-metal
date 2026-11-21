@@ -96,6 +96,10 @@ CHUNK_FP32_CBS = (5, 6, 11, 16, 25, 28)
 GDN_CHUNK = os.environ.get("RESIDENT_GDN_CHUNK", "1") == "1"
 # (attention of a verify of R > 2 rows in packed passes of several rows, attn_common.hpp; 0: a pass per row)
 ATTN_PACKED = os.environ.get("RESIDENT_ATTN_PACKED", "1") == "1"
+# (row groups: attention tail cores taking the active users alternately, attn_common.hpp kTails; 1 = one tail. Two
+# tails halve the tail's per-user work but take a chunk worker; while the per-user loop is bound by the M round trip
+# (not the tail) one tail is faster at long contexts: default 1)
+ATTN_TAILS = int(os.environ.get("RESIDENT_ATTN_TAILS", "1"))
 HUB_LINKS = int(os.environ.get("RESIDENT_HUB_LINKS", "2"))  # fabric links per neighbour the hubs' all-reduce uses
 # (debug, row groups: the attention leader's per-iteration timeline, attn_leader_writer.cpp mark_it)
 ATTN_TS = os.environ.get("RESIDENT_ATTN_TS", "0") == "1"
@@ -471,16 +475,17 @@ def worker_rect(mesh, used, count):
     raise RuntimeError(f"no free rectangle of {count} cores")
 
 
-def chunk_of(w, tp, banks):
-    """Mirror of attn_common.hpp chunk_of: (bank, j, J, rows) of chunk worker w (round robin: (None, w,
-    WORKERS - 1, tiles))."""
+def chunk_of(w, tp, banks, chunks=None):
+    """Mirror of attn_common.hpp chunk_of: (bank, j, J, rows) of chunk worker w of `chunks` (default WORKERS - 1;
+    round robin: (None, w, chunks, tiles))."""
+    W = chunks or WORKERS - 1
     if ATTN_RR:
-        return None, w, WORKERS - 1, (tp - w + WORKERS - 2) // (WORKERS - 1) if tp > w else 0
+        return None, w, W, (tp - w + W - 1) // W if tp > w else 0
     live = min(tp, banks)
     if live == 0:
         return 0, 0, 1, 0
     b, j = w % live, w // live
-    J = (WORKERS - 1 - b + live - 1) // live
+    J = (W - b + live - 1) // live
     rows = (tp - b + banks - 1) // banks
     return b, j, J, ((rows - j + J - 1) // J if rows > j else 0)
 
@@ -611,6 +616,9 @@ class ResidentModel:
         ):
             raise ValueError("row groups: rows mode with paged KV and the hub feed (embed), no fc / verify / taps")
         self.groups = groups
+        # (row groups: two attention tail cores, attn_common.hpp kTails; the chunk workers are the others)
+        self.attn_tails = ATTN_TAILS if rows and groups > 1 and not verify else 1
+        assert self.attn_tails in (1, 2)
         # with row groups the rows' positions live past the token state's x0 / rope (active_rows.hpp tok_pos_off);
         # one group keeps them in the head's words 1 .. batch
         self.tok_pos_off = 0
@@ -670,8 +678,10 @@ class ResidentModel:
         self.head_groups = G
         leader, heads = free[0], free[1 : 1 + d.nv * G]
         tail_core = workers[-1]
+        tail_cores = workers[len(workers) - self.attn_tails :]  # (kTails: the second tail is the worker before)
+        assert all((WORKERS - 1 - t) % FANIN for t in range(self.attn_tails)), "a tail core is a group head"
         C = lambda cs: ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cs])
-        hub_grid, lead_grid, tail_grid, head_grid = C([hub]), C([leader]), C([tail_core]), C(heads)
+        hub_grid, lead_grid, tail_grid, head_grid = C([hub]), C([leader]), C(tail_cores), C(heads)
         work_grid = ttnn.CoreRangeSet([ttnn.CoreRange(workers[0], workers[-1])])
         chunk_grid = work_grid.subtract(tail_grid)
         prep_grid = lead_grid.merge(tail_grid)
@@ -682,6 +692,7 @@ class ResidentModel:
         phys = lambda c: mesh.worker_core_from_logical_core(c)
         sphys = [phys(c) for c in cores]
         hub_p, lead_p, tail_p = phys(hub), phys(leader), phys(tail_core)
+        tail2_p = [phys(c) for c in tail_cores[:-1]]  # (kTails: the second tail core)
         head_p = [phys(c) for c in heads]
         wphys = [phys(c) for c in workers]
 
@@ -897,7 +908,8 @@ class ResidentModel:
             torch.zeros(1, WORKERS * slot_words), lead_grid, [1, WORKERS * slot_words], layout=ttnn.ROW_MAJOR_LAYOUT
         )
         one_t = l1(torch.ones(WORKERS * TILE, TILE), work_grid, [TILE, TILE], tile=full)
-        mean_t = l1(torch.full((2 * TILE, TILE), 1.0 / HD), prep_grid, [TILE, TILE], tile=full)
+        # (one tile per core of prep_grid: the leader and the tail core(s))
+        mean_t = l1(torch.full(((1 + self.attn_tails) * TILE, TILE), 1.0 / HD), prep_grid, [TILE, TILE], tile=full)
         rows32 = lambda v: v[None].expand(TILE, -1)
         qw = torch.cat([rows32(wa["wq"] / math.sqrt(HD)) for wa in w["attn"]] or [torch.zeros(TILE, HD)], dim=1)
         kw = torch.cat([rows32(wa["wk"]) for wa in w["attn"]] or [torch.zeros(TILE, HD)], dim=1)
@@ -941,10 +953,13 @@ class ResidentModel:
         else:
             self.K_t, self.V_t = settled(cache("K")), settled(cache("V"))
         # a chunk worker streams its KV tiles in blocks of kv_block (L1 independent of the context length)
-        kv_block = min(KV_BLOCK, max(chunk_of(wi, max_tp, banks)[3] for wi in range(WORKERS - 1)) or 1)
+        nck = WORKERS - self.attn_tails
+        kv_block = min(KV_BLOCK, max(chunk_of(wi, max_tp, banks, nck)[3] for wi in range(nck)) or 1)
         kv_block = max(kv_block, 2 if packed else 1)  # (the tail core scores up to two tail tiles at once)
         nodes = list(range(WORKERS))
-        groups_ = [nodes[i : i + FANIN] for i in range(0, WORKERS, FANIN)]
+        groups_ = [
+            nodes[i : i + FANIN] for i in range(0, WORKERS, FANIN)
+        ]  # (children: consecutive, attn_worker_reader)
         slots_per_node = max(FANIN - 1, len(groups_))
 
         # ---- token state: ring step, positions, x0, rope tables of the positions
@@ -1347,7 +1362,8 @@ class ResidentModel:
                 cb(7, work_grid, 1),
                 cb(8, work_grid, Dt + 1),
                 # (row groups: up to 32 users' words, the -inf rows at 256 and the positions at 512)
-                cb(10, work_grid, 1, ttnn.uint32, 1088 if packed or groups > 1 else 256),
+                # (rows mode: + the group heads' per-user child masks, attn_common.hpp kChildMaskOff)
+                cb(10, work_grid, 1, ttnn.uint32, 1088 if packed or groups > 1 else (640 if self.rows else 256)),
                 *(
                     [cb(23, attn_grid, slots_per_node * (Dt + 1))]
                     if groups == 1
@@ -1436,6 +1452,7 @@ class ResidentModel:
                 ("o_tiles", d.gv // TILE),  # the streamers' o_in tiles per row group (gdn_head_writer.cpp)
                 ("tok_pos_off", self.tok_pos_off),  # the rows' positions with row groups (active_rows.hpp)
                 ("sem_raddr", SEM_RADDR),
+                ("attn_tails", self.attn_tails),  # (attn_common.hpp kTails)
             ]
 
             def kernel(src, core_ranges, ct, rt, config, named=()):
@@ -1592,6 +1609,7 @@ class ResidentModel:
                         + [sub["hist"].buffer_address(), i * gdn_copies, gdn_copies, tok_addr]
                         + head_xy
                         + [lead_p.x, lead_p.y, tail_p.x, tail_p.y]
+                        + [v for p in tail2_p for v in (p.x, p.y)]
                         + peers
                         + [ts_addr]
                         + [(sub["argmax"].buffer_address() if groups == 1 else 1) if lm_head else 0]
@@ -1690,8 +1708,8 @@ class ResidentModel:
                 kids = {grp[0]: grp[1:] for grp in groups_}
                 ar, aw, ac = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
                 for w_i, c in enumerate(workers):
-                    is_tail = w_i == WORKERS - 1
-                    role = 2 if is_tail else 1
+                    is_tail = w_i >= WORKERS - self.attn_tails
+                    role = 2 + (WORKERS - 1 - w_i) if is_tail else 1  # (kTails: 2 the last worker, 3 the one before)
                     ch = kids.get(w_i, [])
                     pp, slot = parent[w_i]
                     ar[c.x][c.y] = (
@@ -1721,6 +1739,7 @@ class ResidentModel:
                     + [len(groups_)]
                     + [v for grp in groups_ for v in (wphys[grp[0]].x, wphys[grp[0]].y)]
                     + [self.attn_ts_t.buffer_address() if self.attn_ts_t is not None else 0, tok_addr]
+                    + [v for p in tail2_p for v in (p.x, p.y)]  # (kTails: the second tail core)
                 )
                 lc[leader.x][leader.y] = [len(groups_)]
 
@@ -2167,7 +2186,8 @@ class ResidentModel:
         # page list entries per user: a chunk's tiles grow with the position once every bank holds some
         max_tp = max_pos // TILE
         tps = list(range(min(max_tp, 2 * banks) + 1)) + [max_tp]
-        self.kv_max_n = max(1, max(chunk_of(w, tp, banks)[3] for w in range(WORKERS - 1) for tp in tps))
+        nck = WORKERS - self.attn_tails
+        self.kv_max_n = max(1, max(chunk_of(w, tp, banks, nck)[3] for w in range(nck) for tp in tps))
         if tables is None:
             bpu = self.blocks_per_user
             assert blocks >= len(sts) * bpu, (blocks, len(sts), bpu)

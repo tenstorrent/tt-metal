@@ -79,7 +79,7 @@ void kernel_main() {
     uint32_t tail_bank[kRows], tail_row[kRows];
     uint64_t owner_sem = 0;  // verify: the tail-semaphore of the chunk worker reading row 0's tile for later rows
     uint32_t last = batch;   // verify: the last row on row 0's tile, if a later row starts the next one
-    if (role == 2) {
+    if (role >= 2) {
         const InterleavedAddrGen<true> tok{
             .bank_base_address = get_arg_val<uint32_t>(tail_args + 3), .page_size = 4 * (1 + batch)};
         // (row groups: the users' positions are the token state's positions region)
@@ -178,7 +178,11 @@ void kernel_main() {
             cb_pop_front(cb_flush, 2 * n_tail * Dt);
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_tail)) = l + 1;
         }
-        if (!packed && role == 2) {
+        if (!packed && role >= 2 && !has_chunk) {
+            // (kTails: the other tail's user, nothing to write back)
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_tail)) = i + 1;
+        }
+        if (!packed && role >= 2 && has_chunk) {
             const uint32_t copy_stride = get_arg_val<uint32_t>(tail_args + 2);
             const uint32_t copy_off = ((verify ? 0 : u) * copies + l % copies) * copy_stride + tail_row[u] * kKvRow;
             cb_wait_front(cb_flush, 2 * Dt);

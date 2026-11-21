@@ -159,6 +159,19 @@ constexpr uint32_t kRopePages = packed ? kRopeK + 3 : 3 * batch * groups;
 // placement matmul puts its row into the tail tile (cb_rowsel per user: P_u = 1 at (r_u, u), then keep = rows != r_u)
 constexpr bool kTailBatched = rows_mode && groups > 1 && !verify;
 static_assert(!kTailBatched || kUsers <= 32, "a user per tile row");
+// row groups: two tail cores take the active users alternately (named arg attn_tails): role 2 (the last worker) the
+// even active indices, role 3 (the worker before it) the odd ones; a tail core runs the other tail's users as a chunk
+// worker without a chunk. The chunk workers are the other workers - kTails.
+constexpr uint32_t kTails = get_named_compile_time_arg_val("attn_tails");
+static_assert(kTails == 1 || (kTails == 2 && kTailBatched), "two tails: the batched tail (row groups)");
+constexpr uint32_t kChunkWorkers = workers - kTails;
+// whether tail core `role` (2 / 3) takes the user at active index ka
+FORCE_INLINE bool tail_takes(uint32_t role, uint32_t ka) { return kTails == 1 || (ka & 1) == role - 2; }
+// rows mode: a group head adds only the children with KV tiles for the user (the others' partials are exact zeros; at
+// short contexts most chunk workers have none, and the head's sum gates its next row max). The reader leaves a mask per
+// user (bit c: child c has tiles) at byte kChildMaskOff of the cb_ntiles page.
+constexpr bool kSkipZeroParts = rows_mode && !verify && !packed;
+constexpr uint32_t kChildMaskOff = groups == 1 ? 64 + 512 : 640;  // (past the -inf rows / the reader's positions)
 constexpr uint32_t kRopeRows = 3 * batch * groups;
 constexpr uint32_t kRopeTail = kRopePages + (kTailBatched ? 3 : 0);  // the tail core's cb_rope pages
 // row groups (rows mode): the leader normalizes and ropes q for a pass of kQPerPass active users at once (user j of
@@ -208,7 +221,7 @@ struct Chunk {
 };
 FORCE_INLINE Chunk chunk_of(uint32_t w, uint32_t tp) {
     if constexpr (round_robin) {
-        constexpr uint32_t W = workers - 1;
+        constexpr uint32_t W = kChunkWorkers;
         return {w, W, tp > w ? (tp - w + W - 1) / W : 0};
     }
     const uint32_t live = tp < banks ? tp : banks;
@@ -217,7 +230,7 @@ FORCE_INLINE Chunk chunk_of(uint32_t w, uint32_t tp) {
     }
     const uint32_t b = w % live;
     const uint32_t j = w / live;
-    const uint32_t J = (workers - 1 - b + live - 1) / live;
+    const uint32_t J = (kChunkWorkers - b + live - 1) / live;
     const uint32_t rows = (tp - b + banks - 1) / banks;  // tiles b, b + banks, ... below tp
     return {j * banks + b, J * banks, rows > j ? (rows - j + J - 1) / J : 0};
 }
@@ -230,11 +243,11 @@ FORCE_INLINE bool holds(const Chunk& ch, uint32_t t) {
 // the chunk worker whose chunk at tp complete tiles holds tile t < tp
 FORCE_INLINE uint32_t owner_of(uint32_t t, uint32_t tp) {
     if constexpr (round_robin) {
-        return t % (workers - 1);
+        return t % kChunkWorkers;
     }
     const uint32_t live = tp < banks ? tp : banks;
     const uint32_t b = t % banks;
-    const uint32_t J = (workers - 1 - b + live - 1) / live;
+    const uint32_t J = (kChunkWorkers - b + live - 1) / live;
     return b + live * ((t / banks) % J);
 }
 

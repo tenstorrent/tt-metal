@@ -64,6 +64,13 @@ void kernel_main() {
         // and to the tail core, which reads its k / v rows from here (args 6, 7: its coordinates)
         noc_inline_dw_write(
             get_noc_addr(get_arg_val<uint32_t>(6), get_arg_val<uint32_t>(7), get_semaphore(sem_raddr)), rows);
+        if constexpr (kTails > 1) {
+            // (the second tail core: the last two args)
+            const uint32_t tb =
+                peers_base + 2 * num_streamers + 1 + 2 * get_arg_val<uint32_t>(peers_base + 2 * num_streamers) + 2;
+            noc_inline_dw_write(
+                get_noc_addr(get_arg_val<uint32_t>(tb), get_arg_val<uint32_t>(tb + 1), get_semaphore(sem_raddr)), rows);
+        }
         noc_async_write_barrier();
         // the streamers' o memory (their activation CB), from streamer 0 (which publishes before it waits for ours)
         volatile tt_l1_ptr uint32_t* oaddr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_raddr));
