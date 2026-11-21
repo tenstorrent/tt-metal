@@ -9,7 +9,7 @@ import ttnn
 import pytest
 from loguru import logger
 
-from tt_py_test_utils_common.utility_functions import tt2torch_tensor, comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc
 
 
 def run_ssm_eltwise_mul_test(batch_size, in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device):
@@ -31,9 +31,9 @@ def run_ssm_eltwise_mul_test(batch_size, in0_W, in1_W, dtype, in0_mem_config, in
         tt_input_tensor_B, tt_input_tensor_X, memory_config=out_mem_config, dtype=dtype
     )
 
-    assert list(tt_out.padded_shape) == [1, 1, batch_size, latent_size * hidden_size]
+    assert list(tt_out.shape) == [1, 1, batch_size, latent_size * hidden_size]
 
-    out = tt2torch_tensor(tt_out)
+    out = ttnn.to_torch(tt_out)
 
     # Compute reference on pytorch
     if in0_W == latent_size and in1_W == hidden_size:
@@ -87,7 +87,7 @@ def run_ssm_eltwise_mul_test(batch_size, in0_W, in1_W, dtype, in0_mem_config, in
 )
 @pytest.mark.parametrize(
     "batch",
-    (32, 64),
+    (32, 64, 40, 1, 33),
 )
 def test_ssm_eltwise_mul(batch, in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device):
     run_ssm_eltwise_mul_test(batch, in0_W, in1_W, dtype, in0_mem_config, in1_mem_config, out_mem_config, device)
