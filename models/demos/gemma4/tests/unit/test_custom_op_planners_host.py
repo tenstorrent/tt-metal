@@ -465,3 +465,20 @@ def test_splitfree_golden_gathers_through_the_page_table():
                 vv = torch.stack([v[blk, g, off] for blk, off in rows])
                 want = torch.softmax(q[0, b, h] @ kk.T * 0.5, dim=-1) @ vv
                 assert torch.allclose(got[0, b, h], want, atol=1e-5), (window, ring, b, h)
+
+
+@pytest.mark.parametrize("window", [512, 1000], ids=["w_multiple_of_unit", "w_not_multiple_of_unit"])
+def test_splitfree_sliding_layer_with_ring_wide_page_table_keeps_live_units_in_distinct_slots(window):
+    """A bounded sliding ring hands the layer a page table exactly one window wide while positions keep growing:
+    the window has up to ceil((W - 1) / unit) + 1 live units, so the slot count must not be clamped to the
+    table's reach (W = 512 on 256-token chunks: 3 live units at p = 700 against a 2-unit table)."""
+    plan = _plan((8, 8), 4, groups=1, hpg=2, head_dim=256, ctx=window, window=window)
+    want = -(-(window - 1) // plan.unit) + 1
+    assert plan.max_units < want and plan.n_slots == want
+    most = 0
+    for pos in (window - 1, window, window + 188, 1535, 4095, 100000):
+        live = plan.live_units(pos)
+        slots = [plan.slot(1, 0, u) for u in live]
+        assert len(set(slots)) == len(slots), (pos, slots)
+        most = max(most, len(live))
+    assert most == plan.n_slots

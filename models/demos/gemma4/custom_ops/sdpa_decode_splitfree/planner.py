@@ -343,7 +343,10 @@ def plan_splitfree(
     else:
         unit = max(chunk, (unit_cfg // chunk) * chunk)  # the default 4096, or the env's pin
     max_units = ceil_div(max_context, unit)
-    n_slots = max_units if not window else min(max_units, ceil_div(window - 1, unit) + 1)
+    # A windowed row has up to ceil((window - 1) / unit) + 1 live units. The page table's reach (max_units) does
+    # not bound that: a bounded sliding ring keeps a ring-wide table while positions grow, so clamping to it
+    # makes two live units share a slot.
+    n_slots = max_units if not window else ceil_div(window - 1, unit) + 1
     modulus = min(n_cores, max_units)
     stride, stride_inv = unit_stride(batch * groups, n_cores)
     return SplitfreePlan(
