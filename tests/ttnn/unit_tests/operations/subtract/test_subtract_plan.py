@@ -14,7 +14,7 @@ import torch
 
 import ttnn
 from ttnn.operations.subtract import default_compute_kernel_config, subtract
-from ttnn.operations.subtract.subtract_program_artifacts import THREAD_PLAN, create_program_artifacts
+from ttnn.operations.subtract.subtract_program_artifacts import THREAD_PLAN, create_program_artifacts, split_tiles
 
 
 def _inputs(device, shape, seed=0, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -68,6 +68,24 @@ def test_thread_plans_and_quanta(device, threads, sync_tiles):
 
 def test_default_plan_constant():
     assert THREAD_PLAN == (1, 1, 1)
+
+
+@pytest.mark.parametrize("num_tiles", [1, 2, 13, 31, 32, 33, 263, 1050])
+@pytest.mark.parametrize("min_tiles_per_core", [1, 4, 8])
+def test_split_tiles_partitions_range(device, num_tiles, min_tiles_per_core):
+    """The host split covers [0, num_tiles) exactly once in contiguous row-major ranges, engages
+    min(grid, ceil(num_tiles / min_tiles_per_core)) clusters and is balanced to within one tile."""
+    grid = device.compute_with_storage_grid_size()
+    core_set, counts, starts = split_tiles(num_tiles, grid, min_tiles_per_core)
+    engaged = min(grid.x * grid.y, -(-num_tiles // min_tiles_per_core))
+    assert len(counts) == engaged == core_set.num_cores()
+    order = sorted(counts, key=lambda c: starts[c])
+    pos = 0
+    for core in order:
+        assert starts[core] == pos
+        pos += counts[core]
+    assert pos == num_tiles
+    assert max(counts.values()) - min(counts.values()) <= 1
 
 
 def test_after_another_program_and_before_tt_metal(device):

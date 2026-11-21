@@ -90,30 +90,18 @@ def split_tiles(num_tiles, grid_size, min_tiles_per_core=MIN_TILES_PER_CORE):
     """(core set, {core: tiles}, {core: first tile}) over the clusters that get work, row-major."""
     num_cores = grid_size.x * grid_size.y
     engaged = max(1, min(num_cores, -(-num_tiles // max(1, min_tiles_per_core))))
-    if engaged < num_cores:
-        # Restrict the grid row-wise to `engaged` clusters' worth of work units.
-        _, all_cores, group_1, group_2, per_core_1, per_core_2 = ttnn.split_work_to_cores(
-            grid_size, engaged, row_wise=True
-        )
-        cores = [c for g in (group_1, group_2) for c in ttnn.corerange_to_cores(g, None, True)]
-        base, extra = divmod(num_tiles, engaged)
-        counts, starts, start = {}, {}, 0
-        for i, core in enumerate(cores):
-            counts[core] = base + (1 if i < extra else 0)
-            starts[core] = start
-            start += counts[core]
-        return all_cores, counts, starts
-    _, all_cores, group_1, group_2, per_core_1, per_core_2 = ttnn.split_work_to_cores(
-        grid_size, num_tiles, row_wise=True
-    )
+    # One path for every case: pick the `engaged` clusters row-wise (one placeholder unit each), then deal
+    # the tiles over them in contiguous ranges, the first `extra` clusters taking one more (the same
+    # assignment split_work_to_cores(grid, num_tiles) gives when every cluster is engaged).
+    _, core_set, group_1, group_2, _, _ = ttnn.split_work_to_cores(grid_size, engaged, row_wise=True)
+    cores = [c for g in (group_1, group_2) for c in ttnn.corerange_to_cores(g, None, True)]
+    base, extra = divmod(num_tiles, engaged)
     counts, starts, start = {}, {}, 0
-    for group, per_core in ((group_1, per_core_1), (group_2, per_core_2)):
-        if per_core == 0:
-            continue
-        for core in ttnn.corerange_to_cores(group, None, True):
-            counts[core], starts[core] = per_core, start
-            start += per_core
-    return all_cores, counts, starts
+    for i, core in enumerate(cores):
+        counts[core] = base + (1 if i < extra else 0)
+        starts[core] = start
+        start += counts[core]
+    return core_set, counts, starts
 
 
 def create_program_artifacts(a, b, out, config, *, threads=None, sync_tiles=None):

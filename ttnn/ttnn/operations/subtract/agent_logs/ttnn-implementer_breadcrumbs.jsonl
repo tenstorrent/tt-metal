@@ -1,3 +1,4 @@
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/subtract/test_subtract.py","detail":"acceptance 13/13 first run","ts":"2026-11-21T06:58:04+00:00"}
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/subtract/test_subtract_plan.py","detail":"23/23: plans (1,1,1),(2,2,2),(1,4,1),(4,4,2),(2,4,2) x sync_tiles 1,3,4 on 263 tiles; multi-cluster YOLO shapes; session tilize->subtract->untilize; L1 placement; refusals","ts":"2026-11-21T06:58:05+00:00"}
 {"event":"test_run","status":"pass","test":"eval/golden_tests/subtract","detail":"79 passed, 1512 xfailed, 1 skipped, 0 failed, 0 xpass","ts":"2026-11-21T06:58:05+00:00"}
+{"event":"friction","what":"none","ts":"2026-11-21T06:58:23+00:00"}
