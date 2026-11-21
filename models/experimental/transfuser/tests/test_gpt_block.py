@@ -16,7 +16,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_lin
 from models.common.utility_functions import (
     tt2torch_tensor,
 )
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 
 
 def create_gpt_block_preprocessor(device, weight_dtype=ttnn.bfloat16, use_optimized_self_attn=False):

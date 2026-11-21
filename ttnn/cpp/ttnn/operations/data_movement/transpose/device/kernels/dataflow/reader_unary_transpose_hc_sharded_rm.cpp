@@ -95,9 +95,7 @@ void kernel_main() {
     constexpr uint32_t H = get_arg(args::H);
     constexpr uint32_t C = get_arg(args::C);
     constexpr uint32_t W_size_bytes = get_arg(args::W_size_bytes);
-    constexpr bool row_major = get_arg(args::row_major) == 1;
-    constexpr uint32_t num_cores_x = get_arg(args::num_cores_x);
-    constexpr uint32_t num_cores_y = get_arg(args::num_cores_y);
+    constexpr uint32_t num_cores = get_arg(args::num_cores);
 
     uint32_t num_sticks_per_core = get_arg(args::num_sticks_per_core);
     uint32_t start_id = get_arg(args::start_id);
@@ -105,10 +103,10 @@ void kernel_main() {
     uint32_t curr_h = get_arg(args::curr_h);
     uint32_t curr_n = get_arg(args::curr_n);
 
-    // The shard grid's physical x coordinates (num_cores_x entries) and y coordinates (num_cores_y
-    // entries) ride as runtime varargs, laid out back to back.
-    auto shard_grid_x_map = [&](uint32_t i) { return get_vararg(i); };
-    auto shard_grid_y_map = [&](uint32_t i) { return get_vararg(num_cores_x + i); };
+    // The NoC x (num_cores entries) and y (num_cores entries) of the core holding each input shard,
+    // indexed by shard id, ride as common runtime varargs, laid out back to back.
+    auto shard_noc_x = [&](uint32_t shard_id) { return get_common_vararg(shard_id); };
+    auto shard_noc_y = [&](uint32_t shard_id) { return get_common_vararg(num_cores + shard_id); };
 
     constexpr uint32_t CH = C * H;
 
@@ -126,23 +124,8 @@ void kernel_main() {
         uint32_t shard_id = i_stick / num_sticks_per_core;
         uint32_t stick_id_in_shard = i_stick - (shard_id * num_sticks_per_core);
 
-        uint32_t shard_grid_inner_dim;
-        if constexpr (row_major) {
-            shard_grid_inner_dim = num_cores_x;
-        } else {
-            shard_grid_inner_dim = num_cores_y;
-        }
-        uint32_t shard_grid_outer_dim_id = shard_id / shard_grid_inner_dim;
-        uint32_t shard_grid_inner_dim_id = shard_id - (shard_grid_outer_dim_id * shard_grid_inner_dim);
-
-        uint32_t worker_x_physical, worker_y_physical;
-        if constexpr (row_major) {
-            worker_x_physical = shard_grid_x_map(shard_grid_inner_dim_id);
-            worker_y_physical = shard_grid_y_map(shard_grid_outer_dim_id);
-        } else {
-            worker_x_physical = shard_grid_x_map(shard_grid_outer_dim_id);
-            worker_y_physical = shard_grid_y_map(shard_grid_inner_dim_id);
-        }
+        uint32_t worker_x_physical = shard_noc_x(shard_id);
+        uint32_t worker_y_physical = shard_noc_y(shard_id);
 
         uint32_t l1_read_addr = dfb_in.get_read_ptr() + stick_id_in_shard * stick_size_bytes;
 

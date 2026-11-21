@@ -120,7 +120,7 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
         num_links,
         available_core_count);
 
-    const auto& page_size = input_tensor.buffer()->page_size();
+    const auto& page_size = input_tensor.mesh_buffer().page_size();
     const auto& input_shape = input_tensor.logical_shape();
     auto rank = input_shape.rank();
     const auto max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
@@ -128,7 +128,7 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(operation_attributes.in_dim >= 0 && operation_attributes.in_dim < rank, "in_dim out of range");
     TT_FATAL(operation_attributes.out_dim >= 0 && operation_attributes.out_dim < rank, "out_dim out of range");
 
-    TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllToAllAsync currently requires aligned pages");
+    TT_FATAL(page_size % input_tensor.mesh_buffer().alignment() == 0, "AllToAllAsync currently requires aligned pages");
 
     // A row-major input is tilized on the way (concatenating along the rows dim, splitting an outer dim) and the
     // output is tiled, so its packets carry output tiles rather than input rows.
@@ -156,7 +156,7 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
             (tilize_input && operation_attributes.in_dim == rank - 2 && operation_attributes.out_dim < rank - 2 &&
              input_shape[rank - 1] % tt::constants::TILE_WIDTH == 0 &&
              input_shape[rank - 2] % tt::constants::TILE_HEIGHT == 0 &&
-             input_tensor.buffer()->buffer_type() == BufferType::DRAM),
+             input_tensor.memory_config().buffer_type() == BufferType::DRAM),
         "Unsupported input layout {} (a row-major input must concatenate along dim {} with whole tiles, in DRAM).",
         input_tensor.layout(),
         rank - 2);
@@ -199,7 +199,7 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
 
 void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*tensor_args.input_tensor.device()))) {
         TT_FATAL(
             operation_attributes.cluster_axis.has_value(),
             "all_to_all_async_generic on FABRIC_2D requires a cluster_axis");
@@ -215,9 +215,9 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_hit(
             output_tensor.storage_type() == StorageType::DEVICE,
             "Output tensor for all_to_all_async must be on device");
         TT_FATAL(
-            output_tensor.buffer()->buffer_type() == BufferType::DRAM,
+            output_tensor.memory_config().buffer_type() == BufferType::DRAM,
             "Output tensor for all_to_all_async must be in DRAM, but is in {}",
-            output_tensor.buffer()->buffer_type());
+            output_tensor.memory_config().buffer_type());
         TT_FATAL(output_tensor.layout() == Layout::TILE, "Unsupported output layout {}.", output_tensor.layout());
 
         TT_FATAL(output_tensor.dtype() == input_tensor.dtype(), "Output tensor dtype must match input tensor dtype");
@@ -305,7 +305,7 @@ ttsl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     const auto max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     // The cached program contains the fabric mux kernel and client ABI. Bump this whenever either changes.
     constexpr uint32_t fabric_mux_implementation_version = 2;
@@ -347,7 +347,7 @@ Tensor all_to_all_async_generic(
         num_devices);
 
     DrainCoreMapping drain_core_mapping;
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*input_tensor.device());
     const bool is_fabric_2d = tt::tt_fabric::is_2d_fabric_config(fabric_config);
     // Only a single-process world may defer mapping to the program-cache miss. Multi-host
     // ranks must all enter the exchange even when their local cache states differ.
