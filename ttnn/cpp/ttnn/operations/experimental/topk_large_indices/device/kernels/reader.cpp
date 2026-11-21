@@ -287,6 +287,12 @@ __attribute__((noinline)) void two_level_gather(
 // repair that comes too early only does a unit twice.
 constexpr uint32_t repair_after = 200000;
 
+// From this search length a row of the last phase-1 wave can stream its stage 2 while units are still unclaimed (see
+// two_level_run). Below it the other cores may all be sorting rows meanwhile, and a unit nobody claims would leave the
+// streaming row waiting for its repair. (Measured on 108 and 99 cores, 160 rows: gains from 512K; at 131K-262K on 99
+// cores the repairs double the op.)
+constexpr uint32_t stream_early_from = 393216;
+
 // The block maxima of phase-1 unit `part` of `row`, computed here instead of by the compute, into `dst` (slot b for
 // the unit's block b): its keys through the stage-1 CB, idle meanwhile (as for the gather), each block's largest live
 // key, with -0 and subnormals read as +0 as the compute's unpack does.
@@ -604,15 +610,25 @@ FORCE_INLINE void two_level_run(
                 }
             }
         }
-        // Every unit is claimed and no row is ready: the stage 2 of the row with the most units done from its first
-        // (complete_parts) starts now, each chunk as soon as its units are done.
+        // No row is ready: the stage 2 of the row with the most units done from its first (complete_parts) starts
+        // now, each chunk as soon as its units are done, once every unit is claimed or, from stream_early_from and for
+        // a row of the last wave, once its first chunk's units are done. The last wave's owners then leave phase 1
+        // early, whose end is paced by the DRAM, not by the cores.
         bool streaming = false;
         if constexpr (!has_block_max) {
-            if (local_row == local_rows && !units_left && rows_done < local_rows) {
+            if (local_row == local_rows && rows_done < local_rows) {
+                constexpr uint32_t chunk_units =
+                    chunk_bytes / sizeof(uint16_t) /
+                    (get_named_compile_time_arg_val("tl_stage1_batch") * (tile_keys / block_keys));
                 uint32_t best_parts = 0;
                 for (uint32_t candidate = 0; candidate < local_rows; ++candidate) {
                     const bool split = split_owner && candidate == local_whole_rows;
                     if ((done_rows >> candidate & 1) || (split && !early_halves)) {
+                        continue;
+                    }
+                    if (units_left &&
+                        (search_len < stream_early_from || complete_parts[candidate] < chunk_units ||
+                         units.unit_of(local_row_index(candidate), 0) + wave_rows * units.per_row < units.total)) {
                         continue;
                     }
                     if (local_row == local_rows || complete_parts[candidate] > best_parts) {
