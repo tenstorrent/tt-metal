@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import socket
 import sys
 import time
@@ -40,6 +41,7 @@ from diag.common import default_tt_metal_path, log, print_phase_line, print_phas
 from diag.device_tests import run_tests  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
+from diag.hsc import judge_hsc, read_hsc_status  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.qsfp import QSFP_TOOL_BIN, run_qsfp_tests  # noqa: E402
 from diag.resets import fold_post_reset_snapshots, reset_loop, run_post_test_reset  # noqa: E402
@@ -50,7 +52,7 @@ from diag.snapshot import (  # noqa: E402
     resolve_tt_smi,
     take_snapshot,
 )
-from diag.snapshot_checks import validate_snapshot  # noqa: E402
+from diag.snapshot_checks import pcie_enum_check, validate_snapshot  # noqa: E402
 from diag.sys_triage import SYS_TRIAGE_BIN, run_sys_triage  # noqa: E402
 from diag.triage import TRIAGE_DIR_ENV, TRIAGE_SUBDIR, default_triage_dir, run_triage  # noqa: E402
 from tiers import DEPRECATED_TIER_ALIASES, TIERS  # noqa: E402
@@ -166,6 +168,27 @@ def _guarded(phase: Phase, error_check: str, error_status: str, body: Callable[[
     except Exception as e:
         phase.error = repr(e)
         phase.add(Check(name=error_check, status=error_status, details=repr(e), ip="other"))
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_TRACE_LINE_RE = re.compile(r"^(\d+\.\s|Location:)")
+
+
+def _short_error(e: Exception, lines: int = 2) -> str:
+    """An error's first message lines on one line, without colour codes or the stack trace under them."""
+    text = [" ".join(ln.split()) for ln in _ANSI_RE.sub("", str(e)).splitlines()]
+    return "; ".join([ln for ln in text if ln and not _TRACE_LINE_RE.match(ln)][:lines])
+
+
+def recount_after_tests(snapshot: Callable[[], dict]) -> Check:
+    """The chip count from a fresh snapshot after the tests. A snapshot that
+    cannot be taken (tt-smi cannot read a chip, or is gone) is a FAIL with its reason."""
+    name = "pcie_enum_count_after_tests"
+    try:
+        snap = snapshot()
+    except Exception as e:
+        return Check(name=name, status=FAIL, details=f"no snapshot after the tests: {_short_error(e)}", ip="other")
+    return pcie_enum_check(snap.get("device_info") or [], name)
 
 
 def _finish(report: dict, phase: Phase, t0: float, *, summary: bool, all_skip_stays_skip: bool = False) -> None:
@@ -354,7 +377,19 @@ def run_diag(
     elif not plan.tests:
         test_phase.add(Check(name="tests", status=SKIP, details=f"no tests for tier '{tier}'", ip="other"))
     else:
+        # Around the load: the tray HSCs' input-voltage flags are read before and
+        # after, and the chips are recounted after, with a fresh snapshot that
+        # runs even under --skip-reset (a weak bus bar often drops a chip or
+        # latches a flag without failing the test that sagged it). Not on an
+        # input snapshot or a dry run: no live hardware to read.
+        live = not (input_snapshot or dry_run)
+        hsc_before = read_hsc_status() if live else None
         _guarded(test_phase, "tests", FAIL, lambda: run_tests(tt_metal_path, plan.tests, test_phase, dry_run, logs_dir))
+        if live:
+            _guarded(test_phase, "hsc_input_status", WARN, lambda: judge_hsc(hsc_before, read_hsc_status(), test_phase))
+
+            after_out = snapshot_out.with_name(f"{snapshot_out.stem}_after_tests.json")
+            test_phase.add(recount_after_tests(lambda: take_snapshot(resolve_tt_smi(tt_smi_path), after_out)))
     # tests phase prints its own per-test lines as they run — no inline summary.
     _finish(report, test_phase, t0, summary=False)
 

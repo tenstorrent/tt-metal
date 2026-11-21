@@ -86,7 +86,13 @@ class Tier:
 
 _WEEKLY = Tier(
     resets=("-r", "-glx_reset", "-glx_reset"),
-    tests=("gddr_full", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"),
+    tests=(
+        "gddr_full",
+        "eth_link_up",
+        "eth_bandwidth",
+        "didt_matmul_galaxy",
+        "fabric_all_gather_matmul_galaxy",
+    ),
     post_test_resets=("-glx_reset",),
     triage=("host_side", "device_side"),
     qsfp_tests=True,

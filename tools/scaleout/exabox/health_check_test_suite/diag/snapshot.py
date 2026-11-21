@@ -59,12 +59,19 @@ def detect_tt_smi_version(tt_smi: str) -> tuple[int, ...] | None:
     return tuple(int(x) for x in m.groups())
 
 
-def take_snapshot(tt_smi: str, out_path: Path) -> dict:
+SNAPSHOT_TIMEOUT_S = 120
+
+
+def take_snapshot(tt_smi: str, out_path: Path, timeout: float = SNAPSHOT_TIMEOUT_S) -> dict:
     """tt-smi -f <out_path>. Always executes — read-only operation.
 
-    Use --input-snapshot for fully-offline runs."""
+    A hung chip can stall tt-smi; past ``timeout`` it is a RuntimeError like any
+    other failed snapshot. Use --input-snapshot for fully-offline runs."""
     log(f"$ {tt_smi} -f {out_path}")
-    cp = subprocess.run([tt_smi, "-f", str(out_path)], capture_output=True, text=True)
+    try:
+        cp = subprocess.run([tt_smi, "-f", str(out_path)], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"tt-smi -f timed out after {timeout:g} s") from None
     if cp.returncode != 0:
         raise RuntimeError(f"tt-smi -f failed (rc={cp.returncode}): {cp.stderr or cp.stdout}")
     if not out_path.exists():

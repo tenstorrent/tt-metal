@@ -61,6 +61,30 @@ def detect_board_rev(devs: list[dict]) -> tuple[str | None, dict[str, list[str]]
     return None, dict(per_rev)
 
 
+def pcie_enum_check(devs: list[dict], name: str = "pcie_enum_count") -> Check:
+    """All 32 chips present in the snapshot's device list; on a short count, the
+    slots that did not show up (set diff against the full 32-BDF Galaxy 6U topology)."""
+    n = len(devs)
+    actual_bdfs = sorted((d.get("board_info") or {}).get("bus_id", "") for d in devs)
+    all_expected_bdfs = sorted(expected_bdf(t, a) for t in range(1, 5) for a in range(1, 9))
+    missing_bdfs_enum = sorted(set(all_expected_bdfs) - set(actual_bdfs))
+    enum_details = f"{n}/{EXPECTED_CHIP_COUNT} chips enumerated"
+    if missing_bdfs_enum:
+        enum_details += "; missing: " + ", ".join(format_bdf(b) for b in missing_bdfs_enum)
+    return Check(
+        name=name,
+        status=PASS if n == EXPECTED_CHIP_COUNT else FAIL,
+        details=enum_details,
+        data={
+            "actual": n,
+            "expected": EXPECTED_CHIP_COUNT,
+            "missing_bdfs": missing_bdfs_enum,
+            "actual_bdfs": actual_bdfs,
+        },
+        ip="pcie",
+    )
+
+
 def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     """Run all snapshot checks. Returns the detected board revision
     ('RevA/B', 'RevC') or None if indeterminate, so the caller can record it
@@ -71,27 +95,9 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     # 1. Enumeration count — on short count, identify which physical slots didn't
     # show up (set diff against the full 32-BDF Galaxy 6U topology). Helps ops
     # localise the missing chip(s) without manual cross-referencing.
+    enum = pcie_enum_check(devs)
+    phase.add(enum)
     n = len(devs)
-    actual_bdfs = sorted((d.get("board_info") or {}).get("bus_id", "") for d in devs)
-    all_expected_bdfs = sorted(expected_bdf(t, a) for t in range(1, 5) for a in range(1, 9))
-    missing_bdfs_enum = sorted(set(all_expected_bdfs) - set(actual_bdfs))
-    enum_details = f"{n}/{EXPECTED_CHIP_COUNT} chips enumerated"
-    if missing_bdfs_enum:
-        enum_details += "; missing: " + ", ".join(format_bdf(b) for b in missing_bdfs_enum)
-    phase.add(
-        Check(
-            name="pcie_enum_count",
-            status=PASS if n == EXPECTED_CHIP_COUNT else FAIL,
-            details=enum_details,
-            data={
-                "actual": n,
-                "expected": EXPECTED_CHIP_COUNT,
-                "missing_bdfs": missing_bdfs_enum,
-                "actual_bdfs": actual_bdfs,
-            },
-            ip="pcie",
-        )
-    )
     if n == 0:
         return None  # nothing else we can check
 
