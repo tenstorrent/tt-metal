@@ -11,6 +11,7 @@ import json
 import os
 import threading
 
+import pytest
 import ttnn
 from dcp_oracle import tp_split_of
 
@@ -28,7 +29,12 @@ from ttml.distributed_checkpointing._coordinator import (
     merge_plan_parts,
     merge_results,
 )
-from ttml.distributed_checkpointing._errors import CheckpointError, CheckpointFatalError, IncompleteCheckpointError
+from ttml.distributed_checkpointing._errors import (
+    CheckpointError,
+    CheckpointFatalError,
+    IncompleteCheckpointError,
+    MissingKeyError,
+)
 from ttml.distributed_checkpointing._index import ChunkRecord, Entry, FileRecord, data_file_name
 from ttml.distributed_checkpointing._layouts import Identity
 from ttml.distributed_checkpointing._planner import TensorInfo, create_save_plan
@@ -373,18 +379,37 @@ def test_phases_gather_and_broadcast_over_three_ranks():
     assert errors == {} and results == {0: [0, 1, 2], 1: [0, 1, 2], 2: [0, 1, 2]}
 
 
-def test_a_failing_rank_stops_every_rank_and_names_itself():
+@pytest.mark.parametrize(
+    "failures",
+    [
+        {0: ValueError("disk full")},
+        {1: ValueError("disk full")},
+        {2: ValueError("disk full")},
+        {0: MissingKeyError("no entry"), 2: IncompleteCheckpointError("no index")},
+        {1: IncompleteCheckpointError("no index"), 2: MissingKeyError("no entry")},
+    ],
+    ids=["rank_0", "rank_1", "rank_2", "two_classes_from_rank_0", "two_classes_from_rank_1"],
+)
+def test_a_failing_rank_stops_every_rank_and_names_itself(failures):
+    """Whichever ranks fail, the coordinator among them, every rank raises the class the first failing rank reported
+    (CheckpointError for an error from outside the package) and names every failing rank with its message."""
+
     def body(group, fake):
         def work():
-            if group.rank == 1:
-                raise ValueError("disk full")
+            if group.rank in failures:
+                raise failures[group.rank]
 
         group.phase("writing", work)
 
     results, errors = _run_ranks(3, body)
+    first = failures[min(failures)]
+    expected = type(first) if isinstance(first, CheckpointError) else CheckpointError
     assert set(errors) == {0, 1, 2}
-    assert all(isinstance(e, CheckpointError) and "rank(s) [1]" in str(e) for e in errors.values())
-    assert all("rank 1: ValueError: disk full" in str(e) for e in errors.values()), "every rank sees the cause"
+    for rank, err in errors.items():
+        assert type(err) is expected, (rank, repr(err))
+        assert f"writing failed on rank(s) {sorted(failures)} of 3" in str(err), (rank, str(err))
+        for failing, cause in failures.items():
+            assert f"rank {failing}: {type(cause).__name__}: {cause}" in str(err), "every rank sees every cause"
 
 
 def test_a_message_that_cannot_be_encoded_or_rendered_still_reaches_every_rank():
@@ -449,10 +474,18 @@ def test_a_failing_point_to_point_transfer_is_fatal_on_both_ends():
         group.broadcast(b"the election" if group.is_coordinator else None)
 
     for body in (gather_body, broadcast_body):
-        _, errors = _run_ranks(2, body)
+        transports = {}
+
+        def recording(group, fake, body=body):
+            transports[group.rank] = group.transport
+            body(group, fake)
+
+        _, errors = _run_ranks(2, recording)
         assert set(errors) == {0, 1}, body.__name__
         assert all(type(e) is CheckpointFatalError for e in errors.values()), (body.__name__, errors)
         assert all("point-to-point transfer failed" in str(e) for e in errors.values()), (body.__name__, errors)
+        # Both ends record the failure, so no later save or load in either process attempts an exchange.
+        assert all("point-to-point transfer failed" in (t.broken or "") for t in transports.values()), body.__name__
 
 
 def test_no_exchange_after_a_fatal_failure(expect_error):
