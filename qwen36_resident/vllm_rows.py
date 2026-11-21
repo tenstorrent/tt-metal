@@ -45,7 +45,20 @@ SCHED_TRACE = os.environ.get("RESIDENT_SCHED_TRACE")
 FIRST_TOKEN_BATCH = os.environ.get("RESIDENT_FIRST_TOKEN_BATCH", "1") == "1"
 # 0: one PP pass per whole prompt (A/B) even where the PP prefill streams several through one pass (run_batch)
 PP_BATCH = os.environ.get("RESIDENT_PP_BATCH", "1") == "1"
-BLOCK = 64  # KV block (positions) = vLLM block_size
+BLOCK = 64  # KV block (positions): the engine's page
+# (prefix caching, S1: vLLM's hybrid KV cache gives the attention group blocks of PAGES_PER_BLOCK engine pages — 13 for
+# Qwen3.8, 832 tokens; its block b is engine pages b * PAGES_PER_BLOCK .. + PAGES_PER_BLOCK - 1. 1 = vLLM's block is the
+# engine page)
+PAGES_PER_BLOCK = int(os.environ.get("RESIDENT_PAGES_PER_BLOCK", "1"))
+
+
+def expand_blocks(row, pages_per_block):
+    """a vLLM block-table row as engine pages: block b -> pages b * k .. b * k + k - 1 (k = pages_per_block)"""
+    if pages_per_block == 1:
+        return list(row)
+    return [int(b) * pages_per_block + j for b in row for j in range(pages_per_block)]
+
+
 CHUNK_UNIT = 1024  # the PP prefill's largest chunk: a split prompt resumes only at its multiples
 
 
@@ -164,6 +177,7 @@ class ResidentRowsAdapter:
         # the partial prefill the PP pipeline holds: (resident slot, tokens fed so far) or None
         self.pp_partial = None
         self.tables = [[] for _ in range(self.n_slots)]  # each resident slot's block table (last written)
+        self.pages_per_block = PAGES_PER_BLOCK  # (engine pages per vLLM block, see expand_blocks)
         self._expect_moves = None  # the moves note_state_slots_moved must report for the last applied remap
         self._sampling = None  # per resident slot (temperature, top_k, top_p, seed) of the device sampler
         self._fed_launches = None  # launches the last device-sampled step replayed (their token states are fed)
@@ -176,12 +190,14 @@ class ResidentRowsAdapter:
         self.engine.set_page_table(self.tables)
 
     def _blocks_for(self, page_table_row, n_pos):
-        """the first ceil(n_pos / BLOCK) physical blocks of a page-table row (the rest is padding)"""
+        """the first ceil(n_pos / BLOCK) engine pages of a page-table row (the rest is padding; vLLM blocks of
+        pages_per_block pages each)"""
+        k = self.pages_per_block
         need = math.ceil(n_pos / BLOCK)
-        row = [int(b) for b in page_table_row[:need]]
-        if len(row) < need:
+        row = [int(b) for b in page_table_row[: math.ceil(need / k)]]
+        if len(row) * k < need:
             raise RuntimeError(f"block table of {len(row)} blocks does not cover {n_pos} positions")
-        return row
+        return expand_blocks(row, k)[:need]
 
     # ------------------------------------------------------------------ prefill
     def prefill_forward(
@@ -413,7 +429,7 @@ class ResidentRowsAdapter:
             # element cost ~37 ms a step at 16 users x 4096 blocks) and rewrite the device tables only on a change
             changed = False
             for i, r in zip(rows, row_slot):
-                row = page_table[i].tolist()
+                row = expand_blocks(page_table[i].tolist(), self.pages_per_block)
                 if row != self.tables[r]:
                     self.tables[r] = row
                     changed = True

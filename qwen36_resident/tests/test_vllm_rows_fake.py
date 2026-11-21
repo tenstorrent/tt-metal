@@ -761,3 +761,18 @@ def test_sync_scheduling_processes_the_raw_handle(sample):
     assert not _is_host_decode_output(h), "the plugin must route the handle through process_decode_output_host"
     out = adapter.process_decode_output_host(h, is_tokens=sample)
     assert out.shape == ((4, 1) if sample else (4, 1, V))
+
+
+def test_vllm_blocks_expand_to_engine_pages():
+    """prefix caching (S1): with vLLM blocks of k engine pages, the adapter hands the engine block b as pages b k ..
+    b k + k - 1, in the decode tables and in the prefill's block list"""
+    from qwen36_resident.vllm_rows import expand_blocks
+
+    assert expand_blocks([5, 7], 1) == [5, 7]
+    assert expand_blocks([5, 7], 3) == [15, 16, 17, 21, 22, 23]
+    adapter, _ = make_adapter(8, 1024, False)
+    adapter.pages_per_block = 13
+    # 832 + 100 positions: two vLLM blocks, 15 engine pages
+    assert adapter._blocks_for([4, 9, 0, 0], 832 + 100) == list(range(52, 65)) + [117, 118]
+    with raises(RuntimeError, match="does not cover"):
+        adapter._blocks_for([4], 832 + 1)
