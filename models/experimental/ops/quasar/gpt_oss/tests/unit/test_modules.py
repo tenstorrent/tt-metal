@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -1071,6 +1073,7 @@ def run_model_forward_test(
     """
     from models.experimental.ops.quasar.gpt_oss.tt.ccl import CCLManager
     from models.experimental.ops.quasar.gpt_oss.tt.model import Model
+    from models.experimental.ops.quasar.gpt_oss.utils import pcc_log
     from models.experimental.ops.quasar.gpt_oss.utils.general_utils import get_default_num_links
 
     # Determine local batch size for row sharding
@@ -1109,7 +1112,11 @@ def run_model_forward_test(
     # Create position IDs
     position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
 
-    # Run reference forward pass
+    # Run reference forward pass. With GPT_OSS_PCC_LOG=1, record the reference output of each step, so the
+    # device run logs the PCC of each step against it ([GOLDENPCC] lines).
+    golden_handles = []
+    if pcc_log.is_enabled():
+        golden, golden_handles = pcc_log.capture_golden_intermediates(reference_model)
     with torch.no_grad():
         reference_output = reference_model(
             input_ids=input_ids,
@@ -1118,6 +1125,10 @@ def run_model_forward_test(
             use_cache=False,
         )
         reference_logits = reference_output.logits  # [batch_size, seq_len, vocab_size]
+    for handle in golden_handles:
+        handle.remove()
+    if golden_handles:
+        pcc_log.set_golden_intermediates(golden)
 
     # Prepare inputs for TT model
     if is_decode:
@@ -1201,10 +1212,11 @@ def run_model_forward_test(
 )
 @pytest.mark.parametrize(
     "num_layers",
-    [1],
-    ids=["1_layer"],
+    [1, 2],
+    ids=["1_layer", "2_layers"],
 )
-def test_model(mesh_device, device_params, batch_size, seq_len, mode, num_layers, reset_seeds):
+@pytest.mark.parametrize("weights", ["random", "trained"])
+def test_model(mesh_device, device_params, batch_size, seq_len, mode, num_layers, weights, reset_seeds):
     """
     Test full model forward pass comparing TT implementation to HuggingFace reference.
 
@@ -1221,6 +1233,8 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, num_layers
         seq_len: Sequence length for the test
         mode: "prefill" or "decode"
         num_layers: Number of layers to use (overrides config.num_hidden_layers)
+        weights: "random" for random-init weights, "trained" for the first num_layers layers of the
+            checkpoint in HF_MODEL
         reset_seeds: Fixture to reset random seeds
     """
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
@@ -1258,14 +1272,21 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, num_layers
     mesh_shape = tuple(mesh_device.shape)
     mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
 
-    # Build a small random-init reference. ``setup_test`` already pulled the
-    # HF config (a tiny JSON) so we have the correct architecture; we don't
-    # download or load any actual checkpoint. Accuracy testing against real
-    # weights lives in ``tests/accuracy/test_model.py`` — keep this unit test
-    # cheap so it can run anywhere the HF config resolves (offline or via
-    # cache).
+    # The "random" case builds a small random-init reference from the HF config that ``setup_test``
+    # already pulled (a tiny JSON), so it runs anywhere the HF config resolves (offline or via cache).
+    # The "trained" case loads the first num_layers layers of the checkpoint in HF_MODEL; the
+    # checkpoint's MXFP4 experts are dequantized on load. Token-level accuracy against the full
+    # trained model lives in ``tests/accuracy/test_model.py``.
     tensor_cache_path = None
-    reference_model_hf = GptOssForCausalLM(config)
+    if weights == "trained":
+        model_path = os.getenv("HF_MODEL")
+        if model_path is None:
+            pytest.skip("trained weights need HF_MODEL (a local gpt-oss checkpoint)")
+        reference_model_hf = GptOssForCausalLM.from_pretrained(
+            model_path, config=config, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True
+        ).float()
+    else:
+        reference_model_hf = GptOssForCausalLM(config)
     reference_model_hf.eval()
     state_dict_hf = reference_model_hf.state_dict()
     state_dict_meta = convert_hf_qkv_to_meta_format(state_dict_hf, config.head_dim)

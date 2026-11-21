@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.experimental.ops.quasar.gpt_oss.utils import pcc_log
 from models.experimental.ops.quasar.gpt_oss.utils.general_utils import get_cache_file_name
 from models.experimental.ops.quasar.gpt_oss.utils.substate import substate
 
@@ -57,6 +58,7 @@ class DecoderLayer:
             tokens_per_device=tokens_per_device,
         )
 
+        self.layer_idx = layer_idx
         self.attention_type = hf_config.layer_types[layer_idx]
 
         # Create attention configuration
@@ -109,6 +111,9 @@ class DecoderLayer:
         # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
         residual = hidden_states
         hidden_states_post_norm = self.input_layernorm(hidden_states)
+        # GPT_OSS_PCC_LOG=1 logs each step of the layer; the names match pcc_log.capture_golden_intermediates.
+        name = f"layer{self.layer_idx}"
+        pcc_log.log_op(f"{name}.input_layernorm", hidden_states_post_norm)
 
         # additional all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
         # hidden_states_post_norm: [1, 1, tokens/num_rows, hidden_size]
@@ -122,20 +127,25 @@ class DecoderLayer:
             user_id=user_id,
             batch_size=batch_size,
         )
+        pcc_log.log_op(f"{name}.self_attn", hidden_states)
         hidden_states_post_norm.deallocate(True)
 
         # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
+        pcc_log.log_op(f"{name}.attn_residual", hidden_states)
         residual = hidden_states
         hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
+        pcc_log.log_op(f"{name}.post_attention_layernorm", hidden_states_post_norm)
         # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
 
         hidden_states = self.mlp(hidden_states_post_norm, is_decode=is_decode)  # diff with llama: router scores
+        pcc_log.log_op(f"{name}.mlp", hidden_states)
         hidden_states_post_norm.deallocate(True)
 
         # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
+        pcc_log.log_op(f"{name}.output", hidden_states)
 
         return hidden_states
