@@ -105,6 +105,31 @@ def test_the_election_gives_every_box_one_owner_that_holds_it():
     assert Election.from_bytes(election.to_bytes()) == election
 
 
+def test_the_election_evens_out_the_bytes_each_rank_and_device_writes():
+    """A few large replicated keys decide where most bytes land. The boxes one holder has are charged first, then the
+    others, largest first, go to the least-loaded rank among their holders and its least-loaded device, so two ranks
+    end up writing equal shares and their devices similar ones."""
+    coords = {0: [(0, 0), (0, 1)], 1: [(0, 2), (0, 3)]}
+    sharded = _info("model/w", [R, S(3)], (1, 4), (1, 1, 32, 16))  # one box per device: forced
+    rows = [512, 384, 256, 256, 128, 128, 64, 64, 32, 32, 16, 16]  # replicated keys of very different sizes
+    replicated = [_info(f"model/r{i}", [R, R], (1, 4), (1, 1, n, 64)) for i, n in enumerate(rows)]
+    parts = [PlanPart(_record(r, coords[r]), [sharded, *replicated]) for r in (0, 1)]
+    election = merge_plan_parts(parts)
+    assert election == merge_plan_parts(list(reversed(parts))), "the same parts always elect the same owners"
+    rank_bytes, device_bytes = {0: 0, 1: 0}, {}
+    for info in [sharded, *replicated]:
+        for rank, coord in election.owners[info.key].values():
+            nbytes = 2 * info.local_shape[2] * info.local_shape[3]
+            rank_bytes[rank] += nbytes
+            device_bytes[coord] = device_bytes.get(coord, 0) + nbytes
+    assert rank_bytes[0] == rank_bytes[1], rank_bytes
+    assert len(device_bytes) == 4 and max(device_bytes.values()) <= 1.25 * min(device_bytes.values()), device_bytes
+    # A key one rank holds alone is that rank's, whatever it already writes.
+    alone = _info("model/alone", [R, R], (1, 4), (1, 1, 512, 64))
+    election = merge_plan_parts([PlanPart(_record(0, coords[0]), [alone]), PlanPart(_record(1, coords[1]), [])])
+    assert {r for r, _ in election.owners["model/alone"].values()} == {0}
+
+
 def test_each_rank_plans_only_its_owned_chunks_and_files():
     parts = _big_mesh_parts()
     election = merge_plan_parts(parts)

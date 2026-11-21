@@ -30,7 +30,7 @@ rank. Data files go through the shared filesystem and are only ever opened by ex
 Save. Every rank describes its tensors and the mesh coordinates it holds (its plan part); rank 0 merges the parts,
 checking that the ranks describe every key they share alike and together hold every box, and elects one owner per box,
 so a box held by several ranks (a replica across hosts, or the same key on several meshes) is written by exactly one of
-them, the hash of the key choosing among them in rank order; rank 0 broadcasts the election; every rank writes the boxes
+them, chosen to even out the bytes each rank and device writes; rank 0 broadcasts the election; every rank writes the boxes
 it owns into its own files; the result parts (files, chunk records, checksums, this rank's generators) are gathered;
 rank 0 merges them into ``index.json`` and ``header.json``, checking that the ranks report one chunk per elected box,
 checks every data file's size through the shared filesystem, and finalizes the directory. Its phases: collecting the
@@ -47,7 +47,9 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from collections import defaultdict
 from dataclasses import dataclass, field
+from math import prod
 from typing import Any, Callable, Protocol
 
 import ttnn
@@ -58,7 +60,7 @@ from ._index import FORMAT, VERSION, Entry, FileRecord, Index, _entry_from_json,
 from ._layouts import transform_from_json
 from ._planner import TensorInfo, _checked_groups
 from ._state_dict import is_structural_scalar
-from ._topology import Chunk, Label, crc31, owner
+from ._topology import Chunk, Label, crc31
 from ._train_state import RNG_FORMAT, this_world_rank
 
 # The MPI tag of every coordinator transfer. It is reserved: the coordinator shares the world communicator with every
@@ -503,9 +505,12 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
     A key held by several ranks must be described identically by all of them (label, per-device shape, dtype,
     transform), and the ranks' scheduler and dataloader states must agree, since the checkpoint stores one copy that
     every rank restores. A key's label splits it into boxes (its replica groups); each box is held by one or more
-    (rank, mesh coordinate) pairs, at least one of which must exist. The box's owner, the one pair that writes it, is
-    picked by ``_topology.owner``, a hash of the key over the pairs in order, so different keys pick different pairs
-    and the writes of replicated tensors spread over the ranks and devices.
+    (rank, mesh coordinate) pairs, at least one of which must exist. The box's owner is the one pair that writes it.
+
+    The owners even out the bytes written, since the slowest rank ends the write: a box with one holder is that
+    holder's, and the others, largest first, go to the rank among their holders with the fewest bytes so far and to
+    that rank's device with the fewest. A few large keys (a vocab matrix and its moments) would otherwise decide where
+    most of the bytes land. Ties go to the lower rank and coordinate, so the same parts always elect the same owners.
     """
     parts = sorted(parts, key=lambda p: p.record.rank)
     differing = [p.record.rank for p in parts if p.train_state_hash != parts[0].train_state_hash]
@@ -548,10 +553,11 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
                 group_key = by_coord.get(tuple(coord))
                 if group_key is not None:
                     members[info.key].setdefault(group_key, []).append((part.record.rank, tuple(coord)))
-    owners: dict[str, dict[tuple[int, ...], Owner]] = {}
+    owners: dict[str, dict[tuple[int, ...], Owner]] = {key: {} for key in infos}
+    boxes: list[tuple[int, str, tuple[int, ...], list[Owner]]] = []  # (bytes, key, group, holders)
     for key, info in infos.items():
         groups, _ = _groups_of(info)
-        chosen: dict[tuple[int, ...], Owner] = {}
+        nbytes = prod(info.local_shape) * info.itemsize
         for group_key in groups:
             holders = sorted(members[key].get(group_key, []))
             if not holders:
@@ -559,8 +565,17 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
                     f"{key}: no rank holds the box of replica group {group_key}; the ranks' local coordinates do not "
                     f"cover the label's mesh coordinates"
                 )
-            chosen[group_key] = owner(key, holders)
-        owners[key] = chosen
+            boxes.append((nbytes, key, group_key, holders))
+    rank_bytes: dict[int, int] = defaultdict(int)
+    device_bytes: dict[Owner, int] = defaultdict(int)
+    forced = [box for box in boxes if len(box[3]) == 1]
+    free = sorted((box for box in boxes if len(box[3]) > 1), key=lambda box: (-box[0], box[1], box[2]))
+    for nbytes, key, group_key, holders in forced + free:
+        rank = min({r for r, _ in holders}, key=lambda r: (rank_bytes[r], r))
+        chosen = min((h for h in holders if h[0] == rank), key=lambda h: (device_bytes[h], h))
+        owners[key][group_key] = chosen
+        rank_bytes[chosen[0]] += nbytes
+        device_bytes[chosen] += nbytes
     return Election(owners, len(infos), {key: tuple(sorted(names)) for key, names in aliases.items()})
 
 

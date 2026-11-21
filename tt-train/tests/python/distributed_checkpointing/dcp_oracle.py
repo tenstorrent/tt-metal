@@ -29,16 +29,17 @@ from ttml.distributed_checkpointing._boxes import Box
 from ttml.distributed_checkpointing._errors import TopologyError
 from ttml.distributed_checkpointing._index import HEADER_NAME, FileRecord, Index, data_file_name
 from ttml.distributed_checkpointing._planner import TensorInfo, create_load_plan, create_save_plan
-from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords, owner
+from ttml.distributed_checkpointing._topology import Label, Placement, crc31, dist_coords
 
 R = Placement.replicate
 S = Placement.shard
 
 
 def one_process_owner(key: str, group) -> object:
-    """The election of a single-process save: the chunk of the group's coordinates ``_topology.owner`` picks."""
-    coord = owner(key, [c.mesh_coord for c in group])
-    return next(c for c in group if c.mesh_coord == coord)
+    """A single-process owner for the planner tests and ``FakeCheckpoint``: a hash of the key picks one of the group's
+    chunks, so the writes of replicated keys spread over the devices. (A real save elects by bytes over every key.)"""
+    ordered = sorted(group, key=lambda c: c.mesh_coord)
+    return ordered[crc31(key) % len(ordered)]
 
 
 def label_local_shape(label: Label, global_shape) -> tuple[int, ...]:
