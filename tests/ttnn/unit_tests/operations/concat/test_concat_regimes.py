@@ -1,0 +1,463 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""concat: the tests op_design.md's Work Distribution requires beside the acceptance test.
+
+- regime-pinned cases (page_copy, run_assembly row-, face- and element-granular; ROW_MAJOR row_major_copy and
+  row_major_runs), with the host's choice asserted;
+- the layout matrix: TILE -> TILE and ROW_MAJOR -> ROW_MAJOR over aligned and non-aligned shapes, both dims;
+- a ragged last block (the block knob turned to a value that does not divide a core's share);
+- the work split: every output page on exactly one cluster;
+- one device session: the op after another program, after a tt-metal program, and before one (to_layout);
+- height sharding in L1 (Refinement 10): YOLOv8's neck join on two cores and on one, every regime in both layouts
+  with the tensors of a call on shard grids of their own; sharded calls in the device-session test;
+- `memory_config`, `sub_core_grids`, four and nine tensors (Refinement 20): Llama's and Qwen's calls with the
+  placement of each result asserted, nine and four pieces through every regime, and the refusals of a sharded output
+  config and of a non-None `sub_core_grids`;
+- placement (R5), refusals (R4) and malformed calls (X1..X4).
+
+Values are moved, never computed: every check is exact.
+"""
+
+import pytest
+import torch
+
+import ttnn
+from ttnn.operations.concat import concat
+from ttnn.operations.concat.concat import concat_with_block_tiles
+from ttnn.operations.concat.concat_program_artifacts import BLOCK_TILES, select_regime, split_tiles
+
+# (dim, shapes, regime the host must choose)
+PINNED = [
+    ((-1, (1, 1, 64, 64), (1, 1, 64, 80)), "page_copy"),
+    ((-2, (1, 64, 144), (1, 16, 144), (1, 4, 144)), "run_assembly"),  # row-granular, seam at row 80
+    ((-2, (1, 2, 400), (1, 2, 400)), "run_assembly"),  # row-granular, seam at row 2
+    ((-1, (1, 1, 32, 48), (1, 1, 32, 16)), "run_assembly"),  # face-granular, seam at column 48
+    ((-1, (1, 1, 32, 50), (1, 1, 32, 14)), "run_assembly"),  # element-granular
+    ((-1, (4, 8, 32, 47), (4, 8, 32, 100), (4, 8, 32, 50)), "run_assembly"),  # element-granular, many tiles
+    ((-2, (1, 1, 17, 64), (1, 1, 15, 64)), "run_assembly"),  # 17 + 15 rows in one tile
+    ((-2, (2, 4, 32, 256), (2, 4, 96, 256), (2, 4, 32, 256)), "page_copy"),
+    ((-1, (2, 1, 100, 32), (2, 1, 100, 96)), "page_copy"),  # H non-aligned, seam aligned
+    ((-1, (1, 1, 64, 17), (1, 1, 64, 47)), "run_assembly"),
+]
+
+
+def _id(entry):
+    dim, *shapes = entry
+    return "+".join("x".join(map(str, s)) for s in shapes) + f"_dim{dim}"
+
+
+# ROW_MAJOR: (dim, shapes, regime the host must choose). The stick is the page.
+PINNED_RM = [
+    ((-1, (1, 1, 32, 50), (1, 1, 32, 14)), "row_major_runs"),  # seam at element 50: not 16-B aligned (100 B)
+    ((-1, (4, 8, 32, 47), (4, 8, 32, 100), (4, 8, 32, 50)), "row_major_runs"),  # odd seams, 394 B output stick
+    ((-1, (1, 1, 64, 64), (1, 1, 64, 32)), "row_major_runs"),  # the YOLOv8 neck join (interleaved here)
+    ((-1, (1, 32, 50), (1, 32, 47)), "row_major_runs"),  # rank 3, odd output stick (194 B)
+    ((-2, (1, 1, 17, 64), (1, 1, 15, 64)), "row_major_copy"),
+    ((-2, (1, 1, 32, 50), (1, 1, 32, 50)), "row_major_copy"),  # 100 B sticks
+    ((-2, (1, 64, 144), (1, 16, 144), (1, 4, 144)), "row_major_copy"),
+    ((-2, (2, 4, 32, 256), (2, 4, 96, 256), (2, 4, 32, 256)), "row_major_copy"),
+]
+
+
+def _make(device, shapes, memory_config=ttnn.DRAM_MEMORY_CONFIG, seed=0, layout=ttnn.TILE_LAYOUT):
+    torch.manual_seed(seed)
+    host = [torch.randn(*s, dtype=torch.bfloat16) for s in shapes]
+    dev = [ttnn.from_torch(t, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=memory_config) for t in host]
+    return host, dev
+
+
+def _check(out, host, dim, layout=None):
+    if layout is not None:
+        assert out.layout == layout, (out.layout, layout)
+    got = ttnn.to_torch(out)
+    expected = torch.cat(host, dim=dim)
+    assert got.shape == expected.shape, (got.shape, expected.shape)
+    assert torch.equal(got, expected), (got.float() - expected.float()).abs().max()
+
+
+@pytest.mark.parametrize("entry,regime", PINNED, ids=[_id(e) for e, _ in PINNED])
+def test_regime_selection(entry, regime):
+    dim, *shapes = entry
+    canonical = dim if dim < 0 else dim - len(shapes[0])
+    assert select_regime(shapes, canonical) == regime
+
+
+@pytest.mark.parametrize("entry,regime", PINNED_RM, ids=[_id(e) for e, _ in PINNED_RM])
+def test_regime_selection_row_major(entry, regime):
+    dim, *shapes = entry
+    canonical = dim if dim < 0 else dim - len(shapes[0])
+    assert select_regime(shapes, canonical, ttnn.ROW_MAJOR_LAYOUT) == regime
+
+
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["DRAM", "L1"])
+@pytest.mark.parametrize("entry", [e for e, _ in PINNED_RM], ids=[_id(e) for e, _ in PINNED_RM])
+def test_pinned_row_major(device, entry, memory_config):
+    dim, *shapes = entry
+    host, dev = _make(device, shapes, memory_config, layout=ttnn.ROW_MAJOR_LAYOUT)
+    _check(concat(dev, dim=dim), host, dim, ttnn.ROW_MAJOR_LAYOUT)
+
+
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["DRAM", "L1"])
+@pytest.mark.parametrize("entry", [e for e, _ in PINNED], ids=[_id(e) for e, _ in PINNED])
+def test_pinned(device, entry, memory_config):
+    dim, *shapes = entry
+    host, dev = _make(device, shapes, memory_config)
+    _check(concat(dev, dim=dim), host, dim)
+
+
+# A block knob that does not divide a core's share: every core's last block is ragged.
+RAGGED = [
+    (-1, (4, 8, 32, 47), (4, 8, 32, 100), (4, 8, 32, 50)),  # run_assembly: 224 tiles, 7 per cluster
+    (-2, (2, 4, 50, 64), (2, 4, 50, 64), (2, 4, 28, 64)),  # run_assembly: 8 images x 4 x 2 = 64 tiles
+    (1, (2, 512, 1024), (2, 512, 1024)),  # page_copy: 2048 tiles, 64 per cluster
+]
+
+
+@pytest.mark.parametrize("block_tiles", [1, 3, 5, BLOCK_TILES, 64])
+@pytest.mark.parametrize("entry", RAGGED, ids=[_id(e) for e in RAGGED])
+def test_ragged_last_block(device, entry, block_tiles):
+    dim, *shapes = entry
+    host, dev = _make(device, shapes)
+    _check(concat_with_block_tiles(dev, dim=dim, block_tiles=block_tiles), host, dim)
+
+
+# ROW_MAJOR: the block knob counts sticks. 4*8*32 = 1024 sticks, 32 per cluster: 3, 5 and 7 leave a ragged block.
+RAGGED_RM = [
+    (-1, (4, 8, 32, 47), (4, 8, 32, 100), (4, 8, 32, 50)),  # row_major_runs
+    (-2, (2, 4, 50, 64), (2, 4, 50, 64), (2, 4, 28, 64)),  # row_major_copy
+]
+
+
+@pytest.mark.parametrize("block_tiles", [1, 3, 7, None])
+@pytest.mark.parametrize("entry", RAGGED_RM, ids=[_id(e) for e in RAGGED_RM])
+def test_ragged_last_block_row_major(device, entry, block_tiles):
+    dim, *shapes = entry
+    host, dev = _make(device, shapes, layout=ttnn.ROW_MAJOR_LAYOUT)
+    _check(concat_with_block_tiles(dev, dim=dim, block_tiles=block_tiles), host, dim, ttnn.ROW_MAJOR_LAYOUT)
+
+
+def test_wide_stick_row_major(device):
+    """[1,32,4096] x 2 along W: a 16 KiB output stick; the ring stays under its cap through the block clamp."""
+    host, dev = _make(device, [(1, 32, 4096), (1, 32, 4096)], layout=ttnn.ROW_MAJOR_LAYOUT)
+    _check(concat(dev, dim=-1), host, -1, ttnn.ROW_MAJOR_LAYOUT)
+
+
+MATRIX_SHAPES = [(1, 1, 32, 32), (1, 1, 32, 64), (1, 1, 64, 128), (1, 1, 256, 512),
+                 (1, 1, 32, 48), (1, 1, 48, 32), (1, 1, 48, 48), (1, 1, 96, 80)]
+
+
+@pytest.mark.parametrize("dim", [-1, -2])
+@pytest.mark.parametrize("shape", MATRIX_SHAPES, ids=["x".join(map(str, s)) for s in MATRIX_SHAPES])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile_to_tile", "rm_to_rm"])
+def test_concat_layout_matrix(device, layout, shape, dim):
+    """Each supported layout pair (input layout = output layout) over aligned and non-aligned shapes. bfloat16 only:
+    the op's dtype axis is bfloat16 until the dtype refinement; block formats have no ROW_MAJOR form (INVALID)."""
+    other = list(shape)
+    other[dim] = other[dim] // 2 + 3  # a second piece of another, odd-ish extent: the seam lands inside a tile
+    shapes = [shape, tuple(other)]
+    host, dev = _make(device, shapes, layout=layout)
+    _check(concat(dev, dim=dim), host, dim, layout)
+
+
+@pytest.mark.parametrize("num_tiles", [1, 10, 13, 15, 31, 32, 33, 224, 2048])
+def test_split_covers_every_page_once(device, num_tiles):
+    """The writer of cluster c stores pages [start, start + n): together they are every page, once."""
+    _, counts, starts = split_tiles(num_tiles, device.compute_with_storage_grid_size())
+    pages = sorted(p for core, n in counts.items() for p in range(starts[core], starts[core] + n))
+    assert pages == list(range(num_tiles))
+
+
+def test_output_is_dram_interleaved(device):
+    """R5: the output is in DRAM, interleaved, whichever buffer the inputs are in."""
+    host, dev = _make(device, [(1, 1, 64, 64), (1, 1, 64, 80)], ttnn.L1_MEMORY_CONFIG)
+    out = concat(dev, dim=3)
+    config = out.memory_config()
+    assert config.buffer_type == ttnn.BufferType.DRAM
+    assert config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    _check(out, host, 3)
+
+
+def test_programs_share_a_device_session(device):
+    """Both regimes after each other, after a tt-metal program, and followed by one, in one device session.
+
+    page_copy uses implicit reads, run_assembly explicit tagged reads; the writer is implicit in both.
+    """
+    tile_steps = [(e, ttnn.TILE_LAYOUT) for e, _ in PINNED[:6] + PINNED[:2]]
+    rm_steps = [(e, ttnn.ROW_MAJOR_LAYOUT) for e, _ in (PINNED_RM[0], PINNED_RM[4], PINNED_RM[1], PINNED_RM[5])]
+    # Interleave: a ROW_MAJOR call after a TILE call and before one, both ROW_MAJOR regimes after each other.
+    steps = [tile_steps[0], rm_steps[0], tile_steps[1], rm_steps[1], rm_steps[2], tile_steps[2], rm_steps[3]]
+    steps += tile_steps[3:]
+    # Height-sharded calls (Refinement 10), each between tt-metal programs: page_copy and row_major_copy (implicit),
+    # row_major_runs and run_assembly (explicit), the tensors of a call on shard grids of different sizes.
+    sharded_steps = [
+        (PINNED[0][0], ttnn.TILE_LAYOUT),
+        (PINNED_RM[4][0], ttnn.ROW_MAJOR_LAYOUT),
+        (PINNED_RM[2][0], ttnn.ROW_MAJOR_LAYOUT),
+        (PINNED[1][0], ttnn.TILE_LAYOUT),
+    ]
+    steps = steps[:2] + [sharded_steps[0]] + steps[2:4] + [sharded_steps[1]] + steps[4:] + sharded_steps[2:]
+    sharded_seeds = {2, 5, len(steps) - 2, len(steps) - 1}
+    # Nine and four pieces with an L1 result (Refinement 20): in_5 .. in_8 bound, run_assembly and row_major_runs.
+    many_steps = [(NINE_RUNS, ttnn.TILE_LAYOUT), (LLAMA, ttnn.ROW_MAJOR_LAYOUT), (FOUR_ROWS, ttnn.TILE_LAYOUT)]
+    l1_seeds = set(range(len(steps), len(steps) + len(many_steps)))
+    steps += many_steps
+    for seed, (entry, layout) in enumerate(steps):
+        dim, *shapes = entry
+        if seed in sharded_seeds:
+            host, dev = _make_height_sharded(device, shapes, layout, seed=seed)
+        else:
+            host, dev = _make(device, shapes, seed=seed, layout=layout)
+        # A tt-metal program before ours (an untilize, or a tilize, with plain transfers). tt-metal cannot change the
+        # layout of a row-major shard narrower than a tile, so a sharded step runs it on an interleaved copy.
+        other_layout = ttnn.TILE_LAYOUT if layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.ROW_MAJOR_LAYOUT
+        first = _make(device, shapes[:1], seed=seed, layout=layout)[1][0] if seed in sharded_seeds else dev[0]
+        before = ttnn.to_layout(first, other_layout)
+        assert torch.equal(ttnn.to_torch(before), host[0])
+        out = concat(dev, dim=dim, memory_config=ttnn.L1_MEMORY_CONFIG if seed in l1_seeds else None)
+        _check(out, host, dim)
+        # A tt-metal program after ours: to_layout(output, ROW_MAJOR) (the target page's check; a no-op program
+        # for a ROW_MAJOR output, so a ROW_MAJOR output is also tilized by tt-metal).
+        after = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)))
+        assert torch.equal(after, torch.cat(host, dim=dim))
+        if layout == ttnn.ROW_MAJOR_LAYOUT:
+            tiled = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(out, ttnn.TILE_LAYOUT)))
+            assert torch.equal(tiled, torch.cat(host, dim=dim))
+
+
+# --- memory_config, sub_core_grids, four and nine tensors (Refinement 20) ---
+
+LLAMA = (-1, *[(1, 1, 32, 512)] * 8, (1, 1, 32, 256))  # nine pieces along W, tile-aligned seams
+QWEN = (3, *[(1, 1, 32, 37984)] * 4)  # the logits: four pieces of 37,984 columns
+NINE_RUNS = (-1, *[(1, 1, 32, 50)] * 4, (1, 1, 32, 14), *[(1, 1, 32, 47)] * 3, (1, 1, 32, 9))  # element-granular
+FOUR_ROWS = (-2, (1, 17, 64), (1, 15, 64), (1, 40, 64), (1, 9, 64))  # rows join inside tiles
+
+
+def _assert_placed(out, buffer_type):
+    config = out.memory_config()
+    assert config.buffer_type == buffer_type, config
+    assert config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED, config
+
+
+def test_model_call_llama(device):
+    """Llama: nine bfloat16 TILE pieces in DRAM along W with memory_config=L1: a [1,1,32,4352] result, L1
+    interleaved."""
+    dim, *shapes = LLAMA
+    host, dev = _make(device, shapes)
+    out = concat(dev, dim=dim, memory_config=ttnn.L1_MEMORY_CONFIG)
+    assert tuple(out.shape) == (1, 1, 32, 4352)
+    _assert_placed(out, ttnn.BufferType.L1)
+    _check(out, host, dim, ttnn.TILE_LAYOUT)
+
+
+def test_model_call_qwen(device):
+    """Qwen: four bfloat16 ROW_MAJOR pieces of 37,984 columns along dim=3 with sub_core_grids=None: a
+    [1,1,32,151936] result, DRAM interleaved."""
+    dim, *shapes = QWEN
+    host, dev = _make(device, shapes, layout=ttnn.ROW_MAJOR_LAYOUT)
+    out = concat(dev, dim=dim, sub_core_grids=None)
+    assert tuple(out.shape) == (1, 1, 32, 151936)
+    _assert_placed(out, ttnn.BufferType.DRAM)
+    _check(out, host, dim, ttnn.ROW_MAJOR_LAYOUT)
+
+
+# Four and nine pieces through every regime: (entry, layout, regime the host must choose).
+MANY = [
+    (LLAMA, ttnn.TILE_LAYOUT, "page_copy"),
+    (NINE_RUNS, ttnn.TILE_LAYOUT, "run_assembly"),
+    (FOUR_ROWS, ttnn.TILE_LAYOUT, "run_assembly"),
+    (NINE_RUNS, ttnn.ROW_MAJOR_LAYOUT, "row_major_runs"),
+    (FOUR_ROWS, ttnn.ROW_MAJOR_LAYOUT, "row_major_copy"),
+]
+
+
+@pytest.mark.parametrize(
+    "memory_config", [None, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["none", "DRAM", "L1"]
+)
+@pytest.mark.parametrize("entry,layout,regime", MANY, ids=[f"{_id(e)}-{r}" for e, _, r in MANY])
+def test_many_pieces(device, entry, layout, regime, memory_config):
+    """count 4 and 9 in each regime; the result is in the buffer `memory_config` names, DRAM without one (R5)."""
+    dim, *shapes = entry
+    assert select_regime([tuple(s) for s in shapes], dim if dim < 0 else dim - len(shapes[0]), layout) == regime
+    host, dev = _make(device, shapes, ttnn.L1_MEMORY_CONFIG, layout=layout)
+    out = concat(dev, dim=dim, memory_config=memory_config)
+    want = ttnn.BufferType.L1 if memory_config == ttnn.L1_MEMORY_CONFIG else ttnn.BufferType.DRAM
+    _assert_placed(out, want)
+    _check(out, host, dim, layout)
+
+
+def test_sharded_output_config_refused_by_name(device):
+    """A sharded `memory_config` reads as "L1/height" (CALL["canonical"]), a value no cell has: refused by name."""
+    host, dev = _make(device, [(1, 1, 64, 64), (1, 1, 64, 32)])
+    config = ttnn.create_sharded_memory_config(
+        shape=(32, 96),
+        core_grid=ttnn.CoreGrid(y=1, x=2),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    with pytest.raises(NotImplementedError, match="output_memory"):
+        concat(dev, dim=-1, memory_config=config)
+
+
+def test_sub_core_grids_refused_unless_none(device):
+    _, dev = _make(device, [(1, 1, 32, 64), (1, 1, 32, 64)])
+    grids = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    with pytest.raises(NotImplementedError, match="sub_core_grids"):
+        concat(dev, dim=-1, sub_core_grids=grids)
+
+
+def test_op_twice_in_a_row(device):
+    for entry in [PINNED[0][0], PINNED[4][0], PINNED[0][0], PINNED[1][0], PINNED[1][0]]:
+        dim, *shapes = entry
+        host, dev = _make(device, shapes)
+        _check(concat(dev, dim=dim), host, dim)
+
+
+# --- refusals (R4) and malformed calls (X1..X4) ---
+
+REFUSED = [
+    ("float32", ttnn.float32, (-1, (1, 1, 32, 64), (1, 1, 32, 64))),
+    ("dim -3", ttnn.bfloat16, (-3, (1, 4, 32, 64), (1, 8, 32, 64))),
+    ("count 1", ttnn.bfloat16, (-1, (1, 1, 32, 64))),
+    ("count 5", ttnn.bfloat16, (-1, *[(1, 1, 32, 32)] * 5)),
+    ("rank 2", ttnn.bfloat16, (-1, (32, 64), (32, 64))),
+]
+
+
+@pytest.mark.parametrize("dtype,entry", [r[1:] for r in REFUSED], ids=[r[0] for r in REFUSED])
+def test_refused(device, dtype, entry):
+    dim, *shapes = entry
+    dev = [ttnn.from_torch(torch.zeros(*s), layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype) for s in shapes]
+    with pytest.raises(NotImplementedError):
+        concat(dev, dim=dim)
+
+
+def test_sharded_refused_by_name(device):
+    """R6: a sharding outside SUPPORTED is refused through the `sharding` axis (eval.memory.memory_axes), by name.
+
+    The tensors are bfloat16 TILE and otherwise a supported call, so `sharding` = "width" is the only axis outside
+    SUPPORTED ("height" is supported since Refinement 10).
+    """
+    shapes = [(1, 1, 64, 64), (1, 1, 64, 32)]
+    dev = []
+    for s in shapes:
+        config = ttnn.create_sharded_memory_config(
+            shape=(64, 32),
+            core_grid=ttnn.CoreGrid(y=1, x=s[-1] // 32),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            use_height_and_width_as_shard_shape=True,
+        )
+        dev.append(
+            ttnn.from_torch(
+                torch.zeros(*s), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=config
+            )
+        )
+    with pytest.raises(NotImplementedError, match="sharding"):
+        concat(dev, dim=-1)
+
+
+# --- height sharding in L1 (Refinement 10) ---
+
+
+def _make_height_sharded(device, shapes, layout, seed=0, cores=None):
+    """Each tensor height-sharded in L1 on a grid of its own, sized as the golden runner sizes it (eval.memory.place),
+    or on exactly `cores` cores (shard height = rows / cores) when given."""
+    from eval.memory import Sharded, place
+
+    torch.manual_seed(seed)
+    host = [torch.randn(*s, dtype=torch.bfloat16) for s in shapes]
+    dev = []
+    for t in host:
+        if cores is None:
+            config = place(Sharded("L1", "height"), t.shape, layout, device)
+        else:
+            rows = t.numel() // t.shape[-1]
+            config = ttnn.create_sharded_memory_config(
+                shape=(rows // cores, t.shape[-1]),
+                core_grid=ttnn.CoreGrid(y=1, x=cores),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+        dev.append(ttnn.from_torch(t, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=config))
+    return host, dev
+
+
+def _assert_dram_interleaved(out):
+    config = out.memory_config()
+    assert config.buffer_type == ttnn.BufferType.DRAM
+    assert config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+
+
+@pytest.mark.parametrize("cores,shard_rows", [(2, 32), (1, 64)], ids=["two_cores", "one_core"])
+def test_model_neck_join_height_sharded(device, cores, shard_rows):
+    """YOLOv8's neck join: concat([a, b], dim=-1) of a [1,1,64,64] and a [1,1,64,32] bfloat16 ROW_MAJOR tensor,
+    height-sharded in L1 (shards [32,64] + [32,32] on two cores, [64,64] + [64,32] on one): a [1,1,64,96] tensor in
+    DRAM, interleaved (R5), with every value exact."""
+    shapes = [(1, 1, 64, 64), (1, 1, 64, 32)]
+    host, dev = _make_height_sharded(device, shapes, ttnn.ROW_MAJOR_LAYOUT, cores=cores)
+    for d, s in zip(dev, shapes):
+        spec = d.memory_config().shard_spec
+        assert spec.grid.num_cores() == cores and tuple(spec.shape) == (shard_rows, s[-1])
+    out = concat(dev, dim=-1)
+    assert tuple(out.shape) == (1, 1, 64, 96)
+    _assert_dram_interleaved(out)
+    _check(out, host, -1, ttnn.ROW_MAJOR_LAYOUT)
+
+
+# Every regime, with the tensors of one call on shard grids of different sizes (32/16/4 cores, 2/1/1, 8/24/8), one
+# core, and grids that do not divide the cluster count (25 cores).
+SHARDED = [
+    (-1, (1, 1, 64, 64), (1, 1, 64, 80)),
+    (-2, (1, 64, 144), (1, 16, 144), (1, 4, 144)),
+    (-2, (1, 2, 400), (1, 2, 400)),
+    (-1, (1, 1, 32, 50), (1, 1, 32, 14)),
+    (-2, (1, 1, 17, 64), (1, 1, 15, 64)),
+    (-2, (2, 4, 32, 256), (2, 4, 96, 256), (2, 4, 32, 256)),
+    (-1, (2, 1, 100, 32), (2, 1, 100, 96)),
+]
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+@pytest.mark.parametrize("entry", SHARDED, ids=[_id(e) for e in SHARDED])
+def test_height_sharded(device, entry, layout):
+    dim, *shapes = entry
+    host, dev = _make_height_sharded(device, shapes, layout)
+    out = concat(dev, dim=dim)
+    _assert_dram_interleaved(out)
+    _check(out, host, dim, layout)
+
+
+def test_row_major_output_is_dram_interleaved(device):
+    """R5 on the ROW_MAJOR path: L1 inputs, a DRAM interleaved ROW_MAJOR output."""
+    host, dev = _make(device, [(1, 1, 64, 64), (1, 1, 64, 32)], ttnn.L1_MEMORY_CONFIG, layout=ttnn.ROW_MAJOR_LAYOUT)
+    out = concat(dev, dim=-1)
+    config = out.memory_config()
+    assert config.buffer_type == ttnn.BufferType.DRAM
+    assert config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    _check(out, host, -1, ttnn.ROW_MAJOR_LAYOUT)
+
+
+def test_mixed_layouts_refused(device):
+    """The tensors of one call share one layout (spec DEFINITION)."""
+    a = ttnn.from_torch(torch.zeros(1, 1, 32, 64), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    b = ttnn.from_torch(torch.zeros(1, 1, 32, 64), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    with pytest.raises(NotImplementedError):
+        concat([a, b], dim=-1)
+
+
+@pytest.mark.parametrize(
+    "entry,error",
+    [
+        ((-1, (1, 1, 32, 64), (1, 1, 64, 64)), ValueError),  # X1
+        ((-1, (1, 1, 32, 64), (1, 32, 64)), ValueError),  # X2
+        ((4, (1, 1, 32, 64), (1, 1, 32, 64)), IndexError),  # X3
+        ((0,), ValueError),  # X4
+    ],
+    ids=["X1", "X2", "X3", "X4"],
+)
+def test_malformed(device, entry, error):
+    dim, *shapes = entry
+    _, dev = _make(device, shapes)
+    with pytest.raises(error):
+        concat(dev, dim=dim)
