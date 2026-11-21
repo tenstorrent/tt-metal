@@ -16,15 +16,26 @@
 #include <utility>
 #include <vector>
 
+#include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/optimizers/adamw/adamw.hpp"
 #include "test_utils/program_cache.hpp"
+#include "tt-metalium/bfloat16.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "xtensor/containers/xarray.hpp"
 
 // Launch tensors and checks shared by the AdamW tests on bf16 and on fp32 parameters.
 
 namespace ttml::test_utils::adamw {
+
+inline ttnn::Tensor to_tt_fp32(const xt::xarray<float>& x) {
+    return ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(x, &ttml::autograd::ctx().get_device());
+}
+
+// `x` rounded to bf16, as an fp32 gradient's one cast to bf16 rounds it.
+inline xt::xarray<float> bf16_rounded(const xt::xarray<float>& x) {
+    return xt::cast<float>(xt::cast<bfloat16>(x));
+}
 
 // The mean and max absolute differences of `actual` from `reference`; both non-finite if any difference is.
 struct ErrorMetrics {
