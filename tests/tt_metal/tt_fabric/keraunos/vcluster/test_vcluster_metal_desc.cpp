@@ -49,14 +49,7 @@ namespace vc = tt::tt_fabric::vcluster;
 
 const fs::path kVclusterDir = fs::path(__FILE__).parent_path();
 
-// The package descriptor, UMD tests/soc_descs/mmk.yaml; VCLUSTER_PACKAGE_SOC_DESC overrides it.
-fs::path package_soc_desc() {
-    if (const char* path = std::getenv("VCLUSTER_PACKAGE_SOC_DESC"); path != nullptr && *path != '\0') {
-        return path;
-    }
-    return kVclusterDir.parent_path().parent_path().parent_path().parent_path().parent_path() /
-           "tt_metal/third_party/umd/tests/soc_descs/mmk.yaml";
-}
+using vc::test::package_soc_desc;
 
 fs::path temp_dir(const std::string& name) {
     return fs::path(::testing::TempDir()) / ("vcluster_metal_desc_" + std::to_string(::getpid()) + "_" + name);
@@ -407,7 +400,7 @@ TEST_F(VclusterMetalDescDeathTest, E5KeraunosEntryWithAnotherHsio) {
                     }
                 }
             }),
-        "Chip 1 descriptor [^ ]*chip_1_soc_desc\\.yaml: keraunos\\.cores entry \\{core: 4-1, hsio: 3, cce: 0\\} is "
+        "Chip 1 descriptor [^ ]*chip_1_soc_desc\\.yaml: keraunos\\.cores entry \\{core: 4-1, hsio: 3, eth_cce: 0\\} is "
         "not the package descriptor's");
 }
 
@@ -415,7 +408,7 @@ TEST_F(VclusterMetalDescDeathTest, E5KeraunosEntryWithAnotherHsio) {
 TEST_F(VclusterMetalDescDeathTest, E5KeraunosEntryForACoreEthLacks) {
     EXPECT_REFUSED(
         in_chip(0, [](YAML::Node& soc) { soc["keraunos"]["cores"].push_back(package_keraunos_entry("4-1")); }),
-        "Chip 0 descriptor [^ ]*chip_0_soc_desc\\.yaml: keraunos\\.cores entry \\{core: 4-1, hsio: 1, cce: 0\\} names "
+        "Chip 0 descriptor [^ ]*chip_0_soc_desc\\.yaml: keraunos\\.cores entry \\{core: 4-1, hsio: 1, eth_cce: 0\\} names "
         "a core its eth list lacks");
 }
 
