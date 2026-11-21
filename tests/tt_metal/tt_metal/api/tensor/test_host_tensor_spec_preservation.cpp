@@ -24,18 +24,14 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
+#include "common_tensor_test_utils.hpp"
+
 namespace tt::tt_metal {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-template <typename T>
-std::vector<T> make_ramp(size_t count) {
-    std::vector<T> data(count);
-    for (size_t i = 0; i < count; ++i) {
-        data[i] = static_cast<T>(static_cast<float>(i % 251));
-    }
-    return data;
-}
+// Deterministic ramp for test data (shared; well defined for every element type, including int8_t)
+using ::test_utils::make_ramp;
 
 bool exact_spec_match(const TensorSpec& a, const TensorSpec& b) {
     return a == b && experimental::per_core_allocation::is_per_core_allocation(a.memory_config()) ==
