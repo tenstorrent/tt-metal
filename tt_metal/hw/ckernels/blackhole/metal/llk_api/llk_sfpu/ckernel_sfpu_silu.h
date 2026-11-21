@@ -8,10 +8,20 @@
 #include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_sfpu_recip.h"
 
+#include "ckernel_sfpu_silu_bf16.h"
+
 namespace ckernel::sfpu {
 
+// Whether BF16 DEST runs the generated silu kernel as one call over the whole tile.
+inline constexpr bool silu_bf16_whole_tile = true;
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_silu() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_silu()) {
+            calculate_silu_bf16<ITERATIONS>();
+            return;
+        }
+    }
     // The exp's constants, loaded once and kept in LRegs for the whole loop (see _sfpu_sigmoid_prgm_); 1/ln2 is
     // Prgm1 from silu_init. x stays live across the sigmoid, so the fp32 arm has room for two of its
     // three: p1 stays a per-row literal.
