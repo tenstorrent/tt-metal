@@ -83,6 +83,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/workload/specification/data_movement_hardware_config.hpp
     api/tt-metalium/workload/specification/dataflow_buffer_spec.hpp
     api/tt-metalium/workload/specification/global_semaphore_parameter.hpp
+    api/tt-metalium/workload/specification/kernel_hardware_types.hpp
     api/tt-metalium/workload/specification/kernel_spec.hpp
     api/tt-metalium/vocabulary/node_coord.hpp
     api/tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp
@@ -192,6 +193,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/data_formats/mxfp8.hpp
     api/tt-metalium/data_formats/mxint.hpp
     api/tt-metalium/workload/legacy/workload_descriptor.hpp
+    api/tt-metalium/observability/profiler/device_profiler.hpp
     api/tt-metalium/observability/profiler/profiler_optional_metadata.hpp
     api/tt-metalium/observability/profiler/profiler_types.hpp
     api/tt-metalium/workload/program.hpp
