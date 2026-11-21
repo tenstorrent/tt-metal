@@ -1,0 +1,15 @@
+import ttnn
+E = ttnn.experimental
+c = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False)
+print("CCD attrs", [a for a in dir(c) if not a.startswith("_")])
+print("dst_full_sync_en", c.dst_full_sync_en)
+print("Precision", hasattr(ttnn, "Precision"), [a for a in dir(E) if "recision" in a])
+hw = E.ComputeHardwareConfig(fpu_math_fidelity=c.math_fidelity, enable_32_bit_dest=True, double_buffer_dest=True)
+print("hw", hw.fpu_math_fidelity, hw.enable_32_bit_dest, hw.double_buffer_dest, hw.sfpu_precision_mode)
+device = ttnn.open_device(device_id=0)
+grid = device.compute_with_storage_grid_size()
+crs = ttnn.num_cores_to_corerangeset(5, grid, True)
+print("crs", crs)
+print(ttnn.split_work_to_cores(crs, 13, row_wise=True))
+print(ttnn.split_work_to_cores(grid, 13, row_wise=True))
+ttnn.close_device(device)
