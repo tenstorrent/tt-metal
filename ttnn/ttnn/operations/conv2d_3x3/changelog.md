@@ -2675,3 +2675,101 @@ Where the time is now:
 | `compute_kernel_lib::add_bias_bcast_rows` (`bias_add_helpers.hpp`) | capability | It runs over a whole block of row groups that it waits for at once, so it cannot be interleaved behind the matmul's row groups in batches. It also owns its init, so each batch's switch back to the matmul state (`matmul_block_init`, srcA / srcB / pack reconfig, L1-acc) has to be done by hand around it. | same pair as above (one walk) | same | `kernels/conv2d_3x3_kblock_walk.hpp:81-117` (`bias_rows`) |
 
 The N split needed no bypass: it is host-side, and the kernels already took a per-core matmul column start. Feedback for the multicast helper, from weight_stream_decouple_v2 (not graduated): `ReceiverPipe::receive` / `SenderPipe::send` have no ack-now / complete-later receive and no non-blocking "all acks in?" query.
+
+## Perf 18
+- Date: 2026-11-21
+- Scope: perf tournament (this run's round 3 of 5) on the 17 FLUX.2 Blackhole (2, 4) per-device decoder convs (feature_spec block `attention: PERF FOCUS (FLUX.2)`): bf16, HiFi4, fp32 DEST, bias, padding (0, 0, 1, 1), DRAM-interleaved ROW_MAJOR input, 110 cores, Blackhole p150b. Hard gates: Panoptic's 22 `[perf]` cases (timing and bit-identity) and the single-device FLUX.2 convs (TILE input).
+- Outcome: 6 ideas floated (cap 6): 4 WIN, 2 NULL. 3 graduated (C_out fold, ring startup split, kh tile reuse); 1 WIN not graduated (whole-K row stream, reasons below).
+  - FLUX.2 bh2x4, call-weighted over the 17 cases: **62.28 -> 61.15 ms (-1.8%)**; against the 110-core HiFi4 ideal (40.18 ms), 64.5% -> 65.7%.
+  - conv_out P3 1026x2048 128->3 2398 -> 2039 us (-15.0%), P9 514x1024 128->3 801 -> 592 us (-26.1%); P8 258x512 64->256 448 -> 399 (-11.1%), P11 514x1024 64->128 799 -> 755 (-5.6%), P10 130x256 128->512 388 -> 374 (-3.5%, 17 calls).
+  - The top-priority cases did not move: P1 (C_in 32) and P2 are store / DRAM-bound, and every idea that sped up their compute made them slower (below).
+  - PCC vs torch unchanged on all 17 (0.9999985). Outputs bit-identical except P3 (1 of 6.3 M outputs differs by 1 bf16 ulp, C_out fold).
+  - End to end (`test_vae_flux2_conv2d_3x3.py`): not re-measured this round.
+- Instrumentation: new zones `compute_fold_walk` / `compute_fold_final` (C_out fold) and `reader_rm_split_wait` (the reader's wait on the writer's part of the first window); the kh-reuse tilize runs inside `compute_tilize`. Ablation hooks for the current walk: `perf_experiments/ablation_r18/apply_hooks.py` (tokens fill / weights / store / tilize / bias / matmul), raw results `ab_results.txt`, the optimizers' shared brief `BRIEF_COMMON.md`.
+
+### Measured breakdown (round start, device kernel us; cumulative peel, everything left of a row stubbed)
+
+| stubbed | P1 | P3 | P6 | P2 | P4 | P7 | P10 | P8 | P15 |
+|---|---|---|---|---|---|---|---|---|---|
+| none (full) | 1821 | 2398 | 5317 | 1373 | 595 | 1309 | 388 | 448 | 139 |
+| fill | 1764 | 1944 | 5206 | 1357 | 569 | 1286 | 374 | 430 | 138 |
+| + weights | 1766 | 1943 | 5198 | 1354 | 565 | 1282 | 369 | 424 | 126 |
+| + store | 1547 | 1933 | 5110 | 1264 | 392 | 1241 | 324 | 323 | 103 |
+| + tilize | 1462 | 1574 | 4889 | 1208 | 372 | 1194 | 313 | 310 | 103 |
+| + bias | 1401 | 1558 | 4771 | 1177 | 357 | 1179 | 309 | 302 | 102 |
+| + matmul (everything) | 400 | 662 | 531 | 128 | 108 | 95 | 29 | 38 | 17 |
+| solo: store | 1615 | 2355 | 5265 | 1309 | 432 | 1306 | 368 | 354 | 118 |
+| solo: tilize | **2001** | 2405 | 5115 | 1318 | 607 | 1262 | 374 | 435 | 139 |
+
+Ranked by measured headroom:
+1. **Matmul is at its roofline** on every case (removing it saves its 64-cycle/tile-MAC HiFi4 ideal). The 22 ms above the ideal is everything else.
+2. **The store is serialized into the last K-block.** The whole M-block's output (P1: 368 KB per core, ~40 MB chip-wide) drains during the last of 9 K-blocks through a 2-row-group output CB. Solo store stub: P1 -206, P4 -163, P8 -95, P2 -65 us. P4's last K-block takes 46 us p50 (max 77) against ~10 us for the others.
+3. **The everything-stubbed floor** (P1 400, P3 662, P6 531 us; ~75-140 ns per tap-direct unit) sits on top of the matmul when only the matmul runs (P1 1401 = 1000 + 400). tapdirect_unit_cost later showed it is NOT on the critical path of the real op (below).
+4. **conv_out (P3, P9):** 3 output channels in a 32-lane N tile (29 lanes of MACs wasted), bm 7 (1x1 subblocks, 774 K-blocks per core), and an exposed fill (-454 us stubbed) with a grid-row imbalance (`reader_band_wait` p50 254, max 474 us).
+5. Tilize payload ~21 cycles per tile (P3 358, P6 220 us); bias 15-118 us; weights (resident) ~0.
+
+Roofline gate (by bytes; the NoC-estimator CLI is not built in this tree): DRAM floors at 450 GB/s, input read once plus the 32-lane-padded output: P1 1.49 ms, P4 373 us, P3 1.49 ms, P9 373 us (all DRAM-bound at their roofline), P5 1.79 ms and P2 745 us near-balanced, the rest compute-bound. Stubbing only the tilize made P1 180 us slower: P1 is DRAM-coupled (671 MB in 1.82 ms).
+
+### Portfolio and verdicts (each measured end to end in its own op copy, base = this round's start)
+
+| idea | verdict | measured (base -> candidate, us) | precision | domain / notes |
+|---|---|---|---|---|
+| conv_out_fold: fold kw into the N lanes where C_out <= 4 (weights W'[(kh, c), 4 kw + co], 3 K-blocks of the kw = 0 tap; the kw shift and lane select in fp32 packs at -kw rows and -kw lane groups, packer L1 accumulation; final pass + bias with a lane mask) | **WIN, graduated** | P3 2395 -> 2088, P9 791 -> 633; 514x1024 64->3 413 -> 392, 512x1024 128->3 padding 1 791 -> 636, 514x1024 128->4 799 -> 634. Fill stubbed: P3 1944 -> 787 (2.47x), P9 447 -> 237 | P9 bit-identical; P3 1 output 1 ulp (M-block boundary rows take their kw = 1, 2 partials from the next block) | 12 tile-MACs, 12 tilized tiles and 3 units per output tile-row instead of 36 / 36 / 9. Whole-op is now DRAM-bound (P3 787 MB at 377 GB/s). Next lever it names: the 2-row halo re-read (+21% input bytes on P3, +43% on P9). |
+| ring_fill_noc_split: the ring's first window (all cores fetch ~2 image rows at once) split between the reader (NoC0, front claims) and the writer (NoC1, back claims), the writer serving only while it waits for its first output | **WIN, graduated (carve-out: windows < 512 KB)** | P3 2401 -> 2184, P9 798 -> 595; on top of the fold: P3 2088 -> 2050, P9 634 -> 590. Others -2.4% to +1.9% | bit-identical | Startup only: from block 1 on the reader's band waits are 0. Startup at ~484 GB/s on every core; P3 span max/p50 1.098 -> 1.005, P9 1.413 -> 1.037. Menu: writer filling in every phase P1 +13% (its NoC1 reads beside NoC1 stores), 2+2 staging chunks shrink P3's bm (2294 us). |
+| kh_tile_reuse: tilize each (input tile-row, kw) once into a tile ring of max(2 W/32, bm) rows; K-block (kh, kw) reads ring row t + kh W/32 | **WIN (C_in >= 64), graduated; REGRESSION at C_in 32 (carved out)** | P8 448 -> 399, P11 799 -> 755, P10 387 -> 375, P2 1373 -> 1387 (flat); P1 1833 -> 2591, P4 598 -> 698 | bit-identical | 3x fewer tilized tiles, ~9x fewer units. At C_in 32 the store is the critical path: store stubbed, P1 1615 -> 1437 and P4 432 -> 378, but with it the faster cores bunch their NoC1 stores and the far columns (x = 13-15) starve. Window units measured flat. |
+| whole_k_rowstream: whole-K, row-streamed walk on the ring (per batch: tilize 9 taps, accumulate K = 9 tw in DEST, bias, pack once; no fp32 partials; output leaves evenly) | WIN, **not graduated** | with writer store pacing (factor 1.2): P8 449 -> 384, P4 599 -> 540, P13 5390 -> 4907, P12 2795 -> 2564, P6 -5.0%, P3 -5.6%, P5 -3.3%, P2 -2.8%; **P1 1823 -> 1921 (+5.4%)**, P9 +5.1%, P14 +2.5%; unpaced P1 2895, P4 743 | not bit-identical: DEST accumulation replaces packer-L1 accumulation; <= 1 ulp on 2.8% of outputs (bias as a ones-column K step) or 0.008% (batch bias); PCC equal | Call-weighted 62.32 -> 60.75 ms in its copy. Not graduated: (1) its wins depend on a wall-clock store pacer whose rate is a tuned 1.2 x the op's DRAM floor at an assumed 450 GB/s; without it P1 and P4 regress badly (P1 2895 us = +59%, P4 743 us = +24%; P2 and P8 still gain); (2) it regresses P1 (priority 1, 5 calls) and P14, and nothing but a fitted shape list separates P1 from P4 (both C_in 32, DRAM-bound, -9.8% on P4); (3) its reader rewrites the ring fill the startup split also changes, and that combination is unmeasured. Next round: fix the NoC1 store starvation itself (finding below), then re-measure it without the pacer. |
+| kblock_store_decouple: keep the K-blocked walk; (a) output CB of a whole M-block traded against bm, (b) skewed K order | NULL | deep CB: P1 1826 -> 3038 (+66%), P4 595 -> 724, P8 448 -> 405, P11 799 -> 764; free-L1-only deeper CB: P11 -2.5%, P2 -1.0%, rest flat; (b) not built | bit-identical | Finding: output-write bandwidth on NoC1 depends on core position. With stores spread evenly, ~15 cores at grid x 13-15, y 5-10 get almost none until the others finish (P4: core (15, 9) needed 130 -> 515 us for its first block). The burst in the last K-block leaves NoC1 idle between bursts, which is what lets those cores catch up today. Per-core pacing or a 330 GB/s cap did not fix it (P4 713). |
+| tapdirect_unit_cost: cut the per-unit floor (grouped table wait/pop, skip-remap tilize init, finer band waits) | NULL | grouped wait P1 1831 -> 2063-2089 (+12.7..14.5%), P4 +2..3%; skip-remap and fine waits flat on 10 cases | bit-identical | In the stubbed build the floor is real (reader planning ~20 cycles per unit, then the compute handshake). In the real op the reader runs a whole K-block ahead (compute waits 0.03 us per K-block after the first) and the handshake hides under the tilize hardware time (~132 cycles per 2-tile unit). Faster compute makes P1 / P4 slower (DRAM coupling). |
+
+### Graduated
+1. **C_out fold** (`467439ef5d4`). Domain: the DRAM-interleaved ROW_MAJOR ring walk with resident weights at stride 1, dilation 1, pad_left = pad_right = 1 (W_out = W), W % 32 == 0, C_in % 32 == 0, C_out <= 4, any pad_top / pad_bottom. Feasibility carve-outs, as built: no bias (the final pass takes its srcB row from the bias tile; it needs a zero row), C_out 5-8 (lane stride 8, the kw = 2 group in faces 1 and 3), bf8_b weights (the writer moves weight lanes between tiles with RISC stores; a block-float tile's shared exponents do not move per lane). Not reached: one M-block per core and the per-block slab (a different walk). TILE and sharded input never reach it (bank-run input only; every Panoptic conv has C_out >= 32). Knobs deleted (`COUT_FOLD`, `COUT_FOLD_FORCE`). New L1: the fp32 plane (bm + 2 slots of 2 KB, x2 for the half-planes) and an 8-tile output CB; the partials CB drops to one page. P3 bm 7 -> 8 (4x1 subblocks).
+2. **Ring startup split** (`b1c0ab0885b`). Domain: the ROW_MAJOR ring with resident weights (streamed, the writer's block-0 rounds wait on compute, which would wait on the writer) and a first window >= 512 KB. Carve-out, measured: below 512 KB the split lines up every core's first output stores; A/B on the same tree, off -> on: 130x256 128->512 (213 KB window) 387.6 -> 393.8 (+1.6%; +1.1 / +1.9 / +1.5 / +1.6% over four more runs), 514x1024 32->128 (233 KB) +1.2%, 514x1024 64->128 (385 KB) +1.3%. The windows of 541 KB and up gain (P5 -1.0%, P6 -0.6%, P12 -1.4%, P13 -1.0%, P3, P9). No new L1 (the writer borrows the second staging chunk for the window), 6 semaphores. Knob deleted (`RM_SPLIT`).
+3. **kh tile reuse** (`b9e67b54711`). Domain: the ROW_MAJOR ring walk at stride 1, dilation 1, W_out == W_in a multiple of 32, one tap per K-block, one-row subblocks, C_in >= 64, where the tile ring fits next to the resident weights (the solve re-picks bm). Carve-out, measured: C_in 32 (1026x2048 32->128 +41%, 514x1024 32->128 +16.6%; store-bound, see the table). Not reached, feasibility: P7 / P14 (resident weights + ring exceed L1), P3 / P5 / P6 / P12 / P13 (the ring alone is 1.5-3 MB), kernel-row K-blocks (bf8_b weights let the solve take bk = 3 taps: 258x512 64->256 bf8_b runs bk 6, 3 K-blocks), one M-block per core. P2 is flat (+0.9-1.0%, inside noise) and keeps it. Knobs deleted (`KH_REUSE`, `KHR_TABLE_ROWS`, `KHR_FILL_ROWS`, `KHR_WINDOWS`).
+
+No code was deleted: each change is a new path beside the K-blocked tap-direct walk, which stays the walk for TILE and sharded input, one-M-block cases and every carve-out above.
+
+FLUX.2 bh2x4 before / after (device kernel us, median of 3 calls per run, `test_flux_conv3x3_compare.py`, ROW_MAJOR input). "+ split" is the fold plus the split before its window carve-out (on every ring case):
+
+| prio | case (H x W, C_in->C_out) | calls | start | + fold | + split | final (fold, split carve-out, kh reuse) | change | util (110-core HiFi4) | target |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1026x2048 32->128 | 5 | 1821.2 | 1821.7 | 1830.4 | 1827.5 | +0.3% (same program) | 55% | 1453 |
+| 2 | 514x1024 64->256 | 6 | 1373.4 | | 1382.2 | 1385.6 | +0.9% (kh reuse, flat) | 73% | 1453 |
+| 3 | 1026x2048 128->3 | 1 | 2398.1 | 2088.2 | 2050.4 | 2039.1 | -15.0% | 5% | 136 |
+| 4 | 514x1024 32->128 | 5 | 595.1 | 597.2 | 605.5 | 598.6 | +0.6% (same program) | 42% | 363 |
+| 5 | 1026x2048 64->128 | 1 | 2920.3 | | 2891.8 | 2887.8 | -1.1% | 70% | 2905 |
+| 6 | 1026x2048 64->256 | 1 | 5316.6 | | 5282.7 | 5279.4 | -0.7% | 77% | 5810 |
+| 7 | 258x512 128->512 | 8 | 1309.4 | | 1294.6 | 1310.1 | +0.1% (same program) | 77% | 1453 |
+| 8 | 258x512 64->256 | 5 | 448.4 | | 448.2 | 398.7 | -11.1% | 63% | 363 |
+| 9 | 514x1024 128->3 | 1 | 800.8 | 633.6 | 590.1 | 591.9 | -26.1% | 4% | 34 |
+| 10 | 130x256 128->512 | 17 | 387.5 | | 393.6 | 374.1 | -3.5% | 68% | 363 |
+| 11 | 514x1024 64->128 | 1 | 799.4 | | 811.0 | 754.6 | -5.6% | 67% | 726 |
+| 12 | 514x1024 128->256 | 1 | 2794.6 | | 2755.1 | 2748.6 | -1.6% | 74% | 2905 |
+| 13 | 514x1024 128->512 | 1 | 5389.9 | | 5336.4 | 5336.8 | -1.0% | 76% | 5810 |
+| 14 | 258x512 128->256 | 1 | 745.2 | | 731.7 | 746.0 | +0.1% (same program) | 68% | 726 |
+| 15 | 66x128 128->512 | 10 | 139.4 | | 139.9 | 139.5 | 0.0% | 45% | 91 |
+| 16 | 130x256 32->128 | 1 | 70.6 | | 70.5 | 70.4 | -0.2% | 23% | 23 |
+| 17 | 66x128 32->128 | 1 | 26.1 | | 25.4 | 25.7 | -1.9% (same program, noise) | 16% | 6 |
+
+Call-weighted 62.28 -> 61.15 ms. 6 of 17 under target (P2, P5, P6, P7, P12, P13); P14 (+2.8%), P10 (+3.1%) and P11 (+3.9%) are within 4% of it.
+
+Where the time is now:
+- **P1 / P4 (C_in 32, 10 calls) and the store.** Both are DRAM-bound at their roofline, and every change that sped up their compute (kh reuse, the whole-K walk, grouped table waits, a solo tilize stub) made them slower. The cause, measured by two optimizers independently: NoC1 output-write bandwidth depends on core position, and ~15 cores at grid x 13-15, y 4-10 starve once the other cores store continuously. Lever: give those cores' stores another path (NoC0 for part of their writes, or less work on them), then revisit the whole-K walk without its pacer.
+- **conv_out (P3, P9):** now DRAM-bound (fill). Lever: compute the 2-row halo once and pass the boundary partials between neighbour cores (64 B fp32 per pixel instead of 256 B of input).
+
+### Guard set (no regression)
+- **Panoptic (22 compare cases, LoFi bf8_b sharded):** 45 / 45 LOOSE outputs bit-identical to the round start (sha256, `asym_padding/panoptic_hashes.py`); none of the three changes reaches a sharded program. Timing, round start -> final on the same tree, one run each: all 22 within -0.95% / +0.92% (aspp.convs.2 +0.10%).
+- **Single-device FLUX.2 (TILE input):** the 25 compare cases up to 1024² (every single-device LOOSE conv), round start -> final: -3.03% / +1.07%. TILE input reaches none of the new paths.
+- **Off-focus ROW_MAJOR configs** (`graduation_r16/test_guard_cfg.py`, sha1 equal on all 5): 258x512 64->256 bias 447.5 -> 398.7 (kh reuse), the bf8_b-weight no-bias ReLU pair 412.8 -> 411.3 / 413.9 -> 412.4 (kernel-row K-blocks: unchanged path), 514x1024 32->128 no-bias ReLU 594.6 -> 594.6, 130x256 64->64 68.1 -> 67.8.
+- **Extra correctness probes (tt-probe, PCC vs torch):** kh reuse with no bias + ReLU (258x512 64->256) and with symmetric padding 1 (256x512 64->256), the fold at 514x1024 64->3 padding 1: PCC 1.0000000, max abs error 0.017-0.018.
+- **Golden:** interleaved ROW_MAJOR slice PASS (210); `TILE and INTERLEAVED` 536 passed; sharded 1008 passed, 144 xfailed; LOOSE 79 passed.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::matmul_block` (`matmul_block_helpers.hpp`) | capability | It packs whole tiles at a CB's write pointer. The fold packs each subblock three times as rows at computed plane addresses (-kw rows, -kw 16 B lane groups) through a replayed PACR stream, with per-pack packer edge masks zeroing the two rows that wrap an image-row start. No helper offsets a pack by rows / lanes or configures edge masks. | n/a (inexpressible); base tap walk P3 2398098 | P3 2088154 (fold only) | `kernels/conv2d_3x3_cout_fold.hpp:38` (walk at `:212`) |
+| `compute_kernel_lib::add_bias_bcast_rows` (`bias_add_helpers.hpp`) | capability | It reads its partials tiles at the CB read pointer. The fold's final pass unpacks face pairs at computed plane addresses (kw-fold's `fs_unpack_run`) and packs with a lane mask that keeps lanes [0, C_out). | n/a | as above | `kernels/conv2d_3x3_cout_fold.hpp:254-279` |
+| no helper covers this: sub-tile lane moves between tiles (dataflow family) | capability | The fold's weight tile is built on device from the prepared weights: three kw tiles' first C_out lanes merge into one tile's lane groups with RISC L1 stores. No dataflow helper copies lane ranges between tiles. | n/a | as above | `kernels/conv2d_3x3_writer.cpp:2495-2532` |
+| `dataflow_kernel_lib::read_with_state` (`local_copy_helpers_dataflow.hpp`) | capability | The writer's share of the ring's first window de-interleaves one pixel per read from bank-major staging into the ring, so both addresses change on every read (the reader's ring fill has the same gap). | n/a (inexpressible) | P9 633572 -> 590144 with the split | `kernels/conv2d_3x3_rm_ring.hpp:640` |
+| no helper covers this: a two-party claim over core-local words (semaphore family) | capability | The reader and writer claim chunks from opposite ends: each side stores its claim count, fences, then reads the other side's, so every chunk has one owner. `Semaphore<>` documents no store-then-load ordering across two words; the claims are raw volatile L1 words with explicit fences. | n/a | as above | `kernels/conv2d_3x3_rm_ring.hpp:76-81` (`rm_load` / `rm_store`), claims `:274-316`, `:587-590` |
+| `compute_kernel_lib::matmul_block` and the K-block walk's in0 (`ckernel::matmul_block` from a CB read pointer) | capability | kh reuse's in0 for K-block (kh, kw) is a row of a tile ring at an offset (ring row t + kh W/32, tap kw), with a wrap. The helper takes in0 as a contiguous block at the CB read pointer with a wait / pop per K-block. `kblock_walk::walk` gained an in0 index function (`In0Indexed`). | n/a (inexpressible) | P8 448358 -> 398713, P11 799444 -> 754560 | `kernels/conv2d_3x3_kblock_walk.hpp:57-93`, index `kernels/conv2d_3x3_compute.cpp:1020` |
+| no helper covers this: free CB pages without moving the read pointer (circular-buffer API family) | capability | The tile ring is read at offsets while its oldest rows are freed for the tilize to overwrite. `cb_pop_front` moves the read pointer, which the indexed reads use as their base; `ack_tiles` does `llk_pop_tiles`' tiles-acked update and stall without moving it. | n/a | as above | `kernels/conv2d_3x3_compute.cpp:896` |

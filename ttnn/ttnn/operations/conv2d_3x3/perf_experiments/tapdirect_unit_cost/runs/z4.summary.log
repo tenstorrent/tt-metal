@@ -1,0 +1,12 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-21 00:30:52] SAFE_PYTEST: waiting for device (20s) — holder pid=4089613 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kblock_store_decouple/test_ksd.py " parent pid=4089610 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kblock_store_decouple/test_ksd.py "
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen python -m tracy -r -m pytest -p tests.plugins.up_front_collect ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_unit_cost/test_tu.py
+TU: {"case": "36", "variant": "c.Z.PREWAIT", "knobs": {"TU_DEFS": "Z,PREWAIT"}, "ablate": "", "log": "z4", "t": 1795221077.9462142, "status": "ok", "sha1": "8c78d9da0c9690306cbb3b81bc969bdee9687d32", "pcc": 0.9999985504467828, "mean_abs_err": 0.0011684884871176842, "max_abs_err": 0.017355918884277344, "ref": true, "bit_identical_to_first": true, "max_abs_vs_first": 0.0, "frac_diff_vs_first": 0.0,
+TU: {"case": "42", "variant": "c.Z.PREWAIT", "knobs": {"TU_DEFS": "Z,PREWAIT"}, "ablate": "", "log": "z4", "t": 1795221080.6473644, "status": "ok", "sha1": "05ef45778414808ae1ef4fb08dcad60fbe046a9d", "pcc": 0.9999985523059673, "mean_abs_err": 0.0011694483284738304, "max_abs_err": 0.017507553100585938, "ref": true, "bit_identical_to_first": true, "max_abs_vs_first": 0.0, "frac_diff_vs_first": 0.0,
+TU: {"case": "43", "variant": "c.Z.PREWAIT", "knobs": {"TU_DEFS": "Z,PREWAIT"}, "ablate": "", "log": "z4", "t": 1795221084.8124642, "status": "ok", "sha1": "e4417d6178b44f6dbacdcb00e9e16f35b6c2d12c", "pcc": 0.9999985522014374, "mean_abs_err": 0.0011686913131488026, "max_abs_err": 0.017363548278808594, "ref": true, "bit_identical_to_first": true, "max_abs_vs_first": 0.0, "frac_diff_vs_first": 0.0,
+============================== 3 passed in 16.97s ==============================
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_21_00_31_40/ops_perf_results_2026_11_21_00_31_40.csv
+SAFE_PYTEST_RESULT: PASS
+SAFE_PYTEST_TOTAL_RUNTIME: 0m40s (40s total, device-lock-acquired -> exit)

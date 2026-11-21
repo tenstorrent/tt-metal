@@ -1,0 +1,10 @@
+COF: {"case": "35", "variant": "base_abl", "status": "ok", "fold": false, "pcc": -0.0011984649681691798, "sha1": "55a1706e2dc00b64", "ref": true, "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0, "max_abs_vs_first": 0.0}
+COF: {"case": "35", "variant": "fold_abl", "status": "ok", "fold": true, "blocking": {"ng": 1, "cores": 110, "core_m": 596, "bm": 8, "bk": 4, "bn": 1, "m_blocks": 75, "k_blocks": 3, "resident": true, "footprint": 1333392}, "pcc": -0.00016738076672335078, "sha1": "4ae6d4084984f22a", "bit_identical_to_first": false, "n_diff_vs_first": 5654935, "max_ulp_vs_first": 50119, "max_abs_vs_first": 1.3823971156163125e+38, "first_diffs": [[0, 226, 0], [0, 226, 1], [0, 226, 2], [0, 227, 0], [0, 227, 1], [0, 227, 2], [0, 228, 0], [0, 228, 1]]}
+COF: {"case": "33", "variant": "fold_abl", "status": "ok", "fold": true, "blocking": {"ng": 1, "cores": 110, "core_m": 149, "bm": 30, "bk": 4, "bn": 1, "m_blocks": 5, "k_blocks": 3, "resident": true, "footprint": 1333744}, "pcc": 0.0018151365863914018, "sha1": "58cd58f7769b223a", "ref": true, "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0, "max_abs_vs_first": 0.0}
+COF: {"case": "33", "variant": "base_abl", "status": "ok", "fold": false, "pcc": 0.0018151365863914018, "sha1": "58cd58f7769b223a", "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0, "max_abs_vs_first": 0.0}
+========================= 2 passed in 64.41s (0:01:04) =========================
+SAFE_PYTEST_RESULT: PASS
+35|base_abl	1943925	[1943925]
+35|fold_abl	787010	[787010]
+33|fold_abl	236590	[236590]
+33|base_abl	446842	[446842]

@@ -1,0 +1,821 @@
+diff -ruN -x __pycache__ op_base/conv2d_3x3.py op_copy/conv2d_3x3.py
+--- op_base/conv2d_3x3.py	2026-11-21 00:33:56.586671292 +0000
++++ op_copy/conv2d_3x3.py	2026-11-21 00:44:40.101717067 +0000
+@@ -29,6 +29,7 @@
+ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
+ 
+ from .conv2d_3x3_program_descriptor import (
++    cout_fold_capable,
+     Conv3x3Geometry,
+     _core_m_ranges,
+     _kw_fold_group,
+@@ -578,6 +579,10 @@
+ # ---------------------------------------------------------------------------
+ 
+ 
++LAST_BLOCKING = None
++LAST_GEOMETRY = None
++
++
+ def conv2d_3x3(
+     input_tensor,
+     weight_tensor,
+@@ -703,6 +708,26 @@
+         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+         resident_shard_bytes = 0
+     blocking = select_blocking(geometry, work_grid, l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes))
++    if cout_fold_capable(geometry):
++        # C_out fold (COUT_FOLD): kw in the N lanes, on the ROW_MAJOR ring walk with resident weights.
++        fold_geometry = dataclasses.replace(geometry, fold=True)
++        try:
++            fold_blocking = select_blocking(
++                fold_geometry, work_grid, l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes)
++            )
++        except ValueError:
++            fold_blocking = None
++        if (
++            fold_blocking is not None
++            and fold_blocking.rm_ring_px
++            and fold_blocking.weights_resident
++            and fold_blocking.num_k_blocks == 3
++            and fold_blocking.block_k_tiles == geometry.c_in_tiles
++            and fold_blocking.block_n_tiles == 1
++        ):
++            geometry, blocking = fold_geometry, fold_blocking
++    global LAST_BLOCKING, LAST_GEOMETRY
++    LAST_BLOCKING, LAST_GEOMETRY = blocking, geometry
+ 
+     output_tensor = ttnn.allocate_tensor_on_device(
+         ttnn.Shape([1, 1, h_out * w_out, c_out]),
+diff -ruN -x __pycache__ op_base/conv2d_3x3_program_descriptor.py op_copy/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-21 00:33:56.586671292 +0000
++++ op_copy/conv2d_3x3_program_descriptor.py	2026-11-21 01:44:12.503526898 +0000
+@@ -88,6 +88,10 @@
+ CB_KWF_HALO_IN = 15
+ # ROW_MAJOR ring slab: the bank-run fill's staging (RM_RING_NSTG chunks).
+ CB_RM_STAGE = 16
++# C_out fold (kernels/conv2d_3x3_cout_fold.hpp): the fp32 plane the kw shift accumulates into, and its one-page
++# ready token (compute pack -> compute unpack).
++CB_FOLD_PLANE = 17
++CB_FOLD_TOKEN = 18
+ # Bank-run fill: the ROW_MAJOR DRAM-interleaved slab fill reads each chunk of consecutive pixels as one run per DRAM
+ # bank into a staging ring (BRF_NSTG chunks of up to BRF_CHUNK_BYTES), then de-interleaves it into the slab with local
+ # NoC copies. One read per pixel page is DRAM-transaction-bound (~600 M reads/s across the chip); bank runs are
+@@ -584,6 +588,8 @@
+     l1_small_bytes: int = 0
+     # DRAM-interleaved ROW_MAJOR input with one pixel per page (no padded lanes): the bank-run reads apply (rm ring).
+     bank_run_input: bool = False
++    # C_out fold (COUT_FOLD): the walk's K is (kh, c) and its N lanes (kw, c_out); see cout_fold_capable.
++    fold: bool = False
+ 
+     @property
+     def pad_sides(self):
+@@ -629,9 +635,18 @@
+ 
+     @property
+     def tensor_kkh_tiles(self):
++        # C_out fold: one tap (kw = 0) per kernel row; kw lives in the N lanes.
++        if self.fold:
++            return self.c_in_tiles
+         return _div_up(3 * self.c_in_p, TILE)
+ 
+     @property
++    def num_out_px_walk(self):
++        """Output pixels the walk covers: the C_out fold also multiplies one tile-row past the end (its first rows hold
++        the last output pixels' kw = 1, 2 partials)."""
++        return self.num_out_px + (TILE if self.fold else 0)
++
++    @property
+     def tensor_k_tiles(self):
+         return 3 * self.tensor_kkh_tiles
+ 
+@@ -809,6 +824,9 @@
+     """(first output tile-row, tile-rows) per M work index: the balanced split's ranges, else the uniform split."""
+     if g.m_ranges:
+         return list(g.m_ranges)
++    if g.fold:
++        # The C_out fold's walk multiplies one tile-row past the core's range (cout_fold_capable).
++        return [(s, a + 1) for s, a in _core_m_ranges(g.tensor_m_tiles, core_m_tiles)]
+     return _core_m_ranges(g.tensor_m_tiles, core_m_tiles)
+ 
+ 
+@@ -919,7 +937,7 @@
+         for block_start in range(0, actual, block_m_tiles):
+             tiles = min(block_m_tiles, actual - block_start)
+             o_first = (start + block_start) * TILE
+-            o_last = min((start + block_start + tiles) * TILE, g.num_out_px) - 1
++            o_last = min((start + block_start + tiles) * TILE, g.num_out_px_walk) - 1
+             band_len = _block_band_len(g, o_first, o_last)
+             worst_band = max(worst_band, band_len)
+             if g.tile_input:
+@@ -1178,7 +1196,8 @@
+         if _row_split(g, bm, bk)
+         else (IM2COL_RM_DEPTH_ROWS if im2col_depth is None else im2col_depth)
+     )
+-    max_m_blocks = _div_up(core_m_tiles, bm)
++    # C_out fold: one more tile-row per core (core_m_ranges).
++    max_m_blocks = _div_up(core_m_tiles + (1 if g.fold else 0), bm)
+     num_slices = _div_up(g.tensor_n_tiles, g.out_n_tiles)
+     weight_rounds = (num_slices if nslice else num_k_blocks) * max_m_blocks
+     weight_depth = 1 if weight_rounds == 1 else (NSLICE_WEIGHT_DEPTH if nslice else WEIGHT_DEPTH)
+@@ -1224,13 +1243,22 @@
+         + bm * (g.tensor_k_tiles if nslice else bk) * g.in0_tile_bytes
+         + weight_depth * (g.tensor_k_tiles * ns if nslice else bk * bn) * g.weight_tile_bytes
+         + (ns * g.weight_tile_bytes if g.has_bias else 0)
+-        + (RING_TOKEN_PAGES * RING_TOKEN_BYTES + TILE_BYTES_FP32 if nslice else bm * bn * TILE_BYTES_FP32)
++        + (
++            RING_TOKEN_PAGES * RING_TOKEN_BYTES + TILE_BYTES_FP32
++            if nslice
++            else (TILE_BYTES_FP32 if g.fold else bm * bn * TILE_BYTES_FP32)
++        )
+         + combine_bytes
+         + (
+             bm * ns * g.out_tile_bytes
+             if g.remote_output
+-            else (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
++            else (
++                0
++                if g.sharded_output
++                else (COUT_FOLD_OUT_TILES if g.fold else OUT_DEPTH_ROW_GROUPS * sb_h * bn) * g.out_tile_bytes
++            )
+         )
++        + (cout_fold_plane_bytes(g, bm) + RING_TOKEN_BYTES if g.fold else 0)
+         + (
+             (_tap_direct_fifo_units(g, bm, bk, nslice) * 16 or _src_table_bytes(im2col_rm_depth_rows))
+             if _tap_direct(g, bm, bk, nslice)
+@@ -1385,7 +1413,7 @@
+         for block_start in range(0, actual, bm):
+             tiles = min(bm, actual - block_start)
+             o_first = (start + block_start) * TILE
+-            o_end = min((start + block_start + tiles) * TILE, g.num_out_px)
++            o_end = min((start + block_start + tiles) * TILE, g.num_out_px_walk)
+             band_len = _block_band_len(g, o_first, o_end - 1)
+             f = _block_first_tap(g, o_first)
+             bands = []
+@@ -1420,6 +1448,56 @@
+     return worst
+ 
+ 
++# C_out fold (kernels/conv2d_3x3_cout_fold.hpp): where C_out fits a few lanes of one N tile, the walk folds kw into the
++# N lanes (K' = (kh, c), N' = lane group kw of COUT_FOLD_LANE_STRIDE fp32 lanes, c_out fastest) and multiplies each
++# output tile-row against the kw = 0 tap of the three kernel rows only: 3 tap-direct units and 3 C_in-tile K-blocks per
++# tile-row instead of 9. The kw shift and lane select move into the packs (fp32 packer L1 accumulation into a plane at
++# -kw rows and -kw lane groups). COUT_FOLD_FORCE: None takes it where capable, 0 never.
++COUT_FOLD = True
++COUT_FOLD_FORCE = None
++COUT_FOLD_LANE_STRIDE = 4  # fp32 lanes per kw group: one 16 B step of the packer's L1 address
++COUT_FOLD_OUT_TILES = 8  # output CB: two final-pass batches
++COUT_FOLD_PRE_BYTES = 256  # plane rows below slot 0 the backward spills of slot 0's tiles land in
++COUT_FOLD_SLOT_BYTES = TILE * 16 * 4  # one tile-row of the plane: 32 rows of 16 fp32 lanes
++
++
++def cout_fold_capable(g: Conv3x3Geometry):
++    """Geometry side of the C_out fold: the DRAM-interleaved ROW_MAJOR ring walk at stride 1, dilation 1, one column of
++    padding each side (W_out = W, so an output tile-row's kw taps are its pixels shifted by -1, 0, +1 in the row-major
++    pixel stream), W % 32 == 0 (an image row starts a tile-row), whole-tile C_in, bf16 activations and weights, a bias,
++    and the three kw lane groups of C_out fp32 lanes inside the tile's left 16 lanes."""
++    return (
++        COUT_FOLD
++        and COUT_FOLD_FORCE != 0
++        and g.bank_run_input
++        and not g.tile_input
++        and not g.sharded_output
++        and not g.k_split
++        and g.stride == 1
++        and g.dilation == 1
++        and g.pad_left == 1
++        and g.pad_sides[3] == 1
++        and g.output_width == g.input_width
++        and g.input_width % TILE == 0
++        and g.c_in_p % TILE == 0
++        and g.c_in == g.c_in_p
++        and g.has_bias
++        and g.in0_tile_bytes == TILE_BYTES_BF16
++        and g.weight_tile_bytes == TILE_BYTES_BF16
++        and g.c_out <= COUT_FOLD_LANE_STRIDE
++        and 3 * COUT_FOLD_LANE_STRIDE <= 16
++    )
++
++
++def cout_fold_plane_bytes(g: Conv3x3Geometry, bm):
++    """The fold's fp32 plane: PRE bytes, bm + 1 slots (the M-block's tile-rows and the previous block's last, which the
++    next block's first tile-row completes), one alias slot; the final pass's right half-plane run reads as far again
++    (masked). The writer stages one kernel row's 3 C_in-tile prepared weight tiles in it before compute's first pack."""
++    left = COUT_FOLD_PRE_BYTES + (bm + 2) * COUT_FOLD_SLOT_BYTES
++    stage = 3 * g.c_in_tiles * g.weight_tile_bytes
++    return _div_up(max(2 * left, stage), COUT_FOLD_SLOT_BYTES) * COUT_FOLD_SLOT_BYTES
++
++
+ # The most DRAM banks a chunk's bank runs round up to (a staging chunk holds NB runs of ceil(chunk / NB) pixels).
+ RM_MAX_DRAM_BANKS = 12
+ 
+@@ -2967,7 +3045,7 @@
+             cores,
+         ),
+         # Unused by the N-slice ring: one page there keeps the face-direct startup's output format defined.
+-        _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, 1 if b.nslice else bm * bn, cores),
++        _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, 1 if b.nslice or g.fold else bm * bn, cores),
+     ]
+     if g.remote_output:
+         # One [bm, out_n] block (tile-row major), drained by the writer to the output shards every M-block.
+@@ -2988,10 +3066,15 @@
+                 CB_OUTPUT_TILES,
+                 output_tensor.dtype,
+                 g.out_tile_bytes,
+-                b.out_depth_row_groups * b.out_subblock_h * bn,
++                COUT_FOLD_OUT_TILES if g.fold else b.out_depth_row_groups * b.out_subblock_h * bn,
+                 cores,
+             )
+         )
++    if g.fold:
++        # C_out fold: the fp32 plane (raw region: packs at computed rows, final-pass unpacks) and its ready token.
++        plane_slots = cout_fold_plane_bytes(g, bm) // COUT_FOLD_SLOT_BYTES
++        cbs.append(_cb(CB_FOLD_PLANE, ttnn.float32, COUT_FOLD_SLOT_BYTES, plane_slots, cores))
++        cbs.append(_cb(CB_FOLD_TOKEN, ttnn.float32, RING_TOKEN_BYTES, 1, cores))
+     if has_bias:
+         cbs.append(_cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, ns, cores))
+     input_ring_batches = INPUT_TILE_DEPTH_BATCHES
+@@ -3340,7 +3423,7 @@
+             g.input_height,
+             g.input_width,
+             g.output_width,
+-            g.num_out_px,
++            g.num_out_px_walk,
+             slice_channels,
+             g.c_in_p,
+             g.pad_top,
+@@ -3803,6 +3886,8 @@
+                     compute_args += [min(bm, actual_m_tiles - m * bm), slab_rows_per_block[m]]
+         if slab_direct or s2_taps:
+             compute_args += [m_tile_start, actual_m_tiles]
++        if g.fold:
++            compute_args += [m_tile_start, actual_m_tiles]
+         if kwf or padded_slab:
+             compute_args += [m_tile_start, actual_m_tiles]
+             compute_args += _kwf_xchg_flags(g, m_tile_start, actual_m_tiles) if kwf_xchg else [0, 0]
+@@ -4016,6 +4101,21 @@
+         [("CONV2D_3X3_HOST_FILL", "1"), ("HOST_FILL_WRITER_WINDOW", str(HOST_FILL_WRITER_WINDOW))] if host_fill else []
+     )
+     _wr_defines = [("WEIGHTS_RESIDENT", "1")] if b.weights_resident else []
++    _fold_defines = []
++    if g.fold:
++        assert b.weights_resident and b.rm_ring_px and b.num_k_blocks == 3 and bk == g.c_in_tiles and bn == 1
++        _fold_defines = [
++            ("CONV2D_3X3_COUT_FOLD", "1"),
++            ("FOLD_R", str(g.input_width // TILE)),
++            ("FOLD_COUT", str(g.c_out)),
++            ("FOLD_LS", str(COUT_FOLD_LANE_STRIDE)),
++            ("FOLD_S", str(bm + 1)),
++            ("FOLD_PRE", str(COUT_FOLD_PRE_BYTES)),
++            ("FOLD_LEFT", str(COUT_FOLD_PRE_BYTES + (bm + 2) * COUT_FOLD_SLOT_BYTES)),
++            ("FOLD_CB_PLANE", str(CB_FOLD_PLANE)),
++            ("FOLD_CB_TOKEN", str(CB_FOLD_TOKEN)),
++            ("FOLD_OUT_TILES", str(COUT_FOLD_OUT_TILES)),
++        ]
+     if b.weights_resident:
+         assert not (kwf or slab_direct or row_split or b.nslice or g.k_split or g.sharded_output or weight_servers)
+     if b.rm_ring_px:
+@@ -4056,7 +4156,8 @@
+             + _s2_dm_defines
+             + _host_fill_defines
+             + _brf_defines
+-            + _rm_ring_defines,
++            + _rm_ring_defines
++            + _fold_defines,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+@@ -4076,6 +4177,7 @@
+             + slot_ack_defines
+             + _host_fill_defines
+             + _wr_defines
++            + _fold_defines
+             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
+             + (
+                 [
+@@ -4104,7 +4206,8 @@
+         + _wide_short_defines
+         + _s2_compute_defines
+         + _ring_arrival_defines
+-        + _wr_defines,
++        + _wr_defines
++        + _fold_defines,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_compute.cpp op_copy/kernels/conv2d_3x3_compute.cpp
+--- op_base/kernels/conv2d_3x3_compute.cpp	2026-11-21 00:33:56.589671335 +0000
++++ op_copy/kernels/conv2d_3x3_compute.cpp	2026-11-21 00:48:48.350253505 +0000
+@@ -86,6 +86,9 @@
+ #ifdef CONV2D_3X3_S2_TAPS
+ #include "conv2d_3x3_s2_taps.hpp"
+ #endif
++#ifdef CONV2D_3X3_COUT_FOLD
++#include "conv2d_3x3_cout_fold.hpp"
++#endif
+ 
+ namespace ckl = compute_kernel_lib;
+ 
+@@ -1337,6 +1340,13 @@
+     [[maybe_unused]] uint32_t ring_need = 0;
+     // Weights resident: rounds waited for so far (see ResidentWeightsPreKBlock).
+     [[maybe_unused]] uint32_t wr_rounds_waited = 0;
++#ifdef CONV2D_3X3_COUT_FOLD
++    // C_out fold (conv2d_3x3_cout_fold.hpp): the core's first output tile-row and walk tile-rows (runtime args 3, 4).
++    conv2d_3x3::cout_fold::State fold_state{};
++    const uint32_t fold_m_tile_start = get_arg_val<uint32_t>(3);
++    const uint32_t fold_ext = get_arg_val<uint32_t>(4);
++    PACK((conv2d_3x3::cout_fold::mask_tables_init((1u << FOLD_COUT) - 1)));
++#endif
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         [[maybe_unused]] const uint32_t valid_rows =
+             rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx) : block_m_tiles;
+@@ -2211,6 +2221,19 @@
+             constexpr uint32_t wr_round_tiles = block_k_tiles * block_n_tiles;
+             using WrPre = ResidentWeightsPreKBlock<PreKBlockFn, cb_weights, wr_round_tiles>;
+             const WrPre wr_pre{pre_k_block, &wr_rounds_waited};
++#ifdef CONV2D_3X3_COUT_FOLD
++            static_assert(has_bias && block_n_tiles == 1 && num_k_blocks == 3 && block_k_tiles == c_in_tiles);
++            conv2d_3x3::cout_fold::block<
++                cb_im2col_tiles,
++                cb_weights,
++                FOLD_CB_PLANE,
++                FOLD_CB_TOKEN,
++                cb_output_tiles,
++                cb_bias,
++                block_m_tiles,
++                block_k_tiles,
++                apply_relu>(wr_pre, fold_state, m_block_idx, fold_m_tile_start, fold_ext);
++#else
+             conv2d_3x3::kblock_walk::walk<
+                 has_bias,
+                 bias_batch_groups,
+@@ -2229,6 +2252,7 @@
+                 block_k_tiles,
+                 num_k_blocks>(
+                 wr_pre, CenterTapIn0<center_mode, cb_center_tiles>{}, ResidentIn1Offset<wr_round_tiles>{});
++#endif
+ #else
+             conv2d_3x3::kblock_walk::walk<
+                 has_bias,
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_cout_fold.hpp op_copy/kernels/conv2d_3x3_cout_fold.hpp
+--- op_base/kernels/conv2d_3x3_cout_fold.hpp	1970-01-01 00:00:00.000000000 +0000
++++ op_copy/kernels/conv2d_3x3_cout_fold.hpp	2026-11-21 00:48:07.273668347 +0000
+@@ -0,0 +1,315 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// C_out fold on the K-blocked tap-direct ROW_MAJOR ring walk (the descriptor's cout_fold_capable: stride 1, dilation 1,
++// one column of padding each side so W_out = W, W % 32 == 0, C_out at most FOLD_LS lanes, bias).
++//
++// A conv with C_out = 3 multiplies a whole 32-lane N tile per output tile-row and K-block. The fold puts kw in the N
++// lanes instead: the weights' N tile is W'[(kh, c), FOLD_LS kw + co] = W[co, c, kh, kw] (the writer builds it), the walk
++// runs 3 K-blocks (kh) of C_in tiles, and each K-block's unit is the kw = 0 tap only. Output tile-row o's unit for kernel
++// row kh is the row-major pixel stream's [q + kh W - 1, + 32), q = 32 o (the reader's flat units: across an image-row
++// end too), so DEST row j holds U[q + j - 1] of kernel row kh, lane group kw = the partial pixel q + j - 1 adds to output
++// pixel q + j - kw. Packing DEST into a 16-lane fp32 plane at -kw rows and -kw lane groups (-kw (64 + 4 FOLD_LS) B)
++// puts every kw group's partial at lanes [0, C_out) of its output row: 9 packs per tile-row (3 per K-block) through the
++// packer's fp32 L1 accumulation sum the 9 taps, in the base walk's (kh, kw) order. The other lanes collect the other
++// groups (garbage, masked on the output pack). 3 K-blocks of bk tile-MACs and 3 units per tile-row instead of 9.
++//
++// Row-major wrap: at an image-row start (o % FOLD_R == 0) DEST row 0 is the previous row's last pixel. Its kw = 1, 2
++// partials belong to that row's last two output pixels (right), its kw = 0 partial would land on this row's first pixel
++// (padding: 0), and DEST row 1's kw = 2 partial on the previous row's last pixel (padding: 0). The packer's edge masks
++// zero those two rows of those two packs (row 0 of face 0 for kw = 0, row 1 of face 0 for kw = 2).
++//
++// Plane: FOLD_S = bm + 1 slots of 32 rows x 16 fp32 lanes (2 KB), core-local tile-row o in slot o % FOLD_S. Each tile's
++// kw = 1, 2 packs spill 1-2 rows (and a lane group) into the previous slot: the previous tile-row is complete only once
++// the next one is packed, so the final pass trails by one tile-row and the M-block's last tile-row waits for the next
++// block (bm + 1 slots). Slot 0's spills go below the plane (FOLD_PRE bytes) and are packed again from the alias slot
++// FOLD_S, so that they land in slot FOLD_S - 1. K-block 0's kw = 0 pack writes each slot's 32 rows first (overwrite);
++// every other pack accumulates. The walk runs one tile-row past the core's range (the reader's and this walk's
++// extended M range), whose rows 0-1 complete the core's last tile-row; it is never output.
++//
++// Final pass: each completed tile-row's 32 plane rows are faces 0 and 2 of a tile (srcA, the kw-fold final pass's two
++// 2-face runs: faces 1 and 3 read the right half-plane region FOLD_LEFT further, never written and masked), plus the
++// bias row (srcB from the bf16 bias tile), packed with the edge mask that keeps lanes [0, C_out) of faces 0 and 2 (the
++// lanes the base walk leaves at bias 0 + 0 come out 0). Same fp32 partials (each tap's K sum in DEST, as the base K-block
++// of that tap) and same final add; the packer adds the 9 partials in the base order except on the 1-2 rows a tile-row
++// takes from the next one at an M-block boundary.
++//
++// Raw LLK (capability): compute_kernel_lib::matmul_block packs whole tiles at a CB's write pointer; here a subblock's
++// tiles go as rows at computed plane addresses (kw-fold's replayed 4-row PACR streams, the left half-plane only), with
++// per-pack edge masks. compute_kernel_lib::add_bias_bcast_rows reads tiles at the CB read pointer; the final pass reads
++// face pairs at computed addresses (kw-fold's fs_unpack_run) and packs with a lane mask. No helper sets edge masks.
++
++#pragma once
++
++#include <cstdint>
++
++#include "api/compute/matmul.h"
++#include "api/compute/pack.h"
++#include "api/compute/reconfig_data_format.h"
++#include "api/dataflow/circular_buffer.h"
++#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++#include "conv2d_3x3_kw_fold.hpp"
++
++namespace conv2d_3x3::cout_fold {
++
++constexpr uint32_t SLOT = 32 * 16 * 4;  // one tile-row of the plane: 32 rows of 16 fp32 lanes
++constexpr uint32_t SBH = 4;             // subblock rows (fp32 DEST half)
++constexpr uint32_t FINAL_BATCH = 4;     // output tiles per DEST section in the final pass
++
++struct State {
++    uint32_t fin = 0;  // core-local tile-rows output so far
++    bool bias_waited = false;
++};
++
++#ifdef TRISC_PACK
++// Edge masks (tt-isa-documentation BlackholeA0 Packers/EdgeMasking.md): mask sections SEC0 pass (0 during the final
++// pass), SEC1 zero, SEC2 lanes [0, C_out); row tables T0 every row -> SEC0, T1 row 0 -> SEC1, T2 row 1 -> SEC1, T3 every
++// row -> SEC2; face tables F0 every face -> T0, F1 face 0 -> T1, F2 face 0 -> T2, F3 faces 0, 2 -> T3 and 1, 3 -> T0.
++// Face lookup is on only inside this file's packs (with pack_reads_per_xy_plane 16, the tile position's Z is the face
++// count of the PACR stream); T0 / SEC0 are the hardware defaults every other pack uses.
++inline void mask_tables_init(uint32_t cout_mask) {
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
++    cfg_reg_rmw_tensix<PCK_EDGE_OFFSET_SEC1_mask_ADDR32, 0, 0xffff>(0);
++    cfg_reg_rmw_tensix<PCK_EDGE_OFFSET_SEC2_mask_ADDR32, 0, 0xffff>(cout_mask);
++    cfg_reg_rmw_tensix<TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32, 0, 0xffffffff>(0x1);
++    cfg_reg_rmw_tensix<TILE_ROW_SET_MAPPING_2_row_set_mapping_0_ADDR32, 0, 0xffffffff>(0x4);
++    cfg_reg_rmw_tensix<TILE_ROW_SET_MAPPING_3_row_set_mapping_0_ADDR32, 0, 0xffffffff>(0xaaaaaaaa);
++    cfg_reg_rmw_tensix<TILE_FACE_SET_MAPPING_0_face_set_mapping_0_ADDR32, 0, 0xffffffff>(0);
++    cfg_reg_rmw_tensix<TILE_FACE_SET_MAPPING_1_face_set_mapping_0_ADDR32, 0, 0xffffffff>(0x1);
++    cfg_reg_rmw_tensix<TILE_FACE_SET_MAPPING_2_face_set_mapping_0_ADDR32, 0, 0xffffffff>(0x2);
++    cfg_reg_rmw_tensix<TILE_FACE_SET_MAPPING_3_face_set_mapping_0_ADDR32, 0, 0xffffffff>(0x33);
++}
++inline void mask_select(uint32_t face_table) {
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
++    cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_select_ADDR32, 0, 0x1ff>(0x100 | face_table);
++}
++inline void masks_on() {
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
++    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(16);
++    cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_select_ADDR32, 0, 0x1ff>(0x100);
++}
++// Back to the defaults (pack_reads_per_xy_plane 1 is what a packer data-format reconfig expects).
++inline void masks_off() {
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
++    cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_select_ADDR32, 0, 0x1ff>(0);
++    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1);
++}
++inline void final_masks_on() {
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
++    cfg_reg_rmw_tensix<PCK_EDGE_OFFSET_SEC0_mask_ADDR32, 0, 0xffff>(0);
++    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(16);
++    cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_select_ADDR32, 0, 0x1ff>(0x103);
++}
++inline void final_masks_off() {
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
++    cfg_reg_rmw_tensix<PCK_EDGE_OFFSET_SEC0_mask_ADDR32, 0, 0xffff>(0xffff);
++    cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_select_ADDR32, 0, 0x1ff>(0);
++    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1);
++}
++
++// kw-fold's face-split stream (kw_fold::pack_fst), left half-plane only: DEST tiles t0 .. t0 + g - 1, faces 0 and 2 of
++// each, as 32 g consecutive 64 B rows from byte address addr. Entry and exit state: packer ch0 Y / Z at 0.
++inline void pack_init() {
++    addr_mod_pack_t{.y_src = {.incr = 4}}.set(ADDR_MOD_0);
++    addr_mod_pack_t{.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}}.set(ADDR_MOD_2);
++    addr_mod_pack_t{.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 0, .clr = 1}}.set(ADDR_MOD_1);
++    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(2 * FACE_R_DIM * FACE_C_DIM * 4);
++    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(FACE_R_DIM * FACE_C_DIM * 4);
++    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
++    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
++    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
++    load_replay_buf(kw_fold::FST_REPLAY, 8, [] {
++        kw_fold::fst_pacr_face(ADDR_MOD_2, 0);
++        kw_fold::fst_pacr_face(ADDR_MOD_1, 1);
++    });
++}
++inline void pack_left(uint32_t addr, uint32_t t0, uint32_t g) {
++    program_packer_destination((addr >> 4) - 1);
++    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, 4 * t0);
++    for (uint32_t k = 0; k + 1 < 2 * g; ++k) {
++        lltt::replay(kw_fold::FST_REPLAY, 4);
++    }
++    lltt::replay(kw_fold::FST_REPLAY + 4, 4);
++}
++
++// One subblock's three kw packs: DEST tiles 0 .. h - 1 are core-local tile-rows o0 .. (global g0 ..) of kernel row
++// kb. A stream is one run of tile-rows in consecutive slots; a tile-row at an image-row start begins its own (its masked
++// row is the stream's face 0). l1acc: the packer's L1 accumulation state.
++template <uint32_t R, uint32_t S, uint32_t LS, uint32_t PRE>
++inline void pack_subblock(uint32_t plane, uint32_t o0, uint32_t h, uint32_t g0, bool first_kb, uint32_t& l1acc) {
++    for (uint32_t kw = 0; kw < 3; ++kw) {
++        // Every stream but K-block 0's kw = 0 accumulates onto rows an earlier stream wrote: its reads follow them.
++        TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
++        const uint32_t acc = first_kb && kw == 0 ? 0 : 1;
++        if (acc != l1acc) {
++            llk_pack_reconfig_l1_acc(acc);
++            l1acc = acc;
++        }
++        const uint32_t shift = kw * (64 + LS * 4);
++        uint32_t slot = o0 % S;
++        uint32_t gr = g0 % R;
++        for (uint32_t j = 0; j < h;) {
++            uint32_t e = j + 1;
++            uint32_t es = slot + 1 == S ? 0 : slot + 1;
++            uint32_t er = gr + 1 == R ? 0 : gr + 1;
++            while (e < h && es != 0 && er != 0) {
++                ++e;
++                es = es + 1 == S ? 0 : es + 1;
++                er = er + 1 == R ? 0 : er + 1;
++            }
++            const bool special = kw != 1 && gr == 0;
++            if (special) {
++                mask_select(kw == 0 ? 1 : 2);
++            }
++            pack_left(plane + PRE + slot * SLOT - shift, j, e - j);
++            if (kw != 0 && slot == 0) {
++                // Slot 0's spill rows, again from the alias slot: into slot S - 1.
++                pack_left(plane + PRE + S * SLOT - shift, j, 1);
++            }
++            if (special) {
++                mask_select(0);
++            }
++            j = e;
++            slot = es;
++            gr = er;
++        }
++    }
++}
++#endif
++
++// One M-block of the fold walk. pre_k_block: the tilize hook + resident-weights wait (K-block kb's bm units of the kw =
++// 0 tap of kernel row kb into cb_in0). m_tile_start: the core's first output tile-row; ext: its walk tile-rows (the
++// output tile-rows + 1).
++template <
++    uint32_t cb_in0,
++    uint32_t cb_w,
++    uint32_t cb_plane,
++    uint32_t cb_token,
++    uint32_t cb_out,
++    uint32_t cb_bias,
++    uint32_t bm,
++    uint32_t bk,
++    bool relu,
++    typename PreKBlockFn>
++ALWI void block(const PreKBlockFn& pre_k_block, State& st, uint32_t m_block_idx, uint32_t m_tile_start, uint32_t ext) {
++    constexpr uint32_t R = FOLD_R;
++    constexpr uint32_t S = FOLD_S;
++    constexpr uint32_t LS = FOLD_LS;
++    constexpr uint32_t PRE = FOLD_PRE;
++    constexpr uint32_t LEFT = FOLD_LEFT;
++    constexpr uint32_t ZK = LEFT / 4 <= 0xffff ? 1 : 2;
++    static_assert(S == bm + 1 && LEFT % (4 * ZK) == 0 && LEFT / (4 * ZK) <= 0xffff && 3 * LS <= 16);
++    CircularBuffer in0(cb_in0);
++    CircularBuffer token(cb_token);
++    CircularBuffer bias(cb_bias);
++
++    const uint32_t t_first = m_block_idx * bm;
++    const uint32_t valid = ext - t_first < bm ? ext - t_first : bm;
++    [[maybe_unused]] uint32_t plane_wr = 0;
++    PACK((plane_wr = get_local_cb_interface(get_output_id(cb_plane)).fifo_wr_ptr << 4));
++    {
++        MaybeDeviceZoneScope("compute_fold_walk");
++        for (uint32_t kb = 0; kb < 3; ++kb) {
++            pre_k_block(kb, 3, kb == 2);
++            // Matmul state after the hook (the tilize reconfigures unpack / math / pack); its pack left L1 acc off.
++            reconfig_data_format(cb_w, cb_in0);
++            pack_reconfig_data_format(cb_plane);
++            PACK((pack_init()));
++            PACK((masks_on()));
++            [[maybe_unused]] uint32_t l1acc = 0;
++            uint32_t init_rows = SBH;
++            ckernel::matmul_block_init(cb_in0, cb_w, false, 1, SBH, bk);
++            in0.wait_front(bm * bk);
++            const uint32_t ng = kw_fold::row_groups<SBH>(valid);
++            for (uint32_t k = 0; k < ng; ++k) {
++                uint32_t i0 = 0, h = 0;
++                kw_fold::row_group<SBH>(0, valid, k, i0, h);
++                if ((h == 1) != (init_rows == 1)) {
++                    // ct = 1: the unpack / math MOPs change only where rt = 1 flips ct >= rt.
++                    ckernel::matmul_block_init(cb_in0, cb_w, false, 1, h, bk);
++                }
++                init_rows = h;
++                tile_regs_acquire();
++                kw_fold::matmul_k_rows<1, SBH, bk>(cb_in0, cb_w, i0 * bk, kb * bk, 1, 0, h);
++                tile_regs_commit();
++                tile_regs_wait();
++                PACK((pack_subblock<R, S, LS, PRE>(
++                    plane_wr, t_first + i0, h, m_tile_start + t_first + i0, kb == 0, l1acc)));
++                tile_regs_release();
++            }
++            in0.pop_front(bm * bk);
++            PACK((masks_off()));
++            PACK((llk_pack_reconfig_l1_acc(0)));
++        }
++        // The final pass unpacks the plane: a CB push from the pack thread is stored only after the packer drained.
++        token.reserve_back(1);
++        token.push_back(1);
++    }
++
++    // ---- output tile-rows [fin, t_first + valid - 1): plane rows + bias, lanes [0, C_out) of faces 0 and 2.
++    const uint32_t end_fin = t_first + valid - 1;
++    token.wait_front(1);
++    if (end_fin > st.fin) {
++        MaybeDeviceZoneScope("compute_fold_final");
++        if (!st.bias_waited) {
++            MaybeDeviceZoneScope("compute_bias_wait");
++            bias.wait_front(1);
++            st.bias_waited = true;
++        }
++        [[maybe_unused]] uint32_t plane_rd = 0;
++        [[maybe_unused]] uint32_t bias_rd = 0;
++        UNPACK((plane_rd = get_local_cb_interface(get_operand_id(cb_plane)).fifo_rd_ptr << 4));
++        UNPACK((bias_rd = get_local_cb_interface(get_operand_id(cb_bias)).fifo_rd_ptr << 4));
++        reconfig_data_format(cb_plane, cb_bias);
++        pack_reconfig_data_format(cb_out);
++        if constexpr (relu) {
++            pack_relu_config(ReluConfig::zero());
++        }
++        UNPACK((kw_fold::fs_unpack_init<ZK>(LEFT)));
++        MATH((kw_fold::fs_math_init()));
++        PACK((llk_pack_init<PackMode::Default>(cb_out)));
++        PACK((final_masks_on()));
++        const uint32_t total = end_fin - st.fin;
++        UNPACK(({
++            uint32_t u = st.fin;
++            while (u < end_fin) {
++                const uint32_t slot = u % S;
++                const uint32_t n = end_fin - u < S - slot ? end_fin - u : S - slot;
++                kw_fold::fs_unpack_run<ZK>(plane_rd + PRE + slot * SLOT, n, bias_rd);
++                u += n;
++            }
++        }));
++        MATH(({
++            for (uint32_t f0 = 0; f0 < total; f0 += FINAL_BATCH) {
++                const uint32_t cnt = total - f0 < FINAL_BATCH ? total - f0 : FINAL_BATCH;
++                llk_math_wait_for_dest_available();
++                for (uint32_t j = 0; j < cnt; ++j) {
++                    kw_fold::fs_math_tile(j);
++                }
++                llk_math_dest_section_done<DST_ACCUM_MODE>();
++            }
++        }));
++        PACK(({
++            for (uint32_t f0 = 0; f0 < total; f0 += FINAL_BATCH) {
++                const uint32_t cnt = total - f0 < FINAL_BATCH ? total - f0 : FINAL_BATCH;
++                llk_packer_wait_for_math_done();
++                for (uint32_t j = 0; j < cnt; ++j) {
++                    // One tile per push: the writer drains in groups that never straddle the CB's end.
++                    cb_reserve_back(cb_out, 1);
++                    llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(j, cb_out, 0);
++                    cb_push_back(cb_out, 1);
++                }
++                llk_pack_dest_section_done<DST_ACCUM_MODE>();
++            }
++        }));
++        PACK((final_masks_off()));
++        UNPACK((kw_fold::fs_unpack_uninit()));
++        if constexpr (relu) {
++            pack_relu_config(ReluConfig::none());
++        }
++        st.fin = end_fin;
++    }
++    token.pop_front(1);
++}
++
++}  // namespace conv2d_3x3::cout_fold
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_gather_dataflow.hpp op_copy/kernels/conv2d_3x3_gather_dataflow.hpp
+--- op_base/kernels/conv2d_3x3_gather_dataflow.hpp	2026-11-21 00:33:56.589671335 +0000
++++ op_copy/kernels/conv2d_3x3_gather_dataflow.hpp	2026-11-21 00:48:58.722401262 +0000
+@@ -889,6 +889,52 @@
+         const int32_t h_in0 = ho0 + kh * dilation - pad_top;
+         const bool one_run = wo0 + n <= static_cast<int32_t>(output_width);
+         uint32_t pages = 0;
++#ifdef CONV2D_3X3_COUT_FOLD
++        // C_out fold (conv2d_3x3_cout_fold.hpp): the unit is the row-major pixel stream's [v, v + n), v = the kw = 0
++        // tap's pixel of o, across an image-row end too (compute masks the rows that wrap); zeros outside the image.
++        static_assert(taps == 1 && dilation == 1, "one tap (kw = 0) per unit");
++        if (n > 0) {
++            constexpr int32_t num_in_px = input_height * input_width;
++            const int32_t v = h_in0 * input_width + wo0 - pad_left;
++            if (v >= 0 && v + n <= num_in_px) {
++                const int32_t x = ring_x(slab_x_base_kh + v);
++                if (!crosses(x, n)) {
++                    e[0] = slab_l1 + static_cast<uint32_t>(x) * pixel_bytes;
++                } else {
++                    const uint32_t b = alloc(reads);
++                    const uint32_t dst = blk_base + b * blk_bytes;
++                    run(reads, slab_noc, x, dst, n);
++                    e[0] = dst;
++                    pages += blk_pages;
++                }
++            } else {
++                const int32_t lo = v < 0 ? (-v < n ? -v : n) : 0;
++                int32_t hi = num_in_px - v;
++                hi = hi < lo ? lo : (hi > n ? n : hi);
++                const uint32_t b = alloc(reads);
++                const uint32_t dst = blk_base + b * blk_bytes;
++                if (lo > 0) {
++                    zeros(reads, zero_noc, dst, lo);
++                }
++                if (hi > lo) {
++                    run(reads, slab_noc, ring_x(slab_x_base_kh + v + lo), dst + lo * pixel_bytes, hi - lo);
++                }
++                if (n > hi) {
++                    zeros(reads, zero_noc, dst + hi * pixel_bytes, n - hi);
++                }
++                e[0] = dst;
++                pages += blk_pages;
++            }
++        } else {
++            e[0] = zero_l1;
++        }
++        e[3] = pages;
++        ++tbl_written;
++        if (tbl_written == tbl_reserved) {
++            flush(reads);
++        }
++        return;
++#endif
+         if (n <= 0 || (one_run && (h_in0 < 0 || h_in0 >= input_height))) {
+             for (uint32_t t = 0; t < taps; ++t) {
+                 e[t] = zero_l1;
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_writer.cpp op_copy/kernels/conv2d_3x3_writer.cpp
+--- op_base/kernels/conv2d_3x3_writer.cpp	2026-11-21 00:33:56.590671349 +0000
++++ op_copy/kernels/conv2d_3x3_writer.cpp	2026-11-21 01:44:12.504526913 +0000
+@@ -2472,6 +2472,74 @@
+ #ifdef WEIGHTS_RESIDENT
+     static_assert(!row_split && !nslice_outer && !k_split && !weight_servers && !slab_split && !output_sharded);
+ #endif
++#ifdef CONV2D_3X3_COUT_FOLD
++    // ---- C_out fold (conv2d_3x3_cout_fold.hpp). Weights: round kh = the bk tiles W'[(kh, c), FOLD_LS kw + co] =
++    // W[(kh, kw, c), co], built from the prepared [3 kkh, C_out] weights (a kernel row's 3 bk tiles in (kw, c) order).
++    // Each kernel row's tiles are read into compute's plane (compute writes it only after its first matmul, which waits
++    // for these rounds), then each c-tile's three kw tiles merge lane group by lane group into its fold tile (faces 0
++    // and 2: lanes [0, 16)). Raw L1 stores (capability): no dataflow helper moves sub-tile lanes between tiles.
++    static_assert(block_n_tiles == 1 && num_k_blocks == 3 && 3 * FOLD_LS <= 16 && FOLD_COUT <= FOLD_LS);
++    if (num_m_blocks_this_core > 0) {
++        MaybeDeviceZoneScope("writer_weight_fetch");
++        constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
++        cb_reserve_back(cb_weights, num_k_blocks * round_tiles);
++        const uint32_t base = get_write_ptr(cb_weights);
++        const uint32_t stage = get_write_ptr(FOLD_CB_PLANE);
++        constexpr uint32_t face_words = 16 * 16;  // bf16 datums per face
++        for (uint32_t kh = 0; kh < 3; ++kh) {
++            uint32_t l1 = stage;
++            for (uint32_t kw = 0; kw < 3; ++kw) {
++                for (uint32_t c = 0; c < block_k_tiles; ++c, l1 += weight_tile_bytes) {
++                    const uint32_t k_tile = weight_k_tile_start + (kh * 3 + kw) * block_k_tiles + c;
++                    noc_async_read_page(k_tile * tensor_n_tiles, weights, l1);
++                }
++            }
++            noc_async_read_barrier();
++            invalidate_l1_cache();
++            for (uint32_t c = 0; c < block_k_tiles; ++c) {
++                const uint32_t dst = base + (kh * block_k_tiles + c) * weight_tile_bytes;
++                volatile tt_l1_ptr uint32_t* d32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
++                for (uint32_t i = 0; i < weight_tile_bytes / 4; ++i) {
++                    d32[i] = 0;
++                }
++                volatile tt_l1_ptr uint16_t* d = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst);
++                for (uint32_t kw = 0; kw < 3; ++kw) {
++                    volatile tt_l1_ptr uint16_t* src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
++                        stage + (kw * block_k_tiles + c) * weight_tile_bytes);
++                    for (uint32_t f = 0; f < 4; f += 2) {
++                        for (uint32_t r = 0; r < 16; ++r) {
++                            const uint32_t row = f * face_words + r * 16;
++                            for (uint32_t co = 0; co < FOLD_COUT; ++co) {
++                                d[row + kw * FOLD_LS + co] = src[row + co];
++                            }
++                        }
++                    }
++                }
++            }
++        }
++        cb_push_back(cb_weights, num_k_blocks * round_tiles);
++        k_blocks_issued = num_k_blocks;
++    }
++    {
++        // Output: compute's final pass pushes the core's output tile-rows one at a time, in order (actual_m_tiles - 1:
++        // the walk's extra tile-row is not an output). Drained in groups of half the CB, which never straddle its end.
++        MaybeDeviceZoneScope("writer_store");
++        const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
++        const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
++        const uint32_t real = num_m_blocks_this_core > 0 ? actual_m_tiles - 1 : 0;
++        constexpr uint32_t group = FOLD_OUT_TILES / 2;
++        for (uint32_t t0 = 0; t0 < real; t0 += group) {
++            const uint32_t cnt = real - t0 < group ? real - t0 : group;
++            uint32_t l1 = get_read_ptr(cb_output_tiles);
++            for (uint32_t j = 0; j < cnt; ++j, l1 += out_tile_bytes) {
++                cb_wait_front(cb_output_tiles, j + 1);
++                noc_async_write_page((m_tile_start + t0 + j) * tensor_n_tiles, output, l1);
++            }
++            noc_async_writes_flushed();
++            cb_pop_front(cb_output_tiles, cnt);
++        }
++    }
++#else
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         if constexpr (slab_split) {
+ #ifdef CONV2D_3X3_SLAB_DIRECT
+@@ -2658,6 +2726,7 @@
+             }
+         }
+     }
++#endif
+     drain_fill();
+     if constexpr (!output_sharded || remote_output) {
+         noc_async_write_barrier();

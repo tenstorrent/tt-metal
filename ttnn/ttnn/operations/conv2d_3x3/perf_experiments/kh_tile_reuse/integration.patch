@@ -1,0 +1,680 @@
+diff -ru '--exclude=__pycache__' op_base/conv2d_3x3_program_descriptor.py op_final/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-21 00:17:11.110387045 +0000
++++ op_final/conv2d_3x3_program_descriptor.py	2026-11-21 02:40:27.862508716 +0000
+@@ -526,6 +526,23 @@
+ # band's batches one at a time, slower.
+ BLOCK_FILL_BALANCE = True
+ BLOCK_FILL_GATE = True
++# kh reuse (kernels: KH_REUSE): on the interleaved ROW_MAJOR ring-slab walk at stride 1, d 1, W_out == W_in a multiple
++# of 32 and one tap per K-block, tap (kh, kw) of output tile-row t is tap (0, kw) of tile-row t + kh * W / 32, so
++# compute tilizes each input tile-row once, as one three-tap unit, into a tile ring of max(2 W / 32, bm) rows x 3 taps,
++# and K-block (kh, kw) reads in0 from it: 3x fewer tilized tiles, ~9x fewer units. The ring costs 3 x the tap's tiles
++# per row; the ROW_MAJOR ring slab shrinks to the reader's lookahead (KHR_TABLE_ROWS + KHR_FILL_ROWS tile-rows), and bm
++# is re-solved against both (the weights stay resident). Measured (Blackhole p150b, FLUX.2 bh2x4, bit-identical, device
++# kernel us, medians of 2-6 runs): 258x512 64->256 448.1 -> 398.9, 514x1024 64->128 798.5 -> 754.6, 130x256 128->512
++# 386.9 -> 374.6, 514x1024 64->256 1372.6 -> 1386.7 (bm 15 -> 3: flat). Not at C_in 32 (KHR_MIN_C_IN_TILES): there the
++# output store is the critical path (the most output bytes per MAC), and the faster compute bunches the cores' NoC1
++# stores until the far-column cores starve: 1026x2048 32->128 1832.7 -> 2590.9, 514x1024 32->128 598 -> 697.5, although
++# with the store stubbed they gain 1614.8 -> 1437.0 and 432.4 -> 378.4.
++KH_REUSE = True
++KHR_MIN_C_IN_TILES = 2
++KHR_TABLE_ROWS = None  # entries of the unit FIFO (None: bm)
++KHR_FILL_ROWS = None  # ring slab tile-rows past the FIFO's (None: KHR_TABLE_ROWS)
++KHR_DEPTH = 4  # gathered-block FIFO, in three-tap units
++KHR_WINDOWS = False  # three-tap window units (tw > 1; measured flat: -0.7% / +1.4% / -0.2% / -0.8%)
+ # Column ring rows per NoC on Blackhole (physical y 0..11; worker rows 2..11).
+ _BH_RING_ROWS = 12
+ 
+@@ -704,6 +721,9 @@
+     # N split: work index j * num_m_groups + i multiplies M range i against output columns
+     # [j * block_n_tiles, (j + 1) * block_n_tiles).
+     n_groups: int = 1
++    # kh reuse (KH_REUSE): tile-ring rows (0: off) and unit FIFO entries.
++    khr_ring_rows: int = 0
++    khr_table: int = 0
+ 
+     @property
+     def slab_px(self):
+@@ -1435,6 +1455,103 @@
+     return (ring_px - slab_px) * g.c_in_p * BF16_BYTES + _rm_stage_bytes(g)
+ 
+ 
++def kh_reuse_capable(g: Conv3x3Geometry, b: Conv3x3Blocking):
++    """kh reuse (KH_REUSE): the ROW_MAJOR ring-slab walk (interleaved, no K split) at stride 1, d 1, W_out == W_in a
++    multiple of 32 (a tile-row is one image-row run and the kh offset whole tile-rows), one tap per K-block, one-row
++    subblocks (a ring tile index per subblock row)."""
++    return (
++        KH_REUSE
++        and b.rm_ring_px > 0
++        and not g.tile_input
++        and not g.sharded_output
++        and not g.k_split
++        and not b.nslice
++        and g.stride == 1
++        and g.dilation == 1
++        and g.output_width == g.input_width
++        and g.input_width % TILE == 0
++        and g.c_in_p % TILE == 0
++        and g.c_in_tiles >= KHR_MIN_C_IN_TILES
++        and b.block_k_tiles == g.c_in_tiles
++        and b.num_k_blocks == 9
++        and b.center_mode == CENTER_NONE
++    )
++
++
++def _khr_plan(g: Conv3x3Geometry, bm):
++    """(ring rows, FIFO entries, ring-slab pixels, gathered-block depth) of the kh-reuse walk at bm."""
++    wt = g.input_width // TILE
++    ring_rows = max(2 * wt, bm)
++    table = KHR_TABLE_ROWS or bm
++    fill = KHR_FILL_ROWS if KHR_FILL_ROWS is not None else table
++    nstg, chunk_px = _rm_stage(g)
++    ring_px = max((table + fill) * TILE + 2, chunk_px)
++    return ring_rows, table, ring_px, KHR_DEPTH
++
++
++def _khr_footprint(g: Conv3x3Geometry, b: Conv3x3Blocking, bm):
++    """The L1 of the kh-reuse walk at bm (the ring-slab walk's buffers with the tile ring for in0, the ring slab sized
++    to the reader's lookahead, three-tap gathered blocks and FIFO entries), or None when one-row subblocks do not
++    hold."""
++    sb_h, sb_w = _out_subblock(bm, b.block_n_tiles)
++    if sb_h != 1:
++        return None
++    ring_rows, table, ring_px, depth = _khr_plan(g, bm)
++    tw = g.c_in_tiles
++    bn = b.block_n_tiles
++    ns = g.out_n_tiles if b.n_groups == 1 else bn
++    weight_depth = b.num_k_blocks if b.weights_resident else WEIGHT_DEPTH
++    total = (
++        ring_px * g.c_in_p * BF16_BYTES
++        + _rm_stage_bytes(g)
++        + depth * 3 * tw * TILE_BYTES_BF16
++        + TILE * g.c_in_p * BF16_BYTES
++        + ring_rows * 3 * tw * g.in0_tile_bytes
++        + weight_depth * b.block_k_tiles * bn * g.weight_tile_bytes
++        + (ns * g.weight_tile_bytes if g.has_bias else 0)
++        + bm * bn * TILE_BYTES_FP32
++        + OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes
++        + table * 16
++    )
++    return dict(
++        ring_rows=ring_rows,
++        table=table,
++        ring_px=ring_px,
++        depth=depth,
++        sb=(sb_h, sb_w),
++        footprint=total,
++    )
++
++
++def kh_reuse_blocking(g: Conv3x3Geometry, b: Conv3x3Blocking, l1_budget):
++    """The kh-reuse walk at the ring-slab solve's bk, weight residency and N split: the largest bm that fits, or
++    None."""
++    if not kh_reuse_capable(g, b):
++        return None
++    cm = b.core_m_tiles
++    for bm in sorted({_div_up(cm, n) for n in range(1, cm + 1)}, reverse=True):
++        fit = _khr_footprint(g, b, bm)
++        if fit is None or fit["footprint"] > l1_budget:
++            continue
++        sb_h, sb_w = fit["sb"]
++        return replace(
++            b,
++            block_m_tiles=bm,
++            max_m_blocks_per_core=_div_up(cm, bm),
++            out_subblock_h=sb_h,
++            out_subblock_w=sb_w,
++            combine_subblock_h=_out_subblock(bm, g.out_n_tiles if b.n_groups == 1 else b.block_n_tiles)[0],
++            combine_subblock_w=_out_subblock(bm, g.out_n_tiles if b.n_groups == 1 else b.block_n_tiles)[1],
++            in0_stream_rows=_in0_stream_rows(g, bm, b.block_k_tiles, sb_h),
++            im2col_rm_depth_rows=fit["depth"],
++            rm_ring_px=fit["ring_px"],
++            footprint_bytes=fit["footprint"],
++            khr_ring_rows=fit["ring_rows"],
++            khr_table=fit["table"],
++        )
++    return None
++
++
+ @functools.lru_cache(maxsize=256)
+ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
+     """The one place block extents are chosen. Order of the L1 solve (op_design Mechanism caps #1):
+@@ -1600,6 +1717,9 @@
+         ring_blocking = solve(ring_search, nslice=False, wr_solve=blocking.weights_resident, rm=True, split=split)
+         if ring_blocking is not None:
+             blocking = ring_blocking
++            khr = kh_reuse_blocking(g, blocking, l1_budget)
++            if khr is not None:
++                blocking = khr
+     if blocking is not None and g.k_split:
+         # N-slice-outer at the K-blocked solve's bm, unless its resident [bm, K] in0 does not fit. There bk only sets
+         # the gather / tilize granularity and costs almost no L1, so the coarsest that fits wins.
+@@ -2943,8 +3063,10 @@
+             if ub_s2 != ub0:
+                 b = replace(b, untilize_batch_rows=ub_s2)
+     cbs = [slab_cb]
++    # kh reuse: the gathered-block FIFO holds three-tap units, cb_im2col_tiles is the tile ring.
++    khr = b.khr_ring_rows > 0
+     if not face_direct:
+-        im2col_rm_pages = (1 if padded_slab or s2_taps else b.im2col_rm_depth_rows) * bk
++        im2col_rm_pages = (1 if padded_slab or s2_taps else b.im2col_rm_depth_rows) * bk * (3 if khr else 1)
+         cbs.append(_cb(CB_IM2COL_RM, ttnn.bfloat16, TILE_BYTES_BF16, im2col_rm_pages, cores))
+     cbs += [
+         # Face-direct: the reader writes these tiles; it relies on every K-block starting at the CB base.
+@@ -2955,7 +3077,11 @@
+             (
+                 2
+                 if slab_direct
+-                else (s2_in0_tiles if s2_taps else bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks))
++                else (
++                    b.khr_ring_rows * 3 * bk
++                    if khr
++                    else (s2_in0_tiles if s2_taps else bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks))
++                )
+             ),
+             cores,
+         ),
+@@ -3017,6 +3143,8 @@
+     # kw-fold has no gather (its reader only fills the slab) and owns CB_SRC_TABLE as its ACC-ready token.
+     tap_direct = not kwf and _tap_direct(g, bm, bk, b.nslice)
+     tap_direct_fifo_units = 0 if kwf else _tap_direct_fifo_units(g, bm, bk, b.nslice)
++    if khr:
++        tap_direct_fifo_units = b.khr_table
+     tap_direct_windows = not kwf and _tap_direct_windows(g, bm, bk, b.nslice, b.center_mode)
+     if tap_direct_fifo_units:
+         cbs.append(_cb(CB_SRC_TABLE, ttnn.bfloat16, 16, tap_direct_fifo_units, cores))
+@@ -4002,7 +4130,7 @@
+     # the previous M-block, and it gathers again only after the fill. No new L1, no blocking change. Elsewhere the
+     # per-pixel fill: TILE and sharded inputs have no pixel pages to coalesce, L1-interleaved pages stride by the L1
+     # bank count, and the other walks keep cb_im2col_rm live during the fill.
+-    brf_stage = _brf_staging(g, b.im2col_rm_depth_rows * bk * TILE_BYTES_BF16)
++    brf_stage = _brf_staging(g, b.im2col_rm_depth_rows * bk * (3 if khr else 1) * TILE_BYTES_BF16)
+     brf_fill = (
+         brf_stage is not None
+         and not g.tile_input
+@@ -4032,7 +4160,17 @@
+         if brf_fill
+         else []
+     )
+-    _rm_ring_defines = (
++    _khr_defines = (
++        [
++            ("KH_REUSE", "1"),
++            ("KHR_RING_ROWS", str(b.khr_ring_rows)),
++            ("KHR_WT", str(g.input_width // TILE)),
++            ("KHR_WINDOWS", str(int(KHR_WINDOWS and g.c_in_tiles > 1))),
++        ]
++        if khr
++        else []
++    )
++    _rm_ring_defines = _khr_defines + (
+         [
+             ("RM_RING_PX", str(b.rm_ring_px)),
+             ("RM_RING_NSTG", str(b.rm_stage_n)),
+@@ -4104,7 +4242,8 @@
+         + _wide_short_defines
+         + _s2_compute_defines
+         + _ring_arrival_defines
+-        + _wr_defines,
++        + _wr_defines
++        + _khr_defines,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_compute.cpp op_final/kernels/conv2d_3x3_compute.cpp
+--- op_base/kernels/conv2d_3x3_compute.cpp	2026-11-21 00:17:11.112387074 +0000
++++ op_final/kernels/conv2d_3x3_compute.cpp	2026-11-21 02:40:38.985666126 +0000
+@@ -874,6 +874,139 @@
+     }
+ };
+ 
++#ifdef KH_REUSE
++// kh reuse (the descriptor's KH_REUSE): stride 1, d 1, W_out == W_in a multiple of 32, one tap per K-block (K-block
++// 3 kh + kw). Tap (kh, kw) of output tile-row t is tap (0, kw) of tile-row t + kh * W / 32, so each input tile-row is
++// tilized once, as one three-tap unit ([kw][c] = 3 * tw tiles, the reader's TapDirectFifo entry), into a ring of
++// ring_rows such rows (cb_im2col_tiles), and K-block (kh, kw) of an M-block multiplies rows m0 + kh * W / 32 + i of it
++// at tap offset kw * tw. Rows are counted from the core's first output tile-row and tilized lazily: before K-block
++// (kh, 0), every row up to m0 + kh * wt + bm (so the reader streams rows in increasing order). The unpacker frees rows
++// with a bare ack of the ring's tiles_acked (its read pointer stays at the CB base, so a ring row's tiles sit at a
++// fixed index): before K-block (kh, 0), every row below m0 + min(bm, kh * wt) (kh > 0) or m0 (kh = 0), which no later
++// K-block reads; ring_rows = max(2 * wt, bm) then always holds the live rows. Same tiles, same K order as the
++// tap-direct walk (bit-identical); 3x fewer tilized tiles and ~9x fewer units. Raw LLK (capability): the walk's in0
++// comes from a CB read pointer with a per-K-block wait / pop, which cannot address a tile ring; nothing acks a CB
++// without moving its read pointer.
++namespace kh_reuse {
++#ifdef TRISC_UNPACK
++// tiles_acked += n without moving the read pointer (llk_pop_tiles' counter update and stall).
++inline void ack_tiles(uint32_t cb, uint32_t n) {
++    const uint32_t operand = get_operand_id(cb);
++    const uint32_t addr =
++        static_cast<uint32_t>((reinterpret_cast<std::uintptr_t>(get_cb_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);
++    get_local_cb_interface(operand).tiles_acked += n;
++    TT_SETDMAREG(0, get_local_cb_interface(operand).tiles_acked, 0, LO_16(4));
++    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
++    TT_STOREREG(4, addr);
++}
++#endif
++
++struct State {
++    uint32_t hw = 0;      // rows tilized (pushed)
++    uint32_t acked = 0;   // rows freed
++    uint32_t pos_hw = 0;  // hw's ring row
++    uint32_t m_row0 = 0;  // the M-block's first row
++    uint32_t kh_pos[3] = {0, 0, 0};  // ring row of m_row0 + kh * wt
++};
++
++template <
++    uint32_t tw,
++    uint32_t ring_rows,
++    uint32_t wt,
++    uint32_t bm,
++    uint32_t cb_rm,
++    uint32_t cb_ring,
++    uint32_t cb_table,
++    bool windows,
++    bool relu_on_last_matmul_pack>
++struct Tilize {
++    static constexpr uint32_t row_tiles = 3 * tw;
++    static_assert(ring_rows >= 2 * wt && ring_rows >= bm);
++    DataflowBuffer* rm;
++    DataflowBuffer* ring;
++    DataflowBuffer* table;
++    State* st;
++
++    // Per M-block, before the walk.
++    ALWI void begin_block(uint32_t m_block_idx) const {
++        st->m_row0 = m_block_idx * bm;
++        uint32_t p = st->m_row0 % ring_rows;
++        for (uint32_t kh = 0; kh < 3; ++kh) {
++            st->kh_pos[kh] = p;
++            p += wt;
++            if (p >= ring_rows) {
++                p -= ring_rows;
++            }
++        }
++    }
++
++    ALWI void operator()(uint32_t block, uint32_t /*num_k_blocks*/, bool is_last) const {
++        if (block % 3 != 0) {
++            return;
++        }
++        const uint32_t kh = block / 3;
++        const uint32_t m0 = st->m_row0;
++        const uint32_t free_to = kh == 0 ? m0 : m0 + (bm < kh * wt ? bm : kh * wt);
++        if (free_to > st->acked) {
++            UNPACK((ack_tiles(cb_ring, (free_to - st->acked) * row_tiles)));
++            st->acked = free_to;
++        }
++        const uint32_t target = m0 + kh * wt + bm;
++        if (target > st->hw) {
++            MaybeDeviceZoneScope("compute_tilize");
++            // The previous K-block's pack left packer L1 accumulation on; the tilize pack must overwrite.
++            pack_reconfig_l1_acc(0);
++            if constexpr (relu_on_last_matmul_pack) {
++                pack_relu_config(ReluConfig::none());
++            }
++            // A DEST section's pack never crosses the ring end: one tilize call per contiguous run.
++            while (st->hw < target) {
++                uint32_t n = target - st->hw;
++                const uint32_t to_end = ring_rows - st->pos_hw;
++                n = n < to_end ? n : to_end;
++                fifo_tilize<tw, 3, false, cb_rm, cb_ring, cb_table, windows>(*rm, *ring, *table, n);
++                st->hw += n;
++                st->pos_hw += n;
++                if (st->pos_hw == ring_rows) {
++                    st->pos_hw = 0;
++                }
++            }
++            if constexpr (relu_on_last_matmul_pack) {
++                if (is_last) {
++                    pack_relu_config(ReluConfig::zero());
++                }
++            }
++        }
++        // The rows this kernel row's K-blocks read are packed.
++        cb_wait_front(cb_ring, (target - st->acked) * row_tiles);
++    }
++
++    // Every row left (kernel end).
++    ALWI void finish() const {
++        if (st->hw > st->acked) {
++            UNPACK((ack_tiles(cb_ring, (st->hw - st->acked) * row_tiles)));
++            st->acked = st->hw;
++        }
++    }
++};
++
++// K-block (kh, kw), subblock row i0 (one tile-row): ring row m0 + kh * wt + i0, tap kw. The row stride inside a
++// subblock never matters (one-row subblocks).
++template <uint32_t tw, uint32_t ring_rows>
++struct In0Index {
++    const State* st;
++    ALWI uint32_t operator()(uint32_t block, uint32_t i0) const {
++        const uint32_t kh = block / 3;
++        uint32_t p = st->kh_pos[kh] + i0;
++        if (p >= ring_rows) {
++            p -= ring_rows;
++        }
++        return p * (3 * tw) + (block - 3 * kh) * tw;
++    }
++};
++}  // namespace kh_reuse
++#endif
++
+ #ifdef CONV2D_3X3_SLAB_DIRECT
+ // Slab-direct in0 (conv2d_3x3_slab_direct.hpp): every in0 tile is unpacked straight from the padded slab as two
+ // 2-face runs, K columns [0, 16) of its 32 rows at a and K columns [16, 32) at a + SD_HALF_BYTES. Each run lands in
+@@ -1337,6 +1470,24 @@
+     [[maybe_unused]] uint32_t ring_need = 0;
+     // Weights resident: rounds waited for so far (see ResidentWeightsPreKBlock).
+     [[maybe_unused]] uint32_t wr_rounds_waited = 0;
++#ifdef KH_REUSE
++    static_assert(
++        kb_tap_direct && !tile_input && !k_split && center_mode == 0 && block_k_tiles == c_in_tiles &&
++            num_k_blocks == 9 && out_subblock_h == 1,
++        "kh reuse: the interleaved K-blocked tap-direct walk, one tap per K-block");
++    kh_reuse::State khr_state{};
++    using KhrPre = kh_reuse::Tilize<
++        c_in_tiles,
++        KHR_RING_ROWS,
++        KHR_WT,
++        block_m_tiles,
++        cb_im2col_rm,
++        cb_im2col_tiles,
++        cb_src_table,
++        KHR_WINDOWS != 0,
++        relu_on_last_matmul_pack>;
++    const KhrPre khr_pre{&im2col_rm_dfb, &im2col_tiles_dfb, &src_table_dfb, &khr_state};
++#endif
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         [[maybe_unused]] const uint32_t valid_rows =
+             rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx) : block_m_tiles;
+@@ -2206,7 +2357,40 @@
+             // p150b, 3 runs each; the whole-block batch measured 5645).
+             MaybeDeviceZoneScope("compute_matmul_walk");
+             constexpr uint32_t bias_batch_groups = tile_input ? in0_num_subblocks : 2;
++#ifdef KH_REUSE
++            // kh reuse (kh_reuse::Tilize): the tilize hook and in0 from the tile ring.
++            khr_pre.begin_block(m_block_idx);
++            const auto khr_in0 =
++                conv2d_3x3::kblock_walk::In0Indexed<kh_reuse::In0Index<c_in_tiles, KHR_RING_ROWS>>{{&khr_state}};
+ #ifdef WEIGHTS_RESIDENT
++            constexpr uint32_t khr_round_tiles = block_k_tiles * block_n_tiles;
++            const ResidentWeightsPreKBlock<KhrPre, cb_weights, khr_round_tiles> khr_wr_pre{khr_pre, &wr_rounds_waited};
++            const auto& khr_hook = khr_wr_pre;
++            constexpr bool khr_resident = true;
++            const ResidentIn1Offset<khr_round_tiles> khr_in1{};
++#else
++            const auto& khr_hook = khr_pre;
++            constexpr bool khr_resident = false;
++            const ckl::NoIn1BaseOffset khr_in1{};
++#endif
++            conv2d_3x3::kblock_walk::walk<
++                has_bias,
++                bias_batch_groups,
++                khr_resident,
++                apply_relu,
++                cb_im2col_tiles,
++                cb_weights,
++                cb_matmul_partials,
++                cb_output_tiles,
++                cb_bias,
++                out_n_tiles,
++                in0_num_subblocks,
++                in1_num_subblocks,
++                out_subblock_h,
++                out_subblock_w,
++                block_k_tiles,
++                num_k_blocks>(khr_hook, CenterTapIn0<center_mode, cb_center_tiles>{}, khr_in1, khr_in0);
++#elif defined(WEIGHTS_RESIDENT)
+             // Weights resident (see ResidentIn1Offset): the rounds stay fronted across the M-blocks.
+             constexpr uint32_t wr_round_tiles = block_k_tiles * block_n_tiles;
+             using WrPre = ResidentWeightsPreKBlock<PreKBlockFn, cb_weights, wr_round_tiles>;
+@@ -2255,6 +2439,9 @@
+         }
+     }
+ 
++#ifdef KH_REUSE
++    khr_pre.finish();
++#endif
+ #ifdef WEIGHTS_RESIDENT
+     if (wr_rounds_waited > 0) {
+         weights.pop_front(wr_rounds_waited * block_k_tiles * block_n_tiles);
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_kblock_walk.hpp op_final/kernels/conv2d_3x3_kblock_walk.hpp
+--- op_base/kernels/conv2d_3x3_kblock_walk.hpp	2026-11-21 00:17:11.112387074 +0000
++++ op_final/kernels/conv2d_3x3_kblock_walk.hpp	2026-11-21 02:26:44.008806641 +0000
+@@ -35,6 +35,7 @@
+ #pragma once
+ 
+ #include <cstdint>
++#include <type_traits>
+ 
+ #include "api/compute/bcast.h"
+ #include "api/compute/matmul.h"
+@@ -46,6 +47,22 @@
+ 
+ namespace conv2d_3x3::kblock_walk {
+ 
++// The default in0 addressing: K-block k's [bm, bk] tiles at the in0 CB's read pointer, waited for and popped per
++// K-block.
++struct In0Fifo {};
++
++// KH_REUSE (conv2d_3x3_compute.cpp, KhReuseTilize): in0 tiles are read from a compute-owned tile ring at the tile index
++// the functor returns for (K-block, subblock row), never waited for or popped here (the PreKBlockFn does both).
++template <typename F>
++struct In0Indexed {
++    F f;
++    ALWI uint32_t operator()(uint32_t block, uint32_t i0) const { return f(block, i0); }
++};
++template <typename T>
++struct is_in0_indexed : std::false_type {};
++template <typename F>
++struct is_in0_indexed<In0Indexed<F>> : std::true_type {};
++
+ template <
+     bool has_bias,
+     uint32_t groups,    // with a bias: row groups per interleaved bias batch
+@@ -65,14 +82,22 @@
+     uint32_t num_k_blocks,
+     typename PreKBlockFn,
+     typename In0SourceFn,
+-    typename In1BaseOffsetFn>
+-ALWI void walk(const PreKBlockFn& pre_k_block, const In0SourceFn& in0_source, const In1BaseOffsetFn& in1_offset) {
++    typename In1BaseOffsetFn,
++    typename In0IndexFn = In0Fifo>
++ALWI void walk(
++    const PreKBlockFn& pre_k_block,
++    const In0SourceFn& in0_source,
++    const In1BaseOffsetFn& in1_offset,
++    const In0IndexFn& in0_indexed = {}) {
+     static_assert(!has_bias || groups >= 1);
++    constexpr bool in0_ring = is_in0_indexed<In0IndexFn>::value;
++    // A ring tile index addresses one tile per subblock row: one-row subblocks only.
++    static_assert(!in0_ring || sb_h == 1);
+     constexpr uint32_t bn = in1_num_subblocks * sb_w;
+     constexpr uint32_t row_group_tiles = sb_h * bn;
+     constexpr uint32_t block_tiles = in0_num_subblocks * row_group_tiles;
+-    constexpr uint32_t in0_block_tiles = in0_num_subblocks * sb_h * bk;
+-    constexpr uint32_t in1_block_tiles = bk * bn;
++    [[maybe_unused]] constexpr uint32_t in0_block_tiles = in0_num_subblocks * sb_h * bk;
++    [[maybe_unused]] constexpr uint32_t in1_block_tiles = bk * bn;
+     // No bias: the last K-block reloads the partials of the others (none with one K-block).
+     constexpr bool reload = !has_bias && num_k_blocks >= 2;
+     constexpr bool uses_partials = has_bias || reload;
+@@ -138,7 +163,9 @@
+         }
+         ckernel::matmul_block_init(a_cb, in1_cb, false, sb_w, sb_h, bk);
+         const uint32_t in1_base = in1_offset(block);
+-        cb_wait_front(a_cb, in0_block_tiles);
++        if constexpr (!in0_ring) {
++            cb_wait_front(a_cb, in0_block_tiles);
++        }
+         if constexpr (!in1_resident) {
+             cb_wait_front(in1_cb, in1_block_tiles);
+         }
+@@ -176,6 +203,9 @@
+                     }
+                 }
+                 uint32_t in0_index = in0_sub;
++                if constexpr (in0_ring) {
++                    in0_index = in0_indexed(block, i0);
++                }
+                 uint32_t in1_index = in1_base + col;
+                 for (uint32_t k = 0; k < bk; ++k) {
+                     ckernel::matmul_block(a_cb, in1_cb, in0_index, in1_index, 0, false, sb_w, sb_h, bk);
+@@ -223,7 +253,9 @@
+                 cb_pop_front(partials_cb, block_tiles);
+             }
+         }
+-        cb_pop_front(a_cb, in0_block_tiles);
++        if constexpr (!in0_ring) {
++            cb_pop_front(a_cb, in0_block_tiles);
++        }
+         if constexpr (!in1_resident) {
+             cb_pop_front(in1_cb, in1_block_tiles);
+         }
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_reader.cpp op_final/kernels/conv2d_3x3_reader.cpp
+--- op_base/kernels/conv2d_3x3_reader.cpp	2026-11-21 00:17:11.112387074 +0000
++++ op_final/kernels/conv2d_3x3_reader.cpp	2026-11-21 02:40:21.600420098 +0000
+@@ -766,7 +766,112 @@
+             fifo.fixed_state = 0;
+         }
+     };
+-    for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
++#ifdef KH_REUSE
++    // kh reuse (the compute kernel's kh_reuse::Tilize): one three-tap unit (kw = 0, 1, 2 of kernel row 0) per virtual
++    // tile-row J, in increasing J, over the rows compute tilizes: J in [m_tile_start, m_tile_start + nmb * bm + 2 wt).
++    // Tap (kh, kw) of output tile-row t is unit t + kh * wt's tap kw. A row no in-range output tile-row reads (past the
++    // core's bands, or between them when the core spans less than an image row) is the zero unit. The fill is the ring
++    // slab's (RmBankRing): the core's bands, each pixel read once; a unit waits for its 32 + 2 pixels, and the reader
++    // learns compute's progress from the entry FIFO (tap_direct_fifo_units deep): once units below e are reserved,
++    // compute popped every unit below e - tap_direct_fifo_units, whose pixels the ring may then overwrite.
++    constexpr bool kh_reuse = true;
++    static_assert(
++        rm_ring && kb_tap_direct && stride == 1 && dilation == 1 && static_cast<int32_t>(output_width) == input_width &&
++            input_width % static_cast<int32_t>(TILE_DIM) == 0 && block_k_tiles == c_in_tiles,
++        "kh reuse: stride 1, d 1, W_out == W_in whole tiles, one tap per K-block, the ROW_MAJOR ring slab");
++    if (num_m_blocks_this_core > 0) {
++        MaybeDeviceZoneScope("reader_khr_stream");
++        constexpr uint32_t wt = static_cast<uint32_t>(input_width) / TILE_DIM;
++        constexpr uint32_t T = tap_direct_fifo_units;
++        static_assert(rm_ring_px >= static_cast<int32_t>(T) * 32 + 2, "the ring holds the FIFO's units");
++        using Fifo3T = conv2d_3x3::TapDirectFifo<
++            output_width,
++            input_height,
++            input_width,
++            pad_top,
++            pad_left,
++            dilation,
++            c_in_p,
++            3 * c_in_tiles,
++            -1,
++            rm_ring_px,
++            im2col_rm_depth_rows * 3,
++            T,
++            cb_im2col_rm,
++            cb_src_table,
++            TRID_GATHER,
++            KHR_WINDOWS != 0>;
++        Fifo3T fifo3;
++        fifo3.init(get_write_ptr(cb_im2col_rm), src_table_l1);
++        const uint32_t c0 = m_tile_start;
++        const uint32_t total = num_m_blocks_this_core * block_m_tiles + 2 * wt;
++        // Pixel range of virtual tile-row J's three taps: [J * 32 - pad_top * W - pad_left, + 34).
++        constexpr int32_t px_shift = pad_top * input_width + pad_left;
++        const uint32_t core_end_tiles = (m_tile_start + actual_m_tiles) * TILE_DIM;
++        const conv2d_3x3::SlabFootprint core_fp = conv2d_3x3::
++            block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
++                c0 * TILE_DIM, core_end_tiles < num_out_px ? core_end_tiles : num_out_px);
++        rm.template init<input_width, num_in_px, dilation>(
++            slab_l1, get_write_ptr(cb_rm_stage), core_fp.f > 0 ? core_fp.f : 0, core_fp);
++        auto idle3 = [&]() {
++            if (rm.step(reads, input)) {
++                reads.begin(TRID_GATHER);
++                fifo3.fixed_state = 0;
++            }
++        };
++        int32_t q_lo = 0;  // base_for's wrap count at the current unit's lowest pixel
++        reads.begin(TRID_GATHER);
++        for (uint32_t j = 0; j < total; ++j) {
++            fifo3.reserve(tap_direct_group, total - j, idle3);
++            const uint32_t reserved_end = j + fifo3.tbl_reserved - fifo3.tbl_written;
++            if (reserved_end > T) {
++                rm.release(static_cast<int32_t>((c0 + reserved_end - T) * TILE_DIM) - px_shift);
++            }
++            const uint32_t J = c0 + j;
++            const bool needed = j < actual_m_tiles || (j >= wt && j - wt < actual_m_tiles) ||
++                                (j >= 2 * wt && j - 2 * wt < actual_m_tiles);
++            const int32_t lo = static_cast<int32_t>(J * TILE_DIM) - px_shift;
++            // Keep the staging ring's DRAM reads in flight under the gather (compute may be ahead of the fill), then
++            // wait for this unit's pixels.
++            bool refill = false;
++            if (rm.can_issue()) {
++                rm.issue(reads, input, conv2d_3x3::RM_INF);
++                refill = true;
++            }
++            if (needed) {
++                int32_t hi = lo + static_cast<int32_t>(TILE_DIM) + 2;
++                hi = hi < num_in_px ? hi : num_in_px;
++                // (A row below the image's last pixel has nothing to wait for: its taps are the zero block.)
++                if (hi > lo && hi > rm.landed) {
++                    rm.need_whole(reads, input, hi);
++                    refill = true;
++                }
++            }
++            if (refill) {
++                reads.begin(TRID_GATHER);
++                fifo3.fixed_state = 0;
++            }
++            const int32_t lo_c = lo > rm.origin ? lo : rm.origin;
++            while (lo_c - rm.origin - q_lo * rm_ring_px >= rm_ring_px) {
++                ++q_lo;
++            }
++            fifo3.unit(
++                reads,
++                slab_l1,
++                slab_noc,
++                zero_src_l1,
++                zero_src_noc,
++                J * TILE_DIM,
++                needed ? (J + 1) * TILE_DIM : J * TILE_DIM,
++                0,
++                0,
++                -rm.origin - q_lo * rm_ring_px);
++        }
++    }
++#else
++    constexpr bool kh_reuse = false;
++#endif
++    for (uint32_t m_block_idx = 0; m_block_idx < (kh_reuse ? 0 : num_m_blocks_this_core); ++m_block_idx) {
+         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
+         const uint32_t block_valid_tiles =
+             (actual_m_tiles - block_tiles_done) < block_m_tiles ? (actual_m_tiles - block_tiles_done) : block_m_tiles;
+diff -ru '--exclude=__pycache__' op_base/kernels/conv2d_3x3_rm_ring.hpp op_final/kernels/conv2d_3x3_rm_ring.hpp
+--- op_base/kernels/conv2d_3x3_rm_ring.hpp	2026-11-21 00:17:11.112387074 +0000
++++ op_final/kernels/conv2d_3x3_rm_ring.hpp	2026-11-21 02:40:21.599420084 +0000
+@@ -299,6 +299,24 @@
+         return false;
+     }
+ 
++    // Blocking, whole chunks: every needed pixel below x is in the ring, the chunks that bring it in issued whole (up
++    // to `allowed`), not cut at x. The kh-reuse stream waits for one unit's pixels at a time; cutting there would turn
++    // a lagging fill into one DRAM round trip per unit.
++    template <typename Reads, typename Accessor>
++    FORCE_INLINE void need_whole(Reads& reads, const Accessor& input, int32_t x) {
++        if (x <= landed) {
++            return;
++        }
++        while (copied < x) {
++            if (can_issue() && iss_a < x) {
++                issue(reads, input, RM_INF);
++            } else {
++                process(reads);
++            }
++        }
++        land_copies(reads);
++    }
++
+     // Blocking: every needed pixel below x is in the ring. x is within the plan's capacity of the live pixels
+     // (x <= allowed), so the chunks it needs can be issued.
+     template <typename Reads, typename Accessor>

@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/zone_report.py", line 100, in <module>
+    sys.exit(main())
+  File "/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/zone_report.py", line 74, in main
+    freq_mhz, runs = load(args.log)
+  File "/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/zone_report.py", line 24, in load
+    with open(path) as f:
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/tu_z6_dev.csv'

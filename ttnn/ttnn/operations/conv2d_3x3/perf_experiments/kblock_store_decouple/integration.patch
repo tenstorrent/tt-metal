@@ -1,0 +1,100 @@
+diff -ru -x __pycache__ op_base/conv2d_3x3_program_descriptor.py op_final/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-21 00:10:31.802676707 +0000
++++ op_final/conv2d_3x3_program_descriptor.py	2026-11-21 02:02:15.814924516 +0000
+@@ -331,6 +331,18 @@
+ TAP_DIRECT_FIFO_GROUP = 4
+ WEIGHT_DEPTH = 2
+ OUT_DEPTH_ROW_GROUPS = 2
++# On the ROW_MAJOR ring walk cb_output_tiles takes the L1 the solved blocking leaves before the deep im2col ring does (bm
++# is not traded for it), up to a whole M-block: the last K-block's bias pass then waits on the store for fewer row groups,
++# and the writer drains the rest under the next block. Bit-identical. Only where K has at least OUT_DEPTH_FREE_MIN_K_TILES
++# tiles (C_in >= 64): with one-tile taps (C_in 32, 9 tile-MACs per output tile) the store is NoC1 / DRAM bound, and a
++# store that runs on under the next block keeps NoC1 busy without the gaps the last-K-block burst leaves the cores
++# upstream of the DRAM endpoints (grid x 13-15, y 5-10), which then finish last. Measured (Blackhole p150b, FLUX.2
++# bh2x4, device kernel us, 3 runs each, alternating order): 514x1024 64->128 799 -> 779 (17 of 30 row groups),
++# 514x1024 64->256 1373 -> 1358 (6 of 15), the other ring cases flat; 514x1024 32->128 595 -> 605 (+1.5%, median),
++# hence the K floor. A whole-M-block CB paid for with bm measured worse there (1026x2048 32->128 1826 -> 3038,
++# 514x1024 32->128 595 -> 724).
++OUT_DEPTH_FREE = True
++OUT_DEPTH_FREE_MIN_K_TILES = 18
+ # cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b. Where every core runs
+ # one M-block the ring instead holds the whole slab in cb_im2col_tiles' L1 (see create_program_descriptor).
+ INPUT_TILE_DEPTH_BATCHES = 2
+@@ -1171,6 +1183,7 @@
+     shared=False,
+     resident=False,
+     n_groups=1,
++    out_depth=OUT_DEPTH_ROW_GROUPS,
+ ):
+     num_k_blocks = g.tensor_k_tiles // bk
+     im2col_rm_depth_rows = (
+@@ -1229,7 +1242,7 @@
+         + (
+             bm * ns * g.out_tile_bytes
+             if g.remote_output
+-            else (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
++            else (0 if g.sharded_output else out_depth * sb_h * bn * g.out_tile_bytes)
+         )
+         + (
+             (_tap_direct_fifo_units(g, bm, bk, nslice) * 16 or _src_table_bytes(im2col_rm_depth_rows))
+@@ -1253,6 +1266,7 @@
+         footprint_bytes=total,
+         nslice=nslice,
+         im2col_rm_depth_rows=im2col_rm_depth_rows,
++        out_depth_row_groups=out_depth,
+         shared_slab_bytes=shared_slab_bytes,
+     )
+ 
+@@ -1505,6 +1519,36 @@
+                         footprint_bytes=fit["footprint_bytes"] + rm_delta,
+                     )
+                 if fit["footprint_bytes"] <= l1_budget:
++                    out_depth = OUT_DEPTH_ROW_GROUPS
++                    if rm_px and OUT_DEPTH_FREE and g.tensor_k_tiles >= OUT_DEPTH_FREE_MIN_K_TILES:
++                        # The deeper output CB (OUT_DEPTH_FREE) from the L1 left at this (bm, bk, ub), up to the
++                        # whole block, before the deep im2col ring.
++                        for d in range(_div_up(bm, fit["out_subblock_h"]), OUT_DEPTH_ROW_GROUPS, -1):
++                            deep_out = _footprint(
++                                g,
++                                cm,
++                                bm,
++                                bk,
++                                bn_,
++                                ub_cap,
++                                nslice,
++                                shared=shared,
++                                resident=resident,
++                                n_groups=ng,
++                                out_depth=d,
++                            )
++                            if deep_out["footprint_bytes"] + rm_delta <= l1_budget:
++                                fit = dict(
++                                    deep_out,
++                                    rm_ring_px=fit["rm_ring_px"],
++                                    rm_stage_n=fit["rm_stage_n"],
++                                    rm_stage_px=fit["rm_stage_px"],
++                                    footprint_bytes=deep_out["footprint_bytes"] + rm_delta,
++                                )
++                                if resident:
++                                    fit["weights_resident"] = True
++                                out_depth = d
++                                break
+                     # The deeper im2col ring only takes L1 left at this (bm, bk, ub): it never costs a coarser block.
+                     for depth in range(_im2col_ring_target(g, bm, bk, nslice), IM2COL_RM_DEPTH_ROWS, -1):
+                         deep = _footprint(
+@@ -1519,6 +1563,7 @@
+                             shared=shared,
+                             resident=resident,
+                             n_groups=ng,
++                            out_depth=out_depth,
+                         )
+                         if rm_px:
+                             deep = dict(
+@@ -1557,7 +1602,6 @@
+                         block_m_tiles=bm,
+                         block_k_tiles=bk,
+                         block_n_tiles=bn_,
+-                        out_depth_row_groups=OUT_DEPTH_ROW_GROUPS,
+                         n_groups=ng,
+                         **fit,
+                     )

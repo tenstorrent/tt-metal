@@ -1,0 +1,179 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-21 01:19:17] SAFE_PYTEST: waiting for device (20s) — holder pid=369463 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/ring_fill_noc_split/test_rfs.py " parent pid=369460 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/ring_fill_noc_split/test_rfs.py "
+[2026-11-21 01:19:38] SAFE_PYTEST: waiting for device (40s) — holder pid=369463 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/ring_fill_noc_split/test_rfs.py " parent pid=369460 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/ring_fill_noc_split/test_rfs.py "
+[2026-11-21 01:19:59] SAFE_PYTEST: waiting for device (60s) — holder pid=369463 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/ring_fill_noc_split/test_rfs.py " parent pid=369460 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/ring_fill_noc_split/test_rfs.py "
+[2026-11-21 01:20:20] SAFE_PYTEST: waiting for device (80s) — holder pid=369463 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/ring_fill_noc_split/test_rfs.py " parent pid=369460 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/ring_fill_noc_split/test_rfs.py "
+[2026-11-21 01:20:41] SAFE_PYTEST: waiting for device (100s) — holder pid=369463 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/ring_fill_noc_split/test_rfs.py " parent pid=369460 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/ring_fill_noc_split/test_rfs.py "
+[2026-11-21 01:21:02] SAFE_PYTEST: waiting for device (120s) — holder pid=369463 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/ring_fill_noc_split/test_rfs.py " parent pid=369460 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/ring_fill_noc_split/test_rfs.py "
+[2026-11-21 01:21:22] SAFE_PYTEST: waiting for device (140s) — holder pid=369463 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/ring_fill_noc_split/test_rfs.py " parent pid=369460 cmd="timeout 3000 scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/ring_fill_noc_split/test_rfs.py "
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen python -m tracy -r -m pytest -p tests.plugins.up_front_collect ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kblock_store_decouple/test_ksd.py
+========================================
+2026-11-21 01:21:43.926 | INFO     | __main__:main:381 - Using port 8086
+2026-11-21 01:21:43.927 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-21 01:21:44.540 | INFO     | __main__:run_workload:416 - Test process started
+2026-11-21 01:21:46.989 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-21 01:21:52.040 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-21 01:21:52.040 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-21 01:21:52.043 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-21 01:21:52.043 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-21 01:21:52.066 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-21 01:21:52.067 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-21 01:21:52.342 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-21 01:21:52.343 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-21 01:21:52.343 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-21 01:21:52.343 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-21 01:21:52.350 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-21 01:21:52.811 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-21 01:21:52.965 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-21 01:21:52.965 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-21 01:21:53.146 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-21 01:21:53.165 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-21 01:21:53.928 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-21 01:21:54.093 | INFO     | tracy:signpost:49 - cmp|39|free|0
+2026-11-21 01:21:54.129 | INFO     | tracy:signpost:49 - cmpend|39|free
+2026-11-21 01:21:54.131 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-21 01:21:54.401 | INFO     | tracy:signpost:49 - cmp|39|unpaced|0
+2026-11-21 01:21:54.438 | INFO     | tracy:signpost:49 - cmpend|39|unpaced
+2026-11-21 01:21:54.439 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-21 01:21:54.595 | INFO     | tracy:signpost:49 - cmp|39|base|0
+2026-11-21 01:21:54.631 | INFO     | tracy:signpost:49 - cmpend|39|base
+2026-11-21 01:21:54.843 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-21 01:21:54.861 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-21 01:21:54.953 | info     |           Metal | Clearing program cache on MeshDevice 3 (mesh_device.cpp:1327)
+2026-11-21 01:21:55.570 | INFO     | tracy:signpost:49 - cmp|42|free|0
+2026-11-21 01:21:55.606 | INFO     | tracy:signpost:49 - cmpend|42|free
+2026-11-21 01:21:55.607 | info     |           Metal | Clearing program cache on MeshDevice 3 (mesh_device.cpp:1327)
+2026-11-21 01:21:56.908 | INFO     | tracy:signpost:49 - cmp|42|unpaced|0
+2026-11-21 01:21:56.943 | INFO     | tracy:signpost:49 - cmpend|42|unpaced
+2026-11-21 01:21:56.945 | info     |           Metal | Clearing program cache on MeshDevice 3 (mesh_device.cpp:1327)
+2026-11-21 01:21:57.551 | INFO     | tracy:signpost:49 - cmp|42|base|0
+2026-11-21 01:21:57.586 | INFO     | tracy:signpost:49 - cmpend|42|base
+collected 2 items
+
+UP_FRONT_INLINE: collect pass over 2 item(s) took 5.6s
+UP_FRONT_INLINE: compile route local (programs=6, farm_min=10)
+
+UP_FRONT_COLLECT: 12 ops stashed across 2 bodies -> 6 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=14 fallback=0
+2026-11-21 01:21:57.790 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-21 01:21:57.792 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-21 01:21:57.871 | info     |           Metal | Enabling program cache on MeshDevice 5 (mesh_device.cpp:1322)
+UP_FRONT_COLLECT: 6 collected · 6 built · 0 already compiled in 0.1s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=6 programs=6 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=6 compile_s=0.4 collect_s=5.6 route=local
+UP_FRONT_INLINE: compile step took 0.4s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kblock_store_decouple/test_ksd.py::test_ksd[39-device_params0] 2026-11-21 01:21:58.215 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-21 01:21:58.218 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-21 01:21:58.972 | info     |           Metal | Clearing program cache on MeshDevice 7 (mesh_device.cpp:1327)
+2026-11-21 01:21:59.168 | INFO     | tracy:signpost:49 - cmp|39|free|0
+2026-11-21 01:21:59.239 | INFO     | tracy:signpost:49 - cmpend|39|free
+2026-11-21 01:21:59.948 | info     |           Metal | Clearing program cache on MeshDevice 7 (mesh_device.cpp:1327)
+2026-11-21 01:22:00.222 | INFO     | tracy:signpost:49 - cmp|39|unpaced|0
+2026-11-21 01:22:00.288 | INFO     | tracy:signpost:49 - cmpend|39|unpaced
+2026-11-21 01:22:01.085 | info     |           Metal | Clearing program cache on MeshDevice 7 (mesh_device.cpp:1327)
+2026-11-21 01:22:01.169 | INFO     | tracy:signpost:49 - cmp|39|base|0
+2026-11-21 01:22:01.242 | INFO     | tracy:signpost:49 - cmpend|39|base
+KSD: {"case": "39", "variant": "free", "knobs": {"OUT_BLOCK_DEPTH": 0, "OUT_DEPTH_FREE": true, "OUT_STORE_PACE": false}, "log": "c1", "t": 1795224118.9735372, "status": "ok", "blocking": {"ng": 1, "cores": 110, "core_m": 149, "bm": 30, "bk": 2, "bn": 4, "m_blocks": 5, "k_blocks": 9, "resident": true, "footprint": 1330656, "out_rg": 17, "ring_px": 3010}, "pcc": 0.9999985536566702, "sha1": "c82b501694ba93cc", "ref": true, "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0}
+KSD: {"case": "39", "variant": "unpaced", "knobs": {"OUT_STORE_PACE": false}, "log": "c1", "t": 1795224119.9498918, "status": "ok", "blocking": {"ng": 1, "cores": 110, "core_m": 149, "bm": 25, "bk": 2, "bn": 4, "m_blocks": 6, "k_blocks": 9, "resident": true, "footprint": 1330576, "out_rg": 25, "ring_px": 2850}, "pcc": 0.9999985536566702, "sha1": "c82b501694ba93cc", "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0}
+KSD: {"case": "39", "variant": "base", "knobs": {}, "log": "c1", "t": 1795224121.0869975, "status": "ok", "blocking": {"ng": 1, "cores": 110, "core_m": 149, "bm": 30, "bk": 2, "bn": 4, "m_blocks": 5, "k_blocks": 9, "resident": true, "footprint": 1318368, "out_rg": 2, "ring_px": 3010}, "pcc": 0.9999985536566702, "sha1": "c82b501694ba93cc", "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0}
+PASSED2026-11-21 01:22:02.389 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=763899ns, avg=780965.8ns, max=800216ns (profiler_analysis.cpp:729)
+2026-11-21 01:22:02.389 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=3700ns, range=[762200..799200), underflow(<762200ns)=0, overflow(>=799200ns)=1) (profiler_analysis.cpp:772)
+2026-11-21 01:22:02.389 | info     |           Metal |   [      762200 ..       765900) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-21 01:22:02.389 | info     |           Metal |   [      765900 ..       769600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-21 01:22:02.389 | info     |           Metal |   [      769600 ..       773300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-21 01:22:02.389 | info     |           Metal |   [      773300 ..       777000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-21 01:22:02.389 | info     |           Metal |   [      777000 ..       780700) |########################################|        2 (profiler_analysis.cpp:777)
+2026-11-21 01:22:02.389 | info     |           Metal |   [      780700 ..       784400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-21 01:22:02.389 | info     |           Metal |   [      784400 ..       788100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-21 01:22:02.389 | info     |           Metal |   [      788100 ..       791800) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-21 01:22:02.389 | info     |           Metal |   [      791800 ..       795500) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-21 01:22:02.389 | info     |           Metal |   [      795500 ..       799200) |####################                    |        1 (profiler_analysis.cpp:777)
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kblock_store_decouple/test_ksd.py::test_ksd[42-device_params0] 2026-11-21 01:22:02.858 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-21 01:22:02.861 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-21 01:22:03.599 | info     |           Metal | Clearing program cache on MeshDevice 9 (mesh_device.cpp:1327)
+2026-11-21 01:22:04.197 | INFO     | tracy:signpost:49 - cmp|42|free|0
+2026-11-21 01:22:04.257 | INFO     | tracy:signpost:49 - cmpend|42|free
+2026-11-21 01:22:05.643 | info     |           Metal | Clearing program cache on MeshDevice 9 (mesh_device.cpp:1327)
+2026-11-21 01:22:06.849 | INFO     | tracy:signpost:49 - cmp|42|unpaced|0
+2026-11-21 01:22:06.925 | INFO     | tracy:signpost:49 - cmpend|42|unpaced
+2026-11-21 01:22:08.522 | info     |           Metal | Clearing program cache on MeshDevice 9 (mesh_device.cpp:1327)
+2026-11-21 01:22:08.597 | INFO     | tracy:signpost:49 - cmp|42|base|0
+2026-11-21 01:22:08.694 | INFO     | tracy:signpost:49 - cmpend|42|base
+KSD: {"case": "42", "variant": "free", "knobs": {"OUT_BLOCK_DEPTH": 0, "OUT_DEPTH_FREE": true, "OUT_STORE_PACE": false}, "log": "c1", "t": 1795224123.600593, "status": "ok", "blocking": {"ng": 1, "cores": 110, "core_m": 149, "bm": 15, "bk": 2, "bn": 8, "m_blocks": 10, "k_blocks": 9, "resident": true, "footprint": 1330416, "out_rg": 6, "ring_px": 2530}, "pcc": 0.9999985523059673, "sha1": "05ef45778414808a", "ref": true, "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0}
+KSD: {"case": "42", "variant": "unpaced", "knobs": {"OUT_STORE_PACE": false}, "log": "c1", "t": 1795224125.644635, "status": "ok", "blocking": {"ng": 1, "cores": 110, "core_m": 149, "bm": 12, "bk": 2, "bn": 8, "m_blocks": 13, "k_blocks": 9, "resident": true, "footprint": 1330368, "out_rg": 12, "ring_px": 2434}, "pcc": 0.9999985523059673, "sha1": "05ef45778414808a", "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0}
+KSD: {"case": "42", "variant": "base", "knobs": {}, "log": "c1", "t": 1795224128.524086, "status": "ok", "blocking": {"ng": 1, "cores": 110, "core_m": 149, "bm": 15, "bk": 2, "bn": 8, "m_blocks": 10, "k_blocks": 9, "resident": true, "footprint": 1305840, "out_rg": 2, "ring_px": 2530}, "pcc": 0.9999985523059673, "sha1": "05ef45778414808a", "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0}
+PASSED2026-11-21 01:22:10.891 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=1356905ns, avg=1369523.8ns, max=1378593ns (profiler_analysis.cpp:729)
+2026-11-21 01:22:10.891 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=2200ns, range=[1355200..1377200), underflow(<1355200ns)=0, overflow(>=1377200ns)=1) (profiler_analysis.cpp:772)
+2026-11-21 01:22:10.891 | info     |           Metal |   [     1355200 ..      1357400) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-21 01:22:10.891 | info     |           Metal |   [     1357400 ..      1359600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-21 01:22:10.891 | info     |           Metal |   [     1359600 ..      1361800) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-21 01:22:10.891 | info     |           Metal |   [     1361800 ..      1364000) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-21 01:22:10.891 | info     |           Metal |   [     1364000 ..      1366200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-21 01:22:10.891 | info     |           Metal |   [     1366200 ..      1368400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-21 01:22:10.891 | info     |           Metal |   [     1368400 ..      1370600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-21 01:22:10.891 | info     |           Metal |   [     1370600 ..      1372800) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-21 01:22:10.891 | info     |           Metal |   [     1372800 ..      1375000) |########################################|        1 (profiler_analysis.cpp:777)
+2026-11-21 01:22:10.891 | info     |           Metal |   [     1375000 ..      1377200) |########################################|        1 (profiler_analysis.cpp:777)
+UP_FRONT_INLINE: real pass took 13.3s
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+7.69s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kblock_store_decouple/test_ksd.py::test_ksd[42-device_params0]
+3.93s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kblock_store_decouple/test_ksd.py::test_ksd[39-device_params0]
+0.74s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kblock_store_decouple/test_ksd.py::test_ksd[42-device_params0]
+0.47s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kblock_store_decouple/test_ksd.py::test_ksd[39-device_params0]
+0.24s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kblock_store_decouple/test_ksd.py::test_ksd[39-device_params0]
+0.23s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kblock_store_decouple/test_ksd.py::test_ksd[42-device_params0]
+============================== 2 passed in 20.31s ==============================
+2026-11-21 01:22:12.953 | info     |    BuildKernels | JIT cache stats: 49/49 hits (100.0%) [49 cached, 432 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-21 01:22:12.953 | info     |    BuildKernels | JIT telemetry: 38 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-21 01:22:12.999 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-21 01:22:12.999 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-21 01:22:13.302 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-21 01:22:13.302 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-21 01:22:13.302 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+2026-11-21 01:22:13.876 | INFO     | __main__:main:490 - Copying /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_ksd_2026_11_21_01_22_13.tracy
+2026-11-21 01:22:13.885 | INFO     | __main__:main:493 - Copied /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_ksd_2026_11_21_01_22_13.tracy
+2026-11-21 01:22:13.886 | INFO     | __main__:main:502 - embed.tracy -> traces/test_ksd_2026_11_21_01_22_13.tracy
+2026-11-21 01:22:13.886 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-11-21 01:22:13.886 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-11-21 01:22:13.886 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-11-21 01:22:18.037 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-21 01:22:18.196 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-21 01:22:18.196 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/localdev/pmilojevic/workspaces/opgen/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-11-21 01:22:27.837 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-21 01:22:27.837 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-21 01:22:30.730 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-21 01:22:30.730 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-21 01:22:30.840 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-21 01:22:30.853 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_21_01_22_30/ops_perf_results_2026_11_21_01_22_30.csv
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 2 item(s) took 5.6s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=6, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 12 ops stashed across 2 bodies -> 6 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=14 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 6 collected · 6 built · 0 already compiled in 0.1s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 0.4s; starting the real pass
+PRECOMPILE: UP_FRONT_INLINE: real pass took 13.3s
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_21_01_22_30/ops_perf_results_2026_11_21_01_22_30.csv
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m50s (50s total, device-lock-acquired -> exit)

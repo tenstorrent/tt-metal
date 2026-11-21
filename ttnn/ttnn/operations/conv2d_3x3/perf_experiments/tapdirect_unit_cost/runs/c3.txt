@@ -1,0 +1,8 @@
+41|base	1830967	[1830967]
+41|c.NOPLAN	1813022	[1813022]
+41|c.GRP	2062987	[2062987]
+41|c.SKIPREMAP	1831930	[1831930]
+41|base@fill+weights+store+tilize+bias	1401128	[1401128]
+41|c.NOPLAN@fill+weights+store+tilize+bias	1381447	[1381447]
+41|c.GRP@fill+weights+store+tilize+bias	1295810	[1295810]
+41|c.NOINIT.GRP@fill+weights+store+tilize+bias	1270953	[1270953]

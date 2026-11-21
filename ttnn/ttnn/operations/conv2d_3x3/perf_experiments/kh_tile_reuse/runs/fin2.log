@@ -1,0 +1,5 @@
+KHR: {"case": "37", "variant": "final", "knobs": {}, "log": "fin2", "t": 1795228975.654464, "status": "ok", "blocking": {"ng": 1, "cores": 108, "core_m": 38, "bm": 10, "bk": 2, "bn": 8, "m_blocks": 4, "k_blocks": 9, "resident": true, "footprint": 1219744, "ring_px": 642, "khr_ring_rows": 32, "khr_table": 10}, "pcc": 0.9999985508226197, "sha1": "7b57476384b7456e", "ref": true, "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0}
+KHR: {"case": "38", "variant": "final", "knobs": {}, "log": "fin2", "t": 1795228976.7029057, "status": "ok", "blocking": {"ng": 2, "cores": 108, "core_m": 19, "bm": 3, "bk": 4, "bn": 8, "m_blocks": 7, "k_blocks": 9, "resident": true, "footprint": 1308720, "ring_px": 194, "khr_ring_rows": 16, "khr_table": 3}, "pcc": 0.9999985515464787, "sha1": "7ac604e5df8bc0fa", "ref": true, "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0}
+============================== 2 passed in 7.18s ===============================
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_21_02_43_03/ops_perf_results_2026_11_21_02_43_03.csv
+SAFE_PYTEST_RESULT: PASS

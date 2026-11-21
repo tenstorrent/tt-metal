@@ -1,0 +1,406 @@
+diff -ru op_base/conv2d_3x3_program_descriptor.py op_copy/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-21 00:12:07.741048683 +0000
++++ op_copy/conv2d_3x3_program_descriptor.py	2026-11-21 00:14:59.305502157 +0000
+@@ -329,6 +329,8 @@
+ TAP_DIRECT_GROUP = 3
+ # Tap-direct on the K-blocked walk: the reader reserves, fences and pushes this many unit entries at a time.
+ TAP_DIRECT_FIFO_GROUP = 4
++# Experiment knob (tapdirect_unit_cost): comma list of tokens, each the define TU_<token> on every kernel.
++TU_DEFS = ""
+ WEIGHT_DEPTH = 2
+ OUT_DEPTH_ROW_GROUPS = 2
+ # cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b. Where every core runs
+@@ -4046,6 +4048,7 @@
+     import os as _os
+ 
+     _abl = [(f"CONV2D_3X3_ABLATE_{t.upper()}", "1") for t in _os.environ.get("CONV2D_3X3_ABLATE", "").split(",") if t]
++    _abl = _abl + [(f"TU_{t}", "1") for t in TU_DEFS.split(",") if t]
+     readers = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+diff -ru op_base/kernels/conv2d_3x3_compute.cpp op_copy/kernels/conv2d_3x3_compute.cpp
+--- op_base/kernels/conv2d_3x3_compute.cpp	2026-11-21 00:12:07.745048741 +0000
++++ op_copy/kernels/conv2d_3x3_compute.cpp	2026-11-21 00:59:58.581789369 +0000
+@@ -624,6 +624,13 @@
+ // three adjacent slab runs, row stride one pixel = tw tiles), tilized in fast-tilize chunks of that width, as
+ // window_tilize does at stride 2. UNPACK hands the flag to MATH and PACK through their mailboxes (as get_tile_address),
+ // since the DEST sections differ. Same tiles, same order.
++#ifndef TU_TABLE_GROUP
++#define TU_TABLE_GROUP 4
++#endif
++#ifdef TU_SKIPREMAP
++// Set once the first fast tilize enabled the BH DEST remap; nothing in this kernel turns it off again.
++static bool tu_dest_remap_on = false;
++#endif
+ template <
+     uint32_t tw,
+     uint32_t taps,
+@@ -635,108 +642,152 @@
+ ALWI void fifo_tilize(DataflowBuffer& in, DataflowBuffer& out, DataflowBuffer& table, uint32_t units) {
+     static_assert(tw != 0 && taps <= 3, "a source entry is 16 B: at most 3 taps and the pop count");
+     static_assert(!windows || (taps == 3 && !skip_center && tw > 1), "a window unit is three adjacent taps");
+-    reconfig_data_format_srca(cb_in);
+-    pack_reconfig_data_format(cb_out);
+-    fast_tilize_init(cb_in, tw, cb_out);
+-    if constexpr (tw > 1) {
+-        PACK((conv2d_3x3::lean_tilize::pack_init()));
++#ifndef TU_NOINIT
++    {
++#ifdef TU_ZI
++        MaybeDeviceZoneScope("tu_init");
++#endif
++        reconfig_data_format_srca(cb_in);
++        pack_reconfig_data_format(cb_out);
++#ifdef TU_SKIPREMAP
++        if (tu_dest_remap_on) {
++            fast_tilize_init_skip_remap(cb_in, tw, cb_out);
++        } else {
++            fast_tilize_init(cb_in, tw, cb_out);
++            tu_dest_remap_on = tw > 1;
++        }
++#else
++        fast_tilize_init(cb_in, tw, cb_out);
++#endif
++        if constexpr (tw > 1) {
++            PACK((conv2d_3x3::lean_tilize::pack_init()));
++        }
+     }
++#endif
++#ifdef TU_PREWAIT
++    {
++#ifdef TU_Z
++        MaybeDeviceZoneScope("tu_tblwait");
++#endif
++        table.wait_front(units);
++    }
++#endif
++#ifdef TU_Z
++    MaybeDeviceZoneScope("tu_units");
++#endif
+     [[maybe_unused]] uint32_t prev_chunk = 0;
+     [[maybe_unused]] NarrowTilizeBatch<cb_in, cb_out> nt{out};
+-    for (uint32_t u = 0; u < units; ++u) {
+-        table.wait_front(1);
+-        [[maybe_unused]] uint32_t src[taps];
+-        uint32_t pages = 0;
+-        UNPACK((pages = fifo_unit_sources<cb_table, taps>(src)));
+-        if constexpr (windows) {
+-            uint32_t window = 0;
++#ifdef TU_GRP
++    constexpr uint32_t G = TU_TABLE_GROUP;
++#else
++    constexpr uint32_t G = 1;
++#endif
++    for (uint32_t u0 = 0; u0 < units; u0 += G) {
++        const uint32_t g = units - u0 < G ? units - u0 : G;
++        table.wait_front(g);
++        [[maybe_unused]] uint32_t entry = 0;
++        UNPACK({
++            invalidate_l1_cache();
++            entry = get_local_cb_interface(get_operand_id(cb_table)).fifo_rd_ptr << 4;
++        })
++        for (uint32_t i = 0; i < g; ++i) {
++            [[maybe_unused]] uint32_t src[taps];
++            uint32_t pages = 0;
+             UNPACK({
+-                window = pages >> 31;
+-                pages &= 0x7fffffffu;
+-                ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, window);
+-                ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, window);
++                volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(entry + i * 16);
++                for (uint32_t t = 0; t < taps; ++t) {
++                    src[t] = w[t];
++                }
++                pages = w[3];
+             })
+-            MATH(window = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+-            PACK(window = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+-            if (window != 0) {
+-                constexpr uint32_t wt = 3 * tw;
+-                out.reserve_back(wt);
+-                PACK((conv2d_3x3::lean_tilize::pack_row_begin(cb_out, 0)));
+-                for (uint32_t tiles_done = 0; tiles_done < wt;) {
+-                    const uint32_t chunk = conv2d_3x3::lean_tilize::chunk_of(wt - tiles_done);
+-                    MATH((llk_math_wait_for_dest_available()));
+-                    PACK((llk_packer_wait_for_math_done()));
+-                    if (chunk != prev_chunk) {
+-                        UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+-                        prev_chunk = chunk;
++            if constexpr (windows) {
++                uint32_t window = 0;
++                UNPACK({
++                    window = pages >> 31;
++                    pages &= 0x7fffffffu;
++                    ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, window);
++                    ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, window);
++                })
++                MATH(window = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
++                PACK(window = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
++                if (window != 0) {
++                    constexpr uint32_t wt = 3 * tw;
++                    out.reserve_back(wt);
++                    PACK((conv2d_3x3::lean_tilize::pack_row_begin(cb_out, 0)));
++                    for (uint32_t tiles_done = 0; tiles_done < wt;) {
++                        const uint32_t chunk = conv2d_3x3::lean_tilize::chunk_of(wt - tiles_done);
++                        MATH((llk_math_wait_for_dest_available()));
++                        PACK((llk_packer_wait_for_math_done()));
++                        if (chunk != prev_chunk) {
++                            UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
++                            prev_chunk = chunk;
++                        }
++                        UNPACK((window_unpack_chunk<cb_in>(src[0], chunk, tiles_done)));
++                        MATH((llk_math_fast_tilize_block_<DST_ACCUM_MODE>(0, cb_in, 4)));
++                        PACK((conv2d_3x3::lean_tilize::pack_row_chunk(chunk)));
++                        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
++                        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
++                        tiles_done += chunk;
+                     }
+-                    UNPACK((window_unpack_chunk<cb_in>(src[0], chunk, tiles_done)));
+-                    MATH((llk_math_fast_tilize_block_<DST_ACCUM_MODE>(0, cb_in, 4)));
+-                    PACK((conv2d_3x3::lean_tilize::pack_row_chunk(chunk)));
+-                    MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+-                    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+-                    tiles_done += chunk;
++                    out.push_back(wt);
++                    continue;
+                 }
+-                out.push_back(wt);
+-                table.pop_front(1);
+-                continue;
+             }
+-        }
+ #ifdef CONV2D_3X3_ABLATE_TILIZE
+-        out.reserve_back(taps * tw);
+-        out.push_back(taps * tw);
+-        for (uint32_t p = 0; p < pages; p += tw) {
+-            in.wait_front(tw);
+-            in.pop_front(tw);
+-        }
+-        table.pop_front(1);
+-        continue;
+-#endif
+-        for (uint32_t t = 0; t < taps; ++t) {
+-            if constexpr (skip_center) {
+-                if (t == 1) {
+-                    if constexpr (tw == 1) {
+-                        nt.close();  // the open section's tiles precede this slot
++            out.reserve_back(taps * tw);
++            out.push_back(taps * tw);
++#else
++            for (uint32_t t = 0; t < taps; ++t) {
++                if constexpr (skip_center) {
++                    if (t == 1) {
++                        if constexpr (tw == 1) {
++                            nt.close();  // the open section's tiles precede this slot
++                        }
++                        out.reserve_back(tw);
++                        out.push_back(tw);
++                        continue;
+                     }
++                }
++                if constexpr (tw == 1) {
++                    nt.tile(src[t]);
++                } else {
+                     out.reserve_back(tw);
++                    PACK((conv2d_3x3::lean_tilize::pack_row_begin(cb_out, 0)));
++                    for (uint32_t tiles_done = 0; tiles_done < tw;) {
++                        const uint32_t chunk = conv2d_3x3::lean_tilize::chunk_of(tw - tiles_done);
++                        MATH((llk_math_wait_for_dest_available()));
++                        PACK((llk_packer_wait_for_math_done()));
++                        if (chunk != prev_chunk) {
++                            UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
++                            prev_chunk = chunk;
++                        }
++                        UNPACK((window_unpack_chunk<cb_in>(src[t], chunk, tiles_done)));
++                        MATH((llk_math_fast_tilize_block_<DST_ACCUM_MODE>(0, cb_in, 4)));
++                        PACK((conv2d_3x3::lean_tilize::pack_row_chunk(chunk)));
++                        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
++                        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
++                        tiles_done += chunk;
++                    }
+                     out.push_back(tw);
+-                    continue;
+                 }
+             }
+-            if constexpr (tw == 1) {
+-                nt.tile(src[t]);
+-            } else {
+-                out.reserve_back(tw);
+-                PACK((conv2d_3x3::lean_tilize::pack_row_begin(cb_out, 0)));
+-                for (uint32_t tiles_done = 0; tiles_done < tw;) {
+-                    const uint32_t chunk = conv2d_3x3::lean_tilize::chunk_of(tw - tiles_done);
+-                    MATH((llk_math_wait_for_dest_available()));
+-                    PACK((llk_packer_wait_for_math_done()));
+-                    if (chunk != prev_chunk) {
+-                        UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+-                        prev_chunk = chunk;
+-                    }
+-                    UNPACK((window_unpack_chunk<cb_in>(src[t], chunk, tiles_done)));
+-                    MATH((llk_math_fast_tilize_block_<DST_ACCUM_MODE>(0, cb_in, 4)));
+-                    PACK((conv2d_3x3::lean_tilize::pack_row_chunk(chunk)));
+-                    MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+-                    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+-                    tiles_done += chunk;
+-                }
+-                out.push_back(tw);
++#endif
++            // pages is set on the unpacker only, the only thread with a wait / pop.
++            for (uint32_t p = 0; p < pages; p += tw) {
++                in.wait_front(tw);
++                in.pop_front(tw);
+             }
+         }
+-        // pages is set on the unpacker only, the only thread with a wait / pop.
+-        for (uint32_t p = 0; p < pages; p += tw) {
+-            in.wait_front(tw);
+-            in.pop_front(tw);
+-        }
+-        table.pop_front(1);
++        table.pop_front(g);
+     }
++#ifndef CONV2D_3X3_ABLATE_TILIZE
+     if constexpr (tw == 1) {
+         nt.close();
+     }
++#endif
++#ifndef TU_NOINIT
+     fast_tilize_uninit(cb_in, cb_out, tw);
++#endif
+ }
+ 
+ // Center-tap slots: tilizes num_rows im2col rows of three taps (tap-major, each a [32, tw * 32] block), except tap 1,
+diff -ru op_base/kernels/conv2d_3x3_gather_dataflow.hpp op_copy/kernels/conv2d_3x3_gather_dataflow.hpp
+--- op_base/kernels/conv2d_3x3_gather_dataflow.hpp	2026-11-21 00:12:03.048981584 +0000
++++ op_copy/kernels/conv2d_3x3_gather_dataflow.hpp	2026-11-21 00:15:30.061941992 +0000
+@@ -882,6 +882,18 @@
+         int32_t slab_x_base_kh) {
+         volatile tt_l1_ptr uint32_t* e =
+             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_base + (tbl_head + tbl_written) * 16);
++#ifdef TU_NOPLAN
++        // Diagnostic: no planning (wrong output; for timing the reader's per-unit work only).
++        for (uint32_t t = 0; t < taps; ++t) {
++            e[t] = zero_l1;
++        }
++        e[3] = 0;
++        ++tbl_written;
++        if (tbl_written == tbl_reserved) {
++            flush(reads);
++        }
++        return;
++#endif
+         const int32_t n_all = static_cast<int32_t>(o_end) - static_cast<int32_t>(o);
+         const int32_t n = n_all < TILE_DIM ? n_all : TILE_DIM;
+         const int32_t ho0 = o / output_width;
+diff -ru op_base/kernels/conv2d_3x3_kblock_walk.hpp op_copy/kernels/conv2d_3x3_kblock_walk.hpp
+--- op_base/kernels/conv2d_3x3_kblock_walk.hpp	2026-11-21 00:12:07.746048755 +0000
++++ op_copy/kernels/conv2d_3x3_kblock_walk.hpp	2026-11-21 00:30:27.253693148 +0000
+@@ -125,6 +125,10 @@
+         const bool bias_last = has_bias && last;
+         pre_k_block(block, num_k_blocks, last);
+         const uint32_t a_cb = in0_source(block, in0_cb);
++#ifdef TU_ZI
++        {
++        DeviceZoneScopedN("tu_mminit");
++#endif
+         // Matmul state after the hook (the tilize reconfigures unpack / math / pack).
+         reconfig_data_format(in1_cb, a_cb);
+         if (out_last) {
+@@ -139,8 +143,16 @@
+             PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
+         }
+         ckernel::matmul_block_init(a_cb, in1_cb, false, sb_w, sb_h, bk);
+-        const uint32_t in1_base = in1_offset(block);
++#ifdef TU_ZI
++        }
++        {
++        DeviceZoneScopedN("tu_mmwait");
+         cb_wait_front(a_cb, in0_block_tiles);
++        }
++#else
++        cb_wait_front(a_cb, in0_block_tiles);
++#endif
++        const uint32_t in1_base = in1_offset(block);
+         if constexpr (!in1_resident) {
+             cb_wait_front(in1_cb, in1_block_tiles);
+         }
+diff -ru op_base/kernels/conv2d_3x3_reader.cpp op_copy/kernels/conv2d_3x3_reader.cpp
+--- op_base/kernels/conv2d_3x3_reader.cpp	2026-11-21 00:12:07.743048712 +0000
++++ op_copy/kernels/conv2d_3x3_reader.cpp	2026-11-21 00:59:42.321558209 +0000
+@@ -1825,10 +1825,12 @@
+                     live = lo < live ? lo : live;
+                 }
+                 rm.release(live);
++#ifndef TU_FINENEED
+                 if (col_lo == 0 && rm_win.band_hi[kh] > 0) {
+                     MaybeDeviceZoneScope("reader_band_wait");
+                     rm.need(reads, input, rm_win.band_hi[kh]);
+                 }
++#endif
+             } else if (col_lo == 0) {
+                 // The band's slab rows: compute's untilize (TILE) or this core's own band reads (ROW_MAJOR).
+                 MaybeDeviceZoneScope("reader_band_wait");
+@@ -1901,6 +1903,35 @@
+                 reads.begin(TRID_GATHER);
+                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
+                     if constexpr (rm_ring) {
++#ifdef TU_FINENEED
++                        if (fifo.tbl_reserved == fifo.tbl_written && rm_win.band_hi[kh] > 0) {
++                            // A group starts: wait only for the pixels its units read (the band streams on behind).
++                            const uint32_t g_end = tile_row + tap_direct_group < block_m_tiles
++                                                       ? tile_row + tap_direct_group
++                                                       : block_m_tiles;
++                            const uint32_t o_g = o_first + g_end * TILE_DIM < o_end ? o_first + g_end * TILE_DIM : o_end;
++                            if (o_g > o_first + tile_row * TILE_DIM) {
++                                const uint32_t o_last = o_g - 1;
++                                const int32_t h_in =
++                                    static_cast<int32_t>(o_last / output_width) + kh * dilation - pad_top;
++                                int32_t w_hi = static_cast<int32_t>(o_last % output_width) - pad_left +
++                                               static_cast<int32_t>(kw_first + fifo_taps - 1) * dilation;
++                                w_hi = w_hi < input_width - 1 ? w_hi : input_width - 1;
++                                int32_t x = h_in * input_width + w_hi + 1;
++                                x = x < rm_win.band_hi[kh] ? x : rm_win.band_hi[kh];
++                                if (h_in >= 0 && x > rm.landed) {
++                                    if (tile_row == 0) {
++                                        MaybeDeviceZoneScope("reader_band_wait");
++                                        rm.need_to(reads, input, x, rm_win.band_hi[kh]);
++                                    } else {
++                                        rm.need_to(reads, input, x, rm_win.band_hi[kh]);
++                                    }
++                                    reads.begin(TRID_GATHER);
++                                    fifo.fixed_state = 0;
++                                }
++                            }
++                        }
++#endif
+                         fifo.reserve(tap_direct_group, block_m_tiles - tile_row, rm_idle);
+                     } else {
+                         fifo.reserve(tap_direct_group, block_m_tiles - tile_row);
+diff -ru op_base/kernels/conv2d_3x3_rm_ring.hpp op_copy/kernels/conv2d_3x3_rm_ring.hpp
+--- op_base/kernels/conv2d_3x3_rm_ring.hpp	2026-11-21 00:12:07.741048683 +0000
++++ op_copy/kernels/conv2d_3x3_rm_ring.hpp	2026-11-21 00:59:42.320558195 +0000
+@@ -303,6 +303,25 @@
+         return false;
+     }
+ 
++    // Blocking: every needed pixel below x is in the ring, issuing chunks up to issue_to (>= x, within the plan's
++    // capacity like x) so the stream keeps its full chunks and read-ahead while only x is waited for.
++    template <typename Reads, typename Accessor>
++    FORCE_INLINE bool need_to(Reads& reads, const Accessor& input, int32_t x, int32_t issue_to) {
++        if (x <= landed) {
++            return false;
++        }
++        ASSERT(issue_to <= allowed);
++        while (copied < x) {
++            if (can_issue() && iss_a < issue_to) {
++                issue(reads, input, issue_to);
++            } else {
++                process(reads);
++            }
++        }
++        land_copies(reads);
++        return true;
++    }
++
+     // Blocking: every needed pixel below x is in the ring. x is within the plan's capacity of the live pixels
+     // (x <= allowed), so the chunks it needs can be issued.
+     template <typename Reads, typename Accessor>

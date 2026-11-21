@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_unit_cost/zone_seq.py", line 62, in <module>
+    main()
+  File "/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/tapdirect_unit_cost/zone_seq.py", line 41, in main
+    rid = sorted(runs)[a.run_index]
+IndexError: list index out of range

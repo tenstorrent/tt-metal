@@ -1,0 +1,251 @@
+diff -ru -x __pycache__ op_base/conv2d_3x3_program_descriptor.py op_copy/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-21 00:10:31.802676707 +0000
++++ op_copy/conv2d_3x3_program_descriptor.py	2026-11-21 01:18:52.954919638 +0000
+@@ -331,6 +331,25 @@
+ TAP_DIRECT_FIFO_GROUP = 4
+ WEIGHT_DEPTH = 2
+ OUT_DEPTH_ROW_GROUPS = 2
++# Deep output CB on the ROW_MAJOR ring walk (_out_depth_row_groups), so the last K-block's bias pass does not wait on the
++# store and the writer drains block j while block j + 1 runs. Off by default: measured (Blackhole p150b, FLUX.2 bh2x4,
++# bit-identical) it is a narrow win only where the walk is compute-bound and the bm it costs adds little work (P8
++# 258x512 64->256 448 -> 405 us, P11 514x1024 64->128 799 -> 765 us) and a regression where the store is DRAM / NoC1
++# bound (P1 1026x2048 32->128 1826 -> 3038, P4 514x1024 32->128 595 -> 724, P5 1026x2048 64->128 2923 -> 3005): an
++# even-rate store keeps NoC1 busy without gaps, and the cores upstream of the DRAM endpoints on NoC1 (grid x 13-15,
++# y 5-10) then get almost no write bandwidth until the others finish; the last-K-block burst leaves them those gaps.
++#   OUT_BLOCK_DEPTH  fraction of an M-block's row groups cb_output_tiles holds (1.0: all), the solve trading bm for it at
++#                    the slab solve's bk (bit-identical). 0: OUT_DEPTH_ROW_GROUPS.
++#   OUT_DEPTH_FREE   cb_output_tiles takes the L1 the solved blocking leaves before the deep im2col ring (bm kept).
++#   OUT_STORE_PACE   with a whole-block cb_output_tiles: the writer spreads block j's store over block j + 1's first
++#                    K-blocks (kernels/conv2d_3x3_writer.cpp, OUT_STORE_PACE).
++#   OUT_STORE_RATE_GBS  with a deep cb_output_tiles: each core's store capped at its share of this aggregate DRAM rate
++#                    (input read once plus the output), one row group per interval (OUT_STORE_INTERVAL). 0: off.
++OUT_BLOCK_DEPTH = 0
++OUT_DEPTH_FREE = False
++OUT_STORE_PACE = False
++OUT_STORE_RATE_GBS = 0
++AICLK_MHZ = 1350
+ # cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b. Where every core runs
+ # one M-block the ring instead holds the whole slab in cb_im2col_tiles' L1 (see create_program_descriptor).
+ INPUT_TILE_DEPTH_BATCHES = 2
+@@ -1159,6 +1178,25 @@
+     return _div_up(max(a_bytes, b_bytes), unit) * unit
+ 
+ 
++def _out_depth_row_groups(g: Conv3x3Geometry, bm, sb_h, nslice, max_m_blocks, deep_out):
++    """cb_output_tiles depth in row groups (see OUT_BLOCK_DEPTH): deep (`deep_out`, the ROW_MAJOR ring solve) on the
++    interleaved, unsplit K-blocked walk of more than one M-block per core (the store of the last block has nothing left
++    to run under)."""
++    deep = (
++        deep_out
++        and OUT_BLOCK_DEPTH > 0
++        and not g.sharded_output
++        and not g.remote_output
++        and not g.k_split
++        and not nslice
++        and max_m_blocks > 1
++    )
++    if not deep:
++        return OUT_DEPTH_ROW_GROUPS
++    groups = _div_up(bm, sb_h)
++    return max(OUT_DEPTH_ROW_GROUPS, min(groups, math.ceil(OUT_BLOCK_DEPTH * groups)))
++
++
+ def _footprint(
+     g: Conv3x3Geometry,
+     core_m_tiles,
+@@ -1171,6 +1209,8 @@
+     shared=False,
+     resident=False,
+     n_groups=1,
++    deep_out=False,
++    out_depth=None,
+ ):
+     num_k_blocks = g.tensor_k_tiles // bk
+     im2col_rm_depth_rows = (
+@@ -1188,6 +1228,8 @@
+     band_len, raw_slab_rows = _block_extents(g, core_m_tiles, bm)
+     band_stride = min(g.dilation * g.input_width, band_len)
+     sb_h, sb_w = _out_subblock(bm, bn)
++    if out_depth is None:
++        out_depth = _out_depth_row_groups(g, bm, sb_h, nslice, max_m_blocks, deep_out)
+     # N split: the core's bias and output columns are its N group's block_n_tiles.
+     ns = g.out_n_tiles if n_groups == 1 else bn
+     combine_sb_h, combine_sb_w = _out_subblock(bm, ns)
+@@ -1229,7 +1271,7 @@
+         + (
+             bm * ns * g.out_tile_bytes
+             if g.remote_output
+-            else (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
++            else (0 if g.sharded_output else out_depth * sb_h * bn * g.out_tile_bytes)
+         )
+         + (
+             (_tap_direct_fifo_units(g, bm, bk, nslice) * 16 or _src_table_bytes(im2col_rm_depth_rows))
+@@ -1253,6 +1295,7 @@
+         footprint_bytes=total,
+         nslice=nslice,
+         im2col_rm_depth_rows=im2col_rm_depth_rows,
++        out_depth_row_groups=out_depth,
+         shared_slab_bytes=shared_slab_bytes,
+     )
+ 
+@@ -1469,7 +1512,7 @@
+     search = [(bm, bk) for bm in bm_candidates for bk in bk_above_floor]
+     search += [(bm_candidates[-1], bk) for bk in bk_below_floor]
+ 
+-    def solve(candidates, nslice, shared=False, wr_solve=False, rm=False, split=None):
++    def solve(candidates, nslice, shared=False, wr_solve=False, rm=False, split=None, deep_out=False):
+         # split: (core_m_tiles, num_m_groups, block_n_tiles, n_groups) of an N split (only resident blockings).
+         cm, nmg, bn_, ng = split or (core_m_tiles, num_m_groups, bn, 1)
+         for bm, bk in candidates:
+@@ -1489,7 +1532,9 @@
+             band_len, raw_slab_rows = _block_extents(g, cm, bm)
+             ub_default = _default_untilize_batch_rows(g, band_len, raw_slab_rows)
+             for ub_cap in range(ub_default, 0, -1):
+-                fit = _footprint(g, cm, bm, bk, bn_, ub_cap, nslice, shared=shared, resident=resident, n_groups=ng)
++                fit = _footprint(
++                    g, cm, bm, bk, bn_, ub_cap, nslice, shared=shared, resident=resident, n_groups=ng, deep_out=deep_out
++                )
+                 if resident:
+                     fit["weights_resident"] = True
+                 rm_delta = 0
+@@ -1505,6 +1550,26 @@
+                         footprint_bytes=fit["footprint_bytes"] + rm_delta,
+                     )
+                 if fit["footprint_bytes"] <= l1_budget:
++                    out_depth = fit["out_depth_row_groups"]
++                    if rm_px and OUT_DEPTH_FREE and out_depth <= OUT_DEPTH_ROW_GROUPS:
++                        # The deep output CB from the L1 left at this (bm, bk, ub), before the deep im2col ring.
++                        for d in range(_div_up(bm, fit["out_subblock_h"]), out_depth, -1):
++                            free = _footprint(
++                                g, cm, bm, bk, bn_, ub_cap, nslice, shared=shared, resident=resident, n_groups=ng,
++                                out_depth=d,
++                            )
++                            if free["footprint_bytes"] + rm_delta <= l1_budget:
++                                fit = dict(
++                                    free,
++                                    rm_ring_px=fit["rm_ring_px"],
++                                    rm_stage_n=fit["rm_stage_n"],
++                                    rm_stage_px=fit["rm_stage_px"],
++                                    footprint_bytes=free["footprint_bytes"] + rm_delta,
++                                )
++                                if resident:
++                                    fit["weights_resident"] = True
++                                out_depth = d
++                                break
+                     # The deeper im2col ring only takes L1 left at this (bm, bk, ub): it never costs a coarser block.
+                     for depth in range(_im2col_ring_target(g, bm, bk, nslice), IM2COL_RM_DEPTH_ROWS, -1):
+                         deep = _footprint(
+@@ -1519,6 +1584,8 @@
+                             shared=shared,
+                             resident=resident,
+                             n_groups=ng,
++                            deep_out=deep_out,
++                            out_depth=out_depth,
+                         )
+                         if rm_px:
+                             deep = dict(
+@@ -1557,7 +1624,6 @@
+                         block_m_tiles=bm,
+                         block_k_tiles=bk,
+                         block_n_tiles=bn_,
+-                        out_depth_row_groups=OUT_DEPTH_ROW_GROUPS,
+                         n_groups=ng,
+                         **fit,
+                     )
+@@ -1597,7 +1663,10 @@
+         cm = blocking.core_m_tiles
+         ring_bms = sorted({_div_up(cm, n) for n in range(1, cm + 1)}, reverse=True)
+         ring_search = [(bm, bk0) for bm in ring_bms if bm <= bm0]
+-        ring_blocking = solve(ring_search, nslice=False, wr_solve=blocking.weights_resident, rm=True, split=split)
++        # The deep output CB (OUT_BLOCK_DEPTH) at that bk first, else the shallow one.
++        ring_blocking = solve(
++            ring_search, nslice=False, wr_solve=blocking.weights_resident, rm=True, split=split, deep_out=True
++        ) or solve(ring_search, nslice=False, wr_solve=blocking.weights_resident, rm=True, split=split)
+         if ring_blocking is not None:
+             blocking = ring_blocking
+     if blocking is not None and g.k_split:
+@@ -4043,6 +4112,24 @@
+         if b.rm_ring_px
+         else []
+     )
++    _store_pace_defines = (
++        [("OUT_STORE_PACE", str(CB_SRC_TABLE))]
++        if OUT_STORE_PACE
++        and b.out_depth_row_groups > OUT_DEPTH_ROW_GROUPS
++        and tap_direct_fifo_units > 0
++        and not g.k_split
++        and not b.nslice
++        and not g.sharded_output
++        else []
++    )
++    if OUT_STORE_RATE_GBS and b.out_depth_row_groups > OUT_DEPTH_ROW_GROUPS and not g.sharded_output:
++        traffic = g.num_in_px * g.c_in_p * BF16_BYTES + g.tensor_m_tiles * g.tensor_n_tiles * g.out_tile_bytes
++        # The store starts after the first M-block's walk: the rest of the floor time is its window.
++        nb = b.max_m_blocks_per_core
++        floor_cycles = traffic / OUT_STORE_RATE_GBS * AICLK_MHZ / 1000 * (nb - 1) / nb
++        _store_pace_defines = _store_pace_defines + [
++            ("OUT_STORE_INTERVAL", str(int(floor_cycles / _div_up(b.core_m_tiles, b.out_subblock_h))))
++        ]
+     readers = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+@@ -4076,6 +4163,7 @@
+             + slot_ack_defines
+             + _host_fill_defines
+             + _wr_defines
++            + _store_pace_defines
+             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
+             + (
+                 [
+diff -ru -x __pycache__ op_base/kernels/conv2d_3x3_writer.cpp op_copy/kernels/conv2d_3x3_writer.cpp
+--- op_base/kernels/conv2d_3x3_writer.cpp	2026-11-21 00:10:31.806676764 +0000
++++ op_copy/kernels/conv2d_3x3_writer.cpp	2026-11-21 00:27:48.616442363 +0000
+@@ -2472,6 +2472,10 @@
+ #ifdef WEIGHTS_RESIDENT
+     static_assert(!row_split && !nslice_outer && !k_split && !weight_servers && !slab_split && !output_sharded);
+ #endif
++#ifdef OUT_STORE_INTERVAL
++    uint32_t store_slot_time = 0;  // wall clock (low word) the next output row group may leave at
++    bool store_clock_started = false;
++#endif
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         if constexpr (slab_split) {
+ #ifdef CONV2D_3X3_SLAB_DIRECT
+@@ -2636,7 +2640,37 @@
+             const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
+             const uint32_t block_tile0 = m_block_idx * block_m_tiles;
+             for (uint32_t row_group = 0; row_group < row_groups_per_block; ++row_group) {
++#ifdef OUT_STORE_PACE
++                if (m_block_idx + 1 < num_m_blocks_this_core) {
++                    // Even-rate store (deep cb_output_tiles): row group r of block j leaves once compute has tilized
++                    // r / R of block j + 1's first num_k_blocks - 1 K-blocks (unit entries it popped from the tap-direct
++                    // FIFO, OUT_STORE_PACE), so no core's store runs ahead of its walk: a core whose store burst runs
++                    // unpaced keeps NoC1 busy and starves the cores upstream of it. 16-bit counter, wrap-safe compare.
++                    const uint32_t target =
++                        (m_block_idx + 1) * num_k_blocks * block_m_tiles +
++                        row_group * (num_k_blocks - 1) * block_m_tiles / row_groups_per_block;
++                    volatile tt_reg_ptr uint32_t* acked = get_cb_tiles_acked_ptr(OUT_STORE_PACE);
++                    while (static_cast<int16_t>(static_cast<uint16_t>(*acked) - static_cast<uint16_t>(target)) < 0) {
++                    }
++                }
++#endif
+                 cb_wait_front(cb_output_tiles, row_group_tiles);
++#ifdef OUT_STORE_INTERVAL
++                {
++                    // Store rate cap: one row group per OUT_STORE_INTERVAL cycles from this core's first one (a core
++                    // that fell behind catches up at full rate), so the aggregate store stays under what DRAM / NoC1
++                    // take and no core's writes starve the cores upstream of it on NoC1.
++                    volatile tt_reg_ptr uint32_t* clock_lo =
++                        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
++                    if (!store_clock_started) {
++                        store_slot_time = clock_lo[0];
++                        store_clock_started = true;
++                    }
++                    while (static_cast<int32_t>(clock_lo[0] - store_slot_time) < 0) {
++                    }
++                    store_slot_time += OUT_STORE_INTERVAL;
++                }
++#endif
+                 uint32_t l1 = get_read_ptr(cb_output_tiles);
+                 for (uint32_t r = 0; r < out_subblock_h; ++r) {
+                     const uint32_t local_tile_row = block_tile0 + row_group * out_subblock_h + r;

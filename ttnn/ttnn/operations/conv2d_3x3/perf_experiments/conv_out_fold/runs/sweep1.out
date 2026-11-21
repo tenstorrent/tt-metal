@@ -1,0 +1,26 @@
+COF: {"case": "r3", "variant": "base", "status": "ok", "fold": false, "pcc": 0.9999985502918439, "sha1": "8e86662ec7608c31", "ref": true, "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0, "max_abs_vs_first": 0.0}
+COF: {"case": "r3", "variant": "fold", "status": "ok", "fold": true, "blocking": {"ng": 1, "cores": 110, "core_m": 149, "bm": 75, "bk": 2, "bn": 1, "m_blocks": 2, "k_blocks": 3, "resident": true, "footprint": 1331392}, "pcc": 0.9999985502918439, "sha1": "8e86662ec7608c31", "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0, "max_abs_vs_first": 0.0}
+COF: {"case": "r3", "variant": "off", "status": "ok", "fold": false, "blocking": {"ng": 1, "cores": 110, "core_m": 149, "bm": 75, "bk": 2, "bn": 1, "m_blocks": 2, "k_blocks": 9, "resident": true, "footprint": 1333424}, "pcc": 0.9999985502918439, "sha1": "8e86662ec7608c31", "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0, "max_abs_vs_first": 0.0}
+COF: {"case": "r4", "variant": "off", "status": "ok", "fold": false, "blocking": {"ng": 1, "cores": 110, "core_m": 149, "bm": 30, "bk": 4, "bn": 1, "m_blocks": 5, "k_blocks": 9, "resident": true, "footprint": 1331680}, "pcc": 0.9999985652410636, "sha1": "25c49557777947ea", "ref": true, "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0, "max_abs_vs_first": 0.0}
+COF: {"case": "r4", "variant": "fold", "status": "ok", "fold": true, "blocking": {"ng": 1, "cores": 110, "core_m": 149, "bm": 30, "bk": 4, "bn": 1, "m_blocks": 5, "k_blocks": 3, "resident": true, "footprint": 1333744}, "pcc": 0.9999985652410636, "sha1": "4af9adc4a03e3181", "bit_identical_to_first": false, "n_diff_vs_first": 1, "max_ulp_vs_first": 1, "max_abs_vs_first": 0.0078125, "first_diffs": [[216, 1022, 0]]}
+COF: {"case": "r4", "variant": "base", "status": "ok", "fold": false, "pcc": 0.9999985652410636, "sha1": "25c49557777947ea", "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0, "max_abs_vs_first": 0.0}
+COF: {"case": "r5", "variant": "base", "status": "ok", "fold": false, "pcc": 0.999998547075552, "sha1": "6355e3d8a7194584", "ref": true, "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0, "max_abs_vs_first": 0.0}
+COF: {"case": "r5", "variant": "fold", "status": "ok", "fold": true, "blocking": {"ng": 1, "cores": 110, "core_m": 149, "bm": 30, "bk": 4, "bn": 1, "m_blocks": 5, "k_blocks": 3, "resident": true, "footprint": 1333744}, "pcc": 0.999998547075552, "sha1": "6355e3d8a7194584", "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0, "max_abs_vs_first": 0.0}
+COF: {"case": "r5", "variant": "off", "status": "ok", "fold": false, "blocking": {"ng": 1, "cores": 110, "core_m": 149, "bm": 30, "bk": 4, "bn": 1, "m_blocks": 5, "k_blocks": 9, "resident": true, "footprint": 1331680}, "pcc": 0.999998547075552, "sha1": "6355e3d8a7194584", "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0, "max_abs_vs_first": 0.0}
+COF: {"case": "r1", "variant": "off", "status": "ok", "fold": false, "blocking": {"ng": 1, "cores": 108, "core_m": 38, "bm": 38, "bk": 4, "bn": 1, "m_blocks": 1, "k_blocks": 9, "resident": false, "footprint": 1330272}, "pcc": 0.9999985481696593, "sha1": "6396e5e9c2bf1d17", "ref": true, "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0, "max_abs_vs_first": 0.0}
+COF: {"case": "r1", "variant": "fold", "status": "ok", "fold": false, "blocking": {"ng": 1, "cores": 108, "core_m": 38, "bm": 38, "bk": 4, "bn": 1, "m_blocks": 1, "k_blocks": 9, "resident": false, "footprint": 1330272}, "pcc": 0.9999985481696593, "sha1": "6396e5e9c2bf1d17", "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0, "max_abs_vs_first": 0.0}
+COF: {"case": "r1", "variant": "base", "status": "ok", "fold": false, "pcc": 0.9999985481696593, "sha1": "6396e5e9c2bf1d17", "bit_identical_to_first": true, "n_diff_vs_first": 0, "max_ulp_vs_first": 0, "max_abs_vs_first": 0.0}
+============================== 4 passed in 16.82s ==============================
+SAFE_PYTEST_RESULT: PASS
+r3|base	413283	[413283]
+r3|fold	391701	[391701]
+r3|off	413704	[413704]
+r4|off	794360	[794360]
+r4|fold	636077	[636077]
+r4|base	791406	[791406]
+r5|base	798890	[798890]
+r5|fold	634121	[634121]
+r5|off	796013	[796013]
+r1|off	287236	[287236]
+r1|fold	287127	[287127]
+r1|base	288385	[288385]
