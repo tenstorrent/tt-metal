@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import inspect
 import time
+import warnings
 from collections import OrderedDict
 
 import numpy as np
@@ -193,7 +194,7 @@ class TtnnEsm2:
         """ttnn.linear wrapper; out_fp32 requests fp32 output tiles.
 
         The dtype kwarg (output dtype) is resolved once: if the installed
-        runtime rejects it we fall back to plain bf16 output and record the
+        runtime rejects it (TypeError) we warn and fall back to plain bf16 output and record the
         fact so callers/probes can check ``_mm_out32_ok``.
         """
         ttnn = self.ttnn
@@ -203,8 +204,15 @@ class TtnnEsm2:
                     out = ttnn.linear(a, w, bias=bias, dtype=ttnn.float32)
                     self._mm_out32_ok = True
                     return out
-                except (TypeError, RuntimeError):
+                except TypeError:
+                    # Only a rejected dtype kwarg means "unsupported"; other
+                    # errors (e.g. out of memory) must propagate.
                     self._mm_out32_ok = False
+                    warnings.warn(
+                        "ttnn.linear rejected dtype=float32; " "falling back to bf16 outputs for this process",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
             elif self._mm_out32_ok:
                 return ttnn.linear(a, w, bias=bias, dtype=ttnn.float32)
         return ttnn.linear(a, w, bias=bias)
@@ -223,8 +231,15 @@ class TtnnEsm2:
                     out = ttnn.matmul(a, b, dtype=ttnn.float32)
                     self._mm32_matmul_ok = True
                     return out
-                except (TypeError, RuntimeError):
+                except TypeError:
+                    # Only a rejected dtype kwarg means "unsupported"; other
+                    # errors (e.g. out of memory) must propagate.
                     self._mm32_matmul_ok = False
+                    warnings.warn(
+                        "ttnn.matmul rejected dtype=float32; " "falling back to bf16 outputs for this process",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
             elif self._mm32_matmul_ok:
                 return ttnn.matmul(a, b, dtype=ttnn.float32)
         return ttnn.matmul(a, b)
