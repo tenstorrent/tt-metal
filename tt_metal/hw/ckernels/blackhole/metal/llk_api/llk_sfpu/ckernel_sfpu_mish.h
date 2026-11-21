@@ -52,15 +52,31 @@ inline void calculate_mish() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // x >= SAT_HI: mish(x) ≈ x
+        // x >= SAT_HI: mish(x) ≈ x. For x <= -88.0f (including -inf),
+        // exp(x) == 0 so mish(x) -> 0.0f; the product must not become
+        // (-inf) * 0.0f = NaN.
         sfpi::vFloat result = x;
 
-        v_if(x < SAT_HI) {
+        // Clamp the deep-negative tail instead of branching on it. The NaN
+        // needs an *infinite* x: with x finite, x * 0.0f is -0.0f, not NaN.
+        // At x = -88.0f, u = exp(-88) ~ 6.1e-39 and the result is ~-5e-37,
+        // which rounds to zero in every destination format; if u underflows
+        // to 0 outright the result is -0.0f, which is equally correct.
+        //
+        // Branchless on purpose: an extra v_if/v_elseif here measured ~244
+        // cycles/tile slower on Wormhole and adds a live value in the arm
+        // the note above calls out as having LRegs for only two of its three
+        // exp constants — that is also what broke the bf16 dest_acc=Yes
+        // approx=No builds ("too few lregs to hold live values").
+        // sfpi::max is the same guard expm1_cw_clamped uses.
+        const sfpi::vFloat xc = sfpi::max(x, -88.0f);
+
+        v_if(xc < SAT_HI) {
             sfpi::vFloat u;
             if constexpr (juffa_exp) {
-                u = _sfpu_exp_fp32_accurate_prgm_<false /*unsafe*/>(x, neg_ln2_hi, p0, p1);
+                u = _sfpu_exp_fp32_accurate_prgm_<false /*unsafe*/>(xc, neg_ln2_hi, p0, p1);
             } else {
-                u = _sfpu_exp_21f_bf16_prgm_<is_fp32_dest_acc_en>(x, c0, c1, c2);
+                u = _sfpu_exp_21f_bf16_prgm_<is_fp32_dest_acc_en>(xc, c0, c1, c2);
             }
 
             // denominator = (1 + u)^2 + 1 = u^2 + 2u + 2
@@ -76,14 +92,15 @@ inline void calculate_mish() {
                 inv_denom = sfpu_reciprocal_iter<1>(denom);
             }
 
-            v_if(x >= 0.0f) {
+            v_if(xc >= 0.0f) {
                 // x * (1 - 2/denom)
-                result = x * (1.0f - 2.0f * inv_denom);
+                result = xc * (1.0f - 2.0f * inv_denom);
             }
             v_else {
                 // Stable for x < 0: output x * u(u+2) / denom is itself small
                 sfpi::vFloat numer = u * (u + 2.0f);
-                result = x * (numer * inv_denom);
+                // xc, not x: the clamp above is what keeps this product finite
+                result = xc * (numer * inv_denom);
             }
             v_endif;
         }
