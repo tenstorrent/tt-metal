@@ -6,8 +6,9 @@
 (each size, reference and text bucket: image, reference and text early blocks, single stage). No device.
 
 SP4 x TP2 (DP4 groups) has no key in the shared ring SDPA table, whose default there is a 256 k chunk. Every DP4 length
-must pick a 512 k chunk ((224, 512) at the 4096 image / single-stage rows), and SP8 x TP4 must pick what it picked before
-SP4 x TP2 had its own chunks: Klein's table where it has the rows, else the shared table with q capped at 128.
+must pick a 512 k chunk ((224, 512) at the 4096 image / single-stage rows), and SP8 x TP4 must pick exactly SP8_ROWS:
+Klein's table where it has the rows (k 640 at the 4096 + 1 reference rows, 8960), else the shared table with q capped at
+128.
 """
 
 from __future__ import annotations
@@ -70,7 +71,7 @@ def _blackhole(monkeypatch):
 
 
 @pytest.mark.parametrize("size", SIZES)
-def test_sp8_tp4_picks_are_unchanged(size):
+def test_sp8_tp4_picks_match_the_table(size):
     assert RING_SDPA_CHUNKS_BY_LOCAL_ROWS == SP8_ROWS
     shared = attention_opt.Attention.ring_sdpa_chunk_size_map[(True, 8, 4)]
     for n in _lengths(8, size):

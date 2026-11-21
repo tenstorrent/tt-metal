@@ -52,7 +52,16 @@ LINEAR1_MIN_ROWS = 8192
 class Flux3KleinAttention(Attention):
     """Ring SDPA on the streaming compute path with fp32 dest accumulation (bf16 score block), also on the CCL row's
     cores from RING_SDPA_CCL_ROW_START_X on, with RING_SDPA_CHUNKS_BY_LOCAL_ROWS's chunks where it has the rows (SP4 x TP2:
-    SP4_TP2_RING_SDPA_CHUNKS_BY_LOCAL_ROWS's first, SP4_TP2_RING_SDPA_CHUNKS where neither has them)."""
+    SP4_TP2_RING_SDPA_CHUNKS_BY_LOCAL_ROWS's first, SP4_TP2_RING_SDPA_CHUNKS where neither has them). On SP8 x TP4 the ring
+    SDPA writes the heads side by side and reads V in the QKV layout (bit-identical); not yet on the DP layouts, where the
+    extra gathered-V buffer pair has not been sized."""
+
+    @property
+    def _sp8_tp4(self) -> bool:
+        parallel = self.parallel_config
+        return (parallel.sequence_parallel.factor, parallel.tensor_parallel.factor) == (8, 4)
+
+    ring_sdpa_concat_heads = ring_sdpa_v_in_row = _sp8_tp4
 
     def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
         sp = self.parallel_config.sequence_parallel.factor
