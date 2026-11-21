@@ -400,6 +400,13 @@ def load(
     index, header, train_state, missing_state, live, local = group.phase(
         "reading the index and collecting the live tensors", open_and_collect
     )
+    # Hosts holding their own copies at one path (a relative path into per-host clones, say) agree on the directory
+    # string but read different checkpoints: the ranks also agree on the index's id and creation time.
+    group.agree(
+        "the checkpoint (its id and creation time)",
+        crc31(f"{index.checkpoint_id}\n{index.created}"),
+        shown=f"{index.checkpoint_id}, created {index.created}",
+    )
     by_key = {lt.key: lt for lt in live}
     roles = {"param", "buffer"} | ({"optimizer_state"} if optimizer is not None else set())
 

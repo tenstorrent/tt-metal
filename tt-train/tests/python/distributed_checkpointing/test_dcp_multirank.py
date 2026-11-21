@@ -33,7 +33,7 @@ from tp_block import TPBlock, fresh_tp, train_step
 import ttml
 import ttml.distributed_checkpointing as dcp
 from ttml.common.schedulers import CosineAnnealingScheduler
-from ttml.distributed_checkpointing import _save
+from ttml.distributed_checkpointing import _load, _save
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
@@ -233,6 +233,31 @@ def test_a_directory_the_ranks_do_not_share_is_refused_before_any_write(two_rank
     ttnn.distributed_context_barrier()
     if rank == 0:
         shutil.rmtree(own_disk)
+    ttnn.distributed_context_barrier()
+
+
+def test_ranks_reading_different_checkpoints_at_one_path_are_refused(two_ranks, monkeypatch, expect_error):
+    """Hosts holding their own copies at one path agree on the directory but would load different checkpoints, so the
+    ranks also agree on the index's id and creation time, and nothing is placed. Rank 1 stands in for a host holding an
+    older copy by reading an index with another creation time."""
+    rank, local, root = two_ranks
+    model, params, opt = fresh_tp(DIM)
+    path = os.path.join(root, "own_copies")
+    dcp.save(path, model=model)
+    if rank == 1:
+        real_read_index = _load.read_index
+
+        def older_copy(directory):
+            index = real_read_index(directory)
+            index.created = "2000-01-01T00:00:00Z"
+            return index
+
+        monkeypatch.setattr(_load, "read_index", older_copy)
+    fresh, fresh_params, _ = fresh_tp(DIM)
+    before = model_shards(fresh_params, local)
+    with expect_error(dcp.CheckpointError, r"the ranks disagree on the checkpoint \(its id and creation time\): rank "):
+        dcp.load(path, model=fresh)
+    assert_same_shards(model_shards(fresh_params, local), before, "no rank placed anything")
     ttnn.distributed_context_barrier()
 
 
