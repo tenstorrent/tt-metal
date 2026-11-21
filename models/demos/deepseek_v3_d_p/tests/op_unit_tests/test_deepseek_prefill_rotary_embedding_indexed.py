@@ -607,7 +607,7 @@ def test_rotary_embedding_indexed_repeated_cache_hits(mesh_device):
     # Replace the input with a new buffer at the same address, then record: the recorded bindings must name it.
     ttnn.deallocate(tt_input)
     tt_input = upload(inputs[3], shard_seq)
-    builder = ttnn.experimental.CommandListBuilder(mesh_device)
+    builder = ttnn.CommandListBuilder(mesh_device)
     command_list = None
     try:
         with builder:

@@ -27,6 +27,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/dispatch_core_common.hpp
     api/tt-metalium/distributed.hpp
     api/tt-metalium/distributed_context.hpp
+    api/tt-metalium/execution/command_list.hpp
     api/tt-metalium/distributed_host_buffer.hpp
     api/tt-metalium/experimental/sram_arena/sram_arena.hpp
     api/tt-metalium/experimental/sram_arena/sram_arena_properties.hpp
@@ -76,7 +77,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/lightmetal/lightmetal_replay.hpp
     api/tt-metalium/experimental/mesh_program_descriptor.hpp
     api/tt-metalium/experimental/blaze/named_kernel_args.hpp
-    api/tt-metalium/experimental/command_list.hpp
     api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
     api/tt-metalium/workload/utils/arg_value.hpp
     api/tt-metalium/workload/specification/compute_hardware_config.hpp

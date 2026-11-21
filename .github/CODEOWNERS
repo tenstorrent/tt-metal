@@ -135,7 +135,7 @@ tt_metal/api/tt-metalium/experimental/blaze/ @esmalTT @cfjchu @azaytsev-epam @te
 tt_metal/api/tt-metalium/experimental/disaggregation/ @SeanNijjar @ubcheema # disaggregation experimental APIs
 tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT # fabric experimental APIs
 tt_metal/api/tt-metalium/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT
-tt_metal/api/tt-metalium/experimental/command_list.hpp @cfjchu @aliuTT @tt-asaigal @tenstorrent/metalium-runtime-performance
+tt_metal/api/tt-metalium/execution/command_list.hpp @cfjchu @aliuTT @tt-asaigal @tenstorrent/metalium-runtime-performance @tenstorrent/metalium-api-owners
 tt_metal/api/tt-metalium/experimental/dispatch_telemetry.hpp @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/api/tt-metalium/experimental/udm/ @yugaoTT @SeanNijjar
 tt_metal/api/internal/disaggregation/ @SeanNijjar @ubcheema # disaggregation internal APIs (moved from experimental in #48638)

@@ -69,18 +69,20 @@ protected:
                 ttnn::Shape{1, 1, 32, width}, TensorLayout(DataType::BFLOAT16, Layout::ROW_MAJOR, MemoryConfig{})),
             device_);
 
-        CommandListBuilder builder(*device_);
+        // The builder also holds op-owned tensors, so it is destroyed before replay.
         Tensor output;
-        {
-            auto recording = builder.record_scope();
-            output = ttnn::pad(
-                input,
-                ttsl::SmallVector<std::array<uint32_t, 2>>{{0, 0}, {0, 0}, {0, 0}, {0, width}},
-                pad_value,
-                /*use_multicore=*/false);
-        }
-        CommandList command_list = builder.build(QueueId{0});
-        builder.deallocate();
+        CommandList command_list = [&] {
+            CommandListBuilder builder(*device_);
+            {
+                auto recording = builder.record_scope();
+                output = ttnn::pad(
+                    input,
+                    ttsl::SmallVector<std::array<uint32_t, 2>>{{0, 0}, {0, 0}, {0, 0}, {0, width}},
+                    pad_value,
+                    /*use_multicore=*/false);
+            }
+            return builder.build(QueueId{0});
+        }();
         after_build();
 
         // Same spec as pad's pad-value tensor, so it takes that tensor's L1 if the list let it be freed.
@@ -109,8 +111,10 @@ protected:
             return device_->allocator()->get_statistics(BufferType::L1).total_allocated_bytes;
         };
         const size_t l1_held = l1_allocated();
-        command_list.deallocate();
-        EXPECT_LT(l1_allocated(), l1_held) << "The list should hold pad's pad-value tensor until it is deallocated";
+        {
+            [[maybe_unused]] const CommandList released = std::move(command_list);
+        }
+        EXPECT_LT(l1_allocated(), l1_held) << "The list should hold pad's pad-value tensor until it is destroyed";
     }
 };
 
@@ -131,8 +135,7 @@ TEST_F(CommandListTest, RecordBuildReplay) {
     EXPECT_FALSE(builder.is_recording());
 
     CommandList command_list = builder.build(QueueId{0});
-    builder.deallocate();
-    EXPECT_EQ(*command_list.cq_id(), 0);
+    EXPECT_EQ(&command_list.command_queue(), &device_->mesh_command_queue(0));
 
     command_list.enqueue(/*blocking=*/true);
 
@@ -141,7 +144,6 @@ TEST_F(CommandListTest, RecordBuildReplay) {
     for (size_t i = 0; i < values.size(); ++i) {
         EXPECT_EQ(result[i], std::max(values[i], 0.0f)) << "at index " << i;
     }
-    command_list.deallocate();
 }
 
 TEST_F(CommandListTest, PadReplaysAfterProgramCacheClear) {
@@ -156,14 +158,36 @@ TEST_F(CommandListTest, PadReplaysWithProgramCacheDisabled) {
 TEST_F(CommandListTest, LegacyOpIsRejected) {
     const Tensor input = make_input(std::vector<float>(32 * 64, 1.0f));
     CommandListBuilder builder(*device_);
-    auto recording = builder.record_scope();
-    try {
-        (void)ttnn::add(input, input);
-        FAIL() << "Recording a legacy-factory op should throw";
-    } catch (const std::exception& e) {
-        EXPECT_THAT(std::string(e.what()), ::testing::HasSubstr("cannot be recorded into a command list"));
+    {
+        auto recording = builder.record_scope();
+        try {
+            (void)ttnn::add(input, input);
+            FAIL() << "Recording a legacy-factory op should throw";
+        } catch (const std::exception& e) {
+            EXPECT_THAT(std::string(e.what()), ::testing::HasSubstr("cannot be recorded into a command list"));
+        }
+        EXPECT_TRUE(builder.is_recording());
     }
-    EXPECT_TRUE(builder.is_recording());
+    EXPECT_THAT(
+        [&] { (void)builder.build(); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("An error interrupted recording")));
+}
+
+TEST_F(CommandListTest, ExceptionLeavingRecordScopeRequiresClear) {
+    CommandListBuilder builder(*device_);
+    EXPECT_THAT(
+        [&] {
+            auto recording = builder.record_scope();
+            throw std::runtime_error("user error");
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("user error")));
+    EXPECT_THAT(
+        [&] { (void)builder.build(); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("An error interrupted recording")));
+    builder.clear();
+    EXPECT_THAT(
+        [&] { (void)builder.build(); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Cannot build an empty CommandList")));
 }
 
 TEST_F(CommandListTest, BuilderLifetimeErrors) {
@@ -174,12 +198,14 @@ TEST_F(CommandListTest, BuilderLifetimeErrors) {
         auto recording = builder.record_scope();
         EXPECT_ANY_THROW(builder.begin_recording());
         EXPECT_ANY_THROW(builder.clear());
-        EXPECT_ANY_THROW(builder.deallocate());
     }
-    builder.deallocate();
+    {
+        [[maybe_unused]] const CommandListBuilder released = std::move(builder);
+    }
     EXPECT_THAT(
-        [&] { (void)builder.build(); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("CommandListBuilder has been deallocated")));
+        [&] { (void)builder.build(); },  // NOLINT(bugprone-use-after-move)
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("CommandListBuilder has been moved from")));
+    EXPECT_NO_THROW(CommandListBuilder replacement(*device_));
 }
 
 CmdListScalar real(double value) { return {value}; }
@@ -452,7 +478,6 @@ TEST_F(CommandListDeviceParamsTest, SoftmaxUpdatesInputAndScaleOnEachQueue) {
     }
     CommandList list_cq0 = builder.build(QueueId{0});
     CommandList list_cq1 = builder.build(QueueId{1});
-    builder.deallocate();
 
     list_cq0.update_args({{"input", input_b}, {"scale", real(0.25)}}, /*blocking=*/true);
     list_cq0.enqueue(/*blocking=*/true);
@@ -468,8 +493,6 @@ TEST_F(CommandListDeviceParamsTest, SoftmaxUpdatesInputAndScaleOnEachQueue) {
     EXPECT_THAT(
         [&] { list_cq0.update_args({{"scale", input_b}}); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("'scale' is a scalar")));
-    list_cq0.deallocate();
-    list_cq1.deallocate();
 }
 
 // Writes one op argument, "value", to two L1 words with different encodings. With `packed`, writer_a writes it
@@ -564,13 +587,11 @@ TEST_F(CommandListDeviceParamsTest, OneKeywordFansOutToTwoEncodings) {
         binds.finish();
     }
     CommandList list = builder.build(QueueId{0});
-    builder.deallocate();
 
     list.update_args({{"v", integer(0x1234)}}, /*blocking=*/true);
     list.enqueue(/*blocking=*/true);
     EXPECT_EQ(read_word(FanOutDeviceOperation::kAddressA), 0x1234u);
     EXPECT_EQ(read_word(FanOutDeviceOperation::kAddressB), 0x12341234u);
-    list.deallocate();
 }
 
 TEST_F(CommandListDeviceParamsTest, EachProgramKeepsItsOwnEncoder) {
@@ -592,13 +613,11 @@ TEST_F(CommandListDeviceParamsTest, EachProgramKeepsItsOwnEncoder) {
         binds.finish();
     }
     CommandList list = builder.build(QueueId{0});
-    builder.deallocate();
 
     list.update_args({{"v", integer(0x1234)}}, /*blocking=*/true);
     list.enqueue(/*blocking=*/true);
     EXPECT_EQ(read_word(FanOutDeviceOperation::kAddressA), 0x1234u);
     EXPECT_EQ(read_word(FanOutDeviceOperation::kAddressPacked), 0x12341234u);
-    list.deallocate();
 }
 
 }  // namespace ttnn::command_list::test

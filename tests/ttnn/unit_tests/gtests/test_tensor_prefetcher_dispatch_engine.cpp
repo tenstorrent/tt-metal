@@ -22,7 +22,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/command_list.hpp>
+#include <tt-metalium/execution/command_list.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -352,17 +352,15 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, SendsRecordedRequestOnEveryCommand
     {
         const std::vector<metal_exp::TensorPrefetcherInput> inputs = {
             {prefetch.weight.mesh_tensor(), prefetch.block_count}};
-        metal_exp::CommandListBuilder builder(*device_);
-        builder.add_tensor_prefetcher_request(prefetch.pipe_refs(), std::nullopt, inputs);
+        tt::tt_metal::CommandListBuilder builder(*device_);
+        metal_exp::AddTensorPrefetcherRequest(builder, prefetch.pipe_refs(), std::nullopt, inputs);
         auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
             device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
         builder.add(device_->mesh_command_queue(), validator);
         auto command_list = builder.build(device_->mesh_command_queue());
-        builder.deallocate();
         for (uint32_t i = 0; i < kReplayCount; ++i) {
-            metal_exp::EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true);
+            tt::tt_metal::EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true);
         }
-        command_list.deallocate();
     }
     metal_exp::StopTensorPrefetcher(*device_);
 }

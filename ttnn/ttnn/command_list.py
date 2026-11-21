@@ -2,23 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# Experimental and subject to change. TTNN command-list parameters: op arguments a built TTNN command list can update.
+# TTNN command-list parameters: op arguments a built TTNN command list can update.
 
 import ttnn
 from ttnn._ttnn.operations.command_list import is_recording, pop_cmd_list_binds, push_cmd_list_binds
 
 
 class CmdListParam:
-    """Marks an op argument as a TTNN command-list parameter (experimental).
+    """Marks an op argument as a TTNN command-list parameter.
 
     Pass it by keyword to an op recorded inside ``with builder:``. The op runs with ``default`` and the recorded
-    argument becomes updatable with ``ttnn.experimental.CommandList.update_args({param: value})`` or
+    argument becomes updatable with ``ttnn.CommandList.update_args({param: value})`` or
     ``{name: value}``. Outside a recording the op simply runs with ``default``. An op that does not support the
     parameter is recorded with ``default`` and logs a warning.
 
     Args:
         default (ttnn.Tensor | float | int): Value the op is called and recorded with.
-        name (str): Key for ``ttnn.experimental.CommandList.update_args``. Ops passed the same name share one
+        name (str): Key for ``ttnn.CommandList.update_args``. Ops passed the same name share one
             parameter.
     """
 

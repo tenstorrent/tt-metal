@@ -68,7 +68,7 @@ uint32_t uint16_of(const ttnn::command_list::CmdListScalar& scalar, std::string_
 
 namespace ttnn::command_list::detail {
 
-namespace metal = tt::tt_metal::experimental;
+namespace metal = tt::tt_metal;
 
 struct RecordedTensor {
     std::string name;  // TTNN param
@@ -221,6 +221,12 @@ void throw_if_recording_command_list(std::string_view call_name) {
     TT_FATAL(t_recording == nullptr, "{} cannot run while a CommandListBuilder is recording on this thread", call_name);
 }
 
+void mark_command_list_recording_failed() {
+    if (t_recording != nullptr) {
+        t_recording->mark_failed();
+    }
+}
+
 bool has_active_cmd_list_binds() { return t_recording != nullptr && t_recording->has_binds(); }
 
 void record_to_command_list(
@@ -246,7 +252,7 @@ void record_to_command_list(
 
 namespace ttnn::command_list {
 
-namespace metal = tt::tt_metal::experimental;
+namespace metal = tt::tt_metal;
 
 tt::tt_metal::ArgValue encode_uint32(const CmdListScalar& scalar) {
     return static_cast<uint32_t>(integer_in(scalar, 0, std::numeric_limits<uint32_t>::max(), "encode_uint32"));
@@ -456,6 +462,23 @@ void CmdListBinder::claim_arg(bool common, const tt::tt_metal::KernelSpecName& k
 CommandListBuilder::CommandListBuilder(tt::tt_metal::distributed::MeshDevice& mesh_device) :
     metal_builder_(mesh_device) {}
 
+namespace {
+
+CommandListBuilder& not_recording(CommandListBuilder& builder) {
+    TT_FATAL(!builder.is_recording(), "Cannot move a recording CommandListBuilder");
+    return builder;
+}
+
+}  // namespace
+
+// Bind scopes only exist while recording, so there are none to move.
+CommandListBuilder::CommandListBuilder(CommandListBuilder&& other) noexcept :
+    metal_builder_(std::move(not_recording(other).metal_builder_)),
+    failed_(other.failed_),
+    layout_(std::move(other.layout_)),
+    op_owned_tensors_(std::move(other.op_owned_tensors_)),
+    recorded_programs_(other.recorded_programs_) {}
+
 CommandListBuilder::~CommandListBuilder() {
     if (t_recording == this) {
         t_recording = nullptr;
@@ -464,6 +487,8 @@ CommandListBuilder::~CommandListBuilder() {
 
 void CommandListBuilder::begin_recording() {
     TT_FATAL(!recording_, "CommandListBuilder is already recording");
+    TT_FATAL(
+        !failed_, "An error interrupted recording into this CommandListBuilder. Call clear() before recording again");
     TT_FATAL(t_recording == nullptr, "Another CommandListBuilder is recording on this thread");
     t_recording = this;
     recording_ = true;
@@ -483,11 +508,22 @@ bool CommandListBuilder::is_recording() const { return recording_; }
 
 ScopeGuard CommandListBuilder::record_scope() {
     begin_recording();
-    return make_guard([this]() { end_recording(); });
+    return make_guard([this, uncaught_exceptions = std::uncaught_exceptions()]() {
+        if (std::uncaught_exceptions() > uncaught_exceptions) {
+            mark_failed();
+        }
+        end_recording();
+    });
 }
+
+void CommandListBuilder::mark_failed() { failed_ = true; }
 
 CommandList CommandListBuilder::build(std::optional<QueueId> cq_id) const {
     ZoneScoped;
+    TT_FATAL(
+        !failed_,
+        "An error interrupted recording, so this CommandListBuilder may hold part of an operation. Call clear() and "
+        "record again");
     const QueueId queue = cq_id.value_or(get_current_command_queue_id_for_thread());
     return CommandList(
         metal_builder_.build(device().mesh_command_queue(queue.get())),
@@ -500,13 +536,7 @@ void CommandListBuilder::clear() {
     metal_builder_.clear();
     layout_.clear();
     op_owned_tensors_.clear();
-}
-
-void CommandListBuilder::deallocate() {
-    TT_FATAL(!recording_, "Cannot deallocate a recording CommandListBuilder");
-    metal_builder_.deallocate();
-    layout_.clear();
-    op_owned_tensors_.clear();
+    failed_ = false;
 }
 
 tt::tt_metal::distributed::MeshDevice& CommandListBuilder::device() const { return metal_builder_.device(); }
@@ -620,8 +650,7 @@ CommandList::~CommandList() {
 void CommandList::enqueue(bool blocking, bool check_dram_overlap) {
     ZoneScoped;
     device_operation::detail::throw_if_recording_command_list("CommandList::enqueue");
-    metal::EnqueueCommandList(
-        device().mesh_command_queue(metal_list_.cq_id()), metal_list_, blocking, check_dram_overlap);
+    metal::EnqueueCommandList(command_queue(), metal_list_, blocking, check_dram_overlap);
 }
 
 void CommandList::update_args(const std::unordered_map<std::string, CmdListValue>& values, bool blocking) {
@@ -652,13 +681,8 @@ void CommandList::update_args(const std::unordered_map<std::string, CmdListValue
     metal_list_.update_args(patch, blocking);
 }
 
-void CommandList::deallocate() {
-    metal_list_.deallocate();
-    op_owned_tensors_.clear();
-}
-
 tt::tt_metal::distributed::MeshDevice& CommandList::device() const { return metal_list_.device(); }
 
-QueueId CommandList::cq_id() const { return QueueId(metal_list_.cq_id()); }
+tt::tt_metal::distributed::MeshCommandQueue& CommandList::command_queue() const { return metal_list_.command_queue(); }
 
 }  // namespace ttnn::command_list

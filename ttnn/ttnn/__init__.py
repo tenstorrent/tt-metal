@@ -130,6 +130,12 @@ from ttnn._ttnn.operations.trace import (
     release_trace,
 )
 
+from ttnn._ttnn.operations.command_list import (
+    CommandList,
+    CommandListBuilder,
+)
+from ttnn.command_list import CmdListParam
+
 from ttnn._ttnn.operations.debug import (
     apply_device_delay,
 )
@@ -643,14 +649,6 @@ experimental.PrefetcherPipeL1Source = _prefetcher_pipe.PrefetcherPipeL1Source
 experimental.PrefetcherPipeSpaceConfig = _prefetcher_pipe.PrefetcherPipeSpaceConfig
 experimental.create_prefetcher_pipe_space = _prefetcher_pipe.create_prefetcher_pipe_space
 experimental.create_prefetcher_pipe_spaces = _prefetcher_pipe.create_prefetcher_pipe_spaces
-
-# Command lists (Metal 2.0 replacement for trace). Experimental-only surface.
-from ttnn._ttnn.operations import command_list as _command_list
-from ttnn.command_list import CmdListParam as _CmdListParam
-
-experimental.CommandListBuilder = _command_list.CommandListBuilder
-experimental.CommandList = _command_list.CommandList
-experimental.CmdListParam = _CmdListParam
 
 # Metal 2.0 ProgramSpec, ProgramRunArgs and the types they use, and generic_op's MeshProgramSpec and
 # MeshProgramRunArgs, for ttnn.experimental.generic_op.
