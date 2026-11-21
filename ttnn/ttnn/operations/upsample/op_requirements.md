@@ -28,6 +28,22 @@
 - **Compute config**: none (spec DECISIONS: pure data movement, CONVENTIONS §2.2 exemption).
 - **Golden baseline**: 26 / 26 supported cells pass (bit-exact); 142 xfail_expected, 84 invalid_skipped, 0 loud (per `verifier_report.json`).
 
+### [ ] Refinement 0 — The `memory_config` argument and a height-sharded input (the YOLOv8 sharded upsample)
+
+**Goal**: two things the specification gained after Phase 0, in one refinement because the model's call needs both.
+1. The signature gains a keyword-only `memory_config=None` (the stub in `eval/specs/upsample/spec.py`; rule R7; `CALL["canonical"]`, axis `memory_argument`). Add `memory_argument` to SUPPORTED with `None` and `"input"`: `memory_config=` the input tensor's own memory config gives the same result as leaving it out, and any other config reads as `"other"` and is refused by name.
+2. Add `"height"` to SUPPORTED["sharding"]: a height-sharded input in L1, at the Phase 0 values of every other axis. The result is height-sharded in L1 over the input's cores with the shard shape `[input shard height * sh * sw, C]` (R5).
+
+**Origin**: the model-level test. YOLOv8 upsamples a sharded neck feature map in place (`models/experimental/ops/quasar/tests/yolo_ops/test_upsample_small_grid.py::test_upsample_sharded_small_grid`): `upsample(x, (2, 2), memory_config=x.memory_config())` with `x` a `[1, 4, 4, 64]` bfloat16 ROW_MAJOR tensor height-sharded in L1 over two cores (shard shape [8, 64]); the result is `[1, 8, 8, 64]`, height-sharded over the same two cores (shard shape [32, 64]). The Phase 0 op has no `memory_config` parameter, so the call is a TypeError there, and tt-metal's op serves it.
+
+**Operator notes** (queued by the operator of the run, not by the verifier):
+- The baseline golden run of this refinement is red in every cell: the runner passes `memory_config=None` for the new axis and the Phase 0 entry point does not take the keyword. That is the signature change, not a regression; the Phase 0 cells must pass again once the parameter exists.
+- A sibling op gives a hint, not a proof: the generated `add`, which reads and writes pages through `TensorAccessor`, served height-sharded operands once its gate let them through, with no change to its kernels. Here the output is not sharded like the input (four times the sticks per core for a factor of (2, 2)), so the output's memory config has to be built: same cores, same orientation, the new shard shape.
+- The runner sizes a cell's shard grid from the shape and the device (`eval/CONVENTIONS.md` §2.3, `eval/memory.py`): a shard need not hold whole image rows, and the op must not depend on how many cores a grid spans. A cell whose input shards do not fit one core's L1 is skipped by the runner.
+- Keep the data path: upsampling each shard on the core that holds it is a performance refinement of its own and is not asked for here.
+
+**Done when**: the entry point's signature equals the stub (`eval.validate_contract upsample` reports no `signature` error); every golden cell with `sharding=height` or `memory_argument=input` at the Phase 0 values of the other axes passes exactly; the Phase 0 cells pass again; `verify_supported` loud categories are 0; a test in the op's own test file makes the model's call and asserts the values and the result's placement (height-sharded in L1, the input's cores, shard shape [32, 64]).
+
 ### [ ] Refinement 1 — TILE layout (`tile_layout` regime)
 
 **Goal**: add `ttnn.TILE_LAYOUT` to `SUPPORTED["layout"]` with a native tile-layout reader/writer path, on the Phase 0 cells' other axes (bfloat16, tile_aligned C, uniform factors 1–4, DRAM and L1 interleaved). This is the design's deferred `tile_layout` regime (`op_design.md`, Regimes): a **scheme-change** — a second kernel pair, selected per call by `layout`, inside the same single `generic_op` dispatch.
