@@ -82,11 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 else if constexpr (BROADCAST_TYPE == BroadcastType::COL)
                 {
                     // Interleave per tile; bulk posting deadlocks on the 2-deep src banks.
-                    for (std::uint32_t i = 0; i < tile_iters; ++i)
-                    {
-                        _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(1 /*iterations*/);
-                        _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(1 /*iterations*/);
-                    }
+                    _perf_unpack_stream_ab_then_b<PERF_RUN_TYPE>(1 /*paired*/, 1 /*b_only*/, tile_iters /*tiles*/);
                 }
                 else
                 {
@@ -228,11 +224,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else if constexpr (BROADCAST_TYPE == BroadcastType::COL)
             {
-                for (std::uint32_t i = 0; i < tile_iters; ++i)
-                {
-                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(1 /*iterations*/);
-                    _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1 /*iterations*/);
-                }
+                _perf_math_stream_ab_then_b<PERF_RUN_TYPE>(1 /*paired*/, 1 /*b_only*/, tile_iters /*tiles*/);
             }
             else
             {

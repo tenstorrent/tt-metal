@@ -75,25 +75,30 @@ inline SrcValidsPerTile src_valids_per_tile(const std::uint32_t num_faces)
 
 // Fakes the absent side's valids for `tiles` tiles: sets them in place of unpack, clears them in place of math.
 // COL must alternate its paired and SrcB-only valid per tile; every other type posts one kind, issued in one call.
-template <bool set_valids>
+template <bool set_valids, PerfRunType RUN_TYPE>
 inline void fake_src_valids(const std::uint32_t tiles, const std::uint32_t num_faces)
 {
-    const SrcValidsPerTile valids      = src_valids_per_tile(num_faces);
-    constexpr bool per_tile            = (BROADCAST_TYPE == ckernel::BroadcastType::COL);
-    const std::uint32_t calls          = per_tile ? tiles : 1;
-    const std::uint32_t tiles_per_call = per_tile ? 1 : tiles;
-    for (std::uint32_t call = 0; call < calls; ++call)
+    const SrcValidsPerTile valids = src_valids_per_tile(num_faces);
+    if constexpr (BROADCAST_TYPE == ckernel::BroadcastType::COL)
     {
         if constexpr (set_valids)
         {
-            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(tiles_per_call * valids.paired /*iterations*/);
-            _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(tiles_per_call * valids.b_only /*iterations*/);
+            _perf_unpack_stream_ab_then_b<RUN_TYPE>(valids.paired, valids.b_only, tiles);
         }
         else
         {
-            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(tiles_per_call * valids.paired /*iterations*/);
-            _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(tiles_per_call * valids.b_only /*iterations*/);
+            _perf_math_stream_ab_then_b<RUN_TYPE>(valids.paired, valids.b_only, tiles);
         }
+    }
+    else if constexpr (set_valids)
+    {
+        _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, RUN_TYPE>(tiles * valids.paired /*iterations*/);
+        _perf_unpack_stream_set_valid<false /*set_a*/, true /*set_b*/, RUN_TYPE>(tiles * valids.b_only /*iterations*/);
+    }
+    else
+    {
+        _perf_math_stream_clear_valid<true /*clear_a*/, true /*clear_b*/, RUN_TYPE>(tiles * valids.paired /*iterations*/);
+        _perf_math_stream_clear_valid<false /*clear_a*/, true /*clear_b*/, RUN_TYPE>(tiles * valids.b_only /*iterations*/);
     }
 }
 
@@ -162,7 +167,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            fake_src_valids<true /*set_valids*/>(LOOP_FACTOR * num_tiles /*tiles*/, num_faces);
+            fake_src_valids<true /*set_valids*/, PERF_RUN_TYPE>(LOOP_FACTOR * num_tiles /*tiles*/, num_faces);
         }
         else
         {
@@ -249,7 +254,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            fake_src_valids<false /*set_valids*/>(LOOP_FACTOR * NUM_BLOCKS * NUM_TILES_IN_BLOCK /*tiles*/, num_faces);
+            fake_src_valids<false /*set_valids*/, PERF_RUN_TYPE>(LOOP_FACTOR * NUM_BLOCKS * NUM_TILES_IN_BLOCK /*tiles*/, num_faces);
         }
         else
         {
