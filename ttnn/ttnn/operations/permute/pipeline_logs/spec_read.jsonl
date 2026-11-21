@@ -1,0 +1,1 @@
+{"stage": "planner", "verdict": "opened", "how": "Bash", "tool_calls": 54, "session_id": "8735ac13-d363-4b83-9829-828fee027c06", "spec_path": "eval/specs/permute/spec.py", "subagents": {"total": 0, "opened": 0}, "reason": ""}
