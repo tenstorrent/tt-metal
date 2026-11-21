@@ -43,30 +43,21 @@ constexpr uint32_t tile_size_bytes = elements_per_tile * bytes_per_element;  // 
 
 FORCE_INLINE void generate_reduce_scalar(
     const uint32_t cb_reduce_ones_scalar, const uint32_t packed_scalar, const uint32_t n_activated_experts) {
-    Noc noc;
     CircularBuffer reduce_cb(cb_reduce_ones_scalar);
     reduce_cb.reserve_back(1);
 
     uint32_t write_addr = reduce_cb.get_write_ptr();
     tt_l1_ptr uint32_t* write_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(write_addr);
-    uint32_t scalar = packed_scalar;
-    for (uint32_t i = 0; i < n_activated_experts; i++) {
-        write_ptr[i] = scalar;
-        if (i > rows_per_face - 1) {
-            write_ptr[i + elements_per_face - columns_per_face + 1] = scalar;
-        }
-    }
-    for (uint32_t i = n_activated_experts; i < rows_per_tile; i++) {
-        write_ptr[i] = 0;
-        if (i == rows_per_face) {
-            // Zero the second face's first line (offset face_size_bytes into the tile).
-            noc.async_write_zeros(
-                reduce_cb, score_tile::face_line_bytes, {.offset_bytes = score_tile::face_size_bytes});
+    for (uint32_t i = 0; i < columns_per_tile; i++) {
+        const uint32_t value = i < n_activated_experts ? packed_scalar : 0;
+        if (i < columns_per_face) {
+            write_ptr[i] = value;
+        } else {
+            write_ptr[elements_per_face + i - columns_per_face] = value;
         }
     }
     uint32_t face_3_write_addr = write_addr + 2 * score_tile::face_size_bytes;
     uint32_t face_4_write_addr = write_addr + 3 * score_tile::face_size_bytes;
-    noc.write_zeros_l1_barrier();
     noc_async_read(get_noc_addr(write_addr), face_3_write_addr, score_tile::face_line_bytes);
     noc_async_read(
         get_noc_addr(write_addr + score_tile::face_size_bytes), face_4_write_addr, score_tile::face_line_bytes);
