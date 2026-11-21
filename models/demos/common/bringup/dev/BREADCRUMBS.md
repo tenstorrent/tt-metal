@@ -2886,3 +2886,18 @@ counts only from a fresh-traffic wall with program_builds_after_warmup == 0. The
 chunk_wall_fresh = 0 and prints "WARM, REPEATED POSITION: a best case". The fresh walls (WALLS_FRESH=1) and the
 per-path fixes are DeepSeek-V4.1 PB.9F / PB.9X; the fast tier of every accept gate carries the 0-builds check (PB.T).
 Not done: a generic fresh-traffic driver in the framework (each model's test still draws its own positions).
+
+## F296 (2026-11-21, DeepSeek-V4.1 PB.MB / PB.9X): the added determinism check keeps the gate's chunk
+The determinism unit FIX.25 adds takes the gate's first accuracy unit's configuration (F285), minus per-run variables.
+Those were ITEM_VARS plus every BATCH_ITEM_VARS any parsed test file declared (a global set), so test_no_rebuild's
+BRINGUP_CHUNK made the chunk "per-run" for every unit: an 8192 gate's determinism check loaded the 5120 model and F283
+refused the 8192 oracles in that process (PB.MB: one extra --check; PB.9X: the accept gate FAILED on it). Now only the
+unit's own tests' declarations count (core/batch._config_of). Selftest: selftest/test_determinism_geometry.py.
+
+## F297 (2026-11-21, DeepSeek-V4.1 PB.9C): build counters need a cold program cache
+test_no_rebuild FAILED in a fresh process (fixed lanes 153 builds, glued 4x2k 16), then PASSED in 18 s in the held
+resident process on the same code: its fixed-seed draws found the previous run's programs cached. A test that counts
+program builds after its own warm-up declares ``BATCH_COLD = True``: core/batch runs it in a fresh process (the
+resident runner's fresh request, as the determinism check) and first in its batch after the determinism check, so no
+other run's traffic warms what it must find cold. Selftest: selftest/test_cold_runs.py. Every no-rebuild PASS that ran
+in a held process after an earlier run of the same draws is suspect until re-run cold.
