@@ -58,6 +58,8 @@ On Wormhole the base firmware keeps four values: `FW_RETRAIN_COUNT` (`0x1EDC`), 
 
 The addresses are checked against the firmware headers in `test_perf_eth_counters.py` when run from a metal checkout.
 
+The LLK perf harness is not a consumer of this family: the ethernet counters are read by the host, and the harness runs no ethernet traffic, so there is nothing for it to capture.
+
 ## 3. The MAC/PCS statistics block is not read
 
 The Blackhole MAC/PCS block at `0xFFBA0000` holds 81 64-bit statistics counters (37 TX, 44 RX): frames and octets good, bad, dropped, by unicast, multicast and broadcast, eight frame size ranges, pause and PFC frame counts per class, and fragment and assembly errors. Each exists twice, as an active counter and as a snapshot copy. The block base agrees with what the firmware and tt-exalens use. Its offsets come from a SoC register description that is not the silicon pin: the TX and RX statistics bases are `0xFFBA2800` and `0xFFBA2C00` for the active counters and `0xFFBA2600` and `0xFFBA2A00` for the snapshots; only the TX configuration register at `0xFFBA2200` is cross-checked against metal's own definitions.

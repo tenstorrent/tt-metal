@@ -39,7 +39,6 @@ namespace router_counters {
 constexpr uint32_t kOption = PROFILE_ROUTER_COUNTERS;
 constexpr auto kBanks = llk::perf::router::selected_bank_offsets<kOption>();
 constexpr uint32_t kVcMask = kOption & llk::perf::router::VC_MASK_ALL;
-constexpr bool kPerVc = (kOption & llk::perf::router::PER_VC) != 0;
 constexpr uint32_t kTotal = llk::perf::router::value_count(kOption);
 constexpr uint32_t kMarkers = 1 + (kTotal + 1) / 2;
 static_assert((kOption & ~llk::perf::router::OPTION_VALID) == 0, "unknown bits in the router counter option");
@@ -50,35 +49,7 @@ static_assert(
 
 static uint32_t values[kTotal];
 
-// First call stores the readings, the second turns them into deltas. A bank's selected channels are added up
-// unless the option keeps them apart.
-__attribute__((noinline)) void scan(bool delta) {
-    uint32_t i = 0;
-    for (uint32_t noc = 0; noc < llk::perf::router::ROUTER_NOCS; noc++) {
-        for (uint32_t b = 0; b < kBanks.size(); b++) {
-            const uint32_t base =
-                llk::perf::router::ROUTER_REGS_BASE + noc * llk::perf::router::ROUTER_NOC_STRIDE + kBanks[b];
-            uint32_t sum = 0;
-            for (uint32_t vc = 0; vc < llk::perf::router::NUM_VCS; vc++) {
-                if (((kVcMask >> vc) & 1u) == 0) {
-                    continue;
-                }
-                const uint32_t v =
-                    *reinterpret_cast<volatile uint32_t*>(base + vc * llk::perf::router::ROUTER_VC_STRIDE);
-                if (kPerVc) {
-                    values[i] = delta ? v - values[i] : v;
-                    i++;
-                } else {
-                    sum += v;
-                }
-            }
-            if (!kPerVc) {
-                values[i] = delta ? sum - values[i] : sum;
-                i++;
-            }
-        }
-    }
-}
+__attribute__((noinline)) void scan(bool delta) { llk::perf::router::capture<kOption>(values, delta); }
 
 __attribute__((noinline)) void begin() { scan(false); }
 

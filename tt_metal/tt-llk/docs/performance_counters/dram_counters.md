@@ -37,6 +37,8 @@ The counters count NoC traffic into and out of the DRAM channel tile, not what t
 
 The runtime reads three of the six: `NIU_SLV_RD_DATA_WORD_SENT` and the two write data word counters, on both NoCs. Request counters are in the table for completeness and are not read, to keep the number of register reads (and their own traffic, below) small.
 
+The LLK perf harness is not a consumer of this family: the DRAM tile counters are read by the host, and the harness issues no DRAM traffic, so there is nothing for it to capture.
+
 ## 3. Capture
 
 `TT_METAL_PROFILE_DRAM_COUNTERS=1` makes the runtime read the NIU counters of every DRAM tile on both NoCs through host register reads before a program is launched and after it is done, and write the differences. `raw` does the same without the idle calibration (the capture's own reads are still removed). The option does not need the device profiler, nothing is compiled into firmware, and with the option unset no code of the feature runs.
