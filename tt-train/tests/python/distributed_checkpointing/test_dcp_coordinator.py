@@ -7,6 +7,7 @@ results into one index, and the phase protocol over an in-process transport (a f
 number; a failing collective is fatal and ends the exchanges)."""
 
 import dataclasses
+import gc
 import json
 import os
 import threading
@@ -143,6 +144,16 @@ def test_ranks_must_cover_and_agree_on_the_label(expect_error):
         merge_plan_parts(
             [PlanPart(_record(0, [(0, 0), (0, 1)]), infos), PlanPart(_record(1, [(0, 2), (0, 3)]), different)]
         )
+
+
+def test_a_plan_part_stores_each_label_once():
+    """Keys of one layout share a label: a plan part stores each label once, in a table its tensors point into, and
+    decodes back to the same part, with the cyclic garbage collector back on afterwards."""
+    infos = [_info(f"model/w{i}", [R, S(3)], (1, 4), (1, 1, 32, 16)) for i in range(50)]
+    infos.append(_info("model/b", [R, R], (1, 4), (1, 1, 1, 64)))
+    data = PlanPart(_record(0, [(0, 0), (0, 1)]), infos).to_bytes()
+    assert len(json.loads(data)["labels"]) == 2
+    assert PlanPart.from_bytes(data).to_bytes() == data and gc.isenabled()
 
 
 def test_tp_split_travels_with_the_plan_part(expect_error):

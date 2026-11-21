@@ -54,7 +54,7 @@ import ttnn
 
 from . import _errors
 from ._errors import CheckpointError, CheckpointFatalError
-from ._index import FORMAT, VERSION, Entry, FileRecord, Index, _entry_from_json, _entry_to_json
+from ._index import FORMAT, VERSION, Entry, FileRecord, Index, _entry_from_json, _entry_to_json, _gc_paused
 from ._layouts import transform_from_json
 from ._planner import TensorInfo, _checked_groups
 from ._state_dict import is_structural_scalar
@@ -324,13 +324,14 @@ def state_hash(value: Any) -> int:
 # --- plan parts ------------------------------------------------------------------------------------------------------
 
 
-def info_to_json(info: TensorInfo) -> dict:
+def info_to_json(info: TensorInfo, label_id: int) -> dict:
+    """``info`` as JSON, its label named by ``label_id``, its position in the part's label table."""
     return {
         "key": info.key,
         "role": info.role,
         "dtype": info.dtype,
         "layout": info.layout,
-        "label": info.label.to_json(),
+        "label": label_id,
         "local_shape": list(info.local_shape),
         "transform": info.transform.to_json(),
         "live_keys": list(info.live_keys),
@@ -340,13 +341,13 @@ def info_to_json(info: TensorInfo) -> dict:
     }
 
 
-def info_from_json(value: dict) -> TensorInfo:
+def info_from_json(value: dict, labels: list[Label]) -> TensorInfo:
     return TensorInfo(
         key=value["key"],
         role=value["role"],
         dtype=value["dtype"],
         layout=value["layout"],
-        label=Label.from_json(value["label"]),
+        label=labels[value["label"]],
         local_shape=tuple(int(n) for n in value["local_shape"]),
         transform=transform_from_json(value["transform"]),
         live_keys=tuple(value["live_keys"]),
@@ -399,22 +400,29 @@ class PlanPart:
     train_state_hash: int = 0
 
     def to_bytes(self) -> bytes:
+        # Infos name their labels by position in a table, as result parts and index.json do: many keys share one.
+        label_ids: dict[Label, int] = {}
+        infos = [info_to_json(i, label_ids.setdefault(i.label, len(label_ids))) for i in self.infos]
         return json.dumps(
             {
                 "record": self.record.to_json(),
-                "infos": [info_to_json(i) for i in self.infos],
+                "labels": [label.to_json() for label in label_ids],
+                "infos": infos,
                 "train_state_hash": self.train_state_hash,
             }
         ).encode()
 
     @staticmethod
     def from_bytes(data: bytes) -> "PlanPart":
-        value = json.loads(data.decode("utf-8"))
-        return PlanPart(
-            RankRecord.from_json(value["record"]),
-            [info_from_json(i) for i in value["infos"]],
-            int(value["train_state_hash"]),
-        )
+        # The cyclic GC paused: decoding allocates objects per key that all survive, which it would only rescan.
+        with _gc_paused():
+            value = json.loads(data.decode("utf-8"))
+            labels = [Label.from_json(label) for label in value["labels"]]
+            return PlanPart(
+                RankRecord.from_json(value["record"]),
+                [info_from_json(i, labels) for i in value["infos"]],
+                int(value["train_state_hash"]),
+            )
 
 
 Owner = tuple[int, tuple[int, ...]]  # (rank, mesh coordinate)
@@ -444,13 +452,14 @@ class Election:
 
     @staticmethod
     def from_bytes(data: bytes) -> "Election":
-        value = json.loads(data.decode("utf-8"))
-        owners = {
-            k: {tuple(g): (int(rank), tuple(int(x) for x in coord)) for g, rank, coord in groups}
-            for k, groups in value["owners"].items()
-        }
-        live_keys = {k: tuple(v) for k, v in value["live_keys"].items()}
-        return Election(owners, int(value["keys"]), live_keys)
+        with _gc_paused():
+            value = json.loads(data.decode("utf-8"))
+            owners = {
+                k: {tuple(g): (int(rank), tuple(int(x) for x in coord)) for g, rank, coord in groups}
+                for k, groups in value["owners"].items()
+            }
+            live_keys = {k: tuple(v) for k, v in value["live_keys"].items()}
+            return Election(owners, int(value["keys"]), live_keys)
 
     def owner_of(self, rank: int) -> Callable[[str, list[Chunk]], Chunk | None]:
         """The ``owner_of`` callback for ``create_save_plan`` on ``rank``: the group's chunk when this rank writes
@@ -590,23 +599,24 @@ class ResultPart:
 
     @staticmethod
     def from_bytes(data: bytes) -> "ResultPart":
-        value = json.loads(data.decode("utf-8"))
-        record = RankRecord.from_json(value["record"])
-        files = [
-            FileRecord(f["path"], int(f["nbytes"]), record.world_rank, record.mesh_id, tuple(f["coord"]))
-            for f in value["files"]
-        ]
-        labels = [Label.from_json(label) for label in value["labels"]]
-        entries = {k: _entry_from_json(k, e, labels) for k, e in value["entries"].items()}
-        return ResultPart(
-            record,
-            files,
-            entries,
-            dict(value["rng"]),
-            dict(value["scalars"]),
-            dict(value["header"]),
-            dict(value["train_state"]),
-        )
+        with _gc_paused():
+            value = json.loads(data.decode("utf-8"))
+            record = RankRecord.from_json(value["record"])
+            files = [
+                FileRecord(f["path"], int(f["nbytes"]), record.world_rank, record.mesh_id, tuple(f["coord"]))
+                for f in value["files"]
+            ]
+            labels = [Label.from_json(label) for label in value["labels"]]
+            entries = {k: _entry_from_json(k, e, labels) for k, e in value["entries"].items()}
+            return ResultPart(
+                record,
+                files,
+                entries,
+                dict(value["rng"]),
+                dict(value["scalars"]),
+                dict(value["header"]),
+                dict(value["train_state"]),
+            )
 
 
 def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: str) -> tuple[Index, dict]:
