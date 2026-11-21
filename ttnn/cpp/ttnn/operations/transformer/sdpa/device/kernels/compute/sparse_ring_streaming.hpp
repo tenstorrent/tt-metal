@@ -28,7 +28,7 @@ ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width
 // fidelity, so unpack and pack compile exactly as without the switch. Bit s of sparse_dense_slots: resident slot s
 // holds a dense Q block (set per pass by sdpa_ring_resident). A dense block's setup runs the usual init, then turns
 // its replay image into the high-fidelity one (dense_mm_patch: ADDR_MOD_5 steps the fidelity phase, the image's last
-// MVMUL keeps srcA / srcB); res_mm_math replays it once per phase. Full 32x32 tiles, no throttle. Each matmul's setup
+// MVMUL keeps srcA / srcB); dense_mm replays it once per phase. Full 32x32 tiles, no throttle. Each matmul's setup
 // key carries the bit, so the image is rebuilt whenever the fidelity changes.
 #if defined(SPARSE_DENSE_HIFI) && defined(TRISC_MATH)
 static_assert(MM_THROTTLE == 0, "SPARSE_DENSE_HIFI: the replay patch assumes the unthrottled no-mop matmul");
@@ -46,16 +46,8 @@ static __attribute__((noinline)) void dense_mm_patch() {
     ckernel::load_replay_buf(
         ckernel::math::replay_buf_offset + 15, 1, [] { TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0); });
 }
-// Every matmul of the step goes through this one out-of-line body (the inline copies would cost more text).
-static __attribute__((noinline)) void res_mm_math(
-    bool hifi, uint32_t in0_cb, uint32_t in1_cb, uint32_t idst, uint32_t ct_dim, uint32_t rt_dim) {
-    if (hifi) {
-        _llk_math_matmul_no_mop_<kDenseFidelity, 0>(idst, ct_dim, rt_dim);
-    } else if constexpr (sdpa_matmul_fidelity_set) {
-        llk_math_matmul_no_mop<sdpa_matmul_fidelity, MM_THROTTLE>(in0_cb, in1_cb, idst, ct_dim, rt_dim);
-    } else {
-        llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb, in1_cb, idst, ct_dim, rt_dim);
-    }
+static __attribute__((noinline)) void dense_mm(uint32_t idst, uint32_t ct_dim, uint32_t rt_dim) {
+    _llk_math_matmul_no_mop_<kDenseFidelity, 0>(idst, ct_dim, rt_dim);
 }
 #define RES_MM_INIT(hifi, init_call, ...) \
     do {                                  \
@@ -64,8 +56,15 @@ static __attribute__((noinline)) void res_mm_math(
             dense_mm_patch();             \
         }                                 \
     } while (0)
-// The unpack call of a matmul is a no-op on the math thread: the math call alone runs here.
-#define RES_MM(hifi, in0, in1, i0, i1, idst, tr, ct, rt, kt) res_mm_math(hifi, in0, in1, idst, ct, rt)
+// The unpack call of sdpa_matmul_block_no_mop is a no-op on the math thread: only its math call is replaced.
+#define RES_MM(hifi, in0, in1, i0, i1, idst, tr, ct, rt, kt)                  \
+    do {                                                                      \
+        if (hifi) {                                                           \
+            dense_mm(idst, ct, rt);                                           \
+        } else {                                                              \
+            sdpa_matmul_block_no_mop(in0, in1, i0, i1, idst, tr, ct, rt, kt); \
+        }                                                                     \
+    } while (0)
 #define RES_HIFI_KEY(hifi) ((hifi) ? 0x10000u : 0u)
 #else
 #define slot_hifi(slot) false
@@ -972,17 +971,8 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                 }
                 for (uint32_t c = 0; c < W[g]; ++c) {
                     // The row sum stays at the usual fidelity: the identity sits in srcA, so LoFi is exact.
-                    RES_MM(
-                        false,
-                        cb_qkt_im,
-                        cb_sum_identity,
-                        sidx(g, 0, c),
-                        0,
-                        gg * Sq_chunk_t,
-                        false,
-                        1,
-                        Sq_chunk_t,
-                        W[g]);
+                    sdpa_matmul_block_no_mop(
+                        cb_qkt_im, cb_sum_identity, sidx(g, 0, c), 0, gg * Sq_chunk_t, false, 1, Sq_chunk_t, W[g]);
                 }
             }
             tile_regs_commit();
