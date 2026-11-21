@@ -76,7 +76,7 @@ ALWI void find_shift(
     if constexpr (!UseMinShift) {
         // find max value
         if (Ht == 1) {
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+            mask_neginf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
                 dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/0, /*popm=*/0);
 
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
@@ -91,7 +91,7 @@ ALWI void find_shift(
                 compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
                 dfb_in0_obj, dfb_max_scaler_obj, dfb_max_obj, compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
 
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+            mask_neginf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
                 dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, Ht - 1, 0, /*pop=*/0, /*popm=*/0);
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
                 dfb_tmp_obj,
