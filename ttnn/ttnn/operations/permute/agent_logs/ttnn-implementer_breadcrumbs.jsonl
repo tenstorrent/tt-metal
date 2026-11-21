@@ -1,0 +1,1 @@
+{"event":"test_run","result":"pass","acceptance":"13/13","golden":"136/136 PHASE0+loose+rejections","plan_tests":"52/52","notes":"all three regimes exact on first device run; only fix was STRIDED ring num_entries % max(P,C) for odd page_gather plans","ts":"2026-11-21T06:38:14+00:00"}
