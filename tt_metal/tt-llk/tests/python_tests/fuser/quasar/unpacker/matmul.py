@@ -103,12 +103,3 @@ class MatmulUnpacker(Unpacker):
             f"    }}\n"
             f"}}\n"
         )
-
-    def uninit(
-        self,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-        block: BlockData,
-    ) -> str:
-        return ""

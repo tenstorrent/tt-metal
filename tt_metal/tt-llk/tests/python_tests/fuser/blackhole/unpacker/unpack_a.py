@@ -82,7 +82,7 @@ class UnpackerA(Unpacker):
 
         return (
             f"    _llk_unpack_A_init_<{broadcast_type}, {acc_to_dest}, {reuse_dest}, {unpack_to_dest}>(\n"
-            f"        {transpose_faces}, {transpose_within_face}, {tensor_shape}, {config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}\n"
+            f"        {transpose_faces}, {transpose_within_face}, {tensor_shape}, {compute_unit.unpack_A_src.cpp_underlying_value}, {compute_unit.unpack_A_dst.cpp_underlying_value}\n"
             f"    );\n"
         )
 
@@ -101,7 +101,7 @@ class UnpackerA(Unpacker):
 
         return (
             f"_llk_unpack_A_<{broadcast_type}, {acc_to_dest}, {reuse_dest}, {unpack_to_dest}>(\n"
-            f"    L1_ADDRESS({buffer_a}[{block.tile_id_src_a}]), {config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}\n"
+            f"    L1_ADDRESS({buffer_a}[{block.tile_id_src_a}]), {compute_unit.unpack_A_src.cpp_underlying_value}, {compute_unit.unpack_A_dst.cpp_underlying_value}\n"
             f");\n"
         )
 

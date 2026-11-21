@@ -34,7 +34,7 @@ class TransposeDestFpu(Fpu):
         en_32bit_dest = config.dest_acc.cpp_enum_value
         transpose_faces = compute_unit.transpose_faces.cpp_enum_value
         return configure_alu_cfg(
-            config, cfg_type="AluCfgType::MOV_OPS_EXPLICIT_FORMAT"
+            config, compute_unit, cfg_type="AluCfgType::MOV_OPS_EXPLICIT_FORMAT"
         ) + (f"_llk_math_transpose_dest_init_<{transpose_faces}, {en_32bit_dest}>();\n")
 
     def calculate(

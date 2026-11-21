@@ -39,11 +39,11 @@ class MatmulFpu(Fpu):
         ct_dim = block.block_cols
         src_b_shape = compute_unit.src_a.tile_shape.cpp_value
         src_a_shape = compute_unit.src_b.tile_shape.cpp_value
-        src_a_format, src_b_format = fidelity_source_formats(
-            config, operation, compute_unit
-        )
+        src_a_format, src_b_format = fidelity_source_formats(compute_unit)
 
-        return configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT") + (
+        return configure_alu_cfg(
+            config, compute_unit, cfg_type="AluCfgType::DEFAULT"
+        ) + (
             f"// Operation {stage}: Matmul FPU\n"
             f"_llk_math_matmul_init_<{math_fidelity}>({src_a_format}, {src_b_format}, {ct_dim}, {rt_dim}, {src_b_shape}, {src_a_shape});\n"
         )
@@ -66,12 +66,3 @@ class MatmulFpu(Fpu):
             f"    _llk_math_matmul_block_({ct_dim}, {rt_dim});\n"
             f"}}\n"
         )
-
-    def uninit(
-        self,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-        block: BlockData,
-    ) -> str:
-        return ""

@@ -30,13 +30,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import (
-    BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
-    QUASAR_DATA_FORMAT_ENUM_VALUES,
-    WORMHOLE_DATA_FORMAT_ENUM_VALUES,
-    DataFormat,
-)
+from helpers.chip_architecture import get_chip_architecture
+from helpers.format_config import ARCH_DATA_FORMAT_ENUM_VALUES, DataFormat
 from helpers.logger import logger
 from helpers.utils import TILE_BG_RESULT, format_tile_row
 from ttexalens.tt_exalens_lib import (
@@ -481,11 +476,7 @@ class ElfStrings:
 # These differ per arch (e.g. UInt8 is 30 on WH/BH but 17 on Quasar), and the
 # device stamps its arch's value into array/tile headers. Formats absent on
 # the current arch simply resolve to None.
-_ARCH_DATA_FORMAT_ENUM = {
-    ChipArchitecture.WORMHOLE: WORMHOLE_DATA_FORMAT_ENUM_VALUES,
-    ChipArchitecture.BLACKHOLE: BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
-    ChipArchitecture.QUASAR: QUASAR_DATA_FORMAT_ENUM_VALUES,
-}[get_chip_architecture()]
+_ARCH_DATA_FORMAT_ENUM = ARCH_DATA_FORMAT_ENUM_VALUES[get_chip_architecture()]
 
 _DF_FLOAT32 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Float32)
 _DF_FLOAT16 = _ARCH_DATA_FORMAT_ENUM.get(DataFormat.Float16)

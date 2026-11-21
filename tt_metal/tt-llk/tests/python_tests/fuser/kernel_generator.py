@@ -8,13 +8,12 @@ import subprocess
 from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 from filelock import FileLock
 from helpers.chip_architecture import ChipArchitecture
 
 from .fuser_config import FuserConfig
-from .pipeline_plan import PlannedBlock
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
 
@@ -58,112 +57,89 @@ def render_kernel(thread: str, headers, body: str) -> str:
     )
 
 
-class UnpackKernelGenerator:
-    def __init__(self, config: FuserConfig):
-        self.config = config
-
-    def generate(self, plans: List[List[PlannedBlock]]) -> str:
-        # Collect all unique headers from all operations
-        all_headers = set()
-        for op in self.config.pipeline:
-            for fused_compute in op.math_nodes:
-                if (
-                    hasattr(fused_compute, "unpacker")
-                    and fused_compute.unpacker is not None
-                ):
-                    all_headers.update(fused_compute.unpacker.get_headers())
-
-        unpack_calls = "".join(
-            op.unpack(self.config.global_config, blocks)
-            for op, blocks in zip(self.config.pipeline, plans)
-        )
-        return render_kernel("UNPACK", all_headers, unpack_calls)
+def _unpack_kernel(config: FuserConfig) -> str:
+    headers = {
+        header
+        for op in config.pipeline
+        for node in op.math_nodes
+        if getattr(node, "unpacker", None) is not None
+        for header in node.unpacker.get_headers()
+    }
+    calls = ""
+    previous = None
+    for op, blocks in zip(config.pipeline, config.pipeline_plans):
+        calls += op.unpack(config.global_config, blocks, previous)
+        previous = op.first_unpack or previous
+    return render_kernel("UNPACK", headers, calls)
 
 
-class MathKernelGenerator:
-    def __init__(self, config: FuserConfig):
-        self.config = config
-
-    def generate(self, plans: List[List[PlannedBlock]]) -> str:
-        # Collect all unique headers from all operations
-        all_headers = set()
-        for op in self.config.pipeline:
-            for unit in op.get_math_units():
-                all_headers.update(unit.get_headers())
-
-        if self.config.global_config.skip_math_init:
-            all_headers.discard("sfpu_operations_quasar.h")
-
-        math_calls = "".join(
-            op.do_math(self.config.global_config, blocks)
-            for op, blocks in zip(self.config.pipeline, plans)
-        )
-        return render_kernel("MATH", all_headers, math_calls)
+def _math_kernel(config: FuserConfig) -> str:
+    headers = {
+        header
+        for op in config.pipeline
+        for unit in op.get_math_units()
+        for header in unit.get_headers()
+    }
+    if config.global_config.skip_math_init:
+        headers.discard("sfpu_operations_quasar.h")
+    calls = ""
+    previous = None
+    for op, blocks in zip(config.pipeline, config.pipeline_plans):
+        calls += op.do_math(config.global_config, blocks, previous)
+        previous = op.first_math
+    return render_kernel("MATH", headers, calls)
 
 
-class SfpuKernelGenerator:
-    def __init__(self, config: FuserConfig):
-        self.config = config
-
-    def generate(self) -> str:
-        if self.config.global_config.architecture != ChipArchitecture.QUASAR:
-            return ""
-
-        return (
-            f"\n"
-            f"#ifdef LLK_TRISC_ISOLATE_SFPU\n"
-            f"\n"
-            f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
-            f"{{\n"
-            f"}}\n"
-            f"\n"
-            f"#endif\n"
-        )
+def _pack_kernel(config: FuserConfig) -> str:
+    headers = {
+        header
+        for op in config.pipeline
+        for node in op.pack_nodes
+        for header in node.get_headers()
+    }
+    if config.global_config.skip_math_init:
+        headers.discard("sfpu_operations_quasar.h")
+    calls = ""
+    previous = None
+    for op, blocks in zip(config.pipeline, config.pipeline_plans):
+        calls += op.pack(config.global_config, blocks, previous)
+        previous = op._get_pack_nodes()[0]
+    return render_kernel("PACK", headers, calls)
 
 
-class PackKernelGenerator:
-    def __init__(self, config: FuserConfig):
-        self.config = config
+def _sfpu_kernel(config: FuserConfig) -> str:
+    if config.global_config.architecture != ChipArchitecture.QUASAR:
+        return ""
+    return (
+        f"\n"
+        f"#ifdef LLK_TRISC_ISOLATE_SFPU\n"
+        f"\n"
+        f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
+        f"{{\n"
+        f"}}\n"
+        f"\n"
+        f"#endif\n"
+    )
 
-    def generate(self, plans: List[List[PlannedBlock]]) -> str:
-        # Collect all unique headers from all operations
-        all_headers = set()
-        for op in self.config.pipeline:
-            for pack_node in op.pack_nodes:
-                all_headers.update(pack_node.get_headers())
 
-        if self.config.global_config.skip_math_init:
-            all_headers.discard("sfpu_operations_quasar.h")
-
-        pack_calls = "".join(
-            op.pack(self.config.global_config, blocks)
-            for op, blocks in zip(self.config.pipeline, plans)
-        )
-        return render_kernel("PACK", all_headers, pack_calls)
+def generate_kernels(config: FuserConfig) -> Dict[str, str]:
+    return {
+        "unpack": _unpack_kernel(config),
+        "math": _math_kernel(config),
+        "pack": _pack_kernel(config),
+        "sfpu": _sfpu_kernel(config),
+    }
 
 
 class FusedKernelGenerator:
     def __init__(self, config: FuserConfig):
         self.config = config
-        self.unpack_gen = UnpackKernelGenerator(self.config)
-        self.math_gen = MathKernelGenerator(self.config)
-        self.pack_gen = PackKernelGenerator(self.config)
-        self.sfpu_gen = SfpuKernelGenerator(self.config)
-
-    def generate_all(self) -> Dict[str, str]:
-        plans = self.config.pipeline_plans
-        return {
-            "unpack": self.unpack_gen.generate(plans),
-            "math": self.math_gen.generate(plans),
-            "pack": self.pack_gen.generate(plans),
-            "sfpu": self.sfpu_gen.generate(),
-        }
 
     def write_kernel(self, test_name: str):
         if not self.config.global_config.regenerate_cpp:
             return
 
-        kernels = self.generate_all()
+        kernels = generate_kernels(self.config)
 
         profiler_include = ""
         if self.config.global_config.profiler_enabled:

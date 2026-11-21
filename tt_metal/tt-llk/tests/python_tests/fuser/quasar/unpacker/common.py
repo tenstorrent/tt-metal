@@ -5,7 +5,6 @@
 from typing import TYPE_CHECKING
 
 from fuser.fpu_node import FpuNode
-from helpers.format_config import DataFormat
 from helpers.llk_params import DestSync
 
 if TYPE_CHECKING:
@@ -13,14 +12,8 @@ if TYPE_CHECKING:
     from fuser.l1_operation import L1Operation
 
 
-def hw_configure_unpack(
-    compute_node: FpuNode,
-    dest_acc: str,
-    unpack_A_src: DataFormat,
-    unpack_A_dst: DataFormat,
-    unpack_B_src: DataFormat,
-    unpack_B_dst: DataFormat,
-) -> str:
+def hw_configure_unpack(config: "GlobalConfig", compute_node: FpuNode) -> str:
+    unpack_A_dst, unpack_B_dst = compute_node.unpack_A_dst, compute_node.unpack_B_dst
     return (
         f"_llk_unpack_hw_configure_<p_unpacr::UNP_A>(static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}));\n"
         f"_llk_unpack_hw_configure_<p_unpacr::UNP_B>(static_cast<DataFormat>({unpack_B_dst.cpp_underlying_value}));\n"
@@ -28,19 +21,10 @@ def hw_configure_unpack(
 
 
 def configure_unpack(
-    compute_node: FpuNode,
-    dest_acc: str,
-    old_A_src: DataFormat,
-    new_A_src: DataFormat,
-    new_A_dst: DataFormat,
-    old_B_src: DataFormat,
-    new_B_src: DataFormat,
-    new_B_dst: DataFormat,
-    srca_changed: bool,
-    srcb_changed: bool,
-    srca_tile_changed: bool,
-    srcb_tile_changed: bool,
+    config: "GlobalConfig", compute_node: FpuNode, previous: FpuNode
 ) -> str:
+    new_A_dst, new_B_dst = compute_node.unpack_A_dst, compute_node.unpack_B_dst
+    srca_changed, srcb_changed, _, _ = compute_node.unpack_changes(previous)
     if srca_changed and srcb_changed:
         return f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(static_cast<DataFormat>({new_A_dst.cpp_underlying_value}), static_cast<DataFormat>({new_B_dst.cpp_underlying_value}));\n"
     if srca_changed:
