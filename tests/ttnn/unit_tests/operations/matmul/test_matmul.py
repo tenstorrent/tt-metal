@@ -4608,14 +4608,24 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
     # Both paths should match golden
     if weight_dtype == ttnn.bfloat4_b:
         assert_numeric_metrics(
-            golden, result_conv, atol=0.065 * K, rtol=15.22 * K, frobenius_threshold=0.002 * K, pcc_threshold=0.99
+            golden,
+            result_conv,
+            atol=0.065 * K,
+            rtol=15.22 * K,
+            frobenius_threshold=0.002 * K,
+            pcc_threshold=pcc_threshold,
         )
     elif weight_dtype == ttnn.bfloat8_b:
         assert_numeric_metrics(
-            golden, result_conv, atol=0.004 * K, rtol=2.301 * K, frobenius_threshold=0.001 * K, pcc_threshold=0.99
+            golden,
+            result_conv,
+            atol=0.004 * K,
+            rtol=2.301 * K,
+            frobenius_threshold=0.001 * K,
+            pcc_threshold=pcc_threshold,
         )
     else:
-        assert_numeric_metrics(golden, result_conv, pcc_threshold=0.99)
+        assert_numeric_metrics(golden, result_conv, pcc_threshold=pcc_threshold)
 
     if weight_dtype == ttnn.bfloat4_b:
         assert_numeric_metrics(
@@ -4707,7 +4717,7 @@ def test_from_torch_col_tilize_matches_manual_transpose(weight_dtype, pcc_thresh
     assert (
         result_col.shape == result_manual.shape
     ), f"Shape mismatch: col_tilize={result_col.shape} vs manual={result_manual.shape}"
-    assert_numeric_metrics(result_manual, result_col, pcc_threshold=0.99)
+    assert_numeric_metrics(result_manual, result_col, pcc_threshold=pcc_threshold)
 
 
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])

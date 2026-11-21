@@ -193,9 +193,7 @@ def return_mem_config(mem_config_string):
     raise ("Input mem_config_string is not valid!")
 
 
-@pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008), (torch.float32, ttnn.float32, 0.003)]
-)
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
 @pytest.mark.parametrize(
     "high, low",
     [
@@ -216,7 +214,7 @@ def return_mem_config(mem_config_string):
         "l1_block_sharded_cm",
     ],
 )
-def test_tanh_sharded(device, high, low, input_mem_config, torch_dtype, ttnn_dtype, atol):
+def test_tanh_sharded(device, high, low, input_mem_config, torch_dtype, ttnn_dtype):
     torch.manual_seed(0)
 
     in_data = torch.rand([1, 1, 512, 512], dtype=torch_dtype) * (high - low) + low

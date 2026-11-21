@@ -26,9 +26,10 @@ def test_cluster_serialize_descriptor():
     """Test cluster descriptor serialization"""
     try:
         descriptor_path = ttnn.cluster.serialize_cluster_descriptor()
-        assert isinstance(descriptor_path, str), "Expected string path from serialize_cluster_descriptor"
-        assert len(descriptor_path) > 0, "Expected non-empty path"
-        print(f"Cluster descriptor saved to: {descriptor_path}")
     except Exception as e:
         # Non-critical, might not be available in all environments
         pytest.skip(f"Cluster descriptor serialization not available: {e}")
+
+    assert isinstance(descriptor_path, str), "Expected string path from serialize_cluster_descriptor"
+    assert len(descriptor_path) > 0, "Expected non-empty path"
+    print(f"Cluster descriptor saved to: {descriptor_path}")
