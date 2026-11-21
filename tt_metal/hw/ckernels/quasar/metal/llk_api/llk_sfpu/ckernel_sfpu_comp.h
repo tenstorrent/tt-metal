@@ -74,15 +74,19 @@ struct zero_comp_traits {
             return sfpi::as<sfpi::vInt>(c);
         }
     }
+    // INCR selects the addr mod: ADDR_MOD_6 (dest.incr=2) advances Dest, the default mode (no
+    // increment) leaves it on the row so a second store can overwrite it.
+    template <bool INCR = true>
     static inline __attribute__((always_inline)) void store(result_t r) {
+        constexpr int addr_mod = INCR ? static_cast<int>(ckernel::ADDR_MOD_6) : -1;
         if constexpr (FMT == DataFormat::UInt8) {
-            sfpi::dst_reg[0].mode<sfpi::DataLayout::U8>(ckernel::ADDR_MOD_6) = r;
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::U8>(addr_mod) = r;
         } else if constexpr (FMT == DataFormat::Int8) {
             // The signed 8-bit format is sign magnitude.  Just pun
             // the vInt.
-            sfpi::dst_reg[0].mode<sfpi::DataLayout::SM8>(ckernel::ADDR_MOD_6) = sfpi::as<sfpi::vSMag>(r);
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::SM8>(addr_mod) = sfpi::as<sfpi::vSMag>(r);
         } else {
-            sfpi::dst_reg[0].mode<>(ckernel::ADDR_MOD_6) = sfpi::as<container_t>(r);
+            sfpi::dst_reg[0].mode<>(addr_mod) = sfpi::as<container_t>(r);
         }
     }
 
@@ -176,8 +180,12 @@ inline void init_zero_comp() {
  *
  * Defaults each result lane and writes the opposite into the lanes matching COMP_MODE (eqz/nez/ltz/gtz
  * default 0 and write 1; gtez/ltez default 1 and write 0 — see @ref _zero_comp_writes_zero_), in FMT's
- * native encoding (see @ref zero_comp_traits). The body's SFPSTORE rides @c ADDR_MOD_6 (dest.incr=2,
- * programmed in @ref init_zero_comp) to advance the dest counter, so the loop needs no dst_reg++.
+ * native encoding (see @ref zero_comp_traits). The default is stored straight to Dest and the other
+ * value stored over it on the predicate's lanes: two SFPSTOREs of constant registers instead of the
+ * SFPMOV + predicated SFPMOV/SFPLOADI that building the result in a register costs, and the integer
+ * formats' 1 is loaded once per call rather than once per row. The predicated SFPSTORE rides
+ * @c ADDR_MOD_6 (dest.incr=2, programmed in @ref init_zero_comp) to advance the dest counter, so
+ * the loop needs no dst_reg++.
  *
  * @tparam APPROXIMATION_MODE: Unused (no approx path); retained for dispatcher signature symmetry.
  * @tparam FMT: SFPU DataFormat (sfpu_math): Int32/Int16/Int8/UInt16/UInt8, or Float32 for any float
@@ -203,15 +211,18 @@ inline void calculate_zero_comp() {
     // to 0 and write 1 (see @ref _zero_comp_writes_zero_).
     constexpr bool writes_zero = _zero_comp_writes_zero_<COMP_MODE>();
 
+    // Hoisted out of the row loop: the float 0.0/1.0 are constant registers, the integer 1 is one
+    // SFPLOADI per call.
+    const typename traits::result_t default_result = writes_zero ? traits::one() : traits::zero();
+    const typename traits::result_t taken_result = writes_zero ? traits::zero() : traits::one();
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vInt bits = traits::load();
+        const sfpi::vInt bits = traits::load();
 
-        typename traits::result_t result = writes_zero ? traits::one() : traits::zero();
-        v_if(_zero_comp_pred_<COMP_MODE>(bits)) { result = writes_zero ? traits::zero() : traits::one(); }
+        traits::template store<false /*INCR*/>(default_result);
+        v_if(_zero_comp_pred_<COMP_MODE>(bits)) { traits::store(taken_result); }
         v_endif;
-
-        traits::store(result);
     }
 }
 
