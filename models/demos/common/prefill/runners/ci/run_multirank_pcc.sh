@@ -227,7 +227,8 @@ case "${MODEL}" in
     # The golden is the 8192-token prompt of a vLLM capture, and its span bounds the compare, so no
     # length cap is needed: as for kimi_k3, the span is PCC'd and the tail is timed. Two chunks, so the
     # gate reads one chunk's KV from the next.
-    REQUEST_LEN=$((2 * CHUNK_SIZE))
+    # EXPERIMENT branch: the golden's 8k span is PCC'd, and the request runs on to 1M (timed), as for kimi_k3.
+    REQUEST_LEN=1049600
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"

@@ -79,10 +79,10 @@ on:
         type: boolean
         default: false
         description: "Mistral4: every Mistral4 leg (also pulls kv_cache_table)"
-      llama31:
+      topk_push_long:
         type: boolean
         default: false
-        description: "Llama3.1: every Llama3.1 leg"
+        description: "EXPERIMENT branch: GLM-5.3 1M SC1 and K3.1 1M SC1 real-weights runner legs only"
       gpt_oss_prefill_suite:
         type: boolean
         default: false
