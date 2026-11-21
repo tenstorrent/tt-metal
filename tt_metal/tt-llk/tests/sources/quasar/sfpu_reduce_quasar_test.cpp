@@ -16,30 +16,31 @@
 using namespace ckernel;
 #include "params.h" // POOL_TYPE, REDUCE_DIM, BLOCK_CT_DIM, BLOCK_RT_DIM, is_fp32_dest_acc_en
 
-// A column reduce keeps tiles independent, so a long run is split into full Dest sections; a row
-// reduce needs its whole block in Dest at once and runs as a single section.
+// A column or scalar reduce keeps tiles independent, so a long run is split into full Dest sections;
+// a row reduce needs its whole block in Dest at once and runs as a single section.
 inline std::uint32_t reduce_section_tiles(const std::uint32_t tile_cnt)
 {
-    if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL)
+    if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL || REDUCE_DIM == ckernel::ReduceDim::REDUCE_SCALAR)
     {
         return tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(tile_cnt);
     }
     return tile_cnt;
 }
 
-// SFPU reduce on Quasar: collapse a Dest block along one axis with SUM, AVG, MAX or MIN.
+// SFPU reduce on Quasar: collapse a Dest block along one axis with SUM, AVG, MAX or MIN, or a whole
+// tile with PROD (REDUCE_SCALAR).
 //
 // Three programs in one file, one per thread:
 //   T0 unpack: load every tile of buffer_A from L1 into Dest. One _llk_unpack_unary_operand_to_dest_block_
 //              call covers the whole TILE_CNT bank - no FPU datacopy is involved.
-//   T1 math:   run calculate_reduce over Dest. REDUCE_COL is called once per tile, since a
-//              column sits inside one tile. REDUCE_ROW is called once for the whole block,
-//              since a row spans every tile of its tile row.
+//   T1 math:   run calculate_reduce over Dest. REDUCE_COL and REDUCE_SCALAR are called once per
+//              tile, since a column or a whole-tile product sits inside one tile. REDUCE_ROW is
+//              called once for the whole block, since a row spans every tile of its tile row.
 //   T2 pack:   write the reduced tiles back out to buffer_Res in L1.
 //
-// The reduce only writes the axis it collapses onto - row 0 for REDUCE_COL, column 0 for
-// REDUCE_ROW - and leaves the rest of each tile holding leftovers. The Python side compares
-// just that axis.
+// The reduce only writes what it collapses onto - row 0 for REDUCE_COL, column 0 for REDUCE_ROW,
+// element [0][0] for REDUCE_SCALAR - and leaves the rest of each tile holding leftovers. The
+// Python side compares just that part.
 //
 // Perf run types. Operands reach Dest through the unpack-to-dest engine, so there is no SrcA/SrcB
 // handshake here - the Dest dvalid chain is the only producer/consumer token. That means the two
@@ -178,9 +179,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t pass = 0; pass < LOOP_FACTOR * num_sections; ++pass)
             {
-                if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL)
+                if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL || REDUCE_DIM == ckernel::ReduceDim::REDUCE_SCALAR)
                 {
-                    // A column lives inside one tile, so each tile reduces onto its own row 0.
+                    // A column or a scalar PROD lives inside one tile, so each tile reduces on its own:
+                    // onto its row 0 (REDUCE_COL) or its element [0][0] (REDUCE_SCALAR).
                     for (std::uint32_t tile = 0; tile < section_tiles; ++tile)
                     {
                         SFPU_UNARY_CALL(
@@ -190,8 +192,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             (POOL_TYPE, REDUCE_DIM, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en, dest_sync),
                             DST_INDEX + tile,
                             VectorMode::RC_custom,
-                            1 /*block_ct_dim: unused by the column reduce*/,
-                            1 /*block_rt_dim: unused by the column reduce*/);
+                            1 /*block_ct_dim: unused by the column and scalar reduces*/,
+                            1 /*block_rt_dim: unused by the column and scalar reduces*/);
                     }
                 }
                 else
