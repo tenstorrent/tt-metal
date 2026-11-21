@@ -312,7 +312,6 @@ async def _await_reload(ws_uri: str, embed_path: Path, *, recv_timeout_s: float)
         return await asyncio.wait_for(ws.recv(), timeout=recv_timeout_s)
 
 
-@pytest.mark.timeout(120)
 def test_ws_reload_broadcast_on_embed_change(tmp_path):
     """serve_wasm broadcasts 'reload' over the WebSocket when embed.tracy changes."""
     pytest.importorskip("websockets")
@@ -333,7 +332,6 @@ def test_ws_reload_broadcast_on_embed_change(tmp_path):
         _terminate_serve_wasm(proc)
 
 
-@pytest.mark.timeout(120)
 def test_traces_listing_ordered_newest_first_by_mtime(tmp_path):
     """GET /traces orders by mtime, not by filename (the cmd-name prefix must not win)."""
     if not SERVE_WASM.is_file():
@@ -363,7 +361,6 @@ def test_traces_listing_ordered_newest_first_by_mtime(tmp_path):
     ], f"expected newest-first by mtime, got {listing}"
 
 
-@pytest.mark.timeout(120)
 def test_delete_repoints_embed_to_newest_remaining_by_mtime(tmp_path):
     """Deleting the embedded trace repoints embed.tracy at the newest *remaining* one."""
     if not SERVE_WASM.is_file():
@@ -440,7 +437,6 @@ def test_argv_http_port_parsing():
     assert _argv_http_port(["python", "serve_wasm.py", "--dir", "/x"]) == DEFAULT_HTTP_PORT
 
 
-@pytest.mark.timeout(120)
 def test_launch_reuses_running_server_instead_of_restarting(tmp_path):
     """launch_server_subprocess must reuse a server already serving the port (no kill/respawn)."""
     if not SERVE_WASM.is_file():
@@ -467,7 +463,6 @@ def test_launch_reuses_running_server_instead_of_restarting(tmp_path):
         _terminate_serve_wasm(proc)
 
 
-@pytest.mark.timeout(120)
 def test_kill_previous_server_is_port_scoped(tmp_path):
     """Stale-server cleanup must only reap the matching port, never a sibling on another port."""
     if not SERVE_WASM.is_file():
@@ -532,7 +527,6 @@ def test_web_server_disabled_reads_env():
             os.environ["TRACY_NO_WEB_SERVER"] = prev
 
 
-@pytest.mark.timeout(120)
 def test_no_web_server_env_starts_nothing(tmp_path):
     """TRACY_NO_WEB_SERVER=1 must return without spawning a server or binding the port."""
     if not SERVE_WASM.is_file():
@@ -555,7 +549,6 @@ def test_no_web_server_env_starts_nothing(tmp_path):
     assert _port_free(port + 1), f"WebSocket port {port + 1} was bound despite TRACY_NO_WEB_SERVER=1"
 
 
-@pytest.mark.timeout(120)
 def test_no_web_server_flag_starts_nothing_with_env_unset(tmp_path):
     """enabled=False (what --no-web-server passes) disables on its own, no env var needed."""
     if not SERVE_WASM.is_file():

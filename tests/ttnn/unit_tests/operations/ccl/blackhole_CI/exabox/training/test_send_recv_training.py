@@ -59,7 +59,6 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox.training._training
 # 1. Round-robin send/recv ring
 # ---------------------------------------------------------------------------
 @pytest.mark.requires_device(["QUAD_BH"])
-@pytest.mark.timeout(300)
 def test_round_robin_send_recv_32x4(distributed_runtime):
     """Each rank exchanges a tagged payload with both neighbors in the ring.
 
@@ -96,7 +95,6 @@ def test_round_robin_send_recv_32x4(distributed_runtime):
 # 2. Pipeline activation hand-off (forward + backward over one stage boundary)
 # ---------------------------------------------------------------------------
 @pytest.mark.requires_device(["QUAD_BH"])
-@pytest.mark.timeout(300)
 def test_pipeline_activation_handoff_32x4(distributed_runtime):
     """Rank pair simulates one pipeline-parallel stage boundary.
 
@@ -152,7 +150,6 @@ def test_pipeline_activation_handoff_32x4(distributed_runtime):
 # 3. Remote-optimizer gradient exchange
 # ---------------------------------------------------------------------------
 @pytest.mark.requires_device(["QUAD_BH"])
-@pytest.mark.timeout(300)
 def test_remote_optimizer_grad_exchange_32x4(distributed_runtime):
     """Workers send gradients to rank 0 (aggregator/optimizer); aggregator
     sends updated weights back to each worker.

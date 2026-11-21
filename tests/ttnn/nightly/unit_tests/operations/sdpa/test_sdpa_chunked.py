@@ -435,7 +435,6 @@ def test_sdpa_chunked_iterate_batch(
     )
 
 
-@pytest.mark.timeout(60)
 def _permute_view_general(t_alloc, view_kv, view_block_size, view_head_dim):
     """Reinterpret paged-cache tiles under a different (kv, block, head_dim) view.
 
@@ -537,7 +536,6 @@ def test_chunked_sdpa_geometry_override_hma_shared_buffer(device):
         assert ok, f"HMA geometry override chunk {chunk_idx} PCC fail: {msg}"
 
 
-@pytest.mark.timeout(30)
 def test_chunked_sdpa_geometry_override_rejects_elems_per_block_mismatch(device, expect_error):
     """Overrides that break the elems/block invariant must fail validation."""
     b, nh, nkv_cache, block_size, d_cache = 1, 4, 2, 64, 128

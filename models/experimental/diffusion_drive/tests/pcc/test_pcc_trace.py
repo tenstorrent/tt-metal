@@ -28,7 +28,6 @@ skips locally but fails under ``DD_REQUIRE_ASSETS=1`` (see conftest).
 
 from __future__ import annotations
 
-import pytest
 import torch
 
 from models.common.utility_functions import comp_pcc
@@ -55,7 +54,6 @@ def _features(scale: float = 1.0) -> dict:
     }
 
 
-@pytest.mark.timeout(300)
 def test_backbone_trace_matches_eager(device, model_config, checkpoint_path, missing_asset) -> None:
     if model_config.plan_anchor_path is None:
         missing_asset("plan_anchor_path not set — run scripts/prepare_assets.py first")

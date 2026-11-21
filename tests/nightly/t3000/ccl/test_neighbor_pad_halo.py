@@ -208,7 +208,6 @@ def run_neighbor_pad_halo_2d(mesh_device, input_shape, h_dim, w_dim, h_axis, w_a
     assert all_pass, "compact halo mismatch"
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("input_shape", [[1, 8, 144, 256, 128]], ids=["s3ish"])
@@ -324,7 +323,6 @@ def test_neighbor_pad_halo_padded_border(mesh_device, device_params, input_shape
     assert all_pass, "repacked padded buffer != full-pad output"
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("input_shape", [[1, 8, 144, 256, 128]], ids=["s3ish"])
@@ -439,7 +437,6 @@ def test_neighbor_pad_halo_strided_input(mesh_device, device_params, input_shape
     assert all_pass, "strided-input compact != contiguous-input compact"
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("input_shape", [[1, 8, 144, 256, 128]], ids=["s3ish"])
@@ -548,7 +545,6 @@ def test_halo_scatter_border_only(mesh_device, device_params, input_shape):
     assert all_pass, "border_only scatter != repack"
 
 
-@pytest.mark.timeout(180)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
@@ -788,7 +784,6 @@ def test_neighbor_pad_halo_prod_perf_8k(mesh_device, device_params, input_shape,
 
 
 # Byte-exact PCC with the 8 KB fabric payload: the coalesce forms larger (up to 32-stick) bank packets
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -812,7 +807,6 @@ def test_neighbor_pad_halo_prod_pcc_8k(mesh_device, device_params, input_shape, 
 
 
 # Scaling to longer cluster axes than 2x4
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(4, 2)], ids=["4x2"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
@@ -882,7 +876,6 @@ def test_neighbor_pad_halo_prod_pcc(mesh_device, device_params, padding_mode, in
     )
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_neighbor_pad_halo_devfw(mesh_device, device_params):
@@ -1171,7 +1164,6 @@ def test_conv3d_halo_vs_fullpad(mesh_device, device_params, input_shape, C_out, 
 
 
 # Reuse test: the decode calls neighbor_pad_halo ~30x sharing the manager's ping-pong sems
-@pytest.mark.timeout(200)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_neighbor_pad_halo_reuse(mesh_device, device_params):

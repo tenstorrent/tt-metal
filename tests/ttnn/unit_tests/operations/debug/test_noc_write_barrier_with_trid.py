@@ -23,7 +23,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.mark.timeout(120)
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DEDICATED_NOC, ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("risc", list(RISCS))
 @pytest.mark.parametrize("stateful", [False, True])

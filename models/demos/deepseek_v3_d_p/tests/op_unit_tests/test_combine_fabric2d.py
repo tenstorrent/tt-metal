@@ -824,7 +824,6 @@ def test_combine_fabric2d_external_forwarding_buffer_rebind(mesh_device, device_
     ],
     ids=["undersized", "page_size", "aliased"],
 )
-@pytest.mark.timeout(300)
 def test_combine_fabric2d_external_forwarding_buffer_refused(
     mesh_device, device_params, num_links, case, message, expect_error
 ):

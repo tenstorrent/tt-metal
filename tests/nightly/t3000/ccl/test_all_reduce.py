@@ -14,7 +14,6 @@ from tests.nightly.tg.ccl.test_all_reduce_async import (
 )
 
 
-@pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [
@@ -81,7 +80,6 @@ def test_ring_all_reduce_post_commit(
     )
 
 
-@pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [

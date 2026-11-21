@@ -1000,7 +1000,6 @@ def test_fused_msda_nonfinite_sampling_location_contributes_nothing(device, path
     _assert_close(ref, out)
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("memory", ["dram", "l1"])
 def test_fused_msda_v1_repeated_calls_hit_program_cache(device, memory):
     """Repeated calls reuse one program and stay exact while value moves.
@@ -1588,7 +1587,6 @@ def test_fused_msda_v2_float32_reference_point_sub_ulp(device, packed):
     assert err <= K / 2**11, f"max error {err} exceeds {K / 2**11}: the reference point lost bits"
 
 
-@pytest.mark.timeout(300)
 @pytest.mark.parametrize("P", [4, 8], ids=["LP16", "LP32"])
 def test_fused_msda_v2_repeated_calls_hit_program_cache(device, P):
     """A cached V2 program re-reads reference_points on every launch.

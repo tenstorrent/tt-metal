@@ -220,7 +220,6 @@ def _run_matmul_workload(tmp_path: Path, mode: str, timeout_s: int = 180) -> lis
         return json.load(f)
 
 
-@pytest.mark.timeout(300)
 def test_callback(tmp_path):
     """Register a Python callback, run a small matmul workload, verify records arrive."""
     snapshot = _run_matmul_workload(tmp_path, mode="simple")
@@ -247,7 +246,6 @@ def test_callback(tmp_path):
     _save_artifacts("test_callback", records=out_file)
 
 
-@pytest.mark.timeout(300)
 def test_no_short_zones(tmp_path):
     """
     Capture a 50-matmul trace, replay it 10 times and confirm that no

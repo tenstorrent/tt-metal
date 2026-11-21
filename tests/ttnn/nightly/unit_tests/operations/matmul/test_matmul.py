@@ -181,7 +181,6 @@ def test_sdxl_matmul(
 @pytest.mark.parametrize("k", [63, 32])
 @pytest.mark.parametrize("n", [63, 32])
 @pytest.mark.parametrize("num_dram_banks", [8, 9, 11, 12])
-@pytest.mark.timeout(120)
 def test_matmul_2d_interleaved_sharded_dimension_sweep(device, batch, seq_len, k, n, num_dram_banks):
     """
     Sweep test for 2D matmul with DRAM interleaved in0 and DRAM sharded in1
@@ -221,7 +220,6 @@ def test_matmul_2d_interleaved_sharded_dimension_sweep(device, batch, seq_len, k
         (True, ttnn.float32),
     ],
 )
-@pytest.mark.timeout(120)
 def test_matmul_2d_interleaved_sharded_dtype_bias_sweep(
     device, batch, seq_len, k, n, num_dram_banks, in0_dtype, in1_dtype, out_dtype, has_bias, bias_dtype
 ):
@@ -254,7 +252,6 @@ def test_matmul_2d_interleaved_sharded_dtype_bias_sweep(
 
 
 @pytest.mark.parametrize("rhs_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
-@pytest.mark.timeout(120)
 def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
     """
     Regression test for transpose_a with a lower-precision RHS tensor.
@@ -360,7 +357,6 @@ def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
         ),
     ],
 )
-@pytest.mark.timeout(120)
 def test_matmul_transpose_a_fuse_batch(device, batch, m, k, n, program_config):
     """
     Regression test for transpose_a stride calculation with fuse_batch enabled

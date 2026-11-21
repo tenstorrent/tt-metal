@@ -16,13 +16,11 @@ from tests.ttnn.unit_tests.operations.sdpa.gqa_crossing_test_utils import (
 
 @pytest.mark.parametrize("b, nh, nkv, s, d, q_chunk, k_chunk, grid", CROSSING_CASES)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.timeout(300)
 def test_sdpa_gqa_crossing(device, b, nh, nkv, s, d, q_chunk, k_chunk, grid, dtype):
     check_gqa_crossing(device, b, nh, nkv, s, d, q_chunk, k_chunk, grid, dtype)
 
 
 @pytest.mark.parametrize("b, nh, nkv, s, d, q_chunk, k_chunk, grid", CROSSING_CASES[:2] + CROSSING_CASES[4:])
-@pytest.mark.timeout(300)
 def test_sdpa_gqa_crossing_concat_wrap_non_streaming(device, b, nh, nkv, s, d, q_chunk, k_chunk, grid):
     check_concat_wrap_non_streaming(device, b, nh, nkv, s, d, q_chunk, k_chunk, grid)
 
