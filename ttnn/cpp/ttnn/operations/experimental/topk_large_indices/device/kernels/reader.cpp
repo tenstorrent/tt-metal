@@ -29,7 +29,6 @@ __attribute__((noinline)) uint32_t fill_neginf(uint32_t l1_addr, uint32_t num_el
         *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr) = neginf_bf16;
         addr += sizeof(uint16_t);
     }
-#pragma GCC unroll 4
     for (; addr + sizeof(uint32_t) <= end; addr += sizeof(uint32_t)) {
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr) = (uint32_t{neginf_bf16} << 16) | neginf_bf16;
     }
@@ -318,34 +317,54 @@ __attribute__((noinline)) void two_level_unit_maxima(
         noc_id);
     noc_async_read_barrier(noc_id);
     invalidate_l1_cache();
-    const auto* keys = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(stage1_cb.get_write_ptr());
-    auto* maxima = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst);
-    for (uint32_t block = 0; block * block_keys < live; ++block) {
-        // Order bf16 bit patterns as their values: flip every bit of a negative one, only the sign of the others.
-        uint32_t best = 0;
-        for (uint32_t key = block * block_keys; key < (block + 1) * block_keys && key < live; ++key) {
-            uint32_t bits = keys[key];
-            bits = (bits & 0x7F80u) == 0 ? 0x8000u : (bits & 0x8000u ? ~bits & 0xFFFFu : bits | 0x8000u);
-            best = bits > best ? bits : best;
+    asm volatile("" ::: "memory");
+    // Keys as integers in value order: a negative one with every bit flipped, a non-negative one with its sign set.
+    // The maximum of the keys is the maximum of these; -0 and subnormals read as +0 after it, which is the maximum of
+    // the flushed keys exactly when one of them is the maximum.
+    const auto ordered = [](uint32_t bits) { return bits ^ ((0u - (bits >> 15)) & 0x7FFFu) ^ 0x8000u; };
+    const auto* pairs = reinterpret_cast<const uint32_t*>(stage1_cb.get_write_ptr());
+    auto* maxima = reinterpret_cast<uint16_t*>(dst);
+    // Keys past live in the last block are stale: they read as -inf (0xFF80) here.
+    const uint32_t blocks = div_up(live, block_keys);
+    if (live % block_keys != 0) {
+        auto* tail = reinterpret_cast<uint16_t*>(stage1_cb.get_write_ptr());
+        for (uint32_t key = live; key < blocks * block_keys; ++key) {
+            tail[key] = 0xFF80u;
         }
-        maxima[block] = best & 0x8000u ? best & 0x7FFFu : ~best & 0xFFFFu;
+    }
+    for (uint32_t block = 0; block < blocks; ++block) {
+        uint32_t best0 = 0;
+        uint32_t best1 = 0;
+        for (uint32_t word = block * block_keys / 2; word < (block + 1) * block_keys / 2; ++word) {
+            const uint32_t pair = pairs[word];
+            const uint32_t lo = ordered(pair & 0xFFFFu);
+            const uint32_t hi = ordered(pair >> 16);
+            best0 = lo > best0 ? lo : best0;
+            best1 = hi > best1 ? hi : best1;
+        }
+        const uint32_t best = best0 > best1 ? best0 : best1;
+        // Back from the order: a set sign bit was a non-negative key.
+        const uint32_t bits = best & 0x8000u ? best & 0x7FFFu : ~best & 0xFFFFu;
+        maxima[block] = (bits & 0x7F80u) == 0 ? 0 : bits;
     }
     wait_l1_store(reinterpret_cast<uint32_t>(&maxima[div_up(live, block_keys) - 1]));
 }
 
 // Stage 2 of one row: its block maxima from the maxima tensor through the input CB, one chunk per reserve so a chunk
 // never wraps. Past the row's blocks a chunk is -inf. With done_words (the row's done words, per_row of them), the row
-// runs before its maxima are complete: each chunk waits for the units it covers, and a unit still missing after
-// repair_after is computed here (see two_level_run's claims).
-template <typename InputAccessor, typename MaxAccessor>
+// runs before its maxima are complete: each chunk waits for the units it covers, and a unit still missing
+// repair_after after it was claimed is computed here (see two_level_run's claims). A unit not yet claimed (the
+// claimed count, read by claimed_count, is not past it) is only waited for: a core that finishes its rows claims it.
+template <typename InputAccessor, typename MaxAccessor, typename ClaimedCount>
 FORCE_INLINE void two_level_stage2(
     const Noc& noc,
     const InputAccessor& input,
     const MaxAccessor& block_max,
     uint32_t search_len,
     uint32_t row,
-    const volatile tt_l1_ptr uint32_t* done_words = nullptr,
-    uint32_t per_row = 0) {
+    const volatile tt_l1_ptr uint32_t* done_words,
+    const topk_two_level::Units& units,
+    const ClaimedCount& claimed_count) {
     using namespace topk_two_level;
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t chunk_bytes = get_compile_time_arg_val(1);
@@ -363,11 +382,18 @@ FORCE_INLINE void two_level_stage2(
         uint32_t repairs = 0;
         if (done_words != nullptr) {
             uint32_t needed = (chunk + 1) * (chunk_maxima / unit_maxima);
-            needed = needed < per_row ? needed : per_row;
+            needed = needed < units.per_row ? needed : units.per_row;
             uint32_t since = get_timestamp_32b();
             while (parts_seen < needed) {
                 invalidate_l1_cache();
-                if (done_words[parts_seen] != 0 || get_timestamp_32b() - since > repair_after) {
+                bool late = false;
+                if (done_words[parts_seen] == 0 && get_timestamp_32b() - since > repair_after) {
+                    late = claimed_count() > units.unit_of(row, parts_seen);
+                    if (!late) {
+                        since = get_timestamp_32b();
+                    }
+                }
+                if (done_words[parts_seen] != 0 || late) {
                     if (done_words[parts_seen] == 0) {
                         repairs |= 1u << (parts_seen - chunk * (chunk_maxima / unit_maxima));
                     }
@@ -664,7 +690,8 @@ FORCE_INLINE void two_level_run(
                 search_len,
                 row,
                 streaming ? flags + local_row * max_row_units : nullptr,
-                units.per_row);
+                units,
+                read_counter);
             if (is_split_row && early_halves) {
                 two_level_push_stage1(two_level_announce(header_half, row));
                 two_level_gather(
