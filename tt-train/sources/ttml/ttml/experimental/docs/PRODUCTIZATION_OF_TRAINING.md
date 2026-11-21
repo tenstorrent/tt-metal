@@ -71,9 +71,12 @@ scaling other than `llama3` or the default. Other models plug in as model provid
 [Adding a model](#adding-a-model)).
 
 **LoRA or every weight.** With `model.lora`, a run trains those adapters and nothing else. Without it, every weight
-is trained. The recipes without `model.lora` are `llama_3_2_1b_instruct_sst2.yaml`,
-`llama_3_1_8b_instruct_alpaca.yaml`, and `llama_3_1_8b_instruct_custom.yaml`. `target_modules` uses HF projection
-names, and takes any of them. ttml's Llama fuses some projections into one layer:
+is trained; the recipe without `model.lora` is `llama_3_2_1b_instruct_sst2.yaml`. Both are accepted for every model
+listed above. Whether a run fits in device memory is up to the caller: the trainer doesn't estimate it, and the run
+fails when the device runs out of memory. Full fine-tuning of Llama 3.1 8B doesn't fit on one chip, so the 8B
+recipes use LoRA.
+
+`target_modules` uses HF projection names, and takes any of them. ttml's Llama fuses some projections into one layer:
 
 | HF projections | ttml Llama layer |
 |---|---|
