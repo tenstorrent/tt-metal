@@ -51,14 +51,10 @@ constexpr uint64_t kHsioLocalBase = 0x20000000;
 constexpr uint64_t kHsioTileStride = 0x4000000;
 constexpr uint64_t kHsioCceSramOffset = 0x2800000;
 
-// CCE-local PF_CTRL_TILE_ID, a strap: bit 0 is the CCE, bits 3:1 the HSIO tile.
-constexpr uintptr_t kPfCtrlTileIdAddr = 0x03200008;
-
 // What halt() posts to the router postcode word (fabric_postcode_ptr in tunneling.h, which includes this header).
 enum class HaltCode : uint32_t {
     RemoteRegMisaligned = 0xCCEEF001,    // detail: the address
     RemoteRegValueTooWide = 0xCCEEF002,  // detail: the value's upper 32 bits
-    NotOnCce0 = 0xCCEEF003,              // detail: PF_CTRL_TILE_ID
     BadLinkKind = 0xCCEEF004,            // detail: EthLink::kind
     NocPeerOnOwnTile = 0xCCEEF005,       // detail: EthLink::peer_tile
     BadTxq = 0xCCEEF006,                 // detail: the TX queue number
@@ -75,23 +71,10 @@ enum class HaltCode : uint32_t {
     }
 }
 
-FORCE_INLINE uint32_t pf_ctrl_tile_id() { return *reinterpret_cast<const volatile uint32_t*>(kPfCtrlTileIdAddr); }
-
-// HSIO tile of this CCE, from PF_CTRL_TILE_ID (an MMIO read).
-FORCE_INLINE uint32_t hsio_tile() { return (pf_ctrl_tile_id() >> 1) & 0x7; }
-
-// Halts unless this hart is on CCE0, the only CCE sram_local_addr() handles. Reads an MMIO register: call once.
-inline void check_on_cce0() {
-    const uint32_t tile_id = pf_ctrl_tile_id();
-    if ((tile_id & 0x1) != 0) {
-        halt(HaltCode::NotOnCce0, tile_id);
-    }
-}
-
 // The Ethernet-link slot at MEM_IERISC_FABRIC_ETH_LINK_BASE, an EthLink (hostdev/eth_link.h). The host
 // (RiscFirmwareInitializer) writes it before launch on every linked Quasar Ethernet core, from the cluster's link
-// table; when that table has no peer for the core, valid stays 0. This CCE's own tile comes from hsio_tile(), not from
-// the slot.
+// table; when that table has no peer for the core, valid stays 0. This CCE's own tile comes from KeraunosSpaRoutes, not
+// from the slot.
 static_assert(sizeof(EthLink) == MEM_IERISC_FABRIC_ETH_LINK_SIZE);
 
 // The slot, once the host has written it. Without the valid word the peer tile is stale and a send would land in
@@ -105,33 +88,43 @@ FORCE_INLINE const volatile EthLink& eth_link() {
     return link;
 }
 
-// This hart's copy of the slot's kind and peer tile, taken by link() in this kernel run. Kernel start-up zeroes it, so
-// latched is false until then.
+// Keraunos local address of offset 0 of HSIO tile @p tile's CCE0 SRAM.
+constexpr uint64_t sram_local_base(uint32_t tile) {
+    return kHsioLocalBase + tile * kHsioTileStride + kHsioCceSramOffset;
+}
+
+// This hart's copy of the slot's kind, and the addresses a send adds an SRAM offset to, taken by link() in this kernel
+// run. Kernel start-up zeroes it, so latched is false until then.
 struct LinkCopy {
     uint32_t kind;
-    uint32_t peer_tile;
     bool latched;
+    uint64_t src_base;   // offset 0 of this CCE's SRAM, as the command buffer's source
+    uint64_t dest_base;  // offset 0 of the peer CCE0's SRAM: local address on an Ethernet link, system on a NOC link
 };
 inline LinkCopy link_copy;
 
-// Reads the slot through eth_link(), waiting as it does, checks it, and latches it into link_copy. On a NOC link also
-// reads PF_CTRL_TILE_ID and resets the command buffer. Halts with BadLinkKind on an unknown kind and with
-// NocPeerOnOwnTile on a NOC link whose peer is this CCE's own tile, which has no documented system-address route back.
+// Reads the slot through eth_link(), waiting as it does, checks it, and latches it into link_copy with this CCE's tile
+// from KeraunosSpaRoutes. On a NOC link also resets the command buffer. Halts with BadLinkKind on an unknown kind and
+// with NocPeerOnOwnTile on a NOC link whose peer is this CCE's own tile, which has no documented system-address route
+// back.
 [[gnu::cold, gnu::noinline]] inline void latch_link() {
     const volatile EthLink& slot = eth_link();
     const uint32_t kind = slot.kind;
     const uint32_t peer_tile = slot.peer_tile;
+    const uint32_t own_tile = internal_::cce_noc::spa_routes().hsio;
     if (kind != ETH_LINK_KIND_ETHERNET && kind != ETH_LINK_KIND_NOC) {
         halt(HaltCode::BadLinkKind, kind);
     }
-    if (kind == ETH_LINK_KIND_NOC && peer_tile == hsio_tile()) {
+    if (kind == ETH_LINK_KIND_NOC && peer_tile == own_tile) {
         halt(HaltCode::NocPeerOnOwnTile, peer_tile);
     }
+    uint64_t dest_base = sram_local_base(peer_tile);
     if (kind == ETH_LINK_KIND_NOC) {
         // Not repeated per send: txq_busy reads each queue's ack count, and no document says a reset keeps it.
         reset_cmdbuf<kCmdBuf>();
+        dest_base = internal_::cce_noc::dma_addr(internal_::cce_noc::Target{peer_tile, 0, 0});
     }
-    link_copy = LinkCopy{.kind = kind, .peer_tile = peer_tile, .latched = true};
+    link_copy = LinkCopy{.kind = kind, .latched = true, .src_base = sram_local_base(own_tile), .dest_base = dest_base};
 }
 
 // This hart's link as the slot read on the first call in this kernel run. That call waits for the host to write the
@@ -165,23 +158,9 @@ FORCE_INLINE uint32_t noc_trid(uint32_t q_num) {
     return kFirstNocTrid + q_num;
 }
 
-// SRAM offset of the flat address @p flat (cached or uncached alias) of a CCE.
-FORCE_INLINE uint32_t sram_offset(uint32_t flat) {
-    const uint32_t offset = flat >= MEM_IERISC_UNCACHED_BASE ? flat - MEM_IERISC_UNCACHED_BASE : flat;
-    ASSERT(offset < MEM_IERISC_L1_SIZE);
-    return offset;
-}
-
-// Keraunos local address of the flat address @p flat (cached or uncached alias) in HSIO tile @p tile's CCE SRAM.
-FORCE_INLINE uint64_t sram_local_addr(uint32_t tile, uint32_t flat) {
-    return kHsioLocalBase + tile * kHsioTileStride + kHsioCceSramOffset + sram_offset(flat);
-}
-
-// System address of the flat address @p flat (cached or uncached alias) in HSIO tile @p tile's CCE0 SRAM, from this
-// core's KeraunosSpaRoutes (cce_noc.h).
-FORCE_INLINE uint64_t sram_system_addr(uint32_t tile, uint32_t flat) {
-    return internal_::cce_noc::dma_addr(internal_::cce_noc::Target{tile, 0, flat});
-}
+// SRAM offset of the flat address @p flat (cached or uncached alias) of a CCE0. Halts outside both
+// (cce_noc::Fault::OutsideSram).
+FORCE_INLINE uint64_t sram_offset(uint32_t flat) { return internal_::cce_noc::sram_offset(flat, 0); }
 
 // On an Ethernet link, true while the command buffer has no space on TX queue @p q_num's request VC. On a NOC link,
 // true while its iDMA request VC has no space or the queue's last send is not acked: one send in flight per queue.
@@ -194,31 +173,30 @@ FORCE_INLINE bool txq_busy(uint32_t q_num) {
     return idma_free_space_cmdbuf<kCmdBuf>(txq_req_vc(q_num)) == 0;
 }
 
-// Programs the command buffer for a send on TX queue @p q_num to the flat address @p dest on the Ethernet link peer
-// @p peer_tile.
-FORCE_INLINE void setup_send(uint32_t q_num, uint32_t dest, uint32_t peer_tile) {
+// Programs the command buffer for a send on TX queue @p q_num to the flat address @p dest on the Ethernet link peer,
+// whose SRAM is at @p dest_base.
+FORCE_INLINE void setup_send(uint32_t q_num, uint32_t dest, uint64_t dest_base) {
     const uint32_t vc = txq_req_vc(q_num);
     reset_cmdbuf<kCmdBuf>();
     idma_setup_as_copy_cmdbuf<kCmdBuf>();
     setup_ongoing_cmdbuf<kCmdBuf>(AutoIncConfig{});
     setup_wrapping_vcs_cmdbuf<kCmdBuf>(VcRange{.start = vc, .end = vc});
     setup_trids_cmdbuf<kCmdBuf>(kTrid);
-    set_dest_cmdbuf<kCmdBuf>(sram_local_addr(peer_tile, dest));
+    set_dest_cmdbuf<kCmdBuf>(dest_base + sram_offset(dest));
 }
 
-// send_bytes() on the latched NOC link to @p peer_tile, after its fence: a coupled copy on TX queue @p q_num, which
-// must be in range. The command buffer is not reset: the latch reset it once (latch_link()). Out of line, as is
+// send_bytes() on the latched NOC link, after its fence: a coupled copy on TX queue @p q_num, which must be in
+// range. The command buffer is not reset: the latch reset it once (latch_link()). Out of line, as is
 // noc_send_dword(), so that a send site pays a compare and a call for the NOC path, not its whole sequence.
-[[gnu::noinline]] inline void noc_send_bytes(
-    uint32_t q_num, uint32_t src, uint32_t dest, uint32_t num_bytes, uint32_t peer_tile) {
+[[gnu::noinline]] inline void noc_send_bytes(uint32_t q_num, uint32_t src, uint32_t dest, uint32_t num_bytes) {
     const uint32_t vc = noc_req_vc(q_num);
     idma_setup_as_copy_cmdbuf<kCmdBuf>();
     setup_ongoing_cmdbuf<kCmdBuf>(AutoIncConfig{});
     setup_wrapping_vcs_cmdbuf<kCmdBuf>(
         VcRange{.start = vc, .end = vc}, VcRange{.start = kNocRespVc, .end = kNocRespVc});
     setup_trids_cmdbuf<kCmdBuf>(noc_trid(q_num));
-    set_dest_cmdbuf<kCmdBuf>(sram_system_addr(peer_tile, dest), 0, 0, 0);
-    set_src_cmdbuf<kCmdBuf>(sram_local_addr(hsio_tile(), src), 0, 0, 0);
+    set_dest_cmdbuf<kCmdBuf>(link_copy.dest_base + sram_offset(dest), 0, 0, 0);
+    set_src_cmdbuf<kCmdBuf>(link_copy.src_base + sram_offset(src), 0, 0, 0);
     set_len_cmdbuf<kCmdBuf>(num_bytes);
     setup_max_bytes_in_packet_cmdbuf<kCmdBuf>(kMaxBytesInPacket);
     setup_packet_tags_cmdbuf<kCmdBuf>(PacketTags{});
@@ -234,26 +212,26 @@ FORCE_INLINE void send_bytes(uint32_t q_num, uint32_t src, uint32_t dest, uint32
     check_txq(q_num);
     const LinkCopy& copy = link();
     if (copy.kind == ETH_LINK_KIND_NOC) {
-        noc_send_bytes(q_num, src, dest, num_bytes, copy.peer_tile);
+        noc_send_bytes(q_num, src, dest, num_bytes);
         return;
     }
-    setup_send(q_num, dest, copy.peer_tile);
-    set_src_cmdbuf<kCmdBuf>(sram_local_addr(hsio_tile(), src));
+    setup_send(q_num, dest, copy.dest_base);
+    set_src_cmdbuf<kCmdBuf>(copy.src_base + sram_offset(src));
     set_len_cmdbuf<kCmdBuf>(num_bytes);
     setup_max_bytes_in_packet_cmdbuf<kCmdBuf>(kMaxBytesInPacket);
     setup_packet_tags_cmdbuf<kCmdBuf>(PacketTags{.snoop = snoop});
     issue_cmdbuf<kCmdBuf>();
 }
 
-// send_dword() on the latched NOC link to @p peer_tile, after its checks: stages @p val in TX queue @p q_num's word at
+// send_dword() on the latched NOC link, after its checks: stages @p val in TX queue @p q_num's word at
 // MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE, through the uncached alias, and sends those 8 bytes. @p q_num must be in
 // range. No inline write on an iDMA back-end: it leaves the AW coupler count of GREN-2020.
-[[gnu::noinline]] inline void noc_send_dword(uint32_t q_num, uint32_t dest, uint64_t val, uint32_t peer_tile) {
+[[gnu::noinline]] inline void noc_send_dword(uint32_t q_num, uint32_t dest, uint64_t val) {
     const uint32_t stage = MEM_IERISC_FABRIC_NOC_DWORD_STAGE_BASE + q_num * sizeof(val);
     *reinterpret_cast<volatile uint64_t*>(static_cast<uintptr_t>(MEM_IERISC_UNCACHED_BASE + stage)) = val;
     // A core store to the source must reach SRAM before the copy reads it.
     asm volatile("fence" ::: "memory");
-    noc_send_bytes(q_num, stage, dest, sizeof(val), peer_tile);
+    noc_send_bytes(q_num, stage, dest, sizeof(val));
 }
 
 // Write @p val to the 8-byte-aligned @p dest on the link peer on TX queue @p q_num: on an Ethernet link as an inline
@@ -271,10 +249,10 @@ FORCE_INLINE void send_dword(uint32_t q_num, uint32_t dest, uint64_t val, bool s
     check_txq(q_num);
     const LinkCopy& copy = link();
     if (copy.kind == ETH_LINK_KIND_NOC) {
-        noc_send_dword(q_num, dest, val, copy.peer_tile);
+        noc_send_dword(q_num, dest, val);
         return;
     }
-    setup_send(q_num, dest, copy.peer_tile);
+    setup_send(q_num, dest, copy.dest_base);
     set_src_cmdbuf<kCmdBuf>(val);
     set_len_cmdbuf<kCmdBuf>(sizeof(val));
     TT_ROCC_CMD_BUF_AXI_OPT_1_reg_u axi_opt_1;
