@@ -239,6 +239,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(
                             ((DST_INDEX + tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
+                        // One tile per call; Quasar packs a whole block per _llk_pack_ call.
                         _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
                     }
                     // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers

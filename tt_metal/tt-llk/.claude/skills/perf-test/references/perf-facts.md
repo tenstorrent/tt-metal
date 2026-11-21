@@ -90,6 +90,145 @@ comparison.
 - A comparison with few or no matched points is inconclusive
   (`perf-regression-check`, "Interpreting results").
 
+### `tile_cnt` per module
+
+`tile_cnt` is the `TILE_COUNT` runtime value, the divisor of the `.post.csv`
+normalization (`loop_factor * tile_cnt`). Each test sets it; there is no
+shared formula. The tables list every module in `PERF_TEST_SCHEMAS` and
+`PERF_TEST_SCHEMAS_QSR` that has a `tile_cnt` column, with the value read from
+the `TILE_COUNT(...)` call of the test the perf module runs (`test_*.py`, or
+the perf module itself where it passes `TILE_COUNT` directly). `rt`, `ct`,
+`kt` are the tile-grid dims of the output rows, output columns and the
+contraction.
+
+Wormhole and Blackhole:
+
+| Module | `tile_cnt` | Related columns |
+| --- | --- | --- |
+| `perf_bcast` | `tile_cnt_A` (`generate_stimuli`, operand A tiles) |  |
+| `perf_block_max8` | 1 |  |
+| `perf_csa_index_remap` | 9 (fixed) |  |
+| `perf_dense_pack_untilize` | `tile_cnt_A` |  |
+| `perf_eltwise_add_scalar` | `tile_cnt_input`, the input tiles of operand A | output tiles are input tiles divided by the accumulation depth |
+| `perf_eltwise_bcast_col_custom` | `tile_cnt_A` |  |
+| `perf_eltwise_binary` | `tile_cnt_A` of `input_dimensions`: `(rows // tile_rows) * (cols // tile_cols)` | with `acc_to_dest`, `num_blocks * num_tiles_in_block` is half of `tile_cnt` (see below) |
+| `perf_eltwise_binary_reuse_dest` | `tile_cnt_input`, the input tiles of operand A |  |
+| `perf_eltwise_binary_broadcast` | `tile_cnt_A` (runs the `test_eltwise_binary` body) | same `acc_to_dest` note as `perf_eltwise_binary` |
+| `perf_eltwise_binary_sfpu` | `tile_cnt_A` for the float and integer sweeps; `tile_cnt_A + tile_cnt_B` for mixed formats and the broadcast kernel |  |
+| `perf_eltwise_mul_scalar_block` | `len(scalars) * block_size` (4 scalars times `block_size`) |  |
+| `perf_eltwise_unary_datacopy` | `tile_cnt_A` |  |
+| `perf_eltwise_unary_datacopy_custom` | `tile_cnt_A` |  |
+| `perf_eltwise_unary_typecast` | `tile_cnt_A` |  |
+| `perf_eltwise_unary_sfpu` | `tile_cnt_A` |  |
+| `perf_fast_tilize` | `tile_count`, the height tiles times the width tiles of `input_dimensions` |  |
+| `perf_fast_tilize_full` | `rt * ct` |  |
+| `perf_fast_tilize_metal_api` | `rt * ct` |  |
+| `perf_fast_untilize` | `rt * ct` |  |
+| `perf_hadamard` | `num_tiles`, the row count of `inputs` (one transform per tile) |  |
+| `perf_math_matmul` | `rt * ct * kt * num_blocks` | `num_blocks` is its own column; `num_tiles_in_block = rt * ct` |
+| `perf_mul_reduce_scalar` | `num_tiles` axis (operand A tiles) |  |
+| `perf_sdpa_bcast_col_srca_srcb_reuse` | 1 (fixed) |  |
+| `perf_sdpa_weighted_reduce` | `tile_cnt_qk`, the qk operand tiles, not the weight tiles (`tile_cnt_w`) |  |
+| `perf_sfpu_sdpa` | 1, or `len(src_tiles)` for the correction variant |  |
+| `perf_sum_reduce_scalar` | `num_tiles` axis (operand A tiles) |  |
+| `perf_rmsnorm_clear_product_tile` | `output_tiles = CYCLES * (capacity - 1) * dest_tiles`, the output tiles, not the `dest_tiles` operand tiles |  |
+| `perf_mul_reduce_scalar_chunked` | `num_tiles` axis (operand A tiles) |  |
+| `perf_rmsnorm_bcast_scalar_dest_reuse` | `num_tiles` axis (tiles in operand A; operand B is one tile) |  |
+| `perf_rope` | `tiles`, the Dest tiles of the geometry |  |
+| `perf_sdpa_bcast_col_srcb_reuse` | `num_tiles` axis (1 or 2) |  |
+| `perf_top32_rm` | ordinary variants: `2 * ceil(row_elements / 64)` (1024, 1088, 1152 elements give 32, 34, 36); pre-sorted variant: `2 * (row_elements // 1024 + ceil((row_elements % 1024) / 64))` (1024, 1088, 1152 give 2, 4, 6) | |
+| `perf_topk_pack_supplied_indices` | `2 * tiles`, `tiles = ceil(k / ELEMENTS_PER_TILE)` |  |
+| `perf_topk_xl` | `num_rows * num_chunks * tiles_per_seq` |  |
+| `perf_topk_xl_split` | `num_rows * num_chunks * tiles_per_seq` |  |
+| `perf_transpose_dest` | the `tile_cnt` axis (16) |  |
+| `perf_matmul` | `rt * ct * kt` |  |
+| `perf_pack_l1_acc` | `tile_cnt_A` |  |
+| `perf_pack` | `tile_cnt_A` | `num_blocks * num_tiles_in_block` equals `tile_cnt` |
+| `perf_pack_tiny_tile_block` | `tile_cnt_A` |  |
+| `perf_pack_tiny_tile_reconfig` | `tile_cnt_A` |  |
+| `perf_pack_untilize` | `tile_cnt_A` |  |
+| `perf_reduce` | `tile_cnt_A` | `output_tile_cnt` is 1 for reduce-to-one, else `tile_cnt` |
+| `perf_reduce_block_max` | `block_ct_dim` |  |
+| `perf_sfpu_binop_scalar` | `tile_cnt_A` |  |
+| `perf_sfpu_ema` | `tile_cnt` (operand A tiles) |  |
+| `perf_sfpu_reduce` | `tile_count`, the input tiles |  |
+| `perf_sfpu_reduce_sdpa` | `tile_count` / `tile_cnt_A`, the input tiles |  |
+| `perf_sfpu_ternary` | `tile_count`, the operand A tiles of `input_dimensions` |  |
+| `perf_vif_equiv_sweep` | `tile_cnt_A` (runs the unary SFPU test body) |  |
+| `perf_unpack_a_bcast_eltwise` | `tile_count`, the input tiles (stimuli carry `reuse_factor` A tiles) |  |
+| `perf_unpack_reduce_col_tilizeA_strided` | `tile_cnt_A` |  |
+| `perf_unpack_tilize` | `tile_cnt_A` |  |
+| `perf_unpack_transpose` | `tile_count`, the input tiles |  |
+| `perf_custom_mm` | `ct * kt` |  |
+| `perf_matmul_custom` | `rt * ct` (output tiles) |  |
+| `perf_matmul_in1_column_stride` | `2 * ct` |  |
+| `perf_compressed_custom_mm` | `rt * ct` (output tiles) |  |
+| `perf_matmul_custom_compressed` | `ct` (`run_compressed`) |  |
+| `perf_matmul_face_compressed` | `ct` (`run_compressed`) |  |
+| `perf_unpack_A_custom` | `tile_cnt_A` |  |
+
+Quasar:
+
+| Module | `tile_cnt` | Related columns |
+| --- | --- | --- |
+| `perf_eltwise_binary_broadcast_quasar` | `tile_cnt_A` | `output_tile_cnt` is the result tiles |
+| `perf_eltwise_binary_quasar` | `tile_cnt_A` | `output_tile_cnt` is the result tiles (input tiles divided by tiles per accumulation); with `acc_to_dest`, `num_blocks * num_tiles_in_block` is half of `tile_cnt` |
+| `perf_eltwise_binary_reuse_dest_quasar` | `tile_cnt_input`, the input tiles of operand A | `output_tile_cnt` is the reuse-dest output grid |
+| `perf_eltwise_binary_sfpu_quasar` | tiles staged in `buffer_A` (`max(src0_idx, src1_idx, dst_idx) + 1` for the two-operand kernels), times `num_blocks` in the dest-depth variant |  |
+| `perf_eltwise_unary_datacopy_quasar` | `tile_cnt_A` |  |
+| `perf_eltwise_unary_sfpu_quasar` | `tile_cnt_A` (1 for the single-tile variants) |  |
+| `perf_eltwise_unary_typecast_quasar` | `tile_cnt_A` (runs the unary SFPU test body) |  |
+| `perf_matmul_int4_dequant_quasar` | `output_tile_cnt * kt`, i.e. `rt * ct * kt` |  |
+| `perf_matmul_quasar` | `output_tile_cnt * kt`, i.e. `rt * ct * kt` |  |
+| `perf_pack_l1_acc_quasar` | `tile_cnt` of `input_dimensions` |  |
+| `perf_pack_quasar` | `tile_cnt_A` |  |
+| `perf_pack_untilize_quasar` | `tile_cnt_A` |  |
+| `perf_reduce_quasar` | `tile_cnt` (input tiles) | no `output_tile_cnt` column; the test's local `output_tile_cnt` (1 for reduce-to-one, else `tile_cnt`) only sizes the result stimuli |
+| `perf_sfpu_add_parallel_matmul_quasar` | `tile_cnt_add`, the SFPU add operand tiles (the parallel matmul is not counted) |  |
+| `perf_sfpu_exp_parallel_matmul_quasar` | `tile_cnt_exp`, the SFPU exp input tiles (the parallel matmul is not counted) |  |
+| `perf_sfpu_reduce_quasar` | `tile_cnt`, the input tiles |  |
+| `perf_sfpu_where_quasar` | `3 * tile_cnt_single`: condition, true and false tiles (3 at the perf size of one tile each) |  |
+| `perf_transpose_dest_quasar` | `tile_cnt_A` |  |
+| `perf_unary_broadcast_quasar` | `tile_cnt` of `input_dimensions` |  |
+| `perf_unpack_reduce_col_tilizeA_strided_quasar` | `tile_cnt_A` |  |
+| `perf_unpack_tilize_quasar` | `tile_cnt_A` |  |
+| `perf_unpack_unary_operand_quasar` | `tile_cnt_A` |  |
+
+`perf_fused`, `perf_fused_quasar`, `perf_sfpu_sdpa_fw`,
+`perf_custom_mm_reuse_dest_srcb` and `perf_sdpa_custom_mm_reuse_dest_srcb`
+have no `tile_cnt` column in their schema. `postprocess_tile_loop` fills a
+missing `tile_cnt` with 1, so their `TILE_LOOP` rows are divided by
+`loop_factor` alone.
+
+Differences that matter when comparing architectures:
+
+- The same matmul name carries three formulas: WH/BH `perf_matmul` and Quasar
+  count `rt * ct * kt`, `perf_math_matmul` multiplies by `num_blocks`, and
+  `perf_matmul_custom` counts only the output tiles `rt * ct`. A per-tile
+  cycle count from one is not comparable with another.
+- Binary SFPU kernels count operand tiles, not result tiles, so per-tile
+  cycles are about half a result tile (see above).
+- `tile_cnt` is not always operand A: `perf_sdpa_weighted_reduce` counts the
+  qk operand tiles and `perf_rmsnorm_clear_product_tile` the output tiles.
+- With `acc_to_dest`, `num_tiles_in_block` is the output-based value (WH/BH
+  computes it from the accumulated output dimensions; the Quasar eltwise
+  binary test also passes the output value unsuffixed), so
+  `num_blocks * num_tiles_in_block` is half of `tile_cnt`. The per-block
+  `input_num_tiles_in_block` column, `num_tiles_in_block * 2` there, is the one
+  that matches: `num_blocks * input_num_tiles_in_block == tile_cnt`.
+- `input_tile_cnt` is only a retired alias of `tile_cnt`; the columns that
+  exist are `tile_cnt` and, on a few modules, `output_tile_cnt`.
+- `_llk_pack_` covers a different amount of work per call on each
+  architecture. WH/BH `pack_test.cpp` calls it once per tile inside the
+  `NUM_TILES_IN_BLOCK` loop, so it packs one tile per call. Quasar
+  `pack_quasar_test.cpp` programs the pack MOP for `tiles_in_block` tiles in
+  `_llk_pack_init_` and calls `_llk_pack_` once per block. `tile_cnt` is the
+  total tile count on both sides, so the per-tile normalization is
+  consistent, but the instruction-level work and call overhead per
+  `_llk_pack_` call are not: read pack deltas across architectures per tile,
+  not per call. On Quasar the `num_tiles_in_block` column of `perf_pack_quasar`
+  records the tiles per `_llk_pack_` call.
+
 ## Where reports land
 
 - Workers write `<module>.<worker>.csv` and `.post.csv` into
