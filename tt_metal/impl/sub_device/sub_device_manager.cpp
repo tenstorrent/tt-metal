@@ -17,6 +17,7 @@
 
 #include "core_coord.hpp"
 #include "llrt/hal.hpp"
+#include "dispatch/dispatch_query_manager.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/fmt.hpp>
