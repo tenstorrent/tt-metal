@@ -270,8 +270,14 @@ void kernel_main() {
     constexpr bool indexed_kv_cache = get_compile_time_arg_val(24) == 1;
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(25) == 1;
     constexpr uint32_t NHV = get_compile_time_arg_val(26);
-    // Latent-V mode: absent V is materialized from the prefix of K tiles already in L1.
+    // Latent-V mode: absent V is materialized from the prefix of K tiles already in L1, or (one-row Q chunks,
+    // latent_v_in_k) read by compute in place from the K^T chunk: no V entries, three K entries.
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(27) == 1;
+    constexpr bool latent_v_in_k = get_named_compile_time_arg_val("latent_v_in_k") == 1;
+    static_assert(!latent_v_in_k || v_shares_k_buffer);
+    // K CB entries (the chained readers' phase alignment cycle): three with in-place latent V when L1 allows.
+    constexpr uint32_t k_cb_entries = get_named_compile_time_arg_val("k_cb_entries");
+    static_assert(k_cb_entries == 2 || (k_cb_entries == 3 && latent_v_in_k));
     constexpr bool use_attention_sink = get_compile_time_arg_val(28) == 1;
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(29);
     constexpr bool has_sliding_window = sliding_window_size > 0;
@@ -1411,7 +1417,9 @@ void kernel_main() {
                     // (GQA multicast) or empty, so both CBs keep the same phase as the real path.
                     cb_k.push_back(k_chunk_tiles);
                     KV_chunks_processed_in_iter++;
-                    if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
+                    if constexpr (latent_v_in_k) {
+                        // no V entry
+                    } else if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
                         const uint32_t nv = nq / q_heads_per_v;
                         CircularBuffer cb_v(cb_v_in);
                         cb_v.reserve_back(v_cb_entry_tiles);
@@ -1471,7 +1479,9 @@ void kernel_main() {
                 // Latent V: materialize V [Sk, vDHt] into its own CB from the K^T chunk already in L1 (local L1-to-L1
                 // NoC reads). Every row: compute processes whole chunks and masks keys by position, so no V row it
                 // reads may hold stale data.
-                if constexpr (v_shares_k_buffer) {
+                if constexpr (latent_v_in_k) {
+                    // compute reads V from the K^T chunk
+                } else if constexpr (v_shares_k_buffer) {
                     materialize_v_prefix_from_k<cb_v_in, v_cb_entry_tiles, Sk_chunk_t, vDHt, k_tile_bytes>(
                         noc, cb_k_start_address, Sk_chunk_t);
                 } else if constexpr (!v_shares_k_buffer) {
@@ -1534,14 +1544,16 @@ void kernel_main() {
         if constexpr (!has_sliding_window) {
             for (uint32_t dummy_chunk = 0;
                  dummy_chunk <
-                 dummy_kv_chunks_for_phase_alignment<false, false>(KV_chunks_processed_in_iter);
+                 dummy_kv_chunks_for_phase_alignment<false, k_cb_entries == 3>(KV_chunks_processed_in_iter);
                  ++dummy_chunk) {
                 CircularBuffer cb_k_dummy(cb_k_in);
                 cb_k_dummy.reserve_back(k_chunk_tiles);
                 cb_k_dummy.push_back(k_chunk_tiles);
-                CircularBuffer cb_v_dummy(cb_v_in);
-                cb_v_dummy.reserve_back(v_cb_entry_tiles);
-                cb_v_dummy.push_back(v_cb_entry_tiles);
+                if constexpr (!latent_v_in_k) {
+                    CircularBuffer cb_v_dummy(cb_v_in);
+                    cb_v_dummy.reserve_back(v_cb_entry_tiles);
+                    cb_v_dummy.push_back(v_cb_entry_tiles);
+                }
             }
         }
     }

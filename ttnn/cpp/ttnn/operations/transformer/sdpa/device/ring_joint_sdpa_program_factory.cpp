@@ -2241,6 +2241,22 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         q_df);
     auto& compute_recipe_kernel = recipe_program.kernels.front();
     desc.cbs = std::move(recipe_program.cbs);
+    // ring_mla with one-row Q chunks reads latent V in place from the K^T chunk (as legacy kt_inplace_v): no V CB, no
+    // V materialization in the reader, and the freed L1 holds a third K entry. With a one-tile Q chunk the copy is not
+    // hidden behind the chunk's compute and two K entries do not cover the K chain's latency (kimi50k chunk 10,
+    // Q32/K512, BH Galaxy: 9.43 ms; knocking out the V copy and the K DRAM reads gives 6.04 ms).
+    // V a prefix of K's rows (not packed latent V, whose V columns the reader fetches on their own).
+    const bool latent_v_in_k = tensor_args.v_shares_k_buffer() && Sq_chunk_t == 1;
+    // K entries: three with in-place latent V (L1 fallback below: two), else two.
+    uint32_t k_cb_entries = latent_v_in_k ? 3 : 2;
+    if (latent_v_in_k) {
+        desc.cbs.erase(
+            std::remove_if(
+                desc.cbs.begin(),
+                desc.cbs.end(),
+                [](const CBDescriptor& cb) { return cb.format_descriptors.front().buffer_index == recipe_ring_cb::v; }),
+            desc.cbs.end());
+    }
     for (auto& cb : desc.cbs) {
         auto& format = cb.format_descriptors.front();
         if (format.buffer_index == recipe_ring_cb::q) {
@@ -2248,8 +2264,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             cb.total_size = Sq_chunk_t * DHt * (max_q_chunks_per_core > 1 ? 2 : 1) * q_tile_size;
         } else if (format.buffer_index == recipe_ring_cb::k) {
             // K and V double-buffered: the store-and-forward chains forward into a peer's CB at its write pointer, and
-            // the phase alignment (dummy_kv_chunks_for_phase_alignment) assumes two entries.
-            cb.total_size = Sk_chunk_t * DHt * 2 * k_tile_size;
+            // the phase alignment (dummy_kv_chunks_for_phase_alignment) assumes two entries; three K entries (and the
+            // alignment's three-entry cycle) with in-place latent V.
+            cb.total_size = Sk_chunk_t * DHt * k_cb_entries * k_tile_size;
         } else if (format.buffer_index == recipe_ring_cb::v) {
             cb.total_size = Sk_chunk_t * vDHt * 2 * v_tile_size;
         } else if (format.buffer_index == recipe_ring_cb::out) {
@@ -2301,7 +2318,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         cb_bytes = recipes::recipe_cb_bytes(desc);
         log_debug(tt::LogOp, "RingJointSDPA recipe: single-slot Q to fit L1");
     }
-    if (cb_bytes > l1_available && tensor_args.has_latent_v()) {
+    if (cb_bytes > l1_available && k_cb_entries == 3) {
+        // In-place latent V: back to two K entries (the reader still materializes no V).
+        for (auto& cb : desc.cbs) {
+            if (cb.format_descriptors.front().buffer_index == recipe_ring_cb::k) {
+                cb.total_size = cb.total_size / 3 * 2;
+            }
+        }
+        k_cb_entries = 2;
+        cb_bytes = recipes::recipe_cb_bytes(desc);
+        log_debug(tt::LogOp, "RingJointSDPA recipe: two K entries to fit L1");
+    }
+    if (cb_bytes > l1_available && tensor_args.has_latent_v() && !latent_v_in_k) {
         for (auto& cb : desc.cbs) {
             if (cb.format_descriptors.front().buffer_index == recipe_ring_cb::v) {
                 cb.total_size /= 2;
@@ -2360,7 +2388,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
 
     const std::vector<uint32_t> reader_cb_compile_time_args = {
-        recipe_ring_cb::q, recipe_ring_cb::k, recipe_ring_cb::v, cb_attention_sink, recipe_ring_cb::derived};
+        recipe_ring_cb::q,
+        recipe_ring_cb::k,
+        latent_v_in_k ? recipe_ring_cb::k : recipe_ring_cb::v,
+        cb_attention_sink,
+        recipe_ring_cb::derived};
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
     auto* const q_buf = input_tensor_q.buffer();
@@ -3058,6 +3090,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         kernel->named_compile_time_args.emplace_back("sliding_max_source_ranges", sliding_max_source_ranges);
         kernel->named_compile_time_args.emplace_back("sliding_local_first", sliding_local_first);
         kernel->named_compile_time_args.emplace_back("state_cache_slots", state_cache_slots);
+        kernel->named_compile_time_args.emplace_back("latent_v_in_k", latent_v_in_k ? 1u : 0u);
+        kernel->named_compile_time_args.emplace_back("k_cb_entries", k_cb_entries);
         kernel->named_compile_time_args.insert(
             kernel->named_compile_time_args.end(), recipe_args.begin(), recipe_args.end());
     }
