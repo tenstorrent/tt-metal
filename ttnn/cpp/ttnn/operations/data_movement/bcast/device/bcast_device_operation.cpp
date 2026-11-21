@@ -78,6 +78,7 @@ void BcastDeviceOperation::validate_on_program_cache_miss(
         "Input tensor B layout must be TILE but got {}",
         input_tensor_b.layout());
     TT_FATAL(is_floating_point(input_tensor_a.dtype()), "Unsupported data format");
+    TT_FATAL(is_floating_point(input_tensor_b.dtype()), "Unsupported data format for input tensor B");
     if (tensor_args.preallocated_output.has_value()) {
         TT_FATAL(is_floating_point(tensor_args.preallocated_output->dtype()), "Unsupported data format");
         const auto output_spec_required = compute_output_specs(operation_attributes, tensor_args);
