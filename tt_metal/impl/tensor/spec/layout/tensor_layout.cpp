@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <limits>
+#include <numeric>
+
 #include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
@@ -99,7 +102,16 @@ void TensorLayoutImpl::initialize_alignment() {
     }
     for (size_t i = 0; i < default_alignment.size(); i++) {
         size_t result_idx = i + result.size() - default_alignment.size();
-        result[result_idx] = CMAKE_UNIQUE_NAMESPACE::round_up(result[result_idx], default_alignment[i]);
+        // lcm, not rounding up: the padded dimension must be a multiple of both alignments, and rounding the custom one
+        // up to the default isn't always a multiple of the custom one (32 with 48 gives 48).
+        const uint64_t combined =
+            std::lcm(static_cast<uint64_t>(result[result_idx]), static_cast<uint64_t>(default_alignment[i]));
+        TT_FATAL(
+            combined <= std::numeric_limits<uint32_t>::max(),
+            "Alignment {} combined with the default alignment {} doesn't fit into 32 bits",
+            result[result_idx],
+            default_alignment[i]);
+        result[result_idx] = static_cast<uint32_t>(combined);
     }
     alignment_ = Alignment(std::move(result));
 }
@@ -295,15 +307,13 @@ Shape2D TensorLayoutImpl::compute_page_shape(const Shape2D& physical_size) const
 }
 
 Strides TensorLayoutImpl::compute_strides(const tt::tt_metal::Shape& logical_shape) const {
+    // Dense strides of the padded shape, at the logical rank. The padded shape can have a higher rank than the logical
+    // one (0-D and 1-D TILE tensors), so it is indexed from the end.
+    const tt::tt_metal::Shape padded_shape = compute_padded_shape(logical_shape);
     const int rank = static_cast<int>(logical_shape.rank());
-    const int alignment_rank = static_cast<int>(alignment_.size());
     Strides strides(rank, 1);
     for (int i = rank - 2; i >= 0; i--) {
-        strides[i] = strides[i + 1] * logical_shape[i + 1];
-        const int alignment_index = i - (rank - alignment_rank) + 1;
-        if (alignment_index >= 0) {
-            strides[i] = CMAKE_UNIQUE_NAMESPACE::round_up(strides[i], alignment_[alignment_index]);
-        }
+        strides[i] = strides[i + 1] * padded_shape[i + 1 - rank];
     }
     return strides;
 }

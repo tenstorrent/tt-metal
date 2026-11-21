@@ -11,6 +11,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "common_tensor_test_utils.hpp"
 #include "gtest/gtest.h"
+#include <gmock/gmock.h>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tensor/spec/layout/alignment.hpp>
 #include <tt-metalium/tensor/spec/layout/page_config.hpp>
@@ -19,6 +20,7 @@
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt_metal/impl/tensor/spec/layout/tensor_layout_impl.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -70,7 +72,7 @@ INSTANTIATE_TEST_SUITE_P(
             Expected{
                 .physical_size = {5 * 4 * 32, 32},
                 .alignment = tt::tt_metal::Alignment({32, 32}),
-                .strides = tt::tt_metal::Strides({32 * 3 * 4, 32 * 3, 32, 1})}},
+                .strides = tt::tt_metal::Strides({4 * 32 * 32, 32 * 32, 32, 1})}},
 
         // Row Major, bfloat16, requires padding to 2
         TensorLayoutTestParams{
@@ -102,7 +104,7 @@ INSTANTIATE_TEST_SUITE_P(
             Expected{
                 .physical_size = {32, 32},
                 .alignment = tt::tt_metal::Alignment({32, 32}),
-                .strides = tt::tt_metal::Strides({32, 32, 32, 1})}},
+                .strides = tt::tt_metal::Strides({32 * 32, 32 * 32, 32, 1})}},
 
         // Row Major, 1 element
         TensorLayoutTestParams{
@@ -297,13 +299,13 @@ INSTANTIATE_TEST_SUITE_P(
             .padded_shape = Shape{32, 32, 32},
             .expected_alignment = tt::tt_metal::Alignment({1024, 32, 32}),
             .expected_physical_shape = tt::tt_metal::Shape2D{1024, 32},
-            .expected_strides = tt::tt_metal::Strides({640, 32, 1})},
+            .expected_strides = tt::tt_metal::Strides({32 * 32, 32, 1})},
         RowMajorPaddedShapeAlignmentTestParams{
             .shape = Shape{2, 3, 16, 16},
             .padded_shape = Shape{2, 16, 32, 32},
             .expected_alignment = tt::tt_metal::Alignment({1024, 512, 32, 32}),
             .expected_physical_shape = tt::tt_metal::Shape2D{1024, 32},
-            .expected_strides = tt::tt_metal::Strides({1536, 512, 32, 1})}));
+            .expected_strides = tt::tt_metal::Strides({16 * 32 * 32, 32 * 32, 32, 1})}));
 
 // Regression tests for `legacyShapeToAlignment` on TILE-layout tensors that
 // take the "INTERLEAVED with (deprecated) non-height/width padding" branch
@@ -471,6 +473,79 @@ INSTANTIATE_TEST_SUITE_P(
             .tile = Tile({16, 32}),
             .expected_alignment = tt::tt_metal::Alignment({32, 96}),
         }));
+
+// A 2D-sharded tensor keeps the given height padding; a TILE one also keeps the given width padding, while a
+// ROW_MAJOR one is padded to its shard width.
+TEST(TensorLayoutTests, FromPaddedShapeKeepsPaddingOf2DShardedTensors) {
+    const NodeRangeSet nodes(NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}});
+    const auto padded_shape_of =
+        [](const Layout layout, const MemoryConfig& memory_config, const Shape& shape, const Shape& padded_shape) {
+            const TensorLayout tensor_layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+                DataType::BFLOAT16, PageConfig(layout), memory_config, shape, padded_shape);
+            return tensor_layout.impl().compute_padded_shape(shape);
+        };
+
+    const MemoryConfig tile_config{
+        TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, ShardSpec{nodes, {32, 64}, ShardOrientation::ROW_MAJOR}};
+    EXPECT_EQ(padded_shape_of(Layout::TILE, tile_config, Shape{30, 40}, Shape{64, 64}), Shape({64, 64}));
+
+    const MemoryConfig row_major_config{
+        TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, ShardSpec{nodes, {16, 16}, ShardOrientation::ROW_MAJOR}};
+    EXPECT_EQ(padded_shape_of(Layout::ROW_MAJOR, row_major_config, Shape{30, 10}, Shape{32, 12}), Shape({32, 16}));
+}
+
+// A custom alignment is combined with the default one so that the padded shape is a multiple of both.
+TEST(TensorLayoutTests, CustomAlignmentCombinesWithDefaultByLcm) {
+    const MemoryConfig memory_config(
+        BufferType::L1,
+        NdShardSpec{.shard_shape = Shape{1, 48}, .grid = NodeRangeSet(NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}})});
+    const TensorLayout layout = tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
+        DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory_config, tt::tt_metal::Alignment({32}));
+
+    EXPECT_EQ(layout.get_alignment(), tt::tt_metal::Alignment({96}));
+    EXPECT_EQ(layout.impl().compute_padded_shape(Shape{2, 40}), Shape({2, 96}));
+}
+
+// A padded width unrelated to the shard width is not combined with it by lcm: an ND-sharded ROW_MAJOR tensor is padded
+// to the next multiple of its shard width, which keeps a given width that already is one.
+TEST(TensorLayoutTests, FromPaddedShapePadsShardedRowMajorWidthToShard) {
+    const MemoryConfig memory_config(
+        BufferType::L1,
+        NdShardSpec{.shard_shape = Shape{1, 48}, .grid = NodeRangeSet(NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}})});
+    const TensorLayout layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+        DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory_config, Shape{2, 30}, Shape{2, 31});
+
+    EXPECT_EQ(layout.impl().compute_padded_shape(Shape{2, 30}), Shape({2, 48}));
+
+    // A padded width that is already a multiple of the shard width is kept.
+    const TensorLayout wide_layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+        DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory_config, Shape{2, 30}, Shape{2, 96});
+    EXPECT_EQ(wide_layout.impl().compute_padded_shape(Shape{2, 30}), Shape({2, 96}));
+}
+
+// A custom alignment whose lcm with the default one doesn't fit into 32 bits is rejected.
+TEST(TensorLayoutTests, CustomAlignmentRejectsLcmOutside32Bits) {
+    const MemoryConfig memory_config(
+        BufferType::L1,
+        NdShardSpec{.shard_shape = Shape{1, 65536}, .grid = NodeRangeSet(NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}})});
+    EXPECT_THAT(
+        [&] {
+            tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
+                DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory_config, tt::tt_metal::Alignment({65537}));
+        },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("doesn't fit into 32 bits")));
+}
+
+// A sharded memory config without a shard spec is rejected, not dereferenced.
+TEST(TensorLayoutTests, FromPaddedShapeRejectsShardedRowMajorWithoutShardSpec) {
+    const MemoryConfig memory_config{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, std::nullopt};
+    EXPECT_THAT(
+        [&] {
+            tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+                DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory_config, Shape{2, 30}, Shape{2, 32});
+        },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("must have Shard Spec specified")));
+}
 
 struct ConsumedMemoryBytesPerBankTestParams {
     Shape shape;
