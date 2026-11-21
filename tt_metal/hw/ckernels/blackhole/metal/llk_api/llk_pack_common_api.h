@@ -200,10 +200,7 @@ constexpr bool llk_pack_reconfig_table_ok() {
          ckernel::packer::LLK_PACK_RECONFIG_SKIP_ALL) != 0;
     constexpr ckernel::packer::llk_pack_reconfig_profiles_t prof =
         ckernel::packer::llk_pack_reconfig_profiles(pack_src_format, pack_dst_format, pack_tile_num_faces);
-    // SDPA kernels keep the full reconfigure: at k512 the immediates' RMWCIBs after the packer-idle stall cost the pack thread
-    // more than the GPR writes they replace (pack stalls +23 %, joint_sdpa k512 q32 bfp8 +0.3 %).
-    return !LLK_SIZE_MODE && !ckernel::packer::llk_pack_sdpa_api<is_fp32_dest_acc_en * 0 + 1>::value && imm.ok && !skip_all &&
-           prof.n >= 1 && prof.n <= 8;
+    return !LLK_SIZE_MODE && imm.ok && !skip_all && prof.n >= 1 && prof.n <= 8;
 }
 
 template <bool is_fp32_dest_acc_en, std::uint32_t k, bool gate = true>
@@ -301,6 +298,23 @@ inline void llk_pack_reconfig_data_format_body(const std::uint32_t new_output) {
     LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en);
     if constexpr (!gate) {
         TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::UNPACK0);
+    }
+    [[maybe_unused]] constexpr std::uint32_t full_skip = ckernel::packer::
+        llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
+            pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
+    // SDPA kernels: after a push of 8+ tiles (the k512 q chunk's QK row) the full reconfigure, whose GPR writes overlap the
+    // packer drain; after a shorter one the immediates (joint_sdpa k512 bfp8 +0.7 % vs k128 gains).
+    if constexpr (llk_pack_reconfig_table_ok<is_fp32_dest_acc_en, gate>() && ckernel::packer::llk_pack_sdpa_api<gate * 0 + 1>::value) {
+        if (ckernel::packer::pack_sdpa_last_push >= 8) {
+            _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, full_skip, inl, LLK_SIZE_MODE>(
+                pack_src_format[output_id],
+                pack_dst_format[output_id],
+                get_local_cb_interface(output_id).fifo_page_size,
+                tile_c_dim,
+                num_faces,
+                false /* partial_face */);
+            return;
+        }
     }
     if constexpr (llk_pack_reconfig_table_ok<is_fp32_dest_acc_en, gate>() && inl) {
         llk_pack_reconfig_data_format_table_inl<is_fp32_dest_acc_en>(output_id);
@@ -452,7 +466,13 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct_gate
 
 template <bool is_fp32_dest_acc_en, std::uint32_t new_output>
 __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
-    if constexpr (LLK_SIZE_MODE || ckernel::packer::llk_pack_sdpa_api<new_output * 0 + 1>::value) {
+    if constexpr (!LLK_SIZE_MODE && ckernel::packer::llk_pack_sdpa_api<new_output * 0 + 1>::value) {
+        if (ckernel::packer::pack_sdpa_last_push >= 8) {
+            llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_output);
+            return;
+        }
+    }
+    if constexpr (LLK_SIZE_MODE) {
         llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_output);
     } else if constexpr (
         ckernel::packer::llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, DST_SYNC_MODE>() &&

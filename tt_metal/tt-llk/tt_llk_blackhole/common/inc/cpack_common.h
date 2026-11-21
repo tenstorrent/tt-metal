@@ -345,6 +345,8 @@ constexpr std::uint8_t LLK_PACK_STATE_W       = 0x80;
 [[maybe_unused]] static std::uint32_t pack_pre_next = 0;
 // The last release drained the packer and no pack has run since the next section's wait: the push needs no stall of its own.
 [[maybe_unused]] static bool pack_push_drained = false;
+// SDPA kernels: tiles of the last push (llk_push_tiles), which picks the reconfigure form.
+[[maybe_unused]] static std::uint32_t pack_sdpa_last_push = 0;
 constexpr std::uint32_t LLK_PACK_PRE_WRITTEN        = 0x80000000u;
 inline void llk_pack_live_forget()
 {

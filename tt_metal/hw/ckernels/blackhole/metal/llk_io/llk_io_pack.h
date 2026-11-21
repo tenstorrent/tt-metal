@@ -83,6 +83,9 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
 template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
     SYNC_SIGNAL("SYNC-CB-PUSH", operand);
+    if constexpr (ckernel::packer::llk_pack_sdpa_api<push_blocks * 0 + 1>::value) {
+        ckernel::packer::pack_sdpa_last_push = num_tiles;
+    }
     std::uint32_t output = operand;
 
     auto& cb = get_local_cb_interface(output);
