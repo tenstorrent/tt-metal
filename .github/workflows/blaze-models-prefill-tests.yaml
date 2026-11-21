@@ -75,10 +75,10 @@ on:
         type: boolean
         default: false
         description: "MiniMax-M3: every MiniMax leg"
-      mistral4:
+      topk_push_det:
         type: boolean
         default: false
-        description: "Mistral4: every Mistral4 leg (also pulls kv_cache_table)"
+        description: "EXPERIMENT branch: sparse MLA full-layer push determinism repro on 8x4"
       topk_push_long:
         type: boolean
         default: false
