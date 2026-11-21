@@ -20,6 +20,7 @@
 #include <optional>
 #include <random>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -391,6 +392,10 @@ TEST_F(MeshBufferTest2x4, ShardedBufferInitialization) {
     EXPECT_EQ(sharded_buffer->size(), 16 << 10);
     EXPECT_EQ(sharded_buffer->global_layout(), MeshBufferLayout::SHARDED);
     EXPECT_EQ(sharded_buffer->device_local_size(), 2 << 10);
+    EXPECT_THAT(
+        [&] { (void)sharded_buffer->replicated_config(); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Can only query the replicated config for a replicated MeshBuffer")));
 }
 
 TEST_F(MeshBufferTest2x4, ReplicatedBufferInitialization) {
@@ -403,6 +408,30 @@ TEST_F(MeshBufferTest2x4, ReplicatedBufferInitialization) {
     EXPECT_EQ(replicated_buffer->size(), 16 << 10);
     EXPECT_EQ(replicated_buffer->global_layout(), MeshBufferLayout::REPLICATED);
     EXPECT_EQ(replicated_buffer->device_local_size(), 16 << 10);
+    EXPECT_EQ(replicated_buffer->replicated_config().size, 16 << 10);
+}
+
+TEST_F(MeshBufferTest2x4, CreateViewKeepsSourceConfig) {
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+
+    auto replicated_buffer =
+        MeshBuffer::create(ReplicatedBufferConfig{.size = 16 << 10}, device_local_config, mesh_device_.get());
+    auto replicated_view = MeshBuffer::create_view(
+        *replicated_buffer, device_local_config, mesh_device_.get(), replicated_buffer->address());
+    EXPECT_EQ(replicated_view->address(), replicated_buffer->address());
+    EXPECT_EQ(replicated_view->global_layout(), MeshBufferLayout::REPLICATED);
+    EXPECT_EQ(replicated_view->replicated_config().size, 16 << 10);
+
+    const ShardedBufferConfig sharded_config{
+        .global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 32}};
+    auto sharded_buffer = MeshBuffer::create(sharded_config, device_local_config, mesh_device_.get());
+    auto sharded_view =
+        MeshBuffer::create_view(*sharded_buffer, device_local_config, mesh_device_.get(), sharded_buffer->address());
+    EXPECT_EQ(sharded_view->address(), sharded_buffer->address());
+    EXPECT_EQ(sharded_view->global_layout(), MeshBufferLayout::SHARDED);
+    EXPECT_EQ(sharded_view->size(), 16 << 10);
+    EXPECT_EQ(sharded_view->device_local_size(), 2 << 10);
 }
 
 TEST_F(MeshBufferTestSuite, EnqueueWriteMeshBufferValidSrcSize) {

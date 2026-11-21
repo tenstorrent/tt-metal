@@ -630,7 +630,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
             .bottom_up = std::nullopt,
             .sub_device_id = std::nullopt,
         };
-        distributed::MeshBufferConfig mesh_config = distributed::ReplicatedBufferConfig{
+        distributed::ReplicatedBufferConfig mesh_config{
             .size = aligned_shard_size * static_cast<DeviceAddr>(num_workers_),
         };
 

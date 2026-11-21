@@ -9,7 +9,6 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt_stl/overloaded.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/debug/inspector/inspector.hpp"
 #include <map>
@@ -106,22 +105,15 @@ bool is_per_core_allocation(const distributed::MeshBuffer& mesh_buffer) {
 }
 
 std::shared_ptr<distributed::MeshBuffer> create_on_single_device(
-    const distributed::MeshBufferConfig& mesh_buffer_config,
+    const distributed::ReplicatedBufferConfig& replicated_config,
     const distributed::DeviceLocalBufferConfig& device_local_config,
     distributed::MeshDevice* mesh_device,
     const distributed::MeshCoordinate& coord) {
-    const DeviceAddr device_local_size = std::visit(
-        ttsl::overloaded{
-            [](const distributed::ReplicatedBufferConfig& c) { return c.size; },
-            [](const distributed::ShardedBufferConfig& config) {
-                const auto [shard_height, shard_width] = config.physical_shard_shape();
-                return config.compute_datum_size_bytes() * shard_height * shard_width;
-            }},
-        mesh_buffer_config);
+    const DeviceAddr device_local_size = replicated_config.size;
 
     // Create a non-owning MeshBuffer — each device buffer will own its own allocation.
     auto mesh_buffer = std::shared_ptr<distributed::MeshBuffer>(new distributed::MeshBuffer(
-        mesh_buffer_config, device_local_config, /*address=*/0, device_local_size, mesh_device));
+        replicated_config, device_local_config, /*address=*/0, device_local_size, mesh_device));
     mesh_buffer->unique_id_ = BufferImpl::allocate_unique_id();
 
     // Only allocate on the target device.

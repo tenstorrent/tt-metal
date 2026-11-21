@@ -227,6 +227,22 @@ Shape2D ShardedBufferConfig::physical_shard_shape() const {
 }
 
 std::shared_ptr<MeshBuffer> MeshBuffer::create(
+    const ReplicatedBufferConfig& replicated_config,
+    const DeviceLocalBufferConfig& device_local_config,
+    MeshDevice* mesh_device,
+    std::optional<DeviceAddr> address) {
+    return create(MeshBufferConfig(replicated_config), device_local_config, mesh_device, address);
+}
+
+std::shared_ptr<MeshBuffer> MeshBuffer::create_view(
+    const MeshBuffer& source,
+    const DeviceLocalBufferConfig& device_local_config,
+    MeshDevice* mesh_device,
+    DeviceAddr address) {
+    return create(source.config_, device_local_config, mesh_device, address);
+}
+
+std::shared_ptr<MeshBuffer> MeshBuffer::create(
     const MeshBufferConfig& mesh_buffer_config,
     const DeviceLocalBufferConfig& device_local_config,
     MeshDevice* mesh_device,
@@ -575,6 +591,12 @@ DeviceAddr MeshBuffer::size() const {
 MeshBufferLayout MeshBuffer::global_layout() const {
     return std::holds_alternative<ReplicatedBufferConfig>(config_) ? MeshBufferLayout::REPLICATED
                                                                    : MeshBufferLayout::SHARDED;
+}
+
+const ReplicatedBufferConfig& MeshBuffer::replicated_config() const {
+    const auto* replicated_config = std::get_if<ReplicatedBufferConfig>(&config_);
+    TT_FATAL(replicated_config != nullptr, "Can only query the replicated config for a replicated MeshBuffer");
+    return *replicated_config;
 }
 
 const ShardedBufferConfig& MeshBuffer::global_shard_spec() const {

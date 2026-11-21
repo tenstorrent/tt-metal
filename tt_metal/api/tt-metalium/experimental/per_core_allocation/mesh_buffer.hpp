@@ -30,7 +30,7 @@ bool is_per_core_allocation(const distributed::MeshBuffer& mesh_buffer);
 
 // Creates a MeshBuffer that only allocates on a single device within the mesh.
 std::shared_ptr<distributed::MeshBuffer> create_on_single_device(
-    const distributed::MeshBufferConfig& mesh_buffer_config,
+    const distributed::ReplicatedBufferConfig& replicated_config,
     const distributed::DeviceLocalBufferConfig& device_local_config,
     distributed::MeshDevice* mesh_device,
     const distributed::MeshCoordinate& coord);
