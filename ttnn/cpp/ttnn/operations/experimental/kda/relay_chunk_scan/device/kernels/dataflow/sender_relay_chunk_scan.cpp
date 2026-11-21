@@ -38,9 +38,10 @@ static_assert(
 
 // Sender core: the relay's sender of a link reads each finished tile column out of its heads' relay cores and forwards
 // it into the head's slot of the successor's landing buffer (the first rank's final-state slot, from the last rank)
-// over the fabric. On the chronologically first rank, every sender then multicasts the final carry the relay cores
-// form, carry_range ranks along its one connection (or unicasts it to each of them), into the head's final-state slot
-// of every rank's relay core, which writes it out; together a link's senders reach every other rank once.
+// over the fabric. On the final carry's source (kda_relay::final_from_last: the chronologically last rank, whose final
+// states are the carries, else the first), every sender then multicasts the final carry the relay cores form,
+// carry_range ranks along its one connection (or unicasts it to each of them), into the head's final-state slot of
+// every rank's relay core, which writes it out; together a link's senders reach every other rank once.
 void kernel_main() {
     size_t arg = 0;
     const uint32_t start_address = get_common_arg_val<uint32_t>(0);
@@ -79,6 +80,11 @@ void kernel_main() {
         kda_chronology::derive(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage)[0], sp_rank, sp_size, local_rows);
     const uint32_t position = (topology.rank + sp_size - topology.first_rank) % sp_size;
     const bool last = position == sp_size - 1;
+    // The final carry's source (kda_relay::final_from_last): on its way from the last rank the final state is the final
+    // carry, and the relay's hand-off to the first rank gives way to it.
+    const bool final_from_last = !topology.split;
+    const bool relays = relay && !(final_from_last && last);
+    const bool carry_source = final_from_last ? last : position == 0;
 
     RoutingPlaneConnectionManager fabric;
     open_connections(fabric, connections, arg);
@@ -154,7 +160,7 @@ void kernel_main() {
     // A unit's packets, each `chunk_bytes` but the last.
     const auto chunk_size = [](uint32_t c) { return c + 1 == chunks ? unit_bytes - c * chunk_bytes : chunk_bytes; };
 
-    if (relay) {
+    if (relays) {
         auto* to_successor = &fabric.get(0).sender;
         for (uint32_t b = 0; b < slots; ++b) {
             for (uint32_t c = 0; c < chunks; ++c) {
@@ -202,7 +208,7 @@ void kernel_main() {
     }
 
     const auto carries = [&](uint32_t h) { return get_arg_val<uint32_t>(carries_args + h) != 0; };
-    if (position == 0 && carry_range != 0) {
+    if (carry_source && carry_range != 0) {
         // The final carry, a head's columns after its relay's on the relay's sender: each column into the head's
         // final-state slot of its relay core on every rank this sender reaches (the same core everywhere), counted
         // there in the final semaphore with the column's last packet.
@@ -217,7 +223,7 @@ void kernel_main() {
         if constexpr (unicast_peers) {
             // Unicast: a slot's headers per unit and rank in flight, rerouted to the next rank once flushed.
             uint32_t group = 0;
-            stream(relay ? kt : 0, carries, [&](uint32_t u, uint32_t slot, uint32_t buffer) {
+            stream(relays ? kt : 0, carries, [&](uint32_t u, uint32_t slot, uint32_t buffer) {
                 for (uint32_t peer = 0; peer < carry_range; ++peer) {
                     if (group != 0 && group % slots == 0) {
                         noc_async_writes_flushed();
@@ -269,7 +275,7 @@ void kernel_main() {
                 }
             }
             auto* sender = &fabric.get(0).sender;
-            stream(relay ? kt : 0, carries, [&](uint32_t u, uint32_t slot, uint32_t buffer) {
+            stream(relays ? kt : 0, carries, [&](uint32_t u, uint32_t slot, uint32_t buffer) {
                 for (uint32_t c = 0; c < chunks; ++c) {
                     const auto command = destination(u, c);
                     if (c + 1 == chunks) {
