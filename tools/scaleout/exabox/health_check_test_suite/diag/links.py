@@ -89,17 +89,17 @@ def link_ends(disc: dict, a: int, b: int, channels: list[int]) -> list[dict]:
 
 def name_chips(report: dict) -> None:
     """Add to every check of the *report*: ``bdf``, ``tray`` and ``asic`` (parallel lists, one entry per Galaxy chip the check
-    names, empty when it names none) and ``link_ends`` (the links it names). A check names chips in its data: ``missing``
-    (chips, as naming.chip), ``failed_chips`` (BDFs) and the ends of ``link_ends``; nothing is read from its text.
+    blames, empty when it blames none) and ``link_ends`` (the links it names). A check blames chips in its data:
+    ``blamed_chips`` (only the failing or warned ones, as naming.chip) and the ends of ``link_ends``; nothing is read
+    from its text.
     """
     for phase in report["phases"].values():
         for c in phase["checks"]:
             d = c["data"]
             ends = d.get("link_ends", [])
-            bdfs = [m["bdf"] for m in d.get("missing", []) if isinstance(m, dict) and "bdf" in m]
-            bdfs += d.get("failed_chips", []) + [e["bdf"] for l in ends for e in l.values()]
-            chips = {b: n for b in bdfs if (n := chip(b))["tray"] is not None}
-            c["bdf"], c["tray"], c["asic"] = ([n[k] for n in chips.values()] for k in ("bdf", "tray", "asic"))
+            bdfs = [m["bdf"] for m in d.get("blamed_chips", [])] + [e["bdf"] for l in ends for e in l.values()]
+            named = {b: n for b in bdfs if (n := chip(b))["tray"] is not None}
+            c["bdf"], c["tray"], c["asic"] = ([n[k] for n in named.values()] for k in ("bdf", "tray", "asic"))
             c["link_ends"] = ends
 
 

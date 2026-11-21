@@ -14,6 +14,11 @@ def chip(bdf: str) -> dict:
     return {"bdf": bdf, "tray": tray, "asic": asic}
 
 
+def blamed(bdfs) -> list[dict]:
+    """``chip`` for each distinct BDF, in order: what a check stores in ``data["blamed_chips"]`` for the chips it blames."""
+    return [chip(b) for b in dict.fromkeys(bdfs)]
+
+
 def port_name(ptype: str, pid: int) -> str:
     """'QSFP P3' for the cage ports, 'TRACE P9' and the like for the built-in ones."""
     return f"{'QSFP' if ptype == 'QSFP_DD' else ptype} P{pid}"

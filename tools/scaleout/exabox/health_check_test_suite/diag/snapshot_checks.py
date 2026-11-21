@@ -24,7 +24,7 @@ from .galaxy import (
     parse_bdf_physical,
 )
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
-from .naming import chip
+from .naming import blamed, chip
 
 # GDDR train+BIST bitmask layout — tt-system-firmware telemetry.h:103-118.
 # Exposed by tt-smi -s as smbus_telem.DDR_STATUS (legacy WH name; on BH this is
@@ -81,6 +81,7 @@ def pcie_enum_check(devs: list[dict], name: str = "pcie_enum_count") -> Check:
             "expected": EXPECTED_CHIP_COUNT,
             "missing_bdfs": missing_bdfs_enum,
             "missing": [chip(b) for b in missing_bdfs_enum],
+            "blamed_chips": blamed(missing_bdfs_enum),
             "actual_bdfs": actual_bdfs,
         },
         ip="pcie",
@@ -146,6 +147,7 @@ def _thermal_and_telemetry(devs: list[dict], phase: Phase) -> None:
                 "hottest_temp_c": top["asic_temperature"] if top else None,
                 "over": [r["bdf"] for r in over],
                 "warm": [r["bdf"] for r in warm],
+                "blamed_chips": blamed(r["bdf"] for r in over + warm),
                 "per_chip": rows,
                 "ignored": ignored,
             },
@@ -169,7 +171,7 @@ def _thermal_and_telemetry(devs: list[dict], phase: Phase) -> None:
             status=WARN if flagged else PASS,
             details="; ".join(f"{format_bdf(f['bdf'])} {f['why']}" for f in flagged)
             or f"temperature, power, current and vcore in range on {len(rows)} chips",
-            data={"flagged": flagged, "ignored": ignored},
+            data={"flagged": flagged, "ignored": ignored, "blamed_chips": blamed(f["bdf"] for f in flagged)},
             ip="asic",
         )
     )
@@ -261,7 +263,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             status=PASS if all(dram_ok) else FAIL,
             details=f"{sum(dram_ok)}/{n} dram_status=True"
             + (f"; failed: [{', '.join(format_bdf(b) for b in bad)}]" if bad else ""),
-            data={"failed_chips": bad},
+            data={"failed_chips": bad, "blamed_chips": blamed(bad)},
             ip="gddr",
         )
     )
@@ -275,7 +277,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             status=PASS if not gddr_bad else FAIL,
             details=f"{n - len(gddr_bad)}/{n} chips have ENABLED_GDDR=0xff"
             + (f"; partial: [{', '.join(f'{format_bdf(b)}={m}' for b, m in gddr_bad[:5])}]" if gddr_bad else ""),
-            data={"partial_chips": gddr_bad},
+            data={"partial_chips": gddr_bad, "blamed_chips": blamed(b for b, _ in gddr_bad)},
             ip="gddr",
         )
     )
@@ -290,7 +292,11 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             name="harvesting_state",
             status=PASS if not harv_bad else FAIL,
             details=f"{n - len(harv_bad)}/{n} chips have HARVESTING_STATE in {{0,1}}",
-            data={"harvested_chips": harv_bad, "distribution": dict(Counter(harv))},
+            data={
+                "harvested_chips": harv_bad,
+                "distribution": dict(Counter(harv)),
+                "blamed_chips": blamed(b for b, _ in harv_bad),
+            },
             ip="asic",
             console_visible=False,
         )
@@ -335,6 +341,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                 "missing": missing,
                 "missing_trays": missing_trays,
                 "missing_bdfs": missing_bdfs,
+                "blamed_chips": blamed(missing_bdfs),
             },
             ip="asic",
         )
@@ -367,7 +374,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             status=PASS if not mismatches else FAIL,
             details=f"{n - len(mismatches)}/{n} chips match"
             + (f"; mismatches: [{'; '.join(_fmt_mismatch(m) for m in mismatches[:3])}]" if mismatches else ""),
-            data={"mismatches": mismatches},
+            data={"mismatches": mismatches, "blamed_chips": blamed(m["bdf"] for m in mismatches)},
             ip="asic",
         )
     )
@@ -474,7 +481,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                 if train_failures
                 else ""
             ),
-            data={"failures": train_failures},
+            data={"failures": train_failures, "blamed_chips": blamed(f["bdf"] for f in train_failures)},
             ip="gddr",
         )
     )
@@ -488,7 +495,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                 if bist_failures
                 else ""
             ),
-            data={"failures": bist_failures},
+            data={"failures": bist_failures, "blamed_chips": blamed(f["bdf"] for f in bist_failures)},
             ip="gddr",
         )
     )
@@ -540,7 +547,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                     else ""
                 )
             ),
-            data={"mismatches": lane_mismatches},
+            data={"mismatches": lane_mismatches, "blamed_chips": blamed(m["bdf"] for m in lane_mismatches)},
             ip="pcie",
         )
     )
@@ -755,7 +762,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                     f"first failure: {format_bdf(first['bdf'])} "
                     f"down_ports={first['down_ports']}"
                 ),
-                data={"failures": eth_link_failures},
+                data={"failures": eth_link_failures, "blamed_chips": blamed(f["bdf"] for f in eth_link_failures)},
                 ip="eth",
             )
         )

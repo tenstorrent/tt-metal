@@ -28,7 +28,7 @@ import tiers  # noqa: E402
 from diag import busbar, links  # noqa: E402
 from diag.aer import aer_check, aer_new  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, Check, Phase  # noqa: E402
-from diag.naming import link_end  # noqa: E402
+from diag.naming import chip, link_end  # noqa: E402
 
 
 def _steps(mode, **kw):
@@ -453,6 +453,63 @@ class TestLinks(unittest.TestCase):
         got = report["phases"]["snapshot"]["checks"][0]
         self.assertEqual((got["status"], got["bdf"], got["tray"], got["asic"]), (FAIL, [bdfs[0]], [1], [1]))
 
+    def test_every_chip_blaming_check_names_exactly_the_bad_chip(self):
+        from diag.eth_status import PcieFunction, pcie_gate_check
+        from diag.galaxy import expected_bdf, parse_bdf_physical
+        from diag.snapshot_checks import validate_snapshot
+
+        bad = "0000:41:00.0"
+
+        def dev(bdf):
+            _, asic = parse_bdf_physical(bdf)
+            board = {"bus_id": bdf, "dram_status": True, "pcie_width": "8" if asic == 6 else "1"}
+            smbus = {"ENABLED_GDDR": "0xff", "HARVESTING_STATE": "0x0", "ASIC_LOCATION": hex(asic)}
+            telem = {"asic_temperature": "45.0", "power": "120.0", "current": "90.0", "voltage": "0.75"}
+            return {
+                "board_info": board,
+                "telemetry": telem,
+                "limits": {"thm_limit": "100"},
+                "smbus_telem": {**smbus, "DDR_STATUS": "0x55555555"},
+            }
+
+        devs = [dev(expected_bdf(t, a)) for t in range(1, 5) for a in range(1, 9)]
+        i = next(i for i, d in enumerate(devs) if d["board_info"]["bus_id"] == bad)
+        devs[i]["board_info"].update(dram_status=False, pcie_width="4")
+        devs[i]["telemetry"]["asic_temperature"] = "101.0"
+        devs[i]["smbus_telem"].update(
+            ENABLED_GDDR="0x7f", HARVESTING_STATE="0x5", ASIC_LOCATION="0x3", DDR_STATUS="0x0"
+        )
+        phase = Phase(name="snapshot")
+        validate_snapshot({"device_info": devs}, phase)
+        checks = [asdict(c) for c in phase.checks]
+        checks.append(asdict(pcie_gate_check([PcieFunction(bad, 0xFFFF, 0)])))
+        checks.append(asdict(pcie_gate_check([PcieFunction(bad, None, None)])))
+        checks.append(asdict(aer_check({bad: {"fatal": 1}, "0000:42:00.0": {"corr": 1}}, 1.0)))
+        report = {"phases": {"all": {"checks": checks}}}
+        links.name_chips(report)
+        named = {}
+        for c in checks:
+            self.assertIn((c["bdf"], c["tray"], c["asic"]), (([], [], []), ([bad], [2], [1])), c["name"])
+            if c["bdf"]:
+                named.setdefault(c["name"], []).append(c["status"])
+        self.assertEqual(
+            {n: sorted(set(v)) for n, v in named.items()},
+            {
+                "dram_status": [FAIL],
+                "enabled_gddr_full": [FAIL],
+                "harvesting_state": [FAIL],
+                "asic_location_per_ubb": [FAIL],
+                "physical_vs_fw_location": [FAIL],
+                "gddr_training_per_channel": [FAIL],
+                "gddr_bist_per_channel": [FAIL],
+                "pcie_lane_width": [FAIL],
+                "asic_thermal_precheck": [FAIL],
+                "c8_telemetry": ["WARN"],
+                "eth_status_pcie_gate": [FAIL, "WARN"],
+                "pcie_aer_delta": [FAIL],
+            },
+        )
+
     def test_report_checks_name_their_chips_and_link_ends(self):
         ends = links.link_ends(self._disc(), 0, 1, [0])
         report = {
@@ -466,7 +523,13 @@ class TestLinks(unittest.TestCase):
                             "data": {"failed": [{"pair": "01:00.0-02:00.0", "ends": ends}], "link_ends": ends},
                         },
                         {"name": "x", "status": "PASS", "details": "at 04:00.0 on 0000:c1:00.0", "data": {}},
-                        {"name": "dram", "status": "FAIL", "details": "", "data": {"failed_chips": ["0000:c1:00.0"]}},
+                        {
+                            "name": "dram",
+                            "status": "FAIL",
+                            "details": "",
+                            "data": {"blamed_chips": [chip("0000:c1:00.0")]},
+                        },
+                        {"name": "old", "status": "FAIL", "details": "", "data": {"failed_chips": ["0000:c1:00.0"]}},
                         {"name": "none", "status": "PASS", "details": "", "data": {}},
                     ]
                 }
@@ -474,11 +537,12 @@ class TestLinks(unittest.TestCase):
         }
         before = json.loads(json.dumps(report))
         links.name_chips(report)
-        a, x, dram, none = report["phases"]["links"]["checks"]
+        a, x, dram, old, none = report["phases"]["links"]["checks"]
         self.assertEqual((a["bdf"], a["tray"], a["asic"]), (["0000:01:00.0", "0000:02:00.0"], [1, 1], [1, 2]))
         self.assertEqual(a["link_ends"], ends)
         self.assertEqual((x["bdf"], x["link_ends"]), ([], []))  # a BDF or time in the text names nothing
         self.assertEqual((dram["bdf"], dram["tray"], dram["asic"]), (["0000:c1:00.0"], [3], [1]))
+        self.assertEqual(old["bdf"], [])  # only blamed_chips and link_ends name chips
         self.assertEqual((none["bdf"], none["tray"], none["asic"], none["link_ends"]), ([], [], [], []))
         for old, new in zip(before["phases"]["links"]["checks"], report["phases"]["links"]["checks"]):
             self.assertEqual(old, {k: new[k] for k in old})  # only keys were added
@@ -505,7 +569,7 @@ class TestTierAndAer(unittest.TestCase):
 
     def test_aer_data_holds_only_the_diff(self):
         c = aer_check(aer_new({"0000:01:00.0": {"corr": 0}}, {"0000:01:00.0": {"corr": 1}}), 1.0)
-        self.assertEqual(set(c.data), {"hours", "new", "flagged"})
+        self.assertEqual(set(c.data), {"hours", "new", "flagged", "blamed_chips"})
 
 
 if __name__ == "__main__":
