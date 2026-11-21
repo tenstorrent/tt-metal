@@ -23,7 +23,10 @@
 #include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.hpp"
+#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp"
@@ -2192,4 +2195,72 @@ TEST_F(FusedOpHookLabel2x4Test, AllGatherConcatRenumbersTheHeadsShardOfAnNdLabel
     const auto labels = AllGatherConcatDeviceOperation::compute_output_topologies(params, args);
     ASSERT_EQ(labels.size(), 1u);
     EXPECT_EQ(labels[0], nd_label(shape, {TopoShard{3}, TopoReplicate{}}));
+}
+
+TEST_F(FusedOpHookLabel2x4Test, FusedCclMatmulOpsRejectTransposeAAndTransposeB) {
+    auto& mesh = *mesh_device_;
+    const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(mesh);
+    const ttnn::Tensor a = mesh_tensor(mesh, ttnn::Shape{1, 1, 32, 64}, *replicate);
+    const ttnn::Tensor b = mesh_tensor(mesh, ttnn::Shape{1, 1, 64, 64}, *replicate);
+    ttnn::Tensor out = mesh_tensor(mesh, ttnn::Shape{1, 1, 32, 64}, *replicate);
+    const tt::tt_metal::CoreRangeSet sem_cores{
+        tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}}};
+    const auto sem = ttnn::global_semaphore::create_global_semaphore(&mesh, sem_cores, 0);
+
+    for (const auto& [transpose_a, transpose_b] : {std::pair{true, false}, std::pair{false, true}, std::pair{true, true}}) {
+        EXPECT_ANY_THROW(ttnn::prim::all_gather_matmul_async(
+            a,
+            b,
+            /*persistent_output_buffer=*/std::nullopt,
+            /*dim=*/3,
+            /*multi_device_global_semaphore=*/{sem},
+            /*all_gather_core_grid_offset=*/tt::tt_metal::CoreCoord{0, 0},
+            /*bias=*/std::nullopt,
+            /*num_links=*/1,
+            /*memory_config_ag=*/std::nullopt,
+            ttnn::ccl::Topology::Ring,
+            /*barrier_semaphore=*/std::nullopt,
+            /*sub_device_id=*/std::nullopt,
+            /*memory_config_mm=*/std::nullopt,
+            transpose_a,
+            transpose_b));
+
+        EXPECT_ANY_THROW(ttnn::prim::matmul_reduce_scatter_async(
+            a,
+            b,
+            /*persistent_intermediate_buffer=*/out,
+            /*persistent_output_buffer=*/out,
+            /*dim=*/3,
+            /*multi_device_global_semaphore=*/{sem},
+            /*reduce_scatter_core_grid_offset=*/tt::tt_metal::CoreCoord{0, 0},
+            /*barrier_semaphore=*/std::nullopt,
+            /*bias=*/std::nullopt,
+            /*num_links=*/1,
+            /*memory_config_rs=*/std::nullopt,
+            /*intermediate_memory_config_rs=*/std::nullopt,
+            ttnn::ccl::Topology::Ring,
+            /*sub_device_id=*/std::nullopt,
+            /*memory_config_mm=*/std::nullopt,
+            transpose_a,
+            transpose_b));
+
+        EXPECT_ANY_THROW(ttnn::prim::llama_rs_matmul(
+            a,
+            b,
+            /*rs_tensor=*/a,
+            /*intermediate_packet_buffer=*/out,
+            /*dim=*/3,
+            sem,
+            /*cluster_axis=*/1,
+            /*ring_devices=*/4,
+            /*num_links=*/1,
+            mesh.get_sub_device_ids().at(0),
+            /*memory_config_rs=*/std::nullopt,
+            /*memory_config_mm=*/std::nullopt,
+            /*compute_kernel_config=*/std::nullopt,
+            /*global_cb=*/std::nullopt,
+            /*core_grid=*/std::nullopt,
+            transpose_a,
+            transpose_b));
+    }
 }
