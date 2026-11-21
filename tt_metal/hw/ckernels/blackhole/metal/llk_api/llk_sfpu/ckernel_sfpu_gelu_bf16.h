@@ -18,7 +18,7 @@ inline bool bf16_dest_gelu() {
     return false;
 #endif
 }
-// calculate_zone_affine_even_decay's instructions in a stall-filling order, constants held in LRegs.
+// The kernel's instructions in a stall-filling order, constants held in LRegs.
 inline void calculate_gelu_bf16_scheduled() {
     TTI_SFPLOADI(7, 2, 0xaa3b);
     TTI_SFPLOADI(7, 8, 0xbf38);

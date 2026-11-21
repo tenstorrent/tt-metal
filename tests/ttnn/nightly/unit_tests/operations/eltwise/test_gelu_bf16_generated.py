@@ -54,18 +54,8 @@ def test_gelu_bf16_unflushed_zero_and_subnormal_inputs(device):
 
 
 def test_gelu_bf16_bfloat8_b(device):
-    """bfloat8_b in and out: PCC 0.999 against torch, and each output within one bfloat8_b step of the BF16 call's
-    packed to bfloat8_b (two in a block holding an infinity or NaN)."""
-    torch.manual_seed(0)
-    x = torch.empty(1, 1, 64, 64).uniform_(-10.0, 10.0).to(torch.bfloat16)
-    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-    stored = ttnn.to_torch(tt_x).to(torch.float64).flatten()
-    output = ttnn.gelu(tt_x)
-    assert output.dtype == ttnn.bfloat8_b
-    actual = ttnn.to_torch(output).to(torch.float64).flatten()
-    golden = ttnn.get_golden_function(ttnn.gelu)(stored).to(torch.float64)
-    pcc = torch.corrcoef(torch.stack([actual, golden]))[0, 1].item()
-    assert pcc >= 0.999, f"PCC {pcc:.6f} against torch"
+    """bfloat8_b in and out: each output within one bfloat8_b step of the BF16 call's packed to bfloat8_b (two in a
+    block holding an infinity or NaN). The exhaustive case holds the BF16 call to torch on every input."""
     # Every finite BF16 exponent and +-0, one exponent per 16-value face row.
     words = torch.arange(1 << 16, dtype=torch.int32)
     exponent = (words >> 7) & 0xFF
@@ -75,7 +65,9 @@ def test_gelu_bf16_bfloat8_b(device):
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     stored = ttnn.to_torch(tt_x).to(torch.bfloat16)
     tt_stored = ttnn.from_torch(stored, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    actual = ttnn.to_torch(ttnn.gelu(tt_x)).to(torch.float32).flatten()
+    output = ttnn.gelu(tt_x)
+    assert output.dtype == ttnn.bfloat8_b
+    actual = ttnn.to_torch(output).to(torch.float32).flatten()
     expected = ttnn.to_torch(ttnn.typecast(ttnn.gelu(tt_stored), ttnn.bfloat8_b)).to(torch.float32).flatten()
     # One step of a Bfp8_b block: 7 bits under the largest of its 16 values' exponent.
     finite = torch.isfinite(actual) & torch.isfinite(expected)
@@ -133,9 +125,8 @@ def test_gelu_bf16_nonfinite_inputs(device):
 def test_gelu_bf16_exhaustive_inputs(device):
     """All 65,536 BF16 inputs: torch's result as stored, within STEPS BF16 steps.
 
-    SKIP lists inputs the LLK sweep judges instead. MODEL: per board, the kernel's offset in BF16 steps from torch's word.
+    SKIP lists inputs the LLK sweep judges instead. MODEL: the kernel's offset in BF16 steps from torch's word.
     """
-    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     STEPS = 1
     SKIP = [(0x0003, 0x00FE), (0x8004, 0x80FE), (0xC0F9, 0xC101), (0xC103, 0xC158)]
     MODEL = {
