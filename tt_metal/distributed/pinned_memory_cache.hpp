@@ -5,10 +5,14 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <iosfwd>
 #include <list>
 #include <memory>
 #include <mutex>
 #include <set>
+#include <string_view>
 #include <unordered_map>
 
 #include <tt-metalium/experimental/pinned_memory.hpp>
@@ -26,6 +30,32 @@ class MeshCoordinateRangeSet;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::experimental {
+
+enum class PrivateFileMapping { NotFound, Found, Unknown };
+enum class MapsSource { None, Ioctl, Text };  // which path answered find_private_file_mapping
+
+// Whether [address, address + size) overlaps a MAP_PRIVATE mapping with an inode, from the calling thread's maps
+// (PROCMAP_QUERY on Linux 6.11+, else their text). Unknown unless the maps can be read and cover the whole range.
+PrivateFileMapping find_private_file_mapping(
+    const void* address, size_t size, const char* maps_path = "/proc/thread-self/maps", MapsSource* source = nullptr);
+
+// The same question for maps text: "begin-end perms offset dev inode [path]" lines in address order.
+PrivateFileMapping find_private_file_mapping_in_maps_text(std::istream& maps, uintptr_t begin, uintptr_t end);
+
+// try_pin's read-only decline (#63423): false for a private file mapping, and for Unknown, which also warns the first
+// time `unknown_warning` sees one, through `warn` if given, else log_warning. True when the pin may go ahead.
+bool read_only_pin_allowed(
+    const void* address,
+    size_t size,
+    PrivateFileMapping mapping,
+    std::once_flag& unknown_warning,
+    const std::function<void(std::string_view)>& warn = {});
+// The same with one flag for the whole process, so try_pin warns about Unknown at most once.
+bool read_only_pin_allowed(
+    const void* address,
+    size_t size,
+    PrivateFileMapping mapping,
+    const std::function<void(std::string_view)>& warn = {});
 
 /**
  * @brief LRU cache for PinnedMemory objects, keyed by host buffer address.
@@ -61,7 +91,8 @@ public:
      * PinnedMemory immediately. Otherwise evicts global LRU entries to make
      * room under the cache-size limit, then creates a new one, retrying after
      * evicting LRU entries on the target MMIO device if creation fails.
-     * Returns nullptr on permanent failure (not an error condition).
+     * Returns nullptr on permanent failure (not an error condition). A new device-read-only pin is also declined when
+     * the buffer overlaps a private file mapping (#63423) or when the thread's maps cannot rule that out.
      *
      * @param mesh_device          Mesh device to pin for.
      * @param coordinate_range_set Set of device coordinates to pin for.

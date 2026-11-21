@@ -72,16 +72,14 @@ void write_tensor_file(
 // a `MemoryPin`. `file_name` is used for error reporting only.
 //
 // The mapping is MAP_SHARED wherever the filesystem allows it, because uploads pin it read-only as a device DMA
-// source. A long-term pin of a MAP_PRIVATE file mapping makes the kernel first copy every page into private anonymous
-// memory (copy-on-write unshare), which is slower than the upload itself and doubles resident memory; a shared
+// source; a MAP_PRIVATE mapping is copied instead, as its read-only pin can loop in the kernel (#63423). A shared
 // mapping is pinned in place. The cost of pinning in place is that the device reads the file's page cache: writing
-// the file in place while a pin is cached changes what later uploads from that pin transfer, where the private copies
-// made for a MAP_PRIVATE pin would not have changed. `write_tensor_file` replaces a file instead of writing it in
-// place, so only other writers can do that.
+// the file in place while a pin is cached changes what later uploads from that pin transfer. `write_tensor_file`
+// replaces a file instead of writing it in place, so only other writers can do that.
 //
 // Some filesystems accept MAP_PRIVATE but refuse MAP_SHARED: FUSE in direct-I/O mode fails a shared mapping with
-// ENODEV unless the server allows it. The mapping then falls back to MAP_PRIVATE, which loads correctly and pays the
-// copy above on a pinned upload.
+// ENODEV unless the server allows it. The mapping then falls back to MAP_PRIVATE, which loads correctly; uploads
+// from it are copied, not pinned.
 std::shared_ptr<void> map_tensor_file(int fd, size_t file_size, std::string_view file_name);
 
 }  // namespace ttnn
