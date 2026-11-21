@@ -82,3 +82,19 @@ def test_local_rmsnorm_rope(mesh_device, heads):
     for device_index, out in enumerate(first):
         pcc = _pcc(out, expected[0])
         assert pcc > 0.999, f"device {device_index}: pcc={pcc}"
+
+
+@pytest.mark.parametrize("op", ["dit_fused_distributed_rmsnorm", "dit_fused_distributed_layernorm"])
+def test_dit_fused_distributed_norm_rejects_zero_heads(device, expect_error, op):
+    grid = device.compute_with_storage_grid_size()
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    x = ttnn.from_torch(torch.randn(1, 1, 32, 128).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "num_heads_per_device must be >= 1"):
+        getattr(ttnn.experimental, op)(
+            x,
+            cluster_axis=1,
+            mesh_device=device,
+            multi_device_global_semaphore=[ttnn.create_global_semaphore(device, cores, 0)],
+            topology=ttnn.Topology.Linear,
+            num_heads_per_device=0,
+        )

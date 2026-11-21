@@ -27,6 +27,12 @@ void StridedAllGatherMinimalMatmulAsync::validate_on_program_cache_miss(
     TT_FATAL(
         tensor_args.fused_ternary_input_a.has_value() == tensor_args.fused_ternary_input_b.has_value(),
         "StridedAllGatherMinimalMatmulAsync fused addcmul requires both ternary inputs (a and b) or neither.");
+    if (attributes.matmul_struct.config.has_value()) {
+        const auto& config = attributes.matmul_struct.config.value();
+        TT_FATAL(
+            config.M_block_size > 0 && config.K_block_size > 0 && config.N_block_size > 0,
+            "StridedAllGatherMinimalMatmulAsync requires block sizes > 0");
+    }
 
     // SwiGLU packs gate/up tile-pairs along the weight's N, so the weight width must be an even
     // number of tiles; each pair collapses to one output tile. Restated here because this op does
@@ -97,7 +103,11 @@ StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalM
     tt::tt_metal::TensorSpec strided_all_gather_output_shape = StridedAllGatherAsync::compute_output_specs(
         attributes.strided_all_gather_async_struct, StridedAllGatherAsyncInputs{tensor_args.input_tensor});
 
-    // Matmul specs: one per output chunk (chunks == 1 by default)
+    // Matmul specs: one per output chunk (chunks == 1 by default). They split N by chunks, and run before validate.
+    TT_FATAL(
+        attributes.matmul_struct.chunks >= 1,
+        "StridedAllGatherMinimalMatmulAsync requires chunks >= 1, got chunks={}",
+        attributes.matmul_struct.chunks);
     auto minimal_matmul_output_specs_vec = matmul_device_operation_t::compute_output_specs(
         attributes.matmul_struct, {tensor_args.input_tensor, tensor_args.weight_tensor});
 
