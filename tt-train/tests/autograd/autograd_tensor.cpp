@@ -10,8 +10,12 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
+#include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "models/common/transformer_common.hpp"
+#include "ops/binary_ops.hpp"
+#include "ops/unary_ops.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/adamw_composite.hpp"
 #include "optimizers/sgd.hpp"
@@ -30,6 +34,12 @@ public:
 
     static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
+    }
+
+protected:
+    void TearDown() override {
+        ttml::autograd::ctx().set_gradient_mode(ttml::autograd::GradMode::ENABLED);
+        ttml::autograd::ctx().reset_graph();
     }
 };
 
@@ -390,4 +400,96 @@ TEST_F(AutogradTensorTest, FusedAdamWWithStochasticRoundingUpdatesFp32Parameter)
     config.stochastic_rounding = true;
     optimizers::AdamW optimizer(serialization::NamedParameters{{"theta", theta}}, config);
     expect_views_track({{"theta", theta}}, autograd::PreferredPrecision::HALF, [&] { optimizer.step(); });
+}
+
+
+TEST_F(AutogradTensorTest, GradModeDisabledSetsRequiresGradFalseAcrossAllOverloads) {
+    auto* device = &autograd::ctx().get_device();
+    auto x = autograd::create_tensor(core::ones(kShape, device, ttnn::DataType::BFLOAT16), /*requires_grad=*/true);
+    auto w = autograd::create_tensor(core::ones(kShape, device, ttnn::DataType::BFLOAT16), /*requires_grad=*/true);
+    autograd::TensorPtr null_tensor = nullptr;
+
+    autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED);
+
+    bool variadic_called = false;
+    auto out_variadic =
+        autograd::create_tensor(core::ones(kShape, device, ttnn::DataType::BFLOAT16), /*requires_grad=*/true);
+    out_variadic->set_node(
+        autograd::add_backward_node([&]() { variadic_called = true; }, out_variadic, x, null_tensor, w));
+    EXPECT_FALSE(out_variadic->get_requires_grad());
+    EXPECT_FALSE(out_variadic->get_node().has_value());
+
+    bool vector_called = false;
+    auto out_vector =
+        autograd::create_tensor(core::ones(kShape, device, ttnn::DataType::BFLOAT16), /*requires_grad=*/true);
+    std::vector<autograd::TensorPtr> vec_inputs = {x, nullptr, w};
+    out_vector->set_node(autograd::add_backward_node([&]() { vector_called = true; }, out_vector, vec_inputs));
+    EXPECT_FALSE(out_vector->get_requires_grad());
+    EXPECT_FALSE(out_vector->get_node().has_value());
+
+    bool always_called = false;
+    auto out_always =
+        autograd::create_tensor(core::ones(kShape, device, ttnn::DataType::BFLOAT16), /*requires_grad=*/true);
+    out_always->set_node(autograd::add_backward_node_always([&]() { always_called = true; }, out_always, x));
+    EXPECT_FALSE(out_always->get_requires_grad());
+    EXPECT_FALSE(out_always->get_node().has_value());
+
+    EXPECT_FALSE(variadic_called);
+    EXPECT_FALSE(vector_called);
+    EXPECT_FALSE(always_called);
+}
+
+TEST_F(AutogradTensorTest, GradModeDisabledOutputDoesNotPolluteDownstreamEnabledGraph) {
+    auto x = autograd::create_tensor(filled(2.0F, ttnn::DataType::BFLOAT16), /*requires_grad=*/true);
+    auto w_pre = autograd::create_tensor(filled(3.0F, ttnn::DataType::BFLOAT16), /*requires_grad=*/true);
+
+    autograd::TensorPtr frozen_act;
+    {
+        autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED);
+        frozen_act = ops::mul(x, w_pre);
+        EXPECT_FALSE(frozen_act->get_requires_grad());
+        EXPECT_FALSE(frozen_act->get_node().has_value());
+        autograd::ctx().set_gradient_mode(autograd::GradMode::ENABLED);
+    }
+
+    // Combining a no-grad output with a frozen tensor under GradMode::ENABLED must prune the branch cleanly.
+    auto c_frozen = autograd::create_tensor(filled(1.0F, ttnn::DataType::BFLOAT16), /*requires_grad=*/false);
+    auto z_frozen = ops::add(frozen_act, c_frozen);
+    EXPECT_FALSE(z_frozen->get_requires_grad());
+    EXPECT_FALSE(z_frozen->get_node().has_value());
+
+    // Combining a no-grad output with a trainable parameter under GradMode::ENABLED must backprop only to w_post.
+    auto w_post = autograd::create_tensor(filled(4.0F, ttnn::DataType::BFLOAT16), /*requires_grad=*/true);
+    auto loss = ops::mean(ops::mul(frozen_act, w_post));
+    EXPECT_TRUE(loss->get_requires_grad());
+    EXPECT_TRUE(loss->get_node().has_value());
+    loss->backward();
+
+    EXPECT_TRUE(w_post->is_grad_initialized());
+    EXPECT_FALSE(frozen_act->is_grad_initialized());
+    EXPECT_FALSE(x->is_grad_initialized());
+    EXPECT_FALSE(w_pre->is_grad_initialized());
+}
+
+TEST_F(AutogradTensorTest, MemoryEfficientRunnerRespectsGradMode) {
+    auto x_frozen = autograd::create_tensor(filled(2.0F, ttnn::DataType::BFLOAT16), /*requires_grad=*/false);
+    auto w = autograd::create_tensor(filled(3.0F, ttnn::DataType::BFLOAT16), /*requires_grad=*/true);
+
+    auto block = [w](const autograd::TensorPtr& in, const std::optional<autograd::TensorPtr>& /*mask*/) {
+        return ops::mul(in, w);
+    };
+
+    autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED);
+    auto out_eval = models::common::transformer::memory_efficient_runner(block, x_frozen, std::nullopt);
+    EXPECT_FALSE(out_eval->get_requires_grad());
+    EXPECT_FALSE(out_eval->get_node().has_value());
+
+    autograd::ctx().set_gradient_mode(autograd::GradMode::ENABLED);
+    auto out_ckpt = models::common::transformer::memory_efficient_runner(block, x_frozen, std::nullopt);
+    EXPECT_TRUE(out_ckpt->get_requires_grad());
+    EXPECT_TRUE(out_ckpt->get_node().has_value());
+
+    ops::mean(out_ckpt)->backward();
+    EXPECT_TRUE(w->is_grad_initialized());
+    EXPECT_FALSE(x_frozen->is_grad_initialized());
 }
