@@ -112,6 +112,13 @@ MimirCceSpaRoutes mimir_cce_spa_routes_for_channel(const metal_SocDescriptor& so
     for (uint32_t dest = 0; dest < MIMIR_CCE_SPA_ROUTES_MAX_INSTANCES; ++dest) {
         routes.gddr_d2d[dest] = gddr_cce_port(soc, channel, sender, dest);
     }
+    // A Mimir CCE reaches Keraunos HSIO SRAM through the package address the Keraunos CCEs use for it.
+    const auto& arch = soc.get_arch_descriptor();
+    if (!arch.get_keraunos().cores.empty()) {
+        routes.keraunos_sram_base = kKeraunosHsioSramSpaBase;
+        routes.keraunos_tile_stride = arch.get_keraunos().tile_stride.value_or(0);
+        routes.keraunos_cce_sram_size = arch.get_eth_l1_size();
+    }
     return routes;
 }
 
