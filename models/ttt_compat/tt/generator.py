@@ -4170,8 +4170,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             tokens.append(result.token)
             if result.text == "<|eot_id|>":
                 stop_reason = StopReason.end_of_turn
+                break
             elif result.text == "<|eom_id|>":
                 stop_reason = StopReason.end_of_message
+                break
 
         if stop_reason is None:
             stop_reason = StopReason.out_of_tokens
