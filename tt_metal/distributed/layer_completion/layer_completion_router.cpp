@@ -4,9 +4,12 @@
 
 #include <internal/disaggregation/layer_completion_router.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <iterator>
+#include <numeric>
 #include <mutex>
 #include <optional>
 #include <vector>
@@ -30,6 +33,17 @@ LayerCompletionRouter::LayerCompletionRouter(LayerCompletionRouterConfig cfg) : 
     TT_FATAL(
         !is_master() || !cfg_.scheduler_shm_name.empty(), "LayerCompletionRouter: master requires scheduler_shm_name");
     TT_FATAL(cfg_.completions_per_chunk > 0, "LayerCompletionRouter: completions_per_chunk must be > 0");
+    if (!cfg_.participant_ranks.empty()) {
+        const auto& ranks = cfg_.participant_ranks;
+        TT_FATAL(
+            std::ranges::find(ranks, cfg_.rank) != ranks.end(),
+            "LayerCompletionRouter: rank {} is not in participant_ranks",
+            cfg_.rank);
+        TT_FATAL(
+            std::ranges::find(ranks, cfg_.master_rank) != ranks.end(),
+            "LayerCompletionRouter: master_rank {} is not in participant_ranks",
+            cfg_.master_rank);
+    }
     ring_ = LayerCompletionQueue::create(cfg_.ring_shm_name, cfg_.completions_per_chunk);
     if (is_master()) {
         scheduler_ = LayerCompletionQueue::create(cfg_.scheduler_shm_name, cfg_.completions_per_chunk);
@@ -83,14 +97,13 @@ void LayerCompletionRouter::stop() {
 
 template <typename Forward>
 void LayerCompletionRouter::fan_in(const Forward& forward) {
-    std::vector<int> subs;
-    if (cfg_.world_size > 1) {
-        for (int r = 0; r < cfg_.world_size; ++r) {
-            if (r != cfg_.master_rank) {
-                subs.push_back(r);
-            }
-        }
+    std::vector<int> peers = cfg_.participant_ranks;
+    if (peers.empty() && cfg_.world_size > 1) {
+        peers.resize(cfg_.world_size);
+        std::iota(peers.begin(), peers.end(), 0);
     }
+    std::vector<int> subs;
+    std::ranges::copy_if(peers, std::back_inserter(subs), [master = cfg_.master_rank](int r) { return r != master; });
     using Buf = std::array<std::byte, sizeof(LayerCompletionMessage)>;
     std::vector<Buf> bufs(subs.size());
     std::vector<mh::RequestPtr> reqs(subs.size());

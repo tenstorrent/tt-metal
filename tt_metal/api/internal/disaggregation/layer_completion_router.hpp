@@ -7,6 +7,9 @@
 // its own and theirs, as they arrive, into the scheduler-facing ring it owns. world_size == 1 needs no MPI.
 // Teardown: each subordinate drains its ring and sends one sentinel; the master keeps receiving until every
 // sentinel is in and its ring is empty, bounded by teardown_timeout_ms.
+// Peers are addressed by MPI world rank. `participant_ranks` lists the world ranks that run a router (one per
+// pipeline stage, in stage order); it may skip ranks, e.g. when a stage spans several hosts. Left empty, every
+// rank in 0..world_size-1 participates.
 
 #pragma once
 
@@ -18,6 +21,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace tt::tt_metal::internal {
 
@@ -26,7 +30,9 @@ class LayerCompletionQueue;
 struct LayerCompletionRouterConfig {
     int rank = 0;
     int world_size = 1;
+    // World rank of the master; with `participant_ranks` set, `rank` is a world rank too.
     int master_rank = 0;
+    std::vector<int> participant_ranks;
     std::string ring_shm_name;
     // Master only: the scheduler-facing ring.
     std::string scheduler_shm_name;
