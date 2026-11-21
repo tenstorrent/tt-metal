@@ -5,6 +5,7 @@
 from tt_py_test_utils_common.all_gather_validate import ti_cond_skip, validate_test
 
 import pytest
+import torch
 import ttnn
 
 from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
@@ -102,10 +103,8 @@ def test_all_gather_linear_2D_nightly(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-# Multicast writer with pages that do not use scatter writes: one page per packet (fp32 tile, 4096 B
-# against the 4352 B fabric payload) and a page larger than the packet (fp32 row-major, 8192 B rows).
-# The small volume keeps the op on the multicast factory. Run with Watcher enabled to catch the
-# scatter-state assert of the first class; the second class overruns the packet header in every build.
+# Multicast with pages that do not divide the packet: fp32 tiles (4096 B) against the 4352 B fabric payload, so packets
+# cut tiles, and fp32 row-major rows (8192 B) larger than a packet. The small volume keeps the op on multicast.
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize(
@@ -114,7 +113,7 @@ def test_all_gather_linear_2D_nightly(
         (4, [1, 1, 32, 512], 3, ttnn.float32, ttnn.TILE_LAYOUT),
         (4, [1, 1, 32, 8192], 3, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
     ],
-    ids=["fp32_tile_one_page_per_packet", "fp32_rm_page_larger_than_packet"],
+    ids=["fp32_tile_straddles_packets", "fp32_rm_page_larger_than_packet"],
 )
 @pytest.mark.parametrize("mem_config_input, mem_config_ag", [(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)])
 @pytest.mark.parametrize(
@@ -236,16 +235,21 @@ def test_all_gather_linear_4D_nightly(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
+# A ring of every device in the box: multicast, then unicast with short row-major rows (256 B per device, so packets of
+# 4 KB or less and 5 workers) and with 1 tile per device per output row. Each device's input shape is fixed; the
+# output is [1, 1, rows, width * N] for the ring's N devices.
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(2)
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, layout",
+    "input_rows, input_width, layout",
+    # Per device: 4 KB for multicast, 1.25 MB for unicast. Each row stays on its factory, with at least 2x margin, on
+    # rings of 4, 8 and 32 devices with up to 4 links.
     [
-        ([1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT),
-        ([1, 1, 256, 512], 3, ttnn.TILE_LAYOUT),
-        ([1, 1, 256, 768], 3, ttnn.TILE_LAYOUT),
+        (32, 64, ttnn.TILE_LAYOUT),
+        (5120, 128, ttnn.ROW_MAJOR_LAYOUT),
+        (20480, 32, ttnn.TILE_LAYOUT),
     ],
-    ids=["4_device_test", "2_device_test", "4_device_large_test"],
+    ids=["multicast", "unicast_rm_short_rows", "unicast_narrow_tile_rows"],
 )
 @pytest.mark.parametrize(
     "ag_input_dtype",
@@ -287,10 +291,10 @@ def test_all_gather_linear_4D_nightly(
 @pytest.mark.parametrize("cluster_axis", [0])
 def test_all_gather_ring_nightly(
     bh_1d_mesh_device,
-    ag_output_shape,
-    dim,
-    ag_input_dtype,
+    input_rows,
+    input_width,
     layout,
+    ag_input_dtype,
     mem_config_input,
     mem_config_ag,
     enable_trace,
@@ -305,8 +309,8 @@ def test_all_gather_ring_nightly(
         submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
-        ag_output_shape,
-        dim,
+        [1, 1, input_rows, input_width * num_devices],
+        3,
         ag_input_dtype,
         layout,
         mem_config_input,
@@ -558,3 +562,60 @@ def test_all_gather_broken(
         num_buffers_per_channel=2,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
+
+
+# Back-to-back gathers into one persistent output with no sync, every device but (0, 0) stalled after each launch and
+# each result copied out in queue order: a fast device's next gather must not write a neighbor's output before that
+# neighbor has relayed (unicast) or copied out (multicast) the previous one, so the init handshake must stay on with a
+# persistent output. The multicast scenario gathers L1 inputs into a DRAM persistent output with no memory_config: the
+# factory is chosen for the output it writes (16 B rows the unicast relay cannot re-read from DRAM), at a size the
+# input's L1 spec would send to unicast.
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(7)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+def test_all_gather_persistent_output(bh_1d_mesh_device):
+    mesh_device = bh_1d_mesh_device
+    num_iters = 10
+    mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(3, None), mesh_shape=tuple(mesh_device.shape))
+    rows, cols = tuple(mesh_device.shape)
+    delays = [[0 if (r, c) == (0, 0) else 2_000_000 for c in range(cols)] for r in range(rows)]
+    scenarios = {
+        "multicast_l1_in_dram_out": ([1, 1, 16384, 64], ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG),
+        "unicast": ([1, 1, 1024, 2048], ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
+    }
+    for scenario, (shape, layout, input_memory_config) in scenarios.items():
+        goldens = [torch.randn(shape, dtype=torch.bfloat16) for _ in range(num_iters)]
+        inputs = [
+            ttnn.from_torch(
+                golden, device=mesh_device, layout=layout, memory_config=input_memory_config, mesh_mapper=mesh_mapper
+            )
+            for golden in goldens
+        ]
+
+        def replicated_zeros():
+            return ttnn.from_torch(
+                torch.zeros(shape, dtype=torch.bfloat16),
+                device=mesh_device,
+                layout=layout,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
+        output = replicated_zeros()
+        captures = [replicated_zeros() for _ in range(num_iters)]
+        ttnn.all_gather(inputs[0], dim=3, cluster_axis=0, output_tensor=output)  # compile: every launch below is cached
+        ttnn.synchronize_device(mesh_device)
+
+        for i in range(num_iters):
+            result = ttnn.all_gather(inputs[i], dim=3, cluster_axis=0, output_tensor=output)
+            ttnn.apply_device_delay(mesh_device, delays)
+            ttnn.copy(result, captures[i])
+        ttnn.synchronize_device(mesh_device)
+
+        for i, capture in enumerate(captures):
+            for d, device_tensor in enumerate(ttnn.get_device_tensors(capture)):
+                assert torch.equal(
+                    ttnn.to_torch(device_tensor), goldens[i]
+                ), f"{scenario}: iteration {i}: device {d} mismatch"
