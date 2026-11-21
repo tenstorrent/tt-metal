@@ -7,6 +7,7 @@ golden (`dsa_fp64_golden.py`) against independent references and through its res
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -632,3 +633,369 @@ def test_summaries_leave_out_rows_below_topk():
     assert s["overall"]["rows"] == 3 and s["overall_rows_ge_topk"]["rows"] == 2
     assert [(w["start"], w["end"], w["rows"]) for w in s["windows"]] == [(0, 2500, 1), (2500, 5001, 1)]
     assert [w["trace_recall_mean"] for w in s["windows"]] == pytest.approx([0.5, 0.7])
+
+
+# --- FP64 chain of layers 0-3 (fp64_chain.py) ----------------------------------------------------------------------
+
+
+class _F64Torch:
+    """``torch`` as the model reference modules see it, with ``float32`` read as ``float64``: the references hard-code
+    fp32 compute, and the FP64 comparison substitutes the dtype without editing their semantics."""
+
+    float32 = torch.float64
+
+    def __getattr__(self, name):
+        return getattr(torch, name)
+
+
+@pytest.fixture
+def fp64_references(monkeypatch):
+    """Run the vendored AttnRes read, `KimiRMSNorm` and the trimmed MoE reference in FP64."""
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3 import modeling_kimi_moe
+
+    monkeypatch.setattr(modeling_kimi_moe, "torch", _F64Torch())
+    monkeypatch.setattr(
+        KimiRMSNorm,
+        "forward",
+        lambda self, h: self.weight * (h * torch.rsqrt(h.pow(2).mean(-1, keepdim=True) + self.variance_epsilon)),
+    )
+    return monkeypatch
+
+
+@contextmanager
+def _fp64_upcasts(monkeypatch):
+    """`Tensor.float` as `double` while the context lasts: the vendored `_apply_attn_res` upcasts with it. Only
+    around reference code, so the code under test keeps its own casts."""
+    with monkeypatch.context() as patch:
+        patch.setattr(torch.Tensor, "float", lambda self, *a, **k: self.double())
+        yield
+
+
+def _rel(got: torch.Tensor, want: torch.Tensor) -> float:
+    return float((got.double() - want.double()).norm() / want.double().norm())
+
+
+def _tiny_moe_cfg(hidden: int):
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3.configuration_kimi_k3 import KimiLinearConfig
+
+    return KimiLinearConfig(
+        hidden_size=hidden,
+        routed_expert_hidden_size=16,
+        moe_intermediate_size=8,
+        intermediate_size=24,
+        num_experts=6,
+        num_experts_per_token=2,
+        num_shared_experts=2,
+        num_expert_group=1,
+        topk_group=1,
+        moe_renormalize=True,
+        moe_router_activation_func="sigmoid",
+        routed_scaling_factor=KimiK3Config.ROUTE_SCALE,
+        latent_moe_use_norm=True,
+        hidden_act="situ",
+        activation_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
+        activation_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
+        rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
+    )
+
+
+def _moe64_of(block, top_k: int):
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import MoE64
+
+    w = {n: p.detach() for n, p in block.named_parameters() if not n.startswith("experts.")}
+    experts = [tuple(getattr(x, m).weight.detach() for m in ("w1", "w3", "w2")) for x in block.experts]
+    return MoE64(w, experts, top_k, block.routed_expert_norm.variance_epsilon)
+
+
+def test_fp64_attn_res_matches_the_vendored_read(fp64_references):
+    """`attn_res64` (scores as proj . rms_norm(candidate), a softmax mix of the raw candidates) equals the vendored
+    HuggingFace read run in FP64 to <= 1e-14 relative, with one and two sealed snapshots; mixing the normalized
+    candidates instead (a plausible slip) is O(1) away."""
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import hf_attn_res
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import attn_res64, rms64
+
+    gen = torch.Generator().manual_seed(1)
+    d = 32
+    norm = 1 + 0.1 * torch.randn(d, generator=gen, dtype=torch.float64)
+    proj = torch.randn(1, d, generator=gen, dtype=torch.float64)
+    for s in (1, 2):
+        live = torch.randn(5, d, generator=gen, dtype=torch.float64)
+        sealed = 3 * torch.randn(5, s, d, generator=gen, dtype=torch.float64)
+        with _fp64_upcasts(fp64_references):
+            want = hf_attn_res(live, sealed, norm, proj, 1e-5)
+        assert want.dtype == torch.float64
+        assert _rel(attn_res64(live, sealed, (norm, proj), 1e-5), want) <= 1e-14
+        v = torch.cat([sealed, live.unsqueeze(1)], 1)
+        probs = (rms64(v, norm, 1e-5) @ proj[0]).softmax(-1)
+        assert _rel(torch.einsum("ns,nsd->nd", probs, rms64(v, norm, 1e-5)), want) > 0.1
+
+
+def test_fp64_dense_ffn_and_moe_match_the_model_reference(fp64_references):
+    """`dense_mlp64` equals the reference `KimiMLP` and `MoE64` (experts grouped, each expert's rows at once) the
+    reference `KimiSparseMoeBlock` (per expert over sorted tokens, then a weighted sum per row), all in FP64: outputs
+    to <= 1e-13 relative, the routing's sets and weights to rounding, the selection best first with a positive margin
+    to the next expert. Mutations (shared experts left out; the routing weights not renormalized) are O(0.01-1)."""
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3.modeling_kimi_moe import KimiMLP, KimiSparseMoeBlock
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import dense_mlp64
+
+    torch.manual_seed(5)
+    hidden = 32
+    cfg = _tiny_moe_cfg(hidden)
+    block = KimiSparseMoeBlock(cfg).double().eval()
+    with torch.no_grad():
+        block.gate.e_score_correction_bias.normal_(std=0.05)
+        block.routed_expert_norm.weight.normal_(1.0, 0.1)
+    x = torch.randn(11, hidden, dtype=torch.float64)
+    with torch.no_grad():
+        ref_ids, ref_w = block.gate(x.unsqueeze(0))
+        want = block(x.unsqueeze(0))[0]
+    moe = _moe64_of(block, 2)
+    got = moe(x)
+    assert _rel(got["output"], want) <= 1e-13
+    order = ref_ids.argsort(dim=1)
+    assert torch.equal(got["ids"].sort(dim=1).values, ref_ids.sort(dim=1).values)
+    assert torch.allclose(got["weights"].gather(1, got["ids"].argsort(dim=1)), ref_w.gather(1, order), rtol=1e-14)
+    choice = (x @ block.gate.weight.T).sigmoid() + block.gate.e_score_correction_bias
+    assert (choice.gather(1, got["ids"]).diff(dim=1) <= 0).all() and (got["margin"] > 0).all()
+    shared = {
+        f"{n}.weight": getattr(block.shared_experts, n).weight.detach() for n in ("gate_proj", "up_proj", "down_proj")
+    }
+    assert _rel(got["output"] - dense_mlp64(x, shared), want) > 0.01
+    with torch.no_grad():
+        assert _rel(block.shared_experts(x), dense_mlp64(x, shared)) <= 1e-14
+        dense = KimiMLP(cfg).double().eval()
+        w = {f"{n}.weight": getattr(dense, n).weight.detach() for n in ("gate_proj", "up_proj", "down_proj")}
+        assert _rel(dense_mlp64(x, w), dense(x)) <= 1e-14
+    unnormalized = _moe64_of(block, 2)
+    unnormalized.route = lambda h, r=moe.route: (lambda i, w, m: (i, w * 3, m))(*r(h))
+    assert _rel(unnormalized(x)["output"], want) > 0.01
+
+
+def test_index_topk_matches_the_rowwise_golden():
+    """The batched indexer (`index_topk`, key blocks of 7 here) scores every causal key as the row-wise
+    `dsa_fp64_golden.index_scores` does to <= 1e-14 relative and selects the same top-k, best first; a row with fewer
+    causal keys than top-k selects all of them and pads with -1 (score NaN); keys after a row are never selected."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import fp64_chain
+
+    gen = torch.Generator().manual_seed(2)
+    keys = torch.randn(40, 16, generator=gen, dtype=torch.float64)
+    q = torch.randn(6, 4, 16, generator=gen, dtype=torch.float64)
+    w = torch.randn(6, 4, generator=gen, dtype=torch.float64)
+    rows = torch.tensor([0, 3, 9, 10, 25, 38])
+    fp64_chain.KEY_BLOCK, block = 7, fp64_chain.KEY_BLOCK
+    try:
+        idx, score = fp64_chain.index_topk(q, w, keys, rows, 10)
+    finally:
+        fp64_chain.KEY_BLOCK = block
+    for i, r in enumerate(rows.tolist()):
+        want = golden.index_scores(q[i], w[i], keys[: r + 1])
+        top = want.topk(min(10, r + 1))
+        n = top.indices.numel()
+        assert torch.equal(idx[i, :n], top.indices) and (idx[i, n:] == -1).all()
+        assert ((score[i, :n] - top.values).abs() <= 1e-14 * want.abs().max()).all() and score[i, n:].isnan().all()
+        assert int(idx[i].max()) <= r
+
+
+def _tiny_chain(hidden: int = 32, vocab: int = 50):
+    """A ChainModel with random weights at tiny dimensions, and the reference modules it was built from."""
+    from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+    from models.demos.deepseek_v3_d_p.reference.kda.tests.helpers import random_weights
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3.modeling_kimi_moe import KimiMLP, KimiSparseMoeBlock
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import ChainModel
+
+    torch.manual_seed(9)
+    gen = torch.Generator().manual_seed(9)
+    eps = KimiK3Config.RMS_NORM_EPS
+    kda_cfg = KDAConfig(hidden, 2, 8, 8, 4, eps, use_full_rank_gate=True, gate_lower_bound=-5.0)
+    vec = lambda: 1 + 0.1 * torch.randn(hidden, generator=gen, dtype=torch.float64)  # noqa: E731
+    query = lambda: (vec(), torch.randn(1, hidden, generator=gen, dtype=torch.float64))  # noqa: E731
+    cfg = _tiny_moe_cfg(hidden)
+    refs = {"mlp": KimiMLP(cfg).double().eval()}
+    layers = {}
+    for l in range(4):
+        layers[l] = {
+            "input_layernorm": vec(),
+            "attn_res": query(),
+            "mlp_res": query(),
+            "post_attention_layernorm": vec(),
+        }
+        if l < 3:
+            layers[l]["kda"] = {n: v.double() for n, v in random_weights(kda_cfg).items()}
+    layers[0]["mlp"] = {
+        f"{n}.weight": getattr(refs["mlp"], n).weight.detach() for n in ("gate_proj", "up_proj", "down_proj")
+    }
+    for l in (1, 2):
+        block = KimiSparseMoeBlock(cfg).double().eval()
+        with torch.no_grad():
+            block.gate.e_score_correction_bias.normal_(std=0.05)
+            block.routed_expert_norm.weight.normal_(1.0, 0.1)
+        refs[l] = block
+        layers[l]["moe"] = _moe64_of(block, 2)
+    layers[3]["dsa"] = _weights(SMALL, hidden, 24)
+    layers[3]["gate"] = torch.randn(6, hidden, generator=gen, dtype=torch.float64)
+    layers[3]["gate_bias"] = 0.05 * torch.randn(6, generator=gen, dtype=torch.float64)
+    embedding = torch.randn(vocab, hidden, generator=gen).to(torch.bfloat16)
+    model = ChainModel(embedding, layers, kda_cfg, SMALL, eps, top_k=2)
+    return model, refs
+
+
+def _reference_walk(model, refs, token_ids: torch.Tensor, monkeypatch) -> dict:
+    """Layers 0-3 over the whole sequence at once, by the vendored AttnRes walk (`hf_walk.hf_layer`), the reference
+    norm and MoE modules, one-shot FP64 KDA per layer, and the DSA golden's row-wise indexer and attention."""
+    from models.demos.deepseek_v3_d_p.reference.kda.layer import kda_forward_reference
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import HfStream, hf_layer
+
+    def norm(weight):
+        n = KimiRMSNorm(weight.numel(), eps=model.eps).double()
+        n.weight = torch.nn.Parameter(weight)
+        return n
+
+    got = {}
+    stream = HfStream(model.embedding[token_ids].double(), model.block_size, model.eps)
+    for l in range(3):
+        L = model.layers[l]
+
+        def attn_fn(h, L=L, l=l):
+            out = kda_forward_reference(
+                norm(L["input_layernorm"])(h)[None], L["kda"], model.kda_config, dtype=torch.float64
+            )[0][0]
+            got[f"attn_output_{l}"] = out
+            return out
+
+        def mlp_fn(h, L=L, l=l):
+            x = norm(L["post_attention_layernorm"])(h)
+            out = refs[l](x.unsqueeze(0))[0] if l else refs["mlp"](x)
+            got[f"moe_input_{l}"], got[f"moe_output_{l}"] = x, out
+            return out
+
+        with torch.no_grad(), _fp64_upcasts(monkeypatch):
+            hf_layer(stream, l, L["attn_res"], L["mlp_res"], attn_fn, mlp_fn)
+        if l:
+            got[f"routing_ids_{l}"] = refs[l].gate(got[f"moe_input_{l}"].unsqueeze(0))[0]
+    L = model.layers[3]
+    with _fp64_upcasts(monkeypatch):
+        got["dsa_input_3"] = stream.read(L["attn_res"])
+    x = norm(L["input_layernorm"])(got["dsa_input_3"]).detach()
+    keys = golden.layer_keys(x, L["dsa"], SMALL)
+    q = golden.layer_queries(x, L["dsa"], SMALL)
+    got.update(keys)
+    got["topk"] = [
+        golden.index_scores(q["index_q"][r], q["index_w"][r], keys["index_key"][: r + 1]).topk(min(SMALL.topk, r + 1))
+        for r in range(x.shape[0])
+    ]
+    got["attn_output_3"] = torch.stack(
+        [
+            golden.attend(q, r, keys["latent"][t.indices], keys["kpe"][t.indices], L["dsa"], SMALL)
+            for r, t in enumerate(got["topk"])
+        ]
+    )
+    return got
+
+
+def test_fp64_chain_segments_match_a_one_shot_reference_walk_and_resume(tmp_path: Path, fp64_references):
+    """The segmented chain (10 rows in segments 4 / 4 / 2: KDA state and DSA keys carried across, a last segment
+    shorter than the others) equals a one-shot walk of independent forms in FP64 (vendored AttnRes read and seal
+    schedule, reference norm / FFN / MoE modules, whole-sequence KDA, row-wise DSA golden) to <= 1e-12 relative on
+    every product, with identical routing and top-k; the cross-checks against a trace built from that walk read
+    exact embeddings, PCC ~1 and recall 1. Losing the last segment and rerunning rewrites it bit for bit."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import fp64_chain
+
+    model, refs = _tiny_chain()
+    rows = 10
+    token_ids = torch.randint(0, 50, (rows,), generator=torch.Generator().manual_seed(4))
+    with torch.no_grad():
+        want = _reference_walk(model, refs, token_ids, fp64_references)
+    trace_dir = tmp_path / "trace"
+    topk_idx = torch.full((rows, SMALL.topk), -1, dtype=torch.int32)
+    for r, t in enumerate(want["topk"]):
+        topk_idx[r, : t.indices.numel()] = t.indices.int()
+    streams = {
+        "decoder_input_layer_0": model.embedding[token_ids],
+        "attn_output_layer_0": want["attn_output_0"].to(torch.bfloat16),
+        "decoder_output_layer_0": want["moe_output_0"].to(torch.bfloat16),
+        "expert_ids_layer_1": want["routing_ids_1"].int(),
+        "expert_ids_layer_2": want["routing_ids_2"].int(),
+        "expert_ids_layer_3": torch.zeros(rows, 2, dtype=torch.int32),
+        "kv_post_transform_layer_3": torch.cat([want["latent"], want["kpe"]], -1).to(torch.bfloat16),
+        "indexer_k_layer_3": want["index_key"].to(torch.bfloat16),
+        "dsa_topk_indices_layer_3": topk_idx,
+    }
+    _write_trace(trace_dir, streams, chunk_rows=4)
+    out = tmp_path / "chain"
+    sampled = golden.sample_rows(rows, 4, 0)
+    run = lambda: fp64_chain.run_chain(  # noqa: E731
+        run_dir=out,
+        model=model,
+        token_ids=token_ids,
+        segment=4,
+        sampled=sampled,
+        identity={"t": 1},
+        trace=Trace(trace_dir),
+    )
+    with torch.no_grad():
+        manifest = run()
+    assert [(s["start"], s["end"]) for s in manifest["segments"]] == [(0, 4), (4, 8), (8, 10)]
+    names = ["moe_input_1", "moe_output_1", "moe_input_2", "moe_output_2", "dsa_input_3", "latent", "kpe", "index_key"]
+    got = fp64_chain.load_products(out, names + ["routing_ids_1", "routing_ids_2", "topk_indices_3"])
+    for n in names:
+        assert got[n].dtype == (torch.float64 if n in ("latent", "kpe", "index_key") else torch.float32), n
+    for n in ("latent", "kpe", "index_key"):
+        assert _rel(got[n], want[n]) <= 1e-12, n
+    for n in names[
+        :5
+    ]:  # stored fp32: equal to the walk at fp32 rounding (the FP64 values themselves are checked below)
+        assert _rel(got[n], want[n]) <= 1e-7, n
+    for l in (1, 2):
+        assert torch.equal(got[f"routing_ids_{l}"].long().sort(1).values, want[f"routing_ids_{l}"].sort(1).values)
+    assert torch.equal(got["topk_indices_3"], topk_idx)
+    attn = torch.cat(
+        [torch.load(fp64_chain.segment_path(out, i), weights_only=True)["attn_output_3"] for i in range(3)]
+    )
+    assert attn.dtype == torch.float64 and _rel(attn, want["attn_output_3"][sampled]) <= 1e-12
+    # FP64 products before the fp32 store: rerun one segment's chain in memory from the stored carried state
+    carried = fp64_chain.load_carried(out, 1)
+    products, _ = fp64_chain.chain_segment(model, token_ids[4:8], 4, carried, sampled)
+    for n in names[:5]:
+        assert _rel(products[n], want[n][4:8]) <= 1e-12, n
+    checks = manifest["segments"][1]["checks"]
+    assert checks["embedding_ulp_mismatches"] == 0 and checks["routing_recall_1"] == 1.0
+    assert (
+        checks["kv_latent_pcc"] > 0.9999 and checks["attn_output_0_pcc"] > 0.9999 and checks["topk_recall_mean"] == 1.0
+    )
+    assert manifest["bytes_per_row"]["topk_indices_3"] == 4 * SMALL.topk
+    before = {
+        p: torch.load(p, weights_only=True) for p in (fp64_chain.segment_path(out, 2), fp64_chain.state_path(out, 2))
+    }
+    m = json.loads((out / MANIFEST).read_text())
+    m["segments"].pop()
+    (out / MANIFEST).write_text(json.dumps(m))
+    for p in before:
+        p.unlink()
+    with torch.no_grad():
+        resumed = run()
+    assert len(resumed["sessions"]) == 2 and len(resumed["segments"]) == 3
+    flat = lambda d, pre="": {  # noqa: E731
+        f"{pre}{k}": v
+        for k0, v0 in d.items()
+        for k, v in (flat(v0, f"{k0}.").items() if isinstance(v0, dict) else [(k0, v0)])
+    }
+    for p, old in before.items():
+        new = flat(torch.load(p, weights_only=True))
+        old = flat(old)
+        assert new.keys() == old.keys()
+        for k, v in old.items():
+            assert (
+                (torch.equal(new[k], v) or (new[k].isnan() == v.isnan()).all()) if torch.is_tensor(v) else new[k] == v
+            ), k
+
+
+def test_fp64_chain_refuses_a_different_run(tmp_path: Path, expect_error):
+    """A resume with other tokens (or segment size) is refused, not mixed into the stored run."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import fp64_chain
+
+    model, _ = _tiny_chain()
+    ids = torch.arange(6) % 50
+    with torch.no_grad():
+        fp64_chain.run_chain(run_dir=tmp_path, model=model, token_ids=ids, segment=4, sampled=[5], identity={})
+        with expect_error(ValueError, "token_ids_sha256"):
+            fp64_chain.run_chain(run_dir=tmp_path, model=model, token_ids=ids + 1, segment=4, sampled=[5], identity={})
