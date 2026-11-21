@@ -406,6 +406,17 @@ WEIGHT_MCAST_PREFIX = "weight_mcast"
 # 256x256 256->512 -17%), and stride 2 slower with two (TILE 512x512 s2 256->256 1439 -> 1529 us, median of 3): neither
 # is taken. NSPLIT_GROUPS: the group counts tried in order (the first whose resident blocking fits).
 NSPLIT_GROUPS = (2,)
+# N split for one M-block per core: where the interleaved K-blocked solve gives every core a single M-block, the work grid
+# splits into g N groups of cores / g cores each, every core ceil(M / (cores / g)) tile-rows x N / g columns at the base
+# solve's bk. Each group's first core reads and multicasts only the group's [K, N / g] weight slice, so g senders share
+# the weight stream, and the cores the M split's granularity left idle work (66x128 128->512: 86 cores x 3 tile-rows x
+# 16 columns -> 104 x 5 x 8). Each group fills the slab of its own M range. Same bk, same dot products in the same
+# order: bit-identical. Taken where the busiest core's tile-MACs do not grow. Carve-out: fewer than
+# ONE_MBLOCK_NSPLIT_MIN_BN output tiles per group, where the per-tile-row work the split adds (fill, tilize, bias, store)
+# outweighs what it saves (2 tiles per group measured +24% on 130x256 32->128 and +14% on 66x128 32->128; 4 was flat).
+# Two groups: four measured slower on 66x128 128->512.
+ONE_MBLOCK_NSPLIT_GROUPS = (2,)
+ONE_MBLOCK_NSPLIT_MIN_BN = 4
 # Weight servers (HEIGHT-sharded K-blocked walk): when the device has a spare core per rectangle of the weight channel,
 # each rectangle's rounds come from one spare core outside the work grid (its reader reads DRAM on NoC0, its writer
 # multicasts on NoC1) instead of from work core 0, which read on NoC1 (the unfavourable read NoC, ~23 GB/s) and then
@@ -1665,12 +1676,13 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
     search = [(bm, bk) for bm in bm_candidates for bk in bk_above_floor]
     search += [(bm_candidates[-1], bk) for bk in bk_below_floor]
 
-    def solve(candidates, nslice, shared=False, wr_solve=False, rm=False, split=None):
-        # split: (core_m_tiles, num_m_groups, block_n_tiles, n_groups) of an N split (only resident blockings).
+    def solve(candidates, nslice, shared=False, wr_solve=False, rm=False, split=None, streamed_split=False):
+        # split: (core_m_tiles, num_m_groups, block_n_tiles, n_groups) of an N split (only resident blockings, or with
+        # streamed_split one M-block per core).
         cm, nmg, bn_, ng = split or (core_m_tiles, num_m_groups, bn, 1)
         for bm, bk in candidates:
             resident = wr_solve and weights_resident_capable(g, cm, bm, bk, nslice)
-            if split is not None and not resident:
+            if split is not None and not resident and not (streamed_split and _div_up(cm, bm) == 1):
                 continue
             # ROW_MAJOR ring slab (rm): only candidates that take it (one M-block per core has nothing to reuse).
             rm_px = None
@@ -1785,6 +1797,33 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
                 blocking = split_blocking
                 break
             split = None
+    if (
+        blocking is not None
+        and split is None
+        and not g.sharded_output
+        and not g.k_split
+        and not g.fold
+        and g.stride == 1
+        and not blocking.nslice
+        and blocking.max_m_blocks_per_core == 1
+    ):
+        # N split for one M-block per core (ONE_MBLOCK_NSPLIT_GROUPS): one M-block per core at the base solve's bk.
+        best = None
+        cost = blocking.core_m_tiles * g.tensor_n_tiles
+        for ng in ONE_MBLOCK_NSPLIT_GROUPS:
+            if g.tensor_n_tiles % ng or grid_x * grid_y < 2 * ng:
+                continue
+            cm, nmg = m_split(g, (grid_x * grid_y) // ng)
+            ng_cost = cm * (g.tensor_n_tiles // ng)
+            fewer = ng_cost < cost or (best is None and ng_cost == cost)
+            if not (fewer and g.tensor_n_tiles // ng >= ONE_MBLOCK_NSPLIT_MIN_BN):
+                continue
+            ng_split = (cm, nmg, g.tensor_n_tiles // ng, ng)
+            split_blocking = solve([(cm, blocking.block_k_tiles)], nslice=False, split=ng_split, streamed_split=True)
+            if split_blocking is not None and split_blocking.max_m_blocks_per_core == 1:
+                best, cost = split_blocking, ng_cost
+        if best is not None:
+            blocking = best
     if blocking is not None and not g.k_split and g.bank_run_input and blocking.max_m_blocks_per_core > 1:
         # ROW_MAJOR ring slab at the slab (or N-split) solve's bk (a different K-block count changes the fp32
         # accumulation order), weight residency and N split: the largest bm whose ring fits. Not where the slab solve
@@ -3016,7 +3055,8 @@ def create_program_descriptor(
     ns = g.out_n_tiles if b.n_groups == 1 else bn
     n_group_of = {(c.x, c.y): w // b.num_m_groups for w, c in enumerate(core_list)} if b.n_groups > 1 else {}
     if b.n_groups > 1:
-        assert b.weights_resident and not (g.k_split or g.sharded_output) and g.tensor_n_tiles == b.n_groups * bn
+        assert (b.weights_resident or b.max_m_blocks_per_core == 1) and not (g.k_split or g.sharded_output)
+        assert g.tensor_n_tiles == b.n_groups * bn
 
     if g.tile_input:
         # Untilized footprint tile-rows: one bf16 tile page holds 32 slab pixels of 32 channels.
