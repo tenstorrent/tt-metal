@@ -36,7 +36,7 @@ inline uint32_t relay_chunk_scan_column_packets(uint32_t key_tiles) {
 inline uint32_t fabric_packet_headers_per_risc(tt::ARCH arch) { return arch == tt::ARCH::BLACKHOLE ? 12 : 8; }
 
 // Tile-column buffers per sender, each holding one packet header per packet of its column: later columns are read out
-// of their head cores while earlier ones are on the link. Up to four, as many as the header pool holds.
+// of their relay cores while earlier ones are on the link. Up to four, as many as the header pool holds.
 inline uint32_t relay_chunk_scan_sender_slots(uint32_t key_tiles, tt::ARCH arch) {
     return std::min(4u, fabric_packet_headers_per_risc(arch) / relay_chunk_scan_column_packets(key_tiles));
 }
