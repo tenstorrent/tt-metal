@@ -88,8 +88,9 @@ def run_squeezebert_question_and_answering_inference(
         }
         preprocessed_inputs.append(single_input)
 
-    squeezebert_input = tokenizer.batch_encode_plus(
-        zip(question, context),
+    squeezebert_input = tokenizer(
+        text=question,
+        text_pair=context,
         max_length=sequence_size,
         padding="max_length",
         truncation=True,
