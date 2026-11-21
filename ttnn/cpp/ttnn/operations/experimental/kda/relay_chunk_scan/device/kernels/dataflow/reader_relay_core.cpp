@@ -69,11 +69,16 @@ void kernel_main() {
     // forms the final carry, whether it applies the final transition, and the heads.
     auto* chron_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(Chronology::cb_chron));
     auto* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(Chronology::cb_ctl));
+    static_assert(Chronology::slab_index_word != kda_relay::chron_flags_word);
+    const bool final_from_last = kda_relay::final_from_last(chronology.topology);
     chron_words[0] = chronology.position;
+    chron_words[kda_relay::chron_flags_word] = (final_from_last ? kda_relay::chron_final_from_last : 0) |
+                                               (chronology.last() ? kda_relay::chron_last : 0);
     cb_push_back(Chronology::cb_chron, 1);
     ctl[0] = holder;
     ctl[1] = chronology.interval.split;
     ctl[2] = heads;
+    ctl[3] = final_from_last;
     cb_push_back(Chronology::cb_ctl, 1);
 
     // [E | B] rows of a head: kt tile rows of 2 kt tiles.
@@ -194,7 +199,7 @@ void kernel_main() {
         }
     }
 
-    if (holder) {
+    if (holder && !final_from_last) {
         // The last rank's sender writes each tile column of each head's final state into the head's final slot, then
         // counts it. With a separated tail, the heads' final transitions go in first: P lands only after the whole lap.
         // They take the entry states' landing slots and cb_b's storage, free once every head's hop has left.

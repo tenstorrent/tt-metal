@@ -10,6 +10,16 @@
 
 namespace kda_relay {
 
+// Where the final carry comes from. With actual_start on a rank boundary there is no separated tail, so the final carry
+// is the last rank's final state itself and the last rank's carrying senders send it to every rank as it forms: no
+// rank waits for the lap. Otherwise the first rank applies the tail's final transition to the relayed final state and
+// sends that. Every kernel decides it from actual_start alone (derive), so they agree.
+inline bool final_from_last(const kda_chronology::Topology& topology) { return !topology.split; }
+// cb_chron's word of flags for the relay cores' writer (word 0 holds the position).
+constexpr uint32_t chron_flags_word = 1;
+constexpr uint32_t chron_final_from_last = 1;
+constexpr uint32_t chron_last = 2;
+
 // The call's chronology as the relay's readers derive it. Compile-time args from `ct`: cb_chron and cb_ctl, sp_size,
 // local_rows, whether there is a valid end, the slab's args (slab_kernel_args, then its entry's tiles and the word of
 // cb_chron's second DRAM-aligned slot its index lands at), then actual_start's, the slab index's and the end's
@@ -73,6 +83,7 @@ struct Chronology {
     }
 
     bool holder() const { return position == 0; }
+    bool last() const { return position == sp_size - 1; }
     // The slab entry's first tile (0 without a slab).
     uint32_t entry_base() const { return slab ? (index * slab_scale + slab_offset) * entry_tiles : 0; }
 };

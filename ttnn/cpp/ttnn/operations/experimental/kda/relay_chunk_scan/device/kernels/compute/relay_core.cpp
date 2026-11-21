@@ -150,6 +150,7 @@ void kernel_main() {
     const uint32_t holder = read_tile_value(cb_ctl, 0, 0);
     const uint32_t split = read_tile_value(cb_ctl, 0, 1);
     const uint32_t heads = read_tile_value(cb_ctl, 0, 2);
+    const uint32_t final_from_last = read_tile_value(cb_ctl, 0, 3);
     cb_pop_front(cb_ctl, 1);
     // cb_eout holds a state per head slot: a core with fewer heads fills the rest, which the writer releases with the
     // heads' states.
@@ -162,7 +163,7 @@ void kernel_main() {
     }
     fill();
     cb_pop_front(cb_identity, 1);
-    if (holder) {
+    if (holder && !final_from_last) {
         for (uint32_t h = 0; h < heads; ++h) {
             carry_pass(split);
         }

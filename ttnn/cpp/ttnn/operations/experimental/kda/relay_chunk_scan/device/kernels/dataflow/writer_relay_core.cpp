@@ -5,6 +5,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/persistent_counter.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/dataflow/relay_chronology.hpp"
 
 constexpr uint32_t cb_eout = get_compile_time_arg_val(0);
 constexpr uint32_t cb_chron = get_compile_time_arg_val(1);
@@ -26,8 +27,9 @@ constexpr uint32_t state_tiles = kt * kt;
 
 // A relay core hands each tile column of each of its heads' next entry states to the head's sender as compute packs
 // it (per-core args: the heads, then per head its index, its count semaphore on the senders, and its link's relay and
-// second carry senders' NoC x | y << 16). On the first rank it hands on and writes each head's final carry; on every
-// other rank it writes each head's carry once the first rank's senders have landed it in the head's final slot.
+// second carry senders' NoC x | y << 16). The rank the final carry comes from (kda_relay::final_from_last: the last,
+// else the first) hands it on and writes it; every other rank writes each head's carry once the source's senders have
+// landed it in the head's final slot.
 void kernel_main() {
     const uint32_t heads = get_arg_val<uint32_t>(0);
     const auto head_arg = [](uint32_t s, uint32_t i) { return get_arg_val<uint32_t>(1 + 5 * s + i); };
@@ -39,6 +41,9 @@ void kernel_main() {
     cb_wait_front(cb_chron, 1);
     const auto* chron = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_chron));
     const uint32_t position = chron[0];
+    const uint32_t flags = chron[kda_relay::chron_flags_word];
+    const bool final_from_last = flags & kda_relay::chron_final_from_last;
+    const bool last = flags & kda_relay::chron_last;
     const uint32_t index = slab ? chron[slab_index_word] : 0;
     const bool writes_carry = !slab || index < slab_index_limit;
     const uint32_t carry_base = writes_carry ? (index * slab_scale + slab_offset) * entry_tiles : 0;
@@ -63,14 +68,14 @@ void kernel_main() {
             }
         }
     };
-    // Each head's slot is free again once its senders have read its last column: the relay's, then for the final
-    // carry each carrying sender's.
-    const auto release = [&](bool carry) {
+    // Each head's slot is free again once its senders have read its last column: the relay's (when `relayed`), then
+    // for the final carry each carrying sender's.
+    const auto release = [&](bool relayed, bool carry) {
         for (uint32_t s = 0; s < heads; ++s) {
             const uint32_t senders = senders_of(s, true);
             noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(first_ack_semaphore_id + s)),
-                1 + (carry ? (senders & 1) + (senders >> 1) : 0));
+                uint32_t(relayed) + (carry ? (senders & 1) + (senders >> 1) : 0));
         }
         cb_wait_front(cb_eout, relay_heads * state_tiles);
     };
@@ -90,34 +95,42 @@ void kernel_main() {
         }
         noc_async_write_barrier();
     };
-    hand_on(false);
-    release(false);
-    cb_pop_front(cb_eout, relay_heads * state_tiles);
-
-    if (position == 0) {
-        // The final carries: hand their columns to the senders, then, once they have read them (the relay's release,
-        // then each carrying sender's), write them out, off the DRAM the output gate still reads meanwhile.
+    if (final_from_last && last) {
+        // The final states this rank forms are the final carries: its carrying senders send them to every rank as
+        // they form, in place of the relay's hand-off to the first rank.
         hand_on(true);
-        release(true);
+        release(false, true);
         write_carry(get_read_ptr(cb_eout));
         cb_pop_front(cb_eout, relay_heads * state_tiles);
     } else {
-        // Each carry column out as it lands; the call ends once the whole carry has arrived, which separates
-        // consecutive calls across the SP line.
-        for (uint32_t s = 0; s < heads; ++s) {
-            const uint32_t head = head_arg(s, 0);
-            for (uint32_t j = 0; j < kt; ++j) {
-                kda_counter::wait(final_semaphore, s * kt + j + 1);
-                for (uint32_t r = 0; r < kt && writes_carry; ++r) {
-                    noc_async_write_page(
-                        carry_base + head * state_tiles + r * kt + j,
-                        carry,
-                        final_landing + (s * state_tiles + j * kt + r) * tile);
+        hand_on(false);
+        release(true, false);
+        cb_pop_front(cb_eout, relay_heads * state_tiles);
+        if (!final_from_last && position == 0) {
+            // The final carries: hand their columns to the senders, then, once they have read them (the relay's
+            // release, then each carrying sender's), write them out, off the DRAM the output gate still reads meanwhile.
+            hand_on(true);
+            release(true, true);
+            write_carry(get_read_ptr(cb_eout));
+            cb_pop_front(cb_eout, relay_heads * state_tiles);
+        } else {
+            // Each carry column out as it lands; the call ends once the whole carry has arrived, which separates
+            // consecutive calls across the SP line.
+            for (uint32_t s = 0; s < heads; ++s) {
+                const uint32_t head = head_arg(s, 0);
+                for (uint32_t j = 0; j < kt; ++j) {
+                    kda_counter::wait(final_semaphore, s * kt + j + 1);
+                    for (uint32_t r = 0; r < kt && writes_carry; ++r) {
+                        noc_async_write_page(
+                            carry_base + head * state_tiles + r * kt + j,
+                            carry,
+                            final_landing + (s * state_tiles + j * kt + r) * tile);
+                    }
                 }
             }
+            noc_async_write_barrier();
+            kda_counter::consume(final_semaphore, heads * kt);
         }
-        noc_async_write_barrier();
-        kda_counter::consume(final_semaphore, heads * kt);
     }
     noc_async_atomic_barrier();
 }
