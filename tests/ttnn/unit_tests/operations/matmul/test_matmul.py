@@ -196,6 +196,61 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
     assert_with_pcc(output, optional_output_tensor, 0.999)
 
 
+@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
+@pytest.mark.parametrize("tile_w", [16])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4])
+@pytest.mark.parametrize("throttle_level", [ttnn.ThrottleLevel.LEVEL_4, ttnn.ThrottleLevel.LEVEL_5])
+def test_matmul_tiny_tiles_throttled(device, tile_h, tile_w, math_fidelity, throttle_level, monkeypatch):
+    monkeypatch.delenv("TT_MM_THROTTLE_PERF", raising=False)
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((1, 1, 1024, 64), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((1, 1, 64, 512), dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile((tile_h, 32)), device=device
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile((32, tile_w)), device=device
+    )
+    optional_output_tensor = ttnn.from_torch(
+        torch.zeros_like(torch_output_tensor),
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((tile_h, tile_w)),
+        device=device,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+        throttle_level=throttle_level,
+    )
+
+    output = ttnn.to_torch(ttnn.matmul(input_tensor_a, input_tensor_b, compute_kernel_config=compute_kernel_config))
+    ttnn.matmul(
+        input_tensor_a,
+        input_tensor_b,
+        optional_output_tensor=optional_output_tensor,
+        compute_kernel_config=compute_kernel_config,
+    )
+    optional_output_tensor = ttnn.to_torch(optional_output_tensor)
+
+    # PCC is blind to a uniform scale (fidelity phases rerun math_fidelity times); the Frobenius bound catches it at
+    # a relative error of 1.0 or more (2x at HiFi2, 4x at HiFi4), against ~0.004 from bf16 rounding.
+    for result in (output, optional_output_tensor):
+        assert_numeric_metrics(
+            torch_output_tensor,
+            result,
+            frobenius_threshold=0.02,
+            pcc_threshold=0.999,
+            check_allclose=False,
+            check_ulp=False,
+        )
+
+
 @pytest.mark.parametrize(
     "a_shape, b_shape, out_shape, raises",
     [
