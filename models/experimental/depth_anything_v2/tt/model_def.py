@@ -141,6 +141,25 @@ def ttnn_upsample(x, scale_factor):
     return x
 
 
+def conv_transpose_as_linear(resize):
+    """Weights of a ConvTranspose2d with kernel_size == stride as one linear per pixel: (in, out * f * f), (1, out * f * f)."""
+    f = resize.kernel_size[0]
+    return resize.weight.reshape(resize.in_channels, -1), resize.bias.repeat_interleave(f * f).unsqueeze(0)
+
+
+def ttnn_conv_transpose_same_stride(x, parameters, factor, channels, height, width):
+    """ConvTranspose2d with kernel_size == stride == factor on x (B, C, H, W): one linear per pixel, then the
+    factor x factor output blocks are interleaved into (B, C, H * factor, W * factor)."""
+    batch_size = x.shape[0]
+    x = ttnn.permute(x, (0, 2, 3, 1))
+    x = ttnn.to_layout(ttnn.reshape(x, (batch_size, 1, height * width, channels)), ttnn.TILE_LAYOUT)
+    x = ttnn.linear(x, parameters.weight, bias=parameters.bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    x = ttnn.reshape(x, (batch_size, height, width, channels, factor, factor))
+    x = ttnn.permute(x, (0, 3, 1, 4, 2, 5))
+    return ttnn.reshape(x, (batch_size, channels, height * factor, width * factor))
+
+
 # ============================================================================
 # DPT Neck -- Reassemble stage
 # ============================================================================
@@ -191,14 +210,11 @@ class TtDPTReassembleLayer:
         x = ttnn.transpose(x, -2, -1)  # (B, feat, grid_h, grid_w)
 
         # 4. Resample based on reassemble_factors = [4, 2, 1, 0.5]
-        if self.read_idx == 0:
-            x = ttnn_upsample(x, scale_factor=4)
-            grid_h *= 4
-            grid_w *= 4
-        elif self.read_idx == 1:
-            x = ttnn_upsample(x, scale_factor=2)
-            grid_h *= 2
-            grid_w *= 2
+        if self.read_idx in (0, 1):
+            factor = 4 if self.read_idx == 0 else 2
+            x = ttnn_conv_transpose_same_stride(x, self.parameters.resize, factor, feat, grid_h, grid_w)
+            grid_h *= factor
+            grid_w *= factor
         elif self.read_idx == 2:
             pass  # identity -- no resize
         elif self.read_idx == 3:
@@ -980,18 +996,15 @@ class TtDepthAnythingV2:
             if i in out_indices:
                 features.append(ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG))
 
-        # ---- 3. Final backbone LayerNorm --------------------------------
-        # Move to DRAM for the final layernorm (neck/head use DRAM anyway)
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-        hidden_states = ttnn.layer_norm(
-            hidden_states,
-            weight=self.parameters["backbone"]["layernorm"]["weight"],
-            bias=self.parameters["backbone"]["layernorm"]["bias"],
-        )
-        # Replace the last stored feature with the post-norm version.
-        old_feature = features[-1]
-        features[-1] = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(old_feature)
+        # ---- 3. Final backbone LayerNorm, on every selected stage as in HF Dinov2Backbone ----
+        for i, feature in enumerate(features):
+            features[i] = ttnn.layer_norm(
+                feature,
+                weight=self.parameters["backbone"]["layernorm"]["weight"],
+                bias=self.parameters["backbone"]["layernorm"]["bias"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(feature)
 
         # ---- 4. DPT Neck -----------------------------------------------
         reassembled = []
@@ -1336,7 +1349,14 @@ def custom_preprocessor(torch_model, name):
             }
         }
 
-        if hasattr(layer, "resize") and hasattr(layer.resize, "weight"):
+        if isinstance(layer.resize, torch.nn.ConvTranspose2d):
+            # Learned upsampling for layers 0 and 1, as one linear per pixel (ttnn_conv_transpose_same_stride).
+            resize_w, resize_b = conv_transpose_as_linear(layer.resize)
+            rp["resize"] = {
+                "weight": _tile(resize_w, dtype=ttnn.bfloat16),
+                "bias": _tile(resize_b, dtype=ttnn.bfloat16),
+            }
+        elif hasattr(layer, "resize") and hasattr(layer.resize, "weight"):
             # Stride-2 conv for layer 3 (downsample).
             # Conv weight must be bfloat16 ROW_MAJOR -- NOT bfloat8_b.
             rp["resize"] = {
