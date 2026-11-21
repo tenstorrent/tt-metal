@@ -348,9 +348,7 @@ Tensor group_norm(
     const std::optional<ttnn::Tensor>& beta =
         bias.has_value() ? std::optional<ttnn::Tensor>(ttnn::unsqueeze_to_4D(bias.value())) : std::nullopt;
 
-    const MemoryConfig& dram_memory_config =
-        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-    const MemoryConfig& output_mem_config = memory_config.value_or(dram_memory_config);
+    const MemoryConfig& output_mem_config = memory_config.value_or(input_tensor.memory_config());
 
     // Initialize compute kernel config
     TT_FATAL(
