@@ -79,13 +79,19 @@ const char* get_riscv_name(const Hal& hal, HalProgrammableCoreType core_type, ui
             return names[processor_index];
         }
         case HalProgrammableCoreType::DRAM: {
-            static const char* const names[] = {"drisc"};
+            auto num_processors = hal.get_num_risc_processors(core_type);
             TT_FATAL(
-                processor_index < 1,
-                "Watcher data corrupted, unexpected processor index {} on core {}",
+                processor_index < num_processors,
+                "Watcher data corrupted, unexpected processor index {} on core {} (max {})",
                 processor_index,
-                core_type);
-            return names[processor_index];
+                core_type,
+                num_processors - 1);
+            if (hal.get_arch() == tt::ARCH::QUASAR) {
+                static const char* const names[] = {
+                    "drisc0", "drisc1", "drisc2", "drisc3", "drisc4", "drisc5", "drisc6", "drisc7"};
+                return names[processor_index];
+            }
+            return "drisc";
         }
         case HalProgrammableCoreType::DISPATCH: {
             auto num_processors = hal.get_num_risc_processors(core_type);
@@ -677,9 +683,12 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     // Quasar's MPSC head lives outside the mailbox: in a semaphore register on Tensix, in its own L1 line on
     // dispatch engines. Read it here with the rest of the snapshot. Gated on the same condition as
     // DumpMpscRingBuffer(), the only consumer: on Tensix, with the ring buffer disabled the firmware never
-    // initializes semaphore 31, so touching it would fault.
+    // initializes semaphore 31, so touching it would fault. CCE cores (Mimir DRISC, Keraunos idle-eth) have no
+    // such register and keep the head in the mailbox.
     uint32_t ring_buf_head = 0;
-    if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled()) {
+    if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled() &&
+        programmable_core_type != HalProgrammableCoreType::DRAM &&
+        programmable_core_type != HalProgrammableCoreType::IDLE_ETH) {
         uint64_t head_addr = (programmable_core_type == HalProgrammableCoreType::DISPATCH)
                                  ? hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::RING_BUF_HEAD)
                                  : watcher_ring_buf_sem_peek_addr;
@@ -1135,8 +1144,12 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
 
     uint32_t capacity = hal.get_ring_buffer_capacity();
     uint32_t mask = capacity - 1;  // capacity is a power of two
-    // Quasar keeps head outside the mailbox, snapshotted alongside it.
-    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR) ? ring_buf_head_ : rb->head;
+    // Quasar keeps head outside the mailbox, snapshotted alongside it, except on CCE cores (Mimir DRISC,
+    // Keraunos idle-eth), which keep it in the mailbox as Blackhole does.
+    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type_ != HalProgrammableCoreType::DRAM &&
+                     programmable_core_type_ != HalProgrammableCoreType::IDLE_ETH)
+                        ? ring_buf_head_
+                        : rb->head;
 
     // Check every slot: head restarts at 0 after a rewind, so a small head doesn't mean few entries.
     std::vector<uint32_t> data, thread_indices;  // newest first
