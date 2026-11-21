@@ -133,6 +133,7 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         // hashed -- it is structural (chunk_local * sp), identical for every chunk and layer.
         tensor_args.has_gathered_prefix_metadata(),
         args.gathered_slab_global,
+        args.gathered_active_below,
         tensor_args);
 }
 
@@ -183,6 +184,9 @@ void validate_gathered_prefix_metadata(const HighBwAllGatherParams& args, const 
         TT_FATAL(
             args.gathered_slab_global == 0,
             "high_bw_all_gather gathered_slab_global is only meaningful with gathered_prefix_tensor");
+        TT_FATAL(
+            args.gathered_active_below == 0,
+            "high_bw_all_gather gathered_active_below is only meaningful with gathered_prefix_tensor");
         return;
     }
     TT_FATAL(
@@ -376,11 +380,32 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
             }
             expected_output_shape[0] = 1;
         }
-        TT_FATAL(
-            output_shape == expected_output_shape,
-            "Output tensor shape must be the worst-case gathered shape {}, got {}",
-            expected_output_shape,
-            output_shape);
+        if (args.gathered_active_below > 0) {
+            // Rank slots sized from the threshold (gathered_active_extent): every dim but the gathered one as in the
+            // worst case, and the gathered one, of any length, holding every rank's slot.
+            const uint64_t largest_extent = gathered_active_extent(args);
+            auto worst_case_but_dim = expected_output_shape;
+            worst_case_but_dim[args.dim] = output_shape[args.dim];
+            TT_FATAL(
+                output_shape == worst_case_but_dim,
+                "high_bw_all_gather with gathered_active_below: output shape {} must match the worst-case shape {} "
+                "except along the gathered dim",
+                output_shape,
+                expected_output_shape);
+            TT_FATAL(
+                largest_extent <= output_shape[args.dim],
+                "high_bw_all_gather: gathered_active_below {} allows an extent of {} rows, more than the output's {}; "
+                "lower the threshold or enlarge the output",
+                args.gathered_active_below,
+                largest_extent,
+                output_shape[args.dim]);
+        } else {
+            TT_FATAL(
+                output_shape == expected_output_shape,
+                "Output tensor shape must be the worst-case gathered shape {}, got {}",
+                expected_output_shape,
+                output_shape);
+        }
 
         if (args.gathered_dim_size.has_value()) {
             const uint32_t gathered_dim_size = *args.gathered_dim_size;
@@ -492,6 +517,7 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     uint32_t batch_slot_layer_idx,
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
+    uint32_t gathered_active_below,
     const std::optional<GlobalSemaphore>& ready_semaphore,
     const std::optional<GlobalSemaphore>& data_valid_semaphore,
     uint32_t full_mesh_outer_axis) {
@@ -600,7 +626,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .gathered_dim_size = gathered_dim_size,
             .batch_slot_num_layers = batch_slot_num_layers,
             .batch_slot_layer_idx = batch_slot_layer_idx,
-            .gathered_slab_global = gathered_slab_global},
+            .gathered_slab_global = gathered_slab_global,
+            .gathered_active_below = gathered_active_below},
         HighBwAllGatherInputs{
             .input_tensor = input_tensor,
             .output_tensor = output_tensor,
@@ -627,6 +654,7 @@ Tensor high_bw_all_gather(
     uint32_t batch_slot_layer_idx,
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
+    uint32_t gathered_active_below,
     const std::optional<GlobalSemaphore>& ready_semaphore,
     const std::optional<GlobalSemaphore>& data_valid_semaphore,
     uint32_t full_mesh_outer_axis) {
@@ -645,6 +673,7 @@ Tensor high_bw_all_gather(
         batch_slot_layer_idx,
         gathered_prefix_tensor,
         gathered_slab_global,
+        gathered_active_below,
         ready_semaphore,
         data_valid_semaphore,
         full_mesh_outer_axis);
