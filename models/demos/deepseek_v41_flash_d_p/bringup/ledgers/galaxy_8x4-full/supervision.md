@@ -1118,3 +1118,23 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - tasks.yaml: test_no_rebuild units in PB.8R / PB.8RP / PB.T now carry each gate's own model configuration (validate
   flagged F283: one load per class; PB.8R 5120 only, PB.8RP / PB.T 8192 with MHC_POST_V2=on).
 - 03:15 PB.9X accept recorded (a brief edit detaches the A/B report from decide: reverted the brief note, kept only the metric change). Resumed.
+- 03:15 heartbeat: PB.9X accept gate running (resident runner busy, units passing); watch armed.
+- 03:20 OWNER (awake): performance = the standard context-length ladder (agentx_ladder_20261119 method: agentic_cc, steady
+  chunk, DECODER_SKIP=decode, layers 0-20, resident runner) at REAL fixed histories 51200 / 131072 / 139264 (AgentX p50) /
+  262144 / 524288 / 786432 / 1024000, every segment of a packed chunk at that same history (no "mixed history"); the
+  no-rebuild check is PASS/FAIL only, a gate unit; a ladder counts only when its path's no-rebuild passes on the same code;
+  AgentX-mix walls are diagnostics. Recorded in the skill (standing decisions) and PACKED_RULES.md (68dbad3b8b6, a919b6d2e0a).
+- 03:25 PB.9X accept gate FAIL at unit 2 (test_packed_oracle, 0 s): F283 refused the 8192 oracle because the added
+  determinism unit had loaded the 5120 model = the framework bug noted at 01:05. FIXED at the cause: F296
+  (core/batch._config_of: only the unit's own tests' declared per-run variables are stripped; test_no_rebuild's
+  BRINGUP_CHUNK declaration no longer strips the chunk from every gate's determinism config), selftest
+  test_determinism_geometry.py (fails without the fix), 68dbad3b8b6. Classified framework; gate --continue runs the 6
+  remaining units only.
+- 03:30 QUEUED per the owner: PB.9C rewritten = the ladder per path at 8192 (single 8192 via test_skip_positions SKIP_POS;
+  lanes 4x2k via PACKED_ROUTE=lanes, glued 4x2k, glued 5x1600: tests get a LADDER_POS / LADDER_CASES mode, every segment at
+  h, steady + resumed), no-rebuild PASS/FAIL per path (test_no_rebuild extended to packed layouts; lanes FAIL recorded),
+  report results/packed_ladder_20261121.md with earlier numbers beside (source / date / commit). PB.9C5 (scripted): the
+  5120 single-request ladder + no-rebuild at 5120. PB.9H now judged on ladder_glued4x2k_tok_s_p139264 >= 67000 + no-rebuild
+  PASS (not fresh AgentX walls). Plan: run through PB.9C5, send the owner the table, then stop at that stopping point,
+  stash the batching ledger records, switch to dnijemcevic/model_bringup and run MB.3 (the same 5120 ladder on
+  b3decade3d8+, POS_DYNAMIC on), switch back, then PB.T and PB.9H.

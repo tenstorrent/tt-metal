@@ -6630,39 +6630,98 @@ tasks:
       program_builds_after_warmup_serving*: == 0
       ids_uploads_per_chunk*: == 0
 - id: PB.9C
-  title: 'OWNER 2026-11-20: combined perf report: every accepted packing switch + glued packing + long-history hide + the
-    mHC change, one table (before PB.T)'
+  title: 'OWNER 2026-11-21: the performance LADDER per path at real fixed histories (single 8192, fixed 4x2k lanes, glued
+    4x2k, glued 5x1.6k) + the no-rebuild PASS/FAIL per path; yesterday''s numbers beside; table to the owner'
   step: perf
   device: true
   deps:
   - PB.8RP
   brief:
-    details: 'OWNER 2026-11-20 19:00: every number in this report is the FRESH one (PB.9F''s WALLS_FRESH=1: new positions
-      / slots / layouts every timed chunk, builds counted), with the warm-repeated number beside it. Scripted (no agent):
-      one performance load (layers 0-20, 8192, resident engram table, agentic_cc, DECODER_SKIP=decode), every accepted switch
-      on (the overseer sets the env to the accepted set before it runs: a rejected switch is off). The packed walls (4x2k@139k,
-      mixed, 4x1.6k padded, 4x2k@~1M, 1x2k, the single 8192 request PACKED=off) and the glued walls (5x1.6k glued, AgentX-sampled
-      mixes glued vs fixed lanes, overhead vs segment count). The 5120 single-request path (fresh and warm) comes from PB.MB''s
-      5120 fresh walls and PB.8R''s 5120 A/B side; fixed lanes are routed through glued since PB.9X (no separate lane rows
-      unless PB.9X kept one A/B row) (a second geometry cannot share this gate''s load, F283). The overseer writes results/packed_combined_<date>.md
-      from these metrics, compared with PB.5C, before PB.T runs. Send the owner the table (overseer).'
+    prior_work: 'models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/agentx_ladder_20261119.md (THE
+      method and table: test_skip_positions SKIP_POS walls, agentic_cc, steady chunk, DECODER_SKIP=decode, layers 0-20 on
+      the resident runner; columns steady wall ms, tok/s, resumed wall ms, device ms, exposed host ms). test_packed_walls
+      / test_glued_walls today run only at ~139264 (CASES) or AgentX mixes. PB.9X: every packed chunk goes through glued (PACKED_ROUTE=glued
+      default; PACKED_ROUTE=lanes = the old fixed-lane path, call-time). Earlier numbers to put beside: the 11-19 ladder (5120
+      single), PB.5C / PB.6L (4x2k at 139264 and ~1M), PB.9F / PB.9X / PB.MB (139264 rows), with their date and commit.'
+    details: 'OWNER 2026-11-21 (binding): performance = the standard context-length ladder at REAL FIXED histories 51200,131072,139264,262144,524288,786432,1024000
+      (139264 = AgentX p50); in a packed chunk EVERY segment sits at that same history (no mixed-history or AgentX-mix cases:
+      those are diagnostics, never a headline). The no-rebuild check is PASS / FAIL only, never a throughput number, and a
+      ladder counts only when its path''s no-rebuild check passes on the same code. TESTS ONLY (no model change): (1) add
+      a ladder mode to tests/packed/test_packed_walls.py and test_glued_walls.py (env LADDER_POS=<histories>, LADDER_CASES):
+      cases 4x2k (four 2048-token segments), 5x1600 (glued), each segment its own slot at history h; per h and kind: steady
+      (every segment a mid-request chunk, write_start = start) and resumed (every segment a request''s first chunk after a
+      prefix hit: write_start = start + 128); timed the way agentx_ladder_20261119 times a chunk (repeated runs at the fixed
+      position, median, the profiled pass for device ms, exposed host ms = wall - device). Metrics: ladder_<path>_steady_wall_ms_p<h>,
+      ladder_<path>_tok_s_p<h> (new tokens / steady wall), ladder_<path>_resumed_wall_ms_p<h>, ladder_<path>_device_ms_p<h>,
+      ladder_<path>_host_exposed_ms_p<h>, path in {lanes4x2k (PACKED_ROUTE=lanes), glued4x2k, glued5x1600}. A case that does
+      not fit DRAM at h records fits_<path>_p<h> = 0 with the reason (all segments'' histories resident at once). The single-request
+      8192 ladder is test_skip_positions with BRINGUP_CHUNK=8192 and SKIP_POS (its existing metrics). (2) the no-rebuild check
+      per path: extend tests/test_no_rebuild.py so that at BRINGUP_CHUNK=8192 it also checks packed chunks (glued 4x2k and
+      5x1600 layouts at fresh slots / starts, and the same with PACKED_ROUTE=lanes) and records no_rebuild_pass_<path> = 1
+      / 0 (path in {single8192, glued4x2k, glued5x1600, lanes4x2k}) with program_builds_after_warmup_<path>; a lanes FAIL
+      is recorded, not hidden (the lane path is off in serving since PB.9X). (3) write models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/packed_ladder_20261121.md:
+      one table per path (rows = histories; the owner''s columns; a column with the earlier number at that history and its
+      source / date / commit, ''-'' where none exists), the no-rebuild PASS/FAIL per path above each table, and below each
+      table the serving entry''s extra host (adapter.prefill_chunk / prefill_packed vs the harness wall) at 139264. Declare
+      LADDER_POS in BATCH_POS_VARS and LADDER_CASES in BATCH_ITEM_VARS of both walls tests (F288 / F279) so the gate''s four
+      units share ONE executed-layers load (F283): `python -m models.demos.common.bringup validate --spec $BRINGUP_SPEC` must
+      print ''valid'' (today it reports PB.9C / PB.9H needing 2-3 loads only because those variables are not declared yet).
+      The 5120 single-request ladder runs in PB.9C5 (one geometry a gate, F283): leave a placeholder table the overseer fills
+      from PB.9C5. OWNER RULES FOR EVERY PB TASK (binding): read models/demos/deepseek_v41_flash_d_p/bringup/PACKED_RULES.md
+      first, and rule 20 of models/demos/common/bringup/agents/bringup-engineer.md.'
   gate:
-    cmd: BRINGUP_CHUNK=8192 DS41_ENGRAM_TABLE=resident DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on
-      DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on
-      DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_MHC_POST_V2=on BRINGUP_POS_TOKENS=agentic_cc WALLS_FRESH=1 DS41_DECODER_SKIP=decode
-      PACKED_WALL_CASES=4x2k_p139264,mixed,4xp50_p139264,4x2k_p1m,1x2k_p139264 scripts/run_safe_pytest.sh --run-all --no-precompile
-      models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py && BRINGUP_CHUNK=8192 DS41_ENGRAM_TABLE=resident
-      DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on
-      DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on
-      DS41_MHC_POST_V2=on BRINGUP_POS_TOKENS=agentic_cc WALLS_FRESH=1 DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_walls.py
+    cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode SKIP_POS=51200,131072,139264,262144,524288,786432,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_PACKED_ROUTE=lanes
+      LADDER_POS=51200,131072,139264,262144,524288,786432,1024000 LADDER_CASES=4x2k scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on
+      DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on
+      DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident
+      BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode LADDER_POS=51200,131072,139264,262144,524288,786432,1024000 LADDER_CASES=4x2k,5x1600
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_walls.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
     metrics:
-      packed_wall_ms_*: '> 0'
-      packed_serving_tok_s_4x2k_p139264_tagentic_cc: '>= 67000'
-      packed_serving_tok_s_mixed_tagentic_cc: '>= 64000'
-      glued_serving_tok_s_*: '> 0'
-      lanes_serving_tok_s_agentx_m*: '> 0'
-      program_builds_after_warmup_*: == 0
+      steady_tok_s_p*: '> 0'
+      ladder_glued4x2k_tok_s_p*: '> 0'
+      ladder_glued5x1600_tok_s_p*: '> 0'
+      ladder_lanes4x2k_tok_s_p*: '> 0'
+      no_rebuild_pass_single8192*: == 1
+      no_rebuild_pass_glued4x2k*: == 1
+      no_rebuild_pass_glued5x1600*: == 1
+      program_builds_after_warmup_serving*: == 0
+      ids_uploads_per_chunk*: == 0
+  role: perf
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/packed_ladder_20261121.md
+- id: PB.9C5
+  title: 'OWNER 2026-11-21: the 5120 single-request ladder at real fixed histories + its no-rebuild PASS/FAIL (PB.9C''s 5120
+    half, one geometry a gate)'
+  step: perf
+  device: true
+  deps:
+  - PB.9C
+  brief:
+    details: 'Scripted (no agent): test_skip_positions at BRINGUP_CHUNK=5120, SKIP_POS = the ladder histories (agentx_ladder_20261119''s
+      method), and test_no_rebuild at 5120. The overseer fills PB.9C''s report''s 5120 table from it (11-19 numbers beside).'
+  gate:
+    cmd: BRINGUP_CHUNK=5120 DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode
+      SKIP_POS=51200,131072,139264,262144,524288,786432,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=5120 DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    metrics:
+      steady_tok_s_p*: '> 0'
+      program_builds_after_warmup_serving*: == 0
+      ids_uploads_per_chunk*: == 0
 - id: PB.T
   title: 'OWNER 2026-11-20: adversarial batching tests: no cross-request leakage, bit-exact vs prompt-by-prompt at the same
     chunk boundaries; FAST tier in every accept gate (<= ~5 min, hard cap) + DEEP sweep (~20-30 min, path-triggered)'
@@ -6670,7 +6729,7 @@ tasks:
   role: perf
   device: true
   deps:
-  - PB.9C
+  - PB.9C5
   paths:
   - models/demos/deepseek_v41_flash_d_p/tests/
   - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
@@ -6781,13 +6840,14 @@ tasks:
       (one program a segment a layer), 72 page copies x 0.074 ms, an unattributed ~13 ms fresh-vs-repeated gap with 0 builds;
       the adapter''s host +5-7 ms a chunk vs run_chunk (PB.MB / MB.2). Misaligned segments cost ~4-5 ms more a segment than
       aligned (PB.9X_fresh_walls.md overhead column).'
-    details: 'OWNER GOAL (binding since 2026-11-19): 4 x 2k each over ~139k history >= 67k new tok/s FRESH (new positions
-      / slots / layouts every timed chunk, 0 builds), through the serving entry. Cut the glued path''s host enqueue below
-      its device time (fewer / cheaper per-call host steps, fused or batched sends, the fresh-vs-repeated gap attributed and
-      removed); also the per-segment overhead of misaligned segments where it is host. Bit-identical (oracles 0). Report fresh
-      vs repeated per case next to PB.9X in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9H_fresh_walls.md.
-      OWNER RULES FOR EVERY PB TASK (binding): read models/demos/deepseek_v41_flash_d_p/bringup/PACKED_RULES.md first, and
-      rule 20 of models/demos/common/bringup/agents/bringup-engineer.md.'
+    details: 'OWNER GOAL (binding since 2026-11-19): 4 x 2k each over ~139k history >= 67k new tok/s: judged on PB.9C''s ladder
+      (ladder_glued4x2k_tok_s_p139264, every segment at 139264) with the no-rebuild check PASS on the same code (owner 2026-11-21:
+      performance = the ladder, no-rebuild PASS/FAIL). Cut the glued path''s host enqueue below its device time (fewer / cheaper
+      per-call host steps, fused or batched sends, the fresh-vs-repeated gap attributed and removed); also the per-segment
+      overhead of misaligned segments where it is host. Bit-identical (oracles 0). Report fresh vs repeated per case next
+      to PB.9X in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9H_fresh_walls.md. OWNER
+      RULES FOR EVERY PB TASK (binding): read models/demos/deepseek_v41_flash_d_p/bringup/PACKED_RULES.md first, and rule
+      20 of models/demos/common/bringup/agents/bringup-engineer.md.'
   gate:
     cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
       DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on
@@ -6800,16 +6860,12 @@ tasks:
       DS41_PACKED_GLUED=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_reference.py
       && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
       DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on
-      DS41_PACKED_GLUED=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode WALLS_FRESH=1
-      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
-      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
-      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on
-      DS41_PACKED_GLUED=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode WALLS_FRESH=1
-      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_walls.py
-      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
-      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on
       DS41_PACKED_GLUED=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py && BRINGUP_CHUNK=8192 DS41_PACKED=on
+      DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on
+      DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on
+      DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode LADDER_POS=139264,1024000 LADDER_CASES=4x2k,5x1600
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_walls.py
     metrics:
       packed_alone_vs_today_max_abs_diff: == 0
       packed_lane_equiv_max_abs_diff: == 0
@@ -6825,4 +6881,5 @@ tasks:
       glued_program_builds_after_warmup*: == 0
       lanes_program_builds_after_warmup*: == 0
       ids_uploads_per_chunk*: == 0
-      glued_serving_tok_s_4x2k_p139264*: '>= 67000'
+      ladder_glued4x2k_tok_s_p139264*: '>= 67000'
+      no_rebuild_pass_glued4x2k*: == 1
