@@ -8,15 +8,18 @@
 // receiver channel of the same VC, and credits each slot to its producer once the remote receiver completes it (or, on
 // first-level-ack VCs, acks it).
 //
-// A pass: the first reads (the free-slots registers of every VC with a worker channel, forwarding channels' first, then
-// the worker channels' connection semaphores; a VC without a worker channel reads its registers right before its
-// visit, so a packet landing during the earlier visits does not wait a pass); then one visit per VC against its remote
-// receiver channel's progress: its forwarding channels (skipped with one test when none has work), then its worker
-// channel; each worker channel's connection is checked every pass, by rule (a later VC's before the visits, the
-// loop-local VC's after them; a change out of line). A channel with work sends, takes completions (and acks) and
-// credits its producer. The loop-local VC is visited every pass; a later VC is skipped with one test when none of its
-// channels has work. The pass makes no call while it sends and takes no closures (a lambda capturing the loop's state
-// can keep that state in memory), so helpers recurse over channel masks.
+// A pass: the first reads (the free-slots registers of every VC with a worker channel, then the worker channels'
+// connection semaphores; a VC without a worker channel reads its registers right before its visit, so a packet landing
+// during the earlier visits does not wait a pass); then one visit per VC against its remote receiver channel's
+// progress: its worker channel, then its forwarding channels (those holding a packet, each on its own test, then those
+// with packets in flight only, behind one test); each worker channel's connection is checked every pass, by rule (a
+// later VC's before the visits, the loop-local VC's after its sends; a change out of line). A channel with work sends,
+// takes completions (and acks) and credits its producer. The loop-local VC is visited every pass; a later VC is skipped
+// with one test when none of its channels has work. On a router with one VC, with a worker channel and forwarding
+// channels, the reads are pipelined (pipelines_pass_reads): the pass issues the next pass's first reads after its last
+// send, so their latency overlaps the pass's remaining work and the loop's back edge; a round's first pass reads
+// afresh. The pass makes no call while it sends and takes no closures (a lambda capturing the loop's state can keep
+// that state in memory), so helpers recurse over channel masks.
 //
 // Each sender channel (SenderChannel<CH>) belongs to one VC (SenderVc<VC>); a VC has at most one worker channel
 // (WorkerChannel<CH>), and its others are forwarding channels (ForwardingChannel<CH>). Where state lives:
@@ -153,6 +156,13 @@ struct SenderChannels {
         }(),
         "a static upstream connection is a forwarding channel's");
 };
+
+// Whether the pass's first reads are pipelined: issued by the pass before, after its last send (PassReads). On a
+// router sending on one VC with a worker channel and forwarding channels (the 2D router), where those reads are four
+// or more registers and the semaphore: their latency then overlaps the end of the pass and the loop's back edge instead
+// of starting each pass. Elsewhere (one channel, or several VCs whose later visits can send) each pass reads its own.
+constexpr bool pipelines_pass_reads = popcount(SenderChannels::serviced_vcs) == 1 &&
+                                      SenderChannels::worker_channels != 0 && SenderChannels::forwarding_channels != 0;
 
 // The remote router's receiver channel of VC: its slots and its packets-received register.
 template <size_t VC>
@@ -517,7 +527,13 @@ struct FreeSlotsRegisters {
     template <size_t CH>
     FORCE_INLINE bool holds_packet() const {
         static_assert(((MASK >> CH) & 1u) != 0);
-        return SenderChannel<CH>::holds_packet(raw[CH]);
+        if constexpr (pipelines_pass_reads) {
+            // The same test as a mask and a compare with the slot count (kept in a register across the loop): two
+            // instructions and the branch, where the pipelined pass is bound by its instructions, not its reads.
+            return (raw[CH] & stream_count_mask) != SenderChannel<CH>::num_slots;
+        } else {
+            return SenderChannel<CH>::holds_packet(raw[CH]);
+        }
     }
 
     // Each register in SUB XOR its channel's slot count, OR'd: zero in the count bits exactly when none holds a packet.
@@ -538,6 +554,32 @@ struct FreeSlotsRegisters {
     FORCE_INLINE bool any_with_work(uint32_t in_flight) const {
         return ((this->template xor_slot_counts<SUB>() & stream_count_mask) | (in_flight & SUB)) != 0;
     }
+};
+
+// A pass's first reads: the free-slots registers read at pass start and the worker channels' connection semaphores.
+struct PassReads {
+    static constexpr uint32_t semaphore_slots = std::max<uint32_t>(1, mask_width(SenderChannels::worker_channels));
+    FreeSlotsRegisters<SenderChannels::read_at_pass_start> registers;
+    // Indexed by sender channel, so up to the highest worker channel; at least 1, as an array can't be empty.
+    uint32_t connection_semaphores[semaphore_slots];
+
+    // Every register, then every semaphore (lowest channel first); nothing is tested here.
+    FORCE_INLINE void read() {
+        registers.read();
+        read_connection_semaphores<SenderChannels::worker_channels>(connection_semaphores);
+    }
+};
+
+// Where the loop-local VC's visit issues the next pass's first reads (pipelines_pass_reads): after its last send.
+// Before them it checks its worker channel's connection on this pass's semaphore (`semaphore`), so nothing of this
+// pass's reads is live past that point. NoPrefetch: each pass reads its own (the connection checked after the visits).
+struct Prefetch {
+    static constexpr bool enabled = true;
+    PassReads& next;
+    uint32_t semaphore;
+};
+struct NoPrefetch {
+    static constexpr bool enabled = false;
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -609,6 +651,13 @@ FORCE_INLINE bool send(
     if constexpr (SenderChannel<CH>::first_level_ack) {
         reported_acks =
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SenderChannel<CH>::first_level_ack_counter_addr);
+    }
+    if constexpr (pipelines_pass_reads) {
+        // The free-slots register +1 above (a store) is seen by the next read of that register: the pipelined reads
+        // follow the pass's last send closely, and Blackhole lets a load pass an earlier store to another address, so
+        // without this a read could miss the +1 and report this packet still held (a send with no packet). Here, on
+        // passes that send, rather than once per pass: a fence on every pass waits for the reads in flight too.
+        asm volatile("fence" ::: "memory");
     }
     sent++;
     if constexpr (telemetry::counts_sent) {
@@ -846,8 +895,10 @@ FORCE_INLINE void visit_forwarding_channels_holding(
     }
 }
 
-// The forwarding channels in MASK that held no packet but had packets in flight as the forwarding visits started
-// (`in_flight`): their completions (and acks). (A channel that held a packet took them in its visit.)
+// The forwarding channels in MASK that had packets in flight as the forwarding visits started (`in_flight`) and held no
+// packet: their completions (and acks). A channel that held a packet took them in its visit (the send's read group);
+// visiting it again would read its counters once more, after the next pass's first reads (Prefetch) and so queued
+// behind them: about 20 cycles per pass while a forwarding channel streams.
 template <uint32_t MASK, typename Registers, typename Remote>
 FORCE_INLINE void visit_forwarding_channels_in_flight(
     SenderChannelStates& states,
@@ -871,14 +922,15 @@ FORCE_INLINE void visit_forwarding_channels_in_flight(
 // worker channel (visited every pass where VC is the loop-local VC, otherwise when it holds a packet or has packets in
 // flight), then its forwarding channels: those holding a packet, each on its own test, then (behind one test) those
 // with packets in flight only.
-template <size_t VC, typename Remote, typename Registers>
+template <size_t VC, typename Remote, typename Registers, typename Next>
 FORCE_INLINE void visit_channels(
     SenderChannelStates& states,
     SenderVcState<VC>& send_state,
     Remote& remote,
     const Registers& registers,
     uint32_t& channels_in_flight,
-    bool& send_yielded) {
+    bool& send_yielded,
+    Next& next) {
     constexpr uint32_t forwarding = SenderVc<VC>::forwarding_channels;
     if constexpr (SenderVc<VC>::has_worker_channel) {
         constexpr size_t CH = SenderVc<VC>::worker_channel;
@@ -893,6 +945,12 @@ FORCE_INLINE void visit_channels(
         // Packets in flight as the forwarding visits start (a visit that sends sets its channel's bit).
         const uint32_t in_flight = channels_in_flight & forwarding;
         visit_forwarding_channels_holding<forwarding>(states, registers, channels_in_flight, remote, send_yielded);
+        if constexpr (Next::enabled) {
+            // The last send is behind: the connection (this pass's semaphore), then the next pass's first reads.
+            static_assert(SenderChannelStates::visited_every_pass<VC> && SenderVc<VC>::has_worker_channel);
+            WorkerChannel<SenderVc<VC>::worker_channel>::check_connection(send_state.worker, next.semaphore);
+            next.next.read();
+        }
         if (__builtin_expect(in_flight != 0, 0)) {
             visit_forwarding_channels_in_flight<forwarding>(
                 states, registers, in_flight, channels_in_flight, remote, send_yielded);
@@ -903,43 +961,48 @@ FORCE_INLINE void visit_channels(
 // VC's channels, on its send state, from their free-slots registers: a later VC is skipped with one test when none of
 // its channels has work; otherwise its remote receiver progress is taken into a local and put back where it changed
 // (after_visit).
-template <size_t VC, typename Registers>
+template <size_t VC, typename Registers, typename Next>
 FORCE_INLINE void visit_vc_channels(
     SenderChannelStates& states,
     SenderVcState<VC>& send_state,
     Registers& registers,
     uint32_t& channels_in_flight,
-    bool& send_yielded) {
+    bool& send_yielded,
+    Next& next) {
     if constexpr (SenderChannelStates::visited_every_pass<VC>) {
-        visit_channels<VC>(states, send_state, send_state.remote, registers, channels_in_flight, send_yielded);
+        visit_channels<VC>(states, send_state, send_state.remote, registers, channels_in_flight, send_yielded, next);
     } else {
+        static_assert(!Next::enabled, "only the loop-local VC issues the next pass's reads");
+        NoPrefetch none;
         if (!registers.template any_with_work<SenderVc<VC>::sender_channels>(channels_in_flight)) {
             return;
         }
         const RemoteReceiverChannelProgress<VC> taken = send_state.remote;
         RemoteReceiverChannelProgress<VC> remote = taken;
-        visit_channels<VC>(states, send_state, remote, registers, channels_in_flight, send_yielded);
+        visit_channels<VC>(states, send_state, remote, registers, channels_in_flight, send_yielded, none);
         states.template after_visit<VC>(send_state, taken, remote);
     }
 }
 
 // VC's visit, on its send state where SenderChannelStates places it: its free-slots registers (the pass's first reads
 // where VC reads them there, `at_pass_start`; otherwise read now), then its channels.
-template <size_t VC, typename LoopCopy, typename PassStartRegisters>
+template <size_t VC, typename LoopCopy, typename PassStartRegisters, typename Next>
 FORCE_INLINE void visit_vc(
     LoopCopy& loop_copy,
     SenderChannelStates& states,
     PassStartRegisters& at_pass_start,
     uint32_t& channels_in_flight,
-    bool& send_yielded) {
+    bool& send_yielded,
+    Next& next) {
     if constexpr (SenderVc<VC>::sender_channels != 0) {
         SenderVcState<VC>& send_state = states.template progress_for<VC>(loop_copy);
         if constexpr (SenderVc<VC>::reads_free_slots_at_pass_start) {
-            visit_vc_channels<VC>(states, send_state, at_pass_start, channels_in_flight, send_yielded);
+            visit_vc_channels<VC>(states, send_state, at_pass_start, channels_in_flight, send_yielded, next);
         } else {
+            static_assert(!Next::enabled);
             FreeSlotsRegisters<SenderVc<VC>::sender_channels> registers;
             registers.read();
-            visit_vc_channels<VC>(states, send_state, registers, channels_in_flight, send_yielded);
+            visit_vc_channels<VC>(states, send_state, registers, channels_in_flight, send_yielded, next);
         }
     }
 }
@@ -1014,37 +1077,66 @@ FORCE_INLINE void check_worker_connection(
     }
 }
 
-// One pass over the sender channels: the first reads, each worker channel's connection, then one visit per VC. Also the
-// sender half of a single-ERISC router's pass.
+// One pass over the sender channels on its first reads (`reads`): each later VC's worker channel's connection, then one
+// visit per VC, then (NoPrefetch) the loop-local VC's worker channel's connection; with Prefetch the loop-local VC's
+// visit checks that connection and issues the next pass's first reads after its last send.
+template <typename LoopCopy, typename Next>
+FORCE_INLINE void pass_on(
+    LoopCopy& loop_copy,
+    SenderChannelStates& states,
+    uint32_t& channels_in_flight,
+    bool& send_yielded,
+    PassReads& reads,
+    Next& next) {
+    // Each worker channel's connection, every pass: a later VC's before the visits, the loop-local VC's after its
+    // sends, so no visit waits on the semaphore read (the pass's last read). (A change seen after the visits is handled
+    // the same way: a worker that connected during the pass was credited into its read counter, and the open credits it
+    // all.)
+    constexpr size_t loop_local_vc = SenderChannelStates::loop_local_vc;
+    if constexpr (loop_local_vc != 0) {
+        check_worker_connection<0>(loop_copy, states, reads.connection_semaphores);
+    }
+    if constexpr (loop_local_vc != 1) {
+        check_worker_connection<1>(loop_copy, states, reads.connection_semaphores);
+    }
+    if constexpr (loop_local_vc != 2) {
+        check_worker_connection<2>(loop_copy, states, reads.connection_semaphores);
+    }
+    visit_vc<0>(loop_copy, states, reads.registers, channels_in_flight, send_yielded, next);
+    visit_vc<1>(loop_copy, states, reads.registers, channels_in_flight, send_yielded, next);
+    visit_vc<2>(loop_copy, states, reads.registers, channels_in_flight, send_yielded, next);
+    if constexpr (!Next::enabled) {
+        check_worker_connection<loop_local_vc>(loop_copy, states, reads.connection_semaphores);
+    }
+}
+
+// One pass over the sender channels, reading its own first reads (every register and semaphore read before any is
+// tested; the registers stay raw until their visit tests them). Also the sender half of a single-ERISC router's pass.
 template <typename LoopCopy>
 FORCE_INLINE void pass(
     LoopCopy& loop_copy, SenderChannelStates& states, uint32_t& channels_in_flight, bool& send_yielded) {
-    constexpr uint32_t worker_channels = SenderChannels::worker_channels;
-    // Indexed by sender channel, so up to the highest worker channel; at least 1, as an array can't be empty.
-    constexpr uint32_t semaphore_slots = std::max<uint32_t>(1, mask_width(worker_channels));
-    uint32_t connection_semaphores[semaphore_slots];
-    // The first reads: every register and semaphore is read before any is tested; the registers stay raw until their
-    // visit tests them (FreeSlotsRegisters).
-    FreeSlotsRegisters<SenderChannels::read_at_pass_start> registers;
-    registers.read();
-    read_connection_semaphores<worker_channels>(connection_semaphores);
-    // Each worker channel's connection, every pass: a later VC's before the visits, the loop-local VC's after them, so
-    // no visit waits on the semaphore read (the pass's last read). (A change seen after the visits is handled the same
-    // way: a worker that connected during the pass was credited into its read counter, and the open credits it all.)
-    constexpr size_t loop_local_vc = SenderChannelStates::loop_local_vc;
-    if constexpr (loop_local_vc != 0) {
-        check_worker_connection<0>(loop_copy, states, connection_semaphores);
-    }
-    if constexpr (loop_local_vc != 1) {
-        check_worker_connection<1>(loop_copy, states, connection_semaphores);
-    }
-    if constexpr (loop_local_vc != 2) {
-        check_worker_connection<2>(loop_copy, states, connection_semaphores);
-    }
-    visit_vc<0>(loop_copy, states, registers, channels_in_flight, send_yielded);
-    visit_vc<1>(loop_copy, states, registers, channels_in_flight, send_yielded);
-    visit_vc<2>(loop_copy, states, registers, channels_in_flight, send_yielded);
-    check_worker_connection<loop_local_vc>(loop_copy, states, connection_semaphores);
+    PassReads reads;
+    reads.read();
+    NoPrefetch none;
+    pass_on(loop_copy, states, channels_in_flight, send_yielded, reads, none);
+}
+
+// One pass on the first reads the pass before issued (`reads`, issued afresh before a round's first pass), issuing the
+// next pass's into `reads` after its last send (pipelines_pass_reads). A register read one pass early can only show
+// fewer packets than the channel holds (its producer only adds them; the router's own +1 per send is fenced before the
+// read: visit_channels), so no send is made without its packet; the semaphore is one pass older, as a change landing
+// just after an unpipelined read would be.
+template <typename LoopCopy>
+FORCE_INLINE void pipelined_pass(
+    LoopCopy& loop_copy,
+    SenderChannelStates& states,
+    uint32_t& channels_in_flight,
+    bool& send_yielded,
+    PassReads& reads) {
+    static_assert(pipelines_pass_reads);
+    PassReads current = reads;
+    Prefetch next{reads, current.connection_semaphores[SenderVc<SenderChannelStates::loop_local_vc>::worker_channel]};
+    pass_on(loop_copy, states, channels_in_flight, send_yielded, current, next);
 }
 
 // The sender's round state: every loop's round counters, whether a send yielded this round (the TX queue was busy) and
@@ -1115,8 +1207,17 @@ __attribute__((noinline)) void run() {
         restore_worker_credit_presets(loop_copy, states);
         while (next_round()) {
             before_round(round, loop_copy, states);
-            for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
-                pass(loop_copy, states, channels_in_flight, round.send_yielded);
+            if constexpr (pipelines_pass_reads) {
+                // A round's first pass reads afresh; each pass then issues the next's (the last pass's go unused).
+                PassReads reads;
+                reads.read();
+                for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
+                    pipelined_pass(loop_copy, states, channels_in_flight, round.send_yielded, reads);
+                }
+            } else {
+                for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
+                    pass(loop_copy, states, channels_in_flight, round.send_yielded);
+                }
             }
             after_round<false>(round, loop_copy, states, [] { return false; });
         }
