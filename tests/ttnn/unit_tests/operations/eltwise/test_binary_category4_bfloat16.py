@@ -447,6 +447,60 @@ def test_xlogy_nonpositive(device):
     )
 
 
+def test_xlogy_y_equals_one_is_zero(device):
+    """log(1) must be exactly 0, so xlogy(x, 1) must be exactly 0 for every x.
+
+    The kernel used to evaluate log with its own coarse cubic, so log(1) came
+    back near 1.00005e-3 and the product carried that offset out to every
+    magnitude. Spanning the exponents covers the whole range where that fixed
+    ratio showed up.
+
+    | x       | y | expected   |
+    |---------|---|------------|
+    | 1.0     | 1 | 0          |
+    | 1e30     | 1 | 0         |
+    | 1e-30    | 1 | 0         |
+    | -1e30    | 1 | -0        |
+    """
+    exponents = [-30, -10, -1, 0, 1, 10, 30]
+    values_x = torch.tensor(
+        [2.0**e if i % 2 == 0 else -(2.0**e) for i, e in enumerate(exponents)], dtype=torch.float32
+    )
+    values_y = torch.ones_like(values_x)
+
+    result = ttnn.to_torch(ttnn.xlogy(to_tt_tensor(values_x, device), to_tt_tensor(values_y, device)))
+
+    assert_equal(torch.zeros_like(result), result)
+
+
+def test_xlogy_matches_log(device):
+    """xlogy(x, y) must track x * log(y) away from the old bound, not only at y = 1.
+
+    The kernel now evaluates log(y) with the same bfloat16 polynomial ttnn.log uses, rather than its own coarse
+    cubic whose error reached 1.5e-2. y spans [0.05, 8] plus the bfloat16 neighbours of 1, where the old log was
+    worst in relative terms, so a regression in the polynomial away from y = 1 fails here even though
+    XLOGY_LOG_ATOL is still wide enough for the old cubic.
+
+    | y                   | expected                               |
+    |---------------------|----------------------------------------|
+    | [0.05, 8]           | within 3 ULP of x * log(y)             |
+    | bfloat16 around 1   | within 3 ULP; log(1) is exactly 0      |
+    """
+    values_y = torch.cat(
+        [
+            torch.logspace(torch.log10(torch.tensor(0.05)), torch.log10(torch.tensor(8.0)), 48),
+            torch.tensor([0.9921875, 0.99609375, 1.0, 1.0078125, 1.015625, 1.0625], dtype=torch.float32),
+        ]
+    ).to(torch.bfloat16)
+    values_x = torch.full_like(values_y, 3.7)
+
+    result = ttnn.to_torch(ttnn.xlogy(to_tt_tensor(values_x, device), to_tt_tensor(values_y, device)))
+
+    # Reference is x * log(y) computed in float32 by torch from the bfloat16 inputs, then rounded to bfloat16.
+    reference = (values_x.float() * torch.log(values_y.float())).to(torch.bfloat16)
+    assert_with_ulp(expected_result=reference, actual_result=result, ulp_threshold=3)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # hypot — SQUARE on both operands, add, then a SQRT post-op
 # ─────────────────────────────────────────────────────────────────────────────
