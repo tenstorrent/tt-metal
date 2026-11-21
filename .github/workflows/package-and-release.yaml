@@ -208,29 +208,30 @@ jobs:
 
   blaze-merge-gate:
     needs: [build-artifact-profiler]
-    # Disabled blaze merge gate until TT_BLAZE_PAT token is restored: https://tenstorrent.atlassian.net/browse/RELEASE-134
-    if: ${{ false && !cancelled() && github.ref != 'refs/heads/stable' && needs.build-artifact-profiler.result == 'success' }}
+    # Runs on main only. The tokens and the relay serve only runs on main. On
+    # stable, v* tags and other branches the gate is skipped, so
+    # publish-to-pypi and trigger-prod-after-rc-success go on as without it.
+    # On main they need a passed gate: when the profiler build fails, the gate
+    # is skipped and they do not run (fail closed).
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.build-artifact-profiler.result == 'success' }}
     permissions:
       contents: read
-    # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
-    secrets:
-      TT_BLAZE_PAT: ${{ secrets.TT_BLAZE_PAT }}
+      # The gate signs in for short-lived tokens on tenstorrent/tt-blaze-relay
+      # (the default GITHUB_TOKEN cannot dispatch another repo).
+      id-token: write
+    # The gate starts the tt-blaze relay with this run's id. The relay takes
+    # the commit and the profiler build of this run from GitHub and runs
+    # tt-blaze's full merge gate (ci.yaml on main).
     uses: ./.github/workflows/blaze-merge-gate.yaml
-    with:
-      # Artifacts belong to the TOP-LEVEL run, which is this workflow.
-      metal-run-id: ${{ github.run_id }}
-      # tt-blaze checks its tt-metal submodule out here so its JIT-compiled kernels
-      # match the libraries it links against.
-      metal-ref: ${{ github.sha }}
-      # Commit-scoped, not tracy-scoped: the same image the plain build resolves.
-      dev-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      # Run tt-blaze's full merge gate from its main branch.
-      blaze-ref: main
 
   # Hands a build that passed tt-blaze's merge gate to tt-blaze's nightly tt-metal uplift,
   # which pins it on a trial branch and validates it there. Only a scheduled run on main,
-  # or a re-run of one (a re-run keeps its event), launches it. It launches the run and
-  # does not wait: the uplift reports in its own run and draft PR.
+  # or a re-run of one (a re-run keeps its event), launches it. It goes through the
+  # tt-blaze relay (target uplift), which checks again that this run is scheduled, on
+  # main, and that its tt-blaze gate passed, then starts nightly-metal-uplift.yaml with
+  # this run's commit as metal-sha, so the uplift adopts the profiler build the gate just
+  # passed instead of building it again. The relay starts it once per run and does not
+  # wait: the uplift reports in its own run and draft PR.
   launch-blaze-uplift:
     needs: [blaze-merge-gate]
     if: >-
@@ -238,22 +239,13 @@ jobs:
           && needs.blaze-merge-gate.result == 'success'
           && github.event_name == 'schedule'
           && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    permissions: {}
-    steps:
-      - name: Launch tt-blaze's nightly tt-metal uplift
-        env:
-          # The default GITHUB_TOKEN cannot dispatch another repo.
-          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
-          METAL_SHA: ${{ github.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          # metal-sha makes the uplift adopt this run's profiler build, the one the gate
-          # just passed, instead of building it again; metal-ref is the branch it is on.
-          gh workflow run nightly-metal-uplift.yaml --repo tenstorrent/tt-blaze --ref main \
-            -f metal-ref=main -f metal-sha="$METAL_SHA" -f validate=true
-          echo "Launched tt-blaze nightly-metal-uplift.yaml for tt-metal ${METAL_SHA}" >> "$GITHUB_STEP_SUMMARY"
+    permissions:
+      contents: read
+      # Short-lived tokens on tenstorrent/tt-blaze-relay, as for the gate.
+      id-token: write
+    uses: ./.github/workflows/blaze-merge-gate.yaml
+    with:
+      target: uplift
 
   publish-to-pypi:
     needs: [build-test-publish, create-tag, blaze-merge-gate]
@@ -262,7 +254,7 @@ jobs:
       ${{ !cancelled()
           && needs.build-test-publish.result == 'success'
           && needs.create-tag.result == 'success'
-          && (needs.blaze-merge-gate.result == 'success' || needs.blaze-merge-gate.result == 'skipped')
+          && (needs.blaze-merge-gate.result == 'success' || (github.ref != 'refs/heads/main' && needs.blaze-merge-gate.result == 'skipped'))
           && (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run) }}
     environment:
       name: pypi
@@ -802,7 +794,7 @@ jobs:
           && needs.release-precheck.result == 'success'
           && needs.build-test-publish.result == 'success'
           && needs.create-tag.result == 'success'
-          && (needs.blaze-merge-gate.result == 'success' || needs.blaze-merge-gate.result == 'skipped') }}
+          && (needs.blaze-merge-gate.result == 'success' || (github.ref != 'refs/heads/main' && needs.blaze-merge-gate.result == 'skipped')) }}
     steps:
       - name: Wait for RC workflow completion
         run: |

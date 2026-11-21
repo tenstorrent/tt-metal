@@ -4,295 +4,789 @@ name: Blaze Merge Gate
 # release pipeline just produced, so a tt-metal change that breaks tt-blaze is
 # caught while the release is being cut rather than by the next uplift.
 #
-# Scope is tt-blaze's whole gate -- unit + P150 + craq-sim + every gate-tier BH
-# Loudbox bucket. With `selected-buckets` set it instead runs tt-blaze's
-# bh-loudbox-intermittent.yaml for just those BH Loudbox buckets.
+# tt-metal does not start tt-blaze itself. It starts the relay workflow
+# relay.yaml in tenstorrent/tt-blaze-relay with ONE input, the id of this run.
+# The relay checks that run against public tt-metal (repository, workflow,
+# event, branch main, age, the profiler build), then starts ONE run of
+# tt-blaze's ci.yaml on main with values it takes from GitHub (this run's
+# commit), waits for it and ends with its result. This job waits for the relay
+# run and passes or fails with it. When this job is cancelled, fails or times
+# out, it cancels the relay run, and the relay then cancels the tt-blaze run.
 #
-# tt-blaze cannot build tt-metal itself -- its CI consumes prebuilt tarball+wheel
-# artifacts. So this workflow does NOT hand tt-blaze a branch to go resolve: it
-# hands over `metal-run-id`, the id of the top-level run whose `build-artifact-profiler`
-# job has already published the tarball and wheel for this exact commit. tt-blaze's
-# download-build-artifact.yaml takes that run id verbatim and skips pin
-# resolution entirely. `metal-ref` then moves tt-blaze's tt-metal submodule to the
-# same commit, so JIT-compiled kernels and the linked libraries come from one
-# tt-metal rather than two.
+# tt-blaze's ci.yaml on main, its whole gate, default runner labels and the
+# image of tt-blaze's DEV_IMAGE variable: these are fixed in the relay. Other
+# tt-blaze workflows, refs, buckets or images cannot be asked for from here.
 #
-# `dev-image` is the dev container this run built for the same commit. tt-blaze
-# JIT-compiles kernels with the SFPI in the container it runs in (not the tarball
-# or wheel), so the gate must run in this commit's image, not vars.DEV_IMAGE.
+# Input `target` picks one of the two things the relay serves:
+#   ci      (default) the merge gate above; this job waits for it.
+#   uplift  tt-blaze's nightly-metal-uplift.yaml for this run's commit. The
+#           relay serves it only for a scheduled package-and-release run whose
+#           ci gate passed, once per run, and does not wait for the uplift, so
+#           this job ends a few minutes after the relay starts it.
 #
+# tt-blaze cannot build tt-metal itself: its CI consumes the prebuilt tarball and
+# wheel that `build-artifact-profiler` published in this run. The relay passes
+# this run's id and commit to tt-blaze, so tt-blaze downloads exactly those
+# artifacts and moves its tt-metal submodule to the same commit.
 #
-# Auth: dispatching and polling a workflow in another repo needs a PAT with
-# `actions: write` (dispatch, cancel) and `actions: read` (poll) on
-# tenstorrent/tt-blaze, stored in THIS repo as the `TT_BLAZE_PAT` secret. The
-# default GITHUB_TOKEN is scoped to tt-metal and cannot dispatch tt-blaze.
-#
-# `gh workflow run` returns no run id, so the run is correlated by echoing a
-# unique `dispatch-id` into tt-blaze's `run-name` and matching it back. That token
-# is also tt-blaze's concurrency key, which is what keeps concurrent dispatches
-# from cancelling each other's blaze run.
+# Auth: no token is stored in this repo. The job gets short-lived tokens at run
+# time (OIDC sign-in, role tenstorrent--tt-metal--blaze-dispatch). The role
+# answers only a job that runs on `main` (schedule or manual dispatch) AND
+# names the environment `tt-blaze-dispatch`. Tokens are on tt-blaze-relay
+# only: a write token (actions write) for the dispatch and for a cancel, each
+# revoked right after its use, and a read token (actions read) for the wait,
+# one per 12 minute segment, revoked at the end of the segment (a token and
+# its sign-in last at most 15 minutes). The caller job must grant
+# `id-token: write`. To change the access, open an OSPO ticket.
 
 on:
   workflow_call:
     inputs:
-      metal-run-id:
-        description: >-
-          Run id holding the tt-metal build artifacts tt-blaze should test
-          against. Normally `github.run_id` -- artifacts belong to the TOP-LEVEL
-          run, so that is the right value even from a nested reusable workflow.
-        required: true
-        type: string
-      metal-ref:
-        description: >-
-          tt-metal commit those artifacts were built from. tt-blaze checks its
-          tt-metal submodule out here. Must be a commit fetchable from
-          tenstorrent/tt-metal for as long as the blaze run lasts.
-        required: true
-        type: string
-      dev-image:
-        description: >-
-          Dev image for `metal-ref` (`build-artifact`'s `dev-docker-image` output,
-          full ghcr ref). Empty = tt-blaze's repo-variable DEV_IMAGE.
+      target:
+        description: "ci (tt-blaze merge gate, waited for) or uplift (tt-blaze nightly-metal-uplift.yaml, after a passed gate)."
         required: false
         type: string
-      blaze-ref:
-        description: "tt-blaze branch/tag/SHA to run the gate from."
-        required: false
-        type: string
-        default: main
-      wait-timeout-minutes:
-        description: >-
-          How long to wait for the tt-blaze run. Includes 1 hour of running the gate
-          and 2 hours to find runners, though most cases should find runners within 30 min
-          given blaze stats, especially at night. Internal timeouts make it fail fast on hangs.
-        required: false
-        type: number
-        default: 180
-      selected-buckets:
-        description: >-
-          Comma-separated tt-blaze BH Loudbox bucket ids. Empty (the default) runs
-          tt-blaze's full merge gate (ci.yaml). Set, it runs tt-blaze's
-          bh-loudbox-intermittent.yaml instead with run-all off, so only these
-          buckets run. An unknown id fails the tt-blaze run.
-        required: false
-        type: string
-        default: ""
+        default: ci
     outputs:
-      blaze-run-url:
-        description: "URL of the tt-blaze run this gate waited on (empty if none was ever found)."
-        value: ${{ jobs.blaze-ci.outputs.blaze-run-url }}
-    secrets:
-      TT_BLAZE_PAT:
-        description: "PAT with actions:read+write on tenstorrent/tt-blaze."
-        required: true
+      relay-run-url:
+        description: "URL of the relay run this gate waited on (empty if none was found)."
+        value: ${{ jobs.blaze-ci.outputs.relay-run-url }}
 
 permissions:
   contents: read
 
 jobs:
   blaze-ci:
-    name: ${{ inputs.selected-buckets == '' && 'tt-blaze CI (full merge gate)' || 'tt-blaze BH Loudbox Intermittent (selected buckets)' }}
+    name: ${{ inputs.target == 'uplift' && 'tt-blaze uplift (through the relay)' || 'tt-blaze CI (full merge gate)' }}
     runs-on: ubuntu-latest
-    # The 3-hour deadline plus slack: the poll loop must outlive its own deadline
-    # so it can report WHY it gave up. If the runner killed it first, the failure
-    # would read as an infra timeout instead of "no Loudbox came free".
-    timeout-minutes: 195
+    # The wait (GATE_WAIT_MINUTES), a few minutes for the dispatch and the
+    # cancel path, and slack. The relay's own deadline (175 minutes) comes
+    # first, so normally the relay reports the result or the timeout.
+    timeout-minutes: 205
+    # The role binds this environment. Deployment branch rule: main only.
+    environment: tt-blaze-dispatch
+    permissions:
+      id-token: write # sign-in for the short-lived relay tokens
     outputs:
-      blaze-run-url: ${{ steps.dispatch.outputs.blaze-run-url }}
+      relay-run-url: ${{ steps.dispatch.outputs.relay-run-url }}
     env:
-      BLAZE_REPO: tenstorrent/tt-blaze
-      BLAZE_WORKFLOW: ${{ inputs.selected-buckets == '' && 'ci.yaml' || 'bh-loudbox-intermittent.yaml' }}
+      RELAY_REPO: tenstorrent/tt-blaze-relay
+      RELAY_WORKFLOW: relay.yaml
+      RELAY_REF: main
+      # REST API version for the dispatch call only: with it GitHub answers
+      # 200 with workflow_run_id (the exact relay run); the default
+      # (2022-11-28) answers 204 with no body.
+      DISPATCH_API_VERSION: "2026-03-10"
+      GATE_WAIT_MINUTES: "190"
+      SEGMENT_MINUTES: "12"
+      POLL_SECONDS: "60"
+      # The id of this run. In a reusable workflow it is the caller's run id,
+      # the run that holds the profiler build.
+      METAL_RUN_ID: ${{ github.run_id }}
+      RELAY_TARGET: ${{ inputs.target }}
     steps:
-      - name: Dispatch tt-blaze ${{ env.BLAZE_WORKFLOW }} and wait for it
-        id: dispatch
+      # The tokens are given only to runs on main. Stop here, with one clear
+      # message, instead of failing later at the sign-in.
+      - name: Check the trigger
+        shell: bash
         env:
-          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
-          METAL_RUN_ID: ${{ inputs.metal-run-id }}
-          METAL_REF: ${{ inputs.metal-ref }}
-          BLAZE_REF: ${{ inputs.blaze-ref }}
-          DEV_IMAGE: ${{ inputs.dev-image }}
-          SELECTED_BUCKETS: ${{ inputs.selected-buckets }}
-          TIMEOUT_MINUTES: ${{ inputs.wait-timeout-minutes }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$REPO" != tenstorrent/tt-metal ] || [ "$REF" != refs/heads/main ]; then
+            echo "::error::the tt-blaze gate runs only on main of tenstorrent/tt-metal; ask OSPO by ticket for other needs"
+            exit 1
+          fi
+          case "$EVENT" in
+            schedule | workflow_dispatch) ;;
+            *)
+              echo "::error::the tt-blaze gate runs only for schedule and workflow_dispatch (got ${EVENT})"
+              exit 1
+              ;;
+          esac
+          if ! [[ "$METAL_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]; then
+            echo "::error::unexpected run id"
+            exit 1
+          fi
+          case "$RELAY_TARGET" in
+            ci) ;;
+            uplift)
+              # The relay serves the uplift only for a scheduled run (a re-run keeps its event).
+              if [ "$EVENT" != schedule ]; then
+                echo "::error::the tt-blaze uplift runs only for schedule (got ${EVENT})"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::unknown target '${RELAY_TARGET}' (ci or uplift)"
+              exit 1
+              ;;
+          esac
+
+      # The helpers of the steps below, from this file. No checkout: this job
+      # runs no code of the repository and no code chosen by an input.
+      - name: Write the job helpers
         shell: bash
         run: |
-          set -euo pipefail
+          cat >"$RUNNER_TEMP/relay-lib.sh" <<'RELAY_LIB_EOF'
+            # shellcheck shell=bash
+            # Helpers of the blaze-ci job. Written by the job itself from the workflow
+            # file (no checkout, no repository script). Sourced, not run.
+            #
+            # Token rules: a token comes only through the environment of a step. It is
+            # never printed and never put on a command line (printf is a shell builtin;
+            # curl reads its headers from stdin; gh reads GH_TOKEN from the environment).
 
-          POLL_SECONDS=60
-          # A dispatched run is not immediately visible to `gh run list`. Until this
-          # is up, "no matching run" means "not indexed yet", not "dispatch failed".
-          GRACE_SECONDS=300
-          # Below this job's fixed 195-minute cap, with room for the loop to report
-          # a timeout instead of the runner killing it mid-wait. Raising the
-          # deadline past this means raising `timeout-minutes` above too.
-          MAX_WAIT_MINUTES=180
+            # revoke_token NAME LABEL: revokes the GitHub token held in variable NAME.
+            # Always returns 0. Prints only the HTTP status.
+            revoke_token() {
+              local tok="${!1:-}" code
+              if [ -z "$tok" ]; then
+                echo "$2 token: nothing to revoke"
+                return 0
+              fi
+              code=$(printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/vnd.github+json"\n' "$tok" |
+                curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -K - -X DELETE \
+                  https://api.github.com/installation/token 2>/dev/null) || code=000
+              case "$code" in
+                204) echo "$2 token: revoked" ;;
+                401) echo "$2 token: already invalid" ;;
+                *) echo "$2 token: revoke not confirmed (HTTP ${code}); it expires on its own" ;;
+              esac
+              return 0
+            }
 
-          # `number` inputs are not integer inputs -- 1.5 reaches the arithmetic
-          # below and fails there as a bare bash syntax error naming nothing.
-          if [[ ! "${TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]] || [ "$TIMEOUT_MINUTES" -lt 1 ]; then
-            echo "::error::wait-timeout-minutes must be a positive whole number of minutes (got '${TIMEOUT_MINUTES:-}')."
-            exit 1
-          fi
-          if [ "$TIMEOUT_MINUTES" -gt "$MAX_WAIT_MINUTES" ]; then
-            echo "::error::wait-timeout-minutes=${TIMEOUT_MINUTES} exceeds ${MAX_WAIT_MINUTES}. This job's timeout-minutes caps it, so a longer deadline would be cut short by the runner instead of reported here -- raise timeout-minutes in this workflow alongside it."
-            exit 1
-          fi
+            # The relay's run name for this tt-metal run and target (relay.yaml run-name).
+            relay_title() {
+              if [ "$RELAY_TARGET" = uplift ]; then
+                printf 'tt-blaze uplift relay for tt-metal run %s' "$METAL_RUN_ID"
+              else
+                printf 'tt-blaze relay for tt-metal run %s' "$METAL_RUN_ID"
+              fi
+            }
 
-          # Unique per run AND per re-run of that run, so a re-run never latches
-          # onto the blaze run its previous attempt started.
-          DISPATCH_ID="metal-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          echo "dispatch-id: ${DISPATCH_ID}"
+            # relay_run_state ID: prints "path<TAB>branch<TAB>event<TAB>status<TAB>conclusion<TAB>url<TAB>title".
+            # Needs GH_TOKEN with actions read on the relay.
+            relay_run_state() {
+              gh api "repos/${RELAY_REPO}/actions/runs/$1" |
+                jq -r '[.path, .head_branch, .event, .status, (.conclusion // "-"), .html_url, (.display_title // "")] | @tsv'
+            }
 
-          # Scope: with no selected-buckets, tt-blaze's WHOLE merge gate. Its
-          # `bh-loudbox-run-all` and `p150-run-all` selectors both default to
-          # true, so passing only the plumbing inputs below is what asks for
-          # every gate-tier bucket.
-          # With selected-buckets, bh-loudbox-intermittent.yaml with run-all off:
-          # its category toggles and warm-kernel-cache all default to false, so
-          # only the listed buckets run.
-          SCOPE_ARGS=()
-          SCOPE="full merge gate"
-          if [ -n "$SELECTED_BUCKETS" ]; then
-            SCOPE_ARGS=(-f bh-loudbox-run-all=false -f bh-loudbox-selected-buckets="$SELECTED_BUCKETS")
-            SCOPE="selected buckets: ${SELECTED_BUCKETS}"
-          fi
-          # Preflight the token before dispatching. tt-blaze is PRIVATE, and
-          # GitHub answers 404 (never 403) for anything a token cannot see there,
-          # so `gh workflow run` reports a missing workflow when the real fault is
-          # a PAT that cannot read the repo. These two probes separate the cases so
-          # the log names the actual problem.
-          # Probe 1: is the credential live at all? Separated from the repo probe
-          # because "expired/revoked token" and "valid token that cannot see
-          # tt-blaze" have completely different fixes but look identical once the
-          # repo lookup 404s.
-          if ! PAT_LOGIN=$(gh api user --jq .login 2>/dev/null) || [ -z "$PAT_LOGIN" ]; then
-            echo "::error::TT_BLAZE_PAT is not a usable credential -- GitHub rejected it outright (401 Bad credentials), so this is not about repo access. It is expired, revoked, or was stored with stray whitespace/quotes when the secret was set. Reissue it and update the secret in ${GITHUB_REPOSITORY}."
-            echo "- ❌ tt-blaze — TT_BLAZE_PAT rejected (bad credentials)" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          # Not a secret; naming it turns "wrong account / stale bot" into a
-          # one-line diagnosis instead of a hunt.
-          echo "TT_BLAZE_PAT authenticates as: ${PAT_LOGIN}"
+            # relay_run_is_ours ID: 0 when run ID is a workflow_dispatch run of
+            # RELAY_WORKFLOW on RELAY_REF with the run name of this tt-metal run.
+            relay_run_is_ours() {
+              local p b e t
+              IFS=$'\t' read -r p b e _ _ _ t < <(relay_run_state "$1") || return 1
+              [ "$p" = ".github/workflows/${RELAY_WORKFLOW}" ] && [ "$b" = "$RELAY_REF" ] &&
+                [ "$e" = workflow_dispatch ] && [ "$t" = "$(relay_title)" ]
+            }
 
-          if ! gh api "repos/${BLAZE_REPO}" --jq .full_name >/dev/null 2>&1; then
-            echo "::error::TT_BLAZE_PAT is valid (authenticates as '${PAT_LOGIN}') but cannot see ${BLAZE_REPO}. ${BLAZE_REPO} is private, so GitHub answers 404 rather than 403 for anything this token is not entitled to. Either '${PAT_LOGIN}' has no access to ${BLAZE_REPO}, or the token is scoped away from it: a fine-grained PAT must list ${BLAZE_REPO} in its selected repositories AND be approved by the tenstorrent org (pending approval also reads as 404); a classic PAT needs the 'repo' scope to see private repos at all."
-            echo "- ❌ tt-blaze — TT_BLAZE_PAT ('${PAT_LOGIN}') cannot see ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          if ! gh api "repos/${BLAZE_REPO}/actions/workflows/${BLAZE_WORKFLOW}" --jq .id >/dev/null 2>&1; then
-            echo "::error::TT_BLAZE_PAT can read ${BLAZE_REPO} but not ${BLAZE_WORKFLOW}. That is an Actions-permission gap, not a missing file: a fine-grained PAT needs Actions: Read and write (plus Metadata: Read); a classic PAT needs the 'repo' scope for a private repository."
-            echo "- ❌ tt-blaze — TT_BLAZE_PAT lacks Actions access on ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
+            # find_relay_run: prints the id of the oldest relay run with the run name of
+            # this tt-metal run that was created after DISPATCH_AT (ISO time, taken 30
+            # seconds before the dispatch call). A re-run of this tt-metal run keeps the
+            # same run id, so the time filter keeps out the relay runs of earlier attempts.
+            find_relay_run() {
+              gh api "repos/${RELAY_REPO}/actions/workflows/${RELAY_WORKFLOW}/runs?event=workflow_dispatch&branch=${RELAY_REF}&per_page=50" |
+                jq -r --arg t "$(relay_title)" --arg since "$DISPATCH_AT" \
+                  '[.workflow_runs[] | select((.display_title // "") == $t and .created_at >= $since)] | sort_by(.created_at) | .[0].id // empty'
+            }
 
-          # Dispatching needs actions:WRITE, which neither probe above proves --
-          # both are reads. A 403 here (rather than 404) means the token can see
-          # Actions but not trigger them.
-          if ! gh workflow run "$BLAZE_WORKFLOW" \
-            --repo "$BLAZE_REPO" \
-            --ref "$BLAZE_REF" \
-            -f metal-run-id="$METAL_RUN_ID" \
-            -f metal-ref="$METAL_REF" \
-            -f dispatch-id="$DISPATCH_ID" \
-            -f dev-image="$DEV_IMAGE" \
-            "${SCOPE_ARGS[@]}"; then
-            echo "::error::Dispatch of ${BLAZE_WORKFLOW} on ${BLAZE_REPO}@${BLAZE_REF} failed. The token can read the workflow (checked above), so the usual causes are: no actions:write on ${BLAZE_REPO}; ${BLAZE_REF} does not carry every input passed here (an input this workflow sends but ${BLAZE_REF}'s ${BLAZE_WORKFLOW} does not declare is rejected outright -- the tt-blaze side must land FIRST); or ${BLAZE_REF} does not exist."
-            echo "- ❌ tt-blaze — dispatch rejected" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
+            # cancel_lookup_run_id: prints the relay run id for the cancel path, or
+            # nothing. RELAY_RUN_ID when known. Else, when the dispatch was started
+            # (DISPATCH_AT set), the run-name lookup: 12 tries, LOOKUP_SLEEP seconds
+            # apart (default 5, about 60 seconds), when the dispatch call returned success
+            # (DISPATCH_ACCEPTED=1) or the job was cancelled (JOB_STATUS=cancelled, so the
+            # call may have been accepted); one try only after a refused call.
+            cancel_lookup_run_id() {
+              local run_id="${RELAY_RUN_ID:-}" tries=1 try
+              if [[ "$run_id" =~ ^[0-9]+$ ]]; then
+                echo "$run_id"
+                return 0
+              fi
+              [ -n "${DISPATCH_AT:-}" ] || return 0
+              if [ "${DISPATCH_ACCEPTED:-}" = 1 ] || [ "${JOB_STATUS:-}" = cancelled ]; then
+                tries=12
+              fi
+              for try in $(seq 1 "$tries"); do
+                run_id=$(find_relay_run) || run_id=""
+                if [[ "$run_id" =~ ^[0-9]+$ ]]; then
+                  echo "$run_id"
+                  return 0
+                fi
+                if [ "$try" -lt "$tries" ]; then
+                  sleep "${LOOKUP_SLEEP:-5}" &
+                  wait $!
+                fi
+              done
+              return 0
+            }
 
-          echo "Dispatched ${BLAZE_REPO} ${BLAZE_WORKFLOW} on ${BLAZE_REF} (${SCOPE})"
-          echo "  tt-metal commit:  ${METAL_REF}"
-          echo "  tt-metal build:   https://github.com/${GITHUB_REPOSITORY}/actions/runs/${METAL_RUN_ID}"
-
-          started=$(date +%s)
-          deadline=$(( started + TIMEOUT_MINUTES * 60 ))
-          run_id=""
-          run_url=""
-
-          while :; do
-            elapsed=$(( $(date +%s) - started ))
-
-            if [ -z "$run_id" ]; then
-              # Correlate on the token echoed into tt-blaze's run-name. Matching on
-              # "newest dispatch" instead would be wrong: the release pipeline is
-              # dispatched on a schedule AND by hand, so two runs can be dispatching
-              # onto the same ref at once.
-              #
-              # `displayTitle` is where a computed `run-name` lands; `name` is the
-              # workflow's own name. Both are searched so this keeps working if gh
-              # ever changes which one carries it.
-              run_id=$(gh run list --repo "$BLAZE_REPO" --workflow "$BLAZE_WORKFLOW" \
-                         --event workflow_dispatch --limit 100 \
-                         --json databaseId,displayTitle,name \
-                         --jq "[.[] | select(((.displayTitle // \"\") + \" \" + (.name // \"\")) | contains(\"${DISPATCH_ID}\"))] | .[0].databaseId // empty" \
-                       2>/dev/null || echo "")
-
-              if [ -z "$run_id" ]; then
-                if [ "$elapsed" -gt "$GRACE_SECONDS" ]; then
-                  echo "::error::Dispatched ${BLAZE_REPO} ${BLAZE_WORKFLOW} but no run carrying '${DISPATCH_ID}' appeared within ${elapsed}s. Most likely ${BLAZE_REF} does not echo dispatch-id into run-name (the tt-blaze side of this plumbing is missing or older than this workflow)."
-                  echo "- ❌ tt-blaze — dispatched run never appeared" >> "$GITHUB_STEP_SUMMARY"
+            # poll_segment: watches the relay run for at most SEGMENT_MINUTES with the
+            # read token in RELAY_READ_TOKEN, and revokes that token at the end.
+            # Writes RELAY_DONE=1 and RELAY_CONCLUSION to GITHUB_ENV when the run ended.
+            # Exit 1 when the gate deadline passed (the cancel steps then stop the relay run).
+            poll_segment() {
+              local segment_end now state p b e status conclusion url title
+              trap 'revoke_token RELAY_READ_TOKEN read' EXIT
+              trap 'exit 143' TERM INT
+              [ -n "${RELAY_READ_TOKEN:-}" ] || { echo "::error::no relay read token from the Vault step"; exit 1; }
+              [[ "${RELAY_RUN_ID:-}" =~ ^[0-9]+$ ]] || { echo "::error::no relay run id"; exit 1; }
+              [[ "${GATE_DEADLINE:-}" =~ ^[0-9]+$ ]] || { echo "::error::no deadline"; exit 1; }
+              export GH_TOKEN="$RELAY_READ_TOKEN"
+              segment_end=$(($(date +%s) + SEGMENT_MINUTES * 60))
+              while :; do
+                now=$(date +%s)
+                if [ "$now" -ge "$GATE_DEADLINE" ]; then
+                  echo "::error::relay run ${RELAY_RUN_ID} did not end within ${GATE_WAIT_MINUTES} minutes"
+                  echo "- relay run ${RELAY_RUN_ID}: no result within ${GATE_WAIT_MINUTES} minutes" >>"$GITHUB_STEP_SUMMARY"
                   exit 1
                 fi
-                echo "waiting for the dispatched run to be indexed (${elapsed}s)"
-                sleep "$POLL_SECONDS"
-                continue
-              fi
+                [ "$now" -lt "$segment_end" ] || break
+                state=$(relay_run_state "$RELAY_RUN_ID") || state=""
+                if [ -n "$state" ]; then
+                  IFS=$'\t' read -r p b e status conclusion url title <<<"$state"
+                  if [ "$p" != ".github/workflows/${RELAY_WORKFLOW}" ] || [ "$b" != "$RELAY_REF" ] ||
+                    [ "$e" != workflow_dispatch ] || [ "$title" != "$(relay_title)" ]; then
+                    echo "::error::run ${RELAY_RUN_ID} is not the relay run this job started"
+                    exit 1
+                  fi
+                  if [ "$status" = completed ]; then
+                    { echo "RELAY_DONE=1"; echo "RELAY_CONCLUSION=${conclusion}"; } >>"$GITHUB_ENV"
+                    echo "relay run ${RELAY_RUN_ID} ended: ${conclusion} (${url})"
+                    echo "- relay run [${RELAY_RUN_ID}](${url}): ${conclusion}" >>"$GITHUB_STEP_SUMMARY"
+                    exit 0
+                  fi
+                  echo "relay run ${RELAY_RUN_ID}: ${status}"
+                else
+                  echo "::warning::could not read relay run ${RELAY_RUN_ID}; trying again"
+                fi
+                # Background sleep, so a cancel signal is handled at once.
+                sleep "$POLL_SECONDS" &
+                wait $!
+              done
+              echo "segment ended; the next segment gets a new token"
+            }
+          RELAY_LIB_EOF
 
-              run_url="https://github.com/${BLAZE_REPO}/actions/runs/${run_id}"
-              echo "tt-blaze run: ${run_url}"
-              echo "blaze-run-url=${run_url}" >> "$GITHUB_OUTPUT"
-              # Read by the cancel step below, which runs only if THIS job is
-              # cancelled and so cannot rely on any of the locals here.
-              echo "BLAZE_RUN_ID=${run_id}" >> "$GITHUB_ENV"
-              echo "- ⏳ tt-blaze — [run ${run_id}](${run_url})" >> "$GITHUB_STEP_SUMMARY"
+      # Write token: just before the dispatch; the next step revokes it.
+      - name: Get the relay write token (dispatch)
+        id: vault-dispatch
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-write
+
+      - name: Start the tt-blaze relay
+        id: dispatch
+        shell: bash
+        env:
+          RELAY_TOKEN: ${{ steps.vault-dispatch.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          # Revoke the write token on every exit, also on a cancel signal.
+          trap 'revoke_token RELAY_TOKEN write' EXIT
+          trap 'exit 143' TERM INT
+          [ -n "${RELAY_TOKEN:-}" ] || { echo "::error::no relay write token from the Vault step; ask OSPO by ticket"; exit 1; }
+          export GH_TOKEN="$RELAY_TOKEN"
+
+          # The deadline and the time filter for the fallback lookup are set
+          # before the call. DISPATCHED=1 also comes before the call, so a
+          # cancel right after GitHub accepted it still reaches the cancel path.
+          DISPATCH_AT=$(date -u -d '-30 seconds' +%Y-%m-%dT%H:%M:%SZ)
+          {
+            echo "DISPATCH_AT=${DISPATCH_AT}"
+            echo "GATE_DEADLINE=$(($(date +%s) + GATE_WAIT_MINUTES * 60))"
+            echo "DISPATCHED=1"
+          } >>"$GITHUB_ENV"
+
+          # The body is built by jq; its values are this run's id and, for
+          # uplift only, the target (ci is the relay's default). Same
+          # request form as the relay's own dispatch. With DISPATCH_API_VERSION
+          # GitHub answers 200 with workflow_run_id, the exact run (so an
+          # earlier attempt's relay run is never taken for this one). On a 204
+          # (no body, the default API version) the run is found by its run
+          # name below.
+          body=$(jq -n --arg ref "$RELAY_REF" --arg rid "$METAL_RUN_ID" --arg target "$RELAY_TARGET" \
+            '{ref: $ref, inputs: ({"metal-run-id": $rid} + (if $target == "uplift" then {target: $target} else {} end))}')
+          resp=$(gh api -X POST -H "X-GitHub-Api-Version: ${DISPATCH_API_VERSION}" \
+            "repos/${RELAY_REPO}/actions/workflows/${RELAY_WORKFLOW}/dispatches" --input - <<<"$body") || {
+            echo "::error::the dispatch of ${RELAY_WORKFLOW} on ${RELAY_REPO}@${RELAY_REF} was refused. Ask OSPO by ticket."
+            echo "- tt-blaze relay: dispatch refused" >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+          echo "DISPATCH_ACCEPTED=1" >>"$GITHUB_ENV"
+          echo "started ${RELAY_WORKFLOW} (target ${RELAY_TARGET}) on ${RELAY_REPO}@${RELAY_REF} for tt-metal run ${METAL_RUN_ID}"
+
+          # The run id: from the 200 answer, else by the relay's run name,
+          # only among runs created after DISPATCH_AT.
+          run_id=$(printf '%s' "${resp:-}" | jq -r '.workflow_run_id // empty' 2>/dev/null || true)
+          if [[ "$run_id" =~ ^[0-9]+$ ]]; then
+            echo "relay run id from the dispatch answer"
+          else
+            echo "::warning::no run id in the dispatch answer; finding the relay run by its run name"
+            run_id=""
+            for _ in $(seq 1 24); do
+              sleep 5 &
+              wait $!
+              run_id=$(find_relay_run) || run_id=""
+              [ -z "$run_id" ] || break
+            done
+          fi
+          [[ "$run_id" =~ ^[0-9]+$ ]] || { echo "::error::the relay was started, but its run was not found within 2 minutes"; exit 1; }
+          relay_run_is_ours "$run_id" || { echo "::error::run ${run_id} is not the relay run this job started"; exit 1; }
+
+          url="https://github.com/${RELAY_REPO}/actions/runs/${run_id}"
+          echo "RELAY_RUN_ID=${run_id}" >>"$GITHUB_ENV"
+          echo "relay-run-url=${url}" >>"$GITHUB_OUTPUT"
+          echo "- tt-blaze relay: [run ${run_id}](${url})" >>"$GITHUB_STEP_SUMMARY"
+          echo "relay run: ${url}"
+
+      # Safety net when the step above did not reach its own revoke (for
+      # example a cancel between the two steps). Quiet when already revoked.
+      - name: Revoke the relay write token (dispatch)
+        if: ${{ always() && steps.vault-dispatch.outcome == 'success' }}
+        shell: bash
+        env:
+          RELAY_TOKEN: ${{ steps.vault-dispatch.outputs.token }}
+        run: |
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh" 2>/dev/null || exit 0
+          revoke_token RELAY_TOKEN write
+
+      # Wait segment 1 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 1)
+        id: vault-read-1
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (1)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-1.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 2 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 2)
+        id: vault-read-2
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (2)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-2.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 3 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 3)
+        id: vault-read-3
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (3)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-3.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 4 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 4)
+        id: vault-read-4
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (4)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-4.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 5 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 5)
+        id: vault-read-5
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (5)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-5.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 6 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 6)
+        id: vault-read-6
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (6)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-6.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 7 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 7)
+        id: vault-read-7
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (7)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-7.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 8 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 8)
+        id: vault-read-8
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (8)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-8.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 9 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 9)
+        id: vault-read-9
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (9)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-9.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 10 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 10)
+        id: vault-read-10
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (10)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-10.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 11 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 11)
+        id: vault-read-11
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (11)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-11.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 12 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 12)
+        id: vault-read-12
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (12)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-12.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 13 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 13)
+        id: vault-read-13
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (13)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-13.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 14 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 14)
+        id: vault-read-14
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (14)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-14.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 15 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 15)
+        id: vault-read-15
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (15)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-15.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      # Wait segment 16 of 16: a new read token, at most SEGMENT_MINUTES of polling.
+      - name: Get a relay read token (wait 16)
+        id: vault-read-16
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-read
+
+      - name: Wait for the relay run (16)
+        if: ${{ env.RELAY_RUN_ID != '' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_READ_TOKEN: ${{ steps.vault-read-16.outputs.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh"
+          poll_segment
+
+      - name: Report the relay result
+        shell: bash
+        env:
+          DONE: ${{ env.RELAY_DONE }}
+          CONCLUSION: ${{ env.RELAY_CONCLUSION }}
+        run: |
+          if [ "$DONE" != 1 ]; then
+            echo "::error::no relay result within ${GATE_WAIT_MINUTES} minutes"
+            exit 1
+          fi
+          if [ "$RELAY_TARGET" = uplift ]; then
+            if [ "$CONCLUSION" = success ]; then
+              echo "tt-blaze nightly-metal-uplift.yaml started (through the relay); it reports in its own run"
+              exit 0
             fi
+            echo "::error::the relay run ended '${CONCLUSION}': the tt-blaze uplift was refused or not started. See the relay run."
+            exit 1
+          fi
+          if [ "$CONCLUSION" = success ]; then
+            echo "tt-blaze CI passed (through the relay)"
+            exit 0
+          fi
+          echo "::error::the relay run ended '${CONCLUSION}': tt-blaze CI failed, timed out or was refused. See the relay run (its log names the tt-blaze run)."
+          exit 1
 
-            read -r status conclusion <<< "$(gh run view "$run_id" --repo "$BLAZE_REPO" \
-                                               --json status,conclusion \
-                                               --jq '"\(.status) \(.conclusion // "-")"')"
+      # This job was cancelled, failed or timed out while the relay run may
+      # still run: cancel the relay run with a fresh write token. The relay
+      # then cancels the tt-blaze run it started.
+      - name: Get the relay write token (cancel)
+        id: vault-cancel
+        if: ${{ (cancelled() || failure()) && env.DISPATCHED == '1' && env.RELAY_DONE != '1' }}
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
+        with:
+          role: tenstorrent--tt-metal--blaze-dispatch
+          github-token: tenstorrent--tt-metal--relay-actions-write
 
-            if [ "$status" = "completed" ]; then
-              case "$conclusion" in
-                success)
-                  echo "✅ tt-blaze CI passed: ${run_url}"
-                  echo "- ✅ tt-blaze — [run ${run_id}](${run_url})" >> "$GITHUB_STEP_SUMMARY"
-                  exit 0
-                  ;;
-                skipped)
-                  echo "::error::tt-blaze CI was skipped, so the required merge-gate validation did not run. ${run_url}"
-                  echo "- ❌ tt-blaze — skipped; no validation ran ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
-                  exit 1
-                  ;;
-                *)
-                  echo "::error::tt-blaze CI concluded '${conclusion}' — this tt-metal change breaks tt-blaze, or the blaze run itself is broken. ${run_url}"
-                  echo "- ❌ tt-blaze — \`${conclusion}\` ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
-                  exit 1
-                  ;;
-              esac
-            fi
+      - name: Cancel the relay run of this job
+        if: ${{ (cancelled() || failure()) && env.DISPATCHED == '1' && env.RELAY_DONE != '1' }}
+        shell: bash
+        env:
+          RELAY_CANCEL_TOKEN: ${{ steps.vault-cancel.outputs.token }}
+          # "cancelled" when the tt-metal run was cancelled: the dispatch call
+          # may have been accepted though DISPATCH_ACCEPTED was not written.
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh" || exit 0
+          trap 'revoke_token RELAY_CANCEL_TOKEN cancel' EXIT
+          if [ -z "${RELAY_CANCEL_TOKEN:-}" ]; then
+            echo "::warning::no write token for the cancel; the relay run (if any) keeps running until its own deadline"
+            exit 0
+          fi
+          export GH_TOKEN="$RELAY_CANCEL_TOKEN"
+          run_id=$(cancel_lookup_run_id) || run_id=""
+          if ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
+            echo "no relay run of this job found: nothing to cancel"
+            exit 0
+          fi
+          if ! relay_run_is_ours "$run_id"; then
+            echo "::warning::run ${run_id} is not the relay run this job started; not cancelled"
+            exit 0
+          fi
+          if gh api -X POST "repos/${RELAY_REPO}/actions/runs/${run_id}/cancel" >/dev/null 2>&1; then
+            echo "relay run ${run_id}: cancel requested"
+            echo "- relay run ${run_id}: cancel requested" >>"$GITHUB_STEP_SUMMARY"
+          else
+            # 409 when the run has already ended.
+            echo "::warning::cancel of relay run ${run_id} not accepted (it may have ended already)"
+          fi
+          exit 0
 
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "::error::Timed out after ${TIMEOUT_MINUTES} min with the tt-blaze run still '${status}'. Raise wait-timeout-minutes or check runner availability. ${run_url}"
-              echo "- ⏱️ tt-blaze — timed out after ${TIMEOUT_MINUTES} min ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
-              exit 1
-            fi
-
-            echo "tt-blaze run ${run_id}: ${status} (${elapsed}s elapsed)"
-            sleep "$POLL_SECONDS"
+      # Safety net for the read and cancel tokens: each step revokes its own
+      # token on exit, but a cancel between a sign-in step and its next step
+      # would leave that token alive. Empty values are skipped.
+      - name: Revoke the read and cancel tokens
+        if: ${{ always() }}
+        shell: bash
+        env:
+          READ_TOKEN_1: ${{ steps.vault-read-1.outputs.token }}
+          READ_TOKEN_2: ${{ steps.vault-read-2.outputs.token }}
+          READ_TOKEN_3: ${{ steps.vault-read-3.outputs.token }}
+          READ_TOKEN_4: ${{ steps.vault-read-4.outputs.token }}
+          READ_TOKEN_5: ${{ steps.vault-read-5.outputs.token }}
+          READ_TOKEN_6: ${{ steps.vault-read-6.outputs.token }}
+          READ_TOKEN_7: ${{ steps.vault-read-7.outputs.token }}
+          READ_TOKEN_8: ${{ steps.vault-read-8.outputs.token }}
+          READ_TOKEN_9: ${{ steps.vault-read-9.outputs.token }}
+          READ_TOKEN_10: ${{ steps.vault-read-10.outputs.token }}
+          READ_TOKEN_11: ${{ steps.vault-read-11.outputs.token }}
+          READ_TOKEN_12: ${{ steps.vault-read-12.outputs.token }}
+          READ_TOKEN_13: ${{ steps.vault-read-13.outputs.token }}
+          READ_TOKEN_14: ${{ steps.vault-read-14.outputs.token }}
+          READ_TOKEN_15: ${{ steps.vault-read-15.outputs.token }}
+          READ_TOKEN_16: ${{ steps.vault-read-16.outputs.token }}
+          CANCEL_TOKEN: ${{ steps.vault-cancel.outputs.token }}
+        run: |
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/relay-lib.sh" 2>/dev/null || exit 0
+          for name in READ_TOKEN_1 READ_TOKEN_2 READ_TOKEN_3 READ_TOKEN_4 READ_TOKEN_5 READ_TOKEN_6 READ_TOKEN_7 READ_TOKEN_8 READ_TOKEN_9 READ_TOKEN_10 READ_TOKEN_11 READ_TOKEN_12 READ_TOKEN_13 READ_TOKEN_14 READ_TOKEN_15 READ_TOKEN_16 CANCEL_TOKEN; do
+            [ -n "${!name:-}" ] || continue
+            revoke_token "$name" "$name"
           done
 
-      # Cancelling this run (or the release pipeline around it) stops this job but
-      # not the run it started, which would otherwise keep occupying constrained
-      # P150/Loudbox runners for hours on behalf of a release nobody is cutting.
-      #
-      # failure() is here for the TIMEOUT path specifically: giving up on the wait
-      # exits 1, which is not cancelled(), so without this a timed-out gate leaves
-      # the blaze run holding those runners with nobody watching it anymore.
-      - name: Cancel the tt-blaze run if this job was cancelled or timed out
-        if: (cancelled() || failure()) && env.BLAZE_RUN_ID != ''
-        env:
-          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
+      # The shared sign-in action does not leave the tailnet.
+      - name: Leave the tailnet
+        if: ${{ always() }}
         shell: bash
         run: |
-          echo "Cancelling tt-blaze run ${BLAZE_RUN_ID}"
-          gh run cancel "$BLAZE_RUN_ID" --repo "$BLAZE_REPO" || true
+          if command -v tailscale >/dev/null 2>&1; then
+            sudo tailscale logout || { echo "::warning::tailscale logout failed; taking the interface down"; sudo tailscale down || true; }
+          else
+            echo "not on the tailnet"
+          fi
