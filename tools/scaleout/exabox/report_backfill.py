@@ -185,13 +185,14 @@ def _last_match(pattern: re.Pattern[str], text: str) -> str | None:
 def parse_compact_ts(value: str) -> str | None:
     """Turn YYYYMMDDTHHMMSSZ or RFC3339 into schema UTC ``...Z``."""
     text = value.strip()
-    if text.endswith("Z") and "-" in text and ":" in text:
+    if "T" in text and ("+" in text or "-" in text):
         try:
-            dt = datetime.fromisoformat(text[:-1] + "+00:00")
+            dt = datetime.fromisoformat(text)
         except ValueError:
             pass
         else:
-            return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if dt.tzinfo is not None:
+                return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     squeezed = text.replace("-", "").replace(":", "")
     match = _FILENAME_TS.search(squeezed)
     if not match:
