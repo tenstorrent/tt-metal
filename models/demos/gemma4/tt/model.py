@@ -2671,7 +2671,8 @@ class Gemma4Model:
         ``ReplicateTensorToMesh``. Returns ``[1, 1, target_batch, H]``.
         """
         del prefill_seq_len  # layout already [B,1,S,H]; S unused after reshape
-        active_indices = [lt for lt in last_token_idx_list if lt > 0]
+        # Pad slots carry -1; a real 1-token prompt has last index 0 and must stay active.
+        active_indices = [lt for lt in last_token_idx_list if lt >= 0]
         all_same = len(set(active_indices)) <= 1
 
         if all_same and active_indices:
@@ -2698,7 +2699,7 @@ class Gemma4Model:
         else:
             rows = []
             for slot in range(padded_batch):
-                lt_idx = int(last_token_idx_list[slot])
+                lt_idx = max(int(last_token_idx_list[slot]), 0)  # pad slots (-1): row unused
                 rows.append(host_full[slot : slot + 1, :, lt_idx : lt_idx + 1, :])
             combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
 
