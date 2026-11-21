@@ -95,8 +95,9 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.hardsigmoid)
-    torch_output_tensor = golden_function(torch_input_tensor_a)
+    value = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100)
+    golden_function = ttnn.get_golden_function(ttnn.heaviside)
+    torch_output_tensor = golden_function(torch_input_tensor_a, value=value)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -107,7 +108,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.hardsigmoid(input_tensor_a, memory_config=sharded_config)
+    output_tensor = ttnn.heaviside(input_tensor_a, value=value, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = ttnn.to_torch(output_tensor)

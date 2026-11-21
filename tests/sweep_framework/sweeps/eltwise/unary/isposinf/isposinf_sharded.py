@@ -90,7 +90,7 @@ def run(
     )
 
     torch_input_tensor_a = gen_rand_inf(input_shape, low=-100, high=100)
-    torch_output_tensor = torch.isfinite(torch_input_tensor_a)
+    torch_output_tensor = torch.isposinf(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -101,7 +101,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.isfinite(input_tensor_a, memory_config=sharded_config)
+    output_tensor = ttnn.isposinf(input_tensor_a, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
 
