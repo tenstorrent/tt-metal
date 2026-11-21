@@ -29,6 +29,7 @@ __attribute__((noinline)) uint32_t fill_neginf(uint32_t l1_addr, uint32_t num_el
         *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr) = neginf_bf16;
         addr += sizeof(uint16_t);
     }
+#pragma GCC unroll 4
     for (; addr + sizeof(uint32_t) <= end; addr += sizeof(uint32_t)) {
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr) = (uint32_t{neginf_bf16} << 16) | neginf_bf16;
     }
@@ -285,11 +286,14 @@ __attribute__((noinline)) void two_level_gather(
 // the unit itself. A claimed unit is usually done well within it (its core may first finish a row's last chunks); a
 // repair that comes too early only does a unit twice.
 constexpr uint32_t repair_after = 200000;
+// Wall-clock ticks (about 10 us) between looks at the claimed count while a streamed stage 2 waits for a unit not yet
+// claimed (see two_level_stage2).
+constexpr uint32_t claim_poll = 13500;
 
 // From this search length, on at least 3 * wave_rows cores, a row of the last phase-1 wave can stream its stage 2
 // while units are still unclaimed (see two_level_run). Below it the other cores may all be sorting rows meanwhile, and
-// a unit nobody claims would leave the streaming row waiting for its repair. (Measured on 108 and 99 cores, 160 rows:
-// gains from 512K; at 131K-262K on 99 cores the repairs double the op.)
+// the streaming row would wait for one of them to claim its units. (Measured on 108 and 99 cores, 160 rows: gains from
+// 512K.)
 constexpr uint32_t stream_early_from = 393216;
 
 // The block maxima of phase-1 unit `part` of `row`, computed here instead of by the compute, into `dst` (slot b for
@@ -324,21 +328,15 @@ __attribute__((noinline)) void two_level_unit_maxima(
     const auto ordered = [](uint32_t bits) { return bits ^ ((0u - (bits >> 15)) & 0x7FFFu) ^ 0x8000u; };
     const auto* pairs = reinterpret_cast<const uint32_t*>(stage1_cb.get_write_ptr());
     auto* maxima = reinterpret_cast<uint16_t*>(dst);
-    // Keys past live in the last block are stale: they read as -inf (0xFF80) here.
     const uint32_t blocks = div_up(live, block_keys);
-    if (live % block_keys != 0) {
-        auto* tail = reinterpret_cast<uint16_t*>(stage1_cb.get_write_ptr());
-        for (uint32_t key = live; key < blocks * block_keys; ++key) {
-            tail[key] = 0xFF80u;
-        }
-    }
     for (uint32_t block = 0; block < blocks; ++block) {
         uint32_t best0 = 0;
         uint32_t best1 = 0;
         for (uint32_t word = block * block_keys / 2; word < (block + 1) * block_keys / 2; ++word) {
             const uint32_t pair = pairs[word];
-            const uint32_t lo = ordered(pair & 0xFFFFu);
-            const uint32_t hi = ordered(pair >> 16);
+            // Keys past live, in the last block, are stale: 0 orders below every key.
+            const uint32_t lo = 2 * word < live ? ordered(pair & 0xFFFFu) : 0;
+            const uint32_t hi = 2 * word + 1 < live ? ordered(pair >> 16) : 0;
             best0 = lo > best0 ? lo : best0;
             best1 = hi > best1 ? hi : best1;
         }
@@ -353,8 +351,9 @@ __attribute__((noinline)) void two_level_unit_maxima(
 // Stage 2 of one row: its block maxima from the maxima tensor through the input CB, one chunk per reserve so a chunk
 // never wraps. Past the row's blocks a chunk is -inf. With done_words (the row's done words, per_row of them), the row
 // runs before its maxima are complete: each chunk waits for the units it covers, and a unit still missing
-// repair_after after it was claimed is computed here (see two_level_run's claims). A unit not yet claimed (the
-// claimed count, read by claimed_count, is not past it) is only waited for: a core that finishes its rows claims it.
+// repair_after after it is known to be claimed is computed here (see two_level_run's claims). A unit seen unclaimed
+// (the claimed count, read by claimed_count, not past it) is waited for until it is claimed, which a core that finishes
+// its rows does, and from then on as long again.
 template <typename InputAccessor, typename MaxAccessor, typename ClaimedCount>
 FORCE_INLINE void two_level_stage2(
     const Noc& noc,
@@ -384,20 +383,24 @@ FORCE_INLINE void two_level_stage2(
             uint32_t needed = (chunk + 1) * (chunk_maxima / unit_maxima);
             needed = needed < units.per_row ? needed : units.per_row;
             uint32_t since = get_timestamp_32b();
+            // Whether the awaited unit was seen unclaimed, and since when it is seen claimed if so.
+            bool unclaimed = false;
             while (parts_seen < needed) {
                 invalidate_l1_cache();
                 bool late = false;
-                if (done_words[parts_seen] == 0 && get_timestamp_32b() - since > repair_after) {
-                    late = claimed_count() > units.unit_of(row, parts_seen);
-                    if (!late) {
-                        since = get_timestamp_32b();
-                    }
+                if (done_words[parts_seen] == 0 &&
+                    get_timestamp_32b() - since > (unclaimed ? claim_poll : repair_after)) {
+                    const bool claimed = claimed_count() > units.unit_of(row, parts_seen);
+                    late = claimed && !unclaimed;
+                    unclaimed = !claimed;
+                    since = get_timestamp_32b();
                 }
                 if (done_words[parts_seen] != 0 || late) {
                     if (done_words[parts_seen] == 0) {
                         repairs |= 1u << (parts_seen - chunk * (chunk_maxima / unit_maxima));
                     }
                     ++parts_seen;
+                    unclaimed = false;
                     since = get_timestamp_32b();
                 }
             }
