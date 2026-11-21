@@ -48,6 +48,12 @@
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 namespace {
+// ring_mla with one-row Q chunks: compute reads latent V in place from the K^T chunk (the reader keeps three K entries
+// and materializes no V; host: ring_joint_sdpa_program_factory.cpp).
+constexpr bool latent_v_in_k = get_named_compile_time_arg_val("latent_v_in_k") == 1;
+// K CB entries, the reader's phase alignment cycle (three with in-place latent V when L1 allows).
+constexpr uint32_t k_cb_entries = get_named_compile_time_arg_val("k_cb_entries");
+
 // One K chunk of a Q chunk's state through the recipe core (the hot path, at the kernel's optimization level). The
 // ring control code below calls it per chunk and is size-optimized: the ring builds sit at the kernel config buffer.
 __attribute__((noinline)) void ring_run_chunk(RecipeAccumulatorState& state, bool last, bool release_q) {
@@ -72,7 +78,7 @@ __attribute__((noinline)) void ring_run_chunk(RecipeAccumulatorState& state, boo
         recipe::pv_w,
         q,
         k,
-        v,
+        latent_v_in_k ? k : v,
         qk,
         identity_scale,
         exp_max_diff,
@@ -597,7 +603,7 @@ __attribute__((optimize("Os"))) void kernel_main() {
             // The masked-whole chunks after the last processed one.
             for (; k_chunk < num_kv_chunks; ++k_chunk) {
                 if (chunk_sent(k_chunk)) {
-                    recipe_ring_pop_chunk<k_chunk_tiles, v_chunk_tiles>();
+                    recipe_ring_pop_chunk<k_chunk_tiles, latent_v_in_k ? 0 : v_chunk_tiles>();
                     chunks_popped++;
                 }
             }
@@ -614,14 +620,14 @@ __attribute__((optimize("Os"))) void kernel_main() {
                 }
                 for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
                     if (chunk_sent(k_chunk)) {
-                        recipe_ring_pop_chunk<k_chunk_tiles, v_chunk_tiles>();
+                        recipe_ring_pop_chunk<k_chunk_tiles, latent_v_in_k ? 0 : v_chunk_tiles>();
                         chunks_popped++;
                     }
                 }
             }
             // Dummy K/V traffic aligns the chained readers' CB phases (none with sliding: independent per-core reads).
-            for (uint32_t dummy = 0; dummy < dummy_kv_chunks_for_phase_alignment<false, false>(chunks_popped); ++dummy) {
-                recipe_ring_pop_chunk<k_chunk_tiles, v_chunk_tiles>();
+            for (uint32_t dummy = 0; dummy < dummy_kv_chunks_for_phase_alignment<false, k_cb_entries == 3>(chunks_popped); ++dummy) {
+                recipe_ring_pop_chunk<k_chunk_tiles, latent_v_in_k ? 0 : v_chunk_tiles>();
             }
         }
         if constexpr (recipe::ring_mask == 2 && !has_sliding_window) {

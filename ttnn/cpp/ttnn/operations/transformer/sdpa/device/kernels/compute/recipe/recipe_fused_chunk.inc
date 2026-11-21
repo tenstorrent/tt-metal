@@ -318,6 +318,9 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     // PV of group g over K tiles [k0, k0 + k_len), L1-accumulated into O plane `plane` (0: O, vDHt: a redone
     // group's chunk PV, written by the first piece).
     bool v_ready = false;
+    // In-place latent V (sdpa_inner_loop_step: the K CB passed as V): V tile (k, d) is K^T tile (d, k).
+    constexpr bool v_in_k = cb_v_in == cb_kt_in;
+    static_assert(!v_in_k || Sq_chunk_t == 1, "in-place V packs one-row PV subblocks only");
     auto pv_piece = [&](uint32_t g, uint32_t k0, uint32_t k_len, uint32_t plane, bool accumulate) SDPA_FUSED_STEP {
         SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
@@ -328,22 +331,27 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             }
         }
         if (!v_ready) {
-            CircularBuffer(cb_v_in).wait_front(KT * vDHt);
+            if constexpr (!v_in_k) {
+                CircularBuffer(cb_v_in).wait_front(KT * vDHt);
+            }
             v_ready = true;
         }
         CircularBuffer(cb_qkt_im).wait_front((row0 + h) * KT);
         set_srca(cb_v_in);
         recipe_mm_reinit(cb_qkt_im, cb_v_in, false, pv_w, h, KT);
+        if constexpr (v_in_k) {
+            matmul_set_in1_column_stride(cb_v_in, KT);
+        }
         set_pack(out_cb);
         PACK((llk_pack_reconfig_l1_acc(accumulate ? 1 : 0)));
         configure_row_pack_width(out_cb, pv_w);
         for (uint32_t v = 0; v < n_pv; ++v) {
-            blocked_matmul_and_pack<false, vDHt, vDHt>(
+            blocked_matmul_and_pack<false, v_in_k ? 1 : vDHt, vDHt>(
                 cb_qkt_im,
                 cb_v_in,
                 out_cb,
                 row0 * KT + k0,
-                k0 * vDHt + v * pv_w,
+                v_in_k ? v * pv_w * KT + k0 : k0 * vDHt + v * pv_w,
                 0,
                 v * pv_w + plane,
                 pv_w,
@@ -353,6 +361,9 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
                 /*skip_pack_configure=*/true);
         }
         PACK((llk_pack_reconfig_l1_acc(0)));
+        if constexpr (v_in_k) {
+            matmul_set_in1_column_stride(cb_v_in, 1);
+        }
     };
 
     // l += this chunk's sums for an unchanged group.
@@ -645,7 +656,9 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     CircularBuffer(psum_cb).push_back(Sq_chunk_t * sbw);
     CircularBuffer(psum_cb).wait_front(Sq_chunk_t * sbw);
     CircularBuffer(psum_cb).pop_front(Sq_chunk_t * sbw);
-    CircularBuffer(cb_v_in).pop_front(KT * vDHt);
+    if constexpr (!v_in_k) {
+        CircularBuffer(cb_v_in).pop_front(KT * vDHt);
+    }
     CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT);
     // Leave the unpack/pack formats where the step expects them.
     set_srca(cb_qkt_im);

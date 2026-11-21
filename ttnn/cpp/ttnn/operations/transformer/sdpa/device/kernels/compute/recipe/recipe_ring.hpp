@@ -11,12 +11,15 @@
 #include "../../recipe_ring_cbs.hpp"
 
 // A K/V chunk the reader sent that compute does not read (fully masked, or multicast / phase-alignment padding).
+// v_chunk_tiles 0: no V entry (latent V read in place from K).
 template <uint32_t k_chunk_tiles, uint32_t v_chunk_tiles>
 ALWI void recipe_ring_pop_chunk() {
     CircularBuffer(recipe_ring_cb::k).wait_front(k_chunk_tiles);
     CircularBuffer(recipe_ring_cb::k).pop_front(k_chunk_tiles);
-    CircularBuffer(recipe_ring_cb::v).wait_front(v_chunk_tiles);
-    CircularBuffer(recipe_ring_cb::v).pop_front(v_chunk_tiles);
+    if constexpr (v_chunk_tiles > 0) {
+        CircularBuffer(recipe_ring_cb::v).wait_front(v_chunk_tiles);
+        CircularBuffer(recipe_ring_cb::v).pop_front(v_chunk_tiles);
+    }
 }
 
 // A Q chunk's state before its first K chunk: the canonical banks. Out of line and field by field: inline, the compiler

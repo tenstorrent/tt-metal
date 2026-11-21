@@ -844,6 +844,13 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
     auto kt_w = [](uint32_t kt) -> uint32_t {
         return qk_ragged && kt == kt_num_subblocks - 1 ? active_Sk % actual_sbw : actual_sbw;
     };
+    // Latent V read in place from the K^T chunk (the ring kernels pass the K CB as V: ring_mla with one-row Q chunks,
+    // whose reader then keeps three K entries and materializes no V): V tile (k, d) is K^T tile (d, k), so the PV
+    // matmul's in1 steps one tile per K row and KT tiles per V column (the unpacker's column stride).
+    constexpr bool v_in_k = cb_v_in == cb_kt_in;
+    static_assert(!v_in_k || Sq_chunk_t == 1, "in-place V packs one-row PV subblocks only");
+    constexpr uint32_t v_in1_stride = v_in_k ? 1 : vDHt;
+    auto v_tile = [](uint32_t k, uint32_t col) -> uint32_t { return v_in_k ? col * KT_stride + k : k * vDHt + col; };
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     constexpr uint32_t in0_block_w = DHt;
     // An odd Q chunk (BF16 recipes, two-row subblocks) ends with a one-row subblock. Helpers
@@ -1130,8 +1137,8 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         q_wait_tiles += q_subblock_num_tiles;
     }
 
-    {
-        CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);
+    if constexpr (!v_in_k) {
+        CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);  // in-place V: after the PV
     }
 
     // Release after the last local use, independently of final normalization
@@ -1406,7 +1413,9 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
 
                     if (kt_sub == 0) {
                         CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles - (qktv_h - first_h) * KT_stride);
-                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * vDHt);
+                        if constexpr (!v_in_k) {
+                            CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * vDHt);
+                        }
                     }
                     if constexpr (recipe::fp32) {
                         if (kt_sub > 0 || inplace_numerator) {
@@ -1423,12 +1432,15 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         // narrower logical width. Keep unpack init on the physical stride; inner_dim below
                         // still limits how many V rows are multiplied.
                         recipe_mm_reinit(cb_qkt_im, cb_v_in, false, qktv_subblock_w, first_h, KT_stride);
+                        if constexpr (v_in_k) {
+                            matmul_set_in1_column_stride(cb_v_in, KT_stride);
+                        }
                         configure_row_pack_width(out_cb, qktv_subblock_w);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             const uint32_t pv_inner_offset = kt_sub * actual_sbw;
-                            const uint32_t qktv_in1_index = pv_inner_offset * vDHt + v_index_offset;
+                            const uint32_t qktv_in1_index = v_tile(pv_inner_offset, v_index_offset);
                             if constexpr (recipe::accurate && recipe::wormhole) {
-                                blocked_matmul_and_pack<false, vDHt, vDHt>(
+                                blocked_matmul_and_pack<false, v_in1_stride, vDHt>(
                                     cb_qkt_im,
                                     cb_v_in,
                                     out_cb,
@@ -1443,7 +1455,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                                     /*skip_pack_configure=*/true,
                                     /*pv_l1_acc=*/kt_sub > 0 || inplace_numerator);
                             } else {
-                                blocked_matmul_and_pack<false, vDHt, vDHt>(
+                                blocked_matmul_and_pack<false, v_in1_stride, vDHt>(
                                     cb_qkt_im,
                                     cb_v_in,
                                     out_cb,
@@ -1469,6 +1481,9 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                                 })
                             }
                             v_index_offset += qktv_subblock_w;
+                        }
+                        if constexpr (v_in_k) {
+                            matmul_set_in1_column_stride(cb_v_in, 1);
                         }
                         sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
                     }
@@ -1660,12 +1675,15 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
                 recipe_mm_reinit(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
+                if constexpr (v_in_k) {
+                    matmul_set_in1_column_stride(cb_v_in, KT_stride);
+                }
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                    const uint32_t qktv_in1_index = v_index_offset;
+                    const uint32_t qktv_in1_index = v_tile(0, v_index_offset);
                     if constexpr (recipe::accurate && recipe::wormhole) {
-                        blocked_matmul_and_pack<false, vDHt, vDHt>(
+                        blocked_matmul_and_pack<false, v_in1_stride, vDHt>(
                             cb_qkt_im,
                             cb_v_in,
                             out_cb,
@@ -1680,7 +1698,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                             /*skip_pack_configure=*/true,
                             /*pv_l1_acc=*/inplace_numerator);
                     } else {
-                        blocked_matmul_and_pack<false, vDHt, vDHt>(
+                        blocked_matmul_and_pack<false, v_in1_stride, vDHt>(
                             cb_qkt_im,
                             cb_v_in,
                             out_cb,
@@ -1695,6 +1713,9 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                             /*skip_pack_configure=*/true);
                     }
                     v_index_offset += qktv_subblock_w;
+                }
+                if constexpr (v_in_k) {
+                    matmul_set_in1_column_stride(cb_v_in, 1);
                 }
                 sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
                 if constexpr (!recipe::fp32) {
@@ -1813,7 +1834,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
             }
         }
 
-        CircularBuffer(cb_v_in).pop_front(KT_stride * vDHt);
+        CircularBuffer(cb_v_in).pop_front(KT_stride * (v_in_k ? DHt : vDHt));  // in-place V: the K^T chunk
         CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT_stride);
     }
     return false;
