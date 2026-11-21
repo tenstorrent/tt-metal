@@ -651,3 +651,4 @@
 - QUEUED MB.3 (tests only): the single-request parts of the batching branch's ladder + cold no-rebuild tests; gate =
   the 5120 ladder at 51200 / 131072 / 139264 / 262144 / 524288 / 786432 / 1024000 + test_no_rebuild cold;
   report results/ladder_5120_20261121.md (11-19 numbers beside). Then the owner gets the branch to push.
+- 07:45 heartbeat: MB.3 agent active; heartbeat re-created for the branch switch; watch armed.

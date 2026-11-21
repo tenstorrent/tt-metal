@@ -26,6 +26,19 @@ prefill_chunk, a chunk; == 0 under POS_DYNAMIC=on: the ids are reordered on the 
 pulled-back chunk run again in two fresh slots with POS_DYNAMIC off and on gives bit-identical final streams
 (no_rebuild_on_off_max_abs_diff == 0).
 
+MB.3 (OWNER 2026-11-21, from the batching branch's PB.9C / PB.NR 21de88e33ad, single-request parts only: this branch
+has no packed path): the no-rebuild check is PASS / FAIL: no_rebuild_pass_single<chunk> (1 / 0) and
+program_builds_after_warmup_single<chunk> beside the gated program_builds_after_warmup_serving; the verdict printed
+(NO_REBUILD VERDICT single<chunk>: PASS / FAIL).
+
+WHY COLD (F297, BATCH_COLD = True): this test counts program-cache entries and prepare_program calls after the
+engine's own warm-up (runtime.compile). Its draws are fixed-seed, so in a held process (the resident runner, a batch
+after test_skip_positions / walls, or this test's own earlier run) every program its fresh chunks need may already be
+cached by EARLIER traffic, and the count reads 0 although serving, which only gets runtime.compile, would build:
+PB.9C saw 153 / 16 builds in a fresh process and 0 in the held one on the same code (MB.2's PASS ran in a held
+process). So the batch runs it in a fresh process (a cold program cache: only runtime.compile before the count), first
+after the determinism check.
+
     PYTHONPATH=$PWD DS41_ENGRAM_TABLE=resident DS41_POS_DYNAMIC=on DS41_DECODER_SKIP=decode \\
         scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
 """
@@ -33,6 +46,7 @@ pulled-back chunk run again in two fresh slots with POS_DYNAMIC off and on gives
 from __future__ import annotations
 
 import functools
+import os
 import time
 
 import pytest
@@ -52,6 +66,9 @@ BATCH_LAYERS = "executed"  # F285: the layers a decode chunk executes (0-20), as
 # executed-layers load; a run at another chunk still gets its own model (testing/batch.shared_model compares the
 # load's chunk: a fresh process, or a failure under one_load), never another chunk's model.
 BATCH_ITEM_VARS = ("BRINGUP_CHUNK",)
+# F297 (PB.NR): a build counter needs a cold program cache (module docstring, WHY COLD): a fresh process, first in its
+# batch after the determinism check
+BATCH_COLD = True
 REPLAY = 128
 SLOTS = 11  # (slot 0: compile's; 1-8: the fresh draws; 9, 10: the on / off comparison, never written before it)
 KINDS = ("aligned", "steady", "resumed", "partial", "pulled", "acks_only", "steady", "partial")
@@ -177,6 +194,11 @@ def test_no_rebuild(mesh_device, monkeypatch):
     from models.demos.deepseek_v41_flash_d_p.tests.test_skip_positions import _runtime
 
     assert settings.get("DECODER_SKIP") == "decode", "run with DS41_DECODER_SKIP=decode (the gate's serving mode)"
+    # PB.8R (OV-61, F283): the shipped ENGRAM_TABLE as test_skip_positions sets it, so the gate's perf units share one
+    # load (unset, a test process reads F222's test value mmap and the one-load rule refused this unit)
+    if os.environ.get(settings.env_name("ENGRAM_TABLE")) is None:
+        monkeypatch.setenv(settings.env_name("ENGRAM_TABLE"), str(settings.table["ENGRAM_TABLE"].default))
+    print(f"ENGRAM_TABLE={settings.get('ENGRAM_TABLE')}")
     pos = settings.get("POS_DYNAMIC")
     print(f"POS_DYNAMIC={pos}")
     chunk = int(S.get("target.chunk"))
@@ -235,6 +257,8 @@ def test_no_rebuild(mesh_device, monkeypatch):
         pb.print("no_rebuild")
         builds = built + pc.n
         F._record_gate_name("program_builds_after_warmup_serving", int(builds))
+        F._record_gate_name(f"no_rebuild_pass_single{chunk}", int(builds == 0))
+        F._record_gate_name(f"program_builds_after_warmup_single{chunk}", int(builds))
         F._record_gate_name("ids_uploads_per_chunk", round(uploads.n / max(1, n_chunks), 3))
         metrics.record("no_rebuild_cache_entries", int(built))
         metrics.record("no_rebuild_prepares", int(pc.n))
@@ -279,6 +303,7 @@ def test_no_rebuild(mesh_device, monkeypatch):
                 ttnn.deallocate(t)
         if loaded != "decode":
             model.use_decoder_skip(loaded)
+    print(f"NO_REBUILD VERDICT single{chunk}: {'PASS' if builds == 0 else 'FAIL'} ({builds} builds)", flush=True)
     assert builds == 0, f"{builds} programs built after warm-up on fresh serving chunks: {pb.summary(8)}"
     if pos == "on":
         assert uploads.n == 0, f"{uploads.n} ids uploads in {n_chunks} chunks (POS_DYNAMIC=on reorders on the device)"

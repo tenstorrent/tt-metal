@@ -2001,6 +2001,26 @@
   "top5_overlap": 1.0,
   "top5_overlap_limit": 0.994286
  },
+ "MB.3": {
+  "ids_uploads_per_chunk": 0.0,
+  "ids_uploads_per_chunk_tagentic_cc": 0.0,
+  "program_builds_after_warmup_serving": 0,
+  "program_builds_after_warmup_serving_tagentic_cc": 0,
+  "resumed_wall_ms_p1024000_tagentic_cc": 95.3,
+  "resumed_wall_ms_p131072_tagentic_cc": 80.0,
+  "resumed_wall_ms_p139264_tagentic_cc": 83.1,
+  "resumed_wall_ms_p262144_tagentic_cc": 80.3,
+  "resumed_wall_ms_p51200_tagentic_cc": 78.0,
+  "resumed_wall_ms_p524288_tagentic_cc": 84.0,
+  "resumed_wall_ms_p786432_tagentic_cc": 91.9,
+  "steady_tok_s_p1024000_tagentic_cc": 55172.4,
+  "steady_tok_s_p131072_tagentic_cc": 66840.7,
+  "steady_tok_s_p139264_tagentic_cc": 64160.4,
+  "steady_tok_s_p262144_tagentic_cc": 66064.5,
+  "steady_tok_s_p51200_tagentic_cc": 69376.7,
+  "steady_tok_s_p524288_tagentic_cc": 61538.5,
+  "steady_tok_s_p786432_tagentic_cc": 56952.2
+ },
  "P.51": {
   "acks_early": 0,
   "acks_early_decoder_skip": 0,

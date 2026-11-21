@@ -1,0 +1,52 @@
+{
+ "used": [
+  {
+   "id": "DS41-245",
+   "how": "test_no_rebuild sets DS41_ENGRAM_TABLE to the shipped default (resident) when unset, so it shares test_skip_positions' load instead of reading F222's mmap test value",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-322",
+   "how": "kept test_no_rebuild's on/off comparison in slots 9/10 that no draw wrote (same zero history), unchanged from the batching port",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the repo map row for test_no_rebuild had a relative path that knowledge.check rejects (fixed)",
+  "no entry said the ladder regressed at long histories since 11-19 (added DS41-324)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-57",
+   "answer": "done",
+   "evidence": "Measured, tests only (no model change in MB.3): cold test_no_rebuild 0 builds / 0 prepare_program over 16 fresh chunks (aligned, steady, resumed, partial, pulled, acks_only) after runtime.compile only, so the build sites OV-57 listed are runtime values on this code; ids_uploads_per_chunk 0.0 (the re-upload OV-57 asked removed is gone: reorder_ids on the device, 0.29 ms enqueue); the ids readback stays (1.92 ms, 16 to_torch calls: the engram host hash needs the ids, owner-approved). Item-by-item host split at 139264 in results/ladder_5120_20261121.md."
+  }
+ ],
+ "cited_only": [
+  "DS41-324"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "MB.3",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T07:53:02",
+  "head": "bc19e5abcdc",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.3.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/MB.3.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/ladder_5120_20261121.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/ladder_common.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py"
+  ]
+ }
+}

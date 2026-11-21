@@ -1387,3 +1387,29 @@
 - Not done (follow-ups): 8192 fresh walls not re-measured (the same code paths; MB.1's 8192 sites are the 5120 ones);
   the tail's 2 hs / overlapping pack pieces could become runtime row counts (slice_write / ckv_bfp4) to drop the few
   re-moved rows (OV-3 answer); the A/B profile was not run (the orchestrator's table decides).
+
+## MB.3 (perf role, TESTS ONLY): the 5120 ladder at real fixed histories + the cold no-rebuild check (2026-11-21)
+- Expected saving per chunk: none, device 0 ms / host 0 ms: no model change (owner: tests only); the step measures.
+  No Setting added (nothing to switch: the model code is unchanged).
+- Ported from dnijemcevic/model_bringup_batching (PB.9C 8d18418226c, PB.NR 21de88e33ad), single-request parts only:
+  tests/test_skip_positions.py = the batching branch's file (serving column through adapter.prefill_chunk with
+  tt-d-gen's per-layer D2H ack; the host split at 139264), its helper module moved from tests/packed/ladder_common.py
+  (absent here) to tests/ladder_common.py with the packed ladder / packed split / CASES / LADDER_POS dropped;
+  tests/test_no_rebuild.py: BATCH_COLD = True (F297), ENGRAM_TABLE = the shipped default when unset (OV-61 / F283),
+  no_rebuild_pass_single<chunk> / program_builds_after_warmup_single<chunk> + the printed VERDICT; every packed
+  path (glued4x2k, glued5x1600, lanes4x2k, NO_REBUILD_PACKED_STRICT) left out.
+- Rule 20 per-chunk values: none touched (no model code changed). The serving column drives the per-chunk values as
+  the engine does (ids via the engine payload made before the clock, start / end / slot as prefill_chunk args).
+- Gate `gate MB.3 --check` (devjob mb3gate, after the last test edit, hooks clean): PASS, 610 s, 2 safe-runner
+  processes. F297 worked: the batch ran test_no_rebuild FIRST in a fresh process (its own 114 s load), then
+  test_skip_positions in the same process. Cold no-rebuild: PASS, 0 builds / 0 prepares / 0 ids uploads in 16 fresh
+  chunks, on vs off 0.0 (MB.2's held-process PASS confirmed cold).
+- Ladder 5120 steady ms (tok/s): 51200 73.8 (69.4k), 131072 76.6 (66.8k), 139264 79.8 (64.2k), 262144 77.5 (66.1k),
+  524288 83.2 (61.5k), 786432 89.9 (57.0k), 1024000 92.8 (55.2k); serving wall +0.4 .. +4.8 ms over it. == PB.9C5
+  within noise; vs 11-19 +3.7 .. +5.4 ms at 524k-1M (DS41-324, not bisected). Report:
+  ledgers/galaxy_8x4-full/results/ladder_5120_20261121.md (with the host split at 139264: serving adds ids readback
+  1.92 + un-shuffle 0.48 + reorder_ids 0.29 + note_tokens 0.07 - the harness's upload 0.41 = +2.35 ms; 21 acks 4.36 ms
+  of enqueue, hidden).
+- `orchestrator measure --task MB.3` (devjob mb3measure): rc 0 (determinism 0.0, quick rc 0, host_transfers_per_layer 0).
+- Repo map: fixed the test_no_rebuild row's path (knowledge.check flagged it), added the ladder row.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate MB.3 --spec $BRINGUP_SPEC --check` (devjob).
