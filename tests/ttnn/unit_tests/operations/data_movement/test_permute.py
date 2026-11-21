@@ -10,7 +10,6 @@ import pytest
 import torch
 
 import ttnn
-from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     check_readable,
@@ -196,8 +195,6 @@ def test_permute_5d(device, shape, perm, dtype):
 
 @pytest.mark.parametrize("pad_value", [float("-inf"), 0.0])
 def test_permute_pad_value(device, pad_value):
-    if pad_value != 0.0 and is_blackhole():
-        pytest.skip("Blackhole reduce is needed for the full test to work")
     torch.manual_seed(2005)
     input_a = torch.randn((2, 11, 33, 17), dtype=torch.bfloat16)
     torch_output = torch.permute(input_a, (3, 2, 1, 0))
