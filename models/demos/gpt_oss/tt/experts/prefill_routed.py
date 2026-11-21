@@ -1455,7 +1455,7 @@ class RoutedPrefillExperts:
         seq_len = x.shape[-2]
         # Combine blocks of whole users that fit L1 (TP_COMBINE_L1_BYTES): the reduce then reads its input from L1, and
         # the combine output never goes to DRAM.
-        users = max(1, min(C // user_len, TP_COMBINE_L1_BYTES // (user_len * self.hidden_size * 2)))
+        users = self._combine_block_users(C, user_len)
         reduced = []
         for start in range(0, seq_len, C):
             n = min(C, seq_len - start)
@@ -1472,6 +1472,10 @@ class RoutedPrefillExperts:
         for t in reduced:
             ttnn.deallocate(t)
         return out
+
+    def _combine_block_users(self, C, user_len):
+        """Whole users per combine block of the batched TP prefill: as many as fit TP_COMBINE_L1_BYTES (at least 1)."""
+        return max(1, min(C // user_len, TP_COMBINE_L1_BYTES // (user_len * self.hidden_size * 2)))
 
     def _combine_block(self, C):
         """Tokens per combine block. The blocks keep the bf16 combine output in L1 so that only its cast to the bf8
@@ -1502,7 +1506,15 @@ class RoutedPrefillExperts:
         axis = self.mesh_config.tp_axis
         links = batched_reduce_links(self.ccl_manager, axis)  # 2 on BH 1x4, batch 1 too (bit-exact vs 1 link)
         user_len = seq_len // batch_size
-        if batch_size > 1 and seq_len > C and self.out_dtype == ttnn.bfloat16 and C % user_len == 0:
+        # Batched TP prefill whose combine output does not fit L1 in one block (more than one chunk, or one chunk of
+        # more users than TP_COMBINE_L1_BYTES holds: b32 1K is one 32K chunk of 4 blocks): combine and reduce block by
+        # block, the combine output in L1, instead of one [S, H] DRAM combine output for the reduce to read back.
+        if (
+            batch_size > 1
+            and self.out_dtype == ttnn.bfloat16
+            and C % user_len == 0
+            and (seq_len > C or self._combine_block_users(C, user_len) * user_len < seq_len)
+        ):
             return self._reduce_by_chunk(x, topk_indices, topk_weights, C, user_len, axis, links, scatter)
         Cs = self._combine_block(C)
         # More than one combine block: cast every block into its rows of one preallocated output (narrow views)
