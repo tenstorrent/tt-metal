@@ -19,16 +19,21 @@ import torch
 
 import ttnn
 
+from models.common.metrics import compute_max_abs_error, compute_pcc
 from models.experimental.nomic_embed_text_v2_moe.common import slice_state_dict
+from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device
+from models.experimental.nomic_embed_text_v2_moe.tt.router import Routing
 
 # (batch, seqlen). 37 is deliberately off-tile: padding bugs only surface when S is not a
 # multiple of 32, and S is the batch's longest tokenized sequence, so that is the common case.
 TOKEN_SHAPES = [(1, 128), (2, 512), (2, 37)]
 
-# Past 32 tile rows of M = B * S the dense projections run through minimal_matmul, which no
-# TOKEN_SHAPES entry reaches. 4x512 folds to 64: M is below N for QKV and fc1 and above it for
-# out_proj and fc2, so both orientations run, and the QKV, out_proj and fc1 outputs go to L1.
-DENSE_SHAPES = [*TOKEN_SHAPES, (4, 512)]
+# From 32 tile rows of M = B * S (2x512 here) the dense projections run on the port's own matmuls: QKV while M <= N
+# and fc1 on grouped_matmul_w1 with one expert, the others on pirotski_matmul. 4x512 folds to 64: M is below N for
+# QKV and above it for out_proj and fc2, so both run, and the QKV, out_proj and fc1 outputs go to L1.
+# 16x512 is the largest chunk a forward runs (tt/chunking.py), 8192 tokens, where SDPA's key chunk
+# is smaller than its rule's so the heads fit L1.
+DENSE_SHAPES = [*TOKEN_SHAPES, (4, 512), (16, 512)]
 
 # A wrong layout or convention does not lose precision, it decorrelates. Anything under this is
 # the wrong tensor, not a less precise one.
@@ -38,6 +43,17 @@ DECORRELATED_PCC = 0.5
 # are the two prefixes the module tests read weights from.
 DENSE_LAYER = 0
 MOE_LAYER = 1
+
+# The shared-bias offset the wrong placement leaves behind. Measured well above this; PCC cannot
+# see it at all.
+BIAS_MISPLACEMENT_MAX_ABS = 1e-3
+
+# How far from 1 the measured count of shared biases a token holds may be. Measured 1.003 and 0.996
+# where routed_combine adds it to the fp32 sum before rounding once. A bfloat16 add of the bias to a
+# bfloat16 sum measured 0.946 and 0.950: it drops the bias from the half of the elements where it is
+# under half a step of the sum. A bias added inside the per-expert loop counts the mean routed-weight
+# sum instead, about 0.55.
+BIAS_SCALE_TOLERANCE = 0.1
 
 
 def load_reference(factory, state_dict: dict, prefix: str):
@@ -98,12 +114,79 @@ def keep_mask(batch: int, seqlen: int, keep) -> torch.Tensor:
     return mask
 
 
-def dense_routing(tokens: int, experts: int, top_k: int) -> torch.Tensor:
-    """A plausible (T, E) dense routing tensor, zero off the top-k and not renormalized.
+def routing_selection(tokens: int, experts: int, top_k: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """A plausible top-k selection: (T, K) float32 weights, descending and not renormalized, and (T, K) experts."""
+    probabilities = torch.randn(tokens, experts).softmax(dim=-1)
+    return torch.topk(probabilities, top_k, dim=-1)
+
+
+def selection_as_dense(values: torch.Tensor, indices: torch.Tensor, experts: int) -> torch.Tensor:
+    """A (T, K) selection as the (T, E) dense routing tensor it stands for, zero off the top-k."""
+    return torch.zeros(values.shape[0], experts).scatter_(-1, indices, values)
+
+
+def injected_routing(tokens: int, experts: int, top_k: int, device) -> tuple[Routing, torch.Tensor]:
+    """A plausible selection on the device, and the (T, E) dense weights it stands for, which
+    NomicExperts.dense_forward takes.
 
     Injected rather than routed so the expert tests measure the expert arithmetic alone; a
     routing flip would otherwise show up as an expert error.
     """
-    probabilities = torch.randn(tokens, experts).softmax(dim=-1)
-    values, indices = torch.topk(probabilities, top_k, dim=-1)
-    return torch.zeros_like(probabilities).scatter_(-1, indices, values)
+    values, indices = routing_selection(tokens, experts, top_k)
+    return device_selection(values, indices, experts, device), selection_as_dense(values, indices, experts)
+
+
+def device_selection(values: torch.Tensor, indices: torch.Tensor, experts: int, device) -> Routing:
+    """A (T, K) selection on the device as the router's (T, E) scores, from which routing_metadata selects
+    exactly it: the chosen experts' weights, which must be descending and above 0, and zeros elsewhere."""
+    scores = torch.zeros(values.shape[0], experts).scatter_(-1, indices, values)
+    return Routing(scores=to_device(scores.reshape(1, 1, *scores.shape), device, dtype=ttnn.float32))
+
+
+def selection_of(routing: Routing, top_k: int, num_experts: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """The (T, K) weights and experts routing_metadata selects from routing's scores: each token's
+    top_k of the experts' columns, largest first and a tie to the lower expert."""
+    scores = ttnn.to_torch(routing.scores).float().reshape(-1, routing.scores.shape[-1])
+    values, indices = torch.sort(scores[:, :num_experts], dim=-1, descending=True, stable=True)
+    return values[:, :top_k], indices[:, :top_k]
+
+
+def bias_scale(got: torch.Tensor, without_bias: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+    """How many times the output holds the bias: its difference from the bias-free run, projected on it.
+
+    1 where the bias is added once to each token's sum, the mean routed-weight sum where it is added
+    inside every expert's term. Projected over every token, the rounding the two runs do differently,
+    up to a bfloat16 step when the bias is added inside a matmul's accumulator, averages out.
+    """
+    difference = (got - without_bias).double().reshape(-1, bias.shape[-1])
+    direction = bias.double().reshape(1, -1)
+    return (difference * direction).sum(-1).mean() / (direction * direction).sum()
+
+
+def assert_bias_added_once(
+    got: torch.Tensor, without_bias: torch.Tensor, bias: torch.Tensor, routed_weight_sum: torch.Tensor
+) -> None:
+    """The shared expert bias is in the output once per token, not once per routed expert.
+
+    Both placements are built from the module's own bias-free output rather than the reference: at
+    real weights the bfloat16 noise is 0.22 against an offset of (sum(w) - 1) * bias far below it.
+
+    Args:
+        got: The module output.
+        without_bias: The same module's output with its bias zeroed.
+        bias: The (H,) shared bias.
+        routed_weight_sum: Each token's sum of routing weights, broadcastable against got.
+    """
+    assert (routed_weight_sum < 1.0).all(), "top-k weights are not renormalized, so they must sum below 1"
+    correct = without_bias + bias
+    inside_the_loop = without_bias + bias * routed_weight_sum
+    assert (
+        compute_max_abs_error(correct, inside_the_loop) > BIAS_MISPLACEMENT_MAX_ABS
+    ), "the two placements agreed; the offset this test exists to catch is not present"
+    assert compute_pcc(inside_the_loop, correct) > 0.9999, "if PCC caught this, the docstring is stale"
+    inside_scale = float(routed_weight_sum.mean())
+    assert 1 - inside_scale > BIAS_SCALE_TOLERANCE, "a bias added inside the loop would pass"
+    scale = float(bias_scale(got, without_bias, bias))
+    assert (
+        abs(scale - 1) < BIAS_SCALE_TOLERANCE
+    ), f"the output holds the bias {scale:.3f} times: once is 1, inside the loop {inside_scale:.3f}"

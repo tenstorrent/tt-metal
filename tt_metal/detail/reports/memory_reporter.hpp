@@ -37,7 +37,7 @@ public:
 private:
     MemoryReporter() = default;
     ~MemoryReporter();
-    void init_reports();
+    void init_reports(const IDevice* device);
     static std::atomic<bool> is_enabled_;
     std::ofstream program_l1_usage_summary_report_;
     std::ofstream program_memory_usage_summary_report_;

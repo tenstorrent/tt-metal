@@ -35,14 +35,12 @@ DispatchKernelInitializer::DispatchKernelInitializer(
     DeviceManager* device_manager,
     const GetControlPlaneFn& get_control_plane,
     const GetDispatchQueryManagerFn& get_dispatch_query_manager,
-    const GetMaxNumEthCoresFn& get_max_num_eth_cores,
     const GetReadsDispatchCoresFn& get_reads_dispatch_cores) :
     FirmwareInitializer(std::move(descriptor)),
     dispatch_core_manager_(dispatch_core_manager),
     device_manager_(device_manager),
     get_control_plane_(get_control_plane),
     get_dispatch_query_manager_(get_dispatch_query_manager),
-    get_max_num_eth_cores_(get_max_num_eth_cores),
     get_reads_dispatch_cores_(get_reads_dispatch_cores) {
     dispatch_topology_ = std::make_unique<tt::tt_metal::DispatchTopology>(
         *descriptor_,
@@ -50,7 +48,6 @@ DispatchKernelInitializer::DispatchKernelInitializer(
         device_manager_,
         get_control_plane_,
         get_dispatch_query_manager_,
-        get_max_num_eth_cores_,
         get_reads_dispatch_cores_);
 }
 
@@ -69,9 +66,9 @@ void DispatchKernelInitializer::init(
 
     devices_ = devices;
 
-    // Skip firmware initialization for mock devices
-    if (descriptor_->is_mock_device()) {
-        log_info(tt::LogMetal, "Skipping dispatch firmware initialization for mock devices");
+    // Mock and emulated devices run no dispatch firmware (tt-emule's command queue stands in for it)
+    if (cluster_.is_mock_or_emulated()) {
+        log_info(tt::LogMetal, "Skipping dispatch firmware initialization for mock/emulated devices");
         return;
     }
 
@@ -102,16 +99,26 @@ void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& ini
         return;
     }
 
-    // Mock devices don't have sysmem_manager, skip FD teardown
-    if (descriptor_->is_mock_device()) {
+    // Mock and emulated devices have no dispatch firmware to tear down
+    if (cluster_.is_mock_or_emulated()) {
         init_done.erase(key);
         return;
     }
 
-    terminate_command_queues();
-    wait_for_dispatch_cores();
-
-    process_termination_signals();
+    // After an L1 ECC halt the dispatcher is stuck on the halted worker and never runs terminate; the RISC reset
+    // in RiscFirmwareInitializer::teardown stops the dispatch cores instead.
+    const bool dispatch_live = !descriptor_->metal_context().l1_ecc_halt_detected();
+    if (dispatch_live) {
+        terminate_command_queues();
+    }
+    // A dispatch core reports done only once every kernel on it has returned, so the dispatch kernels that exit on
+    // a termination signal get it before the wait. Routing kernels carry the CQ kernels' traffic until those exit,
+    // so theirs comes after.
+    process_termination_signals(FDKernelType::DISPATCH);
+    if (dispatch_live) {
+        wait_for_dispatch_cores();
+    }
+    process_termination_signals(FDKernelType::ROUTING);
 
     devices_.clear();
     initialized_ = false;
@@ -121,7 +128,7 @@ void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& ini
 bool DispatchKernelInitializer::is_initialized() const { return initialized_; }
 
 void DispatchKernelInitializer::compile_dispatch_kernels() {
-    if (descriptor_->is_mock_device()) {
+    if (cluster_.is_mock_or_emulated()) {
         return;
     }
 
@@ -172,7 +179,7 @@ void DispatchKernelInitializer::compile_dispatch_kernels() {
 void DispatchKernelInitializer::init_device_command_queues() {
     // Initialize device-side command queues (parallelized per MMIO device).
 
-    if (descriptor_->is_mock_device()) {
+    if (cluster_.is_mock_or_emulated()) {
         return;
     }
 
@@ -257,9 +264,9 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
     }
 }
 
-void DispatchKernelInitializer::process_termination_signals() const {
+void DispatchKernelInitializer::process_termination_signals(FDKernelType kernel_type) const {
     for (auto* dev : devices_) {
-        const auto& info = dispatch_topology_->get_registered_termination_cores(dev->id());
+        const auto& info = dispatch_topology_->get_registered_termination_cores(dev->id(), kernel_type);
         for (const auto& core_to_terminate : info) {
             std::vector<uint32_t> val{core_to_terminate.val};
             detail::WriteToDeviceL1(

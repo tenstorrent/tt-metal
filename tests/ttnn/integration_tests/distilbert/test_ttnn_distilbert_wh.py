@@ -14,7 +14,7 @@ from transformers import (
 from transformers import AutoTokenizer
 from models.demos.wormhole.distilbert.tt import ttnn_optimized_distilbert
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 
 
 @pytest.mark.parametrize("model_name", ["distilbert-base-uncased-distilled-squad"])

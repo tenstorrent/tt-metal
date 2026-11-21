@@ -8,6 +8,7 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 
 // The last group status observed, so a timeout names which lanes were still missing.
@@ -17,7 +18,7 @@ constexpr uint32_t kNumSlots = 2;
 void kernel_main() {
     constexpr uint32_t l1_address = get_named_compile_time_arg_val("l1_address");
     constexpr uint32_t group_id = get_named_compile_time_arg_val("group_id");
-    constexpr uint32_t dispatch_mask = get_named_compile_time_arg_val("dispatch_mask");
+    constexpr uint32_t dispatch_mask = overlay::fds_signalling::dispatch_lane_mask;
     constexpr uint32_t num_engines = get_named_compile_time_arg_val("num_engines");
     constexpr uint32_t poll_iterations = get_named_compile_time_arg_val("poll_iterations");
     static_assert(group_id < kReadyTokenA, "payload group ids must stay below the ready tokens");

@@ -21,6 +21,10 @@ class GLM53Config:
 
     # Core dimensions
     EMB_SIZE = 6144  # embedding dimension
+    # Callers can override this default with use_fused_rmsnorm at model initialization.
+    USE_FUSED_PREFILL_RMSNORM = True
+    # The dense FFN (layers 0-2) fuses its TP gather and reduce-scatter into its matmuls (TtFfn fuse_tp_collectives).
+    FUSE_DENSE_FFN_TP_COLLECTIVES = True
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
@@ -28,14 +32,29 @@ class GLM53Config:
     # routed-expert matmul shape, expert count and activation (6144x2048, 256 experts, top-8, no
     # pre-projection, SiLU). Re-measure if any of those change.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
+    # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced and untraced). Every
+    # config that does not name it runs the routed expert then combine as separate ops.
+    ROUTED_EXPERT_COMBINE_OVERLAP = True
+    # Whether to use the fabric2d-optimized dispatch and combine ops in MoE
+    # True = use them if the mesh allows, False = use older ops
+    MOE_FABRIC2D_TRANSPORT = True
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
+    # Depth of the MoE forwarding buffers, in pages per channel. Before #63483 combine_fabric2d's depth scaled with
+    # the tokens a chip holds: about 66 pages at one 5,120-token chunk on 8x4, about 267 for a packed forward of four
+    # (2,560 rows a chip). At 64, packed 8x4 forwards hang in combine_fabric2d (one TP column never finishes the
+    # routed expert / combine op), so this keeps the depth packed forwards had.
+    MOE_FWD_VC_PAGES = 256
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
+    # Cache the noaux_tc correction bias mean-centred (see centre_gate_bias). The checkpoint biases sit on
+    # per-layer offsets of ~8-34 with a spread of only ~0.06-0.15, so bf16 keeps just 3-9 distinct values a
+    # layer; centred it keeps 78-173. Every config that does not name it keeps the uncentred cache file.
+    MOE_GATE_BIAS_CENTERED = True
 
     # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
     # selected-weight distribution rather than slot alignment; 160 experts, top-8 floors at
@@ -121,8 +140,9 @@ def glm_5_3_hf_config(max_seq: int = 8192):
         index_head_dim=GLM53Config.INDEX_HEAD_DIM,
         index_topk=GLM53Config.INDEX_TOPK,
         index_rope_interleave=True,
-        # Full indexer layers overlap their local TopK on 80 cores with the sparse-KV SP gather on
-        # the remaining 30 (QB2) or 40 (LoudBox/Galaxy) cores. Shared layers reuse those indices.
+        # Full indexer layers overlap their local TopK with the sparse-KV SP gather, which runs on the
+        # worker row below the Ethernet row (11 cores on QB2, 12 on LoudBox/Galaxy); TopK gets the other
+        # nine rows. Shared layers reuse those indices.
         sparse_mla_overlap_profile="auto",
         # Indexer reuse: the per-layer full/shared map (length NUM_LAYERS) plus the params it derives
         # from. Consumers read `indexer_types` by layer index; absent -> all layers full.

@@ -8,13 +8,13 @@ import torch
 import pytest
 from loguru import logger
 
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 import ttnn
 from tracy import signpost
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
-from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
+from tt_py_test_utils_common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
 from tests.nightly.t3000.ccl.test_all_to_all_combine import (
     run_all_to_all_combine_test,
     trace_all_to_all_combine,

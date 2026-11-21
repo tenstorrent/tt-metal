@@ -12,6 +12,8 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -57,6 +59,16 @@ Conv2dResultWithOptions conv2d(
 }  // namespace ttnn::operations::experimental::quasar
 
 namespace ttnn::operations::experimental::quasar::detail {
+
+// Quasar variant of conv2d_utils' determine_matmul_op_config_from_conv_op_config: builds the Quasar matmul
+// program config for the 1x1-conv-as-matmul path. Shared with the Quasar conv_transpose2d.
+ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config_qsr(
+    ttnn::prim::Conv2dParallelizationConfig conv_parallelization_config,
+    ttnn::prim::Conv2dBlockConfig conv_blocking_config,
+    bool height_sharded,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
+    bool transpose_mcast,
+    uint32_t grid_size_along_c);
 
 std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
     uint32_t batch_size,

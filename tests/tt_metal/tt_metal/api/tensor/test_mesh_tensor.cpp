@@ -53,6 +53,7 @@
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_metal/tt_metal/common/device_fixture.hpp"
+#include "common_tensor_test_utils.hpp"
 
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "impl/context/metal_context.hpp"
@@ -147,6 +148,45 @@ TEST_F(MeshDeviceSingleCardFixture, AllocateFp8E4m3OnDevice) {
         EXPECT_ANY_THROW({ [[maybe_unused]] auto tensor = MeshTensor::allocate_on_device(mesh_device, spec); });
     }
 }
+
+// MX tensors can only be placed on Quasar. There the packed tiles (block scales included) must survive a
+// host -> device -> host round trip byte for byte; on any other arch allocation is rejected.
+class MeshTensorMxDeviceTest : public MeshDeviceSingleCardFixture, public ::testing::WithParamInterface<DataType> {};
+
+TEST_P(MeshTensorMxDeviceTest, RoundTripOnQuasarRejectedElsewhere) {
+    auto& mesh_device = *devices_[0];
+    const DataType dtype = GetParam();
+    // 2x2 tiles, so the round trip covers several pages.
+    const Shape shape{64, 64};
+    auto spec = TensorSpec(
+        shape,
+        TensorLayout(dtype, PageConfig(Layout::TILE), MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+
+    if (mesh_device.arch() != tt::ARCH::QUASAR) {
+        EXPECT_ANY_THROW({ [[maybe_unused]] auto tensor = MeshTensor::allocate_on_device(mesh_device, spec); });
+        return;
+    }
+
+    std::vector<float> data(shape.volume());
+    for (size_t i = 0; i < data.size(); ++i) {
+        data[i] = static_cast<float>(i % 61) - 30.0f;
+    }
+    auto host_tensor = HostTensor::from_vector(data, spec);
+
+    auto& cq = mesh_device.mesh_command_queue();
+    MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
+    EXPECT_EQ(device_tensor.dtype(), dtype);
+    HostTensor result = cq.enqueue_read_tensor(device_tensor);
+
+    EXPECT_EQ(result.tensor_spec(), host_tensor.tensor_spec());
+    EXPECT_THAT(host_buffer::get_as<uint32_t>(result), Pointwise(Eq(), host_buffer::get_as<uint32_t>(host_tensor)));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MeshTensorMxDevice,
+    MeshTensorMxDeviceTest,
+    ::testing::ValuesIn(::test_utils::kMxDataTypes),
+    ::test_utils::dtype_param_name);
 
 TEST_F(MeshTensorDeviceTest, MoveConstructionTransfersOwnership) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
@@ -1026,18 +1066,20 @@ void run_large_read_only_file_backed_write_test(distributed::MeshDevice& mesh_de
     expect_host_tensors_eq(host_tensor, result);
 }
 
-// MAP_SHARED of an O_RDONLY descriptor clears VM_MAYWRITE, so the kernel will not let this mapping become
-// writable at all: mprotect(PROT_WRITE) on it fails with EACCES. That makes it the strict case -- read-only
-// pinning has to work on memory that genuinely cannot be widened, not merely on memory nobody widened yet.
+// MAP_SHARED is what the Python load_tensor() API creates (map_tensor_file in tensor_file_layout.cpp maps the file
+// PROT_READ | MAP_SHARED), so this is the case the feature exists for. MAP_SHARED of an O_RDONLY descriptor also
+// clears VM_MAYWRITE, so the kernel will not let this mapping become writable at all: mprotect(PROT_WRITE) on it
+// fails with EACCES. That makes it the strict case -- read-only pinning has to work on memory that genuinely cannot
+// be widened, not merely on memory nobody widened yet.
 TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnlyPinnedMemory) {
     run_large_read_only_file_backed_write_test(*mesh_device_, MAP_SHARED);
 }
 
-// MAP_PRIVATE is what the Python load_tensor() API actually creates (serialization.cpp maps the file
-// PROT_READ | MAP_PRIVATE), so this is the case the feature exists for. It is the weaker case for the pin -- a private
-// PROT_READ mapping keeps VM_MAYWRITE, so mprotect(PROT_WRITE) on it succeeds -- but a read/write pin still
-// fails on it, since VM_WRITE is clear. Covering only MAP_SHARED above would leave the production mapping
-// mode unproven, and covering only this one would drop the strict case.
+// MAP_PRIVATE is what load_tensor() falls back to on a filesystem that refuses a shared mapping. It is the weaker case
+// for the pin -- a private PROT_READ mapping keeps VM_MAYWRITE, so mprotect(PROT_WRITE) on it succeeds -- but a
+// read/write pin still fails on it, since VM_WRITE is clear. The kernel also handles the read-only pin differently: it
+// copies each page of a private file mapping into anonymous memory before pinning it, where a shared mapping's
+// page-cache pages are pinned in place. Covering only MAP_SHARED above would leave the fallback unproven.
 TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyPrivateFileBackedWriteUsesReadOnlyPinnedMemory) {
     run_large_read_only_file_backed_write_test(*mesh_device_, MAP_PRIVATE);
 }

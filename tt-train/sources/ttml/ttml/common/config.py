@@ -8,6 +8,7 @@ import yaml
 from dataclasses import dataclass
 from typing import Union
 from ttml.common.utils import get_tt_metal_runtime_root
+from ttml.fsdp import _compile_replicate_patterns
 
 
 class DeviceConfig:
@@ -39,6 +40,12 @@ class DeviceConfig:
         # so large models (e.g. 32B) never materialize a full replicated copy on one chip.
         # Set to false to opt into the eager (full-replicated, then shard) path.
         self.lazy_parameter_init = device_config.get("lazy_parameter_init", True)
+        # Regex patterns of parameters FSDP keeps replicated, passed to ``fully_shard(replicate=...)``.
+        # Validated here so a bad pattern fails at config load.
+        replicate = device_config.get("fsdp_replicate_params")
+        replicate = [] if replicate is None else replicate
+        _compile_replicate_patterns(replicate, what="device_config.fsdp_replicate_params")
+        self.fsdp_replicate_params = list(replicate)
 
     def total_devices(self) -> int:
         """Get total number of devices in mesh.
@@ -285,15 +292,10 @@ def get_model_config(
     return model_config
 
 
-def get_multihost_config(
-    multihost_config_src: str,
-    configs_root: str = None,
-) -> MultiHostConfig:
-    """Load multihost configuration given its filename."""
-    if configs_root is None:
-        configs_root = f"{get_tt_metal_runtime_root()}/tt-train/configs/multihost_configs/"
-
-    multihost_config = load_config(multihost_config_src, configs_root)
-    multihost_config = MultiHostConfig(multihost_config)
-
-    return multihost_config
+def resolve_multihost_config(yaml_config: dict) -> MultiHostConfig:
+    """Multihost config of a full training config: the YAML that ``training_config.multihost_config`` points to,
+    or an empty (disabled) config if it is not set."""
+    tc = yaml_config.get("training_config", {})
+    if "multihost_config" in tc:
+        return MultiHostConfig(load_config(tc["multihost_config"]))
+    return MultiHostConfig({})

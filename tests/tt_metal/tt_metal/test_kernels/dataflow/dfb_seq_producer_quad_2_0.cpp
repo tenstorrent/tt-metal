@@ -29,12 +29,21 @@ static inline void produce_one_dfb(
     uint32_t num_producers,
     uint32_t producer_idx) {
     const uint32_t entry_size = dfb.get_entry_size();
-    for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; ++tile_id) {
+    const uint32_t share = dfb.get_producer_share();
+    const uint32_t stride_bytes = entry_size * dfb.get_producer_stride_tiles();
+    for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id += share) {
         const uint32_t page_id = tile_id * num_producers + producer_idx;
-        dfb.reserve_back(1);
-        noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = page_id}, {});
+        dfb.reserve_back(share);
+        for (uint32_t i = 0; i < share; ++i) {
+            noc.async_read(
+                tensor_accessor,
+                dfb,
+                entry_size,
+                {.page_id = page_id + i * num_producers},
+                {.offset_bytes = i * stride_bytes});
+        }
         noc.async_read_barrier();
-        dfb.push_back(1);
+        dfb.push_back(share);
     }
     dfb.finish();
 }
@@ -48,6 +57,7 @@ static inline void produce_one_dfb_impl_sync(
     uint32_t num_entries_per_producer,
     uint32_t num_producers,
     uint32_t producer_idx) {
+    // One call per page; the DFB does the reserve/push itself.
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; ++tile_id) {
         const uint32_t page_id = tile_id * num_producers + producer_idx;
         noc.template async_read<NocOptions::TXN_ID>(tensor_accessor, dfb, {.page_id = page_id}, {});

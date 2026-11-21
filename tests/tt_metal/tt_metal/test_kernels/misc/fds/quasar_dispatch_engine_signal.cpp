@@ -14,6 +14,7 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 
 // Mirrored by test_quasar_fds.cpp.
@@ -27,7 +28,7 @@ constexpr uint32_t kNumSlots = 3;
 void kernel_main() {
     constexpr uint32_t l1_address = get_named_compile_time_arg_val("l1_address");
     constexpr uint32_t group_id = get_named_compile_time_arg_val("group_id");
-    constexpr uint32_t worker_mask = get_named_compile_time_arg_val("worker_mask");
+    constexpr uint32_t worker_mask = overlay::fds_signalling::all_worker_lanes_mask;
     constexpr uint32_t poll_iterations = get_named_compile_time_arg_val("poll_iterations");
     // One per worker kernel the host launched. A threshold above that count makes the wait
     // unsatisfiable, since only that many NEOs can ever drive a done.

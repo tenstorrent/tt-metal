@@ -25,14 +25,25 @@ from models.common.utility_functions import run_for_blackhole
 from models.experimental.nomic_embed_text_v2_moe.common import TOKENIZER
 from models.experimental.nomic_embed_text_v2_moe.reference.postprocessing import l2_normalize, mean_pool
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    NORM_ROW_MAJOR_ABOVE_TILES,
+    SHARDED_NORM_DIRECT_MAX_TILES,
+    SHARDED_NORM_MAX_TILES,
+    LayerNormParameters,
+    activation_memory_config,
     flatten_tokens,
+    layer_norm,
+    sharded_norm_layout,
     to_device,
     transpose_linear_weight,
     unflatten_tokens,
 )
-from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import dense_linear
+from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import (
+    SMALL_M_TILES,
+    dense_linear,
+    prepare_grouped_projection,
+)
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device]
 
@@ -148,6 +159,169 @@ def test_layer_norm_fuses_the_post_norm_residual(device, tt_config, config, batc
     assert_with_pcc(ref, out, OPERATOR_PCC)
 
 
+@pytest.mark.parametrize("batch, seqlen", [(1, 128), (2, 512), (8, 512)])
+def test_layer_norm_reads_both_weight_forms_alike(device, tt_config, config, batch, seqlen):
+    """LayerNormParameters' tiled DRAM and row-major L1 forms give the same norm, bit for bit.
+
+    The norm takes the row-major copy above NORM_ROW_MAJOR_ABOVE_TILES tile rows of M and the tiled one up to
+    it, so the choice has to be speed alone. 1x128 and 2x512 read the tiled form, 8x512 the
+    row-major one.
+    """
+    hidden = config.hidden_size
+    x = to_device(torch.randn(batch, 1, seqlen, hidden), device)
+    residual = to_device(torch.randn(batch, 1, seqlen, hidden), device)
+    parameters = LayerNormParameters(torch.randn(hidden), torch.randn(hidden), device, tt_config.weight_dtype)
+
+    def norm(weight, bias):
+        out = ttnn.layer_norm(
+            x,
+            residual_input_tensor=residual,
+            weight=weight,
+            bias=bias,
+            epsilon=config.layer_norm_epsilon,
+            compute_kernel_config=tt_config.compute_kernel_config(OpGroup.NORM),
+        )
+        return ttnn.to_torch(out)
+
+    assert torch.equal(norm(*parameters.tiled), norm(*parameters.row_major))
+    wide = batch * ttnn.core.divup(seqlen, ttnn.TILE_SIZE) > NORM_ROW_MAJOR_ABOVE_TILES
+    assert parameters.for_input(x) is (parameters.row_major if wide else parameters.tiled)
+
+
+def norm_inputs(device, tt_config, config, batch, seqlen, with_residual=True):
+    """x, the residual (or None) and layer_norm's keyword arguments, placed as the model places them."""
+    hidden = config.hidden_size
+    memory_config = activation_memory_config((batch, 1, seqlen, hidden))
+    x_torch = torch.randn(batch, 1, seqlen, hidden)
+    residual_torch = torch.randn(batch, 1, seqlen, hidden) if with_residual else None
+    x = to_device(x_torch, device, memory_config=memory_config)
+    residual = None if residual_torch is None else to_device(residual_torch, device, memory_config=memory_config)
+    kwargs = dict(
+        epsilon=config.layer_norm_epsilon,
+        memory_config=memory_config,
+        compute_kernel_config=tt_config.compute_kernel_config(OpGroup.NORM),
+    )
+    return x_torch, residual_torch, x, residual, kwargs
+
+
+@pytest.mark.needs_weights
+@pytest.mark.parametrize("with_residual", [True, False], ids=["residual", "no_residual"])
+@pytest.mark.parametrize(
+    "batch, seqlen", [(1, 32), (2, 37), (1, 320), (3, 110), (1, ttnn.TILE_SIZE * SHARDED_NORM_MAX_TILES)]
+)
+def test_layer_norm_splits_the_hidden_axis_up_to_the_limit(
+    device, tt_config, config, state_dict, batch, seqlen, with_residual
+):
+    """tt.common.layer_norm runs block-sharded up to SHARDED_NORM_MAX_TILES tile rows of M.
+
+    One tile row of M a core up to the grid's 11 columns (1x32, 2x37, 1x320), two above (3x110, 12 tile rows),
+    three at the limit, 1x(32 * SHARDED_NORM_MAX_TILES), where the last column holds two.
+
+    The sharded program's mean and variance come out sharded_norm_statistics_scale times the true ones,
+    which the corrected float32 gamma cancels: with it the norm is no less accurate against float64 than
+    the interleaved one (1.53x the bfloat16 floor against 1.91x at layer 0's norm1 weights; 2.08x
+    uncorrected). If ttnn's scalers ever change, the correction overshoots and this fails. Up to SMALL_M_TILES
+    the output lands where memory_config says, as the interleaved call's does; above it (the limit) the split
+    layout is handed over alone, the dense projections reading it as it stands.
+    """
+    torch.manual_seed(0)
+    weight, bias = state_dict["encoder.layers.0.norm1.weight"], state_dict["encoder.layers.0.norm1.bias"]
+    parameters = LayerNormParameters(weight, bias, device, tt_config.weight_dtype)
+    x_torch, residual_torch, x, residual, kwargs = norm_inputs(device, tt_config, config, batch, seqlen, with_residual)
+
+    split, split_sharded = layer_norm(x, parameters, residual=residual, keep_sharded=True, **kwargs)
+    if batch * ttnn.core.divup(seqlen, ttnn.TILE_SIZE) > SMALL_M_TILES:
+        assert split_sharded is None and split.memory_config().is_sharded()
+    else:
+        assert split_sharded is not None
+        assert split.memory_config() == kwargs["memory_config"]
+    weight_tt, bias_tt = parameters.for_input(x)
+    stock = ttnn.layer_norm(x, residual_input_tensor=residual, weight=weight_tt, bias=bias_tt, **kwargs)
+
+    summed = x_torch if residual_torch is None else x_torch + residual_torch
+    exact = torch.nn.functional.layer_norm(
+        summed.double(), (config.hidden_size,), weight.double(), bias.double(), config.layer_norm_epsilon
+    )
+
+    def relative_error(out):
+        return ((ttnn.to_torch(out).double() - exact).norm() / exact.norm()).item()
+
+    assert relative_error(split) <= relative_error(stock)
+
+
+def test_layer_norm_takes_a_sharded_residual_as_it_stands(device, tt_config, config):
+    """norm1's keep_sharded output, handed to norm2 as its residual, gives what its interleaved copy gives.
+
+    The block passes the sharded form to save a conversion; converting is exact, so the two
+    residuals must give the same norm, bit for bit.
+    """
+    torch.manual_seed(0)
+    hidden = config.hidden_size
+    parameters = LayerNormParameters(torch.randn(hidden), torch.randn(hidden), device, tt_config.weight_dtype)
+    _, _, x, residual, kwargs = norm_inputs(device, tt_config, config, 1, 128)
+    _, _, mlp_out, _, _ = norm_inputs(device, tt_config, config, 1, 128, with_residual=False)
+
+    hidden_out, hidden_sharded = layer_norm(x, parameters, residual=residual, keep_sharded=True, **kwargs)
+    from_sharded = layer_norm(mlp_out, parameters, residual=hidden_sharded, **kwargs)
+    from_interleaved = layer_norm(mlp_out, parameters, residual=hidden_out, **kwargs)
+    assert torch.equal(ttnn.to_torch(from_sharded), ttnn.to_torch(from_interleaved))
+
+
+@pytest.mark.needs_weights
+@pytest.mark.parametrize("batch, seqlen", [(4, 512), (3, 400), (1, ttnn.TILE_SIZE * SHARDED_NORM_DIRECT_MAX_TILES)])
+def test_layer_norm_keeps_the_split_layout_above_the_conversion_limit(
+    device, tt_config, config, state_dict, batch, seqlen
+):
+    """From SHARDED_NORM_MAX_TILES to SHARDED_NORM_DIRECT_MAX_TILES tile rows, a keep_sharded output stays in
+    the split layout its readers take, alone; on a consumed input it is written in place, bit for bit what a
+    new output holds, and it is no less accurate against float64 than the interleaved call."""
+    torch.manual_seed(0)
+    weight, bias = state_dict["encoder.layers.0.norm1.weight"], state_dict["encoder.layers.0.norm1.bias"]
+    parameters = LayerNormParameters(weight, bias, device, tt_config.weight_dtype)
+    x_torch, residual_torch, x, residual, kwargs = norm_inputs(device, tt_config, config, batch, seqlen)
+    layout = sharded_norm_layout(x.shape, device.compute_with_storage_grid_size())[0]
+
+    kept, none = layer_norm(
+        ttnn.to_memory_config(x, layout), parameters, residual=residual, keep_sharded=True, **kwargs
+    )
+    assert none is None and kept.memory_config() == layout
+    consumed = ttnn.to_memory_config(x, layout)
+    address = consumed.buffer_address()
+    in_place, _ = layer_norm(consumed, parameters, residual=residual, keep_sharded=True, consume_input=True, **kwargs)
+    assert in_place.buffer_address() == address
+    assert torch.equal(ttnn.to_torch(in_place), ttnn.to_torch(kept))
+
+    weight_tt, bias_tt = parameters.for_input(x)
+    stock = ttnn.layer_norm(x, residual_input_tensor=residual, weight=weight_tt, bias=bias_tt, **kwargs)
+    exact = torch.nn.functional.layer_norm(
+        (x_torch + residual_torch).double(),
+        (config.hidden_size,),
+        weight.double(),
+        bias.double(),
+        config.layer_norm_epsilon,
+    )
+
+    def relative_error(out):
+        return ((ttnn.to_torch(out).double() - exact).norm() / exact.norm()).item()
+
+    assert relative_error(kept) <= relative_error(stock)
+
+
+def test_layer_norm_off_the_split_is_the_interleaved_call(device, tt_config, config):
+    """Above SHARDED_NORM_DIRECT_MAX_TILES tile rows of M, tt.common.layer_norm is ttnn.layer_norm as it was."""
+    tiles = SHARDED_NORM_DIRECT_MAX_TILES + 2
+    torch.manual_seed(0)
+    hidden = config.hidden_size
+    parameters = LayerNormParameters(torch.randn(hidden), torch.randn(hidden), device, tt_config.weight_dtype)
+    _, _, x, residual, kwargs = norm_inputs(device, tt_config, config, 1, ttnn.TILE_SIZE * tiles)
+
+    out, sharded = layer_norm(x, parameters, residual=residual, keep_sharded=True, **kwargs)
+    assert sharded is None
+    weight, bias = parameters.for_input(x)
+    stock = ttnn.layer_norm(x, residual_input_tensor=residual, weight=weight, bias=bias, **kwargs)
+    assert torch.equal(ttnn.to_torch(out), ttnn.to_torch(stock))
+
+
 # Projections.
 
 
@@ -165,21 +339,20 @@ def test_layer_norm_fuses_the_post_norm_residual(device, tt_config, config, batc
 def test_linear(device, tt_config, config, state_dict, key, in_dim_is_ffn, group, batch, seqlen):
     """aten.addmm -> dense_linear, at each of the four biased projection widths, under each one's own group.
 
-    TOKEN_SHAPES fold to at most 32 tile rows of M and take ttnn.linear. 4x512 folds to 64 and
-    takes minimal_matmul, with M on the grid's rows for QKV and fc1, whose N is wider, and on its
-    columns for out_proj and fc2; the QKV, out_proj and fc1 outputs go to L1 there.
+    1x128 and 2x37 fold to under 32 tile rows of M and take ttnn.linear. From 32 (2x512) QKV and fc1, whose N is
+    wider, take grouped_matmul_w1 with one expert while M <= N (as attention passes QKV's prepared weight), and
+    out_proj and fc2 pirotski_matmul; 4x512 folds to 64, where the QKV, out_proj and fc1 outputs go to L1.
     """
     weight, bias = state_dict[key + ".weight"], state_dict[key + ".bias"]
     in_dim = config.intermediate_size if in_dim_is_ffn else config.hidden_size
     x = torch.randn(batch, 1, seqlen, in_dim)
+    weight_tt = to_device(transpose_linear_weight(weight), device, dtype=tt_config.matmul_weight_dtype(group))
+    bias_tt = to_device(bias, device, dtype=tt_config.weight_dtype)
+    grouped = None
+    if group in (OpGroup.QKV, OpGroup.FC1):
+        grouped = prepare_grouped_projection(weight_tt, bias_tt, device)
 
-    out = dense_linear(
-        to_device(x, device),
-        to_device(transpose_linear_weight(weight), device, dtype=tt_config.matmul_weight_dtype(group)),
-        to_device(bias, device, dtype=tt_config.weight_dtype),
-        group,
-        tt_config,
-    )
+    out = dense_linear(to_device(x, device), weight_tt, bias_tt, group, tt_config, grouped=grouped)
 
     assert_with_pcc(torch.nn.functional.linear(x, weight, bias), out, OPERATOR_PCC)
 
@@ -248,7 +421,8 @@ def test_token_axis_reshape_round_trip_is_exact(device, config, batch, seqlen):
 
 
 def test_typecast(device, config):
-    """aten._to_copy -> ttnn.typecast, the fp32-to-bf16 step the router needs before scatter."""
+    """aten._to_copy -> ttnn.typecast, fp32 to bf16. The router writes its bf16 gate from the fp32
+    product directly; test_one_hot_reproduces_the_scatter pins that rounding."""
     x = torch.randn(1, 1, 512, config.hidden_size)
 
     out = ttnn.typecast(to_device(x, device, dtype=ttnn.float32), ttnn.bfloat16)
@@ -261,21 +435,23 @@ def test_typecast(device, config):
 
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
-def test_mean_pool_excludes_padding(device, config, batch, seqlen):
-    """Mask-weighted mean over the sequence axis: ttnn.mul, ttnn.sum, ttnn.div.
+def test_mean_pool_excludes_padding(device, tt_config, config, batch, seqlen):
+    """Mask-weighted mean over the sequence axis: one batched ttnn.matmul of mask / count weights.
 
     Padding has to be excluded because the <pad> embedding is non-zero, so counting it would
-    make a text's embedding depend on its batch-mates.
+    make a text's embedding depend on its batch-mates. The divisor rides in the weights.
     """
     hidden = config.hidden_size
     x = torch.randn(batch, 1, seqlen, hidden)
     mask = torch.ones(batch, seqlen, dtype=torch.long)
     mask[0, (seqlen * 3) // 4 :] = 0
 
-    x_tt = to_device(x, device)
-    mask_tt = to_device(mask.reshape(batch, 1, seqlen, 1).float(), device)
-    pooled = ttnn.divide(
-        ttnn.sum(ttnn.multiply(x_tt, mask_tt), dim=2, keepdim=True), ttnn.sum(mask_tt, dim=2, keepdim=True)
+    weights = (mask / mask.sum(dim=1, keepdim=True)).reshape(batch, 1, 1, seqlen)
+    pooled = ttnn.matmul(
+        to_device(weights, device, dtype=ttnn.float32),
+        to_device(x, device),
+        dtype=ttnn.float32,
+        compute_kernel_config=tt_config.compute_kernel_config(OpGroup.REDUCE),
     )
 
     ref = mean_pool(x.squeeze(1), mask).reshape(batch, 1, 1, hidden)

@@ -8,6 +8,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -229,7 +230,7 @@ bool is_shard_local_indexed_fill(
     return true;
 }
 
-CoreRangeSet get_indexed_fill_worker_grid(
+tt::tt_metal::CoreRangeSet get_indexed_fill_worker_grid(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& batch_id,

@@ -44,9 +44,10 @@ AddIntegersHangOperation::tensor_return_value_t AddIntegersHangOperation::create
     return ttnn::create_device_tensor(output_spec, tensor_args.input_tensor_a.device());
 }
 
-ttnn::Tensor add_integers_hang(const ttnn::Tensor& input_tensor_a, const ttnn::Tensor& input_tensor_b) {
+ttnn::Tensor add_integers_hang(
+    const ttnn::Tensor& input_tensor_a, const ttnn::Tensor& input_tensor_b, uint32_t incremented_semaphore_address) {
     return ttnn::device_operation::launch<AddIntegersHangOperation>(
-        AddIntegersHangOperation::operation_attributes_t{},
+        AddIntegersHangOperation::operation_attributes_t{incremented_semaphore_address},
         AddIntegersHangOperation::tensor_args_t{input_tensor_a, input_tensor_b});
 }
 

@@ -1,0 +1,124 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""Exact packed words, including sentinel IDs, half tiles, and in-place output."""
+
+from dataclasses import dataclass
+
+import torch
+from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.golden_generators import ELEMENTS_PER_TILE
+from helpers.llk_params import DestAccumulation, DestSync
+from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
+from helpers.stimuli_config import StimuliConfig
+from helpers.test_variant_parameters import DEST_SYNC, TILE_COUNT, TemplateParameter
+
+pytestmark = [skip_for_quasar, skip_for_wormhole]
+
+PACKED_PADDING = 0xFF80FFFF
+SENTINEL_ID = 0xFFFFFFFF
+SCORE_MASK = 0xFFFF0000
+INDEX_MASK = 0xFFFF
+HALF_TILE_ELEMENTS = ELEMENTS_PER_TILE // 2
+
+
+@dataclass
+class Packing(TemplateParameter):
+    pack_k: int
+    topk_score_half: int
+    topk_pack_alias: int
+
+    def convert_to_cpp(self):
+        return (
+            f"constexpr std::uint32_t PACK_K = {self.pack_k};\n"
+            f"constexpr std::uint32_t PACK_HALF = {self.topk_score_half};\n"
+            f"constexpr std::uint32_t PACK_ALIAS = {self.topk_pack_alias};"
+        )
+
+
+TOPK_PACK_SUPPLIED_INDICES_SWEEP = dict(
+    case=[(512, 0), (512, 1), (1024, 0), (2048, 0)],
+    alias_sync=[
+        (0, DestSync.Full),
+        (1, DestSync.Full),
+        (2, DestSync.Full),
+        (1, DestSync.Half),
+        (2, DestSync.Half),
+    ],
+)
+
+
+@parametrize(**TOPK_PACK_SUPPLIED_INDICES_SWEEP)
+def test_topk_pack_supplied_indices(
+    case,
+    alias_sync,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
+    alias, dest_sync = alias_sync
+    k, half = case
+    tiles = (k + ELEMENTS_PER_TILE - 1) // ELEMENTS_PER_TILE
+    generator = torch.Generator().manual_seed(5554)
+    # Arbitrary score words also prove low score bits cannot contaminate IDs.
+    scores = torch.randint(
+        0, 1 << 32, (tiles * ELEMENTS_PER_TILE,), generator=generator, dtype=torch.int64
+    )
+    ids = torch.randint(
+        0, 1 << 32, (tiles * ELEMENTS_PER_TILE,), generator=generator, dtype=torch.int64
+    )
+    ids[::11] = SENTINEL_ID
+    ids[1:5] = torch.tensor([0, INDEX_MASK, INDEX_MASK + 1, SCORE_MASK])
+    formats = InputOutputFormat(DataFormat.UInt32, DataFormat.UInt32)
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/topk_pack_supplied_indices_test.cpp",
+            formats=formats,
+            # Normalize by the score and ID tiles staged into Dest.
+            templates=[
+                Packing(k, half, alias),
+                DEST_SYNC(dest_sync),
+            ],
+            runtimes=[TILE_COUNT(tile_cnt=2 * tiles)],
+            variant_stimuli=StimuliConfig(
+                scores,
+                DataFormat.UInt32,
+                ids,
+                DataFormat.UInt32,
+                DataFormat.UInt32,
+                tile_count_A=tiles,
+                tile_count_B=tiles,
+                tile_count_res=tiles,
+            ),
+            unpack_to_dest=True,
+            dest_acc=DestAccumulation.Yes,
+        ),
+    )
+    if is_perf:
+        return
+    result = torch.tensor(outcome.result, dtype=torch.int64)[
+        : tiles * ELEMENTS_PER_TILE
+    ]
+    expected = torch.full_like(scores, PACKED_PADDING)
+    offset = half * HALF_TILE_ELEMENTS
+    expected[:k] = (scores[offset : offset + k] & SCORE_MASK) | (ids[:k] & INDEX_MASK)
+    expected[:k][ids[:k] == SENTINEL_ID] = PACKED_PADDING
+    assert torch.equal(result, expected), torch.where(result != expected)[0][
+        :16
+    ].tolist()
+
+
+def test_topk_pack_supplied_indices_repeats():
+    test_topk_pack_supplied_indices(
+        (512, 1),
+        (1, DestSync.Half),
+        loop_factor=2,
+    )

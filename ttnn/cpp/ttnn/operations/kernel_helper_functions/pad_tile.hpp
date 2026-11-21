@@ -4,7 +4,14 @@
 
 #pragma once
 
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
+#if !defined(ARCH_QUASAR)
+// ckernel::load_blocking (the store drain in drain_pad_stores) is WH/BH only: Quasar's ckernel.h has no
+// load_blocking, and from a data-movement build it #errors unless COMPILE_FOR_TRISC is defined. The Quasar
+// branch below uses a plain volatile load instead, so the header is not needed there. Same guard as
+// data_movement/common/kernels/common.hpp.
+#include "ckernel.h"
+#endif
 
 /**
  * @brief Pads a face within a tile.
@@ -360,6 +367,55 @@ constexpr uint32_t blockfloat_mantissa_bits() {
 }
 
 /**
+ * @brief Bytes occupied by one padded tile of the given format.
+ */
+template <DataFormat data_format, uint32_t tile_height = tt::constants::TILE_HEIGHT>
+constexpr uint32_t padded_tile_bytes() {
+    using namespace tt::constants;
+    constexpr uint32_t elems = tile_height * TILE_WIDTH;
+    constexpr uint32_t mantissa_bits = blockfloat_mantissa_bits<data_format>();
+    if constexpr (data_format == DataFormat::Float32) {
+        return elems * sizeof(uint32_t);
+    } else if constexpr (mantissa_bits > 0) {
+        // exponent section (one byte per face row) + packed mantissas
+        constexpr uint32_t num_faces = (TILE_WIDTH / FACE_WIDTH) * (tile_height / FACE_HEIGHT);
+        return num_faces * FACE_HEIGHT + elems * mantissa_bits / BITS_PER_BYTE;
+    } else {
+        return elems * sizeof(uint16_t);
+    }
+}
+
+/**
+ * @brief Forces the padding stores of one tile to be processed by L1 before the caller hands the
+ * tile to another L1 client (the NoC multicast in the matmul in0 senders).
+ *
+ * The padding is written with baby-RISCV stores. A store can retire before its write-request
+ * reaches L1, and the RISCV core and the NoC are different L1 clients with no program-order
+ * guarantee between them (tt-isa-documentation TensixTile/BabyRISCV/MemoryOrdering.md: "there is
+ * no general mechanism to ensure that a store's write-request has been processed before a
+ * subsequent memory operation's request is emitted"). A blocking load of an address this core has
+ * just stored to is processed by L1 only after that store, and the RISCV's L1 access port
+ * processes its requests in order, so reading back the tile's last word orders every earlier
+ * padding store ahead of whatever the caller issues next. Same construction as #50374
+ * (deepseek_grouped_gate) and the pad reader's loop-back guard.
+ *
+ * Every padding pattern writes the tile's last word: right padding covers column 31 of every row,
+ * bottom padding covers row 31, and the block-float variants zero the mantissa of face 3, row 15,
+ * column 15 in both cases.
+ */
+template <DataFormat data_format, uint32_t tile_height = tt::constants::TILE_HEIGHT>
+inline void drain_pad_stores(uint32_t l1_tile_ptr) {
+    constexpr uint32_t last_word = padded_tile_bytes<data_format, tile_height>() - sizeof(uint32_t);
+    volatile tt_l1_ptr uint32_t* drain_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_tile_ptr + last_word);
+#if defined(ARCH_QUASAR)
+    // Quasar has no ckernel::load_blocking; a volatile load is the local ordering barrier there.
+    (void)*drain_ptr;
+#else
+    (void)ckernel::load_blocking(drain_ptr);
+#endif
+}
+
+/**
  * @brief Pads the last K tile in a matrix multiplication operation.
  *
  * This function handles padding for the last K tile in a matrix multiplication operation.
@@ -368,24 +424,31 @@ constexpr uint32_t blockfloat_mantissa_bits() {
  *
  * @tparam in0_data_format The data format of the input tensor
  * @tparam in0_last_ktile_w The unpadded width of the last K tile
+ * @tparam tile_height Physical tile height (16 or 32 rows)
  * @param l1_write_addr_in0 The L1 memory address where the zeros should be written
  */
-template <DataFormat in0_data_format, uint32_t in0_last_ktile_w>
+template <DataFormat in0_data_format, uint32_t in0_last_ktile_w, uint32_t tile_height = tt::constants::TILE_HEIGHT>
 void pad_last_ktile(uint32_t l1_write_addr_in0) {
     using namespace tt::constants;
+    static_assert(tile_height == FACE_HEIGHT || tile_height == TILE_HEIGHT);
     // Non-zero width means block-float; blockfloat_mantissa_bits() returns 0 for everything else.
     constexpr uint32_t mantissa_bits = blockfloat_mantissa_bits<in0_data_format>();
     constexpr bool is_blockfloat = mantissa_bits > 0;
     if constexpr (in0_data_format == DataFormat::Float32) {
-        fill_pad_tile<uint32_t, in0_last_ktile_w, /*num_elements_unpadded_h=*/TILE_HEIGHT>(
+        fill_pad_tile<uint32_t, in0_last_ktile_w, tile_height, TILE_WIDTH / FACE_WIDTH, tile_height / FACE_HEIGHT>(
             l1_write_addr_in0, /*pad_value=*/0);
     } else if constexpr (in0_data_format == DataFormat::Float16_b) {
-        fill_pad_tile<uint16_t, in0_last_ktile_w, /*num_elements_unpadded_h=*/TILE_HEIGHT>(
+        fill_pad_tile<uint16_t, in0_last_ktile_w, tile_height, TILE_WIDTH / FACE_WIDTH, tile_height / FACE_HEIGHT>(
             l1_write_addr_in0, /*pad_value=*/0);
     } else if constexpr (is_blockfloat) {
-        fill_pad_tile_blockfloat<mantissa_bits, in0_last_ktile_w, /*num_elements_unpadded_h=*/TILE_HEIGHT>(
-            l1_write_addr_in0);
+        fill_pad_tile_blockfloat<
+            mantissa_bits,
+            in0_last_ktile_w,
+            tile_height,
+            TILE_WIDTH / FACE_WIDTH,
+            tile_height / FACE_HEIGHT>(l1_write_addr_in0);
     }
+    drain_pad_stores<in0_data_format, tile_height>(l1_write_addr_in0);
 }
 
 /**
@@ -415,4 +478,5 @@ void pad_last_transposed_ktile(uint32_t l1_write_addr_in0) {
         fill_pad_tile_blockfloat<mantissa_bits, /*num_elements_unpadded_w=*/TILE_WIDTH, in0_last_ktile_h>(
             l1_write_addr_in0);
     }
+    drain_pad_stores<in0_data_format>(l1_write_addr_in0);
 }

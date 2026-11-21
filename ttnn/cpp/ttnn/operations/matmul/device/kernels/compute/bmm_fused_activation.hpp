@@ -36,7 +36,8 @@ struct ActivationInitHelper {
             // PARAM0: 0 = accurate, non-zero = fast
             gelu_tile_init_pack<PARAM0 != 0>();
         } else if constexpr (ACT == KernelActivation::GELU_TANH) {
-            gelu_tanh_tile_init_pack();
+            // PARAM0: 0 = accurate (FP32 tanh), non-zero = fast (BF16-grade)
+            gelu_tanh_tile_init_pack<PARAM0 != 0>();
         } else if constexpr (ACT == KernelActivation::RELU6) {
             relu_max_tile_init_pack();
         } else if constexpr (ACT == KernelActivation::SIGMOID) {
@@ -79,7 +80,8 @@ struct ActivationApplyHelper {
             // PARAM0: 0 = accurate, non-zero = fast
             gelu_tile_pack<PARAM0 != 0>(tile_index);
         } else if constexpr (ACT == KernelActivation::GELU_TANH) {
-            gelu_tanh_tile_pack(tile_index);
+            // PARAM0: 0 = accurate (FP32 tanh), non-zero = fast (BF16-grade)
+            gelu_tanh_tile_pack<DST_ACCUM_MODE, PARAM0 != 0>(tile_index);
         } else if constexpr (ACT == KernelActivation::RELU6) {
             // PARAM0 is the max value (as uint32_t bit pattern)
             // Default to 6.0 if PARAM0 is 0
@@ -105,18 +107,22 @@ struct ActivationApplyHelper {
     }
 };
 
-template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0, uint32_t PARAM2 = 0>
-FORCE_INLINE void apply_activation_from_pack(uint32_t out_subblock_num_tiles) {
+// Pack-thread SFPU work on the DEST tiles the math thread committed goes between these two calls: the first waits
+// for the math thread and points the SFPU at the packer's half of DEST, the second holds the packer until the SFPU
+// is done. They replace tile_regs_wait().
+FORCE_INLINE void pack_sfpu_begin() {
     PACK(TTI_SEMWAIT(
         p_stall::STALL_TDMA | p_stall::STALL_CFG, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO));
-
-    // Flip destination register offset for PACKER access
     PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+}
 
+FORCE_INLINE void pack_sfpu_end() { PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU)); }
+
+template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0, uint32_t PARAM2 = 0>
+FORCE_INLINE void apply_activation_from_pack(uint32_t out_subblock_num_tiles) {
+    pack_sfpu_begin();
     for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
         ActivationApplyHelper<ACT, PARAM0, PARAM1, PARAM2>::apply(i);
     }
-
-    // Wait for SFPU completion before packing
-    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+    pack_sfpu_end();
 }

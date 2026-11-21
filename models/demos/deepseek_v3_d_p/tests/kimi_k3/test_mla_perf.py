@@ -3,26 +3,27 @@
 
 """Cold, warm, and long-context performance for one Kimi-K3 MLA layer.
 
-This is the dense-MLA counterpart of ``sparse_mla/test_sparse_mla_perf.py``.  The scenario
-contract is intentionally identical:
+Scenarios:
 
 * ``warm`` profiles one chunk with a 50K-token Galaxy prefix;
 * ``cold`` profiles every chunk from an empty cache through that same warm step; and
 * ``long`` profiles one chunk with a 500K-token Galaxy prefix.
 
-On smaller boxes both the chunk and cache scale with SP/8.  A LoudBox therefore runs a 2,560-token
-chunk at 25.6K (warm/cold) or 256K (long) on SP=4 x TP=2; a QuietBox uses the same sequence geometry
-on SP=4 x TP=1.  The synthetic perf config also scales the global head count with TP, preserving the
-Galaxy shape of 24 attention heads per chip.  Each ring iteration therefore has the same query, KV,
-and head shapes per chip on every box.
+On smaller boxes the chunk scales with SP/8: 2,560 tokens on LoudBox (SP=4 x TP=2) and 1,280 on
+QuietBox (SP=2 x TP=2). The synthetic perf config scales the global head count with TP, preserving
+Galaxy's 24 heads and 640 query tokens per chip. Warm and long keep the full 50K and 500K Galaxy
+prefixes, so they match Galaxy's attention arithmetic per chip, while each ring step sees 8/SP times
+as many KV rows. Cold fills the cache contiguously over the same number of chunks as Galaxy, so its
+prefix also scales with SP/8 (25.6K on LoudBox, 12.8K on QuietBox) and it does SP/8 of Galaxy's work.
 
-K3 is deliberately not another variant in the sparse harness.  It has no DSA indexer, uses the dense
+K3 is deliberately not a sparse-MLA variant.  It has no DSA indexer, uses the dense
 tiled BFP8 KV cache, has NoPE, and adds the output ``g_proj`` gate.  Keeping those facts structural
 avoids fake sparse-cache/indexer axes and makes an accidentally broadened K3 sweep impossible.
 
-The measured unit is a traced forward.  Each forward is compiled, captured, replay-warmed once, and
-then replayed under the realtime profiler.  Host E2E includes replay through device synchronization;
-device program durations collapse chips by MAX, matching the sparse-MLA realtime convention.
+The gate is host time as tests/measure measures it, for warm and long: untraced fastest of 10 after 10 warm-up with
+the CPU clock held, traced one replay, and the traced output must match the untraced one. Each scenario also reports
+the per-op device time of a traced forward under the realtime profiler (compiled, captured, replay-warmed once, chips
+collapsed by MAX); it does not gate, since the profiler cannot see work overlapped on sub-devices.
 
 Run all three cases on a supported Blackhole box::
 
@@ -32,7 +33,7 @@ Run all three cases on a supported Blackhole box::
 Narrow with ``-k warm``, ``-k cold``, or ``-k long``.  Outputs live under
 ``generated/profiler/kimi_k3_dense_mla_perf``.  Sizes can be overridden with
 ``K3_MLA_PERF_CACHE``, ``K3_MLA_PERF_CHUNK``, and ``K3_MLA_PERF_LONG_CACHE``; these are Galaxy-global
-sizes and retain the same SP scaling.
+sizes, scaled on smaller boxes as above. The perf gates apply only at the default sizes.
 """
 
 import copy
@@ -56,24 +57,44 @@ import ttnn
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.measure.gate import MARGIN, gate
+from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, measure_host
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_plugin import is_marker_explicitly_selected
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
-from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
+from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program
 
 pytestmark = pytest.mark.perf
 
 GALAXY_SP = 8
 GALAXY_TP = 4
-CACHE_TOKENS = int(os.environ.get("K3_MLA_PERF_CACHE", 50 * 1024))
-CHUNK_TOKENS = int(os.environ.get("K3_MLA_PERF_CHUNK", 5 * 1024))
-LONG_CACHE_TOKENS = int(os.environ.get("K3_MLA_PERF_LONG_CACHE", 500 * 1024))
+DEFAULT_CACHE_TOKENS = 50 * 1024
+DEFAULT_CHUNK_TOKENS = 5 * 1024
+DEFAULT_LONG_CACHE_TOKENS = 500 * 1024
+CACHE_TOKENS = int(os.environ.get("K3_MLA_PERF_CACHE", DEFAULT_CACHE_TOKENS))
+CHUNK_TOKENS = int(os.environ.get("K3_MLA_PERF_CHUNK", DEFAULT_CHUNK_TOKENS))
+LONG_CACHE_TOKENS = int(os.environ.get("K3_MLA_PERF_LONG_CACHE", DEFAULT_LONG_CACHE_TOKENS))
+DEFAULT_SIZES = (CACHE_TOKENS, CHUNK_TOKENS, LONG_CACHE_TOKENS) == (
+    DEFAULT_CACHE_TOKENS,
+    DEFAULT_CHUNK_TOKENS,
+    DEFAULT_LONG_CACHE_TOKENS,
+)
 RT_RECORD_TIMEOUT_S = float(os.environ.get("K3_MLA_PERF_RT_TIMEOUT", 30.0))
 WRITE_OPS_DUMP = os.environ.get("K3_MLA_PERF_OPS_DUMP", "") not in ("", "0", "false")
+# Host-time targets (ms), keyed by (box, scenario, mode), at the default sizes; warm and long only (cold captures one
+# trace per start). LoudBox and QuietBox, where CI runs this, report until a CI run gives their targets.
+HOST_PERF_TARGETS_MS: dict[tuple[str, str, str], float] = {
+    # 3 runs on one Galaxy.
+    ("Galaxy", "warm", "untraced"): 10.514,
+    ("Galaxy", "warm", "traced"): 9.692,
+    ("Galaxy", "long", "untraced"): 79.050,
+    ("Galaxy", "long", "traced"): 77.720,
+}
 
 SCENARIOS = {
     "warm": {"cache": CACHE_TOKENS, "loop": False},
@@ -111,7 +132,7 @@ class PerfWorkload:
 
 
 _SYSTEM_BY_DEVICE_COUNT = {
-    4: ("QuietBox", (4, 1)),
+    4: ("QuietBox", (2, 2)),
     8: ("LoudBox", (4, 2)),
     32: ("Galaxy", (8, 4)),
 }
@@ -286,43 +307,15 @@ def _profile_forward(mesh_device, run_fn) -> dict:
 
 def _profile_traced_forward(mesh_device, mla, run_fn) -> dict:
     """Compile/capture/warm/measure one forward and release every trace allocation."""
-    controller = SubDeviceTraceController(mesh_device)
-    compile_out = None
-    capture_out = None
-    capture_started = False
-    capture_ended = False
-    mla.set_trace_controller(controller)
-    try:
-        compile_out = run_fn()
+    with TracedStep(
+        mesh_device, run_fn, attach=mla.set_trace_controller, detach=lambda: mla.set_trace_controller(None)
+    ) as traced:
+        traced.capture()
         ttnn.synchronize_device(mesh_device)
-        ttnn.deallocate(compile_out)
-        compile_out = None
-
-        controller.begin_capture()
-        capture_started = True
-        capture_out = run_fn()
-        controller.end_capture()
-        capture_ended = True
-        ttnn.synchronize_device(mesh_device)
-
-        _profile_forward(mesh_device, controller.replay)  # exclude first-replay jitter
-        measured = _profile_forward(mesh_device, controller.replay)
-        measured["trace_segments"] = controller.num_segments
+        _profile_forward(mesh_device, traced.replay)  # exclude first-replay jitter
+        measured = _profile_forward(mesh_device, traced.replay)
+        measured["trace_segments"] = traced.controller.num_segments
         return measured
-    finally:
-        if capture_started and not capture_ended:
-            try:
-                controller.end_capture()
-            except Exception:
-                pass
-        try:
-            controller.release()
-        finally:
-            mla.set_trace_controller(None)
-            if capture_out is not None:
-                ttnn.deallocate(capture_out)
-            if compile_out is not None:
-                ttnn.deallocate(compile_out)
 
 
 def _programs_to_frame(forward: dict) -> pd.DataFrame:
@@ -460,10 +453,9 @@ def _write_outputs(*, scenario: str, cache: int, chunk: int, forwards: list[dict
 @pytest.mark.parametrize("variant", ["kimi_k3"], ids=["k3"], indirect=True)
 @skip_with_llk_assert("LLK assertions perturb kernel timing; K3 MLA perf measurements require them disabled")
 @skip_with_watcher("Watcher perturbs kernel timing; K3 MLA perf measurements require it disabled")
-@pytest.mark.skipif(os.environ.get("CI") == "true", reason="K3 MLA perf requires dedicated Blackhole hardware")
 @pytest.mark.skipif(not is_blackhole(), reason="K3 MLA and the realtime profiler require Blackhole")
 @pytest.mark.timeout(0)
-def test_mla_chunked_perf(mesh_device, device_params, scenario, variant, random_weights):
+def test_mla_chunked_perf(request, mesh_device, device_params, scenario, variant, random_weights):
     if PERF_SKIP_REASON:
         pytest.skip(PERF_SKIP_REASON)
     _require_rt_profiler()
@@ -473,12 +465,12 @@ def test_mla_chunked_perf(mesh_device, device_params, scenario, variant, random_
     assert (sp, tp) == PERF_WORKLOAD.mesh_shape
     assert PERF_WORKLOAD.num_attention_heads % tp == 0
 
-    cache = _local_tokens(SCENARIOS[scenario]["cache"], sp)
+    is_cold = SCENARIOS[scenario]["loop"]
+    cache = _local_tokens(SCENARIOS[scenario]["cache"], sp) if is_cold else SCENARIOS[scenario]["cache"]
     chunk = PERF_WORKLOAD.chunk_tokens
     total = cache + chunk
     assert cache % chunk == 0, f"cache {cache} must be a whole number of {chunk}-token chunks"
     assert chunk % (sp * ttnn.TILE_SIZE) == 0
-    is_cold = SCENARIOS[scenario]["loop"]
 
     fixture_config, weights = random_weights
     config, weights = _shape_normalized_config_and_weights(fixture_config, weights, tp)
@@ -565,3 +557,24 @@ def test_mla_chunked_perf(mesh_device, device_params, scenario, variant, random_
         logger.info("cold per-iteration traced host ms: " + " ".join(f"{value:.3f}" for value in per_iteration))
 
     _write_outputs(scenario=scenario, cache=cache, chunk=chunk, forwards=forwards, by_op=by_op)
+    box = PERF_WORKLOAD.system_name
+
+    if not is_cold:
+        clock = hold_full_cpu_clock()
+        request.addfinalizer(clock.restore)
+        untraced, traced, trace_pcc = measure_host(
+            mesh_device,
+            lambda: one_forward(cache),
+            attach=mla.set_trace_controller,
+            detach=lambda: mla.set_trace_controller(None),
+        )
+        host = {}
+        for mode, samples in (("untraced", untraced), ("traced", traced)):
+            target = HOST_PERF_TARGETS_MS.get((box, scenario, mode)) if DEFAULT_SIZES else None
+            host[mode] = (samples, min(samples), target, MARGIN[mode])
+            emit_perf_metrics(
+                f"kimi_k3_mla_{box.lower()}_{scenario}_host_{mode}",
+                f"Kimi-K3 MLA {box} {scenario} host ({mode})",
+                {"box": box, "scenario": scenario, "mode": mode, "samples_ms": samples, "target_ms": target},
+            )
+        gate(f"kimi_k3 MLA {box} {scenario} host", host, trace_pcc)

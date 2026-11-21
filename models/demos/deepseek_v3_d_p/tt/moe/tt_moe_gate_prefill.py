@@ -22,10 +22,38 @@ from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_sp_mesh_composer, mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import resolve_cache_dump_mode
+
+# The noaux_tc correction bias only ranks experts (score + bias); the routing weights use the raw scores. Some
+# checkpoints put it on a large per-layer offset with a small spread (GLM-5.3: ~34 +- 0.14 at layer 3), and bf16's
+# spacing at that magnitude (0.0625-0.25) leaves each layer only a handful of distinct values, i.e. it erases the
+# bias. Every top-k and every group score (a sum of top-2 of score + bias) is invariant to a constant shift, so a
+# model that sets MOE_GATE_BIAS_CENTERED stores bias - mean(bias) instead: the same selection in exact arithmetic,
+# with bf16 resolution of ~1e-3. The centred tensor has its own cache name, so an uncentred file is never loaded in
+# its place.
+GATE_BIAS_CACHE_NAME = "e_score_correction_bias"
+GATE_BIAS_CENTERED_CACHE_NAME = "e_score_correction_bias_centered"
+
+
+def gate_bias_cache_name(centered: bool) -> str:
+    return GATE_BIAS_CENTERED_CACHE_NAME if centered else GATE_BIAS_CACHE_NAME
+
+
+def gate_bias_centered(model_cfg) -> bool:
+    """Whether a model caches its gate bias mean-centred (MOE_GATE_BIAS_CENTERED; off unless a config names it)."""
+    return bool(getattr(model_cfg, "MOE_GATE_BIAS_CENTERED", False))
+
+
+def centre_gate_bias(bias: torch.Tensor) -> torch.Tensor:
+    """bias - mean(bias), in fp32. Pass the checkpoint's fp32 bias: centring after a bf16 cast is too late."""
+    bias = bias.float()
+    return bias - bias.mean()
 
 
 class GateComputeMode(Enum):
@@ -110,6 +138,76 @@ def gate_mm_config_key(sp_dim: int, per_device_emb_dim: int, n_routed_experts: i
     return (sp_dim, k_tiles * ttnn.TILE_SIZE, n_routed_experts)
 
 
+def gate_mesh_axes(config) -> tuple[int, int]:
+    """(sp_axis, tp_axis) from the gate config's ccl_config ("DISPATCH_AXIS" / "TP_AXIS")."""
+    sp_axis = config.ccl_config.get("DISPATCH_AXIS", 0)
+    tp_axis = config.ccl_config.get("TP_AXIS", 1)
+    assert {sp_axis, tp_axis} == {0, 1}, f"gate DISPATCH_AXIS / TP_AXIS must be 0 and 1, got {sp_axis}, {tp_axis}"
+    return sp_axis, tp_axis
+
+
+def padding_config_tensor(mesh_device, padding_config: list, *, sp_axis: int) -> ttnn.Tensor:
+    """[sp, 2] (local_real_tokens, pad_side) rows -> the MoE padding config device tensor, one row per SP shard
+    (sharded over mesh axis ``sp_axis``, replicated over TP)."""
+    return ttnn.from_torch(
+        torch.tensor(padding_config, dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=mesh_shard_dims(0, sp_axis), mesh_shape=mesh_device.shape),
+    )
+
+
+def real_row_mask_host(row_mask: tuple, n_activated_experts: int) -> torch.Tensor:
+    """[sp * rows, n_activated_experts] 0/1 from packed_real_row_mask's per-chip row flags, laid out as the gate's top-k
+    indices are (one row per token, one column per pick), SP chips stacked on dim 0."""
+    flags = torch.tensor(row_mask, dtype=torch.int32).reshape(-1, 1)
+    return flags.expand(-1, n_activated_experts).contiguous()
+
+
+@dataclass
+class PackedPadding:
+    """A packed forward's MoE padding, shared by every MoE layer of the forward.
+
+    ``config``: the [sp, 2] padding config from packed_real_rows. The gate's top-k and the dispatch read one leading
+    real-row count per chip from it, so it masks the pad rows after a chip's last real row; None when there are none.
+    ``row_mask``: packed_real_row_mask, for the pad rows ``config`` cannot mask: a partial chunk's, ahead of a
+    non-empty chunk. The first MoE layer builds ``real_rows`` from it (TtMoEGatePrefill.real_rows_tensor), and every
+    layer's gate turns those rows' top-k ids into the sentinel (TtMoEGatePrefill.mask_pad_rows), which
+    masked_bincount, dispatch and combine skip as they skip ``config``'s pad rows. None when ``config`` masks every
+    pad row (eager). A traced forward always masks: the runtime keeps one persistent PackedPadding and refreshes
+    ``config`` and ``real_rows`` in place before every replay."""
+
+    config: Optional[ttnn.Tensor] = None
+    row_mask: Optional[tuple] = None
+    real_rows: Optional[ttnn.Tensor] = None
+
+    def deallocate(self) -> None:
+        for t in (self.config, self.real_rows):
+            if t is not None:
+                ttnn.deallocate(t)
+        self.config = self.real_rows = None
+
+
+def packed_padding(mesh_device, chunks, sp: int, chunk_local: int, *, sp_axis: int) -> Optional[PackedPadding]:
+    """An eager packed forward's PackedPadding, built once for every MoE layer of the forward; None when every row is
+    real. The caller owns it (PackedPadding.deallocate).
+
+    A partial chunk ahead of a full one leaves every chip's last row real, so packed_real_rows counts every row and
+    only the row mask has pad rows to mask: the config is still built then (all rows counted), as the traced forward's
+    always is."""
+    from models.demos.minimax_m3.tt.packed_rows import packed_real_row_mask, packed_real_rows, packed_routed_pad_rows
+
+    real_rows = packed_real_rows(chunks, sp, chunk_local)
+    rows_per_chip = len(chunks) * chunk_local
+    routed = packed_routed_pad_rows(chunks, sp, chunk_local)
+    if not routed and all(r == rows_per_chip for r in real_rows):
+        return None
+    config = padding_config_tensor(mesh_device, [[r, 0] for r in real_rows], sp_axis=sp_axis)
+    return PackedPadding(config, packed_real_row_mask(chunks, sp, chunk_local) if routed else None)
+
+
 @dataclass
 class TtMoEGateConfig:
     # gate_params
@@ -120,7 +218,7 @@ class TtMoEGateConfig:
             "TP_AXIS": 1,
             "NUM_LINKS": 2,
             # CCL topology for the TP-axis gate all-reduce. Ring requires the TP axis to be physically
-            # wrapped (FABRIC_2D_TORUS_X / _XY); set from TtMoe's col_topology. Defaults to Linear.
+            # wrapped (FABRIC_2D_TORUS_X / _XY); set from TtMoe's tp_topology. Defaults to Linear.
             "TOPOLOGY": ttnn.Topology.Linear,
         }
     )
@@ -368,6 +466,20 @@ class TtMoEGateConfig:
                     fuse_batch=True,
                 )
             ),
+            (GATE_PRODUCTION_SP_DIM, MistralSmall4Config.EMB_SIZE // 4, MistralSmall4Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(4, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=2,
+                    out_block_w=1,
+                    per_core_M=2,
+                    per_core_N=1,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
         }
     )
 
@@ -383,6 +495,8 @@ class TtMoEGateConfig:
     n_limited_groups: int = DeepSeekV3Config.NUM_LIMITED_GROUPS  # = topk_groups
     route_scale: float = DeepSeekV3Config.ROUTE_SCALE  # PREVIOUS VALUE: 1.0 @ddjekic to check
     score_func: str = "sigmoid"
+    # Cache and use the correction bias mean-centred (see centre_gate_bias / MOE_GATE_BIAS_CENTERED).
+    bias_centered: bool = False
 
     # grid_config
     core_grid: ttnn.CoreRangeSet = field(
@@ -432,6 +546,7 @@ class TtMoEGateConfig:
             # Serves as both the default depth and the ceiling an explicit sp_dim cannot exceed.
             "sp_dim": getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", cls.sp_dim),
             "max_sp_dim": getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
+            "bias_centered": gate_bias_centered(model_cfg),
         }
         return cls(
             dim=model_cfg.EMB_SIZE,
@@ -449,15 +564,18 @@ class TtMoEGatePrefill(LightweightModule):
     """MoE gate module from DeepSeek-R1."""
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
-        """Check if gate weight and bias cache files exist."""
+    def check_cache_complete(cache_path: Path, cache_name_prefix: str, bias_centered: bool = False) -> bool:
+        """Check if gate weight and bias cache files exist. ``bias_centered`` picks the bias file (see
+        gate_bias_centered); a cache holding only the other one is incomplete."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
         if not pattern_exists(f"{cache_name_prefix}.weight*.tensorbin", "MoEGate"):
             logger.debug(f"TTNN cache missing: {cache_name_prefix}.weight")
             return False
-        if not pattern_exists(f"{cache_name_prefix}.e_score_correction_bias*.tensorbin", "MoEGate"):
-            logger.debug(f"TTNN cache missing: {cache_name_prefix}.e_score_correction_bias")
+        bias_name = gate_bias_cache_name(bias_centered)
+        # The trailing "_dtype" keeps e_score_correction_bias from also matching the _centered file.
+        if not pattern_exists(f"{cache_name_prefix}.{bias_name}_dtype*.tensorbin", "MoEGate"):
+            logger.debug(f"TTNN cache missing: {cache_name_prefix}.{bias_name}")
             return False
         return True
 
@@ -470,6 +588,8 @@ class TtMoEGatePrefill(LightweightModule):
         cache_path: Path | None,
         cache_name_prefix: str | None,
         device: ttnn.MeshDevice | None = None,  # None=cache, mesh_device=load
+        *,
+        cache_dump_mode: Optional[ttnn.DumpTensorMode] = None,
     ) -> dict | None:
         """
         Shared logic for converting gate weights to TTNN with caching.
@@ -498,8 +618,22 @@ class TtMoEGatePrefill(LightweightModule):
         else:
             weight_for_ttnn = torch.empty(config.dim, config.n_routed_experts)
 
+        bias_name = gate_bias_cache_name(config.bias_centered)
         if torch_bias is None:
+            # Cache-only load. as_tensor DUMPS this placeholder on a miss, so refuse rather than cache garbage
+            # under the centred name (an uncentred-only cache is the case this catches).
+            bias_file = _cache_name(bias_name)
+            if config.bias_centered and bias_file is not None:
+                if not list(Path(bias_file).parent.glob(f"{Path(bias_file).name}_dtype*.tensorbin")):
+                    raise FileNotFoundError(
+                        f"{bias_file}*.tensorbin missing and no checkpoint bias supplied: rebuild it from the "
+                        "checkpoint's fp32 bias (this model caches it mean-centred, see centre_gate_bias)"
+                    )
             torch_bias = torch.empty(config.n_routed_experts)
+        elif config.bias_centered:
+            torch_bias = centre_gate_bias(torch_bias)
+
+        _, tp_axis = gate_mesh_axes(config)
 
         # Convert weight
         weight_tt = ttnn.as_tensor(
@@ -510,10 +644,11 @@ class TtMoEGatePrefill(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=(None, 0),
+                dims=mesh_shard_dims(0, tp_axis),  # emb dim sharded over TP, replicated over SP
                 mesh_shape=mesh_device.shape,
             ),
             cache_file_name=_cache_name("weight"),
+            cache_dump_mode=resolve_cache_dump_mode(cache_dump_mode),
         )
 
         # Cache bias unbroadcasted (required by moe_grouped_topk)
@@ -522,7 +657,8 @@ class TtMoEGatePrefill(LightweightModule):
             device=None,  # Always load to host first
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=_cache_name("e_score_correction_bias"),
+            cache_file_name=_cache_name(bias_name),
+            cache_dump_mode=resolve_cache_dump_mode(cache_dump_mode),
         )
 
         if device is None:
@@ -537,11 +673,13 @@ class TtMoEGatePrefill(LightweightModule):
                 weight_tt,
                 mesh_composer=ttnn.create_mesh_composer(
                     mesh_device,
+                    # Concat the TP shards on tensor dim 0 and take one SP replica.
                     config=ttnn.MeshComposerConfig(
-                        dims=(-1, 0),  # Work on tensor dims 0 and -1 (both dims of 2D tensor)
-                        mesh_shape_override=ttnn.MeshShape(
-                            1,  # SP replicated
-                            mesh_device.shape[1],  # TP fractured
+                        dims=(-1, 0) if tp_axis == 1 else (0, -1),
+                        mesh_shape_override=(
+                            ttnn.MeshShape(1, mesh_device.shape[1])
+                            if tp_axis == 1
+                            else ttnn.MeshShape(mesh_device.shape[0], 1)
                         ),
                     ),
                 ),
@@ -566,10 +704,18 @@ class TtMoEGatePrefill(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         cache_path: Path,
         cache_name_prefix: str,
+        cache_dump_mode: Optional[ttnn.DumpTensorMode] = None,
     ):
         """Build TTNN cache for gate weights without device copy."""
         TtMoEGatePrefill._convert_and_cache_gate_weights(
-            torch_weight, torch_bias, config, mesh_device, cache_path, cache_name_prefix, device=None
+            torch_weight,
+            torch_bias,
+            config,
+            mesh_device,
+            cache_path,
+            cache_name_prefix,
+            device=None,
+            cache_dump_mode=resolve_cache_dump_mode(cache_dump_mode),
         )
 
     def __init__(
@@ -583,11 +729,15 @@ class TtMoEGatePrefill(LightweightModule):
         cache_name_prefix: Optional[str] = None,
         is_balanced: bool = False,
         hash_table: torch.Tensor = None,
+        cache_dump_mode: Optional[ttnn.DumpTensorMode] = None,
     ):
         """
         Args:
             weight: Gate weight in HF convention: (n_routed_experts, dim).
                     Transposed internally to (dim, n_routed_experts) for the TTNN matmul path.
+            cache_dump_mode: How a weight-cache miss is written (see ttnn.as_tensor). None (default)
+                follows utils/weight_cache_dump.py, which TtPrefillRuntime sets to LOCAL for a
+                pipeline-parallel build, where each rank builds different layers.
             is_balanced: If True, uses zigzag (balanced) sequence placement across SP devices.
                 Affects per-device real token count computation for padding awareness.
             hash_table: DeepSeek-V4 hash routing tid2eid table, shape (vocab_size, n_activated_experts).
@@ -595,10 +745,33 @@ class TtMoEGatePrefill(LightweightModule):
         """
         self.config = config
         self.mesh_device = mesh_device
+        # SP / TP mesh axes come from the config (TtMoe sets them); default SP=0, TP=1.
+        self.sp_axis, self.tp_axis = gate_mesh_axes(config)
         # Shared per-mesh CCL singleton: provides persistent global semaphores for the gate's TP
         # all-reduce so the op reuses them instead of allocating fresh L1 semaphores every layer
         # (those leaked, pinning the L1 floor and clashing with the next layer's ring_mla CBs).
         self.tt_ccl = get_tt_ccl(mesh_device)
+        self._gather_reduce_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self._tp_gather_semaphores = {}
+        self._gate_logits_partials = None
+        tp = mesh_device.shape[self.tp_axis]
+        if tp > 1:
+            ready_semaphore, data_valid_semaphore = self.tt_ccl.get_mla_high_bw_gather_semaphores()
+            self._tp_gather_semaphores = dict(
+                ready_semaphore=ready_semaphore, data_valid_semaphore=data_valid_semaphore
+            )
+            self._gate_logits_partials = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
+                name="gate_logits_partials",
+                shape=[1, tp, config.sp_dim, config.n_routed_experts],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
         self.fallback_mode = fallback_mode
         self.is_balanced = is_balanced
         # Memoization of the per-(actual_isl, padding_side, actual_start) padding_config built on HOST.
@@ -610,14 +783,30 @@ class TtMoEGatePrefill(LightweightModule):
         # on-device instead and refreshes THIS buffer in place — a stable address the capture can keep
         # writing across replays. Allocated lazily on first use (warm-up, before any capture).
         self._padding_config_device: Optional[ttnn.Tensor] = None
+        # Row-index / sentinel masks for _sentinel_padded_rows, keyed on the indices shape.
+        self._row_masks: dict = {}
 
         if weight is not None and bias is not None:
             weights = self._convert_and_cache_gate_weights(
-                weight, bias, config, mesh_device, weight_cache_path, cache_name_prefix, device=mesh_device
+                weight,
+                bias,
+                config,
+                mesh_device,
+                weight_cache_path,
+                cache_name_prefix,
+                device=mesh_device,
+                cache_dump_mode=resolve_cache_dump_mode(cache_dump_mode),
             )
         elif weight_cache_path is not None:
             weights = self._convert_and_cache_gate_weights(
-                None, None, config, mesh_device, weight_cache_path, cache_name_prefix, device=mesh_device
+                None,
+                None,
+                config,
+                mesh_device,
+                weight_cache_path,
+                cache_name_prefix,
+                device=mesh_device,
+                cache_dump_mode=resolve_cache_dump_mode(cache_dump_mode),
             )
         else:
             weights = self._convert_and_cache_gate_weights(
@@ -709,27 +898,17 @@ class TtMoEGatePrefill(LightweightModule):
             x,
             mesh_composer=ttnn.create_mesh_composer(
                 self.mesh_device,
+                # Tokens (dim 0) concat over the SP axis, emb dim (-1) over the TP axis.
                 config=ttnn.MeshComposerConfig(
-                    dims=(0, -1),  # SP on axis 0, TP on axis 1
+                    dims=(0, -1) if self.sp_axis == 0 else (-1, 0),
                 ),
             ),
         )
 
     def _compose_logits_to_host(self, logits: ttnn.Tensor) -> torch.Tensor:
         """Compose SP-sharded logits (TP-replicated after all_reduce) to host."""
-        return ttnn.to_torch(
-            logits,
-            mesh_composer=ttnn.create_mesh_composer(
-                self.mesh_device,
-                config=ttnn.MeshComposerConfig(
-                    dims=(0, -1),
-                    mesh_shape_override=ttnn.MeshShape(
-                        self.mesh_device.shape[0],  # concat SP shards
-                        1,  # collapse TP replicas
-                    ),
-                ),
-            ),
-        )
+        # Concat the SP shards on tensor dim 0 and collapse the TP replicas.
+        return ttnn.to_torch(logits, mesh_composer=get_sp_mesh_composer(self.mesh_device, self.sp_axis))
 
     def _host_logits_to_device(self, host_logits: torch.Tensor) -> ttnn.Tensor:
         """Shard host logits (tokens, n_experts) back to device: SP-sharded, TP-replicated."""
@@ -741,7 +920,7 @@ class TtMoEGatePrefill(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(0, None),  # shard SP, replicate TP
+                dims=mesh_shard_dims(0, self.sp_axis),  # shard SP, replicate TP
                 mesh_shape=self.mesh_device.shape,
             ),
         )
@@ -755,7 +934,7 @@ class TtMoEGatePrefill(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(0, None),
+                dims=mesh_shard_dims(0, self.sp_axis),
                 mesh_shape=self.mesh_device.shape,
             ),
         )
@@ -788,7 +967,7 @@ class TtMoEGatePrefill(LightweightModule):
         """Shard host input_ids to device to match x's SP token order.
 
         input_ids (any shape, flattened to [total_tokens]) is reshaped to [total_tokens/32, 32] and
-        SP-sharded on axis 0 / TP-replicated, so device d holds the same tokens as its logits rows.
+        SP-sharded / TP-replicated, so device d holds the same tokens as its logits rows.
         One ROW_MAJOR page = 32 uint32 token ids = one score height tile. (Assumes sequential SP
         placement; balanced/zigzag would need a matching token permutation.)
         """
@@ -804,7 +983,7 @@ class TtMoEGatePrefill(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(0, None),  # shard tokens across SP, replicate across TP
+                dims=mesh_shard_dims(0, self.sp_axis),  # shard tokens across SP, replicate across TP
                 mesh_shape=self.mesh_device.shape,
             ),
         )
@@ -818,7 +997,7 @@ class TtMoEGatePrefill(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(0, None),
+                dims=mesh_shard_dims(0, self.sp_axis),
                 mesh_shape=self.mesh_device.shape,
             ),
         )
@@ -826,7 +1005,7 @@ class TtMoEGatePrefill(LightweightModule):
     def _device_matmul(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Gate matmul + TP all-reduce on device."""
         per_device_dim = x.shape[-1]
-        n_tp_devices = self.mesh_device.shape[1]
+        n_tp_devices = self.mesh_device.shape[self.tp_axis]
         assert (
             per_device_dim * n_tp_devices == self.config.dim
         ), f"Expected per-device dim {self.config.dim // n_tp_devices}, got {per_device_dim}"
@@ -839,15 +1018,38 @@ class TtMoEGatePrefill(LightweightModule):
         if program_config is None:
             logger.warning(f"[MoeGate] No matmul program config for {config_key}, using TTNN default")
 
+        tp_axis = self.tp_axis
+        tp = self.mesh_device.shape[tp_axis]
+        partials = self._gate_logits_partials
+        use_gather_reduce = (
+            partials is not None and len(x.shape) == 2 and x.shape[0] == partials.shape[2] and x.dtype == partials.dtype
+        )
         logits = ttnn.matmul(
             x,
             self.weight,
             compute_kernel_config=self.config.mm_configs["COMPUTE_CONFIG"],
             program_config=program_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if use_gather_reduce else ttnn.L1_MEMORY_CONFIG,
         )
-        tp_axis = self.config.ccl_config["TP_AXIS"]
-        if self.mesh_device.shape[tp_axis] > 1:
+        if use_gather_reduce:
+            rows, n = logits.shape[-2], logits.shape[-1]
+            gathered = ttnn.experimental.high_bw_all_gather(
+                ttnn.reshape(logits, (1, 1, rows, n)),
+                dim=1,
+                output_tensor=partials,
+                cluster_axis=tp_axis,
+                num_links=self.config.ccl_config["NUM_LINKS"],
+                **self._tp_gather_semaphores,
+            )
+            ttnn.deallocate(logits)
+            summed = ttnn.experimental.fast_reduce_nc(
+                gathered,
+                dims=[1],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self._gather_reduce_kernel_config,
+            )
+            return ttnn.reshape(summed, (rows, n))
+        if tp > 1:
             # Pass persistent CCL semaphores (created once in TT_CCL) so all_reduce_async reuses them
             # instead of internally allocating+leaking global semaphores in main L1 every call. The
             # composite all-reduce needs barrier_semaphores of size 2 ([0]=reduce-scatter, [1]=all-gather),
@@ -905,7 +1107,7 @@ class TtMoEGatePrefill(LightweightModule):
         if cached is not None:
             return cached
 
-        sp_factor = self.mesh_device.shape[0]
+        sp_factor = self.mesh_device.shape[self.sp_axis]
         seq_len_per_chip = self.config.sp_dim
         total_tokens = sp_factor * seq_len_per_chip
         pad_side = 0 if padding_side == "right" else 1
@@ -959,20 +1161,13 @@ class TtMoEGatePrefill(LightweightModule):
 
                 padding_config.append([local_real_tokens, pad_side])
 
-        config_tensor = ttnn.from_torch(
-            torch.tensor(padding_config, dtype=torch.int32),
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=(0, None),
-                mesh_shape=self.mesh_device.shape,
-            ),
-        )
+        config_tensor = self._padding_config_tensor(padding_config)
         self._padding_config_cache[cache_key] = config_tensor
         return config_tensor
+
+    def _padding_config_tensor(self, padding_config: list) -> ttnn.Tensor:
+        """[sp, 2] (local_real_tokens, pad_side) rows -> the device tensor, one row per SP shard."""
+        return padding_config_tensor(self.mesh_device, padding_config, sp_axis=self.sp_axis)
 
     def build_padding_config_device(self, metadata, padding_side: str = "right") -> ttnn.Tensor:
         """Trace-safe twin of build_padding_config: derive the per-device
@@ -1005,7 +1200,7 @@ class TtMoEGatePrefill(LightweightModule):
                 "untraced so the host builder (build_padding_config) handles the balanced layout."
             )
 
-        sp_factor = self.mesh_device.shape[0]
+        sp_factor = self.mesh_device.shape[self.sp_axis]
         if self._padding_config_device is None:
             # Allocate the persistent row once. Same spec the host builder produces, so the consumers
             # (moe_grouped_topk / dispatch) see an identical tensor either way.
@@ -1017,7 +1212,7 @@ class TtMoEGatePrefill(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device,
-                    dims=(0, None),
+                    dims=mesh_shard_dims(0, self.sp_axis),
                     mesh_shape=self.mesh_device.shape,
                 ),
             )
@@ -1031,9 +1226,9 @@ class TtMoEGatePrefill(LightweightModule):
             actual_end,
             tokens_per_chip=self.config.sp_dim,
             pad_side=0 if padding_side == "right" else 1,
-            # SP is mesh axis 0 — the same axis sp_factor is read from above and that the config is
-            # sharded along, so the op's per-chip coordinate matches the host builder's row order.
-            cluster_axis=0,
+            # The SP axis — the same axis sp_factor is read from above and that the config is sharded
+            # along, so the op's per-chip coordinate matches the host builder's row order.
+            cluster_axis=self.sp_axis,
         )
 
     def _device_grouped_gate_fp32(
@@ -1160,6 +1355,83 @@ class TtMoEGatePrefill(LightweightModule):
         ttnn.deallocate(logits_tiled)
         return scores, indices
 
+    def _sentinel_padded_rows(self, indices: ttnn.Tensor, padding_config: ttnn.Tensor) -> ttnn.Tensor:
+        """Set right-padded rows' expert ids to the n_routed_experts sentinel, as DEVICE_FP32's topk does.
+
+        Right padding only: the caller must reject padding_side != "right" (the config's pad_side is
+        not read here). The masks are built lazily on first use of each shape, so that must be
+        warm-up, before any trace capture (from_torch is illegal inside a capture).
+        """
+        key = tuple(indices.shape)
+        if key not in self._row_masks:
+            rows, k = indices.shape[-2], indices.shape[-1]
+            assert rows <= torch.iinfo(torch.int16).max, f"{rows} rows overflow the int16 row index"
+            row_index = torch.arange(rows, dtype=torch.int16).reshape(rows, 1).expand(rows, k).reshape(key)
+            self._row_masks[key] = tuple(
+                ttnn.from_torch(
+                    t,
+                    device=self.mesh_device,
+                    dtype=indices.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                for t in (row_index, torch.full_like(row_index, self.config.n_routed_experts))
+            )
+        row_index, sentinel = self._row_masks[key]
+        real = ttnn.slice(padding_config, [0, 0], [1, 1])
+        real = ttnn.typecast(ttnn.to_layout(real, ttnn.TILE_LAYOUT), indices.dtype)
+        is_real = ttnn.lt(row_index, real)
+        out = ttnn.where(is_real, indices, sentinel)
+        for t in (real, is_real, indices):
+            ttnn.deallocate(t)
+        return out
+
+    def real_rows_tensor(self, row_mask: tuple) -> ttnn.Tensor:
+        """packed_real_row_mask on device for mask_pad_rows: uint16 tiles shaped like this gate's top-k indices on every
+        chip (sharded over the SP axis, replicated over TP). from_torch: not inside a trace capture."""
+        return ttnn.from_torch(
+            real_row_mask_host(row_mask, self.config.n_activated_experts),
+            device=self.mesh_device,
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=mesh_shard_dims(0, self.sp_axis), mesh_shape=self.mesh_device.shape
+            ),
+        )
+
+    def mask_pad_rows(self, indices: ttnn.Tensor, real_rows: ttnn.Tensor) -> ttnn.Tensor:
+        """Set the top-k ids of every row ``real_rows`` flags 0 to the n_routed_experts sentinel, as the top-k does for
+        the padding config's trailing pad rows, so masked_bincount, dispatch and combine skip them: a packed forward's
+        pad rows ahead of a later chunk's real rows (PackedPadding.real_rows). Returns new indices and frees the old.
+
+        The sentinel tile is built on the first call per shape, so that must be warm-up, before any trace capture
+        (from_torch is illegal inside a capture)."""
+        assert tuple(real_rows.shape) == tuple(
+            indices.shape
+        ), f"real-row mask {tuple(real_rows.shape)} does not match the top-k indices {tuple(indices.shape)}"
+        key = ("sentinel", tuple(indices.shape))
+        if key not in self._row_masks:
+            self._row_masks[key] = ttnn.from_torch(
+                torch.full(tuple(indices.shape), self.config.n_routed_experts, dtype=torch.int32),
+                device=self.mesh_device,
+                dtype=indices.dtype,
+                layout=indices.layout,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        # Through DRAM, then back into the indices' memory config once they are freed: an L1 result allocated
+        # while they are alive lands below them and shifts later L1 buffers into ops' static circular buffers.
+        memory_config = indices.memory_config()
+        out = ttnn.where(real_rows, indices, self._row_masks[key], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(indices)
+        if memory_config.buffer_type == ttnn.BufferType.DRAM:
+            return out
+        moved = ttnn.to_memory_config(out, memory_config)
+        ttnn.deallocate(out)
+        return moved
+
     def _host_gpt_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """GPT-OSS routing on host. Returns (indices, scores).
 
@@ -1241,6 +1513,10 @@ class TtMoEGatePrefill(LightweightModule):
 
         elif mode == GateComputeMode.GPT_DEVICE:
             ttnn_scores, ttnn_top_k_experts_indices = self._device_gpt_gate(logits)
+            if padding_config is not None:
+                if padding_side != "right":
+                    raise ValueError(f"GPT_DEVICE padding awareness is right-padding only, got {padding_side!r}")
+                ttnn_top_k_experts_indices = self._sentinel_padded_rows(ttnn_top_k_experts_indices, padding_config)
 
         elif mode == GateComputeMode.GPT_HOST:
             host_logits = self._compose_logits_to_host(logits)

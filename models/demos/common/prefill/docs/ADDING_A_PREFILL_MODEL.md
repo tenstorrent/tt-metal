@@ -58,14 +58,19 @@ class MyModelAdapter(PrefillModelAdapter):
     supports_dflash: bool = False  # may PREFILL_DFLASH=1 attach the DFlash drafter to this model? The
                                # drafter is a separate checkpoint targeting ONE architecture (today only
                                # Kimi-K2.7), so leave it False unless a matching drafter exists.
+    supports_packed_forward: bool = False  # does the runtime implement prefill_forward (section 2.1)? Without
+                               # it, a forward of several chunks runs prefill_chunk once per chunk.
+    passes_indexer_indices: bool = False  # can a pipeline split hand indexer indices between ranks? Unless
+                               # supports_packed_forward_indexer_indices, the runner refuses F > 1 across ranks.
 
     def load_hf_config(self):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to
         hf_model_default). The engine sets `.max_seq_len` on the returned config."""
 
-    def weight_cache_path(self, mesh_shape: tuple):
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0):
         """The TTNN weight-cache dir for this model + mesh (or None if disabled).
-        Mirror the layout the cache-populate run wrote so the runner reads the same files."""
+        Mirror the layout the cache-populate run wrote so the runner reads the same files.
+        `sp_axis` is the mesh axis SP runs on (PREFILL_SP_AXIS); raise if your model does not support it."""
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
         """Allocate (and zero) this model's KV cache(s) on device and return them as a `KvCaches` — your
@@ -135,21 +140,21 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         hidden state on a non-last pipeline rank, or None on the last/single rank (the
         populated cache is the output).
 
-        `request_id` is the engine's chunk counter; the runner ALWAYS passes it, so accept it
-        even if unused. Only the pipelined layer-completion sink consumes it (to build a
-        globally-dense `seq = request_id * num_layers + layer_idx`); a single-rank LayerAck
-        channel carries no payload and can ignore it."""
+        `request_id` increases with every call: the runner's forward index, or `c * F + k` for chunk k of
+        forward c when a packed forward runs chunk by chunk. No runtime keys on it (TODO: drop it from the
+        contract); the runner ALWAYS passes it, so accept it even if unused."""
 
     def capture_trace(self, kv_cache) -> None:
         """OPTIONAL — implement only if your model supports segmented trace capture/replay. The
         engine calls this via `getattr(runtime, "capture_trace", None)`, once, after `compile()`
-        and only when `config.use_trace` is set; a model that never traces can omit it entirely.
+        and only when `config.use_trace` is set; a model that never traces can omit it entirely, and
+        the runner then refuses PREFILL_USE_TRACE=1 instead of running eagerly.
         Must be idempotent (no-op if already captured) since the engine does not track capture
         state itself."""
 
-    # --- OPTIONAL hooks — implement only if your model supports cache migration; the serving loop
-    #     never calls them. Keep the heavy table logic in your model's own module (a thin forwarder on
-    #     the runtime), not inline here. ---
+    # --- REQUIRED KV-table hooks: `build_kv_chunk_table` and `kv_migration_stages`. The engine builds a
+    #     chunk table on every run, so a runtime missing them fails at bringup. Keep the heavy table logic
+    #     in your model's own module (a thin forwarder on the runtime), not inline here. ---
     def build_kv_chunk_table(
         self, kv_cache, path: str, *, first_layer_idx=0, num_my_layers=None, stage_layouts=None
     ) -> str:
@@ -165,7 +170,11 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         anchored on whichever tensor it migrates, since the engine treats `kv_cache` as opaque and
         cannot pick for you. Number a stage in its own space when that is not the model's global layer
         numbering (a cache only some layers write), and map it back to model layers in your
-        `build_kv_chunk_table` (see DeepSeek's `kv_table_layer_rows`)."""
+        `build_kv_chunk_table` (see DeepSeek's `kv_table_layer_rows`).
+
+        Return `[]` only for a cache layout with no table yet (GPT-OSS's bounded sliding cache): the
+        engine then serves without a table, which it allows single-rank with both
+        `PREFILL_ENABLE_MIGRATION` and `PREFILL_MIGRATION_EXPORT_TO_FILE` off, and rejects otherwise."""
 
     # If your merged table's second config is NOT a DSA index cache, override `cache_kind(config_id)`
     # on the ADAPTER (default: 0 = "kvpe", 1 = "index", else "other") so the producer and the
@@ -173,22 +182,109 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
     # state as configs 1 and 2 this way (models/demos/deepseek_v3_d_p/tt/kda/KDA_STATE_MIGRATION.md).
     # If a layer's cache is not on the token axis, also override `layer_position_range(layer_idx,
     # real_len)` (default `(0, real_len)`): the driver issues one /migrate per run of consecutive layers
-    # with equal ranges and byte-verifies that range. Kimi-K3 returns the KDA version window there.
+    # with equal ranges and byte-verifies that range. Kimi-K3 returns its KDA window there.
 
     def set_layer_completion_sink(self, sink) -> None:
         """Register the per-layer completion sink. Required at any rank count, unless the runner runs
-        with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead.
+        with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead. That mode needs
+        `set_d2h_ack_service(service)` on the runtime; without it the runner refuses
+        PREFILL_LAYER_ACK_D2H=1 right after building the runtime.
 
-        Call `sink(layer_idx, request_id)` once per layer, where `request_id` is the one
-        `prefill_chunk` was given -- bind it per call rather than reading mutable state, since the
-        callback fires synchronously mid-forward.
+        As KV-writing layers finish, call `sink.layers_completed(layer_start, layer_end, slot_id,
+        actual_start, actual_end)` for the layers `[layer_start, layer_end)` (one layer, or a span), naming
+        the chunk `prefill_chunk` was given -- bind it per call rather than reading mutable state, since the
+        callback fires synchronously mid-forward. The consumer retires a chunk once completions cover all of
+        its KV-writing layers.
 
-        `layer_idx` MUST be the layer's GLOBAL index. The sink keys on
-        seq = request_id * num_layers + layer_idx, so a rank-local index makes every rank's local
-        layer k collide on one seq and all but one completion is dropped -- silently, since the
-        router just sees a duplicate. If your model enumerates only its own slice, add
+        Layer indices MUST be GLOBAL: with rank-local indices every rank reports the same layers and the
+        chunk never retires. If your model enumerates only its own slice, add
         `config.first_layer_idx`; if it numbers its blocks globally at build time, pass it through."""
 ```
+
+### 2.1 Packed forwards (optional)
+
+With `PREFILL_FORWARD_TOKENS_BUDGET` (default `chunk_size`, a multiple of it) one forward carries
+F = `forward_tokens_budget // chunk_size` chunks (`PrefillRunParams.forward_chunks`): `forward_tokens_budget`
+rows. F = 1 is the `prefill_chunk` path above, unchanged. At F > 1 the runner calls `prefill_chunk` once per
+non-empty chunk, each with its own slot, range, `request_id` and 12 B metadata tensor, and joins the outputs back
+into the forward's layout; each call returns its chunk's activation on a non-last rank and None on the last. A
+runtime that sets `supports_packed_forward = True` on the adapter gets the whole forward through `prefill_forward`
+instead. At F > 1 the runner refuses a runtime whose `prefill_forward` does not match the flag:
+
+```python
+    def prefill_forward(self, input_tensor, kv_cache, chunks, request_id=0, d2h_service=None, *, metadata_msg=None):
+        """One forward of `params.forward_chunks` chunks
+        (`prefill_chunk.PrefillChunk(slot_id, actual_start, actual_end)`, in pack order). `input_tensor` is the
+        forward's packed H2D tokens on the first rank (chip c holds slice c of every chunk's rotated tokens, in
+        chunk order: `chunk_layout.pack_forward_tokens`), or the `[1, 1, forward_tokens_budget, H]` activation
+        from the previous rank. Return the forward_tokens_budget-row activation on a non-last rank, None on the
+        last. Size the non-first-rank placeholder input to forward_tokens_budget. Report layer completions as
+        `prefill_chunk` does, once for each non-empty chunk, after that chunk's layers ran. `request_id` is as
+        for `prefill_chunk`."""
+```
+
+Metadata (`prefill_chunk`), little-endian uint32: at F = 1 today's 12 B `(slot_id, actual_start, actual_end)`
+record; at F > 1 tt-d-gen's `PrefillBatchMetadata`, 8 + 12 * F B: `{num_chunks, 0}` then F records, those
+past `num_chunks` set to `(0xFFFFFFFF, 0, 0)`. `num_chunks` (1..F) is the forward's non-empty chunk count; the
+runtime gets F chunks, the ones past `num_chunks` empty. The H2D producer must use the same F (tt-d-gen's
+`max_chunks_per_batch`), as `prefill_producer.py` and `migration_driver.py` do.
+`[actual_start, actual_end)` keeps its single-chunk meaning; `actual_start == actual_end` is an empty chunk
+(no attention, no KV write, slot ignored). The SHUTDOWN / WARMUP sentinels fill every word with -1 / -2. Order
+contract, validated on the first rank (`prefill_chunk.validate_chunks`):
+
+- at least one non-empty chunk; empty chunks only after every non-empty one;
+- a slot's chunks are one run of consecutive chunks (`actual_start` of each = `actual_end` of the previous),
+  and only the run's last chunk may be partial; chunks never overlap, so a last chunk near the cache end pads
+  into the cache instead of moving back over its predecessor;
+- `actual_start % 32 == 0`, `actual_start < actual_end <= actual_start + chunk_size`,
+  `actual_start + chunk_size <= max_seq_len`;
+- runs of different slots may come in any order, and partial chunks may sit anywhere in the forward. The MoE skips
+  every pad row: its padding config holds one leading real-row count per SP chip, which masks the pad rows after
+  a chip's last real row, and the gate sets the top-k ids of the rest (a partial chunk's, ahead of a non-empty
+  chunk) to the sentinel from a per-row real mask (`PackedPadding`, `packed_real_row_mask`). Putting partial
+  chunks last still shortens the dispatch loop, which stops at the leading count, so the producer does.
+
+Each layer completion names one chunk, on either path, so a consumer retires each chunk on its own.
+
+The runner refuses F > 1 at startup, before the model loads, together with `PREFILL_MTP_LEVELS > 0`,
+`PREFILL_DFLASH=1` or `PREFILL_USE_TRACE=1`, and `PREFILL_LAYER_ACK_D2H=1` with `prefill_forward`. An adapter
+whose `prefill_forward` handles them lifts the last two: `supports_packed_forward_trace = True` (it stages each
+chunk's inputs before a trace replay) and `supports_packed_forward_d2h_acks = True` (it sends one 12 B
+`(slot_id, actual_start, actual_end)` record per chunk per KV-writing layer through the D2H ack service, each
+chunk's records contiguous, since the decoder treats an identity change mid-chunk as a lost record).
+
+A pipeline split that passes indexer indices between ranks (`passes_indexer_indices`, GLM-5.3's cross-layer reuse) is
+refused at F > 1 too, unless `supports_packed_forward_indexer_indices = True`: the runtime's
+`indexer_indices_shape()` then covers all F chunks (GLM-5.3 stacks them chunk-major along rows), `prefill_forward`
+takes the upstream rank's as `indexer_indices=`, and `outbound_indexer_indices` holds its own for every chunk, so the
+runner sends one index tensor per forward exactly as it does per chunk at F = 1. On any rank but the first,
+`prefill_forward` takes the upstream rank's packed activation (every chunk's rows back to back on each chip) and a
+non-last rank returns its own.
+
+MTP is refused at F > 1 too, unless `supports_packed_forward_mtp = True` (GLM-5.3), eager or traced. A packed
+forward then carries every chunk's MTP lookahead, chunk by chunk:
+
+- **H2D row, per SP chip**: every chunk's ids back to back (as above), then one `num_mtp_tokens(K)`-id lookahead
+  block per chunk, in chunk order: `F * (chunk_size / sp + num_mtp_tokens(K))` ids
+  (`make_h2d_spec(..., forward_chunks=F)`). Block k is exactly what a one-chunk forward of chunk k sends after its
+  ids; an empty chunk's block is all `MTP_PAD_TOKEN_ID`. The H2D metadata is unchanged.
+- **D2D record**: the forward's chunk metadata, then one provided-levels word per chunk (empty chunks 0), which
+  the first rank's runner counts from each chunk's block (`chunk_provided_levels`). At F = 1 this is today's single
+  word, so the record is unchanged.
+- **D2D id segments**: as at F = 1, the ids ride as two segments of the activation's service, split per chip as
+  the first rank cuts its H2D row: every chunk's ids (`F * chunk_size / sp`), then every chunk's lookahead block
+  (`F * num_mtp_tokens(K)`; `mtp_id_segment_specs(..., forward_chunks=F)`). The activation itself is the forward's
+  hidden rows only.
+- **`prefill_forward(..., mtp_tokens=, mtp_id_segments=, provided_levels=)`**: the first rank's lookahead blocks
+  (`[sp, 1, F * num_mtp_tokens]`), a downstream rank's two id segments, and one provided-levels count per chunk. A
+  non-last rank returns `[activation, chunk ids, lookahead ids]`. The last rank builds each chunk's MTP input from
+  that chunk's ids and block alone, then runs the MTP layer packed like a trunk layer; each chunk's acks include
+  its MTP layers (`layer_ack_layers`).
+- **Traced** (`PREFILL_USE_TRACE=1`): the first rank keeps the lookahead blocks in a persistent buffer
+  (`claim_persistent_overhang`), a downstream rank its id segments (`claim_persistent_extras`), and the last rank
+  refreshes one level geometry per chunk position before each replay
+  (an empty chunk provides every level). The MTP region is captured twice: "generate", replayed when any chunk
+  generates a level, and "provided", when none does.
 
 ---
 
@@ -218,7 +314,7 @@ put them in a per-model **manifest** in your package and point the binding at it
 
 ```json
 // models/demos/my_model/tt/runners/manifests/my_model.json
-{ "env": { "PREFILL_MODEL": "my_model", "PREFILL_MAX_SEQ_LEN": "256000", "PREFILL_NUM_USERS": "86" } }
+{ "env": { "PREFILL_MODEL": "my_model", "PREFILL_MAX_SEQ_LEN": "262144", "PREFILL_NUM_USERS": "86" } }
 ```
 
 The manifest has two jobs, and only two: it names the model (the one thing the adapter cannot
@@ -250,8 +346,13 @@ swapping the manifest. (The runner reads only the manifest's `env` block; see `_
 and exports its descriptor; the producer (prefill_producer.py / the scheduler) connects by
 `PREFILL_H2D_SERVICE_ID` and pushes token chunks. The shared env (`PREFILL_MODEL`, `PREFILL_SP/TP`,
 `PREFILL_CHUNK_SIZE`, `PREFILL_NUM_USERS`, `PREFILL_MAX_SEQ_LEN`, `PREFILL_H2D_SERVICE_ID`) must match on
-both so the byte layout agrees. `PREFILL_MAX_SEQ_LEN` sizes the per-user cache (default 11 chunks) and
+both so the byte layout agrees. `PREFILL_MAX_SEQ_LEN` sizes the per-user cache (default 16 chunks) and
 must be ≥ `chunks * PREFILL_CHUNK_SIZE`, else the runner asserts when a chunk overruns a slot.
+
+Your adapter's `allocate_kv_cache` must pass `bank_aligned=True` to the model's KV allocator, and the
+allocator must call `check_kv_bank_aligned` (common/prefill/runners/kv_bank_alignment.py) on the per-device
+row count, so every slot and layer starts on DRAM bank 0. Nothing enforces this for a new adapter. `PREFILL_MAX_SEQ_LEN` must be a multiple of stripes × 32 × the DRAM
+bank count, where stripes is the number of devices a token row is split over (2048 for SP=8 on 8 banks).
 
 ```bash
 # terminal A — runner (creates the H2D service, exports the descriptor, serves):
@@ -265,15 +366,17 @@ PREFILL_PRODUCER_CHUNKS=11 \
 ```
 
 **KV PCC** — validate prefill writes correct KV. The producer reads the KV back device-lessly and PCCs
-vs the golden trace, which requires the runner to publish its KV chunk table + device map: run the runner
-with `PREFILL_MOCK_MIGRATION=1` and the producer with `PREFILL_PRODUCER_CHECK_PCC=1`. Full two-terminal
+vs the golden trace, which reads the KV chunk table + device map the runner always publishes: run the
+runner with `PREFILL_ENABLE_MIGRATION=0` (the default, so the table stays on disk) and the producer with
+`PREFILL_PRODUCER_CHECK_PCC=1`. Full two-terminal
 recipe in `docs/PREFILL_MIGRATION_TESTING.md` Gate 1. The runner PCCs nothing on any path — it publishes
 the table and the device map, and every read-back runs in the reader's own process. The producer's reader
 knows two cache layouts — merged MLA (DeepSeek / Kimi) and MiniMax-M3's triple cache; a third
 layout needs a branch in `_read_slot_kv_and_check_pcc`, since that read-back is not adapter-dispatched.
 
-**Single-rank migration** — `PREFILL_ENABLE_MIGRATION=1` on the runner (requires the
-migration endpoint up; see `deepseek_v3_d_p/tt/runners/kv_migration_setup.py`).
+**Live migration** — `PREFILL_ENABLE_MIGRATION=1` hands the same table to a migration worker instead
+and blocks on its ready, so the endpoint must be up (see
+`deepseek_v3_d_p/tt/runners/kv_migration_setup.py`).
 
 ## Checklist
 
@@ -284,4 +387,4 @@ migration endpoint up; see `deepseek_v3_d_p/tt/runners/kv_migration_setup.py`).
 - [ ] No reference-modeling / heavy imports at module load (lazy inside methods).
 - [ ] Registered in `ADAPTER_PATHS` (`models/demos/common/prefill/adapter.py`).
 - [ ] Weight cache populated; golden trace staged.
-- [ ] Request-mode producer PCC run passes (`PREFILL_PRODUCER_CHECK_PCC=1`); request + (if applicable) migration paths exercised.
+- [ ] Request-mode producer PCC run passes (`PREFILL_PRODUCER_CHECK_PCC=1`), which reads back the KV chunk table the runner always builds; the live-migration publish exercised too if your model uses it.

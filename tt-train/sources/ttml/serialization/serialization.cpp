@@ -72,6 +72,24 @@ void get_enum(FlatBufferFile& file, std::string_view name, T& value) {
     value = static_cast<T>(int_value);
 }
 
+void assign_from_floats(const autograd::TensorPtr& tensor, const std::vector<float>& values) {
+    const auto& stored = tensor->get_value(autograd::PreferredPrecision::NATIVE);
+    const auto& shape = stored.logical_shape();
+    auto* device = stored.device();
+    switch (stored.dtype()) {
+        case ttnn::DataType::BFLOAT16:
+            tensor->assign(core::from_vector<float, ttnn::DataType::BFLOAT16>(values, shape, device));
+            return;
+        case ttnn::DataType::FLOAT32:
+            tensor->assign(core::from_vector<float, ttnn::DataType::FLOAT32>(values, shape, device));
+            return;
+        default:
+            throw std::invalid_argument(fmt::format(
+                "assign_from_floats loads into bf16 or fp32 tensors, got one stored as {}",
+                enchantum::to_string(stored.dtype())));
+    }
+}
+
 void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const ttnn::Tensor& tensor) {
     // Store tensor in m_tensors - it will be written to file during serialize()
     // This ensures tensors are written to the correct directory
@@ -125,7 +143,7 @@ void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, ttnn::Tensor&
 
 void write_autograd_tensor(
     FlatBufferFile& file, std::string_view name, const ttml::autograd::TensorPtr& tensor, bool save_grads) {
-    // NATIVE, not HALF or FULL: those can return a cached cast that in-place optimizer steps don't update (#41657).
+    // NATIVE writes the tensor as stored, without a cast, so a checkpoint keeps each tensor's dtype.
     write_ttnn_tensor(
         file, std::string(name) + "/value", tensor->get_value(ttml::autograd::PreferredPrecision::NATIVE));
     auto& grad = tensor->get_grad();
@@ -142,7 +160,8 @@ void read_autograd_tensor(FlatBufferFile& file, std::string_view name, ttml::aut
     bool has_grads = false;
     bool requires_grads = false;
     read_ttnn_tensor(file, std::string(name) + "/value", value);
-    tensor->set_value(value);
+    // Cast to the dtype the tensor is stored in: the model decides the precision, not the file.
+    tensor->assign(value);
     requires_grads = file.get_bool(std::string(name) + "/requires_grads");
     has_grads = file.get_bool(std::string(name) + "/has_grads");
     tensor->set_requires_grad(requires_grads);

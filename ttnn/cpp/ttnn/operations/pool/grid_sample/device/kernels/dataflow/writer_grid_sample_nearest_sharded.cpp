@@ -21,14 +21,15 @@ template <
     uint32_t input_stick_nbytes,
     uint32_t output_cb_index,
     typename TensorAccessor,
-    typename GridPtrType>
+    typename GridPtrType,
+    typename OutputDFB>
 ALWI void process_grid_point_nearest(
     Noc noc,
     GridPtrType grid_ptr,
     uint32_t grid_idx,
     const TensorAccessor& input_tensor_accessor,
     uint32_t batch_offset,
-    DataflowBuffer output_dfb,
+    OutputDFB output_dfb,
     uint32_t output_write_offset,
     uint32_t fill_stick_addr) {
     // Compute scaling factors to match prepare_grid.cpp

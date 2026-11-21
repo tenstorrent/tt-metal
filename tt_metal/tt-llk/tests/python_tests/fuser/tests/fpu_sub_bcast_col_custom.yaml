@@ -1,22 +1,25 @@
 # Subtraction where source B is a column vector broadcast across every column.
 
-supported_archs: ["wormhole", "blackhole"]
+supported_archs: ["wormhole", "blackhole", "quasar"]
 
 operands:
   - name: "input_A"
-    dims: [32, 256]
+    tile_dims: all
+    dims: [64, 256]
     format: "Float16_b"
   - name: "input_B"
-    dims: [32, 256]
+    tile_dims: all
+    dims: [64, 256]
     format: "Float16_b"
   - name: "sub_bcast_col_custom_out"
-    dims: [32, 256]
+    tile_dims: all
+    dims: [64, 256]
     format: "Float16_b"
 
 operations:
   - math:
       - type: "Fpu"
-        block_size: [32, 256]
+        block_tiles: [1, 8]
         in0: "input_A"
         in1: "input_B"
         operation: "SubBcastColCustom"
@@ -25,5 +28,5 @@ operations:
         math_fidelity: "LoFi"
     pack:
       - output: "sub_bcast_col_custom_out"
-        block_size: [32, 256]
+        block_tiles: [1, 8]
         packer: "Packer"

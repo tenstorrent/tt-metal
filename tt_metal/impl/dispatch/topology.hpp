@@ -5,14 +5,13 @@
 #pragma once
 
 #include <device.hpp>
-#include <functional>
 #include <memory>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "device/device_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"
@@ -62,7 +61,6 @@ public:
         DeviceManager* device_manager,
         const GetControlPlaneFn& get_control_plane = {},
         const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
-        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
     ~DispatchTopology();
 
@@ -78,7 +76,9 @@ public:
 
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
-    const std::unordered_set<TerminationInfo>& get_registered_termination_cores(ChipId dev_id) const;
+    // Termination signals of the device's kernels of `kernel_type` (DISPATCH or ROUTING).
+    const std::unordered_set<TerminationInfo>& get_registered_termination_cores(
+        ChipId dev_id, FDKernelType kernel_type) const;
 
     void reset();
 
@@ -90,13 +90,13 @@ private:
     DeviceManager* device_manager_;
     GetControlPlaneFn get_control_plane_;
     GetDispatchQueryManagerFn get_dispatch_query_manager_;
-    GetMaxNumEthCoresFn get_max_num_eth_cores_;
     GetReadsDispatchCoresFn get_reads_dispatch_cores_;
     std::vector<FDKernel*> node_id_to_kernel_;
     std::unique_ptr<detail::ProgramCompileGroup> command_queue_compile_group_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> dispatch_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> routing_cores_;
-    std::unordered_map<ChipId, std::unordered_set<TerminationInfo>> termination_info_;
+    std::unordered_map<ChipId, std::unordered_set<TerminationInfo>> dispatch_termination_info_;
+    std::unordered_map<ChipId, std::unordered_set<TerminationInfo>> routing_termination_info_;
     const std::unordered_set<CoreCoord> empty_container_;
     const std::unordered_set<TerminationInfo> empty_termination_info_container_;
 };

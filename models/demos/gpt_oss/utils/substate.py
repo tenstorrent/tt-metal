@@ -37,7 +37,9 @@ def substate(state: dict[str, torch.Tensor], key: str) -> dict[str, torch.Tensor
     prefix = f"{key}."
     prefix_len = len(prefix)
 
-    return {k[prefix_len:]: v for k, v in state.items() if k.startswith(prefix)}
+    # Filter on keys before reading values: on a lazy state dict (GptOssLazyStateDict) reading a
+    # value loads it from disk, so iterating items() would load the whole model on every call.
+    return {k[prefix_len:]: state[k] for k in state if k.startswith(prefix)}
 
 
 def has_substate(state: dict[str, torch.Tensor], key: str) -> bool:

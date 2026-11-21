@@ -167,6 +167,8 @@ It works for all kinds of tensors (interleaved/sharded, L1/DRAM, etc.). It's goo
 
 The shard pages iterator should be used only in specific cases when a developer intends to optimize a kernel for the sharded tensor case.
 
+To move many pages in one transfer instead of one per page, see [Contiguous pages](./tensor_accessor.md#contiguous-pages).
+
 ### Reshard Op Example 📋
 The reshard op takes input and output tensors that have different `TensorSpec`s. They can differ in anything: `BufferType` (DRAM/L1), `MemoryLayout` (Interleaved/Sharded), or they can have different sharding specifications (e.g., WIDTH_SHARDED->HEIGHT_SHARDED, change of shard shape, etc.).
 

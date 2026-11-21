@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
@@ -13,13 +14,17 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 
 namespace ttnn {
 
 namespace detail {
 
-inline bool is_rm_bw_sharded(const tt::tt_metal::MemoryConfig& mc) {
+// Sharded output specs are 2D (flattened height x width), so spec rescaling needs at least height and width dims.
+constexpr uint32_t kMinRankForShardSpecRescale = 2;
+
+// Layout-neutral: only inspects memory_layout. Used by both RM and TILE predicates.
+inline bool is_bw_sharded(const tt::tt_metal::MemoryConfig& mc) {
     const auto layout = mc.memory_layout();
     return mc.is_sharded() && (layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
                                layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED);
@@ -41,18 +46,7 @@ inline bool has_nontile_w(const ttnn::Tensor& input) {
     return s.rank() >= 1 && s[-1] % tt::constants::TILE_WIDTH != 0;
 }
 
-// TensorAccessor strides pages by the buffer's *aligned* page size, but `noc_async_*_sharded` reads
-// that same value back as the per-page *payload*. For a B/W-sharded RM buffer the page is the shard
-// row, so the two only agree when the row is already a multiple of the buffer's alignment.
-inline bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& mc, uint32_t element_size) {
-    if (!mc.shard_spec().has_value()) {
-        return false;
-    }
-    const uint32_t alignment = mc.buffer_type() == tt::tt_metal::BufferType::DRAM
-                                   ? tt::tt_metal::hal::get_dram_alignment()
-                                   : tt::tt_metal::hal::get_l1_alignment();
-    return (mc.shard_spec()->shape[1] * element_size) % alignment != 0;
-}
+using ttnn::operations::data_movement::has_subaligned_shard_row;
 
 // Route RM sharded input through composite when native isn't safe: nontile-aligned B/W, B/W with a
 // sub-aligned shard row or non-zero width-begin, or nontile-aligned HEIGHT outside the sharded fast
@@ -62,7 +56,7 @@ inline bool needs_rm_composite_input(
     if (input.layout() != Layout::ROW_MAJOR || !input.is_sharded()) {
         return false;
     }
-    if (is_rm_bw_sharded(input.memory_config())) {
+    if (is_bw_sharded(input.memory_config())) {
         // Only W misalignment breaks the per-shard page split; irregular H is fine.
         return has_nontile_w(input) || width_begin_nonzero ||
                has_subaligned_shard_row(input.memory_config(), input.element_size());
@@ -78,7 +72,7 @@ inline bool needs_rm_composite_input(
 // fine natively). Callers must pass the post-rescale config, since the implicit-inheritance rescale
 // can turn an aligned inherited shard row into a sub-aligned one.
 inline bool needs_rm_composite_output(const ttnn::Tensor& input, const tt::tt_metal::MemoryConfig& output_mc) {
-    if (input.layout() != Layout::ROW_MAJOR || !is_rm_bw_sharded(output_mc)) {
+    if (input.layout() != Layout::ROW_MAJOR || !is_bw_sharded(output_mc)) {
         return false;
     }
     return has_nontile_w(input) || has_subaligned_shard_row(output_mc, input.element_size());
@@ -94,6 +88,14 @@ inline bool needs_sharded_output_reshard(const ttnn::Tensor& input, const tt::tt
         return true;
     }
     return input.memory_config().memory_layout() != output_mc.memory_layout();
+}
+
+// TILE B/W-sharded + rm_only downgrade hits the RM shard-width padding + view reshard trap.
+// TODO: root cause = page_config.cpp:create_default_alignment_rm + tensor_ops.cpp Tensor::view shard rewrite.
+inline bool needs_tile_sharded_composite_fallback(
+    const ttnn::Tensor& input, const tt::tt_metal::MemoryConfig& output_mc, bool rm_only) {
+    return rm_only && input.layout() == Layout::TILE &&
+           (is_bw_sharded(input.memory_config()) || is_bw_sharded(output_mc));
 }
 
 }  // namespace detail
@@ -125,6 +127,7 @@ ttnn::Tensor slice(
         "Step {} must have the same size as start {} and end",
         step.size(),
         begins.size());
+    TT_FATAL(std::ranges::all_of(step, [](T s) { return s > 0; }), "Slice step must be greater than 0 in every dim");
 
     bool no_step = std::ranges::all_of(step, [](uint32_t s) { return s == 1; });
     bool starts_zero = std::ranges::all_of(begins, [](uint32_t s) { return s == 0; });
@@ -149,7 +152,11 @@ ttnn::Tensor slice(
     auto resolve_mc = [&](const ttnn::Tensor& source,
                           std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt) {
         auto resolved_mc = output_memory_config;
-        if (resolved_mc.is_sharded() && !resolved_mc.shard_spec().has_value()) {
+        // A populated nd_shard_spec (true ND sharding, e.g. CONTIGUOUS_1D) is already fully specified;
+        // only synthesize a fresh legacy spec below for configs with neither shard_spec nor
+        // nd_shard_spec, so we don't clobber an already-correct ND result.
+        if (resolved_mc.is_sharded() && !resolved_mc.shard_spec().has_value() &&
+            !resolved_mc.nd_shard_spec().has_value()) {
             const auto& in_mc = source.memory_config();
             if (in_mc.is_sharded() && in_mc.memory_layout() == resolved_mc.memory_layout() &&
                 in_mc.shard_spec().has_value()) {
@@ -240,12 +247,12 @@ ttnn::Tensor slice(
     // output doesn't reuse the input's (oversized) spec. Covers HEIGHT/WIDTH/BLOCK. (Issue #38016)
     // Runs before the composite decision below so both that decision and the composite path's own
     // resolve_mc see the final spec — rescaling can turn an aligned shard row into a sub-aligned one.
-    if (!memory_config_arg.has_value() && !optional_output_tensor.has_value() && input_tensor.is_sharded() &&
-        input_rank >= 2) {
+    if (!memory_config_arg.has_value() && !optional_output_tensor.has_value() && input_tensor.is_sharded()) {
         const auto& mem_layout = output_memory_config.memory_layout();
-        if (mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
-            mem_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED ||
-            mem_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+        if (input_rank >= detail::kMinRankForShardSpecRescale &&
+            (mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
+             mem_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED ||
+             mem_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED)) {
             const auto& shard_spec_val = output_memory_config.shard_spec().value();
 
             // Compute output dimensions, tile-aligned if using TILE path
@@ -308,6 +315,58 @@ ttnn::Tensor slice(
                 output_memory_config = MemoryConfig(
                     output_memory_config.memory_layout(), output_memory_config.buffer_type(), new_shard_spec);
             }
+        } else if (
+            mem_layout == tt::tt_metal::TensorMemoryLayout::ND_SHARDED &&
+            output_memory_config.nd_shard_spec().has_value()) {
+            // True ND sharding (e.g. CONTIGUOUS_1D) has no legacy 2D equivalent, so the HEIGHT/WIDTH/
+            // BLOCK rescale above can't apply; rescale the ND shard shape to the sliced output dims
+            // instead, preserving the caller's grid/distribution strategy. (Issue #46954)
+            const auto& nd_shard_spec_val = output_memory_config.nd_shard_spec().value();
+            const auto& input_padded_shape = input_tensor.padded_shape();
+            if (nd_shard_spec_val.shard_shape.rank() <= input_rank && input_padded_shape.rank() == input_rank) {
+                ttsl::SmallVector<uint32_t> output_dims(input_rank);
+                for (size_t i = 0; i < input_rank; i++) {
+                    output_dims[i] = output_dim_i(i, modified_ends);
+                }
+                if (!rm_only) {
+                    output_dims[input_rank - 2] =
+                        std::max(tt::round_up(output_dims[input_rank - 2], tile_shape[0]), tile_shape[0]);
+                    output_dims[input_rank - 1] =
+                        std::max(tt::round_up(output_dims[input_rank - 1], tile_shape[1]), tile_shape[1]);
+                }
+
+                auto new_nd_spec = ttnn::operations::data_movement::common::rescale_nd_shard_spec_for_output(
+                    nd_shard_spec_val,
+                    input_padded_shape,
+                    ttnn::Shape(output_dims),
+                    input_tensor.dtype(),
+                    PageConfig(rm_only ? Layout::ROW_MAJOR : Layout::TILE, input_tensor.tensor_spec().tile()),
+                    output_memory_config.buffer_type());
+
+                if (new_nd_spec != nd_shard_spec_val) {
+                    const bool was_range_lockstep =
+                        tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(
+                            output_memory_config);
+                    output_memory_config = MemoryConfig(output_memory_config.buffer_type(), new_nd_spec);
+                    tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(
+                        output_memory_config, was_range_lockstep);
+                }
+            }
+        }
+    }
+
+    // Strided BFLOAT8_B has no supported path; fail now so the composite below doesn't stage work.
+    if (!no_step) {
+        TT_FATAL(input_tensor.dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
+    }
+
+    // Zero-size output short-circuits below in the empty branch; skip the composite so a 0-dim
+    // rescale (shard_w = 0 etc.) can't trip a downstream to_memory_config.
+    bool any_empty = false;
+    for (size_t i = 0; i < input_rank; ++i) {
+        if (output_dim_i(i, modified_ends) == 0) {
+            any_empty = true;
+            break;
         }
     }
 
@@ -317,7 +376,9 @@ ttnn::Tensor slice(
         detail::needs_rm_composite_input(input_tensor, output_memory_config, no_step, width_begin_nonzero);
     const bool rm_out_bad = detail::needs_rm_composite_output(input_tensor, output_memory_config);
     const bool out_no_spec = detail::needs_sharded_output_reshard(input_tensor, output_memory_config);
-    if (rm_in_bad || rm_out_bad || out_no_spec) {
+    const bool tile_sharded_bad =
+        detail::needs_tile_sharded_composite_fallback(input_tensor, output_memory_config, rm_only);
+    if (rm_in_bad || rm_out_bad || out_no_spec || (tile_sharded_bad && !any_empty)) {
         // Snapshot orientation before the L1-interleaved staging hop strips it.
         std::optional<tt::tt_metal::ShardOrientation> input_orientation_hint;
         if (input_tensor.shard_spec().has_value()) {
@@ -325,11 +386,27 @@ ttnn::Tensor slice(
         }
         const auto interleaved_l1 =
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
-        Tensor x = rm_in_bad ? ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt) : input_tensor;
+        // Only unshard when the input is actually sharded; a DRAM-interleaved input doesn't need an
+        // L1 copy before the recursive slice.
+        const bool stage_input = rm_in_bad || (tile_sharded_bad && input_tensor.is_sharded());
+        Tensor x = stage_input ? ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt) : input_tensor;
+        // Tile-align only the inherited rescaled spec (same gate as the rescale block); an explicit
+        // non-tile spec is caller intent and fatals downstream as today.
+        const bool rescaled_inherited_spec = !memory_config_arg.has_value() && !optional_output_tensor.has_value();
+        if (tile_sharded_bad && rescaled_inherited_spec && output_memory_config.shard_spec().has_value()) {
+            const auto& spec = output_memory_config.shard_spec().value();
+            const uint32_t h = std::max(tt::round_up(spec.shape[0], tile_shape[0]), tile_shape[0]);
+            const uint32_t w = std::max(tt::round_up(spec.shape[1], tile_shape[1]), tile_shape[1]);
+            if (h != spec.shape[0] || w != spec.shape[1]) {
+                output_memory_config = MemoryConfig(
+                    output_memory_config.memory_layout(),
+                    output_memory_config.buffer_type(),
+                    tt::tt_metal::ShardSpec(spec.grid, {h, w}, spec.orientation));
+            }
+        }
         // Intermediate lives in L1 interleaved; to_memory_config lands the result in the caller's
         // buffer. sub_core_grids is threaded through to bound the recursive slice's work split.
         auto sliced = ttnn::slice<T>(x, begins, ends, step, interleaved_l1, std::nullopt, pad_value, sub_core_grids);
-        // slice preserves layout and to_memory_config doesn't change it — no trailing to_layout needed.
         // sliced is L1-interleaved so resolve_mc falls through to generate_transpose_shard_spec.
         const auto final_mc = resolve_mc(sliced, input_orientation_hint);
         if (sliced.memory_config() == final_mc) {
@@ -341,9 +418,6 @@ ttnn::Tensor slice(
 
     Tensor input = input_tensor;
     if (rm_only) {
-        if (!no_step) {
-            TT_FATAL(input.dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
-        }
         input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config);
     }
 
@@ -510,6 +584,9 @@ ttnn::Tensor slice(
         std::optional<Tensor> start_opt = output_tensor_start;
         std::optional<Tensor> end_opt = output_tensor_end;
 
+        // No caller-supplied memory_config / output tensor: the config is inherited from the input, so
+        // the device op may rescale an ND shard shape to the sliced output (Issue #46954).
+        const bool output_mem_config_inherited = !memory_config_arg.has_value() && !optional_output_tensor.has_value();
         auto res = ttnn::prim::slice(
             input_tensor,
             dummy_start,
@@ -522,7 +599,8 @@ ttnn::Tensor slice(
             slice_dim,
             num_devices,
             sub_core_grids,
-            optional_output_tensor);
+            optional_output_tensor,
+            output_mem_config_inherited);
         return res;
     }  // convert the Tensor to Vector
     std::vector<T> output_tensor_start_vector = output_tensor_start.to_vector<T>();

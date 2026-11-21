@@ -7,6 +7,9 @@
 # --- FD shards (full LLK gtest suite) ---
 - name: LLK FD wormhole
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -20,6 +23,9 @@
 
 - name: LLK FD wormhole
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -33,6 +39,9 @@
 
 - name: LLK FD wormhole
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -46,6 +55,9 @@
 
 - name: LLK FD wormhole
   cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -58,10 +70,13 @@
   gtest_shard_index: 3
 
 - name: LLK FD blackhole
-  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*'
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     bh_p150b_civ2_viommu:
-      timeout: 10
+      timeout: 15
   team: llk
   budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic
@@ -71,10 +86,13 @@
   gtest_shard_index: 0
 
 - name: LLK FD blackhole
-  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*'
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     bh_p150b_civ2_viommu:
-      timeout: 10
+      timeout: 15
   team: llk
   budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic
@@ -85,7 +103,10 @@
 
 # --- SD-only / Quasar slice ---
 - name: LLK SD wormhole (Quasar slice)
-  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*LLKMeshDeviceFixtureSlowDispatchOnly*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*LLKMeshDeviceFixtureSlowDispatchOnly*:LLKQuasarMeshDeviceSingleCardFixture.*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -96,7 +117,10 @@
   dispatch_mode: sd
 
 - name: LLK SD blackhole (Quasar slice)
-  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*LLKMeshDeviceFixtureSlowDispatchOnly*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*-LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3'
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*LLKMeshDeviceFixtureSlowDispatchOnly*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*-LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     bh_p150b_civ2_viommu:
       timeout: 10

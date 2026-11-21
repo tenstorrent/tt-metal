@@ -6,8 +6,8 @@
 //
 // Copy of eltwise_binary_row_bcast_dfb.cpp (the FPU ROW kernel) with the binary-op section swapped to the
 // SFPU path -- the SAME delta eltwise_binary_sfpu_no_bcast_dfb.cpp applies vs eltwise_binary_no_bcast_dfb.cpp
-// (unary_op_init_common + BINARY_SFPU_INIT + the copy-both-operands-to-DST / BINARY_SFPU_OP body, with the
-// ARCH_QUASAR copy_tile_to_dst_init_short handling). The broadcast pass (unary_bcast<ROW> through the
+// (compute_kernel_hw_startup + copy_init + BINARY_SFPU_INIT + the copy-both-operands-to-DST / BINARY_SFPU_OP body, with
+// reconfig_data_format_srca + copy_init before each operand copy). The broadcast pass (unary_bcast<ROW> through the
 // intermediate llk_post DFB) and its two pack_reconfig_data_format / pack_init (ARCH_QUASAR gasket) calls are
 // IDENTICAL to the FPU kernel -- unary_bcast is FPU-side regardless of the binary op that consumes its output.
 //
@@ -29,6 +29,7 @@
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/binary_comp.h"
+#include "api/compute/atan2.h"
 // SFPU op headers NOT yet ported to Quasar: they unconditionally pull in WH/BH-only ckernel impls or
 // symbols (InstrModLoadStore, DataFormat::UInt32, ckernel_sfpu_div_int32_floor.h, ...) absent from the
 // Quasar ckernel tree, so they only compile off-Quasar. The float SFPU binary ops this kernel runs on
@@ -45,7 +46,6 @@
 #include "api/compute/gcd.h"
 #include "api/compute/lcm.h"
 #include "api/compute/xlogy.h"
-#include "api/compute/atan2.h"
 #include "api/compute/isclose.h"
 #endif
 #include "api/compute/bcast.h"
@@ -99,6 +99,13 @@ void kernel_main() {
     DataflowBuffer dfb_post_lhs(dfb_post_lhs_id);
     DataflowBuffer dfb_post_rhs(dfb_post_rhs_id);
     DataflowBuffer dfb_out(dfb_out_id);
+    // An activation chain reads its operand from the pre ring. Each object drains once, at kernel exit.
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);
+#endif
 
     compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
     copy_init(dfb_post_lhs_id);
@@ -144,10 +151,10 @@ void kernel_main() {
 #endif
 
         // --- Binary op (SFPU path; mirrors eltwise_binary_sfpu_no_bcast_dfb.cpp's body, single tile). ---
-        PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, num_tiles_per_cycle);
+        PREPROCESS(LHS, dfb_pre_lhs, dfb_post_lhs, dfb_out_id, num_tiles_per_cycle);
         dfb_post_lhs.wait_front(num_tiles_per_cycle);
 
-        PREPROCESS(RHS, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id, num_tiles_per_cycle);
+        PREPROCESS(RHS, dfb_pre_rhs, dfb_post_rhs, dfb_out_id, num_tiles_per_cycle);
         dfb_post_rhs.wait_front(num_tiles_per_cycle);
 
         dfb_out.reserve_back(num_tiles_per_cycle);

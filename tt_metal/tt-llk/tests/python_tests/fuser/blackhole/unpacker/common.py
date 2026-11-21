@@ -7,6 +7,8 @@ from fuser.wormhole.unpacker.common import (  # noqa: F401
     dvalid_init,
     hw_configure_unpack,
     is_datacopy_node,
-    is_unary_unpacker,
     sync_with_packer,
+    unpack_to_dest_section_done,
+    unpack_to_dest_sync_init,
+    unpack_to_dest_wait_for_dest_available,
 )

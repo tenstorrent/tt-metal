@@ -20,17 +20,17 @@
 
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "device.hpp"
-#include "dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "kernel_config/fd_kernel.hpp"
+#include "kernel_config/tensor_prefetcher.hpp"
 #include "program/program_impl.hpp"
 #include "program.hpp"
-#include <tt_stl/span.hpp>
 #include <experimental/fabric/fabric.hpp>
 #include "system_memory_manager.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "dispatch_mem_map.hpp"
 #include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -151,6 +151,27 @@ static const std::vector<DispatchKernelNode> quasar_single_chip_1cq = {
     {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, k_quasar_noc},
     {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_quasar_noc},
 };
+
+// The CQ kernels above plus the Tensor prefetcher kernels, which share the dispatch engine and its L1: one
+// node per tensor_prefetcher_kernels() entry, chained in that order. They come last so the CQ kernels keep the
+// same data-movement cores.
+static const std::vector<DispatchKernelNode> quasar_single_chip_1cq_tensor_prefetcher = [] {
+    std::vector<DispatchKernelNode> nodes = quasar_single_chip_1cq;
+    const int first = static_cast<int>(nodes.size());
+    const int last = first + static_cast<int>(tensor_prefetcher_kernels().size()) - 1;
+    for (int id = first; id <= last; ++id) {
+        nodes.push_back(
+            {id,
+             0,
+             0,
+             0,
+             TENSOR_PREFETCHER,
+             {id > first ? id - 1 : x, x, x, x},
+             {id < last ? id + 1 : x, x, x, x},
+             k_quasar_noc});
+    }
+    return nodes;
+}();
 
 static const std::vector<DispatchKernelNode> quasar_single_chip_2cq = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_quasar_noc},
@@ -421,14 +442,12 @@ DispatchTopology::DispatchTopology(
     DeviceManager* device_manager,
     const GetControlPlaneFn& get_control_plane,
     const GetDispatchQueryManagerFn& get_dispatch_query_manager,
-    const GetMaxNumEthCoresFn& get_max_num_eth_cores,
     const GetReadsDispatchCoresFn& get_reads_dispatch_cores) :
     descriptor_(descriptor),
     dispatch_core_manager_(dispatch_core_manager),
     device_manager_(device_manager),
     get_control_plane_(get_control_plane),
     get_dispatch_query_manager_(get_dispatch_query_manager),
-    get_max_num_eth_cores_(get_max_num_eth_cores),
     get_reads_dispatch_cores_(get_reads_dispatch_cores) {
     command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
 }
@@ -464,7 +483,16 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
     auto populate_single_device = [&]() {
         const bool is_quasar = this->descriptor_.cluster().arch() == tt::ARCH::QUASAR;
         if (num_hw_cqs == 1) {
-            return is_quasar ? quasar_single_chip_1cq : single_chip_arch_1cq;
+            if (!is_quasar) {
+                return single_chip_arch_1cq;
+            }
+            return dispatch_engine_hosts_tensor_prefetcher(
+                       this->descriptor_.cluster(),
+                       dispatch_core_manager_.get_dispatch_core_type(),
+                       num_hw_cqs,
+                       descriptor_.metal_context().dispatch_mem_map())
+                       ? quasar_single_chip_1cq_tensor_prefetcher
+                       : quasar_single_chip_1cq;
         }
         if (is_quasar) {
             return quasar_single_chip_2cq;
@@ -633,7 +661,6 @@ void DispatchTopology::populate_fd_kernels(const std::vector<DispatchKernelNode>
             node.tunnel_index,
             get_control_plane_,
             get_dispatch_query_manager_,
-            get_max_num_eth_cores_,
             get_reads_dispatch_cores_));
         if (descriptor_.cluster().get_associated_mmio_device(node.device_id) == node.device_id) {
             mmio_device_ids.insert(node.device_id);
@@ -701,7 +728,7 @@ void DispatchTopology::populate_cq_static_args(Device* device) {
         !node_id_to_kernel_.empty(),
         "Tried to populate static args on nodes without the nodes populated (need to run populate_fd_kernels()");
     // First pass, add device/program to all kernels for this device and generate static configs.
-    auto cq_program_ptr = std::make_unique<Program>();
+    auto cq_program_ptr = std::make_unique<Program>(std::make_shared<detail::ProgramImpl>(device->get_context_id()));
     for (auto* node_and_kernel : node_id_to_kernel_) {
         // GetDeviceId() uses Id from topology as IDevice* is not present yet
         if (node_and_kernel->GetDeviceId() == device->id()) {
@@ -739,9 +766,20 @@ void DispatchTopology::create_cq_program(Device* device) {
             continue;
         }
 
+        const auto termination = node_and_kernel->GetTerminationInfo();
         switch (node_and_kernel->GetKernelType()) {
-            case FDKernelType::DISPATCH: dispatch_cores_[device->id()].insert(node_and_kernel->GetVirtualCore()); break;
-            case FDKernelType::ROUTING: routing_cores_[device->id()].insert(node_and_kernel->GetVirtualCore()); break;
+            case FDKernelType::DISPATCH:
+                dispatch_cores_[device->id()].insert(node_and_kernel->GetVirtualCore());
+                if (termination.has_value()) {
+                    dispatch_termination_info_[device->id()].insert(*termination);
+                }
+                break;
+            case FDKernelType::ROUTING:
+                routing_cores_[device->id()].insert(node_and_kernel->GetVirtualCore());
+                if (termination.has_value()) {
+                    routing_termination_info_[device->id()].insert(*termination);
+                }
+                break;
             case FDKernelType::VIRTUAL:
                 // Not a real kernel
                 break;
@@ -752,18 +790,6 @@ void DispatchTopology::create_cq_program(Device* device) {
                     typeid(*node_and_kernel).name(),
                     device->id());
                 break;
-        }
-    }
-
-    // Register termination info
-    for (auto* node_and_kernel : node_id_to_kernel_) {
-        if (node_and_kernel->GetDeviceId() != device->id()) {
-            continue;
-        }
-
-        const auto& info = node_and_kernel->GetTerminationInfo();
-        if (info.has_value()) {
-            termination_info_[device->id()].insert(info.value());
         }
     }
 }
@@ -862,11 +888,16 @@ const std::unordered_set<CoreCoord>& DispatchTopology::get_virtual_dispatch_rout
     return routing_cores_.at(dev_id);
 }
 
-const std::unordered_set<TerminationInfo>& DispatchTopology::get_registered_termination_cores(ChipId dev_id) const {
-    if (!termination_info_.contains(dev_id)) {
-        return this->empty_termination_info_container_;
-    }
-    return termination_info_.at(dev_id);
+const std::unordered_set<TerminationInfo>& DispatchTopology::get_registered_termination_cores(
+    ChipId dev_id, FDKernelType kernel_type) const {
+    TT_FATAL(
+        kernel_type == FDKernelType::DISPATCH || kernel_type == FDKernelType::ROUTING,
+        "Only dispatch and routing kernels register termination signals, not {}",
+        enchantum::to_string(kernel_type));
+    const auto& termination_info =
+        kernel_type == FDKernelType::DISPATCH ? dispatch_termination_info_ : routing_termination_info_;
+    const auto it = termination_info.find(dev_id);
+    return it == termination_info.end() ? this->empty_termination_info_container_ : it->second;
 }
 
 void DispatchTopology::reset() {
@@ -877,7 +908,8 @@ void DispatchTopology::reset() {
     command_queue_compile_group_->clear();
     dispatch_cores_.clear();
     routing_cores_.clear();
-    termination_info_.clear();
+    dispatch_termination_info_.clear();
+    routing_termination_info_.clear();
 }
 
 }  // namespace tt::tt_metal

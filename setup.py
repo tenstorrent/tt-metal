@@ -173,11 +173,14 @@ class EditableWheel(editable_wheel):
         # Build the editable wheel first.
         super().run()
 
-        # Create a .pth file with paths to the repo root, ttnn and tools directories.
+        # Create a .pth file with paths to the repo root, ttnn, tools and tt-llk/tools/python directories.
         # This file gets loaded automatically by the python interpreter and its content gets populated into `sys.path`;
         # i.e. as if these paths were added to the PYTHONPATH.
         pth_filename = "ttnn-custom.pth"
-        pth_content = f"{Path(__file__).parent}\n{Path(__file__).parent / 'ttnn'}\n{Path(__file__).parent / 'tools'}\n"
+        pth_content = (
+            f"{Path(__file__).parent}\n{Path(__file__).parent / 'ttnn'}\n{Path(__file__).parent / 'tools'}\n"
+            f"{Path(__file__).parent / 'tt_metal' / 'tt-llk' / 'tools' / 'python'}\n"
+        )
 
         print(f"EditableWheel.run: adding {pth_filename} to the wheel")
 
@@ -249,6 +252,8 @@ class CMakeBuild(build_ext):
                     "-DWITH_PYTHON_BINDINGS=ON",
                     "-DTT_USE_SYSTEM_SFPI=ON",
                     "-DENABLE_CCACHE=TRUE",
+                    # The wheel leaves out the matmul config model blob (ttnn/ttnn/matmul_model/__init__.py)
+                    "-DTT_MATMUL_MODEL_FETCH=OFF",
                 ]
 
                 # Add Tracy flags if enabled
@@ -333,9 +338,9 @@ class CMakeBuild(build_ext):
         ]
         ttnn_cpp_patterns = [
             "ttnn/kernel/**/*",
-            "ttnn/operations/**/kernels/**/*",
-            "ttnn/operations/**/kernels_ng/**/*",
-            "ttnn/operations/**/kernels_dfb/**/*",
+            # Every per-op kernel directory (kernels/, kernels_ng/, kernels_dfb/, kernels_qsr/, ...), as the Quasar
+            # ops' CMake kernels FILE_SET globs them: in a wheel, kernel includes resolve against this copy.
+            "ttnn/operations/**/kernels*/**/*",
             "ttnn/operations/**/shared_with_host/**/*",
             "ttnn/operations/**/hostdevcommon/**/*",
             "ttnn/operations/kernel_helper_functions/*",
@@ -348,15 +353,12 @@ class CMakeBuild(build_ext):
             # the same header tree in an installed wheel as it does in a source checkout.
             "ttnn/kernel_lib/**/*.{hpp,inl}",
             "ttnn/operations/normalization/kernel_util/**/*",
+            # The matmul config model pin (ttnn/ttnn/matmul_model/__init__.py)
+            "ttnn/operations/matmul/device/config/model/matmul_model.json",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",
-            "api/tt-metalium/buffer_types.hpp",
-            "api/tt-metalium/circular_buffer_constants.h",
-            "api/tt-metalium/constants.hpp",
-            "api/tt-metalium/dev_msgs.h",
             "api/tt-metalium/experimental/fabric/fabric_edm_types.hpp",
-            "fabric/fabric_edm_packet_header.hpp",
             "api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp",
             "core_descriptors/*.yaml",
             "fabric/hw/**/*",
@@ -370,10 +372,10 @@ class CMakeBuild(build_ext):
             "fabric/impl/kernels/tt_fabric_mux_v2_kernel_common.hpp",
             "hw/**/*",
             "hostdevcommon/api/hostdevcommon/**/*",
-            # The DRISC tensor-prefetcher kernel and the two host/device shared headers it
-            # includes: a wheel run resolves kernel includes against the wheel, not TT_METAL_HOME.
+            # The Tensor prefetcher kernels and the host/device shared headers they include:
+            # a wheel run resolves kernel includes against the wheel, not TT_METAL_HOME.
             "impl/buffers/kernels/**/*",
-            "impl/buffers/dram_sender_state_block.hpp",
+            "impl/buffers/tensor_prefetcher_fifo.hpp",
             "impl/buffers/tensor_prefetcher_request.hpp",
             "impl/dispatch/kernels/**/*",
             "impl/streaming_profiler/kernels/**/*",
@@ -392,6 +394,10 @@ class CMakeBuild(build_ext):
         )
         copy_tree_with_patterns(source_dir / "ttnn", self.build_lib + "/ttnn", ttnn_patterns)
         copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/ttnn/cpp", ttnn_cpp_patterns)
+        matmul_model_pin = (
+            Path(self.build_lib) / "ttnn/ttnn/cpp/ttnn/operations/matmul/device/config/model/matmul_model.json"
+        )
+        assert matmul_model_pin.is_file(), f"{matmul_model_pin} is missing: ttnn can't download the matmul config model"
         copy_tree_with_patterns(source_dir / "tt_metal", self.build_lib + "/ttnn/tt_metal", tt_metal_patterns)
 
         # Move built final built _ttnn SO into appropriate location in ttnn Python tree in wheel
@@ -418,6 +424,8 @@ class CMakeBuild(build_ext):
 
 packages = find_packages(where="ttnn", exclude=["ttnn.examples", "ttnn.examples.*"])
 packages += find_packages("tools")
+# Shared perf counter package owned by tt-llk (header parsers + metric engine), imported by tracy.
+packages += ["tt_llk_perf"]
 
 # Empty sources in order to force extension executions
 ttnn_lib_C = Extension("ttnn._ttnn", sources=[])
@@ -439,6 +447,7 @@ setup(
         "": "ttnn",
         "tracy": "tools/tracy",
         "triage": "tools/triage",
+        "tt_llk_perf": "tt_metal/tt-llk/tools/python/tt_llk_perf",
     },
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=CMakeBuild, editable_wheel=EditableWheel),

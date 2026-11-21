@@ -110,7 +110,7 @@ inline std::shared_ptr<TwiddlePlan> get_or_create(
     auto [r, i] = build_twiddle_table(N1, N2);
 
     using namespace tt::tt_metal;
-    const ttnn::Shape shape{ttnn::SmallVector<uint32_t>{N2, kTileElems_at}};
+    const ttnn::Shape shape{ttsl::SmallVector<uint32_t>{N2, kTileElems_at}};
     const TensorSpec spec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
     plan->tw_r = Tensor::from_vector(std::move(r), spec, md.get());
     plan->tw_i = Tensor::from_vector(std::move(i), spec, md.get());

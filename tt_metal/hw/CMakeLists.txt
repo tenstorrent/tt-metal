@@ -77,7 +77,7 @@ elseif(NOT "${SFPI_hash}" STREQUAL "")
     FetchContent_MakeAvailable(sfpi)
 else()
     message(STATUS "No downloadable SFPI tarball for ${SFPI_arch} ${SFPI_dist}")
-    if(IS_READABLE "${SFPI_BASE}/${SFPI_filename}")
+    if(EXISTS "${SFPI_BASE}/${SFPI_filename}")
         message(STATUS "Locally-built ${SFPI_filename} present")
     else()
         file(REMOVE_RECURSE "${SFPI_BASE}/sfpi")
@@ -511,15 +511,32 @@ set_target_properties(
 # We may need to revisit later.
 file(GLOB_RECURSE blackhole_kernels ckernels/blackhole/*.h)
 file(GLOB_RECURSE wormhole_kernels ckernels/wormhole_b0/*.h)
+# Kernels split into .inc fragments are globbed like the .h above, so a new kernel needs no sources.cmake line.
+file(GLOB_RECURSE blackhole_kernel_fragments ckernels/blackhole/*.inc)
+file(GLOB_RECURSE wormhole_kernel_fragments ckernels/wormhole_b0/*.inc)
 
 include(sources.cmake)
+# A compute API header is installed without its own sources.cmake line; the listed ones stay listed.
+file(
+    GLOB compute_api_headers
+    RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
+    inc/api/compute/*.h
+    inc/api/compute/eltwise_unary/*.h
+)
+list(APPEND HW_JIT_API_HEADERS ${compute_api_headers})
+list(REMOVE_DUPLICATES HW_JIT_API_HEADERS)
 
 target_sources(
     hw
     PUBLIC
         FILE_SET jit_api
         TYPE HEADERS
-        FILES ${blackhole_kernels} ${wormhole_kernels} ${HW_JIT_API_HEADERS}
+        FILES
+            ${blackhole_kernels}
+            ${wormhole_kernels}
+            ${blackhole_kernel_fragments}
+            ${wormhole_kernel_fragments}
+            ${HW_JIT_API_HEADERS}
         FILE_SET toolchain
         TYPE HEADERS
         BASE_DIRS ${PROJECT_SOURCE_DIR}

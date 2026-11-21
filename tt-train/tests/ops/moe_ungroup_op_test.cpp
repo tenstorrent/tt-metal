@@ -15,6 +15,7 @@
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "moe_test_utils.hpp"
+#include "test_utils/program_cache.hpp"
 
 namespace {
 
@@ -39,7 +40,13 @@ protected:
 // Build host inputs with dispatched + scores already bf16-roundtripped on the
 // test device, so reference comparisons match what the device actually sees.
 ttml::test_utils::moe::MoeHostInputs make_inputs(
-    uint32_t D, uint32_t B, uint32_t S, uint32_t H, uint32_t E, uint32_t K) {
+    uint32_t D,
+    uint32_t B,
+    uint32_t S,
+    uint32_t H,
+    uint32_t E,
+    uint32_t K,
+    uint32_t seed = 42U) {  // MoeHostInputConfig's default seed
     return ttml::test_utils::moe::make_moe_host_inputs({
         .D = D,
         .B = B,
@@ -48,6 +55,7 @@ ttml::test_utils::moe::MoeHostInputs make_inputs(
         .E = E,
         .K = K,
         .roundtrip_device = &ttml::autograd::ctx().get_device(),
+        .seed = seed,
     });
 }
 
@@ -233,4 +241,75 @@ TEST_F(MoeUngroupTest, GroupUngroupRoundTripLargerELocal) {
 // moe_profile_sweep_test.cpp.
 TEST_F(MoeUngroupTest, NIGHTLY_RealShapeLargeE) {
     check_group_ungroup_roundtrip(/*D=*/8, /*B=*/1, /*S=*/1024, /*H=*/2048, /*E=*/96, /*K=*/8);
+}
+
+// ============================================================================
+// Program-cache hits
+// ============================================================================
+// Launches with the same attributes (e_local, D, B, S, H, T_cap) on tensors of the same specs share one program; only
+// the buffer addresses change, on every core of the grid. Each test clears the cache so that its first launch builds
+// the program, then launches again on new inputs while every tensor of the first launch stays alive: the hit must read
+// the new inputs, write the new output and leave the first output as it was. The inputs come from moe_group, as in
+// production, and the two launches differ in all of them: launch A draws K = 2 of E = 4 experts per token (about half
+// the tokens reach each local expert), launch B has E = 2 and the local ids swapped (every token reaches both, so every
+// output row sums two experts), and the hidden rows and scores are drawn from different seeds. So plan, offsets,
+// grouped_scores and expert_out all differ.
+// ============================================================================
+
+namespace {
+
+using ttml::test_utils::expect_new_buffer;
+
+constexpr uint32_t kCacheTestK = 2U;
+
+// The cores zero the D * B * S output rows in contiguous slices and deal each expert's tile-rows out the same way.
+// With D = 2 and S = 32 * cores, every core zeroes 64 rows. moe_group scans the tokens in slices of 64 per core, and
+// launch B routes every token to both local experts, so each expert gets exactly 2 * cores tile-rows, two per core:
+// in launch B every core uses every address the program holds, on any grid. Launch A's routing gives each expert about
+// 1.1 * cores tile-rows.
+uint32_t many_cores_s() {
+    return 32U * ttml::test_utils::num_worker_cores();
+}
+
+// Launch A builds the program. Launch B, on new inputs of the same shapes while every tensor of launch A stays alive,
+// must reuse it.
+void expect_cache_hit_with_fresh_tensors(uint32_t D, uint32_t B, uint32_t S, uint32_t H) {
+    auto& device = ttml::test_utils::device_with_empty_program_cache();
+    constexpr uint32_t e_local = 2U;
+
+    const auto a =
+        build_group_inputs(make_inputs(D, B, S, H, /*E=*/4U, kCacheTestK, /*seed=*/1001U), {0, 1}, kCacheTestK);
+    const auto entries_before_miss = device.num_program_cache_entries();
+    const auto a_out = ttml::metal::moe_ungroup(a.expert_out, a.plan, a.offsets, a.grouped_scores, e_local, D, B, S);
+    ASSERT_GT(device.num_program_cache_entries(), entries_before_miss) << "launch A must build a program";
+    const auto a_out_values = ttml::core::to_xtensor(a_out);
+    const auto a_expected = moe_ungroup_reference(a.expert_out_host, a.plan_host, a.grouped_scores_host, D, B, S);
+    EXPECT_TRUE(xt::allclose(a_out_values, a_expected, kRtol, kAtol)) << "launch A";
+
+    const auto b =
+        build_group_inputs(make_inputs(D, B, S, H, /*E=*/2U, kCacheTestK, /*seed=*/2002U), {1, 0}, kCacheTestK);
+    const auto b_expected = moe_ungroup_reference(b.expert_out_host, b.plan_host, b.grouped_scores_host, D, B, S);
+    ASSERT_FALSE(xt::allclose(b_expected, a_expected, kRtol, kAtol)) << "the launches must be told apart";
+    const auto entries_before_hit = device.num_program_cache_entries();
+    const auto b_out = ttml::metal::moe_ungroup(b.expert_out, b.plan, b.offsets, b.grouped_scores, e_local, D, B, S);
+    EXPECT_EQ(device.num_program_cache_entries(), entries_before_hit) << "launch B must reuse launch A's program";
+    expect_new_buffer(a.expert_out, b.expert_out, "expert_out");
+    expect_new_buffer(a.plan, b.plan, "plan");
+    expect_new_buffer(a.offsets, b.offsets, "offsets");
+    expect_new_buffer(a.grouped_scores, b.grouped_scores, "grouped_scores");
+    expect_new_buffer(a_out, b_out, "ungrouped");
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(b_out), b_expected, kRtol, kAtol)) << "launch B";
+
+    ttml::test_utils::expect_unchanged(a_out, a_out_values, "launch A's output");
+}
+
+}  // namespace
+
+TEST_F(MoeUngroupTest, CacheHitFreshTensorsManyCores) {
+    expect_cache_hit_with_fresh_tensors(/*D=*/2, /*B=*/1, many_cores_s(), /*H=*/64);
+}
+
+TEST_F(MoeUngroupTest, CacheHitFreshTensorsFewTokens) {
+    // Basic's shapes: each expert has a few tile-rows, so most cores only join the barriers.
+    expect_cache_hit_with_fresh_tensors(/*D=*/2, /*B=*/1, /*S=*/32, /*H=*/64);
 }

@@ -11,29 +11,49 @@ rather than after.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device, transpose_linear_weight
-from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import router_program_config
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
+
+# The most tokens whose scores go to L1: the ops after the router, routing_metadata first, read them faster
+# there, and above it the scores take 221 KB of every bank at 94k tokens.
+_L1_MAX_TOKENS = 4096
+
+
+def _scores_memory(tokens: int) -> ttnn.MemoryConfig:
+    return ttnn.L1_MEMORY_CONFIG if tokens <= _L1_MAX_TOKENS else ttnn.DRAM_MEMORY_CONFIG
+
+
+class Routing(NamedTuple):
+    """The router's scores, (1, 1, T, E) float32 probabilities, E the experts. routing_metadata selects
+    each token's top-k from them, the weights unrenormalized. Up to 4096 tokens they sit in L1."""
+
+    scores: ttnn.Tensor
+
+    def deallocate(self) -> None:
+        for tensor in self:
+            ttnn.deallocate(tensor)
 
 
 class TtNomicRouter(LightweightModule):
-    """Softmax over all experts in fp32, top-k, then scatter back to a dense per-expert row.
+    """Softmax over all experts in fp32, from which routing_metadata selects the top-k, and the tokens' rows
+    row-major for the routed dispatch, in one op (router_front_end).
 
     The top-k weights are deliberately NOT renormalized: moe_normalize_expert_weights is false
     in this checkpoint, so they sum to less than 1 and the MoE branch is attenuated relative to
     the residual. Dividing by the top-k sum, which Mixtral and Switch both do and which is the
     reflex to copy, still scores about 0.993 PCC.
 
-    fp32 is carried as far as ttnn.scatter allows. scatter rejects float32 in both layouts, so a
-    cast is unavoidable, but ttnn.topk accepts fp32 and its uint32 index feeds scatter unchanged;
-    only the destination and the two selected weights are cast, after the selection. Casting the
-    probabilities first instead reroutes 0.34% to 0.59% of tokens, because bfloat16 quantizes an
-    8-wide row coarsely enough to turn near-ties into exact ties.
+    The selection stays in fp32: routing_metadata selects from the float32 probabilities, as ttnn.topk
+    did before it, and copies the selected weights as they are. Casting the probabilities first
+    instead reroutes 0.34% to 0.59% of tokens, because bfloat16 quantizes an 8-wide row coarsely
+    enough to turn near-ties into exact ties.
 
-    The softmax needs both halves of the port's compute kernel config. HiFi4 alone measures
+    The softmax needs both halves of the router's compute kernel config. HiFi4 alone measures
     5.4e-3 to 6.8e-3 max-abs against a 5e-3 budget; with fp32 destination accumulation it is
     1.4e-3 to 1.9e-3.
     """
@@ -41,86 +61,36 @@ class TtNomicRouter(LightweightModule):
     def __init__(self, device, config, tt_config, state_dict, state_dict_prefix):
         super().__init__()
         self.tt_config = tt_config
-        self.top_k = config.moe_top_k
+        self.num_experts = config.num_experts
 
-        # The one bias-free projection in the model, and the only weight kept in fp32.
-        self.weight = to_device(
-            transpose_linear_weight(state_dict[f"{state_dict_prefix}layer.weight"]),
-            device,
-            dtype=tt_config.matmul_weight_dtype(OpGroup.ROUTER),
-        )
+        # The one bias-free projection in the model, and the only weight kept in fp32. E columns wide: the
+        # tile's padded columns are zero, and the softmax masks them out (forward).
+        weight = transpose_linear_weight(state_dict[f"{state_dict_prefix}layer.weight"])
+        self.weight = to_device(weight, device, dtype=tt_config.matmul_weight_dtype(OpGroup.ROUTER))
 
-    def logits(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """(1, 1, T, H) -> (1, 1, T, E) float32 expert scores.
+    def forward(
+        self, x: ttnn.Tensor, rows_memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
+    ) -> tuple[Routing, ttnn.Tensor]:
+        """Score every expert, in float32, and lay x's rows out row-major for the dispatch, in one pass over x.
 
-        The bfloat16 activation meets the fp32 weight inside the matmul. Casting it to fp32 first
-        measured the same error to 16 digits, at twice the read plus the cast.
+        router_front_end reads x in whatever layout it comes, the split norm's or interleaved. Its matmul takes
+        K in one block, accumulated in the fp32 DST, and its softmax runs ttnn.softmax's numerically stable
+        steps with the -inf padding mask for E columns of a tile, so the probabilities are, to the bit, those
+        of ttnn.linear with K in one block and ttnn.softmax; the rows are x untilized. At 8x512 it took the
+        place of a copy of x for the router, the router matmul, the softmax and the dispatch table's untilize.
+
+        Args:
+            x: (1, 1, T, H) flat token activations.
+            rows_memory_config: where the rows go (TtNomicExperts.dispatch_table_config).
+
+        Returns:
+            Routing: probabilities (1, 1, T, E) fp32; and the rows, (1, 1, T, H) bfloat16 row-major.
         """
-        compute_kernel_config = self.tt_config.compute_kernel_config(OpGroup.ROUTER)
-        return ttnn.linear(
+        scores, rows = ttnn.experimental.nomic_embed_text_v2_moe.router_front_end(
             x,
             self.weight,
-            dtype=self.tt_config.router_dtype,
-            program_config=router_program_config(
-                x.shape[-2],
-                x.shape[-1] // ttnn.TILE_SIZE,
-                x.dtype,
-                self.weight.dtype,
-                self.tt_config.router_dtype,
-                self.tt_config.core_grid,
-                self.tt_config.l1_cb_bytes,
-                compute_kernel_config,
-            ),
-            compute_kernel_config=compute_kernel_config,
+            scores_memory_config=_scores_memory(x.shape[-2]),
+            rows_memory_config=rows_memory_config,
+            compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.ROUTER),
         )
-
-    def select(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        """Score every expert and take the top-k, all in float32.
-
-        Split out of forward so the per-module test can assert on the selection itself: index
-        agreement against torch is the gate, and PCC on the dense output cannot express it.
-
-        Args:
-            x: (1, 1, T, H) flat token activations.
-
-        Returns:
-            tuple: probabilities (1, 1, T, E) fp32, values (1, 1, T, K) fp32 unrenormalized, and
-            indices (1, 1, T, K) uint32.
-        """
-        logits = self.logits(x)
-        probabilities = ttnn.softmax(
-            logits, dim=-1, compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.SOFTMAX)
-        )
-        ttnn.deallocate(logits)
-
-        values, indices = ttnn.topk(probabilities, k=self.top_k, dim=-1)
-        return probabilities, values, indices
-
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Produce the dense routing weights the expert gate multiply consumes.
-
-        Args:
-            x: (1, 1, T, H) flat token activations.
-
-        Returns:
-            ttnn.Tensor: (1, 1, T, E) in the activation dtype, carrying the routed weight at the
-            top-k positions and zero everywhere else.
-        """
-        probabilities, values, indices = self.select(x)
-
-        # ttnn.zeros rather than zeros_like(typecast(probabilities)): the destination only needs
-        # the shape, and the cast would convert a (1, 1, T, E) tensor to throw its values away.
-        dense = ttnn.scatter(
-            ttnn.zeros(
-                probabilities.shape,
-                dtype=self.tt_config.activation_dtype,
-                layout=self.tt_config.layout,
-                device=probabilities.device(),
-            ),
-            dim=-1,
-            index=indices,
-            src=ttnn.typecast(values, self.tt_config.activation_dtype),
-        )
-        for tensor in (probabilities, values, indices):
-            ttnn.deallocate(tensor)
-        return dense
+        return Routing(scores=scores), rows

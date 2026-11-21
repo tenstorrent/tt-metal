@@ -3,13 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import re
 
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    UnreadableDocstring,
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 
 def assert_quality(expected_tensor, actual_tensor):
@@ -107,6 +116,31 @@ def test_fill_pad_float(
     )
 
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
+
+    assert_quality(padded_torch_tensor, padded_torch_output_tensor)
+
+
+# Two ranges away from core (0, 0), like a sub-device partition. 8 cores give an uneven work split.
+SUB_CORE_GRIDS = ttnn.CoreRangeSet(
+    [
+        ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 3)),
+        ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 1)),
+    ]
+)
+
+
+@pytest.mark.parametrize("shape", [(17, 17), (97, 97), (1, 2, 3, 97, 97)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_fill_pad_sub_core_grids(device, shape, dtype):
+    torch.manual_seed(1234)
+    fill_value = 1.5
+    torch_input_tensor, padded_torch_tensor = create_nd_padded_tiled_tensor(
+        shape, 32, fill_value, ttnn_dtype_to_torch_dtype[dtype]
+    )
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, sub_core_grids=SUB_CORE_GRIDS)
     padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
     assert_quality(padded_torch_tensor, padded_torch_output_tensor)
@@ -525,3 +559,159 @@ def test_fill_pad_rank_gt3_sharded(device, fill_value, shape, shard_shape, dtype
     padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
     assert_quality(padded_torch_tensor, padded_torch_output_tensor)
+
+
+# Fill values each dtype holds exactly, including the smallest negative INT32 value the docstring allows.
+_DOCSTRING_FILL_VALUES = {
+    ttnn.bfloat16: (float("-inf"), 1.5),
+    ttnn.float32: (float("-inf"), 1.5),
+    ttnn.bfloat8_b: (1.5, -2.0),
+    ttnn.bfloat4_b: (1.5, -2.0),
+    ttnn.int32: (-(2**24), 2**31 - 1),
+    ttnn.uint32: (2**32 - 1, 7),
+    ttnn.uint16: (2**16 - 1, 7),
+}
+
+
+def _docstring_fill_values(dtype):
+    if dtype not in _DOCSTRING_FILL_VALUES:
+        pytest.fail(f"no fill values for {dtype}, which the ttnn.fill_implicit_tile_padding docstring lists")
+    return _DOCSTRING_FILL_VALUES[dtype]
+
+
+def _docstring_multiple_of_16_dtypes():
+    """Dtypes the ttnn.fill_implicit_tile_padding docstring says need a last dim that is a multiple of 16, or a fill
+    value of 0."""
+    match = re.search(
+        r"((?:``\w+``(?:,|\s+and|\s+or)?\s*)+)tensors\s+need\s+a\s+last\s+dimension\s+that\s+is\s+a\s+"
+        r"multiple\s+of\s+16",
+        ttnn.fill_implicit_tile_padding.__doc__,
+    )
+    return {getattr(ttnn.DataType, name) for name in re.findall(r"``(\w+)``", match.group(1))} if match else set()
+
+
+def _check_fill(input_tensor, fill_value, signed_zeros=True, **kwargs):
+    """Fills the tile padding of ``input_tensor`` and compares the padded output exactly: ``fill_value`` in the tile
+    padding and the input's values everywhere else."""
+    before = ttnn.from_device(input_tensor).to_torch_with_padded_shape().to(torch.float64)
+    height, width = input_tensor.shape[-2], input_tensor.shape[-1]
+
+    output = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, **kwargs)
+
+    assert output.shape == input_tensor.shape
+    assert output.dtype == input_tensor.dtype
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert output.memory_config().memory_layout == input_tensor.memory_config().memory_layout
+    assert output.memory_config().buffer_type == input_tensor.memory_config().buffer_type
+    expected = before.clone()
+    expected[..., height:, :] = fill_value
+    expected[..., :, width:] = fill_value
+    assert_exact(expected, ttnn.from_device(output).to_torch_with_padded_shape(), signed_zeros=signed_zeros)
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.fill_implicit_tile_padding))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.fill_implicit_tile_padding))
+def test_fill_implicit_tile_padding_docstring_supported_inputs(dtype, layout, buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.fill_implicit_tile_padding docstring lists on
+    inputs of rank 2, 3 and 4, also with ``memory_config`` and ``sub_core_grids``, and compares the padded output
+    exactly."""
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    fill_values = _docstring_fill_values(dtype)
+    # The rank-2 and rank-3 inputs are one tile wide, so every value, full_range_input's special values included,
+    # passes through the fill. The rank-4 input also has inner tiles, and tiles with only right or only bottom padding.
+    for shape in ((40, 16), (3, 40, 20), (1, 2, 70, 80)):
+        # preserve_nan_values keeps full_range_input's NaN in the input: a BFLOAT16 input built on device can lose it.
+        # A BFLOAT16 input leaves out NaN, as the docstring requires, and its zeros are compared by value.
+        input_tensor = ttnn.from_torch(
+            full_range_input(shape, dtype, nan=dtype != ttnn.bfloat16),
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            memory_config=memory_config,
+            preserve_nan_values=True,
+        )
+        signed_zeros = dtype != ttnn.bfloat16
+        if dtype in _docstring_multiple_of_16_dtypes() and shape[-1] % 16 != 0:
+            # A last dim that is not a multiple of 16 needs a fill value of 0, as the docstring says.
+            _check_fill(input_tensor, 0.0, signed_zeros=signed_zeros)
+            continue
+        for fill_value in fill_values:
+            _check_fill(input_tensor, fill_value, signed_zeros=signed_zeros)
+    _check_fill(
+        input_tensor,
+        fill_values[0],
+        signed_zeros=signed_zeros,
+        memory_config=memory_config,
+        sub_core_grids=SUB_CORE_GRIDS,
+    )
+
+
+def _docstring_sharded_line():
+    return next(
+        line.strip()
+        for line in ttnn.fill_implicit_tile_padding.__doc__.splitlines()
+        if line.strip().startswith("- Sharded:")
+    )
+
+
+def _docstring_shard_orientations(memory_layout):
+    """The shard orientations the docstring's Sharded item allows for ``memory_layout``: both, unless the item names
+    one for that layout ("<LAYOUT> in L1 with a <ORIENTATION> shard orientation")."""
+    name = str(memory_layout).split(".")[-1]
+    match = re.search(rf"\b{name} in \w+ with a (ROW_MAJOR|COL_MAJOR) shard orientation", _docstring_sharded_line())
+    if match:
+        return (getattr(ttnn.ShardOrientation, match.group(1)),)
+    return (ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR)
+
+
+def _docstring_sharded_params():
+    """One ``pytest.param(memory_layout, buffer_type)`` per shard layout on the docstring's Sharded Memory Support
+    item."""
+    try:
+        line = _docstring_sharded_line()
+        names = re.findall(r"\b((?:HEIGHT|WIDTH|BLOCK)_SHARDED)\b", line)
+        buffer_type = re.search(r"\bin (L1|DRAM)\b", line).group(1)
+        assert names, f"no shard layouts named on: {line!r}"
+        return [
+            pytest.param(
+                getattr(ttnn.TensorMemoryLayout, name),
+                getattr(ttnn.BufferType, buffer_type),
+                id=f"{name}-{buffer_type}",
+            )
+            for name in names
+        ]
+    except Exception as error:
+        reason = UnreadableDocstring(f"could not read the Sharded line from the docstring: {error}")
+        return [pytest.param(reason, reason, id="docstring-unreadable")]
+
+
+# A [1, 70, 80] input pads to 3x3 tiles. Each shard layout spreads it over a 2x2 core grid: height and width
+# sharding leave one core without a shard, and block sharding gives partial shards on the right and bottom.
+_DOCSTRING_SHARD_SHAPES = {
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: (32, 96),
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED: (96, 32),
+    ttnn.TensorMemoryLayout.BLOCK_SHARDED: (64, 64),
+}
+
+
+@pytest.mark.parametrize("memory_layout, buffer_type", _docstring_sharded_params())
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.fill_implicit_tile_padding))
+def test_fill_implicit_tile_padding_docstring_sharded_inputs(dtype, layout, memory_layout, buffer_type, device):
+    """Runs every dtype and layout the ttnn.fill_implicit_tile_padding docstring lists on each shard layout of its
+    Sharded item, in each shard orientation the item allows, and compares the padded output exactly."""
+    check_readable(dtype, layout, memory_layout, buffer_type)
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
+    for orientation in _docstring_shard_orientations(memory_layout):
+        shard_spec = ttnn.ShardSpec(grid, _DOCSTRING_SHARD_SHAPES[memory_layout], orientation)
+        memory_config = ttnn.MemoryConfig(memory_layout, buffer_type, shard_spec)
+        # The leading dim is 1, as the docstring requires for a sharded input.
+        input_tensor = ttnn.from_torch(
+            full_range_input((1, 70, 80), dtype, nan=dtype != ttnn.bfloat16),
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            memory_config=memory_config,
+            preserve_nan_values=True,
+        )
+        _check_fill(input_tensor, _docstring_fill_values(dtype)[0], signed_zeros=dtype != ttnn.bfloat16)

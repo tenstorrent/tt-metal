@@ -1,7 +1,7 @@
 # Qwen3-32B GRPO + FSDP on a 32-card Blackhole galaxy.
 #
 # Run:
-#   python3 boolq/boolq_training_example.py --model qwen3 \
+#   python3 boolq/boolq_training_example.py \
 #     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
 #
 # Lazy parameter init (default on Qwen3 FSDP) shards each param on load; eager full-replication would OOM.
@@ -26,6 +26,7 @@ training_config:
     kahan_summation: false
 
   grpo_config:
+    rollout_backend: "ttml_in_process_sync"
     epsilon: 0.2
     per_device_train_batch_size: 8
     num_iterations: 1
@@ -45,3 +46,6 @@ training_config:
 device_config:
   enable_fsdp: true
   mesh_shape: [32, 1]
+  # The q/k norms are too small to shard into whole tiles, which makes FSDP's CCLs slow.
+  # Replicating them is faster and costs only a few MiB per device. See docs/FSDP.md.
+  fsdp_replicate_params: ["q_norm.weight", "k_norm.weight"]

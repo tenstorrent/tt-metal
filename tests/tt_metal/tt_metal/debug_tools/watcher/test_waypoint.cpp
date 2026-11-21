@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -23,10 +24,12 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "impl/kernels/kernel.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher waypoints.
@@ -75,53 +78,53 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         }
     }
 
-    std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<experimental::KernelSpecName> kernel_names;
-    experimental::ProgramRunArgs params;
+    std::vector<KernelSpec> kernel_specs;
+    std::vector<KernelSpecName> kernel_names;
+    ProgramRunArgs params;
     auto add_dm_kernel =
         [&](const char* name, uint32_t num_threads, std::optional<tt::tt_metal::DataMovementProcessor> gen1_processor) {
             auto gen1_proc = gen1_processor.value_or(tt::tt_metal::DataMovementProcessor::RISCV_0);
             auto gen1_noc = (gen1_proc == tt::tt_metal::DataMovementProcessor::RISCV_1)
                                 ? tt::tt_metal::NOC::RISCV_1_default
                                 : tt::tt_metal::NOC::RISCV_0_default;
-            experimental::DataMovementHardwareConfig dm_cfg;
+            DataMovementHardwareConfig dm_cfg;
             if (is_quasar) {
-                dm_cfg = experimental::DataMovementHardwareConfig{};
+                dm_cfg = DataMovementHardwareConfig{};
             } else {
-                dm_cfg = experimental::DataMovementHardwareConfig{
+                dm_cfg = DataMovementHardwareConfig{
                     .config_1xx =
-                        experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
                             .processor = gen1_proc,
                             .noc = gen1_noc,
                         },
                 };
             }
-            kernel_specs.push_back(experimental::KernelSpec{
-                .unique_id = experimental::KernelSpecName{name},
+            kernel_specs.push_back(KernelSpec{
+                .unique_id = KernelSpecName{name},
                 .source = kernel_path_metal2,
                 .num_threads = num_threads,
                 .runtime_arg_schema = {.common_runtime_arg_names = {"sync_flag_addr"}},
                 .hw_config = dm_cfg,
             });
             kernel_names.emplace_back(name);
-            params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
-                .kernel = experimental::KernelSpecName{name},
+            params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+                .kernel = KernelSpecName{name},
                 .common_runtime_arg_values = {{"sync_flag_addr", tensix_sync_addr}},
             });
         };
 
-    const experimental::KernelSpecName compute_kernel_name{"wp_compute"};
-    experimental::ComputeHardwareConfig compute_config;
+    const KernelSpecName compute_kernel_name{"wp_compute"};
+    ComputeHardwareConfig compute_config;
     if (is_quasar) {
         constexpr uint32_t kQuasarUserDmCores = 6;
         add_dm_kernel("wp_dm", kQuasarUserDmCores, std::nullopt);
-        compute_config = experimental::ComputeHardwareConfig{};
+        compute_config = ComputeHardwareConfig{};
     } else {
         add_dm_kernel("wp_brisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_0);
         add_dm_kernel("wp_ncrisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_1);
-        compute_config = experimental::ComputeHardwareConfig{};
+        compute_config = ComputeHardwareConfig{};
     }
-    kernel_specs.push_back(experimental::KernelSpec{
+    kernel_specs.push_back(KernelSpec{
         .unique_id = compute_kernel_name,
         .source = kernel_path_metal2,
         .num_threads = is_quasar ? 4u : 1u,
@@ -129,22 +132,22 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         .hw_config = compute_config,
     });
     kernel_names.emplace_back(compute_kernel_name);
-    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
         .kernel = compute_kernel_name,
         .common_runtime_arg_values = {{"sync_flag_addr", tensix_sync_addr}},
     });
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = kernel_names,
-        .target_nodes = experimental::NodeRange{CoreRange(xy_start, xy_end)},
+        .target_nodes = NodeRange{CoreRange(xy_start, xy_end)},
     };
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "watcher_waypoints",
         .kernels = kernel_specs,
         .work_units = {wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-    experimental::SetProgramRunArgs(program, params);
+    Program program(*mesh_device, spec);
+    program.set_program_run_args(params);
     workload.add_program(device_range, std::move(program));
 
     // Dispatch non-blocking: kernels post waypoint then spin on sync flag
@@ -173,9 +176,12 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
 
     constexpr int timeout_ms = 30000;
     auto start = std::chrono::steady_clock::now();
-    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings)) {
+    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings, /*report_missing=*/false)) {
         auto elapsed =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= timeout_ms) {
+            FileContainsAllStrings(fixture->log_file_name, poll_strings);  // logs what's missing, and the file
+        }
         ASSERT_LT(elapsed, timeout_ms) << "Timed out waiting for watcher to log " << waypoint << " waypoints";
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
@@ -227,7 +233,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
 }
 
 void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     const auto& hal = MetalContext::instance().hal();
     if (hal.get_arch() == tt::ARCH::QUASAR) {
         GTEST_SKIP() << "Metal 2.0 does not yet support ETH KernelSpecs";
@@ -252,7 +258,7 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
     uint32_t clk_mhz = MetalContext::instance().get_cluster().get_device_aiclk(device->id());
     std::vector<uint32_t> active_eth_args = {clk_mhz * 3000000};  // 3 seconds
     std::vector<uint32_t> idle_eth_args = {idle_eth_sync_addr};
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     if (has_active_eth_cores) {
         std::set<CoreRange> ranges;
@@ -301,9 +307,12 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
 
     constexpr int timeout_ms = 30000;
     auto start = std::chrono::steady_clock::now();
-    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings)) {
+    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings, /*report_missing=*/false)) {
         auto elapsed =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= timeout_ms) {
+            FileContainsAllStrings(fixture->log_file_name, poll_strings);  // logs what's missing, and the file
+        }
         ASSERT_LT(elapsed, timeout_ms) << "Timed out waiting for watcher to log ETH waypoints";
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
@@ -354,6 +363,9 @@ TEST_F(MeshWatcherFixture, TestWatcherWaypoints) {
 }
 
 TEST_F(MeshWatcherFixture, TestWatcherWaypointsEth) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunEthTest, mesh_device);
     }

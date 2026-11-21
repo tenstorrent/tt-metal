@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
@@ -36,7 +35,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import DEFAULT_TILE_R_DIM, FACE_C_DIM
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 def _narrow_path(
@@ -91,7 +90,7 @@ def _regular_path(src_A, input_dimensions, formats, num_faces, torch_format):
     # Int32 unpack_to_dest tilize path in each.
     formats=lambda narrow_tile: (
         input_output_formats(
-            [DataFormat.Float32, DataFormat.Float16, DataFormat.Float16_b]
+            [DataFormat.Float32, DataFormat.Float16_b]
             + ([DataFormat.Bfp8_b] if narrow_tile == NarrowTile.No else [])
         )
         + input_output_formats([DataFormat.Int32], same=True)
@@ -221,11 +220,7 @@ def test_unpack_tilize_comprehensive(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"

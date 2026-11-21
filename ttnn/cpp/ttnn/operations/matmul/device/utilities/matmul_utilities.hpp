@@ -15,6 +15,10 @@
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
+namespace tt::tt_metal {
+struct KernelSpec;
+}  // namespace tt::tt_metal
+
 namespace ttnn::operations::matmul::utilities {
 
 // Define the buffering depth for input CBs (0 and 1) for mcast variants.
@@ -33,12 +37,13 @@ inline bool fused_matmul_bias_row_broadcastable(const std::optional<const Tensor
     return shape[-2] == 1;
 }
 
-// Sharded out CB is the shard buffer and is never drained, so B>1 would overflow it.
+// Sharded out CB is the shard buffer, which holds the output of one batch. With B>1 the compute kernel would wait
+// forever for space for the second batch.
 inline void validate_block_sharded_output_batch(
     bool output_is_sharded, uint32_t B, uint32_t per_core_M, uint32_t per_core_N) {
     TT_FATAL(
         !(output_is_sharded && B > 1),
-        "Block-sharded output is incompatible with batch > 1 (B={}). The output CB is backed by the shard buffer "
+        "Sharded output is incompatible with batch > 1 (B={}). The output CB is backed by the shard buffer "
         "which only holds per_core_M * per_core_N = {} tiles, but the kernel would produce B * per_core_M * per_core_N "
         "= {} tiles without draining. Use fuse_batch=True.",
         B,
@@ -84,6 +89,39 @@ ttnn::Shape compute_matmul_output_shape(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool transpose_a, bool transpose_b);
 
 ttnn::Shape compute_matmul_with_bias_output_shape(const ttnn::Shape& matmul_shape, const ttnn::Shape& bias_shape);
+
+// Batch dims of the matmul output, torch-style: aligned from the right, a size-1 dim takes the other's size.
+ttsl::SmallVector<uint32_t> get_output_batch_dims(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape);
+
+// Batch count of the matmul output: the product of get_output_batch_dims.
+uint32_t get_output_batch_size(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape);
+
+// Batch dims the matmul readers broadcast: the output batch dims (size-1 dims dropped, neighbours that broadcast alike
+// merged) and each input's stride per dim, counted in that input's batches and 0 where it broadcasts.
+struct BatchBroadcast {
+    std::vector<uint32_t> dims;
+    std::vector<uint32_t> in0_strides;
+    std::vector<uint32_t> in1_strides;
+};
+
+// nullopt unless A and B have the same rank, B is batched and their batch dims differ.
+std::optional<BatchBroadcast> get_batch_broadcast(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape);
+
+// Turns on a reader's batch broadcasting: the BATCH_BROADCAST define, batch_dims, and the tile strides of each input
+// it reads (in0/in1_batch_strides), given that input's tiles per batch.
+void add_batch_broadcast_args(
+    tt::tt_metal::KernelSpec& kernel,
+    const BatchBroadcast& broadcast,
+    std::optional<uint32_t> in0_tiles_per_batch,
+    std::optional<uint32_t> in1_tiles_per_batch);
+
+// Whether the config's readers broadcast size-1 batch dims: every config on non-sharded tensors except a fused batch,
+// gather_in0 and the DRAM-sharded configs.
+bool supports_batch_broadcast(
+    const MatmulProgramConfig& program_config,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const tt::tt_metal::MemoryConfig& output_mem_config);
 
 using Activation = std::variant<std::string, ttnn::operations::unary::UnaryWithParam>;
 std::optional<ttnn::operations::unary::UnaryWithParam> get_fused_activation(
@@ -272,7 +310,8 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
 
         case UnaryOpType::GELU_TANH:
             result.type = KernelActivation::GELU_TANH;
-            // No parameters
+            // param0: 0 = accurate (FP32 tanh), any non-zero value = fast (BF16-grade); normalized like the unary path.
+            result.param0 = has_first && params[0] != 0.0f ? 1u : 0u;
             break;
 
         case UnaryOpType::TANH:
@@ -378,6 +417,35 @@ struct DramBankReaderAssignment {
 
 void validate_num_workers_per_dram_bank(std::size_t workers_per_bank);
 
+// use_multicore_pipeline with num_workers_per_dram_bank >= 2 runs the multi-core pipeline
+// (create_program_dram_sharded_multicore_spec) when the call has no bias, no fused activation and no untilize_out, both
+// operands use 32x32 untransposed tiles, K is a whole number of tiles, A is in L1 and the output is L1 width-sharded
+// ROW_MAJOR; any other call, and every call without use_multicore_pipeline, keeps the single-reader program with its
+// multi-reader conditions.
+bool use_dram_sharded_multicore(
+    bool use_multicore_pipeline,
+    std::size_t workers_per_bank,
+    bool has_bias,
+    bool has_fused_activation,
+    bool untilize_out,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    uint32_t k_logical,
+    tt::tt_metal::BufferType a_buffer_type,
+    const tt::tt_metal::MemoryConfig& output_mem_config);
+
+// Cores for the multi-core pipeline (num_workers_per_dram_bank >= 2): cores_per_bank logical worker cores
+// per bank for the first num_banks banks, each the nearest free core (Manhattan distance in logical
+// coordinates, ties to the same row first) to that bank's NOC-optimal worker, taken round-robin over
+// the banks so every bank gets its nearest core first. coord: the chip the cores run on (its own per-bank
+// optimal workers: the chips of a mesh can be harvested differently).
+std::vector<std::vector<tt::tt_metal::CoreCoord>> get_dram_bank_adjacent_workers(
+    tt::tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::NOC noc,
+    uint32_t cores_per_bank,
+    uint32_t num_banks,
+    const tt::tt_metal::distributed::MeshCoordinate& coord);
+
 // This type of access pattern cannot be copied.
 // Treat it as a one off patch to restore functionality that
 // was adjusted to fix one P0 causing another P0.
@@ -399,13 +467,16 @@ void move_common_entries(
 void get_optimal_dram_bank_to_reader_assignment(
     const tt::tt_metal::distributed::MeshDevice& device,
     std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
-    CoreRangeSet& all_worker_cores,
+    tt::tt_metal::CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc);
 
+// coord: the mesh coordinate of the chip the readers run on (its own bank-to-worker placement: chips of one mesh can
+// be harvested differently).
 std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
-    const CoreRangeSet& secondary_reader_excluded_cores);
+    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores,
+    const tt::tt_metal::distributed::MeshCoordinate& coord);
 
 }  // namespace ttnn::prim::dram_sharded_helpers

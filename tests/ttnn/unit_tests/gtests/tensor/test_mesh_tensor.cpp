@@ -167,8 +167,10 @@ TEST_F(MeshTensorTest, Lifecycle) {
     const auto& view = mesh_device_->get_view();
     const auto buffer_address = input_tensor.mesh_buffer().address();
 
-    for (auto* device : view.get_devices()) {
-        auto coordinate = view.find_device(device->id());
+    for (const auto& coordinate : distributed::MeshCoordinateRange(view.shape())) {
+        if (!mesh_device_->is_local(coordinate)) {
+            continue;
+        }
         auto* buffer = input_tensor.mesh_buffer().get_device_buffer(coordinate);
 
         ASSERT_NE(buffer, nullptr);
@@ -398,6 +400,25 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensorsWithDifferentShardDims) {
         EXPECT_EQ(
             std::get<distributed::MeshMapperConfig::Shard>(combined.tensor_topology().placements()[0]).dim, shard_dim);
     }
+}
+
+TEST_F(MeshTensorTest2x4, CombineOneDeviceTensorTakesTheRequestedShardLabel) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const tt::tt_metal::TensorSpec tensor_spec =
+        tt::tt_metal::TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    Tensor device_tensor = tt::tt_metal::to_device(
+        Tensor::from_vector(std::vector<float>(shape.volume()), tensor_spec), mesh_device_.get());
+    const auto& label = device_tensor.tensor_topology();
+    auto device_tensors = get_device_tensors(device_tensor);
+    ASSERT_THAT(device_tensors, SizeIs(mesh_device_->num_devices()));
+
+    // A device tensor carries a one-device label of its own: the combined tensor takes the label combine asks for, and
+    // the mesh tensor the device tensor was taken from keeps its own.
+    auto combined = combine_device_tensors(std::vector<Tensor>{device_tensors[1]}, /*shard_dim=*/3);
+
+    EXPECT_EQ(
+        combined.tensor_topology(), tt::tt_metal::TensorTopology::create_sharded_tensor_topology(MeshShape(1), 3));
+    EXPECT_EQ(device_tensor.tensor_topology(), label);
 }
 
 TEST_F(MeshTensorTest, DefaultConstructedDeviceStorageGetters) {

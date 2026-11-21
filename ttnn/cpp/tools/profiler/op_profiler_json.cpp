@@ -12,6 +12,8 @@
 #include <set>
 #include <string_view>
 #include <unordered_set>
+#include <tt-metalium/experimental/op_profiler_support.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/operation.hpp"
 #include <enchantum/enchantum.hpp>
@@ -45,11 +47,9 @@ static json tensor_meta_to_json(const TensorMeta& m) {
     return ret;
 }
 
-static json get_kernels_json(ChipId device_id, const Program& program) {
+static json get_kernels_json(distributed::MeshDevice& mesh_device, const Program& program) {
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
-
-    IDevice* device = tt::tt_metal::detail::GetActiveDevice(device_id);
 
     json kernelSizes;
     // TODO(HalProcessorClassType): all the combinations can be queried from HAL instead of hardcoded here, but
@@ -72,7 +72,7 @@ static json get_kernels_json(ChipId device_id, const Program& program) {
     // profiler JSON well within Tracy's 64 KiB message limit.
     std::set<std::pair<std::string_view, std::string>> seenCompute;
     std::set<std::string_view> seenDatamovement;
-    const auto kernelMeta = detail::collect_kernel_meta(program, device);
+    const auto kernelMeta = experimental::collect_kernel_meta(program, mesh_device);
     computeKernels.reserve(kernelMeta.size());
     datamovementKernels.reserve(kernelMeta.size());
     for (const auto& kernel : kernelMeta) {
@@ -126,6 +126,7 @@ std::string assemble_device_op_json(
     [[maybe_unused]] const OpProfileData& data,
     [[maybe_unused]] ttsl::hash::hash_t program_hash,
     [[maybe_unused]] ChipId device_id,
+    [[maybe_unused]] tt::tt_metal::distributed::MeshDevice& mesh_device,
     [[maybe_unused]] bool program_cache_hit,
     [[maybe_unused]] const tt::tt_metal::Program& program) {
 #if defined(TRACY_ENABLE)
@@ -157,7 +158,7 @@ std::string assemble_device_op_json(
     j["device_id"] = device_id;
     j["op_hash"] = program_hash;
     j["program_cache_hit"] = program_cache_hit;
-    j["kernel_info"] = get_kernels_json(device_id, program);
+    j["kernel_info"] = get_kernels_json(mesh_device, program);
 
     auto opname = j["op_code"].template get<std::string>();
     runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, opname);
@@ -171,13 +172,16 @@ std::string assemble_device_op_json(
     j["performance_model"]["input_bws"] = data.perf_input_bws;
     j["performance_model"]["output_bws"] = data.perf_output_bws;
 
-    std::string short_str = fmt::format(
-        "`TT_DNN_DEVICE_OP: {}, {}, {}, {}, ", j["op_code"].dump(), program_hash, device_id, program_cache_hit);
+    // program_cache_hit varies per call, so it must stay out of the cached prefix.
+    std::string cached_prefix =
+        fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, ", j["op_code"].dump(), program_hash, device_id);
+    std::string short_str = fmt::format("{}{}, ", cached_prefix, program_cache_hit);
 
     if (cached_ops.find(device_id) == cached_ops.end()) {
-        cached_ops.emplace(device_id, (std::unordered_map<ttsl::hash::hash_t, std::string>){{program_hash, short_str}});
+        cached_ops.emplace(
+            device_id, (std::unordered_map<ttsl::hash::hash_t, std::string>){{program_hash, cached_prefix}});
     } else {
-        cached_ops.at(device_id).emplace(program_hash, short_str);
+        cached_ops.at(device_id).emplace(program_hash, cached_prefix);
     }
 
     // Tracy hard limit is uint16_t::max bytes including null terminator.

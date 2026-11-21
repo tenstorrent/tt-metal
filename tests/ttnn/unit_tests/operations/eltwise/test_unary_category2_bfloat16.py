@@ -7,6 +7,7 @@ import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_with_pcc
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    assert_ftz_band,
     generate_bfloat16_bits,
     generate_bfloat16_bits_in_range,
     to_tt_tensor,
@@ -34,7 +35,7 @@ Accuracy criteria
 ─────────────────
   relu, relu6    : exact  (comparison + select, no rounding introduced)
   hardsigmoid    : ULP ≤ 1  (clip(x/6 + 0.5, 0, 1); /6 division rounds ≤ 1 ULP)
-  hardmish       : ULP ≤ 1  (golden emulates hardware's SFPSTORE truncation)
+  hardmish       : exact  (fp32 result rounded to nearest-even, as torch does)
   hardswish      : ULP ≤ 2  (two known artifacts verified explicitly, see
                               test_hardswish)
   silu, swish    : ULP ≤ 2  (near-zero and negative-sigmoid FTZ bands
@@ -46,18 +47,6 @@ Accuracy criteria
   tanhshrink     : ULP ≤ 2 for |x| >= 1; PCC ≥ 0.999 for |x| < 1; see
                               test_tanhshrink
 """
-
-
-def assert_ftz_band(result, band_mask, band_desc):
-    """Assert a known flush-to-zero band is non-empty and device-flushed to 0.
-
-    The band is a deterministic slice of the exhaustive sweep, so the
-    non-emptiness assertion guards against a future golden/kernel change that
-    shifts a boundary and silently empties the band (which would otherwise let
-    the test pass without ever checking the documented FTZ behavior).
-    """
-    assert band_mask.any(), f"expected {band_desc} to be non-empty for this exhaustive sweep"
-    assert_equal(torch.zeros_like(result[band_mask]), result[band_mask])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -93,36 +82,51 @@ def test_exact_piecewise_ops(device, ttnn_op):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Piecewise-linear-with-division ops (hardsigmoid, hardmish) — ULP ≤ 1
+# hardsigmoid — clip(x/6 + 0.5, 0, 1), ULP ≤ 1
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "ttnn_op",
-    [
-        ttnn.hardsigmoid,
-        ttnn.hardmish,
-    ],
-)
-def test_piecewise_division_ops(device, ttnn_op):
-    """Exhaustive normal bfloat16 coverage for hardsigmoid and hardmish.
+def test_hardsigmoid(device):
+    """Exhaustive normal bfloat16 coverage for hardsigmoid.
 
     hardsigmoid = clip(x/6 + 0.5, 0, 1): division/clip/add round at most
-    1 ULP total. hardmish's golden already emulates hardware's SFPSTORE
-    truncation (see torch_hardmish in ttnn/ttnn/operations/unary.py), so
-    both agree to within 1 ULP of residual SFPU rounding.
+    1 ULP total.
     """
     input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
 
     tt_in = to_tt_tensor(input_tensor, device)
 
-    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden_function = ttnn.get_golden_function(ttnn.hardsigmoid)
     golden = golden_function(input_tensor, device=device)
 
-    tt_result = ttnn_op(tt_in)
+    tt_result = ttnn.hardsigmoid(tt_in)
     result = ttnn.to_torch(tt_result)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# hardmish — x * clamp(0.5x + 1, 0, 1), exact
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_hardmish(device):
+    """Exhaustive normal bfloat16 coverage for hardmish.
+
+    The kernel computes in fp32 and rounds to nearest-even into bf16 DEST,
+    so it matches torch bit-for-bit; a truncating store would differ by 1 ULP.
+    """
+    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.hardmish)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.hardmish(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    assert_equal(golden, result)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -24,18 +24,32 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.common.prefill.prefill_chunk import PrefillChunk
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.attention import Attention, AttentionConfig, allocate_kv_caches
 from models.demos.minimax_m3.tt.attention_configs import MiniMaxM3AttentionProgramConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.model import create_rope_setup
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
+from models.demos.minimax_m3.utils.model_variant import load_config
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 
 from ..test_factory import compose_tp_hidden, parametrize_mesh_with_fabric
 
-HIDDEN, NQ, NKV, HEAD_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 128, 64, 5_000_000.0, 1e-6
-NIDX, INDEX_DIM = 4, 128
+# Dims and RoPE from the selected variant's config (M3_MODEL_VARIANT / HF_MODEL; utils/model_variant.py).
+_CFG = load_config()
+HIDDEN, NQ, NKV, HEAD_DIM = (
+    _CFG["hidden_size"],
+    _CFG["num_attention_heads"],
+    _CFG["num_key_value_heads"],
+    _CFG["head_dim"],
+)
+ROTARY_DIM, THETA, EPS = _CFG["rotary_dim"], float(_CFG["rope_theta"]), _CFG["rms_norm_eps"]
+_SPARSE = _CFG["sparse_attention_config"]
+NIDX, INDEX_DIM = _SPARSE["sparse_num_index_heads"], _SPARSE["sparse_index_dim"]
+MSA = dict(
+    msa_block_size=_SPARSE["sparse_block_size"], msa_topk_blocks=_SPARSE["sparse_topk_blocks"], msa_index_dim=INDEX_DIM
+)
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
@@ -106,11 +120,10 @@ def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, 
         head_dim=HEAD_DIM,
         rotary_dim=ROTARY_DIM,
         rms_norm_eps=EPS,
-        use_qk_norm=True,
-        use_gemma_norm=True,
         max_seq_len=total,
         max_local_batch_size=1,
         is_sparse=is_sparse,
+        **(MSA if is_sparse else {}),
         sequence_parallel=True,
     )
     attn = Attention(
@@ -148,7 +161,8 @@ def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, 
     def run(x_chunk, a, b, cached_len, kv_cache):
         L = b - a
         x_tt = shard_seq(x_chunk.reshape(1, 1, L, HIDDEN))
-        return attn(x_tt, rope_mats=rope_range(a, b), kv_cache=kv_cache, user_id=0, cached_len=cached_len)
+        pc = PrefillChunk(slot_id=0, actual_start=cached_len, actual_end=b)
+        return attn(x_tt, rope_mats=rope_range(a, b), kv_cache=kv_cache, chunks=[pc])
 
     def gather_seq(out):
         # out: SP-sharded on rows (seq). Hidden is full-emb on each TP col (replicated residual) or
@@ -175,12 +189,12 @@ def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, 
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
-@pytest.mark.parametrize(
-    "chunk_local", [256], ids=["chunk256"]
-)  # chunk=2048, T=4096 (32 blocks) — keeps the fp32 CPU ref fast
+# chunk=2048, T=4096 (32 blocks) keeps the fp32 CPU ref fast; chunk=1024 makes chunk 0 a cold MSA chunk below the
+# 2048-token top-k window (cache-read path).
+@pytest.mark.parametrize("chunk_local", [256, 128], ids=["chunk256", "chunk128"])
 @pytest.mark.parametrize("layer_kind", ["dense", "sparse"])
 def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, chunk_local, reset_seeds):
-    """Chunked-prefill chunk-1 output vs the self-contained torch CPU reference (absolute correctness).
+    """Chunked-prefill chunk 0 and chunk 1 outputs vs the self-contained torch CPU reference (absolute correctness).
 
     Unlike test_attention_chunked (chunked == device single-shot — a self-consistency check that a shared
     bug could pass), this pins the device chunked path to the CPU reference's attention output. The device
@@ -232,9 +246,10 @@ def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, ch
             p + "self_attn.index_q_norm.weight": w["index_q_norm"],
             p + "self_attn.index_k_norm.weight": w["index_k_norm"],
         }
-    ref_model = MiniMaxM3TextModel(MiniMaxM3Config(), DictWeights(ref_state))
+    ref_model = MiniMaxM3TextModel(MiniMaxM3Config.from_hf_config(_CFG), DictWeights(ref_state))
     cos_ref, sin_ref = build_rope(total, ROTARY_DIM, THETA)
     ref_attn = ref_model._attention(x.float(), p, cos_ref, sin_ref, is_sparse)[0]  # [1, total, H]
+    ref_c0 = ref_attn[:, :chunk, :].reshape(1, chunk, HIDDEN)
     ref_c1 = ref_attn[:, chunk:total, :].reshape(1, chunk, HIDDEN)
 
     # --- device chunked: swizzled weights -> Attention; chunk0 then chunk1 (cache-read) ---
@@ -278,11 +293,10 @@ def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, ch
         head_dim=HEAD_DIM,
         rotary_dim=ROTARY_DIM,
         rms_norm_eps=EPS,
-        use_qk_norm=True,
-        use_gemma_norm=True,
         max_seq_len=total,
         max_local_batch_size=1,
         is_sparse=is_sparse,
+        **(MSA if is_sparse else {}),
         sequence_parallel=True,
     )
     attn = Attention(
@@ -316,18 +330,24 @@ def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, ch
 
     def run(x_chunk, a, b, cached_len, kv_cache):
         x_tt = shard_seq(x_chunk.reshape(1, 1, b - a, HIDDEN))
-        return attn(x_tt, rope_mats=rope_range(a, b), kv_cache=kv_cache, user_id=0, cached_len=cached_len)
+        pc = PrefillChunk(slot_id=0, actual_start=cached_len, actual_end=b)
+        return attn(x_tt, rope_mats=rope_range(a, b), kv_cache=kv_cache, chunks=[pc])
 
     def gather_seq(out):
         dts = ttnn.get_device_tensors(out)
         return torch.cat([compose_tp_hidden(dts, r, cols) for r in range(rows)], dim=2)
 
     kvc = allocate_kv_caches(mesh_device, num_layers=1, max_seq_len=total, sp_axis=sp_axis, num_users=1)
-    run(x[:, :chunk], 0, chunk, 0, kvc)
+    out_c0 = run(x[:, :chunk], 0, chunk, 0, kvc)
+    dev_c0 = gather_seq(out_c0).reshape(1, chunk, HIDDEN)
     out_c1 = run(x[:, chunk:], chunk, total, chunk, kvc)
     ttnn.synchronize_device(mesh_device)
     dev_c1 = gather_seq(out_c1).reshape(1, chunk, HIDDEN)
 
+    passing0, pcc0 = comp_pcc(ref_c0, dev_c0, 0.99)
     passing, pcc = comp_pcc(ref_c1, dev_c1, 0.99)
-    logger.info(f"[{layer_kind}] chunked-prefill chunk1 vs CPU reference[{chunk}:{total}]: pcc={pcc}")
+    logger.info(
+        f"[{layer_kind}] chunked-prefill vs CPU reference: chunk0 pcc={pcc0}, chunk1[{chunk}:{total}] pcc={pcc}"
+    )
+    assert passing0, f"{layer_kind} cold chunk0 vs CPU ref PCC fail: {pcc0}"
     assert passing, f"{layer_kind} chunked vs CPU ref PCC fail: {pcc}"

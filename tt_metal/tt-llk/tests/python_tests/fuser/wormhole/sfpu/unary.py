@@ -60,7 +60,7 @@ class UnarySfpu(Sfpu):
 
         return (
             f"// Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
-            f"test_utils::call_unary_sfpu_operation_init<{op}, {approx_mode}, {dest_acc}, {self.iterations}>();\n"
+            f"test_utils::call_unary_sfpu_operation_init<{op}, {approx_mode}, {dest_acc}, {self.iterations}>({config.sentinel.sfpu_format});\n"
         )
 
     def calculate(

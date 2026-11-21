@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "combine_fabric2d_device_operation.hpp"
 #include "kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
@@ -59,12 +61,63 @@ void validate_control_tensor(
         rows);
 }
 
+// The caller's forwarding buffer. It must be its own allocation: on a cache hit the framework finds the cached
+// program's buffers again by matching them among the tensor args, so a buffer that is also an input leaves it
+// unable to tell them apart.
+void validate_forwarding_buffer(const CombineFabric2dParams& args, const CombineFabric2dInputs& t) {
+    if (!t.forwarding_buffer.has_value()) {
+        return;
+    }
+    const auto& fwd = *t.forwarding_buffer;
+    validate_dram_interleaved(fwd, "forwarding_buffer");
+    // The kernels use its address on this mesh, so a buffer of the same size on another mesh would pass the checks
+    // below and be written as if it were here.
+    TT_FATAL(fwd.device() == args.device, "combine_fabric2d: forwarding_buffer is on another mesh device");
+    std::vector<const tt::tt_metal::Buffer*> inputs = {
+        t.dispatched_buffer.buffer(),
+        t.dispatched_metadata.buffer(),
+        t.expert_token_counts.buffer(),
+        t.expert_region_offsets.buffer(),
+        t.expert_offsets.buffer()};
+    if (t.global_expert_idx_table.has_value()) {
+        inputs.push_back(t.global_expert_idx_table->buffer());
+    }
+    const tt::tt_metal::Buffer* buffer = fwd.buffer();
+    TT_FATAL(
+        std::find(inputs.begin(), inputs.end(), buffer) == inputs.end(),
+        "combine_fabric2d: forwarding_buffer shares its buffer with another argument; pass a separate allocation");
+    const auto spec = forwarding_buffer_spec(args, token_size_bytes(t));
+    const uint32_t page_bytes = static_cast<uint32_t>(spec.compute_page_size_bytes());
+    TT_FATAL(
+        buffer->aligned_page_size() == page_bytes,
+        "combine_fabric2d: forwarding_buffer pages at {} B but the op addresses it in {} B pages; allocate it with "
+        "combine_fabric2d_forwarding_buffer for this emb_dim",
+        buffer->aligned_page_size(),
+        page_bytes);
+    // Only the first pages are used, so one buffer sized for the most links and deepest channels serves every
+    // smaller call.
+    const uint32_t num_pages = static_cast<uint32_t>(spec.logical_shape()[0]);
+    TT_FATAL(
+        buffer->num_pages() >= num_pages,
+        "combine_fabric2d: forwarding_buffer has {} pages but this call needs {}",
+        buffer->num_pages(),
+        num_pages);
+}
+
 }  // namespace
 
 void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.device != nullptr, "combine_fabric2d requires a mesh device in attributes");
     TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "num_links must be between 1 and 4 (got {})", args.num_links);
+    // The movement-class split means no depth can deadlock the ring, so the only floor is the credit
+    // scheme's own: a channel returns credits every quarter of its depth, which must stay at least one page.
+    TT_FATAL(
+        args.fwd_vc_pages >= cmbf2d::MIN_VC_PAGES,
+        "combine_fabric2d: fwd_vc_pages must be at least {} (got {}); the credit threshold is a quarter of a "
+        "channel and has to stay >= 1, and a channel shallower than a read batch spends all its time announcing",
+        cmbf2d::MIN_VC_PAGES,
+        args.fwd_vc_pages);
     TT_FATAL(
         !args.output_mem_config.is_sharded(),
         "combine_fabric2d: output memory config must be interleaved, not sharded");
@@ -94,23 +147,35 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         args.seq_len_per_chip >= 1, "combine_fabric2d: seq_len_per_chip must be >= 1 (got {})", args.seq_len_per_chip);
 
-    // ---- Token data. Page = one token, so the last dim is the embedding and the rest is the flat slot
-    // index. BFLOAT16 only: the fp8 and TILE paths both need the untilize stage this op does not have.
+    // ---- Token data. The last dim is the embedding and the rest is the flat slot index. BFLOAT16 in either
+    // layout, or BFLOAT8_B TILE, which the untilizer cores unpack to BFLOAT16 rows. Tokens move as BFLOAT16
+    // from there on, so the output is BFLOAT16 whatever the input.
+    // The id table is optional: without one the ring's experts are contiguous. Unlike the routed-expert fields
+    // it is already set by the time validation runs -- those are filled in later, by the program factory.
+    const bool has_expert_table = tensor_args.global_expert_idx_table.has_value();
     const auto& buf = tensor_args.dispatched_buffer;
     validate_dram_interleaved(buf, "dispatched_buffer");
     TT_FATAL(
         buf.layout() == tt::tt_metal::Layout::ROW_MAJOR || buf.layout() == tt::tt_metal::Layout::TILE,
         "combine_fabric2d: dispatched_buffer must be ROW_MAJOR or TILE, got {}",
         buf.layout());
+    TT_FATAL(
+        buf.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            (buf.dtype() == tt::tt_metal::DataType::BFLOAT8_B && buf.layout() == tt::tt_metal::Layout::TILE),
+        "combine_fabric2d: dispatched_buffer must be BFLOAT16 (ROW_MAJOR or TILE) or BFLOAT8_B (TILE), got {} "
+        "{}. A BFLOAT8_B buffer is dequantised by the untilize, which only the TILE path has.",
+        buf.dtype(),
+        buf.layout());
     // The op does not take a token size, it reads it off the tensor the caller staged. A ROW_MAJOR buffer
-    // pages by exactly one token; a TILE one is untilized into tokens on the way through.
+    // pages by exactly one token; a TILE one pages by one tile, which the untilizer reads and strides its input
+    // CB by.
     const uint32_t token_page = token_size_bytes(tensor_args);
     TT_FATAL(
         buf.layout() == tt::tt_metal::Layout::TILE ||
-            token_page == static_cast<uint32_t>(buf.buffer()->aligned_page_size()),
+            token_page == static_cast<uint32_t>(buf.mesh_buffer().aligned_page_size()),
         "combine_fabric2d: ROW_MAJOR dispatched_buffer pages by {} B but a token is {} B; one row must be "
         "exactly one page",
-        buf.buffer()->aligned_page_size(),
+        buf.mesh_buffer().aligned_page_size(),
         token_page);
     // A token is the payload of a NoC transfer, which needs 16-byte alignment.
     TT_FATAL(
@@ -123,22 +188,32 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         "combine_fabric2d: token page {} B + {} B of forwarding metadata must be 64-byte aligned for DRAM",
         token_page,
         cmbf2d::FORWARDING_METADATA_SIZE);
-    // A forwarded packet carries the token PLUS its routing tail, so the payload the fabric must accept is
-    // token + tail, not just token.
+    // A token goes as one packet or as two halves, and a forwarded token's last packet also carries its
+    // routing tail, so the payload the fabric must accept is that last packet plus the tail.
+    const uint32_t first_packet = cmbf2d::first_packet_bytes(token_page);
     TT_FATAL(
-        token_page + cmbf2d::FORWARDING_METADATA_SIZE <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
-        "combine_fabric2d: token page {} B + {} B routing tail exceeds the fabric max payload {}. Raise "
-        "max_payload_size in the device's fabric_router_config.",
-        token_page,
+        first_packet % 16 == 0,
+        "combine_fabric2d: a token's first packet {} B must be 16-byte aligned for NoC transfers",
+        first_packet);
+    const uint32_t last_packet = first_packet == token_page ? token_page : token_page - first_packet;
+    TT_FATAL(
+        last_packet + cmbf2d::FORWARDING_METADATA_SIZE <= tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+        "combine_fabric2d: a token's last packet {} B + {} B routing tail exceeds the fabric max payload {}. "
+        "Raise max_payload_size in the device's fabric_router_config.",
+        last_packet,
         cmbf2d::FORWARDING_METADATA_SIZE,
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
-    TT_FATAL(
-        buf.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "combine_fabric2d: dispatched_buffer must be BFLOAT16, got {}. BFLOAT8_B needs a dequantise the "
-        "untilizer cores do not do.",
-        buf.dtype());
     const auto buf_shape = buf.logical_shape();
     TT_FATAL(buf_shape.rank() >= 2, "combine_fabric2d: dispatched_buffer must be rank 2 or more");
+    // A token's slot is its index along dim -2, which is also where the kernels clamp to the buffer's end, so any
+    // dim before it would put slots the kernels never see.
+    for (uint32_t d = 0; d + 2 < buf_shape.rank(); d++) {
+        TT_FATAL(
+            buf_shape[d] == 1,
+            "combine_fabric2d: dispatched_buffer must be 1 in every dim before the last two, as dispatch leaves it; "
+            "got {}",
+            buf_shape);
+    }
 
     const auto& meta = tensor_args.dispatched_metadata;
     validate_dram_row_major(meta, "dispatched_metadata");
@@ -152,6 +227,13 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         "combine_fabric2d: dispatched_metadata last dim is {}, expected 3 (linearized_coord, token_idx, "
         "topk_idx). The fp8 scale tail is not supported.",
         meta_shape[-1]);
+    for (uint32_t d = 0; d + 2 < meta_shape.rank(); d++) {
+        TT_FATAL(
+            meta_shape[d] == 1,
+            "combine_fabric2d: dispatched_metadata must be 1 in every dim before the last two, as dispatch leaves it; "
+            "got {}",
+            meta_shape);
+    }
     TT_FATAL(
         meta_shape[-2] == buf_shape[-2],
         "combine_fabric2d: dispatched_metadata holds {} slots but dispatched_buffer holds {}; they index the "
@@ -190,10 +272,34 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     validate_control_tensor(tensor_args.expert_token_counts, 1, num_routed_experts, "expert_token_counts");
     validate_control_tensor(tensor_args.expert_region_offsets, 1, num_routed_experts, "expert_region_offsets");
     validate_control_tensor(tensor_args.expert_offsets, extent, num_routed_experts, "expert_offsets");
+    validate_forwarding_buffer(args, tensor_args);
+    if (!has_expert_table) {
+        return;
+    }
+    const auto& table = *tensor_args.global_expert_idx_table;
+    validate_dram_row_major(table, "global_expert_idx_table");
+    TT_FATAL(
+        table.dtype() == tt::tt_metal::DataType::INT32 || table.dtype() == tt::tt_metal::DataType::UINT32,
+        "combine_fabric2d: global_expert_idx_table must be INT32 or UINT32, got {}",
+        table.dtype());
+    // One dispatch group's rows: a chip only relays tokens between the chips of its own ring, so it needs its
+    // ring's slice of the table and no other group's.
+    const auto& table_shape = table.logical_shape();
+    TT_FATAL(
+        table_shape.rank() == 3 && table_shape[0] == 1 && table_shape[1] == static_cast<int32_t>(extent) &&
+            table_shape[2] == static_cast<int32_t>(args.experts_per_chip),
+        "combine_fabric2d: global_expert_idx_table has shape {}, expected (1, {}, {}) -- this dispatch group's "
+        "rows, replicated across its ring, not the per-device slice the routed expert takes",
+        table_shape,
+        extent,
+        args.experts_per_chip);
 }
 
 void CombineFabric2dDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t&, const tensor_args_t&) {}
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Launches that share a cached program can pass different allocations, so check which one it is every time.
+    validate_forwarding_buffer(args, tensor_args);
+}
 
 CombineFabric2dDeviceOperation::spec_return_value_t CombineFabric2dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -203,9 +309,7 @@ CombineFabric2dDeviceOperation::spec_return_value_t CombineFabric2dDeviceOperati
     return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            args.output_mem_config));
+            TOKEN_DTYPE, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), args.output_mem_config));
 }
 
 CombineFabric2dDeviceOperation::tensor_return_value_t CombineFabric2dDeviceOperation::create_output_tensors(
@@ -228,8 +332,10 @@ ttnn::Tensor combine_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t axis,
     uint32_t num_links,
+    uint32_t fwd_vc_pages,
     tt::tt_fabric::Topology topology,
-    const tt::tt_metal::MemoryConfig& memory_config) {
+    const tt::tt_metal::MemoryConfig& memory_config,
+    const std::optional<ttnn::Tensor>& forwarding_buffer) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -240,6 +346,7 @@ ttnn::Tensor combine_fabric2d(
             .seq_len_per_chip = seq_len_per_chip,
             .axis = axis,
             .num_links = num_links,
+            .fwd_vc_pages = fwd_vc_pages,
             .topology = topology,
             .output_mem_config = memory_config},
         OperationType::tensor_args_t{
@@ -247,6 +354,7 @@ ttnn::Tensor combine_fabric2d(
             .dispatched_metadata = dispatched_metadata,
             .expert_token_counts = expert_token_counts,
             .expert_region_offsets = expert_region_offsets,
-            .expert_offsets = expert_offsets});
+            .expert_offsets = expert_offsets,
+            .forwarding_buffer = forwarding_buffer});
 }
 }  // namespace ttnn::prim

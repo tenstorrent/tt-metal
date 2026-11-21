@@ -7,7 +7,7 @@
  *
  * Consumers (both must be updated together if the compile-time or runtime arg
  * layout below changes):
- *   - ttnn::experimental::prim::DitFusedDistributedRmsnormMeshWorkloadFactory
+ *   - ttnn::experimental::prim::DitFusedDistributedRmsnormProgramFactory
  *   - ttnn::experimental::prim::DitFusedDistributedGroupnormMeshWorkloadFactory
  *
  * The description below is written in terms of the RMSNorm caller (128 B
@@ -39,6 +39,11 @@
  * num_tile_rows / partition), so the per-round present set + inc counts match
  * on both ends — no deadlock, no orphaned waits. Remote packets land in DRAM
  * (workers read them), so the forwarder holds only its outbound packet_buf.
+ *
+ * DIT_NORM_RUNTIME_ROWS (RMSNorm caller): the live tile-row count is common runtime arg 0 and
+ * the round count, pages per device and per-round present counts are derived from it on device
+ * (runtime_length.hpp) with two trailing compile-time args, num_workers and workers_per_forwarder.
+ * Without the define the host supplies max_rounds / num_chunks_per_device and present_count[r].
  */
 
 #include <cstdint>
@@ -52,31 +57,50 @@
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
+#ifdef DIT_NORM_RUNTIME_ROWS
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
+#endif
 
 // ---------- compile-time args ----------
+// The same on every chip: what differs per chip (its device index and fabric routes) is in runtime args, so the
+// callers' per-chip programs can run as one program with per-device runtime args.
 constexpr uint32_t packet_cb = get_compile_time_arg_val(0);  // outbound packet buffer (unit_packet x2)
 constexpr uint32_t reserved_packet_header_cb = get_compile_time_arg_val(1);
 constexpr uint32_t ring_size = get_compile_time_arg_val(2);
-constexpr uint32_t my_device_index = get_compile_time_arg_val(3);
-constexpr uint32_t num_targets_forward = get_compile_time_arg_val(4);
-constexpr uint32_t num_targets_backward = get_compile_time_arg_val(5);
-constexpr uint32_t forwarder_index = get_compile_time_arg_val(6);  // which link/group on this chip
-constexpr uint32_t num_forwarders = get_compile_time_arg_val(7);
-constexpr uint32_t group_size = get_compile_time_arg_val(8);    // workers in this forwarder's group
-constexpr uint32_t max_rounds = get_compile_time_arg_val(9);    // ceil(num_tile_rows / num_workers)
-constexpr uint32_t stick_bytes = get_compile_time_arg_val(10);  // 128 (32 fp32)
-constexpr uint32_t num_chunks_per_device =
-    get_compile_time_arg_val(11);  // = num_forwarders * max_rounds (pages/device)
+constexpr uint32_t forwarder_index = get_compile_time_arg_val(3);  // which link/group on this chip
+constexpr uint32_t num_forwarders = get_compile_time_arg_val(4);
+constexpr uint32_t group_size = get_compile_time_arg_val(5);  // workers in this forwarder's group
+#ifndef DIT_NORM_RUNTIME_ROWS
+constexpr uint32_t max_rounds = get_compile_time_arg_val(6);  // ceil(num_tile_rows / num_workers)
+#endif
+constexpr uint32_t stick_bytes = get_compile_time_arg_val(7);  // 128 (32 fp32)
+#ifndef DIT_NORM_RUNTIME_ROWS
+constexpr uint32_t num_chunks_per_device = get_compile_time_arg_val(8);  // = num_forwarders * max_rounds (pages/device)
+#endif
 // Grid-uniform semaphore ids (created on the whole core grid -> same L1 addr on
 // every worker + forwarder core, so no cross-core address args are needed).
-constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(12);  // workers inc; forwarder waits
-constexpr uint32_t go_sem_id = get_compile_time_arg_val(13);       // forwarder incs; workers wait
-constexpr auto stats_dram_args = TensorAccessorArgs<14>();
-constexpr auto forward_route =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<stats_dram_args.next_compile_time_args_offset()>();
-constexpr auto backward_route = ccl_routing_utils::get_line_multicast_route_info_from_args<
-    stats_dram_args.next_compile_time_args_offset() + ccl_routing_utils::num_line_multicast_args>();
+constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(9);  // workers inc; forwarder waits
+constexpr uint32_t go_sem_id = get_compile_time_arg_val(10);      // forwarder incs; workers wait
+constexpr auto stats_dram_args = TensorAccessorArgs<11>();
+#ifdef DIT_NORM_RUNTIME_ROWS
+constexpr uint32_t rows_args_offset = stats_dram_args.next_compile_time_args_offset();
+constexpr uint32_t num_workers = get_compile_time_arg_val(rows_args_offset);
+constexpr uint32_t workers_per_forwarder = get_compile_time_arg_val(rows_args_offset + 1);
+#endif
+
+// A line-multicast route from ccl_routing_utils::num_line_multicast_args runtime args, in the order
+// ttnn::ccl::get_forward_backward_line_mcast_configuration writes them.
+inline ccl_routing_utils::line_multicast_route_info_t line_multicast_route_from_rt_args(size_t& arg_idx) {
+    ccl_routing_utils::line_multicast_route_info_t route{};
+    route.dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+    route.dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+    route.e_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+    route.w_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+    route.n_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+    route.s_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+    return route;
+}
 
 void kernel_main() {
     size_t arg_idx = 0;
@@ -84,6 +108,10 @@ void kernel_main() {
     // out_ready_sem: a GlobalSemaphore — PEER forwarders fuse-inc it over fabric
     // (same L1 addr on every chip). Local pointer for the wait + reset.
     const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    // This chip's position on the ring and its forward / backward line-multicast routes.
+    const uint32_t my_device_index = get_arg_val<uint32_t>(arg_idx++);
+    const auto forward_route = line_multicast_route_from_rt_args(arg_idx);
+    const auto backward_route = line_multicast_route_from_rt_args(arg_idx);
     // group worker NoC coords (x,y) x group_size, then present_count[r]. Sized by
     // the constexpr CT args (group_size / max_rounds) so large-row configs (e.g.
     // wan self_sp4_N18944 -> 592 tile-rows / 32 workers = 19 rounds) don't overflow
@@ -94,10 +122,30 @@ void kernel_main() {
         worker_x[i] = get_arg_val<uint32_t>(arg_idx++);
         worker_y[i] = get_arg_val<uint32_t>(arg_idx++);
     }
-    uint32_t present_count[max_rounds];
+#ifdef DIT_NORM_RUNTIME_ROWS
+    const uint32_t num_tile_rows = get_common_arg_val<uint32_t>(0);
+    const uint32_t rows_per_worker = ttnn::runtime_length::div_up(num_tile_rows, num_workers);
+    const uint32_t max_rounds = rows_per_worker;
+    const uint32_t num_chunks_per_device = num_forwarders * max_rounds;
+    // Group workers that still own a tile row in round r: a prefix of the group, since the
+    // contiguous split gives earlier workers at least as many rows as later ones.
+    auto present_count = [&](uint32_t r) {
+        uint32_t pc = 0;
+        for (uint32_t i = 0; i < group_size; i++) {
+            const uint32_t w = forwarder_index * workers_per_forwarder + i;
+            const uint32_t rows = ttnn::runtime_length::core_end(w, rows_per_worker, num_tile_rows) -
+                                  ttnn::runtime_length::core_start(w, rows_per_worker, num_tile_rows);
+            pc += (rows > r) ? 1u : 0u;
+        }
+        return pc;
+    };
+#else
+    uint32_t present_count_args[max_rounds];
     for (uint32_t r = 0; r < max_rounds; r++) {
-        present_count[r] = get_arg_val<uint32_t>(arg_idx++);
+        present_count_args[r] = get_arg_val<uint32_t>(arg_idx++);
     }
+    auto present_count = [&](uint32_t r) { return present_count_args[r]; };
+#endif
     Noc noc;
     CircularBuffer cb_pkt_hdr(reserved_packet_header_cb);
     CircularBuffer cb_packet(packet_cb);
@@ -138,7 +186,7 @@ void kernel_main() {
     uint32_t cumulative_arrivals = 0;
     uint32_t cumulative_incs = 0;
     for (uint32_t r = 0; r < max_rounds; r++) {
-        const uint32_t pc = present_count[r];
+        const uint32_t pc = present_count(r);
         // Zero-present round (uneven num_tile_rows / num_workers split, e.g. 38
         // tile-rows over 32 workers -> later forwarders have no worker on the
         // remainder round). Symmetric across devices, so every peer forwarder_index
