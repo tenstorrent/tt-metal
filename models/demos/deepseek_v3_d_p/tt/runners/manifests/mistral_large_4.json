@@ -1,0 +1,12 @@
+{
+  "env": {
+    "PREFILL_MODEL": "mistral_large_4",
+    "PREFILL_SP": "8",
+    "PREFILL_TP": "4",
+    "PREFILL_CHUNK_SIZE": "5120",
+    "PREFILL_MAX_SEQ_LEN": "56320",
+    "PREFILL_NUM_USERS": "2",
+    "PREFILL_USE_TRACE": "1",
+    "TT_PREFILL_CHUNK_TIMEOUT_SECONDS": "10"
+  }
+}

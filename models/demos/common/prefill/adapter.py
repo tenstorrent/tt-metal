@@ -402,6 +402,7 @@ ADAPTER_PATHS = {
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
     "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",
+    "mistral_large_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_large_4:MistralLarge4PrefillAdapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}
