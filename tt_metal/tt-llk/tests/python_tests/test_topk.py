@@ -784,3 +784,167 @@ def test_topk_sfpu_adversarial(
                 ]
             )
         )
+
+
+# =============================================================================
+# Direct merge with sub-tile K (test_topk_merge_subtile)
+# =============================================================================
+#
+# One merge on a freshly unpacked tile pair (no local sort / rebuild), so the merge's run
+# walk -- including the run-to-run re-base taken when K < 32 -- is checked on its own.
+# Each row is a 64-datum sequence (tile 0 then tile 1, transposed into a DEST column); the
+# merge compare-exchanges positions p and p + dist of K-long runs, keeping the better datum
+# in the left run.
+
+_MERGE_TIE_VALUES = [-3.5, -1.0, 0.25, 1.0, 2.0, 7.5]
+
+
+def _merge_pairs(K, m_iter):
+    """(left, right) sequence positions one merge compares, in the kernel's walk order."""
+    k_max = min(K, 32)
+    inner_d = k_max >> 2
+    total = max(2 * k_max, 64 >> m_iter)
+    dist = min(32, k_max << m_iter)
+    pairs, compared, offset, run_base = [], 0, 0, 0
+    while compared < total:
+        for ii in range(inner_d):
+            pairs.extend((offset + j, offset + j + dist) for j in range(4))
+            compared += 8
+            if ii == inner_d - 1:
+                run_base += 2 * dist
+                offset = run_base
+            else:
+                offset += 4
+    return pairs
+
+
+def _merge_golden(values, indices, pairs, largest):
+    """Stable compare-exchange: the left run keeps the better value, ties to the lower index."""
+    values, indices = list(values), list(indices)
+    for a, b in pairs:
+        va, vb = values[a], values[b]
+        b_better = (vb > va if largest else vb < va) or (
+            vb == va and indices[b] < indices[a]
+        )
+        if b_better:
+            values[a], values[b] = vb, va
+            indices[a], indices[b] = indices[b], indices[a]
+    return values, indices
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    K=[4, 8, 16],
+    m_iter=[0, 1, 2],
+    sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
+    sort_mode=["unstable", "stable", "fused", "rank_stamped"],
+)
+def test_topk_merge_subtile(
+    formats: InputOutputFormat,
+    K: int,
+    m_iter: int,
+    sort_direction: TopKSortDirection,
+    sort_mode: str,
+):
+    if (K << m_iter) > 32:
+        pytest.skip("run distance K << m_iter exceeds one tile")
+
+    input_dimensions = [32, 128]
+    rows, seq_len = input_dimensions[0], input_dimensions[1] // NUM_STAGES
+    largest = sort_direction == TopKSortDirection.Descending
+    fused_stable = sort_mode == "fused"
+    rank_stamped = sort_mode == "rank_stamped"
+
+    generator = torch.Generator().manual_seed(0x70C0 + 97 * K + 13 * m_iter)
+    # Few distinct values per row so most compared pairs tie.
+    values = torch.tensor(_MERGE_TIE_VALUES, dtype=torch.bfloat16)[
+        torch.randint(len(_MERGE_TIE_VALUES), (rows, seq_len), generator=generator)
+    ]
+    if rank_stamped:
+        # Rank tags order ties by run position, which matches the index order only for in-order indices.
+        indices = torch.arange(seq_len).repeat(rows, 1)
+    else:
+        indices = torch.stack(
+            [torch.randperm(seq_len, generator=generator) for _ in range(rows)]
+        )
+
+    src = torch.empty(input_dimensions, dtype=torch.bfloat16)
+    src[:, :seq_len] = values
+    src[:, seq_len:] = indices.to(torch.int16).view(torch.bfloat16)
+    src_A = get_golden_generator(TilizeGolden)(
+        src.flatten(), input_dimensions, formats.input_format
+    )
+    tile_cnt = (input_dimensions[0] * input_dimensions[1]) // ELEMENTS_PER_TILE
+
+    configuration = TestConfig(
+        test_name="sources/topk_test.cpp",
+        formats=formats,
+        templates=[
+            DEST_SYNC(),
+            TOPK(
+                topk_k=K,
+                topk_matrix_width=input_dimensions[1],
+                topk_sort_direction=sort_direction,
+                topk_stable_sort=sort_mode == "stable",
+                topk_fused_stable=fused_stable,
+                topk_rank_stamped=rank_stamped,
+                topk_merge_only=True,
+                topk_merge_m_iter=m_iter,
+            ),
+        ],
+        runtimes=[
+            INPUT_DIMENSIONS(input_dimensions[0] // 32, input_dimensions[1] // 32),
+            TILE_COUNT(tile_cnt),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_A,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=(
+            DestAccumulation.Yes
+            if (fused_stable or rank_stamped)
+            else DestAccumulation.No
+        ),
+        unpack_to_dest=False,
+    )
+
+    res_tensor = result_tensor(configuration.run().result, formats.output_format)
+    res_tensor = transform_result_tensor_to_right_form(
+        res_tensor, formats, seq_len, input_dimensions
+    )
+    res = get_golden_generator(UntilizeGolden)(
+        res_tensor, formats.output_format, input_dimensions
+    ).reshape(input_dimensions)
+    res_values = res[:, :seq_len].to(torch.bfloat16)
+    res_indices = res[:, seq_len:].to(torch.bfloat16).view(torch.int16).to(torch.int64)
+
+    pairs = _merge_pairs(K, m_iter)
+    for row in range(rows):
+        golden_values, golden_indices = _merge_golden(
+            values[row].tolist(), indices[row].tolist(), pairs, largest
+        )
+        got_values = res_values[row].float().tolist()
+        got_indices = res_indices[row].tolist()
+        assert (
+            got_values == golden_values
+        ), f"row {row}: values {got_values} != {golden_values}"
+        if sort_mode == "unstable":
+            # Ties may land on either side: each index must still carry its own value.
+            value_of = dict(zip(indices[row].tolist(), values[row].tolist()))
+            for pos, (value, index) in enumerate(zip(got_values, got_indices)):
+                assert (
+                    value_of.get(index) == value
+                ), f"row {row} pos {pos}: index {index} does not hold {value}"
+            assert sorted(got_indices) == sorted(
+                indices[row].tolist()
+            ), f"row {row}: indices are not a permutation"
+        else:
+            assert (
+                got_indices == golden_indices
+            ), f"row {row}: indices {got_indices} != {golden_indices}"

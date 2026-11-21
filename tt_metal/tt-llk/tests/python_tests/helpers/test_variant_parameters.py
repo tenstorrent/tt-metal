@@ -1201,6 +1201,9 @@ class TOPK(TemplateParameter):
     topk_split_phase: int = 0
     # Re-run the topk init between the two split calls (fresh replay recording).
     topk_split_reinit: bool = False
+    # Run only one merge (m_iter = topk_merge_m_iter) on the unpacked tile pair and pack all four tiles.
+    topk_merge_only: bool = False
+    topk_merge_m_iter: int = 0
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1214,6 +1217,8 @@ class TOPK(TemplateParameter):
             f"constexpr std::uint32_t TOPK_TAG_BITS = {self.topk_tag_bits};",
             f"constexpr int TOPK_SPLIT_PHASE = {self.topk_split_phase};",
             f"constexpr bool TOPK_SPLIT_REINIT = {str(self.topk_split_reinit).lower()};",
+            f"constexpr bool TOPK_MERGE_ONLY = {str(self.topk_merge_only).lower()};",
+            f"constexpr int TOPK_MERGE_M_ITER = {self.topk_merge_m_iter};",
         ]
         return "\n".join(lines)
 
@@ -1229,8 +1234,10 @@ class TOPK(TemplateParameter):
             "std::uint32_t TOPK_TAG_BITS;",
             "int TOPK_SPLIT_PHASE;",
             "bool TOPK_SPLIT_REINIT;",
+            "bool TOPK_MERGE_ONLY;",
+            "int TOPK_MERGE_M_ITER;",
         ]
-        return "\n".join(lines), "IIII???Ii?"
+        return "\n".join(lines), "IIII???Ii??i"
 
 
 @dataclass
