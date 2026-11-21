@@ -28,7 +28,6 @@
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/losses.hpp"
 #include "ops/losses.hpp"
-#include "optimizers/remote_optimizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -218,9 +217,16 @@ MultihostConfig parse_multihost_config(const YAML::Node &yaml_config) {
         throw std::runtime_error("Unknown socket type: " + socket_type_str);
     }
 
+    const auto pipeline_parallel_config = multihost_config["pipeline_parallel_config"];
+    if (config.enable_mpi && !pipeline_parallel_config) {
+        throw std::runtime_error(
+            "multihost_config.enabled requires pipeline_parallel_config: nano_gpt's multihost mode runs pipeline "
+            "parallel training only.");
+    }
+
     ttml::autograd::ctx().initialize_socket_manager(config.socket_type);
 
-    if (auto pipeline_parallel_config = multihost_config["pipeline_parallel_config"]) {
+    if (pipeline_parallel_config) {
         config.pipeline_parallel_config =
             ttml::models::distributed::pipeline_parallel_llama::read_config(pipeline_parallel_config);
     }
@@ -306,10 +312,6 @@ inline int get_mpi_rank_or_zero() {
     auto &ctx = ttml::autograd::ctx();
     auto distributed_ctx = ctx.get_distributed_context();
     return distributed_ctx ? *distributed_ctx->rank() : 0;
-}
-
-inline bool is_three_tier_training(const MultihostConfig &config) {
-    return config.enable_mpi && !is_pipeline_parallel_enabled(config);
 }
 
 inline bool is_last_pipeline_stage(const MultihostConfig &config) {
@@ -405,7 +407,7 @@ int main(int argc, char **argv) {
         num_devices *= device_config.mesh_shape[i];
     }
 
-    // enable fabric config for 3-tier architecture, tp, ddp, cp
+    // enable fabric config for fabric sockets between hosts, tp, ddp, cp
     if (multihost_config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp ||
         device_config.enable_cp) {
         fmt::print("Enabling fabric\n");
@@ -539,16 +541,12 @@ int main(int argc, char **argv) {
     auto dataset = create_dataset(text_or_tokens, sequence_length, model_config);
 
     fmt::print("Dataset size: {}\n", dataset.get_size());
-    // In 3-tier training every worker iterates the full dataset with its own seed and the optimizer
-    // averages their gradients, so one optimizer step consumes num_mh_workers batches.
-    const uint32_t num_data_workers = is_three_tier_training(multihost_config) ? multihost_config.num_mh_workers : 1U;
     const auto [steps_per_epoch, effective_max_steps] = compute_training_steps(
         dataset,
         training_config.data_path,
         sequence_length,
         training_config.batch_size,
         training_config.gradient_accumulation_steps,
-        num_data_workers,
         training_config.max_steps,
         training_config.num_epochs);
     fmt::print("Steps per epoch {:.2f}\n", steps_per_epoch);
@@ -705,9 +703,8 @@ int main(int argc, char **argv) {
     }
 
     // Before anything is loaded and the optimizer is created (see core::store_trainable_parameters_as for the load
-    // order). Save-and-exit exports the weights in the dtype the model builds, so it skips the conversion. 3-tier
-    // workers keep bf16 parameters for RemoteOptimizer; the optimizer worker holds the fp32 master weights.
-    if (save_and_exit_path.empty() && !is_three_tier_training(multihost_config)) {
+    // order). Save-and-exit exports the weights in the dtype the model builds, so it skips the conversion.
+    if (save_and_exit_path.empty()) {
         if (auto master_dtype =
                 ttml::core::apply_precision_config(yaml_config["training_config"], get_model_parameters(model))) {
             fmt::print("Master dtype: {}\n", *master_dtype);
@@ -744,21 +741,10 @@ int main(int argc, char **argv) {
 
     fmt::print("Total parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
-    auto select_optimizer =
-        [&model, &optimizer_node, &multihost_config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
-        if (is_three_tier_training(multihost_config)) {
-            return std::make_unique<ttml::optimizers::RemoteOptimizer>(
-                get_model_parameters(model), multihost_config.num_mh_workers);
-        }
-        return ttml::optimizers::create_optimizer(optimizer_node, get_model_parameters(model));
-    };
-
-    auto optimizer = select_optimizer();
+    auto optimizer = ttml::optimizers::create_optimizer(optimizer_node, get_model_parameters(model));
 
     if (optimizer->get_name() == "NoOp") {
         fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
-    } else if (is_three_tier_training(multihost_config)) {
-        fmt::println("Remote optimizer configured!");
     } else {
         fmt::print("Optimizer: {}\n", optimizer->get_name());
         // TODO: Replace with print_stats() after #38756 is resolved
@@ -766,15 +752,7 @@ int main(int argc, char **argv) {
     }
     auto scheduler = schedule_func(optimizer.get(), effective_max_steps);
 
-    if (is_three_tier_training(multihost_config)) {
-        auto *optimizer_ptr = dynamic_cast<ttml::optimizers::RemoteOptimizer *>(optimizer.get());
-        if (!optimizer_ptr) {
-            throw std::runtime_error("Optimizer is not RemoteOptimizer");
-        }
-        fmt::println("[worker] Remote optimizer receiving weights from rank {}", multihost_config.num_mh_workers);
-        optimizer_ptr->receive_weights();
-        fmt::println("[worker] Remote optimizer received weights from rank {}", multihost_config.num_mh_workers);
-    } else if (optimizer->get_name() == "NoOp") {
+    if (optimizer->get_name() == "NoOp") {
         fmt::print("Skipping training state load (NoOp optimizer)\n");
     } else {
         // otherwise proceed with normal loading training state if necessary
@@ -792,7 +770,7 @@ int main(int argc, char **argv) {
     }
 
     if (multihost_config.enable_mpi && training_config.use_clip_grad_norm) {
-        throw std::logic_error("Clip grad norm is not supported with 3 tier training");
+        throw std::logic_error("Clip grad norm is not supported with multihost training");
     }
 
     if (device_config.enable_ddp) {
@@ -881,8 +859,7 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if ((device_config.enable_ddp || device_config.enable_cp) &&
-                    !is_three_tier_training(multihost_config)) {
+                if (device_config.enable_ddp || device_config.enable_cp) {
                     ttml::core::distributed::synchronize_gradients(parameters);
                 }
                 ttml::autograd::ctx().get_profiler().read_results(device, "gradient_sync_done");
@@ -923,7 +900,7 @@ int main(int argc, char **argv) {
                 }
 
                 if (!multihost_config.enable_mpi) {
-                    // save training state if it's not 3 tier training
+                    // multihost runs don't save the training state
                     if (!model_config.model_path.empty() && training_config.model_save_interval > 0 &&
                         global_step % training_config.model_save_interval == 0) {
                         save_training_state(
@@ -954,7 +931,7 @@ int main(int argc, char **argv) {
     }
 
     if (!multihost_config.enable_mpi) {
-        // save training state if it's not 3 tier training
+        // multihost runs don't save the training state
         if (!model_config.model_path.empty()) {
             save_training_state(
                 model_config.model_path, model, scheduler, model_config.model_type, optimizer->get_name());
