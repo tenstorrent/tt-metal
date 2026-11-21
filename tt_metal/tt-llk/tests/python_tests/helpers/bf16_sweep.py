@@ -262,6 +262,27 @@ def bf16_exhaustive_sweep(
     assert passed_test(
         golden, result, formats.output_format, max_ulp=max_ulp, mask=mask
     ), f"{mathop.name}: {over} lanes over the {max_ulp}-ULP budget"
+    # Whole steps cannot see a store that truncates instead of rounding: it stays within
+    # one step of the rounded golden. Measured against the exact (Float32) golden in BF16
+    # steps, its error passes the budget, which is at least the half step of a correct round.
+    exact = get_golden_generator(UnarySFPUGolden)(
+        mathop,
+        src_A,
+        DataFormat.Float32,
+        DestAccumulation.Yes,
+        formats.input_format,
+        dimensions,
+    ).double()
+    rounded = golden.double()
+    step = torch.ldexp(torch.ones_like(rounded), torch.frexp(rounded)[1] - 8)
+    lanes = (
+        mask & torch.isfinite(exact) & torch.isfinite(result.double()) & (rounded != 0)
+    )
+    pure = ((result.double() - exact).abs() / step)[lanes]
+    worst = float(pure.max()) if pure.numel() else 0.0
+    assert worst <= max(
+        max_ulp, 0.5
+    ), f"{mathop.name}: max pure ULP {worst:.4f} over the {max(max_ulp, 0.5)} bound"
     # The step budget helpers/sfpu_accuracy_budget.yaml declares for this cell, where it
     # declares one for this board, judged as test_unary_sfpu_ulp.py judges it.
     contract = accuracy_contract(
