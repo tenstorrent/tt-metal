@@ -167,16 +167,14 @@ ALWI void sigmoid_tile(uint32_t idst) {
     MATH(if constexpr (
         ckernel::sfpu::sigmoid_bf16_whole_tile && !is_fp32_dest_acc_en && !fast_and_approx && iterations == 8 &&
         vec_mode == VectorMode::RC) {
-        if (vec_mode == VectorMode::RC) {
-            SFPU_UNARY_CALL(
-                DST_SYNC_MODE,
-                is_fp32_dest_acc_en,
-                calculate_sigmoid,
-                (fast_and_approx, is_fp32_dest_acc_en, 32 /*ITERATIONS*/),
-                idst,
-                VectorMode::None);
-            return;
-        }
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_sigmoid,
+            (fast_and_approx, is_fp32_dest_acc_en, 32 /*ITERATIONS*/),
+            idst,
+            VectorMode::None);
+        return;
     });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
