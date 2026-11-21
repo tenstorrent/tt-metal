@@ -94,7 +94,15 @@ Intermediate data: the only intermediate is the assembled output tile (`tile_row
 | CB | Depth knob | Phase 0 value | What the depth buys |
 |----|------------|---------------|---------------------|
 | `cb_output_pages` | `RING_DEPTH` (entries per thread; × 1 thread) | 2 | reader fills entry k+1 while the writer drains entry k (implicit sync splits the ring into two txn-id halves, `DataflowBuffer.md` "Double buffering") |
-| `scratch_input_window` (tile_row_shift only) | `WINDOW_TILES = BLOCK_H_TILES + 1` (derived, not a knob of its own) | 9 | one block's input tile-rows plus the one shared with the previous block, so each input tile is read once per column segment |
+| `scratch_input_window` (tile_row_shift only) | `WINDOW_TILES = 2 × BLOCK_H_TILES` (derived, not a knob of its own; verifier amendment, below) | 16 | one block's input tiles — a block may span several short tile columns, ≤ m + 1 input tiles per column segment of m output tiles — including the one shared with the previous block, so each input tile is read once per core range |
+
+> **Verifier amendment (Phase 0 verification).** The `width` = 1 column per block rule above is withdrawn for
+> `tile_row_shift`. Holding several columns *does* remove barriers: with blocks clamped to one column, every
+> Phase 0 `tile_row_shift` entry (all have H ≤ 2 tile-rows per chunk image, the YOLO calls included) read one
+> input tile per DRAM barrier, the read-one/barrier trap. A block is now `block_h_tiles` consecutive output
+> tiles of the column-major walk, across column boundaries; the window holds `2 × block_h_tiles` tiles indexed
+> by read sequence number. Counts and the reasoning are in `l1_ledger.md` (Verifier amendment) and
+> `verification_report.md`.
 
 ### Mechanism caps
 

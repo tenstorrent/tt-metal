@@ -6,7 +6,7 @@
 // so the two agree on which chunk page each entry is. One tagged write per entry; the DM0 interrupt handler
 // acks the entry once it is sent.
 //
-// The chunk tensors are bound as chunk_0 .. chunk_{SPLIT_NUM_CHUNKS-1}; SPLIT_NUM_CHUNKS (<= 4) is a define so
+// The chunk tensors are bound as chunk_0 .. chunk_{SPLIT_NUM_CHUNKS-1}; SPLIT_NUM_CHUNKS (<= SPLIT_MAX_CHUNKS) is a define so
 // that only bound accessors are named.
 
 #include "api/dataflow/dataflow_api.h"
@@ -19,8 +19,12 @@
 
 #include "split_walk.hpp"
 
-#if !defined(SPLIT_NUM_CHUNKS) || SPLIT_NUM_CHUNKS < 1 || SPLIT_NUM_CHUNKS > 4
-#error "split_writer: SPLIT_NUM_CHUNKS must be 1..4"
+// SPLIT_MAX_CHUNKS is the host's MAX_CHUNKS (split_program_artifacts.py); this file names accessors chunk_0..chunk_3.
+#if !defined(SPLIT_MAX_CHUNKS) || SPLIT_MAX_CHUNKS > 4
+#error "split_writer: SPLIT_MAX_CHUNKS must be defined and <= 4 (the accessors this writer names)"
+#endif
+#if !defined(SPLIT_NUM_CHUNKS) || SPLIT_NUM_CHUNKS < 1 || SPLIT_NUM_CHUNKS > SPLIT_MAX_CHUNKS
+#error "split_writer: SPLIT_NUM_CHUNKS must be 1..SPLIT_MAX_CHUNKS"
 #endif
 
 void kernel_main() {

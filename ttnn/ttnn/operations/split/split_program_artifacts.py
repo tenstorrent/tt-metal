@@ -11,7 +11,7 @@ page_remap      every output page is exactly one input page (ROW_MAJOR cut along
                 before H, or along H at a multiple of the tile height). Reader and writer both implicit sync.
 tile_row_shift  TILE cut along H inside a tile: an output tile takes its rows from up to two input tiles. The
                 reader keeps a window of input tiles in a scratchpad (one DRAM barrier per block of
-                `BLOCK_H_TILES` output tiles) and assembles each output tile into the ring with self-aimed NoC
+                `BLOCK_H_TILES` output tiles, which may span tile columns) and assembles each output tile into the ring with self-aimed NoC
                 copies (explicit sync, every transfer trid 0). The writer stays implicit.
 
 The geometry of a call is derived once here (`derive_geometry`) and passed to both kernels as common runtime
@@ -34,12 +34,16 @@ E = ttnn.experimental
 THREAD_PLAN = (1, 0, 1)
 # Entries of cb_output_pages per DM thread: reader fills entry k+1 while the writer drains entry k.
 RING_DEPTH = 2
-# tile_row_shift: output tiles of one tile column assembled per DRAM-read barrier.
+# tile_row_shift: output tiles of the walk assembled per DRAM-read barrier (a block may span tile columns).
 BLOCK_H_TILES = 8
-# tile_row_shift: input tiles resident in the scratchpad window (one block's tile-rows + the shared one).
-WINDOW_TILES = BLOCK_H_TILES + 1
-# The writer binds one accessor per chunk tensor (chunk_0 .. chunk_{MAX_CHUNKS-1}).
+# tile_row_shift: input tiles resident in the scratchpad window. A column segment of m output tiles reads at most
+# m + 1 input tiles, so a block of BLOCK_H_TILES output tiles reads at most 2 * BLOCK_H_TILES (shared tile included).
+WINDOW_TILES = 2 * BLOCK_H_TILES
+# The writer binds one accessor per chunk tensor (chunk_0 .. chunk_{MAX_CHUNKS-1}); passed to it as the define
+# SPLIT_MAX_CHUNKS, so the cap is stated once.
 MAX_CHUNKS = 4
+# The tile the tile_row_shift assembly addresses (four 16x16 faces; split_walk.hpp TILE_ROWS = its height).
+ASSEMBLY_TILE = (32, 32)
 
 # Mechanism cap: an implicit-sync transfer is one ring entry, one NoC transaction (no size argument).
 NOC_MAX_BURST_BYTES = 256 * 256  # NOC_MAX_BURST_WORDS x NOC_WORD_BYTES on quasar (noc_parameters.h:395-396)
@@ -119,6 +123,13 @@ def derive_geometry(input_tensor, split_size, dim):
             cut_pages = ceil(shape[-2] / tile_h)
             inner_pages = ceil(shape[-1] / tile_w)
             chunk_pages = split_size // tile_h
+        elif dim == -1:
+            # TILE cut along W at a multiple of the tile width: every tile-row of every image is a page-row,
+            # cut into tile columns (op_design.md, Regimes, rm_substick row's note).
+            outer = prod(shape[:-2]) * ceil(shape[-2] / tile_h)
+            cut_pages = ceil(shape[-1] / tile_w)
+            inner_pages = 1
+            chunk_pages = split_size // tile_w
         else:  # TILE, dim <= -3: whole images of tiles
             outer = prod(shape[:dim])
             cut_pages = extent
@@ -127,6 +138,9 @@ def derive_geometry(input_tensor, split_size, dim):
         geometry.update(cut_pages=cut_pages, inner_pages=inner_pages, chunk_pages=chunk_pages)
         num_units = outer * cut_pages * inner_pages
     else:  # TILE_ROW_SHIFT: walk (o, tw, c, j) over output tiles, column-major
+        if (tile_h, tile_w) != ASSEMBLY_TILE:
+            # The row-run assembly (split_reader.cpp, split_walk.hpp TILE_ROWS) addresses four 16x16 faces.
+            raise NotImplementedError(f"split: tile_row_shift assembles {ASSEMBLY_TILE} tiles, not {(tile_h, tile_w)}")
         outer = prod(shape[:-2])
         h_tiles = ceil(shape[-2] / tile_h)
         w_tiles = ceil(shape[-1] / tile_w)
@@ -239,7 +253,7 @@ def create_program_artifacts(input_tensor, chunks, split_size, dim, *, threads=T
         source=str(KERNEL_DIR / "split_writer.cpp"),
         hw_config=_dm_config(E.create_writer_datamovement_config, []),
         num_threads=W,
-        compiler_options=E.KernelSpec.CompilerOptions(defines={**regime_define, "SPLIT_NUM_CHUNKS": str(n_chunks)}),
+        compiler_options=E.KernelSpec.CompilerOptions(defines={**regime_define, "SPLIT_NUM_CHUNKS": str(n_chunks), "SPLIT_MAX_CHUNKS": str(MAX_CHUNKS)}),
         dfb_bindings=[E.consumer_of("cb_output_pages", "cb_output_pages")],
         tensor_bindings=[E.TensorBinding(tensor_parameter_name=name, accessor_name=name) for name in chunk_names],
         compile_time_args=plan,

@@ -6,10 +6,10 @@
 // regime page_remap (implicit sync): each unit is one input page, which is exactly one output page; one tagged
 //   read per entry lands at the ring's cursor and the DM0 interrupt handler posts its credit.
 // regime tile_row_shift (explicit sync on cb_output_pages, opted out on the host): the cut is inside a tile, so an
-//   output tile takes its rows from up to two input tiles. Per block of <= block_h_tiles output tiles of one
-//   tile column:
+//   output tile takes its rows from up to two input tiles. Per block of <= block_h_tiles output tiles of the
+//   walk (a block may span several tile columns):
 //     load_window_block  read the input tiles the block needs that are not yet resident into the scratchpad
-//                        window (slot = tile-row % window_tiles), ONE barrier for the block;
+//                        window (slot = read sequence number % window_tiles), ONE barrier for the block;
 //     assemble_block     per output tile: reserve 1 entry, copy its valid rows from the window with <= 8
 //                        self-aimed NoC copies (face-row runs), barrier, push 1.
 //   Every transfer of this regime carries the user transaction id 0 (target page, Ring protocols).
@@ -66,14 +66,20 @@ void kernel_main() {
         static_assert(R == 1, "the tile_row_shift reader is one hart: its window is per hart");
         constexpr uint32_t block_h_tiles = get_arg(args::block_h_tiles);
         constexpr uint32_t window_tiles = get_arg(args::window_tiles);
-        static_assert(window_tiles >= block_h_tiles + 1, "a block spans up to block_h_tiles + 1 input tile-rows");
+        // A block of block_h_tiles output tiles may span several tile columns (a short column, e.g. H <= 32, holds
+        // one or two output tiles): a column segment of m output tiles reads at most m + 1 input tiles, so a block
+        // reads at most 2 * block_h_tiles, the one it may share with the previous block included.
+        static_assert(window_tiles >= 2 * block_h_tiles, "a block's input tiles must fit the window");
         constexpr NocOptVals user_txn = {.trid = 0};
 
         Scratchpad<uint8_t> window(scratch::scratch_input_window);
         const uint32_t page_bytes = ring.get_entry_size();
         const uint32_t face_bytes = page_bytes / 4;
         const uint32_t face_row_bytes = page_bytes / 64;
-        auto slot_offset = [&](uint32_t tile_row) { return (tile_row % window_tiles) * page_bytes; };
+        // Input tiles are numbered in the order they are read (seq); a tile's slot is seq % window_tiles. The walk
+        // needs input tiles (column, tile-row) in increasing order, so a block's tiles have consecutive seqs, and
+        // the last tile read is the only resident tile a later output tile can need again.
+        auto slot_offset = [&](uint32_t seq) { return (seq % window_tiles) * page_bytes; };
 
         split::TileRowShiftWalk walk(
             get_arg(args::h_tiles),
@@ -84,51 +90,52 @@ void kernel_main() {
             get_arg(args::column_tiles));
         walk.seek(start_unit);
 
-        // Resident input tile-rows [lo, hi) of column `resident_col` (none at the start of the range).
-        uint32_t resident_col = 0xFFFFFFFFu, lo = 0, hi = 0;
+        uint32_t last_col = 0xFFFFFFFFu, last_ta = 0, last_seq = 0;  // the last input tile read (none yet)
+        uint32_t next_seq = 0;
+        uint32_t first_seq[block_h_tiles];  // seq of each output tile's first input tile; the second is seq + 1
         uint32_t remaining = num_units;
         while (remaining > 0) {
-            const uint32_t block = split::min_u32(split::min_u32(block_h_tiles, remaining), walk.tiles_left_in_column());
+            const uint32_t block = split::min_u32(block_h_tiles, remaining);
 
-            // ---- load_window_block: the block's input rows are contiguous: [first row, end of last tile's rows)
-            const uint32_t first_row = walk.first_row();
-            split::TileRowShiftWalk last = walk;
-            last.advance(block - 1);
-            const uint32_t end_row = last.first_row() + last.valid_rows();
-            const uint32_t ta_lo = first_row / split::TILE_ROWS;
-            const uint32_t ta_hi = (end_row - 1) / split::TILE_ROWS + 1;
-            if (walk.col != resident_col || ta_lo >= hi || ta_lo < lo) {
-                resident_col = walk.col;
-                lo = hi = ta_lo;
-            }
-            lo = ta_lo;  // tiles below the block are no longer needed: their slots may be refilled
-            if (ta_hi > hi) {
-                for (uint32_t ta = hi; ta < ta_hi; ++ta) {
+            // ---- load_window_block: every input tile the block needs that is not resident, ONE barrier
+            bool issued = false;
+            split::TileRowShiftWalk w = walk;
+            for (uint32_t b = 0; b < block; ++b, w.next()) {
+                const uint32_t g = w.first_row();
+                const uint32_t ta = g / split::TILE_ROWS;
+                const uint32_t tb = (g % split::TILE_ROWS + w.valid_rows() > split::TILE_ROWS) ? ta + 1 : ta;
+                for (uint32_t t = ta; t <= tb; ++t) {
+                    if (w.col == last_col && t == last_ta) {
+                        continue;  // resident
+                    }
+                    last_col = w.col, last_ta = t, last_seq = next_seq++;
                     noc.async_read<NocOptions::TXN_ID>(
-                        acc_input, window, page_bytes, {.page_id = walk.input_page(ta)}, {.offset_bytes = slot_offset(ta)}, user_txn);
+                        acc_input, window, page_bytes, {.page_id = w.input_page(t)}, {.offset_bytes = slot_offset(last_seq)}, user_txn);
+                    issued = true;
                 }
-                hi = ta_hi;
+                first_seq[b] = tb == ta ? last_seq : last_seq - 1;
+            }
+            if (issued) {
                 noc.async_read_barrier<NocOptions::TXN_ID>(user_txn);
             }
 
             // ---- assemble_block: one ring entry per output tile
             for (uint32_t b = 0; b < block; ++b) {
                 const uint32_t g = walk.first_row();
-                const uint32_t ta = g / split::TILE_ROWS;
                 const uint32_t shift = g % split::TILE_ROWS;
                 const uint32_t valid = walk.valid_rows();
                 ring.reserve_back(1);
                 if (shift == 0) {
                     // Rows line up with the input tile: copy it whole (rows past `valid` are padding).
                     noc.async_read<NocOptions::TXN_ID>(
-                        window, ring, page_bytes, {.offset_bytes = slot_offset(ta)}, {.offset_bytes = 0}, user_txn);
+                        window, ring, page_bytes, {.offset_bytes = slot_offset(first_seq[b])}, {.offset_bytes = 0}, user_txn);
                 } else {
                     // Output row r <- input row r + shift (of tile ta, or of tile ta + 1 past row 31). Maximal runs
                     // that stay inside one 16-row face band on both sides; each run is one copy per column half.
                     uint32_t r = 0;
                     while (r < valid) {
                         const uint32_t s = r + shift;
-                        const uint32_t src_tile = ta + s / split::TILE_ROWS;
+                        const uint32_t src_seq = first_seq[b] + s / split::TILE_ROWS;
                         const uint32_t sr = s % split::TILE_ROWS;
                         const uint32_t run = split::min_u32(split::min_u32(valid - r, 16 - r % 16), 16 - sr % 16);
                         const uint32_t run_bytes = run * face_row_bytes;
@@ -137,7 +144,7 @@ void kernel_main() {
                                 window,
                                 ring,
                                 run_bytes,
-                                {.offset_bytes = slot_offset(src_tile) + tile_row_offset(sr, h, face_bytes, face_row_bytes)},
+                                {.offset_bytes = slot_offset(src_seq) + tile_row_offset(sr, h, face_bytes, face_row_bytes)},
                                 {.offset_bytes = tile_row_offset(r, h, face_bytes, face_row_bytes)},
                                 user_txn);
                         }

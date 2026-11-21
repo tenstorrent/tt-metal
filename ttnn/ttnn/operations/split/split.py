@@ -115,7 +115,8 @@ def split(
 ) -> list:
     """Cut `input_tensor` along `dim` into ceil(shape[dim] / split_size) chunks; returns a list of tensors."""
     axes = validate(input_tensor, split_size, dim)
-    return _dispatch(input_tensor, split_size, _check_call(input_tensor, split_size, dim), _chunk_memory_config(axes))
+    # axes["dim"] is the canonical negative dim (tag_dim, R3); validate() already checked the call.
+    return _dispatch(input_tensor, split_size, axes["dim"], _chunk_memory_config(axes))
 
 
 def _dispatch(input_tensor, split_size, d, memory_config):

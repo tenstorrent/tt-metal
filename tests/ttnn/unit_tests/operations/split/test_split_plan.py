@@ -5,7 +5,7 @@
 
 - which regime each named Phase 0 entry selects (the host's selection function, called directly);
 - tile_row_shift shapes whose per-core ranges start mid-column (halo) and span several blocks of
-  BLOCK_H_TILES, with chunk boundaries inside a block;
+  BLOCK_H_TILES, with chunk boundaries inside a block, and blocks that span several short tile columns;
 - every output page written: exact comparison of every chunk against torch.split on random values;
 - chunk placement (R5): each chunk in the input's buffer, interleaved;
 - chunk counts 1, 3, 4 and a smaller last chunk through the dispatch below validate() (the kernels handle them;
@@ -88,6 +88,9 @@ WINDOW_CASES = [
     ((4, 1000, 96), 500),  # 12 columns x 32 tiles = 384 on 32 cores: 12 per core, blocks of 8 + 4, mid-column starts
     ((1, 600, 32), 300),  # one tall column, the chunk boundary at row 300 (tile 9, row 12)
     ((3, 70, 40), 35),  # W and H non-aligned, chunk boundary inside a tile, ragged last tiles
+    # short columns (2 output tiles each, 2 input tiles) over 512 columns: 32 output tiles per core, blocks span
+    # 4 columns, ~32 window reads per core, so the window's read sequence wraps the 2*BLOCK_H_TILES slots twice
+    ((2, 40, 8192), 20),
 ]
 
 
@@ -175,3 +178,24 @@ def test_split_back_to_back(device):
         split_size = 17 if step < 2 else 32
         t = torch.randn((2, 2 * split_size, 160), dtype=torch.bfloat16)
         _check_chunks(split(_put(device, t, layout), split_size, -2), t, split_size, -2)
+
+
+# --- R6: a sharded input is refused by name (the generic runner builds interleaved tensors only) -------------
+
+
+@pytest.mark.parametrize("strategy", ["HEIGHT", "WIDTH"])
+def test_sharded_input_is_refused_by_name(device, strategy):
+    from eval.memory import memory_axes
+    from eval.sharding import auto_shard_config
+    from ttnn.operations._op_contract import UnsupportedAxisValue
+
+    shape = (1, 64, 256)
+    memory_config = auto_shard_config(
+        shape, getattr(ttnn.ShardStrategy, strategy), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+    )
+    sharded = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    assert memory_axes(sharded)["sharding"] == strategy.lower()
+    with pytest.raises(UnsupportedAxisValue, match="sharding"):
+        split(sharded, 32, 1)

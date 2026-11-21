@@ -83,7 +83,6 @@ struct TileRowShiftWalk {
     uint32_t chunk_tile_rows() const { return (chunk_rows() + TILE_ROWS - 1) / TILE_ROWS; }
     uint32_t first_row() const { return c * split_rows + TILE_ROWS * j; }
     uint32_t valid_rows() const { return min_u32(TILE_ROWS, chunk_rows() - TILE_ROWS * j); }
-    uint32_t tiles_left_in_column() const { return column_tiles - k; }
     // Input tile at tile-row `ta` of this column.
     uint32_t input_page(uint32_t ta) const {
         const uint32_t o = col / w_tiles, tw = col - (col / w_tiles) * w_tiles;
