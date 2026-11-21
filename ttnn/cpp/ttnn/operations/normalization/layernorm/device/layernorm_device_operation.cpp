@@ -508,7 +508,11 @@ tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
                         operation_attributes.output_mem_config.buffer_type(),
                         shard_spec);
                     return tt::tt_metal::TensorSpec(
-                        output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config));
+                        output_shape,
+                        TensorLayout(
+                            operation_attributes.dtype.value_or(DataType::BFLOAT16),
+                            PageConfig(Layout::TILE),
+                            mem_config));
                 }
                 if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
                     auto output_shard_spec = operation_attributes.output_mem_config.shard_spec().value();

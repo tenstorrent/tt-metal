@@ -33,7 +33,7 @@ ttnn::Tensor rms_norm_pre_all_gather(
             memory_config.value_or(input_tensor.memory_config()),
             program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}),
             kernel_config_val,
-            std::nullopt,  // dtype
+            dtype,
             ttnn::prim::LayerNormType::RMSNORM,
             ttnn::prim::DistributedLayerNormStage::PRE_ALL_GATHER);
     }
