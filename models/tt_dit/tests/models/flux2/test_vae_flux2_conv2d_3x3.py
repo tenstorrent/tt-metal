@@ -7,7 +7,7 @@
 The full decoder and encoder (layers_per_block 2) with diffusers' AutoencoderKLFlux2 default config, which is
 FLUX.2's VAE architecture, with seeded random weights: the gated FLUX.2-dev checkpoint is not needed to compare
 the two conv implementations, and both see the same weights and the same torch reference. Meshes: one device,
-and the Blackhole (2, 4) preset of pipeline_flux2.py (channels split on mesh axis 1, rows on axis 0).
+and the Blackhole (2, 2) and (2, 4) presets of pipeline_flux2.py (channels split on mesh axis 1, rows on axis 0).
 
 Each case checks quality against torch, then times MEASURED_DECODES untraced passes (wall clock after
 synchronize, after one warm-up pass that compiles). With conv2d_3x3 every 3x3 conv must run on it. Results go
@@ -114,9 +114,10 @@ def _decoder_case(mesh_device, tp_axis, h_axis, height, width, conv):
     "mesh_device, device_params, tp_axis, h_axis",
     [
         [(1, 1), single_device_params_flux2, 0, 1],
+        [(2, 2), line_params_flux2, 1, 0],
         [(2, 4), line_params_flux2, 1, 0],
     ],
-    ids=["1x1", "bh2x4"],
+    ids=["1x1", "bh2x2", "bh2x4"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("height", "width"), [(1024, 1024), (2048, 2048)], ids=["1024", "2048"])
@@ -167,9 +168,10 @@ def test_vae_flux2_decoder_conv2d_3x3(
     [
         # On one chip ttnn.conv2d DRAM-slices the 2048² decoder's convs, and its trace outgrows TRACE_REGION_SIZE.
         [(1, 1), {**single_device_params_flux2, "trace_region_size": 4 * TRACE_REGION_SIZE}, 0, 1],
+        [(2, 2), {**line_params_flux2, "trace_region_size": TRACE_REGION_SIZE}, 1, 0],
         [(2, 4), {**line_params_flux2, "trace_region_size": TRACE_REGION_SIZE}, 1, 0],
     ],
-    ids=["1x1", "bh2x4"],
+    ids=["1x1", "bh2x2", "bh2x4"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("height", "width"), [(1024, 1024), (2048, 2048)], ids=["1024", "2048"])
