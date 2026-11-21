@@ -365,6 +365,41 @@ FORCE_INLINE void update_tail_rows(uint32_t n_tail) {
     cb_pop_front(cb_vraw, Dt);
 }
 
+// kTailBatched: the user's tail tile (cb_tail8, k then v) with its new row placed from the layer's batched new rows
+// (cb_knew / cb_vraw, user u in row u; waited for by the caller, kept for the layer's other users): tail (x) keep +
+// P_u @ new, P_u / keep at tiles sel / sel + 1 of cb_rowsel (exact: 0/1 products)
+FORCE_INLINE void update_tail_user(uint32_t sel) {
+    cb_wait_front(cb_tail8, 2 * Dt);
+    cb_reserve_back(cb_tailk, Dt);
+    cb_reserve_back(cb_tailv, Dt);
+    pack_reconfig_data_format(cb_tailk);
+    for (uint32_t kv = 0; kv < 2; kv++) {
+        const uint32_t row_cb = kv == 0 ? cb_knew : cb_vraw;
+        for (uint32_t d0 = 0; d0 < Dt; d0 += kBatch) {
+            tile_regs_acquire();
+            reconfig_data_format(cb_tail8, cb_rowsel);
+            mul_init(cb_tail8, cb_rowsel, false);
+            for (uint32_t i = 0; i < kBatch; i++) {
+                mul_tiles(cb_tail8, cb_rowsel, kv * Dt + d0 + i, sel + 1, i);
+            }
+            reconfig_data_format(row_cb, cb_rowsel);
+            matmul_init(cb_rowsel, row_cb, 0);
+            for (uint32_t i = 0; i < kBatch; i++) {
+                matmul_tiles(cb_rowsel, row_cb, sel, d0 + i, i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < kBatch; i++) {
+                pack_tile(i, kv == 0 ? cb_tailk : cb_tailv);
+            }
+            tile_regs_release();
+        }
+    }
+    cb_push_back(cb_tailk, Dt);
+    cb_push_back(cb_tailv, Dt);
+    cb_pop_front(cb_tail8, 2 * Dt);
+}
+
 // the updated tail tiles (n_tail of them) as bf8 for the DRAM write-back, k of each tile then v; pops them
 FORCE_INLINE void pack_tail_bf8(uint32_t n_tail = 1) {
     cb_reserve_back(cb_flush, 2 * n_tail * Dt);

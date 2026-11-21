@@ -65,6 +65,7 @@ FORCE_INLINE void fill_bf16(uint32_t addr, bool (*one)(uint32_t, uint32_t), uint
 }
 
 uint32_t tail_r;
+uint32_t tail_u;  // (kTailBatched: the user whose placement matrix is being filled)
 
 }  // namespace
 
@@ -202,16 +203,25 @@ void kernel_main() {
             fill_bf16(
                 get_write_ptr(cb_mask) + u * kTile, [](uint32_t, uint32_t col) { return col <= tail_r; }, 0, 0xff80);
             const uint32_t sel = get_write_ptr(cb_rowsel) + 2 * u * kTile;
-            fill_bf16(sel, [](uint32_t row, uint32_t) { return row == tail_r; }, 0x3f80, 0);
+            if constexpr (kTailBatched) {
+                // P_u: row u of the batched new rows into row r of the tail tile; keep: every other row
+                tail_u = u;
+                fill_bf16(sel, [](uint32_t row, uint32_t col) { return row == tail_r && col == tail_u; }, 0x3f80, 0);
+            } else {
+                fill_bf16(sel, [](uint32_t row, uint32_t) { return row == tail_r; }, 0x3f80, 0);
+            }
             fill_bf16(sel + kTile, [](uint32_t row, uint32_t) { return row == tail_r; }, 0, 0x3f80);
         }
         if constexpr (!packed) {
             cb_push_back(cb_mask, kRows);
             cb_push_back(cb_rowsel, 2 * kRows);
-            cb_reserve_back(cb_rope, 3 * batch * groups);
+            cb_reserve_back(cb_rope, kRopeTail);
             noc_async_read(tok.get_noc_addr(0, rope_off), get_write_ptr(cb_rope), 3 * batch * groups * kTile);
             noc_async_read_barrier();
-            cb_push_back(cb_rope, 3 * batch * groups);
+            if constexpr (kTailBatched) {
+                build_rows_rope(get_write_ptr(cb_rope));
+            }
+            cb_push_back(cb_rope, kRopeTail);
         }
         push_resident(cb_mean, 1);
     }
@@ -325,28 +335,54 @@ void kernel_main() {
             cb_reserve_back(cb_tail8, 2 * Dt);
             read_rows(ch, k_addr, 0, 1, get_write_ptr(cb_tail8), pages, copy_page);
             read_rows(ch, v_addr, 0, 1, get_write_ptr(cb_tail8) + kKvRow, pages, copy_page);
-            cb_reserve_back(cb_kw, Dt);
-            for (uint32_t d = 0; d < Dt; d++) {
-                noc_async_read_page((l % copies) * Dt + d, kw_dram, get_write_ptr(cb_kw) + d * kTile);
+            // (kTailBatched: the k norm weight and every user's new rows once per layer)
+            const bool per_user = !kTailBatched || ka == 0;
+            if (per_user) {
+                cb_reserve_back(cb_kw, Dt);
+                for (uint32_t d = 0; d < Dt; d++) {
+                    noc_async_read_page((l % copies) * Dt + d, kw_dram, get_write_ptr(cb_kw) + d * kTile);
+                }
             }
             noc_async_read_barrier();
             cb_push_back(cb_tail8, 2 * Dt);
-            cb_push_back(cb_kw, Dt);
+            if (per_user) {
+                cb_push_back(cb_kw, Dt);
+            }
             if (ka == 0) {
                 noc_semaphore_wait_min(rows_sem, num_streamers * (l + 1));
             }
-            cb_reserve_back(cb_kraw, Dt);
-            cb_reserve_back(cb_vraw, Dt);
-            const uint32_t k = get_write_ptr(cb_kraw), v = get_write_ptr(cb_vraw);
-            // (row groups: user u's rows in block u / batch of the row buffer, row u % batch)
-            const uint32_t grows = rows + (u / batch) * row_tiles * kRowTile;
-            for (uint32_t d = 0; d < Dt; d++) {
-                place_row0(grows + (k0 + d) * kRowTile + user_offset(u % batch), k + d * kTile);
-                place_row0(grows + (v0 + d) * kRowTile + user_offset(u % batch), v + d * kTile);
+            if constexpr (kTailBatched) {
+                if (ka == 0) {
+                    // every active user's k / v row into row uu (its global row) of one tile set
+                    cb_reserve_back(cb_kraw, Dt);
+                    cb_reserve_back(cb_vraw, Dt);
+                    const uint32_t k = get_write_ptr(cb_kraw), v = get_write_ptr(cb_vraw);
+                    for (uint32_t a2 = 0; a2 < n_act; a2++) {
+                        const uint32_t uu = act.row[a2];
+                        const uint32_t grows = rows + (uu / batch) * row_tiles * kRowTile;
+                        for (uint32_t d = 0; d < Dt; d++) {
+                            place_row(grows + (k0 + d) * kRowTile + user_offset(uu % batch), k + d * kTile, uu);
+                            place_row(grows + (v0 + d) * kRowTile + user_offset(uu % batch), v + d * kTile, uu);
+                        }
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_kraw, Dt);
+                    cb_push_back(cb_vraw, Dt);
+                }
+            } else {
+                cb_reserve_back(cb_kraw, Dt);
+                cb_reserve_back(cb_vraw, Dt);
+                const uint32_t k = get_write_ptr(cb_kraw), v = get_write_ptr(cb_vraw);
+                // (row groups: user u's rows in block u / batch of the row buffer, row u % batch)
+                const uint32_t grows = rows + (u / batch) * row_tiles * kRowTile;
+                for (uint32_t d = 0; d < Dt; d++) {
+                    place_row0(grows + (k0 + d) * kRowTile + user_offset(u % batch), k + d * kTile);
+                    place_row0(grows + (v0 + d) * kRowTile + user_offset(u % batch), v + d * kTile);
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_kraw, Dt);
+                cb_push_back(cb_vraw, Dt);
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_kraw, Dt);
-            cb_push_back(cb_vraw, Dt);
         }
         mark(l, 0);
         noc_semaphore_wait_min(q_sem, i + 1);

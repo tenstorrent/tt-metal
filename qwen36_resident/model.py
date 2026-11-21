@@ -97,6 +97,8 @@ GDN_CHUNK = os.environ.get("RESIDENT_GDN_CHUNK", "1") == "1"
 # (attention of a verify of R > 2 rows in packed passes of several rows, attn_common.hpp; 0: a pass per row)
 ATTN_PACKED = os.environ.get("RESIDENT_ATTN_PACKED", "1") == "1"
 HUB_LINKS = int(os.environ.get("RESIDENT_HUB_LINKS", "2"))  # fabric links per neighbour the hubs' all-reduce uses
+# (debug, row groups: the attention leader's per-iteration timeline, attn_leader_writer.cpp mark_it)
+ATTN_TS = os.environ.get("RESIDENT_ATTN_TS", "0") == "1"
 # row groups: size the weight ring from the L1 actually left on the streamers (up to the one-group ring) instead of
 # the per-group reservation estimate (act_bytes), which overstates what a second group takes
 RING_AUTO = os.environ.get("RESIDENT_RING_AUTO", "1") == "1"
@@ -1042,6 +1044,10 @@ class ResidentModel:
         # the hub's: per round (per sub-round with row groups) 8 words (mlp_hub.cpp kHubTs)
         self.hub_ts_t = ts_buf(hub_grid, 1, (2 * layers + int(self.fc)) * self.groups * 8) if timeline else None
         self.l1_addrs += [ts_addr, self.hub_ts_t.buffer_address()] if timeline else []
+        # (debug: the attention leader's timeline per (layer, user) iteration, row groups)
+        self.attn_ts_t = ts_buf(lead_grid, 1, max(1, self.n_attn) * LR * 8) if ATTN_TS and groups > 1 else None
+        if self.attn_ts_t is not None:
+            self.l1_addrs.append(self.attn_ts_t.buffer_address())
 
         # ---- per sub-batch decode state (sub-batch 0's is above)
         subs = [
@@ -1317,7 +1323,8 @@ class ResidentModel:
                 # leader and tail core
                 cb(13, prep_grid, Dt),
                 cb(14, prep_grid, 2),
-                cb(17, prep_grid, 3 * LR + (3 * attn_users + 3 if packed else 0)),
+                # (row groups: + the tail core's per-row rope tiles, attn_common.hpp kTailBatched)
+                cb(17, prep_grid, 3 * LR + (3 * attn_users + 3 if packed else 0) + (3 if groups > 1 else 0)),
                 T(29, mean_t),
                 # leader
                 cb(2, lead_grid, 1, page=groups * heads_a * Dt * 64 * B),
@@ -1661,7 +1668,7 @@ class ResidentModel:
                     + peers
                     + [len(groups_)]
                     + [v for grp in groups_ for v in (wphys[grp[0]].x, wphys[grp[0]].y)]
-                    + [0, tok_addr]
+                    + [self.attn_ts_t.buffer_address() if self.attn_ts_t is not None else 0, tok_addr]
                 )
                 lc[leader.x][leader.y] = [len(groups_)]
 

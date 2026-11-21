@@ -251,7 +251,7 @@ void kernel_main() {
     }
     compute_kernel_hw_startup(cb_kraw, cb_kraw, cb_sq);
     cb_wait_front(cb_mean, 1);
-    cb_wait_front(cb_rope, kRopePages);
+    cb_wait_front(cb_rope, kRopeTail);
     if constexpr (packed) {
         // every row's new k / v into the tail tiles once per layer, then per pass the masked tail tiles
         const uint32_t n_tail = n_of[0];
@@ -284,11 +284,23 @@ void kernel_main() {
     cb_wait_front(cb_mask, kRows);
     cb_wait_front(cb_rowsel, 2 * kRows);
     for (uint32_t i = 0; i < layers * n_act; i++) {
-        const uint32_t u = act.row[i % n_act];
-        cb_wait_front(cb_kw, Dt);
-        norm_rope(cb_kraw, cb_kw, 0, cb_knew, cb_knew, 3 * u);
-        cb_pop_front(cb_kw, Dt);
-        update_tail(2 * u);
+        const uint32_t ka = i % n_act, u = act.row[ka];
+        if constexpr (kTailBatched) {
+            // every active user's new k row of the layer at once (row u = user u, per-row rope), then its placement
+            if (ka == 0) {
+                cb_wait_front(cb_kw, Dt);
+                norm_rope(cb_kraw, cb_kw, 0, cb_knew, cb_knew, kRopeRows);
+                cb_pop_front(cb_kw, Dt);
+                cb_wait_front(cb_knew, Dt);
+                cb_wait_front(cb_vraw, Dt);
+            }
+            update_tail_user(2 * u);
+        } else {
+            cb_wait_front(cb_kw, Dt);
+            norm_rope(cb_kraw, cb_kw, 0, cb_knew, cb_knew, 3 * u);
+            cb_pop_front(cb_kw, Dt);
+            update_tail(2 * u);
+        }
         cb_wait_front(cb_q, Dt);
         cb_wait_front(cb_tailk, Dt);
         cb_wait_front(cb_tailv, Dt);
@@ -300,5 +312,11 @@ void kernel_main() {
         }
         cb_pop_front(cb_q, Dt);
         pack_tail_bf8();
+        if constexpr (kTailBatched) {
+            if (ka + 1 == n_act) {
+                cb_pop_front(cb_knew, Dt);
+                cb_pop_front(cb_vraw, Dt);
+            }
+        }
     }
 }

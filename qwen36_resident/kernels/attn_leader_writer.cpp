@@ -77,8 +77,14 @@ void kernel_main() {
     const uint32_t ts_addr = get_arg_val<uint32_t>(children_base + 1 + 2 * children);
     volatile tt_l1_ptr uint32_t* ts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ts_addr);
     volatile uint32_t* clk = reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    // (row groups: the timeline is per iteration instead, mark_it: 8 words per (layer, user) iteration)
+    auto mark_it = [&](uint32_t it, uint32_t k) {
+        if (groups > 1 && ts_addr) {
+            ts[it * 8 + k] = *clk;
+        }
+    };
     auto mark = [&](uint32_t l, uint32_t i) {
-        if (ts_addr) {
+        if (groups == 1 && ts_addr) {
             ts[l * 8 + i] = *clk;
         }
     };
@@ -144,6 +150,7 @@ void kernel_main() {
     };
     for (uint32_t i = 0; i < layers * n_act; i++) {
         const uint32_t l = i / n_act, k = i % n_act, u = act.row[k];
+        mark_it(i, 0);
         // q to the workers (a later user's q goes out as soon as the workers have this user's scores)
         if (k == 0) {
             send_q(i);
@@ -152,6 +159,7 @@ void kernel_main() {
 
         // global row max
         noc_semaphore_wait_min(m_sem, active * (i + 1));
+        mark_it(i, 1);
         invalidate_l1_cache();  // the slots are written by other cores
         {
             // row h's column 0: slot (face 0 rows, then face 2 rows at 512 B) -> tile (face 2 at 1024 B)
@@ -173,6 +181,7 @@ void kernel_main() {
         *M_sem = i + 1;
         noc_semaphore_set_multicast(get_semaphore(sem_M), mc_M_sem, mc_dests);
         mark(l, 6);
+        mark_it(i, 2);
         // every worker sent its row max, so none reads q any more: the next user's q can go
         if (k + 1 < n_act) {
             send_q(i + 1);
@@ -180,6 +189,7 @@ void kernel_main() {
 
         // rows 0..heads-1 of the output into row u of the staged tiles
         cb_wait_front(cb_out, Dt);
+        mark_it(i, 3);
         const uint32_t out = get_read_ptr(cb_out);
         // (row (r, h) of a pass is head h of row u * group_rows + r)
         for (uint32_t r = 0; r < group_rows; r++) {
@@ -194,6 +204,7 @@ void kernel_main() {
             }
         }
         noc_async_read_barrier();
+        mark_it(i, 4);
         cb_pop_front(cb_out, Dt);
         if (k + 1 < n_act) {
             continue;

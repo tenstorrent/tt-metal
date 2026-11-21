@@ -154,6 +154,13 @@ constexpr uint32_t cb_rope = 17;    // per user: cos, sin, -sin of its position 
 // from the group's row r) and the tail's k rope (row r from row r)
 constexpr uint32_t kRopeQ = 3 * batch, kRopeK = 3 * batch + 3 * users;
 constexpr uint32_t kRopePages = packed ? kRopeK + 3 : 3 * batch * groups;
+// row groups (rows mode): the tail core normalizes and ropes every active user's new k row of a layer at once (user u
+// in row u of one tile set, per-row rope tiles at kRopeRows of cb_rope, built by the tail reader), then per user a 0/1
+// placement matmul puts its row into the tail tile (cb_rowsel per user: P_u = 1 at (r_u, u), then keep = rows != r_u)
+constexpr bool kTailBatched = rows_mode && groups > 1 && !verify;
+static_assert(!kTailBatched || kUsers <= 32, "a user per tile row");
+constexpr uint32_t kRopeRows = 3 * batch * groups;
+constexpr uint32_t kRopeTail = kRopePages + (kTailBatched ? 3 : 0);  // the tail core's cb_rope pages
 constexpr uint32_t cb_knew = 18;    // normalized + rotated k row (row 0)
 constexpr uint32_t cb_tail8 = 31;   // tail core: tail k | v tiles as read from DRAM (2 Dt bf8)
 constexpr uint32_t cb_rowsel = 12;  // tail core: per user R (ones in row r), 1 - R (packed: per tail tile the

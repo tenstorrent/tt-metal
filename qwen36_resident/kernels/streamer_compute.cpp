@@ -259,7 +259,9 @@ FORCE_INLINE void rmsnorm_rows() {
 }
 
 // cb_h = x / rms(x), computed on the 32x32 views of x and h (the norm weight is folded into the weights)
-FORCE_INLINE void rmsnorm() {
+// (not inlined, like the residual helpers: several call sites, one copy per TRISC — the streamer core's kernels
+// sit at the kernel config buffer's size)
+__attribute__((noinline)) void rmsnorm() {
     static_assert(Hf >= 1 && Hf <= 8 && Hf * 32 == Ht, "hidden must be 1..8 full tiles");
     if constexpr (batch > 1) {
         rmsnorm_rows();
@@ -332,7 +334,7 @@ FORCE_INLINE void silu_mul(uint32_t ng) {
 
 // chip 0, h over x (kHInPlace): the residual columns x[pout_off : pout_off + nd] of every active group into cb_xres,
 // before rmsnorm overwrites x with h
-FORCE_INLINE void save_residual(uint32_t nd, uint32_t pout_off) {
+__attribute__((noinline)) void save_residual(uint32_t nd, uint32_t pout_off) {
     cb_wait_front(cb_x, groups * Ht);
     cb_reserve_back(cb_xres, groups * nd_max);
     reconfig_full_operand(cb_x, cb_x);
@@ -354,7 +356,7 @@ FORCE_INLINE void save_residual(uint32_t nd, uint32_t pout_off) {
 }
 
 // cb_pout = cb_dout + x[pout_off : pout_off + nd] (kHInPlace: from cb_xres)
-FORCE_INLINE void add_residual(uint32_t nd, uint32_t pout_off) {
+__attribute__((noinline)) void add_residual(uint32_t nd, uint32_t pout_off) {
     constexpr uint32_t xcb = kHInPlace ? cb_xres : cb_x;
     cb_wait_front(cb_dout, groups * nd_max);
     if constexpr (kHInPlace) {

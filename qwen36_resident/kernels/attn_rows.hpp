@@ -38,4 +38,17 @@ FORCE_INLINE void build_packed_rope(uint32_t base) {
     noc_async_read_barrier();
 }
 
+// row groups (kTailBatched): pages kRopeRows .. + 3 — row u of the cos / sin / -sin tiles from user u's page (rows
+// replicated); the users' pages already in place at base
+FORCE_INLINE void build_rows_rope(uint32_t base) {
+    for (uint32_t k = 0; k < 3; k++) {
+        for (uint32_t u = 0; u < kUsers; u++) {
+            const uint32_t from = base + (3 * u + k) * kTile, to = base + (kRopeRows + k) * kTile + row_offset(u);
+            noc_async_read(get_noc_addr(from), to, kFaceRow);
+            noc_async_read(get_noc_addr(from + kFace), to + kFace, kFaceRow);
+        }
+    }
+    noc_async_read_barrier();
+}
+
 }  // namespace resident_attn
