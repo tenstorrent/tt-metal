@@ -87,3 +87,25 @@ def test_moreh_linear_backward_rejects_mismatched_bias_grad(device, expect_error
     b, db = tt(torch.randn(1, 1, 1, 64)), tt(torch.zeros(1, 1, 1, 64), ttnn.float32)
     with expect_error(RuntimeError, "must match the output_grad dtype"):
         ttnn.moreh_linear_backward(dy, x, w, are_required_outputs=[False, False, True], bias=b, bias_grad=db)
+
+
+def test_moreh_linear_backward_rejects_bias_grad_width_mismatch(device, expect_error):
+    # The bias-grad kernel strides over the bias features, so a narrower bias_grad leaves the
+    # tail of the buffer untouched and writes the wrong values instead of being rejected.
+    torch.manual_seed(0)
+    tt = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_grad = tt(torch.randn(1, 1, 32, 64))
+    input_tensor = tt(torch.randn(1, 1, 32, 32))
+    weight = tt(torch.randn(1, 1, 64, 32))
+    bias = tt(torch.randn(1, 1, 1, 64))
+    bias_grad = tt(torch.zeros(1, 1, 1, 32))
+
+    with expect_error(RuntimeError, "bias_grad last dimension"):
+        ttnn.moreh_linear_backward(
+            output_grad,
+            input_tensor,
+            weight,
+            are_required_outputs=[False, False, True],
+            bias=bias,
+            bias_grad=bias_grad,
+        )

@@ -41,6 +41,7 @@ inline void moreh_linear_backward_validate(
     const Tensor& /*output_grad*/,
     const Tensor& input,
     const Tensor& weight,
+    const std::optional<const Tensor>& bias,
     const std::optional<const Tensor>& input_grad,
     const std::optional<const Tensor>& weight_grad,
     const std::optional<const Tensor>& bias_grad) {
@@ -58,6 +59,15 @@ inline void moreh_linear_backward_validate(
         const auto& bias_grad_tensor = bias_grad.value();
         TT_FATAL(
             is_scalar(bias_grad_tensor) || is_1d_tensor(bias_grad_tensor), "bias_grad tensor should be 1d or scalar");
+        // The bias-grad kernel walks the bias features; a bias_grad with a different last
+        // dimension leaves part of the buffer unwritten and reads past the rest.
+        if (bias.has_value() && !is_scalar(bias_grad_tensor)) {
+            TT_FATAL(
+                bias_grad_tensor.logical_shape()[-1] == bias->logical_shape()[-1],
+                "bias_grad last dimension {} must match the bias last dimension {}",
+                bias_grad_tensor.logical_shape()[-1],
+                bias->logical_shape()[-1]);
+        }
     }
 }
 
@@ -133,7 +143,7 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
         "Output grad storage type must be DEVICE but got {}",
         output_grad.storage_type());
     operations::moreh::moreh_linear_backward::moreh_linear_backward_validate(
-        output_grad, input, weight, input_grad, weight_grad, bias_grad);
+        output_grad, input, weight, bias, input_grad, weight_grad, bias_grad);
 
     if (input_required_grad) {
         TT_FATAL(input_grad.has_value(), "input_grad tensor should not be std::nullopt");
