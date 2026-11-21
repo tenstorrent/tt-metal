@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/reshuffle.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
@@ -26,7 +27,6 @@ void kernel_main() {
     CircularBuffer cb_out(cb_out_idx);
 
     compute_kernel_hw_startup(cb_grad_idx, cb_out_idx);
-    copy_init(cb_grad_idx);
 
     for (uint32_t i = 0; i < input_height; ++i) {
         cb_grad.wait_front(max_tiles_per_core);
@@ -53,8 +53,14 @@ void kernel_main() {
                 tile_regs_acquire();
                 tile_regs_wait();
 
+                // The gradient (bfloat16, bfloat8_b or FLOAT32) and the partial output (FLOAT32 when accumulating in
+                // FP32) can be unpacked differently, so each copy is initialised for its own buffer.
+                reconfig_data_format_srca(cb_grad_idx);
+                copy_init(cb_grad_idx);
                 copy_tile(cb_grad_idx, hidden_dim, 0);
 
+                reconfig_data_format_srca(cb_out_intermed_idx);
+                copy_init(cb_out_intermed_idx);
                 copy_tile(cb_out_intermed_idx, hidden_dim, 1);
 
                 reshuffle_rows_tile_init();
