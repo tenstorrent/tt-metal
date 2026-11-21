@@ -37,6 +37,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/generic/device/generic_program_spec_device_operation.hpp"
 #include "ttnn/operations/generic/generic_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -556,6 +557,57 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMeshProgramSpec) {
     EXPECT_THAT(
         [&] { ttnn::experimental::generic_op({input, output}, overlapping, overlapping_run_args); },
         ThrowsMessage<std::exception>(HasSubstr("overlap")));
+}
+
+// The Python bindings pass generic_op the tensor arguments that hold only some devices of their tensors, which C++ run
+// args cannot express. On one device, a view that names only another device stands in for one, so the check runs here
+// on a first call, which misses the program cache, and on a later one, which hits it.
+TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecChecksTensorViewsOnEveryCall) {
+    auto [input, output] = make_tensors(this->device_, 4);
+    const auto program = make_exp_program(input, output);
+    const auto view_of_input = [](const m2::ProgramRunArgs& run_args) {
+        return ttnn::operations::generic::TensorViews{{run_args, "input", {ttnn::MeshCoordinate(0, 1)}}};
+    };
+    const auto misses_its_device = ThrowsMessage<std::exception>(
+        HasSubstr("tensor_args['input'] holds devices MeshCoordinate([0, 1]), but its program runs on device "
+                  "MeshCoordinate([0, 0])"));
+
+    const auto entries = this->device_->num_program_cache_entries();
+    EXPECT_THAT(
+        [&] {
+            ttnn::prim::generic_op({input, output}, program.spec, program.run_args, view_of_input(program.run_args));
+        },
+        misses_its_device);
+    ttnn::prim::generic_op({input, output}, program.spec, program.run_args);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), entries + 1);
+    EXPECT_THAT(
+        [&] {
+            ttnn::prim::generic_op({input, output}, program.spec, program.run_args, view_of_input(program.run_args));
+        },
+        misses_its_device);
+    EXPECT_THAT(
+        [&] {
+            ttnn::prim::prepare_generic_op(
+                {input, output}, program.spec, program.run_args, view_of_input(program.run_args));
+        },
+        misses_its_device);
+
+    // The mesh form's views name the run args of their range. A view counts only for the run args that bind it: the
+    // ProgramSpec form's run args are not those of this call's program. This program writes an output of zeros with the
+    // same spec as before, so it hits the cached program, and its result shows that it ran.
+    const Tensor zeros = ttnn::zeros_like(output);
+    const auto mesh_program = make_exp_program(input, zeros);
+    const auto mesh_entries = this->device_->num_program_cache_entries();
+    const ttnn::MeshCoordinateRange whole_mesh(this->device_->shape());
+    const std::vector<std::pair<ttnn::MeshCoordinateRange, m2::ProgramSpec>> programs{{whole_mesh, mesh_program.spec}};
+    const std::vector<std::pair<ttnn::MeshCoordinateRange, m2::ProgramRunArgs>> run_args{
+        {whole_mesh, mesh_program.run_args}};
+    EXPECT_THAT(
+        [&] { ttnn::prim::generic_op({input, zeros}, programs, run_args, view_of_input(run_args[0].second)); },
+        misses_its_device);
+    ttnn::prim::generic_op({input, zeros}, programs, run_args, view_of_input(mesh_program.run_args));
+    EXPECT_EQ(this->device_->num_program_cache_entries(), mesh_entries);
+    EXPECT_TRUE(ttnn::allclose<bfloat16>(ttnn::exp(input).cpu(), zeros.cpu()));
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramSpecPreparationFillsTheProgramCache) {

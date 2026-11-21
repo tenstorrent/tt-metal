@@ -989,6 +989,26 @@ def mesh_range(device):
     return ttnn.MeshCoordinateRange(device.shape)
 
 
+def rename_tensor_parameter(spec, run_args, old_name, new_name):
+    """Renames a tensor parameter of a spec, its kernels' bindings and its entry in the run args."""
+    parameters = spec.tensor_parameters
+    for parameter in parameters:
+        if parameter.unique_id == old_name:
+            parameter.unique_id = new_name
+    spec.tensor_parameters = parameters
+    kernels = spec.kernels
+    for kernel in kernels:
+        bindings = kernel.tensor_bindings
+        for binding in bindings:
+            if binding.tensor_parameter_name == old_name:
+                binding.tensor_parameter_name = new_name
+        kernel.tensor_bindings = bindings
+    spec.kernels = kernels
+    tensors = run_args.tensor_args
+    tensors[new_name] = tensors.pop(old_name)
+    run_args.tensor_args = tensors
+
+
 def one_device(column):
     return ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, column), ttnn.MeshCoordinate(0, column))
 
@@ -1018,6 +1038,215 @@ def test_a_range_over_a_device_without_a_tensor_is_rejected(mesh_device, expect_
             E.MeshProgramSpec(programs=[(whole_mesh, spec)]),
             E.MeshProgramRunArgs(programs=[(whole_mesh, run_args)]),
         )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expect_error):
+    """Per-device views of one tensor share its MeshTensor, which is all Metal binds, so on each device a program runs
+    on it reads that device's part of the tensor. A tensor argument that misses one of those devices, such as a
+    per-device view, is rejected."""
+    torch.manual_seed(23)
+    torch_input = torch.rand([2, 1, 32, 32]).to(torch.bfloat16)
+    split = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=0)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=split)
+    output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
+    first_input, second_input = ttnn.get_device_tensors(input_tensor)
+    first_output, second_output = ttnn.get_device_tensors(output_tensor)
+
+    # The program runs on the first device, and the run args name the second device's view of the input.
+    message = r"tensor_args\['input'\] holds devices"
+    spec, run_args = exp_program(second_input, first_output)
+    with expect_error(
+        RuntimeError,
+        r"tensor_args\['input'\] holds devices MeshCoordinate\(\[0, 1\]\), but its program runs on device "
+        r"MeshCoordinate\(\[0, 0\]\), which it does not hold\. On each device, a program reads that device's part of a "
+        r"tensor, so a program that binds a per-device view must run only on the view's devices: with a ProgramSpec, "
+        r"list only views of those devices in io_tensors; with a MeshProgramSpec, bind the view only in the run args "
+        r"of a range on them\. Binding the whole tensor instead reads each device's own part, which is the view's "
+        r"data only if every device holds the same data",
+    ):
+        E.generic_op([first_input, first_output], spec, run_args)
+    with expect_error(RuntimeError, message):
+        E.prepare_generic_op([first_input, first_output], spec, run_args)
+    # With the whole tensors in io_tensors the program runs on both devices, so one device's view misses the other.
+    whole_spec, whole_run_args = exp_program(first_input, output_tensor)
+    with expect_error(RuntimeError, message):
+        E.generic_op([input_tensor, output_tensor], whole_spec, whole_run_args)
+    # The same through a mesh range over both devices.
+    with expect_error(RuntimeError, message):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(mesh_range(mesh_device), whole_spec)]),
+            E.MeshProgramRunArgs(programs=[(mesh_range(mesh_device), whole_run_args)]),
+        )
+    mesh_spec = E.MeshProgramSpec(programs=[(one_device(0), spec)])
+    mesh_run_args = E.MeshProgramRunArgs(programs=[(one_device(0), run_args)])
+    with expect_error(
+        RuntimeError,
+        r"tensor_args\['input'\] holds devices MeshCoordinate\(\[0, 1\]\), but its program runs on device "
+        r"MeshCoordinate\(\[0, 0\]\), which it does not hold\.",
+    ):
+        E.generic_op([input_tensor, output_tensor], mesh_spec, mesh_run_args)
+    with expect_error(RuntimeError, message):
+        E.prepare_generic_op([input_tensor, output_tensor], mesh_spec, mesh_run_args)
+    # A run args taken back from a MeshProgramRunArgs keeps its tensors, views included.
+    with expect_error(RuntimeError, message):
+        E.generic_op([first_input, first_output], spec, mesh_run_args.programs[0][1])
+    # Every program of a MeshProgramSpec is checked: here the second device's program names the first device's view.
+    first_spec, first_run_args = exp_program(first_input, first_output)
+    other_spec, other_run_args = exp_program(first_input, second_output)
+    with expect_error(RuntimeError, message):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), other_spec)]),
+            E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), other_run_args)]),
+        )
+    # Each range's run args are checked against their own range, so run args in another order are checked too.
+    with expect_error(RuntimeError, message):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), other_spec)]),
+            E.MeshProgramRunArgs(programs=[(one_device(1), other_run_args), (one_device(0), first_run_args)]),
+        )
+
+    # generic_op's other checks run first, so every other call they reject gets their message: a view of a tensor
+    # that io_tensors does not list, or that whole tensor; a tensor under a name its program does not declare, even if
+    # another range's program declares it; and a tensor in run args for a range the spec has no program on.
+    unlisted = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
+    spec, run_args = exp_program(ttnn.get_device_tensors(unlisted)[1], output_tensor)
+    with expect_error(RuntimeError, "tensor of tensor parameter 'input' is not in io_tensors"):
+        E.generic_op([input_tensor, output_tensor], spec, run_args)
+    spec, run_args = exp_program(unlisted, output_tensor)
+    with expect_error(RuntimeError, "tensor of tensor parameter 'input' is not in io_tensors"):
+        E.generic_op([input_tensor, output_tensor], spec, run_args)
+    spec, run_args = exp_program(first_input, first_output)
+    run_args.tensor_args = {"input": first_input, "output": first_output, "extra": second_input}
+    with expect_error(RuntimeError, "has a tensor for 'extra', which the ProgramSpec does not declare"):
+        E.generic_op([first_input, first_output], spec, run_args)
+    first_spec, first_run_args = exp_program(first_input, first_output)
+    other_spec, other_run_args = exp_program(second_input, second_output)
+    rename_tensor_parameter(other_spec, other_run_args, "input", "source")
+    other_run_args.tensor_args = {**other_run_args.tensor_args, "input": first_input}
+    with expect_error(RuntimeError, "has a tensor for 'input', which the ProgramSpec does not declare"):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), other_spec)]),
+            E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), other_run_args)]),
+        )
+    spec, run_args = exp_program(second_input, first_output)
+    with expect_error(RuntimeError, "has no run args for mesh range"):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(one_device(1), spec)]),
+            E.MeshProgramRunArgs(programs=[(one_device(0), run_args)]),
+        )
+    # A range far past the mesh gets the range check's message, which comes before any walk over the range.
+    past_the_mesh = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 1), ttnn.MeshCoordinate(999999, 999999))
+    spec, run_args = exp_program(second_input, second_output)
+    with expect_error(RuntimeError, "mesh range .* reaches outside the MeshDevice"):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(past_the_mesh, spec)]),
+            E.MeshProgramRunArgs(programs=[(past_the_mesh, run_args)]),
+        )
+
+    # A Python subclass of the run args is checked too.
+    class SubclassRunArgs(E.ProgramRunArgs):
+        pass
+
+    spec, run_args = exp_program(second_input, first_output)
+    subclass_run_args = SubclassRunArgs(kernel_run_args=run_args.kernel_run_args, tensor_args=run_args.tensor_args)
+    with expect_error(RuntimeError, message):
+        E.generic_op([first_input, first_output], spec, subclass_run_args)
+
+    # The tensors that run args keep are private: an entry of another type, put there in place, is reported, not read.
+    spec, run_args = exp_program(first_input, first_output)
+    edited = exp_program(first_input, first_output)[1]
+    edited._tensor_args["input"] = 1
+    with expect_error(RuntimeError, "a ProgramRunArgs keeps were edited in place; set its tensor_args again"):
+        E.generic_op([first_input, first_output], spec, edited)
+    mesh_spec = E.MeshProgramSpec(programs=[(one_device(0), spec)])
+    edited_mesh = E.MeshProgramRunArgs(programs=[(one_device(0), run_args)])
+    edited_mesh._tensor_args[0]["input"] = 1
+    with expect_error(RuntimeError, "a MeshProgramRunArgs keeps were edited in place; set its programs again"):
+        E.generic_op([first_input, first_output], mesh_spec, edited_mesh)
+    edited_mesh = E.MeshProgramRunArgs(programs=[(one_device(0), run_args)])
+    edited_mesh._tensor_args.append({})
+    with expect_error(RuntimeError, "a MeshProgramRunArgs keeps were edited in place; set its programs again"):
+        E.generic_op([first_input, first_output], mesh_spec, edited_mesh)
+
+    # A view, or the whole tensor, that holds the program's device reads that device's part, whether io_tensors lists
+    # the input's view or the whole input: the output's view keeps the program on the first device. Each call writes
+    # its own output of zeros, so each result shows that its program ran there.
+    def zeros():
+        return ttnn.from_torch(
+            torch.zeros_like(torch_input), layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=split
+        )
+
+    inputs_bound_and_listed = [(first_input, input_tensor), (first_input, first_input), (input_tensor, first_input)]
+    for bound_input, listed_input in inputs_bound_and_listed:
+        output = zeros()
+        output_view = ttnn.get_device_tensors(output)[0]
+        spec, run_args = exp_program(bound_input, output_view)
+        result = E.generic_op([listed_input, output_view], spec, run_args)
+        assert_close(torch.exp(torch_input[:1]), ttnn.to_torch(result))
+
+    # The check compares devices, not placements: one device's view of a replicated tensor is rejected in the other
+    # device's program too, although both devices hold the same data. The tensor itself holds both devices and passes.
+    replicated = ttnn.from_torch(torch_input[:1], layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    replicated_output = ttnn.from_torch(torch.zeros_like(torch_input[:1]), layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    first_replica, second_replica = ttnn.get_device_tensors(replicated)
+    first_replicated_output = ttnn.get_device_tensors(replicated_output)[0]
+    spec, run_args = exp_program(second_replica, first_replicated_output)
+    with expect_error(RuntimeError, message):
+        E.generic_op([first_replica, first_replicated_output], spec, run_args)
+    spec, run_args = exp_program(replicated, first_replicated_output)
+    result = E.generic_op([first_replica, first_replicated_output], spec, run_args)
+    assert_close(torch.exp(torch_input[:1]), ttnn.to_torch(result))
+
+    # Each device's program may name that device's views while io_tensors lists the whole tensors.
+    output = zeros()
+    first_view, second_view = ttnn.get_device_tensors(output)
+    first_spec, first_run_args = exp_program(first_input, first_view)
+    second_spec, second_run_args = exp_program(second_input, second_view)
+    each_spec = E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), second_spec)])
+    E.generic_op(
+        [input_tensor, output],
+        each_spec,
+        E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), second_run_args)]),
+    )
+    result = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    assert_close(torch.exp(torch_input), result)
+    # The same mesh call hits the cached programs, and the check runs there too: with the run args swapped, the first
+    # device's program binds the second device's views.
+    entries = mesh_device.num_program_cache_entries()
+    E.generic_op(
+        [input_tensor, output],
+        each_spec,
+        E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), second_run_args)]),
+    )
+    assert mesh_device.num_program_cache_entries() == entries
+    with expect_error(RuntimeError, message):
+        E.generic_op(
+            [input_tensor, output],
+            each_spec,
+            E.MeshProgramRunArgs(programs=[(one_device(0), second_run_args), (one_device(1), first_run_args)]),
+        )
+
+    # Views are not part of the cache key, so a call that hits a cached program gets the check too, with
+    # validate_program_args off as well: here the second device's view in a program on the first device. The same
+    # call with the first device's view adds no cache entry, so the program is cached and the next call hits it.
+    ttnn.CONFIG.validate_program_args = False
+    output = zeros()
+    output_view = ttnn.get_device_tensors(output)[0]
+    entries = mesh_device.num_program_cache_entries()
+    E.generic_op([first_input, output_view], *exp_program(first_input, output_view))
+    assert mesh_device.num_program_cache_entries() == entries
+    spec, run_args = exp_program(second_input, output_view)
+    with expect_error(RuntimeError, message):
+        E.generic_op([first_input, output_view], spec, run_args)
+    # prepare_generic_op takes a view that holds its program's device.
+    E.prepare_generic_op([first_input, output_view], *exp_program(first_input, output_view))
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)

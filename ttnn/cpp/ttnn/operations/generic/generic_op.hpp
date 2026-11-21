@@ -49,6 +49,11 @@ void prepare_generic_op(
 using tt::tt_metal::ProgramRunArgs;
 using tt::tt_metal::ProgramSpec;
 
+// For both forms: a tensor argument binds the whole MeshTensor of the tensor it is given, and on each device a program
+// runs on, it reads that device's part. The per-device views of a tensor share its MeshTensor, so a view's MeshTensor
+// bound in a program on another device reads that device's part, not the view's. generic_op sees only MeshTensors
+// here and cannot catch this, so bind a view's MeshTensor only in a program on the view's devices.
+
 // Fixed: a ProgramSpec per mesh coordinate range. The ranges must stay inside the mesh and must not overlap, and every
 // device in a range must hold every tensor.
 struct MeshProgramSpec {

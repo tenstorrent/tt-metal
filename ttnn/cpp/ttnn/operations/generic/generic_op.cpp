@@ -48,36 +48,8 @@ void prepare_generic_op(
     prepare_generic_op(io_tensors, make_spmd_mesh_program_descriptor(io_tensors, program_descriptor));
 }
 
-namespace {
-
-using ProgramSpecAttributes = ttnn::operations::generic::GenericProgramSpecDeviceOperation::operation_attributes_t;
-
-// Pairs each range's spec with its run args.
-ProgramSpecAttributes make_program_spec_attributes(
-    const MeshProgramSpec& mesh_program_spec, const MeshProgramRunArgs& mesh_run_args) {
-    const auto& programs = mesh_program_spec.programs;
-    TT_FATAL(!programs.empty(), "generic_op: the MeshProgramSpec has no programs");
-    TT_FATAL(
-        mesh_run_args.programs.size() == programs.size(),
-        "generic_op: the MeshProgramSpec and the MeshProgramRunArgs have different numbers of programs ({} and {})",
-        programs.size(),
-        mesh_run_args.programs.size());
-    ProgramSpecAttributes attributes;
-    attributes.programs.reserve(programs.size());
-    for (const auto& [range, spec] : programs) {
-        const auto run_args =
-            std::ranges::find(mesh_run_args.programs, range, &std::pair<MeshCoordinateRange, ProgramRunArgs>::first);
-        TT_FATAL(
-            run_args != mesh_run_args.programs.end(),
-            "generic_op: the MeshProgramRunArgs has no run args for mesh range {}",
-            range);
-        attributes.programs.emplace_back(range, spec, run_args->second);
-    }
-    return attributes;
-}
-
-}  // namespace
-
+// The Python binding calls the ttnn::prim functions directly, with the tensor views it reads from Python run args, so
+// anything both need belongs there, not here.
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args) {
     return ttnn::prim::generic_op(io_tensors, spec, run_args);
 }
@@ -86,7 +58,7 @@ Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const MeshProgramSpec& mesh_program_spec,
     const MeshProgramRunArgs& mesh_run_args) {
-    return ttnn::prim::generic_op(io_tensors, make_program_spec_attributes(mesh_program_spec, mesh_run_args));
+    return ttnn::prim::generic_op(io_tensors, mesh_program_spec.programs, mesh_run_args.programs);
 }
 
 void prepare_generic_op(
@@ -98,7 +70,7 @@ void prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const MeshProgramSpec& mesh_program_spec,
     const MeshProgramRunArgs& mesh_run_args) {
-    ttnn::prim::prepare_generic_op(io_tensors, make_program_spec_attributes(mesh_program_spec, mesh_run_args));
+    ttnn::prim::prepare_generic_op(io_tensors, mesh_program_spec.programs, mesh_run_args.programs);
 }
 
 uint64_t compute_program_spec_hash(const ProgramSpec& spec) {
