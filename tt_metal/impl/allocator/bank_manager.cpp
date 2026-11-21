@@ -18,6 +18,35 @@
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 #include "tt_metal/impl/allocator/algorithms/address_ranges.hpp"
 #include "tt_metal/impl/allocator/allocation_request.hpp"
+#include <tt-metalium/experimental/trace_store.hpp>
+#include <mutex>
+#include <optional>
+
+namespace tt::tt_metal::experimental::trace_store {
+namespace {
+std::mutex forced_mu;
+uint64_t forced_address = 0;
+uint64_t forced_size = 0;
+}  // namespace
+
+void set_next_allocation_address(uint64_t address, uint64_t size) {
+    std::lock_guard<std::mutex> lk(forced_mu);
+    forced_address = address;
+    forced_size = address == 0 ? 0 : size;
+}
+
+// The pinned address if this DRAM allocation of `size` bytes takes the pin (consumed), else nothing.
+std::optional<uint64_t> take_forced_address(uint64_t size) {
+    std::lock_guard<std::mutex> lk(forced_mu);
+    if (forced_address == 0 || forced_size != size) {
+        return std::nullopt;
+    }
+    const uint64_t address = forced_address;
+    forced_address = 0;
+    forced_size = 0;
+    return address;
+}
+}  // namespace tt::tt_metal::experimental::trace_store
 
 namespace tt::tt_metal {
 
@@ -367,6 +396,24 @@ uint64_t BankManager::allocate_buffer(
 
     // If there are no dependent allocators, fall back to allocator's single allocator strategy
     const auto& dependent_allocators = allocator_dependencies_.dependencies[allocator_id.get()];
+
+    // Trace store: a restored trace's output tensors go back to the addresses they had at capture.
+    if (buffer_type_ == BufferType::DRAM) {
+        if (const auto forced = experimental::trace_store::take_forced_address(size)) {
+            TT_FATAL(dependent_allocators.empty(), "A pinned DRAM allocation needs an allocator without dependencies");
+            const auto address = alloc->allocate_at_address(*forced, size_per_bank);
+            TT_FATAL(
+                address.has_value() && *address == *forced,
+                "Cannot place a {} B DRAM buffer at pinned address {}: the range is not free",
+                size,
+                *forced);
+            allocated_buffers_[allocator_id.get()].insert(*address);
+            if (tracking_high_water_mark_) {
+                allocation_high_water_mark_ = std::max(allocation_high_water_mark_, *address + size_per_bank);
+            }
+            return *address;
+        }
+    }
 
     // If using single allocator strategy, Algorithm::allocate handles address limit, which means it can only be used
     // with top-down allocation. Otherwise, address limit is used to trim the available ranges regardless of bottom_up

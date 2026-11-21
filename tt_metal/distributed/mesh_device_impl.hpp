@@ -77,6 +77,7 @@ namespace distributed {
 class MeshCommandQueue;
 class MeshDeviceView;
 struct MeshTraceBuffer;
+class MeshTraceDescriptor;
 class MeshCommandQueueBase;
 class MeshDevice;
 class RealtimeProfilerManager;
@@ -299,6 +300,11 @@ public:
     void register_active_trace(const MeshTraceId& trace_id);
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void unregister_active_trace(const MeshTraceId& trace_id);
+
+    // Trace store (experimental/trace_store.hpp). The trace if it can be stored, else throws.
+    std::shared_ptr<MeshTraceBuffer> storable_mesh_trace(const MeshTraceId& trace_id);
+    // Install a stored trace descriptor as a new trace on `cq_id`, as end_mesh_trace does after a capture.
+    MeshTraceId load_mesh_trace(uint8_t cq_id, MeshTraceDescriptor&& desc);
 
     // Unsafe allocation tracking
     std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshTraceId& trace_id) const;

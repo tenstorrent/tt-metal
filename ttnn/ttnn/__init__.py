@@ -130,6 +130,11 @@ from ttnn._ttnn.operations.trace import (
     release_trace,
     set_trace_capture_hold,
     trace_capture_hold_bytes,
+    dump_trace,
+    load_trace,
+    trace_buffer_range,
+    allocated_buffers,
+    set_next_allocation_address,
 )
 
 from ttnn._ttnn.operations.debug import (

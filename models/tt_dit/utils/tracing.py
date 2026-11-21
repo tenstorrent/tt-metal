@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.utils import tensor
+from models.tt_dit.utils import tensor, trace_store
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -203,6 +203,7 @@ class Tracer:
         self._outputs: Any = None
         self._trace_ids: tuple[ttnn.MeshTraceId, ...] | None = None
         self.capture_count = 0
+        self.restore_count = 0
         self.replay_count = 0
         # Set by prepare(): inputs are on device and the prep run is done; capture_prepared() records.
         self._prepared = False
@@ -346,6 +347,23 @@ class Tracer:
         return self._function(*prep_args, **prep_kwargs)
 
     def _record(self, *, cq_id: int, blocking_execution: bool, execute: bool) -> None:
+        # Trace store (TT_DIT_TRACE_STORE=1): install a stored trace in place of a capture.
+        store_key = None
+        if trace_store.enabled() and len(self._devices) == 1 and not self._hold_capture_frees:
+            d = self._devices[0]
+            store_pre = trace_store.live_buffers(d)
+            store_key = trace_store.key_for(self, d, cq_id, store_pre)
+            restored = trace_store.restore(self, d, cq_id, store_key, store_pre)
+            if restored is not None:
+                trace_id, self._outputs = restored
+                Tracer._traces_live[d.id()] += 1
+                self._trace_ids = (trace_id,)
+                self.capture_hold_bytes = 0
+                self.restore_count += 1
+                if execute:
+                    ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking_execution)
+                return
+
         # capture trace
         logger.debug("capturing trace...")
         trace_ids = self._begin_capture(cq_id)
@@ -371,6 +389,9 @@ class Tracer:
             )
         self._outputs = outputs
         self.capture_count += 1
+        if store_key is not None:
+            trace_store.dump(self, self._devices[0], trace_ids[0], store_key, store_pre, outputs)
+            trace_store.note_captured(store_key)
 
         if execute:
             # Trace capture records commands but does not execute them. Execute the trace to

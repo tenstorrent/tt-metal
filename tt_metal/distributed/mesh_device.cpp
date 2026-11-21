@@ -19,6 +19,10 @@
 #include <tt_metal.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
+#include <tt-metalium/experimental/trace_store.hpp>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <tt-metalium/distributed.hpp>
 #include <algorithm>
 #include <chrono>
@@ -2468,4 +2472,302 @@ void MeshDevice::wait_for_thread_pool() { pimpl_->wait_for_thread_pool(); }
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
+
+// ---- Trace store (task #6183) ----
+
+std::shared_ptr<MeshTraceBuffer> MeshDeviceImpl::storable_mesh_trace(const MeshTraceId& trace_id) {
+    auto trace_buffer = this->get_mesh_trace(trace_id);
+    TT_FATAL(trace_buffer != nullptr && trace_buffer->desc != nullptr, "Trace {} does not exist", *trace_id);
+    TT_FATAL(
+        !capture_hold_by_trace_.contains(trace_id),
+        "Trace {} holds capture frees: its intermediates stay allocated, so it cannot be stored",
+        *trace_id);
+    TT_FATAL(
+        tensor_prefetcher_ == nullptr || !tensor_prefetcher_->has_trace_requests(trace_id),
+        "Trace {} captured tensor prefetcher requests, which the store does not keep",
+        *trace_id);
+    return trace_buffer;
+}
+
+MeshTraceId MeshDeviceImpl::load_mesh_trace(uint8_t cq_id, MeshTraceDescriptor&& desc) {
+    TT_FATAL(
+        this->allocator_impl()->get_config().trace_region_size != 0,
+        "A stored trace can only be loaded into a fixed trace region (trace_region_size > 0)");
+    TT_FATAL(cq_id < mesh_command_queues_.size(), "No command queue {}", (uint32_t)cq_id);
+    TT_FATAL(
+        !this->mesh_command_queues_[cq_id]->trace_id().has_value(),
+        "CQ {} is capturing a trace; cannot load one",
+        (uint32_t)cq_id);
+    for (const auto& sub_device_id : desc.sub_device_ids) {
+        TT_FATAL(*sub_device_id < this->num_sub_devices(), "Stored trace names sub-device {}", *sub_device_id);
+    }
+
+    const auto trace_id = MeshTrace::next_id();
+    std::shared_ptr<MeshTraceBuffer> trace_buffer;
+    {
+        auto lock = lock_api();
+        TT_FATAL(
+            !command_list_builder_active_ && num_command_lists_ == 0,
+            "Cannot load a trace while a CommandListBuilder or CommandList exists on the MeshDevice");
+        trace_buffer = sub_device_manager_tracker_->get_active_sub_device_manager()->create_trace(trace_id);
+        *trace_buffer->desc = std::move(desc);
+    }
+    try {
+        MeshTrace::populate_mesh_buffer(
+            *(mesh_command_queues_[cq_id]),
+            trace_buffer,
+            0,
+            0,
+            sub_device_manager_tracker_->get_max_trace_high_water_mark());
+    } catch (...) {
+        auto lock = lock_api();
+        sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
+        throw;
+    }
+    this->register_active_trace(trace_id);
+    return trace_id;
+}
+
+}  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental::trace_store {
+
+namespace {
+
+using distributed::MeshCoordinate;
+using distributed::MeshCoordinateRange;
+using distributed::MeshTraceData;
+using distributed::MeshTraceDescriptor;
+
+constexpr char kMagic[8] = {'T', 'T', 'T', 'R', 'A', 'C', 'E', '1'};
+constexpr uint32_t kVersion = 1;
+
+// Checksum of the file body: FNV-style over 8-byte words, then the tail bytes.
+uint64_t checksum(const unsigned char* b, size_t n) {
+    uint64_t h = 14695981039346656037ULL;
+    size_t i = 0;
+    for (; i + sizeof(uint64_t) <= n; i += sizeof(uint64_t)) {
+        uint64_t w = 0;
+        std::memcpy(&w, b + i, sizeof(w));
+        h = (h ^ w) * 1099511628211ULL;
+    }
+    for (; i < n; i++) {
+        h = (h ^ b[i]) * 1099511628211ULL;
+    }
+    return h;
+}
+
+// Serializes into memory; finish() appends the checksum and writes the file in one go.
+class Writer {
+public:
+    void bytes(const void* p, size_t n) {
+        const auto* b = static_cast<const unsigned char*>(p);
+        buf_.insert(buf_.end(), b, b + n);
+    }
+    template <typename T>
+    void pod(T v) {
+        bytes(&v, sizeof(T));
+    }
+    void words(const std::vector<uint32_t>& w) {
+        pod<uint64_t>(w.size());
+        bytes(w.data(), w.size() * sizeof(uint32_t));
+    }
+    void coord(const MeshCoordinate& c) {
+        pod<uint32_t>(c.dims());
+        for (size_t i = 0; i < c.dims(); i++) {
+            pod<uint32_t>(c[i]);
+        }
+    }
+    void finish(const std::string& path) {
+        pod<uint64_t>(checksum(buf_.data(), buf_.size()));
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        TT_FATAL(out.good(), "Cannot open {} for writing", path);
+        out.write(reinterpret_cast<const char*>(buf_.data()), static_cast<std::streamsize>(buf_.size()));
+        out.flush();
+        TT_FATAL(out.good(), "Write to {} failed", path);
+    }
+
+private:
+    std::vector<unsigned char> buf_;
+};
+
+class Reader {
+public:
+    explicit Reader(const std::string& path) : path_(path) {
+        std::ifstream in(path, std::ios::binary | std::ios::ate);
+        TT_FATAL(in.good(), "Cannot open stored trace {}", path);
+        const auto size = static_cast<size_t>(in.tellg());
+        TT_FATAL(size >= sizeof(kMagic) + sizeof(uint64_t), "Stored trace {} is truncated", path);
+        buf_.resize(size);
+        in.seekg(0);
+        in.read(reinterpret_cast<char*>(buf_.data()), static_cast<std::streamsize>(size));
+        TT_FATAL(in.good(), "Cannot read stored trace {}", path);
+        end_ = size - sizeof(uint64_t);
+        const uint64_t h = checksum(buf_.data(), end_);
+        uint64_t stored = 0;
+        std::memcpy(&stored, buf_.data() + end_, sizeof(stored));
+        TT_FATAL(h == stored, "Stored trace {} fails its checksum", path);
+    }
+    void bytes(void* p, size_t n) {
+        TT_FATAL(pos_ + n <= end_, "Stored trace {} is truncated", path_);
+        std::memcpy(p, buf_.data() + pos_, n);
+        pos_ += n;
+    }
+    template <typename T>
+    T pod() {
+        T v{};
+        bytes(&v, sizeof(T));
+        return v;
+    }
+    std::vector<uint32_t> words() {
+        const auto n = pod<uint64_t>();
+        TT_FATAL(n <= (end_ - pos_) / sizeof(uint32_t), "Stored trace {} is truncated", path_);
+        std::vector<uint32_t> w(n);
+        bytes(w.data(), n * sizeof(uint32_t));
+        return w;
+    }
+    MeshCoordinate coord() {
+        const auto dims = pod<uint32_t>();
+        TT_FATAL(dims >= 1 && dims <= 8, "Stored trace {} has a coordinate of {} dims", path_, dims);
+        std::vector<uint32_t> c(dims);
+        for (auto& v : c) {
+            v = pod<uint32_t>();
+        }
+        return MeshCoordinate(ttsl::Span<const uint32_t>(c.data(), c.size()));
+    }
+    bool at_end() const { return pos_ == end_; }
+
+private:
+    std::string path_;
+    std::vector<unsigned char> buf_;
+    size_t pos_ = 0;
+    size_t end_ = 0;
+};
+
+}  // namespace
+
+void dump_mesh_trace(distributed::MeshDevice* mesh_device, const distributed::MeshTraceId& trace_id, const std::string& path) {
+    TT_FATAL(mesh_device != nullptr, "dump_mesh_trace needs a mesh device");
+    const auto trace_buffer = mesh_device->impl().storable_mesh_trace(trace_id);
+    const MeshTraceDescriptor& desc = *trace_buffer->desc;
+
+    const std::string tmp = path + ".tmp";
+    {
+        Writer w;
+        w.bytes(kMagic, sizeof(kMagic));
+        w.pod<uint32_t>(kVersion);
+        w.pod<uint32_t>(desc.total_trace_size);
+        // Descriptors in sub-device order, so equal traces give equal files.
+        std::vector<std::pair<uint8_t, tt::tt_metal::TraceWorkerDescriptor>> descriptors;
+        for (const auto& [id, d] : desc.descriptors) {
+            descriptors.emplace_back(*id, d);
+        }
+        std::sort(descriptors.begin(), descriptors.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        w.pod<uint32_t>(descriptors.size());
+        for (const auto& [id, d] : descriptors) {
+            w.pod<uint8_t>(id);
+            w.pod<uint32_t>(d.num_completion_worker_cores);
+            w.pod<uint32_t>(d.num_traced_programs_needing_go_signal_multicast);
+            w.pod<uint32_t>(d.num_traced_programs_needing_go_signal_unicast);
+        }
+        w.pod<uint32_t>(desc.sub_device_ids.size());
+        for (const auto& id : desc.sub_device_ids) {
+            w.pod<uint8_t>(*id);
+        }
+        w.pod<uint32_t>(desc.ordered_trace_data.size());
+        for (const auto& data : desc.ordered_trace_data) {
+            w.coord(data.device_range.start_coord());
+            w.coord(data.device_range.end_coord());
+            w.words(data.data);
+            w.pod<uint32_t>(data.device_patches.size());
+            for (const auto& patch : data.device_patches) {
+                w.coord(patch.device);
+                w.pod<uint32_t>(patch.byte_offset);
+                w.words(patch.words);
+            }
+        }
+        w.finish(tmp);
+    }
+    std::filesystem::rename(tmp, path);
+}
+
+distributed::MeshTraceId load_mesh_trace(distributed::MeshDevice* mesh_device, uint8_t cq_id, const std::string& path) {
+    TT_FATAL(mesh_device != nullptr, "load_mesh_trace needs a mesh device");
+    Reader r(path);
+    char magic[sizeof(kMagic)];
+    r.bytes(magic, sizeof(magic));
+    TT_FATAL(std::memcmp(magic, kMagic, sizeof(kMagic)) == 0, "{} is not a stored trace", path);
+    const auto version = r.pod<uint32_t>();
+    TT_FATAL(version == kVersion, "Stored trace {} has version {}, expected {}", path, version, kVersion);
+
+    MeshTraceDescriptor desc;
+    desc.total_trace_size = r.pod<uint32_t>();
+    const auto num_descriptors = r.pod<uint32_t>();
+    for (uint32_t i = 0; i < num_descriptors; i++) {
+        const auto id = r.pod<uint8_t>();
+        tt::tt_metal::TraceWorkerDescriptor d;
+        d.num_completion_worker_cores = r.pod<uint32_t>();
+        d.num_traced_programs_needing_go_signal_multicast = r.pod<uint32_t>();
+        d.num_traced_programs_needing_go_signal_unicast = r.pod<uint32_t>();
+        desc.descriptors.emplace(SubDeviceId{id}, d);
+    }
+    const auto num_sub_device_ids = r.pod<uint32_t>();
+    for (uint32_t i = 0; i < num_sub_device_ids; i++) {
+        desc.sub_device_ids.push_back(SubDeviceId{r.pod<uint8_t>()});
+    }
+    const auto num_data = r.pod<uint32_t>();
+    const auto mesh_shape = mesh_device->shape();
+    for (uint32_t i = 0; i < num_data; i++) {
+        auto start = r.coord();
+        auto end = r.coord();
+        TT_FATAL(
+            start.dims() == mesh_shape.dims() && end.dims() == mesh_shape.dims(),
+            "Stored trace {} is for a mesh of {} dims, this mesh has {}",
+            path,
+            start.dims(),
+            mesh_shape.dims());
+        for (size_t d = 0; d < end.dims(); d++) {
+            TT_FATAL(end[d] < mesh_shape[d], "Stored trace {} names a device outside the mesh", path);
+        }
+        MeshTraceData data{.device_range = MeshCoordinateRange(start, end), .data = r.words()};
+        const auto num_patches = r.pod<uint32_t>();
+        for (uint32_t p = 0; p < num_patches; p++) {
+            auto device = r.coord();
+            const auto byte_offset = r.pod<uint32_t>();
+            auto words = r.words();
+            TT_FATAL(
+                byte_offset % sizeof(uint32_t) == 0 &&
+                    byte_offset / sizeof(uint32_t) + words.size() <= data.data.size(),
+                "Stored trace {} has a patch outside its data",
+                path);
+            data.device_patches.push_back({device, byte_offset, std::move(words)});
+        }
+        desc.ordered_trace_data.push_back(std::move(data));
+    }
+    TT_FATAL(r.at_end(), "Stored trace {} has trailing bytes", path);
+    return mesh_device->impl().load_mesh_trace(cq_id, std::move(desc));
+}
+
+std::pair<uint64_t, uint64_t> mesh_trace_buffer_range(distributed::MeshDevice* mesh_device, const distributed::MeshTraceId& trace_id) {
+    auto trace_buffer = mesh_device->get_mesh_trace(trace_id);
+    TT_FATAL(trace_buffer != nullptr && trace_buffer->mesh_buffer != nullptr, "Trace {} has no buffer", *trace_id);
+    return {trace_buffer->mesh_buffer->address(), trace_buffer->mesh_buffer->size()};
+}
+
+std::vector<std::tuple<int, uint64_t, uint64_t, uint64_t>> allocated_buffers(distributed::MeshDevice* mesh_device) {
+    std::vector<std::tuple<int, uint64_t, uint64_t, uint64_t>> out;
+    for (auto* b : mesh_device->allocator()->get_allocated_buffers()) {
+        out.emplace_back(
+            static_cast<int>(b->buffer_type()),
+            static_cast<uint64_t>(b->address()),
+            static_cast<uint64_t>(b->size()),
+            static_cast<uint64_t>(b->page_size()));
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+}  // namespace tt::tt_metal::experimental::trace_store
+
+namespace tt::tt_metal::distributed {
 }  // namespace tt::tt_metal::distributed

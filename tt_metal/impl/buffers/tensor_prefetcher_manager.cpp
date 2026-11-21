@@ -1827,6 +1827,12 @@ void TensorPrefetcherManager::release_trace(const MeshTraceId& trace_id) {
     trace_requests_.erase(trace_id);
 }
 
+bool TensorPrefetcherManager::has_trace_requests(const MeshTraceId& trace_id) {
+    std::lock_guard<std::mutex> lk(queue_mu_);
+    auto it = trace_requests_.find(trace_id);
+    return it != trace_requests_.end() && !it->second.empty();
+}
+
 void TensorPrefetcherManager::worker_loop() {
     // Pages per socket per write. One write per page costs ~0.47 us of driver overhead per 128 B page;
     // 8 consecutive pages in one write bring that to ~0.12 us a page, and longer runs gain little while

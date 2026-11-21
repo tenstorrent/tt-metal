@@ -14,6 +14,9 @@
 #include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/unordered_set.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/tuple.h>
+#include <tt-metalium/experimental/trace_store.hpp>
 
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/trace_allocation_tracker.hpp>
@@ -63,6 +66,67 @@ void py_module(nb::module_& mod) {
         nb::arg("trace_id"),
         R"doc(
             DRAM bytes per bank held for the trace by set_trace_capture_hold (0 when none).
+        )doc");
+
+    // Trace store (task #6183): see tt-metalium/experimental/trace_store.hpp.
+    mod.def(
+        "dump_trace",
+        [](MeshDevice* device, MeshTraceId trace_id, const std::string& path) {
+            tt::tt_metal::experimental::trace_store::dump_mesh_trace(device, trace_id, path);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("trace_id"),
+        nb::arg("path"),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Write a captured trace's commands to ``path``. Fails for a trace that holds capture frees or
+            captured tensor prefetcher requests.
+        )doc");
+
+    mod.def(
+        "load_trace",
+        [](MeshDevice* device, const std::string& path, int cq_id) {
+            return tt::tt_metal::experimental::trace_store::load_mesh_trace(device, static_cast<uint8_t>(cq_id), path);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("path"),
+        nb::arg("cq_id") = 0,
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Install a trace written by dump_trace and write it to every device's trace region, without
+            capturing it. Valid only when the same programs are loaded and every buffer the trace uses sits
+            where it did at capture; the caller checks that. Returns the new trace id.
+        )doc");
+
+    mod.def(
+        "trace_buffer_range",
+        [](MeshDevice* device, MeshTraceId trace_id) {
+            return tt::tt_metal::experimental::trace_store::mesh_trace_buffer_range(device, trace_id);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("trace_id"),
+        R"doc(
+            (address, size) of the trace's buffer in the trace region.
+        )doc");
+
+    mod.def(
+        "allocated_buffers",
+        [](MeshDevice* device) { return tt::tt_metal::experimental::trace_store::allocated_buffers(device); },
+        nb::arg("mesh_device"),
+        R"doc(
+            Every live buffer of the mesh allocator, sorted: (buffer type, address, size, page size).
+        )doc");
+
+    mod.def(
+        "set_next_allocation_address",
+        [](uint64_t address, uint64_t size) {
+            tt::tt_metal::experimental::trace_store::set_next_allocation_address(address, size);
+        },
+        nb::arg("address"),
+        nb::arg("size"),
+        R"doc(
+            Place the next DRAM allocation of exactly ``size`` bytes at ``address`` (one-shot; other sizes
+            ignore it). ``set_next_allocation_address(0, 0)`` clears it.
         )doc");
 
     mod.def(

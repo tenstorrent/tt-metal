@@ -109,6 +109,9 @@ public:
     // Drop the requests captured under `trace_id`. Called when the trace is released.
     void release_trace(const MeshTraceId& trace_id);
 
+    // True if any request was captured under `trace_id`.
+    bool has_trace_requests(const MeshTraceId& trace_id);
+
     struct Request {
         // One logical socket page. PREFETCH carries one page per entry in target_sender_indices:
         // the header names that sender's target state, and its layout slots that sender's slab

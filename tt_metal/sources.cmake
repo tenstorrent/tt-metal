@@ -67,6 +67,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/forge_backdoor/global_semaphore.hpp
     api/tt-metalium/experimental/global_circular_buffer.hpp
     api/tt-metalium/experimental/inspector.hpp
+    api/tt-metalium/experimental/trace_store.hpp
     api/tt-metalium/experimental/inspector_config.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
     api/tt-metalium/experimental/operation_timeout.hpp
