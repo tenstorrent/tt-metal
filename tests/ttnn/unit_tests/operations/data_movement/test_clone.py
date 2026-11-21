@@ -518,3 +518,90 @@ def test_clone_sub_core_grids(device, layout, dtype):
     )
     output = ttnn.clone(input_tensor, dtype=dtype, sub_core_grids=sub_core_grids)
     assert torch.equal(ttnn.to_torch(output).to(torch.bfloat16), torch_input)
+
+
+def _two_shard_memory_config(shard_layout, buffer_type, shard_shape):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    return ttnn.MemoryConfig(
+        shard_layout, buffer_type, ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+
+@pytest.mark.parametrize(
+    "tilized, input_dtype, output_dtype",
+    [
+        (True, "bfloat16", None),
+        (True, "float32", None),
+        (True, "bfloat16", "float32"),
+        (True, "uint32", None),
+        (True, "bfloat8_b", None),
+        (False, "bfloat16", None),
+        (False, "float32", None),
+        (False, "uint32", None),
+    ],
+)
+@pytest.mark.parametrize(
+    "shape, shard_layout, shard_shape",
+    [
+        ([1, 1, 256, 512], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [128, 512]),
+        ([2, 2, 64, 256], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [128, 256]),
+        ([1, 1, 128, 256], ttnn.TensorMemoryLayout.WIDTH_SHARDED, [128, 128]),
+        ([1, 1, 128, 256], ttnn.TensorMemoryLayout.BLOCK_SHARDED, [128, 128]),
+        ([1, 1, 96, 96], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [64, 96]),
+        ([1, 1, 64, 96], ttnn.TensorMemoryLayout.WIDTH_SHARDED, [64, 64]),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_buffer_type, output_buffer_type",
+    [
+        (ttnn.BufferType.DRAM, ttnn.BufferType.DRAM),
+        (ttnn.BufferType.DRAM, ttnn.BufferType.L1),
+        (ttnn.BufferType.L1, ttnn.BufferType.DRAM),
+    ],
+)
+def test_clone_dram_sharded(
+    tilized,
+    shape,
+    shard_layout,
+    shard_shape,
+    input_buffer_type,
+    output_buffer_type,
+    input_dtype,
+    output_dtype,
+    device,
+):
+    """
+    Clone with the input and/or output sharded in DRAM (same shard spec on both sides),
+    including uneven last shards.
+    """
+    torch.manual_seed(0)
+    if input_dtype == "uint32":
+        # torch has no uint32; non-negative int32 values are the same bits.
+        torch_input = torch.randint(0, 2**31 - 1, shape, dtype=torch.int32)
+        ttnn_in_dtype = ttnn.uint32
+    elif input_dtype == "bfloat8_b":
+        torch_input = torch.randn(shape, dtype=torch.float32)
+        ttnn_in_dtype = ttnn.bfloat8_b
+    else:
+        torch_input = torch.randn(shape, dtype=get_lib_dtype(torch, input_dtype))
+        ttnn_in_dtype = get_lib_dtype(ttnn, input_dtype)
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        dtype=ttnn_in_dtype,
+        layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=_two_shard_memory_config(shard_layout, input_buffer_type, shard_shape),
+    )
+    ttnn_output = ttnn.clone(
+        ttnn_input,
+        dtype=get_lib_dtype(ttnn, output_dtype),
+        memory_config=_two_shard_memory_config(shard_layout, output_buffer_type, shard_shape),
+    )
+    if input_dtype == "bfloat8_b":
+        # Block-float quantizes on upload, so compare against what the input tensor holds.
+        expected = ttnn.to_torch(ttnn_input)
+    elif input_dtype == "uint32":
+        expected = torch_input
+    else:
+        expected = torch_input.to(get_lib_dtype(torch, output_dtype or input_dtype))
+    assert torch.equal(ttnn.to_torch(ttnn_output).to(expected.dtype), expected)
