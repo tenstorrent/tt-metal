@@ -2329,7 +2329,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, topk_push_long]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
@@ -2489,13 +2489,13 @@
     export TABLE_WAIT_SECS=2400
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1
   test_type: k31_prefill_runner_24l
-  test_tags: [kimi_k3_1, runner, kv_cache]
+  test_tags: [kimi_k3_1, runner, kv_cache, topk_push_long]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
       # K3's 60: its L24 leg was still in bringup at 38 min on CI (run 34831600450), where weight load
       # is NFS-bound. Locally the whole launcher took 6.5 min (bringup ~6 min, two ~207 ms chunks).
-      timeout: 60
+      timeout: 90  # EXPERIMENT branch: 1M request
   owner_id: U0ACLAM77PS  # Kosta Grujcic, K3's suite owner; K3.1's owner to be confirmed
   team: shield
   budget_type: demo
