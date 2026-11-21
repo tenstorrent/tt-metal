@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // NOC calls on a Keraunos CCE (a Quasar Ethernet core), behind noc_nonblocking_api_v2.h. A CCE has no NOC endpoint:
-// a NOC coordinate resolves through the host-written CceNocRoutes (hostdev/cce_spa_routes.h), a copy is one iDMA
+// a NOC coordinate resolves through the host-written CceNocRoutes (hostdev/cce_noc_routes.h), a copy is one iDMA
 // transfer on command buffer 0, and a word write or increment is a CPU store or load and store. Ethernet sends use
 // command buffer 1 (eth_cce_send.h).
 
@@ -18,7 +18,7 @@
 #endif
 
 #include "api/debug/assert.h"
-#include "hostdev/cce_spa_routes.h"
+#include "hostdev/cce_noc_routes.h"
 #include "internal/risc_attribs.h"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 #include "noc_parameters.h"

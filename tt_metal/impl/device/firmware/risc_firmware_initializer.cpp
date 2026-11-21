@@ -1840,7 +1840,6 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         }
     }
 
-    // CceNocRoutes sits after the bank-to-NOC staging table, as CceSpaRoutes does on a DRAM core.
     const auto write_cce_noc_routes =
         [&](const CoreCoord& logical_eth, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
             const CceNocRoutes routes = quasar_cce_noc_routes(cluster_, device_id, logical_eth);
@@ -1848,8 +1847,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
                 &routes,
                 sizeof(routes),
                 {static_cast<size_t>(device_id), virtual_core},
-                hal_.get_dev_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH) +
-                    hal_.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH));
+                hal_.get_dev_addr(core_type, HalL1MemAddrType::CCE_NOC_ROUTES));
         };
 
     log_debug(tt::LogMetal, "Initializing active ethernet cores");
