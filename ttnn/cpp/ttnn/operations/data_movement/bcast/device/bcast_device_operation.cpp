@@ -241,6 +241,8 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> BcastDeviceOperation:
     const bool input_is_dram = input_tensor0.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
     const bool input_is_sharded = input_tensor0.memory_config().is_sharded();
     const bool is_local = input_is_sharded && !input_is_dram && output_is_sharded && !output_is_dram &&
+                          input_tensor0.memory_config().shard_spec().has_value() &&
+                          output_tensor.memory_config().shard_spec().has_value() &&
                           (output_tensor.memory_config().shard_spec().value().grid ==
                            input_tensor0.memory_config().shard_spec().value().grid);
     const int ideal_dev_clock_cycles = ttnn::operations::data_movement::common_tm_bw_model(
