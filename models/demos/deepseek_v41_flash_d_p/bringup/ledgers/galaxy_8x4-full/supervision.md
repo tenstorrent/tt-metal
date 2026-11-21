@@ -1220,3 +1220,4 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   host). That bar (+ resumed <= 150) moved to PB.9H (the 67k task). 1M device gap (157 vs 138 ms, indexer 51 vs 42)
   noted for a follow-up. Fork change: sdpa kv_lane_map_runtime (option, default off). The report's ladder tables came
   out empty (a gate check deletes results/<task>_*.md written before it; numbers in PB.9G.json / BREADCRUMBS).
+- 10:48 PB.9G gate PASS -> 5c274f18959. Stopping point: switching to model_bringup for MB.4 (the long-history slowdown).
