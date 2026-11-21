@@ -177,9 +177,9 @@ tt::tt_metal::ProgramDescriptor build_program(
     const auto connection_node = fabric_2d ? destination_node : mesh->get_fabric_node_id(first_hop);
     const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, source_node, connection_node);
 
-    // The ranks this rank's final carry reaches each way: the whole ring ahead (the link behind it still carries the
-    // last rank's relayed final states in), else to either end of the line.
-    const uint32_t ahead = ring ? sp_size - 1 : sp_size - 1 - sp_rank;
+    // The ranks this rank's final carry reaches each way: on a ring the whole ring behind, on the links the relay's
+    // stream (which runs ahead) leaves free, else to either end of the line.
+    const uint32_t ahead = ring ? 0 : sp_size - 1 - sp_rank;
     const uint32_t behind = sp_size - 1 - ahead;
     const auto [batch_heads, key_dim] = relay_state_geometry(in);
     const uint32_t kt = key_dim / tt::constants::TILE_HEIGHT;
@@ -757,7 +757,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     relay_reader_args.push_back(final_address);
     relay_reader.emplace_common_runtime_args(relay_reader_args);
     relay_writer.emplace_common_runtime_args(
-        {carry.buffer(), uint32_t(back_sender), in.landing.buffer(), final_address});
+        {carry.buffer(), uint32_t(relay_range != 0) | uint32_t(back_sender) << 1, in.landing.buffer(), final_address});
     for (uint32_t r = 0; r < relay_cores.size(); ++r) {
         const auto& heads = relay_core_heads[r];
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt, writer_rt;
