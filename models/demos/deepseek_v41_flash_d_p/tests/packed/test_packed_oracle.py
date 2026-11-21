@@ -20,6 +20,15 @@ Runs (every run on fresh slot states, the prefixes replayed: the device path is 
     packed2    [O, F, -, P]       (every segment in another lane, an empty lane)
     packed3    [G, O, H, F]       (PB.3H: two segments with whole chunks of history)
     packed1'   packed1 again, packed3' packed3 again (determinism)
+PB.9G (chip-aligned lanes, PACKED_CHIPS=on: every packed chunk runs on whole chips a segment, the one-call path, no
+fallback): phase B under DECODER_SKIP=decode (an encoder replay needs it; layers 0-19 compute, layer 20 its KV head):
+    R   slot 7, start 4096, 2048 rows, write_start start + 128 (a resumed request: encoder replay)
+    R1  slot 8, start 8192, 200 rows, write_start start + 128 (replay on one chip, padded)
+    S1  slot 9, start 2048, 256 rows (one chip exactly)
+    T   slot 10, start 4096, 1 row (a 1-token segment: cap <= start, its chip idle: snapshot and acks)
+    X1  slot 11, start 6144, 1024 rows (a split request's first part, 4 chips); X2 its continuation at 7168
+    today[S] / alone[S] for S in R, R1, S1, X1, X2 (and T alone); packed4 [R, S1, T, X1, R1] (5 segments, 15 chips:
+    empty chips), packed5 [X2, R1, S1, R]; packed4' (determinism). Folded into the same four metrics.
 Every slot's caches have one capacity (MAX_SEQ: serving's slots are one size).
 Metrics (gated == 0):
     packed_alone_vs_today_max_abs_diff   alone[S] vs today[S], every layer output (S's rows: streams and pre)
@@ -59,7 +68,7 @@ CHUNK, PAD_ID, Capture, boundary_rows, packed, served_digests = (
     _pc.packed,
     _pc.served_digests,
 )
-from models.demos.deepseek_v41_flash_d_p.tt.packed import ChunkDescriptor, Segment
+from models.demos.deepseek_v41_flash_d_p.tt.packed import ChunkDescriptor, GluedChunk, Segment
 
 S = spec()
 pytestmark = device_timeout(S)
@@ -76,6 +85,20 @@ SEGS = {
 }
 COMPUTED = ("F", "P", "O", "G", "H")
 COMPS = {"packed1": ["F", "P", "O", "Q"], "packed2": ["O", "F", None, "P"], "packed3": ["G", "O", "H", "F"]}
+# PB.9G (chip-aligned lanes): phase B, DECODER_SKIP=decode (an encoder replay needs it; layers 0-19 compute, layer 20
+# its KV head): replay segments (write_start = start + 128), a 1-chip segment, a 1-token segment (its chip idle), a
+# split request (its first part, then its continuation in another chunk), in chunks of up to 5 segments
+SEGS_B = {
+    "R": dict(slot=7, start=4096, n=2048, off=20480, ws=4096 + 128),  # replay, 8 chips
+    "R1": dict(slot=8, start=8192, n=200, off=28672, ws=8192 + 128),  # replay, 1 chip (padded)
+    "S1": dict(slot=9, start=2048, n=256, off=36864),  # 1 chip exactly
+    "T": dict(slot=10, start=4096, n=1, off=40960),  # 1 token: cap <= start, its chip idle (snapshot and acks)
+    "X1": dict(slot=11, start=6144, n=1024, off=44032),  # a split request's first part (4 chips)
+    "X2": dict(slot=11, start=7168, n=1024, off=44032),  # its continuation (history: X1's rows), another chunk
+}
+SEGS.update(SEGS_B)
+COMPUTED_B = ("R", "R1", "S1", "X1", "X2")
+COMPS_B = {"packed4": ["R", "S1", "T", "X1", "R1"], "packed5": ["X2", "R1", "S1", "R"]}
 
 
 def _layers(model) -> list:
@@ -97,7 +120,7 @@ class Run:
 
     def seg(self, name):
         d = SEGS[name]
-        return Segment(d["slot"], d["start"], d["start"] + d["n"])
+        return Segment(d["slot"], d["start"], d["start"] + d["n"], d.get("ws"))
 
 
 def _fresh_state(model, layers, run, name):
@@ -123,8 +146,12 @@ def _run(model, layers, run, lanes: list, mode: str):
 
     names = [n for n in lanes if n is not None]
     states = {n: _fresh_state(model, layers, run, n) for n in names}
-    desc = ChunkDescriptor.packed(CHUNK, [None if n is None else run.seg(n) for n in lanes])
     ids_lane = [None if n is None else run.toks(n)[SEGS[n]["start"] :] for n in lanes]
+    if len(lanes) <= 4:
+        desc = ChunkDescriptor.packed(CHUNK, [None if n is None else run.seg(n) for n in lanes])
+    else:  # (PB.9G: more segments than fixed lanes: the glued chunk tt-d-gen sends, run on chip-aligned lanes)
+        assert None not in lanes, lanes
+        desc = GluedChunk(CHUNK, tuple(run.seg(n) for n in lanes))
     ids = desc.pack_ids(ids_lane)
     cap = Capture()
     from models.demos.deepseek_v41_flash_d_p.tt.attention import prefill_end
@@ -171,25 +198,43 @@ def test_packed_oracle(mesh_device):
     g = Golden.for_rung(S, "s56320")
     run = Run(g.tokens())
 
-    keys = lambda n: [(n, i) for i in layers]  # noqa: E731
     today, alone = {}, {}
     for n in COMPUTED:
         today[n] = _run(model, layers, run, [n, None, None, None], "off")
-    for n in SEGS:
+    for n in [k for k in SEGS if k not in SEGS_B]:  # (phase A: DECODER_SKIP=off)
         alone[n] = _run(model, layers, run, [n, None, None, None], "on")
     comps = {c: _run(model, layers, run, lanes, "on") for c, lanes in COMPS.items()}
     again = _run(model, layers, run, COMPS["packed1"], "on")
     again3 = _run(model, layers, run, COMPS["packed3"], "on")
+    # PB.9G phase B (DECODER_SKIP=decode: replay segments; host lists only, FIX.28)
+    model.use_decoder_skip("decode")
+    try:
+        for n in COMPUTED_B:
+            today[n] = _run(model, layers, run, [n, None, None, None], "off")
+        for n in SEGS_B:
+            alone[n] = _run(model, layers, run, [n, None, None, None], "on")
+        for c, lanes in COMPS_B.items():
+            comps[c] = _run(model, layers, run, lanes, "on")
+        again4 = _run(model, layers, run, COMPS_B["packed4"], "on")
+    finally:
+        model.use_decoder_skip("off")
+    comps_all = {**COMPS, **COMPS_B}
+    keys = lambda n, *caps: sorted({k for c in caps for k in c.dig if k[0] == n})  # noqa: E731 (the layers it ran)
 
-    a_t = max(Capture.diff(alone[n][0], today[n][0], keys(n)) for n in COMPUTED)
-    a_t_dig = sum(_dig_mismatch(alone[n][1][n], today[n][1][n]) for n in COMPUTED)
+    a_t = max(Capture.diff(alone[n][0], today[n][0], keys(n, alone[n][0], today[n][0])) for n in COMPUTED + COMPUTED_B)
+    a_t_dig = sum(_dig_mismatch(alone[n][1][n], today[n][1][n]) for n in COMPUTED + COMPUTED_B)
     lane_eq, digs, worst = 0.0, 0, []
+    for n in COMPUTED + COMPUTED_B:  # (which served records differ between alone and today's chunk)
+        a, b = alone[n][1][n], today[n][1][n]
+        bad = sorted({k for k in set(a) | set(b) if a.get(k) != b.get(k)})
+        if bad:
+            worst.append(f"alone vs today {n}: served digests differ {bad[:8]} ({len(bad)})")
     for c, (cap, dig) in comps.items():
-        for n in COMPS[c]:
+        for n in comps_all[c]:
             if n is None:
                 continue
-            if n in COMPUTED:
-                d = Capture.diff(cap, alone[n][0], keys(n))
+            if n in COMPUTED + COMPUTED_B:
+                d = Capture.diff(cap, alone[n][0], keys(n, cap, alone[n][0]))
                 lane_eq = max(lane_eq, d)
                 if d:
                     bad = [i for i in layers if cap.dig.get((n, i)) != alone[n][0].dig.get((n, i))]
@@ -201,8 +246,9 @@ def test_packed_oracle(mesh_device):
                 worst.append(f"{c} {n}: served digests differ {bad[:6]}")
     det = 0.0
     det_dig = 0
-    for c, rep in (("packed1", again), ("packed3", again3)):
-        det = max(det, Capture.diff(rep[0], comps[c][0], [k for n in COMPS[c] if n in COMPUTED for k in keys(n)]))
+    for c, rep in (("packed1", again), ("packed3", again3), ("packed4", again4)):
+        ks = [k for n in comps_all[c] if n in COMPUTED + COMPUTED_B for k in keys(n, rep[0], comps[c][0])]
+        det = max(det, Capture.diff(rep[0], comps[c][0], ks))
         det_dig += sum(_dig_mismatch(rep[1][n], comps[c][1][n]) for n in rep[1])
     if det_dig and not det:
         det = 1e-30
@@ -212,6 +258,10 @@ def test_packed_oracle(mesh_device):
     metrics.record("packed_slot_digest_mismatches", digs)
     metrics.record("packed_determinism_max_abs_diff", det)
     metrics.record("packed_oracle_layers", len(layers))
+    from models.demos.deepseek_v41_flash_d_p.tt import packed_device as PD
+
+    metrics.record("packed_fallback_chunks", int(PD.STATS["fallback"]))  # (PB.9G: no fallback path exists)
+    metrics.record("packed_onecall_chunks", int(PD.STATS["onecall"]))
     print(
         f"packed oracle: alone vs today {a_t} (digests {a_t_dig}), lane equivalence {lane_eq}, slot digest "
         f"mismatches {digs}, determinism {det} (digests {det_dig})"

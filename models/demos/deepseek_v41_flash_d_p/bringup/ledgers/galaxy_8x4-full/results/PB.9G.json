@@ -1,0 +1,4309 @@
+{
+ "metrics": {
+  "determinism_chunk_max_abs_diff_code": {
+   "t": "2026-11-21T09:24:07",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunk_max_abs_diff_novel": {
+   "t": "2026-11-21T09:24:07",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunks": {
+   "t": "2026-11-21T09:24:07",
+   "value": 4
+  },
+  "determinism_elements_differ": {
+   "t": "2026-11-21T09:24:07",
+   "value": 0
+  },
+  "determinism_max_abs_diff": {
+   "t": "2026-11-21T09:24:07",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_code": {
+   "t": "2026-11-21T09:24:07",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_novel": {
+   "t": "2026-11-21T09:24:07",
+   "value": 0.0
+  },
+  "determinism_rows_code": {
+   "t": "2026-11-21T09:24:07",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_rows_novel": {
+   "t": "2026-11-21T09:24:07",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_runs": {
+   "t": "2026-11-21T09:24:07",
+   "value": 3
+  },
+  "determinism_s": {
+   "t": "2026-11-21T09:24:07",
+   "value": 95.3
+  },
+  "determinism_state_max_abs_diff": {
+   "t": "2026-11-21T09:24:07",
+   "value": 0.0
+  },
+  "fits_lanes4x1600s_p1024000": {
+   "t": "2026-11-21T10:47:39",
+   "value": 1
+  },
+  "fits_lanes4x1600s_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:39",
+   "value": 1
+  },
+  "fits_lanes4x1600s_p139264": {
+   "t": "2026-11-21T10:47:12",
+   "value": 1
+  },
+  "fits_lanes4x1600s_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:12",
+   "value": 1
+  },
+  "fits_lanes4x1600s_p51200": {
+   "t": "2026-11-21T10:46:49",
+   "value": 1
+  },
+  "fits_lanes4x1600s_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:49",
+   "value": 1
+  },
+  "fits_lanes4x2k_p1024000": {
+   "t": "2026-11-21T10:46:28",
+   "value": 1
+  },
+  "fits_lanes4x2k_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:28",
+   "value": 1
+  },
+  "fits_lanes4x2k_p139264": {
+   "t": "2026-11-21T10:46:04",
+   "value": 1
+  },
+  "fits_lanes4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:04",
+   "value": 1
+  },
+  "fits_lanes4x2k_p51200": {
+   "t": "2026-11-21T10:45:45",
+   "value": 1
+  },
+  "fits_lanes4x2k_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:45",
+   "value": 1
+  },
+  "gate_model_loads": {
+   "t": "2026-11-21T10:47:44",
+   "value": 1
+  },
+  "ids_uploads_per_chunk": {
+   "t": "2026-11-21T10:45:08",
+   "value": 0.0
+  },
+  "ids_uploads_per_chunk_tagentic_cc": {
+   "t": "2026-11-21T10:45:08",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_device_ms_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 171.48
+  },
+  "ladder_lanes4x1600s_device_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 171.48
+  },
+  "ladder_lanes4x1600s_device_ms_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 107.91
+  },
+  "ladder_lanes4x1600s_device_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 107.91
+  },
+  "ladder_lanes4x1600s_device_ms_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 100.52
+  },
+  "ladder_lanes4x1600s_device_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 100.52
+  },
+  "ladder_lanes4x1600s_gathers_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 36
+  },
+  "ladder_lanes4x1600s_gathers_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 36
+  },
+  "ladder_lanes4x1600s_gathers_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 18
+  },
+  "ladder_lanes4x1600s_gathers_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 18
+  },
+  "ladder_lanes4x1600s_gathers_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 18
+  },
+  "ladder_lanes4x1600s_gathers_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 18
+  },
+  "ladder_lanes4x1600s_host_exposed_ms_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 23.3
+  },
+  "ladder_lanes4x1600s_host_exposed_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 23.3
+  },
+  "ladder_lanes4x1600s_host_exposed_ms_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 22.3
+  },
+  "ladder_lanes4x1600s_host_exposed_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 22.3
+  },
+  "ladder_lanes4x1600s_host_exposed_ms_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 23.8
+  },
+  "ladder_lanes4x1600s_host_exposed_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 23.8
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attention_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 51.78
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attention_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 51.78
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attention_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 33.12
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attention_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 33.12
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attention_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 30.25
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attention_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 30.25
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_collapse_p1024000": {
+   "t": "2026-11-21T10:47:32",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_collapse_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:32",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_collapse_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_collapse_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_collapse_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_collapse_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_hc_p1024000": {
+   "t": "2026-11-21T10:47:32",
+   "value": 0.27
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_hc_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:32",
+   "value": 0.27
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_hc_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.28
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_hc_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.28
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_hc_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.27
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_hc_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.27
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_index_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.43
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_index_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.43
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_index_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 0.43
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_index_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 0.43
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_index_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.43
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_index_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.43
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_norm_p1024000": {
+   "t": "2026-11-21T10:47:32",
+   "value": 0.02
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_norm_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:32",
+   "value": 0.02
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_norm_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.02
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_norm_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.02
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_norm_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.02
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_norm_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.02
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_region_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 5.43
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_region_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:32",
+   "value": 5.43
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_region_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 3.91
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_region_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 3.91
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_region_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 3.57
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_region_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 3.57
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_residual_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 6.15
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_residual_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 6.15
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_residual_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 6.06
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_residual_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 6.06
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_residual_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 6.11
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_residual_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 6.11
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_table_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 6.47
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_table_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 6.47
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_table_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_table_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_table_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_attn_table_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_compressor_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 4.85
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_compressor_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 4.85
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_compressor_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 4.88
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_compressor_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 4.88
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_compressor_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 4.88
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_compressor_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 4.88
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_add_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.78
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_add_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.78
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_add_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 0.77
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_add_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 0.77
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_add_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.78
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_add_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.78
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_kv_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 1.18
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_kv_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 1.18
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_kv_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 1.19
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_kv_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 1.19
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_kv_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 1.18
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_kv_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 1.18
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_rows_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.09
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_rows_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.09
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_rows_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 0.34
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_rows_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 0.34
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_rows_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.21
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_engram_rows_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.21
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_experts_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 36.18
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_experts_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 36.18
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_experts_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 38.11
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_experts_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 38.11
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_experts_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 38.73
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_experts_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 38.73
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_collapse_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_collapse_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_collapse_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_collapse_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_collapse_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_collapse_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_hc_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_hc_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_hc_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_hc_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_hc_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_hc_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_norm_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_norm_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_norm_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_norm_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_norm_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_norm_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_residual_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 5.9
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_residual_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 5.9
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_residual_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 5.88
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_residual_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 5.88
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_residual_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 6.22
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_ffn_residual_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 6.22
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_history_gather_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 6.86
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_history_gather_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 6.86
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_history_gather_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 2.79
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_history_gather_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 2.79
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_history_gather_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 1.77
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_history_gather_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 1.77
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_indexer_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 61.73
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_indexer_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 61.73
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_indexer_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 13.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_indexer_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 13.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_indexer_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 9.11
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_indexer_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 9.11
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_kv_p1024000": {
+   "t": "2026-11-21T10:47:32",
+   "value": 0.33
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_kv_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:32",
+   "value": 0.33
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_kv_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.32
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_kv_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.32
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_kv_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.33
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_kv_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.33
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_moe_add_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_moe_add_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_moe_add_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_moe_add_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_moe_add_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_moe_add_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_p1024000": {
+   "t": "2026-11-21T10:47:32",
+   "value": 169.91
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:32",
+   "value": 169.91
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 108.32
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 108.32
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 101.09
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 101.09
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_q_a_p1024000": {
+   "t": "2026-11-21T10:47:32",
+   "value": 2.1
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_q_a_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:32",
+   "value": 2.1
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_q_a_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 2.1
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_q_a_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 2.1
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_q_a_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 2.1
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_q_a_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 2.1
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_router_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_router_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_router_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_router_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_router_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_router_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_shared_expert_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_shared_expert_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_shared_expert_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_shared_expert_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_shared_expert_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_device_ms_shared_expert_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_resumed_tok_s_p1024000": {
+   "t": "2026-11-21T10:47:32",
+   "value": 34879.2
+  },
+  "ladder_lanes4x1600s_resumed_tok_s_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:32",
+   "value": 34879.2
+  },
+  "ladder_lanes4x1600s_resumed_tok_s_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 51589.4
+  },
+  "ladder_lanes4x1600s_resumed_tok_s_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 51589.4
+  },
+  "ladder_lanes4x1600s_resumed_tok_s_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 54402.6
+  },
+  "ladder_lanes4x1600s_resumed_tok_s_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 54402.6
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_p1024000": {
+   "t": "2026-11-21T10:47:32",
+   "value": 194.5
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:32",
+   "value": 194.5
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 131.5
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 131.5
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 124.7
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 124.7
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_runs_p1024000": {
+   "t": "2026-11-21T10:47:32",
+   "value": [
+    194.0,
+    194.6,
+    194.4,
+    194.5,
+    194.0,
+    196.1,
+    193.7,
+    196.9,
+    210.4,
+    194.4
+   ]
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_runs_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:32",
+   "value": [
+    194.0,
+    194.6,
+    194.4,
+    194.5,
+    194.0,
+    196.1,
+    193.7,
+    196.9,
+    210.4,
+    194.4
+   ]
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_runs_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": [
+    152.4,
+    129.7,
+    130.5,
+    131.5,
+    132.2,
+    128.1,
+    126.1,
+    156.9,
+    128.8,
+    132.5
+   ]
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_runs_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": [
+    152.4,
+    129.7,
+    130.5,
+    131.5,
+    132.2,
+    128.1,
+    126.1,
+    156.9,
+    128.8,
+    132.5
+   ]
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_runs_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": [
+    124.4,
+    123.4,
+    123.6,
+    123.4,
+    124.7,
+    123.9,
+    127.1,
+    139.0,
+    128.2,
+    124.9
+   ]
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_runs_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": [
+    124.4,
+    123.4,
+    123.6,
+    123.4,
+    124.7,
+    123.9,
+    127.1,
+    139.0,
+    128.2,
+    124.9
+   ]
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_spread_p1024000": {
+   "t": "2026-11-21T10:47:32",
+   "value": 16.7
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_spread_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:32",
+   "value": 16.7
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_spread_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 30.8
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_spread_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 30.8
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_spread_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 15.6
+  },
+  "ladder_lanes4x1600s_resumed_wall_ms_spread_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 15.6
+  },
+  "ladder_lanes4x1600s_resumed_wall_settled_p1024000": {
+   "t": "2026-11-21T10:47:32",
+   "value": 1
+  },
+  "ladder_lanes4x1600s_resumed_wall_settled_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:32",
+   "value": 1
+  },
+  "ladder_lanes4x1600s_resumed_wall_settled_p139264": {
+   "t": "2026-11-21T10:47:07",
+   "value": 1
+  },
+  "ladder_lanes4x1600s_resumed_wall_settled_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:07",
+   "value": 1
+  },
+  "ladder_lanes4x1600s_resumed_wall_settled_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 1
+  },
+  "ladder_lanes4x1600s_resumed_wall_settled_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 1
+  },
+  "ladder_lanes4x1600s_serving_acks_per_chunk": {
+   "t": "2026-11-21T10:47:39",
+   "value": 105
+  },
+  "ladder_lanes4x1600s_serving_acks_per_chunk_tagentic_cc": {
+   "t": "2026-11-21T10:47:39",
+   "value": 105
+  },
+  "ladder_lanes4x1600s_serving_extra_ms_p1024000": {
+   "t": "2026-11-21T10:47:39",
+   "value": 0.9
+  },
+  "ladder_lanes4x1600s_serving_extra_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:39",
+   "value": 0.9
+  },
+  "ladder_lanes4x1600s_serving_extra_ms_p139264": {
+   "t": "2026-11-21T10:47:12",
+   "value": 8.8
+  },
+  "ladder_lanes4x1600s_serving_extra_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:12",
+   "value": 8.8
+  },
+  "ladder_lanes4x1600s_serving_extra_ms_p51200": {
+   "t": "2026-11-21T10:46:49",
+   "value": 10.9
+  },
+  "ladder_lanes4x1600s_serving_extra_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:49",
+   "value": 10.9
+  },
+  "ladder_lanes4x1600s_serving_wall_ms_p1024000": {
+   "t": "2026-11-21T10:47:39",
+   "value": 195.7
+  },
+  "ladder_lanes4x1600s_serving_wall_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:39",
+   "value": 195.7
+  },
+  "ladder_lanes4x1600s_serving_wall_ms_p139264": {
+   "t": "2026-11-21T10:47:12",
+   "value": 139.0
+  },
+  "ladder_lanes4x1600s_serving_wall_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:12",
+   "value": 139.0
+  },
+  "ladder_lanes4x1600s_serving_wall_ms_p51200": {
+   "t": "2026-11-21T10:46:49",
+   "value": 135.2
+  },
+  "ladder_lanes4x1600s_serving_wall_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:49",
+   "value": 135.2
+  },
+  "ladder_lanes4x1600s_serving_wall_ms_runs_p1024000": {
+   "t": "2026-11-21T10:47:39",
+   "value": [
+    198.2,
+    195.2,
+    195.7,
+    195.7,
+    196.2
+   ]
+  },
+  "ladder_lanes4x1600s_serving_wall_ms_runs_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:39",
+   "value": [
+    198.2,
+    195.2,
+    195.7,
+    195.7,
+    196.2
+   ]
+  },
+  "ladder_lanes4x1600s_serving_wall_ms_runs_p139264": {
+   "t": "2026-11-21T10:47:12",
+   "value": [
+    139.0,
+    136.5,
+    156.6,
+    139.6,
+    137.7
+   ]
+  },
+  "ladder_lanes4x1600s_serving_wall_ms_runs_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:12",
+   "value": [
+    139.0,
+    136.5,
+    156.6,
+    139.6,
+    137.7
+   ]
+  },
+  "ladder_lanes4x1600s_serving_wall_ms_runs_p51200": {
+   "t": "2026-11-21T10:46:49",
+   "value": [
+    153.4,
+    133.0,
+    157.3,
+    133.6,
+    135.2
+   ]
+  },
+  "ladder_lanes4x1600s_serving_wall_ms_runs_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:49",
+   "value": [
+    153.4,
+    133.0,
+    157.3,
+    133.6,
+    135.2
+   ]
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attention_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 52.97
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attention_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 52.97
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attention_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 33.05
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attention_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 33.05
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attention_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 30.47
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attention_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 30.47
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_collapse_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_collapse_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_collapse_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_collapse_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_collapse_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_collapse_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_hc_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.27
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_hc_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.27
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_hc_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.27
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_hc_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.27
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_hc_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.28
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_hc_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.28
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_index_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.43
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_index_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.43
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_index_p139264": {
+   "t": "2026-11-21T10:47:01",
+   "value": 0.43
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_index_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:01",
+   "value": 0.43
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_index_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.43
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_index_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.43
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_norm_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.02
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_norm_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.02
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_norm_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.02
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_norm_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.02
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_norm_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.02
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_norm_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.02
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_region_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 4.67
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_region_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 4.67
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_region_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 3.78
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_region_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 3.78
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_region_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 3.58
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_region_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 3.58
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_residual_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 6.31
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_residual_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 6.31
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_residual_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 5.95
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_residual_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 5.95
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_residual_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 6.05
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_residual_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 6.05
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_table_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 6.29
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_table_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 6.29
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_table_p139264": {
+   "t": "2026-11-21T10:47:01",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_table_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:01",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_table_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_attn_table_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_compressor_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 4.86
+  },
+  "ladder_lanes4x1600s_steady_device_ms_compressor_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 4.86
+  },
+  "ladder_lanes4x1600s_steady_device_ms_compressor_p139264": {
+   "t": "2026-11-21T10:47:01",
+   "value": 4.87
+  },
+  "ladder_lanes4x1600s_steady_device_ms_compressor_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:01",
+   "value": 4.87
+  },
+  "ladder_lanes4x1600s_steady_device_ms_compressor_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 4.88
+  },
+  "ladder_lanes4x1600s_steady_device_ms_compressor_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 4.88
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_add_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.78
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_add_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.78
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_add_p139264": {
+   "t": "2026-11-21T10:47:01",
+   "value": 0.78
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_add_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:01",
+   "value": 0.78
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_add_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.78
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_add_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.78
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_kv_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 1.19
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_kv_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 1.19
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_kv_p139264": {
+   "t": "2026-11-21T10:47:01",
+   "value": 1.18
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_kv_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 1.18
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_kv_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 1.18
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_kv_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 1.18
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_rows_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.09
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_rows_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.09
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_rows_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.34
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_rows_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.34
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_rows_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.21
+  },
+  "ladder_lanes4x1600s_steady_device_ms_engram_rows_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.21
+  },
+  "ladder_lanes4x1600s_steady_device_ms_experts_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 36.58
+  },
+  "ladder_lanes4x1600s_steady_device_ms_experts_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 36.58
+  },
+  "ladder_lanes4x1600s_steady_device_ms_experts_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 37.98
+  },
+  "ladder_lanes4x1600s_steady_device_ms_experts_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 37.98
+  },
+  "ladder_lanes4x1600s_steady_device_ms_experts_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 38.47
+  },
+  "ladder_lanes4x1600s_steady_device_ms_experts_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 38.47
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_collapse_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_collapse_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_collapse_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_collapse_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_collapse_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_collapse_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_hc_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_hc_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_hc_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_hc_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_hc_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_hc_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_norm_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_norm_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_norm_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_norm_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_norm_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_norm_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_residual_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 6.33
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_residual_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 6.33
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_residual_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 6.01
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_residual_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 6.01
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_residual_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 6.31
+  },
+  "ladder_lanes4x1600s_steady_device_ms_ffn_residual_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 6.31
+  },
+  "ladder_lanes4x1600s_steady_device_ms_history_gather_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 6.21
+  },
+  "ladder_lanes4x1600s_steady_device_ms_history_gather_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 6.21
+  },
+  "ladder_lanes4x1600s_steady_device_ms_history_gather_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 2.56
+  },
+  "ladder_lanes4x1600s_steady_device_ms_history_gather_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 2.56
+  },
+  "ladder_lanes4x1600s_steady_device_ms_history_gather_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 1.14
+  },
+  "ladder_lanes4x1600s_steady_device_ms_history_gather_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 1.14
+  },
+  "ladder_lanes4x1600s_steady_device_ms_indexer_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 61.75
+  },
+  "ladder_lanes4x1600s_steady_device_ms_indexer_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 61.75
+  },
+  "ladder_lanes4x1600s_steady_device_ms_indexer_p139264": {
+   "t": "2026-11-21T10:47:01",
+   "value": 13.12
+  },
+  "ladder_lanes4x1600s_steady_device_ms_indexer_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:01",
+   "value": 13.12
+  },
+  "ladder_lanes4x1600s_steady_device_ms_indexer_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 9.14
+  },
+  "ladder_lanes4x1600s_steady_device_ms_indexer_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 9.14
+  },
+  "ladder_lanes4x1600s_steady_device_ms_kv_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.32
+  },
+  "ladder_lanes4x1600s_steady_device_ms_kv_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.32
+  },
+  "ladder_lanes4x1600s_steady_device_ms_kv_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.32
+  },
+  "ladder_lanes4x1600s_steady_device_ms_kv_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.32
+  },
+  "ladder_lanes4x1600s_steady_device_ms_kv_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.33
+  },
+  "ladder_lanes4x1600s_steady_device_ms_kv_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.33
+  },
+  "ladder_lanes4x1600s_steady_device_ms_moe_add_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_moe_add_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_moe_add_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_moe_add_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_moe_add_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_moe_add_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 171.48
+  },
+  "ladder_lanes4x1600s_steady_device_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 171.48
+  },
+  "ladder_lanes4x1600s_steady_device_ms_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 107.91
+  },
+  "ladder_lanes4x1600s_steady_device_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 107.91
+  },
+  "ladder_lanes4x1600s_steady_device_ms_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 100.52
+  },
+  "ladder_lanes4x1600s_steady_device_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 100.52
+  },
+  "ladder_lanes4x1600s_steady_device_ms_q_a_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 2.1
+  },
+  "ladder_lanes4x1600s_steady_device_ms_q_a_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 2.1
+  },
+  "ladder_lanes4x1600s_steady_device_ms_q_a_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 2.1
+  },
+  "ladder_lanes4x1600s_steady_device_ms_q_a_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 2.1
+  },
+  "ladder_lanes4x1600s_steady_device_ms_q_a_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 2.1
+  },
+  "ladder_lanes4x1600s_steady_device_ms_q_a_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 2.1
+  },
+  "ladder_lanes4x1600s_steady_device_ms_router_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_router_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_router_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_router_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_router_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_router_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_shared_expert_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_shared_expert_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_shared_expert_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_shared_expert_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_shared_expert_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_device_ms_shared_expert_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 0.0
+  },
+  "ladder_lanes4x1600s_steady_tok_s_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 38110.9
+  },
+  "ladder_lanes4x1600s_steady_tok_s_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 38110.9
+  },
+  "ladder_lanes4x1600s_steady_tok_s_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 57020.0
+  },
+  "ladder_lanes4x1600s_steady_tok_s_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 57020.0
+  },
+  "ladder_lanes4x1600s_steady_tok_s_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 59726.5
+  },
+  "ladder_lanes4x1600s_steady_tok_s_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 59726.5
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 194.8
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 194.8
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 130.2
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 130.2
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 124.3
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 124.3
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_runs_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": [
+    193.9,
+    194.6,
+    195.2,
+    195.3,
+    193.8,
+    199.0,
+    194.1,
+    192.3,
+    195.0,
+    194.8
+   ]
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_runs_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": [
+    193.9,
+    194.6,
+    195.2,
+    195.3,
+    193.8,
+    199.0,
+    194.1,
+    192.3,
+    195.0,
+    194.8
+   ]
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_runs_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": [
+    153.1,
+    130.6,
+    130.1,
+    130.2,
+    128.9,
+    130.0,
+    126.7,
+    134.0,
+    125.9,
+    138.1
+   ]
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_runs_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": [
+    153.1,
+    130.6,
+    130.1,
+    130.2,
+    128.9,
+    130.0,
+    126.7,
+    134.0,
+    125.9,
+    138.1
+   ]
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_runs_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": [
+    123.5,
+    124.0,
+    124.3,
+    125.2,
+    138.4,
+    126.0,
+    124.9,
+    124.0,
+    121.5,
+    123.2
+   ]
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_runs_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": [
+    123.5,
+    124.0,
+    124.3,
+    125.2,
+    138.4,
+    126.0,
+    124.9,
+    124.0,
+    121.5,
+    123.2
+   ]
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_spread_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 6.7
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_spread_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 6.7
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_spread_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 27.2
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_spread_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 27.2
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_spread_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 16.9
+  },
+  "ladder_lanes4x1600s_steady_wall_ms_spread_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 16.9
+  },
+  "ladder_lanes4x1600s_steady_wall_settled_p1024000": {
+   "t": "2026-11-21T10:47:22",
+   "value": 1
+  },
+  "ladder_lanes4x1600s_steady_wall_settled_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:22",
+   "value": 1
+  },
+  "ladder_lanes4x1600s_steady_wall_settled_p139264": {
+   "t": "2026-11-21T10:47:00",
+   "value": 1
+  },
+  "ladder_lanes4x1600s_steady_wall_settled_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:00",
+   "value": 1
+  },
+  "ladder_lanes4x1600s_steady_wall_settled_p51200": {
+   "t": "2026-11-21T10:46:35",
+   "value": 1
+  },
+  "ladder_lanes4x1600s_steady_wall_settled_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:35",
+   "value": 1
+  },
+  "ladder_lanes4x1600s_table": {
+   "t": "2026-11-21T10:47:39",
+   "value": "# Ladder lanes4x1600s: four 1600-token segments + a 1024-row split piece, each at history h (chip-aligned lanes, PACKED_CHIPS=on)\n\n| history | steady wall ms (spread) | new tok/s | resumed wall ms | device ms | exposed host ms | serving wall ms (prefill entry + D2H ack) | gathers traced |\n|---|---|---|---|---|---|---|---|\n| 51200 | 124.3 (16.9) | 59726 | 124.7 | 100.5 | 23.8 | 135.2 | 18 |\n| 139264 | 130.2 (27.2) | 57020 | 131.5 | 107.9 | 22.3 | 139.0 | 18 |\n| 1024000 | 194.8 (6.7) | 38111 | 194.5 | 171.5 | 23.3 | 195.7 | 36 |"
+  },
+  "ladder_lanes4x1600s_table_tagentic_cc": {
+   "t": "2026-11-21T10:47:39",
+   "value": "# Ladder lanes4x1600s: four 1600-token segments + a 1024-row split piece, each at history h (chip-aligned lanes, PACKED_CHIPS=on)\n\n| history | steady wall ms (spread) | new tok/s | resumed wall ms | device ms | exposed host ms | serving wall ms (prefill entry + D2H ack) | gathers traced |\n|---|---|---|---|---|---|---|---|\n| 51200 | 124.3 (16.9) | 59726 | 124.7 | 100.5 | 23.8 | 135.2 | 18 |\n| 139264 | 130.2 (27.2) | 57020 | 131.5 | 107.9 | 22.3 | 139.0 | 18 |\n| 1024000 | 194.8 (6.7) | 38111 | 194.5 | 171.5 | 23.3 | 195.7 | 36 |"
+  },
+  "ladder_lanes4x1600s_tok_s_p1024000": {
+   "t": "2026-11-21T10:47:33",
+   "value": 38110.9
+  },
+  "ladder_lanes4x1600s_tok_s_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:47:33",
+   "value": 38110.9
+  },
+  "ladder_lanes4x1600s_tok_s_p139264": {
+   "t": "2026-11-21T10:47:08",
+   "value": 57020.0
+  },
+  "ladder_lanes4x1600s_tok_s_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:47:08",
+   "value": 57020.0
+  },
+  "ladder_lanes4x1600s_tok_s_p51200": {
+   "t": "2026-11-21T10:46:43",
+   "value": 59726.5
+  },
+  "ladder_lanes4x1600s_tok_s_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:46:43",
+   "value": 59726.5
+  },
+  "ladder_lanes4x2k_device_ms_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 157.06
+  },
+  "ladder_lanes4x2k_device_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 157.06
+  },
+  "ladder_lanes4x2k_device_ms_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 104.79
+  },
+  "ladder_lanes4x2k_device_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:00",
+   "value": 104.79
+  },
+  "ladder_lanes4x2k_device_ms_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 99.01
+  },
+  "ladder_lanes4x2k_device_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 99.01
+  },
+  "ladder_lanes4x2k_gathers_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 32
+  },
+  "ladder_lanes4x2k_gathers_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 32
+  },
+  "ladder_lanes4x2k_gathers_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 15
+  },
+  "ladder_lanes4x2k_gathers_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:00",
+   "value": 15
+  },
+  "ladder_lanes4x2k_gathers_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 15
+  },
+  "ladder_lanes4x2k_gathers_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 15
+  },
+  "ladder_lanes4x2k_host_exposed_ms_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 20.9
+  },
+  "ladder_lanes4x2k_host_exposed_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 20.9
+  },
+  "ladder_lanes4x2k_host_exposed_ms_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 16.0
+  },
+  "ladder_lanes4x2k_host_exposed_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:00",
+   "value": 16.0
+  },
+  "ladder_lanes4x2k_host_exposed_ms_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 22.5
+  },
+  "ladder_lanes4x2k_host_exposed_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 22.5
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attention_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 50.01
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attention_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 50.01
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attention_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 31.22
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attention_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 31.22
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attention_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 29.52
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attention_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 29.52
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_collapse_p1024000": {
+   "t": "2026-11-21T10:46:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_collapse_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:22",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_collapse_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_collapse_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_collapse_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_collapse_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_hc_p1024000": {
+   "t": "2026-11-21T10:46:22",
+   "value": 0.27
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_hc_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:22",
+   "value": 0.27
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_hc_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.27
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_hc_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.27
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_hc_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.28
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_hc_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.28
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_index_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.43
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_index_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.43
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_index_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 0.43
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_index_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:00",
+   "value": 0.43
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_index_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.43
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_index_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.43
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_norm_p1024000": {
+   "t": "2026-11-21T10:46:22",
+   "value": 0.02
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_norm_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:22",
+   "value": 0.02
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_norm_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.02
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_norm_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.02
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_norm_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.02
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_norm_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.02
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_region_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 5.73
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_region_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 5.73
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_region_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 3.22
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_region_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 3.22
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_region_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 3.07
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_region_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 3.07
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_residual_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 5.58
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_residual_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 5.58
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_residual_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 5.28
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_residual_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 5.28
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_residual_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 5.42
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_residual_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 5.42
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_table_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 5.75
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_table_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 5.75
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_table_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_table_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_table_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_attn_table_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_compressor_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 4.43
+  },
+  "ladder_lanes4x2k_resumed_device_ms_compressor_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 4.43
+  },
+  "ladder_lanes4x2k_resumed_device_ms_compressor_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 4.53
+  },
+  "ladder_lanes4x2k_resumed_device_ms_compressor_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:00",
+   "value": 4.53
+  },
+  "ladder_lanes4x2k_resumed_device_ms_compressor_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 4.43
+  },
+  "ladder_lanes4x2k_resumed_device_ms_compressor_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 4.43
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_add_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.78
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_add_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.78
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_add_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 0.78
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_add_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:00",
+   "value": 0.78
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_add_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.78
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_add_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.78
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_kv_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 1.19
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_kv_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 1.19
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_kv_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 1.19
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_kv_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:00",
+   "value": 1.19
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_kv_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 1.19
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_kv_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 1.19
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_rows_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.08
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_rows_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.08
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_rows_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 0.93
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_rows_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:00",
+   "value": 0.93
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_rows_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.47
+  },
+  "ladder_lanes4x2k_resumed_device_ms_engram_rows_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.47
+  },
+  "ladder_lanes4x2k_resumed_device_ms_experts_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 36.07
+  },
+  "ladder_lanes4x2k_resumed_device_ms_experts_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 36.07
+  },
+  "ladder_lanes4x2k_resumed_device_ms_experts_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 38.82
+  },
+  "ladder_lanes4x2k_resumed_device_ms_experts_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 38.82
+  },
+  "ladder_lanes4x2k_resumed_device_ms_experts_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 38.87
+  },
+  "ladder_lanes4x2k_resumed_device_ms_experts_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 38.87
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_collapse_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_collapse_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_collapse_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_collapse_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_collapse_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_collapse_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_hc_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_hc_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_hc_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_hc_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_hc_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_hc_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_norm_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_norm_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_norm_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_norm_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_norm_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_norm_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_residual_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 5.29
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_residual_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 5.29
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_residual_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 5.44
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_residual_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:00",
+   "value": 5.44
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_residual_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 5.58
+  },
+  "ladder_lanes4x2k_resumed_device_ms_ffn_residual_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 5.58
+  },
+  "ladder_lanes4x2k_resumed_device_ms_history_gather_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 4.74
+  },
+  "ladder_lanes4x2k_resumed_device_ms_history_gather_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 4.74
+  },
+  "ladder_lanes4x2k_resumed_device_ms_history_gather_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 3.64
+  },
+  "ladder_lanes4x2k_resumed_device_ms_history_gather_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 3.64
+  },
+  "ladder_lanes4x2k_resumed_device_ms_history_gather_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 1.99
+  },
+  "ladder_lanes4x2k_resumed_device_ms_history_gather_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 1.99
+  },
+  "ladder_lanes4x2k_resumed_device_ms_indexer_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 51.07
+  },
+  "ladder_lanes4x2k_resumed_device_ms_indexer_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 51.07
+  },
+  "ladder_lanes4x2k_resumed_device_ms_indexer_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 11.46
+  },
+  "ladder_lanes4x2k_resumed_device_ms_indexer_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:00",
+   "value": 11.46
+  },
+  "ladder_lanes4x2k_resumed_device_ms_indexer_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 7.89
+  },
+  "ladder_lanes4x2k_resumed_device_ms_indexer_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 7.89
+  },
+  "ladder_lanes4x2k_resumed_device_ms_kv_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.33
+  },
+  "ladder_lanes4x2k_resumed_device_ms_kv_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.33
+  },
+  "ladder_lanes4x2k_resumed_device_ms_kv_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.32
+  },
+  "ladder_lanes4x2k_resumed_device_ms_kv_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.32
+  },
+  "ladder_lanes4x2k_resumed_device_ms_kv_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.33
+  },
+  "ladder_lanes4x2k_resumed_device_ms_kv_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.33
+  },
+  "ladder_lanes4x2k_resumed_device_ms_moe_add_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_moe_add_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_moe_add_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_moe_add_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_moe_add_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_moe_add_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_p1024000": {
+   "t": "2026-11-21T10:46:22",
+   "value": 157.24
+  },
+  "ladder_lanes4x2k_resumed_device_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:22",
+   "value": 157.24
+  },
+  "ladder_lanes4x2k_resumed_device_ms_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 105.24
+  },
+  "ladder_lanes4x2k_resumed_device_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 105.24
+  },
+  "ladder_lanes4x2k_resumed_device_ms_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 98.67
+  },
+  "ladder_lanes4x2k_resumed_device_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 98.67
+  },
+  "ladder_lanes4x2k_resumed_device_ms_q_a_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 2.06
+  },
+  "ladder_lanes4x2k_resumed_device_ms_q_a_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:22",
+   "value": 2.06
+  },
+  "ladder_lanes4x2k_resumed_device_ms_q_a_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 2.06
+  },
+  "ladder_lanes4x2k_resumed_device_ms_q_a_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 2.06
+  },
+  "ladder_lanes4x2k_resumed_device_ms_q_a_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 2.06
+  },
+  "ladder_lanes4x2k_resumed_device_ms_q_a_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 2.06
+  },
+  "ladder_lanes4x2k_resumed_device_ms_router_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_router_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_router_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_router_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_router_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_router_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_shared_expert_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_shared_expert_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_shared_expert_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_shared_expert_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:00",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_shared_expert_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_device_ms_shared_expert_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_resumed_tok_s_p1024000": {
+   "t": "2026-11-21T10:46:22",
+   "value": 43025.2
+  },
+  "ladder_lanes4x2k_resumed_tok_s_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:22",
+   "value": 43025.2
+  },
+  "ladder_lanes4x2k_resumed_tok_s_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 63576.2
+  },
+  "ladder_lanes4x2k_resumed_tok_s_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 63576.2
+  },
+  "ladder_lanes4x2k_resumed_tok_s_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 64646.5
+  },
+  "ladder_lanes4x2k_resumed_tok_s_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 64646.5
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_p1024000": {
+   "t": "2026-11-21T10:46:22",
+   "value": 178.5
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:22",
+   "value": 178.5
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 120.8
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 120.8
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 118.8
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 118.8
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_runs_p1024000": {
+   "t": "2026-11-21T10:46:22",
+   "value": [
+    178.9,
+    204.7,
+    178.5,
+    179.6,
+    180.4,
+    176.3,
+    176.5,
+    178.0,
+    176.0,
+    176.4
+   ]
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_runs_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:22",
+   "value": [
+    178.9,
+    204.7,
+    178.5,
+    179.6,
+    180.4,
+    176.3,
+    176.5,
+    178.0,
+    176.0,
+    176.4
+   ]
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_runs_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": [
+    128.5,
+    135.7,
+    120.8,
+    120.8,
+    121.6,
+    120.8,
+    121.4,
+    120.1,
+    119.9,
+    120.2
+   ]
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_runs_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": [
+    128.5,
+    135.7,
+    120.8,
+    120.8,
+    121.6,
+    120.8,
+    121.4,
+    120.1,
+    119.9,
+    120.2
+   ]
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_runs_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": [
+    117.0,
+    118.7,
+    119.8,
+    120.4,
+    118.8,
+    121.4,
+    118.8,
+    119.2,
+    118.2,
+    118.4
+   ]
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_runs_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": [
+    117.0,
+    118.7,
+    119.8,
+    120.4,
+    118.8,
+    121.4,
+    118.8,
+    119.2,
+    118.2,
+    118.4
+   ]
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_spread_p1024000": {
+   "t": "2026-11-21T10:46:22",
+   "value": 28.7
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_spread_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:22",
+   "value": 28.7
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_spread_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 15.8
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_spread_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 15.8
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_spread_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 4.4
+  },
+  "ladder_lanes4x2k_resumed_wall_ms_spread_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 4.4
+  },
+  "ladder_lanes4x2k_resumed_wall_settled_p1024000": {
+   "t": "2026-11-21T10:46:22",
+   "value": 1
+  },
+  "ladder_lanes4x2k_resumed_wall_settled_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:22",
+   "value": 1
+  },
+  "ladder_lanes4x2k_resumed_wall_settled_p139264": {
+   "t": "2026-11-21T10:45:59",
+   "value": 1
+  },
+  "ladder_lanes4x2k_resumed_wall_settled_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:59",
+   "value": 1
+  },
+  "ladder_lanes4x2k_resumed_wall_settled_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 1
+  },
+  "ladder_lanes4x2k_resumed_wall_settled_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 1
+  },
+  "ladder_lanes4x2k_serving_acks_per_chunk": {
+   "t": "2026-11-21T10:46:28",
+   "value": 84
+  },
+  "ladder_lanes4x2k_serving_acks_per_chunk_tagentic_cc": {
+   "t": "2026-11-21T10:46:28",
+   "value": 84
+  },
+  "ladder_lanes4x2k_serving_extra_ms_p1024000": {
+   "t": "2026-11-21T10:46:28",
+   "value": 3.4
+  },
+  "ladder_lanes4x2k_serving_extra_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:28",
+   "value": 3.4
+  },
+  "ladder_lanes4x2k_serving_extra_ms_p139264": {
+   "t": "2026-11-21T10:46:04",
+   "value": 4.5
+  },
+  "ladder_lanes4x2k_serving_extra_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:04",
+   "value": 4.5
+  },
+  "ladder_lanes4x2k_serving_extra_ms_p51200": {
+   "t": "2026-11-21T10:45:45",
+   "value": 6.6
+  },
+  "ladder_lanes4x2k_serving_extra_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:45",
+   "value": 6.6
+  },
+  "ladder_lanes4x2k_serving_wall_ms_p1024000": {
+   "t": "2026-11-21T10:46:28",
+   "value": 181.4
+  },
+  "ladder_lanes4x2k_serving_wall_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:28",
+   "value": 181.4
+  },
+  "ladder_lanes4x2k_serving_wall_ms_p139264": {
+   "t": "2026-11-21T10:46:04",
+   "value": 125.3
+  },
+  "ladder_lanes4x2k_serving_wall_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:04",
+   "value": 125.3
+  },
+  "ladder_lanes4x2k_serving_wall_ms_p51200": {
+   "t": "2026-11-21T10:45:45",
+   "value": 128.1
+  },
+  "ladder_lanes4x2k_serving_wall_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:45",
+   "value": 128.1
+  },
+  "ladder_lanes4x2k_serving_wall_ms_runs_p1024000": {
+   "t": "2026-11-21T10:46:28",
+   "value": [
+    181.3,
+    181.5,
+    182.4,
+    181.4,
+    180.5
+   ]
+  },
+  "ladder_lanes4x2k_serving_wall_ms_runs_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:28",
+   "value": [
+    181.3,
+    181.5,
+    182.4,
+    181.4,
+    180.5
+   ]
+  },
+  "ladder_lanes4x2k_serving_wall_ms_runs_p139264": {
+   "t": "2026-11-21T10:46:04",
+   "value": [
+    131.4,
+    125.3,
+    133.2,
+    125.1,
+    124.4
+   ]
+  },
+  "ladder_lanes4x2k_serving_wall_ms_runs_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:04",
+   "value": [
+    131.4,
+    125.3,
+    133.2,
+    125.1,
+    124.4
+   ]
+  },
+  "ladder_lanes4x2k_serving_wall_ms_runs_p51200": {
+   "t": "2026-11-21T10:45:45",
+   "value": [
+    134.8,
+    146.1,
+    121.5,
+    124.6,
+    128.1
+   ]
+  },
+  "ladder_lanes4x2k_serving_wall_ms_runs_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:45",
+   "value": [
+    134.8,
+    146.1,
+    121.5,
+    124.6,
+    128.1
+   ]
+  },
+  "ladder_lanes4x2k_steady_device_ms_attention_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 49.88
+  },
+  "ladder_lanes4x2k_steady_device_ms_attention_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 49.88
+  },
+  "ladder_lanes4x2k_steady_device_ms_attention_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 31.37
+  },
+  "ladder_lanes4x2k_steady_device_ms_attention_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 31.37
+  },
+  "ladder_lanes4x2k_steady_device_ms_attention_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 29.55
+  },
+  "ladder_lanes4x2k_steady_device_ms_attention_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 29.55
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_collapse_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_collapse_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_collapse_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_collapse_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_collapse_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_collapse_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_hc_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.27
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_hc_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.27
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_hc_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.27
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_hc_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.27
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_hc_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.27
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_hc_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.27
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_index_p1024000": {
+   "t": "2026-11-21T10:46:14",
+   "value": 0.43
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_index_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:14",
+   "value": 0.43
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_index_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.43
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_index_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.43
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_index_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.43
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_index_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.43
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_norm_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.02
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_norm_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.02
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_norm_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.02
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_norm_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.02
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_norm_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.02
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_norm_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.02
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_region_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 6.39
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_region_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 6.39
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_region_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 3.19
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_region_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 3.19
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_region_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 3.17
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_region_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 3.17
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_residual_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 5.46
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_residual_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 5.46
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_residual_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 5.49
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_residual_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 5.49
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_residual_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 5.54
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_residual_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 5.54
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_table_p1024000": {
+   "t": "2026-11-21T10:46:14",
+   "value": 5.69
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_table_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:14",
+   "value": 5.69
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_table_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_table_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_table_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_attn_table_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_compressor_p1024000": {
+   "t": "2026-11-21T10:46:14",
+   "value": 4.45
+  },
+  "ladder_lanes4x2k_steady_device_ms_compressor_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:14",
+   "value": 4.45
+  },
+  "ladder_lanes4x2k_steady_device_ms_compressor_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 4.45
+  },
+  "ladder_lanes4x2k_steady_device_ms_compressor_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 4.45
+  },
+  "ladder_lanes4x2k_steady_device_ms_compressor_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 4.52
+  },
+  "ladder_lanes4x2k_steady_device_ms_compressor_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 4.52
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_add_p1024000": {
+   "t": "2026-11-21T10:46:14",
+   "value": 0.78
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_add_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:14",
+   "value": 0.78
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_add_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.78
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_add_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.78
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_add_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.78
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_add_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.78
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_kv_p1024000": {
+   "t": "2026-11-21T10:46:14",
+   "value": 1.19
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_kv_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:14",
+   "value": 1.19
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_kv_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 1.19
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_kv_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 1.19
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_kv_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 1.19
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_kv_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 1.19
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_rows_p1024000": {
+   "t": "2026-11-21T10:46:14",
+   "value": 0.08
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_rows_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:14",
+   "value": 0.08
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_rows_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.89
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_rows_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.89
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_rows_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.47
+  },
+  "ladder_lanes4x2k_steady_device_ms_engram_rows_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.47
+  },
+  "ladder_lanes4x2k_steady_device_ms_experts_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 35.69
+  },
+  "ladder_lanes4x2k_steady_device_ms_experts_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 35.69
+  },
+  "ladder_lanes4x2k_steady_device_ms_experts_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 38.7
+  },
+  "ladder_lanes4x2k_steady_device_ms_experts_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 38.7
+  },
+  "ladder_lanes4x2k_steady_device_ms_experts_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 39.34
+  },
+  "ladder_lanes4x2k_steady_device_ms_experts_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 39.34
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_collapse_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_collapse_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_collapse_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_collapse_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_collapse_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_collapse_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_hc_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_hc_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_hc_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_hc_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_hc_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_hc_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_norm_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_norm_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_norm_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_norm_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_norm_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_norm_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_residual_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 5.48
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_residual_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 5.48
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_residual_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 5.52
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_residual_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 5.52
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_residual_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 5.58
+  },
+  "ladder_lanes4x2k_steady_device_ms_ffn_residual_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 5.58
+  },
+  "ladder_lanes4x2k_steady_device_ms_history_gather_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 4.81
+  },
+  "ladder_lanes4x2k_steady_device_ms_history_gather_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 4.81
+  },
+  "ladder_lanes4x2k_steady_device_ms_history_gather_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 3.22
+  },
+  "ladder_lanes4x2k_steady_device_ms_history_gather_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 3.22
+  },
+  "ladder_lanes4x2k_steady_device_ms_history_gather_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 1.81
+  },
+  "ladder_lanes4x2k_steady_device_ms_history_gather_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 1.81
+  },
+  "ladder_lanes4x2k_steady_device_ms_indexer_p1024000": {
+   "t": "2026-11-21T10:46:14",
+   "value": 50.56
+  },
+  "ladder_lanes4x2k_steady_device_ms_indexer_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:14",
+   "value": 50.56
+  },
+  "ladder_lanes4x2k_steady_device_ms_indexer_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 11.52
+  },
+  "ladder_lanes4x2k_steady_device_ms_indexer_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 11.52
+  },
+  "ladder_lanes4x2k_steady_device_ms_indexer_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 7.83
+  },
+  "ladder_lanes4x2k_steady_device_ms_indexer_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 7.83
+  },
+  "ladder_lanes4x2k_steady_device_ms_kv_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.32
+  },
+  "ladder_lanes4x2k_steady_device_ms_kv_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.32
+  },
+  "ladder_lanes4x2k_steady_device_ms_kv_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.32
+  },
+  "ladder_lanes4x2k_steady_device_ms_kv_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.32
+  },
+  "ladder_lanes4x2k_steady_device_ms_kv_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.32
+  },
+  "ladder_lanes4x2k_steady_device_ms_kv_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.32
+  },
+  "ladder_lanes4x2k_steady_device_ms_moe_add_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_moe_add_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_moe_add_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_moe_add_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_moe_add_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_moe_add_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 157.06
+  },
+  "ladder_lanes4x2k_steady_device_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 157.06
+  },
+  "ladder_lanes4x2k_steady_device_ms_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 104.79
+  },
+  "ladder_lanes4x2k_steady_device_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 104.79
+  },
+  "ladder_lanes4x2k_steady_device_ms_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 99.01
+  },
+  "ladder_lanes4x2k_steady_device_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 99.01
+  },
+  "ladder_lanes4x2k_steady_device_ms_q_a_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 2.06
+  },
+  "ladder_lanes4x2k_steady_device_ms_q_a_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 2.06
+  },
+  "ladder_lanes4x2k_steady_device_ms_q_a_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 2.06
+  },
+  "ladder_lanes4x2k_steady_device_ms_q_a_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 2.06
+  },
+  "ladder_lanes4x2k_steady_device_ms_q_a_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 2.06
+  },
+  "ladder_lanes4x2k_steady_device_ms_q_a_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 2.06
+  },
+  "ladder_lanes4x2k_steady_device_ms_router_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_router_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_router_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_router_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_router_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_router_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_shared_expert_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_shared_expert_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_shared_expert_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_shared_expert_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_shared_expert_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_device_ms_shared_expert_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 0.0
+  },
+  "ladder_lanes4x2k_steady_tok_s_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 46022.5
+  },
+  "ladder_lanes4x2k_steady_tok_s_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 46022.5
+  },
+  "ladder_lanes4x2k_steady_tok_s_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 67814.6
+  },
+  "ladder_lanes4x2k_steady_tok_s_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 67814.6
+  },
+  "ladder_lanes4x2k_steady_tok_s_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 67423.9
+  },
+  "ladder_lanes4x2k_steady_tok_s_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 67423.9
+  },
+  "ladder_lanes4x2k_steady_wall_ms_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 178.0
+  },
+  "ladder_lanes4x2k_steady_wall_ms_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 178.0
+  },
+  "ladder_lanes4x2k_steady_wall_ms_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 120.8
+  },
+  "ladder_lanes4x2k_steady_wall_ms_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 120.8
+  },
+  "ladder_lanes4x2k_steady_wall_ms_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 121.5
+  },
+  "ladder_lanes4x2k_steady_wall_ms_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 121.5
+  },
+  "ladder_lanes4x2k_steady_wall_ms_runs_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": [
+    178.7,
+    177.6,
+    176.9,
+    179.5,
+    178.0,
+    177.2,
+    178.8,
+    177.6,
+    178.1,
+    178.0
+   ]
+  },
+  "ladder_lanes4x2k_steady_wall_ms_runs_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": [
+    178.7,
+    177.6,
+    176.9,
+    179.5,
+    178.0,
+    177.2,
+    178.8,
+    177.6,
+    178.1,
+    178.0
+   ]
+  },
+  "ladder_lanes4x2k_steady_wall_ms_runs_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": [
+    119.4,
+    124.7,
+    120.6,
+    129.1,
+    120.2,
+    139.2,
+    121.0,
+    120.8,
+    119.7,
+    120.2
+   ]
+  },
+  "ladder_lanes4x2k_steady_wall_ms_runs_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": [
+    119.4,
+    124.7,
+    120.6,
+    129.1,
+    120.2,
+    139.2,
+    121.0,
+    120.8,
+    119.7,
+    120.2
+   ]
+  },
+  "ladder_lanes4x2k_steady_wall_ms_runs_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": [
+    118.2,
+    118.6,
+    121.5,
+    118.7,
+    121.6,
+    130.4,
+    121.6,
+    118.2,
+    119.4,
+    134.5
+   ]
+  },
+  "ladder_lanes4x2k_steady_wall_ms_runs_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": [
+    118.2,
+    118.6,
+    121.5,
+    118.7,
+    121.6,
+    130.4,
+    121.6,
+    118.2,
+    119.4,
+    134.5
+   ]
+  },
+  "ladder_lanes4x2k_steady_wall_ms_spread_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 2.6
+  },
+  "ladder_lanes4x2k_steady_wall_ms_spread_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 2.6
+  },
+  "ladder_lanes4x2k_steady_wall_ms_spread_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 19.8
+  },
+  "ladder_lanes4x2k_steady_wall_ms_spread_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 19.8
+  },
+  "ladder_lanes4x2k_steady_wall_ms_spread_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 16.3
+  },
+  "ladder_lanes4x2k_steady_wall_ms_spread_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 16.3
+  },
+  "ladder_lanes4x2k_steady_wall_settled_p1024000": {
+   "t": "2026-11-21T10:46:13",
+   "value": 1
+  },
+  "ladder_lanes4x2k_steady_wall_settled_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:13",
+   "value": 1
+  },
+  "ladder_lanes4x2k_steady_wall_settled_p139264": {
+   "t": "2026-11-21T10:45:53",
+   "value": 1
+  },
+  "ladder_lanes4x2k_steady_wall_settled_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:45:53",
+   "value": 1
+  },
+  "ladder_lanes4x2k_steady_wall_settled_p51200": {
+   "t": "2026-11-21T10:45:25",
+   "value": 1
+  },
+  "ladder_lanes4x2k_steady_wall_settled_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:25",
+   "value": 1
+  },
+  "ladder_lanes4x2k_table": {
+   "t": "2026-11-21T10:46:28",
+   "value": "# Ladder lanes4x2k: four 2048-token segments, each at history h (chip-aligned lanes, PACKED_CHIPS=on)\n\n| history | steady wall ms (spread) | new tok/s | resumed wall ms | device ms | exposed host ms | serving wall ms (prefill entry + D2H ack) | gathers traced |\n|---|---|---|---|---|---|---|---|\n| 51200 | 121.5 (16.3) | 67424 | 118.8 | 99.0 | 22.5 | 128.1 | 15 |\n| 139264 | 120.8 (19.8) | 67815 | 120.8 | 104.8 | 16.0 | 125.3 | 15 |\n| 1024000 | 178.0 (2.6) | 46022 | 178.5 | 157.1 | 20.9 | 181.4 | 32 |"
+  },
+  "ladder_lanes4x2k_table_tagentic_cc": {
+   "t": "2026-11-21T10:46:28",
+   "value": "# Ladder lanes4x2k: four 2048-token segments, each at history h (chip-aligned lanes, PACKED_CHIPS=on)\n\n| history | steady wall ms (spread) | new tok/s | resumed wall ms | device ms | exposed host ms | serving wall ms (prefill entry + D2H ack) | gathers traced |\n|---|---|---|---|---|---|---|---|\n| 51200 | 121.5 (16.3) | 67424 | 118.8 | 99.0 | 22.5 | 128.1 | 15 |\n| 139264 | 120.8 (19.8) | 67815 | 120.8 | 104.8 | 16.0 | 125.3 | 15 |\n| 1024000 | 178.0 (2.6) | 46022 | 178.5 | 157.1 | 20.9 | 181.4 | 32 |"
+  },
+  "ladder_lanes4x2k_tok_s_p1024000": {
+   "t": "2026-11-21T10:46:23",
+   "value": 46022.5
+  },
+  "ladder_lanes4x2k_tok_s_p1024000_tagentic_cc": {
+   "t": "2026-11-21T10:46:23",
+   "value": 46022.5
+  },
+  "ladder_lanes4x2k_tok_s_p139264": {
+   "t": "2026-11-21T10:46:00",
+   "value": 67814.6
+  },
+  "ladder_lanes4x2k_tok_s_p139264_tagentic_cc": {
+   "t": "2026-11-21T10:46:00",
+   "value": 67814.6
+  },
+  "ladder_lanes4x2k_tok_s_p51200": {
+   "t": "2026-11-21T10:45:33",
+   "value": 67423.9
+  },
+  "ladder_lanes4x2k_tok_s_p51200_tagentic_cc": {
+   "t": "2026-11-21T10:45:33",
+   "value": 67423.9
+  },
+  "model_loads": {
+   "by": "run0",
+   "ns": 1795252951494644911,
+   "pid": 1540228,
+   "t": "2026-11-21T09:22:31",
+   "total": 1,
+   "value": 1
+  },
+  "model_loads_tagentic_cc": {
+   "by": "PB.9G#test_no_rebuild.0",
+   "ns": 1795257857989985704,
+   "pid": 1740211,
+   "t": "2026-11-21T10:44:17",
+   "total": 2,
+   "value": 1
+  },
+  "model_shared": {
+   "t": "2026-11-21T09:40:30",
+   "value": 1
+  },
+  "model_shared_tagentic_cc": {
+   "t": "2026-11-21T10:45:17",
+   "value": 1
+  },
+  "no_rebuild_cache_entries_tagentic_cc": {
+   "t": "2026-11-21T10:45:08",
+   "value": 0
+  },
+  "no_rebuild_chunks_tagentic_cc": {
+   "t": "2026-11-21T10:45:08",
+   "value": 16
+  },
+  "no_rebuild_on_off_max_abs_diff_tagentic_cc": {
+   "t": "2026-11-21T10:45:14",
+   "value": 0.0
+  },
+  "no_rebuild_pass_lanes4x1600s": {
+   "t": "2026-11-21T10:45:11",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T10:45:11",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x2k": {
+   "t": "2026-11-21T10:45:10",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T10:45:10",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes6mix": {
+   "t": "2026-11-21T10:45:12",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T10:45:12",
+   "value": 1
+  },
+  "no_rebuild_pass_single8192": {
+   "t": "2026-11-21T10:45:08",
+   "value": 1
+  },
+  "no_rebuild_pass_single8192_tagentic_cc": {
+   "t": "2026-11-21T10:45:08",
+   "value": 1
+  },
+  "no_rebuild_prepares_tagentic_cc": {
+   "t": "2026-11-21T10:45:08",
+   "value": 0
+  },
+  "no_rebuild_probe_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T10:45:11",
+   "value": []
+  },
+  "no_rebuild_probe_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T10:45:10",
+   "value": []
+  },
+  "no_rebuild_probe_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T10:45:12",
+   "value": []
+  },
+  "no_rebuild_probe_tagentic_cc": {
+   "t": "2026-11-21T10:45:08",
+   "value": []
+  },
+  "no_rebuild_rows_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T10:45:11",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      31680,
+      85760,
+      104576,
+      327552,
+      304704
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12,
+      16,
+      11,
+      14,
+      13
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      157056,
+      61440,
+      13504,
+      137472,
+      42304
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      19,
+      15,
+      17,
+      11,
+      14
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      12544,
+      272768,
+      329728,
+      46912,
+      212224
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      11,
+      14,
+      16,
+      17,
+      12
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T10:45:10",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      6912,
+      69888,
+      34304,
+      191744
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      11,
+      15,
+      12,
+      17
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      82688,
+      184512,
+      506560,
+      110336
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      16,
+      17,
+      11,
+      13
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      124672,
+      229824,
+      132224,
+      930496
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      18,
+      11,
+      16,
+      14
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T10:45:12",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      27584,
+      101376,
+      255552,
+      582784,
+      177856,
+      117568
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12,
+      17,
+      15,
+      16,
+      11,
+      19
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      134848,
+      494336,
+      217216,
+      133952,
+      7488,
+      150080
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      18,
+      12,
+      15,
+      17,
+      14,
+      11
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      6720,
+      192704,
+      244736,
+      100416,
+      171840,
+      92480
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      11,
+      17,
+      16,
+      14,
+      18,
+      13
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_tagentic_cc": {
+   "t": "2026-11-21T10:45:08",
+   "value": [
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       90112,
+       98304,
+       null
+      ],
+      [
+       98304,
+       106496,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "aligned",
+     "prepared": 0,
+     "slot": 1
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       20160,
+       28352,
+       null
+      ],
+      [
+       28352,
+       36544,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slot": 2
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       525696,
+       533888,
+       null
+      ],
+      [
+       533888,
+       542080,
+       534016
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slot": 3
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       261312,
+       269504,
+       null
+      ],
+      [
+       269504,
+       269604,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "partial",
+     "prepared": 0,
+     "slot": 4
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       111360,
+       119552,
+       null
+      ],
+      [
+       113664,
+       121843,
+       119552
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "pulled",
+     "prepared": 0,
+     "slot": 5
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       79488,
+       87680,
+       null
+      ],
+      [
+       87680,
+       87700,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "acks_only",
+     "prepared": 0,
+     "slot": 6
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       220480,
+       228672,
+       null
+      ],
+      [
+       228672,
+       236864,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slot": 7
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       6336,
+       14528,
+       null
+      ],
+      [
+       14528,
+       19276,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "partial",
+     "prepared": 0,
+     "slot": 8
+    }
+   ]
+  },
+  "packed_alone_vs_today_digest_mismatches": {
+   "t": "2026-11-21T09:46:16",
+   "value": 200
+  },
+  "packed_alone_vs_today_max_abs_diff": {
+   "t": "2026-11-21T09:46:16",
+   "value": 0.0
+  },
+  "packed_determinism_max_abs_diff": {
+   "t": "2026-11-21T09:46:16",
+   "value": 0.0
+  },
+  "packed_fallback_chunks": {
+   "t": "2026-11-21T09:46:16",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x1600s": {
+   "t": "2026-11-21T10:47:39",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T10:47:39",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x2k": {
+   "t": "2026-11-21T10:46:28",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T10:46:28",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes6mix": {
+   "t": "2026-11-21T10:45:12",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T10:45:12",
+   "value": 0
+  },
+  "packed_gather_hide_regions": {
+   "t": "2026-11-21T09:46:16",
+   "value": 42
+  },
+  "packed_ids_uploads_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T10:45:11",
+   "value": 0.0
+  },
+  "packed_ids_uploads_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T10:45:10",
+   "value": 0.0
+  },
+  "packed_ids_uploads_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T10:45:12",
+   "value": 0.0
+  },
+  "packed_lane_equiv_max_abs_diff": {
+   "t": "2026-11-21T09:46:16",
+   "value": 0.0
+  },
+  "packed_onecall_chunks": {
+   "t": "2026-11-21T09:46:16",
+   "value": 8
+  },
+  "packed_oracle_layers": {
+   "t": "2026-11-21T09:46:16",
+   "value": 40
+  },
+  "packed_slot_digest_mismatches": {
+   "t": "2026-11-21T09:46:16",
+   "value": 0
+  },
+  "pos_text_tagentic_cc": {
+   "n": 1076193,
+   "repeats": 1,
+   "sha256": "bffdee742ae2d1dffe91f6fde8388d87fc2d47c0cbbbff48a9e4d82d90340eaa",
+   "source": "38 sessions of claudecode_sample.parquet (nvidia/Open-SWE-Traces, CC-BY-4.0), slice 0, chat template",
+   "t": "2026-11-21T10:45:17",
+   "value": "agentic_cc"
+  },
+  "program_builds_after_warmup_lanes4x1600s": {
+   "t": "2026-11-21T10:45:11",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T10:45:11",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x2k": {
+   "t": "2026-11-21T10:45:10",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T10:45:10",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes6mix": {
+   "t": "2026-11-21T10:45:12",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T10:45:12",
+   "value": 0
+  },
+  "program_builds_after_warmup_serving": {
+   "t": "2026-11-21T10:45:08",
+   "value": 0
+  },
+  "program_builds_after_warmup_serving_tagentic_cc": {
+   "t": "2026-11-21T10:45:08",
+   "value": 0
+  },
+  "program_builds_after_warmup_single8192": {
+   "t": "2026-11-21T10:45:08",
+   "value": 0
+  },
+  "program_builds_after_warmup_single8192_tagentic_cc": {
+   "t": "2026-11-21T10:45:08",
+   "value": 0
+  },
+  "resident_first_chunk_s": {
+   "t": "2026-11-21T09:46:18",
+   "value": 0.89
+  },
+  "resident_first_chunk_s_tagentic_cc": {
+   "t": "2026-11-21T10:47:40",
+   "value": 2.32
+  },
+  "resident_model_loaded": {
+   "t": "2026-11-21T09:46:18",
+   "value": 0
+  },
+  "resident_model_loaded_tagentic_cc": {
+   "t": "2026-11-21T10:47:40",
+   "value": 0
+  },
+  "resident_model_s": {
+   "t": "2026-11-21T09:46:18",
+   "value": 0.73
+  },
+  "resident_model_s_tagentic_cc": {
+   "t": "2026-11-21T10:47:40",
+   "value": 1.81
+  },
+  "resident_request_first_chunk_s": {
+   "t": "2026-11-21T09:46:18",
+   "value": 263.14
+  },
+  "resident_request_first_chunk_s_tagentic_cc": {
+   "t": "2026-11-21T10:47:40",
+   "value": 172.6
+  }
+ },
+ "task": "PB.9G"
+}

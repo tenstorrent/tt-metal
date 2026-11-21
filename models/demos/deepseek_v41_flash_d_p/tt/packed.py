@@ -131,11 +131,12 @@ class ChunkDescriptor:
     def new_tokens(self) -> int:
         return sum(s.length for _, s in self.live())
 
-    def as_glued(self, prefill_end: str = "cap", block: int = KV_BLOCK) -> "GluedChunk | None":
-        """PB.9X (PACKED_ROUTE=glued): the glued chunk tt-d-gen sends for this header: the live segments in lane order,
-        back to back (an empty lane or a lane's pad rows take no rows). None when no lane is live."""
+    def as_glued(self, prefill_end: str = "cap", block: int = KV_BLOCK, align: int = 0) -> "GluedChunk | None":
+        """PB.9X: the glued chunk tt-d-gen sends for this header: the live segments in lane order (an empty lane takes
+        no rows), back to back (``align`` 0) or each on whole chips (PB.9G, ``align`` = rows a chip). None when no lane
+        is live."""
         live = [s for _, s in self.live()]
-        return GluedChunk(self.chunk, tuple(live), prefill_end, block) if live else None
+        return GluedChunk(self.chunk, tuple(live), prefill_end, block, align) if live else None
 
     def lane_seg_ids(self, tokens: torch.Tensor) -> list:
         """Lane-natural ids [chunk] (pack_ids' layout) -> each live segment's [length] ids, in lane order."""
@@ -396,6 +397,7 @@ class GluedChunk:
     segments: tuple = field(default_factory=tuple)
     prefill_end: str = "cap"
     block: int = KV_BLOCK
+    align: int = 0  # PB.9G (OWNER 2026-11-21, chip-aligned lanes): rows a chip; 0 = back to back (PB.7)
 
     glued = True
 
@@ -403,9 +405,20 @@ class GluedChunk:
         n = len(self.segments)
         assert 1 <= n <= GLUED_MAX, f"a glued chunk holds 1..{GLUED_MAX} segments, got {n}"
         assert all(s is not None for s in self.segments), "a glued chunk has no empty lanes"
-        assert (
-            sum(s.length for s in self.segments) <= self.chunk
-        ), f"glued segments of {sum(s.length for s in self.segments)} rows > chunk {self.chunk}"
+        if self.align:
+            a = int(self.align)
+            assert a % 32 == 0 and self.chunk % a == 0, (self.chunk, a)
+            for s in self.segments:
+                assert s.start % 32 == 0, f"chip-aligned segments start 32-aligned (tt-d-gen), got {s}"
+            need = sum(self.ext(k) for k in range(n))
+            assert need <= self.chunk, (
+                f"chip-aligned segments need {need // a} chips of {a} rows > {self.chunk // a} "
+                f"({[s.length for s in self.segments]})"
+            )
+        else:
+            assert (
+                sum(s.length for s in self.segments) <= self.chunk
+            ), f"glued segments of {sum(s.length for s in self.segments)} rows > chunk {self.chunk}"
         slots = [s.slot for s in self.segments]
         assert len(slots) == len(set(slots)), f"two segments of one slot in a chunk: {slots}"
 
@@ -419,12 +432,22 @@ class GluedChunk:
         s = self.segments[k]
         return max(0, s.run_end(self.prefill_end, self.block) - s.start)
 
+    def ext(self, k: int) -> int:
+        """PB.9G (``align`` > 0): segment k's rows in the chunk, engine and model alike: its whole chips (its length
+        rounded up to ``align``; a segment that computes nothing still owns one chip: its snapshot and acks)."""
+        a = int(self.align)
+        return -(-max(1, self.segments[k].length) // a) * a
+
     def in_off(self, k: int) -> int:
         """Engine row of segment k's first id."""
+        if self.align:
+            return sum(self.ext(j) for j in range(k))
         return sum(s.length for s in self.segments[:k])
 
     def lane_off(self, k: int) -> int:
-        """Model row of segment k's first computed row."""
+        """Model row of segment k's first computed row (PB.9G: its first chip's first row; engine row = model row)."""
+        if self.align:
+            return sum(self.ext(j) for j in range(k))
         return sum(self.rows(j) for j in range(k))
 
     def used_rows(self) -> int:
@@ -454,11 +477,13 @@ class GluedChunk:
         out[:] = torch.arange(self.chunk, dtype=torch.int64)
         for k, s in self.live():
             a = self.lane_off(k)
-            out[a : a + self.rows(k)] = s.start + torch.arange(self.rows(k), dtype=torch.int64)
+            n = self.ext(k) if self.align else self.rows(k)  # (PB.9G: a chip's pad rows continue its segment)
+            out[a : a + n] = s.start + torch.arange(n, dtype=torch.int64)
         u = self.used_rows()
         if self.lanes and u < self.chunk:
             k = self.lanes - 1
-            out[u:] = self.segments[k].start + self.rows(k) + torch.arange(self.chunk - u, dtype=torch.int64)
+            n = self.ext(k) if self.align else self.rows(k)
+            out[u:] = self.segments[k].start + n + torch.arange(self.chunk - u, dtype=torch.int64)
         return out
 
     def row_valid(self) -> torch.Tensor:
@@ -523,6 +548,12 @@ class GluedChunk:
     def moe_real_prefix(self, sp: int, valid: torch.Tensor | None = None) -> tuple[list[int], bool]:
         return real_prefix(self.chunk, sp, self.row_valid() if valid is None else valid)
 
+    def aligned(self, align: int) -> "GluedChunk":
+        """PB.9G: the same segments on whole chips of ``align`` rows (self when it already is)."""
+        if int(self.align) == int(align):
+            return self
+        return GluedChunk(self.chunk, tuple(self.segments), self.prefill_end, self.block, int(align))
+
     def as_lanes(self, lanes: int = LANES) -> "ChunkDescriptor | None":
         """The same chunk as fixed lanes (ChunkDescriptor.packed), when it is one: every segment at model row k L
         (L = chunk / lanes) and at most L engine rows long. Then the glued chunk IS that lane chunk (same model rows,
@@ -538,7 +569,13 @@ class GluedChunk:
     # ---------------------------------------------------------------- packing (the harness / the draft's packer)
     @classmethod
     def fill(
-        cls, chunk: int, requests: list, prefill_end: str = "cap", block: int = KV_BLOCK, max_segs: int = GLUED_MAX
+        cls,
+        chunk: int,
+        requests: list,
+        prefill_end: str = "cap",
+        block: int = KV_BLOCK,
+        max_segs: int = GLUED_MAX,
+        align: int = 0,
     ):
         """Pack ``requests`` (Segment, in order) into one glued chunk: back to back while rows and segment slots are
         left; the first that does not fit is SPLIT (``split``). Returns (GluedChunk, the rest: [the split's
@@ -546,16 +583,17 @@ class GluedChunk:
         segs, left, rest = [], chunk, list(requests)
         while rest and len(segs) < max_segs and left > 0:
             s = rest[0]
-            if s.length <= left:
+            need = -(-max(1, s.length) // align) * align if align else s.length
+            if need <= left:
                 segs.append(rest.pop(0))
-                left -= s.length
+                left -= need
                 continue
-            first, cont = split(s, left, block)
+            first, cont = split(s, left, block)  # (PB.9G: the first part ends inside the chips left, on a kv block)
             if first is not None:
                 segs.append(first)
                 rest[0] = cont
             break
-        return cls(chunk, tuple(segs), prefill_end, block), rest
+        return cls(chunk, tuple(segs), prefill_end, block, align), rest
 
 
 def split(s: Segment, rows: int, block: int = KV_BLOCK) -> tuple:

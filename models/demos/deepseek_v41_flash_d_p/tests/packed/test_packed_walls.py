@@ -69,8 +69,9 @@ segment at p - 2048) untimed first as the cases do, program-cache misses allowed
 draws, WALLS_FRESH_RUNS timed (each run again right after: the warm-repeated number), WALLS_FRESH_PROF profiled,
 WALLS_FRESH_PROBE more under the build probe (the ops that built).
 PB.9C (OWNER 2026-11-21, the performance LADDER): LADDER_POS=<histories> runs the ladder instead of the cases
-(tests/packed/ladder_common.py): LADDER_CASES=4x2k (the fixed 4 x 2048 lanes; path lanes4x2k under PACKED_ROUTE=lanes
-with PACKED_GLUED=off, as PB.9F's row; lanehdr4x2k under PACKED_ROUTE=glued, where the lane header runs glued), every
+(tests/packed/ladder_common.py): PB.9G (chip-aligned lanes, PACKED_CHIPS): LADDER_CASES=4x2k (path lanes4x2k: four
+2048-token requests, 8 chips each), 4x1600s (path lanes4x1600s: four 1600-token requests, 7 chips each, + a 1024-row
+split piece, 4 chips; packed_fallback_chunks_<path> recorded, 0: no fallback exists), every
 segment its own serving slot at history h, steady and resumed, the real previous chunk first, warm_up + WALL_RUNS median,
 one profiled run (device ms), the serving wall through runtime.prefill_packed with the D2H ack a layer and segment.
 Metrics ladder_<path>_{steady,resumed}_wall_ms_p<h>, ladder_<path>_tok_s_p<h>, ladder_<path>_device_ms_p<h>,
@@ -870,46 +871,64 @@ def _case(model, mesh, layers, case: str, text, dram, cap: int, proj=None) -> di
 
 # ---------------------------------------------------------------------------------------------- PB.9C the ladder
 def _ladder(mesh, layers, monkeypatch) -> None:
-    """PB.9C: the fixed 4 x 2048 lanes' ladder (tests/packed/ladder_common.packed_ladder) through the serving runtime's
-    slots (adapter.build_runtime through the model's one load path; its KV cache of 4 slots at the walls' capacity)."""
+    """PB.9C / PB.9G: the packed ladder (tests/packed/ladder_common.packed_ladder) through the serving runtime's slots
+    (adapter.build_runtime through the model's one load path; its KV cache of one slot a segment at the walls'
+    capacity). PB.9G (chip-aligned lanes, PACKED_CHIPS=on): LADDER_CASES 4x2k (path lanes4x2k: four 2048-token
+    requests, 8 chips each) and 4x1600s (path lanes4x1600s: four 1600-token requests, 7 chips each, + the 5th request's
+    first 1024 rows, 4 chips: a split piece); every chunk runs the one-call glued path (no fallback)."""
     from models.demos.deepseek_v41_flash_d_p.tests import test_skip_positions as SP
     from models.demos.deepseek_v41_flash_d_p.tests.packed import ladder_common as L
+    from models.demos.deepseek_v41_flash_d_p.tt import packed_device as PD
+    from models.demos.deepseek_v41_flash_d_p.tt.packed import GluedChunk
 
     L = importlib.reload(L)
     cases = L.cases(["4x2k"])
-    assert cases == ["4x2k"], f"test_packed_walls' ladder runs the fixed lanes' 4x2k only (got {cases})"
-    route = settings.get("PACKED_ROUTE")
-    path = "lanes4x2k" if route != "glued" else "lanehdr4x2k"
-    lens = L.CASES["4x2k"]
+    assert set(cases) <= {"4x2k", "4x1600s"}, f"test_packed_walls' ladder runs 4x2k / 4x1600s (got {cases})"
+    chips = settings.get("PACKED_CHIPS")
     deploy = int(S.get("deploy.seq") or S.get("target.seq"))
     cap = _cap(deploy)
     want = max(cap, int(S.data["target"]["seq"]))
     monkeypatch.setitem(S.data["target"], "seq", want)
-    monkeypatch.setenv("WALLS_FRESH_SLOTS", str(len(lens)))  # (the runtime's KV cache: one slot a segment)
+    nmax = max(len(L.CASES[c]) for c in cases)
+    monkeypatch.setenv("WALLS_FRESH_SLOTS", str(nmax))  # (the runtime's KV cache: one slot a segment)
     runtime, adapter, hf, params = SP._runtime(mesh, layers, CHUNK, want)
     model = runtime.model
     loaded = model.skip_mode
     if loaded != "decode":
         model.use_decoder_skip("decode")
     pos = L.positions()
-    text = PositionGolden(S, (len(lens) - 1) * SHIFT + max(pos) + max(lens) + CHUNK, CHUNK).tokens()
+    text = PositionGolden(S, (nmax - 1) * SHIFT + max(pos) + 2048 + CHUNK, CHUNK).tokens()
     kv = adapter.allocate_kv_cache(mesh_device=mesh, hf_config=hf, params=params)
-    print(f"LADDER {path}: PACKED_ROUTE={route}, histories {pos}, {len(lens)} slots at {want}", flush=True)
+    all_rows = []
     try:
-        with packed("on"), _pc.switch("PACKED_GLUED", "on" if route == "glued" else "off"):
-            rows = L.packed_ladder(
-                runtime,
-                kv,
-                mesh,
-                layers,
-                path,
-                lens,
-                lambda segs: ChunkDescriptor.packed(CHUNK, segs),
-                text,
-                SHIFT,
-                cap,
+        for case in cases:
+            path = f"lanes{case}"
+            lens = L.CASES[case]
+            print(f"LADDER {path}: PACKED_CHIPS={chips}, histories {pos}, {len(lens)} slots at {want}", flush=True)
+            PD.STATS["fallback"] = 0
+            with packed("on"), _pc.switch("PACKED_GLUED", "on"):
+                rows = L.packed_ladder(
+                    runtime,
+                    kv,
+                    mesh,
+                    layers,
+                    path,
+                    lens,
+                    (lambda segs: ChunkDescriptor.packed(CHUNK, segs))
+                    if case == "4x2k"
+                    else (lambda segs: GluedChunk(CHUNK, tuple(segs))),
+                    text,
+                    SHIFT,
+                    cap,
+                )
+            L.record(f"packed_fallback_chunks_{path}", int(PD.STATS["fallback"]))
+            what = (
+                "four 2048-token segments, each at history h"
+                if case == "4x2k"
+                else "four 1600-token segments + a 1024-row split piece, each at history h"
             )
-        L.ladder_table(path, f"four 2048-token segments, each at history h (PACKED_ROUTE={route})", rows)
+            L.ladder_table(path, f"{what} (chip-aligned lanes, PACKED_CHIPS={chips})", rows)
+            all_rows += rows
     finally:
         for key in [k for k in runtime._states if k[0] == id(kv)]:
             try:
@@ -923,7 +942,7 @@ def _ladder(mesh, layers, monkeypatch) -> None:
                 ttnn.deallocate(t)
         if loaded != "decode":
             model.use_decoder_skip(loaded)
-    assert any(r is not None for _, r, _ in rows), "no history of the ladder ran"
+    assert any(r is not None for _, r, _ in all_rows), "no history of the ladder ran"
 
 
 # ----------------------------------------------------------------------------------------------- PB.9F fresh walls
@@ -975,7 +994,7 @@ def _fresh_walls(mesh, layers, monkeypatch) -> None:
 
 
 def _lane_path() -> str:
-    route = settings.get("PACKED_ROUTE")
+    route = "glued"  # (PB.9G: PACKED_ROUTE removed; every packed chunk runs glued)
     return (
         "4 lanes sent as glued chunks (PACKED_ROUTE=glued, prefill_packed)"
         if route == "glued"
@@ -999,7 +1018,7 @@ def _fresh_lanes(runtime, kv, mesh, case: str, hi: int, text, slots) -> dict:
         "probe": [base + 500 + j for j in range(nprobe)],
     }
     print(f"FRESH {case}: seeds {seeds}", flush=True)
-    route = settings.get("PACKED_ROUTE")
+    route = "glued"  # (PB.9G: PACKED_ROUTE removed; every packed chunk runs glued)
 
     def draw(seed: int, phase: str) -> dict:
         d = F.Draw(seed)

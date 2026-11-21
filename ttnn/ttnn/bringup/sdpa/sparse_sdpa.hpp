@@ -132,6 +132,9 @@ ttnn::Tensor sparse_sdpa(
     // at c * KV_ROWS_WORDS: [n, end_0, lane_0, .., end_{n-1}, lane_{n-1}], n <= KV_ROWS_MAX ranges of the device's
     // query rows [previous end, end_i) reading kv_lanes[lane_i] (rows past the last end: kv_lane_of_chip's lane).
     // Runtime values (not in the program hash): any map reuses the program. Needs kv_lanes.
-    const std::optional<std::vector<uint32_t>>& kv_lane_rows = std::nullopt);
+    const std::optional<std::vector<uint32_t>>& kv_lane_rows = std::nullopt,
+    // PB.9G (deepseek_v41_flash_d_p, chip-aligned packed lanes; needs kv_lanes): kv_lane_of_chip is a runtime value
+    // (not in the program's key): any lane map reuses the program. Default false (the map is hashed).
+    bool kv_lane_map_runtime = false);
 
 }  // namespace ttnn::transformer::bringup

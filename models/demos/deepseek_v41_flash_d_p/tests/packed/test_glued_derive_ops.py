@@ -56,6 +56,24 @@ def _cases(chunk: int, R: int, rnd: random.Random) -> list:
             reqs.append(Segment(20 + k, h, h + n))
         c, _ = GluedChunk.fill(chunk, reqs)
         out.append(c)
+    # PB.9G: chip-aligned lanes (align = R): 1-chip, 1-token, idle, padded, split, replay segments, AgentX-like fills
+    A = R
+    out.append(
+        GluedChunk(chunk, (Segment(1, 2048, 2048 + A), Segment(2, 4096, 4097), Segment(3, 64, 64 + 40)), align=A)
+    )
+    out.append(GluedChunk(chunk, tuple(Segment(30 + k, 139264, 139264 + 1600) for k in range(4)), align=A))
+    out.append(GluedChunk(chunk, (Segment(1, 8192, 8392, 8192 + 128), Segment(2, 4096, 6144, 4096 + 128)), align=A))
+    out.append(GluedChunk(chunk, tuple(Segment(10 + k, 64 * k * 37, 64 * k * 37 + 300) for k in range(6)), align=A))
+    out.append(GluedChunk(chunk, (Segment(1, 139264, 139264 + chunk),), align=A))
+    for _ in range(12):
+        reqs = []
+        for k in range(rnd.randint(1, 9)):
+            h = rnd.choice([0, 64, 4096, 61440, 139264, 307200, 546816]) // 64 * 64
+            n = rnd.choice([1, 31, 33, 64, 200, 640, 1600, 2900, 5900])
+            ws = h + 128 if (h and n > 256 and rnd.random() < 0.4) else None
+            reqs.append(Segment(20 + k, h, h + n, ws))
+        c, _ = GluedChunk.fill(chunk, reqs, align=A)
+        out.append(c)
     return out
 
 
@@ -93,7 +111,7 @@ def test_glued_derive_ops(mesh_device, monkeypatch):
     cix = next((ix for ix in ixs if isinstance(ix, TtCandidateIndexer)), None)
     pix = next((ix for ix in ixs if ix is not None), None)
     assert pix is not None
-    dv = Derive(mesh, chunk, 64)
+    dvs = {0: Derive(mesh, chunk, 64), R: Derive(mesh, chunk, 64, R)}  # (PB.9G: back to back / chip-aligned)
     comp = ttnn.ConcatMesh2dToTensor(mesh, mesh_shape=(sp, tp), dims=(0, 1))
 
     def host(t):
@@ -109,9 +127,11 @@ def test_glued_derive_ops(mesh_device, monkeypatch):
         if not segs:
             continue
         g = GluedGeo(mesh, desc, segs)
+        dv = dvs[int(desc.align)]
+        chips = "on" if desc.align else "off"
         for src in ("input", "upload"):
             if src == "input":
-                with switch("PACKED_GLUED_DYNAMIC", "on"):
+                with switch("PACKED_GLUED_DYNAMIC", "on"), switch("PACKED_CHIPS", chips):
                     ids = [list(range(s.length)) for _, s in desc.live()]
                     inp = make_input(mesh, desc, ids)
                 dv.begin(desc, inp)
@@ -124,7 +144,7 @@ def test_glued_derive_ops(mesh_device, monkeypatch):
             want = g.keep_rows()
             if not torch.equal(host(keep)[..., :1], want):
                 bad.append(f"{tag}: keep")
-            nr, _ = real_prefix(chunk, sp, torch.arange(chunk) < g.used)
+            nr, _ = real_prefix(chunk, sp, g.keep_rows().reshape(-1) > 0)
             ends = torch.tensor([[r * W + nr[r]] * tp for r in range(sp)]).view(sp, tp, 1, 1)
             if not torch.equal(host(moe), ends):
                 bad.append(f"{tag}: moe ends {host(moe).view(-1).tolist()} vs {ends.view(-1).tolist()}")
@@ -141,7 +161,8 @@ def test_glued_derive_ops(mesh_device, monkeypatch):
             for nn in (chunk // 2, chunk // 4):
                 got = host(dv.run("ckeep", (nn,))[0])[0, 0, :, 0]
                 want = torch.zeros(nn)
-                want[: g.used * nn // chunk] = 1.0
+                for o, kk in zip(g.off, g.rows):
+                    want[o * nn // chunk : (o + kk) * nn // chunk] = 1.0
                 if not torch.equal(got, want):
                     bad.append(f"{tag}: ckeep {nn}")
             # idx: valid lengths, candidate caps, piece tables
@@ -211,15 +232,18 @@ def test_glued_derive_ops(mesh_device, monkeypatch):
                 got = host(dv.run("srv", (k,), tuple(js))[0]).view(sp, tp, -1)
                 parts = []
                 for j in js:
-                    d = wgeo.server_rows(32 * ((segs[j].start % chunk) // 32))
-                    parts.append((d + g.off[j]) % chunk)
+                    lo = max(int(segs[j].start), int(segs[j].seg.gws))  # (PB.9G: a replay writes from gws)
+                    d = wgeo.server_rows(32 * ((lo % chunk) // 32))
+                    parts.append((d + g.off[j] + lo - int(segs[j].start)) % chunk)
                 want = torch.cat(parts, dim=-1).view(sp, 1, -1).expand(sp, tp, -1)
                 if not torch.equal(got, want):
                     bad.append(f"{tag}: srv {js}")
             dv.end()
             if inp is not None:
                 ttnn.deallocate(inp)
-    print(f"DERIVE {len(cases)} cases x 2 header sources: {len(bad)} mismatches; runs {dv.stats}")
+    print(
+        f"DERIVE {len(cases)} cases x 2 header sources: {len(bad)} mismatches; runs {[d.stats for d in dvs.values()]}"
+    )
     for b in bad[:40]:
         print("DERIVE BAD", b)
     assert not bad, f"{len(bad)} derived tables differ from the host's"

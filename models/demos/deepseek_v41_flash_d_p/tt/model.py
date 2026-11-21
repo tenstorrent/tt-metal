@@ -1190,6 +1190,9 @@ class TtDS41Model:
         self.max_seq, self.chunk = int(max_seq), int(chunk)
         self.sp, self.tp = mesh.shape[SP_AXIS], mesh.shape[TP_AXIS]
         assert self.chunk % (32 * self.sp * self.tp) == 0, (self.chunk, tuple(mesh.shape))
+        from . import packed_device as _pd
+
+        _pd.CHIP_ROWS[0] = self.chunk // (self.sp * self.tp)  # PB.9G: chip-aligned lanes' rows a chip (as_run_desc)
         self.fused = settings.get("MHC_FUSED") == "on"  # P.14
         self.own = own_rows()  # OWN_ROWS (P.23): the streams on each chip's own S/(SP TP) rows, whole hidden
         self.rows = self.chunk // (self.sp * self.tp if self.own else self.sp)  # the streams' rows a chip
@@ -1997,15 +2000,19 @@ class TtDS41Model:
             jobs = []
             for k in range(desc.lanes):
                 r = by_lane.get(k)
-                if r is None:  # (a segment that computes nothing: no model rows)
-                    continue
-                off, v = desc.lane_off(k), r.run_end - r.start
-                lid = ids[off : off + v].contiguous()
-                tail = rows.new_tail() if r.start == 0 else r.state.tail[i]
-                tail = tail.long().clone().contiguous()
-                new_tail = rows.next_tail(lid, tail, v)
-                r.state.tail[i] = new_tail
-                jobs.append((off, lid, tail, new_tail.long().contiguous()))
+                off, v = desc.lane_off(k), (0 if r is None else r.run_end - r.start)
+                if r is not None:
+                    lid = ids[off : off + v].contiguous()
+                    tail = rows.new_tail() if r.start == 0 else r.state.tail[i]
+                    tail = tail.long().clone().contiguous()
+                    new_tail = rows.next_tail(lid, tail, v)
+                    r.state.tail[i] = new_tail
+                    jobs.append((off, lid, tail, new_tail.long().contiguous()))
+                pad = (desc.ext(k) - v) if getattr(desc, "align", 0) else 0
+                if pad:  # (PB.9G: a segment's last chip past its rows, an idle segment's chip: zero rows, as the tail)
+                    jobs.append(
+                        (off + v, torch.zeros(pad, dtype=torch.int64), rows.new_tail().long().contiguous(), None, 0)
+                    )
             _free(self._engram_dev.pop(i, None))
             dev = rows.allocate_tp(ids.numel(), rows.upload_pieces(ids.numel()))
             self._engram_dev[i] = dev
@@ -2034,14 +2041,26 @@ class TtDS41Model:
         if i in self._deep_set:
             raise AssertionError("PACKED=on: DEEP_LAYERS=tail is not packed")
         out = self.blocks[i].packed(h, pk) if segs else h
-        for j, r in enumerate(segs):  # (each its own broadcast instance: back-to-back sends, DS41-324)
+        # PB.9G (PACKED_CHIPS=on): every segment's snapshot of the layer in ONE program (SnapshotSend.multi; one
+        # arrival counter a (segment, block)); off: each its own broadcast instance (back-to-back sends, DS41-324)
+        from .packed_device import chips_on
+
+        batch = [] if (chips_on() and not pk.trivial) else None
+        for j, r in enumerate(segs):
             pk.enter(r)
-            self._snapshot(i, r.start, r.state, r.run_end, send=j)
+            self._snapshot(i, r.start, r.state, r.run_end, send=j, batch=batch)
             pk.leave(r)
         for j, r in enumerate(pk.idle, len(segs)):  # (PREFILL_END=cap, cap <= start: the snapshot at cap, _acks_only)
             c = r.state.window[i]
             if c.snap is not None and not (self.skip_mode == "decode" and i in self.decoder):
-                c.write_snapshot(r.run_end, send=j)
+                c.write_snapshot(r.run_end, send=j, batch=batch)
+        if batch:
+            items = [b[1:] for b in batch]
+            if batch[0][0].multi_ok(items):
+                batch[0][0].multi(items)
+            else:  # (one snapshot, or slabs / rings of different geometries: one program each)
+                for snd, *it in batch:
+                    snd(*it)
         if segs:
             pk.enter(segs[0])
         return out
@@ -2239,13 +2258,15 @@ class TtDS41Model:
             return SKIPPED
         return out
 
-    def _snapshot(self, i: int, start: int, state: DS41DeviceState, end: int | None, src=None, send: int = 0) -> None:
+    def _snapshot(
+        self, i: int, start: int, state: DS41DeviceState, end: int | None, src=None, send: int = 0, batch=None
+    ) -> None:
         """WINDOW_KV_KEEP=snapshot128 (P.42): layer i's served window snapshot after its window write of the chunk
         [start, end) (device ops; before the layer's ack), unless the caller marked the chunk not the request's last.
         ``src`` (P.43, replay128's tail): the window cache whose ring holds the rows (the tail state's)."""
         c = state.window[i]
         if c.snap is not None and self._snap:
-            c.write_snapshot(start + self.chunk if end is None else int(end), src=src, send=send)
+            c.write_snapshot(start + self.chunk if end is None else int(end), src=src, send=send, batch=batch)
 
     def _tail_layer(self, i: int, h, start: int, state: DS41DeviceState, end: int | None) -> TailH:
         """DECODER_SKIP=replay128 (P.31), the request's last chunk [start, end). The first decoder layer (20): its KV

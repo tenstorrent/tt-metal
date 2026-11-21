@@ -90,8 +90,12 @@ constexpr uint32_t NSEG = 6;
 constexpr auto h_args = TensorAccessorArgs<12>();
 @ACCESSORS@
 
+#ifndef ALIGN_ROWS
+#define ALIGN_ROWS 0
+#endif
+
 struct Seg {
-    uint32_t start, rows, off, lane;
+    uint32_t start, rows, off, lane, gws;
 };
 
 FORCE_INLINE void zero_words(uint32_t addr, uint32_t words) {
@@ -118,17 +122,22 @@ void kernel_main() {
     uint32_t ns = 0, used = 0;
     const uint32_t n = hw[0] < NSEG ? hw[0] : NSEG;
     for (uint32_t i = 0; i < n; ++i) {
-        const uint32_t st = hw[2 + 4 * i], en = hw[3 + 4 * i];
+        const uint32_t st = hw[2 + 4 * i], en = hw[3 + 4 * i], gw = hw[4 + 4 * i];
         const uint32_t cap = en / BLOCK * BLOCK;
         const uint32_t rows = cap > st ? cap - st : 0;
+        // PB.9G (ALIGN_ROWS = rows a chip): a segment owns whole chips (its length rounded up, at least one chip)
+        const uint32_t len = en > st ? en - st : 1;
+        constexpr uint32_t AR = ALIGN_ROWS ? ALIGN_ROWS : 1;  // (no division by a zero constant)
+        const uint32_t ext = ALIGN_ROWS ? (len + AR - 1) / AR * AR : rows;
         if (rows) {
             s[ns].start = st;
             s[ns].rows = rows;
             s[ns].off = used;
             s[ns].lane = i;
+            s[ns].gws = gw;
             ++ns;
-            used += rows;
         }
+        used += ext;
     }
     // this chip's entries (pass p = its p-th): segment, local rows [a, b)
     const uint32_t q0 = q * R;
@@ -152,7 +161,12 @@ void kernel_main() {
         for (uint32_t t = 0; t < R / 32; ++t) {
             zero_words(buf, 512);
             for (uint32_t r = 0; r < 32; ++r) {
-                if (q0 + 32 * t + r < used) {
+                const uint32_t i = 32 * t + r;  // (a row of a segment's computed rows; PB.9G: not its chip's pad)
+                bool in = false;
+                for (uint32_t e = 0; e < ne; ++e) {
+                    in = in || (ea[e] <= i && i < eb[e]);
+                }
+                if (in) {
                     t16[((r >> 4) << 9) + ((r & 15) << 4)] = 0x3F80;
                 }
             }
@@ -161,9 +175,13 @@ void kernel_main() {
         }
         constexpr uint32_t W = CHUNK / SP;
         const uint32_t rr = q / TP;
-        uint32_t nr = used > rr * W ? used - rr * W : 0;
-        if (nr > W) {
-            nr = W;
+        uint32_t nr = 0;  // (the SP row's real rows as a prefix: its last real row + 1, tt/packed.real_prefix)
+        for (uint32_t j = 0; j < ns; ++j) {
+            const uint32_t lo = s[j].off, hi = s[j].off + s[j].rows;
+            if (lo < (rr + 1) * W && hi > rr * W) {
+                const uint32_t e = (hi < (rr + 1) * W ? hi : (rr + 1) * W) - rr * W;
+                nr = e > nr ? e : nr;
+            }
         }
         u[0] = rr * W + nr;
         noc_async_write(buf, O1.get_noc_addr(0), 4);
@@ -228,11 +246,16 @@ void kernel_main() {
     {
         const auto O0 = TensorAccessor(o0_args, get_arg_val<uint32_t>(1), P0);
         volatile tt_l1_ptr uint16_t* t16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(buf);
-        const uint32_t lim = used * A0 / CHUNK;
+        constexpr uint32_t RAT = CHUNK / A0;  // (model rows a compressed row)
         for (uint32_t t = 0; t < A0 / 32; ++t) {
             zero_words(buf, 512);
             for (uint32_t r = 0; r < 32; ++r) {
-                if (32 * t + r < lim) {
+                const uint32_t m = (32 * t + r) * RAT;  // (a compressed row of a segment's computed rows)
+                bool in = false;
+                for (uint32_t j = 0; j < ns; ++j) {
+                    in = in || (s[j].off <= m && m < s[j].off + s[j].rows);
+                }
+                if (in) {
                     t16[((r >> 4) << 9) + ((r & 15) << 4)] = 0x3F80;
                 }
             }
@@ -331,10 +354,13 @@ void kernel_main() {
         const uint32_t rr = q / TP;
         for (uint32_t x = 0; x < A0; ++x) {
             const uint32_t j = get_arg_val<uint32_t>(4 + NOUT + x);
-            const uint32_t s0 = s[j].start % CHUNK;
+            // PB.9G: an encoder replay segment (gws > start) writes [gws, cap) as a chunk at gws: gws's server order,
+            // its rows from gws - start on (TtCompressor._write_from's shifted rows)
+            const uint32_t lo = s[j].gws > s[j].start ? s[j].gws : s[j].start;
+            const uint32_t s0 = lo % CHUNK;
             const uint32_t intra = s0 % W, cst = (s0 / W) % SP;
             const uint32_t kk = (rr + SP - cst) % SP;
-            const uint32_t off = s[j].off;
+            const uint32_t off = s[j].off + (lo - s[j].start);
             for (uint32_t jj = 0; jj < W; ++jj) {
                 const uint32_t d = kk == 0 ? (jj < W - intra ? jj : CHUNK - W + jj) : kk * W - intra + jj;
                 u[jj] = (d + off) % CHUNK;
@@ -358,8 +384,9 @@ def _page_bytes(t: ttnn.Tensor) -> int:
 class Derive:
     """The per-chunk derive programs of a mesh (persistent outputs; ``begin`` a chunk, then each output on first use)."""
 
-    def __init__(self, mesh, chunk: int, block: int):
+    def __init__(self, mesh, chunk: int, block: int, align: int = 0):
         self.mesh = mesh
+        self.align = int(align)  # PB.9G: rows a chip of chip-aligned lanes (0: back to back)
         self.sp, self.tp = int(mesh.shape[SP_AXIS]), int(mesh.shape[TP_AXIS])
         self.n = self.sp * self.tp
         self.chunk, self.block = int(chunk), int(block)
@@ -470,6 +497,7 @@ class Derive:
             flags["D_CAND"] = 1
         head = "".join(f"#define {k} {v}\n" for k, v in flags.items())
         head += f"#define NOUT {len(outs)}\n"
+        head += f"#define ALIGN_ROWS {self.align}\n"
         if kind == "idx":
             head += f"#define TAB_ARG {len(outs)}\n"
         body = _KERNEL.replace("@ACCESSORS@", "\n".join(acc + defs + [f"constexpr uint32_t HPAGE = HPAGE_BYTES;"]))
@@ -547,10 +575,12 @@ class Derive:
         self.stats["runs"] += 1
         return outs
 
-    def moe_span(self, used: int) -> dict | None:
-        """PB.4's moe head span of this chunk (tt/packed_device.MoEPadSpan.span for a glued chunk: SP row r's real
-        rows are a prefix): None when every row is real, else the zero start words and the derived end words."""
-        if int(used) >= self.chunk:
+    def moe_span(self, real: int) -> dict | None:
+        """PB.4's moe head span of this chunk (tt/packed_device.MoEPadSpan.span for a glued chunk: each SP row's rows
+        up to its last real row; PB.9G: pad rows of a segment's last chip inside that prefix stay routed, row-local):
+        None when every row is real (``real`` rows of the chunk's), else the zero start words and the derived end
+        words."""
+        if int(real) >= self.chunk:
             return None
         if getattr(self, "_zero", None) is None:
             self._zero = self._alloc([self.sp, self.tp, 1, 1], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, True)
@@ -560,9 +590,9 @@ class Derive:
 _BY: dict = {}
 
 
-def derive(mesh, chunk: int, block: int) -> Derive:
-    key = (id(mesh), int(chunk), int(block))
+def derive(mesh, chunk: int, block: int, align: int = 0) -> Derive:
+    key = (id(mesh), int(chunk), int(block), int(align))
     hit = _BY.get(key)
     if hit is None or hit.mesh is not mesh:
-        hit = _BY[key] = Derive(mesh, chunk, block)
+        hit = _BY[key] = Derive(mesh, chunk, block, align)
     return hit

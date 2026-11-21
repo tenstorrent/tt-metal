@@ -362,7 +362,7 @@ class DS41PrefillRuntime:
         its tail gathered) and its pulled-back partial last chunk (start c + m, not chunk-aligned: two chunk periods,
         the window region path; end 2c + m', its cap below it: the partial masks and the snapshot at a cap; under
         DECODER_SKIP=decode global_write_start 2c: the encoder replay). Kinds that do not fit max_seq are skipped.
-        PB.9X (PACKED=on, PACKED_ROUTE=glued): also the glued layout kinds (tt/packed_device.warm_glued_chunks: every
+        PB.9X / PB.9G (PACKED=on, PACKED_GLUED=on): also the glued layout kinds (tt/packed_device.warm_glued_chunks: every
         segment count, fresh / continued / near-the-end histories, lane-shaped, 1-token and idle segments) in slots
         0..5, so a packed chunk builds nothing on the request path either."""
         from ..page_copy import on as pos_dynamic
@@ -382,16 +382,16 @@ class DS41PrefillRuntime:
             ids = self.make_chunk_input([0] * (end - start), start)
             self._run(ids, kv_cache, 0, start, end, acks=False, write_start=ws)
             ttnn.deallocate(ids)
-        from ..packed_device import route_glued, warm_glued_chunks
+        from ..packed_device import glued_on, packed_on, warm_glued_chunks
 
-        if pos_dynamic() and route_glued() and self.gap_feed is None:
+        if pos_dynamic() and packed_on() and glued_on() and self.gap_feed is None:
             # PB.9X (rule 20, OV-68): every packed chunk runs glued; its programs depend on a finite set of layout
             # kinds (segment counts 1..6, fresh / continued requests, 1-token / idle segments: warm_glued_chunks), all
             # warmed here in slots 0.. (junk KV there before serving, as the single chunks in slot 0)
             import torch
 
             slots = list(range(min(6, int(kv_cache.contract.num_users))))
-            for desc in warm_glued_chunks(c, slots, m):
+            for desc in warm_glued_chunks(c, slots, m, self.mesh_device, replay=self.model.skip_mode == "decode"):
                 ids = [torch.zeros(sg.length, dtype=torch.int64) for sg in desc.segments]
                 inp = self.make_packed_input(desc, ids)
                 self.prefill_packed(inp, kv_cache, desc, acks=False)
@@ -464,20 +464,21 @@ class DS41PrefillRuntime:
         end and global_write_start; the engine input in lane-natural order). Every served layer is acked once per
         segment (host sink: sink.layers_completed(g, g + 1, slot, start, end) for each segment after the layer's
         sync; D2H: one outbound_socket_service_sync a segment). PACKED=off refuses (prefill_chunk is today's path).
-        PB.9X (PACKED_ROUTE=glued, PACKED_GLUED=on: the shipped switches): every packed chunk runs the glued path, a
-        tt/packed.GluedChunk as itself (lane-shaped too), a ChunkDescriptor as its live segments' glued chunk (its
-        engine input the glued one, tt/packed_device.make_input); the embedding ids are made on the device from the
-        input's header (tt/packed_device.glued_dev_ids: no second upload)."""
+        PB.9G (PACKED_GLUED=on, PACKED_CHIPS=on: the shipped switches): every packed chunk runs the one-call glued path
+        on chip-aligned lanes (each segment its own whole chips), a ChunkDescriptor as its live segments' glued chunk
+        (its engine input the run layout's, tt/packed_device.make_input); the embedding ids are made on the device from
+        the input's header (tt/packed_device.glued_dev_ids: no second upload). A chunk the one call cannot run raises.
+        """
         from ..packed_device import as_run_desc, glued_dev_ids, packed_on, routed
 
         if not packed_on():
             raise ValueError("prefill_packed needs PACKED=on (PACKED=off: prefill_chunk, one request a chunk)")
         c, m = self.config.chunk_size, self.config.max_seq_len
         assert int(descriptor.chunk) == c, (descriptor.chunk, c)
-        # PB.9X (PACKED_ROUTE=glued, the shipped value): every packed chunk runs the glued path; a fixed-lane header is
-        # the glued chunk of its live segments (its engine input the glued one: tt/packed_device.make_input). PB.7's
-        # routing (PACKED_ROUTE=lanes): a lane-shaped glued chunk runs the fixed-lane path.
-        run_desc = as_run_desc(descriptor)
+        # PB.9G: every packed chunk runs the one-call glued path on chip-aligned lanes (PACKED_CHIPS=on; off: PB.9X's
+        # back-to-back layout); a fixed-lane header is the glued chunk of its live segments (its engine input the run
+        # layout's: tt/packed_device.make_input)
+        run_desc = as_run_desc(descriptor, self.mesh_device)
         if routed(descriptor, run_desc):
             descriptor = run_desc
         assert self.gap_feed is None, "PACKED=on serves a contiguous layer range"
@@ -499,7 +500,6 @@ class DS41PrefillRuntime:
                 SNAPSHOT_ENDS[int(s.slot)] = int(s.end)
                 WINDOW_UNWRITTEN[int(s.slot)] = frozenset(model.decoder) if model.skip_mode == "decode" else frozenset()
         ids = self._host_ids_packed(input_tensor, descriptor)  # (model rows: a glued chunk's segments back to back)
-        # (PACKED_ROUTE=lanes: a lane-shaped glued chunk runs the lane path on the same model rows / ids)
         last = False if model.skip_mode == "decode" else None
         model.begin_packed(run_desc, ids, states, last=last, inp=input_tensor)
         try:

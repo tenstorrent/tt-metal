@@ -598,3 +598,17 @@ Build fixes after fork_op.py (no behaviour change):
 - Run: the model's glued oracle (tests/packed/test_glued_oracle.py, PACKED_GLUED_DYNAMIC=on, 8x4); no fork suite on
   the 8x4 (PACKED_RULES).
 - Files: device/sparse_sdpa_lanes_device_operation.cpp, README.md
+
+### PB.9G (deepseek_v41_flash_d_p, 2026-11-21): kv_lane_map_runtime (kv_lanes without hashing the lane map)
+- What: new option `kv_lane_map_runtime` (bool, default False): with `kv_lanes` and no `kv_lane_rows`,
+  `SparseSDPALanesOperation::compute_program_hash` leaves `lane_of_chip` out (the override already re-binds each
+  device's kv to `kv_lanes[kv_lane_of_chip[chip]]` every call; the source program's key holds no kv rows, the
+  assumption PB.7C made for kv_lane_rows).
+- Why: deepseek_v41_flash_d_p PB.9G (chip-aligned lanes, owner 2026-11-21): every chip holds one segment, so the
+  per-token row ranges of kv_lane_rows (their per-core arg patching, ~0.27 ms of host a call more, PB.9X) are not
+  needed, but a hashed map would build a program for every layout serving sends.
+- Default: unchanged (False: the map is hashed as before; kv_lane_rows calls unchanged).
+- Run: the model's packed oracle (tests/packed/test_packed_oracle.py, PACKED_CHIPS=on, 8x4) and test_no_rebuild; no
+  fork suite on the 8x4 (PACKED_RULES).
+- Files: device/sparse_sdpa_lanes_device_operation.hpp, device/sparse_sdpa_lanes_device_operation.cpp,
+  sparse_sdpa.hpp, sparse_sdpa.cpp, sdpa_nanobind.cpp, README.md

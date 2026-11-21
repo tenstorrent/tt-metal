@@ -88,6 +88,40 @@ calls, which segments write) and the per-call runtime args of the kernels (lane 
 snapshot owners: dispatched with the launch, no upload). A run_chunk without the engine input (tests driving host ids)
 uploads the header alone.
 
+PB.9G (OWNER 2026-11-21, PACKED_CHIPS=on, the shipped value): CHIP-ALIGNED LANES are the one packed path. Rows of two
+requests never share a chip: a packed chunk is a list of segments, each owning a contiguous run of whole chips
+(R = chunk / (SP TP) rows a chip: 256 on the 8x4, 512 on 4x4, 1024 on 2x4, 2048 on 2x2): segment k's rows (engine
+and model alike) are [off_k, off_k + ext_k), off_k = the extents before it, ext_k = its length rounded up to R (at
+least one chip: a 1-token or an idle segment owns one chip, its rows past cap are pad), 1..chunk / R chips a segment;
+a request that does not fit the chips left is split on a kv block inside them (``GluedChunk.fill(align=R)``; the rest
+continues in a later chunk). tt/packed.GluedChunk(align = R) describes it; ``as_run_desc`` turns every packed header
+(a back-to-back GluedChunk, a fixed-lane ChunkDescriptor) into it. It runs the one-call path of tt/packed_glued.py
+(GluedCall) with PB.7C's device-derived tables: on whole-chip segments each chip holds one segment from its row 0, so
+every per-row quantity of that path is a per-chip one (packed_onecall's per-chip design): one pass, the ring's lane
+ranges one a chip, no phase rolls / keep copies, the history read by kv_lanes with the lane map a runtime value (sdpa
+fork kv_lane_map_runtime), the engine ids are the model ids (GluedIdsReorder reads its own mesh row only). The derive
+kernels (tt/glued_derive.py, ALIGN_ROWS) and the ids reorder (page_copy, ALIGN) compute the chip-aligned offsets from
+the header; keep / compressed keep / MoE end words are segment membership (a chip's pad rows masked as today's pad
+rows past cap). Encoder replay segments (write_start > start) run in the one call: their window carry class 0 (the
+region mask) and their served writes from write_start (the server order of write_start, the segment's rows from
+write_start - start on: the derive's srv rows; TtCompressor._write_from's shift as index rows). Removed: path (b)
+(per-segment moves, PackedChunk._glued_attention / GluedMover), the fixed 2048-row lanes (LaneMover, OneCall on a
+ChunkDescriptor, PACKED_ROUTE=lanes): a chunk the one call cannot run raises (``glued_call_ok``), never falls back.
+PACKED_CHIPS=off keeps PB.9X's back-to-back layout through the same one call (the A/B's previous side; its per-row
+pieces: passes, ChipRows, kv_lane_rows). The window send (GluedSend) orders its carry tensors by accessor kind (the
+served snapshot first, then ring-carry temps, then scratch; an anchor snapshot when none carries): one program for
+every carry mix (DS41-360). Every segment's served window snapshot of a layer goes in ONE prepared program
+(tt/snapshot_send.SnapshotSend.multi: the dynamic broadcast looped over the segments, an arrival counter a (segment,
+block); 20 launches a 4-segment chunk instead of 80, DS41-364).
+
+**Proposed contract change (tt-d-gen, drafts/tt_d_gen_packed_ask.md G1):** the chunk header keeps tt-d-gen's fields
+(n, then slot / actual_start / actual_end / global_write_start a segment, 32 words after each SP row's ids, one
+upload); the packer places segment k's ids at engine row off_k = sum of ceil(max(1, length_j) / R) x R over the
+segments before it (R = chunk / (SP x TP), the server's mesh: 256 on the 8x4), pads each segment's last chip with
+PAD_ID, starts every segment at a 32-aligned position (as today) and splits a request that does not fit the chips
+left at a kv block inside them (the continuation starts there, its own write_start); at most GLUED_SEGS (6) segments
+and chunk / R chips a chunk. The model derives off_k itself from the header (lengths), so no new field is needed.
+
 Contents: 1 geometry and the key fact, 2 the descriptor, 3 per-chunk quantities, 4 non-row-local ops, 5 attention and
 the cross-chip pieces, 6 pipelining and hiding per-segment costs, 7 DRAM at 1M, 8 8192 on today's tree, 9 test plan,
 10 projected time, 11 owner decisions, 12 PB.2-PB.4 estimates.

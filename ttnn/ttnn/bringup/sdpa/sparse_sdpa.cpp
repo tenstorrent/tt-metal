@@ -32,11 +32,13 @@ ttnn::Tensor sparse_sdpa(
     std::optional<tt::tt_metal::CoreCoord> max_grid,
     const std::optional<std::vector<ttnn::Tensor>>& kv_lanes,
     const std::optional<std::vector<uint32_t>>& kv_lane_of_chip,
-    const std::optional<std::vector<uint32_t>>& kv_lane_rows) {
+    const std::optional<std::vector<uint32_t>>& kv_lane_rows,
+    bool kv_lane_map_runtime) {
     TT_FATAL(
         kv_lanes.has_value() == kv_lane_of_chip.has_value(),
         "sparse_sdpa: kv_lanes and kv_lane_of_chip must both be set or both unset");
     TT_FATAL(!kv_lane_rows.has_value() || kv_lanes.has_value(), "sparse_sdpa: kv_lane_rows needs kv_lanes");
+    TT_FATAL(!kv_lane_map_runtime || kv_lanes.has_value(), "sparse_sdpa: kv_lane_map_runtime needs kv_lanes");
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
 
@@ -103,6 +105,7 @@ ttnn::Tensor sparse_sdpa(
             *kv_lanes,
             *kv_lane_of_chip,
             kv_lane_rows.value_or(std::vector<uint32_t>{}),
+            kv_lane_map_runtime,
             indices,
             ttnn::prim::bringup::SparseSDPAParams{
                 .scale = resolved_scale,

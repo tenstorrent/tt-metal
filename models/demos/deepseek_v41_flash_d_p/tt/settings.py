@@ -1467,18 +1467,18 @@ TABLE = {
         "off = PB.7B's per-pass ring calls. Bit-identical to off (tests/packed/test_glued_oracle.py). Default off (the "
         "task's: on = the change; the gate sets it)",
     ),
-    "PACKED_ROUTE": Setting(
-        "glued",
-        ("glued", "lanes"),
-        "PB.9X (overseer for the owner 2026-11-20 night), read per chunk (CALL-TIME, listed in bringup/hooks.py "
-        "batch_call_settings). With PACKED=on and PACKED_GLUED=on: glued = EVERY packed chunk runs the glued path "
-        "(tt/packed_glued.py, PB.7B / PB.7C: per-chunk tables derived on the device, no program build for a new "
-        "layout): a glued chunk that is lane-shaped (4 x 2048 aligned) stays glued, and a fixed-lane header "
-        "(tt/packed.ChunkDescriptor, padded or empty lanes included) is sent as the glued chunk of its live segments in "
-        "lane order (ChunkDescriptor.as_glued: back to back, no pad rows between them; its engine input is the glued "
-        "one, tt/packed_device.make_input). lanes = PB.7's routing (a lane-shaped glued chunk and every ChunkDescriptor "
-        "run the fixed-lane path, which builds programs for fresh slots / positions, DS41-346): kept for the A/B row "
-        "only. Default glued",
+    "PACKED_CHIPS": Setting(
+        "on",
+        ("on", "off"),
+        "PB.9G (OWNER 2026-11-21: chip-aligned lanes), read per chunk (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings). With PACKED=on and PACKED_GLUED=on every packed chunk (a tt/packed.GluedChunk, or a "
+        "fixed-lane header as the glued chunk of its live segments) runs the one-call glued path (tt/packed_glued.py, "
+        "per-chunk tables derived on the device from the chunk header). on = chip-aligned lanes: rows of two requests "
+        "never share a chip; each segment owns a contiguous run of whole chips (starts and lengths multiples of the rows "
+        "a chip, chunk / (SP TP) = 256 on the 8x4; its last chip padded; splits on chip boundaries; tt/packed.GluedChunk "
+        "align); engine rows = model rows. off = PB.9X's back-to-back glued layout (rows of two segments may share a "
+        "chip), the A/B's previous side. Replay (encoder) segments run in the one call either way; the fixed 2048-row "
+        "lanes and path (b) (per-segment moves) are removed: a chunk the one call cannot run raises. Default on",
     ),
     "COMMON_VALUE_SLOTS": Setting(
         "on",

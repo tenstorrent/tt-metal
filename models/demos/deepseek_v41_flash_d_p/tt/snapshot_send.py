@@ -759,3 +759,349 @@ class SnapshotSend:
         pp, nk = hit
         vals = [int(page0)] + [int(rr) for _, rr in blocks]
         ttnn.bringup.run_prepared(pp, io, vals * nk)
+
+
+# appended to tt/snapshot_send.py (PB.9G)
+
+# ---------------------------------------------------------------------------------------------- PB.9G: every segment
+MAX_SEGS = 6  # (tt/packed.GLUED_MAX: segments a chunk; arrival counters 4 a segment)
+WAIT_LIMIT = 1 << 30  # (bounded waits: spins before a wait gives up, PACKED_RULES)
+
+_BOUNDED = r"""
+inline void wait_min_bounded(volatile tt_l1_ptr uint32_t* p, uint32_t v) {
+    for (uint32_t i = 0; i < WAIT_LIMIT && *p < v; ++i) {
+        invalidate_l1_cache();
+    }
+}
+"""
+
+_HOME_KERNEL_MULTI = (
+    r"""
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+"""
+    + _TREE_CODE
+    + r"""
+constexpr uint32_t PAGE = get_compile_time_arg_val(0);
+constexpr uint32_t NS = get_compile_time_arg_val(1);  // segments of this program
+constexpr uint32_t WAIT_LIMIT = get_compile_time_arg_val(2);
+constexpr uint32_t NB = 4;
+constexpr uint32_t BR = 32;
+constexpr auto g_args = TensorAccessorArgs<3>();
+constexpr auto s_args = TensorAccessorArgs<g_args.next_compile_time_args_offset()>();
+"""
+    + _BOUNDED
+    + r"""
+void kernel_main() {
+    // [ring0, slab0 (io: the accessors' stand-ins), (ring, slab, page0, rr, codes) x NS | mr, mc, R, C, wx, wy,
+    //  nports, (px, py, nr, nc) x nports, sem x 4 NS]
+    constexpr uint32_t V = 2;
+    constexpr uint32_t F = V + 5 * NS;
+    const uint32_t mr = get_arg_val<uint32_t>(F), mc = get_arg_val<uint32_t>(F + 1);
+    const uint32_t R = get_arg_val<uint32_t>(F + 2), C = get_arg_val<uint32_t>(F + 3);
+    const uint32_t wx = get_arg_val<uint32_t>(F + 4), wy = get_arg_val<uint32_t>(F + 5);
+    const uint32_t nports = get_arg_val<uint32_t>(F + 6);
+    const uint32_t P0 = F + 7;
+    const uint32_t S0 = P0 + 4 * nports;  // the arrival counters, one a (segment, block)
+    const uint32_t me = mr * C + mc;
+    const uint32_t buf = (get_write_ptr(0) + 63) & ~63u;
+    const uint32_t zbuf = buf + BR * PAGE;
+    bool zeroed = false;
+    for (uint32_t s = 0; s < NS; ++s) {
+        const auto G = TensorAccessor(g_args, get_arg_val<uint32_t>(V + 5 * s), PAGE);
+        const auto S = TensorAccessor(s_args, get_arg_val<uint32_t>(V + 5 * s + 1), PAGE);
+        const uint32_t page0 = get_arg_val<uint32_t>(V + 5 * s + 2);
+        const uint32_t rrp = get_arg_val<uint32_t>(V + 5 * s + 3), cp = get_arg_val<uint32_t>(V + 5 * s + 4);
+        for (uint32_t b = 0; b < NB; ++b) {
+            const uint32_t code = snap_code(cp, b);
+            if (code == CODE_ZERO) {
+                if (!zeroed) {
+                    volatile tt_l1_ptr uint32_t* z = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zbuf);
+                    for (uint32_t i = 0; i < PAGE / 4; ++i) {
+                        z[i] = 0;
+                    }
+                    zeroed = true;
+                }
+                for (uint32_t i = 0; i < BR; ++i) {
+                    noc_async_write(zbuf, S.get_noc_addr(page0 + b * BR + i), PAGE);
+                }
+            } else if (code == CODE_LOCAL || code == me) {
+                const uint32_t rr = (rrp >> (8 * b)) & 0xFFu;
+                for (uint32_t i = 0; i < BR; ++i) {
+                    noc_async_read(G.get_noc_addr(rr + i), buf + i * PAGE, PAGE);
+                }
+                noc_async_read_barrier();
+                for (uint32_t i = 0; i < BR; ++i) {
+                    noc_async_write(buf + i * PAGE, S.get_noc_addr(page0 + b * BR + i), PAGE);
+                }
+                noc_async_write_barrier();
+            }
+        }
+    }
+    // received blocks, (segment, block) order: wait for each, tell the ports that relay it (a counter a port)
+    for (uint32_t s = 0; s < NS; ++s) {
+        const uint32_t cp = get_arg_val<uint32_t>(V + 5 * s + 4);
+        for (uint32_t b = 0; b < NB; ++b) {
+            const uint32_t code = snap_code(cp, b);
+            if (code == CODE_ZERO || code == CODE_LOCAL || code == me) {
+                continue;
+            }
+            volatile tt_l1_ptr uint32_t* arrived =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(S0 + NB * s + b));
+            wait_min_bounded(arrived, 1);
+            for (uint32_t k = 0; k < nports; ++k) {
+                const uint32_t nr = get_arg_val<uint32_t>(P0 + 4 * k + 2), nc = get_arg_val<uint32_t>(P0 + 4 * k + 3);
+                if (snap_child(code, mr, mc, nr, nc, R, C, wx, wy)) {
+                    const uint32_t px = get_arg_val<uint32_t>(P0 + 4 * k);
+                    const uint32_t py = get_arg_val<uint32_t>(P0 + 4 * k + 1);
+                    noc_semaphore_inc(get_noc_addr(px, py, get_semaphore(0)), 1);
+                }
+            }
+        }
+    }
+    noc_async_write_barrier();
+    for (uint32_t s = 0; s < NS; ++s) {
+        const uint32_t cp = get_arg_val<uint32_t>(V + 5 * s + 4);
+        for (uint32_t b = 0; b < NB; ++b) {
+            const uint32_t code = snap_code(cp, b);
+            if (!(code == CODE_ZERO || code == CODE_LOCAL || code == me)) {
+                noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(S0 + NB * s + b)), 0u - 1u);
+            }
+        }
+    }
+    noc_async_atomic_barrier();
+}
+"""
+)
+
+_PORT_KERNEL_MULTI = (
+    r"""
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+#include "hostdev/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+using namespace tt::tt_fabric;
+"""
+    + _TREE_CODE
+    + r"""
+constexpr uint32_t PAGE = get_compile_time_arg_val(0);
+constexpr uint32_t K = get_compile_time_arg_val(1);
+constexpr uint32_t NS = get_compile_time_arg_val(2);
+constexpr uint32_t WAIT_LIMIT = get_compile_time_arg_val(3);
+constexpr uint32_t NB = 4;
+constexpr uint32_t BR = 32;
+constexpr auto g_args = TensorAccessorArgs<4>();
+constexpr auto s_args = TensorAccessorArgs<g_args.next_compile_time_args_offset()>();
+"""
+    + _BOUNDED
+    + r"""
+void kernel_main() {
+    // [ring0, slab0, (ring, slab, page0, rr, codes) x NS | mr, mc, R, C, wx, wy, nr, nc, hx, hy, mesh_id, chip_id,
+    //  sem x 4 NS, conn..]
+    constexpr uint32_t V = 2;
+    size_t a = V + 5 * NS;
+    const uint32_t mr = get_arg_val<uint32_t>(a++), mc = get_arg_val<uint32_t>(a++);
+    const uint32_t R = get_arg_val<uint32_t>(a++), C = get_arg_val<uint32_t>(a++);
+    const uint32_t wx = get_arg_val<uint32_t>(a++), wy = get_arg_val<uint32_t>(a++);
+    const uint32_t nr = get_arg_val<uint32_t>(a++), nc = get_arg_val<uint32_t>(a++);
+    const uint32_t hx = get_arg_val<uint32_t>(a++);
+    const uint32_t hy = get_arg_val<uint32_t>(a++);
+    const uint16_t mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
+    const uint16_t chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
+    const size_t s0 = a;
+    a += NB * NS;
+    const uint32_t me = mr * C + mc;
+    bool busy = false;  // (a port with no block this call never touches its fabric connection)
+    for (uint32_t s = 0; s < NS; ++s) {
+        const uint32_t cp = get_arg_val<uint32_t>(V + 5 * s + 4);
+        for (uint32_t b = 0; b < NB; ++b) {
+            const uint32_t code = snap_code(cp, b);
+            busy = busy || (code != CODE_ZERO && code != CODE_LOCAL && snap_child(code, mr, mc, nr, nc, R, C, wx, wy));
+        }
+    }
+    auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
+    if (!busy) {
+        return;
+    }
+    const uint32_t buf = (get_write_ptr(0) + 63) & ~63u;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::allocate_header();
+#if (defined(ROUTING_MODE) && ((ROUTING_MODE & ROUTING_MODE_2D) != 0))
+    (void)fabric_set_unicast_route(hdr, chip_id, mesh_id);
+#else
+#error "the snapshot send needs a 2D fabric (agent rule 4)"
+#endif
+    conn.open();
+    uint32_t relayed = 0;  // (the home core's counter: one increment a block this port relays, in block order)
+    volatile tt_l1_ptr uint32_t* flag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));
+    for (uint32_t s = 0; s < NS; ++s) {
+        const auto G = TensorAccessor(g_args, get_arg_val<uint32_t>(V + 5 * s), PAGE);
+        const auto S = TensorAccessor(s_args, get_arg_val<uint32_t>(V + 5 * s + 1), PAGE);
+        const uint32_t page0 = get_arg_val<uint32_t>(V + 5 * s + 2);
+        const uint32_t rrp = get_arg_val<uint32_t>(V + 5 * s + 3), cp = get_arg_val<uint32_t>(V + 5 * s + 4);
+        for (uint32_t b = 0; b < NB; ++b) {
+            const uint32_t code = snap_code(cp, b);
+            if (code == CODE_ZERO || code == CODE_LOCAL || !snap_child(code, mr, mc, nr, nc, R, C, wx, wy)) {
+                continue;
+            }
+            const bool own = code == me;
+            if (!own) {
+                ++relayed;
+                wait_min_bounded(flag, relayed);
+            }
+            const uint32_t rr = (rrp >> (8 * b)) & 0xFFu;
+            const uint32_t p0 = page0 + b * BR;
+            for (uint32_t i = 0; i < BR; ++i) {
+                noc_async_read(own ? G.get_noc_addr(rr + i) : S.get_noc_addr(p0 + i), buf + i * PAGE, PAGE);
+            }
+            noc_async_read_barrier();
+            const uint64_t arrival = get_noc_addr(hx, hy, get_arg_val<uint32_t>(s0 + NB * s + b));
+            for (uint32_t i = 0; i < BR; i += K) {
+                const uint64_t dst = S.get_noc_addr(p0 + i);
+                const bool run = (K > 1) && (S.get_noc_addr(p0 + i + K - 1) == dst + (K - 1) * PAGE);
+                const uint32_t n = run ? K : 1;
+                for (uint32_t j = 0; j < K; j += n) {
+                    const uint64_t d = run ? dst : S.get_noc_addr(p0 + i + j);
+                    const uint32_t bytes = n * PAGE;
+                    if (i + j + n == BR) {
+                        hdr->to_noc_fused_unicast_write_atomic_inc(NocUnicastAtomicIncFusedCommandHeader{d, arrival, 1, true}, bytes);
+                    } else {
+                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{d}, bytes);
+                    }
+                    conn.wait_for_empty_write_slot();
+                    conn.send_current_slot_non_blocking(buf + (i + j) * PAGE, bytes, reinterpret_cast<uint32_t>(hdr));
+                    noc_async_writes_flushed();
+                }
+            }
+        }
+    }
+    conn.close();
+    if (relayed) {
+        noc_semaphore_set(flag, 0);
+    }
+}
+"""
+)
+
+
+def _multi_build(self, ns: int, ring: ttnn.Tensor, slab: ttnn.Tensor):
+    """PB.9G: one program for ``ns`` segments' snapshots of a layer (every block pattern: codes are values; each chip
+    derives its roles; per segment its ring / slab addresses, page0, ring rows and codes are values)."""
+    acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
+    hct = [self.page, ns, WAIT_LIMIT] + acc(ring) + acc(slab)
+    pct = [self.page, self.k, ns, WAIT_LIMIT] + acc(ring) + acc(slab)
+    ra, sa = int(ring.buffer_address()), int(slab.buffer_address())
+    head = [ra, sa] + [0] * (5 * ns)
+    node = lambda ch: self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(*ch))  # noqa: E731
+    dm = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default)
+    geo = [self.R, self.C, int(bool(self.wrap_x)), int(bool(self.wrap_y))]
+    sems = list(self.msem_addr[: 4 * ns])
+    md = ttnn.MeshProgramDescriptor()
+    hc = ttnn.CoreCoord(*HOME)
+    n_ports = 0
+    for r in range(self.R):
+        for c in range(self.C):
+            ds = sorted(DIRS.index(d) for d in self.chips[(r, c)])
+            n_ports += len(ds)
+            pcs = [ttnn.CoreCoord(HOME[0] + 1 + d, HOME[1]) for d in ds]
+            all_crs = ttnn.CoreRangeSet([ttnn.CoreRange(x, x) for x in [hc] + pcs])
+            hcrs = ttnn.CoreRangeSet([ttnn.CoreRange(hc, hc)])
+            pcrs = ttnn.CoreRangeSet([ttnn.CoreRange(x, x) for x in pcs])
+            prog = ttnn.ProgramDescriptor()
+            prog.cbs = [
+                ttnn.CBDescriptor(
+                    total_size=(BROWS + 1) * self.page + 64,
+                    core_ranges=hcrs,
+                    format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint8, (BROWS + 1) * self.page + 64)],
+                ),
+                ttnn.CBDescriptor(
+                    total_size=BROWS * self.page + 64,
+                    core_ranges=pcrs,
+                    format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint8, BROWS * self.page + 64)],
+                ),
+            ]
+            prog.semaphores = [ttnn.SemaphoreDescriptor(id=0, core_ranges=all_crs, initial_value=0)]
+            peers = [tuple(self.chips[(r, c)][DIRS[d]]["peer"]) for d in ds]
+            hrt = ttnn.RuntimeArgs()
+            hargs = head + [r, c] + geo + [len(ds)]
+            for d, pr in zip(ds, peers):
+                hargs += list(self.port_xy[d]) + [int(pr[0]), int(pr[1])]
+            hrt[hc.x][hc.y] = hargs + sems
+            prt = ttnn.RuntimeArgs()
+            for d, pc, pr in zip(ds, pcs, peers):
+                port = self.chips[(r, c)][DIRS[d]]
+                pn = node(pr)
+                args = head + [r, c] + geo + [int(pr[0]), int(pr[1])]
+                args += [self.home_xy[0], self.home_xy[1], int(pn.mesh_id), int(pn.chip_id)] + sems
+                args += list(ttnn.setup_fabric_connection(self.mesh, node((r, c)), pn, port["links"][0], prog, pc))
+                prt[pc.x][pc.y] = args
+            prog.kernels = [
+                ttnn.KernelDescriptor(
+                    kernel_source=_HOME_KERNEL_MULTI,
+                    source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                    core_ranges=hcrs,
+                    compile_time_args=hct,
+                    runtime_args=hrt,
+                    config=dm,
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=_PORT_KERNEL_MULTI,
+                    source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                    core_ranges=pcrs,
+                    compile_time_args=pct,
+                    runtime_args=prt,
+                    config=dm,
+                ),
+            ]
+            md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
+    return md, n_ports
+
+
+def multi_ok(self, items: list) -> bool:
+    """``multi`` can take these snapshots in one program: 2..MAX_SEGS of them, every ring and every slab of one
+    geometry (one accessor kind each; FIX.32)."""
+    if not 1 < len(items) <= MAX_SEGS:
+        return False
+    r0, s0 = _geom(items[0][0]), _geom(items[0][1])
+    return all(_geom(r) == r0 and _geom(s) == s0 for r, s, _, _ in items[1:])
+
+
+def multi(self, items: list) -> None:
+    """PB.9G (chip-aligned packed lanes): every segment's snapshot of a layer in ONE prepared program (``items``
+    [(ring, slab, page0, blocks)] as ``__call__``'s; one arrival counter a (segment, block)): the same bytes as one
+    ``__call__`` a segment, 1 mesh program launch a layer instead of one a segment."""
+    ns = len(items)
+    if getattr(self, "msems", None) is None:
+        hc = ttnn.CoreCoord(*HOME)
+        hcrs = ttnn.CoreRangeSet([ttnn.CoreRange(hc, hc)])
+        self.msems = [
+            ttnn.create_global_semaphore(self.mesh, hcrs, 0, ttnn.BufferType.L1_SMALL) for _ in range(4 * MAX_SEGS)
+        ]
+        self.msem_addr = [int(ttnn.get_global_semaphore_address(s)) for s in self.msems]
+    ring0, slab0 = items[0][0], items[0][1]
+    io = [ring0, slab0]
+    key = ("multi", ns, _geom(ring0), _geom(slab0))
+    hit = self._pp.get(key)
+    if hit is None:
+        md, n_ports = _multi_build(self, ns, ring0, slab0)
+        nv = 5 * ns
+        pp = ttnn.bringup.prepare_program(md, io, [(k, 2 + i) for k in (0, 1) for i in range(nv)])
+        want = (2 + nv) * (self.n + n_ports)
+        assert pp.patch_count == want, f"snapshot send (multi): {pp.patch_count} patched slots, {want} expected"
+        hit = self._pp[key] = pp
+    vals = []
+    for ring, slab, page0, blocks in items:
+        assert len(blocks) == BLOCKS, blocks
+        rrp, cp = 0, 0
+        for b, (k, rr) in enumerate(blocks):
+            c = 0xFF if k == "zero" else 0xFE if k == "local" else int(k)
+            assert 0 <= c <= 0xFF and (c >= 0xFE or c < self.n) and 0 <= int(rr) < 256, (k, rr)
+            rrp |= int(rr) << (8 * b)
+            cp |= c << (8 * b)
+        vals += [int(ring.buffer_address()), int(slab.buffer_address()), int(page0), rrp, cp]
+    ttnn.bringup.run_prepared(hit, io, vals * 2)
+
+
+SnapshotSend.multi = multi
+SnapshotSend.multi_ok = multi_ok

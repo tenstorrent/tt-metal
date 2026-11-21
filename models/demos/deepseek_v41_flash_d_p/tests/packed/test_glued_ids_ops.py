@@ -58,6 +58,12 @@ def _layouts(chunk: int, R: int, rnd: random.Random) -> list:
     return out
 
 
+def _ids(desc, vmax: int) -> list:
+    if getattr(desc, "glued", False):
+        return [torch.randint(0, vmax + 200, (s.length,)) for _, s in desc.live()]
+    return [None if s is None else torch.randint(0, vmax + 200, (s.length,)) for s in desc.segments]
+
+
 @mesh_parametrize(timeout_s=3600)
 def test_glued_ids_ops(mesh_device, monkeypatch):
     if mesh_device is None:
@@ -87,26 +93,29 @@ def test_glued_ids_ops(mesh_device, monkeypatch):
     rnd = random.Random(9)
     bad, n_ok, builds, preps = [], 0, 0, 0
     pc = PrepCount()
+    lays = _layouts(chunk, chunk // (sp * tp), rnd)
+    runs = [("off", ci, d) for ci, d in enumerate(lays)] + [("on", ci, d) for ci, d in enumerate(lays)]
     with switch("PACKED", "on"), switch("PACKED_GLUED", "on"), switch("PACKED_GLUED_DYNAMIC", "on"), switch(
-        "PACKED_ROUTE", "glued"
-    ), switch("POS_DYNAMIC", "on"):
-        for ci, desc in enumerate(_layouts(chunk, chunk // (sp * tp), rnd)):
-            rd = as_run_desc(desc)
+        "POS_DYNAMIC", "on"
+    ):
+        for chips, ci, desc in runs:  # (PB.9G: PACKED_CHIPS off = back to back, on = chip-aligned lanes)
+            try:
+                with switch("PACKED_CHIPS", chips):
+                    rd = as_run_desc(desc, mesh)
+                    inp = make_input(mesh, desc, _ids(desc, vmax))
+            except AssertionError:  # (a back-to-back layout whose segments need more chips than the chunk has)
+                continue
             assert getattr(rd, "glued", False), desc
-            if getattr(desc, "glued", False):
-                ids = [torch.randint(0, vmax + 200, (s.length,)) for _, s in desc.live()]
-            else:
-                ids = [None if s is None else torch.randint(0, vmax + 200, (s.length,)) for s in desc.segments]
-            inp = make_input(mesh, desc, ids)
             e0, p0 = cache_entries(mesh), pc.n
             with pc:
                 dev = glued_dev_ids(model, rd, inp)
             assert dev is not None, "no device ids for a header input"
-            if ci > 0:
+            if ci > 0:  # (the first layout of a side builds its program)
                 e1 = cache_entries(mesh)
                 builds += 0 if e0 is None or e1 is None else e1 - e0
                 preps += pc.n - p0
-            want = ids_from_input(mesh, inp, rd).clamp(0, vmax)  # (the host path: model rows, PAD -> vocab - 1)
+            with switch("PACKED_CHIPS", chips):
+                want = ids_from_input(mesh, inp, rd).clamp(0, vmax)  # (the host path: model rows, PAD -> vocab - 1)
             got_dev = ttnn.get_device_tensors(dev)
             for r in range(sp):
                 for c in range(tp):

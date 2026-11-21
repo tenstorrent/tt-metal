@@ -336,7 +336,7 @@ def _ladder(mesh, layers, monkeypatch) -> None:
     W = _walls_mod()
     cases = L.cases(["4x2k", "5x1600"])
     assert set(cases) <= set(L.CASES), f"unknown ladder cases {cases} (known: {sorted(L.CASES)})"
-    route = settings.get("PACKED_ROUTE")
+    route = "glued"  # (PB.9G: PACKED_ROUTE removed; every packed chunk runs glued)
     assert route == "glued", f"the glued ladder runs PACKED_ROUTE=glued (got {route})"
     deploy = int(S.get("deploy.seq") or S.get("target.seq"))
     cap = W._cap(deploy)
@@ -546,7 +546,7 @@ def _measure(
     extra = {}
     # PB.9X: the lanes side packs lane-wise (<= 2048 a piece, 4 a chunk); under PACKED_ROUTE=glued (the shipped value)
     # those headers run the glued path (PACKED_GLUED=on), under PACKED_ROUTE=lanes the fixed-lane path (PB.7's row)
-    route = settings.get("PACKED_ROUTE")
+    route = "glued"  # (PB.9G: PACKED_ROUTE removed; every packed chunk runs glued)
     with packed("on"), glued("on" if side == "glued" or route == "glued" else "off"):
         if fresh is not None:  # PB.7C: every timed run a new mix; the builds the timed runs add are the metric
             warm_seeds, timed_seeds = _fresh_seeds(case)

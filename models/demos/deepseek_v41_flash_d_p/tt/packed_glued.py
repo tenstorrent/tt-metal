@@ -4,8 +4,8 @@
 """PACKED_GLUED_ONECALL=on (PB.7B, owner 2026-11-20; bringup/PACKED_DESIGN.md "PB.7B"): a glued chunk's attention ONCE a
 layer over every segment, each row at its own segment's positions, slot caches and history (no row moves).
 
-PB.7's path (b) (tt/packed_device.PackedChunk._glued_attention, the switch off) moves each segment's rows to rows
-[0, n) and runs today's attention steps once per segment (two whole-chunk gathers a segment a layer). Here a glued chunk
+PB.7's path (b) (removed in PB.9G) moved each segment's rows to rows [0, n) and ran today's attention steps once per
+segment (two whole-chunk gathers a segment a layer). Here a glued chunk
 (tt/packed.GluedChunk: segments back to back at any tile row, a chip may hold rows of several segments and a segment
 may span chips) runs the PB.3A one-call path (tt/packed_onecall.OneCall) with every per-chip lane argument replaced by
 a per-ROW one:
@@ -33,10 +33,15 @@ a per-ROW one:
 
 Every row computes exactly the bytes path (b) computes for it (same keys in the same order, same scores, same top-k
 inputs and valid lengths, same served rows): the oracle (tests/packed/test_glued_oracle.py) with the switch on is
-bit-identical. PB.9X (PACKED_ROUTE=glued, the shipped value): lane-shaped chunks and fixed-lane headers run here too
-(PACKED_ROUTE=lanes: they keep the lane path, GluedChunk.as_lanes); a chunk this path does not take (a replay segment,
-PREFILL_END=end, a box with fewer than 128 rows a chip, more than GLUED_SEGS segments) keeps path (b)
-(``glued_call_ok``).
+bit-identical. PB.9G (OWNER 2026-11-21, PACKED_CHIPS=on, the shipped value): every packed chunk runs here on
+CHIP-ALIGNED LANES (tt/packed.GluedChunk(align = rows a chip): each segment owns whole chips from a chip's row 0), so
+every per-row argument above is a per-chip one: one pass, the ring's lane ranges one a chip, no phase rolls or keep
+copies (identity piece tables), sparse_sdpa by kv_lanes with the lane map a runtime value (sdpa fork
+kv_lane_map_runtime); encoder replay segments run here too (their served writes from write_start, ``_srv`` and the
+derive's srv rows; their window carry class 0). PB.7's path (b) and the fixed-lane path are removed: a chunk this path
+does not take (PREFILL_END=end, a box with fewer than 128 rows a chip, more than GLUED_SEGS segments, a replay without
+DECODER_SKIP=decode) raises (``glued_call_ok``). PACKED_CHIPS=off: PB.9X's back-to-back layout (a chip may hold rows of
+two segments: the passes, ChipRows and kv_lane_rows below).
 
 Per-chip tables (row pieces, index lists, keep masks, served-write index rows) are constants of the chunk's descriptor
 (the chunk header), made on the host and uploaded once a descriptor (cached), as PB.3A's per-tuple constants.
@@ -57,6 +62,7 @@ from .cores import sub_cores, to_rm
 from .packed_onecall import (
     ONE_RING,
     OneCall,
+    _has_map_runtime,
     _kbuf,
     _out,
     _own_extent,
@@ -135,9 +141,11 @@ def glued_call_ok(model, desc, segs: list) -> str | None:
         return "fewer than 128 rows a chip"
     if not ONE_RING[0]:
         return "the indexer fork's lanes ring is not built"
+    if getattr(desc, "align", 0) and int(desc.align) != model.chunk // (sp * tp):
+        return f"chip-aligned lanes of {desc.align} rows on a mesh of {model.chunk // (sp * tp)} rows a chip"
     for r in segs:
-        if r.seg.replay:
-            return "an encoder replay segment"
+        if r.seg.replay and getattr(model, "skip_mode", None) != "decode":
+            return "an encoder replay segment needs DECODER_SKIP=decode"
         if (r.run_end - r.start) % 32:
             return "a segment's rows are not whole tiles"
     return None
@@ -167,8 +175,21 @@ class GluedGeo:
                 a, b = max(o, q * self.R) - q * self.R, min(o + k, (q + 1) * self.R) - q * self.R
                 self.chip[q].append((j, a, b))
         self.passes = max(1, max(len(c) for c in self.chip))
-        pieces = [(int(r.start), k) for r, k in zip(segs, self.rows)]
-        if self.used < self.chunk:  # (the tail pad: positions 0.., never read)
+        self.align = int(getattr(desc, "align", 0))
+        if self.align:  # PB.9G (chip-aligned lanes): every chip holds at most one segment, from its first row
+            assert self.passes == 1, self.chip
+            assert all(o % self.R == 0 for o in self.off), (self.off, self.R)
+        pieces = []  # (the rope rows of every model row in order: a segment's computed rows at its positions; pad rows
+        # (PB.9G: a segment's last chip past its rows, an idle segment's chip; the tail) at positions 0.., never read)
+        by_lane = {int(r.lane): (int(r.start), k) for r, k in zip(segs, self.rows)}
+        for k in range(desc.lanes):
+            st, n = by_lane.get(k, (0, 0))
+            if n:
+                pieces.append((st, n))
+            pad = (desc.ext(k) - n) if self.align else 0
+            if pad:
+                pieces.append((0, pad))
+        if self.used < self.chunk:
             pieces.append((0, self.chunk - self.used))
         self.starts = GluedStarts(pieces)
 
@@ -186,8 +207,10 @@ class GluedGeo:
     # ------------------------------------------------------------------ host tables
     def keep_rows(self) -> torch.Tensor:
         """[SP, TP, R, 1]: 1.0 on every chip's rows below the used rows (the tail pad 0)."""
-        d = torch.arange(self.chunk, dtype=torch.int64).view(self.sp, self.tp, self.R, 1)
-        return (d < self.used).float()
+        t = torch.zeros(self.chunk)
+        for o, k in zip(self.off, self.rows):  # (PB.9G: a segment's computed rows; its last chip's pad 0)
+            t[o : o + k] = 1.0
+        return t.view(self.sp, self.tp, self.R, 1)
 
     def region_lists(self, classes: tuple, seg_block: list) -> torch.Tensor:
         """[SP, TP, R, 128] int32: each row's window index list in the glued region [carry 128 | own rows R |
@@ -704,6 +727,7 @@ class GluedSend:
             [1, 1, rows, 512], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=DRAM
         )
         self.scratch_tail = [alloc(WINDOW) for _ in range(GLUED_SEGS)]  # (load time: never read)
+        self._tkind = None  # (the scratch's accessor args: the ring-carry temps' kind, PB.9G)
         self.scratch_ring = [alloc(RING) for _ in range(GLUED_SEGS)]
         for t in self.scratch_tail + self.scratch_ring:
             ccl.pin(mesh, t)
@@ -771,7 +795,7 @@ class GluedSend:
             md[rng] = p
         return md
 
-    def __call__(self, region, rows, tails: list, rings: list, pieces: list, carries: list) -> None:
+    def __call__(self, region, rows, tails: list, rings: list, pieces: list, carries: list, anchor=None) -> None:
         """region [1, 1, 128 + R + 128 GLUED_SEGS, 512] bf16 RM (the layer's glued region), rows [1, 1, R, 512] bf16 RM
         (each chip its own masked rows); per segment slot s < GLUED_SEGS: ``tails[s]`` the tensor its carry is read
         from (None: none), ``carries[s]`` (first page, rotation) or None (no carry: its block is not written),
@@ -793,12 +817,36 @@ class GluedSend:
                 j = len(utails)
                 utails.append(t)
             tsel.append(j)
+        # PB.9G (DS41-360): one program for every mix of carry sources. The tails' accessors are of two kinds (the
+        # served snapshot tensor, ND-sharded or interleaved; an interleaved ring-carry temp, the scratch's kind): the
+        # snapshot-kind ones first, then the temp-kind ones, then scratch, and at least one snapshot-kind slot
+        # (``anchor``: a snapshot tensor of the chunk, read by no segment when none carries from it)
+        akey = lambda t: tuple(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
+        if getattr(self, "_tkind", None) is None:  # (DS41-353: an instance made before a reload has none)
+            self._tkind = akey(self.scratch_tail[0])
+        tkind = self._tkind
+        keys = [akey(x) for x in utails]
+        snaps = [u for u, kk in enumerate(keys) if kk != tkind]
+        if not snaps and anchor is not None and len(utails) < S:
+            ak = akey(anchor)
+            if ak != tkind:
+                utails.insert(0, anchor)
+                keys.insert(0, ak)
+                tsel = [None if j is None else j + 1 for j in tsel]
+                snaps = [0]
+        order = snaps + [u for u in range(len(utails)) if u not in snaps]
+        remap = {u: i for i, u in enumerate(order)}
+        utails = [utails[u] for u in order]
+        keys = [keys[u] for u in order]
+        tsel = [None if j is None else remap[j] for j in tsel]
         k = 0
         while len(utails) < S:
             utails.append(self.scratch_tail[k])
+            keys.append(tkind)
             k += 1
+        assert len(utails) == S, len(utails)
         io = [region, rows] + utails + rings
-        key = tuple(tuple(ttnn.TensorAccessorArgs(t).get_compile_time_args()) for t in utails)
+        key = tuple(keys)
         pp = self._pps.get(key)
         if pp is None:
             slots = [(0, 7 + S + i) for i in range(4 * S)] + [(1, 2 + S + i) for i in range(3 * RING_PIECES * S)]
@@ -976,7 +1024,7 @@ class GluedCall(OneCall):
         if dynamic_on():
             from .glued_derive import derive
 
-            self.dv = derive(mesh, self.geo.chunk, int(getattr(pk.desc, "block", 64)))
+            self.dv = derive(mesh, self.geo.chunk, int(getattr(pk.desc, "block", 64)), self.geo.align)
             self.dv.begin(pk.desc, getattr(pk, "header", None))
         self.hide = None
         from .gather_hide import Hide, Split, hide_on
@@ -1027,7 +1075,8 @@ class GluedCall(OneCall):
 
         def make():
             t = torch.zeros(1, 1, n, 1)
-            t[0, 0, : g.used * n // g.chunk, 0] = 1.0
+            for o, k in zip(g.off, g.rows):
+                t[0, 0, o * n // g.chunk : (o + k) * n // g.chunk, 0] = 1.0
             return _upload(g.mesh, t, ttnn.bfloat16, ttnn.TILE_LAYOUT)
 
         return self._const("ckeep", int(n), make)
@@ -1053,10 +1102,13 @@ class GluedCall(OneCall):
 
     def _srv(self, geo, j: int) -> ttnn.Tensor:
         """Segment j's server-order index row ((d + off) mod S: its rows first), [1, 1, 1, W] uint32 per chip (its SP
-        row's), replicated over TP."""
+        row's), replicated over TP. PB.9G: an encoder replay segment (global_write_start lo > start) writes the rows of
+        [lo, cap) as a chunk at lo (TtCompressor._write_from's shifted rows): lo's server order, its rows from lo - start
+        on."""
         r = self.geo.segs[j]
-        k = (r.start % geo.chunk) // 32
-        off = self.geo.off[j]
+        lo = max(int(r.start), int(r.seg.gws))
+        k = (lo % geo.chunk) // 32
+        off = self.geo.off[j] + (lo - int(r.start))
         if self.dv is not None:
             assert geo.chunk == self.dv.chunk and geo.w == self.dv.W, (geo.chunk, geo.w)
             return self.dv.run("srv", (1,), (j,))[0]
@@ -1080,14 +1132,15 @@ class GluedCall(OneCall):
     # ------------------------------------------------------------------ compressor
     def _compress(self, block, x: ttnn.Tensor) -> None:
         pk, m, comp, i = self.pk, self.model, block.compressor, block.layer
-        need = []
+        need, los = [], {}
         for r in pk.segs:
             pk.enter(r)
-            lo = m.write_from(r.start)
+            lo = m.write_from(r.start)  # (DECODER_SKIP=decode: global_write_start; PB.9G: a replay writes from it)
             pk.leave(r)
             if lo < r.run_end:
-                assert lo <= r.start, "PACKED_GLUED_ONECALL: no replay segment (glued_call_ok)"
+                assert lo == max(int(r.start), int(r.seg.gws)), (lo, r.seg)
                 need.append(r)
+                los[id(r)] = lo
         if not need:
             return
         ckv, k = comp(x, self.starts)
@@ -1114,7 +1167,7 @@ class GluedCall(OneCall):
                 caches = r.state.compress[i]
                 for rm, cache in zip(rms, (caches.ckv, caches.index_k)):
                     assert cache.table is None, "PACKED_ATTN_ONECALL=on: STATIC_TABLES=off (no attention table)"
-                    cache.write(rm, r.start, r.run_end, idx=idx)
+                    cache.write(rm, los[id(r)], r.run_end, idx=idx)
         for rm in rms:
             dealloc(rm)
         for t, g in ((gc, ckv), (gk, k)):
@@ -1147,7 +1200,8 @@ class GluedCall(OneCall):
             parts = [self._srv(geo, j) for _, j in plain]
             idx_all = self.memo[key] = ttnn.concat(parts, dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
         for rm, cs, grp in zip(rms, kinds, groups):
-            TtServedRows.write_lanes([(c, r.start, r.run_end) for c, (r, _) in zip(cs, plain)], rm, idx_all, grp)
+            items = [(c, max(int(r.start), int(r.seg.gws)), r.run_end) for c, (r, _) in zip(cs, plain)]
+            TtServedRows.write_lanes(items, rm, idx_all, grp)
         return True
 
     def _drop(self, key) -> None:
@@ -1677,7 +1731,8 @@ class GluedCall(OneCall):
                 carry = cache.carry(start)
                 tails[s], carries[s] = carry, (0, 0)
                 temps.append(carry)
-        glued_send(self.model.mesh, gg.R)(region, orm, tails, rings, pieces, carries)
+        anchor = next((r.state.window[i].snap.tensor for r in segs if r.state.window[i].snap is not None), None)
+        glued_send(self.model.mesh, gg.R)(region, orm, tails, rings, pieces, carries, anchor=anchor)
         dealloc(orm)
         for t in temps:
             dealloc(t)
@@ -1816,6 +1871,20 @@ class GluedCall(OneCall):
             index = ttnn.concat([win, rows], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
             dealloc(rows)
             self.memo[ikey] = index
+        if g.align and _has_map_runtime():  # PB.9G (chip-aligned lanes): one segment a chip: kv_lanes, the lane map
+            # a runtime value (sdpa fork kv_lane_map_runtime): ONE call, no per-row ranges, no program a layout
+            loc0 = [(g.entry(q, 0)[0] if g.entry(q, 0) is not None else 0) for q in range(g.n)]
+            lbufs = list(bufs) + [bufs[0]] * (GLUED_SEGS - len(bufs))  # (a fixed lane count: no program a count)
+            profiler.signpost("attention")
+
+            def sdpa_chips(q_rm):
+                o = sdpa_lanes(att, q_rm, lbufs, loc0, index, region, map_runtime=True)
+                dealloc(q_rm)
+                return o
+
+            out = self._phase(i, lambda _: att._q(qr, cos, sin), sdpa_chips, lambda o: _out(att, o, cos, sin))
+            att.rope.free(cos, sin)
+            return out
         rows_map = self._lane_rows() if LANE_ROWS[0] else None
         if rows_map is not None:  # (the sdpa fork's kv_lane_rows: every row its segment's history, ONE call)
             loc0 = [(g.entry(q, 0)[0] if g.entry(q, 0) is not None else 0) for q in range(g.n)]

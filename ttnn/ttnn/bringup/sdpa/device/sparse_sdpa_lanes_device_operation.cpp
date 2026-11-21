@@ -177,6 +177,10 @@ ttsl::hash::hash_t SparseSDPALanesOperation::compute_program_hash(
         return tt::tt_metal::operation::hash_operation<SparseSDPALanesOperation>(
             base, static_cast<uint32_t>(t.kv_lanes.size()), true);
     }
+    if (a.lane_map_runtime) {  // PB.9G: the override re-binds every device's kv to its lane's tensor each call
+        return tt::tt_metal::operation::hash_operation<SparseSDPALanesOperation>(
+            base, static_cast<uint32_t>(t.kv_lanes.size()), false, true);
+    }
     return tt::tt_metal::operation::hash_operation<SparseSDPALanesOperation>(
         base, a.lane_of_chip, static_cast<uint32_t>(t.kv_lanes.size()), !a.lane_rows.empty());
 }
@@ -186,6 +190,7 @@ Tensor sparse_sdpa_lanes(
     const std::vector<Tensor>& kv_lanes,
     const std::vector<uint32_t>& lane_of_chip,
     const std::vector<uint32_t>& lane_rows,
+    bool lane_map_runtime,
     const Tensor& indices,
     const SparseSDPAParams& base,
     const std::optional<Tensor>& attention_sink,
@@ -193,7 +198,8 @@ Tensor sparse_sdpa_lanes(
     using OperationType = ttnn::prim::bringup::SparseSDPALanesOperation;
     TT_FATAL(!kv_lanes.empty(), "sparse_sdpa kv_lanes: at least one tensor");
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{.base = base, .lane_of_chip = lane_of_chip, .lane_rows = lane_rows},
+        OperationType::operation_attributes_t{
+            .base = base, .lane_of_chip = lane_of_chip, .lane_rows = lane_rows, .lane_map_runtime = lane_map_runtime},
         OperationType::tensor_args_t{
             .q = q,
             .kv = kv_lanes.front(),

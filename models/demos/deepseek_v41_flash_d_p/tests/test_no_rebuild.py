@@ -30,19 +30,20 @@ PB.9C (OWNER 2026-11-21: the no-rebuild check per path, PASS / FAIL only): at BR
 also checks the packed paths through ``runtime.prefill_packed``, every chunk at fresh slots (a pool of PACKED_SLOTS
 slots no single draw and no warm-up used; each draw's slots a new subset in a new order) and fresh histories (AgentX
 draws, 64-aligned), each request's real previous chunk first, kinds steady / resumed (write_start = start + 128) /
-steady:
-    glued4x2k     four 2048-token segments back to back (one lane-shaped GluedChunk), PACKED_ROUTE=glued
-    glued5x1600   five 1600-token segments (GluedChunk), PACKED_ROUTE=glued
-    lanes4x2k     the 4 x 2k chunk under PACKED_ROUTE=lanes (the fixed-lane path, off in serving since PB.9X: its FAIL is
-                  recorded, never hidden, and not asserted); run last, after the glued paths' counts
+steady (PB.9G: chip-aligned lanes, every chunk through the one-call path; a resumed segment of fewer than 192 tokens
+stays steady):
+    lanes4x2k     four 2048-token segments (8 chips each)
+    lanes4x1600s  four 1600-token segments (7 chips each) + a 1024-row split piece (4 chips)
+    lanes6mix     segments of 200 (1 chip), 1 (1 token, its chip idle), 2048, 777, 40 (cap <= start: acks only), 1500
 Metrics: no_rebuild_pass_<path> (1 / 0; also single<chunk> for the single-request check above) and
 program_builds_after_warmup_<path> (program-cache entries + prepare_program calls in the path's fresh chunks),
 packed_ids_uploads_<path>, no_rebuild_rows_<path>, no_rebuild_probe_<path> (the ops that built).
 
 PB.NR (OWNER 2026-11-21): asserted always: the single-request path builds nothing (no_rebuild_pass_single<chunk> == 1).
-The packed paths (glued4x2k, glued5x1600, lanes4x2k) are RECORDED (PASS / FAIL, their build count and the probe's
-ops), and asserted only with NO_REBUILD_PACKED_STRICT=1 (then every glued path must build nothing, the PB.9C
-behaviour); a packed path that raises on a fresh chunk is a recorded FAIL unless strict (a hang always raises).
+The packed paths (PACKED_PATHS) are RECORDED (PASS / FAIL, their build count and the probe's ops, and
+packed_fallback_chunks_<path>: chunks that did not run the one call, 0 by construction since PB.9G), and asserted only
+with NO_REBUILD_PACKED_STRICT=1 (then every packed path must build nothing); a packed path that raises on a fresh chunk
+is a recorded FAIL unless strict (a hang always raises).
 
 WHY COLD (F297, BATCH_COLD = True): this test counts program-cache entries and prepare_program calls after the
 engine's own warm-up (runtime.compile). Its draws are fixed-seed, so in a held process (the resident runner, a batch
@@ -88,10 +89,11 @@ KINDS = ("aligned", "steady", "resumed", "partial", "pulled", "acks_only", "stea
 # PB.9C: the packed paths' pool (slots SLOTS .. SLOTS + PACKED_SLOTS - 1: compile's glued warm-up takes 0..5, the single
 # draws 1..8, the on / off comparison 9, 10)
 PACKED_SLOTS = 9
+# PB.9G (chip-aligned lanes, PACKED_CHIPS=on): one path a layout; every chunk runs the one-call glued path
 PACKED_PATHS = (
-    ("glued4x2k", (2048,) * 4, "glued"),
-    ("glued5x1600", (1600,) * 5, "glued"),
-    ("lanes4x2k", (2048,) * 4, "lanes"),
+    ("lanes4x2k", (2048,) * 4),  # four 2048-token requests, 8 chips each
+    ("lanes4x1600s", (1600,) * 4 + (1024,)),  # four 1600 (7 chips each) + a 1024-row split piece (4 chips)
+    ("lanes6mix", (200, 1, 2048, 777, 40, 1500)),  # 1-chip, 1-token, idle (cap <= start) and padded segments
 )
 PACKED_KINDS = ("steady", "resumed", "steady")
 
@@ -292,12 +294,12 @@ def test_no_rebuild(mesh_device, monkeypatch):
         metrics.record("no_rebuild_probe", pb.summary(20))
 
         packed = {}
-        if packed_check:  # PB.9C: the packed paths, glued first, the lane path last (its builds after the counts)
-            for path, lens, route in PACKED_PATHS:
+        if packed_check:  # PB.9C / PB.9G: the packed paths (one a layout)
+            for path, lens in PACKED_PATHS:
                 try:
-                    packed[path] = _packed_path(runtime, kv, mesh_device, text, path, lens, route, hi)
+                    packed[path] = _packed_path(runtime, kv, mesh_device, text, path, lens, hi)
                 except Exception as e:  # noqa: BLE001 (a path that fails on fresh chunks: recorded FAIL, not hidden)
-                    if F.is_hang(e) or (strict and path.startswith("glued")):
+                    if F.is_hang(e) or strict:
                         raise
                     msg = f"{type(e).__name__}: {str(e).strip().splitlines()[0] if str(e).strip() else ''}"[:300]
                     print(f"NO_REBUILD {path}: FAIL (error on a fresh chunk: {msg})", flush=True)
@@ -347,14 +349,14 @@ def test_no_rebuild(mesh_device, monkeypatch):
     print(f"NO_REBUILD VERDICT single{chunk}: {'PASS' if builds == 0 else 'FAIL'} ({builds} builds)", flush=True)
     assert builds == 0, f"{builds} programs built after warm-up on fresh serving chunks: {pb.summary(8)}"
     if strict:
-        bad = {k: v for k, v in packed.items() if k.startswith("glued") and v["builds"] != 0}
+        bad = {k: v for k, v in packed.items() if v["builds"] != 0}
         assert not bad, f"packed paths built programs after warm-up on fresh chunks: {bad}"
     if pos == "on":
         assert uploads.n == 0, f"{uploads.n} ids uploads in {n_chunks} chunks (POS_DYNAMIC=on reorders on the device)"
     assert diff == 0, f"POS_DYNAMIC on vs off differ: max |diff| {diff}"
 
 
-def _packed_path(runtime, kv, mesh, text, path: str, lens, route: str, hi: int) -> dict:
+def _packed_path(runtime, kv, mesh, text, path: str, lens, hi: int) -> dict:
     """PB.9C: one packed path's fresh chunks through runtime.prefill_packed (module docstring) -> {"builds", "pass",
     "rows"}; records no_rebuild_pass_<path>, program_builds_after_warmup_<path>, packed_ids_uploads_<path>."""
     import random
@@ -362,6 +364,7 @@ def _packed_path(runtime, kv, mesh, text, path: str, lens, route: str, hi: int) 
     import ttnn
     from models.demos.deepseek_v41_flash_d_p.tests import fresh_common as F
     from models.demos.deepseek_v41_flash_d_p.tests.packed.packed_common import switch
+    from models.demos.deepseek_v41_flash_d_p.tt import packed_device as PD
     from models.demos.deepseek_v41_flash_d_p.tt.packed import GluedChunk, Segment
 
     model = runtime.model
@@ -370,7 +373,7 @@ def _packed_path(runtime, kv, mesh, text, path: str, lens, route: str, hi: int) 
     n = len(lens)
     draws = []
     for j, kind in enumerate(PACKED_KINDS):
-        d = F.Draw(525200 + 100 * j + 10 * n + (1 if route == "lanes" else 0))
+        d = F.Draw(525200 + 100 * j + 10 * n + sum(lens) % 7)
         rnd = random.Random(d.seed)
         slots = rnd.sample(pool, n)  # (a new subset of the pool in a new order every draw)
         hs = [d.history(lo=max(lens), hi=hi - max(lens)) for _ in range(n)]
@@ -378,7 +381,8 @@ def _packed_path(runtime, kv, mesh, text, path: str, lens, route: str, hi: int) 
     uploads = Uploads(chunk)
     pc = F.PrepCount()
     rows = []
-    with switch("PACKED_ROUTE", route), switch("PACKED_GLUED", "on"):
+    PD.STATS["fallback"] = 0
+    with switch("PACKED_GLUED", "on"):
         e0, p0, u0, nch = cache_entries(mesh), pc.n, uploads.n, 0
         with F.BuildProbe(mesh) as pb:
             for kind, slots, hs in draws:
@@ -386,10 +390,11 @@ def _packed_path(runtime, kv, mesh, text, path: str, lens, route: str, hi: int) 
                 for prev in (True, False):
                     segs, ids = [], []
                     for k in range(n):
-                        s = hs[k] - (lens[k] if prev else 0)
-                        ws = s + REPLAY if (kind == "resumed" and not prev) else None
-                        segs.append(Segment(slots[k], s, s + lens[k], ws))
-                        ids.append(text[s : s + lens[k]].long())
+                        m = -(-lens[k] // 64) * 64 if prev else lens[k]  # (the previous chunk: whole kv blocks)
+                        s = hs[k] - (m if prev else 0)
+                        ws = s + REPLAY if (kind == "resumed" and not prev and lens[k] >= REPLAY + 64) else None
+                        segs.append(Segment(slots[k], s, s + m, ws))
+                        ids.append(text[s : s + m].long())
                     desc = GluedChunk(chunk, tuple(segs))
                     inp = runtime.make_packed_input(desc, ids)  # (the engine's H2D: before the count)
                     with pc, uploads:
@@ -406,18 +411,19 @@ def _packed_path(runtime, kv, mesh, text, path: str, lens, route: str, hi: int) 
                     "ids_uploads": uploads.n - v0,
                 }
                 rows.append(row)
-                print(f"NO_REBUILD {path} (PACKED_ROUTE={route}) {row}", flush=True)
+                print(f"NO_REBUILD {path} (PACKED_CHIPS={settings.get('PACKED_CHIPS')}) {row}", flush=True)
         pb.print(f"no_rebuild {path}")
         builds = (cache_entries(mesh) - e0) + (pc.n - p0)
     ok = int(builds == 0)
     F._record_gate_name(f"no_rebuild_pass_{path}", ok)
     F._record_gate_name(f"program_builds_after_warmup_{path}", int(builds))
     metrics.record(f"packed_ids_uploads_{path}", round((uploads.n - u0) / max(1, nch), 3))
+    F._record_gate_name(f"packed_fallback_chunks_{path}", int(PD.STATS["fallback"]))
     metrics.record(f"no_rebuild_rows_{path}", rows)
     metrics.record(f"no_rebuild_probe_{path}", pb.summary(20))
     print(
         f"NO_REBUILD {path}: {'PASS' if ok else 'FAIL'} ({builds} builds after warm-up in {nch} fresh chunks; "
-        f"PACKED_ROUTE={route}); probe {pb.summary(8)}",
+        f"PACKED_CHIPS={settings.get('PACKED_CHIPS')}); probe {pb.summary(8)}",
         flush=True,
     )
     return {"builds": int(builds), "pass": ok, "rows": rows}

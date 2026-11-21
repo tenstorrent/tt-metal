@@ -1,0 +1,142 @@
+{
+ "used": [
+  {
+   "id": "DS41-360",
+   "how": "GluedSend orders its carry tensors by accessor kind (snapshot first, temps, scratch, an anchor snapshot): one program for every carry mix",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-361",
+   "how": "replay segments now run in the one call (served writes from write_start via shifted server-order index rows); path (b) removed",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-357",
+   "how": "the resumed chunk's 3.3x cost came from path (b): replay support in GluedCall._compress / glued_derive srv rows",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-342",
+   "how": "chip-aligned segments start at a chip's row 0, so a row's chip row equals its alone chip row: no phase rolls needed (identity piece tables)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-343",
+   "how": "the sdpa kv_lanes padding repeats bufs[0]: safe for a device operation that re-binds kv every call (not a descriptor op's one-time binding)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-345",
+   "how": "the derive / ids kernels kept their cores inside every box's grid; no new core ranges",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-353",
+   "how": "new per-chunk helpers are module functions (relay_ids, seg_index, chip_rows); the resident runner reloads modules, not held instances",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-324",
+   "how": "SnapshotSend.multi keeps one arrival counter per (segment, block) (24 global semaphores) so back-to-back segments never share a counter",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-358",
+   "how": "the walls' harness wall is the headline; the D2H ack cost stays in the serving column only (unchanged by this step)",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a chip-aligned layout's geometry: which per-row structures of the glued path collapse to per-chip ones (passes, ChipRows, kv_lane_rows)",
+  "the per-launch host cost of a mesh program on the 8x4 (~0.1 ms) as the unit to count when a packed path multiplies programs by segments",
+  "a gate check removes results/<task>_*.md files written before it (PB.9G_ladder.md vanished twice): write reports after the last gate check"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "pad rows of a segment's last chip are the owner's chip-aligned layout (owner rule), not padding to fit a kernel; MoE pad rows past each SP row's last real row stay out of the dispatch (derived end words)"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "DECIDED lines in BREADCRUMBS PB.9G (the chip-aligned path is GluedCall on an aligned GluedChunk)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "the oracle runs on the 40-layer accuracy load (DS41_PACKED_LAYERS for iteration), walls / no-rebuild on the executed-layers load; no new load-time env"
+  },
+  {
+   "id": "OV-67",
+   "answer": "done",
+   "evidence": "chip-aligned offsets, keep / compressed keep / MoE end words and replay write rows derived on the device from the header (glued_derive ALIGN_ROWS, page_copy ALIGN); one upload a chunk"
+  }
+ ],
+ "cited_only": [
+  "DS41-362",
+  "DS41-364",
+  "DS41-366"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.9G",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T09:52:16",
+  "head": "78803d4c13c",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9G.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9G_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.9G.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/ladder_common.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/packed_common.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_derive_ops.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_ids_ops.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_walls.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_onecall_host.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_onecall_ops.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_onecall_sizes.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/glued_derive.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_glued.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_onecall.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/page_copy.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/snapshot_send.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/sdpa/CHANGELOG.md",
+   "ttnn/ttnn/bringup/sdpa/README.md",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_lanes_device_operation.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_lanes_device_operation.hpp",
+   "ttnn/ttnn/bringup/sdpa/sdpa_nanobind.cpp",
+   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.cpp",
+   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.hpp"
+  ]
+ }
+}

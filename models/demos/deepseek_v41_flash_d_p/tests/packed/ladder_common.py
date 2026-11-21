@@ -35,7 +35,13 @@ import os
 import time
 
 LADDER_POS = (51200, 131072, 139264, 262144, 524288, 786432, 1024000)
-CASES = {"4x2k": (2048, 2048, 2048, 2048), "5x1600": (1600, 1600, 1600, 1600, 1600)}
+CASES = {
+    "4x2k": (2048, 2048, 2048, 2048),
+    "5x1600": (1600, 1600, 1600, 1600, 1600),
+    # PB.9G (chip-aligned lanes, 8x4: 256 rows a chip): four 1.6k requests (7 chips each, the last one padded) and the
+    # 5th request's first 1024 rows (4 chips: the split piece; its rest continues in a later chunk)
+    "4x1600s": (1600, 1600, 1600, 1600, 1024),
+}
 REPLAY = 128  # resumed: write_start = start + 128 (DeepSeek's Encoder SWA Bounded Replay)
 SPLIT_POS = 139264  # the host split's history (AgentX p50)
 ITEM_VARS = ("LADDER_POS", "LADDER_CASES", "LADDER_SERVING")

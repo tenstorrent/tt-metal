@@ -1169,7 +1169,7 @@ class TtWindowCache:
         return (self.ring.nbytes if self.ring_owned else 0) + snap + pin
 
     # ------------------------------------------------------------------ WINDOW_KV_KEEP=snapshot128 (P.42)
-    def write_snapshot(self, end: int, src: "TtWindowCache | None" = None, send: int = 0) -> None:
+    def write_snapshot(self, end: int, src: "TtWindowCache | None" = None, send: int = 0, batch=None) -> None:
         """The served snapshot after a chunk ending at ``end`` (device ops only; after the layer's window write, before
         its ack): position p at row p % 128 for p in [cap - 128, cap), cap = snapshot_cap(end), read from the ring
         (``_snapshot_rows``: blocks held by one chip gathered from it, so every chip holds the same bytes); rows of no
@@ -1180,7 +1180,9 @@ class TtWindowCache:
         ``src`` (P.43, SKIP_TAIL_START=cap): the cache whose ring holds the rows, when not this one: DECODER_SKIP=
         replay128's decoder tail (the tail state's window cache of this layer, written by the tail's chunk; its ring
         is the tail model's working ring, the same [1, 1, 192, 512] shape); this cache's gather buffers and slab.
-        ``send`` (PB.3): the snapshot broadcast instance (WindowTables.snapshot_send)."""
+        ``send`` (PB.3): the snapshot broadcast instance (WindowTables.snapshot_send). ``batch`` (PB.9G, a list): the
+        broadcast's (instance, ring, slab, page0, blocks) appended instead of sent (the caller sends a layer's
+        snapshots of every segment in one program: SnapshotSend.multi)."""
         src = self if src is None else src
         assert src.ring is not None, "write_snapshot: the source cache keeps no ring"
         assert src is self or src.keep != "none" or src.ring.writer is src, "the tail ring was written by another cache"
@@ -1201,7 +1203,10 @@ class TtWindowCache:
                     o = ring.own[(p // 32) % ring.BLOCKS]
                     blocks.append(("local" if o is None else int(o), p % RING))
             snap = self.snap
-            send(ring.t, snap.tensor, snap.batch * snap.rows, blocks)
+            if batch is not None:
+                batch.append((send, ring.t, snap.tensor, snap.batch * snap.rows, blocks))
+            else:
+                send(ring.t, snap.tensor, snap.batch * snap.rows, blocks)
             self.snap_cap = cap
             return
         rows = self._snapshot_rows(cap, lo, src.ring) if lo < cap else self.tables.zero_carry

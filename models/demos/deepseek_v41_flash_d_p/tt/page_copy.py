@@ -363,9 +363,11 @@ constexpr uint32_t VMAX = get_compile_time_arg_val(2);   // vocab - 1 (the clamp
 constexpr uint32_t HDR = get_compile_time_arg_val(3);    // header words after each mesh row's ids
 constexpr uint32_t BLOCK = get_compile_time_arg_val(4);  // decode's kv block (PREFILL_END=cap: cap = end / BLOCK x BLOCK)
 constexpr uint32_t CAP = get_compile_time_arg_val(5);    // 1: PREFILL_END=cap, 0: end (every row computed)
+constexpr uint32_t ALIGN = get_compile_time_arg_val(6);  // PB.9G: rows a chip of chip-aligned lanes (0: back to back)
 constexpr uint32_t NSEG = 6;
 constexpr uint32_t PAGE = (W + HDR) * 4;  // bytes a mesh row of the gathered input
-constexpr auto s_args = TensorAccessorArgs<6>();
+constexpr uint32_t NR = ALIGN ? 1 : SP;   // (PB.9G: engine row = model row: this mesh row's own input page only)
+constexpr auto s_args = TensorAccessorArgs<7>();
 constexpr auto d_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
 
 void kernel_main() {
@@ -376,7 +378,7 @@ void kernel_main() {
     const auto D = TensorAccessor(d_args, dst, W * 4);
     cb_reserve_back(0, 1);
     const uint32_t buf = (get_write_ptr(0) + 63) & ~63u;  // SP pages, then W output words
-    for (uint32_t r = 0; r < SP; ++r) {
+    for (uint32_t r = 0; r < NR; ++r) {
         noc_async_read(S.get_noc_addr(r, 0), buf + r * PAGE, PAGE);
     }
     noc_async_read_barrier();
@@ -394,10 +396,13 @@ void kernel_main() {
         in_off[k] = ci;
         lane_off[k] = cl;
         rows[k] = run_end > start ? run_end - start : 0;
-        ci += end - start;
-        cl += rows[k];
+        const uint32_t len = end > start ? end - start : 1;
+        constexpr uint32_t AL = ALIGN ? ALIGN : 1;  // (no division by a zero constant)
+        const uint32_t ext = ALIGN ? (len + AL - 1) / AL * AL : 0;
+        ci += ALIGN ? ext : end - start;
+        cl += ALIGN ? ext : rows[k];
     }
-    volatile tt_l1_ptr uint32_t* out = in + SP * (W + HDR);
+    volatile tt_l1_ptr uint32_t* out = in + NR * (W + HDR);
     uint32_t k = 0;
     for (uint32_t i = 0; i < W; ++i) {
         const uint32_t j = me * W + i;  // the model row
@@ -407,7 +412,7 @@ void kernel_main() {
         uint32_t x = VMAX;
         if (k < n && j >= lane_off[k]) {
             const uint32_t e = in_off[k] + (j - lane_off[k]);  // its engine row
-            x = in[(e / W) * (W + HDR) + (e % W)];
+            x = ALIGN ? in[e - me * W] : in[(e / W) * (W + HDR) + (e % W)];
             if (x > VMAX) {
                 x = VMAX;
             }
@@ -428,8 +433,9 @@ class GluedIdsReorder:
     the header (no per-chunk value from the host). Pad rows and ids past the vocabulary -> vocab - 1 (the host path's
     clamp, tt/model._host_emb_ids). One prepared program for every layout (a PREFILL_END value)."""
 
-    def __init__(self, mesh, chunk: int, vocab: int, hdr: int, block: int):
+    def __init__(self, mesh, chunk: int, vocab: int, hdr: int, block: int, align: int = 0):
         self.mesh = mesh
+        self.align = int(align)  # PB.9G: chip-aligned lanes (engine row = model row: no gather)
         self.sp, self.tp = int(mesh.shape[SP_AXIS]), int(mesh.shape[TP_AXIS])
         self.chunk, self.w = int(chunk), int(chunk) // int(mesh.shape[SP_AXIS])
         assert self.w * self.sp == self.chunk and self.w % 32 == 0, (chunk, self.sp)
@@ -454,10 +460,10 @@ class GluedIdsReorder:
 
     def _build(self, src, dst, cap: bool):
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-        ct = [self.w, self.sp, self.vmax, self.hdr, self.block, int(cap)]
+        ct = [self.w, self.sp, self.vmax, self.hdr, self.block, int(cap), self.align]
         for t in (src, dst):
             ct += list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-        size = 64 + 4 * (self.sp * (self.w + self.hdr) + self.w)
+        size = 64 + 4 * ((1 if self.align else self.sp) * (self.w + self.hdr) + self.w)
         a = [int(src.buffer_address()), int(dst.buffer_address())]
         md = ttnn.MeshProgramDescriptor()
         for r in range(self.sp):
@@ -488,7 +494,7 @@ class GluedIdsReorder:
         """inp [SP, 1, W + HDR] uint32 (the engine's, a mesh row each; not consumed) -> [1, W] uint32 ROW_MAJOR DRAM a
         chip (a new tensor: the caller frees it)."""
         assert int(inp.shape[-1]) == self.w + self.hdr and inp.dtype == ttnn.uint32, (inp.shape, inp.dtype)
-        src = self._gather(inp)
+        src = inp if self.align else self._gather(inp)
         out = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, self.w]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, DRAM
         )

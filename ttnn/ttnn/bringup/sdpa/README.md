@@ -108,6 +108,10 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
   glued chunk reads each row's own history in ONE call (no second pass). PB.7C: with `kv_lane_rows` the
   `kv_lane_of_chip` map is not hashed either (the override re-binds each device's base kv to the call's map; the
   source key holds no kv rows): no program a glued layout.
+- `kv_lane_map_runtime` (sparse_sdpa with kv_lanes, fork, opt-in, default False; deepseek_v41_flash_d_p PB.9G):
+  `kv_lane_of_chip` is a runtime value without `kv_lane_rows` (not hashed; the override re-binds each device's kv to
+  its lane's tensor every call): chip-aligned packed lanes (one segment a chip) read each chip's segment history in
+  ONE call with no per-core row ranges and no program a layout. Measured: see the model's PB.9G ladder.
 
 ## Limits
 - Narrow V: not with `paged_cache_geometry` or windowed mode; V % 32 == 0 and V <= K.

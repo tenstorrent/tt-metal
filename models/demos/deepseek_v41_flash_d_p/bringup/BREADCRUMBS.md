@@ -842,3 +842,113 @@
   the 5120 unit alone with `--unit PB.NR#test_no_rebuild.2.0`.
 - `orchestrator measure --task PB.NR` (devjob pbnr_measure) returned rc 4: "paused before A/B on: one process for
   quick; `resume` continues the task". Left for the orchestrator (no model code changed, so the A/B has nothing to compare).
+
+## PB.9G perf (attempt 1): chip-aligned lanes are the one packed path (PACKED_CHIPS on | off)
+
+- Read first: OV-3 / OV-58 / OV-61 / OV-67, PACKED_RULES.md (CHIP-ALIGNED LANES, NO SLOW FALLBACK), rule 20, perf_guide.
+- Expected saving per chunk (written before any device run, perf_guide s1-4): 4 x 2k steady at 139264 (PB.9C: glued
+  129.4 ms, fixed lanes 114.8): device ~0 to -3 ms (one pass a chip, no ChipRows phase / keep copies, the ids reorder
+  without its SP all_gather), host -2 to -8 ms (identity piece tables skipped, no per-row pieces; the sdpa call's host
+  cost is the big lever: PB.9X measured 0.45 vs 0.18 ms a call x ~18). Resumed 4 x 2k (PB.9C glued 419 ms through path
+  (b)): -270 ms (replay segments in the one call: ~steady + the replay's writes, ~130-145 ms). 4 x 1.6k + split: one
+  chunk of 7424 new tokens on 32 chips (glued 5 x 1600 was 137.5 ms for 8000 tokens): ~125-135 ms. Builds: steady 0
+  (DS41-360 fixed: one GluedSend program for every carry mix), resumed 0 (DS41-361: no path (b) left).
+- DECIDED (OV-58): the chip-aligned path is the one-call path of tt/packed_glued.py (GluedCall, PB.7C's device-derived
+  tables) on a chip-aligned GluedChunk (align = rows a chip): on whole-chip segments every per-row quantity of that
+  path IS a per-chip one (one segment a chip from its row 0: one pass, identity rolls, the ring's ranges one a chip),
+  i.e. packed_onecall's per-chip design with glued_derive's device tables; generalising packed_onecall's fixed-lane
+  class instead would re-do PB.7C's derivation for it (its per-tuple host constants and slices are the 224 builds).
+- Load reason (1): tests/packed/test_glued_derive_ops.py + test_glued_ids_ops.py on the resident runner's held perf
+  load (mesh only, 0 loads): "the derive and ids kernels' chip-aligned offsets / membership / replay shift vs the host
+  functions: op level, no layer runs".
+- Load reason (2): test_packed_oracle at DS41_PACKED_LAYERS=0,1,2,3,14,20,21,24 on the 40-layer 8192 accuracy load:
+  "bit-identity of chip-aligned chunks (replay, 1-chip, 1-token, split, empty chips) needs the device path of every
+  layer role; the characteristic layers cover them".
+- What (PACKED_CHIPS=on default; off = PB.9X's back-to-back glued layout through the same one call; call-time,
+  hooks.batch_call_settings, refreshed in batch_call_apply like POS_DYNAMIC; PACKED_ROUTE is gone with the lanes):
+  - tt/packed.GluedChunk(align): a segment's rows (engine = model) [off_k, off_k + ext_k), ext_k = its length rounded
+    up to whole chips (>= 1 chip; a 1-token / idle segment owns one chip), off_k = the extents before it; fill(align)
+    splits a request on a kv block inside the chips left; aligned() re-lays a chunk.
+  - tt/packed_device: as_run_desc(desc, mesh) makes every packed header a chip-aligned GluedChunk (CHIP_ROWS set by
+    the model); relay_ids / seg_index re-lay ids and lanes; PackedChunk raises on a chunk the one call cannot run (no
+    path (b): GluedMover, _glued_attention gone; no fixed lanes: LaneMover gone); STATS counts onecall / trivial /
+    fallback (0) chunks; warm_glued_chunks enumerates chip-aligned kinds (1..6 segments, fresh / continued / replay /
+    far, 1-token + idle).
+  - tt/glued_derive (ALIGN_ROWS) and page_copy.GluedIdsReorder (ALIGN): offsets from the header's lengths; keep, the
+    compressed keep and the MoE end words by segment membership (a segment's last chip past cap masked as today's pad
+    rows); srv rows of a replay segment: write_start's server order, its rows from write_start - start on. The ids
+    reorder reads its own mesh row only (no SP all_gather) when aligned.
+  - tt/packed_glued: replay segments in the one call (_compress writes [gws, cap) through the shifted index rows;
+    glued_call_ok refuses a replay only without DECODER_SKIP=decode); GluedGeo rope pieces cover pad rows; sparse_sdpa
+    on chip-aligned chunks by kv_lanes with the map a runtime value (sdpa fork kv_lane_map_runtime, below);
+    GluedSend orders its carry tensors by accessor kind with an anchor snapshot (DS41-360: one program for every mix).
+  - tt/model._begin_engram_glued: zero jobs for a segment's last-chip pad rows and idle chips.
+  - tt/packed_onecall: the fixed-lane code removed (Lanes, LaneCopy, LaneSend, the lane kernels, OneCall's lane
+    methods); OneCall is GluedCall's base (attention, compress_only, _query, _keep, _phase) and raises if built.
+  - Fork sdpa: kv_lane_map_runtime (default False; CHANGELOG / README / INDEX). Cores: no new grid (data movement and
+    the derive programs keep their rectangles; no matmul changed). Build: ./build_metal.sh 45 s, clean.
+  - Tests: test_packed_oracle phase B (DECODER_SKIP=decode: replay R / R1 (1 chip), S1 (1 chip), T (1 token), X1 / X2
+    (a split request), 5-segment chunks, empty chips; alone-vs-today digest keys printed); test_packed_walls ladder
+    cases 4x2k / 4x1600s (paths lanes4x2k, lanes4x1600s); ladder_common CASES["4x1600s"]; test_no_rebuild paths
+    lanes4x2k / lanes4x1600s / lanes6mix (strict: all asserted; packed_fallback_chunks_<path>); test_glued_derive_ops
+    and test_glued_ids_ops on chip-aligned layouts (replay, 1-chip, idle, split); test_onecall_host on the walls'
+    load; removed test_onecall_ops / test_onecall_sizes / test_glued_probe (the removed code's tests).
+- Op checks (resident, mesh only on the perf load): test_glued_derive_ops 47 layouts x 2 header sources, 0
+  mismatches (18 chip-aligned incl. replay srv rows). Oracle rung (characteristic layers, accuracy load): alone vs
+  today 0.0, lane equivalence 0.0, slot digests 0, determinism 0.0 (phase B included).
+- Ladder rung (139264 only, harness wall, LADDER_SERVING=0): lanes4x2k steady 123.3 ms (device 104.1), resumed
+  122.0 (PB.9C glued 129.4 / 419.0, fixed lanes 114.8 / 143.2); lanes4x1600s steady 132.4 (device 108.0), resumed
+  131.0. Host probe (test_onecall_host, 4 x 2k @ 139264): walls 119 ms, run_chunk enqueue 109.5 ms; cProfile: 1021
+  ttnn op calls 54 ms own time, 80 snapshot sends 11 ms cum (one mesh program a segment a layer), 20 GluedSend 4 ms,
+  72 page copies 5 ms (DS41-364).
+- Snapshot sends (PB.9G, part of PACKED_CHIPS=on): every segment's served snapshot of a layer (and every idle
+  segment's) in ONE prepared program (tt/snapshot_send.SnapshotSend.multi: the dynamic kernels looped over up to 6
+  segments, one arrival counter a (segment, block) (24 global semaphores), one relay counter a port core (program
+  semaphore 0, incremented in block order), bounded waits; per segment its ring / slab addresses, page0, ring rows and
+  block codes as values; one program a segment count, built by the warm-up's counts): 20 launches a 4-segment chunk
+  instead of 80 (the cProfile's 11 ms). write_snapshot(batch=) collects, TtDS41Model.layer_packed sends.
+- Gotcha: a `str.replace(old, new)` in my edit script hit a second, identical line (page_copy.IdsReorder got
+  GluedIdsReorder's `inp if self.align` line): the single-request no-rebuild crashed in the first gate check
+  ('IdsReorder' has no 'align'). Fixed; edit scripts now count matches.
+- Rule 20, per-chunk values this change touches and how they reach the device: segment starts / ends / write_starts /
+  slots -> the chunk header (tt-d-gen's fields, one upload with the ids) -> derived on the device: chip-aligned
+  offsets (glued_derive ALIGN_ROWS, GluedIdsReorder ALIGN), keep / compressed keep / MoE end words (membership), the
+  window index lists (+ the replay class-0 mask: a per-run value), the replay write rows (srv: write_start's server
+  order + write_start - start). Per-call runtime values (no program key, no upload): the ring's lane ranges, the sdpa
+  lane map (kv_lane_map_runtime), GluedSend's carries / pieces (its program key no longer follows the carry mix), the
+  snapshot programs' per-segment addresses / rows / codes, GluedRows' rope pieces. The host keeps only what decides the
+  op sequence (segment count, which segments write). No host table.
+- After SnapshotSend.multi (rung, 139264, harness wall): lanes4x2k steady 121.4 ms (was 123.3; device 104.4),
+  resumed 121.3; lanes4x1600s steady 127.4 (was 132.4; device 107.2), resumed 127.8. Oracle rung (characteristic
+  layers) with multi: alone vs today 0.0, lane equivalence 0.0, slot digests 0, determinism 0.0.
+- First gate check (pb9g_gate1, before multi): determinism 0.0; oracle on all 40 layers: alone vs today 0.0, lane
+  equivalence 0.0, slot digests 0, determinism 0.0, packed_fallback_chunks 0; test_no_rebuild crashed on the
+  IdsReorder slip above (fixed), so its batch's walls did not run. alone-vs-today served digests: 40 a phase-B
+  segment, all decoder layers' (20..39) window / snapshot records (DS41-366; not served under decode).
+- Gate check 2 (pb9g_gate2, code with SnapshotSend.multi): every unit ok but ladder_lanes4x2k_steady_wall_ms_p139264
+  = 123.4 (need <= 117: FAIL); resumed 121.2 (<= 150 ok); no-rebuild cold strict PASS on every path (0 builds);
+  ids uploads 0; packed_fallback_chunks 0; tables in results/PB.9G_ladder.md.
+- Indexer at chip-aligned lanes (after gate check 2): the one ring call's lane_ranges take one whole-chip range a chip
+  (pad rows past a segment's rows computed at its positions, never kept), so the ring runs the model's q chunk (64)
+  instead of the glued path's 32 (_ranges / program_config in GluedCall._index_dynamic): at 1M the 4 x 2k chunk is
+  device-bound with the indexer at 51 ms (fixed lanes ~42). Oracle rung (characteristic layers): bit-identical.
+- Switch for the A/B: PACKED_CHIPS (DS41_PACKED_CHIPS) on = the change (chip-aligned lanes + per-layer snapshot
+  program + whole-chip indexer ranges + kv_lane_map_runtime), off = PB.9X's back-to-back glued layout through the
+  same one call (replay segments included: path (b) no longer exists, so off cannot be PB.9X's resumed path).
+- Device opens this task: ~10 (resident restarts: C++ build, model configuration changes between the accuracy load
+  and the executed-layers load, cold no-rebuild processes).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.9G --spec $BRINGUP_SPEC --check` (devjob);
+  rungs: `resident submit --cmd "DS41_PACKED_LAYERS=0,1,2,3,14,20,21,24 <oracle env> scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py"`, the walls with
+  `LADDER_POS=139264 LADDER_CASES=4x2k,4x1600s LADDER_SERVING=0`; op checks test_glued_derive_ops / test_glued_ids_ops;
+  host probe test_onecall_host (walls env).
+- REVERTED (measured worse): the whole-chip indexer ranges at the model's q chunk 64. Gate check 3 (pb9g_gate3, that
+  code): indexer at 1M 58.8 ms (4 x 2k; q 32: 51.4), 69.7 (4 x 1.6k; 60.0); 4 x 2k @ 1M steady 184.6 ms (180.3),
+  4 x 1.6k 199.3 (193.8); 139264 unchanged within noise (123.1 / 132.4). Back to the glued ring's q chunk 32 (the
+  shipped code is gate check 2's: no-rebuild cold PASS everywhere, oracle / determinism 0, steady 4 x 2k @ 139264
+  123.4 ms FAIL vs 117).
+- `orchestrator measure --task PB.9G` (devjob pb9g_measure, final code): rc 0, quick side on: min layer PCC 0.732
+  (L39, as earlier tasks' 0.7318), host_transfers_per_layer 0, chunk wall 221.9 ms (the single-request quick chunk;
+  PACKED_CHIPS does not touch it).
+- Report: results/PB.9G_ladder.md (gate check 2's ladder of the shipped code next to PB.9C; the no-rebuild and
+  accuracy verdicts; for the owner). A gate check deletes results/<task>_*.md written before it: write it after.
