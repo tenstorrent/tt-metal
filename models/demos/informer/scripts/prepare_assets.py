@@ -327,7 +327,7 @@ def evaluate_checkpoint_quality(
             past_time = time_features[start : start + cfg.seq_len].unsqueeze(0)
             future_time = time_features[start + cfg.seq_len : start + cfg.seq_len + cfg.pred_len].unsqueeze(0)
 
-            pred = model(past_values, past_time, future_time, future_values)
+            pred = model(past_values, past_time, future_time)
             mse, mae, corr = compute_metrics(pred, future_values)
             baseline = past_values[:, -1:, :].repeat(1, cfg.pred_len, 1)
             mse_b, mae_b, corr_b = compute_metrics(baseline, future_values)
@@ -412,7 +412,7 @@ def create_trained_checkpoint(
     for step in range(1, train_steps + 1):
         starts = torch.randint(0, max_start + 1, (train_batch_size,))
         past_values, past_time, future_time, future_values = build_batch_tensors(values, time_features, starts, cfg)
-        pred = model(past_values, past_time, future_time, future_values)
+        pred = model(past_values, past_time, future_time)
         loss = loss_fn(pred, future_values)
         optimizer.zero_grad()
         loss.backward()
