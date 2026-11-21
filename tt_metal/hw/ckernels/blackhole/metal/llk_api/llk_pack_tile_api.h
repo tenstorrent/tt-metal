@@ -107,6 +107,13 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
         StateDiscard<std::uint32_t>(tile_index),
         StateDiscard<std::uint32_t>(output_tile_index)));
 
+    // joint_sdpa, packing a block of 8+ reserved tiles (its k512 QK row): main's word-wise destination write with its Z reset.
+    if constexpr (ckernel::packer::llk_pack_sdpa_joint<static_cast<int>(pack_mode) * 0 + 1>() && !LLK_SIZE_MODE) {
+        if (ckernel::packer::pack_sdpa_reserve >= 8) {
+            llk_pack_tile_of_output<is_fp32_dest_acc_en, pack_mode, true, true>(tile_index, pack_tile_addr, output_id);
+            return;
+        }
+    }
     llk_pack_tile_of_output<is_fp32_dest_acc_en, pack_mode, true, LLK_SIZE_MODE>(tile_index, pack_tile_addr, output_id);
 }
 

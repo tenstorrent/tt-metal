@@ -33,6 +33,9 @@ constexpr bool llk_pack_sdpa_joint() {
 template <bool skip_sync = false, bool wait_for_blocks = false, bool brisc_pack = false>
 inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+    if constexpr (ckernel::packer::llk_pack_sdpa_joint<skip_sync * 0 + 1>()) {
+        ckernel::packer::pack_sdpa_reserve = num_tiles;
+    }
     std::uint32_t output = operand;
 
     volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);

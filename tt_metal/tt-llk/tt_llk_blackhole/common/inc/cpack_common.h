@@ -347,6 +347,8 @@ constexpr std::uint8_t LLK_PACK_STATE_W       = 0x80;
 [[maybe_unused]] static bool pack_push_drained = false;
 // SDPA kernels: tiles of the last push (llk_push_tiles), which picks the reconfigure form.
 [[maybe_unused]] static std::uint32_t pack_sdpa_last_push = 0;
+// SDPA kernels: tiles of the last reserve (llk_wait_for_free_tiles), the block now being packed.
+[[maybe_unused]] static std::uint32_t pack_sdpa_reserve = 0;
 constexpr std::uint32_t LLK_PACK_PRE_WRITTEN        = 0x80000000u;
 inline void llk_pack_live_forget()
 {
