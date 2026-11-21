@@ -114,7 +114,9 @@
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 4 --group 4 -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
-      timeout: 40
+      # Was 40. Since 2026-11-12 the CI kernel cache is unreachable from these runners, so every kernel compiles
+      # from scratch and the group takes about 50 minutes instead of 23. Back to 40 once the cache is restored.
+      timeout: 55
     bh_p100:
       timeout: 40
     bh_p150b_civ2:
@@ -313,6 +315,10 @@
   cmd: >-
     pytest --timeout 300 tests/ttnn/unit_tests/kernel_lib -xv
     -m "not disable_fast_runtime_mode and not models_device_performance_bare_metal"
+  # A JIT compile-contract failure logs its TT_THROW as '<risc> build failed' with the static_assert text on later
+  # lines, so no expect_error message can match the line carrying the token.
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n300_civ2:
       timeout: 20
@@ -327,7 +333,7 @@
   # once when MetalContext is first constructed, so it must be set before this process opens a
   # device. Exporting it here rather than relying on the directory conftest's fixture also makes
   # the requirement visible, and satisfies the requires_hybrid_allocator marker on those tests.
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode" && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/range_lockstep_allocation -xv'
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor tests/ttnn/unit_tests/test_comparison_funcs.py -xv -m "not disable_fast_runtime_mode" && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/range_lockstep_allocation -xv'
   ai_summary:
     authoritative_job_status: true
   skus:

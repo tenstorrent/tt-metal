@@ -178,6 +178,11 @@ std::vector<std::string> build_gpp_argv(
             args.push_back("-o");
             args.push_back(out_path);
             args.push_back(src);
+            // Without -MF, -MMD names the depfile after out_path.
+            if (!dep_path.empty()) {
+                args.push_back("-MF");
+                args.push_back(dep_path);
+            }
             break;
     }
     return args;
