@@ -24,6 +24,8 @@ import ttnn
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
 from models.experimental.pi0.reference.torch_suffix import SuffixEmbedding as SuffixEmbeddingTorch
+from models.experimental.pi0.reference.torch_suffix import create_sinusoidal_pos_embedding
+from models.experimental.pi0.tt.ttnn_common import create_sinusoidal_pos_embedding_ttnn
 from models.experimental.pi0.tt.ttnn_suffix import SuffixEmbeddingTTNN, convert_suffix_weights_to_ttnn
 from models.experimental.pi0.common.configs import SuffixConfig
 from models.experimental.pi0.common.weight_loader import PI0WeightLoader
@@ -234,6 +236,22 @@ def test_pcc_suffix_full_embed(device, use_pretrained):
     print(f"\n✅ Suffix full embed_suffix PCC ({weight_type}): {pcc:.6f}")
     print(f"   Output shape: {embs_ttnn.shape}")
     assert pcc >= 0.90, f"PCC {pcc:.6f} < threshold 0.90"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("timestep", [1.0 - i / 10 for i in range(10)])
+def test_pcc_suffix_time_embedding(device, timestep):
+    """Sinusoidal timestep embedding at the denoising timesteps: TTNN vs PyTorch."""
+    width = create_suffix_config().expert_width
+    time = torch.tensor([timestep])
+    expected = create_sinusoidal_pos_embedding(time, width)
+
+    indices = ttnn.arange(0, width // 2, 1, device=device, dtype=ttnn.float32)
+    time_ttnn = ttnn.from_torch(time, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(create_sinusoidal_pos_embedding_ttnn(time_ttnn, width, indices=indices)).float()
+
+    # The fastest channel turns about 1571 rad per unit of time, so compare values rather than correlation.
+    assert torch.allclose(actual, expected, atol=0.02), (actual - expected).abs().max()
 
 
 def main():
