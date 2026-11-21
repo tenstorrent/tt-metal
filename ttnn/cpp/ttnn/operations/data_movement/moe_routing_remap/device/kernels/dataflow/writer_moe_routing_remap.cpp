@@ -47,7 +47,11 @@ void kernel_main() {
     auto local_weights_idxs_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_weights_idxs_addr);
 
     for (uint32_t i = 0; i < num_non_zero_per_device; ++i) {
-        const uint32_t offset = local_weights_idxs_ptr[i] * weight_datum_size_bytes;
+        const uint16_t idx = local_weights_idxs_ptr[i];
+        if (idx >= num_cluster_experts) {
+            continue;
+        }
+        const uint32_t offset = idx * weight_datum_size_bytes;
         tt_memmove<false, false, false, weight_datum_size_bytes>(
             noc, local_weights_l1_addr + offset, routing_weights_addr + offset, weight_datum_size_bytes);
     }
@@ -61,4 +65,8 @@ void kernel_main() {
         {.offset_bytes = 0},
         {.page_id = 0, .offset_bytes = 0});
     noc.async_write_barrier();
+    routing_weights_dfb.pop_front(1);
+    local_weights_idxs_dfb.pop_front(1);
+    local_weights_dfb.wait_front(1);
+    local_weights_dfb.pop_front(1);
 }
