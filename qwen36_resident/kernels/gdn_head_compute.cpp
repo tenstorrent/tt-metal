@@ -189,6 +189,18 @@ void kernel_main() {
     constexpr uint32_t kSoftplusThreshold = 0x41a00000u;  // 20.0f
 
     compute_kernel_hw_startup(cb_q_in, cb_row_mask, cb_scratch);
+    // (debug, RESIDENT_GDN_TS=1: the pack thread stamps the end of each step of the first 64 (layer, user) steps,
+    // 16 words each; runtime arg 0, 0 = off)
+    const uint32_t ts_addr = get_arg_val<uint32_t>(0);
+    uint32_t it = 0;
+    auto mark = [&](uint32_t k) {
+        PACK(({
+            if (ts_addr && it < 64) {
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ts_addr)[it * 16 + k] =
+                    *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+            }
+        }));
+    };
     // (layer, user) steps: CT 9, or (rows mode) the GDN layers times this core's active users of the step
     uint32_t layers = get_compile_time_arg_val(9);
     if constexpr (rows_mode) {
@@ -199,10 +211,12 @@ void kernel_main() {
     }
     CircularBuffer(cb_ones).wait_front(1);
     CircularBuffer(cb_row_mask).wait_front(1);
-    for (uint32_t layer = 0; layer < layers; layer++) {
+    for (uint32_t layer = 0; layer < layers; layer++, it++) {
+        mark(0);
         // 1. Normalised query (with scale) and key.
         l2_normalize(cb_q_in, Kt, l2_eps_bits, scale_bits, cb_qn);
         l2_normalize(cb_k_in, Kt, l2_eps_bits, kOneBits, cb_kn);
+        mark(1);
         // 2. Gates (fp32 SFPU): decay = exp(neg_exp_A * softplus(a + dt_bias)), beta = sigmoid(b).
         CircularBuffer(cb_a_full).wait_front(1);
         CircularBuffer(cb_dt_bias_full).wait_front(1);
@@ -249,6 +263,7 @@ void kernel_main() {
         // beta restricted to row 0: zeroes the padding rows of delta, so they drop out of k^T (x) delta.
         fpu_binary(Bin::Mul, cb_beta, cb_row_mask, true, 1, cb_beta_row0);
         CircularBuffer(cb_beta).pop_front(1);
+        mark(2);
         // 3. delta = beta_row0 * (v - (decay * k) @ S).
         fpu_binary(Bin::Mul, cb_kn, cb_inv, true, Kt, cb_scratch);
         CircularBuffer(cb_inv).pop_front(1);
@@ -261,6 +276,7 @@ void kernel_main() {
         fpu_binary(Bin::Mul, cb_scratch, cb_beta_row0, true, Vt, cb_delta);
         CircularBuffer(cb_scratch).pop_front(Vt);
         CircularBuffer(cb_beta_row0).pop_front(1);
+        mark(3);
         // 4. k^T tiles (column vectors) for the rank-1 update.
         CircularBuffer(cb_kn).wait_front(Kt);
         CircularBuffer(cb_kt).reserve_back(Kt);
@@ -277,6 +293,7 @@ void kernel_main() {
         }
         CircularBuffer(cb_kt).push_back(Kt);
         CircularBuffer(cb_kn).pop_front(Kt);
+        mark(4);
         // 5. S' = decay * S + k^T (x) delta. Per DEST window: three state tiles and decay are copied in
         //    (fp32), scaled on SFPU, then the rank-1 tile k^T[kt] @ delta[vt] is accumulated onto them
         //    by the FPU (only column 0 of k^T and row 0 of delta are live). Packed twice: for the
@@ -321,10 +338,12 @@ void kernel_main() {
         CircularBuffer(cb_decay).pop_front(1);
         CircularBuffer(cb_kt).pop_front(Kt);
         CircularBuffer(cb_delta).pop_front(Vt);
+        mark(5);
         // 6. o = q @ S'.
         row_matmul(cb_qn, cb_s_new_mm, Kt, Vt, cb_o);
         CircularBuffer(cb_qn).pop_front(Kt);
         CircularBuffer(cb_s_new_mm).pop_front(st);
+        mark(6);
         // 7. Gated RMSNorm: on = o * rsqrt(mean(o^2) + eps) * norm_w.
         inv_norm(cb_o, Vt, inv_dv_bits, rms_eps_bits, kOneBits);
         fpu_binary(Bin::Mul, cb_o, cb_inv, true, Vt, cb_on);
@@ -333,6 +352,7 @@ void kernel_main() {
         fpu_binary(Bin::MulBcastRows, cb_on, cb_norm_w, false, Vt, cb_scratch);
         CircularBuffer(cb_on).pop_front(Vt);
         CircularBuffer(cb_norm_w).pop_front(Vt);
+        mark(7);
         // 8. out = on * silu(z).
         CircularBuffer(cb_z_in).wait_front(Vt);
         CircularBuffer(cb_sz).reserve_back(Vt);
@@ -352,6 +372,7 @@ void kernel_main() {
         fpu_binary(Bin::Mul, cb_scratch, cb_sz, false, Vt, cb_out);
         CircularBuffer(cb_scratch).pop_front(Vt);
         CircularBuffer(cb_sz).pop_front(Vt);
+        mark(8);
     }
     CircularBuffer(cb_ones).pop_front(1);
     CircularBuffer(cb_row_mask).pop_front(1);

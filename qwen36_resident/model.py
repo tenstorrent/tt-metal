@@ -99,6 +99,8 @@ ATTN_PACKED = os.environ.get("RESIDENT_ATTN_PACKED", "1") == "1"
 HUB_LINKS = int(os.environ.get("RESIDENT_HUB_LINKS", "2"))  # fabric links per neighbour the hubs' all-reduce uses
 # (debug, row groups: the attention leader's per-iteration timeline, attn_leader_writer.cpp mark_it)
 ATTN_TS = os.environ.get("RESIDENT_ATTN_TS", "0") == "1"
+# (debug: the GDN head cores' per-step timeline, gdn_head_compute.cpp mark)
+GDN_TS = os.environ.get("RESIDENT_GDN_TS", "0") == "1"
 # row groups: size the weight ring from the L1 actually left on the streamers (up to the one-group ring) instead of
 # the per-group reservation estimate (act_bytes), which overstates what a second group takes
 RING_AUTO = os.environ.get("RESIDENT_RING_AUTO", "1") == "1"
@@ -1047,6 +1049,9 @@ class ResidentModel:
         self.l1_addrs += [ts_addr, self.hub_ts_t.buffer_address()] if timeline else []
         # (debug: the attention leader's timeline per (layer, user) iteration, row groups)
         self.attn_ts_t = ts_buf(lead_grid, 1, max(1, self.n_attn) * LR * 8) if ATTN_TS and groups > 1 else None
+        self.gdn_ts_t = ts_buf(head_grid, len(heads), 64 * 16) if GDN_TS and not self.gdn_chunk else None
+        if self.gdn_ts_t is not None:
+            self.l1_addrs.append(self.gdn_ts_t.buffer_address())
         if self.attn_ts_t is not None:
             self.l1_addrs.append(self.attn_ts_t.buffer_address())
 
@@ -1647,6 +1652,10 @@ class ResidentModel:
                         + [0, gi * nu, nu, G, col.x, col.y, tok_addr]
                     )
                 head_ct = [4, 4, self.n_gdn, gdn_copies, S]
+                # (runtime arg 0: the debug per-step timeline, 0 = off)
+                head_compute_rt = ttnn.RuntimeArgs()
+                for c in heads:
+                    head_compute_rt[c.x][c.y] = [self.gdn_ts_t.buffer_address() if self.gdn_ts_t is not None else 0]
                 head_compute_ct = [d.nk, d.nv, 4, 4, group, f32_bits(DK**-0.5), f32_bits(1e-6), f32_bits(1e-6)]
                 head_compute_ct += [f32_bits(1.0 / DV), self.n_gdn * (1 if self.gdn_chunk else B // G), R]
 
@@ -1726,7 +1735,7 @@ class ResidentModel:
                             "gdn_chunk_compute.cpp" if self.gdn_chunk else "gdn_head_compute.cpp",
                             head_grid,
                             head_compute_ct,
-                            ttnn.RuntimeArgs(),
+                            head_compute_rt,
                             head_compute,
                         ),
                     ]
