@@ -6,6 +6,7 @@
 #include "llrt/hal.hpp"  // Hal — needed for ParseAllFeatureEnv, ParseFeatureEnv, ParseFeatureRiscvMask
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cctype>
 #include <cstdio>
@@ -151,6 +152,8 @@ enum class EnvVarID {
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
+    TT_METAL_PROFILE_RISCV_PMC,                    // Enable RISC-V baby-core HPM counters
+    TT_METAL_PROFILE_RISCV_PMC_DM,                 // Event selects of the Quasar data-movement cores
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
     TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
@@ -428,6 +431,10 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         !(get_experimental_noc_debug_dump_enabled() && (get_profiler_trace_only() || get_profiler_accumulate())),
         "TT_METAL_NOC_DEBUG_DUMP cannot be combined with TT_METAL_TRACE_PROFILER or TT_METAL_PROFILER_ACCUMULATE: "
         "the debug dump only reads the profiler DRAM buffers, and those modes keep part of their data in L1.");
+    // Trace-only profiling points every Tensix RISC at the first RISC's buffer, where the counter markers collide.
+    TT_FATAL(
+        !(get_profiler_riscv_pmc_enabled() && get_profiler_trace_only()),
+        "TT_METAL_PROFILE_RISCV_PMC cannot be combined with TT_METAL_TRACE_PROFILER.");
 }
 
 const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocation_options() {
@@ -1245,6 +1252,79 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 this->profiler_enabled = true;
             }
             break;
+
+        // TT_METAL_PROFILE_RISCV_PMC
+        // RISC-V performance monitor of the Tensix baby cores: BRISC, NCRISC and TRISC0/1/2 on Blackhole,
+        // the TRISCs and data-movement cores on Quasar. Value is the mhpmevent3 and optional mhpmevent4 select, comma
+        // separated, hex or decimal (eight 4-bit pipeline-domain nibbles each). See
+        // tt_metal/tt-llk/docs/performance_counters/riscv_pmc.md. Default: disabled Usage: export
+        // TT_METAL_PROFILE_RISCV_PMC=0x10110111,0xA0000000
+        case EnvVarID::TT_METAL_PROFILE_RISCV_PMC: {
+            // strtoul with base 0 rather than sscanf: the selects routinely have bit 31 set (the MEM
+            // nibble is the top one), which does not survive a signed parse.
+            char* end = nullptr;
+            const unsigned long ev3 = std::strtoul(value, &end, 0);
+            bool parsed = end != value;
+            unsigned long ev4 = 0;
+            if (parsed && *end == ',') {
+                const char* second = end + 1;
+                ev4 = std::strtoul(second, &end, 0);
+                parsed = end != second;
+            }
+            if (!parsed || *end != '\0') {
+                TT_THROW(
+                    "TT_METAL_PROFILE_RISCV_PMC=\"{}\" could not be parsed. Expected one or two "
+                    "integers (hex accepted), e.g. 0x10110111,0xA0000000.",
+                    value);
+            }
+            if (ev3 > std::numeric_limits<uint32_t>::max() || ev4 > std::numeric_limits<uint32_t>::max()) {
+                TT_THROW("TT_METAL_PROFILE_RISCV_PMC=\"{}\" has a select wider than 32 bits.", value);
+            }
+            if (ev3 == 0 && ev4 == 0) {
+                TT_THROW(
+                    "TT_METAL_PROFILE_RISCV_PMC has both event selects zero, which leaves both "
+                    "counters disabled in hardware. Unset the variable instead.");
+            }
+            this->profiler_riscv_pmc_event3 = static_cast<uint32_t>(ev3);
+            this->profiler_riscv_pmc_event4 = static_cast<uint32_t>(ev4);
+            this->profiler_riscv_pmc_enabled = true;
+            this->profiler_enabled = true;
+            break;
+        }
+
+        // TT_METAL_PROFILE_RISCV_PMC_DM
+        // Quasar data-movement cores only: their mhpmevent3 to mhpmevent6 selects, (event mask << 8) | event set,
+        // comma separated, one to four values. Only read together with TT_METAL_PROFILE_RISCV_PMC. Unset leaves
+        // the counters idle, so only mcycle and minstret are captured on those cores.
+        // Usage: export TT_METAL_PROFILE_RISCV_PMC_DM=0x201,0x801,0x202,0x402
+        case EnvVarID::TT_METAL_PROFILE_RISCV_PMC_DM: {
+            std::array<unsigned long, 4> ev{};
+            char* end = nullptr;
+            const char* cursor = value;
+            size_t parsed = 0;
+            bool ok = true;
+            while (ok && parsed < ev.size()) {
+                ev[parsed] = std::strtoul(cursor, &end, 0);
+                ok = end != cursor && ev[parsed] <= std::numeric_limits<uint32_t>::max();
+                ++parsed;
+                if (ok && *end == ',' && parsed < ev.size()) {
+                    cursor = end + 1;
+                } else {
+                    break;
+                }
+            }
+            if (!ok || *end != '\0') {
+                TT_THROW(
+                    "TT_METAL_PROFILE_RISCV_PMC_DM=\"{}\" could not be parsed. Expected one to four 32-bit "
+                    "integers (hex accepted), e.g. 0x201,0x801,0x202,0x402.",
+                    value);
+            }
+            this->profiler_riscv_pmc_dm_event3 = static_cast<uint32_t>(ev[0]);
+            this->profiler_riscv_pmc_dm_event4 = static_cast<uint32_t>(ev[1]);
+            this->profiler_riscv_pmc_dm_event5 = static_cast<uint32_t>(ev[2]);
+            this->profiler_riscv_pmc_dm_event6 = static_cast<uint32_t>(ev[3]);
+            break;
+        }
 
         // TT_METAL_TRACE_PROFILER
         // Enables trace profiler for detailed execution tracing.

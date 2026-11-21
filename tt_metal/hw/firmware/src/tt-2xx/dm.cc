@@ -18,6 +18,7 @@
 #include "hostdev/dev_msgs.h"
 #include "api/debug/kernel_profiler.hpp"
 #include "internal/profiler/perf_counters.hpp"
+#include "internal/profiler/riscv_pmc.hpp"
 #include "api/kernel_thread_globals.h"
 #include "internal/tt-2xx/worker_go_signalling.h"
 // The TensorAccessor address-generator path (internal/tensor/generated_noc_addr.h) only exists with the ATT backend,
@@ -472,6 +473,7 @@ extern "C" uint32_t _start1() {
 
                 // The counter window runs from here to StopPerfCounters after wait_subordinates.
                 StartPerfCounters();
+                RiscvPmcBegin();
                 run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
@@ -515,6 +517,7 @@ extern "C" uint32_t _start1() {
                         prepare_worker_completion_signal(mailboxes, launch_msg_address, /*wait_for_go=*/true);
                 }
                 wait_subordinates_and_finish_dfbs(implicit_sync_txn_ids);
+                RiscvPmcEnd();
 
                 // Every TRISC is done: the window spans the whole kernel and the TRISC profiler buffers are final.
                 StopPerfCounters();
@@ -601,7 +604,9 @@ extern "C" uint32_t _start1() {
         {
             // Profiler FW zone for subordinate DMs (DM1-DM7).
             DeviceZoneScopedMainN("DM-FW");
+            RiscvPmcBegin();
             auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+            RiscvPmcEnd();
 
             record_stack_usage(stack_free);
         }
