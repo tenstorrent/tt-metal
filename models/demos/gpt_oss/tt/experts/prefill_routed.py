@@ -1413,6 +1413,28 @@ class RoutedPrefillExperts:
         ttnn.deallocate(idx_rm)
         return pieces
 
+    def _reduce_by_chunk(self, x, topk_indices, topk_weights, C, user_len, axis, links, scatter):
+        """Batched prefill in TP mode over more than one chunk, each chunk holding whole users: reduce each chunk's
+        bf16 output as soon as it is produced and concatenate the reduced rows. per_user_reduce works per user, so
+        every user's rows are reduced exactly as in the single-reduce path, but the chunk outputs are not copied into
+        one [S, H] buffer first (a bf16 -> bf16 typecast of every chunk, 0.46 ms per 16K-token chunk); the concat
+        moves only the reduced rows (1/N of them with scatter)."""
+        seq_len = x.shape[-2]
+        reduced = []
+        for start in range(0, seq_len, C):
+            n = min(C, seq_len - start)
+            chunk = [_row_view(x, 2, start, n), _row_view(topk_indices, 0, start, n), _row_view(topk_weights, 0, start, n)]
+            (piece,) = self._chunk(*(t for t, _ in chunk), out=None, out_start=start)
+            for t, owned in chunk:
+                if owned:
+                    ttnn.deallocate(t)
+            reduced.append(per_user_reduce(piece, n // user_len, axis, links, scatter=scatter))
+            ttnn.deallocate(piece)
+        out = ttnn.concat(reduced, dim=2)
+        for t in reduced:
+            ttnn.deallocate(t)
+        return out
+
     def _combine_block(self, C):
         """Tokens per combine block. The blocks keep the bf16 combine output in L1 so that only its cast to the bf8
         output is written to DRAM; with a bf16 output (tensor-parallel experts) there is no cast, so the whole chunk
@@ -1439,6 +1461,11 @@ class RoutedPrefillExperts:
         if len(x.shape) != 4:
             x = ttnn.reshape(x, (1, 1, seq_len, self.hidden_size))
         C = min(self.chunk_size, seq_len)
+        axis = self.mesh_config.tp_axis
+        links = batched_reduce_links(self.ccl_manager, axis)  # 2 on BH 1x4, batch 1 too (bit-exact vs 1 link)
+        user_len = seq_len // batch_size
+        if batch_size > 1 and seq_len > C and self.out_dtype == ttnn.bfloat16 and C % user_len == 0:
+            return self._reduce_by_chunk(x, topk_indices, topk_weights, C, user_len, axis, links, scatter)
         Cs = self._combine_block(C)
         # More than one combine block: cast every block into its rows of one preallocated output (narrow views)
         # instead of concatenating the blocks afterwards (a full read + write of the [S, H] bf8 output), when every
@@ -1478,8 +1505,6 @@ class RoutedPrefillExperts:
             out = ttnn.concat(outputs, dim=2)
             for t in outputs:
                 ttnn.deallocate(t)
-        axis = self.mesh_config.tp_axis
-        links = batched_reduce_links(self.ccl_manager, axis)  # 2 on BH 1x4, batch 1 too (bit-exact vs 1 link)
         if batch_size > 1:
             reduced = per_user_reduce(out, batch_size, axis, links, scatter=scatter)
             ttnn.deallocate(out)
