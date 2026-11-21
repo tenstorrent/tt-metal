@@ -3868,5 +3868,27 @@
   "no_rebuild_pass_single8192_tagentic_cc": 1,
   "program_builds_after_warmup_serving": 0,
   "program_builds_after_warmup_serving_tagentic_cc": 0
+ },
+ "PB.T": {
+  "ids_uploads_per_chunk": 0.0,
+  "ids_uploads_per_chunk_tagentic_cc": 0.0,
+  "packed_deep_ack_mismatches": 0,
+  "packed_deep_bystander_mismatches": 0,
+  "packed_deep_fallback_mismatches": 0,
+  "packed_deep_output_max_abs_diff": 0.0,
+  "packed_deep_output_mismatches": 0,
+  "packed_deep_served_mismatches": 0,
+  "packed_fast_ack_mismatches": 0,
+  "packed_fast_bystander_mismatches": 0,
+  "packed_fast_fallback_mismatches": 0,
+  "packed_fast_hide_regions": 12,
+  "packed_fast_one_ring_layers": 3,
+  "packed_fast_output_max_abs_diff": 0.0,
+  "packed_fast_output_mismatches": 0,
+  "packed_fast_program_builds_after_warmup": 0,
+  "packed_fast_served_mismatches": 0,
+  "packed_fast_tier_s": 102.6,
+  "program_builds_after_warmup_serving": 0,
+  "program_builds_after_warmup_serving_tagentic_cc": 0
  }
 }

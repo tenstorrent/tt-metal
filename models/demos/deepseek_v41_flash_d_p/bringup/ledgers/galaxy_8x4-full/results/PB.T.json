@@ -1,0 +1,978 @@
+{
+ "metrics": {
+  "determinism_chunk_max_abs_diff_code": {
+   "t": "2026-11-21T14:48:14",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunk_max_abs_diff_novel": {
+   "t": "2026-11-21T14:48:13",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunks": {
+   "t": "2026-11-21T14:48:14",
+   "value": 4
+  },
+  "determinism_elements_differ": {
+   "t": "2026-11-21T14:48:14",
+   "value": 0
+  },
+  "determinism_max_abs_diff": {
+   "t": "2026-11-21T14:48:14",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_code": {
+   "t": "2026-11-21T14:48:14",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_novel": {
+   "t": "2026-11-21T14:48:13",
+   "value": 0.0
+  },
+  "determinism_rows_code": {
+   "t": "2026-11-21T14:48:14",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_rows_novel": {
+   "t": "2026-11-21T14:48:14",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_runs": {
+   "t": "2026-11-21T14:48:14",
+   "value": 3
+  },
+  "determinism_s": {
+   "t": "2026-11-21T14:48:14",
+   "value": 98.9
+  },
+  "determinism_state_max_abs_diff": {
+   "t": "2026-11-21T14:48:14",
+   "value": 0.0
+  },
+  "gate_model_loads": {
+   "t": "2026-11-21T15:30:31",
+   "value": 2
+  },
+  "ids_uploads_per_chunk": {
+   "t": "2026-11-21T15:10:35",
+   "value": 0.0
+  },
+  "ids_uploads_per_chunk_tagentic_cc": {
+   "t": "2026-11-21T15:10:35",
+   "value": 0.0
+  },
+  "model_loads": {
+   "by": "run0",
+   "ns": 1795274059102702091,
+   "pid": 2419363,
+   "t": "2026-11-21T15:14:19",
+   "total": 2,
+   "value": 1
+  },
+  "model_loads_tagentic_cc": {
+   "by": "PB.T#test_no_rebuild.0",
+   "ns": 1795273785016817332,
+   "pid": 2411033,
+   "t": "2026-11-21T15:09:45",
+   "total": 1,
+   "value": 1
+  },
+  "model_shared": {
+   "t": "2026-11-21T15:14:19",
+   "value": 0
+  },
+  "model_shared_tagentic_cc": {
+   "t": "2026-11-21T15:09:45",
+   "value": 0
+  },
+  "no_rebuild_cache_entries_tagentic_cc": {
+   "t": "2026-11-21T15:10:35",
+   "value": 0
+  },
+  "no_rebuild_chunks_tagentic_cc": {
+   "t": "2026-11-21T15:10:35",
+   "value": 16
+  },
+  "no_rebuild_on_off_max_abs_diff_tagentic_cc": {
+   "t": "2026-11-21T15:10:43",
+   "value": 0.0
+  },
+  "no_rebuild_pass_lanes2x3k": {
+   "t": "2026-11-21T15:10:41",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-21T15:10:41",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x1600s": {
+   "t": "2026-11-21T15:10:38",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T15:10:38",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x2k": {
+   "t": "2026-11-21T15:10:37",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T15:10:37",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes6mix": {
+   "t": "2026-11-21T15:10:39",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T15:10:39",
+   "value": 1
+  },
+  "no_rebuild_pass_one1600": {
+   "t": "2026-11-21T15:10:41",
+   "value": 1
+  },
+  "no_rebuild_pass_one1600_tagentic_cc": {
+   "t": "2026-11-21T15:10:41",
+   "value": 1
+  },
+  "no_rebuild_pass_one4k": {
+   "t": "2026-11-21T15:10:40",
+   "value": 1
+  },
+  "no_rebuild_pass_one4k_tagentic_cc": {
+   "t": "2026-11-21T15:10:40",
+   "value": 1
+  },
+  "no_rebuild_pass_single8192": {
+   "t": "2026-11-21T15:10:35",
+   "value": 1
+  },
+  "no_rebuild_pass_single8192_tagentic_cc": {
+   "t": "2026-11-21T15:10:35",
+   "value": 1
+  },
+  "no_rebuild_prepares_tagentic_cc": {
+   "t": "2026-11-21T15:10:35",
+   "value": 0
+  },
+  "no_rebuild_probe_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-21T15:10:42",
+   "value": []
+  },
+  "no_rebuild_probe_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T15:10:38",
+   "value": []
+  },
+  "no_rebuild_probe_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T15:10:37",
+   "value": []
+  },
+  "no_rebuild_probe_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T15:10:39",
+   "value": []
+  },
+  "no_rebuild_probe_one1600_tagentic_cc": {
+   "t": "2026-11-21T15:10:41",
+   "value": []
+  },
+  "no_rebuild_probe_one4k_tagentic_cc": {
+   "t": "2026-11-21T15:10:40",
+   "value": []
+  },
+  "no_rebuild_probe_tagentic_cc": {
+   "t": "2026-11-21T15:10:35",
+   "value": []
+  },
+  "no_rebuild_rows_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-21T15:10:42",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      239104,
+      393024
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      15,
+      13
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      781440,
+      12800
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      15,
+      11
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      20096,
+      360832
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12,
+      18
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T15:10:38",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      31680,
+      85760,
+      104576,
+      327552,
+      304704
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12,
+      16,
+      11,
+      14,
+      13
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      157056,
+      61440,
+      13504,
+      137472,
+      42304
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      19,
+      15,
+      17,
+      11,
+      14
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      12544,
+      272768,
+      329728,
+      46912,
+      212224
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      11,
+      14,
+      16,
+      17,
+      12
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T15:10:37",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      6912,
+      69888,
+      34304,
+      191744
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      11,
+      15,
+      12,
+      17
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      82688,
+      184512,
+      506560,
+      110336
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      16,
+      17,
+      11,
+      13
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      124672,
+      229824,
+      132224,
+      930496
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      18,
+      11,
+      16,
+      14
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T15:10:39",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      27584,
+      101376,
+      255552,
+      582784,
+      177856,
+      117568
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12,
+      17,
+      15,
+      16,
+      11,
+      19
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      134848,
+      494336,
+      217216,
+      133952,
+      7488,
+      150080
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      18,
+      12,
+      15,
+      17,
+      14,
+      11
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      6720,
+      192704,
+      244736,
+      100416,
+      171840,
+      92480
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      11,
+      17,
+      16,
+      14,
+      18,
+      13
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_one1600_tagentic_cc": {
+   "t": "2026-11-21T15:10:41",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      122816
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      18
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      251328
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      12
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      21632
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_one4k_tagentic_cc": {
+   "t": "2026-11-21T15:10:40",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      24000
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      50240
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      14
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      804224
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      16
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_tagentic_cc": {
+   "t": "2026-11-21T15:10:35",
+   "value": [
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       90112,
+       98304,
+       null
+      ],
+      [
+       98304,
+       106496,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "aligned",
+     "prepared": 0,
+     "slot": 1
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       20160,
+       28352,
+       null
+      ],
+      [
+       28352,
+       36544,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slot": 2
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       525696,
+       533888,
+       null
+      ],
+      [
+       533888,
+       542080,
+       534016
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slot": 3
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       261312,
+       269504,
+       null
+      ],
+      [
+       269504,
+       269604,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "partial",
+     "prepared": 0,
+     "slot": 4
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       111360,
+       119552,
+       null
+      ],
+      [
+       113664,
+       121843,
+       119552
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "pulled",
+     "prepared": 0,
+     "slot": 5
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       79488,
+       87680,
+       null
+      ],
+      [
+       87680,
+       87700,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "acks_only",
+     "prepared": 0,
+     "slot": 6
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       220480,
+       228672,
+       null
+      ],
+      [
+       228672,
+       236864,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slot": 7
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       6336,
+       14528,
+       null
+      ],
+      [
+       14528,
+       19276,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "partial",
+     "prepared": 0,
+     "slot": 8
+    }
+   ]
+  },
+  "packed_deep_ack_mismatches": {
+   "t": "2026-11-21T15:30:26",
+   "value": 0
+  },
+  "packed_deep_bystander_mismatches": {
+   "t": "2026-11-21T15:30:26",
+   "value": 0
+  },
+  "packed_deep_compile_s": {
+   "t": "2026-11-21T15:30:26",
+   "value": 48.6
+  },
+  "packed_deep_fallback_mismatches": {
+   "t": "2026-11-21T15:30:26",
+   "value": 0
+  },
+  "packed_deep_grouped_ring_layers": {
+   "t": "2026-11-21T15:30:26",
+   "value": 3
+  },
+  "packed_deep_hide_regions": {
+   "t": "2026-11-21T15:30:26",
+   "value": 42
+  },
+  "packed_deep_long_pool_layers": {
+   "t": "2026-11-21T15:30:26",
+   "value": 0
+  },
+  "packed_deep_one_ring_layers": {
+   "t": "2026-11-21T15:30:26",
+   "value": 3
+  },
+  "packed_deep_output_max_abs_diff": {
+   "t": "2026-11-21T15:30:26",
+   "value": 0.0
+  },
+  "packed_deep_output_mismatches": {
+   "t": "2026-11-21T15:30:26",
+   "value": 0
+  },
+  "packed_deep_program_builds_after_warmup": {
+   "t": "2026-11-21T15:30:26",
+   "value": 0
+  },
+  "packed_deep_segments": {
+   "t": "2026-11-21T15:30:26",
+   "value": 373
+  },
+  "packed_deep_served_mismatches": {
+   "t": "2026-11-21T15:30:26",
+   "value": 0
+  },
+  "packed_deep_serving_calls": {
+   "t": "2026-11-21T15:30:26",
+   "value": 164
+  },
+  "packed_deep_sweep_s": {
+   "t": "2026-11-21T15:30:26",
+   "value": 1140.6
+  },
+  "packed_fallback_chunks_lanes2x3k": {
+   "t": "2026-11-21T15:10:41",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-21T15:10:41",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x1600s": {
+   "t": "2026-11-21T15:10:38",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T15:10:38",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x2k": {
+   "t": "2026-11-21T15:10:37",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T15:10:37",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes6mix": {
+   "t": "2026-11-21T15:10:39",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T15:10:39",
+   "value": 0
+  },
+  "packed_fallback_chunks_one1600": {
+   "t": "2026-11-21T15:10:41",
+   "value": 0
+  },
+  "packed_fallback_chunks_one1600_tagentic_cc": {
+   "t": "2026-11-21T15:10:41",
+   "value": 0
+  },
+  "packed_fallback_chunks_one4k": {
+   "t": "2026-11-21T15:10:40",
+   "value": 0
+  },
+  "packed_fallback_chunks_one4k_tagentic_cc": {
+   "t": "2026-11-21T15:10:40",
+   "value": 0
+  },
+  "packed_fast_ack_mismatches": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0
+  },
+  "packed_fast_bystander_mismatches": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0
+  },
+  "packed_fast_compile_s": {
+   "t": "2026-11-21T14:55:50",
+   "value": 9.0
+  },
+  "packed_fast_fallback_mismatches": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0
+  },
+  "packed_fast_grouped_ring_layers": {
+   "t": "2026-11-21T14:55:50",
+   "value": 3
+  },
+  "packed_fast_hide_regions": {
+   "t": "2026-11-21T14:55:50",
+   "value": 12
+  },
+  "packed_fast_long_pool_layers": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0
+  },
+  "packed_fast_one_ring_layers": {
+   "t": "2026-11-21T14:55:50",
+   "value": 3
+  },
+  "packed_fast_output_max_abs_diff": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0.0
+  },
+  "packed_fast_output_mismatches": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0
+  },
+  "packed_fast_program_builds_after_warmup": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0
+  },
+  "packed_fast_segments": {
+   "t": "2026-11-21T14:55:50",
+   "value": 18
+  },
+  "packed_fast_served_mismatches": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0
+  },
+  "packed_fast_serving_calls": {
+   "t": "2026-11-21T14:55:50",
+   "value": 22
+  },
+  "packed_fast_tier_s": {
+   "t": "2026-11-21T14:55:50",
+   "value": 102.6
+  },
+  "packed_ids_uploads_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-21T15:10:41",
+   "value": 0.0
+  },
+  "packed_ids_uploads_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T15:10:38",
+   "value": 0.0
+  },
+  "packed_ids_uploads_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T15:10:37",
+   "value": 0.0
+  },
+  "packed_ids_uploads_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T15:10:39",
+   "value": 0.0
+  },
+  "packed_ids_uploads_one1600_tagentic_cc": {
+   "t": "2026-11-21T15:10:41",
+   "value": 0.0
+  },
+  "packed_ids_uploads_one4k_tagentic_cc": {
+   "t": "2026-11-21T15:10:40",
+   "value": 0.0
+  },
+  "program_builds_after_warmup_lanes2x3k": {
+   "t": "2026-11-21T15:10:41",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-21T15:10:41",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x1600s": {
+   "t": "2026-11-21T15:10:38",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T15:10:38",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x2k": {
+   "t": "2026-11-21T15:10:37",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T15:10:37",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes6mix": {
+   "t": "2026-11-21T15:10:39",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T15:10:39",
+   "value": 0
+  },
+  "program_builds_after_warmup_one1600": {
+   "t": "2026-11-21T15:10:41",
+   "value": 0
+  },
+  "program_builds_after_warmup_one1600_tagentic_cc": {
+   "t": "2026-11-21T15:10:41",
+   "value": 0
+  },
+  "program_builds_after_warmup_one4k": {
+   "t": "2026-11-21T15:10:40",
+   "value": 0
+  },
+  "program_builds_after_warmup_one4k_tagentic_cc": {
+   "t": "2026-11-21T15:10:40",
+   "value": 0
+  },
+  "program_builds_after_warmup_serving": {
+   "t": "2026-11-21T15:10:35",
+   "value": 0
+  },
+  "program_builds_after_warmup_serving_tagentic_cc": {
+   "t": "2026-11-21T15:10:35",
+   "value": 0
+  },
+  "program_builds_after_warmup_single8192": {
+   "t": "2026-11-21T15:10:35",
+   "value": 0
+  },
+  "program_builds_after_warmup_single8192_tagentic_cc": {
+   "t": "2026-11-21T15:10:35",
+   "value": 0
+  },
+  "resident_first_chunk_s": {
+   "t": "2026-11-21T15:30:27",
+   "value": 174.6
+  },
+  "resident_first_chunk_s_tagentic_cc": {
+   "t": "2026-11-21T15:10:45",
+   "value": 98.13
+  },
+  "resident_model_loaded": {
+   "t": "2026-11-21T15:30:27",
+   "value": 1
+  },
+  "resident_model_loaded_tagentic_cc": {
+   "t": "2026-11-21T15:10:45",
+   "value": 1
+  },
+  "resident_model_s": {
+   "t": "2026-11-21T15:30:27",
+   "value": 174.03
+  },
+  "resident_model_s_tagentic_cc": {
+   "t": "2026-11-21T15:10:45",
+   "value": 96.89
+  },
+  "resident_request_first_chunk_s": {
+   "t": "2026-11-21T15:30:27",
+   "value": 174.76
+  },
+  "resident_request_first_chunk_s_tagentic_cc": {
+   "t": "2026-11-21T15:10:45",
+   "value": 98.29
+  }
+ },
+ "task": "PB.T"
+}

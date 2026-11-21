@@ -685,6 +685,8 @@
    "session_id": "fc602edb-76ba-4ff9-adea-8e52528f5f93"
   },
   "attempt": 1,
+  "attempts": 0,
+  "duration_s": 1368.0,
   "history": [
    {
     "attempt": 1,
@@ -692,18 +694,47 @@
     "role": "perf",
     "status": "RESUMED",
     "t": "2026-11-21T14:26:41"
+   },
+   {
+    "reused": [
+     "PB.T#test_determinism",
+     "PB.T#test_packed_fast_tier"
+    ],
+    "s": 1368.0,
+    "status": "PASS",
+    "t": "2026-11-21T15:30:34"
    }
   ],
-  "reason": [
-   "apply PB.T or not? A/B table at /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/ab/PB.T/table.md; the gate with the change on would FAIL (no `ab` switch in tasks.yaml: the change is measured on only); then: python -m models.demos.common.bringup.orchestrator decide --task PB.T --accept|--reject --spec /home/dnijemcevic/repos/tt-metal/models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml, and resume"
-  ],
+  "last_run": "2026-11-21T15:30:31",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/PB.T.log",
+  "rc": 0,
+  "reason": [],
   "review": [
    "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md: entry '- **[DS41-372] runtime.compile crashes on packed slots below' lacks ['Fix:']",
    "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md: entry '- **[DS41-373] A one-segment packed chunk at a continuing, n' lacks ['Fix:']"
   ],
   "role": "perf",
-  "status": "TODO",
-  "waiting": "apply PB.T or not? A/B table at /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/ab/PB.T/table.md; the gate with the change on would FAIL (no `ab` switch in tasks.yaml: the change is measured on only); then: python -m models.demos.common.bringup.orchestrator decide --task PB.T --accept|--reject --spec /home/dnijemcevic/repos/tt-metal/models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml, and resume"
+  "stamp": {
+   "reused": [
+    "PB.T#test_determinism",
+    "PB.T#test_packed_fast_tier"
+   ],
+   "units": {
+    "PB.T#test_determinism": "27051aa7ff63a35a",
+    "PB.T#test_no_rebuild": "07bb7686c56ea74f",
+    "PB.T#test_packed_deep_sweep": "a97053b7df7c5ce9",
+    "PB.T#test_packed_fast_tier": "f81196a137d6de64"
+   }
+  },
+  "started": "2026-11-21T15:07:43",
+  "status": "PASS",
+  "units": {
+   "PB.T#test_determinism": "PASS",
+   "PB.T#test_no_rebuild": "PASS",
+   "PB.T#test_packed_deep_sweep": "PASS",
+   "PB.T#test_packed_fast_tier": "PASS"
+  },
+  "waiting": null
  },
  "X.9": {
   "ab_pending": [

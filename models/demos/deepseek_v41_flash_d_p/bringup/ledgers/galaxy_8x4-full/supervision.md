@@ -1247,3 +1247,5 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 14:35 PB.T's fast tier ASSERTS 0 builds (the test itself), so recording the metric cannot pass it. Rewired instead (no weakening): PB.FX runs first (deps PB.MB4; its paths include tests/, PB.T's untracked tests stay in the tree), then PB.T's gate re-runs strict (builds == 0), then PB.HG -> PB.NC. Running resume --only PB.FX.
 - 14:40 heartbeat: PB.FX agent active; watch armed.
 - 15:05 PB.FX ACCEPTED (oracle 0, fast tier strict 0 builds, cold no-rebuild PASS). Cause (agent; DS41-373 corrected): a lone segment after a PARTIAL chunk of its slot reads its window carry from the ring (attention._ring_carry_pages); programs position-free, the warm-up never ran that kind. Fix: PACKED_WARM_CONT1 adds that pair to warm_glued_chunks (finite warm-up); test_no_rebuild gains the layout + a 1600-token sibling. Not reachable on model_bringup's single path (a partial chunk is always a request's last).
+- 15:05 PB.FX gate PASS -> 2633a26c8ad. Next: PB.T's strict gate.
+- 15:10 heartbeat: PB.T strict gate running; watch armed.
