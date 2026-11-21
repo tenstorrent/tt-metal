@@ -63,6 +63,7 @@ from models.demos.gpt_oss.config import Mode
 
 from ..batched_prefill import batched_reduce_links, per_user_reduce, ring_reduce_scatter
 from .prefill_routed_placement import ROUTED_EXPERT_PLACEMENT, ROUTED_EXPERT_PLACEMENT_DEVICES
+from .tp_route import TpRoute
 
 ROUTED_PREFILL_ENV = "GPT_OSS_ROUTED_PREFILL"
 ROUTED_PREFILL_MIN_SEQ_ENV = "GPT_OSS_ROUTED_PREFILL_MIN_SEQ"
@@ -524,6 +525,9 @@ class RoutedPrefillExperts:
             count_table = torch.full((self.num_devices, self.num_experts + 1), -1, dtype=torch.int32)
             count_table[0, : self.num_experts] = 0
         self._consts = {}
+        # TP mode: the fused routing program (tp_route.py) replaces masked_bincount / offset_cumsum / _pair_positions /
+        # the dispatch scatter.
+        self._tp_route = TpRoute(mesh_device, self.num_experts, self.top_k) if self.tp_mode else None
         # The [C, C] prefix-sum operators are shared across layers (per device: [chunk, chunk], plus [8192, 8192] for
         # chunks of at most ROUTED_PREFIX_TRI_SMALL tokens). Each is built on first use.
         self._prefix_tri = _shared_prefix_tri(mesh_device, self.chunk_size)
@@ -1317,9 +1321,13 @@ class RoutedPrefillExperts:
         # A token picks k distinct experts, so one expert holds at most C pairs.
         max_tokens_per_expert = C
 
-        offsets, counts, region_offsets = self._routing(indices)
-
-        ttnn.deallocate(offsets)
+        consts = self._chunk_constants(C)
+        if self._tp_route is not None:
+            # TP mode: counts, regions, pair rows and the row -> token table in one program (tp_route.py)
+            counts, region_offsets, pos_tm, tok_of_row = self._tp_route(indices, consts["spare"])
+        else:
+            offsets, counts, region_offsets = self._routing(indices)
+            ttnn.deallocate(offsets)
         idx_rm = ttnn.reshape(ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT), (1, C, k))
         w_rm = ttnn.to_layout(weights, ttnn.ROW_MAJOR_LAYOUT)
         if w_rm.dtype != ttnn.bfloat16:
@@ -1327,13 +1335,15 @@ class RoutedPrefillExperts:
 
         # Buffer row of every (token, slot) pair: its expert's region start + its rank among that expert's pairs
         # (token order); pairs whose expert is on another device point at the spare tile past all regions.
-        consts = self._chunk_constants(C)
-        pos_tm, pos_sm = self._pair_positions(indices, region_offsets, consts)  # [C, k] and [1, k*C] uint32 RM
+        if self._tp_route is None:
+            pos_tm, pos_sm = self._pair_positions(indices, region_offsets, consts)  # [C, k] and [1, k*C] uint32 RM
 
         # Dispatch: buffer row -> source token (scatter of the pair's token index to its row); the expert op reads x
         # through it. Rows no pair writes (region padding, the spare tile) read token 0 (the split path: the spare row
         # reads another valid token): finite and never consumed.
-        if consts["scatter_groups"] == 1:
+        if self._tp_route is not None:
+            pass  # (tok_of_row from tp_route)
+        elif consts["scatter_groups"] == 1:
             tok_of_row = ttnn.scatter(consts["row_init"], -1, pos_sm, consts["pair_token"])
             ttnn.deallocate(pos_sm)
             tok_of_row = ttnn.to_layout(tok_of_row, ttnn.ROW_MAJOR_LAYOUT)

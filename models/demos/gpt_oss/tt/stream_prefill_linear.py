@@ -446,11 +446,17 @@ def _ones_tensor(mesh_device, dtype):
     return cached[1]
 
 
+_L1_BASE = {}  # id(mesh) -> (mesh, L1 allocator base): fixed for the mesh's lifetime
+
+
 def _l1_base(mesh_device):
     """The L1 allocator base on the compute cores (where a program's circular buffers can start)."""
-    import ttnn
+    cached = _L1_BASE.get(id(mesh_device))
+    if cached is None or cached[0] is not mesh_device:  # (the entry holds the mesh: its id is not reused meanwhile)
+        import ttnn
 
-    return ttnn.get_allocator_base_address(mesh_device, ttnn.BufferType.L1)
+        cached = _L1_BASE[id(mesh_device)] = (mesh_device, ttnn.get_allocator_base_address(mesh_device, ttnn.BufferType.L1))
+    return cached[1]
 
 
 def _l1_budget(mesh_device):
@@ -506,7 +512,8 @@ class StreamPrefillLinear:
             self._fast[fk] = (self._programs[key], list(out.shape), out.memory_config(), key[4] if l1_out else None)
             return out
         (plan, kernels, cbs, sems, phash, tables), out_shape, out_mc, l1_budget = hit
-        out = ttnn.empty(out_shape, dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=out_mc)
+        # (the C++ functions under ttnn.empty / ttnn.generic_op: their python wrappers cost ~10 us a call here)
+        out = ttnn.empty.function(out_shape, dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=out_mc)
         if l1_budget is not None and _l1_budget(mesh) != l1_budget:
             # (an L1 output landed elsewhere than when the program was built: the checked path re-plans for it)
             ttnn.deallocate(out)
@@ -521,7 +528,7 @@ class StreamPrefillLinear:
         kernels[1].common_runtime_args = [out.buffer_address(), tables[1].buffer_address()]
         desc = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
         desc.custom_program_hash = phash
-        ttnn.generic_op([x, stream, ones, out], desc)
+        ttnn.generic_op.function([x, stream, ones, out], desc)
         return out
 
     def _call_slow(self, x, stream, out_dtype, out_width, memory_config):
