@@ -9,6 +9,7 @@
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 #include <array>
+#include <span>
 #include <vector>
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/utils/math.hpp>
@@ -234,14 +235,20 @@ void MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory::override_runtime
     const MinimalMatmulStridedReduceScatterAsyncInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     const auto address = counter_addresses(operation_attributes, tensor_args);
+    // Every program binds the same tensors: collect them once per hit, not once per program.
+    std::optional<typename descriptor_adapter_t::CollectedTensorBuffers> collected;
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared = cached_workload.shared_variables.at(coordinate_range);
         // As DescriptorMeshWorkloadAdapter::apply_descriptor (ttnn/api/ttnn/mesh_device_operation_adapter.hpp) does on
-        // a hit for a WorkloadDescriptor factory: re-apply the resolved buffer bindings, then the runtime args.
+        // a hit for a WorkloadDescriptor factory: re-apply the resolved buffer bindings (here only those whose
+        // buffer moved), then the runtime args.
         if (!shared.descriptor.resolved_bindings.empty()) {
-            auto collected = descriptor_adapter_t::collect_tensor_buffers(
-                tensor_args, tensor_return_value, shared.descriptor.workload_descriptor);
-            tt::tt_metal::apply_resolved_bindings(program, shared.descriptor.resolved_bindings, collected.buffers);
+            if (!collected.has_value()) {
+                collected = descriptor_adapter_t::collect_tensor_buffers(
+                    tensor_args, tensor_return_value, shared.descriptor.workload_descriptor);
+            }
+            ttnn::device_operation::apply_changed_bindings(
+                program, shared.descriptor.resolved_bindings, shared.bindings, collected->buffers);
         }
         override_common_runtime_arguments(program, operation_attributes, tensor_args, tensor_return_value);
         auto& counters = shared.counters;
