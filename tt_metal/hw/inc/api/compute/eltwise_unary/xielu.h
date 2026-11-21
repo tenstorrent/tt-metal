@@ -36,7 +36,7 @@ ALWI void xielu_tile(uint32_t idst, uint32_t alpha_p, uint32_t alpha_n) {
                 DST_SYNC_MODE,
                 is_fp32_dest_acc_en,
                 calculate_xielu,
-                (APPROX, is_fp32_dest_acc_en, 32),
+                (APPROX, is_fp32_dest_acc_en, 32 /*ITERATIONS*/),
                 idst,
                 VectorMode::None,
                 alpha_p,
