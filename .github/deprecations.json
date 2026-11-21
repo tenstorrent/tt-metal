@@ -12,6 +12,17 @@
       "introduced_by_pr": 51559,
       "grace": "4w",
       "owners": ["riverwuTT"]
+    },
+    {
+      "id": "equal-within-n-sig-figs",
+      "description": "equal_within_n_sig_figs(float, float, int) is deprecated in favor of is_within_n_sig_figs(float, float, int) (tt-metal#60627), which compares |a - b| against half a unit in the nth significant digit of the larger magnitude. All in-repo call sites are already migrated; the old helper remains only for external callers during the grace period. The cleanup PR deletes its declaration in bfloat16.hpp, its definition in bfloat16.cpp, and the compatibility tests in test_equal_within_n_sig_figs.cpp.",
+      "files": [
+        "tt_metal/api/tt-metalium/bfloat16.hpp",
+        "tt_metal/impl/data_format/bfloat16.cpp"
+      ],
+      "introduced_by_pr": 60627,
+      "grace": "4w",
+      "owners": ["mateusznowakTT"]
     }
   ]
 }
