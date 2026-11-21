@@ -597,6 +597,20 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
         "mutex_ADC is supported for PackMode::Default only: other modes issue ADC instructions from inside the MOP, "
         "which the mutex cannot cover");
 
+#ifdef ADC_PROBE_HOLD
+    if constexpr (mutex_ADC)
+    {
+        // PROBE: hold the ADC mutex across every TDMA-range instruction of this pack, until the PACRs drain.
+        t6_mutex_acquire(mutex::THREAD2_ADC);
+        set_dst_write_addr<false>(tile_index);
+        program_packer_destination(address);
+        ckernel::ckernel_template::run();
+        TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::PACK);
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
+        t6_mutex_release(mutex::THREAD2_ADC);
+        return;
+    }
+#endif
     set_dst_write_addr<mutex_ADC>(tile_index);
 
     program_packer_destination(address);
