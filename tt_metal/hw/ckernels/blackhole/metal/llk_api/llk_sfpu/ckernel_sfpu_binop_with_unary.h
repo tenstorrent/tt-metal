@@ -110,4 +110,16 @@ void calculate_sub_int32(std::uint32_t scalar) {
     }
 }
 
+// Two's-complement add/sub produces the same 32-bit result for signed and unsigned operands, so the uint32
+// variants share the int32 kernels.
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+void calculate_add_uint32(std::uint32_t scalar) {
+    calculate_add_int32<APPROXIMATION_MODE, ITERATIONS>(scalar);
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+void calculate_sub_uint32(std::uint32_t scalar) {
+    calculate_sub_int32<APPROXIMATION_MODE, ITERATIONS>(scalar);
+}
+
 }  // namespace ckernel::sfpu
