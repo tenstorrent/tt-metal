@@ -454,6 +454,10 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
 
+    if golden.numel() == 0 or calculated.numel() == 0:
+        # torch.max() cannot reduce an empty tensor; compare like comp_equal does.
+        return torch.equal(golden, calculated), f"{golden} != {calculated}"
+
     atol_delta = torch.max(torch.abs(golden - calculated)).item()
     rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(calculated)).item()
     return (
