@@ -25,16 +25,25 @@ from math import prod
 import numpy as np
 import ttnn
 
-from ._errors import CheckpointError
+from ._coordinator import (
+    Election,
+    PlanPart,
+    RankRecord,
+    ResultPart,
+    checked_payload,
+    current_group,
+    merge_plan_parts,
+    merge_results,
+    state_hash,
+)
+from ._errors import CheckpointError, CheckpointFatalError
 from ._index import (
-    FORMAT,
-    VERSION,
     FileRecord,
-    Index,
     begin_staging,
     check_json,
     data_file_name,
     finalize_staging,
+    staging_dir,
     write_header,
     write_index,
 )
@@ -46,11 +55,12 @@ from ._state_dict import (
     check_threads,
     collect_model,
     collect_optimizer,
+    is_structural_scalar,
+    rank_record,
     reshard_fsdp_modules,
-    world_record,
 )
-from ._topology import Chunk, owner
-from ._train_state import TRAIN_STATE_KEY, capture_train_state
+from ._topology import crc31
+from ._train_state import capture_train_state
 
 
 @dataclass
@@ -95,13 +105,6 @@ def _logical_bytes(view: np.ndarray, sizes: tuple[int, ...], itemsize: int) -> n
             f"{itemsize}; its host layout is padded or sharded in a way save does not handle"
         )
     return view
-
-
-def _one_process_owner(key: str, group: list[Chunk]) -> Chunk:
-    """The writer of a replica group in a single-process save: one process holds every coordinate, so it writes the
-    chunk at the coordinate ``owner`` picks."""
-    coord = owner(key, [c.mesh_coord for c in group])
-    return next(c for c in group if c.mesh_coord == coord)
 
 
 def _writer(
@@ -222,6 +225,8 @@ def _write_plan(
                 if failed:
                     break
                 items = plan.items[key]
+                if not items:
+                    continue
                 info = plan.infos[key]
                 live_tensor = by_key[key]
                 charged = info.local_nbytes * len(items)
@@ -287,71 +292,160 @@ def save(
     hold the same values, as ``ttml.checkpointing.save_checkpoint`` does by default (``verify_replicas=True``):
     replicas that drifted apart, say through a gradient that was not all-reduced, load back as that one copy on every
     device. ``ttml.Sharding.from_tensor(t).gather(t, verify_replicas=True)`` checks a tensor when in doubt.
+
+    Under ``tt-run`` with several ranks the call is collective: every rank calls it at the same point with the same
+    ``ckpt_dir``; each rank writes the shards of the coordinates it holds into its own files in a shared directory, and
+    rank 0 merges the ranks' parts into one index (``_coordinator``). The ranks' scheduler and dataloader states must be
+    equal, and so must their optimizers' scalars (steps, learning rates; every rank passes an optimizer or none), since
+    the checkpoint stores one copy; their generators are stored per rank. The user header stored is rank 0's. A failure
+    on any rank, the local work included, makes every rank raise the same error class, and no point-to-point MPI traffic
+    between the ranks may be outstanding when save is called. No other code may use the MPI tag ``DCP_TAG`` (``0x7DC0``)
+    on the world communicator while it runs: the ranks' metadata travels under it. Every rank of the world must call
+    save (#65436 tracks a subset of the ranks; #65666 a communicator of its own, without the reserved tag). The result
+    on each rank lists that rank's files and bytes; ``keys`` counts the whole checkpoint. A single process is the group
+    of one and takes the same path.
     """
-    if model is None and optimizer is None:
-        raise TypeError("save needs a model and/or an optimizer")
-    if optimizer is not None and model is None:
-        raise TypeError("optimizer state is keyed by the model's parameters; pass model= as well")
-    if header is not None and not isinstance(header, dict):
-        raise TypeError(f"header must be a dict, not {type(header).__name__}")
-    check_threads(threads)
-    if int(max_inflight_bytes) <= 0:
-        raise ValueError(f"max_inflight_bytes must be positive, got {max_inflight_bytes}")
-    # The JSON state is checked before any device read (the FSDP modules may be resharded) or file write.
-    header = check_json("header", header or {})
-    world = world_record()
-    train_state = capture_train_state(
-        scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world["ranks"][0]["world_rank"]
-    )
     t0 = time.perf_counter()
     stats: dict[str, float] = {}
-    reshard_fsdp_modules(model)
-    live: list[LiveTensor] = collect_model(model)
-    scalars: dict = {}
-    if optimizer is not None:
-        state_live, scalars = collect_optimizer(optimizer, live)
-        live.extend(state_live)
+    group = current_group()
+    rank, world_rank = group.rank, group.world_rank
+
+    def collect():
+        # The arguments are checked here, inside the first phase: a rank called with a bad one (a None directory from
+        # a find_latest that saw no checkpoint) then stops every rank instead of leaving them in the first collective.
+        if model is None and optimizer is None:
+            raise TypeError("save needs a model and/or an optimizer")
+        if optimizer is not None and model is None:
+            raise TypeError("optimizer state is keyed by the model's parameters; pass model= as well")
+        if header is not None and not isinstance(header, dict):
+            raise TypeError(f"header must be a dict, not {type(header).__name__}")
+        check_threads(threads)
+        if int(max_inflight_bytes) <= 0:
+            raise ValueError(f"max_inflight_bytes must be positive, got {max_inflight_bytes}")
+        target = os.path.abspath(ckpt_dir)
+        # The JSON state is checked before any device read (the FSDP modules may be resharded) or file write.
+        user_header = check_json("header", header or {})
+        train_state = capture_train_state(scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank)
+        reshard_fsdp_modules(model)
+        live: list[LiveTensor] = collect_model(model)
+        scalars: dict = {}
+        if optimizer is not None:
+            state_live, scalars = collect_optimizer(optimizer, live)
+            live.extend(state_live)
+        shared_state = {k: v for k, v in train_state.items() if k != "rng"}
+        record = RankRecord.from_json(rank_record(rank, world_rank))
+        part = PlanPart(record, [lt.info for lt in live], state_hash(shared_state)).to_bytes()
+        progress = {k: v for k, v in scalars.items() if not is_structural_scalar(k)}
+        payload = checked_payload(part, "this rank's plan part")
+        return target, live, scalars, progress, user_header, train_state, record, payload
+
+    # Even the local work runs inside a phase: on a multi-rank world a rank that fails here stops every rank instead
+    # of leaving the others waiting in the first collective. On a single process the phase just runs it.
+    ckpt_dir, live, scalars, progress, user_header, train_state, record, part = group.phase(
+        "collecting the live tensors", collect
+    )
+    name = os.path.basename(ckpt_dir)
     by_key = {lt.key: lt for lt in live}
     stats["collect_s"] = time.perf_counter() - t0
+    group.agree("the checkpoint directory", crc31(ckpt_dir), shown=ckpt_dir)
+    group.agree("overwrite", int(bool(overwrite)), shown=bool(overwrite))
+    # The index holds one copy of the optimizer's scalars, rank 0's; a rank whose optimizer differs (or that has none)
+    # would load rank 0's steps and learning rates without a word. A param group's member list is per rank (a rank of
+    # a multi-mesh world holds its own parameters) and is merged instead.
+    group.agree("whether an optimizer is saved", int(optimizer is not None), shown=optimizer is not None)
+    group.agree("the optimizer's scalars (steps, learning rates, ...)", state_hash(progress), shown=progress)
+    nonce = group.allgather(secrets.randbits(31))[0]
+    staging = staging_dir(ckpt_dir, nonce)
+    created_staging = False  # whether the coordinator made the staging directory, and so may remove it
 
-    ckpt_dir = os.path.abspath(ckpt_dir)
-    if os.path.exists(ckpt_dir) and not overwrite:
-        raise CheckpointError(f"{ckpt_dir} already exists; pass overwrite=True to replace it")
-    os.makedirs(os.path.dirname(ckpt_dir), exist_ok=True)
-    staging = begin_staging(ckpt_dir, secrets.randbits(31))
+    def check_target() -> None:
+        # The coordinator alone creates the staging directory, and only a new one: an existing one is another save's
+        # (of the same step, with the same random nonce) or one a dead save left, and writing into it would mix two
+        # saves' files. The other ranks join it in the next phase.
+        nonlocal created_staging
+        if not group.is_coordinator:
+            return
+        if os.path.exists(ckpt_dir) and not overwrite:
+            raise CheckpointError(f"{ckpt_dir} already exists; pass overwrite=True to replace it")
+        os.makedirs(os.path.dirname(ckpt_dir), exist_ok=True)
+        try:
+            os.mkdir(staging)
+        except FileExistsError:
+            raise CheckpointError(
+                f"{staging} already exists: another save of this step drew the same nonce, or a save that died left "
+                f"it behind. Nothing was written, and the directory is left as it is; a new save draws a new nonce."
+            ) from None
+        created_staging = True
+
     try:
+        group.phase("checking the target directory", check_target)
+        group.phase("creating the staging directory", lambda: begin_staging(ckpt_dir, nonce))
         t1 = time.perf_counter()
-        plan: SavePlan = create_save_plan(
-            [lt.info for lt in live],
-            file_for_coord=lambda c: data_file_name(0, 0, c),
-            owner_of=_one_process_owner,
-        )
+        gathered = group.gather(part)
+
+        def merge_parts() -> bytes | None:
+            if not group.is_coordinator:
+                return None
+            parts = [PlanPart.from_bytes(b) for b in gathered]
+            return checked_payload(merge_plan_parts(parts).to_bytes(), "the owner election")
+
+        election = Election.from_bytes(group.broadcast(group.phase("merging the plan parts", merge_parts)))
         stats["plan_s"] = time.perf_counter() - t1
 
-        crcs = _write_plan(staging, plan, by_key, threads, max_inflight_bytes, stats)
+        def write() -> tuple[SavePlan, bytes]:
+            plan = create_save_plan(
+                [lt.info for lt in live],
+                file_for_coord=lambda c: data_file_name(world_rank, record.mesh_id, c),
+                owner_of=election.owner_of(rank),
+            )
+            crcs = _write_plan(staging, plan, by_key, threads, max_inflight_bytes, stats)
+            files = [
+                FileRecord(f.path, len(f.header) + f.data_bytes, world_rank, record.mesh_id, f.coord)
+                for f in plan.files
+            ]
+            shared_state = dict(train_state)
+            generators = shared_state.pop("rng", {})
+            # The header and the scheduler and dataloader state stored are rank 0's (the latter two agree, by hash).
+            first = group.is_coordinator
+            result = ResultPart(
+                record,
+                files,
+                plan.entries(crcs),
+                generators,
+                scalars,
+                user_header if first else {},
+                shared_state if first else {},
+            )
+            return plan, checked_payload(result.to_bytes(), "this rank's result part")
 
-        write_header(
-            staging,
-            {
-                "format": FORMAT,
-                "version": VERSION,
-                "checkpoint_id": os.path.basename(ckpt_dir),
-                "user": header or {},
-                TRAIN_STATE_KEY: train_state,
-            },
-        )
-        index = Index(
-            checkpoint_id=os.path.basename(ckpt_dir),
-            world=world,
-            files=[FileRecord(f.path, len(f.header) + f.data_bytes, 0, 0, f.coord) for f in plan.files],
-            entries=plan.entries(crcs),
-            scalars=scalars,
-            writer_software={"ttml_distributed_checkpointing": "0.1"},
-        )
-        write_index(staging, index)
-        finalize_staging(staging, ckpt_dir, overwrite=overwrite)
+        plan, result_bytes = group.phase("writing the shards", write)
+        gathered = group.gather(result_bytes)
+
+        def finalize() -> None:
+            if not group.is_coordinator:
+                return
+            index, header_json = merge_results([ResultPart.from_bytes(b) for b in gathered], election, name)
+            for record_ in index.files:
+                fd = os.open(os.path.join(staging, record_.path), os.O_RDONLY)  # by exact name: fresh attributes
+                try:
+                    size = os.fstat(fd).st_size
+                finally:
+                    os.close(fd)
+                if size != record_.nbytes:
+                    raise CheckpointError(
+                        f"{record_.path}: {size} bytes on the shared filesystem, {record_.nbytes} reported by world rank "
+                        f"{record_.world_rank}"
+                    )
+            write_header(staging, header_json)
+            write_index(staging, index)
+            finalize_staging(staging, ckpt_dir, overwrite=overwrite)
+
+        group.phase("merging the index and finalizing", finalize)
+    except CheckpointFatalError:
+        raise  # the staging directory is left in place; nothing else can be agreed on
     except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
+        if group.is_coordinator and created_staging:  # never another save's directory
+            shutil.rmtree(staging, ignore_errors=True)
         raise
     stats["total_s"] = time.perf_counter() - t0
-    return SaveResult(ckpt_dir, plan.bytes_written, [f.path for f in plan.files], len(live), stats)
+    return SaveResult(ckpt_dir, plan.bytes_written, [f.path for f in plan.files], election.keys, stats)

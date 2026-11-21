@@ -13,6 +13,7 @@ never corrupt the next save.
 
 from __future__ import annotations
 
+import json
 import os
 import struct
 import time
@@ -24,9 +25,10 @@ from math import prod
 import numpy as np
 import ttnn
 
+from ._coordinator import checked_payload, current_group
 from ._errors import CheckpointError, IncompleteCheckpointError, MissingKeyError, UnexpectedKeyError
 from ._index import Index, is_complete, read_checked_header, read_index
-from ._planner import KeyPlan, LoadPlan, ReadItem, create_load_plan
+from ._planner import KeyPlan, LoadPlan, ReadItem, create_load_plan, unexpected_keys
 from ._safetensors import pread_all
 from ._state_dict import (
     NATIVE,
@@ -39,12 +41,12 @@ from ._state_dict import (
     check_undeclared_fusion,
     collect_model,
     collect_optimizer,
+    local_coords,
     mesh_device,
     reshard_fsdp_modules,
     restore_scalars,
-    world_record,
 )
-from ._topology import chunk_boxes
+from ._topology import chunk_boxes, crc31
 from ._train_state import (
     check_train_state,
     missing_train_state,
@@ -166,12 +168,15 @@ def _describe_spec(t) -> str:
     )
 
 
-def _place(live: LiveTensor, arrays: dict[tuple, np.ndarray], device) -> None:
-    """Assemble the destination shards under the live label, move them to the device and install them in place."""
+def _place(live: LiveTensor, arrays: dict[tuple, np.ndarray], device, local: set[tuple[int, ...]]) -> None:
+    """Assemble the destination shards this process holds under the live label, move them to the device and install
+    them in place."""
     value = live.tensor.get_value(NATIVE)
     shards = {}
     hosts = {group: _host_shard(arr, live.info.dtype) for group, arr in arrays.items()}
     for chunk in chunk_boxes(live.info.label, live.info.local_shape):
+        if chunk.mesh_coord not in local:
+            continue
         shards[ttnn.MeshCoordinate(list(chunk.mesh_coord))] = hosts[chunk.group]
     assembled = ttnn.from_local_host_shards(shards, device, value.tensor_topology())
     on_device = assembled.to(device)
@@ -190,7 +195,7 @@ def _place(live: LiveTensor, arrays: dict[tuple, np.ndarray], device) -> None:
 
 class _DataFiles:
     """The data files a load reads, opened and checked while the load is planned, so that a missing or truncated file
-    stops the load before it places a tensor; open until the load ends."""
+    stops every rank before any rank places a tensor; open until the load ends."""
 
     def __init__(self) -> None:
         self.fds: dict[int, int] = {}
@@ -236,11 +241,15 @@ def _raise_partly_restored(err: Exception, at: str, placed: list[str], total: in
 
 
 def _read_and_place(
-    plan: LoadPlan, files: _DataFiles, by_key: dict[str, LiveTensor], threads: int | None
+    plan: LoadPlan,
+    files: _DataFiles,
+    by_key: dict[str, LiveTensor],
+    threads: int | None,
+    local: set[tuple[int, ...]],
 ) -> tuple[int, int, float, float, list[str]]:
-    """Read every planned key into host arrays and place it on the device; returns the bytes read, the number of reads,
-    the seconds spent waiting for reads and placing, and the keys placed. A failure once a tensor was placed raises a
-    ``CheckpointError`` that says the live state is partly restored."""
+    """Read every planned key into host arrays and place the shards of the coordinates in ``local`` on the device;
+    returns the bytes read, the number of reads, the seconds spent waiting for reads and placing, and the keys placed.
+    A failure once a tensor was placed raises a ``CheckpointError`` that says the live state is partly restored."""
     fds, data_start, paths = files.fds, files.data_start, files.paths
     placed: list[str] = []
     device = mesh_device()
@@ -286,7 +295,7 @@ def _read_and_place(
                     bytes_read += future.result()
                 t_read_done = time.perf_counter()
                 pending = submit(keys[position + 1][1]) if position + 1 < len(keys) else None
-                _place(by_key[key], arrays, device)
+                _place(by_key[key], arrays, device, local)
             except Exception as err:
                 _raise_partly_restored(err, key, placed, len(keys))
             placed.append(key)
@@ -309,20 +318,20 @@ def load(
 ) -> LoadResult:
     """Restore ``model`` and ``optimizer`` in place from the checkpoint directory ``ckpt_dir``.
 
-    Works on any single-host mesh shape and parallelism: each destination shard reads only the bytes it needs. With
-    ``strict`` (default), a live tensor without an entry, or an entry of a requested role (model, and optimizer state
-    when ``optimizer`` is passed) without a live tensor, is an error; otherwise they are listed in the result.
-    Optimizer scalars (steps, learning rates) are restored through ``set_state_dict``. ``scheduler`` and
-    ``dataloader`` are restored through their ``set_state_dict`` from the state ``save`` stored. With ``rng`` so is
-    every random generator ``save`` captured (ttml's and ttml.init's for this world rank, python, numpy, torch when
-    imported). By default (``None``) the generators are restored whenever a scheduler or a dataloader is, since a resume
-    that restores those but keeps the current generators takes a different step; ``rng=False`` keeps them (a deliberate
-    reseed), ``rng=True`` restores them with only a model. A component asked for that the checkpoint lacks entirely is
-    an error under ``strict`` and listed in ``missing`` otherwise; within the RNG block, a generator or a world rank the
-    checkpoint holds no state for (torch imported only now, a world with more hosts than the save) keeps its current
-    state with a warning, and ``restored`` lists exactly what was restored. ``threads`` caps the reader threads (default
-    32; a read is one contiguous byte range of one file). FSDP modules are resharded first. Returns the header passed to
-    ``save``, the train state stored and the names restored.
+    Works on any mesh shape and parallelism: each destination shard reads only the bytes it needs. With ``strict``
+    (default), a live tensor without an entry, or an entry of a requested role (model, and optimizer state when
+    ``optimizer`` is passed) without a live tensor, is an error; otherwise they are listed in the result. Optimizer
+    scalars (steps, learning rates) are restored through ``set_state_dict``. ``scheduler`` and ``dataloader`` are
+    restored through their ``set_state_dict`` from the state ``save`` stored. With ``rng`` so is every random generator
+    ``save`` captured for this world rank (ttml, ttml.init, python, numpy, torch when imported). By default (``None``)
+    the generators are restored whenever a scheduler or a dataloader is, since a resume that restores those but keeps
+    the current generators takes a different step; ``rng=False`` keeps them (a deliberate reseed), ``rng=True``
+    restores them with only a model. A component asked for that the checkpoint lacks entirely is an error under
+    ``strict`` and listed in ``missing`` otherwise; within the RNG block, a generator or a world rank the checkpoint
+    holds no state for (torch imported only now, a world with more hosts than the save) keeps its current state with a
+    warning, and ``restored`` lists exactly what was restored. ``threads`` caps the reader threads (default 32; a read
+    is one contiguous byte range of one file). FSDP modules are resharded first. Returns the header passed to ``save``,
+    the train state stored and the names restored.
 
     Everything that can be checked without reading tensor data is checked before the first tensor is placed: keys,
     shapes, dtypes, layouts, param groups, the sizes of the data files and the stored RNG state. A failure after that
@@ -331,85 +340,149 @@ def load(
     dataloader without a ``set_state_dict`` is refused before anything is placed; one that refuses its state can only
     say so after, and raises a ``CheckpointError`` naming it, with the tensors, the optimizer scalars and the scheduler
     (when the dataloader refuses) already restored.
+
+    Under ``tt-run`` with several ranks the call is collective: every rank calls it with the same ``ckpt_dir``,
+    ``strict`` and optimizer-or-not (checked before anything is read), restores the shards of the coordinates it holds,
+    and ``strict`` judges unexpected entries over the union of the ranks' live tensors. A failure on any rank makes
+    every rank raise the same error class, and no point-to-point MPI traffic between the ranks may be outstanding when
+    load is called. No other code may use the MPI tag ``DCP_TAG`` (``0x7DC0``) on the world communicator while it runs:
+    the ranks' metadata travels under it. Every rank of the world must call load (#65436 tracks a subset of the ranks;
+    #65666 a communicator of its own, without the reserved tag). A single process is the group of one and takes the same
+    path.
     """
-    if model is None and optimizer is None:
-        raise TypeError("load needs a model and/or an optimizer")
-    if optimizer is not None and model is None:
-        raise TypeError("optimizer state is keyed by the model's parameters; pass model= as well")
-    check_threads(threads)
+    t0 = time.perf_counter()
     rng_by_default = rng is None
     if rng_by_default:  # a resume: the generators come back with the scheduler or the dataloader
         rng = scheduler is not None or dataloader is not None
-    t0 = time.perf_counter()
-    ckpt_dir = os.path.abspath(ckpt_dir)
-    if not is_complete(ckpt_dir):
-        raise IncompleteCheckpointError(
-            f"{ckpt_dir} is not a complete checkpoint (staging directory or missing index.json)"
-        )
-    index: Index = read_index(ckpt_dir)
-    header = read_checked_header(ckpt_dir)
-    world_rank = world_record()["ranks"][0]["world_rank"]
-    train_state = train_state_of(header, ckpt_dir)
-    missing_state = missing_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng)
-    if strict and missing_state:
-        raise missing_train_state_error(missing_state, rng_by_default=rng_by_default)
-    check_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank)
+    group = current_group()
+    world_rank = group.world_rank
 
-    fsdp_states = reshard_fsdp_modules(model)
-    # A sharded FSDP module's cached shards are its current values: drop them now, so every value the load replaces is
-    # freed as it is replaced instead of at the end (the next forward rebuilds the cache).
-    for state in fsdp_states:
-        state._cached_shards.clear()
-    live: list[LiveTensor] = collect_model(model)
-    if optimizer is not None:
-        state_live, _ = collect_optimizer(optimizer, live)
-        live.extend(state_live)
+    def check_arguments() -> str:
+        if model is None and optimizer is None:
+            raise TypeError("load needs a model and/or an optimizer")
+        if optimizer is not None and model is None:
+            raise TypeError("optimizer state is keyed by the model's parameters; pass model= as well")
+        check_threads(threads)
+        return os.path.abspath(ckpt_dir)
+
+    # In a phase of its own: a rank called with a bad argument (a None directory from a find_latest that saw no
+    # checkpoint) then stops every rank instead of leaving them waiting in the first collective.
+    ckpt_dir = group.phase("checking the arguments", check_arguments)
+    # Ranks that resolved different directories (a stale NFS listing behind find_latest) or asked for different
+    # things would restore different checkpoints, or wait for each other in different collectives.
+    group.agree("the checkpoint directory", crc31(ckpt_dir), shown=ckpt_dir)
+    group.agree(
+        "strict and whether an optimizer is loaded",
+        int(bool(strict)) + 2 * int(optimizer is not None),
+        shown=f"strict={bool(strict)}, optimizer={'passed' if optimizer is not None else 'none'}",
+    )
+
+    def open_and_collect():
+        if not is_complete(ckpt_dir):
+            raise IncompleteCheckpointError(
+                f"{ckpt_dir} is not a complete checkpoint (staging directory or missing index.json)"
+            )
+        index: Index = read_index(ckpt_dir)
+        header = read_checked_header(ckpt_dir)
+        train_state = train_state_of(header, ckpt_dir)
+        missing_state = missing_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng)
+        if strict and missing_state:
+            raise missing_train_state_error(missing_state, rng_by_default=rng_by_default)
+        check_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank)
+        fsdp_states = reshard_fsdp_modules(model)
+        # A sharded FSDP module's cached shards are its current values: drop them now, so every value the load
+        # replaces is freed as it is replaced instead of at the end (the next forward rebuilds the cache).
+        for state in fsdp_states:
+            state._cached_shards.clear()
+        live: list[LiveTensor] = collect_model(model)
+        if optimizer is not None:
+            state_live, _ = collect_optimizer(optimizer, live)
+            live.extend(state_live)
+        return index, header, train_state, missing_state, fsdp_states, live, set(local_coords())
+
+    # Even the local work runs inside a phase, so a rank that fails here cannot leave the others waiting in the next
+    # collective; on a single process the phase just runs it.
+    index, header, train_state, missing_state, fsdp_states, live, local = group.phase(
+        "reading the index and collecting the live tensors", open_and_collect
+    )
     by_key = {lt.key: lt for lt in live}
     roles = {"param", "buffer"} | ({"optimizer_state"} if optimizer is not None else set())
-    plan: LoadPlan = create_load_plan(index, [lt.info for lt in live], roles=roles)
-    if strict and plan.missing:
-        raise MissingKeyError(f"{len(plan.missing)} live tensor(s) have no entry in the checkpoint: {plan.missing[:5]}")
-    if strict and plan.unexpected:
-        raise UnexpectedKeyError(
-            f"{len(plan.unexpected)} checkpoint entr(ies) have no live tensor: {plan.unexpected[:5]}"
-        )
-    for key, kplan in plan.keys.items():
-        check_undeclared_fusion(by_key[key], kplan.entry)
-    if optimizer is not None:
-        check_param_groups(optimizer, index.scalars, strict)  # before anything is placed
-    files = _DataFiles()
-    try:
-        files.open(ckpt_dir, index, plan)  # before anything is placed
-        stats: dict[str, float] = {"plan_s": time.perf_counter() - t0}
-        t1 = time.perf_counter()
-        bytes_read, reads, read_s, place_s, placed = _read_and_place(plan, files, by_key, threads)
-        stats["read_and_place_s"] = time.perf_counter() - t1
-    finally:
-        files.close()  # every descriptor opened, whatever ended the load
-    stats["read_s"] = read_s
-    stats["place_s"] = place_s
-    stats["reads"] = float(reads)
-    stats["bytes_read"] = float(bytes_read)
 
-    applied: list[str] = []
-    if optimizer is not None:
-        try:
-            applied = restore_scalars(optimizer, index.scalars)
-        except Exception as err:
-            _raise_partly_restored(err, "the optimizer scalars", placed, len(placed))
-    # After the optimizer scalars: a scheduler writes its last LRs back into the optimizer and has the last word.
-    restored = restore_train_state(
-        train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank
-    )
-    stats["total_s"] = time.perf_counter() - t0
-    return LoadResult(
-        ckpt_dir,
-        header["user"],
-        {k: index.scalars[k] for k in applied} if optimizer is not None else dict(index.scalars),
-        plan.missing + missing_state,
-        plan.unexpected,
-        plan.fast_path_keys,
-        stats,
-        train_state=train_state,
-        restored=restored,
-    )
+    def plan_locally() -> LoadPlan:
+        plan = create_load_plan(index, [lt.info for lt in live], roles=roles, local_coords=local)
+        if strict and plan.missing:
+            raise MissingKeyError(
+                f"{len(plan.missing)} live tensor(s) have no entry in the checkpoint: {plan.missing[:5]}"
+            )
+        for key, kplan in plan.keys.items():
+            check_undeclared_fusion(by_key[key], kplan.entry)
+        if optimizer is not None:
+            check_param_groups(optimizer, index.scalars, strict)  # before anything is placed
+        return plan
+
+    files = _DataFiles()
+
+    def plan_and_report() -> tuple[LoadPlan, bytes]:
+        plan = plan_locally()
+        files.open(ckpt_dir, index, plan)  # before any rank places anything
+        used = sorted({kp.entry.key for kp in plan.keys.values()})
+        return plan, checked_payload(json.dumps(used).encode(), "this rank's planned keys")
+
+    try:
+        plan, used_bytes = group.phase("planning the load", plan_and_report)
+        gathered = group.gather(used_bytes)
+
+        def judge() -> bytes | None:
+            if not group.is_coordinator:
+                return None
+            union_used = {key for part in gathered for key in json.loads(part.decode("utf-8"))}
+            return checked_payload(
+                json.dumps(unexpected_keys(index, union_used, roles)).encode(), "the unexpected keys"
+            )
+
+        plan.unexpected = json.loads(group.broadcast(group.phase("judging the unexpected entries", judge)))
+        if strict and plan.unexpected:
+            raise UnexpectedKeyError(
+                f"{len(plan.unexpected)} checkpoint entr(ies) have no live tensor: {plan.unexpected[:5]}"
+            )
+        stats: dict[str, float] = {"plan_s": time.perf_counter() - t0}
+
+        t1 = time.perf_counter()
+        bytes_read, reads, read_s, place_s, placed = group.phase(
+            "reading and placing the shards", lambda: _read_and_place(plan, files, by_key, threads, local)
+        )
+        stats["read_and_place_s"] = time.perf_counter() - t1
+        stats["read_s"] = read_s
+        stats["place_s"] = place_s
+        stats["reads"] = float(reads)
+        stats["bytes_read"] = float(bytes_read)
+
+        def restore_rest() -> tuple[list[str], list[str]]:
+            applied: list[str] = []
+            if optimizer is not None:
+                try:
+                    applied = restore_scalars(optimizer, index.scalars)
+                except Exception as err:
+                    _raise_partly_restored(err, "the optimizer scalars", placed, len(placed))
+            # After the optimizer scalars: a scheduler writes its last LRs back into the optimizer, having the last
+            # word.
+            restored = restore_train_state(
+                train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank
+            )
+            return applied, restored
+
+        applied, restored = group.phase("restoring the scalars and the train state", restore_rest)
+        stats["total_s"] = time.perf_counter() - t0
+        return LoadResult(
+            ckpt_dir,
+            header["user"],
+            {k: index.scalars[k] for k in applied} if optimizer is not None else dict(index.scalars),
+            plan.missing + missing_state,
+            plan.unexpected,
+            plan.fast_path_keys,
+            stats,
+            train_state=train_state,
+            restored=restored,
+        )
+    finally:
+        files.close()  # every descriptor opened while planning, whichever phase ended the load

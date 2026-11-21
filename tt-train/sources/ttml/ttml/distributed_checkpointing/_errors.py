@@ -9,6 +9,15 @@ class CheckpointError(RuntimeError):
     """Base class: a save or load that could not be carried out as asked."""
 
 
+class CheckpointFatalError(CheckpointError):
+    """An exchange between the ranks failed (a peer died); the operation cannot be completed in this process, and
+    the staging directory is left in place.
+
+    It subclasses ``CheckpointError`` so that one handler catches every checkpoint failure. Retrying is harmless but
+    pointless: once an exchange has failed, every later save or load in this process raises ``CheckpointFatalError`` at
+    once, without reaching the other ranks."""
+
+
 class IncompleteCheckpointError(CheckpointError):
     """The directory is a staging directory, or its ``index.json`` or ``header.json`` is missing, truncated or
     malformed."""

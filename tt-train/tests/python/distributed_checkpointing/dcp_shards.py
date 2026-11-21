@@ -5,9 +5,10 @@
 """This process's shards of model and optimizer tensors as numpy arrays, for the round-trip tests to compare.
 
 A tensor's shards come from the host buffer of the tensor brought to the host, one per mesh coordinate asked for (by
-default every coordinate of the device ``AutoContext`` holds, all of which belong to a single process). That works on
-one device, on a mesh, and on a mesh spread over several ranks, where the per-device tensors
-``ttnn.get_device_tensors`` hands out still carry the mesh distribution and ``ttnn.to_torch`` refuses them.
+default every coordinate of the device ``AutoContext`` holds, all of which belong to a single process; a rank of a
+multi-rank world passes the coordinates it holds). That works on one device, on a mesh, and on a mesh spread over
+several ranks, where the per-device tensors ``ttnn.get_device_tensors`` hands out still carry the mesh distribution and
+``ttnn.to_torch`` refuses them.
 """
 
 import itertools
