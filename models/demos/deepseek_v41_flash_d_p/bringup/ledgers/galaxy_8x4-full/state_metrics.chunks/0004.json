@@ -3721,5 +3721,21 @@
   "single5120_steady_fresh_tok_s_tagentic_cc": 58655.3,
   "top5_overlap": 1.0,
   "top5_overlap_limit": 0.994286
+ },
+ "PB.NR": {
+  "ids_uploads_per_chunk": 0.0,
+  "ids_uploads_per_chunk_tagentic_cc": 0.0,
+  "no_rebuild_pass_glued4x2k": 0,
+  "no_rebuild_pass_glued4x2k_tagentic_cc": 0,
+  "no_rebuild_pass_glued5x1600": 0,
+  "no_rebuild_pass_glued5x1600_tagentic_cc": 0,
+  "no_rebuild_pass_lanes4x2k": 0,
+  "no_rebuild_pass_lanes4x2k_tagentic_cc": 0,
+  "no_rebuild_pass_single5120": 1,
+  "no_rebuild_pass_single5120_tagentic_cc": 1,
+  "no_rebuild_pass_single8192": 1,
+  "no_rebuild_pass_single8192_tagentic_cc": 1,
+  "program_builds_after_warmup_serving": 0,
+  "program_builds_after_warmup_serving_tagentic_cc": 0
  }
 }

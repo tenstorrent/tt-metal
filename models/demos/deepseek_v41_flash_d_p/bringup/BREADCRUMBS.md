@@ -820,3 +820,25 @@
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.9C --spec $BRINGUP_SPEC --check` (devjob);
   ack probe: `resident submit --cmd "<the gate's env> scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/perf/test_d2h_ack_probe.py"`; report: compose from results/PB.9C.json.
+
+## PB.NR (2026-11-21, perf role, TESTS ONLY): the no-rebuild check runs cold, packed paths recorded per path
+- Expected saving per chunk: 0 ms device, 0 ms host (no model code changes; this step makes the build count honest).
+- Load needed: the gate's own loads only (test_no_rebuild must run in a fresh process: a held process's program cache
+  is exactly what made PB.9C5's 5120 PASS suspect, F297); no extra load of mine.
+- Changed (tests/test_no_rebuild.py only): `BATCH_COLD = True` (F297: core/batch puts it in a fresh process, first
+  after the determinism check); `NO_REBUILD_PACKED_STRICT` in BATCH_ITEM_VARS (=1 asserts the glued paths and lets a
+  glued error raise, the PB.9C behaviour; default records only); the single-request check always asserts 0 builds;
+  `NO_REBUILD VERDICT <path>: PASS|FAIL (n builds)` printed per path before the asserts; docstring says why cold.
+- Cold results (same model code 286f4654ec5): single8192 PASS (0), glued4x2k FAIL 16 (steady 1+1 prepare DS41-360,
+  resumed 14), glued5x1600 FAIL 13 (all on the resumed draw; PB.9C's PASS was a warm cache), lanes4x2k FAIL 224,
+  single5120 PASS (0). New: DS41-361 (path (b) of a replay chunk is never warmed by runtime.compile and slices at
+  the segment offset).
+- Gotcha: the gate batches both test_no_rebuild units (8192 and 5120) into one cold process; the 5120 one needs another
+  model (chunk / seq) and tests.one_load refuses it ("needs another model ... switches []"). It passed when run alone:
+  `gate PB.NR --check --unit PB.NR#test_no_rebuild.2.0` (its own fresh process). The orchestrator's gate must run it
+  apart too (one geometry a process, F283).
+- Rule 20: no per-chunk value touched (tests only; no model code changed).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.NR --spec $BRINGUP_SPEC --check` (devjob);
+  the 5120 unit alone with `--unit PB.NR#test_no_rebuild.2.0`.
+- `orchestrator measure --task PB.NR` (devjob pbnr_measure) returned rc 4: "paused before A/B on: one process for
+  quick; `resume` continues the task". Left for the orchestrator (no model code changed, so the A/B has nothing to compare).

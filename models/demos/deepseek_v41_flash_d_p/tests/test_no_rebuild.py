@@ -37,8 +37,19 @@ steady:
                   recorded, never hidden, and not asserted); run last, after the glued paths' counts
 Metrics: no_rebuild_pass_<path> (1 / 0; also single<chunk> for the single-request check above) and
 program_builds_after_warmup_<path> (program-cache entries + prepare_program calls in the path's fresh chunks),
-packed_ids_uploads_<path>, no_rebuild_rows_<path>, no_rebuild_probe_<path> (the ops that built). Asserted: the single
-path and the glued paths build nothing.
+packed_ids_uploads_<path>, no_rebuild_rows_<path>, no_rebuild_probe_<path> (the ops that built).
+
+PB.NR (OWNER 2026-11-21): asserted always: the single-request path builds nothing (no_rebuild_pass_single<chunk> == 1).
+The packed paths (glued4x2k, glued5x1600, lanes4x2k) are RECORDED (PASS / FAIL, their build count and the probe's
+ops), and asserted only with NO_REBUILD_PACKED_STRICT=1 (then every glued path must build nothing, the PB.9C
+behaviour); a packed path that raises on a fresh chunk is a recorded FAIL unless strict (a hang always raises).
+
+WHY COLD (F297, BATCH_COLD = True): this test counts program-cache entries and prepare_program calls after the
+engine's own warm-up (runtime.compile). Its draws are fixed-seed, so in a held process (the resident runner, a batch
+after test_skip_positions / walls, or this test's own earlier run) every program its fresh chunks need may already be
+cached by EARLIER traffic, and the count reads 0 although serving, which only gets runtime.compile, would build:
+PB.9C saw 153 / 16 builds in a fresh process and 0 in the held one on the same code. So the batch runs it in a fresh
+process (a cold program cache: only runtime.compile before the count), first after the determinism check.
 
     PYTHONPATH=$PWD DS41_ENGRAM_TABLE=resident DS41_POS_DYNAMIC=on DS41_DECODER_SKIP=decode \\
         scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
@@ -66,7 +77,11 @@ BATCH_LAYERS = "executed"  # F285: the layers a decode chunk executes (0-20), as
 # the gate's unit (no BRINGUP_CHUNK: the spec's 5120) and test_skip_positions' (BRINGUP_CHUNK=5120) share the one
 # executed-layers load; a run at another chunk still gets its own model (testing/batch.shared_model compares the
 # load's chunk: a fresh process, or a failure under one_load), never another chunk's model.
-BATCH_ITEM_VARS = ("BRINGUP_CHUNK",)
+# PB.NR: NO_REBUILD_PACKED_STRICT=1 asserts the packed paths too (default: recorded only); a per-run test switch
+BATCH_ITEM_VARS = ("BRINGUP_CHUNK", "NO_REBUILD_PACKED_STRICT")
+# F297 (PB.NR): a build counter needs a cold program cache (module docstring, WHY COLD): a fresh process, first in its
+# batch after the determinism check
+BATCH_COLD = True
 REPLAY = 128
 SLOTS = 11  # (slot 0: compile's; 1-8: the fresh draws; 9, 10: the on / off comparison, never written before it)
 KINDS = ("aligned", "steady", "resumed", "partial", "pulled", "acks_only", "steady", "partial")
@@ -215,6 +230,8 @@ def test_no_rebuild(mesh_device, monkeypatch):
     cap = max(-(-deploy // chunk) * chunk, int(S.data["target"]["seq"]))  # (test_skip_positions' fresh load)
     monkeypatch.setitem(S.data["target"], "seq", cap)
     packed_check = chunk == 8192 and settings.get("PACKED") == "on"  # PB.9C (module docstring)
+    strict = os.environ.get("NO_REBUILD_PACKED_STRICT", "0") == "1"  # PB.NR: assert the packed paths too
+    print(f"NO_REBUILD_PACKED_STRICT={int(strict)}")
     monkeypatch.setenv("WALLS_FRESH_SLOTS", str(SLOTS + (PACKED_SLOTS if packed_check else 0)))
     t0 = time.time()
     runtime, adapter, hf, params = _runtime(mesh_device, layers, chunk, cap)
@@ -280,7 +297,7 @@ def test_no_rebuild(mesh_device, monkeypatch):
                 try:
                     packed[path] = _packed_path(runtime, kv, mesh_device, text, path, lens, route, hi)
                 except Exception as e:  # noqa: BLE001 (a path that fails on fresh chunks: recorded FAIL, not hidden)
-                    if F.is_hang(e) or path.startswith("glued"):
+                    if F.is_hang(e) or (strict and path.startswith("glued")):
                         raise
                     msg = f"{type(e).__name__}: {str(e).strip().splitlines()[0] if str(e).strip() else ''}"[:300]
                     print(f"NO_REBUILD {path}: FAIL (error on a fresh chunk: {msg})", flush=True)
@@ -325,9 +342,13 @@ def test_no_rebuild(mesh_device, monkeypatch):
                 ttnn.deallocate(t)
         if loaded != "decode":
             model.use_decoder_skip(loaded)
+    for path, v in packed.items():  # PB.NR: the per-path verdict, recorded above; asserted only when strict
+        print(f"NO_REBUILD VERDICT {path}: {'PASS' if v['pass'] else 'FAIL'} ({v['builds']} builds)", flush=True)
+    print(f"NO_REBUILD VERDICT single{chunk}: {'PASS' if builds == 0 else 'FAIL'} ({builds} builds)", flush=True)
     assert builds == 0, f"{builds} programs built after warm-up on fresh serving chunks: {pb.summary(8)}"
-    bad = {k: v for k, v in packed.items() if k.startswith("glued") and v["builds"] != 0}
-    assert not bad, f"packed paths built programs after warm-up on fresh chunks: {bad}"
+    if strict:
+        bad = {k: v for k, v in packed.items() if k.startswith("glued") and v["builds"] != 0}
+        assert not bad, f"packed paths built programs after warm-up on fresh chunks: {bad}"
     if pos == "on":
         assert uploads.n == 0, f"{uploads.n} ids uploads in {n_chunks} chunks (POS_DYNAMIC=on reorders on the device)"
     assert diff == 0, f"POS_DYNAMIC on vs off differ: max |diff| {diff}"

@@ -5,6 +5,10 @@ Gate run `gate PB.9C --check` (devjob pb9c_gate4): one executed-layers load (lay
 BRINGUP_CHUNK=8192, serving slots at 1,048,576), agentic_cc text, the shipped resident engram table, every PB switch of
 the gate on. Metrics: results/PB.9C.json.
 
+PB.NR (2026-11-21): every no-rebuild line below is the COLD result (tests/test_no_rebuild.py, BATCH_COLD: a fresh
+process, only runtime.compile before the count; results/PB.NR.json); PB.9C's held-process counts are kept beside it.
+The 5120 table is filled from results/PB.9C5.json.
+
 Method (results/agentx_ladder_20261119.md's): at each history h EVERY segment sits at h, each in its own serving slot;
 steady = every segment a mid-request chunk (write_start = start), resumed = every segment a request's first chunk after
 a prefix hit (write_start = start + 128). Each timed run first runs the real previous chunk (every segment at h - its
@@ -25,6 +29,8 @@ run (no lane / row keeps a slot).
 ## Single request, 8192-row chunk (test_skip_positions, BRINGUP_CHUNK=8192, SKIP_POS)
 
 No-rebuild (test_no_rebuild: fresh slots / starts, 8 draws, 16 chunks): **PASS** (0 builds after warm-up); ids uploads a chunk 0.
+Re-run COLD (PB.NR, 2026-11-21: a fresh process, only runtime.compile before the count, F297; same model code): **PASS**
+(0 builds, 0 prepare_program; on vs off max |diff| 0).
 
 | history | steady wall ms | new tok/s | resumed wall ms | device ms | exposed host ms | serving wall ms (prefill_chunk + D2H ack) | earlier steady wall (tok/s) | earlier source |
 |---|---|---|---|---|---|---|---|---|
@@ -41,24 +47,39 @@ Serving entry's extra at 139264: serving wall 104.7 ms vs harness 100.6 ms (+4.1
 note_tokens 0.07 = 2.7 ms the harness does not do, less the harness's ids upload 0.4; the 21 D2H acks 4.3 ms of
 enqueue, about 1.8 ms of it exposed (the device tail shrinks 22.8 -> 21.0 ms).
 
-## Single request, 5120-row chunk
+## Single request, 5120-row chunk (test_skip_positions, BRINGUP_CHUNK=5120; PB.9C5)
 
-Placeholder: PB.9C5 runs it (one geometry a gate, F283); the overseer fills this table from PB.9C5's metrics
-(test_skip_positions at BRINGUP_CHUNK=5120 records the same columns, its serving wall and its host split at 139264).
+Gate PB.9C5 (model code 7d755180024 + tests, same switches as the 8192 table, BRINGUP_CHUNK=5120, layers 0-20).
+Metrics: results/PB.9C5.json (*_tagentic_cc). Exposed host = steady wall - device. Earlier = results/agentx_ladder_20261119.md @ 04c14a09d00
+(the 11-19 numbers, nearest history).
 
-| history | steady wall ms | new tok/s | resumed wall ms | device ms | exposed host ms | serving wall ms | earlier steady wall (tok/s), agentx_ladder_20261119 @ 04c14a09d00 |
+No-rebuild (test_no_rebuild at 5120: fresh slots / starts, 8 draws, 16 chunks): PB.9C5 recorded PASS (0 builds), but in a
+process held after test_skip_positions (model_shared 1: a warm program cache, F297): suspect. Cold re-run (PB.NR):
+**PASS** (0 builds after warm-up in 16 fresh chunks, 0 prepare_program; ids uploads a chunk 0; POS_DYNAMIC on vs off
+max |diff| 0), run alone in a fresh process (gate PB.NR --check --unit PB.NR#test_no_rebuild.2.0, BATCH_COLD). So this
+5120 ladder counts.
+
+| history | steady wall ms | new tok/s | resumed wall ms | device ms | exposed host ms | serving wall ms (prefill_chunk + D2H ack) | earlier steady wall (tok/s), agentx_ladder_20261119 @ 04c14a09d00 |
 |---|---|---|---|---|---|---|---|
-| 51200 | (PB.9C5) | | | | | | 74.1 ms (69.1k) |
-| 131072 | (PB.9C5) | | | | | | 75.2 ms at 128000 (68.1k) |
-| 139264 | (PB.9C5) | | | | | | - |
-| 262144 | (PB.9C5) | | | | | | 77.2 ms at 256000 (66.3k) |
-| 524288 | (PB.9C5) | | | | | | 79.5 ms at 512000 (64.4k) |
-| 786432 | (PB.9C5) | | | | | | 84.9 ms at 768000 (60.3k) |
-| 1024000 | (PB.9C5) | | | | | | 87.4 ms (58.6k) |
+| 51200 | 73.9 | 69283 | 77.8 | 61.1 | 12.8 | 81.2 | 74.1 ms (69.1k) |
+| 131072 | 77.8 | 65810 | 79.9 | 62.9 | 14.9 | 78.0 | 75.2 ms at 128000 (68.1k) |
+| 139264 | 77.1 | 66407 | 81.8 | 63.8 | 13.3 | 79.1 | - |
+| 262144 | 76.7 | 66754 | 79.9 | 65.5 | 11.2 | 80.1 | 77.2 ms at 256000 (66.3k) |
+| 524288 | 81.2 | 63054 | 85.0 | 71.2 | 10.0 | 84.3 | 79.5 ms at 512000 (64.4k) |
+| 786432 | 89.1 | 57464 | 91.7 | 79.5 | 9.6 | 91.1 | 84.9 ms at 768000 (60.3k) |
+| 1024000 | 91.5 | 55956 | 93.8 | 83.0 | 8.5 | 94.4 | 87.4 ms (58.6k) |
+
+Steady walls within -3 .. +4 ms of the 11-19 ladder (same order: 74-92 ms, 56-69k new tok/s); the 5120 chunk is
+the fastest per chunk but 8192 is faster per token at every history (62-82k). Serving entry's extra over the harness:
++0.2 .. +7.3 ms (+2.0 at 139264; 21 D2H acks a chunk). Host split at 139264 (medians of 7): harness 75.9 ms wall =
+layers' enqueue 65.7 + device tail 7.6 + begin_chunk 0.6 + embed 0.4 + ids upload 0.4; serving 78.7 ms = layers 61.5
++ device tail 8.8 + D2H acks 4.1 + ids readback 1.9 + un-shuffle 0.4 + reorder_ids 0.3 + begin 0.5 + embed 0.3.
 
 ## Fixed 4 x 2048 lanes: lanes4x2k (test_packed_walls, PACKED_ROUTE=lanes, PACKED_GLUED=off; off in serving since PB.9X)
 
-No-rebuild (PACKED_ROUTE=lanes, a 4 x 2k chunk at fresh slots / histories, 3 draws, 6 chunks): **FAIL** (153 builds after warm-up) (ttnn.slice
+No-rebuild COLD (PB.NR: a fresh process, only runtime.compile before the count): **FAIL** (224 builds after warm-up: steady 63 + 15
+prepare_program, resumed 98, steady 48; ttnn.slice @ served.py:162 slice_rows / served.py:218 _pick / history_gather.py:407 _tail_part,
+packed_onecall.py:897-899 _roll). PB.9C's run (held process) below: **FAIL** (153 builds after warm-up) (ttnn.slice
 keyed on slot rows / pick sizes: served.py:162 slice_rows, served.py:218 _pick, history_gather; DS41-346), ids uploads
 4.3 a chunk. Recorded, not hidden: this ladder does not count as serving performance.
 
@@ -77,7 +98,10 @@ histories, where the lane chunk is more device-bound); 84 D2H acks a chunk (21 l
 
 ## Glued 4 x 2048: glued4x2k (test_glued_walls, PACKED_ROUTE=glued: the serving path)
 
-No-rebuild (PACKED_ROUTE=glued, fresh slots / histories, 3 draws steady / resumed / steady, 6 chunks): **FAIL** (2 builds after warm-up): 1
+No-rebuild COLD (PB.NR: a fresh process, only runtime.compile before the count): **FAIL** (16 builds after warm-up: steady 1 + 1
+prepare_program (DS41-360), resumed 14: the replay chunk's path (b), ttnn.slice @ packed_device.py:213 _rows keyed on the segment
+offset, concat @ packed_device.py:224 to_row0, first-call high_bw_all_gather / mesh_partition; DS41-361; steady again 0).
+PB.9C's run (held process, a warm cache) had: **FAIL** (2 builds after warm-up): 1
 program-cache entry + 1 prepare_program @ tt/packed_glued.py:805-822 GluedSend.__call__ on the first draw (histories
 385728 / 435200 / 273920 / 19008): the window send's prepared program is keyed on the ordered mix of the segments'
 carry sources (a slot's served snapshot or a ring-carry temp), and the warm-up covers only some orders (DS41-360).
@@ -105,7 +129,10 @@ land on the critical path; without any ack the serving entry equals the harness 
 
 ## Glued 5 x 1600: glued5x1600 (test_glued_walls, PACKED_ROUTE=glued)
 
-No-rebuild (fresh slots / histories, 3 draws, 6 chunks): **PASS** (0 builds after warm-up); ids uploads 0.
+No-rebuild COLD (PB.NR: a fresh process, only runtime.compile before the count): **FAIL** (13 builds after warm-up, all on the
+resumed draw: path (b)'s ttnn.slice @ packed_device.py:213 _rows (slice end 1600 -> 8192) and concat @ packed_device.py:224 /
+258; both steady draws 0; DS41-361); ids uploads 0. PB.9C's **PASS** (0 builds) ran in a held process whose earlier walls had
+built path (b)'s programs (F297): false. So this ladder does not count yet.
 
 | history | steady wall ms | new tok/s | resumed wall ms | device ms | exposed host ms | serving wall ms (prefill_packed + D2H ack) | earlier steady wall (tok/s) | earlier source |
 |---|---|---|---|---|---|---|---|---|
@@ -188,9 +215,11 @@ wall still below the repeated side's; not reproduced in the other sides.)
 
 ## For the owner
 
-1. No-rebuild per path, same code as the ladders: single8192 PASS, glued5x1600 PASS, glued4x2k FAIL (1 build + 1
-   prepare on a fresh carry-source mix, DS41-360), lanes4x2k FAIL (153 builds; off in serving). So only the single 8192
-   and glued 5 x 1.6k ladders count today.
+1. No-rebuild per path, COLD (PB.NR, fresh processes, same model code as the ladders): single8192 PASS, single5120
+   PASS, glued4x2k FAIL (16: 1 build + 1 prepare on a fresh carry-source mix, DS41-360; 14 on the resumed draw,
+   DS41-361), glued5x1600 FAIL (13, all on the resumed draw, DS41-361; PB.9C's PASS was a warm cache), lanes4x2k FAIL
+   (224; off in serving). So only the single 8192 and single 5120 ladders count today; both glued paths' steady draws
+   build nothing after their first fresh carry mix, the resumed chunk (path (b)) is what builds.
 2. Resumed chunks on the glued path (the serving path for every packed chunk) are 3.1-3.4x slower than steady: any
    encoder-replay segment sends the whole chunk to path (b) (DS41-357). Every prefix-hit request's first chunk is one.
 3. The D2H ack costs ~0.2 ms of host a layer and segment: 4.3 ms a single 8192 chunk (about half hidden), 16.7 ms a
