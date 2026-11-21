@@ -24,7 +24,7 @@ MLP_RATIO = 3
 # Ring SDPA (q, k) chunks by the rows each device holds (image + text), where the shared table keyed by the logical
 # length picks badly; other row counts keep the Attention defaults.
 # At the 4096 rows on 116 cores (12 x 9 + the CCL row's 8 free cores): 2 rounds of q 224, and 3 rounds of q 160 at
-# 4096 + 1 reference (2048-row text bucket).
+# 4096 + 1 reference (2048-row text bucket), where k 640 divides the shard (14 chunks; larger k do not fit L1).
 RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
     2560: (160, 512),
     2688: (160, 512),
@@ -32,7 +32,7 @@ RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
     3072: (192, 512),
     8192: (224, 512),
     8320: (224, 512),
-    8960: (160, 512),
+    8960: (160, 640),
 }
 # SP4 x TP2 (DP4 groups) has no key in the shared table, whose default there is a 256 k chunk: twice SP8 x TP4's softmax
 # merges, 7 dB of image at 4096 (jobs 219146 / 219220). A length neither table has takes SP8 x TP4's default k 512 (q 128,
