@@ -412,6 +412,68 @@ class GenerationMixin:
 
         return model_kwargs
 
+    # Fields this file parses out of the config but never applies to the decoder logits. HF turns every one of
+    # them into a logits processor, so accepting them here would silently return text that differs from HF.
+    UNSUPPORTED_LOGIT_FIELDS = (
+        ("repetition_penalty", 1.0),
+        ("encoder_repetition_penalty", 1.0),
+        ("no_repeat_ngram_size", 0),
+        ("encoder_no_repeat_ngram_size", 0),
+        ("bad_words_ids", None),
+        ("force_words_ids", None),
+        ("constraints", None),
+        ("forced_bos_token_id", None),
+        ("forced_eos_token_id", None),
+        ("forced_decoder_ids", None),
+        ("suppress_tokens", None),
+        ("begin_suppress_tokens", None),
+        ("min_length", 0),
+        ("min_new_tokens", None),
+        ("diversity_penalty", 0.0),
+        ("exponential_decay_length_penalty", None),
+        ("remove_invalid_values", False),
+        ("renormalize_logits", False),
+    )
+
+    def _validate_supported_generation_config(self, generation_config) -> None:
+        """Reject config settings that this greedy-only generate() cannot honour.
+
+        The class parses these fields into its `GenerationConfig` but builds no logits processors, so a non-default
+        value would be dropped and the decoded text would silently diverge from HF. Raise instead.
+        """
+        if getattr(generation_config, "do_sample", False):
+            raise NotImplementedError(
+                "trocr generate() only implements greedy search: `do_sample=True` is not supported"
+            )
+        if getattr(generation_config, "num_beams", 1) > 1:
+            raise NotImplementedError(
+                f"trocr generate() only implements greedy search: `num_beams="
+                f"{generation_config.num_beams}` is not supported"
+            )
+        if getattr(generation_config, "num_beam_groups", 1) > 1:
+            raise NotImplementedError(
+                f"trocr generate() only implements greedy search: `num_beam_groups="
+                f"{generation_config.num_beam_groups}` is not supported"
+            )
+        if getattr(generation_config, "penalty_alpha", None) is not None:
+            raise NotImplementedError(
+                "trocr generate() only implements greedy search: contrastive search (`penalty_alpha`) is not"
+                " supported"
+            )
+
+        unsupported = []
+        for field, neutral in self.UNSUPPORTED_LOGIT_FIELDS:
+            value = getattr(generation_config, field, neutral)
+            if value is not None and value != neutral:
+                unsupported.append(f"{field}={value}")
+        if unsupported:
+            raise NotImplementedError(
+                "trocr generate() builds no logits processors, so these generation settings would be silently"
+                " ignored: " + ", ".join(unsupported) + ". Build the processors with"
+                " models.common.generation_utils._get_logits_processor (see get_logits_processor there) or unset"
+                " them."
+            )
+
     def _get_stopping_criteria(
         self,
         generation_config: GenerationConfig,
@@ -478,6 +540,8 @@ class GenerationMixin:
         model_kwargs = generation_config.update(**kwargs)  # All unused kwargs must be model kwargs
         generation_config.validate()
         self._validate_model_kwargs(model_kwargs.copy())
+        # Fail loudly instead of dropping any logits-processor setting or non-greedy mode on the floor.
+        self._validate_supported_generation_config(generation_config)
 
         # 2. Set generation parameters if not already defined
         logits_processor = logits_processor if logits_processor is not None else LogitsProcessorList()
