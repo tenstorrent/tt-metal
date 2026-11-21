@@ -294,6 +294,15 @@ TEST(VclusterDescriptors, PackageFacts) {
     EXPECT_EQ(pairs, (std::set<std::pair<uint32_t, uint32_t>>{{0, 1}, {2, 3}}));
 }
 
+// The manifests of manifests/ pass the checks with the package's facts.
+TEST(VclusterDescriptors, ManifestsPassChecks) {
+    const fs::path manifests = fs::path(__FILE__).parent_path() / "manifests";
+    for (const auto* name : {"line3_eth.yaml", "line3_am.yaml", "line3_noc.yaml"}) {
+        SCOPED_TRACE(name);
+        EXPECT_TRUE(check_manifest(load_manifest(manifests / name), package_facts(package_soc_desc())).empty());
+    }
+}
+
 // --- noc_links ---------------------------------------------------------------------------------------------------
 
 // Each pair is its ends' fabric_chip, lower first, in link order, and only noc links count.
