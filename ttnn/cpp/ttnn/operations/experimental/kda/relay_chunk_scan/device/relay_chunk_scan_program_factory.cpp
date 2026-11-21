@@ -431,6 +431,12 @@ tt::tt_metal::ProgramDescriptor build_program(
         // Two DRAM-aligned slots: actual_start (then the writer's chronology words), then the slab index.
         kda_factory_detail::cb_descriptor(cb_chron, 1, 2 * chron_slot_bytes, tt::DataFormat::UInt32, control_set),
         kda_factory_detail::cb_descriptor(cb_ctl, 1, 64, tt::DataFormat::UInt32, control_set),
+        // The next states, at one address on the relay and sender cores, before either role's own buffers.
+        kda_factory_detail::cb_descriptor(
+            cb_eout, relay_heads * state_tiles, state_tile, tt::DataFormat::Float32, eout_set),
+        // One page: the sender addresses its slots itself.
+        kda_factory_detail::cb_descriptor(
+            cb_stage, 1, sender_slots * kt * state_tile, tt::DataFormat::Float32, sender_set),
         std::move(terms_cb),
         // Every chunk's gate rows, FP32, which the matmul accumulates in place; in place, then the differences, which
         // compute forms once the gate rows have become factors (streamed, each chunk's difference comes before its
@@ -455,24 +461,18 @@ tt::tt_metal::ProgramDescriptor build_program(
         tile_cb(cb_weight_rows, kt, in.norm_weight.dtype()),
         // One normalized row, single-buffered: L1 beside the in-place terms has no room for two.
         tile_cb(cb_norm, kt, attrs.output_dtype),
-        // The relay core's heads' [E | B], one head after the other; on the first rank, once the hops are done, each
-        // head's final transition (FP32) in turn.
-        shared_cb(
-            relay_set,
-            {{cb_e, tt::DataFormat::Float16_b, relay_heads * state_tiles * summary_tile, state_tiles * summary_tile},
-             {cb_fe, tt::DataFormat::Float32, state_tiles * state_tile, state_tiles * state_tile}}),
+        // The relay core's heads' [E | B], one head after the other; on the first rank, once the hops are done, the
+        // heads' final transitions (FP32): E in the entry states' landing slots, B in cb_b's storage.
+        kda_factory_detail::cb_descriptor(
+            cb_e, relay_heads * state_tiles, summary_tile, tt::DataFormat::Float16_b, relay_set),
         shared_cb(
             relay_set,
             {{cb_b, tt::DataFormat::Float16_b, relay_heads * state_tiles * summary_tile, state_tiles * summary_tile},
-             {cb_fb, tt::DataFormat::Float32, state_tiles * state_tile, state_tiles * state_tile}}),
+             {cb_fb, tt::DataFormat::Float32, relay_heads * state_tiles * state_tile, state_tiles * state_tile}}),
+        landing_cb(cb_fe, 0),
         landing_cb(cb_ein, 0),
         landing_cb(cb_ein_exact, 0),
         kda_factory_detail::cb_descriptor(cb_identity, 1, summary_tile, tt::DataFormat::Float16_b, relay_set),
-        kda_factory_detail::cb_descriptor(
-            cb_eout, relay_heads * state_tiles, state_tile, tt::DataFormat::Float32, eout_set),
-        // One page: the sender addresses its slots itself.
-        kda_factory_detail::cb_descriptor(
-            cb_stage, 1, sender_slots * kt * state_tile, tt::DataFormat::Float32, sender_set),
         landing_cb(cb_p, relay_heads),
         landing_cb(cb_p_exact, relay_heads),
     };
@@ -592,7 +592,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     for (const auto* tensor : {&in.packed, &in.initial_state, &in.final_e, &in.final_b}) {
         tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(relay_reader_ct);
     }
-    std::vector<uint32_t> relay_writer_ct = {cb_eout, cb_chron, kt, first_ack_semaphore_id};
+    std::vector<uint32_t> relay_writer_ct = {cb_eout, cb_chron, kt, first_ack_semaphore_id, relay_heads};
     tt::tt_metal::TensorAccessorArgs(carry.buffer()).append_to(relay_writer_ct);
     relay_writer_ct.insert(relay_writer_ct.end(), slab_ct.begin(), slab_ct.end());
     std::vector<uint32_t> sender_ct = {cb_stage, cb_eout};
@@ -601,9 +601,6 @@ tt::tt_metal::ProgramDescriptor build_program(
         sender_ct.end(),
         {kt * state_tile, relay_chunk_scan_packet_bytes(), kt, sender_slots, first_ack_semaphore_id, relay_heads});
     tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(sender_ct);
-    tt::tt_metal::TensorAccessorArgs(carry.buffer()).append_to(sender_ct);
-    sender_ct.insert(sender_ct.end(), slab_ct.begin(), slab_ct.end());
-    tt::tt_metal::TensorAccessorArgs(slab_index.buffer()).append_to(sender_ct);
     sender_ct.push_back(uint32_t(unicast_peers));
 
     tt::tt_metal::KernelDescriptor reader{
@@ -682,7 +679,19 @@ tt::tt_metal::ProgramDescriptor build_program(
         .kernel_source = std::string(kernel_dir) + "compute/relay_core.cpp",
         .core_ranges = relay_set,
         .compile_time_args =
-            {cb_e, cb_b, cb_ein, cb_eout, kt, cb_ein_exact, cb_identity, cb_fe, cb_fb, cb_p, cb_p_exact, cb_ctl},
+            {cb_e,
+             cb_b,
+             cb_ein,
+             cb_eout,
+             kt,
+             cb_ein_exact,
+             cb_identity,
+             cb_fe,
+             cb_fb,
+             cb_p,
+             cb_p_exact,
+             cb_ctl,
+             relay_heads},
         .config = std::move(relay_compute_config),
     };
     tt::tt_metal::KernelDescriptor sender{
@@ -697,12 +706,11 @@ tt::tt_metal::ProgramDescriptor build_program(
     };
 
     const auto& semaphores = attrs.semaphore_addresses;
+    // The entry states' and final states' (and carries') arrivals, then x's and W's block counts.
     const uint32_t arrival_address = semaphores[0];
     const uint32_t final_address = semaphores[1];
-    const uint32_t carry_address = semaphores[2];
-    // x's and W's block counts.
-    const uint32_t x_valid = semaphores[3];
-    const uint32_t w_valid = semaphores[4];
+    const uint32_t x_valid = semaphores[2];
+    const uint32_t w_valid = semaphores[3];
     const auto append_gate_args = [&](tt::tt_metal::KernelDescriptor::RTArgList& args) {
         args.push_back(in.gate_input.buffer());
         args.push_back(gate_local.buffer());
@@ -747,7 +755,8 @@ tt::tt_metal::ProgramDescriptor build_program(
     relay_reader_args.push_back(arrival_address);
     relay_reader_args.push_back(final_address);
     relay_reader.emplace_common_runtime_args(relay_reader_args);
-    relay_writer.emplace_common_runtime_args({carry.buffer(), uint32_t(back_sender)});
+    relay_writer.emplace_common_runtime_args(
+        {carry.buffer(), uint32_t(back_sender), in.landing.buffer(), final_address});
     for (uint32_t r = 0; r < relay_cores.size(); ++r) {
         const auto& heads = relay_core_heads[r];
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt, writer_rt;
@@ -778,15 +787,13 @@ tt::tt_metal::ProgramDescriptor build_program(
         std::move(relay_compute)};
     tt::tt_metal::KernelHandle sender_kernel = 3;
 
-    desc.kernels[sender_kernel].emplace_common_runtime_args(
-        {in.actual_start.buffer(), in.landing.buffer(), carry.buffer(), slab_index.buffer()});
+    desc.kernels[sender_kernel].emplace_common_runtime_args({in.actual_start.buffer(), in.landing.buffer()});
     // The second carry senders connect to the predecessor where they carry; an idle one is given the relay's
     // connection, which it never opens, so every chip's runtime args keep one layout.
     const auto back_node = !back_sender    ? connection_node
                            : unicast_peers ? carry_senders[1].connections.front()
                                            : predecessor_node;
     const auto back_links = tt::tt_fabric::get_forwarding_link_indices(*mesh, source_node, back_node);
-    const auto drain_core = mesh->worker_core_from_logical_core(sender_cores.front());
     TT_FATAL(
         links.size() >= attrs.num_links && back_links.size() >= attrs.num_links,
         "relay_chunk_scan uses {} links; the hops towards the successor and predecessor have {} and {}",
@@ -816,11 +823,6 @@ tt::tt_metal::ProgramDescriptor build_program(
             sender_rt.append(heads);
             sender_rt.append(notify);
             sender_rt.append(head_slots);
-            sender_rt.push_back(carry_address);
-            sender_rt.push_back(static_cast<uint32_t>(drain_core.x));
-            sender_rt.push_back(static_cast<uint32_t>(drain_core.y));
-            sender_rt.push_back(attrs.num_links);
-            sender_rt.push_back(link);
             sender_rt.push_back(uint32_t(!backward));
             sender_rt.push_back(backward ? back_range : relay_range);
             // An idle second sender is given the relay's connection, which it never opens.
