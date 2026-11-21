@@ -13,6 +13,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -140,7 +141,16 @@ Tensor pre_gather_transform_tensor(
 
     if (padding_index_tensor) {
         // Index tensor padding
-        return is_tile ? ttnn::fill_implicit_tile_padding(transformed_tensor, 0.0f) : transformed_tensor;
+        // fill_implicit_tile_padding writes in place, so never write the caller's tensor.
+        if (!is_tile) {
+            return transformed_tensor;
+        }
+        if (transformed_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT == 0 &&
+            transformed_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0) {
+            return transformed_tensor;
+        }
+        return ttnn::fill_implicit_tile_padding(
+            ttnn::clone(transformed_tensor, std::nullopt, std::nullopt, std::nullopt), 0.0f);
     }
 
     // Input tensor processing
@@ -158,7 +168,17 @@ Tensor pre_gather_transform_tensor(
     const Tensor sliced_tensor =
         ttnn::slice(transformed_tensor, start_index, end_index, step, input_tensor.memory_config());
 
-    return is_tile ? ttnn::fill_implicit_tile_padding(sliced_tensor, std::numeric_limits<float>::min()) : sliced_tensor;
+    if (!is_tile) {
+        return sliced_tensor;
+    }
+    // fill_implicit_tile_padding writes in place, so never write the caller's tensor. The sliced
+    // tensor can still alias the input when the slice is a no-op, so clone before filling.
+    if (sliced_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT == 0 &&
+        sliced_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0) {
+        return sliced_tensor;
+    }
+    return ttnn::fill_implicit_tile_padding(
+        ttnn::clone(sliced_tensor, std::nullopt, std::nullopt, std::nullopt), std::numeric_limits<float>::min());
 }
 
 /**

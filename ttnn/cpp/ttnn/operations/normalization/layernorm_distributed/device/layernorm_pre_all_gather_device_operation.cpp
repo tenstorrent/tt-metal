@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_pre_all_gather_device_operation.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -145,12 +146,19 @@ Tensor layer_norm_pre_all_gather(
         TT_FATAL(input.device() == b.device(), "Input and residual tensors must be on same device");
     }
 
-    auto input_padded = ttnn::fill_implicit_tile_padding(input, 0.0f);
+    // fill_implicit_tile_padding writes in place, so never write the caller's tensors.
+    auto fill_padding = [](const Tensor& tensor) {
+        if (tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT == 0 &&
+            tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0) {
+            return tensor;
+        }
+        return ttnn::fill_implicit_tile_padding(ttnn::clone(tensor, std::nullopt, std::nullopt, std::nullopt), 0.0f);
+    };
+    auto input_padded = fill_padding(input);
     // Also zero residual's implicit tile padding so it doesn't contaminate the kernel-fused
     // a + b that gets fed into the per-row stats.
-    auto residual_padded = residual_input_tensor.has_value()
-                               ? std::make_optional(ttnn::fill_implicit_tile_padding(*residual_input_tensor, 0.0f))
-                               : std::nullopt;
+    auto residual_padded =
+        residual_input_tensor.has_value() ? std::make_optional(fill_padding(*residual_input_tensor)) : std::nullopt;
     return ttnn::device_operation::detail::launch<OperationType>(
         OperationType::operation_attributes_t{
             .norm_type = norm_type,
