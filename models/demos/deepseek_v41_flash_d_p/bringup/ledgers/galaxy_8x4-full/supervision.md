@@ -668,3 +668,9 @@
 - 11:10 heartbeat: MB.4 agent active; watch armed.
 - 11:40 heartbeat: MB.4 agent active; watch armed.
 - 11:51 MB.4 finding (agent, KNOWLEDGE CONTRADICTED DS41-324): at 1024000 POS_DYNAMIC on 92.59 vs off 86.81 ms; the history prefetch: device 6.08 vs 4.13 ms, host 6.85 vs 1.40 ms; the harness adds nothing (off == 11-19). The orchestrator now runs the on/off A/B.
+- 12:05 MB.4 gate PASS -> 32d12f46bda (accepted: all 7 units, cold no-rebuild 0 builds, 0 ids uploads; checked the diff:
+  history_gather._pack_rows = one fused ckv_bfp4 pack per piece (fork option) instead of MB.2's per-2048-row alloc + page
+  copy + tilize; source row a runtime value; prepared_program fork change; no host table). Cause found: MB.2's history
+  pack at long histories (1M: device 6.08 vs 4.13, host 6.85 vs 1.40 ms); the harness added nothing. 5120 ladder now
+  (steady ms / tok/s): 51200 72.1 / 71.0k; 131072 75.4 / 67.9k; 139264 77.2 / 66.3k; 262144 75.7 / 67.6k; 524288 79.7 /
+  64.2k; 786432 85.9 / 59.6k; 1024000 86.9 / 58.9k = at or better than 11-19 everywhere. Branch ready to push (owner).
