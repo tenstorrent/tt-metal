@@ -55,91 +55,6 @@ inline uint32_t pack_two_bfloat16_to_uint32(float value) {
     return casted_uint16_data | (casted_uint16_data << 16U);
 }
 
-/**
- *   Create and configure a circular buffer, returning both the configuration and the handle.
- */
-inline tt::tt_metal::CBHandle create_circular_buffer(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t single_tile_size,
-    uint32_t num_tiles) {
-    tt::tt_metal::CircularBufferConfig cb_config =
-        tt::tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, data_format}})
-            .set_page_size(cb_index, single_tile_size);
-
-    auto cb_handle = CreateCircularBuffer(program, core_ranges, cb_config);
-    return cb_handle;
-}
-
-/**
- *   Byte-sized variant of create_circular_buffer for CBs whose total size and
- *   page size aren't naturally expressed as tile_size × num_tiles (control/scratch
- *   buffers, row-major staging, custom-aligned pages). If `page_size_bytes` is 0
- *   the whole buffer is one page.
- */
-inline tt::tt_metal::CBHandle create_circular_buffer_bytes(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t total_bytes,
-    uint32_t page_size_bytes = 0U) {
-    const uint32_t page_size = page_size_bytes == 0U ? total_bytes : page_size_bytes;
-    tt::tt_metal::CircularBufferConfig cb_config =
-        tt::tt_metal::CircularBufferConfig(total_bytes, {{cb_index, data_format}}).set_page_size(cb_index, page_size);
-    return CreateCircularBuffer(program, core_ranges, cb_config);
-}
-
-/**
- *   Create a reader kernel with the given compile-time arguments.
- */
-inline tt::tt_metal::KernelHandle create_reader_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::ReaderDataMovementConfig(compile_time_args, defines));
-}
-
-/**
- *   Create a writer kernel with the given compile-time arguments.
- */
-inline tt::tt_metal::KernelHandle create_writer_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::WriterDataMovementConfig(compile_time_args, defines));
-}
-
-/**
- * Create a compute kernel with the given compile-time arguments.
- */
-inline tt::tt_metal::KernelHandle create_compute_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path,
-    const bool fp32_dest_acc_en) {
-    return tt::tt_metal::CreateKernel(
-        program,
-        kernel_path,
-        core_ranges,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = false,
-            .compile_args = compile_time_args,
-            .defines = defines});
-}
-
 namespace ttml::metal {
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -160,7 +75,6 @@ namespace ttml::metal {
 //
 // Kernel handles in the built Program are the push order of ProgramDescriptor::kernels. Factories with an override push
 // fixed-index kernels first (reader, writer, ...) and the optional per-group compute kernel last, and name the indices.
-// The helpers below mirror the Program-based create_* helpers above, with the same parameter order minus the Program.
 // ---------------------------------------------------------------------------------------------------------------------
 
 // Program(const ProgramDescriptor&) merges a CB's core ranges, as CreateCircularBuffer does, so they go in as given.
@@ -181,7 +95,7 @@ inline tt::tt_metal::CBDescriptor make_cb_descriptor(
     };
 }
 
-// Descriptor counterpart of create_circular_buffer_bytes: a page size of 0 makes the whole buffer one page.
+// A CB sized in bytes, for buffers that are not whole tiles: a page size of 0 makes the whole buffer one page.
 inline tt::tt_metal::CBDescriptor make_cb_descriptor_bytes(
     const tt::tt_metal::CoreRangeSet& core_ranges,
     uint32_t cb_index,
@@ -233,7 +147,7 @@ inline tt::tt_metal::KernelDescriptor make_writer_kernel_descriptor(
         kernel_path, core_ranges, compile_time_args, defines, tt::tt_metal::WriterConfigDescriptor{});
 }
 
-// Same settings as create_compute_kernel (HiFi4, no approximation) unless overridden. unpack_to_dest_mode is indexed
+// HiFi4 and no approximation unless overridden. unpack_to_dest_mode is indexed
 // by CB id, as in tt::tt_metal::ComputeConfig; leave it empty for the default.
 inline tt::tt_metal::KernelDescriptor make_compute_kernel_descriptor(
     const tt::tt_metal::CoreRangeSet& core_ranges,

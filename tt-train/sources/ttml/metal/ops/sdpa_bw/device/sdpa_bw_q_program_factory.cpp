@@ -4,13 +4,16 @@
 
 #include "sdpa_bw_q_program_factory.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "sdpa_bw_q_device_operation.hpp"
 
 namespace {
 
@@ -38,6 +41,13 @@ constexpr uint32_t kGradQueryBufferIdx = 0;
 constexpr uint32_t kUScalerOutputBufferIdx = 1U;
 constexpr uint32_t kGradGateBufferIdx = 2U;
 constexpr uint32_t kGatedGradOutputBufferIdx = 3U;
+
+// Kernel handles in the built Program: the push order of ProgramDescriptor::kernels. The group 2 compute kernel (3)
+// exists only for an uneven row split; override_runtime_arguments() touches only the reader and the writer.
+constexpr uint32_t kReaderKernel = 0U;
+constexpr uint32_t kWriterKernel = 1U;
+constexpr uint32_t kComputeGroup1Kernel = 2U;
+constexpr uint32_t kComputeGroup2Kernel = 3U;
 
 // Circular buffer indices
 constexpr auto kGradOutputCbIndex = tt::CBIndex::c_0;
@@ -98,20 +108,37 @@ std::vector<std::pair<uint32_t, uint32_t>> calculate_balanced_pair_distribution(
     return distribution;
 }
 
+// How the rows split over the cores: for causal attention with an even number of sequence tiles and more rows than
+// cores, pairs of a light and a heavy row (balanced parallelism), else split_work_to_cores' row split. Either way the
+// cores with work are the first `num_cores` of the walk, core i being {i / num_cores_y, i % num_cores_y}.
+struct RowSplit {
+    bool balanced = false;
+    uint32_t num_cores = 0U;
+};
+
+RowSplit choose_row_split(
+    ttml::metal::AttentionMaskType mask_type, uint32_t St, uint32_t NC, uint32_t num_available_cores) {
+    const uint32_t total_rows = NC * St;
+    const bool balanced = (mask_type == ttml::metal::AttentionMaskType::Causal) && (St % 2 == 0) &&
+                          (total_rows > num_available_cores) && (St > 0);
+    const uint32_t units = balanced ? NC * (St / 2U) : total_rows;
+    return RowSplit{.balanced = balanced, .num_cores = std::min(num_available_cores, units)};
+}
+
+// An optional buffer's runtime arg: the buffer when present, 0 when not.
+void push_buffer_or_zero(tt::tt_metal::KernelDescriptor::RTArgList& args, tt::tt_metal::Buffer* buffer) {
+    if (buffer != nullptr) {
+        args.push_back(buffer);
+    } else {
+        args.push_back(0U);
+    }
+}
+
 }  // namespace
 
 namespace ttml::metal::ops::sdpa_bw::device {
 
-/**
- *   Helper struct to hold references to all kernels we create,
- *        used during runtime argument setup.
- */
-struct SDPABackwardQKernels {
-    tt::tt_metal::KernelHandle reader{};
-    tt::tt_metal::KernelHandle writer{};
-    tt::tt_metal::KernelHandle compute_group_1{};
-    tt::tt_metal::KernelHandle compute_group_2{};
-};
+TTML_ASSERT_DESCRIPTOR_OVERRIDE(SDPABackwardQDeviceOperation, SDPABackwardQProgramFactory);
 
 /**
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
@@ -124,19 +151,18 @@ struct SDPABackwardQKernels {
  * a "heavy" row (late in sequence, more work), providing balanced total work.
  */
 void assign_per_core_runtime_args_balanced(
-    tt::tt_metal::Program& program,
-    const SDPABackwardQKernels& kernels,
-    const tt::tt_metal::Buffer* grad_output_buffer,
-    const tt::tt_metal::Buffer* attn_output_buffer,
-    const tt::tt_metal::Buffer* query_buffer,
-    const tt::tt_metal::Buffer* key_buffer,
-    const tt::tt_metal::Buffer* value_buffer,
-    const tt::tt_metal::Buffer* intermediates_buffer,
-    const tt::tt_metal::Buffer* gate_buffer,
-    const tt::tt_metal::Buffer* grad_gate_buffer,
-    const tt::tt_metal::Buffer* gated_grad_output_buffer,
-    const tt::tt_metal::Buffer* grad_query_buffer,
-    const tt::tt_metal::Buffer* u_scaler_buffer,
+    tt::tt_metal::ProgramDescriptor& desc,
+    tt::tt_metal::Buffer* grad_output_buffer,
+    tt::tt_metal::Buffer* attn_output_buffer,
+    tt::tt_metal::Buffer* query_buffer,
+    tt::tt_metal::Buffer* key_buffer,
+    tt::tt_metal::Buffer* value_buffer,
+    tt::tt_metal::Buffer* intermediates_buffer,
+    tt::tt_metal::Buffer* gate_buffer,
+    tt::tt_metal::Buffer* grad_gate_buffer,
+    tt::tt_metal::Buffer* gated_grad_output_buffer,
+    tt::tt_metal::Buffer* grad_query_buffer,
+    tt::tt_metal::Buffer* u_scaler_buffer,
     const uint32_t num_cores,
     const uint32_t num_cores_y,
     const std::vector<std::pair<uint32_t, uint32_t>>& pair_distribution) {
@@ -145,44 +171,35 @@ void assign_per_core_runtime_args_balanced(
         const auto& [start_pair_idx, num_pairs] = pair_distribution[i];
 
         // Reader kernel: reuses num_rows_to_process = num_pairs, start_row = start_pair_idx
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {
-                grad_output_buffer->address(),
-                attn_output_buffer->address(),
-                query_buffer->address(),
-                key_buffer->address(),
-                value_buffer->address(),
-                0U,  // mask_addr unused for balanced causal
-                intermediates_buffer->address(),
-                gate_buffer != nullptr ? gate_buffer->address() : 0U,  // gate buffer address
-                num_pairs,
-                start_pair_idx,
-            });
+        tt::tt_metal::KernelDescriptor::RTArgList reader_args;
+        reader_args.push_back(grad_output_buffer);
+        reader_args.push_back(attn_output_buffer);
+        reader_args.push_back(query_buffer);
+        reader_args.push_back(key_buffer);
+        reader_args.push_back(value_buffer);
+        reader_args.push_back(0U);  // mask_addr unused for balanced causal
+        reader_args.push_back(intermediates_buffer);
+        push_buffer_or_zero(reader_args, gate_buffer);
+        reader_args.push_back(num_pairs);
+        reader_args.push_back(start_pair_idx);
+        desc.kernels[kReaderKernel].emplace_runtime_args(core, reader_args);
 
         // Writer kernel: num_rows_to_process = num_pairs, start_row = start_pair_idx
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {
-                grad_query_buffer->address(),
-                u_scaler_buffer->address(),
-                grad_gate_buffer != nullptr ? grad_gate_buffer->address() : 0U,  // grad_gate buffer address
-                gated_grad_output_buffer != nullptr ? gated_grad_output_buffer->address()
-                                                    : 0U,  // gated dO buffer address
-                num_pairs,
-                start_pair_idx,
-            });
+        tt::tt_metal::KernelDescriptor::RTArgList writer_args;
+        writer_args.push_back(grad_query_buffer);
+        writer_args.push_back(u_scaler_buffer);
+        push_buffer_or_zero(writer_args, grad_gate_buffer);
+        push_buffer_or_zero(writer_args, gated_grad_output_buffer);
+        writer_args.push_back(num_pairs);
+        writer_args.push_back(start_pair_idx);
+        desc.kernels[kWriterKernel].emplace_runtime_args(core, writer_args);
 
         // Compute kernel: (start_pair_idx, num_pairs)
-        SetRuntimeArgs(program, kernels.compute_group_1, core, {start_pair_idx, num_pairs});
+        desc.kernels[kComputeGroup1Kernel].emplace_runtime_args(core, {start_pair_idx, num_pairs});
     }
 }
 
-SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::create(
+tt::tt_metal::ProgramDescriptor SDPABackwardQProgramFactory::create_descriptor(
     const q::operation_attributes_t& args, const q::tensor_args_t& tensor_args, q::tensor_return_value_t& output) {
     // -------------------------------------------------------------------------
     // 1) Setup device, data formats, tile sizes, and compute split
@@ -196,7 +213,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     const auto& gate = tensor_args.gate;
 
     auto* device = grad_output.device();
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
+    tt::tt_metal::ProgramDescriptor desc;
     auto input_data_format = datatype_to_dataformat_converter(grad_output.dtype());
     const uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
@@ -235,8 +252,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // -------------------------------------------------------------------------
     const uint32_t pairs_per_seq = St / 2;
     const uint32_t total_pairs = NC * pairs_per_seq;
-    const bool use_balanced_parallelism = (args.mask_type == AttentionMaskType::Causal) && (St % 2 == 0) &&
-                                          (total_rows_to_process > num_available_cores) && (St > 0);
+    const RowSplit row_split = choose_row_split(args.mask_type, St, NC, num_available_cores);
+    const bool use_balanced_parallelism = row_split.balanced;
 
     uint32_t num_cores = 0;
     tt::tt_metal::CoreRangeSet all_cores{};
@@ -272,132 +289,71 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
-    [[maybe_unused]] auto cb_grad_output = create_circular_buffer(  // CBIndex::c_0
-        program,
-        all_cores,
-        kGradOutputCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        2 * vWt);
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kGradOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
 
-    [[maybe_unused]] auto cb_attn_output = create_circular_buffer(  // CBIndex::c_1
-        program,
-        all_cores,
-        kAttnOutputCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        2 * vWt);
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kAttnOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
 
-    [[maybe_unused]] auto cb_query = create_circular_buffer( // CBIndex::c_2
-        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt));
 
-    [[maybe_unused]] auto cb_key =  // CBIndex::c_3
-        create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt));
 
-    [[maybe_unused]] auto cb_value =  // CBIndex::c_4
-        create_circular_buffer(
-            program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
 
     // Create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly
     // Not needed for AttentionMaskType::None
     if (args.mask_type != AttentionMaskType::None) {
-        [[maybe_unused]] auto cb_attn_mask =  // CBIndex::c_5
-            create_circular_buffer(
-                program,
-                all_cores,
-                kAttnMaskCbIndex,
-                data_format,
-                bfloat16_single_tile_size_bytes,
-                2 * kSingleTileBuffer);
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kSingleTileBuffer));
     }
 
-    [[maybe_unused]] auto cb_intermediates =  // CBIndex::c_6
-        create_circular_buffer(
-            program,
-            all_cores,
-            kIntermediatesCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            2 * kNumOfIntermCBTiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores,
+        kIntermediatesCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        2 * kNumOfIntermCBTiles));
 
-    [[maybe_unused]] auto cb_mat_mul_reduce =  // CBIndex::c_7
-        create_circular_buffer(
-            program,
-            all_cores,
-            kMatMulReduceCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kSingleTileBuffer);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kMatMulReduceCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
 
-    [[maybe_unused]] auto cb_grad_query_accum =  // CBIndex::c_8
-        create_circular_buffer(
-            program, all_cores, kGradQueryAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kGradQueryAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt));
 
-    [[maybe_unused]] auto cb_attention_weights =  // CBIndex::c_9
-        create_circular_buffer(
-            program,
-            all_cores,
-            kAttentionWeightsCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kSingleTileBuffer);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kAttentionWeightsCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
 
-    [[maybe_unused]] auto cb_grad_attention =  // CBIndex::c_10
-        create_circular_buffer(
-            program,
-            all_cores,
-            kGradAttentionCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kSingleTileBuffer);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kGradAttentionCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
 
-    [[maybe_unused]] auto cb_grad_scores =  // CBIndex::c_11
-        create_circular_buffer(
-            program,
-            all_cores,
-            kGradScoresCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kSingleTileBuffer);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kGradScoresCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
 
-    [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_12
-        create_circular_buffer(
-            program,
-            all_cores,
-            kUScalarRowCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kSingleTileBuffer);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kUScalarRowCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
 
-    [[maybe_unused]] auto cb_grad_query =  // CBIndex::c_13
-        create_circular_buffer(
-            program, all_cores, kGradQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kGradQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt));
 
-    [[maybe_unused]] auto cb_u_scaler_output =  // CBIndex::c_14
-        create_circular_buffer(
-            program,
-            all_cores,
-            kUScalerOutputCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kSingleTileBuffer);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kUScalerOutputCbIndex, precise_data_format, float32_single_tile_size_bytes, kSingleTileBuffer));
 
     if (args.has_gate) {
-        [[maybe_unused]] auto cb_gate =  // CBIndex::c_15
-            create_circular_buffer(
-                program, all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+        desc.cbs.push_back(
+            make_cb_descriptor(all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
 
-        [[maybe_unused]] auto cb_grad_gate =  // CBIndex::c_16
-            create_circular_buffer(
-                program, all_cores, kGradGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+        desc.cbs.push_back(
+            make_cb_descriptor(all_cores, kGradGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
 
-        [[maybe_unused]] auto cb_gated_grad_output =  // CBIndex::c_17
-            create_circular_buffer(
-                program, all_cores, kGatedGradOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores, kGatedGradOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt));
 
-        [[maybe_unused]] auto cb_gated_grad_output_local =  // CBIndex::c_18
-            create_circular_buffer(
-                program, all_cores, kGatedGradOutputLocalCbIndex, data_format, bfloat16_single_tile_size_bytes, vWt);
+        desc.cbs.push_back(make_cb_descriptor(
+            all_cores, kGatedGradOutputLocalCbIndex, data_format, bfloat16_single_tile_size_bytes, vWt));
     }
 
     // -------------------------------------------------------------------------
@@ -458,8 +414,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     const auto math_fidelity = (device->arch() == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3
                                                                          : tt::tt_metal::MathFidelity::HiFi4;
 
-    SDPABackwardQKernels kernels;
-
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
         qWt,              // 0: Q/K width in tiles
@@ -477,7 +431,9 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_compile_args);
 
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, reader_defines, kReaderKernelPath);
+    // Kernels are pushed in the order of the k*Kernel handles: reader, writer, then the compute kernels.
+    desc.kernels.push_back(
+        make_reader_kernel_descriptor(all_cores, reader_compile_args, reader_defines, kReaderKernelPath));
 
     // Writer compile-time arguments
     std::vector<uint32_t> writer_compile_args = {
@@ -490,7 +446,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     tt::tt_metal::TensorAccessorArgs(grad_gate_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(gated_grad_output_buffer).append_to(writer_compile_args);
 
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, writer_defines, kWriterKernelPath);
+    desc.kernels.push_back(
+        make_writer_kernel_descriptor(all_cores, writer_compile_args, writer_defines, kWriterKernelPath));
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels
@@ -519,17 +476,15 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             block_size           // 7: block size
         };
 
-        kernels.compute_group_1 = tt::tt_metal::CreateKernel(
-            program,
-            kComputeKernelPath,
+        desc.kernels.push_back(make_compute_kernel_descriptor(
             all_cores,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode = create_unpack_to_dest_mode(),
-                .math_approx_mode = false,
-                .compile_args = compute_args,
-                .defines = compute_defines});
+            compute_args,
+            compute_defines,
+            kComputeKernelPath,
+            /*fp32_dest_acc_en=*/true,
+            create_unpack_to_dest_mode(),
+            math_fidelity,
+            /*math_approx_mode=*/false));
     } else {
         // Group 1 compile-time arguments
         std::vector<uint32_t> compute_group_1_args = {
@@ -542,17 +497,15 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             custom_inf,                 // 6: used to transform mask from 0/-1 to 0/-inf
             block_size                  // 7: block size
         };
-        kernels.compute_group_1 = tt::tt_metal::CreateKernel(
-            program,
-            kComputeKernelPath,
+        desc.kernels.push_back(make_compute_kernel_descriptor(
             core_group_1,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode = create_unpack_to_dest_mode(),
-                .math_approx_mode = false,
-                .compile_args = compute_group_1_args,
-                .defines = compute_defines});
+            compute_group_1_args,
+            compute_defines,
+            kComputeKernelPath,
+            /*fp32_dest_acc_en=*/true,
+            create_unpack_to_dest_mode(),
+            math_fidelity,
+            /*math_approx_mode=*/false));
 
         // Group 2 compile-time arguments
         if (!core_group_2.ranges().empty()) {
@@ -566,27 +519,26 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
                 custom_inf,                 // 6: used to transform mask from 0/-1 to 0/-inf
                 block_size                  // 7: block size
             };
-            kernels.compute_group_2 = tt::tt_metal::CreateKernel(
-                program,
-                kComputeKernelPath,
+            desc.kernels.push_back(make_compute_kernel_descriptor(
                 core_group_2,
-                tt::tt_metal::ComputeConfig{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = true,
-                    .unpack_to_dest_mode = create_unpack_to_dest_mode(),
-                    .math_approx_mode = false,
-                    .compile_args = compute_group_2_args,
-                    .defines = compute_defines});
+                compute_group_2_args,
+                compute_defines,
+                kComputeKernelPath,
+                /*fp32_dest_acc_en=*/true,
+                create_unpack_to_dest_mode(),
+                math_fidelity,
+                /*math_approx_mode=*/false));
         }
     }
 
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
+    // On a cache hit override_runtime_arguments() rewrites the buffer addresses (the k*BufferIdx slots) on the reader
+    // and the writer. Row counts and offsets follow from the input shapes, which the program hash keys on.
     if (use_balanced_parallelism) {
         assign_per_core_runtime_args_balanced(
-            program,
-            kernels,
+            desc,
             grad_output_buffer,
             attn_output_buffer,
             query_buffer,
@@ -611,84 +563,69 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             num_rows_per_core_group_2,
             [&](const CoreWork& work) {
                 const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
-                SetRuntimeArgs(
-                    program,
-                    kernels.reader,
-                    core,
-                    {grad_output_buffer->address(),
-                     attn_output_buffer->address(),
-                     query_buffer->address(),
-                     key_buffer->address(),
-                     value_buffer->address(),
-                     attn_mask_buffer != nullptr ? attn_mask_buffer->address() : 0U,
-                     intermediates_buffer->address(),
-                     gate_buffer != nullptr ? gate_buffer->address() : 0U,
-                     num_rows,
-                     start_row});
-                SetRuntimeArgs(
-                    program,
-                    kernels.writer,
-                    core,
-                    {grad_query_buffer->address(),
-                     u_scaler_buffer->address(),
-                     grad_gate_buffer != nullptr ? grad_gate_buffer->address() : 0U,
-                     gated_grad_output_buffer != nullptr ? gated_grad_output_buffer->address() : 0U,
-                     num_rows,
-                     start_row});
-                SetRuntimeArgs(
-                    program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {start_row});
+                tt::tt_metal::KernelDescriptor::RTArgList reader_args;
+                reader_args.push_back(grad_output_buffer);
+                reader_args.push_back(attn_output_buffer);
+                reader_args.push_back(query_buffer);
+                reader_args.push_back(key_buffer);
+                reader_args.push_back(value_buffer);
+                push_buffer_or_zero(reader_args, attn_mask_buffer);
+                reader_args.push_back(intermediates_buffer);
+                push_buffer_or_zero(reader_args, gate_buffer);
+                reader_args.push_back(num_rows);
+                reader_args.push_back(start_row);
+                desc.kernels[kReaderKernel].emplace_runtime_args(core, reader_args);
+                tt::tt_metal::KernelDescriptor::RTArgList writer_args;
+                writer_args.push_back(grad_query_buffer);
+                writer_args.push_back(u_scaler_buffer);
+                push_buffer_or_zero(writer_args, grad_gate_buffer);
+                push_buffer_or_zero(writer_args, gated_grad_output_buffer);
+                writer_args.push_back(num_rows);
+                writer_args.push_back(start_row);
+                desc.kernels[kWriterKernel].emplace_runtime_args(core, writer_args);
+                desc.kernels[in_group_1 ? kComputeGroup1Kernel : kComputeGroup2Kernel].emplace_runtime_args(
+                    core, {start_row});
             });
     }
 
     // -------------------------------------------------------------------------
-    // 6) Return the fully configured program & relevant shared variables
+    // 6) Return the program descriptor
     // -------------------------------------------------------------------------
-    return cached_program_t{
-        std::move(program),
-        {.sdpa_bw_q_reader_kernel = kernels.reader,
-         .sdpa_bw_q_writer_kernel = kernels.writer,
-         .sdpa_bw_q_kernel_group_1 = kernels.compute_group_1,
-         .sdpa_bw_q_kernel_group_2 = kernels.compute_group_2,
-         .core_group_1 = core_group_1,
-         .core_group_2 = core_group_2,
-         .num_cores = num_cores,
-         .num_cores_y = num_cores_y}};
+    return desc;
 }
 
 void SDPABackwardQProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+    tt::tt_metal::Program& program,
     const q::operation_attributes_t& args,
     const q::tensor_args_t& tensor_args,
-    q::tensor_return_value_t& tensor_return_value) {
-    // This updates buffer addresses and other runtime parameters
-    auto& shared_vars = cached_program.shared_variables;
-    auto& sdpa_bw_reader_kernel = shared_vars.sdpa_bw_q_reader_kernel;
-    auto& sdpa_bw_writer_kernel = shared_vars.sdpa_bw_q_writer_kernel;
-    auto& program = cached_program.program;
-
-    uint32_t num_cores = shared_vars.num_cores;
-    uint32_t num_cores_y = shared_vars.num_cores_y;
-
-    const auto* grad_output_buffer = &tensor_args.grad_output.mesh_buffer();
-    const auto* attn_output_buffer = &tensor_args.attn_output.mesh_buffer();
-    const auto* query_buffer = &tensor_args.query.mesh_buffer();
-    const auto* key_buffer = &tensor_args.key.mesh_buffer();
-    const auto* value_buffer = &tensor_args.value.mesh_buffer();
+    q::tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
+    // Only buffer addresses change: row counts follow from the input shapes, which the program hash keys on.
+    const auto* grad_output_buffer = tensor_args.grad_output.buffer();
+    const auto* attn_output_buffer = tensor_args.attn_output.buffer();
+    const auto* query_buffer = tensor_args.query.buffer();
+    const auto* key_buffer = tensor_args.key.buffer();
+    const auto* value_buffer = tensor_args.value.buffer();
     const auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
-    const auto* intermediates_buffer = &tensor_args.intermediates.mesh_buffer();
+    const auto* intermediates_buffer = tensor_args.intermediates.buffer();
     const auto* gate_buffer = tensor_args.gate.has_value() ? tensor_args.gate.value().buffer() : nullptr;
 
     auto& [grad_query_tensor, u_scaler_tensor, grad_gate_tensor, gated_grad_output_tensor] = tensor_return_value;
-    const auto* grad_query_buffer = &grad_query_tensor.mesh_buffer();
-    const auto* u_scaler_buffer = &u_scaler_tensor.mesh_buffer();
+    const auto* grad_query_buffer = grad_query_tensor.buffer();
+    const auto* u_scaler_buffer = u_scaler_tensor.buffer();
     const auto* grad_gate_buffer = grad_gate_tensor.has_value() ? grad_gate_tensor.value().buffer() : nullptr;
     const auto* gated_grad_output_buffer =
         gated_grad_output_tensor.has_value() ? gated_grad_output_tensor.value().buffer() : nullptr;
 
-    auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_bw_reader_kernel);
-    auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_bw_writer_kernel);
+    const auto [qB, qNH, qS, qEmbd] = tensor_args.query.padded_shape().to_array_4D();
+    const auto grid = tensor_args.query.device()->compute_with_storage_grid_size();
+    const RowSplit row_split = choose_row_split(
+        args.mask_type, qS / tt::constants::TILE_HEIGHT, qB * qNH, static_cast<uint32_t>(grid.x * grid.y));
 
-    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
+    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernel);
+    auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernel);
+
+    for_each_core(row_split.num_cores, static_cast<uint32_t>(grid.y), [&](const tt::tt_metal::CoreCoord& core) {
         // Update input buffers for reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
