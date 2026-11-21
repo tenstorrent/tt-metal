@@ -1,4 +1,42 @@
 {
+ "PB.MB5": {
+  "attempts": 0,
+  "duration_s": 765.5,
+  "history": [
+   {
+    "s": 765.5,
+    "status": "PASS",
+    "t": "2026-11-21T01:16:18"
+   }
+  ],
+  "last_run": "2026-11-21T01:16:15",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/PB.MB5.log",
+  "rc": 0,
+  "reason": [],
+  "stamp": {
+   "reused": [],
+   "units": {
+    "PB.MB5#test_contract": "a40927168f8d1ca9",
+    "PB.MB5#test_decoder_skip_decode": "a8bf05ff4d89ea06",
+    "PB.MB5#test_determinism": "9515ec547c4b95a3",
+    "PB.MB5#test_ladder": "961b925f31ee5f12",
+    "PB.MB5#test_no_rebuild": "43a4cd285c62c59e",
+    "PB.MB5#test_outside_history": "074af96c8d0adb4a",
+    "PB.MB5#test_skip_positions": "6ac338238b47879a"
+   }
+  },
+  "started": "2026-11-21T01:03:29",
+  "status": "PASS",
+  "units": {
+   "PB.MB5#test_contract": "PASS",
+   "PB.MB5#test_decoder_skip_decode": "PASS",
+   "PB.MB5#test_determinism": "PASS",
+   "PB.MB5#test_ladder": "PASS",
+   "PB.MB5#test_no_rebuild": "PASS",
+   "PB.MB5#test_outside_history": "PASS",
+   "PB.MB5#test_skip_positions": "PASS"
+  }
+ },
  "X.9": {
   "ab_pending": [
    "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",

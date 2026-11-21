@@ -1076,3 +1076,17 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   stop hook present. Resident runner was stopped (model_bringup's model gone), box free.
 - 00:15 heartbeat: PB.MB attempt 1 active (transcript fresh), diff applied, conflicts being resolved; watch armed.
 - 00:45 heartbeat: PB.MB attempt 1 active, running device tests through the resident runner (busy since 00:40); watch armed.
+- 01:05 PB.MB gate PASS -> e3fcaf5a369 (ACCEPTED by the overseer after gate --status: all 6 units PASS, and the deliverable
+  check: the old ttnn.slice paths remain only under POS_DYNAMIC=off; per-chunk values (RoPE rows, replay rotation, history
+  slices, tails, srv_row) are page copies / runtime values; ids reordered on device; no host table). Metrics: packed +
+  glued oracles all 0; chunk8192 ref err_final_hidden 0.140 / 0.259, top5 1.0; 0 builds after warm-up at 8192
+  (single steady / resumed / partial) and in test_no_rebuild; ids uploads 0. FRESH 8192 single request through the
+  adapter: steady 69.1k (warm 68.3k), resumed 70.5k (70.5k), partial 13.7k (14.0k) - the MB.1 correction's 49.4k
+  fresh is gone. vs PB.9F's run_chunk walls (72.6k): -4.9 % = the adapter's host +5-7 ms a chunk at the same device
+  ms (MB.2 saw the same at 5120): a host-path pick for later. 5120 (agent's run of PB.MB5's units): steady 56.3k fresh
+  (one 132.9 ms host stall; ~60.3k without), resumed 57.8k, partial 18.2k, 0 builds. DS41-350: index_keys._decode
+  under POS_DYNAMIC uses MB.2's one whole-grid program (PB.6L's small-rectangle grid keyed a program on history length).
+- FRAMEWORK NOTE (to fix at a pause): the determinism unit the framework adds to a perf gate has no BRINGUP_CHUNK, so
+  in an 8192 gate it loads the 5120 model and F283 refuses the 8192 oracles in the same process (cost: one extra
+  --check, minutes). Fix: the added unit inherits the gate's geometry env.
+- 01:15 heartbeat: PB.MB5 gate running on the resident runner (request since 01:07); orchestrator alive; watch armed.
