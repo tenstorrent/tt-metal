@@ -1235,3 +1235,12 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   111.0; 1024000 127.4 / 64.3k / 132.1 (PB.9C 131.7 at 1M). Chip-aligned 4x2k: 139264 116.8 / 70.1k / 115.7 (PB.9G
   123.4 / 121.2) - meets the <= 117 bar and the owner's 67k; 524288 134.9 / 60.7k / 134.7; 1024000 161.2 / 50.8k / 160.2
   (device 146.7; PB.9G ~180). The MB.4 conversion fix was most of the chip-aligned host gap.
+- 12:49 PB.MB4 gate PASS -> 5d1a45d1970. Next PB.T (slot isolation).
+- 12:55 OWNER: skip the 67k task (met: 70.1k / 116.8 ms after PB.MB4) and go to the no-conversion assessment. Pause requested (stops after PB.T); patch_nc then drops PB.9H and adds PB.NC (tests-only probe at 1M: single 8192 + chip-aligned 4x2k, today's per-chunk bf16->4-bit pack vs history pre-packed once; outputs must match). model_bringup's 5120 part = MB.5 on the final visit.
+- 13:05 OWNER: 'do it': queue PB.HG (each segment's history gathered only to the chips it owns, 1..32; today every chip receives every segment's history) before PB.NC (which also reports the gathers' device ms). Applied with patch_nc at PB.T's stop.
+- 13:10 heartbeat: PB.T agent active; pause pending (patch_nc then); watch armed.
+- 13:15 PB.T agent edited the framework (core/batch.py BATCH_MAX_SEQ hint + a selftest in test_resident_gate.py): an honest generic hook; at PB.T's stop the overseer commits it as a framework change (not charged to the agent). Owner wants PB.HG next: it starts right after PB.T (patch_nc applied at that stop).
+- 13:40 heartbeat: PB.T agent active; watch armed.
+- 14:10 heartbeat: PB.T agent active (~80 min); watch armed.
+- 14:20 OWNER: queue the fixes (+ tests). patch_fx (applied after patch_nc at PB.T's stop): PB.T's build metric recorded (its tests commit), PB.FX = DS41-373's 6 builds fixed (runtime values or finite warm-up), the layout added to the cold strict no-rebuild test; gate = fast tier strict + no-rebuild + oracle; the fast tier joins PB.HG / PB.NC's gates. Order: PB.FX -> PB.HG -> PB.NC.
+- 14:30 PB.T agent done (paused before its quick A/B). Committed its framework hook myself (F298 BATCH_MAX_SEQ, selftests pass) ddc00cc0c8e. Applied patch_nc + patch_fx: PB.9H dropped; queue PB.T (builds recorded) -> PB.FX -> PB.HG -> PB.NC (fast tier in PB.HG / PB.NC gates). known_issues DS41-372 / 373 lack 'Fix:' lines (format note for PB.FX). Resumed --until PB.NC.
