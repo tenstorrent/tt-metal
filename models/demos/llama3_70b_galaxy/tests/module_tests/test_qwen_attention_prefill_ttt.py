@@ -263,7 +263,6 @@ def test_qwen_attention_inference_prefill_ttt(
 
         logger.info(comp_allclose(reference_output, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
-        logger.info(f"PCC xqkv: {pcc_message_xqkv}")
 
     if passing:
         logger.info(f"Qwen_Attention Prefill TTT Passed!")

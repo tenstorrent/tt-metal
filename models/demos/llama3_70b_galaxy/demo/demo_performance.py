@@ -315,7 +315,7 @@ def run_llama3_decode_performance(
     ttnn.synchronize_device(mesh_device)
 
     # When getting dispatch device perf, pushing weights fills up profiler buffers.
-    ttnn.ReadDeviceProfiler(device)
+    ttnn.ReadDeviceProfiler(mesh_device)
 
     # Sync after profiler read or execute trace will launch on devices with huge skew
     ttnn.synchronize_device(mesh_device)
