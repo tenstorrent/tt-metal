@@ -1206,8 +1206,9 @@ PERF_ASPECT = (16, 9)
 
 
 def _packed_sizes(duration_s: float, num_text_tokens: int) -> dict:
-    """Token counts for `duration_s` seconds of 768P video, derived from the pipeline's own packing helpers."""
-    height, width = resolve_canvas_size(*PERF_ASPECT)
+    """Token counts for `duration_s` seconds of 768P video (480P with H3_BLOCK_PERF_480P=1), derived from the
+    pipeline's own packing helpers."""
+    height, width = (480, 832) if os.environ.get("H3_BLOCK_PERF_480P") == "1" else resolve_canvas_size(*PERF_ASPECT)
     tokens_per_latent_frame = (height // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[1]) * (
         width // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[2]
     )
@@ -1278,7 +1279,8 @@ def test_minimax_h3_transformer_block_perf(
 ) -> None:
     """One block at the production geometry, legacy or dynamic-length configs. H3_BLOCK_PERF_ITERS=N adds N
     timed warm iterations (host wall with a sync, min / median logged) after the profiled one. H3_BLOCK_PERF_LORA_RANK=r
-    runs the block with a random rank-r LoRA side branch."""
+    runs the block with a random rank-r LoRA side branch; H3_BLOCK_PERF_BF8_DIT=1 with the serving driver's BFP8 DiT
+    weights and activations; H3_BLOCK_PERF_PERSISTENT=0 without persistent CCL buffers (the 4x8 preset)."""
     skip_if_unsupported_num_links(mesh_device, num_links)
     # SP simulation emulates the Blackhole 4x32 quad's per-device shard by shrinking the sequence so a
     # 4x8 device carries what a 4x32 device would. There is no Wormhole quad, so sp_sim rows measure
@@ -1337,10 +1339,13 @@ def test_minimax_h3_transformer_block_perf(
         is_fsdp=is_fsdp,
         dynamic_length=dynamic_length,
         lora_rank=lora_rank,
+        use_persistent_ccl_buffers=os.environ.get("H3_BLOCK_PERF_PERSISTENT", "1") == "1",
     )
     adapter = {} if lora_rank is None else _random_side_adapter(torch_block, lora_rank)
     tt_block.load_torch_state_dict({**torch_block.state_dict(), **adapter})
     del torch_block, adapter
+    if os.environ.get("H3_BLOCK_PERF_BF8_DIT") == "1":
+        _bf8_dit(tt_block)
 
     # H3_BLOCK_PERF_LEGACY_PARTS=agmm_attn,agmm_ff1,sdpa,mmrs,gather puts those dynamic-length pins back on
     # the legacy choice (sdpa320 / sdpa256: that chunk pair in every class), to attribute a delta part by part.
