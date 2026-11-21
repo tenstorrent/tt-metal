@@ -671,7 +671,7 @@ ttnn::Tensor pad_with_route(
         // capture.
         const tt::tt_metal::TensorSpec output_spec(
             output_shape,
-            TensorLayout(
+            tt::tt_metal::TensorLayout(
                 input_tensor.dtype(),
                 tt::tt_metal::PageConfig(input_tensor.layout(), input_tensor.tensor_spec().tile()),
                 MemoryConfig{TensorMemoryLayout::INTERLEAVED, requested_config.buffer_type()}));
