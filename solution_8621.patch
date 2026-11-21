@@ -1,0 +1,23 @@
+- def optimize_tilizer(data_format):
++ def optimize_tilizer(data_format):
+-     # Original unoptimized code
++     # Optimized code
++     import numpy as np
++     import numba
++
++     @numba.njit(parallel=True)
++     def process_data(data):
++         # Implementation using Numba for parallel processing
++         for i in numba.prange(len(data)):
++             # Process data here
++             pass
++ 
++     if data_format == "BFP8":
++         optimized_data = process_data(data)
++     elif data_format == "BFP4":
++         optimized_data = process_data(data)
++     elif data_format == "BFP2":
++         optimized_data = process_data(data)
++ 
+-     # Original unoptimized code
++     return optimized_data
