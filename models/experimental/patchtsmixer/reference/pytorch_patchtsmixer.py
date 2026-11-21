@@ -2,7 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import math
+import os
 
 import torch
 import torch.nn as nn
@@ -54,7 +56,7 @@ class PatchTSMixerPositionalEncoding(nn.Module):
                 self.pe = nn.Parameter(torch.randn(num_patches, d_model))
             elif pe_type == "sincos":
                 pos = torch.arange(0, num_patches).unsqueeze(1)
-                div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0)))
+                div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
                 pe = torch.zeros(num_patches, d_model)
                 pe[:, 0::2] = torch.sin(pos * div_term)
                 pe[:, 1::2] = torch.cos(pos * div_term)
@@ -66,6 +68,67 @@ class PatchTSMixerPositionalEncoding(nn.Module):
     def forward(self, x):
         # x: (B, C, N_p, D)
         return x + self.pe
+
+
+class PatchTSMixerScaler(nn.Module):
+    """
+    Per-window instance scaling over the time dimension, as HF's std and mean scalers.
+    """
+
+    def __init__(self, scaling="std"):
+        super().__init__()
+        self.scaling = "std" if scaling is True else scaling
+        if self.scaling not in ("std", "mean"):
+            raise ValueError("scaling must be 'std', 'mean' or True")
+
+    def forward(self, x):
+        # x: (B, L, C) -> scaled x, loc (B, 1, C), scale (B, 1, C)
+        if self.scaling == "std":
+            loc = x.mean(dim=1, keepdim=True)
+            scale = torch.sqrt(((x - loc) ** 2).mean(dim=1, keepdim=True) + 1e-5)
+        else:
+            loc = torch.zeros_like(x[:, :1])
+            scale = x.abs().mean(dim=1, keepdim=True).clamp(min=1e-10)
+        return (x - loc) / scale, loc, scale
+
+
+def patch_mask(
+    mask_type,
+    batch_size,
+    num_channels,
+    num_patches,
+    *,
+    random_mask_ratio=0.5,
+    num_forecast_mask_patches=(2,),
+    channel_consistent_masking=True,
+):
+    """
+    Bool (B, C, N_p) mask of the patches to hide, drawn as HF's random_masking / forecast_masking do.
+    """
+    if mask_type == "random":
+        len_keep = int(num_patches * (1 - random_mask_ratio))
+        if channel_consistent_masking:
+            noise = torch.rand(batch_size, 1, num_patches).repeat(1, num_channels, 1)
+        else:
+            noise = torch.rand(batch_size, num_channels, num_patches)
+        mask = torch.ones(batch_size, num_channels, num_patches)
+        mask[:, :, :len_keep] = 0
+        ids_restore = torch.argsort(torch.argsort(noise, dim=-1), dim=-1)
+        return torch.gather(mask, dim=-1, index=ids_restore).bool()
+    if mask_type == "forecast":
+        if isinstance(num_forecast_mask_patches, int):
+            num_forecast_mask_patches = [num_forecast_mask_patches]
+        counts = [batch_size // len(num_forecast_mask_patches)] * len(num_forecast_mask_patches)
+        counts[0] += batch_size - sum(counts)
+        mask = torch.zeros(batch_size, num_channels, num_patches)
+        start = 0
+        for patch_len, count in zip(num_forecast_mask_patches, counts):
+            if patch_len <= 0 or patch_len >= num_patches:
+                raise ValueError(f"num_forecast_mask_patches {patch_len} must be in (0, {num_patches})")
+            mask[start : start + count, :, -patch_len:] = 1
+            start += count
+        return mask[torch.randperm(batch_size)].bool()
+    raise ValueError(f"Invalid mask type {mask_type}.")
 
 
 class PatchTSMixerNormLayer(nn.Module):
@@ -417,13 +480,17 @@ class PatchTSMixerEmbedding(nn.Module):
         # linear projection: patch_length -> d_model
         self.proj = nn.Linear(patch_length, d_model)
 
-    def forward(self, x):
+    def forward(self, x, mask=None, mask_value=0):
         """
         x: (B, C, L)
         HF expects (B, L, C) so adjust
+        mask: optional bool (B, C, N_p); masked patches are filled with mask_value before the projection
         """
         x = x.transpose(1, 2)
         patches = self.patchify(x)  # (B, C, N_p, patch_len)
+
+        if mask is not None:
+            patches = patches.masked_fill(mask.unsqueeze(-1), mask_value)
 
         # project last dimension
         patches = self.proj(patches)  # (B, C, N_p, d_model)
@@ -458,8 +525,12 @@ class PatchTSMixerModelForForecasting(nn.Module):
         use_gated_attn: bool = False,
         head_dropout: float = 0.1,
         eps: float = 1e-5,
+        scaling=None,  # None, "std", "mean" or True (HF's default "std")
+        use_positional_encoding: bool = True,
     ):
         super().__init__()
+
+        self.scaler = PatchTSMixerScaler(scaling) if scaling else None
 
         # 1) Patchify + linear projection to d_model
         self.patch_embed = PatchTSMixerEmbedding(
@@ -473,11 +544,10 @@ class PatchTSMixerModelForForecasting(nn.Module):
         num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
 
         # 2) Positional encoding over patches
-        self.pos_enc = PatchTSMixerPositionalEncoding(
-            num_patches=num_patches,
-            d_model=d_model,
-            use_pe=True,
-            pe_type="sincos",
+        self.pos_enc = (
+            PatchTSMixerPositionalEncoding(num_patches=num_patches, d_model=d_model, use_pe=True, pe_type="sincos")
+            if use_positional_encoding
+            else None
         )
 
         # 3) Mixer stack (time + feature [+ channel] mixing)
@@ -509,6 +579,9 @@ class PatchTSMixerModelForForecasting(nn.Module):
         past values: (B, L, C) from ForecastDFDataset batch
         returns: (B, H, C)
         """
+        if self.scaler is not None:
+            past_values, loc, scale = self.scaler(past_values)
+
         # (B, L, C) -> (B, C, L)
         x = past_values.transpose(1, 2)
 
@@ -516,13 +589,16 @@ class PatchTSMixerModelForForecasting(nn.Module):
         x = self.patch_embed(x)
 
         # 2) positional encoding
-        x = self.pos_enc(x)
+        if self.pos_enc is not None:
+            x = self.pos_enc(x)
 
         # 3) mixer stack: (B, C, N_p, D) -> (B, C, N_p, D)
         x, _ = self.mixer_block(x, output_hidden_states=False)
 
         # 4) head: (B, C, N_p, D) -> (B, H, C)
         preds = self.head(x)
+        if self.scaler is not None:
+            preds = preds * scale + loc
         return preds
 
 
@@ -770,10 +846,24 @@ class PatchTSMixerForPretraining(nn.Module):
         use_gated_attn: bool = False,
         head_dropout: float = 0.0,
         eps: float = 1e-5,
+        scaling=None,  # None, "std", "mean" or True (HF's default "std")
+        use_positional_encoding: bool = True,
+        mask_type: str = None,  # None, "random" or "forecast" (HF's default "random")
+        random_mask_ratio: float = 0.5,
+        num_forecast_mask_patches=(2,),
+        channel_consistent_masking: bool = True,
+        mask_value: float = 0,
     ):
         super().__init__()
 
-        num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
+        self.num_channels = num_channels
+        self.num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
+        self.scaler = PatchTSMixerScaler(scaling) if scaling else None
+        self.mask_type = mask_type
+        self.random_mask_ratio = random_mask_ratio
+        self.num_forecast_mask_patches = num_forecast_mask_patches
+        self.channel_consistent_masking = channel_consistent_masking
+        self.mask_value = mask_value
 
         self.embedding = PatchTSMixerEmbedding(
             context_length=context_length,
@@ -782,13 +872,14 @@ class PatchTSMixerForPretraining(nn.Module):
             d_model=d_model,
         )
 
-        self.pos_encoder = PatchTSMixerPositionalEncoding(
-            num_patches=num_patches,
-            d_model=d_model,
+        self.pos_encoder = (
+            PatchTSMixerPositionalEncoding(num_patches=self.num_patches, d_model=d_model)
+            if use_positional_encoding
+            else None
         )
 
         layer_kwargs = {
-            "num_patches": num_patches,
+            "num_patches": self.num_patches,
             "d_model": d_model,
             "num_channels": num_channels,
             "mode": mode,
@@ -806,12 +897,117 @@ class PatchTSMixerForPretraining(nn.Module):
             head_dropout=head_dropout,
         )
 
-    def forward(self, past_values):
+    def forward(self, past_values, mask=None):
+        """
+        past_values: (B, L, C)
+        mask: bool (B, C, Np) of the patches to hide; drawn from mask_type when None
+        returns: reconstruction (B, C, Np, patch_length) in the scaled units, mask
+        """
+        if self.scaler is not None:
+            past_values, _, _ = self.scaler(past_values)
+        if mask is None and self.mask_type is not None:
+            mask = patch_mask(
+                self.mask_type,
+                past_values.shape[0],
+                self.num_channels,
+                self.num_patches,
+                random_mask_ratio=self.random_mask_ratio,
+                num_forecast_mask_patches=self.num_forecast_mask_patches,
+                channel_consistent_masking=self.channel_consistent_masking,
+            )
+
         # (B, L, C) -> (B, C, L)
         x = past_values.transpose(1, 2)
 
-        x = self.embedding(x)  # (B, C, Np, D)
-        x = self.pos_encoder(x)
+        x = self.embedding(x, mask=mask, mask_value=self.mask_value)  # (B, C, Np, D)
+        if self.pos_encoder is not None:
+            x = self.pos_encoder(x)
         x, _ = self.encoder(x)  # Unpack tuple
         reconstructed = self.head(x)  # (B, C, Np, patch_length)
-        return reconstructed
+        return reconstructed, mask
+
+
+def hf_state_dict_to_port(state_dict, task="forecasting"):
+    """
+    Rename a Hugging Face PatchTSMixerForPrediction / PatchTSMixerForPretraining state dict to this module's keys.
+    """
+    embed, pos, enc, hf_head, head = {
+        "forecasting": ("patch_embed", "pos_enc", "mixer_block", "base_forecast_block", "proj"),
+        "pretraining": ("embedding", "pos_encoder", "encoder", "base_pt_block", "projection"),
+    }[task]
+    renames = (
+        ("model.encoder.patcher.", f"{embed}.proj."),
+        ("model.encoder.positional_encoder.position_enc", f"{pos}.pe"),
+        ("model.encoder.mlp_mixer_encoder.mixers.", f"{enc}.layers."),
+        (".channel_feature_mixer.", ".channel_mixer."),
+        (".gating_block.", ".gate."),
+        (f"head.{hf_head}.", f"head.{head}."),
+    )
+    out = {}
+    for key, value in state_dict.items():
+        for old, new in renames:
+            key = key.replace(old, new)
+        out[key] = value
+    return out
+
+
+def from_hf_config(config, state_dict=None, task="forecasting"):
+    """
+    Build the forecasting or pretraining model from a Hugging Face PatchTSMixerConfig dict
+    (PatchTSMixerConfig.to_dict() or config.json) and load its state dict when given.
+    """
+    if config.get("self_attn") or config.get("norm_mlp", "LayerNorm") != "LayerNorm":
+        raise ValueError("self_attn and norm_mlp other than LayerNorm are not supported")
+    kwargs = dict(
+        context_length=config["context_length"],
+        patch_length=config["patch_length"],
+        patch_stride=config["patch_stride"],
+        num_channels=config["num_input_channels"],
+        d_model=config["d_model"],
+        num_layers=config["num_layers"],
+        mode=config.get("mode", "common_channel"),
+        expansion=config.get("expansion_factor", 2),
+        dropout=config.get("dropout", 0.2),
+        use_gated_attn=config.get("gated_attn", True),
+        head_dropout=config.get("head_dropout", 0.2),
+        eps=config.get("norm_eps", 1e-5),
+        scaling=config.get("scaling", "std"),
+        use_positional_encoding=config.get("use_positional_encoding", False),
+    )
+    if task == "forecasting":
+        if config.get("loss", "mse") != "mse" or config.get("prediction_channel_indices") is not None:
+            raise ValueError("only loss='mse' with all channels predicted is supported")
+        model = PatchTSMixerModelForForecasting(prediction_length=config["prediction_length"], **kwargs)
+    elif task == "pretraining":
+        if config.get("unmasked_channel_indices") is not None:
+            raise ValueError("unmasked_channel_indices is not supported")
+        model = PatchTSMixerForPretraining(
+            mask_type=config.get("mask_type", "random"),
+            random_mask_ratio=config.get("random_mask_ratio", 0.5),
+            num_forecast_mask_patches=config.get("num_forecast_mask_patches", (2,)),
+            channel_consistent_masking=config.get("channel_consistent_masking", True),
+            mask_value=config.get("mask_value", 0),
+            **kwargs,
+        )
+    else:
+        raise ValueError(f"Unsupported task {task}")
+    if state_dict is not None:
+        model.load_state_dict(hf_state_dict_to_port(state_dict, task))
+    return model.eval()
+
+
+def load_hf_checkpoint(name_or_path):
+    """
+    Read config.json and model.safetensors of a Hugging Face checkpoint from a local directory or the hub.
+    Returns (config dict, state dict) for from_hf_config.
+    """
+    from safetensors.torch import load_file
+
+    path = name_or_path
+    if not os.path.isdir(path):
+        from huggingface_hub import snapshot_download
+
+        path = snapshot_download(name_or_path, allow_patterns=["config.json", "model.safetensors"])
+    with open(os.path.join(path, "config.json")) as f:
+        config = json.load(f)
+    return config, load_file(os.path.join(path, "model.safetensors"))

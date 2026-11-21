@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.experimental.patchtsmixer.reference.pytorch_patchtsmixer import patch_mask
 
 from .patchtsmixer_utils import apply_linear_height_sharded, make_1d_mcast_prog_config_for_height_sharded
 
@@ -91,6 +92,27 @@ class TtPatchTSMixerPositionalEncoding:
     def __call__(self, x):
         # Addition with input memory config preserved
         return ttnn.add(x, self.pe)
+
+
+class TtPatchTSMixerScaler:
+    """
+    TTNN equivalent of PatchTSMixerScaler: per-window loc and scale over the time dim of (B, L, C).
+    """
+
+    def __init__(self, scaling="std"):
+        self.scaling = "std" if scaling is True else scaling
+        if self.scaling not in ("std", "mean"):
+            raise ValueError("scaling must be 'std', 'mean' or True")
+
+    def __call__(self, x):
+        # x: (B, L, C) -> scaled x, loc (B, 1, C), scale (B, 1, C)
+        if self.scaling == "std":
+            loc = ttnn.mean(x, dim=1, keepdim=True)
+            centered = ttnn.subtract(x, loc)
+            scale = ttnn.sqrt(ttnn.add(ttnn.mean(ttnn.square(centered), dim=1, keepdim=True), 1e-5))
+            return ttnn.divide(centered, scale), loc, scale
+        scale = ttnn.clamp(ttnn.mean(ttnn.abs(x), dim=1, keepdim=True), min=1e-10)
+        return ttnn.divide(x, scale), ttnn.zeros_like(scale), scale
 
 
 class TtPatchTSMixerBatchNorm:
@@ -933,9 +955,10 @@ class TtPatchTSMixerEmbedding:
         self.weight = parameters[f"{self.base}.proj.weight"]
         self.bias = parameters.get(f"{self.base}.proj.bias", None)
 
-    def __call__(self, x: ttnn.Tensor, *, dtype=ttnn.bfloat16):
+    def __call__(self, x: ttnn.Tensor, *, dtype=ttnn.bfloat16, mask=None, mask_value=0):
         """
         x: (B, C, L) ttnn tensor (host)
+        mask: optional torch bool (B, C, Np); masked patches are filled with mask_value before the projection
         returns: TTNN tensor (B, C, Np, d_model)
         """
 
@@ -945,6 +968,20 @@ class TtPatchTSMixerEmbedding:
         # Patchify
         patches_tt = self.patchify(x_lc)
         ttnn.deallocate(x_lc)
+
+        if mask is not None:
+            keep = ttnn.from_torch(
+                (~mask).unsqueeze(-1).float(), dtype=patches_tt.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+            patches_tt = ttnn.multiply(patches_tt, keep)
+            if mask_value:
+                fill = ttnn.from_torch(
+                    mask.unsqueeze(-1).float() * mask_value,
+                    dtype=patches_tt.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                )
+                patches_tt = ttnn.add(patches_tt, fill)
 
         # Linear projection: (B, C, Np, patch_length) @ (patch_length, d_model)
         # Use multi-core parallelization for input embedding
@@ -984,6 +1021,8 @@ class TtPatchTSMixerModelForForecasting:
         expansion: int = 2,
         use_gated_attn: bool = False,
         eps: float = 1e-5,
+        scaling=None,  # None, "std", "mean" or True (HF's default "std")
+        use_positional_encoding: bool = True,
     ):
         self.device = device
         self.base = base_address
@@ -999,6 +1038,7 @@ class TtPatchTSMixerModelForForecasting:
         self.expansion = expansion
         self.use_gated_attn = use_gated_attn
         self.eps = eps
+        self.scaler = TtPatchTSMixerScaler(scaling) if scaling else None
 
         # HF-compatible num_patches
         self.num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
@@ -1015,12 +1055,16 @@ class TtPatchTSMixerModelForForecasting:
         )
 
         # 2) positional encoding
-        self.pos_enc = TtPatchTSMixerPositionalEncoding(
-            device=device,
-            base_address=f"{self.base}.pos_enc",
-            parameters=parameters,  # depends on your PE design (buffer/param)
-            num_patches=self.num_patches,
-            d_model=d_model,
+        self.pos_enc = (
+            TtPatchTSMixerPositionalEncoding(
+                device=device,
+                base_address=f"{self.base}.pos_enc",
+                parameters=parameters,
+                num_patches=self.num_patches,
+                d_model=d_model,
+            )
+            if use_positional_encoding
+            else None
         )
 
         # 3) mixer stack
@@ -1059,6 +1103,11 @@ class TtPatchTSMixerModelForForecasting:
         assert L == self.context_length
         assert C == self.num_channels
 
+        if self.scaler is not None:
+            past_values, loc, scale = self.scaler(past_values)
+        if past_values.dtype != dtype:
+            past_values = ttnn.typecast(past_values, dtype)
+
         # Transpose: (B, L, C) -> (B, C, L)
         x_bcl = ttnn.permute(past_values, (0, 2, 1))
 
@@ -1066,13 +1115,16 @@ class TtPatchTSMixerModelForForecasting:
         x = self.patch_embed(x_bcl, dtype=dtype)
 
         # 2) PE: (B, C, Np, D)
-        x = self.pos_enc(x)
+        if self.pos_enc is not None:
+            x = self.pos_enc(x)
 
         # 3) mixer block
         x, _ = self.mixer_block(x, output_hidden_states=False)
 
         # 4) head: returns TT (B, H, C)
         y = self.head(x)
+        if self.scaler is not None:
+            y = ttnn.add(ttnn.multiply(y, scale), loc)
 
         return y
 
@@ -1355,6 +1407,13 @@ class TtPatchTSMixerForPretraining:
         expansion: int = 2,
         use_gated_attn: bool = False,
         eps: float = 1e-5,
+        scaling=None,  # None, "std", "mean" or True (HF's default "std")
+        use_positional_encoding: bool = True,
+        mask_type: str = None,  # None, "random" or "forecast" (HF's default "random")
+        random_mask_ratio: float = 0.5,
+        num_forecast_mask_patches=(2,),
+        channel_consistent_masking: bool = True,
+        mask_value: float = 0,
     ):
         self.device = device
         self.base = base_address
@@ -1369,6 +1428,12 @@ class TtPatchTSMixerForPretraining:
         self.expansion = expansion
         self.use_gated_attn = use_gated_attn
         self.eps = eps
+        self.scaler = TtPatchTSMixerScaler(scaling) if scaling else None
+        self.mask_type = mask_type
+        self.random_mask_ratio = random_mask_ratio
+        self.num_forecast_mask_patches = num_forecast_mask_patches
+        self.channel_consistent_masking = channel_consistent_masking
+        self.mask_value = mask_value
 
         # HF-compatible num_patches
         self.num_patches = (max(context_length, patch_length) - patch_length) // patch_stride + 1
@@ -1387,12 +1452,16 @@ class TtPatchTSMixerForPretraining:
 
         # 2) positional encoding
         pos_addr = f"{self.base}.pos_encoder" if self.base else "pos_encoder"
-        self.pos_enc = TtPatchTSMixerPositionalEncoding(
-            device=device,
-            base_address=pos_addr,
-            parameters=parameters,
-            num_patches=self.num_patches,
-            d_model=d_model,
+        self.pos_enc = (
+            TtPatchTSMixerPositionalEncoding(
+                device=device,
+                base_address=pos_addr,
+                parameters=parameters,
+                num_patches=self.num_patches,
+                d_model=d_model,
+            )
+            if use_positional_encoding
+            else None
         )
 
         # 3) encoder (mixer block)
@@ -1424,23 +1493,40 @@ class TtPatchTSMixerForPretraining:
             patch_length=patch_length,
         )
 
-    def __call__(self, past_values: ttnn.Tensor, *, dtype=ttnn.bfloat16):
+    def __call__(self, past_values: ttnn.Tensor, *, mask=None, dtype=ttnn.bfloat16):
         """
         past_values: ttnn tensor (B, L, C)
-        returns: ttnn tensor (B, C, Np, patch_length)
+        mask: torch bool (B, C, Np) of the patches to hide; drawn on host from mask_type when None
+        returns: ttnn tensor (B, C, Np, patch_length) in the scaled units, mask
         """
         B, L, C = past_values.shape
         assert L == self.context_length
         assert C == self.num_channels
 
+        if self.scaler is not None:
+            past_values, _, _ = self.scaler(past_values)
+        if past_values.dtype != dtype:
+            past_values = ttnn.typecast(past_values, dtype)
+        if mask is None and self.mask_type is not None:
+            mask = patch_mask(
+                self.mask_type,
+                B,
+                C,
+                self.num_patches,
+                random_mask_ratio=self.random_mask_ratio,
+                num_forecast_mask_patches=self.num_forecast_mask_patches,
+                channel_consistent_masking=self.channel_consistent_masking,
+            )
+
         # match PyTorch: (B, L, C) -> (B, C, L) for embedding
         x_bcl = ttnn.permute(past_values, (0, 2, 1))
 
         # 1) embedding: returns TT (B, C, Np, D)
-        x = self.patch_embed(x_bcl, dtype=dtype)
+        x = self.patch_embed(x_bcl, dtype=dtype, mask=mask, mask_value=self.mask_value)
 
         # 2) PE: (B, C, Np, D)
-        x = self.pos_enc(x)
+        if self.pos_enc is not None:
+            x = self.pos_enc(x)
 
         # 3) encoder
         x, _ = self.encoder(x, output_hidden_states=False)
@@ -1448,4 +1534,4 @@ class TtPatchTSMixerForPretraining:
         # 4) head: returns tensor (B, C, Np, patch_length)
         reconstructed = self.head(x)
 
-        return reconstructed
+        return reconstructed, mask
