@@ -152,6 +152,30 @@ def test_refused(device, dtype, entry):
         concat(dev, dim=dim)
 
 
+def test_sharded_refused_by_name(device):
+    """R6: a sharded tensor is refused through the `sharding` axis (eval.memory.memory_axes), by name.
+
+    The tensors are bfloat16 TILE and otherwise a PHASE0 call, so `sharding` is the only axis outside SUPPORTED.
+    YOLOv8's untraced calls: [1,1,64,64] + [1,1,64,32] height-sharded in L1, shard height 32 on two cores.
+    """
+    shapes = [(1, 1, 64, 64), (1, 1, 64, 32)]
+    dev = []
+    for s in shapes:
+        config = ttnn.create_sharded_memory_config(
+            shape=(32, s[-1]),
+            core_grid=ttnn.CoreGrid(y=1, x=2),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        dev.append(
+            ttnn.from_torch(
+                torch.zeros(*s), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=config
+            )
+        )
+    with pytest.raises(NotImplementedError, match="sharding"):
+        concat(dev, dim=-1)
+
+
 def test_row_major_refused(device):
     dev = [ttnn.from_torch(torch.zeros(1, 1, 32, 64), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16)] * 2
     with pytest.raises(NotImplementedError):

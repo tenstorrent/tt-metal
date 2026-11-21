@@ -23,6 +23,7 @@ Block axes from the Blocking Model:
 | `tile_bytes` | 2,048 for bf16 (4,096 for 32-bit dtypes later; 1,024 for uint8) | `out.buffer_page_size()` |
 | `ring_cap_tiles` | `floor(RING_MAX_BYTES / (OUTPUT_DEPTH · tile_bytes))` = 255 (bf16) | `RING_MAX_BYTES = 1,048,560` (target page, cluster model; a named host constant, since Python has no query) |
 | `budget_tiles` | `floor((ttnn.get_max_worker_l1_unreserved_size() - L1_RESERVE_BYTES) / (OUTPUT_DEPTH · tile_bytes))` | run-time query. Its value on `quasar` was not probed (≤ 4,194,304 B per cluster) |
+| `L1_RESERVE_BYTES` | 262,144 B (constant) | host constant in `concat_program_artifacts.py`: L1 left free beside the ring, because L1 input tensors share the cluster's L1 (verifier: row added, it was used in `budget_tiles` with no row) |
 | `max_core_tiles` | `ceil(total_out_tiles / num_cores)` | `ttnn.split_work_to_cores` |
 | `count` | `2 ≤ count ≤ 3` in Phase 0 (`≤ MAX_INPUTS = 5` in TARGET). Sets no buffer size | `validate()` |
 

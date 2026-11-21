@@ -116,8 +116,9 @@ def _dispatch(tensors, dim, *, block_tiles=BLOCK_TILES):
     first = tensors[0]
     out_shape = list(first.shape)
     out_shape[dim] = sum(int(t.shape[dim]) for t in tensors)
+    # The output has the tensors' dtype and layout (spec OUTPUT) and is DRAM interleaved whatever their buffer (R5).
     output = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(out_shape), first.dtype, ttnn.TILE_LAYOUT, first.device(), ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape(out_shape), first.dtype, first.layout, first.device(), ttnn.DRAM_MEMORY_CONFIG
     )
     spec, run_args, tensor_indices = create_program_artifacts(list(tensors), output, dim, block_tiles=block_tiles)
     return ttnn.generic_op([*tensors, output], spec, run_args, tensor_indices)
