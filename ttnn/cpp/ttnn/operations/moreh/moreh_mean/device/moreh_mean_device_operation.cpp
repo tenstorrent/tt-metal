@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_mean_device_operation.hpp"
+
+#include <limits>
+
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -119,6 +123,22 @@ ttnn::operations::moreh::moreh_mean::MorehMeanOperation::tensor_return_value_t m
         memory_config.value_or(input.memory_config()),
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input, output};
+    // The mean over an empty dim is NaN, as in torch, and the W factory divides by that dim.
+    if (input.logical_volume() == 0) {
+        OperationType::validate_on_program_cache_miss(operation_attributes, tensor_args);
+        auto result = OperationType::create_output_tensors(operation_attributes, tensor_args);
+        if (result.logical_volume() == 0) {
+            return result;
+        }
+        return ttnn::full(
+            result.logical_shape(),
+            std::numeric_limits<float>::quiet_NaN(),
+            result.dtype(),
+            result.layout(),
+            *result.device(),
+            result.memory_config(),
+            result);
+    }
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
