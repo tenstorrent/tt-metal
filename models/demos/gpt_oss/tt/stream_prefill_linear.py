@@ -484,10 +484,48 @@ class StreamPrefillLinear:
         self.spec = StreamSpec(k, n, mesh_device.dram_grid_size().x, order)
         self.math_fidelity = math_fidelity
         self._programs = {}  # (row tiles, dtypes, L1 budget, widths, memory configs) -> (plan, (kernels, cbs))
+        # Cheap-key fast path: (x shape, dtypes, out width, L1 budget, x's memory config if sharded, the
+        # memory_config argument) -> (program entry, output shape, output memory config). A call at 128 tokens spent
+        # ~58 us on the host, half of it checks and key building (shape lists, str of memory configs); 73 calls per
+        # prefill.
+        self._fast = {}
 
     def __call__(self, x, stream, out_dtype, out_width=None, memory_config=None):
         """x: [..., M, K] TILE (interleaved or sharded, DRAM or L1; bfloat16 / bfloat8_b); stream: the decode stream
         tensor; -> a new [..., M, out_width or N] TILE tensor (DRAM interleaved by default), columns >= N zero."""
+        import ttnn
+
+        mesh = self.mesh_device
+        fk = (tuple(x.shape), x.dtype, stream.dtype, out_dtype, out_width, _l1_budget(mesh), str(x.memory_config()))
+        fk += (str(memory_config) if memory_config is not None else None,)
+        hit = self._fast.get(fk)
+        if hit is None:
+            out = self._call_slow(x, stream, out_dtype, out_width, memory_config)
+            key = self._last_key
+            l1_out = out.memory_config().buffer_type == ttnn.BufferType.L1
+            self._fast[fk] = (self._programs[key], list(out.shape), out.memory_config(), key[4] if l1_out else None)
+            return out
+        (plan, kernels, cbs, sems, phash, tables), out_shape, out_mc, l1_budget = hit
+        out = ttnn.empty(out_shape, dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=out_mc)
+        if l1_budget is not None and _l1_budget(mesh) != l1_budget:
+            # (an L1 output landed elsewhere than when the program was built: the checked path re-plans for it)
+            ttnn.deallocate(out)
+            return self._call_slow(x, stream, out_dtype, out_width, memory_config)
+        ones = _ones_tensor(mesh, x.dtype)
+        kernels[0].common_runtime_args = [
+            stream.buffer_address(),
+            x.buffer_address(),
+            ones.buffer_address(),
+            tables[0].buffer_address(),
+        ]
+        kernels[1].common_runtime_args = [out.buffer_address(), tables[1].buffer_address()]
+        desc = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
+        desc.custom_program_hash = phash
+        ttnn.generic_op([x, stream, ones, out], desc)
+        return out
+
+    def _call_slow(self, x, stream, out_dtype, out_width, memory_config):
+        """The checked path: validates the shapes, builds (or finds) the program, records its key in _last_key."""
         import ttnn
 
         from .fused_decode.stream import NBIAS as STREAM_NBIAS
@@ -517,6 +555,7 @@ class StreamPrefillLinear:
         budget = _l1_budget(mesh)  # (after the output: an L1 output lowers it)
         key = (m_tiles, str(x.dtype), str(stream.dtype), str(out_dtype), budget, out_tiles)
         key += (str(x.memory_config()), str(out.memory_config()))  # (the tensor accessors' compile-time args)
+        self._last_key = key
         cached = self._programs.get(key)
         if cached is None:
             plan = plan_work(
