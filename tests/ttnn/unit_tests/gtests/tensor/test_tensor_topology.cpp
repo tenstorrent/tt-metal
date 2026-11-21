@@ -12,6 +12,7 @@
 #include "ttnn_test_fixtures.hpp"
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::distributed::test {
 
@@ -242,6 +243,92 @@ TEST_F(TensorTopology2x4Test, CreateShardedTensorTopology) {
     auto expected_topology = tt::tt_metal::TensorTopology::create_sharded_tensor_topology(mesh_device_->shape(), 1);
 
     EXPECT_EQ(tensor_topology, expected_topology);
+}
+
+TEST(ReshapedTensorTopologyUnitTest, RenumbersShardPlacementsByPrefixVolume) {
+    using Replicate = MeshMapperConfig::Replicate;
+    using Shard = MeshMapperConfig::Shard;
+
+    const auto make_topology = [](int shard_dim) {
+        return tt::tt_metal::TensorTopology(
+            MeshShape(1, 2),
+            ttsl::SmallVector<MeshMapperConfig::Placement>{Replicate{}, Shard{shard_dim}},
+            std::vector<MeshCoordinate>{MeshCoordinate(0, 0), MeshCoordinate(0, 1)});
+    };
+
+    // Unsqueeze leading size-1 dim: Shard{0} -> Shard{1}
+    {
+        auto updated = ttnn::reshaped_tensor_topology(make_topology(0), ttnn::Shape{2, 4}, ttnn::Shape{1, 2, 4});
+        ASSERT_TRUE(updated.has_value());
+        EXPECT_EQ(updated->placements(), (ttsl::SmallVector<MeshMapperConfig::Placement>{Replicate{}, Shard{1}}));
+    }
+
+    // Squeeze leading size-1 dim: Shard{1} -> Shard{0}
+    {
+        auto updated = ttnn::reshaped_tensor_topology(make_topology(1), ttnn::Shape{1, 2, 4}, ttnn::Shape{2, 4});
+        ASSERT_TRUE(updated.has_value());
+        EXPECT_EQ(updated->placements(), (ttsl::SmallVector<MeshMapperConfig::Placement>{Replicate{}, Shard{0}}));
+    }
+
+    // Flatten dims strictly after split dim with negative Shard spelling: Shard{-3} on rank 4 -> Shard{-2} on rank 3
+    {
+        auto updated =
+            ttnn::reshaped_tensor_topology(make_topology(-3), ttnn::Shape{1, 2, 4, 8}, ttnn::Shape{1, 2, 32});
+        ASSERT_TRUE(updated.has_value());
+        EXPECT_EQ(updated->placements(), (ttsl::SmallVector<MeshMapperConfig::Placement>{Replicate{}, Shard{-2}}));
+    }
+
+    // Unflatten split dim into [d', d'+1]: inter-device cut lands on outermost piece d'
+    // Negative spelling ([2, 12] Shard{-1} -> [2, 4, 3] Shard{-2}) and squeezed outer dim
+    // ([1, 2, 12] Shard{2} -> [2, 4, 3] Shard{1}) verify destination d'=1 was actively resolved.
+    {
+        auto updated_neg = ttnn::reshaped_tensor_topology(make_topology(-1), ttnn::Shape{2, 12}, ttnn::Shape{2, 4, 3});
+        ASSERT_TRUE(updated_neg.has_value());
+        EXPECT_EQ(updated_neg->placements(), (ttsl::SmallVector<MeshMapperConfig::Placement>{Replicate{}, Shard{-2}}));
+
+        auto updated_pos =
+            ttnn::reshaped_tensor_topology(make_topology(2), ttnn::Shape{1, 2, 12}, ttnn::Shape{2, 4, 3});
+        ASSERT_TRUE(updated_pos.has_value());
+        EXPECT_EQ(updated_pos->placements(), (ttsl::SmallVector<MeshMapperConfig::Placement>{Replicate{}, Shard{1}}));
+    }
+
+    // Flatten dims strictly before split dim: [2, 3, 4, 8] Shard{2} -> [6, 4, 8] Shard{1}
+    {
+        auto updated =
+            ttnn::reshaped_tensor_topology(make_topology(2), ttnn::Shape{2, 3, 4, 8}, ttnn::Shape{6, 4, 8});
+        ASSERT_TRUE(updated.has_value());
+        EXPECT_EQ(updated->placements(), (ttsl::SmallVector<MeshMapperConfig::Placement>{Replicate{}, Shard{1}}));
+    }
+
+    // Split dim merged under an outer dim of size > 1: [2, 4, 8] Shard{1} -> [8, 8] keeps input label
+    {
+        auto updated = ttnn::reshaped_tensor_topology(make_topology(1), ttnn::Shape{2, 4, 8}, ttnn::Shape{8, 8});
+        EXPECT_FALSE(updated.has_value());
+    }
+
+    // Volume-mismatch and identical-shape guards return std::nullopt
+    {
+        EXPECT_FALSE(
+            ttnn::reshaped_tensor_topology(make_topology(0), ttnn::Shape{2, 4}, ttnn::Shape{1, 2, 8}).has_value());
+        EXPECT_FALSE(
+            ttnn::reshaped_tensor_topology(make_topology(0), ttnn::Shape{2, 4}, ttnn::Shape{2, 4}).has_value());
+    }
+
+    // Zero-volume shapes: zero-sized sharded dims and dims following a zero dim renumber accurately
+    {
+        auto zero_sharded = ttnn::reshaped_tensor_topology(make_topology(0), ttnn::Shape{0, 4}, ttnn::Shape{1, 0, 4});
+        ASSERT_TRUE(zero_sharded.has_value());
+        EXPECT_EQ(zero_sharded->placements(), (ttsl::SmallVector<MeshMapperConfig::Placement>{Replicate{}, Shard{1}}));
+
+        auto zero_mid = ttnn::reshaped_tensor_topology(make_topology(1), ttnn::Shape{2, 0, 4}, ttnn::Shape{1, 2, 0, 4});
+        ASSERT_TRUE(zero_mid.has_value());
+        EXPECT_EQ(zero_mid->placements(), (ttsl::SmallVector<MeshMapperConfig::Placement>{Replicate{}, Shard{2}}));
+
+        auto after_zero =
+            ttnn::reshaped_tensor_topology(make_topology(2), ttnn::Shape{2, 0, 4}, ttnn::Shape{1, 2, 0, 4});
+        ASSERT_TRUE(after_zero.has_value());
+        EXPECT_EQ(after_zero->placements(), (ttsl::SmallVector<MeshMapperConfig::Placement>{Replicate{}, Shard{3}}));
+    }
 }
 
 }  // namespace ttnn::distributed::test

@@ -11,7 +11,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -94,12 +93,24 @@ ReshapeDeviceOperation::spec_return_value_t ReshapeDeviceOperation::compute_outp
     const auto& input_tensor = tensor_args.input_tensor;
     return tt::tt_metal::TensorSpec(
         operation_attributes.logical_output_shape,
-        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+        TensorLayout::fromPaddedShape(
             input_tensor.dtype(),
             input_tensor.tensor_spec().page_config(),
             operation_attributes.output_mem_config,
             operation_attributes.logical_output_shape,
             operation_attributes.padded_output_shape));
+}
+
+std::vector<tt::tt_metal::TensorTopology> ReshapeDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto topology = ttnn::reshaped_tensor_topology(
+        tensor_args.input_tensor.tensor_topology(),
+        tensor_args.input_tensor.logical_shape(),
+        operation_attributes.logical_output_shape);
+    if (!topology.has_value()) {
+        return {};
+    }
+    return {std::move(*topology)};
 }
 
 ReshapeDeviceOperation::tensor_return_value_t ReshapeDeviceOperation::create_output_tensors(
