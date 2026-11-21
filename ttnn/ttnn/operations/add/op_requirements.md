@@ -38,6 +38,19 @@
 
 Omitted: SUPPORTED["dtype"] bfloat8_b — no path for block floats on Quasar (target page, *Family facts*: unbuildable on quasar, its cells skip; refuse in validate(), queue no refinement).
 
+### [x] Refinement 0 — Height-sharded operands in L1 (the YOLOv8 bottleneck add)
+
+**Goal**: add `"height"` to SUPPORTED["sharding"]: both operands height-sharded in L1, at the Phase 0 values of every other axis. The specification's TARGET gained this value after Phase 0 (rules R9 and R10, the INVALID entry DRAM x height, the DECISIONS entry of 2026-11-21). The result is allocated where the first operand is: height-sharded in L1 with that operand's shard shape and cores (R9).
+
+**Origin**: the model-level test. YOLOv8's bottleneck shortcut (`models/experimental/ops/quasar/tests/yolo_ops/test_add.py::test_add_residual_sharded`, small-grid form `[1, 1, 64, 128]`) calls add on two bfloat16 TILE operands height-sharded in L1 over two cores (shard shape [32, 128]) and gets a tensor sharded the same way. The Phase 0 op refuses the call by name, and tt-metal's op serves it.
+
+**Operator notes** (queued by the operator of the run, not by the verifier):
+- A probe: with `"height"` added to SUPPORTED by hand and nothing else changed, the Phase 0 op passed the 39 golden cells `sharding=height` x bfloat16 x TILE x broadcast=none x output_dtype=None that the runner could build on ttsim, and the YOLOv8 test above. So the page walk through `TensorAccessor` already reaches the shards. What is owed is the claim and its evidence, and what the probe did not look at: where the result is and how it is sharded (R9), the op in one device session with tt-metal programs before and after it on sharded tensors, and operands whose shard grid is not the set of cores the op works on (a shard grid of one core, of two, of the full grid).
+- The runner sizes a cell's shard grid from the shape and the device (`eval/CONVENTIONS.md` §2.3, `eval/memory.py`); the op must not depend on how many cores a grid spans. A cell whose input shards do not fit one core's L1 is skipped by the runner (on this simulator `[1, 2, 33600]`).
+- Keep the data path: reading each shard on the core that holds it is a performance refinement of its own and is not asked for here.
+
+**Done when**: every golden cell with `sharding=height` at the Phase 0 values of the other axes passes; the interleaved cells are unchanged; `verify_supported` loud categories are 0; a test in the op's own test file asserts that the result of a height-sharded call is height-sharded in L1 with the first operand's shard shape and cores.
+
 ### [ ] Refinement 1 — Broadcasting: tensor broadcast and a Python-number operand
 
 **Goal**: add `"over_w"`, `"over_h"`, `"over_hw"`, `"over_leading"` and `"number"` to SUPPORTED["broadcast"] (all five values in one refinement), for TILE operands in DRAM or L1, at the Phase 0 dtype. The output is allocated with the broadcast shape (no longer `a.spec`), still in the operands' buffer (R9).

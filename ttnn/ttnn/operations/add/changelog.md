@@ -29,3 +29,32 @@
 - **Tests added**: test_add.py (generated acceptance), test_add_plan.py (thread plans, knobs, session, structural
   counts, refusals), test_add_precision_baseline.py
 - **Performance**: no time figure — ttsim has no clock; perf is structural on this backend.
+
+## Refinement 0 — Height-sharded operands in L1 (the YOLOv8 bottleneck add)
+- Date: 2026-11-21
+- What was done: `"height"` added to `SUPPORTED["sharding"]` (both operands height-sharded in L1; R9, R10). No
+  kernel, ring or program-spec change. Reused: the Phase 0 `stream_flat` path unchanged. The reader and writer
+  address every tensor through its `TensorAccessor` by logical page id, so a sharded operand's pages are fetched
+  from whichever core holds them. The work split stays the full-grid flat page split, independent of the shard
+  grid. The output is allocated from `a.spec`, so it is height-sharded in L1 with a's shard shape, grid and
+  orientation (R9). Added: the SUPPORTED value, comments in `add.py`, an `l1_ledger.md` note (same crossings,
+  tier = the shard holders' L1 over the NoC), and the tests below.
+- Accuracy achieved: the result equals the fp32 sum rounded once to bf16 (`torch.equal` on [1, 1, 64, 128]
+  sharded over two cores, the traced YOLOv8 call). All sharded golden cells meet the 1-ulp bf16 requirement.
+  Unit tests check allclose(1e-2) against the single-rounded sum on [1,1,64,128], [1,2,400], [1,1,50,128],
+  [128,100], [1,1,1024,64] and [1,3,320,320].
+- Golden test progress: targeted slice: 39/39 buildable `sharding=height` × bfloat16 × TILE × broadcast=none ×
+  output_dtype=None cells pass; [1, 2, 33600] is skipped by the runner (its 2,150,400 B shard does not fit one
+  core's L1). The interleaved representatives (DRAM and L1; [1,2,400], [1,1,1600,128], [17,64]) still pass, and a
+  sharded broadcast cell is still refused (xfail). Full-suite count: the harness's run.
+- Issues encountered: None. Finding (not done here, as the refinement asked): the shards are not consumed in
+  place. Every page still crosses the NoC once from its holder's L1, and the op's cores are not aligned with
+  the shard grid. A zero-copy ring backed on each local shard (`cb_descriptor_from_sharded_tensor` /
+  the ProgramSpec equivalent), with the core set taken from the shard grid, would remove those crossings. That
+  is its own performance refinement.
+- Tests added: `test_add_sharded.py`. It checks: R9 placement (height-sharded L1, a's shard shape, grid and
+  orientation) on 4 runner-placed shapes; shard grids of one core, two cores, the full grid and an offset pair of
+  cores; a and b on different shard grids; thread plans (1,1,1) and (4,4,2) on sharded operands into a
+  NaN-prefilled sharded output; one device session (`interleaved_to_sharded` before, add twice, `to_layout` and
+  `sharded_to_interleaved` of the sharded result after, then an interleaved add); and refusal of width
+  sharding by name (R10).

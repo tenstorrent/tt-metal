@@ -44,6 +44,13 @@ No intermediate ring: the sum lives in DEST for one block and is packed straight
 
 For L1 operands the tier is the L1 banks over the NoC instead of DRAM, with the same counts.
 
+Height-sharded operands (Refinement 0): the tier is the shard-holding cores' L1, still crossed over the NoC
+through each tensor's `TensorAccessor` (a page is fetched from whichever core holds its shard, which is in general
+not the core that adds it), with the same counts: a, b and out once each, 0 cross-core traffic beyond those
+crossings. No ring is added, resized or backed on a shard, so the ledger above is unchanged. Consuming each shard
+in place on the core that holds it (a zero-copy ring over the shard) would remove those NoC crossings; the
+refinement left that out on purpose, and it is a separate performance refinement.
+
 Totals per tier (tile-padded pages, bf16):
 
 | Shape | Pages per tensor | Read (a + b) | Written (out) | Cross-core |
