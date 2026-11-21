@@ -278,7 +278,8 @@ ttsl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() con
         get_dtype(),
         compute_kernel_config,
         sub_core_grids,
-        worker_grid);
+        worker_grid,
+        fast_interpolate);
 }
 
 void TernaryDeviceOperation::validate_on_program_cache_miss(
@@ -675,7 +676,8 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const bool fast_interpolate) {
     using OperationType = ttnn::operations::ternary::TernaryDeviceOperation;
 
     ttnn::operations::ternary::TernaryBroadcastType broadcast_type = ttnn::operations::ternary::get_broadcast_type(
@@ -700,6 +702,7 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .sub_core_grids = sub_core_grids,
         .scalar_input_a = std::nullopt,
         .scalar_input_b = std::nullopt,
+        .fast_interpolate = fast_interpolate,
     };
 
     OperationType::tensor_args_t args{
@@ -769,7 +772,8 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const bool fast_interpolate) {
     using OperationType = ttnn::operations::ternary::TernaryDeviceOperation;
 
     ttnn::operations::ternary::TernaryBroadcastType broadcast_type =
@@ -792,6 +796,7 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
         .compute_kernel_config = std::nullopt,
         .sub_core_grids = sub_core_grids,
         .scalar_input_b = ttnn::operations::ternary::ScalarVariant(scalar_c),
+        .fast_interpolate = fast_interpolate,
     };
 
     OperationType::tensor_args_t args{

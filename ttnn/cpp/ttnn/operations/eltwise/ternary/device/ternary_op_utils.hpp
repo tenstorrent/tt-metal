@@ -67,7 +67,8 @@ std::map<std::string, std::string> make_dataflow_defines(
     DataType dtype, DataType b_dtype, std::optional<DataType> c_dtype = std::nullopt);  // for binary & ternary variant
 
 // Get compute kernel defines based on operation type
-std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, DataType dtype);
+std::map<std::string, std::string> get_compute_defines(
+    TernaryOpType op_type, DataType dtype, bool fast_interpolate = false);
 
 // TTT variant (tensor-tensor-tensor)
 TernaryBroadcastType get_broadcast_type(

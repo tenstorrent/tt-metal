@@ -158,6 +158,13 @@ namespace test_utils
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
+// lerp kernel selector, set by the LERP_FAST_INTERPOLATE test parameter.
+#ifdef LERP_FAST_INTERPOLATE
+inline constexpr bool LERP_FAST_INTERPOLATE_SELECTED = true;
+#else
+inline constexpr bool LERP_FAST_INTERPOLATE_SELECTED = false;
+#endif
+
 //
 // SFPU typecast dispatch.
 //
@@ -2655,8 +2662,8 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::lerp)
     {
-        // lerp_init programs the dest auto-advance for the Wormhole two-row body (no-op elsewhere).
-        SFPU_TERNARY_INIT_FN(lerp, sfpu::lerp_init, (APPROX_MODE));
+        // lerp_init programs the dest auto-advance of the Wormhole and Blackhole lerp loops (no-op elsewhere).
+        SFPU_TERNARY_INIT_FN(lerp, sfpu::lerp_init, (APPROX_MODE, LERP_FAST_INTERPOLATE_SELECTED));
     }
     else if constexpr (OPERATION == SfpuType::snake_beta)
     {
@@ -2753,7 +2760,7 @@ void call_ternary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_lerp,
-            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ITERATIONS),
+            (APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, ITERATIONS, LERP_FAST_INTERPOLATE_SELECTED),
             dst_index_in0,
             dst_index_in1,
             dst_index_in2,

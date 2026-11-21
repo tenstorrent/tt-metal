@@ -16,6 +16,15 @@ namespace ckernel {
 /**
  * Performs elementwise linear interpolation (lerp): out = input + weight * (end - input)
  *
+ * On Blackhole, it is evaluated at half scale as 2 * (input / 2 + weight * (end / 2 - input / 2)), so for
+ * weight in [0, 1] no intermediate overflows; values below 2^-125 are flushed to zero at the halved scale.
+ * With is_fp32_dest_acc_en == false the result is rounded for a 16-bit Dest store only, so Dest must not be
+ * in 32-bit mode.
+ *
+ * fast_interpolate (Blackhole only, ignored elsewhere): the caller guarantees weight in [0, 1], and the result is
+ * undefined outside it. Evaluates (input - weight * input) + weight * end: no intermediate overflows,
+ * weight == 0 returns input and weight == 1 returns end bit-exact. Must match lerp_tile_init's.
+ *
  * | Argument | Description                                                | Type     | Valid Range                                           | Required |
  * |----------|------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst0    | Index of the tile in DST register buffer (input/start)   | uint32_t | Must be less than the size of the DST register buffer | True     |
@@ -24,14 +33,14 @@ namespace ckernel {
  * | odst     | Index of the tile in DST register buffer (output)        | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool fast_interpolate = false>
 ALWI void lerp_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
 #ifdef ARCH_BLACKHOLE
     MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_lerp,
-        (APPROX, is_fp32_dest_acc_en, data_format, 32 /* ITERATIONS */),
+        (APPROX, is_fp32_dest_acc_en, data_format, 32 /* ITERATIONS */, fast_interpolate),
         idst0,
         idst1,
         idst2,
@@ -42,7 +51,7 @@ ALWI void lerp_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t ods
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_lerp,
-        (APPROX, is_fp32_dest_acc_en, data_format, 8 /* ITERATIONS */),
+        (APPROX, is_fp32_dest_acc_en, data_format, 8 /* ITERATIONS */, fast_interpolate),
         idst0,
         idst1,
         idst2,
@@ -52,8 +61,11 @@ ALWI void lerp_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t ods
 }
 
 /**
- * Please refer to documentation for any_init.
+ * Please refer to documentation for any_init. fast_interpolate must match lerp_tile's.
  */
-ALWI void lerp_tile_init() { MATH((SFPU_TERNARY_INIT_FN(lerp, sfpu::lerp_init, (APPROX)))); }
+template <bool fast_interpolate = false>
+ALWI void lerp_tile_init() {
+    MATH((SFPU_TERNARY_INIT_FN(lerp, sfpu::lerp_init, (APPROX, fast_interpolate))));
+}
 
 }  // namespace ckernel

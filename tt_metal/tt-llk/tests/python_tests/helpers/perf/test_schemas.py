@@ -1671,6 +1671,7 @@ PERF_TEST_SCHEMAS = {
             "clobber_lregs",
             "dest_acc",
             "dest_sync",
+            "fast_interpolate",
             "formats.input_A",
             "formats.input_B",
             "formats.output",

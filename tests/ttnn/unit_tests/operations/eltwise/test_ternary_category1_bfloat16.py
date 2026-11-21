@@ -11,6 +11,7 @@ from tests.ttnn.utils_for_testing import (
     ulp_distance,
     flush_subnormal_values_to_zero,
 )
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     SMALLEST_NORMAL_BF16,
     pairwise_inputs,
@@ -45,6 +46,9 @@ failing run points at the row that explains it.
 
 BF16_MAX = torch.finfo(torch.bfloat16).max
 MIN_NORMAL_BF16 = 2.0**-126
+# Blackhole lerp works at half scale, 2 * (a / 2 + weight * (b / 2 - a / 2)), so
+# a value it flushes below 2^-126 there is below 2^-125 at full scale.
+HALF_SCALE_MIN_NORMAL_BF16 = 2.0**-125
 
 # These kernels compute an intermediate in a LoFi dest before the final add, so
 # a result whose magnitude lands in the bottom binades carries the rounding of
@@ -165,18 +169,45 @@ def collapses_to_a_exception(golden, input_a, region, name, detail, *, only_wher
     return (name, build_mask)
 
 
-def difference_underflow_exception(golden, input_a, difference):
-    """lerp subtracts before it scales, so a b - a that lands on a bf16
-    subnormal is flushed away before the weight ever sees it and lerp returns a
-    for every weight."""
+def difference_underflow_exception(golden, input_a, difference, threshold=MIN_NORMAL_BF16, region=None):
+    """lerp subtracts before it scales, so a b - a that lands below
+    ``threshold`` (a bf16 subnormal, or 2^-125 on Blackhole's half scale) is
+    flushed away before the weight ever sees it and lerp returns a for every
+    weight. ``region`` narrows the range further."""
+    underflows = (difference != 0) & (difference.abs() < threshold)
     return collapses_to_a_exception(
         golden,
         input_a,
-        (difference != 0) & (difference.abs() < MIN_NORMAL_BF16),
+        underflows if region is None else underflows & region,
         "b - a underflows",
         "device is expected to return a unchanged when b - a flushes to zero",
         only_where_disagreeing=False,
     )
+
+
+def input_half_flush_exception(input_half_flushes, input_b, input_weight):
+    """Blackhole lerp halves a first, and for 2^-126 <= abs(a) < 2^-125 that
+    half flushes, so the device returns 2 * (weight * (b / 2)): weight * b,
+    rounded to bf16, and 0 where abs(b) or abs(weight * b) is below 2^-125.
+
+        a = 1.1755e-38, b = 1.1847e-38, weight = 65536
+        a / 2 and b / 2 flush -> device 0; torch returns 6.0185e-36.
+    """
+    b64, w64 = input_b.to(torch.float64), input_weight.to(torch.float64)
+    end_half = torch.where(b64.abs() < HALF_SCALE_MIN_NORMAL_BF16, torch.zeros_like(b64), b64)
+    weight_times_end = w64 * end_half
+    expected = torch.where(
+        weight_times_end.abs() < HALF_SCALE_MIN_NORMAL_BF16, torch.zeros_like(weight_times_end), weight_times_end
+    ).to(torch.bfloat16)
+
+    def build_mask(result):
+        mask = input_half_flushes.expand_as(result)
+        assert torch.equal(
+            result[mask].to(torch.bfloat16), expected.expand_as(result)[mask]
+        ), "device is expected to return weight * b, flushed below 2^-125, when a / 2 flushes to zero"
+        return mask
+
+    return ("a / 2 flushes", build_mask)
 
 
 def scaled_underflow_exception(golden, input_a, scaled_b):
@@ -406,6 +437,19 @@ def test_lerp(device, ttnn_op):
     the output there is built entirely out of the rounding of b - a, so it is
     far from the golden in both relative and absolute terms by construction.
     The remaining 99.6% is checked at 1 ULP, and 1,068 positions use it.
+
+    Blackhole evaluates 2 * (a / 2 + weight * (b / 2 - a / 2)) and replaces
+    stage 1 with two stages, both asserting the device value over their whole
+    range:
+
+      #  Stage                        Range that fires it               Positions
+      1a a / 2 flushes                2^-126 <= |a| < 2^-125           524,288  3.125%
+                                      returns weight * b, 0 where |b| or
+                                      |weight * b| < 2^-125
+      1b b - a underflows             |b - a| < 2^-125, outside 1a      27,648  0.165%
+
+    The later stages are unchanged; on Blackhole they excuse 10,314, 33,739
+    and 2,028 positions.
     """
     input_a, input_b, input_weight = ternary_inputs(include_zero=True)
     golden, result = run_ternary(device, ttnn_op, input_a, input_b, input_weight)
@@ -417,13 +461,25 @@ def test_lerp(device, ttnn_op):
     difference = b64 - a64
     scaled = difference * w64
 
-    stages = [
+    if is_blackhole():
+        # Half scale: a / 2 flushes for a in the bottom binade, and b - a
+        # flushes below 2^-125 instead of 2^-126.
+        a_abs = a64.abs()
+        input_half_flushes = (a_abs >= MIN_NORMAL_BF16) & (a_abs < HALF_SCALE_MIN_NORMAL_BF16)
+        flush_stages = [
+            input_half_flush_exception(input_half_flushes, input_b, input_weight),
+            difference_underflow_exception(
+                golden, input_a, difference, HALF_SCALE_MIN_NORMAL_BF16, region=~input_half_flushes
+            ),
+        ]
+    else:
         # The subtraction lands on a bf16 subnormal, the device flushes it, and
         # the whole correction term disappears -- the result is exactly a.
         #   a = 1.1755e-38, b = 1.1847e-38, weight = 65536
         #   b - a = 9.184e-41 -> device 0, so lerp returns a; torch keeps the
         #   subnormal and reaches 6.0185e-36.
-        difference_underflow_exception(golden, input_a, difference),
+        flush_stages = [difference_underflow_exception(golden, input_a, difference)]
+    stages = flush_stages + [
         # Either intermediate can exceed bf16 max while a + weight * (b - a) is
         # still finite, because the device rounds each step into bf16 and so
         # overflows a binade earlier than the fp32 golden.
