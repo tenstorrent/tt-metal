@@ -42,7 +42,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     bool fuse_swiglu,
     const std::vector<uint32_t>& chunk_sizes,
     std::optional<bool> transpose_core_grid,
-    bool use_mcast) {
+    bool use_mcast,
+    bool gather_rows) {
     return ttnn::prim::all_gather_minimal_matmul_async(
         input_tensor,
         weight_tensor,
@@ -73,7 +74,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         fuse_swiglu,
         chunk_sizes,
         transpose_core_grid,
-        use_mcast);
+        use_mcast,
+        gather_rows);
 }
 
 }  // namespace ttnn

@@ -64,6 +64,10 @@ struct AllGatherMinimalMatmulAsyncParams {
     // relay. Independent of the fabric config.
     bool use_mcast = false;
 
+    // Gather the activation's rows instead of its K: each rank holds [M, K] (whole K) and the op computes the
+    // [M * ring_size, K] gather (persistent_output_buffer) times this rank's weight, the rows in rank order.
+    bool gather_rows = false;
+
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
         std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
@@ -91,7 +95,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         bool fuse_swiglu = false,
         std::vector<uint32_t> chunk_sizes = {},
         std::optional<bool> transpose_core_grid = std::nullopt,
-        bool use_mcast = false) :
+        bool use_mcast = false,
+        bool gather_rows = false) :
         config(config),
         fused_activation(std::move(fused_activation)),
         output_mem_config(std::move(output_mem_config)),
@@ -118,7 +123,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         fsdp_topology(fsdp_topology),
         fuse_swiglu(fuse_swiglu),
         transpose_core_grid(transpose_core_grid),
-        use_mcast(use_mcast) {}
+        use_mcast(use_mcast),
+        gather_rows(gather_rows) {}
 
     // Structural fields that affect program-cache key.
     static constexpr auto attribute_names = std::make_tuple(
@@ -138,6 +144,7 @@ struct AllGatherMinimalMatmulAsyncParams {
         "using_persistent_weight_buffer",
         "fuse_swiglu",
         "use_mcast",
+        "gather_rows",
         "fused_activation",
         "output_dtype",
         // Selects DST_SYNC_MODE and the other compile-time compute settings.
@@ -161,11 +168,20 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->using_persistent_weight_buffer,
             this->fuse_swiglu,
             this->use_mcast,
+            this->gather_rows,
             this->fused_activation,
             this->output_dtype,
             this->compute_kernel_config);
     }
 };
+
+// gather_rows multiplies the activation's rows by the ring size; otherwise the ring multiplies its K.
+inline uint32_t agmm_row_factor(const AllGatherMinimalMatmulAsyncParams& params) {
+    return params.gather_rows ? params.ring_size : 1;
+}
+inline uint32_t agmm_k_factor(const AllGatherMinimalMatmulAsyncParams& params) {
+    return params.gather_rows ? 1 : params.ring_size;
+}
 
 // The orientation the program is built with. M and N are the matmul's padded row count and weight width. Fabric2D
 // only runs the untransposed grid, so it is not picked there automatically.

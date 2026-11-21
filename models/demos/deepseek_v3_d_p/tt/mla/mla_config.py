@@ -658,6 +658,27 @@ MLA_MATMUL_CONFIG = {
 # golden (PCC 0.99999 vs 0.99993, max abs error 0.008 vs 0.028 for the unfused gate). On a 4x4 stage (TP over a line)
 # the gather dominates: ~295 us against 315.
 MLA_AGMM_CONFIG = {
+    # Sparse MLA q stem, row path: the TP gather of each rank's normalized q rows fused into q_b_proj
+    # (all_gather_minimal_matmul_async gather_rows). Same tiling and compute config as the q_b_proj entries above.
+    # Kimi K3.1 only: traced layer, paired A/B on Galaxy 8x4, fused vs gather + q_b_proj: warm -11.6 +/- 3.4 us, long
+    # -10.3 +/- 6.4. GLM-5.3 (K 2048) measured +0.5..+9 us, so it keeps the separate gather.
+    "q_b_proj": {
+        640: [
+            {
+                **_K3_TAGS,
+                "config": {
+                    "M_block_size": 2,
+                    "K_block_size": 8,
+                    "N_block_size": 14,
+                    "subblock_h": 1,
+                    "subblock_w": 7,
+                    "compute_with_storage_grid_size": COMPUTE_GRID,
+                },
+                "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+                "out_dtype": ttnn.bfloat16,
+            },
+        ],
+    },
     "g_proj": {
         640: {
             **_K3_TAGS,

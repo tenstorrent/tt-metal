@@ -615,6 +615,7 @@ class ttMLA:
         self._kv_stem_gather_output = None
         self._output_gate_gather_output = None
         self._gate_agmm_kwargs = None
+        self._q_rows_agmm_kwargs = None
         # q_a and kv_a as one matmul + one all-reduce over [q_a_proj | kv_a_proj_with_mqa | pad].
         self._merge_qkv_a = ttMLA.merges_qkv_a(config, self.tp_factor, self.kv_only, self._has_indexer)
         if self._merge_qkv_a:
@@ -730,6 +731,7 @@ class ttMLA:
             if self._use_gate:
                 self.g_proj_weight = weights["g_proj"]
                 self._setup_output_gate(mesh_device)
+            self._setup_q_rows_agmm(mesh_device)
             if self._q_distnorm:
                 self._q_a_norm_weight_tp = weights["q_a_layernorm_tp"]
                 self._q_a_norm_resources_memo = [None, None, None]  # see TT_CCL.get_fused_rmsnorm_resources
@@ -1570,12 +1572,16 @@ class ttMLA:
         seq_len_local: int,
         metadata: Optional[ttnn.Tensor] = None,
         qr_borrowed: bool = False,
+        projected: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Absorbed-Q stem from the q_a latent: q_b_proj → heads → split → wkv_b1(nope) → RoPE(rope)
         → query assembly. Consumes qr (the indexer, if any, has already read it by this point) unless it is borrowed:
-        the persistent q_a gather buffer, which must stay allocated."""
+        the persistent q_a gather buffer, which must stay allocated. `projected` is q_b_proj's output computed already
+        (the fused row gather); qr is then unused."""
         num_heads_local = self.num_heads // self.tp_factor
-        if self._llama4_beta is not None:
+        if projected is not None:
+            tt_q = projected
+        elif self._llama4_beta is not None:
             # Mistral's per-position query temperature, applied to the normed q_a latent rather than to
             # Q: every step from here to Q (q_b_proj, head split, wkv_b1, RoPE) is linear or a per-row
             # rotation, so s * f(qr) == f(s * qr), and the latent is [S, 1024] in L1 against Q's
@@ -1586,13 +1592,14 @@ class ttMLA:
             if not qr_borrowed:
                 ttnn.deallocate(qr)
             qr, qr_borrowed = scaled, False
-        tt_q = ttnn.linear(
-            qr,
-            self.q_b_proj_weight,
-            **self._get_mm_kwargs("q_b_proj", seq_len_local),
-        )
-        if not qr_borrowed:
-            ttnn.deallocate(qr)
+        if projected is None:
+            tt_q = ttnn.linear(
+                qr,
+                self.q_b_proj_weight,
+                **self._get_mm_kwargs("q_b_proj", seq_len_local),
+            )
+            if not qr_borrowed:
+                ttnn.deallocate(qr)
 
         # The Q stem uses interleaved head creation. Write the two channel regions directly.
         tt_q_nope, tt_q_rope = ttnn.experimental.nlp_create_q_heads_split(
@@ -1999,6 +2006,60 @@ class ttMLA:
             use_mcast=True,
         )
 
+    def _setup_q_rows_agmm(self, mesh_device) -> None:
+        """On the row path (_q_a_rows_for_indexer), fuse the TP gather of the normalized q rows into q_b_proj
+        (all_gather_minimal_matmul_async with gather_rows) when a tuned MLA_AGMM_CONFIG entry applies, on a Fabric2D TP
+        ring with a column beside the grid free for the fabric muxes. Else the row path gathers, then runs q_b_proj."""
+        if self.tp_factor == 1 or not self._has_indexer or self._merge_qkv_a or self._llama4_beta is not None:
+            return
+        if not self._is_blackhole:
+            return
+        cfg = self._select_cfg(MLA_AGMM_CONFIG["q_b_proj"].get(self.active_seq_len_local), "q_b_proj")
+        if cfg is None:
+            return
+        mm = cfg["config"]
+        matmul_grid = ttnn.CoreCoord(*mm["compute_with_storage_grid_size"])
+        rank_tiles = self.active_seq_len_local // self.tp_factor // ttnn.TILE_SIZE
+        topology = ttnn.get_usable_topology(self.q_b_proj_weight, self.tp_ccl_topology, self.tp_axis)
+        if not (
+            matmul_grid.x < mesh_device.compute_with_storage_grid_size().x
+            and ttnn.get_fabric_config(mesh_device).name.startswith("FABRIC_2D")
+            and topology == ttnn.Topology.Ring
+            and self.active_seq_len_local % (self.tp_factor * ttnn.TILE_SIZE) == 0
+            and mm["M_block_size"] <= rank_tiles
+            and (self.q_lora_rank // ttnn.TILE_SIZE) % mm["K_block_size"] == 0
+        ):
+            return
+        links = max(1, min(self.ccl_num_links, matmul_grid.y // 2))
+        self._q_rows_agmm_kwargs = dict(
+            tp_gather_resources(mesh_device, self.active_seq_len_local, self.q_lora_rank),
+            config=ttnn.MinimalMatmulConfig(**{**mm, "compute_with_storage_grid_size": matmul_grid}),
+            compute_kernel_config=self._tuned_compute_kernel_config(cfg),
+            memory_config=cfg["out_mem_config"],
+            dtype=cfg["out_dtype"],
+            topology=topology,
+            cluster_axis=self.tp_axis,
+            num_links=links,
+            num_workers_per_link=-(-matmul_grid.y // links),
+            num_buffers_per_channel=tp_gather_mux_buffers(mesh_device),
+            force_transpose=False,
+            use_mcast=True,
+            gather_rows=True,
+        )
+
+    def _q_rows_projection(self, qr_local: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+        """q_b_proj of the TP ranks' gathered normalized q rows, the gather fused in: [1, 1, seq_len_local, N]."""
+        assert (
+            seq_len_local == self.active_seq_len_local
+        ), f"the fused q row gather was set up for {self.active_seq_len_local} local tokens, got {seq_len_local}"
+        rows, width = qr_local.shape[-2], qr_local.shape[-1]
+        tt_q = ttnn.experimental.all_gather_minimal_matmul_async(
+            input_tensor=ttnn.reshape(qr_local, (1, rows, width)),
+            weight_tensor=self.q_b_proj_weight,
+            **self._q_rows_agmm_kwargs,
+        )[0]
+        return ttnn.reshape(tt_q, (1, 1, seq_len_local, tt_q.shape[-1]))
+
     def _output_gate(self, hidden_states: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         """Kimi-K3 gated MLA: sigmoid(g_proj(hidden_states)), head-sharded to match concat_heads.
 
@@ -2230,11 +2291,21 @@ class ttMLA:
                 **indexer_qr_kwargs,
             )
 
+        projected = None
         if qr_local is not None:
-            qr = self._gather_tp_rows(qr_local, seq_len_local)
+            if self._q_rows_agmm_kwargs is not None:
+                projected = self._q_rows_projection(qr_local, seq_len_local)
+            else:
+                qr = self._gather_tp_rows(qr_local, seq_len_local)
             ttnn.deallocate(qr_local)
         tt_q = self._q_stem(
-            qr, rope_tensors, kv_actual_isl, seq_len_local, metadata=metadata, qr_borrowed=self._is_q_gather_buffer(qr)
+            qr,
+            rope_tensors,
+            kv_actual_isl,
+            seq_len_local,
+            metadata=metadata,
+            qr_borrowed=qr is not None and self._is_q_gather_buffer(qr),
+            projected=projected,
         )
         tt_kvpe, tt_kv_nope, kv_intermediates = self._kv_stem(
             hidden_states,

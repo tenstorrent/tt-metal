@@ -32,6 +32,26 @@ constexpr uint32_t K_block_tiles = get_compile_time_arg_val(5);
 constexpr uint32_t N_block_tiles = get_compile_time_arg_val(6);
 constexpr uint32_t out_piece_tiles = get_named_compile_time_arg_val("out_piece_w");  // the compute's output pieces
 constexpr bool mcast = get_named_compile_time_arg_val("mcast");  // blocks go along the row in one multicast
+// Row gather: the rows (not K) are gathered. Each rank holds M / m_ring rows of the whole K; the K walk is a single
+// device's (num_devices == 1) and every core row relays its own rows' bands around the ring (Ring halves).
+constexpr bool m_gather = get_named_compile_time_arg_val("m_gather");
+constexpr uint32_t m_ring = get_named_compile_time_arg_val("m_ring");
+
+// Row gather: whether a band's K block reaches the rank `left_hops` hops before its owner (rank - left_hops) going
+// towards lower ranks, else the other way. Each block takes the shorter way to every rank, whole, so a rank holds a
+// block before it relays it; at the antipode (even ring) the two ways alternate by K block to balance the links.
+// Row gather: the gather buffer's tile pages are permuted so each (tile row i, K block) segment of K_block tiles sits
+// contiguously in one DRAM bank (pages q, q + num_dram_banks, ... of an interleaved buffer are adjacent in a bank):
+// the movers write a segment in a few large packets, the injectors read it in one go. A bijection on the buffer when
+// the segment count is a multiple of num_dram_banks (validated on the host).
+FORCE_INLINE uint32_t row_gather_page(uint32_t i, uint32_t j, uint32_t K_tiles_, uint32_t K_block_, uint32_t banks) {
+    const uint32_t segment = i * (K_tiles_ / K_block_) + j / K_block_;
+    return (segment / banks) * banks * K_block_ + (j % K_block_) * banks + segment % banks;
+}
+
+FORCE_INLINE bool m_gather_via_lower(uint32_t left_hops, uint32_t k_block) {
+    return 2 * left_hops < m_ring || (2 * left_hops == m_ring && (k_block & 1) == 0);
+}
 // The core grid and the in0 chain through it, from which each core computes its own position (AgmmCore).
 constexpr bool transpose_grid = get_named_compile_time_arg_val("transpose_grid");
 constexpr uint32_t grid_x = get_named_compile_time_arg_val("grid_x");
@@ -451,6 +471,12 @@ void kernel_main() {
 #endif  // !FABRIC_2D
 #endif
 
+    // Row gather: the rows each rank owns (its band). m_ring is the ring size in either mode, never 0.
+    [[maybe_unused]] const uint32_t M_dev_tiles = M_tiles / m_ring;
+    // Row gather: whether the antipode's rows arrive from rank + 1 (the common arg after the grid's NoC coordinates).
+    [[maybe_unused]] const bool m_antipode_from_higher =
+        get_common_arg_val<uint32_t>(noc_coords_arg + grid_x + in0_parallel_axis_cores) != 0;
+
     /**
      * This is a Row-Major output block ordering.
      * It enables reuse of the last in0 block when striding the output block N dimension.
@@ -559,25 +585,74 @@ void kernel_main() {
                     k_left_tiles = k_block_odd ? (K_block_tiles - (K_block_tiles / 2)) : (K_block_tiles / 2);
                     k_right_tiles = k_block_odd ? (K_block_tiles / 2) : (K_block_tiles - k_left_tiles);
                 }
-                compute_actual_k_block<is_linear>(
-                    k_block_iter,
-                    K_num_blocks,
-                    my_rank,
-                    K_blocks_per_device,
-                    K_block_tiles,
-                    K_tiles_per_device,
-                    num_devices,
-                    k_forward,
-                    n_block_iter == 0,
-                    out_ready_sem_forward_addr_ptr,
-                    out_ready_sem_backward_addr_ptr,
-                    sem_target_forward,
-                    sem_target_backward,
-                    is_injector_core,
-                    1,
-                    k_left_tiles,
-                    k_block_left_tile,
-                    k_block_right_tile);
+                // Row gather: this block's rows owned by other ranks (one band per segment) must have landed.
+                // Row gather arrivals per direction (down from rank + 1, up from rank - 1): blocks the neighbour owns
+                // (pushed straight from its input, counted in the counter's high half) and blocks it relays (low half).
+                [[maybe_unused]] uint32_t higher_direct = 0, higher_relayed = 0, lower_direct = 0, lower_relayed = 0;
+                // Row gather: rows past M_tiles are padding of the core's M range, never read or relayed.
+                [[maybe_unused]] const uint32_t m_rows_end = std::min(m_tile_end, M_tiles);
+                if constexpr (m_gather) {
+                    k_block_left_tile = actual_k_block * K_block_tiles;
+                    k_block_right_tile = k_block_left_tile + k_left_tiles;
+                    for (uint32_t s = m_tile; s < m_rows_end;) {
+                        const uint32_t band = s / M_dev_tiles;
+                        if (band != my_rank) {
+                            // 1-hop neighbours' rows count in the high half of the counter of the way they come, the
+                            // antipode's (ring of 4, sent straight there) in the low half of the way its route ends.
+                            const uint32_t left_hops = (band + m_ring - my_rank) % m_ring;
+                            const bool antipode = left_hops != 1 && left_hops != m_ring - 1;
+                            // The antipode's even K blocks come straight along its route, odd ones relayed the
+                            // other way round (dm_row_gather_mover.cpp), so from the other side.
+                            const bool from_higher = antipode
+                                                         ? (m_antipode_from_higher != (((actual_k_block) & 1) != 0))
+                                                         : m_gather_via_lower(left_hops, actual_k_block);
+                            if (from_higher) {
+                                (antipode ? higher_relayed : higher_direct)++;
+                            } else {
+                                (antipode ? lower_relayed : lower_direct)++;
+                            }
+                        }
+                        s = std::min(m_rows_end, (band + 1) * M_dev_tiles);
+                    }
+                    if (is_injector_core && n_block_iter == 0) {
+                        // Blocks coming down (rank + 1 -> rank) bump the forward counter, up the backward one. Each
+                        // half of a counter arrives in this core row's block order.
+                        auto wait_lanes =
+                            [](volatile tt_l1_ptr uint32_t* sem, uint32_t& target, uint32_t direct, uint32_t relayed) {
+                                target += (direct << 16) + relayed;
+                                const uint32_t direct_target = target >> 16, relayed_target = target & 0xFFFF;
+                                while (true) {
+                                    invalidate_l1_cache();
+                                    const uint32_t value = *sem;
+                                    if ((value >> 16) >= direct_target && (value & 0xFFFF) >= relayed_target) {
+                                        break;
+                                    }
+                                }
+                            };
+                        wait_lanes(out_ready_sem_forward_addr_ptr, sem_target_forward, higher_direct, higher_relayed);
+                        wait_lanes(out_ready_sem_backward_addr_ptr, sem_target_backward, lower_direct, lower_relayed);
+                    }
+                } else {
+                    compute_actual_k_block<is_linear>(
+                        k_block_iter,
+                        K_num_blocks,
+                        my_rank,
+                        K_blocks_per_device,
+                        K_block_tiles,
+                        K_tiles_per_device,
+                        num_devices,
+                        k_forward,
+                        n_block_iter == 0,
+                        out_ready_sem_forward_addr_ptr,
+                        out_ready_sem_backward_addr_ptr,
+                        sem_target_forward,
+                        sem_target_backward,
+                        is_injector_core,
+                        1,
+                        k_left_tiles,
+                        k_block_left_tile,
+                        k_block_right_tile);
+                }
                 if constexpr (is_linear) {
                     // For Linear tail, the right half is pure zero-fill padding (no real tiles).
                     // Point past the logical K end so read_in0_block_sync's `j < logical_d1` check
@@ -586,7 +661,37 @@ void kernel_main() {
                         k_block_right_tile = K_tiles;
                     }
                 }
-                if (is_injector_core) {
+                if (m_gather && is_injector_core) {
+                    // This rank's rows from its input, the others' from the gather buffer (one read per segment row).
+                    uint32_t write_ptr = in0_start_address;
+                    for (uint32_t i = m_tile; i < m_rows_end; i++) {
+                        const uint32_t band = i / M_dev_tiles;
+                        if (band == my_rank) {
+                            for (uint32_t j = k_block_left_tile; j < k_block_left_tile + K_block_tiles; j++) {
+#ifdef READ_FROM_LOCAL_INPUT
+                                noc_obj.async_read(
+                                    in3_reader,
+                                    CoreLocalMem<uint8_t>(write_ptr + (j - k_block_left_tile) * in0_tile_size),
+                                    in0_tile_size,
+                                    {.page_id = (i - band * M_dev_tiles) * K_tiles + j},
+                                    {});
+#endif
+                            }
+                        } else {
+                            noc_async_read(
+                                in0_reader.get_noc_addr(row_gather_page(
+                                    i,
+                                    k_block_left_tile,
+                                    K_tiles,
+                                    K_block_tiles,
+                                    get_named_compile_time_arg_val("m_banks"))),
+                                write_ptr,
+                                K_block_tiles * in0_tile_size);
+                        }
+                        write_ptr += K_block_tiles * in0_tile_size;
+                    }
+                    noc_obj.async_read_barrier();
+                } else if (is_injector_core) {
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         noc_obj,
                         in0_reader,
@@ -647,35 +752,38 @@ void kernel_main() {
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
 #ifdef FABRIC_2D
-                    // Skip the last K_blocks_per_device iterations: by then every block has reached every device.
-                    if (k_block_iter < (K_num_blocks - K_blocks_per_device)) {
-                        if (fabric_sends) {
-                            held[num_held++] = {
-                                m_tile,
-                                k_block_left_tile,
-                                k_block_right_tile,
-                                current_M_block_tiles,
-                                k_left_tiles,
-                                k_right_tiles,
-                                in0_start_address};
+                    if constexpr (m_gather) {
+                        // Row gather: the movers carry the rows (dm_row_gather_mover.cpp).
+                    } else
+                        // Skip the last K_blocks_per_device iterations: by then every block has reached every device.
+                        if (k_block_iter < (K_num_blocks - K_blocks_per_device)) {
+                            if (fabric_sends) {
+                                held[num_held++] = {
+                                    m_tile,
+                                    k_block_left_tile,
+                                    k_block_right_tile,
+                                    current_M_block_tiles,
+                                    k_left_tiles,
+                                    k_right_tiles,
+                                    in0_start_address};
+                            }
+                            if (!joined_fabric) {
+                                join_fabric();
+                                joined_fabric = true;
+                            }
+                            if (!fabric_open) {
+                                // Wait once the buffer is full, or before the first block from a peer: that one can
+                                // only arrive once the peer's forwards (held the same way) go out.
+                                fabric_open =
+                                    neighbour_entered(num_held > max_held || k_block_iter + 1 >= K_blocks_per_device);
+                            }
+                            for (uint32_t h = 0; fabric_open && h < num_held; h++) {
+                                forward_held(held[h]);
+                            }
+                            if (fabric_open) {
+                                num_held = 0;
+                            }
                         }
-                        if (!joined_fabric) {
-                            join_fabric();
-                            joined_fabric = true;
-                        }
-                        if (!fabric_open) {
-                            // Wait once the buffer is full, or before the first block from a peer: that one can only
-                            // arrive once the peer's forwards (held the same way) go out.
-                            fabric_open =
-                                neighbour_entered(num_held > max_held || k_block_iter + 1 >= K_blocks_per_device);
-                        }
-                        for (uint32_t h = 0; fabric_open && h < num_held; h++) {
-                            forward_held(held[h]);
-                        }
-                        if (fabric_open) {
-                            num_held = 0;
-                        }
-                    }
 #else
                     if constexpr (is_linear) {
                         // Linear uni-ring: every (non-skipped) iter, every device sends ONE full

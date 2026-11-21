@@ -42,6 +42,9 @@ struct AllGatherMinimalMatmulAsyncProgramFactory {
         std::reference_wrapper<tt::tt_metal::RuntimeArgsData> in1_sender;
         std::reference_wrapper<tt::tt_metal::RuntimeArgsData> in1_receiver;
         std::reference_wrapper<tt::tt_metal::RuntimeArgsData> compute;
+        // gather_rows: the row movers' common args (in the mux kernel's slot).
+        std::optional<std::reference_wrapper<tt::tt_metal::RuntimeArgsData>> mover;
+        std::optional<std::reference_wrapper<tt::tt_metal::RuntimeArgsData>> mover_reader;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
