@@ -101,7 +101,6 @@ enum class HalL1MemAddrType : uint8_t {
     ETH_PTP_TRACE,            // Runtime FW entry/exit PTP stamps (Blackhole only)
     L1_ECC_HALT,              // L1 ECC halt record and BRISC release code, l1_ecc_halt_slot_t (Blackhole Tensix only)
     RING_BUF_HEAD,            // Watcher MPSC ring buffer head, outside the mailbox (Quasar dispatch only)
-    FABRIC_KERNEL_HEARTBEAT,  // Fabric router heartbeat (Quasar only)
     ETH_LINK,                 // Ethernet-link slot, written before launch (Quasar only)
     KERAUNOS_NOC_CHANNELS,    // KeraunosNocChannels of a Keraunos CCE, written before launch (Quasar Ethernet only)
     COUNT                     // Keep this last so it always indicates number of enum options
