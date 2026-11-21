@@ -67,8 +67,6 @@ constexpr uint32_t cb_gate_partial = get_compile_time_arg_val(28);
 // 2 where the heads pair up, else 1 (each core its head over all of K).
 constexpr uint32_t gate_ways = get_compile_time_arg_val(29);
 constexpr uint32_t state_tiles = kt * kt;
-// One way, the gate's matmul applies the sigmoid in its last K block (kda_gate::matmul); paired, after add_pair.
-constexpr bool sigmoid_in_gate = gate_ways == 1;
 // A chunk row of the outputs is formed in one DST pass (the op checks K against the DST).
 static_assert(kt <= compute_kernel_lib::DEST_AUTO_LIMIT);
 // The terms buffer holds a chunk row of F(0) at tile row, and of F(I) at fi_offset further: in place, the core's whole
@@ -105,8 +103,7 @@ void broadcast_weight() {
     cb_wait_front(cb_weight_rows, kt);
 }
 
-// Each of the next `chunks` gate rows into its chunk's g = sigmoid(gate) * weight (the sigmoid already applied when
-// sigmoid_in_gate).
+// Each of the next `chunks` gate rows into its chunk's g = sigmoid(gate) * weight.
 void gate_factors(uint32_t chunks) {
     DataflowBuffer gate(cb_gate);
     DataflowBuffer weight_rows(cb_weight_rows);
@@ -119,40 +116,21 @@ void gate_factors(uint32_t chunks) {
     for (uint32_t c = 0; c < chunks; ++c) {
         if constexpr (fp32_output) {
             // The product on the SFPU, in FP32: the FPU's DEST reuse would round sigmoid(gate) to srcA's format.
-            if constexpr (sigmoid_in_gate) {
-                ckl::eltwise_chain(
-                    ckl::IterationShape::tiles(kt).block_size(kt),
-                    ckl::CopyTile<gate_row, ckl::Dst::D0>{gate},
-                    ckl::CopyTile<weight_row, ckl::Dst::D1>{weight_rows},
-                    ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
-                    ckl::PackTile<gate_factor_row, ckl::Dst::D0>{gate_factor});
-            } else {
-                ckl::eltwise_chain(
-                    ckl::IterationShape::tiles(kt).block_size(kt),
-                    ckl::CopyTile<gate_row, ckl::Dst::D0>{gate},
-                    ckl::Sigmoid<ckl::Dst::D0>{},
-                    ckl::CopyTile<weight_row, ckl::Dst::D1>{weight_rows},
-                    ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
-                    ckl::PackTile<gate_factor_row, ckl::Dst::D0>{gate_factor});
-            }
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(kt).block_size(kt),
+                ckl::CopyTile<gate_row, ckl::Dst::D0>{gate},
+                ckl::Sigmoid<ckl::Dst::D0>{},
+                ckl::CopyTile<weight_row, ckl::Dst::D1>{weight_rows},
+                ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
+                ckl::PackTile<gate_factor_row, ckl::Dst::D0>{gate_factor});
         } else {
             // A BF16 g needs only the BF16-accurate sigmoid, and the FPU product reusing DEST.
-            if constexpr (sigmoid_in_gate) {
-                ckl::eltwise_chain(
-                    ckl::IterationShape::tiles(kt).block_size(kt),
-                    ckl::CopyTile<gate_row>{gate},
-                    ckl::DestReuseBinary<ckl::BinaryFpuOp::Mul, weight_row, ckl::DestReuseType::DEST_TO_SRCA>{
-                        weight_rows},
-                    ckl::PackTile<gate_factor_row>{gate_factor});
-            } else {
-                ckl::eltwise_chain(
-                    ckl::IterationShape::tiles(kt).block_size(kt),
-                    ckl::CopyTile<gate_row>{gate},
-                    ckl::Sigmoid<ckl::Dst::D0, ckl::Approx::Exact, ckl::SigmoidPrecision::Bf16>{},
-                    ckl::DestReuseBinary<ckl::BinaryFpuOp::Mul, weight_row, ckl::DestReuseType::DEST_TO_SRCA>{
-                        weight_rows},
-                    ckl::PackTile<gate_factor_row>{gate_factor});
-            }
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(kt).block_size(kt),
+                ckl::CopyTile<gate_row>{gate},
+                ckl::Sigmoid<ckl::Dst::D0, ckl::Approx::Exact, ckl::SigmoidPrecision::Bf16>{},
+                ckl::DestReuseBinary<ckl::BinaryFpuOp::Mul, weight_row, ckl::DestReuseType::DEST_TO_SRCA>{weight_rows},
+                ckl::PackTile<gate_factor_row>{gate_factor});
         }
     }
 }
@@ -264,7 +242,7 @@ void kernel_main() {
     const uint32_t group_chunks = read_tile_value(cb_ctl, 0, 1);
     cb_pop_front(cb_ctl, 1);
 
-    kda_gate::matmul<gate_fidelity, sigmoid_in_gate, fp32_output>(
+    kda_gate::matmul<gate_fidelity>(
         cb_gin0,
         cb_gin1,
         cb_gate,
