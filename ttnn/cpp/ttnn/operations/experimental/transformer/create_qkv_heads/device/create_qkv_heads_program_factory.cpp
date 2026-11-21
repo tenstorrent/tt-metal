@@ -63,8 +63,8 @@ ProgramDescriptor CreateQKVHeadsProgramFactory::create_descriptor(
     auto bbox = all_cores.bounding_box();
     ShardOrientation shard_orientation = shard_spec.orientation;
     bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;
-    uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
-    uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
+    uint32_t num_h_cores = rm ? bbox.grid_size().y : bbox.grid_size().x;
+    uint32_t num_w_cores = rm ? bbox.grid_size().x : bbox.grid_size().y;
 
     TT_FATAL(
         input_shape[3] % (num_w_cores * TILE_WIDTH) == 0,

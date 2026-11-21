@@ -47,8 +47,8 @@ ttnn::device_operation::ProgramArtifacts SplitFusedQKVAndSplitHeadsShardedProgra
     auto bbox = all_cores.bounding_box();
     ShardOrientation shard_orientation = a.shard_spec().value().orientation;
     bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;
-    uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
-    uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
+    uint32_t num_h_cores = rm ? bbox.grid_size().y : bbox.grid_size().x;
+    uint32_t num_w_cores = rm ? bbox.grid_size().x : bbox.grid_size().y;
     // tensor shape
     const auto& shape = a.padded_shape();
     uint32_t M = shape[2] * shape[0];  // 4608
