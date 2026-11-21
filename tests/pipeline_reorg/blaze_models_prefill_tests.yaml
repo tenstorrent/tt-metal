@@ -512,12 +512,11 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      # The job took 13 min in CI (run 44900949382: four ~1 min pytest runs plus fabric bring-up and the 4x4 binding);
-      # 20 leaves 1.5x.
+      # The job takes ~13 min (four ~1 min pytest runs plus fabric bring-up and the 4x4 binding); 20 leaves 1.5x.
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U08RL15T4N8 # Danilo Djekic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1

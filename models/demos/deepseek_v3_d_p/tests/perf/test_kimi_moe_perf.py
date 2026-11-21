@@ -6,8 +6,7 @@
 One MoE layer through the model adapter (TtMoEBlockFfn: MoE head -> sparse dispatch -> flat experts + combine -> MoE
 tail; K3's seeded random weights, block_cases.MODELS) at each model's stage and chunk:
 
-* kimi_k3-8x4-5120: K3 on one 8x4 Galaxy (the runners' *_8x4 configs), 5,120-token chunk - the shape the TtMoe-era
-  gate measured.
+* kimi_k3-8x4-5120: K3 on one 8x4 Galaxy (the runners' *_8x4 configs), 5,120-token chunk.
 * kimi_k3_1-4x4-sp1-2560: K3.1's production stage, one tray half (SP=4 on mesh axis 1, TP=4 on axis 0), 2,560-token
   chunk, the mesh opened with K3.1's L1_SMALL_SIZE. Needs the Galaxy narrowed to the tray half: run it through
   tests/run_4x4_stage_tests.sh (unnarrowed, the system mesh is 8x4 and the case skips; the 8x4 case skips the other way).
@@ -61,8 +60,7 @@ class MoEPerfCase:
         return f"{self.model}-{self.mesh}-{self.chunk}"
 
 
-# Targets: CI runs 44900949382 (bh-glx-120-d09u02) and 44905230066 (d06u02), 14 kW, 2026-11-21; untraced the fastest
-# run, traced the mean of the runs (as test_sparse_mla_perf's).
+# Targets on 14 kW CI Galaxies: untraced the fastest run, traced the mean of the runs (as test_sparse_mla_perf's).
 CASES = [
     MoEPerfCase("kimi_k3", "8x4", 5120, targets_ms=(2.38, 2.27)),
     MoEPerfCase("kimi_k3_1", "4x4-sp1", 2560, targets_ms=(3.63, 3.54)),
