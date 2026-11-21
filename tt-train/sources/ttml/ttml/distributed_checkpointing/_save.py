@@ -50,6 +50,7 @@ from ._state_dict import (
     world_record,
 )
 from ._topology import Chunk, owner
+from ._train_state import TRAIN_STATE_KEY, capture_train_state
 
 
 @dataclass
@@ -264,16 +265,23 @@ def save(
     model=None,
     optimizer=None,
     header: dict | None = None,
+    scheduler=None,
+    dataloader=None,
+    rng: bool = True,
     threads: int | None = None,
     max_inflight_bytes: int = 4 << 30,
     overwrite: bool = False,
 ) -> SaveResult:
     """Write ``model`` and ``optimizer`` to the directory ``ckpt_dir``.
 
-    ``header`` is any JSON-encodable dict (the step, dataloader state, ...), returned by ``load``. ``threads`` caps
-    the writer threads (default: one per device data file); ``max_inflight_bytes`` bounds the host buffers waiting
-    to be written. An existing ``ckpt_dir`` is refused unless ``overwrite=True``. FSDP modules are resharded first
-    (nothing to do for one already sharded).
+    ``header`` is any JSON-encodable dict (the step, the config, ...), returned by ``load``. ``scheduler`` and
+    ``dataloader`` are saved through their ``get_state_dict`` (JSON only; ``load`` hands their ``set_state_dict`` the
+    state as JSON types, so a tuple comes back as a list) and, with ``rng`` (default), so is the state of every random
+    generator training draws from: the ttml generator (an mt19937 in ``AutoContext``), ``ttml.init``'s PCG64, python's,
+    numpy's, and torch's when torch is imported; ``load`` restores them with a scheduler or dataloader, or on request.
+    ``threads`` caps the writer threads (default: one per device data file); ``max_inflight_bytes`` bounds the host
+    buffers waiting to be written. An existing ``ckpt_dir`` is refused unless ``overwrite=True``. FSDP modules are
+    resharded first (nothing to do for one already sharded).
 
     A replicated shard is written once, from one device of its replica group. Save does not check that the replicas
     hold the same values, as ``ttml.checkpointing.save_checkpoint`` does by default (``verify_replicas=True``):
@@ -289,7 +297,12 @@ def save(
     check_threads(threads)
     if int(max_inflight_bytes) <= 0:
         raise ValueError(f"max_inflight_bytes must be positive, got {max_inflight_bytes}")
-    header = check_json("header", header or {})  # before any device read or file write
+    # The JSON state is checked before any device read (the FSDP modules may be resharded) or file write.
+    header = check_json("header", header or {})
+    world = world_record()
+    train_state = capture_train_state(
+        scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world["ranks"][0]["world_rank"]
+    )
     t0 = time.perf_counter()
     stats: dict[str, float] = {}
     reshard_fsdp_modules(model)
@@ -299,7 +312,6 @@ def save(
         state_live, scalars = collect_optimizer(optimizer, live)
         live.extend(state_live)
     by_key = {lt.key: lt for lt in live}
-    world = world_record()
     stats["collect_s"] = time.perf_counter() - t0
 
     ckpt_dir = os.path.abspath(ckpt_dir)
@@ -320,7 +332,13 @@ def save(
 
         write_header(
             staging,
-            {"format": FORMAT, "version": VERSION, "checkpoint_id": os.path.basename(ckpt_dir), "user": header or {}},
+            {
+                "format": FORMAT,
+                "version": VERSION,
+                "checkpoint_id": os.path.basename(ckpt_dir),
+                "user": header or {},
+                TRAIN_STATE_KEY: train_state,
+            },
         )
         index = Index(
             checkpoint_id=os.path.basename(ckpt_dir),

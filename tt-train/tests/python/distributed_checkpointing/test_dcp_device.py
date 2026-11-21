@@ -5,8 +5,9 @@
 """Same-world round trips of ``ttml.distributed_checkpointing`` on the shared ``[1, 2]`` TP and FSDP fixtures.
 
 Every parameter and optimizer moment must come back device for device, bit for bit, into a fresh model and
-optimizer; the header and the optimizer scalars must come back; a gathered FSDP module is resharded first; a
-strict load must name what is missing. Cross-world loads live in ``test_dcp_cross_world.py``, which needs no open
+optimizer; the header and the optimizer scalars must come back; the scheduler, the dataloader and every random
+generator must resume where the save left them; a gathered FSDP module is resharded first; a strict load
+must name what is missing. Cross-world loads live in ``test_dcp_cross_world.py``, which needs no open
 device of its own.
 
 ``tp_mesh`` and ``fsdp_mesh`` are both module-scoped and each reopens the device with its own axis names, so the two
@@ -15,17 +16,21 @@ groups must not interleave: the TP tests come first, the FSDP test last.
 
 import glob
 import os
+import random
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pytest
+import torch
 import ttnn
-from dcp_shards import assert_same_shards, assert_some_differ, model_shards, optimizer_shards, tensor_shards
+from dcp_oracle import MISREAD_RNG, WRONG_LENGTH_RNG, Loader, advance_generators, damage_stored_rng, host_draws
+from dcp_shards import NATIVE, assert_same_shards, assert_some_differ, model_shards, optimizer_shards, tensor_shards
 from tp_block import TPBlock, fresh_tp, make_adamw, train_step
 
 import ttml
 import ttml.distributed_checkpointing as dcp
+from ttml.common.schedulers import CosineAnnealingScheduler
 from ttml.distributed_checkpointing import _load, _save
 from ttml.distributed_checkpointing._layouts import Pad, fused_segments
 from ttml.distributed_checkpointing._state_dict import collect_model
@@ -468,6 +473,169 @@ def test_undeclared_fused_weight_needs_same_row_order(tp_mesh, tmp_path, expect_
     ):
         dcp.load(path, model=declared)
     assert_same_shards(model_shards(declared.parameters()), before)
+
+
+def _ttml_draw():
+    """One tensor from the ttml generator (``rand`` without a seed draws its seed from it), as seen by device 0."""
+    value = ttml.ops.rand((1, 1, 32, 32)).get_value(NATIVE)
+    return ttnn.to_torch(ttnn.get_device_tensors(value)[0])
+
+
+def _adamw_stochastic_rounding(params):
+    """AdamW rounding its BF16 updates stochastically: every step draws from the ttml generator."""
+    cfg = ttml.optimizers.AdamWConfig.make(
+        lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0, stochastic_rounding=True
+    )
+    return ttml.optimizers.AdamW(params, cfg)
+
+
+@pytest.mark.parametrize("damage", ["ttml_position_past_624", "python_gauss_next_text"])
+def test_damaged_rng_state_changes_nothing(tp_mesh, tmp_path, damage, expect_error):
+    """A load asking for damaged RNG state changes nothing, and one that does not ask for RNG state goes ahead."""
+    ctx = ttml.autograd.AutoContext.get_instance()
+    model, params, opt = fresh_tp(DIM)
+    train_step(model, opt, DIM)
+    path = str(tmp_path / "ckpt")
+    dcp.save(path, model=model)
+    damage_stored_rng(path, MISREAD_RNG[damage])
+
+    model2, params2, _ = fresh_tp(DIM)
+    before, generator = model_shards(params2), ctx.get_generator_state()
+    with expect_error(dcp.CheckpointError, "the stored RNG state is malformed .*pass rng=False to load"):
+        dcp.load(path, model=model2, rng=True)
+    assert_same_shards(model_shards(params2), before)
+    assert ctx.get_generator_state() == generator, "refused before any generator was set"
+
+    loaded = dcp.load(path, model=model2, rng=False)
+    assert loaded.restored == [] and ctx.get_generator_state() == generator
+    assert_same_shards(model_shards(params2), model_shards(params))
+
+
+def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_error):
+    """The scheduler, the dataloader and every generator continue exactly as the uninterrupted run would, and so
+    does the next training step, taken with the restored moments, step count, LR and generator: the optimizer rounds
+    stochastically, so the step matches only if the ttml generator was restored, not reseeded."""
+    ctx = ttml.autograd.AutoContext.get_instance()
+    model, params, opt = fresh_tp(DIM, _adamw_stochastic_rounding)
+    sched = CosineAnnealingScheduler(opt, T_max=8)
+    loader = Loader()
+    ctx.set_seed(123)
+    random.seed(4)
+    np.random.seed(5)
+    torch.manual_seed(6)
+    advance_generators()  # the generators are saved mid-stream, not as seeding left them
+    for _ in range(3):
+        train_step(model, opt, DIM)
+        sched.step()
+        loader.advance()
+    path = str(tmp_path / dcp.step_dir_name(3))
+    dcp.save(path, model=model, optimizer=opt, scheduler=sched, dataloader=loader, header={"step": 3})
+    stored = dcp.read_train_state(path)
+    assert set(stored) == {"scheduler", "dataloader", "rng"} and stored["dataloader"] == {"position": 3}
+    assert set(stored["rng"]) == {"format", "ranks"} and list(stored["rng"]["ranks"]) == ["0"]
+    assert set(stored["rng"]["ranks"]["0"]) == {"ttml", "python", "numpy", "ttml_init", "torch"}
+    lrs_at_save = sched.get_last_lrs()
+    opt_lrs_at_save = opt.get_group_lrs()  # the optimizer holds float32 LRs, the scheduler doubles
+
+    # The uninterrupted run continues for one step, a real one: this is what a resumed run must reproduce.
+    train_step(model, opt, DIM, input_scale=0.5)
+    after_step = model_shards(params)
+    after_state, after_scalars = optimizer_shards(opt)
+    sched.step()
+    loader.advance()
+    expected = {
+        "lrs": sched.get_last_lrs(),
+        "loader": loader.get_state_dict(),
+        "ttml": _ttml_draw(),
+        "host": host_draws(),
+    }
+
+    model2, params2, opt2 = fresh_tp(DIM, _adamw_stochastic_rounding)
+    sched2 = CosineAnnealingScheduler(opt2, T_max=8)
+    loader2 = Loader()
+    ctx.set_seed(999)
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
+    # rng by default: restoring a scheduler and a dataloader restores the generators with them.
+    loaded = dcp.load(path, model=model2, optimizer=opt2, scheduler=sched2, dataloader=loader2)
+    assert loaded.restored == [
+        "scheduler",
+        "dataloader",
+        "rng.ttml",
+        "rng.python",
+        "rng.numpy",
+        "rng.ttml_init",
+        "rng.torch",
+    ]
+    assert loaded.train_state == stored and loaded.missing == [] and loaded.header == {"step": 3}
+    assert sched2.get_last_lrs() == lrs_at_save and opt2.get_group_lrs() == opt_lrs_at_save
+    train_step(model2, opt2, DIM, input_scale=0.5)
+    assert_same_shards(model_shards(params2), after_step)
+    assert_same_shards(optimizer_shards(opt2)[0], after_state)
+    assert optimizer_shards(opt2)[1] == after_scalars
+    sched2.step()
+    loader2.advance()
+    assert sched2.get_last_lrs() == expected["lrs"]
+    assert loader2.get_state_dict() == expected["loader"]
+    assert torch.equal(_ttml_draw(), expected["ttml"])
+    assert host_draws() == expected["host"]
+
+    # The negative control: everything restored but the generators (rng=False, a deliberate reseed), and the same
+    # step rounds differently.
+    model3, params3, opt3 = fresh_tp(DIM, _adamw_stochastic_rounding)
+    sched3 = CosineAnnealingScheduler(opt3, T_max=8)
+    ctx.set_seed(999)
+    dcp.load(path, model=model3, optimizer=opt3, scheduler=sched3, rng=False)
+    train_step(model3, opt3, DIM, input_scale=0.5)
+    assert_some_differ(model_shards(params3), after_step)
+
+    # A dataloader alone brings the generators back too, by default.
+    ctx.set_seed(999)
+    alone = dcp.load(path, model=model3, dataloader=Loader())
+    assert alone.restored == ["dataloader", "rng.ttml", "rng.python", "rng.numpy", "rng.ttml_init", "rng.torch"]
+    assert ctx.get_generator_state() == stored["rng"]["ranks"]["0"]["ttml"]
+
+    # A load of the model alone leaves the generators alone.
+    before = ctx.get_generator_state()
+    plain = dcp.load(path, model=model2)
+    assert plain.restored == [] and ctx.get_generator_state() == before
+
+    # Asked for but absent (the generators too, by default, with a scheduler): a strict load refuses before touching
+    # anything, a lenient one lists them.
+    bare = str(tmp_path / "bare")
+    dcp.save(bare, model=model, rng=False)
+    assert dcp.read_train_state(bare) == {}
+    untouched = model_shards(params2), sched2.get_state_dict()
+    with expect_error(
+        dcp.MissingKeyError,
+        r"the checkpoint holds no state for \['train_state/scheduler', 'train_state/rng'\]; rng was not passed, .* "
+        r"pass rng=False to keep the current ones",
+    ):
+        dcp.load(bare, model=model2, scheduler=sched2)
+    with expect_error(dcp.MissingKeyError, r"the checkpoint holds no state for \['train_state/rng'\]$"):
+        dcp.load(bare, model=model2, rng=True)  # asked for explicitly: nothing to suggest
+    assert sched2.get_state_dict() == untouched[1]
+    assert_same_shards(model_shards(params2), untouched[0])
+    lenient = dcp.load(bare, model=model2, scheduler=sched2, strict=False)
+    assert lenient.missing == ["train_state/scheduler", "train_state/rng"] and lenient.restored == []
+
+    # A damaged RNG block is refused before anything is placed, generators and model alike.
+    damage_stored_rng(path, WRONG_LENGTH_RNG["numpy_623_words"])
+    untouched = model_shards(params2), ctx.get_generator_state(), random.getstate()
+    with expect_error(dcp.CheckpointError, "the stored RNG state is malformed"):
+        dcp.load(path, model=model2, optimizer=opt2, rng=True)
+    assert_same_shards(model_shards(params2), untouched[0])
+    assert (ctx.get_generator_state(), random.getstate()) == untouched[1:]
+
+    # And a save whose dataloader state is not JSON writes nothing.
+    class _NotJson(Loader):
+        def get_state_dict(self) -> dict:
+            return {"position": np.int64(self.position)}
+
+    with expect_error(dcp.CheckpointError, "dataloader state at /position: a int64 has no JSON form"):
+        dcp.save(str(tmp_path / "not_json"), model=model, dataloader=_NotJson())
+    assert not [name for name in os.listdir(tmp_path) if name.startswith("not_json")], "nothing on disk"
 
 
 def test_fsdp_round_trip_and_a_gathered_module_resharded(fsdp_mesh, tmp_path):

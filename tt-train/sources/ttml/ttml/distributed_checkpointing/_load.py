@@ -42,8 +42,16 @@ from ._state_dict import (
     mesh_device,
     reshard_fsdp_modules,
     restore_scalars,
+    world_record,
 )
 from ._topology import chunk_boxes
+from ._train_state import (
+    check_train_state,
+    missing_train_state,
+    missing_train_state_error,
+    restore_train_state,
+    train_state_of,
+)
 
 
 @dataclass
@@ -55,6 +63,8 @@ class LoadResult:
     unexpected: list[str]
     fast_path_keys: list[str]
     stats: dict[str, float] = field(default_factory=dict)
+    train_state: dict = field(default_factory=dict)
+    restored: list[str] = field(default_factory=list)
 
 
 def _read_into(
@@ -291,6 +301,9 @@ def load(
     *,
     model=None,
     optimizer=None,
+    scheduler=None,
+    dataloader=None,
+    rng: bool | None = None,
     strict: bool = True,
     threads: int | None = None,
 ) -> LoadResult:
@@ -299,20 +312,34 @@ def load(
     Works on any single-host mesh shape and parallelism: each destination shard reads only the bytes it needs. With
     ``strict`` (default), a live tensor without an entry, or an entry of a requested role (model, and optimizer state
     when ``optimizer`` is passed) without a live tensor, is an error; otherwise they are listed in the result.
-    Optimizer scalars (steps, learning rates) are restored through ``set_state_dict``. ``threads`` caps the reader
-    threads (default 32; a read is one contiguous byte range of one file). FSDP modules are resharded first.
-    Returns the header passed to ``save``.
+    Optimizer scalars (steps, learning rates) are restored through ``set_state_dict``. ``scheduler`` and
+    ``dataloader`` are restored through their ``set_state_dict`` from the state ``save`` stored. With ``rng`` so is
+    every random generator ``save`` captured (ttml's and ttml.init's for this world rank, python, numpy, torch when
+    imported). By default (``None``) the generators are restored whenever a scheduler or a dataloader is, since a resume
+    that restores those but keeps the current generators takes a different step; ``rng=False`` keeps them (a deliberate
+    reseed), ``rng=True`` restores them with only a model. A component asked for that the checkpoint lacks entirely is
+    an error under ``strict`` and listed in ``missing`` otherwise; within the RNG block, a generator or a world rank the
+    checkpoint holds no state for (torch imported only now, a world with more hosts than the save) keeps its current
+    state with a warning, and ``restored`` lists exactly what was restored. ``threads`` caps the reader threads (default
+    32; a read is one contiguous byte range of one file). FSDP modules are resharded first. Returns the header passed to
+    ``save``, the train state stored and the names restored.
 
     Everything that can be checked without reading tensor data is checked before the first tensor is placed: keys,
-    shapes, dtypes, layouts, param groups and the sizes of the data files. A failure after that (a read error, the
-    device out of memory) leaves the model and optimizer partly restored; the ``CheckpointError`` raised then says how
-    many tensors were placed, and the model should be loaded again or discarded.
+    shapes, dtypes, layouts, param groups, the sizes of the data files and the stored RNG state. A failure after that
+    (a read error, the device out of memory) leaves the model and optimizer partly restored; the ``CheckpointError``
+    raised then says how many tensors were placed, and the model should be loaded again or discarded. A scheduler or
+    dataloader without a ``set_state_dict`` is refused before anything is placed; one that refuses its state can only
+    say so after, and raises a ``CheckpointError`` naming it, with the tensors, the optimizer scalars and the scheduler
+    (when the dataloader refuses) already restored.
     """
     if model is None and optimizer is None:
         raise TypeError("load needs a model and/or an optimizer")
     if optimizer is not None and model is None:
         raise TypeError("optimizer state is keyed by the model's parameters; pass model= as well")
     check_threads(threads)
+    rng_by_default = rng is None
+    if rng_by_default:  # a resume: the generators come back with the scheduler or the dataloader
+        rng = scheduler is not None or dataloader is not None
     t0 = time.perf_counter()
     ckpt_dir = os.path.abspath(ckpt_dir)
     if not is_complete(ckpt_dir):
@@ -321,6 +348,12 @@ def load(
         )
     index: Index = read_index(ckpt_dir)
     header = read_checked_header(ckpt_dir)
+    world_rank = world_record()["ranks"][0]["world_rank"]
+    train_state = train_state_of(header, ckpt_dir)
+    missing_state = missing_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng)
+    if strict and missing_state:
+        raise missing_train_state_error(missing_state, rng_by_default=rng_by_default)
+    check_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank)
 
     fsdp_states = reshard_fsdp_modules(model)
     # A sharded FSDP module's cached shards are its current values: drop them now, so every value the load replaces is
@@ -364,13 +397,19 @@ def load(
             applied = restore_scalars(optimizer, index.scalars)
         except Exception as err:
             _raise_partly_restored(err, "the optimizer scalars", placed, len(placed))
+    # After the optimizer scalars: a scheduler writes its last LRs back into the optimizer and has the last word.
+    restored = restore_train_state(
+        train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank
+    )
     stats["total_s"] = time.perf_counter() - t0
     return LoadResult(
         ckpt_dir,
         header["user"],
         {k: index.scalars[k] for k in applied} if optimizer is not None else dict(index.scalars),
-        plan.missing,
+        plan.missing + missing_state,
         plan.unexpected,
         plan.fast_path_keys,
         stats,
+        train_state=train_state,
+        restored=restored,
     )
