@@ -178,4 +178,22 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixTestDifferentUnpackToDes
         << "unpack_to_dest_mode is not accounted for in computing ComputeKernel::config_hash()";
 }
 
+TEST_F(MeshDispatchFixture, TensixTestDifferentOptLevelShouldProduceDifferentHashes) {
+    auto hash_of = [this](const std::string& kernel_file, const auto& config) {
+        auto program = CreateProgram(*this->devices_[0]);
+        auto handle = CreateKernel(program, kernel_file, CoreCoord(0, 0), config);
+        return program.impl().get_kernel(handle)->compute_hash();
+    };
+
+    const std::string compute_file = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp";
+    const auto compute_default = hash_of(compute_file, ComputeConfig{});
+    EXPECT_EQ(compute_default, hash_of(compute_file, ComputeConfig{.opt_level = KernelBuildOptLevel::O3}));
+    EXPECT_NE(compute_default, hash_of(compute_file, ComputeConfig{.opt_level = KernelBuildOptLevel::O2}));
+
+    const std::string dm_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
+    const auto dm_default = hash_of(dm_file, DataMovementConfig{});
+    EXPECT_EQ(dm_default, hash_of(dm_file, DataMovementConfig{.opt_level = KernelBuildOptLevel::O2}));
+    EXPECT_NE(dm_default, hash_of(dm_file, DataMovementConfig{.opt_level = KernelBuildOptLevel::Os}));
+}
+
 }  // namespace tt::tt_metal
