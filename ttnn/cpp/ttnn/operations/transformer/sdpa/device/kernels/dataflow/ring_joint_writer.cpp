@@ -78,7 +78,7 @@ inline uint32_t get_end_seq_tile(const QChunkInfo& qi, uint32_t ring_id, uint32_
 
 // One raw state checkpoint request from compute: streamed (BF16 recipes with fused chunks) or synchronous.
 template <bool stream_state, bool fp32_state, uint32_t Sq_chunk_t, uint32_t vDHt, typename Accessor>
-FORCE_INLINE void transfer_state(Noc& noc, const Accessor& backing) {
+FORCE_INLINE void transfer_state(Noc& noc, const RecipeStateStore<Accessor>& backing) {
     if constexpr (stream_state) {
         stream_recipe_state<Sq_chunk_t, recipe_ring_cb::checkpoint_request, recipe_ring_cb::checkpoint_ack, vDHt>(
             noc, backing);
@@ -333,7 +333,14 @@ void kernel_main() {
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
     const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr);
-    const auto state_backing = TensorAccessor(state_args, state_addr);
+    const auto state_tensor = TensorAccessor(state_args, state_addr);
+    // The core's first state_cache_slots Q blocks checkpoint into L1 (the host sizes the cache from free L1).
+    constexpr uint32_t state_cache_slots = get_named_compile_time_arg_val("state_cache_slots");
+    const RecipeStateStore<decltype(state_tensor)> state_backing{
+        state_tensor,
+        state_cache_slots > 0 ? CircularBuffer(recipe_ring_cb::state_cache).get_write_ptr() : 0,
+        state_cache_slots,
+        global_q_start};
 
     constexpr bool output_has_no_padding =
         !dynamic_local_n && !has_joint_q && (q_local_padded_Nt_ct % Sq_chunk_t == 0);

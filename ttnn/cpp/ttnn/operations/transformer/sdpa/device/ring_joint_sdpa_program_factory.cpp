@@ -16,6 +16,7 @@
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/recipe_ring_cbs.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/recipe_state_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_program.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -2343,6 +2344,20 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         recipes::set_named_arg(compute_recipe_kernel.named_compile_time_args, "recipe_fused", 0);
     }
     const bool recipe_fused = recipes::named_arg(compute_recipe_kernel.named_compile_time_args, "recipe_fused") != 0;
+    // L1 state checkpoint cache: a multi-Q core's first Q blocks keep their checkpoints in L1, copied locally instead of
+    // round-tripping through DRAM (the round trips cost a mla_100k-shaped ring ~1.4 ms of 10, BH Galaxy). Sized from
+    // the L1 left after every other CB.
+    uint32_t state_cache_slots = 0;
+    if (staged_cores) {
+        using State = ::sdpa::streaming::StateTransfer;
+        const uint32_t slot_pages = State::page_count(Sq_chunk_t, vDHt, policy.fp32_destination ? 4096 : 2048) + 1;
+        const uint64_t left = l1_available - recipes::recipe_cb_bytes(desc);
+        state_cache_slots = static_cast<uint32_t>(
+            std::min<uint64_t>(max_q_chunks_per_core, left / (uint64_t{slot_pages} * State::page_bytes)));
+        if (state_cache_slots > 0) {
+            add_cb(recipe_ring_cb::state_cache, state_cache_slots * slot_pages, State::page_bytes, tt::DataFormat::UInt32);
+        }
+    }
 
     const std::vector<uint32_t> reader_cb_compile_time_args = {
         recipe_ring_cb::q, recipe_ring_cb::k, recipe_ring_cb::v, cb_attention_sink, recipe_ring_cb::derived};
@@ -3042,6 +3057,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         kernel->named_compile_time_args.emplace_back("sliding_halo_slot_count", sliding_halo_slot_count);
         kernel->named_compile_time_args.emplace_back("sliding_max_source_ranges", sliding_max_source_ranges);
         kernel->named_compile_time_args.emplace_back("sliding_local_first", sliding_local_first);
+        kernel->named_compile_time_args.emplace_back("state_cache_slots", state_cache_slots);
         kernel->named_compile_time_args.insert(
             kernel->named_compile_time_args.end(), recipe_args.begin(), recipe_args.end());
     }

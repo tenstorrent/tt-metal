@@ -14,6 +14,7 @@ namespace recipe_ring_cb {
 constexpr uint32_t q = 0, k = 1, v = 2, identity_scale = 3, col_identity = 4, recip_scratch = 5, qk = 6;
 constexpr uint32_t out_a = 8, out_b = 9, max_a = 10, max_b = 11, sum_a = 12, sum_b = 13, exp_max_diff = 14, out = 16;
 constexpr uint32_t checkpoint_request = 17, checkpoint_ack = 18;
-// The attention sink's tile (reader -> compute) and the reader's derived lengths (reader -> compute).
-constexpr uint32_t sink = 19, derived = 20;
+// The attention sink's tile (reader -> compute) and the reader's derived lengths (reader -> compute); the writer's L1
+// state checkpoint cache (recipe_state_transfer.hpp: RecipeStateStore).
+constexpr uint32_t sink = 19, derived = 20, state_cache = 21;
 }  // namespace recipe_ring_cb
