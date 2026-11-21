@@ -157,7 +157,6 @@ std::vector<PreparedRouter> prepare_routers(ChipId chip, const NocLinks& noc_lin
     const auto& control_plane = MetalContext::instance().get_control_plane();
     const auto& cluster = MetalContext::instance().get_cluster();
     const FabricNodeId node = control_plane.get_fabric_node_id_from_physical_chip_id(chip);
-    const NocStage zeros{};
     std::vector<PreparedRouter> routers;
     for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(node)) {
         const FabricNodeId peer = control_plane.get_connected_mesh_chip_chan_ids(node, chan).first;
@@ -169,12 +168,17 @@ std::vector<PreparedRouter> prepare_routers(ChipId chip, const NocLinks& noc_lin
         const CoreCoord virtual_core =
             cluster.get_virtual_coordinate_from_logical_coordinates(chip, logical, CoreType::ETH);
         PreparedRouter router{chip, virtual_core, read_eth_link(chip, virtual_core), noc, peer.chip_id > node.chip_id};
-        cluster.write_core_immediate(zeros.data(), sizeof(zeros), tt_cxy_pair(chip, virtual_core), noc_stage_address());
+        // One write: the record, with the NOC kind on a chosen link, and the zeroed staging words directly after it.
+        struct {
+            EthLink record;
+            NocStage stage;
+        } block{router.as_found, {}};
+        static_assert(sizeof(block) == sizeof(EthLink) + sizeof(NocStage));
         if (noc) {
-            EthLink record = router.as_found;
-            record.kind = ETH_LINK_KIND_NOC;
-            cluster.write_core_immediate(&record, sizeof(record), tt_cxy_pair(chip, virtual_core), eth_link_address());
+            block.record.kind = ETH_LINK_KIND_NOC;
         }
+        cluster.write_core_immediate(
+            &block, sizeof(block), tt_cxy_pair(chip, virtual_core), noc_stage_address() - sizeof(EthLink));
         routers.push_back(router);
     }
     return routers;
