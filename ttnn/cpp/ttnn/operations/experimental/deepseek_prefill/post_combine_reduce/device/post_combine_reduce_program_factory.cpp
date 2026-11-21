@@ -139,11 +139,12 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     // c_0: the reader fetches all of a token's expert rows under one NoC barrier and double-buffers
     // tokens, so reads overlap compute instead of paying a round trip per row. Only when two tokens'
     // rows fit in C0_BATCH_BUDGET_BYTES; wider rows (DeepSeek/Kimi 7168 x 8 experts) keep streaming one
-    // expert at a time to hold the L1 footprint. Row-indexed combine also streams: the reader zeroes
-    // its single c_0 slot once so slots it skips stay finite.
+    // expert at a time to hold the L1 footprint. Row-indexed combine batches the same way: the reader
+    // zeroes all of c_0 once, so a slot it skips holds zeros or an earlier real row (finite) either way
+    // (GPT-OSS 2880 x 4 experts: 48 KB, two tokens deep).
     constexpr uint32_t C0_BATCH_BUDGET_BYTES = 64 * 1024;
     const uint32_t token_rows_bytes = num_experts * slice_cb_tiles * tile_size;
-    const bool batch_experts = !row_indexed && 2 * token_rows_bytes <= C0_BATCH_BUDGET_BYTES;
+    const bool batch_experts = 2 * token_rows_bytes <= C0_BATCH_BUDGET_BYTES;
     const uint32_t experts_per_batch = batch_experts ? num_experts : 1;
     uint32_t combine_cb_size = batch_experts ? 2 * token_rows_bytes : slice_cb_tiles * tile_size;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
