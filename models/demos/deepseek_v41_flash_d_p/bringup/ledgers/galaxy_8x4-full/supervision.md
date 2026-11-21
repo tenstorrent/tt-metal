@@ -1148,3 +1148,16 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   serving entry's own host work (readback + note_tokens + device reorder), real in serving; split unmeasured -> PB.9C.
 - 04:15 heartbeat: mhc_post re-apply (PB.8R) agent attempt 1 active; watch armed.
 - 04:40 mhc_post re-apply (PB.8R) ACCEPTED: gate units all PASS (5120 ladder, determinism, decoder skip, contract, outside history, walls, no-rebuild 0 builds); fork code identical to the saved branch 0ef6b7107f5 (its unit test now in the tree), fork test bit-identical 8/8; walls within noise (-0.4..+0.4 ms); the device win is PB.8's measurement on this same code (~-0.6 ms a 5120 chunk). Owner rule: verified device win, no minimum-gain line.
+- 04:40 mhc_post re-apply (PB.8R) gate PASS -> a8fa3f56806. Next: the same change on the 8192 packed path (PB.8RP, scripted).
+- 04:45 heartbeat: mhc_post on the 8192 packed path (PB.8RP, scripted) running on the resident runner; watch armed.
+- 05:04 mhc_post on the 8192 packed path (PB.8RP): oracles PASS (packed 1078 s, glued), then test_packed_walls marked FAIL
+  (0 s): in the gate's shared process it was refused (F269: needs another model than run0) and went to a fresh process,
+  where it PASSED (184 s), yet the unit verdict stayed FAIL and the orchestrator started a fix agent (twice). Aborted both
+  (OV-70 / OV-71, closed), classified framework, resumed: only walls + no-rebuild run. FRAMEWORK BUG to fix at the next
+  pause: a unit refused in the shared process and passed in its fresh process must take the fresh run's verdict (and a
+  refusal must never start an agent).
+- 05:12 PB.8RP's real failure: the walls PASSED (fresh process; 4x2k@139264 65.6k, "mixed" 61.7k, harness walls) but the gate
+  still carried the 11-19 goal bars (4x2k >= 67000, mixed >= 64000). This task checks the mhc change on the packed path
+  (oracles bit-identical: all 0). DECIDED: bars removed (owner 2026-11-21: performance = the ladder, no mixed-history case;
+  the 67k goal is PB.9H on the ladder); 4x2k kept as '> 0' for the record. The F269 refuse-then-fresh note above was a
+  red herring (the fresh run's verdict is used). gate --continue.

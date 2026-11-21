@@ -6625,10 +6625,9 @@ tasks:
       packed_determinism_max_abs_diff: == 0
       glued_segment_equiv_max_abs_diff: == 0
       glued_slot_digest_mismatches: == 0
-      packed_serving_tok_s_4x2k_p139264_tagentic_cc: '>= 67000'
-      packed_serving_tok_s_mixed_tagentic_cc: '>= 64000'
       program_builds_after_warmup_serving*: == 0
       ids_uploads_per_chunk*: == 0
+      packed_serving_tok_s_4x2k_p139264_tagentic_cc: '> 0'
 - id: PB.9C
   title: 'OWNER 2026-11-21: the performance LADDER per path at real fixed histories (single 8192, fixed 4x2k lanes, glued
     4x2k, glued 5x1.6k) + the no-rebuild PASS/FAIL per path; yesterday''s numbers beside; table to the owner'
