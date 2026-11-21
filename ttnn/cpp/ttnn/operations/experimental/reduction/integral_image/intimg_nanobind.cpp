@@ -27,7 +27,7 @@ void bind_reduction_intimg_operation(nb::module_& mod) {
           - Axis 2: height_of_images (H)
           - Axis 3: number_of_channels (C) == number of images
         - Layout: 'tile' (required)
-        - dtype: bfloat16 (required)
+        - dtype: bfloat16 or float32
         - Only one input tensor is accepted.
 
         Returns
