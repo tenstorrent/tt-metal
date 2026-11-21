@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import struct
+
 import torch
 import typing
 import pytest
@@ -82,3 +84,29 @@ def test_chain_op_test_light_metal_capture(device, reset_device, shape, blocking
 
 
 # TODO (kmabee) - Add more tests, including version with metal-trace.
+
+
+def _binary_with_commands_only():
+    """LightMetalBinary root table with an empty commands vector and no trace_descriptors field."""
+    vtable_size = 8
+    object_size = 12
+    table_at = 16
+    vec_at = table_at + object_size
+    body = bytearray()
+    body += struct.pack("<I", table_at)
+    body += struct.pack("<HHHH", vtable_size, object_size, 4, 0)
+    body += b"\x00" * (table_at - len(body))
+    body += struct.pack("<i", table_at - 4)
+    body += struct.pack("<I", vec_at - (table_at + 4))
+    body += struct.pack("<I", 0)
+    body += struct.pack("<I", 0)
+    return bytes(body)
+
+
+def test_replay_missing_trace_descriptors_raises(tmp_path, expect_error):
+    capture = tmp_path / "missing_trace_descriptors.bin"
+    capture.write_bytes(_binary_with_commands_only())
+    binary_data = ttnn._ttnn.core.LightMetalBinary.load_from_file(str(capture))
+    replay = ttnn.LightMetalReplay.create(binary_data)
+    with expect_error(RuntimeError, "trace_descriptors is required for LightMetalBinary"):
+        replay.run()
