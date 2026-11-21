@@ -81,8 +81,7 @@ QUERY_BLOCK = 16  # query rows per indexer block
 # --- math, FP64 ----------------------------------------------------------------------------------------------------
 
 
-def rms64(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
-    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * weight
+rms64 = dsa.rms64  # RMSNorm in FP64: x rsqrt(mean(x^2) + eps) weight
 
 
 def attn_res64(live: torch.Tensor, sealed: torch.Tensor, query: tuple[torch.Tensor, torch.Tensor], eps: float):
@@ -206,6 +205,7 @@ class ChainModel:
         config = json.loads((checkpoint / "config.json").read_text())
         kda_config = KDAConfig.from_model_config(config)
         eps = float(config.get("text_config", config)["rms_norm_eps"])
+        num_experts = int(config.get("text_config", config)["num_experts"])
         embedding = checkpoint_tensors(checkpoint, None, ["embed_tokens.weight"])["embed_tokens.weight"]
         layers, digests = {}, {"embed_tokens": tensor_digest({"w": embedding})}
         for l in range(DSA_LAYER + 1):
@@ -238,7 +238,7 @@ class ChainModel:
                     n: t[f"mlp.{n}"].to(F64) for n in ("gate_proj.weight", "up_proj.weight", "down_proj.weight")
                 }
             if l in MOE_LAYERS:
-                experts, digests[f"layers.{l}.experts"] = load_experts(checkpoint, l, threads, log)
+                experts, digests[f"layers.{l}.experts"] = load_experts(checkpoint, l, num_experts, threads, log)
                 w = {n: t[f"block_sparse_moe.{n}"] for n in MoE_NON_ROUTED}
                 layer["moe"] = MoE64(w, experts, C.NUM_EXPERTS_PER_TOKEN, eps)
             if l == DSA_LAYER:
@@ -281,29 +281,31 @@ def tensor_digest(tensors: dict[str, torch.Tensor]) -> str:
     return h.hexdigest()
 
 
-def load_experts(checkpoint: Path, layer: int, threads: int, log: Callable[[str], None]):
-    """Routed experts of ``layer`` in their checkpoint dtype, ``[(w1, w3, w2)]`` by expert, read in parallel groups,
+def load_experts(checkpoint: Path, layer: int, count: int, threads: int, log: Callable[[str], None]):
+    """The ``count`` routed experts of ``layer`` in their checkpoint dtype, ``[(w1, w3, w2)]`` by expert, read in parallel groups,
     and the digest of their per-expert digests."""
     began = time.perf_counter()
 
     def group(lo: int) -> list[tuple[tuple[torch.Tensor, ...], str]]:
-        names = [f"block_sparse_moe.experts.{e}.{m}.weight" for e in range(lo, lo + 32) for m in ("w1", "w3", "w2")]
+        names = [
+            f"block_sparse_moe.experts.{e}.{m}.weight"
+            for e in range(lo, min(lo + 32, count))
+            for m in ("w1", "w3", "w2")
+        ]
         t = checkpoint_tensors(checkpoint, layer, names)
         out = []
-        for e in range(lo, lo + 32):
+        for e in range(lo, min(lo + 32, count)):
             ws = {m: t[f"block_sparse_moe.experts.{e}.{m}.weight"] for m in ("w1", "w3", "w2")}
             out.append((tuple(ws.values()), tensor_digest(ws)))
         return out
 
     experts, digests = [], []
     with ThreadPoolExecutor(max_workers=threads) as pool:
-        for i, part in enumerate(pool.map(group, range(0, C.NUM_ROUTED_EXPERTS, 32))):
+        for i, part in enumerate(pool.map(group, range(0, count, 32))):
             experts += [e for e, _ in part]
             digests += [d for _, d in part]
             if i % 7 == 6:
-                log(
-                    f"layer {layer}: {len(experts)}/{C.NUM_ROUTED_EXPERTS} experts read {time.perf_counter() - began:.0f} s"
-                )
+                log(f"layer {layer}: {len(experts)}/{count} experts read {time.perf_counter() - began:.0f} s")
     log(f"layer {layer}: {len(experts)} experts read in {time.perf_counter() - began:.0f} s")
     return experts, hashlib.sha256("".join(digests).encode()).hexdigest()
 
@@ -388,22 +390,25 @@ def chain_segment(
     stage("layer 3 indexer top-k")
     local = [r - start for r in sampled if start <= r < start + n]
     out["sampled_rows"] = torch.tensor([start + r for r in local], dtype=torch.int64)
-    attn_rows, route_ids = [], []
     if local:
         latent, kpe = torch.cat(carried.keys["latent"]), torch.cat(carried.keys["kpe"])
         q = dsa.layer_queries(hidden[local], L["dsa"], dims)
+        attn_rows = []
         for i, r in enumerate(local):
             sel = out["topk_indices_3"][r].long()
             sel = sel[sel >= 0]
             attn_rows.append(dsa.attend(q, i, latent[sel], kpe[sel], L["dsa"], dims))
-        attn3 = torch.stack(attn_rows)
+        out["attn_output_3"] = torch.stack(attn_rows)
         normed = rms64(
-            attn_res64(live[local] + attn3, sealed[local], L["mlp_res"], eps), L["post_attention_layernorm"], eps
+            attn_res64(live[local] + out["attn_output_3"], sealed[local], L["mlp_res"], eps),
+            L["post_attention_layernorm"],
+            eps,
         )
-        ids = (normed @ L["gate"].T).sigmoid().add(L["gate_bias"]).topk(model.top_k, dim=-1).indices
-        route_ids.append(ids)
-    out["attn_output_3"] = torch.stack(attn_rows) if attn_rows else hidden.new_zeros(0, hidden.shape[1])
-    extra["routing_ids_3_sampled"] = route_ids[0] if route_ids else torch.zeros(0, model.top_k, dtype=torch.int64)
+        gate = (normed @ L["gate"].T).sigmoid().add(L["gate_bias"])
+        extra["routing_ids_3_sampled"] = gate.topk(model.top_k, dim=-1).indices
+    else:
+        out["attn_output_3"] = hidden.new_zeros(0, hidden.shape[1])
+        extra["routing_ids_3_sampled"] = torch.zeros(0, model.top_k, dtype=torch.int64)
     stage("layer 3 sampled attention")
     return out, extra
 

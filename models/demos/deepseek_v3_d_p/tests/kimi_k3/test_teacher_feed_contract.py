@@ -1075,3 +1075,100 @@ def test_key_sums_give_pcc_and_nrmse_by_hand():
     xf, yf = x.flatten() - x.mean(), y.flatten() - y.mean()
     assert p == pytest.approx(float(xf @ yf / (xf.norm() * yf.norm())), rel=1e-12)
     assert n == pytest.approx(float((x - y).norm() / y.norm()), rel=1e-12)
+
+
+def test_chain_model_reads_each_checkpoint_tensor_into_its_slot(tmp_path: Path):
+    """`ChainModel.from_checkpoint` on a tiny checkpoint whose every tensor is distinct puts each one where its
+    checkpoint name says: per layer the pre-attention (`self_attention_res_*`) and pre-FFN (`mlp_res_*`) queries, the
+    two norms, layer 0-2 KDA, layer 0's dense FFN, layer 1-2 MoE (non-routed weights and every routed expert as
+    (w1, w3, w2)), layer 3's DSA attention and gate; the KDA config, eps and expert count come from config.json."""
+    from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+    from models.demos.deepseek_v3_d_p.reference.kda.tests.helpers import random_weights
+    from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_state_dict
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import fp64_chain
+
+    hidden, experts, eps = 16, 3, 1e-5
+    kda_cfg = KDAConfig(hidden, 2, 8, 8, 4, eps, use_full_rank_gate=True, gate_lower_bound=-5.0)
+    gen = torch.Generator().manual_seed(3)
+    rnd = lambda *shape: torch.randn(*shape, generator=gen).to(torch.bfloat16)  # noqa: E731
+    t = {"embed_tokens.weight": rnd(20, hidden)}
+    for l in range(4):
+        p = f"layers.{l}."
+        for n in ("input_layernorm", "post_attention_layernorm", "mlp_res_norm", "self_attention_res_norm"):
+            t[f"{p}{n}.weight"] = rnd(hidden)
+        t[f"{p}mlp_res_proj.weight"], t[f"{p}self_attention_res_proj.weight"] = rnd(1, hidden), rnd(1, hidden)
+        if l < 3:
+            t.update(
+                {
+                    f"{p}self_attn.{n}": (v + torch.randn(v.shape, generator=gen) * 0.01).to(torch.bfloat16)
+                    for n, v in random_weights(kda_cfg).items()
+                }
+            )
+        if l == 0:
+            t.update({f"{p}mlp.{n}.weight": rnd(8, hidden) for n in ("gate_proj", "up_proj", "down_proj")})
+        if l >= 1:
+            t[f"{p}block_sparse_moe.gate.weight"], t[f"{p}block_sparse_moe.gate.e_score_correction_bias"] = rnd(
+                experts, hidden
+            ), rnd(experts)
+        if l in (1, 2):
+            for n in fp64_chain.MoE_NON_ROUTED[2:]:
+                t[f"{p}block_sparse_moe.{n}"] = rnd(4, 4)
+            for e in range(experts):
+                t.update({f"{p}block_sparse_moe.experts.{e}.{m}.weight": rnd(4, 4) for m in ("w1", "w3", "w2")})
+        if l == 3:
+            t.update({f"{p}self_attn.{n}": rnd(5, 3) for n in golden.WEIGHTS})
+    ckpt = tmp_path / "ckpt"
+    ckpt.mkdir()
+    save_file({f"model.{k}": v.contiguous() for k, v in t.items()}, str(ckpt / "shard.safetensors"))
+    (ckpt / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {f"model.{k}": "shard.safetensors" for k in t}})
+    )
+    linear = {
+        "num_heads": 2,
+        "head_dim": 8,
+        "short_conv_kernel_size": 4,
+        "use_full_rank_gate": True,
+        "gate_lower_bound": -5.0,
+    }
+    config = {"hidden_size": hidden, "rms_norm_eps": eps, "num_experts": experts, "linear_attn_config": linear}
+    (ckpt / "config.json").write_text(json.dumps({"text_config": config}))
+    model = fp64_chain.ChainModel.from_checkpoint(ckpt, threads=2, log=lambda m: None)
+
+    same = lambda got, name: torch.equal(got, t[name].double())  # noqa: E731
+    assert torch.equal(model.embedding, t["embed_tokens.weight"]) and model.eps == eps and model.kda_config == kda_cfg
+    for l in range(4):
+        L, p = model.layers[l], f"layers.{l}."
+        assert same(L["input_layernorm"], f"{p}input_layernorm.weight")
+        assert same(L["post_attention_layernorm"], f"{p}post_attention_layernorm.weight")
+        assert same(L["attn_res"][0], f"{p}self_attention_res_norm.weight") and same(
+            L["attn_res"][1], f"{p}self_attention_res_proj.weight"
+        )
+        assert same(L["mlp_res"][0], f"{p}mlp_res_norm.weight") and same(L["mlp_res"][1], f"{p}mlp_res_proj.weight")
+        if l < 3:
+            kda = {n[len(p + "self_attn.") :]: v for n, v in t.items() if n.startswith(p + "self_attn.")}
+            want = normalize_kda_state_dict(kda, kda_cfg)
+            assert want.keys() == L["kda"].keys() and all(torch.equal(L["kda"][n], want[n].double()) for n in want)
+        if l == 0:
+            assert all(
+                same(L["mlp"][f"{n}.weight"], f"{p}mlp.{n}.weight") for n in ("gate_proj", "up_proj", "down_proj")
+            )
+        if l in (1, 2):
+            moe = L["moe"]
+            assert all(same(moe.w[n], f"{p}block_sparse_moe.{n}") for n in fp64_chain.MoE_NON_ROUTED)
+            assert len(moe.experts) == experts
+            for e in range(experts):
+                for got, m in zip(moe.experts[e], ("w1", "w3", "w2")):
+                    assert torch.equal(got, t[f"{p}block_sparse_moe.experts.{e}.{m}.weight"]), (l, e, m)
+        if l == 3:
+            assert all(same(L["dsa"][n], f"{p}self_attn.{n}") for n in golden.WEIGHTS)
+            assert same(L["gate"], f"{p}block_sparse_moe.gate.weight")
+            assert same(L["gate_bias"], f"{p}block_sparse_moe.gate.e_score_correction_bias")
+    assert set(model.digests) == {
+        "embed_tokens",
+        "layers.0",
+        "layers.1",
+        "layers.2",
+        "layers.3",
+        "layers.1.experts",
+        "layers.2.experts",
+    }
