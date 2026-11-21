@@ -8,7 +8,7 @@ import pytest
 import ttnn
 from models.experimental.swin_s.reference.swin_transformer_block import SwinTransformerBlock
 from models.experimental.swin_s.tt.tt_swin_transformer_block import TtSwinTransformerBlock
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.swin_s.tests.pcc.test_ttnn_shifted_window_attention import (
     create_custom_mesh_preprocessor as create_custom_mesh_preprocessor_shifted_window_attention,

@@ -5,6 +5,7 @@
 #include "upsample.hpp"
 #include <algorithm>
 #include "tt-metalium/shape.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation.hpp"
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/work_split.hpp"
@@ -114,7 +115,15 @@ ttnn::Tensor upsample(
         },
         scale_factor);
 
-    // Validation is handled by the device operation's validate_on_program_cache_miss
+    // The device operation validates the rest, but bilinear mode builds the halo from these scales first.
+    TT_FATAL(scale_h > 0.0f, "scale_factor_h must be positive, got {}", scale_h);
+    TT_FATAL(scale_w > 0.0f, "scale_factor_w must be positive, got {}", scale_w);
+    TT_FATAL(
+        mode != "bilinear" || (operations::pool::upsample::is_integer_scale(scale_h) &&
+                               operations::pool::upsample::is_integer_scale(scale_w)),
+        "bilinear mode requires integer scale factors, got ({}, {})",
+        scale_h,
+        scale_w);
 
     auto* device = input_tensor.device();
     TT_FATAL(device != nullptr, "upsample expects an allocated device tensor as input");

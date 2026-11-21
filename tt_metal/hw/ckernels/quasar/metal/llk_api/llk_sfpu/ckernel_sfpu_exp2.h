@@ -36,10 +36,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
     r = 0x1.41cp-13f;
     r = r * f + 0x1.5f4p-10f;
     r = r * f + 0x1.3b4p-7f;
-    // Quasar: the Blackhole abs + copysgn pair relies on Blackhole's sign-magnitude integer behaviour (see
-    // _sfpu_exp_fp32_accurate_ in ckernel_sfpu_exp.h), and SFPCAST SM32_TO_INT32 maps the sign-magnitude -0
-    // that x in (-0.5, 0) rounds to onto INT_MIN (sfpi_constants.h). j is an integer-valued float in
-    // [-32767, 32767], so take i from j instead.
+    // Quasar: the Blackhole abs + copysgn pair relies on Blackhole's sign-magnitude integer behaviour.
+    // j is an integer-valued float in [-32767, 32767], so take i from j instead.
     _sfpu_round_to_nearest_int32_(j, i);
     y = r * f + sfpi::vConstFloatPrgm2;
     r = y * f + sfpi::vConstFloatPrgm1;

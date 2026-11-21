@@ -5,8 +5,10 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/types.hpp"
 #include <ranges>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::experimental::quasar::matmul {
@@ -1001,6 +1003,18 @@ MatmulProgramConfig get_program_config(
     const MatmulUnifiedProgramConfig* requested =
         attributes.program_config.has_value() ? std::get_if<MatmulUnifiedProgramConfig>(&*attributes.program_config)
                                               : nullptr;
+    // Prefetcher pipes place the matmul on their receivers, the only cores they deliver B to. The op fixes the K chunk
+    // once C is allocated (see ttnn::prim::qsr::matmul).
+    if (!attributes.prefetcher_pipes.empty() && (requested != nullptr || !attributes.program_config.has_value())) {
+        const ttnn::PrefetcherPipeRefList pipes = ttnn::prefetcher_pipe_refs(attributes.prefetcher_pipes);
+        MatmulUnifiedProgramConfig config =
+            requested != nullptr ? *requested
+                                 : MatmulUnifiedProgramConfig{.fused_activation = attributes.user_fused_activation};
+        if (config.cores.num_cores() == 0) {
+            config.cores = tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(pipes).merge_ranges();
+        }
+        return config;
+    }
     if (requested != nullptr && requested->cores.num_cores() == 0) {
         std::optional<MatmulUnifiedProgramConfig> chosen = ttnn::prim::qsr::choose_unified_placement(
             input_tensor_a, input_tensor_b, bias_single_tile_size, attributes, *requested);
@@ -1309,12 +1323,17 @@ MatmulProgramConfig create_simple_matmul_program_config(
             }
         }
 
+        // A batch=1, B batch>1: force mcast_in0=false so in0_reuse can keep A in L1 across all
+        // B batches. mcast_in0=true has no batch-reuse path and would FATAL in the validator.
+        const bool a_batch_broadcast =
+            all_interleaved and get_batch_size(a_shape_padded) == 1 and get_batch_size(b_shape_padded) > 1;
+
         bool use_mcast_1d_in0_config =
-            is_wide or
+            (is_wide and not a_batch_broadcast) or
             (core_range.y == 0 and mem_config.is_sharded() and
              (mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or block_sharded_on_1d_row_grid));
         bool use_mcast_1d_in1_config =
-            is_tall or
+            is_tall or a_batch_broadcast or
             (core_range.y == 0 and mem_config.is_sharded() and
              (mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED or block_sharded_on_1d_column_grid));
         bool use_mcast_2d_config =
@@ -1324,7 +1343,8 @@ MatmulProgramConfig create_simple_matmul_program_config(
         // A block-sharded output with a fused batch (A batched, B unbatched) must stay on the 2D path: the fused M can
         // make num_blocks a single row/column (e.g. 5x1), which would otherwise be mistaken for a 1D grid whose
         // config ignores fuse_batch and sizes the output shard on the unfused M.
-        if (not fuse_batch_for_sharded_output and (core_range.y == 1 or use_mcast_1d_in0_config)) {
+        if (not fuse_batch_for_sharded_output and
+            ((core_range.y == 1 and not a_batch_broadcast) or use_mcast_1d_in0_config)) {
             // Pass user's shard_spec when BLOCK_SHARDED on 1D row grid
             std::optional<tt::tt_metal::ShardSpec> user_shard_spec =
                 (block_sharded_on_1d_row_grid && mem_config.shard_spec().has_value())

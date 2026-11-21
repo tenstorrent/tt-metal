@@ -5,8 +5,8 @@
 #include "pad_rm_reader_writer_multi_core_default_program_factory.hpp"
 
 #include <algorithm>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -15,12 +15,10 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 static const uint32_t max_read_size = 2048;  // max read size in bytes for reader and writer kernels
 
 namespace ttnn::prim {
-using ttnn::operations::data_movement::float_to_uint16;
-using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
+using ttnn::operations::data_movement::pack_scalar_into_uint32;
 
 namespace {
 
@@ -104,14 +102,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
 
     TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
-    uint32_t packed_pad_value;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
-        packed_pad_value = pad_value;
-    } else if (a.dtype() == DataType::UINT16) {
-        packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
-    } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
-    }
+    uint32_t packed_pad_value = pack_scalar_into_uint32(a.dtype(), pad_value);
 
     Group<DataflowBufferSpec> dataflow_buffers;
 
