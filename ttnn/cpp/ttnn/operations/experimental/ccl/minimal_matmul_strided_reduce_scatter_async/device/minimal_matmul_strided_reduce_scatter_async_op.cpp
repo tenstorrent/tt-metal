@@ -91,7 +91,7 @@ void validate_operands_on_device(const MinimalMatmulStridedReduceScatterAsyncInp
 MinimalMatmulStridedReduceScatterAsync::program_factory_t
 MinimalMatmulStridedReduceScatterAsync::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return MinimalMatmulStridedReduceScatterAsyncProgramFactory{};
+    return MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory{};
 }
 
 ttsl::hash::hash_t MinimalMatmulStridedReduceScatterAsync::compute_program_hash(
