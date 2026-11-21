@@ -155,7 +155,7 @@ def encode_content(content, images, image_token):
     if isinstance(content, str):
         return content
     if isinstance(content, (list, tuple)):
-        return "\n".join(encode_content(item, images) for item in content)
+        return "\n".join(encode_content(item, images, image_token) for item in content)
     if isinstance(content, dict):
         content_type = content.get("type")
         if content_type == "text":
