@@ -71,3 +71,12 @@ Totals per tier:
 > Cheapest-traffic split considered: data rows and pad rows as two lists over the full grid. It has the minimum
 > crossings (input once, output once, no cross-core traffic). Implemented: the same split. The implemented split
 > is the cheapest; the only tie on bytes, contiguous output-row ranges, is rejected on load balance alone.
+
+## Implementation notes (ttnn-implementer, phase 0)
+
+- Inventory and capacities as above; no CB added, resized, merged or deleted.
+- `block_rows` in `rows_resident` is `ceil(max_core_data_rows / T)` (one op per tile counter of a STRIDED ring;
+  T = 1 at the Phase 0 plan, so the worked values are unchanged).
+- `dfb_pad_row` holds `T` entries; `W` of them are pushed (one per writer thread). With R > W the counters of
+  readers `p >= W` stay empty, which the ring allows.
+- Data-movement budget unchanged: input 1 crossing, output 1 crossing, 0 B cross-core.

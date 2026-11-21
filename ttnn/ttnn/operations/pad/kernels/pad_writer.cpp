@@ -17,7 +17,12 @@
 //   release_trid      the hart's tag register is handed back (last statement): the implicit writes left a
 //                     ring's id in it, and the next program's untagged writes would be counted for a ring.
 //
-// Thread w of W writes this core's data rows w, w+W, ... and pad rows w, w+W, ... (in the core's pad order).
+// Thread w of W writes this core's pad rows w, w+W, ... (in the core's pad order) and the data rows the STRIDED
+// ring deals it (pad_reader.cpp: reader p pushes its rows p, p+R, ... in ops of block_rows):
+//   W >= R (W = m*R)  reader p = w mod R rotates its ops over writers p, p+R, ...: this thread takes that
+//                     reader's ops k = w/R, w/R + m, ... whole;
+//   R > W             this thread rotates over readers w, w+W, ... one entry at a time: its i-th entry is
+//                     core-local row w + i*W.
 
 #include <cstdint>
 
@@ -30,6 +35,7 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+    constexpr uint32_t R = get_arg(args::reader_threads);
     constexpr uint32_t W = get_arg(args::writer_threads);
 
     const uint32_t data_start = get_arg(args::data_start);
@@ -37,6 +43,7 @@ void kernel_main() {
     const uint32_t pad_count = get_arg(args::pad_count);
     const uint32_t pad_start_out_row = get_arg(args::pad_start_out_row);
     const uint32_t pad_rows_per_barrier = get_arg(args::pad_rows_per_barrier);
+    const uint32_t block_rows = get_arg(args::block_rows);
     const uint32_t out_row_bytes = get_arg(args::out_row_bytes);
     // Input row space (N, C, H), output row space (N_o, C_o, H_o), `before` offsets of the outer dims.
     const uint32_t N = get_arg(args::N);
@@ -94,24 +101,37 @@ void kernel_main() {
         dfb_pad_row.pop_front(1);
     }
 
-    // store_data_block, over every block the reader publishes: data row i of the input lands on output row
-    // ((n+bn)*C_o + (c+bc))*H_o + (h+bh). Counters advance by W; one division per core.
-    const uint32_t my_rows = data_count / W + (w < data_count % W ? 1u : 0u);
-    const uint32_t first = data_start + w;
-    uint32_t h = first % H;
-    uint32_t c = (first / H) % C;
-    uint32_t n = first / (H * C);
-    for (uint32_t i = 0; i < my_rows; ++i) {
-        const uint32_t out_row = ((n + bn) * C_o + (c + bc)) * H_o + (h + bh);
-        noc.async_write<NocOptions::TXN_ID>(dfb_out_rows, acc_out, {}, {.page_id = out_row});
-        h += W;
-        while (h >= H) {
-            h -= H;
-            if (++c == C) {
-                c = 0;
-                ++n;
+    // store_data_block: data row i of the input lands on output row ((n+bn)*C_o + (c+bc))*H_o + (h+bh).
+    // Counters advance by the dealing stride; one division per op.
+    auto write_rows = [&](uint32_t first_row, uint32_t count, uint32_t step) {
+        const uint32_t first = data_start + first_row;
+        uint32_t h = first % H;
+        uint32_t c = (first / H) % C;
+        uint32_t n = first / (H * C);
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint32_t out_row = ((n + bn) * C_o + (c + bc)) * H_o + (h + bh);
+            noc.async_write<NocOptions::TXN_ID>(dfb_out_rows, acc_out, {}, {.page_id = out_row});
+            h += step;
+            while (h >= H) {
+                h -= H;
+                if (++c == C) {
+                    c = 0;
+                    ++n;
+                }
             }
         }
+    };
+    if constexpr (W >= R) {
+        constexpr uint32_t m = W / R;
+        const uint32_t p = w % R;
+        const uint32_t reader_rows = data_count / R + (p < data_count % R ? 1u : 0u);
+        for (uint32_t k = w / R; k * block_rows < reader_rows; k += m) {
+            const uint32_t j0 = k * block_rows;
+            const uint32_t rows = reader_rows - j0 < block_rows ? reader_rows - j0 : block_rows;
+            write_rows(p + j0 * R, rows, R);
+        }
+    } else {
+        write_rows(w, data_count / W + (w < data_count % W ? 1u : 0u), W);
     }
 
     // release_trid: firmware waits for the implicit writes to land when the kernel returns.

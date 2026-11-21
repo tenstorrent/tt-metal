@@ -1,0 +1,5 @@
+{"event":"test_run","result":"pass","what":"acceptance 4/4 first run; probe exact on 4 shapes incl. value 1.0","ts":"2026-11-21T09:15:42+00:00"}
+{"event":"test_run","result":"fail","class":"hang","what":"plan (1,0,2): cores with 2 data rows hang; 1-row cores finish","ts":"2026-11-21T09:15:43+00:00"}
+{"event":"hypothesis","what":"STRIDED producer rotates tile counters per op, entries stride apart; push_back(2) lands both rows on one writer thread","ts":"2026-11-21T09:15:44+00:00"}
+{"event":"fix_applied","what":"writer deals whole reader ops when W>=R, rows w+iW when R>W; reader addresses entries by get_stride_size; resident block ceil(rows/T)","ts":"2026-11-21T09:15:45+00:00"}
+{"event":"test_run","result":"pass","what":"test_pad_plan 41 cases, golden 18 pass / 242 xfail / 0 fail","ts":"2026-11-21T09:15:45+00:00"}

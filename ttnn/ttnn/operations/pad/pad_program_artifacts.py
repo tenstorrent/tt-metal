@@ -151,7 +151,8 @@ def choose_blocking(max_core_data_rows: int, threads, entry_bytes: int, *, block
     if entry_bytes > ring_byte_cap or 2 * entry_bytes > budget:
         raise NotImplementedError(f"pad: a {entry_bytes} B row does not fit one ring entry (row_chunked regime)")
     rows_fit = min(RING_ENTRY_CAP, ring_byte_cap // entry_bytes) // T
-    per_thread = -(-max_core_data_rows // min(R, W))
+    # Rows per op in rows_resident: one op per (reader thread, writer thread) tile counter.
+    per_thread = -(-max_core_data_rows // T)
     if block_rows_override is not None:
         block_rows, ring_blocks = int(block_rows_override), BUFFER_DEPTH
         if not (1 <= block_rows and T * ring_blocks * block_rows <= min(RING_ENTRY_CAP, ring_byte_cap // entry_bytes)):
@@ -212,17 +213,18 @@ def create_program_artifacts(inp, out, shape4, pairs4, value, *, threads=PAD_THR
     dfbs = [
         E.DataflowBufferSpec(unique_id=DFB_OUT_ROWS, entry_size=entry_bytes,
                              num_entries=T * ring_blocks * block_rows, data_format_metadata=inp.dtype),
+        # One template per writer thread; a STRIDED ring needs num_entries % max(R, W) == 0.
         E.DataflowBufferSpec(unique_id=DFB_PAD_ROW, entry_size=entry_bytes, num_entries=T,
                              data_format_metadata=inp.dtype),
     ]
     tensor_parameters = [E.TensorParameter(unique_id=TP_INPUT, spec=inp.spec),
                          E.TensorParameter(unique_id=TP_OUTPUT, spec=out.spec)]
-    plan = {"reader_threads": R, "writer_threads": W, "template_copies": T, "elem_bytes": e}
+    plan = {"reader_threads": R, "writer_threads": W, "elem_bytes": e}
 
     reader_rt = ["data_start", "data_count", "pad_count", "block_rows", "ring_blocks", "in_row_bytes",
-                 "out_row_bytes", "entry_bytes", "head_bytes", "tail_bytes", "pad_bits"]
+                 "out_row_bytes", "head_bytes", "tail_bytes", "pad_bits"]
     writer_rt = ["data_start", "data_count", "pad_count", "pad_start_out_row", "pad_rows_per_barrier",
-                 "out_row_bytes", "N", "C", "H", "C_o", "H_o", "bn", "bc", "bh", "N_o"]
+                 "block_rows", "out_row_bytes", "N", "C", "H", "C_o", "H_o", "bn", "bc", "bh", "N_o"]
 
     reader_hw = E.create_reader_datamovement_config()
     reader_hw.config_2xx = E.DataMovementHardwareConfig.DataMovement2XXConfig(
@@ -261,12 +263,13 @@ def create_program_artifacts(inp, out, shape4, pairs4, value, *, threads=PAD_THR
     reader_args = {
         "data_start": data_start, "data_count": data_count, "pad_count": pad_count,
         "block_rows": same(block_rows), "ring_blocks": same(ring_blocks), "in_row_bytes": same(in_row_bytes),
-        "out_row_bytes": same(out_row_bytes), "entry_bytes": same(entry_bytes), "head_bytes": same(bw * e),
+        "out_row_bytes": same(out_row_bytes), "head_bytes": same(bw * e),
         "tail_bytes": same(aw * e), "pad_bits": same(bits),
     }
     writer_args = {
         "data_start": data_start, "data_count": data_count, "pad_count": pad_count,
         "pad_start_out_row": pad_start_out_row, "pad_rows_per_barrier": batch,
+        "block_rows": same(block_rows),
         "out_row_bytes": same(out_row_bytes), "N": same(N), "C": same(C), "H": same(H), "C_o": same(C_o),
         "H_o": same(H_o), "bn": same(bn), "bc": same(bc), "bh": same(bh), "N_o": same(N_o),
     }
