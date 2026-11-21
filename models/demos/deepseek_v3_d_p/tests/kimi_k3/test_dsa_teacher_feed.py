@@ -3,7 +3,7 @@
 """Kimi-K3.1 DSA layer 92 teacher-fed from a vLLM trace on one 4x4 stage (SP on axis 1), chunk by chunk.
 
 The device half of ``dsa_teacher_feed.py`` (read its docstring for the three steps; its CPU half is tested in
-``test_dsa_teacher_feed_contract.py``). The production DSA module (``ttMLA`` for layer 92 from the stage's TTNN
+``test_teacher_feed_contract.py``). The production DSA module (``ttMLA`` for layer 92 from the stage's TTNN
 weight cache, scaled-FP8 kvpe and bf8 index-key caches allocated by the adapter as the runner does) runs every
 2560-token chunk of the prefix in order, eager, reading the KV and index keys its earlier chunks wrote. Its input is
 the trace-rebuilt ``input_layernorm`` output, so each chunk is teacher-fed and only the attention module's own error
@@ -29,17 +29,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import provenance
+from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, provenance
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.dsa_teacher_feed import (
-    LAYER,
-    MANIFEST,
-    chunk_path,
-    finish_run,
-    load_input,
-    start_run,
-)
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.dsa_teacher_feed import LAYER
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows, compose
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import chunk_path, finish_run, load_input, start_run
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import k31_topk_rows
 
 PLACEMENT_4X4 = [p for p in k31_stage.PLACEMENT if p.id == "4x4-sp1"]
