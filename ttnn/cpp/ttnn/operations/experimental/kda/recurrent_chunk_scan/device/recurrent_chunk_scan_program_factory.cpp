@@ -127,22 +127,24 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     };
     const uint32_t split_head_tiles = summary ? Vt : 1;
     const uint32_t tail_entry_states_tiles = !summary ? kv : 1;
+    // Per-chunk inputs three chunks deep: value block 0's reads and multicasts run further ahead of the dependent steps.
+    constexpr uint32_t input_depth = 3;
     tt::tt_metal::Group<tt::tt_metal::DataflowBufferSpec> dfbs = {
         make_dfb(state_dfb_name, state_tiles, fp32),
-        make_dfb(t_inv_dfb_name, 2 * cc, input_format(in.t_inv)),
-        make_dfb(v_beta_dfb_name, 2 * cv, input_format(in.v_beta)),
-        make_dfb(kd_dfb_name, 2 * ck, input_format(in.kd)),
-        make_dfb(q_decay_dfb_name, reads_queries ? 2 * ck : 1, reads_queries ? input_format(in.q_decay) : fp32),
-        make_dfb(intra_dfb_name, reads_queries ? 2 * cc : 1, reads_queries ? input_format(in.intra) : fp32),
+        make_dfb(t_inv_dfb_name, input_depth * cc, input_format(in.t_inv)),
+        make_dfb(v_beta_dfb_name, input_depth * cv, input_format(in.v_beta)),
+        make_dfb(kd_dfb_name, input_depth * ck, input_format(in.kd)),
+        make_dfb(q_decay_dfb_name, reads_queries ? input_depth * ck : 1, reads_queries ? input_format(in.q_decay) : fp32),
+        make_dfb(intra_dfb_name, reads_queries ? input_depth * cc : 1, reads_queries ? input_format(in.intra) : fp32),
         // Exactly one state: the update pops it and re-reserves the same tiles, then accumulates onto them in place.
         make_dfb(state_ring_dfb_name, state_tiles, fp32),
         make_dfb(value_new_dfb_name, paths * cv, fp32),
-        make_dfb(final_decay_dfb_name, 2 * Kt, input_format(in.final_decay)),
+        make_dfb(final_decay_dfb_name, input_depth * Kt, input_format(in.final_decay)),
         make_dfb(output_dfb_name, summary ? kv : 2 * cv, output_format),
         make_dfb(output_intermediate_dfb_name, summary ? 1 : cv, fp32),
         // The recurrence's q_decay @ state, computed early so its latency hides behind the dependent stages.
         make_dfb(query_projection_dfb_name, reads_queries ? paths * cv : 1, fp32),
-        make_dfb(k_decay_transposed_dfb_name, 2 * kc, input_format(in.k_dec_t)),
+        make_dfb(k_decay_transposed_dfb_name, input_depth * kc, input_format(in.k_dec_t)),
         make_dfb(final_state_dfb_name, summary ? 1 : state_tiles, fp32),
         make_dfb(transport_state_dfb_name, summary ? kv : 1, tt::DataFormat::Float16_b),
         make_dfb(scratch_dfb_name, scratch_entries, fp32),
