@@ -2,15 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""FLUX.2 VAE decode with its 3x3 convs on ttnn.conv2d vs ttnn.operations.conv2d_3x3.
+"""FLUX.2 VAE decode and encode with their 3x3 convs on ttnn.conv2d vs ttnn.operations.conv2d_3x3.
 
-The full decoder (layers_per_block 2) with diffusers' AutoencoderKLFlux2 default config, which is FLUX.2's
-VAE architecture, with seeded random weights: the gated FLUX.2-dev checkpoint is not needed to compare the
-two conv implementations, and both see the same weights and the same torch reference. Meshes: one device,
+The full decoder and encoder (layers_per_block 2) with diffusers' AutoencoderKLFlux2 default config, which is
+FLUX.2's VAE architecture, with seeded random weights: the gated FLUX.2-dev checkpoint is not needed to compare
+the two conv implementations, and both see the same weights and the same torch reference. Meshes: one device,
 and the Blackhole (2, 4) preset of pipeline_flux2.py (channels split on mesh axis 1, rows on axis 0).
 
-Each case checks quality against torch, then times MEASURED_DECODES untraced decodes (wall clock after
-synchronize, after one warm-up decode that compiles). Results go to FLUX_E2E_RESULTS (JSON lines).
+Each case checks quality against torch, then times MEASURED_DECODES untraced passes (wall clock after
+synchronize, after one warm-up pass that compiles). With conv2d_3x3 every 3x3 conv must run on it. Results go
+to FLUX_E2E_RESULTS (JSON lines).
 """
 
 import json
@@ -25,7 +26,7 @@ import torch
 import ttnn
 
 from ....layers.conv2d import Conv2d, configure_conv2d
-from ....models.vae.vae_flux2 import Flux2VaeDecoder
+from ....models.vae.vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 from ....parallel.config import Flux2VaeParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import tensor
@@ -38,8 +39,10 @@ RESULTS = os.environ.get("FLUX_E2E_RESULTS", "/tmp/flux_e2e_results.jsonl")
 
 
 def _conv_paths(module) -> tuple[int, int]:
-    """(convs that ran on conv2d_3x3, convs that ran on ttnn.conv2d) in the last decode."""
+    """(3x3 convs that ran on conv2d_3x3, 3x3 convs that ran on ttnn.conv2d) in the last pass."""
     if isinstance(module, Conv2d):
+        if tuple(module.kernel_size) != (3, 3):
+            return 0, 0
         on_3x3 = any(k and k[0] == "conv2d_3x3" for k in module._prepared)
         return int(on_3x3), int(not on_3x3)
     on_3x3 = on_ttnn = 0
@@ -47,6 +50,21 @@ def _conv_paths(module) -> tuple[int, int]:
         a, b = _conv_paths(child)
         on_3x3, on_ttnn = on_3x3 + a, on_ttnn + b
     return on_3x3, on_ttnn
+
+
+def _auto_slice_strided(module, mesh_shape) -> None:
+    """Let ttnn pick the slicing of the stride-2 convs. Conv2d.slice_params is keyed without stride, so a stride-2
+    downsampler gets the slice count of the stride-1 conv of the same input shape, which ttnn rejects for its
+    halved output width (num_slices <= max_num_slices)."""
+    if isinstance(module, Conv2d):
+        if module.stride != (1, 1):
+            table = dict(module.slice_params.get(mesh_shape, module.slice_default))
+            for key in list(table):
+                table[key] = None
+            module.slice_params = {**module.slice_params, mesh_shape: table}
+        return
+    for _, child in module.named_children():
+        _auto_slice_strided(child, mesh_shape)
 
 
 @pytest.mark.parametrize(
@@ -108,6 +126,7 @@ def test_vae_flux2_decoder_conv2d_3x3(
     on_3x3, on_ttnn = _conv_paths(tt_model)
     pcc = torch.corrcoef(torch.stack([torch_output.flatten().double(), tt_out_torch.flatten().double()]))[0, 1].item()
     record = {
+        "part": "decoder",
         "mesh": list(mesh_device.shape),
         "image": [height, width],
         "conv": conv,
@@ -124,3 +143,85 @@ def test_vae_flux2_decoder_conv2d_3x3(
     # PCC only: test_vae_flux2.py's relative-RMSE bound is calibrated on the pretrained, pruned decoder; the
     # full-depth random-weight decoder reads RMSE/sigma ~6% on ttnn.conv2d itself.
     assert_quality(torch_output, tt_out_torch, pcc=0.995)
+    if conv == "conv2d_3x3":
+        assert on_ttnn == 0, f"{on_ttnn} 3x3 convs ran on ttnn.conv2d"
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, tp_axis, h_axis",
+    [
+        [(1, 1), single_device_params_flux2, 0, 1],
+        [(2, 4), line_params_flux2, 1, 0],
+    ],
+    ids=["1x1", "bh2x4"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("height", "width"), [(1024, 1024), (2048, 2048)], ids=["1024", "2048"])
+@pytest.mark.parametrize("conv", ["ttnn", "conv2d_3x3"])
+def test_vae_flux2_encoder_conv2d_3x3(
+    *, mesh_device: ttnn.MeshDevice, tp_axis: int, h_axis: int, height: int, width: int, conv: str
+) -> None:
+    torch.manual_seed(0)
+    torch_model = reference.AutoencoderKLFlux2()
+    torch_model.eval()
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    vae_parallel_config = Flux2VaeParallelConfig.from_axes(mesh_device, tp_axis=tp_axis, h_axis=h_axis, w_axis=None)
+
+    tt_model = Flux2VaeEncoder(
+        in_channels=torch_model.config.in_channels,
+        block_out_channels=list(torch_model.config.block_out_channels),
+        layers_per_block=torch_model.config.layers_per_block,
+        z_channels=torch_model.config.latent_channels,
+        device=mesh_device,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
+    )
+    configure_conv2d(tt_model, use_conv2d_3x3=conv == "conv2d_3x3")
+    _auto_slice_strided(tt_model, tuple(mesh_device.shape))
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    image = torch.rand(1, 3, height, width) * 2 - 1
+    with torch.no_grad():
+        torch_output = torch_model.encode(image).latent_dist.mode()
+
+    h_mesh_axis = vae_parallel_config.h_parallel.mesh_axis if vae_parallel_config.h_parallel is not None else None
+    tt_image = tensor.from_torch(
+        image.permute(0, 2, 3, 1),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_axes=[None, h_mesh_axis, None, None],
+    )
+    tt_out = tt_model.forward(tt_image)
+    ttnn.synchronize_device(mesh_device)
+    tt_out_torch = tensor.to_torch(tt_out).permute(0, 3, 1, 2)
+    ttnn.deallocate(tt_out)
+
+    wall_ms = []
+    for _ in range(MEASURED_DECODES):
+        t0 = time.perf_counter()
+        tt_out = tt_model.forward(tt_image)
+        ttnn.synchronize_device(mesh_device)
+        wall_ms.append((time.perf_counter() - t0) * 1000)
+        ttnn.deallocate(tt_out)
+
+    on_3x3, on_ttnn = _conv_paths(tt_model)
+    pcc = torch.corrcoef(torch.stack([torch_output.flatten().double(), tt_out_torch.flatten().double()]))[0, 1].item()
+    record = {
+        "part": "encoder",
+        "mesh": list(mesh_device.shape),
+        "image": [height, width],
+        "conv": conv,
+        "decode_ms_median": statistics.median(wall_ms),
+        "decode_ms": wall_ms,
+        "pcc": pcc,
+        "convs_on_conv2d_3x3": on_3x3,
+        "convs_on_ttnn_conv2d": on_ttnn,
+    }
+    with open(RESULTS, "a") as fh:
+        fh.write(json.dumps(record) + "\n")
+    print("FLUX_E2E:", json.dumps(record))
+
+    assert_quality(torch_output, tt_out_torch, pcc=0.995)
+    if conv == "conv2d_3x3":
+        assert on_ttnn == 0, f"{on_ttnn} 3x3 convs ran on ttnn.conv2d"

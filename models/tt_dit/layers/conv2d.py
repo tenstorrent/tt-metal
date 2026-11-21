@@ -687,10 +687,14 @@ class Conv2d(Module):
             or self.dilation != (1, 1)
             or self.stride[0] != self.stride[1]
             or b != 1
-            or c % 8 != 0
+            or (c % 8 != 0 and self.in_mesh_axis is not None)
         ):
             return None
 
+        if c % 8 != 0:
+            # conv2d_3x3 takes C_in in multiples of 8 (an RGB image): zero channels meet zero weight rows.
+            x = ttnn.pad(x, padding=[(0, 0), (0, 0), (0, 0), (0, -c % 8)], value=0.0)
+            c += -c % 8
         x_flat = ttnn.reshape(x, (1, 1, h * w, c))
         try:
             prepared = self._prepared.get(key)
@@ -731,6 +735,8 @@ class Conv2d(Module):
         from ttnn.operations.conv2d_3x3 import prepare_conv2d_weights_host
 
         weight, bias = self._torch_weight, self._torch_bias
+        if self.in_mesh_axis is None and x_flat.shape[-1] > weight.shape[1]:
+            weight = torch.nn.functional.pad(weight, (0, 0, 0, 0, 0, x_flat.shape[-1] - weight.shape[1]))
         if self.in_mesh_axis is not None:
             n, axis = self.in_mesh_axis_size, self.in_mesh_axis
             cs = weight.shape[1] // n
