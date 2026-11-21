@@ -344,15 +344,14 @@ FlatProgramHandles add_flat_routed_expert_program(
     };
     // Every data-movement kernel's positional compile-time args are the op's DRAM tensors' accessor args (a
     // TensorAccessorArgs chain is offset-based; every other compile-time arg is named), in flat_accessors.hpp's order:
-    // x, y, counts, regions, expert ids, token index, the combine's y-row tables (the last two interleaved DRAM
-    // placeholders when this program has none).
+    // x, y, counts, regions, expert ids, token index, the combine's y-row tables (the last two placeholders, built
+    // from no buffer, when this program has none).
     std::vector<uint32_t> acc_ct;
     for (const Tensor* tensor : {&t.x, &t.output, &t.counts, &t.regions, &t.global_expert_ids}) {
         TensorAccessorArgs(*tensor->buffer()).append_to(acc_ct);
     }
-    (t.token_index ? TensorAccessorArgs(*t.token_index->buffer()) : TensorAccessorArgs::create_dram_interleaved())
-        .append_to(acc_ct);
-    TensorAccessorArgs::create_dram_interleaved().append_to(acc_ct);
+    TensorAccessorArgs(t.token_index ? t.token_index->buffer() : nullptr).append_to(acc_ct);
+    TensorAccessorArgs(static_cast<const Buffer*>(nullptr)).append_to(acc_ct);
     auto dm = [&](const std::string& name,
                   const std::vector<CoreCoord>& cores,
                   DataMovementProcessor proc,

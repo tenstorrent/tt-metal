@@ -56,9 +56,10 @@ RuntimeShapeArgs get_runtime_shape_args(const Tensor& input, std::optional<uint3
         .input_row_bytes = n * input.element_size()};
 }
 
+// The kernels pass page sizes explicitly, so the compile-time page size is unused, and a cached program stays correct
+// for tensors of another width.
 tt::tt_metal::TensorAccessorArgs interleaved_accessor_args(const Tensor& tensor) {
-    return tensor.buffer()->is_dram() ? tt::tt_metal::TensorAccessorArgs::create_dram_interleaved()
-                                      : tt::tt_metal::TensorAccessorArgs::create_l1_interleaved();
+    return tt::tt_metal::TensorAccessorArgs(*tensor.buffer());
 }
 
 uint32_t rows_for_core(

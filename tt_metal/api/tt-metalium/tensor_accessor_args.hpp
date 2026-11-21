@@ -48,7 +48,13 @@ public:
         ttsl::optional_reference<const MeshTensor> tensor,
         tensor_accessor::ArgsConfig args_config = tensor_accessor::ArgConfig::None);
 
+    [[deprecated(
+        "Construct TensorAccessorArgs from the buffer instead, with ArgConfig::RuntimePageSize to keep the page "
+        "size out of the kernel binary. This API will be removed after 2027-02-17.")]]
     static TensorAccessorArgs create_dram_interleaved();
+    [[deprecated(
+        "Construct TensorAccessorArgs from the buffer instead, with ArgConfig::RuntimePageSize to keep the page "
+        "size out of the kernel binary. This API will be removed after 2027-02-17.")]]
     static TensorAccessorArgs create_l1_interleaved();
 
     void append_to(std::vector<uint32_t>& compile_time_args) const;
