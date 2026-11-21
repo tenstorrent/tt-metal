@@ -346,6 +346,16 @@ void py_module(nb::module_& mod) {
               command queue is idle, otherwise close throws "cq is in use by child submesh".
         )doc")
         .def(
+            "lowest_occupied_compute_l1_address",
+            [](const MeshDevice& self) { return self.lowest_occupied_compute_l1_address(); },
+            R"doc(
+           Lowest L1 address occupied by an L1 buffer, as reported by the mesh's global allocator and the
+           active sub-devices' allocators, or None when they report no L1 buffer. This is the address the
+           runtime checks a program's circular buffers against (they must end below it). It does not cover
+           the L1_SMALL region, which sits above all L1 buffers, nor per-core (HYBRID mode) allocations held
+           by each device's own allocator. It is a snapshot of current allocations.
+       )doc")
+        .def(
             "compute_with_storage_grid_size",
             &MeshDevice::compute_with_storage_grid_size,
             R"doc(
