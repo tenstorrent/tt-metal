@@ -117,6 +117,14 @@ def last_tile_rows(rows, tile_start, cluster_axis=None):
         if num_dev > 1
         else ttnn.ReplicateTensorToMesh(mesh_device),
     )
+    out = select_tile_rows(rows, sel_tt, cluster_axis if num_dev > 1 else None)
+    sel_tt.deallocate(True)
+    return out
+
+
+def select_tile_rows(rows, sel_tt, cluster_axis=None):
+    """rows [1, 1, S_local, H] -> sel_tt @ rows ([1, 1, 32, H]; sel_tt one-hot [1, 1, 32, S_local]), summed over the
+    sequence-parallel devices with cluster_axis (only the device holding the tile selects non-zero rows). Exact."""
     picked = ttnn.matmul(
         sel_tt,
         rows,
@@ -126,10 +134,8 @@ def last_tile_rows(rows, tile_start, cluster_axis=None):
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
         ),
     )
-    sel_tt.deallocate(True)
-    if num_dev == 1:
+    if cluster_axis is None:
         return picked
-    # Only device d selects non-zero rows: the sum over the sequence-parallel devices is its tile.
     out = ttnn.all_reduce(
         picked, topology=ttnn.Topology.Ring, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
@@ -198,6 +204,12 @@ class Model:
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
+        # Traced batch-1 prefill: the last token's tile is selected inside the trace (one-hot rows of a persistent
+        # [1, 1, 32, S] selection per trace length, written before each replay; _trace_tile_select) so the final norm
+        # and LM head run on 32 rows instead of all S (the LM head reads the decode stream: 1K, 1024 rows ~9 ms).
+        self._trace_last_token = None  # set by the generator before a traced prefill (set_prefill_trace_last_token)
+        self._trace_tile_sel = {}  # trace length S -> persistent selection tensor
+        self._trace_tile_seq = None  # S of the traced prefill being prepared / replayed, else None
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
         self.core_grid = ttnn.CoreCoord(8, 8)
@@ -523,6 +535,9 @@ class Model:
         # length, so that every user runs the same path as its batch-1 prefill.
         batched_last_tokens = isinstance(get_last_token, (list, tuple))
         user_seq_len = hidden_states.shape[-2] // batch_size
+        trace_sel = None
+        if not is_decode and batch_size == 1 and get_last_token == -1 and self._trace_tile_seq == user_seq_len:
+            trace_sel = self._trace_tile_sel.get(user_seq_len)
         sequence_parallel = (
             not is_decode
             and os.getenv(PREFILL_SP_ENV, "1") == "1"
@@ -570,10 +585,22 @@ class Model:
                 rows = hidden_states
                 hidden_states = gather_users(rows, batch_size, sp_axis)
                 rows.deallocate(True)
+            elif trace_sel is not None:
+                # Traced: the last token's tile by the persistent selection (device d takes its S / N columns of it;
+                # last_tile_rows' sum over the devices, the same exact one-hot matmul as the untraced path)
+                rows = hidden_states
+                hidden_states = select_tile_rows(rows, ttnn.mesh_partition(trace_sel, 3, cluster_axis=sp_axis), sp_axis)
+                rows.deallocate(True)
             else:
                 hidden_states = self._gather_prefill_rows(hidden_states, get_last_token, sp_axis)
             if get_last_token != -1:
                 get_last_token = -1  # already the [1, 1, 32, H] tile of the last token
+        elif trace_sel is not None:
+            rows = hidden_states
+            if len(rows.shape) == 3:
+                rows = ttnn.unsqueeze(rows, dim=1)
+            hidden_states = select_tile_rows(rows, trace_sel, None)
+            rows.deallocate(True)
         logits = hidden_states
 
         if get_last_token != -1:
@@ -917,6 +944,8 @@ class Model:
         """
         get_last_token = (last_token_idx // 32) * 32
         seq_len = int(logits.shape[-2])
+        if seq_len == 32:
+            return logits  # the trace selected the last token's tile (set_prefill_trace_last_token)
         # Pass the offset at runtime rather than as a compile-time attribute. With literal bounds
         # every distinct prompt offset compiles its own slice program, and this runs after the
         # prefill traces are captured, so each one is stranded across trace replays. Warmup cannot
@@ -1381,10 +1410,38 @@ class Model:
 
         return tokens, current_pos_tt, rope_idxs, page_table
 
+    def set_prefill_trace_last_token(self, last_token_idx):
+        """Generator hook, before a traced prefill: the prompt's last token index (relative to the traced chunk), or
+        None (batched / unknown: the trace computes logits of all rows). prepare_prefill_inputs_trace, which the
+        generator calls before the compile pass, the capture and every replay, writes its tile into the selection."""
+        self._trace_last_token = last_token_idx
+
+    def _trace_tile_select(self, seq_len, batch_size):
+        """Point the traced forward at the last token's tile (_trace_last_token) of a seq_len prefill: write the
+        one-hot rows into the persistent selection of this length (allocated on first use, in the generator's prepare
+        phase, as its own trace inputs are)."""
+        last = self._trace_last_token
+        self._trace_tile_seq = None
+        if last is None or batch_size != 1 or seq_len % ttnn.TILE_SIZE or not 0 <= last < seq_len:
+            return
+        tile = (last // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        sel = torch.zeros(1, 1, ttnn.TILE_SIZE, seq_len, dtype=torch.float32)
+        sel[0, 0, torch.arange(ttnn.TILE_SIZE), tile + torch.arange(ttnn.TILE_SIZE)] = 1.0
+        host = ttnn.from_torch(
+            sel, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device)
+        )
+        dev = self._trace_tile_sel.get(seq_len)
+        if dev is None:
+            self._trace_tile_sel[seq_len] = ttnn.to_device(host, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            ttnn.copy_host_to_device_tensor(host, dev)
+        self._trace_tile_seq = seq_len
+
     def prepare_prefill_inputs_trace(
         self, tokens, start_pos=0, page_table=None, chunk_page_table=None, last_token_idx=None, **kwargs
     ):
         """Prepare inputs on host so we later send them to device"""
+        self._trace_tile_select(int(tokens.shape[-1]), int(kwargs.get("batch_size", 1)))
         host_inputs = self.prepare_inputs_prefill(
             tokens,
             start_pos=start_pos,
@@ -1439,6 +1496,8 @@ class Model:
         """
         # Embed the tokens
         device = None if trace_enabled else self.mesh_device
+        if not trace_enabled:
+            self._trace_tile_seq = None  # an untraced forward computes the rows its caller asks for
 
         if batched_prefill:
             # Row-parallel batched prefill: tokens is [num_rows, seq_len]

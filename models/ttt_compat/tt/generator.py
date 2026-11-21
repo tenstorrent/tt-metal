@@ -1672,6 +1672,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 )
 
             if enable_trace_current_prompt:
+                # Opt-in hook (GPT-OSS): a batch-1 trace selects the last token's tile itself, so the LM head runs on
+                # 32 rows; the index is written into the trace's inputs before the compile pass and every replay.
+                set_trace_last_token = getattr(self.model[model_id], "set_prefill_trace_last_token", None)
+                if set_trace_last_token is not None:
+                    set_trace_last_token(
+                        None
+                        if use_batched_prefill or return_hidden_states
+                        else last_token_idx - (num_cached_tokens if num_cached_tokens > 0 else 0)
+                    )
                 logits = self._easy_trace_prefill(
                     prefill_ids,
                     page_table=page_table_user,
