@@ -18,6 +18,7 @@ import zlib
 
 import pytest
 import ttnn
+from dcp_driver import MESH_OPEN_FAILED
 
 import ttml
 
@@ -71,6 +72,30 @@ def run_world(command: list[str], env: dict, timeout: int) -> subprocess.Complet
             command, TIMED_OUT, out + f"\n[harness] the world ran for {timeout} s and was terminated\n", err
         )
     return subprocess.CompletedProcess(command, proc.returncode, out, err)
+
+
+def run_checked(
+    command: list[str], what: str, timeout: int, *, needs_tt_run: bool, save: bool, expect_ok: bool = True
+) -> list[str]:
+    """Run a world of the driver (``command``) and check how it ended; returns its output lines. Skips when the world
+    needs tt-run and it is not installed, or when a host cannot open the mesh: the driver then reports
+    MESH_OPEN_FAILED, in its exit status and in its output, since tt-run may not carry a rank's exit status. The exit
+    status must be 0 (1 with ``expect_ok=False``), and a save must have printed its summary, which the driver prints
+    only when it succeeded; a failure shows the output's tail."""
+    if needs_tt_run and TT_RUN is None:
+        pytest.skip(f"{what}: tt-run is not installed")
+    env = dict(os.environ)
+    env.pop("TT_MESH_GRAPH_DESC_PATH", None)
+    proc = run_world(command, env, timeout)
+    lines = output_lines(proc)
+    reason = next((line for line in lines if "MESH_OPEN_FAILED" in line), None)
+    if proc.returncode == MESH_OPEN_FAILED or reason is not None:
+        pytest.skip(f"{what}: a host cannot open the mesh: {reason or 'no reason given'}")
+    tail = "\n".join(lines[-80:])
+    assert proc.returncode == (0 if expect_ok else 1), f"{what} failed with exit {proc.returncode}:\n{tail}"
+    if save and expect_ok:
+        assert '"saved"' in proc.stdout, f"{what} printed no summary:\n{tail}"
+    return lines
 
 
 def ranks_in_step(where: str) -> None:

@@ -17,8 +17,8 @@ import sys
 
 import numpy as np
 import pytest
-from dcp_driver import LOGITS_TOLERANCE, MESH_OPEN_FAILED, RESUME, compare
-from dcp_harness import DRIVER, TT_RUN, output_lines, run_world, tt_run_command
+from dcp_driver import LOGITS_TOLERANCE, RESUME, compare
+from dcp_harness import DRIVER, TT_RUN, run_checked, run_world, tt_run_command
 
 # Each child is one process opening a mesh, training or loading a tiny Llama: in CI the whole module takes about
 # 3.5 minutes and its slowest case (two children) 78 s, while on a host reading its files over NFS one child has taken
@@ -127,24 +127,17 @@ def _command(args: list[str]) -> list[str]:
 
 
 def _run(args: list[str], what: str, expect_ok: bool = True) -> str:
-    env = dict(os.environ)
-    env.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    if "--ranks" in args and TT_RUN is None:
-        pytest.skip(f"{what}: tt-run is not installed")
-    proc = run_world(_command(args), env, CHILD_TIMEOUT_S)
-    lines = output_lines(proc)
-    opened = not any("MESH_OPEN_FAILED" in ln for ln in lines)  # tt-run may not carry a rank's exit status
-    if proc.returncode == MESH_OPEN_FAILED or not opened:  # only the descriptor-fabric mismatch (see dcp_driver)
-        reason = next((ln for ln in lines if "MESH_OPEN_FAILED" in ln), "no reason given")
-        pytest.skip(f"{what}: this host cannot open the mesh: {reason}")
+    lines = run_checked(
+        _command(args),
+        what,
+        CHILD_TIMEOUT_S,
+        needs_tt_run="--ranks" in args,
+        save=args[0] == "save",
+        expect_ok=expect_ok,
+    )
     for line in lines:  # the measured differences, for the log
         if "max |diff| / max |ref|" in line:
             print(f"{what}: {line}")
-    tail = "\n".join(lines[-60:])
-    assert proc.returncode == (0 if expect_ok else 1), f"{what} failed with exit {proc.returncode}:\n{tail}"
-    if "--ranks" in args and what.endswith("save"):
-        # tt-run does not always carry the ranks' exit status; the save prints its summary only when it succeeded.
-        assert '"saved"' in proc.stdout, f"{what} printed no summary:\n{tail}"
     return "\n".join(lines)
 
 

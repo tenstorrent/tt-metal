@@ -37,8 +37,7 @@ import uuid
 
 import pytest
 
-from dcp_driver import MESH_OPEN_FAILED
-from dcp_harness import DRIVER, HERE, MGD_DIR, TT_RUN, output_lines, run_world, tt_run_command
+from dcp_harness import DRIVER, HERE, MGD_DIR, run_checked, tt_run_command
 
 pytestmark = [pytest.mark.timeout(7200)]
 
@@ -127,20 +126,9 @@ def _command(world, command, ckpt, steps):
 
 
 def _run(world, command, ckpt, steps, what):
-    if len(world["hosts"]) > 1 and TT_RUN is None:
-        pytest.skip(f"{what}: tt-run is not installed")
-    env = dict(os.environ)
-    env.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    proc = run_world(_command(world, command, ckpt, steps), env, 3000)
-    lines = output_lines(proc)
-    if proc.returncode == MESH_OPEN_FAILED or any("MESH_OPEN_FAILED" in ln for ln in lines):
-        reason = next((ln for ln in lines if "MESH_OPEN_FAILED" in ln), "no reason given")
-        pytest.skip(f"{what}: a host cannot open the mesh: {reason}")
-    tail = "\n".join(lines[-80:])
-    assert proc.returncode == 0, f"{what} failed with exit {proc.returncode}:\n{tail}"
-    if command == "save":
-        assert '"saved"' in proc.stdout, f"{what} printed no summary:\n{tail}"
-    return proc.stdout
+    command_line = _command(world, command, ckpt, steps)
+    lines = run_checked(command_line, what, 3000, needs_tt_run=len(world["hosts"]) > 1, save=command == "save")
+    return "\n".join(lines)
 
 
 @pytest.fixture(scope="module")
