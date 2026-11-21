@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Kimi-K3.1 DSA layer 92 teacher-fed from a vLLM trace on one 4x4 stage (SP on axis 1), chunk by chunk.
 
-The device half of ``dsa_teacher_feed.py`` (read its docstring for the three steps). The production DSA module
-(``ttMLA`` for layer 92 from the stage's TTNN weight cache, scaled-FP8 kvpe and bf8 index-key caches allocated
-by the adapter as the runner does) runs every 2560-token chunk of the prefix in order, eager, reading the KV and
-index keys its earlier chunks wrote. Its input is the trace-rebuilt ``input_layernorm`` output, so each chunk is
-teacher-fed and only the attention module's own error accumulates in its caches. Each chunk's attention output
-and top-k indices, then both caches, are saved to ``$TT_DSA_TF_OUT``; nothing is scored while the device is held
-(``dsa_teacher_feed.py score`` does it). Skips unless ``$TT_DSA_TF_INPUT`` and ``$TT_DSA_TF_OUT`` are set.
+The device half of ``dsa_teacher_feed.py`` (read its docstring for the three steps; its CPU half is tested in
+``test_dsa_teacher_feed_contract.py``). The production DSA module (``ttMLA`` for layer 92 from the stage's TTNN
+weight cache, scaled-FP8 kvpe and bf8 index-key caches allocated by the adapter as the runner does) runs every
+2560-token chunk of the prefix in order, eager, reading the KV and index keys its earlier chunks wrote. Its input is
+the trace-rebuilt ``input_layernorm`` output, so each chunk is teacher-fed and only the attention module's own error
+accumulates in its caches. Each chunk's attention output and top-k indices, then both caches, are saved to
+``$TT_DSA_TF_OUT``; nothing is scored while the device is held (``dsa_teacher_feed.py score`` does it). Skips
+unless ``$TT_DSA_TF_INPUT`` and ``$TT_DSA_TF_OUT`` are set.
 
     TT_DSA_TF_INPUT=/mnt/.../k31-l92-input-128k-v2 TT_DSA_TF_OUT=/mnt/.../k31-l92-dev-128k \\
     models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- \\
@@ -25,114 +26,38 @@ from pathlib import Path
 import pytest
 import torch
 from loguru import logger
-from safetensors.torch import save_file
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import HfStream
+from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import provenance
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.dsa_teacher_feed import (
-    BARS,
     LAYER,
     MANIFEST,
-    Pooled,
-    Trace,
-    check_bars,
     chunk_path,
+    finish_run,
     load_input,
-    miss_margins,
-    provenance,
-    replay_live_and_sealed,
-    topk_recall,
-    write_json,
+    start_run,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows, compose
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import k31_topk_rows
 
 PLACEMENT_4X4 = [p for p in k31_stage.PLACEMENT if p.id == "4x4-sp1"]
-
-
-# --- host checks of the CPU half -----------------------------------------------------------------------------
-
-
-def _tiny_trace(path: Path, layers: int, rows: int, dim: int, chunk_rows: int) -> dict[str, torch.Tensor]:
-    """A chunked_group_a_v1 trace of random bf16 streams (decoder_input_layer_0, attn_output and FFN output of
-    every layer below ``layers``), in ``chunk_rows``-row shards."""
-    gen = torch.Generator().manual_seed(3)
-    keys = ["decoder_input_layer_0"] + [
-        f"{s}_layer_{l}" for l in range(layers) for s in ("attn_output", "decoder_output")
-    ]
-    streams = {k: torch.randn(rows, dim, generator=gen).to(torch.bfloat16) for k in keys}
-    index = {}
-    for key, value in streams.items():
-        chunks = []
-        for lo in range(0, rows, chunk_rows):
-            hi = min(lo + chunk_rows, rows)
-            rel = f"{key}/rows_{lo:08d}_{hi:08d}.safetensors"
-            (path / key).mkdir(parents=True, exist_ok=True)
-            save_file({key: value[lo:hi].contiguous()}, str(path / rel))
-            chunks.append({"row_start": lo, "row_end": hi, "path": rel})
-        index[key] = {"row_count": rows, "dtype": "bfloat16", "shape_tail": [dim], "chunks": chunks}
-    (path / "index.json").write_text(json.dumps({"tensor_streams": index}))
-    (path / "metadata.json").write_text(json.dumps({"n_prompt_tokens": rows}))
-    return streams
-
-
-def test_replay_matches_the_reference_walk(tmp_path: Path):
-    """The tracer's replay rule equals the reference AttnRes walk (`hf_walk`: seal at every block start, the
-    write is `+=`) driven with the trace's own module outputs, bit for bit, across two seals and a row window that
-    straddles a shard."""
-    layers, rows = 14, 10
-    streams = _tiny_trace(tmp_path, layers, rows, dim=8, chunk_rows=4)
-    stream = HfStream(streams["decoder_input_layer_0"], block_size=12, eps=1e-5)
-    for l in range(layers - 1):
-        if l % 12 == 0:
-            stream.seal()
-        stream.accumulate(streams[f"attn_output_layer_{l}"])
-        stream.accumulate(streams[f"decoder_output_layer_{l}"])
-    live, sealed = replay_live_and_sealed(Trace(tmp_path), 3, 9, layer=layers - 1)
-    assert sealed.shape[1] == 2 == stream.num_sealed
-    assert torch.equal(live, stream.running_sum[3:9])
-    assert torch.equal(sealed, stream.block_residual[3:9])
-
-
-def test_topk_recall_and_miss_margins_by_hand():
-    """Row 0: trace keys {5, 6, 7} with scores 3 / 2 / 1, device {5, 7, 9}: recall 2/3; the miss is key 6, at
-    (2 - 1) / (3 - 1) = 0.5 of the spread. Row 1 has two valid trace keys, both found (and a no-key -1): recall 1,
-    no miss. Device negatives (no key) match nothing."""
-    want = torch.tensor([[5, 6, 7], [1, 0, -1]])
-    got = torch.tensor([[5, 7, 9], [0, 1, -1]])
-    scores = torch.tensor([[3.0, 2.0, 1.0], [4.0, 5.0, 0.0]])
-    assert topk_recall(got, want).tolist() == pytest.approx([2 / 3, 1.0])
-    margins = miss_margins(got, want, scores)
-    assert margins[0].tolist() == pytest.approx([0.5]) and margins[1].numel() == 0
-    assert topk_recall(torch.tensor([[-1, -1, -1]]), torch.tensor([[0, 1, 2]])).tolist() == [0.0]
-
-
-def test_pooled_pcc_spans_chunks():
-    """x = 1 2 3 4, y = 1 3 2 4: deviations (-1.5 -.5 .5 1.5) and (-1.5 .5 -.5 1.5), r = 4 / 5 = 0.8 whole or split."""
-    x, y = torch.tensor([1.0, 2.0, 3.0, 4.0]), torch.tensor([1.0, 3.0, 2.0, 4.0])
-    whole, split = Pooled(), Pooled()
-    whole.add(x, y)
-    split.add(x[:2], y[:2])
-    split.add(x[2:], y[2:])
-    assert whole.value() == pytest.approx(0.8) and split.value() == pytest.approx(0.8)
-
-
-# --- the device run ------------------------------------------------------------------------------------------
+SOURCE, OUT = os.environ.get("TT_DSA_TF_INPUT"), os.environ.get("TT_DSA_TF_OUT")
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
+@pytest.mark.skipif(
+    not (SOURCE and OUT),
+    reason="set TT_DSA_TF_INPUT (a dsa_teacher_feed input) and TT_DSA_TF_OUT (the run's output dir)",
+)
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENT_4X4, indirect=True)
 def test_k31_dsa_layer92_teacher_fed(mesh_device, device_params):
     from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
     from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
-    source, out = os.environ.get("TT_DSA_TF_INPUT"), os.environ.get("TT_DSA_TF_OUT")
-    if not (source and out):
-        pytest.skip("set TT_DSA_TF_INPUT (a dsa_teacher_feed input) and TT_DSA_TF_OUT (the run's output dir)")
-    source, out = Path(source), Path(out)
+    source, out = Path(SOURCE), Path(OUT)
     built = json.loads((source / MANIFEST).read_text())
     assert built["layer"] == LAYER
     count = int(os.environ.get("TT_DSA_TF_COUNT", built["segments"][-1]["end"]))
@@ -144,7 +69,6 @@ def test_k31_dsa_layer92_teacher_fed(mesh_device, device_params):
         mesh_shape, LAYER, 1, max_seq_len, is_first_rank=False, is_last_rank=True
     )
     adapter = k31_stage.ADAPTER
-    out.mkdir(parents=True, exist_ok=True)
     manifest = {
         "layer": LAYER,
         "input": str(source),
@@ -158,7 +82,7 @@ def test_k31_dsa_layer92_teacher_fed(mesh_device, device_params):
         "kvpe_format": str(adapter.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format)),
         **provenance(),
     }
-    write_json(out / MANIFEST, manifest)
+    start_run(out, manifest)
 
     caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     mla = ttMLA(
@@ -235,23 +159,6 @@ def test_k31_dsa_layer92_teacher_fed(mesh_device, device_params):
             ttnn.deallocate(caches.index)
     for name, values in (("kvpe", kvpe), ("index", index)):
         assert torch.isfinite(values).all(), f"non-finite rows in the {name} cache"
-    manifest["seconds"] = round(time.perf_counter() - began, 1)
-    write_json(out / MANIFEST, manifest)
-    logger.info(f"DSA_TF done: {num_chunks} chunks, {count} rows, {manifest['seconds']} s -> {out}")
-
-
-def test_check_bars_flags_each_breach():
-    """A window under a min bar, over a max bar and NRMSE growth past NRMSE_GROWTH are each named; NaN passes."""
-    good = {name: (bar if kind == "min" else bar) for name, (kind, bar) in BARS.items()}
-    good |= {"start": 0, "end": 1, "attn_nrmse_median": 0.04, "recall_min_below_topk": float("nan")}
-    assert check_bars([good, {**good, "start": 1, "end": 2}]) == []
-    bad = {
-        **good,
-        "start": 1,
-        "end": 2,
-        "kv_latent_pcc": 0.99,
-        "miss_top_half_fraction": 0.5,
-        "attn_nrmse_median": 0.05,
-    }
-    failures = check_bars([good, bad])
-    assert [f.split()[0] for f in failures] == ["kv_latent_pcc", "miss_top_half_fraction", "attn"], failures
+    seconds = time.perf_counter() - began
+    finish_run(out, manifest, seconds)
+    logger.info(f"DSA_TF done: {num_chunks} chunks, {count} rows, {seconds:.1f} s -> {out}")
