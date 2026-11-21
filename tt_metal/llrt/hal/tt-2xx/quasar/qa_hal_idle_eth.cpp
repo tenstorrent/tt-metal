@@ -6,7 +6,7 @@
 #define COMPILE_FOR_ERISC
 
 #include <tt-metalium/math.hpp>
-#include "hostdev/cce_spa_routes.h"
+#include "hostdev/cce_noc_routes.h"
 #include "hostdev/dev_msgs.h"
 #include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "hostdev/realtime_profiler_msgs.h"
@@ -75,6 +75,7 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] =
         GET_IERISC_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SCRATCH;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CCE_NOC_ROUTES)] = MEM_IERISC_NOC_ROUTES_BASE;
     // The control plane writes routing info to every Ethernet core, linked or not, as on Blackhole, and the worker
     // connection table to the idle ones a Keraunos chip runs workers on.
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_BASE;
@@ -97,6 +98,7 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::CCE_NOC_ROUTES)] = MEM_IERISC_NOC_ROUTES_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_IERISC_ROUTING_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_IERISC_FABRIC_CONNECTIONS_SIZE;
@@ -129,7 +131,8 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
         }
         processor_classes.push_back(std::move(processors));
         processor_classes_names.push_back(std::move(names));
-        processor_classes_num_fw_binaries.push_back(/*one image per CCE*/ MEM_IERISC_ETH_CCES);
+        // One image per CCE.
+        processor_classes_num_fw_binaries.push_back(MEM_IERISC_ETH_CCES);
     }
 
     return {
