@@ -145,3 +145,40 @@ def test_moreh_group_norm_backward_input_grad_large_group(device):
     )
     error = (ttnn.to_torch(tt_input_grad).double() - x.grad).abs().max()
     assert error < 0.05, error
+
+
+def run_moreh_group_norm_backward_affine_width(device, tensor_name, width):
+    # gamma, gamma_grad and beta_grad all carry one value per input channel.
+    N, C, H, W, num_groups = 2, 64, 32, 32, 4
+    cpu_output_grad = torch.rand(N, C, H, W).bfloat16()
+    affine = {name: torch.zeros(1, 1, 1, C) for name in ["gamma", "gamma_grad", "beta_grad"]}
+    affine[tensor_name] = torch.zeros(1, 1, 1, width)
+    tt_affine = {name: to_ttnn(value, device=device) for name, value in affine.items()}
+    _, _, tt_beta_grad = ttnn.moreh_group_norm_backward(
+        create_ttnn_tilized_tensor(cpu_output_grad, device, ttnn.bfloat16),
+        create_ttnn_tilized_tensor(torch.rand(N, C, H, W), device, ttnn.bfloat16),
+        create_ttnn_tilized_tensor(torch.zeros(1, 1, N, num_groups), device, ttnn.bfloat16),
+        create_ttnn_tilized_tensor(torch.ones(1, 1, N, num_groups), device, ttnn.bfloat16),
+        num_groups,
+        are_required_outputs=[True, True, True],
+        gamma=tt_affine["gamma"],
+        gamma_grad=tt_affine["gamma_grad"],
+        beta_grad=tt_affine["beta_grad"],
+    )
+    return cpu_output_grad, tt_beta_grad
+
+
+@pytest.mark.parametrize("width", [32, 128], ids=["narrower", "wider"])
+@pytest.mark.parametrize("tensor_name", ["gamma", "gamma_grad", "beta_grad"])
+def test_moreh_group_norm_backward_rejects_mismatched_channels(device, tensor_name, width, expect_error):
+    # A 32-channel gamma_grad for a 64-channel input used to be accepted and written past its end.
+    with expect_error(RuntimeError, f"{tensor_name} shape"):
+        run_moreh_group_norm_backward_affine_width(device, tensor_name, width)
+
+
+def test_moreh_group_norm_backward_matching_channels(device):
+    torch.manual_seed(0)
+    cpu_output_grad, tt_beta_grad = run_moreh_group_norm_backward_affine_width(device, "beta_grad", 64)
+    expected = cpu_output_grad.float().sum(dim=(0, 2, 3))
+    actual = to_torch(tt_beta_grad, shape=[1, 1, 1, 64]).float().flatten()
+    assert torch.allclose(actual, expected, rtol=0.02, atol=0.5), (actual, expected)
