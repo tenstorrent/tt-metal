@@ -60,6 +60,10 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "fabric/fabric_builder_context.hpp"
+#include "fabric/fabric_context.hpp"
+#include "fabric/fabric_host_utils.hpp"
+#include "fabric/fabric_tensix_builder.hpp"
 #include <tt-umd/coordinates/coordinate_manager.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
@@ -412,14 +416,32 @@ void Device::reset_worker_mailboxes(dev_msgs::dispatch_mode mode) {
         hal.get_dev_size(core_type, HalL1MemAddrType::GO_MSG) / sizeof(uint32_t), 0);
     const uint32_t zero = 0;
 
+    // Claimed service cores and fabric mux cores run persistent kernels that outlive a dispatch mode switch. Their
+    // mailboxes belong to whoever launched them: a cleared go reads as done, and a launch message switched to DEV
+    // makes the kernel report to the dispatcher when it returns. Fabric launches its mux kernels itself, resetting
+    // the read pointer, so skipping them here is also safe while dispatch first comes up.
+    const auto& service_cores = context_->get_service_core_manager().impl();
+    std::unordered_set<CoreCoord> fabric_mux_cores;
+    if (tt::tt_fabric::is_tt_fabric_config(env_impl.get_fabric_config()) &&
+        env_impl.get_fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        const auto& builder_ctx = env_impl.get_control_plane().get_fabric_context().get_builder_context();
+        if (builder_ctx.has_tensix_config()) {
+            fabric_mux_cores = builder_ctx.get_tensix_config().get_translated_fabric_mux_cores();
+        }
+    }
+
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
     if (env_impl.get_rtoptions().get_watcher_enabled() && context_->watcher_server()) {
         watcher_lock = context_->watcher_server()->get_lock();
     }
     for (uint32_t y = 0; y < logical_grid_size().y; y++) {
         for (uint32_t x = 0; x < logical_grid_size().x; x++) {
-            const tt_cxy_pair core(
-                id_, cluster.get_virtual_coordinate_from_logical_coordinates(id_, CoreCoord(x, y), CoreType::WORKER));
+            const CoreCoord logical_core(x, y);
+            const CoreCoord virtual_core = this->worker_core_from_logical_core(logical_core);
+            if (service_cores.is_service_core(id_, logical_core) || fabric_mux_cores.contains(virtual_core)) {
+                continue;
+            }
+            const tt_cxy_pair core(id_, virtual_core);
             cluster.write_core(
                 launch_msg_ring.data(),
                 launch_msg_ring.size(),

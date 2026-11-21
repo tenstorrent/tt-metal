@@ -149,7 +149,8 @@ public:
 
     void init_command_queue_device_with_topology(DispatchTopology* topology);
     // Points every Tensix worker back at launch slot 0 and go row 0, marks its go messages done, and fills its launch
-    // message ring with empty messages in the given dispatch mode. Workers must be idle.
+    // message ring with empty messages in the given dispatch mode. Workers must be idle. Claimed service cores and
+    // fabric mux cores are skipped, since their persistent kernels keep running across dispatch mode switches.
     void reset_worker_mailboxes(dev_msgs::dispatch_mode mode);
 
     void update_smc_dispatch_telemetry_for_fast_dispatch(
