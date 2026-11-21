@@ -55,7 +55,7 @@ ACT_BLOCK_H = {
     "res5.2.conv2": 224,
     "aspp.convs.1 (x2 heads)": 128,
     "aspp.convs.2 (x2 heads)": 64,
-    "aspp.convs.3 (x2 heads, 1024-ch slice)": 256,
+    "aspp.convs.3 (x2 heads)": 256,
     "semantic decoder.res3.fuse_conv.0": 32,
     "instance decoder.res3.fuse_conv.0": 32,
     "semantic decoder.res3.fuse_conv.1": 32,
@@ -65,6 +65,11 @@ ACT_BLOCK_H = {
     "instance res2.fuse_conv.1 + center_head.0 + offset_head.0": 64,
     "center_head.1 + offset_head.1": 64,
 }
+
+# Layers Panoptic runs on ttnn.conv2d as channel slices (model_configs.py ChannelSliceStrategyConfiguration):
+# the full-K call does not fit ttnn.conv2d's L1. As in TtConv2d, each slice runs without bias or activation and
+# the slices are summed afterwards; only the conv calls are timed.
+TTNN_CHANNEL_SLICES = {"aspp.convs.3 (x2 heads)": 2}
 
 CASES = [c for c in feature_spec.LOOSE_CASES if "@ LoFi" not in c["extras"]["layer"]]
 # Comma-separated CASES indices to run. Selects by env var because `python -m tracy` (used by
@@ -162,6 +167,9 @@ def test_panoptic_conv3x3_compare(device, idx):
     del new_out, ttnn_input
 
     # --- ttnn.conv2d, Panoptic's per-layer config ---
+    num_slices = TTNN_CHANNEL_SLICES.get(layer, 1)
+    sliced = num_slices > 1
+    slice_c = c_in // num_slices
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=weight_dtype,
         shard_layout=mem,
@@ -169,17 +177,33 @@ def test_panoptic_conv3x3_compare(device, idx):
         enable_act_double_buffer=True,
         enable_weights_double_buffer=True,
         output_layout=ttnn.TILE_LAYOUT,
-        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) if relu else None,
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) if relu and not sliced else None,
         config_tensors_in_dram=True,
     )
     conv_config.act_block_h_override = ACT_BLOCK_H[layer]
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(), math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
     )
-    tt_w = ttnn.from_torch(torch_weight.float(), ttnn.float32)
-    tt_b = ttnn.from_torch(torch_bias.float().reshape(1, 1, 1, c_out), ttnn.float32) if with_bias else None
+    slice_mc = input_mc
+    if sliced:
+        shard_h, shard_w = extras["shard_shape"]
+        slice_mc = build_input_memory_config(
+            (1, 1, H * W, slice_c),
+            mem,
+            layout=layout,
+            dtype=dtype,
+            device=device,
+            extras={**extras, "shard_shape": [shard_h, shard_w // num_slices]},
+        )
+    tt_ws = [
+        ttnn.from_torch(torch_weight[:, s * slice_c : (s + 1) * slice_c].float(), ttnn.float32)
+        for s in range(num_slices)
+    ]
+    tt_b = (
+        ttnn.from_torch(torch_bias.float().reshape(1, 1, 1, c_out), ttnn.float32) if with_bias and not sliced else None
+    )
     ref_kwargs = dict(
-        in_channels=c_in,
+        in_channels=slice_c,
         out_channels=c_out,
         device=device,
         kernel_size=(3, 3),
@@ -198,26 +222,47 @@ def test_panoptic_conv3x3_compare(device, idx):
         slice_config=ttnn.Conv2dL1FullSliceConfig,
     )
 
-    def fresh_input():
-        return create_ttnn_input_tensor(torch_input, device, dtype=dtype, layout=layout, memory_config=input_mc)
+    def fresh_inputs():
+        return [
+            create_ttnn_input_tensor(
+                torch_input[..., s * slice_c : (s + 1) * slice_c],
+                device,
+                dtype=dtype,
+                layout=layout,
+                memory_config=slice_mc,
+            )
+            for s in range(num_slices)
+        ]
 
-    warm_out, _, [tt_w, tt_b] = ttnn.conv2d(
-        input_tensor=fresh_input(), weight_tensor=tt_w, bias_tensor=tt_b, **ref_kwargs
-    )
+    def run_ref(inputs):
+        nonlocal tt_b
+        outs = []
+        for s, inp in enumerate(inputs):
+            out, _, [tt_ws[s], tt_b] = ttnn.conv2d(
+                input_tensor=inp, weight_tensor=tt_ws[s], bias_tensor=tt_b, **ref_kwargs
+            )
+            outs.append(out)
+        return outs
+
+    for out in run_ref(fresh_inputs()):
+        ttnn.deallocate(out)
     ttnn.synchronize_device(device)
-    ttnn.deallocate(warm_out)
-    ref_out = None
+    ref_outs = []
     for i in range(MEASURED_ITERS):
-        if ref_out is not None:
-            ttnn.deallocate(ref_out)
-        inp = fresh_input()
+        for out in ref_outs:
+            ttnn.deallocate(out)
+        inputs = fresh_inputs()
         signpost(header=f"cmp|{layer}|ttnn.conv2d|{i}")
-        ref_out, _, [tt_w, tt_b] = ttnn.conv2d(input_tensor=inp, weight_tensor=tt_w, bias_tensor=tt_b, **ref_kwargs)
+        ref_outs = run_ref(inputs)
         ttnn.synchronize_device(device)
     signpost(header=f"cmp|{layer}|end_ref")
-    ref_pcc = _pcc(
-        ttnn.to_torch(ref_out).reshape(-1, ref_out.shape[-1])[: h_out * w_out, :c_out], expected.reshape(-1, c_out)
-    )
+    ref = sum(ttnn.to_torch(out).float().reshape(-1, out.shape[-1])[: h_out * w_out, :c_out] for out in ref_outs)
+    if sliced:
+        if with_bias:
+            ref = ref + torch_bias.float().reshape(1, c_out)
+        if relu:
+            ref = torch.relu(ref)
+    ref_pcc = _pcc(ref, expected.reshape(-1, c_out))
 
     ttnn.ReadDeviceProfiler(device)
     with open(RESULTS, "a") as f:
