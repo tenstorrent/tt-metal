@@ -16,6 +16,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
 #include <internal/reload_table.hpp>
+#include <tt_stl/optional_reference.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/base_types.hpp>
 
@@ -173,13 +174,15 @@ struct KernelDescriptor {
     BufferBindings buffer_bindings;
     CommonBufferBindings common_buffer_bindings;
 
-    // Builder for dynamically-constructed runtime arg lists.  Buffer* entries
-    // auto-register as buffer bindings; uint32_t entries embed their value.
+    // Builder for dynamically-constructed runtime arg lists.  Buffer* and MeshTensor entries
+    // auto-register as buffer bindings; uint32_t entries embed their value.  A null Buffer* or an
+    // empty optional MeshTensor (an absent optional tensor) embeds 0 without a binding.
     // The variant type is hidden — callers push typed values directly.
     struct RTArgList {
         void push_back(uint32_t v) { items_.emplace_back(v); }
         void push_back(Buffer* b) { items_.emplace_back(b); }
         void push_back(const MeshTensor& t) { items_.emplace_back(t); }
+        void push_back(ttsl::optional_reference<const MeshTensor> t) { items_.emplace_back(t); }
         void reserve(size_t n) { items_.reserve(n); }
         // Append a plain uint32_t range (e.g. from fused-op signaler helpers).
         void append(const std::vector<uint32_t>& v) {
@@ -189,7 +192,7 @@ struct KernelDescriptor {
         }
 
     private:
-        std::vector<std::variant<uint32_t, Buffer*, std::reference_wrapper<const MeshTensor>>> items_;
+        std::vector<std::variant<uint32_t, Buffer*, ttsl::optional_reference<const MeshTensor>>> items_;
         friend struct KernelDescriptor;
     };
 

@@ -42,6 +42,8 @@ public:
     // Dynamic circular buffer spec
     CircularBufferConfig(
         uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec, const Buffer& buffer);
+    CircularBufferConfig(
+        uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec, const MeshTensor& tensor);
 
     // For flatbuffer deserialization, set all private members.
     CircularBufferConfig(
@@ -74,6 +76,9 @@ public:
 
     CircularBufferConfig& set_globally_allocated_address_and_total_size(
         const Buffer& buffer, uint32_t total_size, uint32_t address_offset);
+
+    CircularBufferConfig& set_globally_allocated_address_and_total_size(
+        const MeshTensor& tensor, uint32_t total_size, uint32_t address_offset);
 
     CircularBufferConfig& set_tile_dims(uint8_t buffer_index, const Tile& tile);
 
