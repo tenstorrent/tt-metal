@@ -38,9 +38,15 @@ L1_RESERVE_BYTES = 0  # L1 kept back from the ring cap (the ring is the op's onl
 # --- Cluster model and mechanism caps (target page; Python has no query for them) --------------------------
 FREE_DM_HARTS = 6  # of 8: DM0 serves the ring interrupts, DM1 the remapper
 DFB_RING_MAX_BYTES = 1_048_560  # a ring is at most 1 MiB - 16 B (target page, cluster model)
-# One implicit-sync entry is one NoC transaction; keep it within one burst so the ISR's transaction count
-# is the entry count (tt_metal/hw/inc/internal/tt-2xx/quasar/noc/noc_parameters.h: 256 words x 256 B).
+# One transfer is one NoC burst at most (tt_metal/hw/inc/internal/tt-2xx/quasar/noc/noc_parameters.h:
+# 256 words x 256 B).
 NOC_MAX_BURST_BYTES = 65_536
+# The overlay cuts every transfer into packets of at most 8 KiB (NOC_OVERLAY_MAX_BYTES_IN_PACKET,
+# tt_metal/hw/inc/internal/tt-2xx/quasar/noc_cmd_buf_common.h). An implicit-sync ring whose entry spans more
+# than one packet loses count: measured on ttsim, 8,256-B to 16,832-B entries end in "tile counter
+# underflowed" (or a hang) as soon as a block holds 2 entries, while 8,192-B entries pass
+# (tests/ttnn/unit_tests/operations/slice/probes/). Larger pages take the ring's explicit protocol.
+IMPLICIT_SYNC_MAX_ENTRY_BYTES = 8 * 1024
 
 RING = "slice_pages"
 PAGE_MAP_RANK = 4
@@ -69,6 +75,15 @@ def validate_thread_plan(threads):
     r, w = threads
     if not (r >= 1 and w >= 1 and r + w <= FREE_DM_HARTS and (r % w == 0 or w % r == 0)):
         raise ValueError(f"slice: thread plan (R, W) = {threads}: need R + W <= {FREE_DM_HARTS}, R | W or W | R")
+    # W > R was seen to hang only with entries over 8 KiB under implicit sync (probe_001.py), the packet
+    # limit above, before large pages moved to explicit sync. It is not needed by the design (plan (1, 1);
+    # (2, 2) tests the strided dealing) and stays refused until a test covers it.
+    if w > r:
+        raise ValueError(f"slice: thread plan (R, W) = {threads}: W > R is not supported")
+
+
+def uses_explicit_sync(entry_bytes):
+    return entry_bytes > IMPLICIT_SYNC_MAX_ENTRY_BYTES
 
 
 def block_pages_for(max_core_pages, entry_bytes, threads):
@@ -115,6 +130,14 @@ def page_map(input_tensor, start, out_shape):
     return out_page_shape, in_page_stride, src_base
 
 
+def _dm_config(make, explicit_sync):
+    # Implicit sync is the ring's default on a data-movement kernel; the explicit protocol opts it out.
+    hw = make()
+    if explicit_sync:
+        hw.config_2xx = E.DataMovementHardwareConfig.DataMovement2XXConfig(disable_dfb_implicit_sync_for=[RING])
+    return hw
+
+
 def split_pages(num_pages, grid_size):
     """(core set, {core: pages}, {core: first page}, max pages per core) over the clusters that get work."""
     _, all_cores, group_1, group_2, per_core_1, per_core_2 = ttnn.split_work_to_cores(
@@ -146,6 +169,10 @@ def create_program_artifacts(input_tensor, output, start, *, threads=DM_THREAD_P
         num_out_pages, input_tensor.device().compute_with_storage_grid_size()
     )
     block_pages = block_pages_for(max_core_pages, entry_bytes, threads)
+    explicit_sync = uses_explicit_sync(entry_bytes)
+    if explicit_sync and R != W:
+        # Explicit sync batches a block per hart in place, which needs each hart on one tile counter per end.
+        raise ValueError(f"slice: thread plan (R, W) = {threads}: pages over 8 KiB need R == W")
 
     ring = E.DataflowBufferSpec(
         unique_id=RING,
@@ -158,18 +185,20 @@ def create_program_artifacts(input_tensor, output, start, *, threads=DM_THREAD_P
         E.TensorParameter(unique_id="output", spec=output.spec),
     ]
     per_core = ["first_out_page", "num_pages"]
+    # Explicit sync keeps the ring's credits in the kernels, which then reserve / wait a block per hart.
+    common = {"thread_block_pages": block_pages // max(threads)}
 
     reader = E.KernelSpec(
         unique_id="reader",
         source=str(KERNEL_DIR / "slice_reader.cpp"),
-        hw_config=E.create_reader_datamovement_config(),
+        hw_config=_dm_config(E.create_reader_datamovement_config, explicit_sync),
         num_threads=R,
         dfb_bindings=[E.producer_of(RING, "slice_pages")],
         tensor_bindings=[E.TensorBinding(tensor_parameter_name="input", accessor_name="input")],
-        compile_time_args={"reader_threads": R},
+        compile_time_args={"reader_threads": R, "explicit_sync": int(explicit_sync)},
         runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(
             runtime_arg_names=per_core,
-            common_runtime_arg_names=["src_base"],
+            common_runtime_arg_names=["src_base", *common],
             common_runtime_array_args=[
                 E.ArrayArgDecl(name="out_page_shape", size=PAGE_MAP_RANK),
                 E.ArrayArgDecl(name="in_page_stride", size=PAGE_MAP_RANK),
@@ -179,12 +208,14 @@ def create_program_artifacts(input_tensor, output, start, *, threads=DM_THREAD_P
     writer = E.KernelSpec(
         unique_id="writer",
         source=str(KERNEL_DIR / "slice_writer.cpp"),
-        hw_config=E.create_writer_datamovement_config(),
+        hw_config=_dm_config(E.create_writer_datamovement_config, explicit_sync),
         num_threads=W,
         dfb_bindings=[E.consumer_of(RING, "slice_pages")],
         tensor_bindings=[E.TensorBinding(tensor_parameter_name="output", accessor_name="output")],
-        compile_time_args={"writer_threads": W},
-        runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_arg_names=per_core),
+        compile_time_args={"writer_threads": W, "explicit_sync": int(explicit_sync)},
+        runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(
+            runtime_arg_names=per_core, common_runtime_arg_names=list(common)
+        ),
     )
     spec = E.ProgramSpec(
         name="slice",
@@ -199,10 +230,10 @@ def create_program_artifacts(input_tensor, output, start, *, threads=DM_THREAD_P
             E.KernelRunArgs(
                 kernel="reader",
                 runtime_arg_values=dm_args,
-                common_runtime_arg_values={"src_base": src_base},
+                common_runtime_arg_values={"src_base": src_base, **common},
                 common_runtime_array_arg_values={"out_page_shape": out_page_shape, "in_page_stride": in_page_stride},
             ),
-            E.KernelRunArgs(kernel="writer", runtime_arg_values=dm_args),
+            E.KernelRunArgs(kernel="writer", runtime_arg_values=dm_args, common_runtime_arg_values=common),
         ]
     )
     return spec, run_args, {"input": 0, "output": 1}

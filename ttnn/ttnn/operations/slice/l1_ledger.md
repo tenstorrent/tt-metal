@@ -6,6 +6,13 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes f
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_slice_pages` | `RING_DEPTH_BLOCKS × block_pages` (Phase 0: `2 × block_pages`; `block_pages = round_up(max(1, min(ceil(max_core_pages / RING_DEPTH_BLOCKS), block_pages_cap)), max(R, W))`) | `RING_DEPTH_BLOCKS × block_pages` pages: one block being filled by the reader while the previous one drains through the writer. Equals capacity: the second block is the double buffer, which is the only overlap a relay has. Capacity never exceeds the core's assignment rounded up to whole blocks (`block_pages ≤ ceil(max_core_pages / 2)`), so no slot is allocated that no page passes through, except on a 1-page core (ring of 2, 1 used — the txn-batch divisibility needs an even ring) | `{out_page: spans → RING_DEPTH_BLOCKS × block_pages, a0: streams (folded into out_page), a1: streams (folded into out_page), h: streams (folded into out_page), w: streams (folded into out_page; RM: inside the page)}` | the input dtype as metadata (bf16 in Phase 0), `entry_size = input.buffer_aligned_page_size()`; raw bytes moved by the NoC only — never unpacked, never through DEST, so audit 2 (page format vs DEST width) does not apply: the payload is dataflow-only | reader | writer | whole program | Shares with nothing — it is the only buffer of the op. A relay needs one staging buffer (a core reads only into its own L1 and writes only out of it); no second buffer exists to alias, pack into or transform in place |
 
+**Implementation note (implementer, Phase 0).** Inventory unchanged: one ring. Its *protocol* depends on
+`entry_bytes`: implicit sync for pages up to one 8 KiB NoC packet (`IMPLICIT_SYNC_MAX_ENTRY_BYTES`, the
+overlay's `NOC_OVERLAY_MAX_BYTES_IN_PACKET`), explicit sync with block-batched reserve/push and wait/pop
+(one barrier per block per side) above it, because a multi-packet implicit-sync entry miscounts on the
+DM0 interrupt path (measured: `tile counter underflowed` at 8,256 B and above once a block holds 2 entries).
+Capacity, block size and traffic are the same either way.
+
 ## Symbol table
 
 | Symbol | Bound | Predicate / source establishing it |
