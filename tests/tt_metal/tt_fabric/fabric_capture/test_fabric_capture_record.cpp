@@ -155,7 +155,7 @@ TEST(CaptureRecord, FailsOnAMissingKey) {
 TEST(CaptureRecord, FailsOnAnotherFileKindOrVersion) {
     json record_json = make_capture_record_json(make_record_with_every_part());
     record_json["file_kind"] = "fabric_manifest";
-    expect_parse_fails_with(record_json, "/file_kind is \"fabric_manifest\", not \"fabric_capture\"");
+    expect_parse_fails_with(record_json, R"(/file_kind is "fabric_manifest", not "fabric_capture")");
 
     record_json = make_capture_record_json(make_record_with_every_part());
     record_json["capture_version"] = 2;

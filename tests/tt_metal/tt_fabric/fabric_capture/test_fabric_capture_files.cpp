@@ -19,7 +19,6 @@
 #include <string>
 #include <vector>
 
-#include <stdlib.h>
 #include <unistd.h>
 
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_files.hpp"
