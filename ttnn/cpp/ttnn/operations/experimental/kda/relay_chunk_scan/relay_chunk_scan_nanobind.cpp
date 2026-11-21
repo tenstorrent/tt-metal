@@ -19,21 +19,24 @@ void bind_relay_chunk_scan(nb::module_& mod) {
         The sequence-parallel prefix as a relay along the SP axis, with the chunk's final carry: rank ``p``
         (chronological position, from ``actual_start``) takes its entry state ``S_p`` from its predecessor, computes
         ``S_{p+1} = A_p S_p + B_p = S_p + (E_p S_p + B_p)`` from its packed complement-form summary ``[E | B]``
-        (``E = A - I``) and forwards it, one head per head's first core and one tile column at a time; the last rank
+        (``E = A - I``) and forwards it, on relay cores of two heads each and one tile column at a time; the last rank
         sends the final state ``P`` on to the first. ``S_p`` and ``B_p`` are added exactly in FP32 DST (``B_p`` as
         ``I B_p`` in the matmul); only ``E_p S_p`` passes through the matmul's source registers at its fidelity.
 
-        Every core of a head then forms its chunks' outputs ``x = F0 + (FI - F0) @ seed`` from the summary's
+        Every correction core of a head then forms its chunks' outputs ``x = F0 + (FI - F0) @ seed`` from the summary's
         ``terms`` (the entry correction), the seed being ``S_p``, or ``P`` for the chunks of a separated tail,
         and writes each row's gated RMSNorm ``x / sqrt(mean(x^2) + norm_epsilon) * norm_weight *
-        sigmoid(gate)``, token-major. The first rank forms the final carry as ``P`` lands: ``P + (E P + B)``
-        with its final transition ``final_e`` / ``final_b`` when the interval ends in a separated tail, else
-        ``P``. It multicasts it from L1 along the SP axis into every rank's carry output, and every other rank
-        waits for its arrival, which separates consecutive calls across the SP line.
+        sigmoid(gate)``, token-major. The gate ``gate_input @ gate_weight`` is formed in the same program at
+        ``gate_math_fidelity`` while the relay's hops are on their way: each correction core forms its chunks' rows.
+        The first rank forms the final carry as ``P``
+        lands: ``P + (E P + B)`` with its final transition ``final_e`` / ``final_b`` when the interval ends in a
+        separated tail, else ``P``. It multicasts it from L1 along the SP axis into every rank's carry output, and
+        every other rank waits for its arrival, which separates consecutive calls across the SP line.
 
-        ``cores`` lists the same number of cores per head, head by head (the first of each also runs the relay's
-        hop), then two sender cores per link. The ``landing`` buffer and the global ``semaphores`` outlive the call:
-        a peer writes them before this rank's call starts.
+        ``cores`` lists the same number of correction cores per head, head by head, then two sender cores per link,
+        then the relay cores (each runs the hop of up to two heads of one link, far apart in its order). The
+        ``landing`` buffer and the global ``semaphores`` outlive the call: a peer writes them before this rank's
+        call starts.
 
         Args:
             packed (ttnn.Tensor): BFLOAT16 TILE-layout interleaved ``[1, B*H, K, 2K]`` rows of this rank's
@@ -47,29 +50,35 @@ void bind_relay_chunk_scan(nb::module_& mod) {
             final_e (ttnn.Tensor): FLOAT32 TILE-layout interleaved ``[B*H, K, K]`` E of this rank's final
                 transition.
             final_b (ttnn.Tensor): FLOAT32 TILE-layout interleaved ``[B*H, K, K]`` B of the same transition.
-            output_gate (ttnn.Tensor): BF16 TILE-layout interleaved ``[B, local_rows, W]`` holding each token's output
-                gate logits for heads ``0..H-1`` in ``H*K`` columns from ``gate_column_offset``.
+            gate_input (ttnn.Tensor): BF16 TILE-layout interleaved ``[B, local_rows, X]`` input the output gate
+                projects (the layer's hidden states), ``X`` a multiple of 64.
+            gate_weight (ttnn.Tensor): BF16, BFP8 or BFP4 TILE-layout interleaved ``[X, H*K]`` output gate projection.
             norm_weight (ttnn.Tensor): BF16 TILE-layout interleaved ``[K]`` RMSNorm weight.
             actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar with the absolute position of the
                 chunk's first token. Keep its address stable and update its contents before replay of a
                 captured trace.
-            landing (ttnn.Tensor): FLOAT32 TILE-layout ``[2*B*H*K, K]`` height-sharded in L1 over each head's
-                first core, two ``K x K`` states per core: the entry state the predecessor's sender writes and the
-                final state the last rank writes on the first rank.
-            semaphores (list[ttnn.GlobalSemaphore]): The zeroed entry-state, final-state and final-carry arrival
-                counters.
+            landing (ttnn.Tensor): FLOAT32 TILE-layout ``[4*R*K, K]`` height-sharded in L1 over the ``R`` relay cores,
+                four ``K x K`` states per core: per head slot, the entry state the predecessor's sender writes, then
+                per slot the final state the last rank writes on the first rank.
+            gate_workspace (ttnn.Tensor): L1 tensor height-sharded over the correction cores, the same bytes on each:
+                the output gate's working buffers, for the call only. The relay takes K blocks as large as it holds.
+            semaphores (list[ttnn.GlobalSemaphore]): Four zeroed counters on every core of the program: the
+                entry-state and final-state (or carry) arrivals, then the output gate's x and W block counts.
 
         Keyword Args:
             local_rows (int): Positive, 32-aligned token rows per SP device.
             num_links (int): Fabric links to the successor, two sender cores each.
-            cores (list[ttnn.CoreCoord]): The heads' cores, head by head (as many per head, dividing its chunks),
-                then two senders per link, all distinct.
+            cores (list[ttnn.CoreCoord]): The heads' correction cores, head by head (as many per head, dividing its
+                chunks), then two senders per link, then the relay cores (all distinct).
             num_heads (int): Heads per batch ``H``; ``B*H`` heads are ``B`` batches.
             actual_end (ttnn.Tensor, optional): Replicated UINT32 exclusive valid end, which decides whether the
                 interval ends in a separated tail. Omitted, the chunk runs to its full capacity.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence, of at least two ranks
                 (the last rank's hand-off to the first crosses the axis when it does not wrap).
-            gate_column_offset (int, optional): Tile-aligned first gate column in ``output_gate``. Defaults to 0.
+            gate_local (ttnn.Tensor, optional): BF16 TILE-layout interleaved ``[B, local_rows, X / TP]``, this rank's
+                TP slice of ``gate_input`` (TP the mesh axis other than ``sequence_parallel_axis``), read in place of
+                those columns of ``gate_input``, which then need not hold them.
+            gate_math_fidelity (ttnn.MathFidelity, optional): The output gate's fidelity. Defaults to HiFi2.
             norm_epsilon (float, optional): Added to the mean square. Defaults to 1e-6.
             output_dtype (ttnn.DataType, optional): FLOAT32 or BFLOAT16 output. Defaults to BFLOAT16.
             memory_config (ttnn.MemoryConfig, optional): Interleaved memory of the output. Defaults to DRAM.
@@ -97,10 +106,12 @@ void bind_relay_chunk_scan(nb::module_& mod) {
         nb::arg("initial_state").noconvert(),
         nb::arg("final_e").noconvert(),
         nb::arg("final_b").noconvert(),
-        nb::arg("output_gate").noconvert(),
+        nb::arg("gate_input").noconvert(),
+        nb::arg("gate_weight").noconvert(),
         nb::arg("norm_weight").noconvert(),
         nb::arg("actual_start").noconvert(),
         nb::arg("landing").noconvert(),
+        nb::arg("gate_workspace").noconvert(),
         nb::arg("semaphores"),
         nb::kw_only(),
         nb::arg("local_rows"),
@@ -109,7 +120,8 @@ void bind_relay_chunk_scan(nb::module_& mod) {
         nb::arg("num_heads"),
         nb::arg("actual_end") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("gate_column_offset") = 0,
+        nb::arg("gate_local") = nb::none(),
+        nb::arg("gate_math_fidelity") = tt::tt_metal::MathFidelity::HiFi2,
         nb::arg("norm_epsilon") = 1e-6f,
         nb::arg("output_dtype") = tt::tt_metal::DataType::BFLOAT16,
         nb::arg("memory_config") = nb::none(),

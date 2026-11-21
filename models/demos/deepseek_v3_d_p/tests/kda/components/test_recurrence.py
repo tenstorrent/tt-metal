@@ -289,6 +289,10 @@ def _activation_dims(sp_axis: int, tp_axis: int) -> tuple:
 _NORM_EPSILON = 1e-6
 
 
+# The output gate's input width: a few of the relay's K blocks.
+_GATE_INPUT = 256
+
+
 def _output_norm(
     mesh_device: ttnn.MeshDevice,
     sequence: int,
@@ -298,11 +302,16 @@ def _output_norm(
     activation_dims: tuple,
     generator: torch.Generator,
 ) -> tuple[OutputNorm, torch.Tensor, torch.Tensor]:
-    """The SP recurrence's gated output norm, with a random BF16 gate laid out like q and weight, and both on host."""
-    gate = torch.randn(1, sequence, heads * dim, generator=generator).bfloat16().float()
+    """The SP recurrence's gated output norm, with a random BF16 input x (sequence over SP, replicated over TP) and
+    gate projection W (heads' columns over TP) and weight, and the gate x @ W and the weight on host."""
+    gate_input = torch.randn(1, sequence, _GATE_INPUT, generator=generator).bfloat16().float()
+    gate_weight = (torch.randn(_GATE_INPUT, heads * dim, generator=generator) / _GATE_INPUT**0.5).bfloat16().float()
     weight = (1 + 0.1 * torch.randn(dim, generator=generator)).bfloat16().float()
+    input_dims = tuple(1 if dim_ == 1 else None for dim_ in activation_dims)
+    weight_dims = tuple(1 if dim_ == 2 else None for dim_ in activation_dims)
     norm = OutputNorm(
-        gate=_to_mesh(gate, mesh_device, activation_dims, ttnn.bfloat16),
+        gate_input=_to_mesh(gate_input, mesh_device, input_dims, ttnn.bfloat16),
+        gate_weight=_to_mesh(gate_weight, mesh_device, weight_dims, ttnn.bfloat16),
         weight=ttnn.from_torch(
             weight,
             dtype=ttnn.bfloat16,
@@ -311,11 +320,11 @@ def _output_norm(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         ),
         num_heads=local_heads,
-        gate_column_offset=0,
         norm_epsilon=_NORM_EPSILON,
         output_dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    gate = gate_input.double() @ gate_weight.double()
     return norm, gate.reshape(1, sequence, heads, dim), weight
 
 
