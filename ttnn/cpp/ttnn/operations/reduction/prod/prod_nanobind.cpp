@@ -37,6 +37,7 @@ void bind_reduction_prod_operation(nb::module_& mod) {
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
+                output_tensor (ttnn.Tensor): required output tensor for the `dims` overload.
 
             Keyword Args:
                 dim (int, optional): Dimension to perform prod. Defaults to `None`.

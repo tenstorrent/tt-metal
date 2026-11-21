@@ -1176,7 +1176,7 @@ void bind_prelu(
 
         Args:
             input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or List[float] of length 1 or Number): weight.
+            weight (ttnn.Tensor or List[float] of length 1 or Number): weight.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
@@ -1787,8 +1787,8 @@ void bind_polyval(
             {3}
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            Coeffs (Vector of floats): coefficients of the polynomial.
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            coeffs (Vector of floats): coefficients of the polynomial.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.

@@ -41,8 +41,8 @@ void bind_unary_backward_two_float(
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor (ttnn.Tensor): the input tensor.
-            threshold (float): the input threshold value.
-            value (float): the input value.
+            min (float): the threshold value.
+            max (float): the replacement value of the forward threshold op; it does not affect the gradient.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.

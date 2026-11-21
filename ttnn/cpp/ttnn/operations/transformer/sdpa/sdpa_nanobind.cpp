@@ -1262,7 +1262,6 @@ void bind_sdpa(nb::module_& mod) {
             page_table (ttnn.Tensor, optional): Page table tensor for paged KV cache access [b x num_pages]. Defaults to `None`.
             chunk_start_idx (int, optional): Absolute position in the sequence where this chunk starts (for prefix caching).
                 Must be a multiple of program_config.q_chunk_size. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the output tensor with results for this device's assigned queries [b x nqh x local_s x dh].

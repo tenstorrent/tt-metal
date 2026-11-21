@@ -213,7 +213,7 @@ void bind_unary_operation_overload_complex_return_complex(
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`. When ``input_tensor`` is a ``ComplexTensor``, this argument is not supported.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`. When ``input_tensor`` is a ``ComplexTensor``, this argument is not supported.
 
         Returns:
@@ -2161,6 +2161,7 @@ void py_module(nb::module_& mod) {
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids to run the operation on. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
