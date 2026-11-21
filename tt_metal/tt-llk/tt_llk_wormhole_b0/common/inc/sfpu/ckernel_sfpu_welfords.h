@@ -9,8 +9,11 @@
 #define WELFORD_SFPU_INDEPENDENT_SHFT2_NOP()
 #define WELFORD_SFPU_ONLINE_HAZARD_NOP() TTI_SFPNOP
 #define WELFORD_SFPU_INSTR_PER_ROW       8
+// A store's row-valid update wins over a same-cycle ZEROACC, so one store per state vector is enough.
+#define WELFORD_SFPU_REPEAT_STATE_STORES false
 #include "ckernel_sfpu_welfords_common.h"
 #undef WELFORD_SFPU_INSTR_PER_ROW
 #undef WELFORD_SFPU_ONLINE_HAZARD_NOP
 #undef WELFORD_SFPU_INDEPENDENT_SHFT2_NOP
 #undef WELFORD_SFPU_DST_ADDR_MOD
+#undef WELFORD_SFPU_REPEAT_STATE_STORES
