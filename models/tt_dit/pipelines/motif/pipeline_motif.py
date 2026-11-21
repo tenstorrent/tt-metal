@@ -374,6 +374,9 @@ class MotifPipeline(PipelineAPIMixin):
         with self._reshape_encoder():
             decoded_output = self._vae.decode(torch_latents, traced=traced)
 
+        # The reference adds the VAE shift to the decoded image instead of to the latents.
+        decoded_output = decoded_output + self._vae.config_shift_factor
+
         image = self._image_processor.postprocess(decoded_output, output_type="pt")
         assert isinstance(image, torch.Tensor)
 
