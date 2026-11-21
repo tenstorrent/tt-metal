@@ -39,7 +39,12 @@ constexpr size_t k_staging_parallel_min = 64ull << 20;
 bool staging_enabled() {
     static const bool enabled = [] {
         const char* e = std::getenv("TT_METAL_PIN_STAGING");
-        return e == nullptr || std::string_view(e) != "0";
+        const bool on = e == nullptr || std::string_view(e) != "0";
+        if (!on) {
+            log_info(
+                tt::LogMetal, "pin staging: off (TT_METAL_PIN_STAGING=0); weights upload on the per-tensor pin path");
+        }
+        return on;
     }();
     return enabled;
 }
@@ -105,6 +110,11 @@ PinnedMemoryCache::StagingRing* PinnedMemoryCache::get_staging_ring(distributed:
     const auto params = GetMemoryPinningParameters(mesh_device);
     const size_t size = staging_ring_bytes();
     if (params.max_pins == 0 || !params.can_map_to_noc || size == 0) {
+        log_info(
+            tt::LogMetal,
+            "pin staging: unavailable (pinning or NOC mapping unsupported, or ring size 0); weights upload on the "
+            "per-tensor "
+            "pin path");
         staging_unavailable_.insert(&mesh_device);
         return nullptr;
     }
