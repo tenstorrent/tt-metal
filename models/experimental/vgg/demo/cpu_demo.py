@@ -10,8 +10,8 @@ from loguru import logger
 _batch_size = 1
 
 
-def test_cpu_demo(imagenet_sample_input, imagenet_label_dict):
-    image = imagenet_sample_input
+def test_cpu_demo(imagenet_sample_input_normalized, imagenet_label_dict):
+    image = imagenet_sample_input_normalized
     class_labels = imagenet_label_dict
 
     batch_size = _batch_size

@@ -21,8 +21,8 @@ from models.experimental.swin.tt.swin import *
     "model_name",
     (("microsoft/swin-tiny-patch4-window7-224"),),
 )
-def test_gs_demo(device, imagenet_sample_input, model_name):
-    image = imagenet_sample_input
+def test_gs_demo(device, imagenet_sample_input, imagenet_sample_image, model_name):
+    image = imagenet_sample_image
 
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
     model = HF_SwinForImageClassification.from_pretrained(model_name)
