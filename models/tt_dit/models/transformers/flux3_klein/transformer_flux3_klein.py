@@ -19,7 +19,14 @@ from ....layers.normalization import DistributedLayerNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import tensor
-from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, register_matmul_configs
+from ....utils.matmul import (
+    FusedMMRSConfig,
+    _compute_heuristic_blocking,
+    _same_m_per_core_match,
+    grid_12_9_configs,
+    register_fused_mmrs_configs,
+    register_matmul_configs,
+)
 from ....utils.substate import rename_substate
 from .transformer_block_flux3_klein import HIDDEN, Flux3KleinTransformerBlock
 
@@ -148,6 +155,35 @@ register_matmul_configs(
             (10496, 3072, 4608): (6, 8, 16, (1, 4)),
             (10752, 3072, 2304): (8, 8, 8, (1, 4)),
             (10752, 3072, 4608): (6, 8, 16, (1, 4)),
+        }
+    }
+)
+
+
+# Untabled (M, 3072, N) shapes whose heuristic blocking overflows L1 on the 12x9 grid (job 226340): the 10-reference early
+# stage (image_cond alone, 40960 / 8 = 5120 rows at every output size) got 14x8x8, 2048 / 4096 + 2 references 9x8x16 /
+# 16x8x16. Block tiles M*K + K*N + M*N: 6x8x16 (272) runs, 14x8x8 (288) clashes. Past 272 the heuristic's M_block is cut
+# to the table's 240 (11x8x8, 4x8x16); every shape with an entry or within 272 keeps its blocking.
+L1_FIT_BLOCK_TILES = 272
+L1_CUT_BLOCK_TILES = 240
+
+
+def fitting_blocking(m: int, k: int, n: int) -> tuple | None:
+    mb, kb, nb, (_, sub_w) = _compute_heuristic_blocking(m, k, n, 12, 9)
+    if mb * kb + kb * nb + mb * nb <= L1_FIT_BLOCK_TILES:
+        return None
+    return (L1_CUT_BLOCK_TILES - kb * nb) // (kb + nb), kb, nb, (1, sub_w)
+
+
+register_matmul_configs(
+    {
+        "12x9": {
+            (m, 3072, n): blocking
+            for m in range(128, 32768 + 1, 128)
+            for n in (2304, 4608, 9216)
+            if (m, 3072, n) not in grid_12_9_configs
+            and _same_m_per_core_match(grid_12_9_configs, m, 3072, n, 12) is None
+            and (blocking := fitting_blocking(m, 3072, n)) is not None
         }
     }
 )
