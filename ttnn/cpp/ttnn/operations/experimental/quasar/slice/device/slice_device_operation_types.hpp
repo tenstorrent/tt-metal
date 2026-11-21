@@ -19,6 +19,9 @@ struct SliceParams {
     std::optional<uint32_t> slice_dim = std::nullopt;
     std::optional<uint32_t> num_devices = std::nullopt;
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt;
+    // Data-movement threads of the slice kernel on every cluster (1..6: Quasar keeps two of the eight DM
+    // harts of a cluster for the runtime). Part of the program-cache key.
+    uint32_t num_threads = 6;
 };
 
 struct SliceInputs {

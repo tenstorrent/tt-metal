@@ -7,97 +7,40 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include "ttnn/operations/experimental/quasar/slice/device/slice_program_factory_rm.hpp"
-#include "ttnn/operations/experimental/quasar/slice/device/slice_program_factory_rm_sharded.hpp"
-#include "ttnn/operations/experimental/quasar/slice/device/slice_program_factory_rm_stride.hpp"
-#include "ttnn/operations/experimental/quasar/slice/device/slice_program_factory_tile.hpp"
-#include "ttnn/operations/experimental/quasar/slice/device/slice_program_factory_tile_tensor_args.hpp"
+#include "ttnn/operations/experimental/quasar/slice/device/slice_program_factory.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 
+#include <cstdlib>
+
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::quasar {
-
-inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const ttnn::Shape& shape) {
-    return std::accumulate(shape.cbegin(), shape.cend() - 2, 1, std::multiplies<uint32_t>{});
-}
-
-inline __attribute__((always_inline)) uint32_t
-get_upper_start_offset(const ttnn::Shape& shape, Layout layout, const ttnn::Shape& slice_start) {
-    // offset for every dim except last 2
-    // 64-bit: shape.volume() (element count) overflows uint32 for tensors > 4 GB. (Port of ed33d897725.)
-    uint64_t start_offset = 0;
-
-    uint64_t num_pages = shape.volume();
-    if (layout == Layout::TILE) {
-        num_pages /= tt::constants::TILE_HW;
-    } else {
-        uint32_t page_width = shape[-1];
-        num_pages /= page_width;
-    }
-
-    for (uint32_t dim_outer = 0; dim_outer < shape.rank() - 2; dim_outer++) {
-        uint64_t compressed_dims = 1;
-        for (uint32_t dim_inner = 0; dim_inner <= dim_outer; dim_inner++) {
-            compressed_dims *= shape[dim_inner];
-        }
-        start_offset += (num_pages / compressed_dims) * slice_start[dim_outer];
-    }
-    return static_cast<uint32_t>(start_offset);  // page index, fits uint32
-}
-
-inline __attribute__((always_inline)) uint32_t
-get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
-    return get_upper_start_offset(tensor.padded_shape(), tensor.layout(), slice_start);
-}
-
-// Returns the start offset for a tiled tensor, given the input tensor and the slice start shape.
-// If round_up is true, and the slice_start is not aligned to a tile boundary, it will round up to the next tile.
-uint32_t get_tiled_start_offset(const ttnn::Shape& input_shape, const ttnn::Shape& slice_start, bool round_up) {
-    using namespace tt::constants;
-    uint32_t num_input_pages = input_shape.volume() / (TILE_HW);
-    uint32_t upper_dims_compressed = get_upper_dims_compressed(input_shape);
-    uint32_t num_pages_width = num_input_pages / (upper_dims_compressed * tt::div_up(input_shape[-2], TILE_HEIGHT));
-
-    // offset for every dim except last 2
-    uint32_t start_offset = get_upper_start_offset(input_shape, Layout::TILE, slice_start);
-
-    if (round_up) {
-        start_offset +=
-            tt::div_up(slice_start[-2], TILE_HEIGHT) * num_pages_width + tt::div_up(slice_start[-1], TILE_WIDTH);
-    } else {
-        start_offset += slice_start[-2] / TILE_HEIGHT * num_pages_width + slice_start[-1] / TILE_WIDTH;
-    }
-    return start_offset;
-}
-
-uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& slice_start, bool round_up) {
-    const auto& shape = input_tensor.padded_shape();
-    return get_tiled_start_offset(shape, slice_start, round_up);
-}
-
-uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
-    uint32_t start_offset = 0;
-
-    if (tensor.padded_shape().rank() >= 2) {
-        start_offset = get_upper_start_offset(tensor, slice_start);
-        start_offset += slice_start[-2];
-    }
-
-    return start_offset;
-}
-
-}  // namespace ttnn::operations::experimental::quasar
-
 namespace ttnn::prim::qsr {
+
+namespace {
+
+// Six free DM harts per cluster by default; TTNN_QSR_SLICE_THREADS overrides the count (experiments only).
+uint32_t slice_num_threads_from_env() {
+    constexpr uint32_t default_threads = 6;
+    const char* env = std::getenv("TTNN_QSR_SLICE_THREADS");
+    if (env == nullptr) {
+        return default_threads;
+    }
+    char* end = nullptr;
+    const unsigned long value = std::strtoul(env, &end, 10);
+    TT_FATAL(
+        end != env && *end == '\0' && value >= 1 && value <= 6,
+        "TTNN_QSR_SLICE_THREADS must be an integer in [1, 6], got '{}'",
+        env);
+    return static_cast<uint32_t>(value);
+}
+
+}  // namespace
 
 void SliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
-    const bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
     TT_FATAL(tensor_args.input.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(tensor_args.input.is_allocated(), "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(
@@ -162,30 +105,76 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             spec_required.tensor_layout(),
             out_tensor.tensor_spec().tensor_layout());
     }
-    auto output_tensor_shape = compute_output_specs(args, tensor_args).logical_shape();
-    if (has_step) {  // if all ones modify before passing in to function
+    const auto output_spec = compute_output_specs(args, tensor_args);
+    const auto& output_tensor_shape = output_spec.logical_shape();
+    const auto& input = tensor_args.input;
+    const uint32_t rank = input.padded_shape().rank();
+
+    TT_FATAL(
+        args.num_threads >= 1 && args.num_threads <= 6,
+        "quasar.slice runs 1 to 6 data-movement threads per cluster, got {}",
+        args.num_threads);
+    TT_FATAL(
+        args.step.rank() == rank, "Number of steps {} must match number of ends/starts {}", args.step.rank(), rank);
+
+    // The kernel addresses both tensors by page id and moves whole rows / tiles.
+    const auto& output_mem_config = tensor_args.preallocated_output.has_value()
+                                        ? tensor_args.preallocated_output->memory_config()
+                                        : output_spec.memory_config();
+    TT_FATAL(
+        slice_addresses_whole_pages(input.layout(), input.memory_config()),
+        "quasar.slice cannot read a ROW_MAJOR {} input: a row is split over clusters. Unshard it first "
+        "(ttnn.experimental.quasar.slice does)",
+        input.memory_config().memory_layout());
+    TT_FATAL(
+        slice_addresses_whole_pages(input.layout(), output_mem_config),
+        "quasar.slice cannot write a ROW_MAJOR {} output: a row is split over clusters. Slice to an interleaved "
+        "tensor and shard that (ttnn.experimental.quasar.slice does)",
+        output_mem_config.memory_layout());
+
+    if (args.use_tensor_args) {
+        TT_FATAL(input.layout() == Layout::TILE, "quasar.slice with tensor begins / ends needs a TILE input");
+        TT_FATAL(tensor_args.start_tensor.has_value(), "quasar.slice with tensor begins needs the start tensor");
+        const auto& start = tensor_args.start_tensor.value();
         TT_FATAL(
-            tensor_args.input.layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
-        // Strided + sharded is natively supported: reader/writer kernels route per-row NOC calls
-        // through noc_async_*_sharded, which handles cross-shard splitting transparently.
+            start.storage_type() == StorageType::DEVICE && start.is_allocated(),
+            "quasar.slice: the start tensor must be allocated on the device");
         TT_FATAL(
-            args.step.size() == args.slice_end.rank(),
-            "Number of steps {} must match number of ends/starts {}",
-            args.step.size(),
-            args.slice_end.rank());
+            start.layout() == Layout::ROW_MAJOR && start.element_size() == sizeof(uint32_t) &&
+                start.logical_shape().rank() == 1 && start.logical_shape()[0] >= rank,
+            "quasar.slice: the start tensor must be a 1D ROW_MAJOR tensor of at least {} 32-bit integers, got {} {} {}",
+            rank,
+            start.layout(),
+            start.dtype(),
+            start.logical_shape());
+        TT_FATAL(
+            !start.is_sharded() || start.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "quasar.slice: the start tensor must be interleaved or height sharded");
     }
-    if (tensor_args.input.layout() == Layout::TILE) {
+    if (input.layout() == Layout::TILE) {
+        TT_FATAL(rank >= 2, "quasar.slice: a TILE input needs at least 2 dims, got {}", rank);
         TT_FATAL(
-            tensor_args.input.physical_volume() % TILE_HW == 0,
+            input.physical_volume() % TILE_HW == 0,
             "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
-            tensor_args.input.physical_volume(),
+            input.physical_volume(),
             TILE_HW);
-        TT_FATAL(
-            (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (args.slice_start[-2] % TILE_HEIGHT == 0),
-            "Can only slice tilized tensor with height begin index aligned to tiles");
-        TT_FATAL(
-            (output_tensor_shape[-1] % TILE_WIDTH == 0) && (args.slice_start[-1] % TILE_WIDTH == 0),
-            "Can only slice tilized tensor with width begin index aligned to tiles");
+        if (slice_gathers_tile_elements(args, input)) {
+            // Unaligned begins or strides in the last two dims: output tiles are assembled from elements.
+            TT_FATAL(
+                slice_tile_gather_supports(input.dtype()),
+                "quasar.slice: a TILE slice with unaligned begins or strides in its last two dims gathers 16-bit "
+                "or 32-bit elements and cannot address {} tiles; slice in ROW_MAJOR (ttnn.experimental.quasar.slice "
+                "does)",
+                input.dtype());
+        } else {
+            // Whole tiles move, so the slice must cover whole tiles (quasar::slice pads the ends).
+            TT_FATAL(
+                output_tensor_shape[-2] % TILE_HEIGHT == 0 && output_tensor_shape[-1] % TILE_WIDTH == 0,
+                "quasar.slice moves whole tiles when the last two begins are tile aligned: the sliced height and "
+                "width ({}, {}) must be whole tiles (ttnn.experimental.quasar.slice pads the ends)",
+                output_tensor_shape[-2],
+                output_tensor_shape[-1]);
+        }
     }
 }
 
@@ -282,37 +271,8 @@ Tensor SliceDeviceOperation::create_output_tensors(
 }
 
 SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input;
-
-    if (args.use_tensor_args) {
-        return SliceTileTensorArgsProgramFactory{};
-    }
-
-    // Check if we have step != 1
-    bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
-
-    if (input.layout() == Layout::ROW_MAJOR) {
-        // Misaligned W-begin needs SliceRmProgramFactory's tt_memmove fixup (issue #50714).
-        const uint32_t begins_bytes_last =
-            args.slice_start.rank() > 0 ? args.slice_start[-1] * input.element_size() : 0u;
-        const bool w_begin_aligned = (begins_bytes_last % ::hal::get_l1_alignment()) == 0;
-        const bool height_sharded_in_out_no_step =
-            input.is_sharded() &&
-            input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
-            args.output_mem_config.is_sharded() &&
-            args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED && !has_step &&
-            w_begin_aligned;
-        if (height_sharded_in_out_no_step) {
-            return SliceRmShardedProgramFactory{};
-        }
-        if (has_step) {
-            return SliceRmStrideProgramFactory{};
-        }
-        return SliceRmProgramFactory{};
-    }
-    // Layout::TILE — TensorAccessor at tile granularity handles all sharded buffer types natively.
-    return SliceTileProgramFactory{};
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
+    return SliceProgramFactory{};
 }
 
 // Port of tt-metal e517beb3f41 (#47602): the default program hash (boost::hash_combine style) has weak
@@ -321,7 +281,6 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
 // slice params so distinct invocations get distinct keys.
 ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto factory = select_program_factory(operation_attributes, tensor_args);
     auto hash = tt::tt_metal::operation::hash_operation<SliceDeviceOperation>(
         operation_attributes.slice_start,
         operation_attributes.slice_end,
@@ -331,7 +290,7 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
         operation_attributes.num_devices,
         operation_attributes.output_mem_config,
         operation_attributes.sub_core_grids,
-        factory.index(),
+        operation_attributes.num_threads,
         tensor_args.start_tensor.has_value(),
         tensor_args.end_tensor.has_value());
 
@@ -357,8 +316,8 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
             st.memory_config());
     }
 
-    // SliceTileTensorArgsProgramFactory gives the end tensor its own TensorAccessorArgs in the reader's
-    // compile-time args, so its memory config picks the bank table and cannot be refreshed on a hit.
+    // The end tensor never reaches the device (the output shape comes from slice_dim / num_devices), but
+    // it stays in the key so a call keeps one cache entry per (start, end) placement, as before.
     if (tensor_args.end_tensor.has_value()) {
         const auto& et = tensor_args.end_tensor.value();
         hash = ttsl::hash::hash_objects(
@@ -411,7 +370,15 @@ SliceDeviceOperation::tensor_return_value_t slice(
     using OperationType = ttnn::prim::qsr::SliceDeviceOperation;
     const auto attributes = [&](const tt::tt_metal::MemoryConfig& mem_config) {
         return OperationType::operation_attributes_t{
-            slice_start, slice_end, step, mem_config, use_tensor_args, slice_dim, num_devices, sub_core_grids};
+            slice_start,
+            slice_end,
+            step,
+            mem_config,
+            use_tensor_args,
+            slice_dim,
+            num_devices,
+            sub_core_grids,
+            slice_num_threads_from_env()};
     };
     return ttnn::operations::data_movement::launch_with_aligned_shard_rows(
         input,
@@ -431,5 +398,32 @@ SliceDeviceOperation::tensor_return_value_t slice(
                     end_tensor,
                     explicit_mem_config.has_value() ? std::nullopt : preallocated_output});
         });
+}
+
+bool slice_gathers_tile_elements(const SliceParams& args, const Tensor& input) {
+    using namespace tt::constants;
+    if (args.use_tensor_args || input.layout() != Layout::TILE || args.slice_start.rank() < 2) {
+        return false;
+    }
+    return args.slice_start[-2] % TILE_HEIGHT != 0 || args.slice_start[-1] % TILE_WIDTH != 0 || args.step[-2] != 1 ||
+           args.step[-1] != 1;
+}
+
+bool slice_tile_gather_supports(tt::tt_metal::DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16:
+        case DataType::FLOAT32:
+        case DataType::INT32:
+        case DataType::UINT32:
+        case DataType::UINT16: return true;
+        default: return false;
+    }
+}
+
+bool slice_addresses_whole_pages(tt::tt_metal::Layout layout, const tt::tt_metal::MemoryConfig& memory_config) {
+    if (layout == Layout::TILE || !memory_config.is_sharded()) {
+        return true;
+    }
+    return memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
 }
 }  // namespace ttnn::prim::qsr

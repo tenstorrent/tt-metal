@@ -45,10 +45,11 @@ void bind_reshape_view_operation(nb::module_& mod) {
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config. If ``memory_config`` specifies a sharded layout without ``shard_spec``, the input tensor's ``shard_spec`` is used as the seed grid (layout should match the input).
                 * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
-                * :attr:`reshape_tile_mode` (TileReshapeMapMode): Advanced option. Set to RECREATE to recompute and reallocate the mapping tensor. This may alleviate DRAM fragmentation but is slow. Default is CACHE. This keyword is named :attr:`reshape_tile_mode` on all overloads; the small-vector (tuple/list) shape overload previously used the name ``recreate_mapping_tensor`` for the same option—update callers to ``reshape_tile_mode``.
+                * :attr:`reshape_tile_mode` (TileReshapeMapMode): Accepted for compatibility and ignored: the Quasar kernel derives the tile mapping itself, so there is no mapping tensor to cache or recreate.
                 * :attr:`sub_core_grids` (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
-                * :attr:`skip_padding_fill` (bool): If False, ``pad_value`` is applied to tile padding lanes. If True, ``pad_value`` is ignored and tile padding is left as-is. Default is False. Note: this option is silently ignored for ``BFLOAT8_B`` outputs because the BF8 typecast computes a shared exponent across each 16-element sub-block, and unfilled padding would corrupt logical values in straddling sub-blocks; the fill always runs in that case.
+                * :attr:`skip_padding_fill` (bool): If False, an explicitly passed ``pad_value`` is applied to tile padding lanes. If True, ``pad_value`` is ignored and tile padding is left as-is. Default is False.
 
+            Note: a reshape that moves data runs on device for ``bfloat16``, ``float32``, ``int32``, ``uint32``, ``uint16`` and ``uint8`` tensors. Block-float tensors (``bfloat8_b``, ``bfloat4_b``) support the 0 cost view cases only.
 
             Returns:
                 ttnn.Tensor: the output tensor with the new shape.

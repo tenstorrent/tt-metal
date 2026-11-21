@@ -75,8 +75,17 @@ def _explicit_block_shard_config(device, grid_h, grid_w, sh, sw, buffer_type=ttn
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type, spec)
 
 
+QUASAR_SLICE_ONLY = "ttnn.experimental.quasar.slice is Quasar-native (multi-threaded data-movement kernel)"
+
+
+def _quasar_slice_only(device):
+    if device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip(QUASAR_SLICE_ONLY)
+
+
 def _run_quasar_slice(shape, begins, ends, step, imc, omc, device):
     """omc=None exercises implicit output-config inheritance from the input."""
+    _quasar_slice_only(device)
     torch.manual_seed(12345)
     x = torch.rand(shape, dtype=torch.bfloat16)
     ttnn_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=imc)
@@ -179,6 +188,7 @@ def test_quasar_slice_rm_nd_sharded_subaligned_shard_row_in(device):
 
 
 def test_quasar_slice_tile_tensor_args(device):
+    _quasar_slice_only(device)
     shape = (1, 1, 64, 64)
     starts, ends = [0, 0, 32, 0], [1, 1, 64, 64]
     torch.manual_seed(12345)
@@ -194,6 +204,7 @@ def test_quasar_slice_tile_tensor_args(device):
 # The tensor-args path hands output_tensor straight to the device op, so its layout check is the only guard.
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["matching_dtype", "mismatched_dtype"])
 def test_quasar_slice_tile_tensor_args_preallocated_output(device, expect_error, out_dtype):
+    _quasar_slice_only(device)
     torch.manual_seed(0)
     x = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
     ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
@@ -224,6 +235,7 @@ def test_quasar_slice_tile_tensor_args_preallocated_output(device, expect_error,
     ids=["unaligned_begin_small", "strided", "unaligned_begin"],
 )
 def test_quasar_slice_tile_preallocated_output_rm_only(device, shape, begins, ends, step, out_mc):
+    _quasar_slice_only(device)
     torch.manual_seed(12345)
     x = torch.rand(shape, dtype=torch.bfloat16)
     ref = x[tuple(slice(b, e, s) for b, e, s in zip(begins, ends, step))]
@@ -248,6 +260,7 @@ def test_quasar_slice_tile_preallocated_output_rm_only(device, shape, begins, en
     ids=["aligned_begin", "unaligned_begin"],
 )
 def test_quasar_slice_preallocated_output_dtype_mismatch_fatal(device, expect_error, begins, ends):
+    _quasar_slice_only(device)
     x = ttnn.from_torch(torch.rand((1, 1, 64, 64), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     out = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
@@ -260,6 +273,10 @@ def test_quasar_slice_preallocated_output_dtype_mismatch_fatal(device, expect_er
 # match either that result or the input.
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16_out", "bf8_out"])
 def test_quasar_slice_bfloat8_b_unaligned_begin_preallocated_output(device, out_dtype):
+    _quasar_slice_only(device)
+    # A bfloat8_b tile has no addressable element, so this slice untilizes first, and that program is
+    # rejected: "DFB 'in' has data format 'Bfp8_b' which is not supported on architecture quasar".
+    pytest.skip("Quasar has no Bfp8_b: the untilize of the ROW_MAJOR route is rejected by ProgramSpec validation")
     torch.manual_seed(0)
     x = ttnn.from_torch(
         torch.rand((1, 1, 64, 64), dtype=torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
@@ -277,6 +294,7 @@ def test_quasar_slice_bfloat8_b_unaligned_begin_preallocated_output(device, out_
 
 
 def test_quasar_slice_tile_tensor_args_end_tensor_placement_keys_cache(device):
+    _quasar_slice_only(device)
     # The end tensor's memory config is baked into the reader's accessor, so it has to be in the key.
     shape = (1, 1, 64, 64)
     starts, ends = [0, 0, 32, 0], [1, 1, 64, 64]
@@ -304,6 +322,12 @@ def test_quasar_slice_tile_tensor_args_end_tensor_placement_keys_cache(device):
 # ---------------------------------------------------------------------------
 
 
+def _quasar_reshape_only(device):
+    # ttnn.experimental.quasar.reshape moves data with Quasar-native kernels (multi-hart DM, byte-granular NOC).
+    if device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip("ttnn.experimental.quasar.reshape runs Quasar-native kernels")
+
+
 @pytest.mark.parametrize("layout", _LAYOUTS, ids=_LAYOUT_IDS)
 @pytest.mark.parametrize(
     "nd_shard_shape, strategy_name",
@@ -317,6 +341,7 @@ def test_quasar_reshape_nd_shard_spec_normalized_to_2d_input(device, layout, nd_
     """An input whose MemoryConfig was built from a rank-4 NdShardSpec that normalizes to a 2D
     layout must reshape to a lower-rank shape without tripping the shard-rank check, using the
     quasar reshape entry point."""
+    _quasar_reshape_only(device)
     input_shape = [1, 1, 64, 128]
     output_shape = [1, 128, 64]
 
@@ -359,6 +384,7 @@ def test_quasar_reshape_nd_shard_spec_normalized_to_2d_input(device, layout, nd_
 def test_quasar_reshape_nd_sharded_output(device, layout, input_shape, output_shape, nd_shard_shape, is_genuine_nd):
     """Reshape with an ND-sharded output memory_config must succeed and preserve values via the
     quasar reshape entry point, covering normalizes-to-2D, genuinely-ND, and same-shape cases."""
+    _quasar_reshape_only(device)
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
     nd_shard_spec = ttnn.NdShardSpec(
         shard_shape=ttnn.Shape(nd_shard_shape), grid=grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
@@ -393,6 +419,7 @@ def test_quasar_reshape_nd_sharded_output(device, layout, input_shape, output_sh
 def test_quasar_reshape_nd_sharded_input_rank_change_inherited(device, layout):
     """A genuinely ND-sharded input reshaped to a different rank with an inherited output config
     must adapt the shard shape to the new rank via the quasar reshape entry point."""
+    _quasar_reshape_only(device)
     input_shape = [2, 2, 64, 64]
     output_shape = [4, 64, 64]
 
@@ -427,6 +454,7 @@ def test_quasar_reshape_nd_sharded_input_rank_change_inherited(device, layout):
 def test_quasar_reshape_nd_sharded_input(device, layout, explicit_output):
     """A genuinely ND-sharded input must reshape and preserve values whether the output
     memory_config is inherited (default) or passed explicitly, via the quasar reshape entry point."""
+    _quasar_reshape_only(device)
     input_shape = [2, 2, 64, 64]
     output_shape = [2, 2, 32, 128]
 
@@ -478,6 +506,7 @@ def test_quasar_reshape_explicit_normalized_nd_memory_config(device, layout):
     """A tensor-derived config that normalized from an NdShardSpec to BLOCK_SHARDED carries both
     specs; handing it to a rank-changing reshape must not carry the higher-rank nd_shard_spec into
     the output's spec."""
+    _quasar_reshape_only(device)
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
     # Default ROUND_ROBIN_1D: GRID_2D rejects a rank-4 shard shape, so the donor would not allocate.
     nd_shard_spec = ttnn.NdShardSpec(
@@ -520,6 +549,7 @@ def test_quasar_reshape_explicit_normalized_nd_memory_config(device, layout):
 def test_quasar_reshape_same_shape_functionally_identical_config_is_noop(device, layout):
     """A same-shape reshape asked for the input's own distribution, expressed as a plain 2D config
     rather than the input's normalized-from-ND one, must stay a no-op."""
+    _quasar_reshape_only(device)
     shape = [1, 1, 64, 128]
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
     nd_shard_spec = ttnn.NdShardSpec(
@@ -558,6 +588,7 @@ def test_quasar_reshape_same_shape_functionally_identical_config_is_noop(device,
 def test_quasar_reshape_nd_input_logical_only_update_is_view(device):
     """A genuinely ND-sharded input reshaped to a different logical shape with the same padded shape
     stays a metadata-only view (same buffer), and returns the cropped values."""
+    _quasar_reshape_only(device)
     padded_shape = [2, 2, 64, 64]
     logical_shape = [2, 2, 60, 64]
 
@@ -596,6 +627,7 @@ def test_quasar_reshape_nd_input_logical_only_update_is_view(device):
 def test_quasar_reshape_nd_input_last_dim_change_is_not_a_view(device):
     """Same padded shape but a changed logical last dim must go through the staging path and obey
     torch-reshape semantics, not return the input's bytes in place."""
+    _quasar_reshape_only(device)
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})  # 1 core
     # Shard must be tile-aligned for TILE layout; [1, 32, 32] over [2, 62, 32] gives 4 shards on
     # 1 core, so normalization is rejected and the config stays genuinely ND_SHARDED.

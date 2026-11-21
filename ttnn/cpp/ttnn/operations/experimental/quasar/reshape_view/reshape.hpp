@@ -27,8 +27,9 @@ ttnn::Tensor PerformView(
 
 // Free function declarations with default parameters
 // `skip_padding_fill`: if true, `pad_value` is ignored and tile padding is left as-is.
-//   Exception: BFLOAT8_B outputs always run the fill (skip is silently ignored) to prevent
-//   shared-exponent corruption in 16-elem sub-blocks that straddle the logical/padded boundary.
+// `reshape_map_mode`: accepted for compatibility and ignored (the Quasar kernel derives the tile
+//   mapping itself; there is no mapping tensor).
+// Block-float tensors (BFLOAT8_B / BFLOAT4_B) support the metadata-only (view) cases only.
 ttnn::Tensor reshape(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_shape,
