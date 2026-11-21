@@ -52,6 +52,7 @@ inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {
 }
 
 inline void llk_math_wait_for_dest_available() {
+    ckernel::icache_prefetch_init_end();  // the first wait ends the init (trisck.cc)
     WAYPOINT("MWDW");
     _llk_math_wait_for_dest_available_<DST_SYNC_MODE>();
     WAYPOINT("MWDD");
