@@ -9,6 +9,7 @@ import diffusers
 import diffusers.models.transformers.transformer_flux2
 import pytest
 import torch
+from huggingface_hub import constants as hf_constants
 from loguru import logger
 from tracy import signpost
 
@@ -19,6 +20,7 @@ from ....parallel.config import DiTGParallelConfigNoCFG, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache, tensor
 from ....utils.check import assert_quality
+from ....utils.hf_local_mirror import ensure_cached
 from ....utils.padding import PaddingConfig
 from .device_params import line_params_flux2_transformer, ring_params_8k_flux2, ring_params_8k_flux2_req_exact
 
@@ -97,7 +99,7 @@ def test_transformer(
         f"topology={topology}, num_links={num_links}, fsdp={fsdp}"
     )
 
-    model_name = model_location_generator("black-forest-labs/FLUX.2-dev", model_subdir="transformer")
+    model_name = ensure_cached(model_location_generator("black-forest-labs/FLUX.2-dev", model_subdir="transformer"))
     config = diffusers.Flux2Transformer2DModel.load_config(model_name, subfolder="transformer")
 
     assert 0 <= skip_layers < config["num_layers"]
@@ -110,6 +112,7 @@ def test_transformer(
     torch_model = diffusers.Flux2Transformer2DModel.from_pretrained(
         model_name,
         subfolder="transformer",
+        local_files_only=hf_constants.HF_HUB_OFFLINE,  # diffusers ignores HF_HUB_OFFLINE for sharded checkpoints
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
         num_layers=num_layers,
@@ -302,9 +305,12 @@ def test_transformer_profile(
         f"topology={topology}, num_links={num_links}"
     )
 
-    model_name = "black-forest-labs/FLUX.2-dev"
+    model_name = ensure_cached("black-forest-labs/FLUX.2-dev")
     torch_model = diffusers.Flux2Transformer2DModel.from_pretrained(
-        model_name, subfolder="transformer", torch_dtype=torch.bfloat16
+        model_name,
+        subfolder="transformer",
+        local_files_only=hf_constants.HF_HUB_OFFLINE,  # diffusers ignores HF_HUB_OFFLINE for sharded checkpoints
+        torch_dtype=torch.bfloat16,
     )
     torch_model.eval()
     logger.info(f"single transformer blocks: {len(torch_model.single_transformer_blocks)}")

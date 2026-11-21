@@ -218,6 +218,9 @@ jobs:
         # rw-ness: per-runner caches are :rw so first-use HF downloads can populate them;
         # shared NFS honors mlperf-read-only.
         - ${{ matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && format('/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
+        # Weka (read-only), for jobs that read weights from the shared Weka mirror. Only the SKUs on the
+        # yyz4-mnt-models mode (bh_quietbox_2) get it; the exabox multihost runners already mount Weka.
+        - ${{ matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/weka/model-weights:/mnt/weka/model-weights:ro' || '/no_weka_mount' }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys -e TT_GH_CI_INFRA"
     defaults:
       run:
