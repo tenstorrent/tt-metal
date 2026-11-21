@@ -469,3 +469,133 @@ def _prepared(
         _PREPARED.popitem(last=False)
     _PREPARED[key] = entry
     return entry[1]
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# ckv_bfp4_rows (deepseek_v41_flash_d_p MB.4): the row records of rows [src_row0, src_row0 + n) of a ROW_MAJOR bf16 row
+# tensor (a served cache slab: one 1024 B row a page, interleaved or ND-sharded), tilized on the core, in ONE prepared
+# program whose source row, destination row and band count are per-run values: the same records as
+# ckv_bfp4(to_tile(slice(src)), rows, row0) without the slice, the tilize or a program per row count.
+CB_TILED = 18  # (rows=True: the band's 16 tiles tilized from cb 0's 32 rows)
+COMMON_ARG = 0x80000000  # (prepare_program value_slots: a common runtime arg)
+RR_SRC0, RR_NB = 1, 2  # reader common args: [src addr, src_row0, nb]
+RW_NB, RW_ROW0 = 1, 2  # writer common args: [rows addr, nb, row0]
+RC_NB = 0  # compute common args: [nb]
+_ROWS_PREPARED = {}  # key -> (mesh, PreparedProgram, ncores)
+
+
+def _tensor_geo(t: ttnn.Tensor) -> tuple:
+    """What a program built for ``t`` depends on: its TensorAccessor compile-time args, its dtype / layout, its page
+    width, and its shape when sharded (an ND-sharded accessor's page mapping holds the shape; deepseek_v41_flash_d_p
+    DS41-277)."""
+    sharded = t.memory_config().is_sharded()
+    return (
+        tuple(ttnn.TensorAccessorArgs(t).get_compile_time_args()),
+        str(t.dtype),
+        str(t.layout),
+        int(t.shape[-1]),
+        tuple(int(x) for x in t.shape) if sharded else None,
+    )
+
+
+def rows_program(src: ttnn.Tensor, rows: ttnn.Tensor, max_grid=None) -> tuple[ttnn.ProgramDescriptor, int]:
+    """The ckv_bfp4_rows program (every core of the grid; the values zero until the first run sets them)."""
+    gx, gy = _grid(src.device(), max_grid)
+    nc = gx * gy
+    cores = [(i % gx, i // gx) for i in range(nc)]
+    crs = _crs(cores, compact=True)
+    t_bf16 = ttnn.tile_size(ttnn.bfloat16)
+    tpb = WIDTH // 32
+    # common args only (the values one a kernel a chip: no per-core args, ~1/8 of the host patching of per-core values)
+    rd_c, cp_c, wr_c = [src.buffer_address(), 0, 0], [0], [rows.buffer_address(), 0, 0]
+
+    def cb(idx, dtype, page, pages):
+        return ttnn.CBDescriptor(
+            total_size=page * pages,
+            core_ranges=crs,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=dtype, page_size=page)],
+        )
+
+    # cb 0: a band's 32 rows as 16 tile-sized pages (row-major), double-buffered; cb 18: the band tilized; cb 16: the
+    # packer's 32 records a band
+    cbs = [
+        cb(CB_IN, ttnn.bfloat16, t_bf16, 2 * tpb),
+        cb(CB_TILED, ttnn.bfloat16, t_bf16, tpb),
+        cb(CB_ROWS, ttnn.bfloat4_b, 32 * ROW_BYTES, 2),
+    ]
+    share = [("CKV_ROWS_GX", str(gx)), ("CKV_ROWS_NC", str(nc))]
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNELS / "ckv_bfp4_rows_reader.cpp"),
+            core_ranges=crs,
+            compile_time_args=[WIDTH * 2] + list(ttnn.TensorAccessorArgs(src).get_compile_time_args()),
+            defines=share,
+            common_runtime_args=rd_c,
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNELS / "ckv_bfp4_writer.cpp"),
+            core_ranges=crs,
+            compile_time_args=[CB_ROWS, CB_ROUNDED, tpb, ROW_BYTES]
+            + list(ttnn.TensorAccessorArgs(rows).get_compile_time_args()),
+            defines=share + [("CKV_ROWS_IN", "1")],
+            common_runtime_args=wr_c,
+            config=ttnn.WriterConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNELS / "ckv_bfp4_compute.cpp"),
+            core_ranges=crs,
+            compile_time_args=[CB_IN, CB_ROWS, CB_ROUNDED, CB_TILED],
+            defines=share + [("CKV_ROWS_IN", "1"), ("CKV_PACK_PRECISE", "1")],
+            common_runtime_args=cp_c,
+            config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=False, dst_full_sync_en=True, bfp8_pack_precise=True),
+        ),
+    ]
+    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs), nc
+
+
+def ckv_bfp4_rows(src: ttnn.Tensor, rows: ttnn.Tensor, src_row0: int, n: int, row0: int, *, max_grid=None) -> None:
+    """Rows [src_row0, src_row0 + n) of ``src`` (bf16 ROW_MAJOR, last dim 512, one row a page: any rank, its rows
+    flattened, e.g. a served cache slab [slots x layers, 1, R, 512] whose (slot, layer) b starts at row b R; DRAM,
+    interleaved or ND-sharded) -> bfloat4_b row records [row0, row0 + n) of ``rows`` ([.., R', 320] uint8 ROW_MAJOR,
+    written in place). n % 32 == 0. The same records as ``ckv_bfp4(tilize(rows of src), rows, row0)``: each core reads
+    its bands' 32 rows, the compute tilizes them (cb 18), rounds and packs as ckv_bfp4 does.
+
+    Always prepared: ONE program per (mesh, src geometry, rows geometry, max_grid) for every src_row0, n and row0 (value
+    slots), on every core of the grid (cores past the band count idle), so a growing history or a moving (slot, layer)
+    builds nothing; every argument a common runtime arg (values: prepare_program value slots on common args), so a
+    call patches 7 words a chip whatever the core count. ``max_grid``: as ckv_bfp4's. On a mesh, the same values on
+    every chip."""
+    assert src.dtype == ttnn.bfloat16 and src.layout == ttnn.ROW_MAJOR_LAYOUT and src.shape[-1] == WIDTH, (
+        src.dtype,
+        src.layout,
+        src.shape,
+    )
+    assert rows.dtype == ttnn.uint8 and rows.layout == ttnn.ROW_MAJOR_LAYOUT and rows.shape[-1] == ROW_BYTES, (
+        rows.dtype,
+        rows.layout,
+        rows.shape,
+    )
+    total_src = _vol(src) // WIDTH
+    total_rows = _vol(rows) // ROW_BYTES
+    assert n % 32 == 0 and n >= 0, ("ckv_bfp4_rows: n must be a multiple of 32", n)
+    assert 0 <= src_row0 and src_row0 + n <= total_src, ("ckv_bfp4_rows: source rows", src_row0, n, total_src)
+    assert 0 <= row0 and row0 + n <= total_rows, ("ckv_bfp4_rows: record rows", row0, n, total_rows)
+    if n == 0:
+        return None
+    mesh = src.device()
+    key = (mesh.id(), _tensor_geo(src), _tensor_geo(rows), _mg_key(max_grid))
+    hit = _ROWS_PREPARED.get(key)
+    if hit is None or hit[0] is not mesh:
+        desc, nc = rows_program(src, rows, max_grid)
+        shape = mesh.shape
+        md = ttnn.MeshProgramDescriptor()
+        md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(shape[0] - 1, shape[1] - 1))] = desc
+        slots = [(k, COMMON_ARG | a) for k, a in ((0, RR_SRC0), (0, RR_NB), (1, RW_NB), (1, RW_ROW0), (2, RC_NB))]
+        pp = ttnn.bringup.prepare_program(md, [src, rows], slots)
+        want = 2 + len(slots)  # (src and rows one common slot each, the 5 values one each)
+        assert pp.patch_count == want, f"ckv_bfp4_rows: {pp.patch_count} patched slots, {want} expected"
+        hit = _ROWS_PREPARED[key] = (mesh, pp, nc)
+    nb = n // 32
+    ttnn.bringup.run_prepared(hit[1], [src, rows], [int(src_row0), nb, nb, int(row0), nb])
+    return None

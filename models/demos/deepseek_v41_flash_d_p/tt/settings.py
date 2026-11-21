@@ -1487,9 +1487,9 @@ TABLE = {
         "whole-grid prepared programs take their per-run values as COMMON runtime args (prepare_program's common value "
         "slots: one patch a program instead of one a core a chip): ttnn.bringup.unpack_fp8_rows (fork option "
         "common_values: the index-key decodes, ~0.33 -> ~0.06 ms of host a call on the 8x4, 24 calls a packed chunk) "
-        "the history pack's ttnn.bringup.ckv_bfp4 (option dynamic_row0: compact cores, row0 a common value slot) and the "
-        "glued RoPE rows' program (tt/lane_rows.GluedRows: the pieces, ~0.39 ms of host a call before). "
-        "The same bytes. off = per-core value slots (MB.2's)",
+        "and the glued RoPE rows' program (tt/lane_rows.GluedRows: the pieces, ~0.39 ms of host a call before). "
+        "The same bytes. off = per-core value slots (MB.2's). (The history pack, PB.MB4: ttnn.bringup.ckv_bfp4_rows, "
+        "always common value slots, either side)",
     ),
     "MOE_HEAD_ORDER": Setting(
         "free",

@@ -322,8 +322,8 @@ def _pack(ckv_cache, lo: int, hi: int, loc: HistoryBuffer | None = None) -> ttnn
     assert 0 <= a < b <= R and (b - a) % 32 == 0, (lo, hi, a, b, R)
     from .page_copy import dyn
 
-    if dyn("hist"):  # PB.7C / MB.2: fixed row counts (no program a history length): see _pack_fixed
-        return _pack_fixed(ckv_cache, loc, a, b)
+    if dyn("hist"):  # MB.4: one call, the rows runtime values (no program a history length): see _pack_rows
+        return _pack_rows(ckv_cache, loc, a, -(-hi // 32) * 32)
     rows = slab.slice_rows(a, b)  # [1, 1, b - a, 512] bf16 ROW_MAJOR DRAM
     tl = to_tile(rows, memory_config=DRAM)
     if tl is not rows:
@@ -336,40 +336,19 @@ def _pack(ckv_cache, lo: int, hi: int, loc: HistoryBuffer | None = None) -> ttnn
     return loc.tensor
 
 
-def _pack_fixed(ckv_cache, loc: HistoryBuffer, a: int, b: int) -> ttnn.Tensor:
-    """POS_DYNAMIC=on (MB.2): ``_pack``'s rows [a, b) packed in pieces of ONE row count a kind (a page copy of the
-    slab's rows, a tilize, ckv_bfp4 with row0 a value slot): a whole history (a == 0) in PACK_BUCKET pieces, the last
-    one ending at b or moved down to end at R (min(R, PACK_BUCKET) rows each); a tail in one piece of
-    ceil32(2 hs) + 32 rows (covers any [a, b) of a tail of up to 2 hs rows) moved down to end at R when it would pass
-    it. The records are a function of each row alone, so the extra rows get the same records a later pack writes."""
-    from .page_copy import pages_of
-
+def _pack_rows(ckv_cache, loc: HistoryBuffer, a: int, b: int) -> ttnn.Tensor:
+    """POS_DYNAMIC=on / PACKED_GLUED_DYNAMIC=on (MB.4; dyn("hist"): every single-request and every packed segment's
+    pack, prefetch and tail): ``_pack``'s rows [a, b) in ONE fork call, ttnn.bringup.ckv_bfp4_rows: each core reads its
+    bands' slab rows straight from the served slab (page slab.batch R + row), tilizes them on the core and packs their
+    records at rows [a, b) of the local record buffer; the source row, the record row and the band count are per-run
+    values, so one program serves every history length, slot and layer (rule 20), with no slice, no tilize op and no
+    per-piece dispatches (MB.2's PACK_BUCKET pieces: a page copy on 4 cores + tilize + ckv_bfp4 a 2048 rows, which grew
+    with the history: +2 ms device, +5.5 ms host a chunk at 1M, MB.4). The records are a function of each row alone:
+    the same bytes as the off path's slice + tilize + ckv_bfp4."""
     slab = ckv_cache.slab
-    R = slab.rows
-    if a == 0:
-        n = min(R, PACK_BUCKET)
-        firsts = [min(a0, R - n) for a0 in range(0, b, n)]
-    else:
-        hs = ckv_cache.stripe // ckv_cache.ratio
-        n = min(R, -(-2 * hs // 32) * 32 + 32)
-        assert b - a <= n, ("MB.2: a tail longer than 2 hs rows", a, b, hs)
-        firsts = [min(a, R - n)]
-    for a0 in firsts:
-        rows = pages_of(slab.tensor, slab.batch * R + a0, n, [1, 1, n, slab.width])
-        tl = to_tile(rows, memory_config=DRAM)
-        if tl is not rows:
-            dealloc(rows)
-        ttnn.bringup.ckv_bfp4(tl, loc.tensor, a0, prepared=True, max_grid=max_grid(), **_dyn_row0())
-        dealloc(tl)
+    ttnn.bringup.ckv_bfp4_rows(slab.tensor, loc.tensor, slab.batch * slab.rows + a, b - a, a, max_grid=max_grid())
     loc.tensor.update_tensor_topology(slab.tensor.tensor_topology())
     return loc.tensor
-
-
-def _dyn_row0() -> dict:
-    """PB.9X (COMMON_VALUE_SLOTS=on): ckv_bfp4 compact with row0 a common value slot (one program for every row0,
-    compact's host cost) when the fork has the option; else MB.2's per-core row0 slot (compact=False)."""
-    on = settings.get("COMMON_VALUE_SLOTS") == "on" and "dynamic_row0" in (ttnn.bringup.ckv_bfp4.__doc__ or "")
-    return {"compact": True, "dynamic_row0": True} if on else {"compact": False}
 
 
 def _tail(ckv_cache, buf: HistoryBuffer, h: int, local_rows: int, owners: int, axis) -> None:

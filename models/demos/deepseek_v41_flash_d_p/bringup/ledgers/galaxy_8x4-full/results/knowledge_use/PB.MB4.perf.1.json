@@ -1,0 +1,88 @@
+{
+ "used": [
+  {
+   "id": "DS41-316",
+   "how": "ran the ckv_bfp4_rows op test on the runner's mesh BEFORE any model load (0 opens, 0 loads)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-352",
+   "how": "kept this branch's prepared_program common value slots (same (k, 1<<31|i) encoding) instead of MB.4's C++ variant: no prepared_program change",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-368",
+   "how": "(MB.4's DS41-325) the reason for the change: the piecewise pack's per-piece device/host cost grows with the history",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-371",
+   "how": "(added this step) rebuilt C++ with ./build_metal.sh after the first gate failed at the load on model_bringup's build",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "one folder, two branches: the C++ build follows the last ./build_metal.sh, not the checkout (now DS41-371)",
+  "MB.4's ids DS41-324..327 collide with this branch's numbering; a cross-branch import must renumber (done: DS41-367..370)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding: ckv_bfp4_rows packs ceil32(hi) rows (fewer than the old PACK_BUCKET pieces)"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "DECIDED in BREADCRUMBS: no new A/B switch (task: one implementation, no dead path)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "only the gate's one-load units run; no new load-time env in any test"
+  }
+ ],
+ "cited_only": [
+  "DS41-324",
+  "DS41-367"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.MB4",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T12:47:06",
+  "head": "fd76e0b40cd",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.MB4.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.MB4_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.MB4.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_ckv_rows_host.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_mb4_history_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_ckv_bfp4_rows.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/history_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/__init__.py",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/README.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/__init__.py",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/ckv_bfp4.py",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/kernels/ckv_bfp4_compute.cpp",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/kernels/ckv_bfp4_rows_reader.cpp",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/kernels/ckv_bfp4_writer.cpp",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/tests/unit/test_ckv_bfp4_rows.py"
+  ]
+ }
+}

@@ -1228,3 +1228,10 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   (device +3.3, host +5.3) is NOT yet attributed (owner rejected the "mesh launches" story): first step of PB.9H.
   QUEUED PB.MB4 (before PB.T): MB.4 into this branch (path-limited apply), oracles 0, ladder single 8192 + aligned 4x2k
   at 139264 / 524288 / 1024000 steady + resumed, cold strict no-rebuild. Launched --until PB.9H.
+- 12:40 OWNER: at the end, assess how much faster without the per-chunk bf16 -> 4-bit history conversion, at 1M, for the 5120 path (model_bringup) and the batched 4x2k path. PLAN (queue at the next stop): PB.NC here after PB.9H, MB.5 on model_bringup's final visit: a perf probe times the chunk at 1M (steady, harness wall + device + host) with today's per-chunk conversion vs history pre-packed once as 4-bit records (what a 4-bit served cache would hold); labelled an assessment, never a serving switch.
+- 12:40 heartbeat: PB.MB4 agent active; watch armed.
+- 12:50 PB.MB4 ACCEPTED (all 5 units PASS: oracles 0, cold strict no-rebuild PASS single8192 / lanes4x2k / lanes4x1600s /
+  lanes6mix). Ladder (steady ms / tok/s / resumed ms): single 8192: 139264 100.0 / 81.9k / 102.8; 524288 107.5 / 76.2k /
+  111.0; 1024000 127.4 / 64.3k / 132.1 (PB.9C 131.7 at 1M). Chip-aligned 4x2k: 139264 116.8 / 70.1k / 115.7 (PB.9G
+  123.4 / 121.2) - meets the <= 117 bar and the owner's 67k; 524288 134.9 / 60.7k / 134.7; 1024000 161.2 / 50.8k / 160.2
+  (device 146.7; PB.9G ~180). The MB.4 conversion fix was most of the chip-aligned host gap.
