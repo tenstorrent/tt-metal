@@ -82,6 +82,12 @@ def test_a_group_runs_the_sequence_on_its_ring_axis():
         assert (types[sp_axis], types[tp_axis]) == ("RING", "LINE")
 
 
+def test_line_axes_are_the_descriptor_lines_longer_than_2_chips():
+    for shape, line_axes in dp.GROUP_LINE_AXES.items():
+        types = re.search(r"dim_types: \[ (\w+), (\w+) \]", dp.MESH_GRAPH_DESCRIPTORS[shape].read_text()).groups()
+        assert line_axes == tuple(axis for axis, kind in enumerate(types) if kind == "LINE" and shape[axis] > 2)
+
+
 @pytest.mark.parametrize(
     ("shape", "fabric"), [((4, 2), "FABRIC_1D_RING"), ((2, 8), "FABRIC_1D_RING"), ((4, 4), "FABRIC_2D_TORUS_Y")]
 )
@@ -149,7 +155,8 @@ def test_serve_warms_every_group_before_ready_and_closes_the_mesh(monkeypatch, g
     assert [parent.recv() for parent, _ in pipes] == [("ready", None)] * groups
     meshes = ["sub0", "sub1"] if groups == 2 else ["mesh"]
     sp_axis, tp_axis = (1, 0) if group_shape == (2, 8) else (0, 1)
-    kw = {"sp_axis": sp_axis, "tp_axis": tp_axis, "upsample": False}
+    axis_topologies = {1: ttnn.Topology.Linear} if group_shape == (4, 4) else {}
+    kw = {"sp_axis": sp_axis, "tp_axis": tp_axis, "axis_topologies": axis_topologies, "upsample": False}
     assert calls == [c for m in meshes for c in (("create", m, kw), ("warmup", m, sizes))]
     for (parent, _), m in zip(pipes, meshes):
         parent.send("r")

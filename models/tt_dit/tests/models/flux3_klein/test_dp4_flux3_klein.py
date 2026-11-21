@@ -29,6 +29,7 @@ def _ccl(mesh_shape: tuple[int, int]) -> CCLManager:
     manager = CCLManager.__new__(CCLManager)
     manager.mesh_device = SimpleNamespace(shape=mesh_shape)
     manager.topology = ttnn.Topology.Ring
+    manager.axis_topologies = {}
     return manager
 
 

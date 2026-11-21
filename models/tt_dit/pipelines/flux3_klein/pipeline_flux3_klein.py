@@ -205,6 +205,7 @@ class Flux3KleinPipeline:
         sp_axis: int = 1,
         tp_axis: int = 0,
         topology: ttnn.Topology = ttnn.Topology.Ring,
+        axis_topologies: dict[int, ttnn.Topology] | None = None,
         num_links: int = 2,
         upsample: bool = False,
     ) -> None:
@@ -223,14 +224,18 @@ class Flux3KleinPipeline:
             shared,
             mesh_device=mesh_device,
             parallel_config=encoder_parallel,
-            ccl_manager=CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology),
+            ccl_manager=CCLManager(
+                mesh_device=mesh_device, num_links=num_links, topology=topology, axis_topologies=axis_topologies
+            ),
             # the TP shard is ~1.8 GB per chip: keep it resident instead of all-gathering every weight per prompt
             is_fsdp=False,
         )
         self._text_encoder = encoder
         self._prompt_encoder = Flux3KleinPromptEncoder(encoder, shared, mesh_device)
 
-        self._ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+        self._ccl = CCLManager(
+            mesh_device=mesh_device, num_links=num_links, topology=topology, axis_topologies=axis_topologies
+        )
         parallel = DiTGParallelConfigNoCFG(
             tensor_parallel=ParallelFactor(factor=mesh_shape[tp_axis], mesh_axis=tp_axis),
             sequence_parallel=ParallelFactor(factor=mesh_shape[sp_axis], mesh_axis=sp_axis),
@@ -258,7 +263,9 @@ class Flux3KleinPipeline:
         self._vae = Flux3KleinVae(
             shared,
             device=mesh_device,
-            ccl_manager=CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology),
+            ccl_manager=CCLManager(
+                mesh_device=mesh_device, num_links=num_links, topology=topology, axis_topologies=axis_topologies
+            ),
             dit_ccl_manager=self._ccl,
             dit_sp_axis=sp_axis,
             sizes=SIZES,
