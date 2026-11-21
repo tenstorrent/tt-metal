@@ -15,10 +15,10 @@ enum Reader {
     input_row_bytes = 3,
     valid_end_address = 4,
     // Two-level programs only. A row runs two-level when its search length is at least the cutover; 0 forces
-    // two-level, 0xFFFFFFFF forces single-level. block_max_address is the maxima tensor stage 2 reads (the
-    // caller's, or the program's own that phase 1 writes); block_max_row_bytes its row pitch. two_level_num_input_rows
-    // is the number of input rows, two_level_num_cores the number of cores the rows run on. The coordinator (core
-    // index 0) hands out the phase-1 units.
+    // two-level, 0xFFFFFFFF forces single-level for a nonempty search (an empty one runs two-level). block_max_address
+    // is the maxima tensor stage 2 reads (the caller's, or the program's own that phase 1 writes); block_max_row_bytes
+    // its row pitch. two_level_num_input_rows is the number of input rows, two_level_num_cores the number of cores the
+    // rows run on. The coordinator (core index 0) hands out the phase-1 units.
     two_level_cutover = 5,
     block_max_address = 6,
     block_max_row_bytes = 7,
@@ -33,8 +33,9 @@ enum Compute { compute_search_length = 0, compute_two_level_num_input_rows = 1 }
 // Two-level programs only: writer_block_max_address is the maxima tensor phase 1 writes, writer_block_max_row_bytes
 // its row pitch, mode_output_address a test output for the mode the program ran in (0 = none).
 // writer_two_level_num_input_rows and writer_two_level_num_cores are the reader's two_level_num_input_rows and
-// two_level_num_cores. writer_two_level_core_coords starts one word per core, in core index order: its virtual NoC
-// x | y << 16 (a row's owner: topk_two_level::row_owner). Its first word is the coordinator's (core index 0).
+// two_level_num_cores. writer_two_level_core_coords starts the cores' virtual NoC x | y << 8, two cores per word (core
+// c in the half c % 2 of word c / 2, in core index order; a row's owner: topk_two_level::row_owner). Core index 0 is
+// the coordinator.
 enum Writer {
     output_address = 0,
     writer_block_max_address = 1,

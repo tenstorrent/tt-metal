@@ -215,8 +215,11 @@ void set_two_level_common_args(
     writer_args[topk_common_args::writer_two_level_split_rows] = split_rows;
     for (uint32_t core = 0; core < num_cores; ++core) {
         const auto noc = input.device()->worker_core_from_logical_core(shared.cores[core]);
-        writer_args[topk_common_args::writer_two_level_core_coords + core] =
-            static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 16);
+        TT_FATAL(noc.x < 256 && noc.y < 256, "topk_large_indices packs NoC coordinates in 8 bits, got {}", noc);
+        auto& word = writer_args[topk_common_args::writer_two_level_core_coords + core / 2];
+        const uint32_t shift = core % 2 * 16;
+        word = (word & ~(0xFFFFu << shift)) |
+               ((static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 8)) << shift);
     }
 }
 
@@ -425,8 +428,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     // row_split_possible are both in the program hash).
     const uint32_t row_split =
         row_split_enabled(k, num_rows, input_width, static_cast<uint32_t>(cores.size())) ? 1u : 0u;
-    // A two-level program with split rows sorts each split row's halves of stage 3 as soon as they can run, not
-    // after the end (see topk_two_level::split_rows_first). Two-level implies k = 2048, so the K' 2048 segmented body.
+    // A two-level program with split rows of more than max_fused_chunks chunks sorts each split row's halves of stage 3
+    // as soon as they can run, not after the end (see topk_two_level::split_rows_first). Two-level implies k = 2048, so
+    // the K' 2048 segmented body.
     const bool early_halves = two_level && row_split != 0 && long_rows(k, input_width);
     uint32_t credit_semaphore_id = 0;
     uint32_t data_semaphore_id = 0;
@@ -686,7 +690,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     std::vector<uint32_t> writer_common = {indices.mesh_buffer().address()};
     if (two_level) {
         reader_common.resize(topk_common_args::two_level_split_rows + 1, 0);
-        writer_common.resize(topk_common_args::writer_two_level_core_coords + cores.size(), 0);
+        writer_common.resize(topk_common_args::writer_two_level_core_coords + (cores.size() + 1) / 2, 0);
     }
     tt::tt_metal::SetCommonRuntimeArgs(program, reader_kernel, reader_common);
     tt::tt_metal::SetCommonRuntimeArgs(

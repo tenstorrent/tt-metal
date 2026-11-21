@@ -48,7 +48,8 @@ struct operation_attributes_t {
     // 2048 selected blocks. nullopt = single-level only.
     std::optional<uint32_t> block_select;
     // Two-level programs run two-level for a search length at least this large (runtime, not hashed).
-    // nullopt = program::two_level_default_cutover; 0 forces two-level, 0xFFFFFFFF single-level.
+    // nullopt = program::two_level_default_cutover; 0 forces two-level, 0xFFFFFFFF single-level for every nonempty
+    // search (an empty one always runs two-level).
     std::optional<uint32_t> two_level_cutover;
 };
 

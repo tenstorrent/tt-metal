@@ -2303,11 +2303,11 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
 
     // ── Phase 5 — build bitonic sequences of length 256 ───────────────────
     //
-    // Now the runs span across LREGs. We use SFPCONFIG to flip every SFPU
-    // instance's swap direction, so a single load+sort_k+store body covers
-    // both halves of the merge.
+    // Now the runs span across LREGs. SFPCONFIG flips the swap direction of the
+    // masked SFPU instances (0x4444), so a single load+sort_k+store body covers
+    // both halves of the merge; they are flipped back after these passes.
     flip_lane_swap_directions<0x4444>();
-    // The direction stays put from here to the end of the sort.
+    // The global direction stays put from here to the end of the sort.
     set_swap_ascending(dir);
 
     // Stride-2 (load + sort_k + store<2, 16>), N = 8. Recording IS iter 0.

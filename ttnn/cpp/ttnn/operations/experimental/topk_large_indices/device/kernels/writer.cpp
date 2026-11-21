@@ -164,8 +164,8 @@ FORCE_INLINE void two_level_unit(
         // The coordinator counts the cores that have cleared; the staging word is free once the maxima are written.
         const uint32_t coordinator = get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_core_coords);
         const uint64_t cleared_count = get_noc_addr(
-            coordinator & 0xFFFFu,
-            coordinator >> 16,
+            coordinator & 0xFFu,
+            (coordinator >> 8) & 0xFFu,
             get_semaphore(get_named_compile_time_arg_val("tl_cleared_sem")),
             noc.get_noc_id());
         const auto* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging);
@@ -176,11 +176,13 @@ FORCE_INLINE void two_level_unit(
         } while (*landed < num_cores);
         cleared = true;
     }
-    const uint32_t coords = get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_core_coords + owner.core);
+    const uint32_t coords =
+        get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_core_coords + owner.core / 2) >>
+        (owner.core % 2 * 16);
     noc_semaphore_inc(
         get_noc_addr(
-            coords & 0xFFFFu,
-            coords >> 16,
+            coords & 0xFFu,
+            (coords >> 8) & 0xFFu,
             CircularBuffer(get_named_compile_time_arg_val("tl_cb_done_words")).get_write_ptr() +
                 done_word_offset(owner.local_row, units.part(unit)),
             noc.get_noc_id()),
