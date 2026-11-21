@@ -146,11 +146,18 @@ void kernel_main() {
     // x of round 0 (x0) is seeded and released by the reader; the hub multicasts x of the later rounds
     // (row groups: the hub runs `groups` sub-rounds per round and counts the slots semaphore per sub-round; x of
     // every group is in before the round's compute starts, group g at tile offset g * Ht)
+    // (row groups: x goes to compute group by group as the hub multicasts it — sub-round (round - 1) * n + k for the
+    // k-th active group — so compute's rmsnorm of a group overlaps the later sub-rounds; an inactive group's pages go
+    // through at once)
     auto take_slots = [&](uint32_t round) {
         if (round > 0) {
-            noc_semaphore_wait_min(slots_sem, round * ag.n);
-            cb_reserve_back(cb_x, groups * Ht);
-            cb_push_back(cb_x, groups * Ht);
+            for (uint32_t g = 0, k = 0; g < groups; g++) {
+                if (ag.has(g)) {
+                    noc_semaphore_wait_min(slots_sem, (round - 1) * ag.n + ++k);
+                }
+                cb_reserve_back(cb_x, Ht);
+                cb_push_back(cb_x, Ht);
+            }
         }
     };
     // group g's partial goes to the hub's slot of sub-round s = round * groups + g (parity s & 1). Two parities keep

@@ -169,7 +169,7 @@ FORCE_INLINE void matmul_groups(
 // where R = R' mod batch) every element of row R holds the sum of squares of user R % batch; then
 // h = x * rsqrt(sum / hidden + eps).
 // one group's rows (views o .. o + V of x and h): the sums of squares, 1 / rms and h = x * r
-FORCE_INLINE void rmsnorm_rows_body(uint32_t o) {
+__attribute__((noinline)) void rmsnorm_rows_body(uint32_t o) {
     constexpr uint32_t V = Hf * batch;  // 32x32 views of x
     cb_reserve_back(cb_sumsq, 2);
     reconfig_full_operand<SrcOrder::Reverse>(cb_x_full, cb_x_full);
@@ -246,13 +246,43 @@ FORCE_INLINE void rmsnorm_rows_body(uint32_t o) {
     cb_pop_front(cb_rinv, 1);
 }
 
-FORCE_INLINE void rmsnorm_rows() {
+// (chip 0, kHInPlace) group gr's residual columns x[pout_off : pout_off + nd] into cb_xres (reserved by the
+// caller), before rmsnorm overwrites the group's x with h
+__attribute__((noinline)) void save_residual_group(uint32_t gr, uint32_t nd, uint32_t pout_off) {
+    reconfig_full_operand(cb_x, cb_x);
+    pack_reconfig_data_format<true>(cb_xres);
+    pack_init(cb_xres);
+    copy_init(cb_x);
+    for (uint32_t t = 0; t < nd; t++) {
+        tile_regs_acquire();
+        copy_tile(cb_x, gr * Ht + pout_off + t, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(0, cb_xres, gr * nd_max + t);
+        tile_regs_release();
+    }
+}
+
+// (res: chip 0's residual columns of each group first, kHInPlace) group by group as its x comes in (the writer pushes
+// a round's x per group as the hub multicasts it)
+FORCE_INLINE void rmsnorm_rows(uint32_t nd, uint32_t pout_off, bool res) {
     constexpr uint32_t V = Hf * batch;  // 32x32 views of x (per group)
-    cb_wait_front(cb_x, groups * Ht);
+    if (res) {
+        cb_reserve_back(cb_xres, groups * nd_max);
+    }
     cb_reserve_back(cb_h, groups * Ht);
     for (uint32_t k = 0; k < groups_on(); k++) {
-        rmsnorm_rows_body(group_at(k) * V);
+        const uint32_t gr = group_at(k);
+        cb_wait_front(cb_x, (gr + 1) * Ht);
+        if (res) {
+            save_residual_group(gr, nd, pout_off);
+        }
+        rmsnorm_rows_body(gr * V);
     }
+    if (res) {
+        cb_push_back(cb_xres, groups * nd_max);
+    }
+    cb_wait_front(cb_x, groups * Ht);     // (inactive groups' pages: pushed at once)
     cb_push_back(cb_h_full, groups * V);  // only wraps the view's write pointer back to the base
     cb_push_back(cb_h, groups * Ht);
     pack_reconfig_data_format<true>(cb_h);
@@ -261,10 +291,12 @@ FORCE_INLINE void rmsnorm_rows() {
 // cb_h = x / rms(x), computed on the 32x32 views of x and h (the norm weight is folded into the weights)
 // (not inlined, like the residual helpers: several call sites, one copy per TRISC — the streamer core's kernels
 // sit at the kernel config buffer's size)
-__attribute__((noinline)) void rmsnorm() {
+// (res: kHInPlace, chip 0 — the residual columns nd at pout_off of every group are saved first, see rmsnorm_rows)
+__attribute__((noinline)) void rmsnorm(uint32_t nd = 0, uint32_t pout_off = 0, bool res = false) {
     static_assert(Hf >= 1 && Hf <= 8 && Hf * 32 == Ht, "hidden must be 1..8 full tiles");
+    static_assert(!kHInPlace || batch > 1, "h over x is a rows-mode layout");
     if constexpr (batch > 1) {
-        rmsnorm_rows();
+        rmsnorm_rows(nd, pout_off, res);
         return;
     }
     cb_wait_front(cb_x, Ht);
@@ -330,29 +362,6 @@ FORCE_INLINE void silu_mul(uint32_t ng) {
     cb_push_back(cb_aslice, groups * kBlk);
     cb_pop_front(cb_g, groups * kBlk);
     cb_pop_front(cb_u, groups * kBlk);
-}
-
-// chip 0, h over x (kHInPlace): the residual columns x[pout_off : pout_off + nd] of every active group into cb_xres,
-// before rmsnorm overwrites x with h
-__attribute__((noinline)) void save_residual(uint32_t nd, uint32_t pout_off) {
-    cb_wait_front(cb_x, groups * Ht);
-    cb_reserve_back(cb_xres, groups * nd_max);
-    reconfig_full_operand(cb_x, cb_x);
-    pack_reconfig_data_format<true>(cb_xres);
-    pack_init(cb_xres);
-    copy_init(cb_x);
-    for (uint32_t k = 0; k < groups_on(); k++) {
-        const uint32_t gr = group_at(k);
-        for (uint32_t t = 0; t < nd; t++) {
-            tile_regs_acquire();
-            copy_tile(cb_x, gr * Ht + pout_off + t, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile<true>(0, cb_xres, gr * nd_max + t);
-            tile_regs_release();
-        }
-    }
-    cb_push_back(cb_xres, groups * nd_max);
 }
 
 // cb_pout = cb_dout + x[pout_off : pout_off + nd] (kHInPlace: from cb_xres)
@@ -601,10 +610,7 @@ void kernel_main() {
         const bool attn = is_attn(l);
         // mixer half
         mark(l, 0);
-        if constexpr (kHInPlace && chip == 0) {
-            save_residual(nd, pout_off);
-        }
-        rmsnorm();
+        rmsnorm(nd, pout_off, kHInPlace && chip == 0);
         mark(l, 1);
         if (attn) {
             matmul<kQkvg>(cb_h, cb_qkvz, nq_attn, kBlk);
@@ -620,10 +626,7 @@ void kernel_main() {
         mark(l, 4);
         // mlp half
         mark(l, 5);
-        if constexpr (kHInPlace && chip == 0) {
-            save_residual(nd, pout_off);
-        }
-        rmsnorm();
+        rmsnorm(nd, pout_off, kHInPlace && chip == 0);
         mark(l, 6);
         matmul<kGateUp>(cb_h, cb_g, 2 * ng, kBlk, cb_u, ng);
         cb_pop_front(cb_h, groups * Ht);
