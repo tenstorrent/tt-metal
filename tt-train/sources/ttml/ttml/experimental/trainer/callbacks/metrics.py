@@ -89,6 +89,8 @@ class MetricsCallback(Callback):
             trainer.logger.error(f"Setup failed: {exception}", traceback.format_exc())
 
     def on_train_error(self, trainer: Any, exception: BaseException) -> None:
+        # The loss may be a device tensor, which must not outlive the run's device.
+        self._running_loss = None
         if trainer.logger is not None:
             trainer.logger.error(f"Training failed: {exception}", traceback.format_exc())
 

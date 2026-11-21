@@ -38,7 +38,7 @@ class SFTTrainer(Trainer):
     (``ttml.experimental.datasets.provider.sft``), one per split. Checkpoints are saved in the format
     ``checkpoint.format`` picks (see ``save_checkpoint``).
 
-    Losses are read back to host floats once per micro-batch, as ttml's other trainers do.
+    Losses are summed on the device, in fp32, and read back only when ``loss_to_float`` reads one.
     """
 
     config_class = SFTTrainerConfig
@@ -121,10 +121,11 @@ class SFTTrainer(Trainer):
     def _backward(self, loss: Any) -> None:
         loss.backward(False)
 
-    def _accumulate_loss(self, running: Optional[float], loss: Any) -> float:
-        # One host readback per micro-batch, before `_clean_graph_state` drops the graph.
-        value = float(self.device_manager.to_numpy(loss).mean())
-        return value if running is None else running + value
+    def _accumulate_loss(self, running: Optional[ttnn.Tensor], loss: Any) -> ttnn.Tensor:
+        # A raw ttnn tensor: no autograd, so `_clean_graph_state` leaves it, and its `+` and `/` stay in fp32, where
+        # ttml's ops would round to bf16 (as do the sums callbacks keep across steps).
+        value = loss.get_value(ttml.autograd.PreferredPrecision.FULL)
+        return value if running is None else ttnn.add(running, value)
 
     def _clean_graph_state(self) -> None:
         # Drops this batch's autograd graph; gradients stay on the parameters until zero_grad.
@@ -152,8 +153,9 @@ class SFTTrainer(Trainer):
 
     # ------------------------------------------------------------------ for callbacks and hosts
 
-    def loss_to_float(self, loss: float) -> float:
-        return float(loss)
+    def loss_to_float(self, loss: ttnn.Tensor) -> float:
+        # The one host readback of a loss, so the device runs ahead between logs.
+        return float(self.device_manager.to_numpy(ttml.autograd.Tensor(loss, False)).mean())
 
     def parameter_counts(self) -> tuple[int, int]:
         tensors = list(self.model.parameters().values())
