@@ -24,16 +24,18 @@ namespace ckernel {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void i0_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_i0, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_i0, (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  *
- * On Wormhole, i0_tile reads series coefficients from the programmable constant registers and its
- * dest stride from ADDR_MOD_6, both loaded here; other SFPU inits may overwrite them, so call
- * i0_tile_init again before i0_tile after them.
+ * i0_tile reads its reciprocal-square-root constants from the programmable constant registers,
+ * loaded here; other SFPU inits may overwrite them, so call i0_tile_init again before i0_tile
+ * after them.
  */
 ALWI void i0_tile_init() { MATH(SFPU_UNARY_INIT(i0)); }
 }  // namespace ckernel

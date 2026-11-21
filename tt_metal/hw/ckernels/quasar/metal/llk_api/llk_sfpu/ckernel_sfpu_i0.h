@@ -53,7 +53,7 @@ inline void i0_init() {
  * @tparam ITERATIONS: Dest rows to process; must be even.
  * @note Call i0_init first; this reads vConstFloatPrgm0-2 and ADDR_MOD_6 as it programs them.
  */
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /*unused*/, int ITERATIONS = 8>
 inline void calculate_i0() {
     static_assert(ITERATIONS % 2 == 0, "calculate_i0 processes two rows per trip");
     const vFloat a11 = I0Series::A11;

@@ -1315,5 +1315,30 @@ void exp_init() {
     }
 }
 
+/*
+ * exp(x) * 2^-SCALE_EXP to 0.9 float32 ULP, with no guards: x must lie in [0, (128 + SCALE_EXP) * ln2).
+ * The power-of-two scale changes no rounding and lets a caller go past exp's own overflow at 88.72.
+ * Same scheme as _sfpu_exp_fp32_accurate_; j >= 0 needs no sign handling, and ln2_hi = 355/512 is
+ * fp16-exact, so j * ln2_hi is exact.
+ */
+template <int SCALE_EXP = 0>
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_nonneg_unsafe_(const sfpi::vFloat x) {
+    const sfpi::vFloat jx = x * 1.442695f;
+    const sfpi::vFloat neg_ln2_hi = -0.693359375f;
+    const sfpi::vSMag16 j = sfpi::convert<sfpi::vSMag16>(jx, sfpi::RoundMode::Nearest);
+    const sfpi::vFloat jf = sfpi::convert<sfpi::vFloat>(j, sfpi::RoundMode::Nearest);
+    sfpi::vFloat f = jf * neg_ln2_hi + x;
+    f = jf * 2.1219444e-04f + f;  // -j*ln2_lo, ln2_lo = ln2 - ln2_hi
+    sfpi::vFloat r = PolynomialEvaluator::eval(
+        f, 4.9999994e-01f, 1.6666515e-01f, 4.1668385e-02f, 0.00836944580078125f, 1.3818741e-03f);
+    r = r * f + 1.0f;
+    r = r * f + 1.0f;
+    sfpi::vInt exp_r = sfpi::exexp(r, sfpi::ExponentMode::Biased);
+    if constexpr (SCALE_EXP != 0) {
+        exp_r = exp_r - SCALE_EXP;
+    }
+    return sfpi::setexp(r, exp_r + sfpi::as<sfpi::vInt>(j));
+}
+
 }  // namespace sfpu
 }  // namespace ckernel
