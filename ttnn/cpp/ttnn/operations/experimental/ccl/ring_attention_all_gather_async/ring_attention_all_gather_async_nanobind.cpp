@@ -56,6 +56,7 @@ void bind_ring_attention_all_gather_async(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.
+            persistent_output_buffer (ttnn.Tensor): Pre-allocated output buffer.
             dim (int): Dimension to perform operation.
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
             mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.

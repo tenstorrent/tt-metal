@@ -30,6 +30,8 @@ void bind_slice_reshard_async(nb::module_& mod) {
             output_dim_offset (int): Start of the output tensor in the shard dimension, in the context of the input tensor.
             output_dim_shape (int): Shape of the output tensor in the shard dimension, before sharding.
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the slice_reshard operation on.
+            final_semaphore (GlobalSemaphore): Final semaphore for synchronization.
+            barrier_semaphore (GlobalSemaphore): Barrier semaphore for synchronization.
 
         Keyword Args:
             num_links (int, optional): Number of links to use for the slice_reshard operation. Defaults to `1`.

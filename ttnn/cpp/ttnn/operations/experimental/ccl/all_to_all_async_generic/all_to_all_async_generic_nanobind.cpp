@@ -37,7 +37,7 @@ void bind_all_to_all_async_generic(nb::module_& mod) {
             persistent_output_buffer (ttnn.Tensor, optional): Buffer where final output will be written.
             num_links (int, optional): Number of fabric links to use for communication.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for buffers.
-            topology (ttnn.Topology, optional): Network topology to use. Defaults to ttnn.Topology.Ring.
+            topology (ttnn.Topology, optional): Network topology to use. Defaults to the device's fabric topology.
             subdevice_id (SubDeviceId, optional): Target specific subdevice for the operation.
             cluster_axis (int, optional): The axis along which to cluster the communication. Required on a
                 FABRIC_2D mesh, where packets are injected through the routing-table-selected compass

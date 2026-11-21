@@ -28,10 +28,11 @@ void bind_strided_all_gather_async(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.
+            persistent_output_buffer (ttnn.Tensor): Pre-allocated output buffer.
             dim (int): Dimension to perform operation.
+            multi_device_global_semaphore (List[GlobalSemaphore]): Semaphores for synchronization.
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
-            mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
-        * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
+        * cluster_axis parameter is applicable only for Linear Topology.
 
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 

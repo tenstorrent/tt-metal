@@ -19,15 +19,17 @@ void bind_all_gather_concat(nb::module_& mod) {
         Performs a fused all-gather/concat operation on multi-device (specific to llama model):attr:`input_tensor` across all devices.
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.
+            buffer_tensor (ttnn.Tensor): Intermediate buffer tensor.
             dim (int): Dimension to perform operation.
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
             mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
+            multi_device_global_semaphore (GlobalSemaphore): Global semaphore for synchronization.
         * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
         Keyword Args:
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
             num_heads (int): Number of heads for NLP concat heads
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
+            memory_config (ttnn.MemoryConfig): Memory configuration for the operation.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Linear`.
         Returns:
             ttnn.Tensor: the output tensor.

@@ -29,7 +29,7 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod) {
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.
             dim (int): Dimension to scatter.
-            mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
+            multi_device_global_semaphore (List[GlobalSemaphore]): Semaphores for synchronization.
 
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
