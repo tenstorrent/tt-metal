@@ -186,6 +186,20 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
     float pad_value) {
     using OperationType = ttnn::operations::data_movement::PermuteDeviceOperation;
 
+    // An empty input has nothing to move, and the row-major factories divide by its zero extents (rows by the
+    // swapped dim, volume by the last dim). Validate, allocate the empty output and skip the program, as untilize
+    // does.
+    if (input_tensor.logical_volume() == 0) {
+        OperationType::operation_attributes_t attributes{
+            .dims = dims,
+            .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+            .pad_value = pad_value};
+        OperationType::tensor_args_t tensor_args{
+            .input_tensor = input_tensor, .optional_output_tensor = std::move(optional_output_tensor)};
+        OperationType::validate_on_program_cache_miss(attributes, tensor_args);
+        return OperationType::create_output_tensors(attributes, tensor_args);
+    }
+
     // BH 8-bit int RM pack_untilize drops the top 24 bits of each 32-bit Dest lane (#61827).
     // Workaround: stage via UInt32 in DRAM, permute, cast back. Lives in prim (not user API)
     // because fold/transpose/quasar call prim::permute directly; a user-API-only workaround

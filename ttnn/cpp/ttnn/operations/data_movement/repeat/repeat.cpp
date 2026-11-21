@@ -681,6 +681,23 @@ ttnn::Tensor repeat(
     detail::validate_optional_output(
         input_tensor, working_tensor, working_repetition_vector, memory_config, optional_output_tensor);
 
+    // An empty input repeats to an empty output; dispatching a program for it never completes.
+    if (input_tensor.logical_volume() == 0) {
+        if (optional_output_tensor.has_value()) {
+            // Validated above; an empty output has nothing to write into it.
+            return *optional_output_tensor;
+        }
+        ttsl::SmallVector<uint32_t> empty_shape(working_repetition_vector.size());
+        const auto& working_shape = working_tensor.logical_shape();
+        for (size_t i = 0; i < empty_shape.size(); ++i) {
+            empty_shape[i] = working_shape[i] * working_repetition_vector[i];
+        }
+        const MemoryConfig empty_mc = memory_config.value_or(
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()});
+        return ttnn::zeros(
+            ttnn::Shape(empty_shape), input_tensor.dtype(), input_tensor.layout(), *input_tensor.device(), empty_mc);
+    }
+
     // A preallocated output's spec is used as-is, so a mismatched tile would reach kernels built for the input's.
     const bool output_page_ok = !optional_output_tensor.has_value() ||
                                 repeat_codegen::output_matches_input_page(input_tensor, *optional_output_tensor);
