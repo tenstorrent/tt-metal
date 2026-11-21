@@ -59,7 +59,8 @@ def load_model(
 
     Attempts to load from cache first. If the cache does not exist, loads from PyTorch state dict
     (if provided) and optionally creates the cache. Raises `MissingCacheError` if neither is
-    available. Finally, any module that needs to be offloaded is taken care of.
+    available. The modules that cannot stay resident beside `tt_model` are evicted on every call,
+    also when `tt_model` is already loaded and the load is skipped.
 
     Args:
         `tt_model`: TT model instance to load weights into.
@@ -71,14 +72,16 @@ def load_model(
         `dtype`: Data type for cached weights (default: "bf16").
         `is_fsdp`: Whether FSDP is used (default: False).
         `get_torch_state_dict`: Optional callable returning PyTorch state dict. Enables lazy
-            evaluation - PyTorch model only loads if the cache does not exist. If `None`, cache
-            must exist or `MissingCacheError` is raised.
+            evaluation - PyTorch model only loads if the cache does not exist and `tt_model` is
+            not already loaded. If `None`, cache must exist or `MissingCacheError` is raised.
         `create_cache`: Create cache after loading from PyTorch (default: True).
 
     Raises:
         `MissingCacheError`: Cache does not exist and `get_torch_state_dict` is `None`.
         `RuntimeError`: `TT_DIT_CACHE_DIR` is not set and `get_torch_state_dict` is `None`.
     """
+    # Before the guard: a resident model still evicts what cannot stay beside it.
+    tt_model.evict_coresident_exclusions()
     if tt_model.is_loaded():
         return
 
