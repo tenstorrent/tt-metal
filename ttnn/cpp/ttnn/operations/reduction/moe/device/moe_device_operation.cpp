@@ -54,6 +54,22 @@ void MoeDeviceOperation::validate_on_program_cache_miss(
         expert_mask_tensor.dtype(),
         topk_mask_tensor.dtype());
 
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto& output_tensor = tensor_args.preallocated_output.value();
+        TT_FATAL(output_tensor.layout() == Layout::TILE, "The preallocated output tensor must be in TILE layout");
+        TT_FATAL(
+            output_tensor.dtype() == DataType::BFLOAT16,
+            "The preallocated output tensor must be BFLOAT16, got {}",
+            output_tensor.dtype());
+        auto expected_output_shape = input_tensor.logical_shape();
+        expected_output_shape[-1] = 1;
+        TT_FATAL(
+            output_tensor.logical_shape() == expected_output_shape,
+            "The preallocated output tensor must have the shape the op would produce ({}) but has {}",
+            expected_output_shape,
+            output_tensor.logical_shape());
+    }
+
     auto is_row_broadcastable_mask = [](const auto& shape, uint32_t expected_last_dim) {
         if (shape.rank() == 0 || shape[-1] != expected_last_dim) {
             return false;
