@@ -511,6 +511,21 @@ class Qwen36Model:
             ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._vis_mask_buf
         )
 
+    def _check_vision_row_count(self, token_ids, vision_tokens):
+        """Host-side check that the prompt has exactly one image placeholder per packed vision row,
+        mirroring _scatter_vision_tokens: no vision_tokens or no placeholders at all is accepted (the
+        scatter returns early there), any other count mismatch raises. The per-segment assert in
+        _set_vision_merge only bounds the row range, so surplus rows would be dropped silently. Call
+        before any trace replay or capture; it reads only host token ids and the vision row count."""
+        if vision_tokens is None:
+            return
+        n = int((token_ids.reshape(-1) == self._vision_placeholder_token_id()).sum())
+        if n == 0:
+            return
+        rows = int(vision_tokens.shape[0])
+        if n != rows:
+            raise ValueError(f"input_ids has {n} image-token positions but vision_tokens has {rows} rows")
+
     def _vis_row_offset_for(self, token_ids, chunk_start):
         """Packed-vision-row offset for the prefill segment starting at absolute position
         ``chunk_start``: the number of image-placeholder tokens before it. The vision rows are
@@ -3239,6 +3254,7 @@ class Qwen36Model:
         # position, and decode offsets by the stored rope_delta. (The num_full==0 short path below
         # re-stages it inside prefill_masked_bucket; that is idempotent.)
         self._build_request_rope(token_ids[:, :actual_len], vision_tokens)
+        self._check_vision_row_count(token_ids[:, :actual_len], vision_tokens)
 
         # Short prompt (no full chunks): route the whole prompt through the SAME masked
         # fixed-bucket path the long-prompt tail uses. chunk_start=0 makes prefill_masked_bucket
