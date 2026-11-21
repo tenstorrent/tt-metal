@@ -13,6 +13,14 @@
 // block_tiles output pages, reserve_back, issue every run of every page as a sub-page read (trid 0) into its
 // entry, one barrier on trid 0, push_back. The run generator below is the block operation's internal walk.
 //
+// Regime row_major_copy (ROW_MAJOR, dim=-2): an output stick is exactly one input stick. Implicit sync, as
+// page_copy, with page = stick: the piece is the one whose row range holds the output row.
+//
+// Regime row_major_runs (ROW_MAJOR, dim=-1): output stick q is input stick q of every piece, side by side: one
+// sub-page read per piece (ext_k elements from offset 0 into the entry at element offset off_k; Quasar's NoC moves
+// any byte alignment). Explicit sync, as run_assembly: per block of block_tiles sticks, reserve, count reads per
+// stick tagged trid 0, one barrier, push.
+//
 // No helper: the op has no compute phase and every step is a NoC read (op_design.md, API Mapping, "Helpers
 // considered and rejected"). Reader threads: page_copy deals output tiles round-robin over R threads;
 // run_assembly is built for the plan's R = 1 (a later R > 1 is a perf lamp of the design).
@@ -33,6 +41,8 @@ constexpr uint32_t TILE = 32;
 constexpr uint32_t FACE = 16;
 constexpr uint32_t REGIME_PAGE_COPY = 0;
 constexpr uint32_t REGIME_RUN_ASSEMBLY = 1;
+constexpr uint32_t REGIME_ROW_MAJOR_COPY = 2;
+constexpr uint32_t REGIME_ROW_MAJOR_RUNS = 3;
 constexpr uint32_t MAX_INPUTS = 5;  // in_0 .. in_4: TARGET's largest count
 
 // The accessor of input K, or a placeholder when this program binds fewer than K + 1 inputs (never used then).
@@ -92,12 +102,13 @@ void kernel_main() {
     constexpr bool concat_is_w = get_arg(args::concat_is_w) != 0;
     constexpr uint32_t regime = get_arg(args::regime);
     constexpr uint32_t block_tiles = get_arg(args::block_tiles);
-    constexpr uint32_t tile_bytes = get_arg(args::tile_bytes);
+    constexpr uint32_t page_bytes = get_arg(args::page_bytes);  // one ring entry: a tile, or an aligned stick
+    constexpr uint32_t elem_bytes = get_arg(args::elem_bytes);
     constexpr uint32_t R = get_arg(args::reader_threads);
-    constexpr uint32_t elem_bytes = tile_bytes / (TILE * TILE);
     constexpr uint32_t face_row_bytes = FACE * elem_bytes;
+    constexpr bool explicit_sync = regime == REGIME_RUN_ASSEMBLY || regime == REGIME_ROW_MAJOR_RUNS;
     static_assert(count >= 1 && count <= MAX_INPUTS, "concat binds in_0 .. in_{count-1}, count <= MAX_INPUTS");
-    static_assert(regime == REGIME_PAGE_COPY || R == 1, "run_assembly is built for one reader thread");
+    static_assert(!explicit_sync || R == 1, "the explicit-sync regimes are built for one reader thread");
 
     const uint32_t start_tile = get_arg(args::start_tile);
     const uint32_t num_tiles = get_arg(args::num_tiles);
@@ -173,6 +184,51 @@ void kernel_main() {
         // No barrier: firmware credits a last partial batch and drains the ring when the kernel returns. Hand the
         // tag register back with the user id (it is sticky; a tt-metal program that runs next issues untagged reads).
         noc_async_read_set_trid(0, noc.get_noc_id());
+    } else if constexpr (regime == REGIME_ROW_MAJOR_COPY) {
+        // Output stick q is row h of image img of the output; the piece holding row h gives its stick.
+        const uint32_t rows_out = piece_offset[count - 1] + piece_extent[count - 1];
+        const uint32_t first = start_tile + get_my_thread_id();
+        uint32_t img = first / rows_out;
+        uint32_t h = first - img * rows_out;
+        for (uint32_t i = get_my_thread_id(); i < num_tiles; i += R) {
+            uint32_t k = count - 1;
+            while (k > 0 && piece_offset[k] > h) {
+                --k;
+            }
+            const uint32_t page = img * piece_extent[k] + (h - piece_offset[k]);
+            with_piece(k, [&](const auto& acc) {
+                noc.async_read<NocOptions::TXN_ID>(acc, cb_output_tiles, {.page_id = page}, {});
+            });
+            for (h += R; h >= rows_out; h -= rows_out) {
+                ++img;
+            }
+        }
+        // As page_copy: hand the sticky tag back.
+        noc_async_read_set_trid(0, noc.get_noc_id());
+    } else if constexpr (regime == REGIME_ROW_MAJOR_RUNS) {
+        constexpr NocOptVals user_txn = {.trid = 0};
+        for (uint32_t done = 0; done < num_tiles;) {
+            const uint32_t block_extent = (num_tiles - done) < block_tiles ? (num_tiles - done) : block_tiles;
+            cb_output_tiles.reserve_back(block_extent);
+            for (uint32_t e = 0; e < block_extent; ++e) {
+                const uint32_t q = start_tile + done + e;  // the same stick index in every piece
+                for (uint32_t k = 0; k < count; ++k) {
+                    with_piece(k, [&](const auto& acc) {
+                        noc.async_read<NocOptions::TXN_ID>(
+                            acc,
+                            cb_output_tiles,
+                            piece_extent[k] * elem_bytes,
+                            {.page_id = q},
+                            {.offset_bytes = e * page_bytes + piece_offset[k] * elem_bytes},
+                            user_txn);
+                    });
+                }
+            }
+            noc.async_read_barrier<NocOptions::TXN_ID>(user_txn);
+            cb_output_tiles.push_back(block_extent);
+            done += block_extent;
+        }
+        // Every transfer carried the user id, so the tag register is already handed back.
     } else {
         constexpr NocOptVals user_txn = {.trid = 0};
 
@@ -230,7 +286,7 @@ void kernel_main() {
             const uint32_t block_extent = (num_tiles - done) < block_tiles ? (num_tiles - done) : block_tiles;
             cb_output_tiles.reserve_back(block_extent);
             for (uint32_t e = 0; e < block_extent; ++e) {
-                const uint32_t base = e * tile_bytes;
+                const uint32_t base = e * page_bytes;
                 const uint32_t p = concat_is_w ? cur.col : cur.row;
                 const uint32_t x = concat_is_w ? cur.row : cur.col;
                 // Elements of the cross axis inside this tile; beyond them is tile padding, not read.

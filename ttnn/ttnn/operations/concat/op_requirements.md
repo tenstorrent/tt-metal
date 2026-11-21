@@ -28,7 +28,7 @@
 - **Compute config**: none (pure data movement; CONVENTIONS §2.2 exemption)
 - **Golden baseline**: 56 / 56 in-SUPPORTED cells passing, 0 supported_fail / xpass_drift / xfail_wrong_mode (`verifier_report.json`)
 
-### [ ] Refinement 1 — ROW_MAJOR layout (native stick kernels)
+### [x] Refinement 1 — ROW_MAJOR layout (native stick kernels)
 
 **Goal**: add `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["layout"]` for every tensor of the list (they share one layout) with a native row-major path in the kernels — the design's deferred `row_major_runs` regime: page = stick. `dim=-1`: each output stick is one sub-page run per piece (byte runs at element offsets; Quasar's NoC has 1-B transfer alignment). `dim=-2`: each output stick is one whole input stick (the `page_copy` shape in the stick domain). Output is ROW_MAJOR, DRAM interleaved (R5). Covers the PHASE0 rectangle in RM: bfloat16, dim ∈ {-1, -2}, count ∈ {2, 3}, rank ∈ {3, 4}, every alignment, DRAM and L1 inputs.
 
@@ -42,6 +42,24 @@
 - The INVALID entry `bfloat8_b × ROW_MAJOR` already covers the impossible cell.
 
 **Done when**: every golden cell with `layout=ROW_MAJOR` inside the new SUPPORTED passes exactly; regime-pinned RM tests (dim -1 with a non-16-aligned seam, dim -2) assert the host's regime choice; the session test covers the RM path; all TILE cells still pass.
+
+**Result** (implementer): SUPPORTED["layout"] = [TILE, ROW_MAJOR]. Regimes `row_major_copy` (dim -2, implicit whole-stick reads) and `row_major_runs` (dim -1, `count` tagged sub-page reads per stick, one barrier per block of sticks) in the existing reader; writer and ring unchanged. Golden slice: 58/58 in-SUPPORTED ROW_MAJOR cells exact, TILE representatives green; unit dir 147/147.
+
+### [x] Refinement 10 — Height-sharded tensors in L1 (the YOLOv8 neck join)
+
+**Goal**: add `"height"` to SUPPORTED["sharding"]: every tensor of the list height-sharded in L1, each with a shard shape and cores of its own, in both layouts the op supports by now (TILE and, after Refinement 1, ROW_MAJOR), at the supported values of every other axis. The specification's TARGET gained this value after Phase 0 (rules R3, R5 and R6, the INVALID entry DRAM x height, the INPUTS entry `(-1, [1, 1, 64, 64], [1, 1, 64, 32])`, the DECISIONS entry of 2026-11-21). The result stays in DRAM, interleaved (R5).
+
+**Origin**: the model-level test. YOLOv8's neck (`models/experimental/ops/quasar/tests/yolo_ops/test_concat_small_grid.py::test_concat_neck_sharded_small_grid`) calls `concat([a, b], dim=-1)` on a `[1, 1, 64, 64]` and a `[1, 1, 64, 32]` bfloat16 ROW_MAJOR tensor, height-sharded in L1 over two cores (shard shapes [32, 64] and [32, 32]) and over one (shard shapes [64, 64] and [64, 32]), and gets a `[1, 1, 64, 96]` tensor in DRAM, interleaved. The Phase 0 op refuses both calls by name, and tt-metal's op serves them. This refinement comes after Refinement 1 because those calls are row-major.
+
+**Operator notes** (queued by the operator of the run, not by the verifier):
+- A sibling op gives a hint, not a proof: the generated `add`, which reads and writes pages through `TensorAccessor`, served height-sharded operands once its gate let them through, with no change to its kernels. Check whether the same holds for this op's readers in each layout before changing anything, and say in the changelog what you found.
+- Not looked at by anyone yet: tensors of one call whose shard grids differ (the runner gives each tensor the cores its own shape divides over, `eval/CONVENTIONS.md` §2.3, `eval/memory.py`; a join along `dim=-2` has tensors with different numbers of rows), a shard grid of one core, and the op in one device session with tt-metal programs before and after it on sharded tensors.
+- The op must not depend on how many cores a shard grid spans. A cell whose input shards do not fit one core's L1 is skipped by the runner.
+- Keep the data path: reading each shard on the core that holds it is a performance refinement of its own and is not asked for here.
+
+**Done when**: every golden cell with `sharding=height` inside the new SUPPORTED passes exactly; the interleaved cells are unchanged; `verify_supported` loud categories are 0; a test in the op's own test file makes the model's call (row-major, two cores and one) and asserts the values and that the result is in DRAM, interleaved.
+
+**Result** (implementer): SUPPORTED["sharding"] = [interleaved, height]. No kernel or host-program change: the operator's hint held — every input page is reached through its `TensorAccessor`, which maps a logical page to the cluster holding its shard, so all four regimes (`page_copy`, `run_assembly`, `row_major_copy`, `row_major_runs`) serve height-sharded inputs unchanged, bit-exact, with tensors of one call on different shard grids (32/16/4, 8/24/8, 2/1/1 cores), one-core grids and grids of 25 clusters. Golden slice: 58/58 in-SUPPORTED `sharding=height` cells (29 TILE, 29 ROW_MAJOR) exact + 4 interleaved representatives; `verify_supported --queue` gaps 0. The data path is kept (accessor reads, output split over the whole grid); native per-shard reading is left as its own perf refinement, as the entry says.
 
 ### [ ] Refinement 2 — Leading dimensions, one and five tensors, rank 2
 
