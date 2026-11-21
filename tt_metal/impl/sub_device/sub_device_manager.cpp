@@ -347,8 +347,15 @@ void SubDeviceManager::populate_noc_data() {
         has_noc_mcast_txns_[i] = sub_devices_[i].impl()->has_core_type(HalProgrammableCoreType::TENSIX);
     }
 
-    const auto& compute_grid_size = device_->compute_with_storage_grid_size();
-    CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
+    // Under FDS every Tensix runs worker firmware and takes every go on the FDS wire, not only the compute grid's
+    // cores. A worker-grid override (TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE) leaves cores outside the compute grid;
+    // unless they map to the unused go message they answer sub-device 0's go, and its done count runs ahead of the
+    // workers that are still running.
+    const bool fds_signalling =
+        MetalContext::instance(context_id_).get_dispatch_query_manager().fds_signalling_enabled();
+    const CoreCoord worker_grid_size =
+        fds_signalling ? device_->logical_grid_size() : device_->compute_with_storage_grid_size();
+    CoreRange device_worker_cores = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
 
     std::vector<std::pair<CoreRangeSet, uint32_t>> core_go_message_mapping;
     CoreRangeSet used_cores;
