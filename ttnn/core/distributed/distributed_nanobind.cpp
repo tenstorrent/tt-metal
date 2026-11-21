@@ -27,7 +27,6 @@
 
 #include "ttnn-nanobind/nanobind_helpers.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
-#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
@@ -350,16 +349,11 @@ void py_module(nb::module_& mod) {
             "lowest_occupied_compute_l1_address",
             [](const MeshDevice& self) { return self.lowest_occupied_compute_l1_address(); },
             R"doc(
-           Lowest L1 address held by a buffer on the compute cores (all devices of the mesh), or None
-           when no L1 buffer is allocated. Circular buffers of a program must end below it.
-       )doc")
-        .def(
-            "l1_allocator_base",
-            [](const MeshDevice& self) {
-                return self.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-            },
-            R"doc(
-           L1 address where the L1 allocator (and a program's circular buffers) start on the compute cores.
+           Lowest L1 address occupied by an L1 buffer, as reported by the mesh's global allocator and the
+           active sub-devices' allocators, or None when they report no L1 buffer. This is the address the
+           runtime checks a program's circular buffers against (they must end below it). It does not cover
+           the L1_SMALL region, which sits above all L1 buffers, nor per-core (HYBRID mode) allocations held
+           by each device's own allocator. It is a snapshot of current allocations.
        )doc")
         .def(
             "compute_with_storage_grid_size",

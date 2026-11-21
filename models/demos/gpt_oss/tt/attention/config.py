@@ -262,7 +262,11 @@ class ProgramConfig:
         l1_bytes = None
         if self.prefill_l1_end:
             # (the 2D configs' L1 model counts its circular buffers only: keep the matmul's small extras clear)
-            l1_bytes = self.prefill_l1_end - mesh_device.l1_allocator_base() - PREFILL_PROJ_L1_MARGIN
+            l1_bytes = (
+                self.prefill_l1_end
+                - ttnn.get_allocator_base_address(mesh_device, ttnn.BufferType.L1)
+                - PREFILL_PROJ_L1_MARGIN
+            )
         return prefill_proj_program_config(
             mesh_device.compute_with_storage_grid_size(),
             shape[-2] // ttnn.TILE_SIZE,
