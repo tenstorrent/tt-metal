@@ -6,6 +6,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstdint>
+#include <cstring>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <functional>
@@ -23,6 +24,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
+#include "single_node_dfb_program.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -229,11 +232,83 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
     return pass;
 }
 
+// Quasar: the same single-tile Int8 matmul over the 2.0 host API. Int8 matmul accumulates into an Int32 Dest and
+// is LoFi-only on Quasar. The output is the unclamped Int32 result, which Quasar stores in L1 as sign-magnitude.
+bool single_tile_matmul_int8_quasar(distributed::MeshDevice& mesh_device) {
+    constexpr size_t tile_size = 32 * 32;
+
+    int8_t min = -5, max = 5;
+    std::vector<int8_t> input_0 = generate_uniform_int8(tile_size, min, max, 0 /*seed*/);
+    std::vector<int8_t> input_1 = generate_uniform_int8(tile_size, min, max, 1 /*different seed*/);
+
+    std::vector<int32_t> golden(tile_size, 0);
+    for (int x = 0; x < 32; x++) {
+        for (int y = 0; y < 32; y++) {
+            for (int z = 0; z < 32; z++) {
+                golden[byte_tile_face_major_index(x, y)] += (int32_t)input_0[byte_tile_face_major_index(z, y)] *
+                                                            (int32_t)input_1[byte_tile_face_major_index(x, z)];
+            }
+        }
+    }
+
+    auto to_words = [](std::vector<int8_t> bytes) {
+        convert_to_sign_mag(bytes);
+        std::vector<uint32_t> words(bytes.size() / sizeof(uint32_t));
+        std::memcpy(words.data(), bytes.data(), bytes.size());
+        return words;
+    };
+
+    std::vector<uint32_t> golden_words(tile_size);
+    for (size_t i = 0; i < tile_size; i++) {
+        const int32_t v = golden[i];
+        golden_words[i] = v < 0 ? (0x80000000u | static_cast<uint32_t>(-v)) : static_cast<uint32_t>(v);
+    }
+
+    namespace sn = unit_tests::llk::single_node_dfb;
+    const std::vector<uint32_t> result = sn::run(
+        mesh_device,
+        {.name = "matmul_int8",
+         .inputs =
+             {{.data = to_words(input_0),
+               .format = tt::DataFormat::Int8,
+               .num_tiles = 1,
+               .accessor = "in0",
+               .num_entries = 1},
+              {.data = to_words(input_1),
+               .format = tt::DataFormat::Int8,
+               .num_tiles = 1,
+               .accessor = "in1",
+               .num_entries = 1}},
+         .output = {.format = tt::DataFormat::Int32, .num_tiles = 1, .accessor = "out", .num_entries = 1},
+         .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/single_tile_compute_2_0.cpp",
+         .compile_time_args = {},
+         .hw_config = ComputeHardwareConfig{.fpu_math_fidelity = MathFidelity::LoFi, .enable_32_bit_dest = true}});
+
+    if (result.size() != golden_words.size()) {
+        log_error(tt::LogTest, "output has {} words, expected {}", result.size(), golden_words.size());
+        return false;
+    }
+    size_t mismatches = 0;
+    for (size_t i = 0; i < golden_words.size(); i++) {
+        if (result[i] != golden_words[i]) {
+            if (mismatches < 16) {
+                log_error(tt::LogTest, "element {}: 0x{:08x} vs. golden 0x{:08x}", i, result[i], golden_words[i]);
+            }
+            mismatches++;
+        }
+    }
+    if (mismatches != 0) {
+        log_error(tt::LogTest, "{}/{} mismatches", mismatches, golden_words.size());
+    }
+    return mismatches == 0;
+}
+
 }  // namespace unit_tests::compute::matmul
 
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
     if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+        ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul_int8_quasar(*this->devices_.at(0)));
+        return;
     }
     ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul_int8(this->devices_.at(0)));
 }
