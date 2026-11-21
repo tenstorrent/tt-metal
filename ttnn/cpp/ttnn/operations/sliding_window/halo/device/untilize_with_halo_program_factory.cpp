@@ -142,6 +142,24 @@ ProgramDescriptor build_halo_program(
     if (skip_untilize) {
         in_page_size = aligned_stick_nbytes;
         input_npages = input_shard_shape[0];
+    } else {
+        // Each core untilizes number_of_blocks_per_core blocks (counted from its gather transfers, which follow the
+        // input shard height) out of the input_nblocks_per_core tile rows its input CB receives (counted from the
+        // tensor height). More blocks than tile rows means the shard spec does not match the tensor, and the untilize
+        // would wait forever for input tiles that are never pushed (#63639).
+        for (size_t core_id = 0; core_id < number_of_blocks_per_core.size(); core_id++) {
+            TT_FATAL(
+                number_of_blocks_per_core[core_id] <= input_nblocks_per_core,
+                "Halo: core {} gathers from {} blocks of {} rows, but its input CB gets {} tile rows (input shard "
+                "height {}, tensor height {} over {} cores): the input shard spec does not match the tensor",
+                core_id,
+                number_of_blocks_per_core[core_id],
+                TILE_HEIGHT,
+                input_nblocks_per_core,
+                input_shard_shape[0],
+                input_nhw_height,
+                ncores_nhw);
+        }
     }
 
     ProgramDescriptor desc;
