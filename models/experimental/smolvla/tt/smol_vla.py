@@ -1676,74 +1676,23 @@ def get_timestep_embedding(
     max_period: float = 4.0,
 ) -> torch.Tensor:
     """
-    Create sinusoidal timestep embeddings for flow matching (CPU version).
+    Sinusoidal timestep embedding for flow matching, as in LeRobot's create_sinusoidal_pos_embedding.
 
     Args:
         timesteps: [batch] tensor of timesteps in [0, 1]
-        embedding_dim: Dimension of the embedding
+        embedding_dim: Dimension of the embedding (even; the expert hidden size, 720)
         min_period: Minimum period for the sinusoidal encoding
         max_period: Maximum period for the sinusoidal encoding
 
     Returns:
-        [batch, embedding_dim] tensor of timestep embeddings
+        [batch, embedding_dim] float32 tensor [sin | cos] with embedding_dim // 2 periods
     """
-    half_dim = embedding_dim // 2
-
-    # Log-spaced frequencies
-    freqs = (
-        torch.exp(
-            -math.log(max_period / min_period)
-            * torch.arange(half_dim, dtype=timesteps.dtype, device=timesteps.device)
-            / (half_dim - 1)
-        )
-        / min_period
-    )
-
-    # [batch, 1] * [half_dim] -> [batch, half_dim]
-    args = timesteps.unsqueeze(-1) * freqs.unsqueeze(0)
-
-    # Concatenate sin and cos
-    embedding = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
-
-    # Pad if necessary
-    if embedding_dim % 2 == 1:
-        embedding = F.pad(embedding, (0, 1))
-
-    return embedding
-
-
-def get_timestep_embedding_tt(
-    timesteps: ttnn.Tensor,
-    freqs: ttnn.Tensor,  # Pre-computed frequency tensor on TT
-    embedding_dim: int,
-) -> ttnn.Tensor:
-    """
-    Create sinusoidal timestep embeddings for flow matching (TT version).
-    100% on TT - no CPU transfers.
-
-    Args:
-        timesteps: [batch, 1] TT tensor of timesteps in [0, 1]
-        freqs: [1, half_dim] pre-computed frequency tensor on TT
-        embedding_dim: Dimension of the embedding
-
-    Returns:
-        [batch, embedding_dim] TT tensor of timestep embeddings
-    """
-    # [batch, 1] * [1, half_dim] -> [batch, half_dim]
-    args = ttnn.matmul(timesteps, freqs, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-    # Sin and cos
-    sin_emb = ttnn.sin(args)
-    cos_emb = ttnn.cos(args)
-
-    # Concatenate [batch, half_dim] + [batch, half_dim] -> [batch, embedding_dim]
-    embedding = ttnn.concat([sin_emb, cos_emb], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-    ttnn.deallocate(sin_emb)
-    ttnn.deallocate(cos_emb)
-    ttnn.deallocate(args)
-
-    return embedding
+    if embedding_dim % 2 != 0:
+        raise ValueError(f"embedding_dim ({embedding_dim}) must be even")
+    fraction = torch.linspace(0.0, 1.0, embedding_dim // 2, dtype=torch.float64)
+    period = min_period * (max_period / min_period) ** fraction
+    args = timesteps.double().unsqueeze(-1) * (2.0 * math.pi / period)
+    return torch.cat([torch.sin(args), torch.cos(args)], dim=-1).float()
 
 
 # ============================================================================
@@ -2141,8 +2090,9 @@ class SmolVLAActionHeads(nn.Module):
         self.max_period = max_period
         self.ttnn_device = ttnn_device
 
-        # Time embedding dimension (sinusoidal uses 2x expert dim / 2 = expert dim)
-        self.time_embed_dim = expert_hidden_dim * 2  # 1440
+        # The sinusoidal time embedding has the expert hidden width (720); it is concatenated with the
+        # projected actions (720) before action_time_mlp_in (1440 -> 720).
+        self.time_embed_dim = expert_hidden_dim
 
         # State projection: 32 -> 960 (context space)
         self.state_proj = nn.Linear(max_state_dim, hidden_dim)
@@ -2151,8 +2101,8 @@ class SmolVLAActionHeads(nn.Module):
         self.action_in_proj = nn.Linear(max_action_dim, expert_hidden_dim)
         self.action_out_proj = nn.Linear(expert_hidden_dim, max_action_dim)
 
-        # Time embedding MLPs: 1440 -> 720 -> 720
-        self.action_time_mlp_in = nn.Linear(self.time_embed_dim, expert_hidden_dim)
+        # Action-time MLPs: concat(action_emb, time_emb) 1440 -> 720 -> 720
+        self.action_time_mlp_in = nn.Linear(2 * expert_hidden_dim, expert_hidden_dim)
         self.action_time_mlp_out = nn.Linear(expert_hidden_dim, expert_hidden_dim)
 
         # TT params
@@ -2226,26 +2176,8 @@ class SmolVLAActionHeads(nn.Module):
             ),
         }
 
-        # Pre-compute frequency tensor for sinusoidal embedding (100% on TT)
-        half_dim = self.time_embed_dim // 2  # 720
-        freqs = (
-            torch.exp(
-                -math.log(self.max_period / self.min_period)
-                * torch.arange(half_dim, dtype=torch.float32)
-                / (half_dim - 1)
-            )
-            / self.min_period
-        )
-        # Shape: [1, half_dim] for broadcasting with timestep [batch, 1]
-        self.tt_params["time_freqs"] = ttnn.from_torch(
-            freqs.unsqueeze(0).to(torch.bfloat16),
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
         self.tt_params_initialized = True
-        logger.info("Initialized TT action head parameters (with sinusoidal freqs on TT)")
+        logger.info("Initialized TT action head parameters")
 
     def _load_action_weights(self, action_weights: Dict[str, torch.Tensor]):
         """Load action head weights."""
@@ -2268,29 +2200,25 @@ class SmolVLAActionHeads(nn.Module):
         logger.info("Loaded action head weights")
 
     def get_time_embedding(self, timestep: torch.Tensor) -> torch.Tensor:
+        """Sinusoidal embedding of the flow-matching time, [batch, expert_hidden_dim=720]."""
+        return get_timestep_embedding(timestep, self.time_embed_dim, self.min_period, self.max_period)
+
+    def embed_suffix(self, action_emb: torch.Tensor, timestep: torch.Tensor) -> torch.Tensor:
         """
-        Generate time embedding for flow matching.
+        Fuse projected noisy actions and time as LeRobot's embed_suffix does:
+        action_time_mlp_out(silu(action_time_mlp_in(concat([action_emb, time_emb])))).
 
         Args:
-            timestep: [batch] tensor of timesteps in [0, 1]
+            action_emb: [batch, chunk_size, 720] output of project_actions
+            timestep: [batch] flow-matching time in [0, 1]
 
         Returns:
-            [batch, expert_hidden_dim=720] time embedding
+            [batch, chunk_size, 720] expert input
         """
-        # Get sinusoidal embedding of dimension 1440
-        emb = get_timestep_embedding(
-            timestep,
-            self.time_embed_dim,  # 1440
-            self.min_period,
-            self.max_period,
-        )
-
-        # Project through MLPs: 1440 -> 720 -> 720
-        emb = self.action_time_mlp_in(emb)
-        emb = F.silu(emb)
-        emb = self.action_time_mlp_out(emb)
-
-        return emb  # [batch, 720]
+        time_emb = self.get_time_embedding(timestep).to(action_emb.dtype)
+        time_emb = time_emb[:, None, :].expand_as(action_emb)
+        emb = self.action_time_mlp_in(torch.cat([action_emb, time_emb], dim=-1))
+        return self.action_time_mlp_out(F.silu(emb))
 
     def project_state(self, robot_state: torch.Tensor) -> torch.Tensor:
         """Project robot state to hidden dimension."""
@@ -2337,36 +2265,41 @@ class SmolVLAActionHeads(nn.Module):
             self.tt_params["action_out_bias"],
         )
 
-    def get_time_embedding_tt(self, timestep: ttnn.Tensor) -> ttnn.Tensor:
+    def embed_suffix_tt(self, action_emb: ttnn.Tensor, timestep: float) -> ttnn.Tensor:
         """
-        TT version of time embedding - 100% on TT, no CPU transfers.
+        TT version of embed_suffix. The sinusoid is built in float64 on the host (its arguments reach
+        2*pi*t/min_period ~ 1571 rad, far beyond what bfloat16 can represent) and uploaded as one
+        [1, 1, 720] row.
 
         Args:
-            timestep: [batch, 1] TT tensor of timesteps in [0, 1]
+            action_emb: [1, chunk_size, 720] TT tensor from project_actions_tt
+            timestep: flow-matching time in [0, 1]
 
         Returns:
-            [batch, 720] time embedding on TT
+            [1, chunk_size, 720] TT expert input
         """
-        # Sinusoidal embedding on TT
-        sinusoidal_emb = get_timestep_embedding_tt(
-            timestep,
-            self.tt_params["time_freqs"],
-            self.time_embed_dim,
+        time_emb = self.get_time_embedding(torch.tensor([float(timestep)]))
+        time_emb_tt = ttnn.from_torch(
+            time_emb.reshape(1, 1, -1).to(torch.bfloat16),
+            device=self.ttnn_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
         )
+        time_emb_tt = ttnn.repeat(time_emb_tt, (1, self.chunk_size, 1))
+        action_emb = ttnn.reshape(action_emb, (1, self.chunk_size, self.expert_hidden_dim))
+        fused = ttnn.concat([action_emb, time_emb_tt], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(time_emb_tt)
 
-        # MLP on TT: 1440 -> 720 (with SiLU) -> 720
         hidden = ttnn.linear(
-            sinusoidal_emb,
+            fused,
             self.tt_params["time_mlp_in_weight"],
             bias=self.tt_params["time_mlp_in_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
             core_grid=ttnn.CoreGrid(y=8, x=8),
         )
-        ttnn.deallocate(sinusoidal_emb)
-
+        ttnn.deallocate(fused)
         hidden = ttnn.silu(hidden)
-
         output = ttnn.linear(
             hidden,
             self.tt_params["time_mlp_out_weight"],
@@ -2376,8 +2309,7 @@ class SmolVLAActionHeads(nn.Module):
             core_grid=ttnn.CoreGrid(y=8, x=8),
         )
         ttnn.deallocate(hidden)
-
-        return output  # [batch, 720]
+        return output
 
     def forward(
         self,
@@ -2407,14 +2339,8 @@ class SmolVLAActionHeads(nn.Module):
             # Project noisy actions: [batch, chunk_size, 720]
             action_emb = self.project_actions(noisy_actions)
 
-            # Get time embedding: [batch, 720]
-            time_emb = self.get_time_embedding(timestep)
-
-            # Combine action and time in expert space
-            # [batch, chunk_size, 720]
-            combined = action_emb + time_emb.unsqueeze(1)
-
-            return combined
+            # Fuse action and time in expert space: [batch, chunk_size, 720]
+            return self.embed_suffix(action_emb, timestep)
         else:
             # Return zeros in expert hidden space
             return torch.zeros(batch_size, self.chunk_size, self.expert_hidden_dim, dtype=torch.float32)
@@ -3490,9 +3416,8 @@ class SmolVLAForActionPrediction(nn.Module):
         # ========================================
         CHECKPOINTS.checkpoint("start_FLOWMATCHING")
 
-        # Initialize noisy actions: start from standard normal noise
-        # or zeros (both work, noise gives more diversity)
-        noisy_actions = torch.zeros(
+        # Flow matching starts from standard normal noise at t=1 and integrates to the actions at t=0
+        noisy_actions = torch.randn(
             batch_size, chunk_size, self.config.max_action_dim, dtype=torch.float32, device=device
         )
 
@@ -3502,8 +3427,8 @@ class SmolVLAForActionPrediction(nn.Module):
                 robot_state = robot_state.unsqueeze(0)  # Add batch dim
             robot_state = robot_state.float()
 
-        # Flow matching: integrate from t=0 to t=1
-        dt = 1.0 / num_inference_steps
+        # Flow matching: integrate from t=1 (noise) to t=0 (actions)
+        dt = -1.0 / num_inference_steps
 
         # Check if TT path is available
         use_tt = (
@@ -3532,29 +3457,15 @@ class SmolVLAForActionPrediction(nn.Module):
             )
 
             for step in range(num_inference_steps):
-                t = step / num_inference_steps
-                timestep = torch.tensor([t], dtype=torch.float32)
+                t = 1.0 - step / num_inference_steps
 
                 with torch.no_grad():
                     # Project actions on TT
                     action_emb_tt = self.action_heads.project_actions_tt(noisy_actions_tt)
 
-                    # Get time embedding - 100% on TT
-                    timestep_tt = ttnn.from_torch(
-                        timestep.unsqueeze(-1).to(torch.bfloat16),  # [batch, 1]
-                        device=self.ttnn_device,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                    )
-                    time_emb_tt = self.action_heads.get_time_embedding_tt(timestep_tt)
-                    ttnn.deallocate(timestep_tt)
-
-                    # Expand time embedding and add to actions using broadcasting
-                    time_emb_3d = ttnn.reshape(time_emb_tt, (1, 1, self.action_heads.expert_hidden_dim))
-                    ttnn.deallocate(time_emb_tt)
-                    expert_input_tt = ttnn.add(action_emb_tt, time_emb_3d)
+                    # Fuse actions and time into the expert input
+                    expert_input_tt = self.action_heads.embed_suffix_tt(action_emb_tt, t)
                     ttnn.deallocate(action_emb_tt)
-                    ttnn.deallocate(time_emb_3d)
 
                     # Expert layers on TT
                     CHECKPOINTS.checkpoint(f"start_EXPERT_STEP_{step}")
@@ -3586,18 +3497,15 @@ class SmolVLAForActionPrediction(nn.Module):
         else:
             # CPU flow matching loop
             for step in range(num_inference_steps):
-                t = step / num_inference_steps
+                t = 1.0 - step / num_inference_steps
                 timestep = torch.tensor([t], dtype=torch.float32, device=device)
 
                 with torch.no_grad():
                     # Project noisy actions to expert hidden space (720-dim)
                     action_emb = self.action_heads.project_actions(noisy_actions)
 
-                    # Get time embedding in expert space (720-dim)
-                    time_emb = self.action_heads.get_time_embedding(timestep)
-
-                    # Combine action and time in expert space: [batch, chunk_size, 720]
-                    expert_input = action_emb + time_emb.unsqueeze(1)
+                    # Fuse actions and time in expert space: [batch, chunk_size, 720]
+                    expert_input = self.action_heads.embed_suffix(action_emb, timestep)
 
                     # Pass through expert layers (16 transformer layers)
                     # NOW WITH FULL VLM K/V CACHE FOR CROSS-ATTENTION!
