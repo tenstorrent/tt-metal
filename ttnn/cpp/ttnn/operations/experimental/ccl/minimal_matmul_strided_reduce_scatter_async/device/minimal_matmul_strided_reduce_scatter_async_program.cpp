@@ -8,6 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
+#include <array>
 #include <vector>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
@@ -38,20 +39,16 @@ namespace {
 // minimal_matmul_factory_helper_common pushes its compute kernel right after its four data-movement kernels.
 constexpr uint32_t kMatmulComputeKernelIdx =
     MinimalMatmulStridedReduceScatterAsyncProgramFactory::kMatmulIn1ReceiverKernelIdx + 1;
-}  // namespace
 
-void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_arguments(
+using Factory = MinimalMatmulStridedReduceScatterAsyncProgramFactory;
+using MeshFactory = MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory;
+
+// The common runtime args (row count, tensor addresses, semaphores): a few words per kernel.
+void override_common_runtime_arguments(
     tt::tt_metal::Program& program,
     const MinimalMatmulStridedReduceScatterAsyncParams& operation_attributes,
     const MinimalMatmulStridedReduceScatterAsyncInputs& tensor_args,
-    std::vector<Tensor>& output_tensor,
-    const std::optional<ttnn::MeshCoordinate>&) {
-    // The common runtime args (row count, tensor addresses, semaphores) are rewritten here: this workload
-    // never rebuilds. Caller-owned progress and credit counters are per-core args and are refreshed too.
-    constexpr uint32_t kReaderArgPrefix = 3;  // direction, worker_id, num_workers
-    constexpr uint32_t kWindowedProgressFromEnd = 4;
-    constexpr uint32_t kWindowedCreditFromEnd = 2;
-
+    std::vector<Tensor>& output_tensor) {
     TT_FATAL(output_tensor.size() == 3, "minimal_matmul_strided_reduce_scatter returns 3 tensors");
     TT_FATAL(output_tensor[0].is_allocated(), "matmul output must have a buffer");
     TT_FATAL(output_tensor[1].is_allocated(), "reduce-scatter intermediate must have a buffer");
@@ -66,9 +63,9 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
         operation_attributes.semaphore.size() > 2,
         "strided reduce scatter expects one semaphore per direction plus the batch semaphore");
     const StridedReduceScatterProgramArtifacts rs_kernels{
-        .reader_kernel_id = kReaderKernelIdx,
-        .writer_kernel_id = kWriterKernelIdx,
-        .reduce_kernel_id = kReduceKernelIdx};
+        .reader_kernel_id = Factory::kReaderKernelIdx,
+        .writer_kernel_id = Factory::kWriterKernelIdx,
+        .reduce_kernel_id = Factory::kReduceKernelIdx};
     ::ttnn::ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
         program,
         rs_kernels,
@@ -84,10 +81,10 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
 
     // Matmul kernels (addcmul is fused in the RS, not here).
     MinimalMatmulProgramFactory::shared_variables_t mm_kernels{
-        .in0_sender_kernels_id = kMatmulIn0SenderKernelIdx,
-        .in0_receiver_kernels_id = kMatmulIn0ReceiverKernelIdx,
-        .in1_sender_kernels_id = kMatmulIn1SenderKernelIdx,
-        .in1_receiver_kernels_id = kMatmulIn1ReceiverKernelIdx,
+        .in0_sender_kernels_id = Factory::kMatmulIn0SenderKernelIdx,
+        .in0_receiver_kernels_id = Factory::kMatmulIn0ReceiverKernelIdx,
+        .in1_sender_kernels_id = Factory::kMatmulIn1SenderKernelIdx,
+        .in1_receiver_kernels_id = Factory::kMatmulIn1ReceiverKernelIdx,
         .compute_kernels_id = kMatmulComputeKernelIdx,
         .read_local_slice_from_input = false,
         .two_input_split = tensor_args.mm_optional_input_tensor.has_value()};
@@ -103,22 +100,40 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
          std::nullopt,
          std::nullopt},
         mm_output_vec);
+}
 
+bool has_caller_progress(const MinimalMatmulStridedReduceScatterAsyncInputs& tensor_args) {
+    return tensor_args.mm_progress_counters.has_value();
+}
+
+bool has_caller_credit(
+    const MinimalMatmulStridedReduceScatterAsyncParams& operation_attributes,
+    const MinimalMatmulStridedReduceScatterAsyncInputs& tensor_args) {
+    return operation_attributes.mm_window_blocks.has_value() && tensor_args.mm_credit_counters.has_value();
+}
+
+uint32_t counter_address(const std::optional<const Tensor>& counters, const char* name) {
+    TT_FATAL(counters->is_allocated(), "{} must have a buffer", name);
+    return static_cast<uint32_t>(counters->mesh_buffer().address());
+}
+
+// Every per-core slot of the caller-owned progress and credit counters, in the order the full override writes them:
+// visit(counter, args, index).
+template <typename Visit>
+void for_each_counter_slot(
+    tt::tt_metal::Program& program,
+    const MinimalMatmulStridedReduceScatterAsyncParams& operation_attributes,
+    const MinimalMatmulStridedReduceScatterAsyncInputs& tensor_args,
+    std::vector<Tensor>& output_tensor,
+    Visit&& visit) {
+    constexpr uint32_t kReaderArgPrefix = 3;  // direction, worker_id, num_workers
+    constexpr uint32_t kWindowedProgressFromEnd = 4;
+    constexpr uint32_t kWindowedCreditFromEnd = 2;
     const bool windowed = operation_attributes.mm_window_blocks.has_value();
-    const bool caller_progress = tensor_args.mm_progress_counters.has_value();
-    const bool caller_credit = windowed && tensor_args.mm_credit_counters.has_value();
+    const bool caller_progress = has_caller_progress(tensor_args);
+    const bool caller_credit = has_caller_credit(operation_attributes, tensor_args);
     if (!caller_progress && !caller_credit) {
         return;
-    }
-    uint32_t progress_addr = 0;
-    if (caller_progress) {
-        TT_FATAL(tensor_args.mm_progress_counters->is_allocated(), "mm_progress_counters must have a buffer");
-        progress_addr = static_cast<uint32_t>(tensor_args.mm_progress_counters->mesh_buffer().address());
-    }
-    uint32_t credit_addr = 0;
-    if (caller_credit) {
-        TT_FATAL(tensor_args.mm_credit_counters->is_allocated(), "mm_credit_counters must have a buffer");
-        credit_addr = static_cast<uint32_t>(tensor_args.mm_credit_counters->mesh_buffer().address());
     }
     uint32_t reader_progress_arg = kReaderArgPrefix;
     if (output_tensor[1].is_sharded()) {
@@ -128,7 +143,7 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
     }
     const uint32_t reader_credit_arg = reader_progress_arg + 1;
 
-    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
+    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, Factory::kReaderKernelIdx);
     for (auto& column : reader_runtime_args) {
         for (auto& args : column) {
             if (args.size() == 0) {
@@ -136,11 +151,11 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
             }
             if (caller_progress) {
                 TT_FATAL(args.size() > reader_progress_arg, "reduce-scatter reader is missing the progress counter");
-                args[reader_progress_arg] = progress_addr;
+                visit(MeshFactory::kProgress, args, reader_progress_arg);
             }
             if (caller_credit) {
                 TT_FATAL(args.size() > reader_credit_arg, "reduce-scatter reader is missing the credit counter");
-                args[reader_credit_arg] = credit_addr;
+                visit(MeshFactory::kCredit, args, reader_credit_arg);
             }
         }
     }
@@ -149,35 +164,106 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
         operation_attributes.matmul_struct.config.has_value(),
         "minimal_matmul_strided_reduce_scatter requires a matmul config");
     const auto grid = operation_attributes.matmul_struct.config->compute_with_storage_grid_size;
-    auto& in0_sender_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kMatmulIn0SenderKernelIdx);
-    auto& in0_receiver_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kMatmulIn0ReceiverKernelIdx);
-    auto& in1_sender_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kMatmulIn1SenderKernelIdx);
-    auto& in1_receiver_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kMatmulIn1ReceiverKernelIdx);
+    auto& in0_sender_runtime_args = tt::tt_metal::GetRuntimeArgs(program, Factory::kMatmulIn0SenderKernelIdx);
+    auto& in0_receiver_runtime_args = tt::tt_metal::GetRuntimeArgs(program, Factory::kMatmulIn0ReceiverKernelIdx);
+    auto& in1_sender_runtime_args = tt::tt_metal::GetRuntimeArgs(program, Factory::kMatmulIn1SenderKernelIdx);
+    auto& in1_receiver_runtime_args = tt::tt_metal::GetRuntimeArgs(program, Factory::kMatmulIn1ReceiverKernelIdx);
     // The counters close the matmul's per-core args: [..., progress] or [..., progress, window_start, credit, readers].
-    const auto refresh_matmul_counters = [&](auto& args) {
+    const auto matmul_counters = [&](auto& args) {
         if (caller_progress) {
             TT_FATAL(
                 !windowed || args.size() >= kWindowedProgressFromEnd,
                 "matmul runtime args are missing the progress counter");
-            const uint32_t progress_arg = windowed ? static_cast<uint32_t>(args.size() - kWindowedProgressFromEnd)
-                                                   : static_cast<uint32_t>(args.size() - 1);
-            args[progress_arg] = progress_addr;
+            visit(
+                MeshFactory::kProgress,
+                args,
+                windowed ? static_cast<uint32_t>(args.size() - kWindowedProgressFromEnd)
+                         : static_cast<uint32_t>(args.size() - 1));
         }
         if (caller_credit) {
             TT_FATAL(args.size() >= kWindowedCreditFromEnd, "matmul runtime args are missing the credit counter");
-            args[args.size() - kWindowedCreditFromEnd] = credit_addr;
+            visit(MeshFactory::kCredit, args, static_cast<uint32_t>(args.size() - kWindowedCreditFromEnd));
         }
     };
     for (uint32_t x = 0; x < grid.x; ++x) {
         for (uint32_t y = 0; y < grid.y; ++y) {
             auto& in0_grid = x == 0 ? in0_sender_runtime_args : in0_receiver_runtime_args;
             if (x < in0_grid.size() && y < in0_grid[x].size() && in0_grid[x][y].size() > 0) {
-                refresh_matmul_counters(in0_grid[x][y]);
+                matmul_counters(in0_grid[x][y]);
             }
             auto& in1_grid = y == 0 ? in1_sender_runtime_args : in1_receiver_runtime_args;
             if (x < in1_grid.size() && y < in1_grid[x].size() && in1_grid[x][y].size() > 0) {
-                refresh_matmul_counters(in1_grid[x][y]);
+                matmul_counters(in1_grid[x][y]);
             }
+        }
+    }
+}
+
+std::array<uint32_t, MeshFactory::kNumCounters> counter_addresses(
+    const MinimalMatmulStridedReduceScatterAsyncParams& operation_attributes,
+    const MinimalMatmulStridedReduceScatterAsyncInputs& tensor_args) {
+    std::array<uint32_t, MeshFactory::kNumCounters> address{};
+    if (has_caller_progress(tensor_args)) {
+        address[MeshFactory::kProgress] = counter_address(tensor_args.mm_progress_counters, "mm_progress_counters");
+    }
+    if (has_caller_credit(operation_attributes, tensor_args)) {
+        address[MeshFactory::kCredit] = counter_address(tensor_args.mm_credit_counters, "mm_credit_counters");
+    }
+    return address;
+}
+}  // namespace
+
+MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory::cached_mesh_workload_t
+MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory::create_mesh_workload(
+    const MinimalMatmulStridedReduceScatterAsyncParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const MinimalMatmulStridedReduceScatterAsyncInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
+    auto adapted =
+        descriptor_adapter_t::create_mesh_workload(operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (auto& [range, descriptor] : adapted.shared_variables) {
+        shared_variables[range].descriptor = std::move(descriptor);
+    }
+    return {std::move(adapted.workload), std::move(shared_variables)};
+}
+
+void MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const MinimalMatmulStridedReduceScatterAsyncParams& operation_attributes,
+    const MinimalMatmulStridedReduceScatterAsyncInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
+    const auto address = counter_addresses(operation_attributes, tensor_args);
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        auto& shared = cached_workload.shared_variables.at(coordinate_range);
+        // As DescriptorMeshWorkloadAdapter::apply_descriptor (ttnn/api/ttnn/mesh_device_operation_adapter.hpp) does on a
+        // hit for a WorkloadDescriptor factory: re-apply the resolved buffer bindings, then the runtime args.
+        if (!shared.descriptor.resolved_bindings.empty()) {
+            auto collected = descriptor_adapter_t::collect_tensor_buffers(
+                tensor_args, tensor_return_value, shared.descriptor.workload_descriptor);
+            tt::tt_metal::apply_resolved_bindings(program, shared.descriptor.resolved_bindings, collected.buffers);
+        }
+        override_common_runtime_arguments(program, operation_attributes, tensor_args, tensor_return_value);
+        auto& counters = shared.counters;
+        if (!counters.recorded) {
+            for_each_counter_slot(
+                program,
+                operation_attributes,
+                tensor_args,
+                tensor_return_value,
+                [&](Counter counter, tt::tt_metal::RuntimeArgsData& args, uint32_t index) {
+                    counters.slots[counter].emplace_back(&args, index);
+                });
+            counters.recorded = true;
+        }
+        for (uint32_t counter = 0; counter < kNumCounters; ++counter) {
+            if (counters.written[counter] == address[counter]) {
+                continue;
+            }
+            for (const auto& [args, index] : counters.slots[counter]) {
+                (*args)[index] = address[counter];
+            }
+            counters.written[counter] = address[counter];
         }
     }
 }
