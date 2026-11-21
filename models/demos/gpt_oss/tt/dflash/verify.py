@@ -180,6 +180,17 @@ class FusedVerify:
         self.down_bal, bal_plan = {}, None
         for li, L in enumerate(self.layers):
             e = L.mlp.experts
+            assert e.decode_weight_dtype == ttnn.bfloat4_b, "the DFlash union MoE streams BFP4 expert weights"
+            dw = e.decode_weights
+            if any(d not in (None, ttnn.bfloat4_b) for d in (dw.gate_up_dtype, dw.down_dtype)):
+                # The split streams (the release setting GPT_OSS_DECODE_EXPERTS_SPLIT: exact top-1 experts, K-GPTQ
+                # rounding; dtype "split" / "split_r<k>") and bf8 streams are laid out for the one-user decode streams
+                # only; the union MoE and the balanced down copy read the plain BFP4 layout.
+                raise NotImplementedError(
+                    f"DFlash reads the plain BFP4 decode expert streams, but layer {li} holds other streams "
+                    f"(gate|up {dw.gate_up_dtype}, down {dw.down_dtype}): run DFlash with GPT_OSS_RELEASE_DEFAULTS=0 "
+                    "(GPT_OSS_DECODE_EXPERTS_SPLIT alone off also loses accepted tokens per round)"
+                )
             self.down_bal[li], bal_plan = load_decode_down_bal(
                 mesh, e.config, e.mesh_config, e.decode_weights, e.weight_dtype, e.tensor_cache_path
             )

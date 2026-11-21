@@ -24,6 +24,7 @@ import torch
 from safetensors import safe_open
 from transformers.integrations.mxfp4 import convert_moe_packed_tensors
 
+from models.demos.gpt_oss.tt.weight_source import env_path
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 _MXFP4_SUFFIXES = ("_blocks", "_scales")
@@ -50,7 +51,12 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
     - Every other float tensor is returned as bf16 (``from_pretrained(torch_dtype=torch.bfloat16)``).
     """
 
-    def __init__(self, weights_path: str | os.PathLike, head_dim: int, convert_to_meta_format: bool = True):
+    def __init__(
+        self,
+        weights_path: str | os.PathLike,
+        head_dim: int,
+        convert_to_meta_format: bool = True,
+    ):
         self._dir = resolve_checkpoint_dir(weights_path)
         self._head_dim = head_dim
         self._convert_to_meta_format = convert_to_meta_format
@@ -74,6 +80,18 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
                     break
             self._key_to_file[key] = filename
         self._mxfp4_keys = {k[: -len("_blocks")] for k in weight_map if k.endswith("_blocks")}
+        # GPT_OSS_DENSE_ROUNDED_DECODE (a release setting, models/demos/gpt_oss/__init__.py) = a file of GPTQ-rounded
+        # dense weights (attention q / k / v / o, router, LM head; q / k in Meta order) on the bfloat8_b grid. Its values
+        # replace the checkpoint ones for prefill and decode alike: each key is served under its own name and as
+        # "<key>_decode" (the name the fused decode stream copies read). Both layouts hold those values exactly in
+        # bfloat8_b, so prefill and decode compute with the same weights; tt/weight_source.py dense_rounded_tag() names
+        # every cache made from them.
+        self._decode_rounded_path = env_path("GPT_OSS_DENSE_ROUNDED_DECODE")  # a local file or hf://...
+        self._decode_rounded = None
+        if self._decode_rounded_path:
+            self._decode_rounded = torch.load(self._decode_rounded_path, mmap=True)
+            for key in self._decode_rounded:
+                self._key_to_file[f"{key}_decode"] = None
 
     def _handle(self, filename: str):
         handle = self._handles.get(filename)
@@ -83,6 +101,10 @@ class GptOssLazyStateDict(Mapping[str, torch.Tensor]):
         return handle
 
     def __getitem__(self, key: str) -> torch.Tensor:
+        if self._decode_rounded is not None:
+            base = key[: -len("_decode")] if key.endswith("_decode") else key
+            if base in self._decode_rounded:
+                return self._decode_rounded[base].clone()  # already Meta order
         filename = self._key_to_file[key]
         handle = self._handle(filename)
         if key in self._mxfp4_keys:

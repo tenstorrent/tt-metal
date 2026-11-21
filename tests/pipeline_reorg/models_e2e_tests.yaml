@@ -943,12 +943,17 @@
 - name: GPT-OSS 20B e2e tests
   cmd: |
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
+    # The release settings (models/demos/gpt_oss/__init__.py) read GPTQ-rounded weights from a pinned Hugging Face Hub
+    # revision. A run with mlperf-write-access goes online once to put them in the shared Hub cache and rebuild the
+    # shared tensor cache; read-only runs then load everything offline from the two caches.
+    [ "${MLPERF_READ_ONLY:-true}" = "false" ] && export HF_HUB_OFFLINE=0
     pytest models/demos/gpt_oss/demo/text_demo.py --timeout 600
     # DFlash accuracy (QuietBox 2; skips elsewhere). The drafter is not in the shared HF cache (read-only, offline here):
     # download it into a job-local cache.
     DFLASH_DRAFT_PATH=$(HF_HUB_OFFLINE=0 HF_HUB_CACHE=/tmp/dflash_hf python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download('z-lab/gpt-oss-20b-DFlash'))")
     export DFLASH_DRAFT_PATH
-    pytest models/demos/gpt_oss/tests/test_dflash.py -k isl_1k
+    # One-user DFlash reads plain BFP4 decode experts: without the release settings (tt/dflash/verify.py).
+    GPT_OSS_RELEASE_DEFAULTS=0 pytest models/demos/gpt_oss/tests/test_dflash.py -k isl_1k
     # Batched DFlash, 32 and 128 users (QuietBox 2; skips elsewhere): tokens vs the batch-32 decode, accepted tokens per round.
     # Its dense expert weights are not in the shared cache (read-only): run on a job-local cache of links into it, so the
     # cached files are read from there and only the missing ones are written locally.

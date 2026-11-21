@@ -128,7 +128,15 @@ class ModelArgs:
         # Padded length -> users per batched forward where all users do not fit the generator's token budget
         # (batched_prefill_group_size).
         self.batched_prefill_groups = dict(BATCHED_PREFILL_GROUPS)
-        self.capped_warmup_seq_len = 2048
+        # QuietBox 2 (vLLM serves up to 128K-token prompts): warm every prefill bucket up to max_seq_len, so that no
+        # program is built for the first time after the decode trace is captured -- its kernel binaries would be
+        # allocated where a trace replay can overwrite them (TT_METAL_TRACE_ALLOC_TRACKING=1) -- and no request waits
+        # on a bucket's first build (13-16 s at 4K, measured).
+        self.warm_every_bucket = determine_device_name(self.mesh_device) == "P150x4"
+        if self.warm_every_bucket:
+            self.capped_warmup_seq_len = 1 << (self.max_seq_len.bit_length() - 1)
+        else:
+            self.capped_warmup_seq_len = 2048
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def batched_prefill_group_size(self, padded_len, batch_size):
@@ -176,7 +184,7 @@ class ModelArgs:
                 to_warmup_seq_lens.remove(6144)
 
         for seq_len in to_warmup_seq_lens:
-            if seq_len >= 64 * 1024:
+            if seq_len >= 64 * 1024 and not self.warm_every_bucket:
                 to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
                 break
         return to_warmup_seq_lens
@@ -225,6 +233,8 @@ class ModelArgs:
             "gpt-oss-20b": {
                 "T3K": [128],
                 "TG": [128],
+                # QuietBox 2: 1.3-2.2 ms less TTFT up to 1024 tokens (vLLM server, 41-59 ms); none from 2048 up
+                "P150x4": [128, 256, 512, 1024],
             },
             # exmaple : #base_model_name : {device_name : [sequence_lengths]}
         }
@@ -356,6 +366,27 @@ class ModelArgs:
     FUSED_DECODE_WEIGHTS_VERSION = 4  # 4: QKV stream in K/V-first slot order (wqkv_kvfirst)
     # Layout version of the batched dense decode MoE weights (experts dense_decode_*).
     DENSE_MOE_DECODE_WEIGHTS_VERSION = 1
+    # Settings that choose which weight values or layouts the cache holds: the marker records them, so a run with other
+    # values (another pinned revision of the rounded weights, say) loads the HF weights once and writes its own files
+    # instead of trusting a marker for files it does not have. Each group only for the builds that read it: the dense
+    # weights (every build), the fused decode streams (QuietBox 2) and the routed prefill experts.
+    DENSE_SETTING_VARS = ("GPT_OSS_DENSE_ROUNDED_DECODE",)
+    FUSED_DECODE_SETTING_VARS = (
+        "GPT_OSS_DECODE_EXPERTS_SPLIT",
+        "GPT_OSS_DECODE_SPLIT_RANKS",
+        "GPT_OSS_DECODE_SPLIT_ROUND_DIR",
+        "GPT_OSS_DECODE_SPLIT_ROUND_ONLY",
+        "GPT_OSS_DECODE_SPLIT_NATIVE",
+        "GPT_OSS_DENSE_ROUNDED_DECODE",
+        "GPT_OSS_QKV_FUSED_ROPE_KV",
+        "GPT_OSS_ROUTED_DECODE_BF8_LAYERS",
+    )
+    ROUTED_PREFILL_SETTING_VARS = ("GPT_OSS_PREFILL_KGPTQ", "GPT_OSS_DECODE_SPLIT_ROUND_DIR")
+
+    @staticmethod
+    def _settings(names):
+        """The variables of names that are set (recorded in the weight-cache marker)."""
+        return {k: os.environ[k] for k in names if os.environ.get(k, "").strip()}
 
     def weight_cache_is_complete(self, dtype, fused_decode=False, dense_moe=False):
         """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was
@@ -388,11 +419,25 @@ class ModelArgs:
             return False
         if meta.get("model_name") != self.model_name or meta.get("n_layers") != self.n_layers:
             return False
+        if meta.get("dense_settings", {}) != self._settings(self.DENSE_SETTING_VARS):
+            # the dense weights' caches (prefill and decode) are named by their values: checkpoint or GPTQ-rounded
+            return False
+        if fused_decode and meta.get("fused_decode_settings", {}) != self._settings(self.FUSED_DECODE_SETTING_VARS):
+            return False
         if fused_decode and meta.get("fused_decode_weights") != self.FUSED_DECODE_WEIGHTS_VERSION:
+            return False
+        decode_bf8 = self._routed_decode_bf8_layers(fused_decode)
+        built = str(meta.get("routed_decode_bf8_layers", "")).split(";")
+        if decode_bf8 and decode_bf8 not in built and "all" not in built:  # "all" wrote every layer's bf8 streams
+            # bf8 decode expert streams (fused_decode/config.py) are extra cache files: cold-load once to write them
             return False
         if dense_moe and meta.get("dense_moe_decode_weights") != self.DENSE_MOE_DECODE_WEIGHTS_VERSION:
             return False
         routed_version = self._routed_prefill_weights_version()
+        if routed_version and meta.get("routed_prefill_settings", {}) != self._settings(
+            self.ROUTED_PREFILL_SETTING_VARS
+        ):
+            return False
         if routed_version and meta.get("routed_prefill_weights") != routed_version:
             # The routed prefill experts (experts/prefill_routed.py) cache their own weight layout; a cache built
             # without them must cold-load once so they get written.
@@ -400,11 +445,19 @@ class ModelArgs:
         # Belt-and-suspenders: the cache dir must still actually hold tensor files.
         return any(cache_path.glob("*.tensorbin"))
 
+    @staticmethod
+    def _routed_decode_bf8_layers(fused_decode):
+        """GPT_OSS_ROUTED_DECODE_BF8_LAYERS when the fused decode streams are built, else ""."""
+        from models.demos.gpt_oss.tt.fused_decode.config import routed_decode_bf8_layers
+
+        return routed_decode_bf8_layers() if fused_decode else ""
+
     def _routed_prefill_weights_version(self):
         """Routed prefill expert weight-cache version when this model builds them (env flag + mesh), else None."""
         from models.demos.gpt_oss.tt.experts.prefill_routed import (
             ROUTED_PREFILL_NUM_EXPERTS,
             ROUTED_PREFILL_WEIGHTS_VERSION,
+            prefill_kgptq_enabled,
             routed_prefill_bf8_layers,
             routed_prefill_enabled,
             routed_prefill_mesh_supported,
@@ -417,8 +470,9 @@ class ModelArgs:
             and routed_prefill_mesh_supported(self.mesh_device, num_experts)
         ):
             bf8 = routed_prefill_bf8_layers()
-            # The bf8 layer set changes which routed caches must exist, so it is part of the marker.
-            return f"{ROUTED_PREFILL_WEIGHTS_VERSION}:bf8={bf8}" if bf8 else ROUTED_PREFILL_WEIGHTS_VERSION
+            # The bf8 layer set and the K-GPTQ switch change which routed caches must exist, so both are in the marker.
+            version = f"{ROUTED_PREFILL_WEIGHTS_VERSION}:bf8={bf8}" if bf8 else ROUTED_PREFILL_WEIGHTS_VERSION
+            return f"{version}:kgptq" if prefill_kgptq_enabled() else version
         return None
 
     def mark_weight_cache_complete(self, dtype, fused_decode=False, dense_moe=False):
@@ -457,6 +511,24 @@ class ModelArgs:
                         ),
                         "routed_prefill_weights": (
                             self._routed_prefill_weights_version() or previous.get("routed_prefill_weights", False)
+                        ),
+                        "dense_settings": self._settings(self.DENSE_SETTING_VARS),
+                        "fused_decode_settings": (
+                            self._settings(self.FUSED_DECODE_SETTING_VARS)
+                            if fused_decode
+                            else previous.get("fused_decode_settings", {})
+                        ),
+                        "routed_prefill_settings": (
+                            self._settings(self.ROUTED_PREFILL_SETTING_VARS)
+                            if self._routed_prefill_weights_version()
+                            else previous.get("routed_prefill_settings", {})
+                        ),
+                        # every bf8 decode expert layer set this cache has been built with (";"-separated)
+                        "routed_decode_bf8_layers": ";".join(
+                            sorted(
+                                {v for v in str(previous.get("routed_decode_bf8_layers", "")).split(";") if v}
+                                | ({self._routed_decode_bf8_layers(fused_decode)} - {""})
+                            )
                         ),
                     }
                 )

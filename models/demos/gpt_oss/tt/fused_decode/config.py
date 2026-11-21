@@ -146,6 +146,80 @@ def fused_decode_supported(mesh_device, mesh_config, hf_config, use_throughput_e
 QKV_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
 OPROJ_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
 ROUTER_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
+# Routed expert weights of the decode MoE streams (ExpertGateUpStream / ExpertDownStream): bfloat4_b, or bfloat8_b for
+# the layers in GPT_OSS_ROUTED_DECODE_BF8_LAYERS ("all", "" or a comma list of layer ids; default ""). bf8 holds the
+# MXFP4 checkpoint values exactly, bf4 rounds ~20% of them (12.8% relative error on layer 10's down weights) and
+# flattens the next-token distribution; a bf8 layer streams 1.9x the expert bytes.
+ROUTED_DECODE_BF8_LAYERS_ENV = "GPT_OSS_ROUTED_DECODE_BF8_LAYERS"
+# GPT_OSS_DECODE_EXPERTS_SPLIT holds the routed experts' MXFP4 weights exactly in the decode streams, as a BFP4 part
+# plus a BFP2 part read by the compressed custom_mm (fused_decode/mxfp4_split.py; on in the gpt-oss-20b release
+# settings, models/demos/gpt_oss/__init__.py). Overrides the bf8 expert switch for the streams it covers. Spec: "1" /
+# "all" (gate|up and down), "gate_up" or "down", optionally ":<comma list of layer ids>" (default every layer); "" / "0"
+# = off.
+DECODE_EXPERTS_SPLIT_SPEC = os.environ.get("GPT_OSS_DECODE_EXPERTS_SPLIT", "0").strip()
+DECODE_EXPERTS_SPLIT = DECODE_EXPERTS_SPLIT_SPEC not in ("", "0")
+
+
+# GPT_OSS_DECODE_SPLIT_RANKS=k or a comma list of k per layer (with GPT_OSS_DECODE_EXPERTS_SPLIT): only each token's top-k
+# routed experts read the exact split parts; the others read a BFP4 rounding (along K) stored after them. Unset: every
+# routed expert is exact.
+_SPLIT_RANKS_SPEC = os.environ.get("GPT_OSS_DECODE_SPLIT_RANKS", "").strip()
+DECODE_SPLIT_RANKS = [int(v) for v in _SPLIT_RANKS_SPEC.split(",")] if _SPLIT_RANKS_SPEC else None
+
+
+# GPT_OSS_DECODE_SPLIT_ROUND_ONLY=1: a split stream with no exact rank (split_r0) stores only its rounded BFP4 parts,
+# columns contiguous like the BFP4 streams. Its [BFP4][BFP2][rounded BFP4] segments made every read skip the two exact
+# parts it never reads (2.3x the bytes per column apart): the K-GPTQ base (k0) ran 0.7% slower than the package.
+DECODE_SPLIT_ROUND_ONLY = os.environ.get("GPT_OSS_DECODE_SPLIT_ROUND_ONLY", "0") == "1"
+
+
+# GPT_OSS_DECODE_SPLIT_NATIVE=1 (with GPT_OSS_DECODE_SPLIT_ROUND_ONLY): a round-only rank-0 stream runs as a plain
+# bfloat4_b stream (the package's reader and custom_mm) of transposed tiles: its rounded part is already the package
+# column layout (K tiles + a bias tile, 576-byte BFP4 tiles), only transposed with the bias terms at K 0 and 16.
+DECODE_SPLIT_NATIVE = os.environ.get("GPT_OSS_DECODE_SPLIT_NATIVE", "0") == "1"
+
+
+def decode_split_ranks(layer_idx):
+    """The exact routed ranks k of a layer (GPT_OSS_DECODE_SPLIT_RANKS), or None (every routed expert exact)."""
+    if DECODE_SPLIT_RANKS is None:
+        return None
+    if len(DECODE_SPLIT_RANKS) == 1:
+        return DECODE_SPLIT_RANKS[0]
+    assert layer_idx is not None, "a per-layer GPT_OSS_DECODE_SPLIT_RANKS needs the layer index"
+    return DECODE_SPLIT_RANKS[int(layer_idx)]
+
+
+def decode_split_dtype(layer_idx=None, stream=None):
+    """The decode stream weight dtype of a layer's split stream ("gate_up" / "down"; both streams of a layer have the
+    same exact ranks): "split" or "split_r<k>" (fused_decode/mxfp4_split.py)."""
+    k = decode_split_ranks(layer_idx)
+    return "split" if k is None else f"split_r{k}"
+
+
+def decode_experts_split(layer_idx):
+    """The decode streams ("gate_up", "down") of a layer held exactly by GPT_OSS_DECODE_EXPERTS_SPLIT."""
+    if not DECODE_EXPERTS_SPLIT:
+        return frozenset()
+    which, _, layers = DECODE_EXPERTS_SPLIT_SPEC.partition(":")
+    streams = {"1": ("gate_up", "down"), "all": ("gate_up", "down"), "gate_up": ("gate_up",), "down": ("down",)}[which]
+    if layers and (layer_idx is None or int(layer_idx) not in {int(x) for x in layers.split(",")}):
+        return frozenset()
+    return frozenset(streams)
+
+
+def routed_decode_bf8_layers():
+    """Raw GPT_OSS_ROUTED_DECODE_BF8_LAYERS spec (recorded in the weight-cache marker)."""
+    return os.getenv(ROUTED_DECODE_BF8_LAYERS_ENV, "").strip()
+
+
+def routed_decode_weights_dtype(layer_idx):
+    """Routed expert weight dtype of one layer's decode streams: bfloat8_b for the layers in the bf8 list."""
+    spec = routed_decode_bf8_layers()
+    if spec == "all":
+        return ttnn.bfloat8_b
+    layers = {int(v) for v in spec.split(",") if v.strip() != ""}
+    return ttnn.bfloat8_b if layer_idx is not None and int(layer_idx) in layers else ttnn.bfloat4_b
+
 
 # Streamed-op worker cores per DRAM bank (swept on the full model): dense projections are bank-bandwidth bound
 # at 1; the routed gate|up (3 column pairs per bank) and down (12 columns per bank) gain from 3 and 2.
@@ -158,6 +232,10 @@ DOWN_STREAM_READERS = 2
 # replacing the fused-QK RoPE op and the fused K/V cache update (2 ops per layer); its weights are then stored in the
 # K / V-first slot order (stream.py qkv_column_order). GPT_OSS_QKV_FUSED_ROPE_KV=0: the separate ops.
 QKV_FUSED_ROPE_KV = os.environ.get("GPT_OSS_QKV_FUSED_ROPE_KV", "1") == "1"
+# GPT_OSS_QKV_ROPE_EXACT=2 (gpt-oss-20b release settings): the fused QKV kernel copies y / cos / sin into DST exactly
+# instead of loading them through LoFi custom_mm (which drops their last BF16 bit); y @ T still goes through LoFi
+# (kernels/stream_qkv_rope_compute.cpp QKV_ROPE_EXACT_LITE). Unset: the LoFi loads.
+QKV_ROPE_EXACT_LITE = os.environ.get("GPT_OSS_QKV_ROPE_EXACT") == "2"
 
 # Decode LM head (fused_decode/terminal.py): a DRAM-streaming copy of the LM-head weight, vocab split evenly over the TP
 # devices, BFP8 x BF16 LoFi like the other dense projections. Readers per DRAM bank (measured standalone: 1 and 2
@@ -185,6 +263,19 @@ SDPA_DECODE_K_CHUNK_FULL = 256
 # layer (182 -> 267 GB/s of KV), at 200 positions 11.9 -> 13.0 us (measured standalone, per-device gpt-oss-20b shapes).
 SDPA_DECODE_B1_GRID = (11, 10)
 SDPA_DECODE_B1_CORES_PER_HEAD = 32
+
+
+# GPT_OSS_DECODE_BOUNDARY_EARLY_SUM=1 (gpt-oss-20b release settings; unset = the previous order): the one-row boundary
+# reader (kernels/boundary_reader.cpp BND_EARLY_SUM) publishes the residual and the all-reduce slots before the RMSNorm
+# inputs, so the gamma DRAM read and the reduce-scaler fill overlap the slot sum instead of gating it (1.4-1.5 us of the
+# 7.2 us router op and of the QKV op's boundary in a device profile, where the slots had long arrived). Same CB bytes:
+# bit-identical.
+DECODE_BOUNDARY_EARLY_SUM = os.environ.get("GPT_OSS_DECODE_BOUNDARY_EARLY_SUM") == "1"
+# GPT_OSS_DECODE_ROUTER_FAST_TOPK=1 (gpt-oss-20b release settings; unset = 4 argmax passes): the one-row decode
+# router's top-4 + softmax (kernels/router_topk.hpp topk_softmax_fast, in the router LinearStream writer) in one pass of
+# register insertions over word reads of the logits; ~1.9 us of the 7.2 us router op ran after its matmul in a device
+# profile. Same ids (ties to the lower id), weights and stage bytes: bit-identical.
+DECODE_ROUTER_FAST_TOPK = os.environ.get("GPT_OSS_DECODE_ROUTER_FAST_TOPK") == "1"
 
 
 def sdpa_decode_program_config(sliding_window, one_user=False):

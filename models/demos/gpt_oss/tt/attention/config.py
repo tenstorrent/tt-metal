@@ -36,6 +36,11 @@ PREFILL_PROJ_2D = {
     "o": (9, 10, 8),  # [S, 1024] x [1024, 2880]: N = 90 tiles over 9 columns, K = 32 tiles
 }
 PREFILL_PROJ_L1_BYTES = 1_100_000
+# ttnn.matmul runs a bf16 x bf8 matmul at HiFi2 only without a program config (LoFi with one, as for bf8 x bf8). A bf16
+# in0 that gets the 2D config above passes this instead: the default's numerics, with the 2D config's fixed K blocking.
+PREFILL_PROJ_BF16_COMPUTE = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
+)
 PREFILL_PROJ_L1_MARGIN = 32 * 1024
 # Tensor parallelism the geometries above were measured at (1x4); any other TP keeps the ttnn default.
 PREFILL_PROJ_TP = 4
@@ -44,8 +49,11 @@ PREFILL_PROJ_TP = 4
 def prefill_proj_program_config(grid, m_tiles, k_tiles, n_tiles, role, tp, in0_dtype, weight_dtype, l1_bytes=None):
     """2D multicast program config for a prefill projection of m_tiles x k_tiles x n_tiles, or None (ttnn default)
     when the role's geometry does not fit (other shapes or a smaller grid), at a TP other than PREFILL_PROJ_TP, or when
-    in0 or the weight is not bfloat8_b (the L1 model below sizes their tiles as bf8: a bf16 in0 doubles the in0
-    buffers and can overflow L1 at long sequences).
+    the weight is not bfloat8_b or in0 is neither bfloat8_b nor bfloat16.
+
+    A bf16 in0 (the bf16 prefill residual stream) gets the same geometry, its in0 buffers sized as bf16. The fixed
+    in0_block_w keeps the K accumulation order independent of M, so a batched prefill ([1, 1, B * S, K]) computes every
+    user's rows exactly as that user's own prefill does; the ttnn default picks in0_block_w from M.
 
     M splits over at most grid.y rows. out_block_h is the largest divisor of per_core_M (at most 32) whose circular
     buffers (in0 + in1 double-buffered, output + bf16 intermediate block) fit PREFILL_PROJ_L1_BYTES; when that leaves
@@ -53,7 +61,8 @@ def prefill_proj_program_config(grid, m_tiles, k_tiles, n_tiles, role, tp, in0_d
     (out_block_h = 1 measured 2-3x slower, and in0_block_w 8 with the whole 26-tile block overflows L1 at S = 8192).
     l1_bytes: the circular-buffer budget instead of PREFILL_PROJ_L1_BYTES when lower (L1 held by resident buffers)."""
     budget = PREFILL_PROJ_L1_BYTES if l1_bytes is None else min(l1_bytes, PREFILL_PROJ_L1_BYTES)
-    if tp != PREFILL_PROJ_TP or in0_dtype != ttnn.bfloat8_b or weight_dtype != ttnn.bfloat8_b:
+    in0_tile = {ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}.get(in0_dtype)
+    if tp != PREFILL_PROJ_TP or in0_tile is None or weight_dtype != ttnn.bfloat8_b:
         return None
     gx, pcn, kb = PREFILL_PROJ_2D[role]
     if gx > grid.x or gx * pcn != n_tiles or k_tiles % kb:
@@ -62,7 +71,7 @@ def prefill_proj_program_config(grid, m_tiles, k_tiles, n_tiles, role, tp, in0_d
 
     def block_h(pcm):
         for obh in range(min(pcm, 32), 0, -1):
-            l1 = obh * kb * 2 * 1088 + kb * pcn * 2 * 1088 + obh * pcn * (out_tile + 2048)
+            l1 = obh * kb * 2 * in0_tile + kb * pcn * 2 * 1088 + obh * pcn * (out_tile + 2048)
             if pcm % obh == 0 and l1 <= budget:
                 return obh
         return 1

@@ -10,13 +10,15 @@ transformation followed by top-k selection to assign tokens to experts.
 
 """
 
+
 import torch
 
 import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
-from .fused_decode.config import ROUTER_DECODE_WEIGHT_DTYPE
+from .fused_decode.config import DECODE_ROUTER_FAST_TOPK, ROUTER_DECODE_WEIGHT_DTYPE
 from .fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
+from .weight_source import dense_rounded_tag
 
 
 def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_config=None):
@@ -64,13 +66,18 @@ class TopKRouter:
         self.hidden_dim = hf_config.hidden_size
         self.tensor_cache_path = tensor_cache_path
         torch_weight = state_dict["weight"].transpose(0, 1) if state_dict else None
+        # GPT_OSS_DENSE_ROUNDED_DECODE (utils/lazy_state_dict.py, gpt-oss-20b release settings): the GPTQ-rounded router
+        # weight, served under both names, so this prefill copy and the decode stream hold the same values
+        self._decode_weight = (
+            state_dict["weight_decode"].transpose(0, 1) if state_dict and "weight_decode" in state_dict else None
+        )
         torch_bias = state_dict["bias"].unsqueeze(0) if state_dict else None
         self.weight = ttnn.as_tensor(
             torch_weight,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"weight{dense_rounded_tag()}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.bias = ttnn.as_tensor(
@@ -98,7 +105,13 @@ class TopKRouter:
 
         if indexed_decode:
             assert ccl_manager is not None, "fused decode routing shares its output buffers through the CCL manager"
-            self._init_indexed_decode(mesh_device, torch_weight, torch_bias, tensor_cache_path, ccl_manager)
+            self._init_indexed_decode(
+                mesh_device,
+                torch_weight if self._decode_weight is None else self._decode_weight,
+                torch_bias,
+                tensor_cache_path,
+                ccl_manager,
+            )
 
         # Fused op support: matmul + topk + softmax in one kernel
         # The fused kernel uses 4 groups of 3 cores, one per N-tile (32 experts
@@ -123,12 +136,13 @@ class TopKRouter:
         layout = None
         if torch_weight is not None:
             layout = stream_linear_layout(torch_weight, torch_bias.reshape(-1), banks)
+        tag = dense_rounded_tag()
         self.weight_stream = as_stream_tensor(
             mesh_device,
             [layout] * mesh_device.shape[1] if layout is not None else None,
             linear_stream_rows(mesh_device, self.hidden_dim, self.num_experts),
             ROUTER_DECODE_WEIGHT_DTYPE,
-            get_cache_file_name(tensor_cache_path, f"weight_stream_e{self.num_experts}_b{banks}_nb{NBIAS}"),
+            get_cache_file_name(tensor_cache_path, f"weight_stream_e{self.num_experts}_b{banks}_nb{NBIAS}{tag}"),
         )
 
     def _init_fused_op(self, device, B):
@@ -411,6 +425,13 @@ class TopKRouter:
             out_page_bytes=64,
             heads=(self.top_k, self.num_experts),
         )
+        if DECODE_ROUTER_FAST_TOPK:  # one-pass top-4 in the writer (fused_decode/config.py)
+            return router(
+                hidden_states,
+                self.weight_stream,
+                self.ccl_manager.get_decode_router_out(),
+                extra_defines=[("ROUTER_FAST_TOPK", "1")],
+            )
         return router(hidden_states, self.weight_stream, self.ccl_manager.get_decode_router_out())
 
     def _fused_call(self, hidden_states, use_throughput_experts):

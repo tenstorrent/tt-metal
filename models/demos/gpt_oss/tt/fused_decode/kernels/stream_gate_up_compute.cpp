@@ -20,6 +20,12 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/experimental/custom_mm.h"
 #include "api/compute/pack.h"
+#ifdef EXPERT_SPLIT
+// GPT_OSS_DECODE_EXPERTS_SPLIT (fused_decode/mxfp4_split.py): exact MXFP4 split weights, two compressed custom_mm calls
+// per column (BFP4 small + bias from cb_w, BFP2 big from cb_w2) into the same DST tile.
+#include "api/compute/experimental/compressed_custom_mm.h"
+#include "split_meta.hpp"
+#endif
 
 // SFPU ops over the result rows only: a 1x32 matmul result occupies the first rows of DST faces 0 and 1
 // (VectorMode::R, 2 iterations, as the DeepSeek DRAM-streaming matmul does for tile heights <= 4).
@@ -43,6 +49,31 @@ ALWI void silu_rows(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (DST_ACCUM_MODE, kRowIters), idst, VectorMode::R));
 }
+#ifdef W_FP32_FOLD
+// split_acc keeps two FP32 accumulators per output row (dest rows 0 / 8 of each face: alternate K faces);
+// custom_mm's own finalize moves one through SrcB (TF32, ~10-bit mantissa) before adding it.
+// custom_mm_block<dest_layout, false> leaves them apart and this folds them in FP32 on the SFPU: rows 8.. of each face
+// onto rows 0.. (VectorMode::R).
+#ifdef TRISC_MATH
+#include "sfpi.h"
+namespace ckernel::sfpu {
+template <int ITERATIONS>
+inline void calculate_split_fold() {
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        const sfpi::vFloat lo = sfpi::dst_reg[0];
+        const sfpi::vFloat hi = sfpi::dst_reg[4];  // 8 dest rows further
+        sfpi::dst_reg[0] = lo + hi;
+        sfpi::dst_reg++;
+    }
+}
+}  // namespace ckernel::sfpu
+#endif
+ALWI void fold_rows(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_split_fold, (2), idst, VectorMode::R));
+}
+#endif
+
 ALWI void mul_rows(uint32_t a, uint32_t b, uint32_t out) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -69,9 +100,32 @@ void kernel_main() {
     constexpr uint32_t inv_alpha = get_compile_time_arg_val(10);  // float bits
     constexpr uint32_t one = get_compile_time_arg_val(11);        // float bits
 
+#ifdef EXPERT_SPLIT
+    constexpr uint32_t cb_w2 = get_compile_time_arg_val(12);
+    constexpr uint32_t kt4 = get_compile_time_arg_val(13);
+    constexpr uint32_t kt2 = get_compile_time_arg_val(14);
+    constexpr uint32_t n4 = get_compile_time_arg_val(15);
+    constexpr uint32_t n2 = get_compile_time_arg_val(16);
+    static constexpr auto meta4 = split_meta::cta_array<17, n4>();
+    static constexpr auto meta2 = split_meta::cta_array<17 + n4, n2>();
+    const uint32_t meta4_addr = reinterpret_cast<uint32_t>(meta4.data());
+    const uint32_t meta2_addr = reinterpret_cast<uint32_t>(meta2.data());
+    constexpr bool transpose = true;
+    constexpr bool split_acc = false;
+    constexpr auto dest_layout = split_acc ? CustomMmDestLayout::DefaultSplitAcc : CustomMmDestLayout::Default;
+    compressed_custom_mm_block_init<transpose, dest_layout>(cb_x, cb_w, cb_act);
+#else
+#ifdef W_TRANSPOSED
+    // transposed BFP4 tiles, 16-value groups along K (GPT_OSS_DECODE_SPLIT_NATIVE: a rank-0 split stream's rounded
+    // parts)
+    constexpr bool transpose = true;
+#else
     constexpr bool transpose = false;
-    constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
+#endif
+    constexpr bool split_acc = true;
+    constexpr auto dest_layout = split_acc ? CustomMmDestLayout::DefaultSplitAcc : CustomMmDestLayout::Default;
     custom_mm_block_init<transpose, dest_layout>(cb_x, cb_w, cb_act);
+#endif
 
     uint32_t scores[num_sel];
     for (uint32_t e = 0; e < num_sel; ++e) {
@@ -83,12 +137,41 @@ void kernel_main() {
     for (uint32_t e = 0; e < num_sel; ++e) {
         for (uint32_t p = 0; p < pairs; ++p) {
             tile_regs_acquire();
+#ifdef EXPERT_SPLIT
+            for (uint32_t d = 0; d < 2; ++d) {  // gate column -> DST 0, up column -> DST 1
+#ifdef SPLIT_RANKS
+                // routed ranks >= SPLIT_RANKS: the rounded BFP4 tiles alone (same tile count and formats as meta4)
+                const bool exact = e < SPLIT_RANKS;
+#else
+                constexpr bool exact = true;
+#endif
+                cb_wait_front(cb_w, 1);
+                compressed_custom_mm_block<dest_layout>(cb_x, cb_w, meta4_addr, d, kt4);
+                cb_pop_front(cb_w, 1);
+                if (exact) {
+                    cb_wait_front(cb_w2, 1);
+                    compressed_custom_mm_block<dest_layout>(cb_x, cb_w2, meta2_addr, d, kt2);
+                    cb_pop_front(cb_w2, 1);
+                }
+            }
+#else
+#ifdef W_FP32_FOLD
+            constexpr bool finalize = false;  // fold_rows below
+#else
+            constexpr bool finalize = custom_mm_split_acc(dest_layout);
+#endif
             cb_wait_front(cb_w, kt);
-            custom_mm_block<dest_layout>(cb_x, cb_w, 0, 0, 0, kt);
+            custom_mm_block<dest_layout, finalize>(cb_x, cb_w, 0, 0, 0, kt);
             cb_pop_front(cb_w, kt);
             cb_wait_front(cb_w, kt);
-            custom_mm_block<dest_layout>(cb_x, cb_w, 0, 0, 1, kt);
+            custom_mm_block<dest_layout, finalize>(cb_x, cb_w, 0, 0, 1, kt);
             cb_pop_front(cb_w, kt);
+#ifdef W_FP32_FOLD
+            binop_with_scalar_tile_init();
+            fold_rows(0);
+            fold_rows(1);
+#endif
+#endif
 
             clamp_tile_init();
             clamp_rows(0, neg_big, limit);
@@ -112,9 +195,17 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(cb_act, 1);
 
+#ifdef EXPERT_SPLIT
+            compressed_custom_mm_block_init_short<transpose, dest_layout>(cb_x, cb_w, cb_act);
+#else
             custom_mm_block_init_short<transpose, dest_layout>(cb_x, cb_w, cb_act);
+#endif
         }
     }
     cb_pop_front(cb_x, kt);
+#ifdef EXPERT_SPLIT
+    compressed_custom_mm_block_uninit<dest_layout>(cb_act);
+#else
     custom_mm_block_uninit<dest_layout>(cb_act);
+#endif
 }

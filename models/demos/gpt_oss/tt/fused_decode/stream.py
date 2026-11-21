@@ -33,7 +33,7 @@ from loguru import logger
 
 import ttnn
 
-from .config import DECODE_BOUNDARY_PREFETCH_ALL
+from .config import DECODE_BOUNDARY_PREFETCH_ALL, QKV_ROPE_EXACT_LITE
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 NBIAS = 4  # residual terms carrying a bias (BFP4: relative error ~ 8^-NBIAS of the 16-value group maximum)
@@ -466,6 +466,10 @@ class _BankStreamOp:
         for c, *_ in self.assignments[1:]:
             self.cores = self.cores.merge(ttnn.CoreRangeSet([ttnn.CoreRange(c, c)]))
 
+    def _split_defines(self):
+        """Kernel defines of the exact MXFP4 split streams (fused_decode/mxfp4_split.py)."""
+        return [("EXPERT_SPLIT", "1")] + ([("SPLIT_RANKS", str(self.ranks))] if self.ranks is not None else [])
+
     def logical_bank(self, bank):
         return (bank + self.rot) % self.banks
 
@@ -499,11 +503,12 @@ class _BankStreamOp:
         compute="matmul",
         compute_rt=None,
         defines=None,
+        reader=None,
     ):
         dm = ttnn.DataMovementConfigDescriptor
         kernels = [
             ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / f"stream_{name}_reader.cpp"),
+                kernel_source=str(KERNEL_DIR / f"stream_{reader or name}_reader.cpp"),
                 core_ranges=self.cores,
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
@@ -525,11 +530,28 @@ class _BankStreamOp:
                 runtime_args=compute_rt if compute_rt is not None else [],
                 defines=defines or [],
                 config=ttnn.ComputeConfigDescriptor(
-                    math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    fp32_dest_acc_en=True,
+                    math_approx_mode=False,
                 ),
             ),
         ]
         return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+
+
+def _native_defines():
+    """W_TRANSPOSED (transposed BFP4 tiles), + W_FP32_FOLD with GPT_OSS_DECODE_SPLIT_NATIVE_FOLD=1 (gpt-oss-20b release
+    settings): custom_mm's two split accumulators are folded in FP32 on the SFPU instead of by custom_mm's finalize,
+    which passes one of them through SrcB (TF32) (kernels/stream_matmul_compute.cpp)."""
+    fold = os.environ.get("GPT_OSS_DECODE_SPLIT_NATIVE_FOLD", "0") == "1"
+    return [("W_TRANSPOSED", "1")] + ([("W_FP32_FOLD", "1")] if fold else [])
+
+
+def _native_round_only(split, ranks):
+    """Whether a decode expert stream of this split spec runs natively (GPT_OSS_DECODE_SPLIT_NATIVE)."""
+    from .config import DECODE_SPLIT_NATIVE, DECODE_SPLIT_ROUND_ONLY
+
+    return split and ranks == 0 and DECODE_SPLIT_ROUND_ONLY and DECODE_SPLIT_NATIVE
 
 
 class ExpertGateUpStream(_BankStreamOp):
@@ -537,8 +559,11 @@ class ExpertGateUpStream(_BankStreamOp):
     UINT16 / BF16 row-major buffers whose first k entries are the routed experts and their softmax weights; act: [k,
     I_pad] BF16 row-major L1, receives w_e * SwiGLU(gate_e, up_e) per routed expert e."""
 
-    def __init__(self, mesh_device, hidden, inter_pad, num_sel, swiglu_limit, alpha, readers):
+    def __init__(
+        self, mesh_device, hidden, inter_pad, num_sel, swiglu_limit, alpha, readers, weight_dtype=ttnn.bfloat4_b
+    ):
         super().__init__(mesh_device, readers, rot=EXPERT_BANK_ROT)
+        self.weight_dtype = weight_dtype
         self.kx = hidden // TILE
         self.kt = self.kx + 1
         self.num_sel = num_sel
@@ -547,22 +572,52 @@ class ExpertGateUpStream(_BankStreamOp):
         assert self.P % readers == 0, f"{self.P} pairs per bank do not split over {readers} readers"
         self.pairs = self.P // readers
         self.limit, self.alpha = swiglu_limit, alpha
-        self.col_bytes = self.kt * BFP4_TILE_BYTES
+        # weight_dtype "split" / "split_r<k>" = exact MXFP4 split streams (fused_decode/mxfp4_split.py); split_r<k>:
+        # only the top-k routed experts read the exact parts, the others a BFP4 rounding stored after them
+        from . import mxfp4_split as ms
+
+        self.split, self.ranks = ms.split_spec(weight_dtype)
+        self.native = _native_round_only(self.split, self.ranks)
+        if self.native:  # a plain bfloat4_b stream of transposed tiles (W_TRANSPOSED)
+            self.split, self.weight_dtype = False, ttnn.bfloat4_b
+        if self.split:
+            self.part4 = self.kt * ms.BFP4_BYTES
+            self.part2 = self.kx * ms.BFP2_BYTES
+            self.page4, self.page2 = ms.page_bytes(self.part4), ms.page_bytes(self.part2)
+            s4, s2 = ms.gate_up_sequences(self.kx)
+            self.meta4, self.meta2 = ms.metadata_words(s4), ms.metadata_words(s2)
+            self.kt4, self.kt2 = len(s4), len(s2)
+            from .config import DECODE_SPLIT_ROUND_ONLY
+
+            self.round_only = DECODE_SPLIT_ROUND_ONLY and self.ranks == 0  # only the rounded parts stored
+            self.col_bytes = (
+                self.part4
+                if self.round_only
+                else self.part4 + self.part2 + (self.part4 if self.ranks is not None else 0)
+            )
+        else:
+            self.tile_bytes = TILE_BYTES[self.weight_dtype]
+            self.col_bytes = self.kt * self.tile_bytes
+            self.page_bytes = _page_bytes(self.kt, self.tile_bytes)
         self.expert_stride = 2 * self.P * self.col_bytes
-        self.page_bytes = _page_bytes(self.kt, BFP4_TILE_BYTES)
 
     def weight_rows(self, num_experts):
         return num_experts * 2 * self.P * self.kt * TILE
 
     def __call__(self, x, ids, scores, weights, act):
-        cb_x, cb_w, cb_idx, cb_scr, cb_act = 0, 1, 2, 3, 16
+        cb_x, cb_w, cb_idx, cb_scr, cb_act, cb_w2 = 0, 1, 2, 3, 16, 4
         cbs = [
             self._cb(cb_x, ttnn.bfloat16, TINY_BYTES, self.kt, tiny=True),
-            self._cb(cb_w, ttnn.bfloat4_b, BFP4_TILE_BYTES, 3 * self.kt),
+            # split: the compressed custom_mm sets the weight formats per tile; the CB format is a placeholder
+            self._cb(cb_w, ttnn.bfloat8_b, self.part4, 3)
+            if self.split
+            else self._cb(cb_w, self.weight_dtype, self.tile_bytes, 3 * self.kt),
             self._cb(cb_idx, ttnn.uint16, 64, 1),
             self._cb(cb_scr, ttnn.bfloat16, 64, 1),
             self._cb(cb_act, ttnn.bfloat16, TINY_BYTES, 4, tiny=True),
         ]
+        if self.split:
+            cbs.append(self._cb(cb_w2, ttnn.bfloat8_b, self.part2, 3))
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for core, bank, r, vc in self.assignments:
             reader_rt[core.x][core.y] = [
@@ -578,8 +633,12 @@ class ExpertGateUpStream(_BankStreamOp):
                 self.logical_bank(bank) * self.P + r * self.pairs,
                 scores.buffer_address(),
             ]
-        reader_ct = [cb_w, cb_idx, self.kt, 2 * self.pairs, self.num_sel, self.expert_stride, BFP4_TILE_BYTES]
-        reader_ct += [self.page_bytes, 64] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
+        if self.split:
+            reader_ct = [cb_w, cb_w2, cb_idx, 2 * self.pairs, self.num_sel, self.expert_stride, self.part4, self.part2]
+            reader_ct += [self.page4, self.page2, 0, 64] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
+        else:
+            reader_ct = [cb_w, cb_idx, self.kt, 2 * self.pairs, self.num_sel, self.expert_stride, self.tile_bytes]
+            reader_ct += [self.page_bytes, 64] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
         writer_ct = [
             cb_x,
             cb_act,
@@ -595,7 +654,18 @@ class ExpertGateUpStream(_BankStreamOp):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         compute_ct = [cb_x, cb_w, cb_act, self.kt, self.pairs, self.num_sel]
         compute_ct += [_f32_bits(v) for v in (self.limit, -self.limit, -3.0e38, self.alpha, 1.0 / self.alpha, 1.0)]
-        program = self._program("gate_up", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, "gate_up")
+        if self.split:
+            compute_ct += [cb_w2, self.kt4, self.kt2, len(self.meta4), len(self.meta2)] + self.meta4 + self.meta2
+            program = self._program(
+                "gate_up", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, "gate_up",
+                defines=self._split_defines() + ([("SPLIT_ROUND_ONLY", "1")] if self.round_only else []),
+                reader="expert_split",
+            )  # fmt: skip
+        else:
+            program = self._program(
+                "gate_up", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, "gate_up",
+                defines=_native_defines() if self.native else None,
+            )  # fmt: skip
         return ttnn.generic_op([weights, x, ids, scores, act], program)
 
 
@@ -605,8 +675,9 @@ class ExpertDownStream(_BankStreamOp):
     sum_e w_e * (act_e @ Wd_e + bd_e) (one matmul per output column over the K = k segments [w_e * act_e | w_e] of
     the routed experts)."""
 
-    def __init__(self, mesh_device, hidden, inter_pad, num_sel, readers):
+    def __init__(self, mesh_device, hidden, inter_pad, num_sel, readers, weight_dtype=ttnn.bfloat4_b):
         super().__init__(mesh_device, readers, rot=EXPERT_BANK_ROT)
+        self.weight_dtype = weight_dtype
         self.hidden = hidden
         self.num_sel = num_sel
         self.inter_pad = inter_pad
@@ -614,8 +685,34 @@ class ExpertDownStream(_BankStreamOp):
         self.C = columns_per_bank(hidden, self.banks)
         assert self.C % readers == 0, f"{self.C} columns per bank do not split over {readers} readers"
         self.cols = self.C // readers
-        self.seg_bytes = self.seg_tiles * BFP4_TILE_BYTES
-        assert self.seg_bytes <= MAX_PACKET_BYTES, "one expert column segment must fit one NOC packet"
+        # weight_dtype "split" / "split_r<k>" = exact MXFP4 split streams (fused_decode/mxfp4_split.py)
+        from . import mxfp4_split as ms
+
+        self.split, self.ranks = ms.split_spec(weight_dtype)
+        self.native = _native_round_only(self.split, self.ranks)
+        if self.native:  # a plain bfloat4_b stream of transposed tiles (W_TRANSPOSED)
+            self.split, self.weight_dtype = False, ttnn.bfloat4_b
+        if self.split:
+            self.part4 = self.seg_tiles * ms.BFP4_BYTES
+            self.part2 = (self.seg_tiles - 1) * ms.BFP2_BYTES
+            self.page4, self.page2 = ms.page_bytes(self.part4), ms.page_bytes(self.part2)
+            self.no_bfp2 = self.ranks == 0  # no exact rank: every routed expert reads the rounded part only
+            s4, s2 = ms.down_sequences(self.seg_tiles - 1, num_sel, self.ranks)
+            self.meta4, self.meta2 = ms.metadata_words(s4), ms.metadata_words(s2)
+            self.kt4, self.kt2 = len(s4), len(s2)
+            from .config import DECODE_SPLIT_ROUND_ONLY
+
+            self.round_only = DECODE_SPLIT_ROUND_ONLY and self.no_bfp2  # only the rounded parts stored
+            self.seg_bytes = (
+                self.part4
+                if self.round_only
+                else self.part4 + self.part2 + (self.part4 if self.ranks is not None else 0)
+            )
+        else:
+            self.tile_bytes = TILE_BYTES[self.weight_dtype]
+            self.seg_bytes = self.seg_tiles * self.tile_bytes
+            # one NOC packet per expert column segment in BFP4 (25 tiles = 14.1 KB at TP 4); BFP8 splits it (5 x 5)
+            self.page_bytes = _page_bytes(self.seg_tiles, self.tile_bytes)
         self.expert_stride = self.C * self.seg_bytes
 
     def weight_rows(self, num_experts):
@@ -624,15 +721,20 @@ class ExpertDownStream(_BankStreamOp):
     def __call__(self, act, ids, scores, weights, out, send=None):
         """send = (boundary, site): fuse the boundary all-reduce's fabric send (fused_decode/boundary.py
         sending_program)."""
-        cb_in0, cb_w, cb_idx, cb_scr, cb_out = 0, 1, 2, 3, 16
+        cb_in0, cb_w, cb_idx, cb_scr, cb_out, cb_w2 = 0, 1, 2, 3, 16, 4
         kt = self.num_sel * self.seg_tiles
         cbs = [
             self._cb(cb_in0, ttnn.bfloat16, TINY_BYTES, kt, tiny=True),
-            self._cb(cb_w, ttnn.bfloat4_b, BFP4_TILE_BYTES, 3 * kt),
+            self._cb(cb_w, ttnn.bfloat8_b, self.num_sel * self.part4, 3)
+            if self.split
+            else self._cb(cb_w, self.weight_dtype, self.tile_bytes, 3 * kt),
             self._cb(cb_idx, ttnn.uint16, 64, 1),
             self._cb(cb_scr, ttnn.bfloat16, 128, 1),
             self._cb(cb_out, ttnn.bfloat16, TINY_BYTES, 4, tiny=True),
         ]
+        if self.split:
+            exact = self.num_sel if self.ranks is None else self.ranks
+            cbs.append(self._cb(cb_w2, ttnn.bfloat8_b, max(exact * self.part2, 64), 3))
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for core, bank, r, vc in self.assignments:
             reader_rt[core.x][core.y] = [
@@ -648,8 +750,12 @@ class ExpertDownStream(_BankStreamOp):
                 out.buffer_address(),
                 self.logical_bank(bank) * self.C + r * self.cols,
             ]
-        reader_ct = [cb_w, cb_idx, self.seg_tiles, self.cols, self.num_sel, self.expert_stride, BFP4_TILE_BYTES]
-        reader_ct += ttnn.TensorAccessorArgs(ids).get_compile_time_args()
+        if self.split:
+            reader_ct = [cb_w, cb_w2, cb_idx, self.cols, self.num_sel, self.expert_stride, self.part4, self.part2]
+            reader_ct += [self.page4, self.page2, 1, 64] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
+        else:
+            reader_ct = [cb_w, cb_idx, self.seg_tiles, self.cols, self.num_sel, self.expert_stride, self.tile_bytes]
+            reader_ct += [self.page_bytes] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
         writer_ct = [cb_in0, cb_out, cb_scr, self.seg_tiles, self.num_sel, NBIAS, self.cols, self.hidden // TILE]
         writer_ct += [self.inter_pad * 2]
         for t in (act, scores, out):
@@ -658,7 +764,21 @@ class ExpertDownStream(_BankStreamOp):
         compute_ct = [cb_in0, cb_w, cb_out, kt, self.cols]
 
         def build():
-            return self._program("down", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct)
+            if self.split:
+                split_ct = compute_ct + [cb_w2, self.kt4, self.kt2, len(self.meta4), len(self.meta2)]
+                split_ct += self.meta4 + self.meta2
+                defines = self._split_defines()
+                defines += [("SPLIT_NO_BFP2", "1")] if self.no_bfp2 else []
+                defines += [("SPLIT_ROUND_ONLY", "1")] if self.round_only else []
+                return self._program(
+                    "down", cbs, reader_ct, reader_rt, writer_ct, writer_rt, split_ct,
+                    "matmul_split", defines=defines,
+                    reader="expert_split",
+                )  # fmt: skip
+            return self._program(
+                "down", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct,
+                defines=_native_defines() if self.native else None,
+            )  # fmt: skip
 
         program = send[0].sending_program(build, out, send[1], self.cores) if send else build()
         return ttnn.generic_op([weights, act, ids, scores, out], program)
@@ -820,7 +940,7 @@ class LinearStream(_BankStreamOp):
                 self._cb(cb_y, ttnn.bfloat16, TINY_BYTES * M, 2, tiny=True, rows=M),
                 self._cb(cb_rot, ttnn.bfloat8_b, BFP8_TILE_BYTES, 2),
                 self._cb(cb_cs, ttnn.bfloat16, TINY_BYTES * M, 2 * self.head_tiles, tiny=True, rows=M),
-                self._cb(cb_kv, ttnn.bfloat8_b, BFP8_TILE_BYTES, kv_pages),
+                self._cb(cb_kv, ttnn.bfloat8_b, BFP8_TILE_BYTES, kv_pages),  # K / V cache pages
             ]
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         gs_noc = []
@@ -871,7 +991,7 @@ class LinearStream(_BankStreamOp):
             compute_rt = ttnn.RuntimeArgs()
             for core, bank, r, vc in self.assignments:
                 compute_rt[core.x][core.y] = self._slot_columns(bank, r, order)
-            defines = [("QKV_ROPE_KV", "1")]
+            defines = [("QKV_ROPE_KV", "1")] + ([("QKV_ROPE_EXACT_LITE", "1")] if QKV_ROPE_EXACT_LITE else [])
         if M > 1:
             defines = (defines or []) + [("ROWS", str(M))]
         if self.gather_split:

@@ -3,6 +3,8 @@
 
 """Generic expert weight loading and management."""
 
+import hashlib
+import os
 from dataclasses import dataclass
 
 import torch
@@ -11,6 +13,7 @@ import ttnn
 from models.demos.gpt_oss.config import MeshConfig, Mode
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
+from ..weight_source import resolve
 from .config import ExpertConfig
 
 
@@ -291,6 +294,10 @@ class DecodeExpertWeights:
     gate_up_stream: ttnn.Tensor
     down_stream: ttnn.Tensor
     intermediate_padded: int
+    # the streams' weight dtypes when they differ from the loader's weight_dtype: the split streams' "split_r<k>"
+    # (GPT_OSS_DECODE_EXPERTS_SPLIT, fused_decode/mxfp4_split.py); None: weight_dtype
+    down_dtype: object = None
+    gate_up_dtype: object = None
 
 
 def load_decode_expert_weights(
@@ -316,6 +323,25 @@ def load_decode_expert_weights(
     inter_pad = -(-inter_local // DECODE_INTERMEDIATE_ALIGN) * DECODE_INTERMEDIATE_ALIGN
     E, H = config.num_experts, config.hidden_size
     banks = mesh_device.dram_grid_size().x
+    import re
+
+    from ..fused_decode.config import decode_experts_split, decode_split_dtype
+
+    layer_match = re.search(r"layers\.(\d+)", str(tensor_cache_path))
+    layer = layer_match.group(1) if layer_match else None
+    split = decode_experts_split(layer)
+    if split:
+        split_streams = _load_split_decode_expert_weights(
+            mesh_device, config, state_dict, tp, inter_local, inter_pad, banks, tensor_cache_path, split, layer
+        )
+        if len(split) == 2:
+            return DecodeExpertWeights(
+                gate_up_stream=split_streams["gate_up"],
+                down_stream=split_streams["down"],
+                intermediate_padded=inter_pad,
+                down_dtype=decode_split_dtype(layer, "down"),
+                gate_up_dtype=decode_split_dtype(layer, "gate_up"),
+            )
     tile = ttnn.TILE_SIZE
 
     def pad_shards(t, dim):
@@ -375,11 +401,172 @@ def load_decode_expert_weights(
             layouts = [torch.cat([h[:, r:], h[:, :r]], dim=-1) for h in host]
         return as_stream_tensor(mesh_device, layouts, rows[name], weight_dtype, cache)
 
+    gu_dtype = down_dtype = weight_dtype
+    if "gate_up" in split:
+        gate_up_stream, gu_dtype = split_streams["gate_up"], decode_split_dtype(layer, "gate_up")
+    else:
+        gate_up_stream = stream("gate_up_stream", gu_layouts)
+    if "down" in split:
+        down_stream, down_dtype = split_streams["down"], decode_split_dtype(layer, "down")
+    else:
+        down_stream = stream("down_stream", dn_layouts)
     return DecodeExpertWeights(
-        gate_up_stream=stream("gate_up_stream", gu_layouts),
-        down_stream=stream("down_stream", dn_layouts),
+        gate_up_stream=gate_up_stream,
+        down_stream=down_stream,
         intermediate_padded=inter_pad,
+        down_dtype=down_dtype,
+        gate_up_dtype=gu_dtype,
     )
+
+
+def _split_stream_tensor(mesh_device, per_device, name, tensor_cache_path, bank_bytes):
+    """per_device: one list per TP device of `banks` equal-length uint8 byte streams (or None: load the cache) -> one
+    DRAM width-sharded uint8 tensor per device whose bank b shard is that bank's bytes, contiguous (the readers address
+    them by byte offset). ROW_MAJOR pages of 64 bytes."""
+    W = 64
+    rows = bank_bytes // W
+    banks = mesh_device.dram_grid_size().x
+    t = None
+    if per_device is not None:
+        t = torch.stack([torch.cat([b.reshape(rows, W) for b in dev], dim=-1) for dev in per_device]).unsqueeze(0)
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))}),
+            (rows, W),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    return ttnn.as_tensor(
+        t,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint8,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, 1)),
+        cache_file_name=get_cache_file_name(tensor_cache_path, name),
+        memory_config=mem,
+    )
+
+
+def _load_split_decode_expert_weights(
+    mesh_device,
+    config,
+    state_dict,
+    tp,
+    inter_local,
+    inter_pad,
+    banks,
+    cache_path,
+    streams=("gate_up", "down"),
+    layer_idx=None,
+):
+    """GPT_OSS_DECODE_EXPERTS_SPLIT: {stream name: tensor} for the decode expert streams in `streams`, holding the
+    checkpoint's MXFP4 weights exactly (fused_decode/mxfp4_split.py), in the bank / expert / column order of
+    stream_gate_up_layout and stream_down_layout, each column (down: each expert column segment) = [BFP4 part][BFP2
+    part], + [rounded BFP4 part] with GPT_OSS_DECODE_SPLIT_RANKS. state_dict must hold the checkpoint values."""
+    from ..fused_decode import mxfp4_split as ms
+    from ..fused_decode.config import DECODE_SPLIT_RANKS, DECODE_SPLIT_ROUND_ONLY, decode_split_dtype
+    from ..fused_decode.stream import EXPERT_BANK_ROT, columns_per_bank
+
+    E, H = config.num_experts, config.hidden_size
+    tile = ttnn.TILE_SIZE
+    kx, kd = H // tile, inter_pad // tile
+    with_round = DECODE_SPLIT_RANKS is not None  # + the BFP4 rounding read by the inexact routed ranks
+    gu_col = (kx + 1) * ms.BFP4_BYTES * (2 if with_round else 1) + kx * ms.BFP2_BYTES
+    dn_seg = (kd + 1) * ms.BFP4_BYTES * (2 if with_round else 1) + kd * ms.BFP2_BYTES
+    P = inter_pad // tile // banks  # gate|up column pairs per bank
+    Cd = columns_per_bank(H, banks)
+    gu_bank = E * 2 * P * gu_col
+    dn_bank = E * Cd * dn_seg
+
+    def shard_pad(t, dim, d):
+        c = torch.chunk(t, tp, dim=dim)[d]
+        pad = [0, 0] * (t.dim() - 1 - (dim % t.dim())) + [0, inter_pad - inter_local]
+        return torch.nn.functional.pad(c, pad)
+
+    def pack(w, b, wr=None, chunk=4):
+        sl = lambda t, i: None if t is None else t[i : i + chunk]
+        parts = [
+            ms.pack_columns(w[i : i + chunk], b[i : i + chunk], with_round, sl(wr, i))
+            for i in range(0, w.shape[0], chunk)
+        ]
+        return torch.cat([torch.cat(list(p), -1) for p in parts], 0)  # [E, n_tiles, column bytes]
+
+    def bank_streams(cols):  # [E, banks * C, bytes] -> bank b's bytes = logical bank (b + rot) % banks, expert-major
+        C = cols.shape[1] // banks
+        return [cols[:, L * C : (L + 1) * C].reshape(-1) for L in ((b + EXPERT_BANK_ROT) % banks for b in range(banks))]
+
+    tag = f"decode_split_i{inter_pad}_b{banks}_rot{EXPERT_BANK_ROT}"
+    if with_round:
+        tag += "_rnd"
+    # GPT_OSS_DECODE_SPLIT_ROUND_DIR: the rounded part from a dir of layer_<L>.pt on the K-grouped bfloat4_b grid (the
+    # K-GPTQ experts, checkpoint channel order) instead of round_k of the checkpoint
+    # The source as given names the cache files: a pinned hf:// location includes its revision, so another revision
+    # gets its own files (the directory's base name alone is the same for every revision). It is resolved, i.e.
+    # downloaded, only when the streams are packed, so a complete cache needs no Hub access.
+    round_spec = os.environ.get("GPT_OSS_DECODE_SPLIT_ROUND_DIR", "").strip() if with_round else ""
+    if round_spec:
+        assert layer_idx is not None, "GPT_OSS_DECODE_SPLIT_ROUND_DIR needs the layer index"
+        tag += "_g" + hashlib.sha1(round_spec.rstrip("/").encode()).hexdigest()[:10]
+    names = {s: f"{s}_stream_{tag}" for s in streams}
+    # as_tensor's cache file names (ttnn/operations/core.py): a cached stream is loaded, so skip the CPU packing
+    cached = cache_path is not None and all(
+        os.path.isfile(f"{get_cache_file_name(cache_path, n)}_dtype_UINT8_layout_ROW_MAJOR.tensorbin")
+        for n in names.values()
+    )
+    gu_dev = dn_dev = None
+    if state_dict and not cached:
+        gu, gub = state_dict["gate_up_proj"].float(), state_dict["gate_up_proj_bias"].float()  # [E, H, 2I], [E, 2I]
+        dn, dnb = state_dict["down_proj"].float(), state_dict["down_proj_bias"].float()  # [E, I, H], [E, H]
+        gu_r = dn_r = None
+        if round_spec:
+            rw = torch.load(f"{resolve(round_spec)}/layer_{int(layer_idx)}.pt")
+            gu_r, dn_r = rw["gate_up_proj"].float(), rw["down_proj"].float()  # [E, H, 2I], [E, I, H]
+        gu_dev, dn_dev = [], []
+        half = inter_pad // tile
+        order = [c for bank in range(banks) for j in range(bank * P, (bank + 1) * P) for c in (j, half + j)]
+        npad = Cd * banks * tile - H
+        for d in range(tp):
+            if "gate_up" in streams:
+                w = torch.cat([shard_pad(gu[..., ::2], -1, d), shard_pad(gu[..., 1::2], -1, d)], -1)
+                b = torch.cat([shard_pad(gub[..., ::2], -1, d), shard_pad(gub[..., 1::2], -1, d)], -1)
+                wr = None
+                if gu_r is not None:
+                    wr = torch.cat([shard_pad(gu_r[..., ::2], -1, d), shard_pad(gu_r[..., 1::2], -1, d)], -1)
+                gu_dev.append(bank_streams(pack(w, b, wr)[:, order]))
+            if "down" in streams:
+                wd = torch.nn.functional.pad(shard_pad(dn, -2, d), (0, npad))
+                bd = torch.nn.functional.pad(dnb if d == 0 else torch.zeros_like(dnb), (0, npad))  # row-parallel bias
+                wr = None if dn_r is None else torch.nn.functional.pad(shard_pad(dn_r, -2, d), (0, npad))
+                dn_dev.append(bank_streams(pack(wd, bd, wr)))
+    # GPT_OSS_DECODE_SPLIT_ROUND_ONLY: a stream with no exact rank keeps only its rounded parts (the last part4 bytes of
+    # every segment), cut from the full stream; own cache names "_ro"
+    part4 = {"gate_up": (kx + 1) * ms.BFP4_BYTES, "down": (kd + 1) * ms.BFP4_BYTES}
+    seg = {"gate_up": gu_col, "down": dn_seg}
+    full_bank = {"gate_up": gu_bank, "down": dn_bank}
+    per_device = {"gate_up": gu_dev, "down": dn_dev}
+    out = {}
+    for s in ("gate_up", "down"):
+        if s not in streams:
+            continue
+        round_only = DECODE_SPLIT_ROUND_ONLY and with_round and decode_split_dtype(layer_idx, s) == "split_r0"
+        if not round_only:
+            out[s] = _split_stream_tensor(mesh_device, per_device[s], names[s], cache_path, full_bank[s])
+            continue
+        ro_name = names[s] + "_ro"
+        ro_bank = full_bank[s] // seg[s] * part4[s]
+        ro_dev = None
+        if not os.path.isfile(f"{get_cache_file_name(cache_path, ro_name)}_dtype_UINT8_layout_ROW_MAJOR.tensorbin"):
+            full = per_device[s]
+            if full is None:  # the full stream from its cache, back to host bytes per device and bank
+                t = _split_stream_tensor(mesh_device, None, names[s], cache_path, full_bank[s])
+                host = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[0]
+                ttnn.deallocate(t)
+                full = [[h[:, b * 64 : (b + 1) * 64].reshape(-1) for b in range(banks)] for h in host]
+            ro_dev = [[b.reshape(-1, seg[s])[:, -part4[s] :].reshape(-1) for b in dev] for dev in full]
+        out[s] = _split_stream_tensor(mesh_device, ro_dev, ro_name, cache_path, ro_bank)
+    return out
 
 
 def load_decode_down_bal(

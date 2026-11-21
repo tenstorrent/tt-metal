@@ -63,7 +63,11 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in0 + (e * seg_tiles + seg_tiles - 1) * tiny_bytes);
         const uint16_t w = scores[e];
         for (uint32_t i = 0; i < 32; ++i) {
+#if defined(EXPERT_SPLIT) || defined(W_TRANSPOSED)
+            aug[i] = (i == 0 || i == 16) ? w : 0;  // the split streams' two bias terms (mxfp4_split.py)
+#else
             aug[i] = i < nbias ? w : 0;
+#endif
         }
     }
     cb_push_back(cb_in0, num_sel * seg_tiles);

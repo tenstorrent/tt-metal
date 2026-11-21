@@ -5,6 +5,8 @@
 MoE MLP: Router + Experts with minimal abstraction
 """
 
+import math
+
 import ttnn
 from models.demos.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
@@ -12,14 +14,24 @@ from models.demos.gpt_oss.utils.substate import substate
 
 from .batched_prefill import gather_users
 from .experts import ExpertConfig, Experts
-from .experts.prefill_routed import RoutedPrefillExperts, routed_prefill_supported
+from .experts.prefill_routed import (
+    ROUTED_PREFILL_SEQ_MULTIPLE,
+    RoutedPrefillExperts,
+    prefill_kgptq_enabled,
+    routed_prefill_supported,
+)
 from .experts_throughput import (
     DeepSeekPrefillConfig,
     ThroughputExpertConfig,
     ThroughputExperts,
     create_fused_moe_gpt_config,
 )
-from .fused_decode.config import DENSE_MOE_TOKENS, dense_moe_decode_supported, fused_decode_supported
+from .fused_decode.config import (
+    DENSE_MOE_TOKENS,
+    dense_moe_decode_supported,
+    fused_decode_supported,
+    routed_decode_weights_dtype,
+)
 from .topk import TopKRouter
 
 # dtype of the expert input rows that MLP.prefill_sequence_parallel all-gathers. bf8 measured TTFT 8K -3.3%, 32K -3.0%
@@ -47,6 +59,7 @@ class MLP:
         # Split state dict
         router_state_dict = substate(state_dict, "router")
         experts_state_dict = substate(state_dict, "experts")
+        experts_cache_name = "experts"
 
         # Throughput experts rely on all_to_all_dispatch/combine across a mesh axis,
         # which has no meaning on a single device and would require fabric.
@@ -92,7 +105,7 @@ class MLP:
                     state_dict=experts_state_dict,
                     tokens_per_device=tokens_per_device,
                     num_links=ccl_manager.num_links,
-                    tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                    tensor_cache_path=get_cache_file_name(tensor_cache_path, experts_cache_name),
                 )
 
             # DeepSeek prefill config: always created when throughput experts are
@@ -144,7 +157,7 @@ class MLP:
                 weight_dtype=ttnn.bfloat4_b,
                 dispatch_cluster_axis=0,
                 decode_memory_config=ttnn.L1_MEMORY_CONFIG,
-                tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, experts_cache_name),
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 fused_config=fused_config,
@@ -177,9 +190,10 @@ class MLP:
                 mesh_config=mesh_config,
                 program_config=program_config,
                 weight_dtype=ttnn.bfloat4_b,
-                tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, experts_cache_name),
                 indexed_decode=self.indexed_decode,
                 dense_decode_tokens=DENSE_MOE_TOKENS if self.dense_decode else None,
+                decode_weight_dtype=routed_decode_weights_dtype(layer_idx),
             )
 
         # Routed top-k prefill experts (experts/prefill_routed.py): only the routed (token, expert) pairs are computed,
@@ -199,7 +213,7 @@ class MLP:
                 experts_state_dict,
                 ccl_manager,
                 mesh_config,
-                tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, experts_cache_name),
                 layer_idx=layer_idx,
             )
         # The routed experts may hold the experts in a per-layer calibrated order (device-load balance,
@@ -207,6 +221,19 @@ class MLP:
         self.routed_router = self.router
         if self.routed_prefill is not None and self.routed_prefill.expert_order is not None:
             self.routed_router = self.router.with_expert_order(self.routed_prefill.expert_order)
+
+    def _routed_padded_rows(self, shape, batch_size):
+        """Rows to pad a batch-1 prefill to so it takes the routed path (GPT_OSS_PREFILL_KGPTQ), else None."""
+        if self.routed_prefill is None or not prefill_kgptq_enabled() or batch_size != 1:
+            return None
+        dims = [shape[i] for i in range(len(shape))]
+        if len(dims) < 2 or math.prod(dims[:-2]) != 1:
+            return None
+        rows = max(
+            self.routed_prefill.min_seq, -(-dims[-2] // ROUTED_PREFILL_SEQ_MULTIPLE) * ROUTED_PREFILL_SEQ_MULTIPLE
+        )
+        padded = list(dims[:-2]) + [rows, dims[-1]]
+        return rows if self.routed_prefill.supports(padded) else None
 
     def routed_prefill_supports(self, shape):
         """Whether a prefill input of this shape takes the routed experts (else the dense prefill path)."""
@@ -272,6 +299,21 @@ class MLP:
             expert_output = self.routed_prefill(hidden_states, expert_indices, expert_weights, batch_size=batch_size)
             ttnn.deallocate(expert_indices)
             ttnn.deallocate(expert_weights)
+            return expert_output
+        padded_rows = None if is_decode else self._routed_padded_rows(hidden_states.shape, batch_size)
+        if padded_rows is not None:
+            # GPT_OSS_PREFILL_KGPTQ: a prefill the routed path does not take on its own runs on it padded with zero
+            # rows (they route like any token and their outputs are dropped), so it reads the same K-GPTQ experts.
+            rank = len(hidden_states.shape)
+            S, H = hidden_states.shape[-2], hidden_states.shape[-1]
+            x = ttnn.pad(hidden_states, [(0, 0)] * (rank - 2) + [(0, padded_rows - S), (0, 0)], 0.0)
+            expert_indices, expert_weights = self.routed_router(x, True, 1)
+            out = self.routed_prefill(x, expert_indices, expert_weights, batch_size=1)
+            ttnn.deallocate(expert_indices)
+            ttnn.deallocate(expert_weights)
+            ttnn.deallocate(x)
+            expert_output = ttnn.slice(out, [0] * rank, [hidden_states.shape[i] for i in range(rank - 2)] + [S, H])
+            ttnn.deallocate(out)
             return expert_output
         if is_decode and self.dense_decode:
             # Batched decode (dense MoE): dense [tokens, experts] routing weights straight from the router.
