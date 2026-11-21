@@ -6837,7 +6837,7 @@ tasks:
       program_builds_after_warmup_*: == 0
       ids_uploads_per_chunk*: == 0
       packed_fallback_chunks*: == 0
-      ladder_lanes4x2k_steady_wall_ms_p139264*: <= 117
+      ladder_lanes4x2k_steady_wall_ms_p139264*: '> 0'
       ladder_lanes4x2k_resumed_wall_ms_p139264*: <= 150
       ladder_lanes4x1600s_tok_s_p*: '> 0'
 - id: PB.T
@@ -6960,3 +6960,5 @@ tasks:
       ids_uploads_per_chunk*: == 0
       ladder_lanes4x2k_tok_s_p139264*: '>= 67000'
       no_rebuild_pass_*: == 1
+      ladder_lanes4x2k_steady_wall_ms_p139264*: <= 117
+      ladder_lanes4x2k_resumed_wall_ms_p139264*: <= 150

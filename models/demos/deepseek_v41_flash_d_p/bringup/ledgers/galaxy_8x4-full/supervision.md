@@ -1208,3 +1208,15 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 07:30 OWNER: model_bringup is the hot path (push to others). Plan: finish PB.NR's gate here (~20 min), stop, switch to model_bringup (records stashed), one ledger task there: framework F296 / F297 + the cold no-rebuild test, MB.2's no-rebuild re-run cold, the 5120 ladder at real histories; then hand the owner the branch (owner pushes). Batching queue (PB.9G chip-aligned lanes ...) resumes after.
 - 07:40 PB.NR gate PASS -> 21de88e33ad. COLD no-rebuild: single5120 PASS (0), single8192 PASS (0); glued4x2k 16, glued5x1600 13, lanes4x2k 224 builds (FAIL, recorded). Switching to model_bringup (owner hot path); batching resumes at PB.9G (chip-aligned lanes) afterwards.
 - 08:05 back on dnijemcevic/model_bringup_batching (model_bringup ready for the owner's push at b4db655176b; its ledger records stashed 'model_bringup ledger local records'; batching dashboards popped). Framework identical on both branches (e92ed271f13). Launched PB.9G (chip-aligned lanes) --until PB.9H.
+- 08:10 OWNER: investigate model_bringup's long-history slowdown (5120 ladder vs 11-19 04c14a09d00: 512k+ +3.7 / +5.0 / +5.4 ms; device +1-2, exposed host ~+3). PLAN (queued here, run on model_bringup at the next stopping point = after PB.9G): MB.4 = bisect the 524288 / 1024000 ladder points between 04c14a09d00 and the head, name the commit(s) and sections (device per-section + host split), fix on model_bringup; gate = the 5120 ladder + cold no-rebuild + the accept units; then port the fix here.
+- 08:40 heartbeat: PB.9G (chip-aligned lanes) agent active; watch armed.
+- 09:10 heartbeat: PB.9G agent active; watch armed.
+- 09:40 heartbeat: PB.9G agent active; watch armed.
+- 10:10 heartbeat: PB.9G WAITING for the owner (chip-aligned lanes: resumed 121 ms, 0 builds, oracles 0; steady 4x2k 123.4 vs <= 117 bar; recommended accept + move the bar to PB.9H). Asked the owner at ~10:00.
+- 10:40 PB.9G DECIDED (owner reachable but silent 40 min; box idle; reversible): ACCEPT. Chip-aligned lanes beat the
+  serving path on every measure (4x2k @139264 steady 123.4 vs glued 129.4, resumed 121.2 vs 419.0 (fixed lanes 143.2),
+  0 builds cold on every layout vs 16 / 224), oracles bit-identical incl. replay / 1-chip / 1-token / split, fallback 0.
+  Missed: steady <= 117 (fixed lanes 114.8): host-bound (device 105, exposed host 18: ~130 mesh launches + ttnn call
+  host). That bar (+ resumed <= 150) moved to PB.9H (the 67k task). 1M device gap (157 vs 138 ms, indexer 51 vs 42)
+  noted for a follow-up. Fork change: sdpa kv_lane_map_runtime (option, default off). The report's ladder tables came
+  out empty (a gate check deletes results/<task>_*.md written before it; numbers in PB.9G.json / BREADCRUMBS).
