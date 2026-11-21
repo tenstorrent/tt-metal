@@ -1035,24 +1035,19 @@ private:
         return receive_configs;
     }
 
-    // Mux channels on one (device, link) kept for its sender and sync cores: one per piece of a split sender, one for
-    // the unsplit senders together (they usually send in different directions, so on different muxes), and one for
-    // sync. FabricConnectionManager checks each mux's actual total when it builds it.
+    // Mux channels on one (device, link) kept for its sender and sync cores: one per sender core + one for sync.
+    // FabricConnectionManager checks each mux's actual total when it builds it.
+    // NOTE: Can overestimate # channels used by senders if they send to different directions, but this doesn't break
+    // correctness.
     static uint32_t count_mux_channels_for_senders_and_sync(
         const TestConfig& config, const FabricNodeId& device, uint32_t link) {
-        uint32_t split_pieces = 0;
-        bool has_unsplit_sender = false;
+        uint32_t sender_channels = 0;
         for (const auto& sender : config.senders) {
-            if (sender.device != device || sender.link_id != link) {
-                continue;
-            }
-            if (sender.split_into > 1) {
-                split_pieces++;
-            } else {
-                has_unsplit_sender = true;
+            if (sender.device == device && sender.link_id == link) {
+                sender_channels++;
             }
         }
-        return std::max(split_pieces + (has_unsplit_sender ? 1u : 0u), 1u) + 1 /* sync */;
+        return std::max(sender_channels, 1u) + 1 /* sync */;
     }
 
     /**
