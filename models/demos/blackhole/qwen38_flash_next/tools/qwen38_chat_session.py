@@ -1702,6 +1702,37 @@ def template_decoder(template: Any) -> Callable[[list[int]], str]:
     return lambda ids: template.tokenizer.decode(ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
 
 
+def _byte_level_decoder() -> dict[str, int]:
+    """The inverse of GPT-2's ``bytes_to_unicode``: the byte each byte-level BPE character stands for."""
+    printable = list(range(ord("!"), ord("~") + 1)) + list(range(0xA1, 0xAD)) + list(range(0xAE, 0x100))
+    mapped = printable[:]
+    extra = 0
+    for byte in range(256):
+        if byte not in printable:
+            printable.append(byte)
+            mapped.append(256 + extra)
+            extra += 1
+    return {chr(code): byte for byte, code in zip(printable, mapped)}
+
+
+def template_token_bytes(template: Any) -> Callable[[int], bytes]:
+    """A token's raw UTF-8 bytes: from its byte-level BPE string, so a byte-fallback token that is only part of a
+    character keeps its own bytes (``decode([id])`` would give U+FFFD). Added and special tokens use their text."""
+    tokenizer = template.tokenizer
+    inverse = _byte_level_decoder()
+    added = set(tokenizer.get_added_vocab().values())
+
+    def token_bytes(token_id: int) -> bytes:
+        piece = tokenizer.convert_ids_to_tokens(token_id)
+        if token_id not in added and isinstance(piece, str) and all(char in inverse for char in piece):
+            return bytes(inverse[char] for char in piece)
+        return tokenizer.decode([token_id], skip_special_tokens=False, clean_up_tokenization_spaces=False).encode(
+            "utf-8"
+        )
+
+    return token_bytes
+
+
 # -- hardware ----------------------------------------------------------------------------------
 
 
