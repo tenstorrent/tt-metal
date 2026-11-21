@@ -65,14 +65,16 @@ CHECK_ROWS = 64  # rows per segment the input check routes
 INPUT_CHECK_RECALL = 0.98
 
 # Stability bars, every one held per window of context positions: PROPOSED, pending the owner's decision. Measured
-# on layers 1/49/85/92 at 10K and 128K, 4x4-sp1, against the vLLM trace (window medians):
-# * MoE output per-row NRMSE against the trace <= 0.20 (measured 0.068-0.178; the layer sets the level: about
-#   0.08 / 0.10 / 0.17 / 0.07 at layers 1 / 49 / 85 / 92). On sampled rows the device reads the same distance against
-#   an fp32 host recompute of the reference MoE, and the trace reads 0.004-0.007 against it: the device's MoE is
-#   15-35x further from fp32 than the GPU's. The bar gates stability, not that precision gap. And no window more than
-#   15% above the first (measured 1.11 at most, at layers 85 / 92; the MoE carries no state across chunks - a
-#   reverse-order run is bit-identical - so a trend over position is the inputs').
-# * routing: mean recall of the trace's top-16 >= 0.98 (measured 0.991-0.996); misses are near-ties: <= 1% of the
+# on 9 layers (1/13/25/37/49/61/73/85/92) at 128K and 4 (1/49/85/92) at 10K, 4x4-sp1, against the vLLM trace
+# (window medians):
+# * MoE output per-row NRMSE against the trace <= 0.20 (measured 0.068-0.185 at 128K, the worst layer 73; the layer
+#   sets the level). On sampled rows the device reads the same distance against an fp32 host recompute of the
+#   reference MoE, and the trace reads 0.004-0.007 against it: the device's MoE is 14-25x further from fp32 than the
+#   GPU's. The bar gates stability, not that precision gap. And no window more than 15% above the first: measured
+#   <= 1.114 at 128K (layers 85 / 92), but 1.152 at 10K layer 92 in 2K windows, which FAILS. The MoE carries no state
+#   across chunks (a reverse-order run is bit-identical), so a trend over position is the inputs'; whether to gate
+#   growth or the reverse-order identity is the owner's decision.
+# * routing: mean recall of the trace's top-16 >= 0.98 (measured >= 0.991); misses are near-ties: <= 1% of the
 #   trace experts the device misses rank in the top half of the trace's selection (measured <= 0.06%; most at rank
 #   15); trace routing weight the device drops, mean <= 0.01 (measured 0.002-0.006).
 BARS = {
@@ -219,15 +221,15 @@ def _q(t: torch.Tensor, q: float) -> float:
     return float(t.float().quantile(q)) if t.numel() else float("nan")
 
 
-def score(*, trace: Trace, out: Path, window: int, checkpoint: Path) -> dict:
+def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: torch.Tensor) -> dict:
     """Score a complete device run in ``out`` against the trace per context position; writes metrics.json,
-    windows.tsv and rows.pt. Routes every row of the run's input with the fp32 router too (the trace's own router
-    noise and the device's distance to fp32, beside the device's distance to the trace)."""
+    windows.tsv and rows.pt. Routes every row of the run's input with the fp32 router too (``gate`` / ``bias``: the
+    layer's gate weight and selection bias), for the trace's own router noise and the device's distance to fp32,
+    beside the device's distance to the trace."""
     manifest = complete_run(out)
     count, chunk, layer = manifest["count"], manifest["chunk"], manifest["layer"]
     source = Path(manifest["input"])
-    w = layer_weights(checkpoint, layer)
-    gate, bias = w["block_sparse_moe.gate.weight"].float(), w["block_sparse_moe.gate.e_score_correction_bias"]
+    gate = gate.float()
     num_chunks = -(-count // chunk)
     moe = TokenErrorAccumulator()
     per_row = {k: [] for k in ("recall", "dropped", "weight_err", "recall_trace_vs_fp32", "recall_device_vs_fp32")}
@@ -413,6 +415,7 @@ def host_check(*, trace: Trace, out: Path, checkpoint: Path, rows: int) -> dict:
     }
     result = {
         "layer": layer,
+        "run_code_revision": manifest.get("code_revision"),
         "rows": picks,
         "seconds": round(time.perf_counter() - began, 1),
         "experts_read": len(host.experts),
@@ -480,7 +483,9 @@ def main() -> None:
             input_normed=args.input_normed,
         )
     elif args.command == "score":
-        result = score(trace=trace, out=args.out, window=args.window, checkpoint=args.checkpoint)
+        w = layer_weights(args.checkpoint, complete_run(args.out)["layer"])
+        gate, bias = w["block_sparse_moe.gate.weight"], w["block_sparse_moe.gate.e_score_correction_bias"]
+        result = score(trace=trace, out=args.out, window=args.window, gate=gate, bias=bias)
         print(json.dumps(result["overall"], indent=1))
         print("bars: " + ("PASS" if not result["bar_failures"] else "FAIL\n  " + "\n  ".join(result["bar_failures"])))
         raise SystemExit(1 if result["bar_failures"] else 0)

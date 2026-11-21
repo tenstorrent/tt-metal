@@ -179,7 +179,7 @@ def load_input(run_dir: Path, start: int, end: int) -> torch.Tensor:
 # --- a device run's output directory ---------------------------------------------------------------------------
 
 # What a device run writes into its output directory; a new run clears all of it first.
-RUN_FILES = ("chunk_*.pt", "caches.pt", "metrics.json", "windows.tsv", "rows.pt", MANIFEST)
+RUN_FILES = ("chunk_*.pt", "caches.pt", "metrics.json", "windows.tsv", "rows.pt", "host.json", MANIFEST)
 
 
 def chunk_path(out: Path, index: int) -> Path:
@@ -263,7 +263,6 @@ def check_bars(windows: list[dict], bars: dict, growth: tuple[str, float]) -> li
     first = windows[0][metric]
     worst = max(windows, key=lambda w: w[metric])
     if worst[metric] > factor * first:
-        failures.append(
-            f"{metric} grows {worst[metric] / first:.3f}x (> {factor}) by [{worst['start']}, {worst['end']})"
-        )
+        ratio = worst[metric] / first if first > 0 else float("inf")  # (from an exact first window, any error grows)
+        failures.append(f"{metric} grows {ratio:.3f}x (> {factor}) by [{worst['start']}, {worst['end']})")
     return failures

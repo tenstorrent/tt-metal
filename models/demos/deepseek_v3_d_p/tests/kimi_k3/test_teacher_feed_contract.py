@@ -17,15 +17,18 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.dsa_teacher_feed import BARS, NRMSE_GROWTH, score
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed import (
+    TOP_K,
     HostMoE,
     owner_positions,
     route,
     routing_window,
     same_rows,
 )
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed import score as score_moe
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     FFN,
     Trace,
+    build_input,
     check_bars,
     chunk_path,
     finish_run,
@@ -38,6 +41,28 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
 )
 
 
+def _write_trace(path: Path, streams: dict[str, torch.Tensor], chunk_rows: int) -> None:
+    """``streams`` as a chunked_group_a_v1 trace in ``path``, in ``chunk_rows``-row shards."""
+    index = {}
+    for key, value in streams.items():
+        rows = value.shape[0]
+        chunks = []
+        for lo in range(0, rows, chunk_rows):
+            hi = min(lo + chunk_rows, rows)
+            rel = f"{key}/rows_{lo:08d}_{hi:08d}.safetensors"
+            (path / key).mkdir(parents=True, exist_ok=True)
+            save_file({key: value[lo:hi].contiguous()}, str(path / rel))
+            chunks.append({"row_start": lo, "row_end": hi, "path": rel})
+        index[key] = {
+            "row_count": rows,
+            "dtype": str(value.dtype),
+            "shape_tail": list(value.shape[1:]),
+            "chunks": chunks,
+        }
+    (path / "index.json").write_text(json.dumps({"tensor_streams": index}))
+    (path / "metadata.json").write_text(json.dumps({"n_prompt_tokens": next(iter(streams.values())).shape[0]}))
+
+
 def _tiny_trace(path: Path, layers: int, rows: int, dim: int, chunk_rows: int) -> dict[str, torch.Tensor]:
     """A chunked_group_a_v1 trace of random bf16 streams (decoder_input_layer_0, attn_output and FFN output of
     every layer below ``layers``), in ``chunk_rows``-row shards."""
@@ -46,18 +71,7 @@ def _tiny_trace(path: Path, layers: int, rows: int, dim: int, chunk_rows: int) -
         f"{s}_layer_{l}" for l in range(layers) for s in ("attn_output", "decoder_output")
     ]
     streams = {k: torch.randn(rows, dim, generator=gen).to(torch.bfloat16) for k in keys}
-    index = {}
-    for key, value in streams.items():
-        chunks = []
-        for lo in range(0, rows, chunk_rows):
-            hi = min(lo + chunk_rows, rows)
-            rel = f"{key}/rows_{lo:08d}_{hi:08d}.safetensors"
-            (path / key).mkdir(parents=True, exist_ok=True)
-            save_file({key: value[lo:hi].contiguous()}, str(path / rel))
-            chunks.append({"row_start": lo, "row_end": hi, "path": rel})
-        index[key] = {"row_count": rows, "dtype": "bfloat16", "shape_tail": [dim], "chunks": chunks}
-    (path / "index.json").write_text(json.dumps({"tensor_streams": index}))
-    (path / "metadata.json").write_text(json.dumps({"n_prompt_tokens": rows}))
+    _write_trace(path, streams, chunk_rows)
     return streams
 
 
@@ -274,3 +288,56 @@ def test_same_rows_names_the_chunks_that_differ(tmp_path: Path):
     bumped["moe_out"][1, 3] = 1.0078125  # (1 + 2^-7: the next bf16 above 1)
     torch.save(bumped, chunk_path(tmp_path / "b", 1))
     assert same_rows(tmp_path / "a", tmp_path / "b")["differ"] == [1]
+
+
+def test_moe_score_places_rows_and_misses_by_context_position(tmp_path: Path):
+    """A 5-row run in 2-row chunks (the last one partial) scored in 2-row windows: rows 0-3 match the trace
+    exactly; row 4, alone in the partial chunk and the last window, has its output scaled by 1.1 (per-row NRMSE
+    0.1) and one of the trace's 16 experts replaced by an expert outside the trace's set (recall 15/16, one miss,
+    trace weight 1/16 dropped). Every window and the miss must land at row 4's position."""
+    dim, experts, count, chunk = 8, 32, 5, 2
+    gen = torch.Generator().manual_seed(7)
+    out = torch.randn(count, dim, generator=gen).to(torch.bfloat16)
+    ids = torch.stack([torch.randperm(experts, generator=gen)[:TOP_K] for _ in range(count)]).to(torch.int32)
+    weights = torch.full((count, TOP_K), 1 / TOP_K, dtype=torch.bfloat16)
+    (tmp_path / "trace").mkdir()
+    _write_trace(
+        tmp_path / "trace",
+        {"decoder_output_layer_7": out, "expert_ids_layer_7": ids, "expert_weights_layer_7": weights},
+        chunk_rows=3,
+    )
+    x = torch.randn(count, dim, generator=gen).to(torch.bfloat16)
+    build_input(
+        out=tmp_path / "input",
+        expected={"layer": 7},
+        count=count,
+        segment=4,
+        make=lambda lo, hi: (x[lo:hi], {}),
+        check_bars={},
+    )
+    run = {"layer": 7, "input": str(tmp_path / "input"), "count": count, "chunk": chunk}
+    start_run(tmp_path / "run", run)
+    device_ids = ids.clone()
+    outside = next(e for e in range(experts) if e not in ids[4].tolist())
+    device_ids[4, 5] = outside
+    device_out = out.clone()
+    device_out[4] = (out[4].float() * 1.1).to(torch.bfloat16)
+    for c, lo in enumerate(range(0, count, chunk)):
+        hi = min(lo + chunk, count)
+        torch.save(
+            {"start": lo, "end": hi, "moe_out": device_out[lo:hi], "expert_ids": device_ids[lo:hi].to(torch.int16),
+             "expert_weights": weights[lo:hi]},
+            chunk_path(tmp_path / "run", c),
+        )  # fmt: skip
+    finish_run(tmp_path / "run", run, 1.0)
+    gate, bias = torch.randn(experts, dim, generator=gen), torch.zeros(experts)
+    result = score_moe(trace=Trace(tmp_path / "trace"), out=tmp_path / "run", window=2, gate=gate, bias=bias)
+    windows = result["windows"]
+    assert [(w["start"], w["end"]) for w in windows] == [(0, 2), (2, 4), (4, 5)]
+    want_nrmse = float((device_out[4].float() - out[4].float()).norm() / out[4].float().norm())  # 0.1, bf16-rounded
+    assert [w["moe_nrmse_median"] for w in windows] == pytest.approx([0.0, 0.0, want_nrmse], abs=1e-6)
+    assert want_nrmse == pytest.approx(0.1, abs=0.01)
+    assert [w["misses"] for w in windows] == [0, 0, 1]
+    assert [w["recall_vs_trace_mean"] for w in windows] == pytest.approx([1.0, 1.0, 15 / 16])
+    assert [w["dropped_trace_weight_mean"] for w in windows] == pytest.approx([0.0, 0.0, 1 / 16])
+    assert result["count"] == count and result["overall"]["misses"] == 1
