@@ -158,12 +158,31 @@ std::vector<std::optional<Tensor>> addalpha_bw(
     operations::binary_backward::detail::preallocated_tensors_check(
         input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]}, output_mem_config);
 
+    // d(a+alpha*b)/da = grad, d(a+alpha*b)/db = alpha*grad. Reduce over broadcasted dims.
+    const auto input_needs_reduce = operations::binary_backward::is_broadcasted_over(
+        input_a.logical_shape(), grad_tensor.logical_shape());
+    const auto other_needs_reduce = operations::binary_backward::is_broadcasted_over(
+        other.logical_shape(), grad_tensor.logical_shape());
+
     if (are_required_outputs[0]) {
-        ttnn::assign(grad_tensor, input_grad.value());
+        if (input_needs_reduce) {
+            Tensor grad_a = operations::binary_backward::detail::reduce_grad_to_operand_shape(
+                grad_tensor, input_a.logical_shape(), output_mem_config);
+            ttnn::assign(grad_a, input_grad.value());
+        } else {
+            ttnn::assign(grad_tensor, input_grad.value());
+        }
         result[0] = input_grad;
     }
     if (are_required_outputs[1]) {
-        ttnn::multiply(grad_tensor, alpha, std::nullopt, output_mem_config, other_grad);
+        Tensor scaled_grad = ttnn::multiply(grad_tensor, alpha, std::nullopt, output_mem_config);
+        if (other_needs_reduce) {
+            Tensor grad_b = operations::binary_backward::detail::reduce_grad_to_operand_shape(
+                scaled_grad, other.logical_shape(), output_mem_config);
+            ttnn::assign(grad_b, other_grad.value());
+        } else {
+            ttnn::assign(scaled_grad, other_grad.value());
+        }
         result[1] = other_grad;
     }
     return result;
@@ -181,13 +200,33 @@ std::vector<std::optional<Tensor>> subalpha_bw(
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
     operations::binary_backward::detail::preallocated_tensors_check(
         input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]}, output_mem_config);
+
+    // d(a-alpha*b)/da = grad, d(a-alpha*b)/db = -alpha*grad. Reduce over broadcasted dims.
+    const auto input_needs_reduce = operations::binary_backward::is_broadcasted_over(
+        input_a.logical_shape(), grad_tensor.logical_shape());
+    const auto other_needs_reduce = operations::binary_backward::is_broadcasted_over(
+        other.logical_shape(), grad_tensor.logical_shape());
+
     if (are_required_outputs.at(0)) {
-        ttnn::assign(grad_tensor, input_grad.value());
+        if (input_needs_reduce) {
+            Tensor grad_a = operations::binary_backward::detail::reduce_grad_to_operand_shape(
+                grad_tensor, input_a.logical_shape(), output_mem_config);
+            ttnn::assign(grad_a, input_grad.value());
+        } else {
+            ttnn::assign(grad_tensor, input_grad.value());
+        }
         result[0] = input_grad;
     }
     if (are_required_outputs.at(1)) {
-        ttnn::neg(grad_tensor, output_mem_config, other_grad);
-        ttnn::multiply(other_grad.value(), alpha, std::nullopt, output_mem_config, other_grad);
+        Tensor neg_scaled_grad = ttnn::neg(grad_tensor, output_mem_config);
+        neg_scaled_grad = ttnn::multiply(neg_scaled_grad, alpha, std::nullopt, output_mem_config);
+        if (other_needs_reduce) {
+            Tensor grad_b = operations::binary_backward::detail::reduce_grad_to_operand_shape(
+                neg_scaled_grad, other.logical_shape(), output_mem_config);
+            ttnn::assign(grad_b, other_grad.value());
+        } else {
+            ttnn::assign(neg_scaled_grad, other_grad.value());
+        }
         result[1] = other_grad;
     }
 
@@ -242,7 +281,7 @@ std::vector<std::optional<Tensor>> add_bw(
             other_tensor_arg,
             tt::tt_metal::DataType::INVALID,
             output_mem_config.value_or(input_tensor_arg.memory_config()),
-            {true, true},
+            {are_required_outputs.at(0), are_required_outputs.at(1)},
             input_grad,
             other_grad);
         return {outs[0], outs[1]};
@@ -356,7 +395,7 @@ std::vector<std::optional<Tensor>> sub_bw(
             other_tensor_arg,
             tt::tt_metal::DataType::INVALID,
             output_mem_config.value_or(input_tensor_arg.memory_config()),
-            {true, true},
+            {are_required_outputs.at(0), are_required_outputs.at(1)},
             input_grad,
             other_grad);
         return {outs[0], outs[1]};
