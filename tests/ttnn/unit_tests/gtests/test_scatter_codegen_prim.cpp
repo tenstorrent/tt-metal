@@ -1,0 +1,471 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// The codegen scatter prim takes an optional preallocated output that no public entry exposes, so
+// its contract on that argument is only reachable from C++: the destination must be the tensor the
+// op would create for itself (standard padding included) and must not be one of the operands the
+// kernels still read. Likewise the shape relations ttnn::scatter establishes before calling (an
+// index no wider than the input on any leading axis) are only testable against the prim directly.
+
+#include <gtest/gtest.h>
+
+#include <cstdint>
+#include <exception>
+#include <optional>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt_stl/reflection.hpp>
+
+#include "ttnn/device.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/scatter/codegen/scatter_codegen_device_operation.hpp"
+#include "ttnn/operations/data_movement/scatter/codegen/scatter_codegen_program_factory.hpp"
+#include "ttnn/operations/data_movement/scatter/codegen/scatter_codegen_supported.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn_test_fixtures.hpp"
+
+namespace ttnn::operations::data_movement::scatter::test {
+
+// The prim is reachable on every architecture, but its factories build the data-movement kernels
+// only Wormhole and Blackhole run, and ttnn::scatter() routes native everywhere else.
+class ScatterCodegenPrimFixture : public TTNNFixtureWithSuiteDevice<ScatterCodegenPrimFixture> {
+protected:
+    void SetUp() override {
+        TTNNFixtureWithSuiteDevice::SetUp();
+        const auto arch = device_->arch();
+        if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "scatter codegen runs only on Wormhole and Blackhole";
+        }
+    }
+};
+
+namespace {
+
+struct Operands {
+    Tensor input;
+    Tensor index;
+    Tensor src;
+};
+
+// bf16 TILE operands with the scatter axis last and a 32x32 index unique along it, the shape every
+// TILE factory serves. `width` is the input's last extent; index and src share the input's rows.
+Operands make_operands(tt::tt_metal::distributed::MeshDevice* device, uint32_t width) {
+    const ttnn::Shape input_shape({1, 1, 32, width});
+    const ttnn::Shape index_shape({1, 1, 32, 32});
+    std::vector<int32_t> index(32 * 32);
+    for (uint32_t r = 0; r < 32; ++r) {
+        for (uint32_t c = 0; c < 32; ++c) {
+            index[r * 32 + c] = static_cast<int32_t>((c * (width / 32) + r) % width);
+        }
+    }
+    const tt::tt_metal::TensorSpec index_spec(
+        index_shape,
+        tt::tt_metal::TensorLayout(
+            DataType::INT32, tt::tt_metal::PageConfig(Layout::TILE), tt::tt_metal::MemoryConfig{}));
+    return {
+        ttnn::ones(input_shape, DataType::BFLOAT16, Layout::TILE, *device),
+        Tensor::from_vector(index, index_spec, device),
+        ttnn::zeros(index_shape, DataType::BFLOAT16, Layout::TILE, *device),
+    };
+}
+
+Tensor run(const Operands& ops, const std::optional<Tensor>& output) {
+    return ttnn::prim::scatter_codegen(
+        ops.input, ops.index, ops.src, kReductionNone, ops.input.memory_config(), output, std::nullopt);
+}
+
+// Index and src of `shape` (scatter axis last, values within `width`) against a bf16 TILE input of
+// `input_shape`.
+Operands make_operands_of(
+    tt::tt_metal::distributed::MeshDevice* device,
+    const ttnn::Shape& input_shape,
+    const ttnn::Shape& shape,
+    uint32_t width) {
+    std::vector<int32_t> index(shape.volume());
+    for (size_t i = 0; i < index.size(); ++i) {
+        index[i] = static_cast<int32_t>(i % width);
+    }
+    const tt::tt_metal::TensorSpec index_spec(
+        shape,
+        tt::tt_metal::TensorLayout(
+            DataType::INT32, tt::tt_metal::PageConfig(Layout::TILE), tt::tt_metal::MemoryConfig{}));
+    return {
+        ttnn::ones(input_shape, DataType::BFLOAT16, Layout::TILE, *device),
+        Tensor::from_vector(index, index_spec, device),
+        ttnn::zeros(shape, DataType::BFLOAT16, Layout::TILE, *device),
+    };
+}
+
+}  // namespace
+
+TEST_F(ScatterCodegenPrimFixture, RejectsAnIndexWiderThanTheInputOnALeadingAxis) {
+    // The readers walk the input's pages and clip each page coordinate against the index's extent,
+    // so index pages past the input's extent on a leading axis are never visited: without the check
+    // the call returns a well-formed result with those updates silently dropped. A narrower index
+    // is served, so only the wider one is refused.
+    const Operands wider = make_operands_of(device_, ttnn::Shape({1, 1, 32, 64}), ttnn::Shape({1, 2, 32, 32}), 64);
+    EXPECT_THROW(run(wider, std::nullopt), std::exception);
+    const Operands lower_rank = make_operands_of(device_, ttnn::Shape({1, 1, 32, 64}), ttnn::Shape({32, 32}), 64);
+    EXPECT_THROW(run(lower_rank, std::nullopt), std::exception);
+    const Operands narrower = make_operands_of(device_, ttnn::Shape({1, 2, 32, 64}), ttnn::Shape({1, 1, 32, 32}), 64);
+    EXPECT_NO_THROW(run(narrower, std::nullopt));
+}
+
+TEST_F(ScatterCodegenPrimFixture, AcceptsTheDestinationItWouldCreateItself) {
+    // The writers bind the destination's buffer as a common runtime arg; a wrong binding would still
+    // return the destination, so its values are checked against the op's own output.
+    const Operands ops = make_operands(device_, 64);
+    const std::vector<::bfloat16> expected = run(ops, std::nullopt).to_vector<::bfloat16>();
+    Tensor destination = ttnn::create_device_tensor(ops.input.tensor_spec(), device_);
+    const Tensor out = run(ops, destination);
+    EXPECT_EQ(out.buffer(), destination.buffer());
+    EXPECT_TRUE(out.to_vector<::bfloat16>() == expected);
+}
+
+TEST_F(ScatterCodegenPrimFixture, AcceptsADestinationThatAliasesTheInput) {
+    // Every factory reads an input page before any core writes it and cores own disjoint pages, so
+    // scattering in place is sound; no public entry exercises it, so the contract is pinned here.
+    const Operands ops = make_operands(device_, 64);
+    const std::vector<::bfloat16> expected = run(ops, std::nullopt).to_vector<::bfloat16>();
+    const Tensor out = run(ops, ops.input);
+    EXPECT_EQ(out.buffer(), ops.input.buffer());
+    EXPECT_TRUE(out.to_vector<::bfloat16>() == expected);
+}
+
+TEST_F(ScatterCodegenPrimFixture, SelectsTheFactoryByTheColumnSplitCost) {
+    // The merge-gate unit cases carry their factory in the id, but a forced call cannot observe which
+    // one ran. One tile row with seven output columns and one index tile: on the default grid the
+    // column split gives a core one tile and one index scan against the row split's seven tiles and
+    // one scan, while a two-core grid hands each core four columns and four scans and the row split
+    // wins.
+    const Operands ops = make_operands_of(device_, ttnn::Shape({1, 1, 32, 200}), ttnn::Shape({1, 1, 32, 32}), 200);
+    const auto factory_on = [&](const Operands& o, const std::optional<CoreRangeSet>& grid) {
+        return ttnn::prim::ScatterCodegenDeviceOperation::select_program_factory(
+            ttnn::prim::build_scatter_codegen_params(
+                o.input, o.index, o.src, kReductionNone, o.input.memory_config(), grid),
+            ttnn::prim::ScatterCodegenInputs{o.input, o.index, o.src, std::nullopt});
+    };
+    const CoreRangeSet two_cores(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
+    EXPECT_TRUE(
+        std::holds_alternative<ttnn::prim::ScatterCodegenProgramFactoryInterleaved>(factory_on(ops, two_cores)));
+    EXPECT_TRUE(
+        std::holds_alternative<ttnn::prim::ScatterCodegenProgramFactoryStreaming>(factory_on(ops, std::nullopt)));
+    // Forty tile rows underfill the grid too, but with eight index tiles per row a column-split core
+    // would read and scan the eight pairs once per output tile instead of once per row: the row
+    // split keeps the busiest core at a fraction of that work, so it is selected although rows are
+    // fewer than cores.
+    const Operands wide =
+        make_operands_of(device_, ttnn::Shape({1, 1, 1280, 3200}), ttnn::Shape({1, 1, 1280, 256}), 3200);
+    EXPECT_TRUE(
+        std::holds_alternative<ttnn::prim::ScatterCodegenProgramFactoryInterleaved>(factory_on(wide, std::nullopt)));
+    // The merge-gate two-range grid case: one tile row, 36 output columns over 35 cores, so the
+    // column split reaches the second range; its 2288 B stick keeps the dispatch off the detour.
+    const Operands two_range =
+        make_operands_of(device_, ttnn::Shape({1, 1, 32, 1144}), ttnn::Shape({1, 1, 32, 32}), 1144);
+    const CoreRangeSet two_ranges(std::vector<CoreRange>{
+        CoreRange(CoreCoord(1, 0), CoreCoord(3, 6)), CoreRange(CoreCoord(5, 0), CoreCoord(6, 6))});
+    EXPECT_TRUE(
+        std::holds_alternative<ttnn::prim::ScatterCodegenProgramFactoryStreaming>(factory_on(two_range, two_ranges)));
+    // The same pair's 400 B stick is not 32 B aligned, which is what keeps it off the row-major
+    // detour; a 128 B stick with one tile row is served by it.
+    const auto detour = [&](const Operands& o) {
+        return prefers_row_major_strategy(
+            o.input,
+            o.index,
+            o.src,
+            o.input.logical_shape(),
+            o.index.logical_shape(),
+            o.input.memory_config(),
+            /*pending_tile_bytes=*/0);
+    };
+    EXPECT_FALSE(detour(ops));
+    EXPECT_TRUE(detour(make_operands(device_, 64)));
+    EXPECT_FALSE(detour(two_range));
+}
+
+TEST(ScatterCodegenFactorySelection, ColumnSplitCostFollowsTheRescans) {
+    // Per core, the row split costs rows x (2 x Wt_output + 18 x Wt_index) and the column split
+    // columns x Ht x (2 + 18 x Wt_index) weighted tile operations; the split with less work on its
+    // busiest core wins. Two rows already favour the row split (one scan per core against two), and
+    // a single output column or a single core never splits by column.
+    using ttnn::prim::scatter_prefers_column_split;
+    EXPECT_TRUE(scatter_prefers_column_split(/*Ht=*/1, /*Wt_output=*/64, /*Wt_index=*/1, /*cores=*/110));
+    EXPECT_TRUE(scatter_prefers_column_split(1, 7, 1, 110));
+    EXPECT_FALSE(scatter_prefers_column_split(1, 7, 1, 2));
+    EXPECT_FALSE(scatter_prefers_column_split(2, 7, 1, 110));
+    EXPECT_FALSE(scatter_prefers_column_split(40, 100, 8, 110));
+    EXPECT_FALSE(scatter_prefers_column_split(40, 100, 1, 110));
+    EXPECT_FALSE(scatter_prefers_column_split(1, 1, 1, 110));
+    EXPECT_FALSE(scatter_prefers_column_split(1, 64, 1, 1));
+    EXPECT_FALSE(scatter_prefers_column_split(0, 64, 1, 110));
+}
+
+TEST_F(ScatterCodegenPrimFixture, RejectsAttributesThatDoNotDescribeTheOperands) {
+    // device_operation::launch takes whatever attributes a caller built; the page map decides which
+    // source page each input page consumes, so a wrong one would scatter updates into the wrong
+    // rows with no error. Every derived field is held to the operands, on a miss and on a hit.
+    const Operands ops = make_operands(device_, 64);
+    const ttnn::prim::ScatterCodegenInputs inputs{ops.input, ops.index, ops.src, std::nullopt};
+    const ttnn::prim::ScatterCodegenParams good = ttnn::prim::build_scatter_codegen_params(
+        ops.input, ops.index, ops.src, kReductionNone, ops.input.memory_config(), std::nullopt);
+    const auto with = [&](uint32_t Ht, const ttnn::prim::ScatterPageMap& page_map) {
+        return ttnn::prim::ScatterCodegenParams{
+            Ht,
+            good.Wt_output,
+            good.Wt_index,
+            good.output_logical_w,
+            good.idx_valid_h_last,
+            good.idx_valid_w_last,
+            good.Ht_per_batch_index,
+            good.num_sticks,
+            good.input_stick_elems,
+            good.index_stick_elems,
+            page_map,
+            good.reduction_mode,
+            good.output_mem_config,
+            good.sub_core_grids};
+    };
+    EXPECT_NO_THROW(ttnn::device_operation::launch<ttnn::prim::ScatterCodegenDeviceOperation>(good, inputs));
+    ttnn::prim::ScatterPageMap narrowed = good.page_map;
+    narrowed[1] += 1;
+    EXPECT_THROW(
+        ttnn::device_operation::launch<ttnn::prim::ScatterCodegenDeviceOperation>(with(good.Ht, narrowed), inputs),
+        std::exception);
+    EXPECT_THROW(
+        ttnn::device_operation::launch<ttnn::prim::ScatterCodegenDeviceOperation>(
+            with(good.Ht + 1, good.page_map), inputs),
+        std::exception);
+}
+
+TEST_F(ScatterCodegenPrimFixture, ChargesTheSlicedSourceAheadOfItsTranspose) {
+    // Off the last axis a source wider than the index is sliced and then transposed while the slice
+    // is still live; the transpose lands below it, so the frontier drops by both. The budget's slice
+    // term must be what allocating that slice moves the frontier by.
+    constexpr uint32_t kWidth = 4096;
+    const tt::tt_metal::MemoryConfig l1{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
+    const Tensor input = ttnn::ones(ttnn::Shape({1, kWidth}), DataType::BFLOAT16, Layout::ROW_MAJOR, *device_);
+    const tt::tt_metal::TensorSpec index_spec(
+        ttnn::Shape({1, kWidth}),
+        tt::tt_metal::TensorLayout(
+            DataType::INT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{}));
+    const Tensor index = Tensor::from_vector(std::vector<int32_t>(kWidth, 0), index_spec, device_);
+    const Tensor wide = ttnn::zeros(ttnn::Shape({2, kWidth}), DataType::BFLOAT16, Layout::ROW_MAJOR, *device_, l1);
+    const Tensor narrow = ttnn::zeros(ttnn::Shape({1, kWidth}), DataType::BFLOAT16, Layout::ROW_MAJOR, *device_, l1);
+    const ttnn::Shape working_input = codegen_working_shape(input.logical_shape(), /*dim=*/0);
+    const ttnn::Shape working_index = codegen_working_shape(index.logical_shape(), /*dim=*/0);
+    const auto owed = [&](const Tensor& src) {
+        return pending_operand_copies_bytes(
+            input, index, src, /*axis=*/0, working_input, working_index, Layout::ROW_MAJOR);
+    };
+    const uint64_t with_slice = owed(wide);
+    const uint64_t without_slice = owed(narrow);
+    EXPECT_GT(with_slice, without_slice);
+    const uint64_t before = ttnn::prim::scatter_usable_l1(input);
+    const Tensor slice = ttnn::zeros(ttnn::Shape({1, kWidth}), DataType::BFLOAT16, Layout::ROW_MAJOR, *device_, l1);
+    const uint64_t after = ttnn::prim::scatter_usable_l1(input);
+    EXPECT_EQ(with_slice - without_slice, before - after);
+}
+
+TEST_F(ScatterCodegenPrimFixture, DeclinesADeallocatedOperandBeforeTouchingItsBuffer) {
+    // buffer() throws on a deallocated tensor, so the gate has to decline on is_allocated() first;
+    // ttnn::scatter() then raises native's own error instead of a routing failure.
+    Operands ops = make_operands(device_, 64);
+    EXPECT_TRUE(supported_by_codegen(ops.input, -1, ops.index, ops.src, kReductionNone));
+    ops.index.deallocate();
+    EXPECT_FALSE(supported_by_codegen(ops.input, -1, ops.index, ops.src, kReductionNone));
+}
+
+TEST_F(ScatterCodegenPrimFixture, DemotesAWideRowWhoseColumnSplitWouldRescan) {
+    // 400 output tile columns do not fit the row split in L1, 64 tile rows are past the detour, and
+    // the column split would rescan the eight index tiles per output tile: measured 38x slower than
+    // native, so the call stays native. The same width over 8 tile rows takes the detour and stays
+    // on codegen.
+    const auto demoted = [&](const Operands& o) {
+        return is_demoted(o.input, -1, o.index, o.src, o.input.memory_config());
+    };
+    EXPECT_TRUE(
+        demoted(make_operands_of(device_, ttnn::Shape({1, 1, 2048, 12800}), ttnn::Shape({1, 1, 2048, 256}), 12800)));
+    EXPECT_FALSE(
+        demoted(make_operands_of(device_, ttnn::Shape({1, 1, 256, 12800}), ttnn::Shape({1, 1, 256, 256}), 12800)));
+    // A row that fits the row split is never demoted by this rule, however many tile rows it has.
+    EXPECT_FALSE(
+        demoted(make_operands_of(device_, ttnn::Shape({1, 1, 2048, 3200}), ttnn::Shape({1, 1, 2048, 256}), 3200)));
+}
+
+TEST_F(ScatterCodegenPrimFixture, RejectsRankZeroRowMajorOperands) {
+    // The ROW_MAJOR stick geometry reads the last dim before validate runs; a scalar has none, so the
+    // call must be refused there instead of walking off the empty shape.
+    const auto scalar = [&](DataType dtype) {
+        const tt::tt_metal::TensorSpec spec(
+            ttnn::Shape({}),
+            tt::tt_metal::TensorLayout(
+                dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{}));
+        return dtype == DataType::INT32 ? Tensor::from_vector(std::vector<int32_t>{0}, spec, device_)
+                                        : Tensor::from_vector(std::vector<::bfloat16>{::bfloat16(1.0f)}, spec, device_);
+    };
+    const Operands ops{scalar(DataType::BFLOAT16), scalar(DataType::INT32), scalar(DataType::BFLOAT16)};
+    EXPECT_THROW(run(ops, std::nullopt), std::exception);
+}
+
+TEST_F(ScatterCodegenPrimFixture, DemotesAUnitRowWhenTheDetourCannotFitLiveL1) {
+    // 32768-element sticks are 32 B aligned, so only the live budget decides the detour: its two
+    // resident 64 KiB sticks need more than an L1 with 100 KiB left, and the unit row is then
+    // demoted rather than sent through the TILE factories' padded rows.
+    const Operands ops = make_operands_of(device_, ttnn::Shape({1, 1, 1, 32768}), ttnn::Shape({1, 1, 1, 32768}), 32768);
+    const auto demoted = [&]() { return is_demoted(ops.input, -1, ops.index, ops.src, ops.input.memory_config()); };
+    EXPECT_FALSE(demoted());
+    const uint32_t banks = device_->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+    const uint64_t stick_bytes = ttnn::prim::scatter_usable_l1(ops.input) - 100 * 1024;
+    const tt::tt_metal::MemoryConfig l1{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
+    Tensor blocker = ttnn::zeros(
+        ttnn::Shape({banks, static_cast<uint32_t>(stick_bytes / sizeof(uint16_t))}),
+        DataType::BFLOAT16,
+        Layout::ROW_MAJOR,
+        *device_,
+        l1);
+    EXPECT_TRUE(demoted());
+    blocker.deallocate();
+    EXPECT_FALSE(demoted());
+}
+
+TEST_F(ScatterCodegenPrimFixture, RejectsADestinationPaddedPastTheStandardGeometry) {
+    const Operands ops = make_operands(device_, 64);
+    // Same logical shape as the input, but tilized with twice the padded rows: the TILE writers
+    // compute page ids from the input's tile-rounded geometry, so these pages would not line up.
+    const Tensor host = ttnn::zeros(ttnn::Shape({1, 1, 32, 64}), DataType::BFLOAT16, Layout::ROW_MAJOR, *device_);
+    const Tensor padded = ttnn::tilize_with_val_padding(host, ttnn::Shape({1, 1, 64, 64}), ttnn::PadValue{0.0f});
+    ASSERT_EQ(padded.logical_shape(), ops.input.logical_shape());
+    ASSERT_EQ(padded.padded_shape(), ttnn::Shape({1, 1, 64, 64}));
+    EXPECT_FALSE(supported_execution_controls(ops.input, ops.input.memory_config(), padded));
+    EXPECT_THROW(run(ops, padded), std::exception);
+}
+
+TEST_F(ScatterCodegenPrimFixture, RejectsADestinationThatAliasesSrc) {
+    // With src the input's own shape, src is a spec-exact destination; aliasing it would let the
+    // writers overwrite source values the streaming readers have not consumed yet.
+    const Operands ops = make_operands(device_, 32);
+    ASSERT_EQ(ops.src.tensor_spec(), ops.input.tensor_spec());
+    EXPECT_THROW(run(ops, ops.src), std::exception);
+    EXPECT_NO_THROW(run(ops, std::nullopt));
+}
+
+TEST_F(ScatterCodegenPrimFixture, RejectsADestinationOfAnotherShapeDtypeLayoutOrTile) {
+    // Every factory sizes its page count and per-core split from the input's geometry, so only the
+    // spec the op would create for itself is a destination it can address.
+    const Operands ops = make_operands(device_, 64);
+    const auto spec_with = [&](const ttnn::Shape& shape, DataType dtype, const tt::tt_metal::PageConfig& page) {
+        return tt::tt_metal::TensorSpec(shape, tt::tt_metal::TensorLayout(dtype, page, ops.input.memory_config()));
+    };
+    const tt::tt_metal::PageConfig tile_page(Layout::TILE);
+    const std::vector<tt::tt_metal::TensorSpec> wrong = {
+        spec_with(ttnn::Shape({1, 1, 32, 128}), DataType::BFLOAT16, tile_page),
+        spec_with(ops.input.logical_shape(), DataType::FLOAT32, tile_page),
+        spec_with(ops.input.logical_shape(), DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR)),
+        spec_with(
+            ops.input.logical_shape(),
+            DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(Layout::TILE, tt::tt_metal::Tile({16, 32}))),
+    };
+    for (const auto& spec : wrong) {
+        const Tensor destination = ttnn::create_device_tensor(spec, device_);
+        EXPECT_FALSE(supported_execution_controls(ops.input, ops.input.memory_config(), destination));
+        EXPECT_THROW(run(ops, destination), std::exception);
+    }
+}
+
+TEST_F(ScatterCodegenPrimFixture, RejectsTransposedTilesOnAProgramCacheHit) {
+    // A Tile's attribute values carry its shape and faces but not its transpose flags, so operands in
+    // transposed 32x32 tiles hash like default-tile ones: the second call below hits the first
+    // call's program, and only the hit-time checks keep its tiles off the fixed-face readers.
+    device_->enable_program_cache();
+    const Operands plain = make_operands(device_, 64);
+    EXPECT_NO_THROW(run(plain, std::nullopt));
+    const tt::tt_metal::Tile transposed({32, 32}, /*transpose_tile=*/true);
+    const auto with_tile = [&](const Tensor& t) {
+        const tt::tt_metal::TensorSpec spec(
+            t.logical_shape(),
+            tt::tt_metal::TensorLayout(
+                t.dtype(), tt::tt_metal::PageConfig(Layout::TILE, transposed), t.memory_config()));
+        return ttnn::create_device_tensor(spec, device_);
+    };
+    const Operands transposed_ops{with_tile(plain.input), with_tile(plain.index), with_tile(plain.src)};
+    // The premise: a key that told the two specs apart would make the hit, and this test, vacuous.
+    EXPECT_EQ(
+        ttsl::hash::hash_objects_with_default_seed(plain.input.tensor_spec()),
+        ttsl::hash::hash_objects_with_default_seed(transposed_ops.input.tensor_spec()));
+    EXPECT_FALSE(
+        supported_by_codegen(transposed_ops.input, -1, transposed_ops.index, transposed_ops.src, kReductionNone));
+    EXPECT_THROW(run(transposed_ops, std::nullopt), std::exception);
+    device_->disable_and_clear_program_cache();
+}
+
+TEST_F(ScatterCodegenPrimFixture, TileRouteNeedsItsStreamingPagesInLiveL1) {
+    // The streaming plan's six tile pages are the least a TILE call seats, so an L1 that cannot hold
+    // them must send the call native rather than fail the program's CB allocation. A 72-wide stick
+    // keeps its raw bytes off a 32 B boundary, so the row-major detour, which would otherwise answer
+    // for the call, declines it.
+    const Operands ops = make_operands_of(device_, ttnn::Shape({1, 1, 32, 72}), ttnn::Shape({1, 1, 32, 32}), 72);
+    const auto fits = [&]() {
+        return codegen_plan_fits_live_l1(ops.input, -1, ops.index, ops.src, kReductionNone, ops.input.memory_config());
+    };
+    EXPECT_TRUE(fits());
+    const uint64_t streaming_bytes = ttnn::prim::scatter_tile_streaming_bytes(
+        ops.input.buffer()->aligned_page_size(),
+        ops.input.buffer()->aligned_page_size(),
+        ops.index.buffer()->aligned_page_size(),
+        ops.src.buffer()->aligned_page_size());
+    // One ROW_MAJOR stick per L1 bank, leaving every bank short of those pages.
+    const uint32_t banks = device_->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+    const uint64_t stick_bytes = ttnn::prim::scatter_usable_l1(ops.input) - streaming_bytes / 2;
+    const tt::tt_metal::MemoryConfig l1{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
+    Tensor blocker = ttnn::zeros(
+        ttnn::Shape({banks, static_cast<uint32_t>(stick_bytes / sizeof(uint16_t))}),
+        DataType::BFLOAT16,
+        Layout::ROW_MAJOR,
+        *device_,
+        l1);
+    ASSERT_LT(ttnn::prim::scatter_usable_l1(ops.input), streaming_bytes);
+    EXPECT_FALSE(fits());
+    blocker.deallocate();
+    EXPECT_TRUE(fits());
+}
+
+TEST(ScatterCodegenRmChunkPlanner, BudgetsTheSeatedCbsOfAnUnalignedChunk) {
+    // An index stick of 42 int32 elements with bf16 sources: 252 raw bytes, but the program
+    // allocator seats each CB on the placement alignment, 64 B on Blackhole (192 + 128 = 320). A
+    // budget between the two must scale the chunk down to the 32-element floor rather than hand the
+    // factory CBs it cannot seat.
+    constexpr uint32_t kIndexElems = 42, kIndexBytes = 4, kSrcBytes = 2, kCbAlign = 64;
+    constexpr uint64_t kFixed = 1024;
+    EXPECT_EQ(
+        ttnn::prim::scatter_rm_chunk_elems(kFixed + 320, kFixed, kIndexElems, kIndexBytes, kSrcBytes, kCbAlign), 42u);
+    EXPECT_EQ(
+        ttnn::prim::scatter_rm_chunk_elems(kFixed + 319, kFixed, kIndexElems, kIndexBytes, kSrcBytes, kCbAlign), 32u);
+}
+
+// A device opened with an L1_SMALL region: the allocator's L1 bank stops below that region, and the
+// occupancy query the live budget reads never reports the buffers living in it.
+class ScatterCodegenL1SmallFixture : public TTNNFixtureWithDevice {
+protected:
+    static constexpr int kL1SmallSize = 16384;
+    ScatterCodegenL1SmallFixture() : TTNNFixtureWithDevice(DEFAULT_TRACE_REGION_SIZE, kL1SmallSize) {}
+};
+
+TEST_F(ScatterCodegenL1SmallFixture, BudgetsStopAtTheL1Bank) {
+    // The RM chunk planner fills whatever budget it is given, so a budget past the bank would plan
+    // CBs over the L1_SMALL region.
+    const Operands ops = make_operands(device_, 64);
+    const uint64_t bank = device_->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+    const uint64_t base = device_->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    ASSERT_LE(bank + kL1SmallSize + base, static_cast<uint64_t>(device_->l1_size_per_core()));
+    EXPECT_LE(ttnn::prim::scatter_static_l1(ops.input), bank);
+    EXPECT_LE(ttnn::prim::scatter_usable_l1(ops.input), bank);
+}
+
+}  // namespace ttnn::operations::data_movement::scatter::test
