@@ -346,6 +346,17 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         mask.logical_shape());
     const uint32_t nkc_local = tt::div_up(N_local_kv, args.get_k_chunk_size());
     TT_FATAL(nkc_local <= 64, "SparseRingSDPA: at most 64 K pieces per shard ({} given)", nkc_local);
+    if (tensor_args.logical_n_tensor.has_value()) {
+        const auto& t = *tensor_args.logical_n_tensor;
+        TT_FATAL(
+            t.dtype() == DataType::UINT32 || t.dtype() == DataType::INT32,
+            "logical_n_tensor must be uint32 or int32, got {}",
+            t.dtype());
+        TT_FATAL(
+            t.buffer() != nullptr && t.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "logical_n_tensor must be in DRAM");
+        TT_FATAL(t.logical_volume() == 1, "logical_n_tensor must hold one value, got volume {}", t.logical_volume());
+    }
 }
 
 void SparseRingSDPADeviceOperation::validate_on_program_cache_hit(
@@ -367,7 +378,8 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_hit(
     for (const auto& [t, name] :
          {std::pair{&tensor_args.pooled_k, "pooled_k"},
           std::pair{&tensor_args.pooled_v, "pooled_v"},
-          std::pair{&tensor_args.block_counts, "block_counts"}}) {
+          std::pair{&tensor_args.block_counts, "block_counts"},
+          std::pair{&tensor_args.logical_n_tensor, "logical_n_tensor"}}) {
         if (t->has_value()) {
             check_allocated(**t, name);
         }
@@ -428,14 +440,18 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
     if (tensor_args.block_counts.has_value()) {
         input_tensors.push_back(*tensor_args.block_counts);
     }
-    // logical_n is baked into the kernels (compile-time args and the bias generator), so it is keyed.
+    // logical_n is baked into the kernels unless logical_n_tensor is given, so it is keyed only without the tensor.
+    if (tensor_args.logical_n_tensor.has_value()) {
+        input_tensors.push_back(*tensor_args.logical_n_tensor);
+    }
+    const std::size_t keyed_logical_n = tensor_args.logical_n_tensor.has_value() ? 0 : args.logical_n;
     // The slots per pass and the K/V CB depth are derived from these inputs plus the live L1 top
     // (lowest_occupied_compute_l1_address), which is not keyed: a cached program keeps the choice of the call that
     // built it.
     return tt::tt_metal::operation::hash_operation<SparseRingSDPADeviceOperation>(
         input_tensors,
         args.scale,
-        args.logical_n,
+        keyed_logical_n,
         args.ring_size,
         args.compute_kernel_config,
         args.program_config,
@@ -446,7 +462,8 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         args.q_blocks_per_pass,
         tensor_args.pooled_k.has_value(),
         tensor_args.pooled_v.has_value(),
-        tensor_args.block_counts.has_value());
+        tensor_args.block_counts.has_value(),
+        tensor_args.logical_n_tensor.has_value());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> SparseRingSDPADeviceOperation::create_op_performance_model(
@@ -510,7 +527,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     const uint32_t block_size,
     const std::optional<uint32_t> q_blocks_per_pass,
-    const std::optional<ttnn::Tensor>& block_counts) {
+    const std::optional<ttnn::Tensor>& block_counts,
+    const std::optional<ttnn::Tensor>& logical_n_tensor) {
     using OperationType = ttnn::prim::SparseRingSDPADeviceOperation;
     // Checked before the launch: a cache hit skips the miss-path validation.
     TT_FATAL(
@@ -585,7 +603,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
         .block_mask = block_mask,
         .pooled_k = pooled_k,
         .pooled_v = pooled_v,
-        .block_counts = block_counts};
+        .block_counts = block_counts,
+        .logical_n_tensor = logical_n_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
