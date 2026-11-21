@@ -64,6 +64,14 @@ FORCE_INLINE void load_from(uint32_t ring) {
     copy_init(ring);
 }
 
+// SFPU inits are issued once per block operation, at its head, not per tile. On this part that holds across the
+// alternation inside a section (tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/): exp_init, the add/sub/mul
+// binary init and init_reduce program nothing beyond the shared SFPU init (ckernel_sfpu_exp.h exp_init,
+// ckernel_sfpu_binary.h sfpu_binary_init, ckernel_sfpu_reduce.h init_reduce); binary_max re-records its replay
+// body on every call and only adds ADDR_MOD_6 (ckernel_sfpu_binary_max_min.h); every sfpu_*_bcast_row call records
+// its own binop (sfpu_binary_bcast.h, "nothing persists between calls"); recip_init's Newton constant
+// (vConstFloatPrgm0) is written by no other op of its section. The math datacopy (copy_init) uses ADDR_MOD_0/1 only.
+
 // Point the packer at another output ring before pack_tile writes it.
 FORCE_INLINE void pack_to(uint32_t ring) {
     pack_reconfig_data_format(ring);
@@ -75,7 +83,6 @@ FORCE_INLINE void load_x(uint32_t idx, uint32_t ht, uint32_t d, uint32_t dmask) 
     copy_tile(cb_input_tiles, idx, d);
     if constexpr (has_mask) {
         if (ht == Ht - 1) {
-            add_binary_tile_init();
             add_binary_tile(d, dmask, d);
         }
     }
@@ -87,6 +94,11 @@ void column_max_block(InRing& in, MaxRing& col_max, uint32_t bc) {
     constexpr uint32_t d_acc = 0, d_work = 1, d_mask = 2;
     static_assert(d_mask < dest_tiles, "column_max_block needs 3 DEST slots");
     pack_to(cb_col_max);
+    if constexpr (has_mask) {
+        add_binary_tile_init();
+    }
+    binary_max_tile_init();
+    sfpu_reduce_init<PoolType::MAX, DataFormat::Float32>();
     for (uint32_t k = 0; k < bc; ++k) {
         tile_regs_acquire();
         if constexpr (has_mask) {
@@ -100,11 +112,9 @@ void column_max_block(InRing& in, MaxRing& col_max, uint32_t bc) {
             const uint32_t d = ht == 0 ? d_acc : d_work;
             load_x(idx, ht, d, d_mask);
             if (ht > 0) {
-                binary_max_tile_init();
                 binary_max_tile(d_acc, d_work, d_acc);
             }
         }
-        sfpu_reduce_init<PoolType::MAX, DataFormat::Float32>();
         sfpu_reduce<PoolType::MAX, DataFormat::Float32, ReduceDim::REDUCE_COL>(d_acc);
         tile_regs_commit();
 
@@ -123,6 +133,11 @@ void column_expsum_block(MaxRing& col_max, RecipRing& col_recip, uint32_t bc) {
     static_assert(d_max < dest_tiles, "column_expsum_block needs 4 DEST slots");
     col_max.wait_front(bc);
     pack_to(cb_col_recip);
+    sfpu_bcast_row_init();
+    exp_tile_init<exp_approx>();
+    add_binary_tile_init();
+    sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+    recip_tile_init();
     for (uint32_t k = 0; k < bc; ++k) {
         tile_regs_acquire();
         load_from(cb_col_max);
@@ -135,18 +150,13 @@ void column_expsum_block(MaxRing& col_max, RecipRing& col_recip, uint32_t bc) {
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             const uint32_t d = ht == 0 ? d_acc : d_work;
             load_x(k * Ht + ht, ht, d, d_mask);
-            sfpu_bcast_row_init();
             sfpu_sub_bcast_row(d, d_max);
-            exp_tile_init<exp_approx>();
             exp_tile<exp_approx>(d);
             if (ht > 0) {
-                add_binary_tile_init();
                 add_binary_tile(d_acc, d_work, d_acc);
             }
         }
-        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
         sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(d_acc);
-        recip_tile_init();
         recip_tile(d_acc);
         tile_regs_commit();
 
@@ -167,6 +177,11 @@ void normalize_block(RecipRing& col_recip, OutRing& out, uint32_t bc) {
     constexpr uint32_t outs_per_section = dest_tiles - d_first_out;
     col_recip.wait_front(bc);
     pack_to(cb_output_tiles);
+    sfpu_bcast_row_init();
+    exp_tile_init<exp_approx>();
+    if constexpr (has_mask) {
+        add_binary_tile_init();
+    }
     for (uint32_t k = 0; k < bc; ++k) {
         for (uint32_t ht0 = 0; ht0 < Ht; ht0 += outs_per_section) {
             const uint32_t n = (Ht - ht0) < outs_per_section ? (Ht - ht0) : outs_per_section;
@@ -185,11 +200,8 @@ void normalize_block(RecipRing& col_recip, OutRing& out, uint32_t bc) {
             for (uint32_t i = 0; i < n; ++i) {
                 const uint32_t d = d_first_out + i;
                 load_x(k * Ht + ht0 + i, ht0 + i, d, d_mask);
-                sfpu_bcast_row_init();
                 sfpu_sub_bcast_row(d, d_max);
-                exp_tile_init<exp_approx>();
                 exp_tile<exp_approx>(d);
-                sfpu_bcast_row_init();
                 sfpu_mul_bcast_row(d, d_recip);
             }
             tile_regs_commit();
