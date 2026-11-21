@@ -187,9 +187,9 @@ class ContextParallelConv3d(Module):
                 halo_tensor,
                 cluster_axis=self.parallel_config.time_parallel.mesh_axis,
                 dim=0,
-                padding_left=2,
-                padding_right=0,
-                padding_mode="replicate",
+                padding_left=pad_front,
+                padding_right=pad_back,
+                padding_mode=self.padding_mode,
             )
             x_pad_NTHWC = ttnn.unsqueeze(halo_tensor, 0)
 
