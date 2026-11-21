@@ -212,13 +212,8 @@ def minimax_h3_vision_config(weights_dir: str | os.PathLike) -> dict:
     return json.loads((Path(weights_dir) / "config.json").read_text())["vision_config"]
 
 
-def load_minimax_h3_vision_state_dict(weights_dir: str | os.PathLike) -> dict[str, torch.Tensor]:
-    """The `model.visual.*` sub-tree, prefix stripped. ~595 M parameters, ~1.2 GB bf16.
-
-    Reads only the shards holding vision tensors, the mirror of
-    :func:`load_minimax_h3_text_state_dict`'s treatment of the decoder.
-    """
-    directory = Path(weights_dir)
+def _vision_shards(directory: Path) -> tuple[dict[str, list[str]], int]:
+    """`({shard: [vision keys]}, total shard count)` from the index: only the shards holding `model.visual.*`."""
     index_path = directory / "model.safetensors.index.json"
     if not index_path.is_file():
         raise FileNotFoundError(f"no model.safetensors.index.json under {directory}")
@@ -230,6 +225,23 @@ def load_minimax_h3_vision_state_dict(weights_dir: str | os.PathLike) -> dict[st
             by_shard.setdefault(shard, []).append(key)
     if not by_shard:
         raise ValueError(f"no {_VISION_PREFIX}* tensors in {index_path}; this checkpoint has no vision tower")
+    return by_shard, len(set(weight_map.values()))
+
+
+def minimax_h3_vision_sources(weights_dir: str | os.PathLike) -> list[Path]:
+    """The checkpoint files the vision tower is prepared from; they key its converted-weight cache."""
+    directory = Path(weights_dir)
+    return [directory / shard for shard in sorted(_vision_shards(directory)[0])]
+
+
+def load_minimax_h3_vision_state_dict(weights_dir: str | os.PathLike) -> dict[str, torch.Tensor]:
+    """The `model.visual.*` sub-tree, prefix stripped. ~595 M parameters, ~1.2 GB bf16.
+
+    Reads only the shards holding vision tensors, the mirror of
+    :func:`load_minimax_h3_text_state_dict`'s treatment of the decoder.
+    """
+    directory = Path(weights_dir)
+    by_shard, n_shards = _vision_shards(directory)
 
     state: dict[str, torch.Tensor] = {}
     for shard, keys in sorted(by_shard.items()):
@@ -238,7 +250,7 @@ def load_minimax_h3_vision_state_dict(weights_dir: str | os.PathLike) -> dict[st
                 state[key[len(_VISION_PREFIX) :]] = handle.get_tensor(key)
     logger.info(
         f"MiniMax-H3 vision tower: {len(state)} tensors from {len(by_shard)} of "
-        f"{len(set(weight_map.values()))} shards, {sum(t.numel() for t in state.values()) * 2 / 1e9:.2f} GB bf16"
+        f"{n_shards} shards, {sum(t.numel() for t in state.values()) * 2 / 1e9:.2f} GB bf16"
     )
     return state
 
@@ -289,5 +301,21 @@ def build_minimax_h3_vision_tower(
     if load_weights:
         # Strict: `pos_embed.weight` is popped to the host by `_prepare_torch_state` and every other
         # key must map, so an unconsumed one is a real mapping bug.
-        tower.load_torch_state_dict(load_minimax_h3_vision_state_dict(weights_dir))
+        if parallel_config is None:
+            tower.load_torch_state_dict(load_minimax_h3_vision_state_dict(weights_dir))
+        else:
+            # Through the content-keyed converted-weight cache, as the conditioner is: a hit reads the
+            # prepared tensorbins instead of converting the checkpoint (about 3 s of every cold H3 start
+            # on blx06, #6185). The tower's `save`/`load` keep the host-only `pos_embed.weight` beside the
+            # tensorbins, so a hit restores it from the same artifact without reading the checkpoint.
+            cache.load_model(
+                tower,
+                model_name="minimax-h3",
+                subfolder="vision_tower",
+                parallel_config=parallel_config,
+                mesh_shape=tuple(mesh_device.shape),
+                mesh_device=mesh_device,
+                sources=minimax_h3_vision_sources(weights_dir),
+                get_torch_state_dict=lambda: load_minimax_h3_vision_state_dict(weights_dir),
+            )
     return tower, config
