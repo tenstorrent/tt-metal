@@ -1556,7 +1556,9 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
             }
         }
 
-        auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
+        // Inlined at its call sites: out of line it is one more frame (its closure and saved registers) under the step
+        // on the Wormhole TRISC stacks, and the closure setup costs more code than the inlined body.
+        auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) __attribute__((always_inline)) {
             fold_first(sbh);
             CircularBuffer(cur.sum).push_back(sbh);
             CircularBuffer(out_cb).push_back(sbh * vDHt * sdpa_out_stride);

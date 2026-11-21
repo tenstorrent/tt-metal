@@ -19,12 +19,14 @@ ALWI void recipe_ring_pop_chunk() {
     CircularBuffer(recipe_ring_cb::v).pop_front(v_chunk_tiles);
 }
 
-// One Q chunk's state for one ring iteration: the state banks (resident: the caller's; staged: restored from the
-// writer unless this is the Q chunk's first iteration), then `chunks` K chunks through `step(state, chunk, last_k)`,
-// then a save (staged, unless the Q chunk normalized). `step` sets the chunk's mask and runs the recipe step.
+// One Q chunk's state for one ring iteration: the state banks (resident: `state` carries over from the Q chunk's
+// previous iteration; staged: the banks reset, restored from the writer unless this is the Q chunk's first iteration),
+// then `chunks` K chunks through `step(state, chunk, last_k)`, then a save (staged, unless the Q chunk normalized).
+// `step` sets the chunk's mask and runs the recipe step. One state object, updated in place: the ring kernel's frame
+// lies under the whole recipe step on the TRISC stacks (Wormhole: a few hundred bytes).
 template <uint32_t q_tiles, uint32_t vd_tiles, typename Step>
 ALWI void recipe_ring_q_block(
-    RecipeAccumulatorState& resident,
+    RecipeAccumulatorState& state,
     bool staged,
     bool first_iteration,
     bool last_iteration,
@@ -33,8 +35,11 @@ ALWI void recipe_ring_q_block(
     uint32_t chunks,
     const Step& step) {
     using namespace recipe_ring_cb;
-    RecipeAccumulatorState state =
-        staged ? RecipeAccumulatorState{{sum_a, max_a, out_a}, {sum_b, max_b, out_b}} : resident;
+    if (staged) {
+        state.prev = {sum_a, max_a, out_a};
+        state.cur = {sum_b, max_b, out_b};
+        state.processed_chunks = 0;
+    }
     if (staged && !first_iteration) {
         if constexpr (recipe::ring_stream_state) {
             recipe_checkpoint_restore_stream<q_tiles, checkpoint_request, checkpoint_ack>(state, slot);
@@ -60,8 +65,5 @@ ALWI void recipe_ring_q_block(
         } else {
             recipe_checkpoint<q_tiles, checkpoint_request, checkpoint_ack, vd_tiles>(state, slot, false);
         }
-    }
-    if (!staged) {
-        resident = state;
     }
 }

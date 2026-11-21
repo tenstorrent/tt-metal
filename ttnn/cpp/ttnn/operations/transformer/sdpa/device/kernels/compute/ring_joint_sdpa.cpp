@@ -82,6 +82,28 @@ __attribute__((noinline)) void ring_run_chunk(RecipeAccumulatorState& state, boo
         true>(state, 1, last, release_q);
 }
 
+// Balanced causal: the last active ring iteration on K from this or an earlier device (walks a copy of the ring order,
+// without its syncs). Out of line: the copy stays off kernel_main's frame, which lies under the recipe step.
+template <
+    uint32_t full_mesh_rank_mapping,
+    uint32_t mesh_rows,
+    uint32_t mesh_cols,
+    ttnn::ccl::snake_ring::Orientation snake_orientation,
+    uint32_t ring_size>
+__attribute__((noinline)) uint32_t ring_early_last_iter(
+    const RingIdSequencer& sequence, uint32_t active_ring_iter_mask, uint32_t ring_index) {
+    RingIdSequencer order = sequence;
+    uint32_t last = 0;
+    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        const uint32_t ring_id = ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+            order.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
+        if (((active_ring_iter_mask >> ring_iter) & 1u) != 0 && ring_id <= ring_index) {
+            last = ring_iter;
+        }
+    }
+    return last;
+}
+
 // RecipeRingMask::reduce (sequence frame): the smallest key of the finished ring iterations and of this one, the Q
 // chunk's first position, whether this iteration processed a spatial chunk for it, and (sliding) its seeded Q tiles.
 // At file scope, not in kernel_main's frame: that frame sits under the whole recipe step on the TRISC stacks, which
@@ -285,23 +307,20 @@ __attribute__((optimize("Os"))) void kernel_main() {
     // chunks see nothing more (walks the reader's ring order without its syncs).
     [[maybe_unused]] uint32_t early_last_iter = 0;
     if constexpr (is_causal && is_balanced && !has_sliding_window) {
-        RingIdSequencer order = fused_op_indexer.seq;
-        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-            const uint32_t ring_id = ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<
-                full_mesh_rank_mapping>(order.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
-            if (((active_ring_iter_mask >> ring_iter) & 1u) != 0 && ring_id <= ring_index) {
-                early_last_iter = ring_iter;
-            }
-        }
+        early_last_iter = ring_early_last_iter<full_mesh_rank_mapping, mesh_rows, mesh_cols, snake_orientation, ring_size>(
+            fused_op_indexer.seq, active_ring_iter_mask, ring_index);
     }
 
     const auto run_chunk = [](RecipeAccumulatorState& state, bool last, bool release_q) {
         ring_run_chunk(state, last, release_q);
     };
 
+    // The lambdas below are always inlined: out of line, each closure (a pointer per captured local) and the captured
+    // locals themselves sit in kernel_main's frame, which lies under the whole recipe step. Wormhole's TRISCs have
+    // 2 KiB of local memory, ~600 B of it stack (firmware and kernel data take the rest).
     // Whether the reader sends spatial K chunk `k_chunk` of `source_ring_id`'s shard (ring_joint_reader.cpp: the
     // logical_n skip, the dense causal skip of chunked prefill).
-    const auto local_chunk_sent = [&](uint32_t source_ring_id, uint32_t k_chunk) -> bool {
+    const auto local_chunk_sent = [&](uint32_t source_ring_id, uint32_t k_chunk) __attribute__((always_inline)) -> bool {
         if constexpr (dynamic_local_n) {
             return chunked_kv_chunk_is_live<kv_pad_rotation_enabled, chunked_enabled>(
                 source_ring_id,
@@ -388,7 +407,7 @@ __attribute__((optimize("Os"))) void kernel_main() {
                                         : joint_shard_rows;
         // Whether the reader sends iteration chunk k (spatial: the logical_n / causal skips; sharded joint: chunks
         // past the logical joint length are skipped).
-        const auto chunk_sent = [&](uint32_t k_chunk) -> bool {
+        const auto chunk_sent = [&](uint32_t k_chunk) __attribute__((always_inline)) -> bool {
             if (k_chunk < num_local_k_chunks) {
                 return local_chunk_sent(ring_id, k_chunk);
             }
@@ -457,7 +476,7 @@ __attribute__((optimize("Os"))) void kernel_main() {
                     q_flat,
                     false,
                     plan.total_k_chunk_count,
-                    [&](RecipeAccumulatorState& state, uint32_t chunk, bool last_k) {
+                    [&](RecipeAccumulatorState& state, uint32_t chunk, bool last_k) __attribute__((always_inline)) {
                         const auto ref = plan.k_chunk_at(chunk);
                         recipe_ring_mask.valid_rows = k_chunk_rows;
                         recipe_ring_mask.masked = true;
@@ -531,7 +550,7 @@ __attribute__((optimize("Os"))) void kernel_main() {
                 q_flat,
                 next_block_unrestored,
                 live_chunks,
-                [&](RecipeAccumulatorState& state, uint32_t, bool last_k) {
+                [&](RecipeAccumulatorState& state, uint32_t, bool last_k) __attribute__((always_inline)) {
                     // The next chunk the reader sent (processed chunks precede the masked-whole ones).
                     while (!chunk_sent(k_chunk)) {
                         k_chunk++;
