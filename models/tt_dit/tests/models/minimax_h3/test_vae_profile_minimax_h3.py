@@ -69,3 +69,27 @@ def test_log_labels_unsynced_device_as_dispatch(monkeypatch, synced, label):
     assert all(line.lstrip().startswith(label) for line in device_lines), device_lines
     if synced:
         assert not any("dispatch" in line for line in lines)
+
+
+def test_log_prints_blend(monkeypatch):
+    # `blend` (the host clip assembly) was summed into the accounting but never printed, so a slow
+    # first clip after a switch read as unexplained decode time.
+    monkeypatch.setattr(vm.ttnn, "using_distributed_env", lambda: False)
+    lines = []
+    sink = logger.add(lambda message: lines.append(str(message)), format="{message}")
+    try:
+        _vae(synced=True, log=True)._report_profile(0.80)
+    finally:
+        logger.remove(sink)
+    blend = [line for line in lines if line.lstrip().startswith("blend")]
+    assert len(blend) == 1 and "0.07 s" in blend[0], lines
+
+
+def test_reserve_decode_output_maps_the_last_assembled_size(monkeypatch):
+    calls = []
+    monkeypatch.setattr(vm.host_buffers, "reserve", lambda shape, count=None: calls.append(shape))
+    vae = object.__new__(vm.MiniMaxH3Vae)
+    vae._assembled_shapes = {(31, 24, 42): (124, 1152, 1344)}
+    vae.reserve_decode_output(31, 24, 42)
+    vae.reserve_decode_output(61, 24, 42)  # never decoded: nothing to map yet
+    assert calls == [(124, 1152, 1344)]

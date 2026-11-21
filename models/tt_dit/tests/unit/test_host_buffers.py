@@ -5,6 +5,7 @@
 """The recycled readback buffers: reused only once released, and byte-identical output."""
 
 import gc
+import threading
 
 import numpy as np
 import pytest
@@ -18,6 +19,24 @@ SHAPE = (4, 1 << 19)  # 2 MiB, above the pool's floor
 
 def _addr(a: np.ndarray) -> int:
     return a.__array_interface__["data"][0]
+
+
+@pytest.fixture(autouse=True)
+def _no_spares(monkeypatch):
+    """The older checks count slabs exactly; the spare fill is tested on its own below."""
+    monkeypatch.setenv("TT_DIT_HOST_BUFFER_SPARES", "0")
+    yield
+    _wait_fills()
+
+
+def _wait_fills() -> None:
+    while True:
+        with host_buffers._lock:
+            pending = list(host_buffers._filling.values())
+        if not pending:
+            return
+        for event in pending:
+            event.wait(10)
 
 
 def test_released_buffer_is_reused():
@@ -118,3 +137,95 @@ def test_planar_concat_into_a_recycled_buffer_matches_a_fresh_one():
     got = pc.planar_concat_cpp(y, u, v, "CHWT", (TP, SP), out_H=H, out_W=W)
     assert _addr(got) == addr
     assert np.array_equal(got, fresh)
+
+
+def test_hand_out_maps_a_spare_ahead(monkeypatch):
+    monkeypatch.setattr(host_buffers, "_slabs", [])
+    monkeypatch.setenv("TT_DIT_HOST_BUFFER_SPARES", "1")
+    a = empty_uint8(SHAPE)
+    _wait_fills()
+    assert [s.size for s in host_buffers._slabs] == [a.size, a.size]
+    spare = host_buffers._slabs[1]
+    assert (spare[:: host_buffers._PAGE] == 0).all()  # touched, so already mapped
+    spare_addr = _addr(spare)
+    del spare
+    b = empty_uint8(SHAPE)  # `a` is still live: the spare, not a fresh slab
+    assert _addr(b) == spare_addr and b.shape == SHAPE
+    _wait_fills()
+    assert len(host_buffers._slabs) == 3
+    del a, b
+
+
+def test_reserve_maps_a_size_before_its_first_use(monkeypatch):
+    monkeypatch.setattr(host_buffers, "_slabs", [])
+    host_buffers.reserve(SHAPE, count=2)
+    _wait_fills()
+    addrs = {_addr(s) for s in host_buffers._slabs}
+    assert len(addrs) == 2
+    assert _addr(empty_uint8(SHAPE)) in addrs
+    host_buffers.reserve((4, 1 << 10))  # under the pool's floor: nothing to map
+    _wait_fills()
+    assert len(host_buffers._slabs) == 2
+
+
+def test_spares_stay_under_the_cap(monkeypatch):
+    monkeypatch.setattr(host_buffers, "_slabs", [])
+    monkeypatch.setenv("TT_DIT_HOST_BUFFER_POOL_MB", "8")
+    monkeypatch.setenv("TT_DIT_HOST_BUFFER_SPARES", "3")
+    live = empty_uint8((3, 1 << 20))
+    _wait_fills()
+    assert [s.size for s in host_buffers._slabs] == [3 << 20, 3 << 20]  # a third would pass 8 MiB
+    del live
+
+
+def test_pool_off_maps_nothing_ahead(monkeypatch):
+    monkeypatch.setattr(host_buffers, "_slabs", [])
+    monkeypatch.setenv("TT_DIT_HOST_BUFFER_POOL_MB", "0")
+    monkeypatch.setenv("TT_DIT_HOST_BUFFER_SPARES", "1")
+    empty_uint8(SHAPE)
+    host_buffers.reserve(SHAPE)
+    _wait_fills()
+    assert host_buffers._slabs == []
+
+
+def test_a_fill_in_progress_is_waited_for_not_doubled(monkeypatch):
+    monkeypatch.setattr(host_buffers, "_slabs", [])
+    n = int(np.prod(SHAPE))
+    filling = threading.Event()
+    monkeypatch.setitem(host_buffers._filling, n, filling)
+    mapped = [np.zeros(n, dtype=np.uint8)]
+    addr = _addr(mapped[0])
+
+    def finish():
+        with host_buffers._lock:
+            host_buffers._slabs.append(mapped.pop())
+            host_buffers._filling.pop(n).set()
+
+    timer = threading.Timer(0.2, finish)
+    timer.start()
+    got = empty_uint8(SHAPE)
+    timer.join()
+    assert _addr(got) == addr
+    assert len(host_buffers._slabs) == 1
+
+
+def test_a_stuck_fill_is_not_waited_for_forever(monkeypatch):
+    monkeypatch.setattr(host_buffers, "_slabs", [])
+    monkeypatch.setattr(host_buffers, "_FILL_WAIT_S", 0.05)
+    n = int(np.prod(SHAPE))
+    monkeypatch.setitem(host_buffers._filling, n, threading.Event())
+    assert empty_uint8(SHAPE).shape == SHAPE
+    host_buffers._filling.pop(n)
+
+
+def test_spare_fill_keeps_a_held_buffer_intact(monkeypatch):
+    monkeypatch.setattr(host_buffers, "_slabs", [])
+    monkeypatch.setenv("TT_DIT_HOST_BUFFER_SPARES", "2")
+    held = []
+    for value in range(1, 6):
+        a = empty_uint8(SHAPE)
+        a[:] = value
+        held.append(a)
+    _wait_fills()
+    assert [int(a.min()) for a in held] == [1, 2, 3, 4, 5]
+    assert [int(a.max()) for a in held] == [1, 2, 3, 4, 5]
