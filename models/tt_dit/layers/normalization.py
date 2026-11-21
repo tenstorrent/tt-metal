@@ -245,6 +245,7 @@ class DistributedRMSNorm(Module):
         dynamic_weight_includes_static=False,
         dynamic_tile_row_map=None,
         row_capacity=None,
+        preserve_rope_rounding=False,
     ) -> ttnn.Tensor:
         # per_head_norm selects the normalization semantics when the activation is
         # head-split (num_heads_per_device > 1):
@@ -343,6 +344,7 @@ class DistributedRMSNorm(Module):
             rope_sin=rope_sin,
             dtype=dtype,
             row_capacity=row_capacity,
+            preserve_rope_rounding=preserve_rope_rounding,
             **extra,
         )
 

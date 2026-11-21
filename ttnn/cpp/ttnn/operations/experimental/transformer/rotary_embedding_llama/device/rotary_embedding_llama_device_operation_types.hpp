@@ -13,6 +13,7 @@ struct RotaryEmbeddingLlamaParams {
     bool is_decode_mode{};
     tt::tt_metal::MemoryConfig output_mem_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
+    bool active_cores_only = false;
 };
 
 struct RotaryEmbeddingLlamaInputs {

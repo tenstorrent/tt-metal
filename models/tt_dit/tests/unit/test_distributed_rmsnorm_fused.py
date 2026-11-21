@@ -528,6 +528,37 @@ def _trace_and_time(submesh, run_ops, *, num_iters: int) -> float:
     return elapsed_us / num_iters
 
 
+@pytest.mark.parametrize("mesh_device,device_params", [((4, 8), ring_params)], indirect=True)
+@pytest.mark.parametrize("cid", ["tp4_v_selfattn_qk_s1", "tp4_v_selfattn_qk_s2", "tp4_a_selfattn_qk"])
+def test_ltx_qk_rope_preserve_rounding(mesh_device, cid):
+    """The norm with preserve_rope_rounding matches the norm followed by rotary_embedding_llama bit for bit."""
+    cfg = next(c for c in _make_cfgs(LTX, 4) if c.cid == cid)
+    inp = _build(mesh_device, cfg, 0)
+    ccl = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    norm = DistributedRMSNorm(
+        embedding_dim=cfg.dim,
+        norm_eps=NORM_EPS,
+        norm_elementwise_affine=False,
+        mesh_axis=0,
+        mesh_device=mesh_device,
+        ccl_manager=ccl,
+    )
+    rope_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    args = dict(num_heads_per_device=cfg.heads, dynamic_weight=inp["weight"])
+    rope = (inp["cos"], inp["sin"], inp["trans"])
+    expected = ttnn.experimental.rotary_embedding_llama(
+        norm(inp["x"], **args), *rope, compute_kernel_config=rope_config
+    )
+    actual = norm(inp["x"], **args, rope_cos=rope[0], rope_sin=rope[1], trans_mat=rope[2], preserve_rope_rounding=True)
+    assert torch.equal(_gather(actual, 0), _gather(expected, 0))
+
+
 # mesh, device_params, model, tp, topology, op_override(=galaxy links; None on BH), tp_axis, full_mesh
 # full_mesh=True keeps the whole 2D mesh with TP on axis 1 (the 8-wide closed ring) and
 # axis 0 replicated — used for the FLUX TP=8 ring config (tp_axis=1 would otherwise carve
