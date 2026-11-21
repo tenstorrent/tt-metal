@@ -1,0 +1,216 @@
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_compute.cpp op_ft/kernels/conv2d_3x3_compute.cpp
+--- op_base/kernels/conv2d_3x3_compute.cpp	2026-11-21 11:50:12.364263166 +0000
++++ op_ft/kernels/conv2d_3x3_compute.cpp	2026-11-21 11:58:44.909719612 +0000
+@@ -886,8 +886,18 @@
+ // tilized once, as one three-tap unit ([kw][c] = 3 * tw tiles, the reader's TapDirectFifo entry), into a ring of
+ // ring_rows such rows (cb_im2col_tiles), and K-block (kh, kw) of an M-block multiplies rows m0 + kh * W / 32 + i of it
+ // at tap offset kw * tw. Rows are counted from the core's first output tile-row; row r sits at ring row r mod
+-// ring_rows. They are tilized lazily in band-first order (conv2d_3x3_khr_band_order.hpp, the reader streams them in the
+-// same order): before K-block (kh, 0), lanes kh.. up to row m0 + kh * wt + bm, each lane's run packed at its own ring
++// ring_rows. With the weights resident a K-block past the first M-block is a whole kernel row (taps = 3: K-block kh,
++// bk = 3 tw): ring row
++// t + kh * wt holds [kw][c], the K order of rounds 3 kh .. 3 kh + 2, which sit consecutively in cb_weights, so in0 is
++// one contiguous run of 3 tw tiles against one contiguous [3 tw, bn] in1 block. 3 K-blocks per M-block instead of 9:
++// 3x fewer partials packs (packer L1 accumulation) and per-K-block inits / reconfigs / hooks; the three taps of a
++// kernel row accumulate in DEST (fp32) before the packer's L1 add, a different fp32 rounding order than one tap per
++// K-block. The first M-block keeps one tap per K-block (taps = 1): the writer's rounds (one tap each) are still
++// arriving and K-block k waits for round k only, so the walk's tail after the last round is one tap, not a kernel row.
++// With streamed weights a K-block stays one tap: a kernel row would need three rounds fronted, the weight CB holds
++// WEIGHT_DEPTH (2). They are tilized lazily in band-first order (conv2d_3x3_khr_band_order.hpp, the
++// reader streams them in the same order): before kernel row kh's first K-block, lanes kh.. up to row m0 + kh * wt + bm,
++// each lane's run packed at its own ring
+ // rows (the packer's write pointer is placed per run). So M-block 0 waits for its own 3 bm rows, not for the whole
+ // first window of 2 wt + bm rows that every core fetches from DRAM at once. The unpacker frees rows with a bare ack of
+ // the ring's tiles_acked (its read pointer stays at the CB base, so a ring row's tiles sit at a fixed index): before
+@@ -934,9 +944,12 @@
+     uint32_t cb_ring,
+     uint32_t cb_table,
+     bool windows,
+-    bool relu_on_last_matmul_pack>
++    bool relu_on_last_matmul_pack,
++    uint32_t taps>  // taps per K-block: 3 (kernel row) or 1
+ struct Tilize {
++    static_assert(taps == 1 || taps == 3);
+     static constexpr uint32_t row_tiles = 3 * tw;
++    static constexpr uint32_t kblocks_per_row = 3 / taps;
+     static_assert(ring_rows >= 2 * wt && ring_rows >= bm);
+     DataflowBuffer* rm;
+     DataflowBuffer* ring;
+@@ -971,10 +984,10 @@
+     }
+ 
+     ALWI void operator()(uint32_t block, uint32_t /*num_k_blocks*/, bool is_last) const {
+-        if (block % 3 != 0) {
++        if (block % kblocks_per_row != 0) {
+             return;
+         }
+-        const uint32_t kh = block / 3;
++        const uint32_t kh = block / kblocks_per_row;
+         const uint32_t m0 = st->m_row0;
+         const uint32_t free_to = kh == 0 ? m0 : m0 + (bm < kh * wt ? bm : kh * wt);
+         if (free_to > st->acked) {
+@@ -1033,18 +1046,35 @@
+     }
+ };
+ 
+-// K-block (kh, kw), subblock row i0 (one tile-row): ring row m0 + kh * wt + i0, tap kw. The row stride inside a
+-// subblock never matters (one-row subblocks).
+-template <uint32_t tw, uint32_t ring_rows>
++// K-block `block` (taps 3 * kh + kw0 ..), subblock row i0 (one tile-row): ring row m0 + kh * wt + i0, from tap kw0's
++// first tile (kw0 = 0 with kernel-row K-blocks). The row stride inside a subblock never matters (one-row subblocks).
++template <uint32_t tw, uint32_t ring_rows, uint32_t taps>
+ struct In0Index {
+     const State* st;
+     ALWI uint32_t operator()(uint32_t block, uint32_t i0) const {
+-        const uint32_t kh = block / 3;
++        constexpr uint32_t kblocks_per_row = 3 / taps;
++        const uint32_t kh = block / kblocks_per_row;
+         uint32_t p = st->kh_pos[kh] + i0;
+         if (p >= ring_rows) {
+             p -= ring_rows;
+         }
+-        return p * (3 * tw) + (block - 3 * kh) * tw;
++        return p * (3 * tw) + (block - kblocks_per_row * kh) * taps * tw;
++    }
++};
++// Weights resident: the tilize hook, then (until every round arrived, the first M-block) the wait for the writer's
++// rounds of K-block `block` (one per tap, round_tiles each). `rounds_waited` counts those rounds.
++template <typename Inner, uint32_t cb_w, uint32_t round_tiles, uint32_t taps>
++struct ResidentRowWeightsPreKBlock {
++    Inner inner;
++    uint32_t* rounds_waited;
++    ALWI void operator()(uint32_t block, uint32_t num_k_blocks, bool is_last) const {
++        inner(block, num_k_blocks, is_last);
++        const uint32_t need = taps * (block + 1);
++        if (*rounds_waited < need) {
++            MaybeDeviceZoneScope("compute_weight_wait");
++            cb_wait_front(cb_w, need * round_tiles);
++            *rounds_waited = need;
++        }
+     }
+ };
+ }  // namespace kh_reuse
+@@ -1519,6 +1549,8 @@
+             num_k_blocks == 9 && out_subblock_h == 1,
+         "kh reuse: the interleaved K-blocked tap-direct walk, one tap per K-block");
+     kh_reuse::State khr_state{};
++    // The per-M-block state (init / begin_block / finish) does not depend on the taps per K-block.
++    constexpr uint32_t khr_taps = 3;
+     using KhrPre = kh_reuse::Tilize<
+         c_in_tiles,
+         KHR_RING_ROWS,
+@@ -1528,7 +1560,8 @@
+         cb_im2col_tiles,
+         cb_src_table,
+         false,
+-        relu_on_last_matmul_pack>;
++        relu_on_last_matmul_pack,
++        khr_taps>;
+     const KhrPre khr_pre{&im2col_rm_dfb, &im2col_tiles_dfb, &src_table_dfb, &khr_state};
+     khr_pre.init(num_m_blocks_this_core);
+ #endif
+@@ -2409,38 +2442,62 @@
+             MaybeDeviceZoneScope("compute_matmul_walk");
+             constexpr uint32_t bias_batch_groups = tile_input ? in0_num_subblocks : 2;
+ #ifdef KH_REUSE
+-            // kh reuse (kh_reuse::Tilize): the tilize hook and in0 from the tile ring.
++            // kh reuse (kh_reuse::Tilize): the tilize hook and in0 from the tile ring, `taps` taps per K-block.
+             khr_pre.begin_block(m_block_idx);
+-            const auto khr_in0 =
+-                conv2d_3x3::kblock_walk::In0Indexed<kh_reuse::In0Index<c_in_tiles, KHR_RING_ROWS>>{{&khr_state}};
++            auto khr_walk = [&](auto taps_c) {
++                constexpr uint32_t taps = decltype(taps_c)::value;
++                using Pre = kh_reuse::Tilize<
++                    c_in_tiles,
++                    KHR_RING_ROWS,
++                    KHR_WT,
++                    block_m_tiles,
++                    cb_im2col_rm,
++                    cb_im2col_tiles,
++                    cb_src_table,
++                    false,
++                    relu_on_last_matmul_pack,
++                    taps>;
++                const Pre pre{&im2col_rm_dfb, &im2col_tiles_dfb, &src_table_dfb, &khr_state};
++                const auto in0 = conv2d_3x3::kblock_walk::In0Indexed<
++                    kh_reuse::In0Index<c_in_tiles, KHR_RING_ROWS, taps>>{{&khr_state}};
+ #ifdef WEIGHTS_RESIDENT
+-            constexpr uint32_t khr_round_tiles = block_k_tiles * block_n_tiles;
+-            const ResidentWeightsPreKBlock<KhrPre, cb_weights, khr_round_tiles> khr_wr_pre{khr_pre, &wr_rounds_waited};
+-            const auto& khr_hook = khr_wr_pre;
+-            constexpr bool khr_resident = true;
+-            const ResidentIn1Offset<khr_round_tiles> khr_in1{};
++                constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
++                const kh_reuse::ResidentRowWeightsPreKBlock<Pre, cb_weights, round_tiles, taps> hook{
++                    pre, &wr_rounds_waited};
++                constexpr bool resident = true;
++                const ResidentIn1Offset<taps * round_tiles> in1{};
+ #else
+-            const auto& khr_hook = khr_pre;
+-            constexpr bool khr_resident = false;
+-            const ckl::NoIn1BaseOffset khr_in1{};
+-#endif
+-            conv2d_3x3::kblock_walk::walk<
+-                has_bias,
+-                bias_batch_groups,
+-                khr_resident,
+-                apply_relu,
+-                cb_im2col_tiles,
+-                cb_weights,
+-                cb_matmul_partials,
+-                cb_output_tiles,
+-                cb_bias,
+-                out_n_tiles,
+-                in0_num_subblocks,
+-                in1_num_subblocks,
+-                out_subblock_h,
+-                out_subblock_w,
+-                block_k_tiles,
+-                num_k_blocks>(khr_hook, CenterTapIn0<center_mode, cb_center_tiles>{}, khr_in1, khr_in0);
++                const auto& hook = pre;
++                constexpr bool resident = false;
++                const ckl::NoIn1BaseOffset in1{};
++#endif
++                conv2d_3x3::kblock_walk::walk<
++                    has_bias,
++                    bias_batch_groups,
++                    resident,
++                    apply_relu,
++                    cb_im2col_tiles,
++                    cb_weights,
++                    cb_matmul_partials,
++                    cb_output_tiles,
++                    cb_bias,
++                    out_n_tiles,
++                    in0_num_subblocks,
++                    in1_num_subblocks,
++                    out_subblock_h,
++                    out_subblock_w,
++                    taps * block_k_tiles,
++                    num_k_blocks / taps>(hook, CenterTapIn0<center_mode, cb_center_tiles>{}, in1, in0);
++            };
++#ifdef WEIGHTS_RESIDENT
++            if (m_block_idx == 0) {
++                khr_walk(std::integral_constant<uint32_t, 1>{});
++            } else {
++                khr_walk(std::integral_constant<uint32_t, 3>{});
++            }
++#else
++            khr_walk(std::integral_constant<uint32_t, 1>{});
++#endif
+ #elif defined(WEIGHTS_RESIDENT)
+             // Weights resident (see ResidentIn1Offset): the rounds stay fronted across the M-blocks.
+             constexpr uint32_t wr_round_tiles = block_k_tiles * block_n_tiles;
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_reader.cpp op_ft/kernels/conv2d_3x3_reader.cpp
+--- op_base/kernels/conv2d_3x3_reader.cpp	2026-11-21 11:55:12.007620417 +0000
++++ op_ft/kernels/conv2d_3x3_reader.cpp	2026-11-21 11:58:44.885719262 +0000
+@@ -1024,8 +1024,7 @@
+                     win.band_hi[kh] > 0 ? static_cast<uint32_t>(win.band_hi[kh] - ring_front_row) * c_in_tiles : 0;
+             }
+         } else if constexpr (tile_input) {
+-            // ---- fill_halo_slab (TILE): plan the slab rows, then stream input tile-rows in slab
+-            // order.
++            // ---- fill_halo_slab (TILE): plan the slab rows, then stream input tile-rows in slab order.
+             MaybeDeviceZoneScope("reader_fill");
+ #ifdef CONV2D_3X3_KW_FOLD
+             // kw-fold: the host planned the fill (descriptor _kwf_fill_args: only the slab rows compute reads, as

@@ -897,25 +897,36 @@ struct ResidentWeightsPreKBlock {
 };
 
 #ifdef KH_REUSE
-// kh reuse (the descriptor's KH_REUSE): stride 1, d 1, W_out == W_in a multiple of 32, one tap per K-block (K-block
-// 3 kh + kw). Tap (kh, kw) of output tile-row t is tap (0, kw) of tile-row t + kh * W / 32, so each input tile-row is
-// tilized once, as one three-tap unit ([kw][c] = 3 * tw tiles, the reader's TapDirectFifo entry), into a ring of
-// ring_rows such rows (cb_im2col_tiles), and K-block (kh, kw) of an M-block multiplies rows m0 + kh * W / 32 + i of it
-// at tap offset kw * tw. Rows are counted from the core's first output tile-row; row r sits at ring row r mod
-// ring_rows. They are tilized lazily in band-first order (conv2d_3x3_khr_band_order.hpp, the reader streams them in the
-// same order): before K-block (kh, 0), lanes kh.. up to row m0 + kh * wt + bm, each lane's run packed at its own ring
-// rows (the packer's write pointer is placed per run). So M-block 0 waits for its own 3 bm rows, not for the whole
-// first window of 2 wt + bm rows that every core fetches from DRAM at once. The unpacker frees rows with a bare ack of
-// the ring's tiles_acked (its read pointer stays at the CB base, so a ring row's tiles sit at a fixed index): before
-// K-block (kh, 0), every row below m0 + min(bm, kh * wt) (kh > 0) or m0 (kh = 0), which no later K-block reads and
-// which are all tilized; ring_rows = max(2 * wt, bm) then always holds the live rows (a ring row is rewritten only
-// once its row is dead), and the CB counts stay exact (rows pushed, rows freed). Same tiles, same K order as the
-// tap-direct walk (bit-identical); 3x fewer tilized tiles and ~9x fewer units. Measured (Blackhole p150b, FLUX.2 bh2x4,
-// bit-identical, device kernel us), monotone order -> band-first with the reader's FIFO groups ending at each tilize
-// step: 514x1024 64->256 1385.8 -> 1268.8 (first M-block 114 -> 36), 514x1024 64->128 758.6 -> 726.9, 130x256
-// 128->512 374.0 -> 358.0, 258x512 64->256 399.2 -> 397.1 (perf_experiments/ring_band_first_startup). Raw LLK
-// (capability): the walk's in0 comes from a CB read pointer with a per-K-block wait / pop, which cannot address a tile
-// ring; nothing acks a CB without moving its read pointer, and nothing packs a CB push at a chosen ring row.
+// kh reuse (the descriptor's KH_REUSE): stride 1, d 1, W_out == W_in a multiple of 32, one tap per writer weight
+// round (round 3 kh + kw). Tap (kh, kw) of output tile-row t is tap (0, kw) of tile-row t + kh * W / 32, so each input
+// tile-row is tilized once, as one three-tap unit ([kw][c] = 3 * tw tiles, the reader's TapDirectFifo entry), into a
+// ring of ring_rows such rows (cb_im2col_tiles), and kernel row kh of an M-block multiplies rows m0 + kh * W / 32 + i
+// of it. Rows are counted from the core's first output tile-row; row r sits at ring row r mod ring_rows.
+// With the weights resident a K-block is a whole kernel row (taps = 3: K-block kh, bk = 3 tw): ring row t + kh * wt
+// holds [kw][c], the K order of rounds 3 kh .. 3 kh + 2, which sit consecutively in cb_weights, so in0 is one
+// contiguous run of 3 tw tiles against one contiguous [3 tw, bn] in1 block: 3 K-blocks per M-block instead of 9, so 3x
+// fewer partials packs (packer L1 accumulation) and per-K-block inits / reconfigs / hooks. The three taps of a kernel
+// row accumulate in DEST (fp32) before the packer's L1 add: a different fp32 rounding order than one tap per K-block
+// (not bit-identical to it; same PCC and error vs fp64). With streamed weights a K-block stays one tap (taps = 1,
+// K-block (kh, kw) at tap offset kw * tw): a kernel row would need three rounds fronted, the weight CB holds
+// WEIGHT_DEPTH (2). Measured (Blackhole p150b, FLUX.2 bh2x4, device kernel us, one tap -> one kernel row per K-block):
+// 514x1024 64->256 1268.8 -> 1245.3, 258x512 64->256 397.0 -> 384.6, 130x256 128->512 358.5 -> 360.9 (its first
+// K-block waits for three weight rounds, not one), 514x1024 64->128 726 -> 728 (its slowest cores wait on the input
+// stream) (perf_experiments/khr_kernel_row_kblocks).
+// The rows are tilized lazily in band-first order (conv2d_3x3_khr_band_order.hpp, the reader streams them in the same
+// order): before kernel row kh's first K-block, lanes kh.. up to row m0 + kh * wt + bm, each lane's run packed at its
+// own ring rows (the packer's write pointer is placed per run). So M-block 0 waits for its own 3 bm rows, not for the
+// whole first window of 2 wt + bm rows that every core fetches from DRAM at once. The unpacker frees rows with a bare
+// ack of the ring's tiles_acked (its read pointer stays at the CB base, so a ring row's tiles sit at a fixed index):
+// before kernel row kh, every row below m0 + min(bm, kh * wt) (kh > 0) or m0 (kh = 0), which no later K-block reads
+// and which are all tilized; ring_rows = max(2 * wt, bm) then always holds the live rows (a ring row is rewritten only
+// once its row is dead), and the CB counts stay exact (rows pushed, rows freed). 3x fewer tilized tiles and ~9x fewer
+// units than the tap-direct walk. Measured (Blackhole p150b, FLUX.2 bh2x4, bit-identical, device kernel us),
+// monotone order -> band-first with the reader's FIFO groups ending at each tilize step: 514x1024 64->256 1385.8 ->
+// 1268.8 (first M-block 114 -> 36), 514x1024 64->128 758.6 -> 726.9, 130x256 128->512 374.0 -> 358.0, 258x512 64->256
+// 399.2 -> 397.1 (perf_experiments/ring_band_first_startup). Raw LLK (capability): the walk's in0 comes from a CB read
+// pointer with a per-K-block wait / pop, which cannot address a tile ring; nothing acks a CB without moving its read
+// pointer, and nothing packs a CB push at a chosen ring row.
 namespace kh_reuse {
 #ifdef TRISC_UNPACK
 // tiles_acked += n without moving the read pointer (llk_pop_tiles' counter update and stall).
@@ -950,9 +961,12 @@ template <
     uint32_t cb_ring,
     uint32_t cb_table,
     bool windows,
-    bool relu_on_last_matmul_pack>
+    bool relu_on_last_matmul_pack,
+    uint32_t taps>  // taps per K-block: 3 (kernel row) or 1
 struct Tilize {
+    static_assert(taps == 1 || taps == 3);
     static constexpr uint32_t row_tiles = 3 * tw;
+    static constexpr uint32_t kblocks_per_row = 3 / taps;
     static_assert(ring_rows >= 2 * wt && ring_rows >= bm);
     DataflowBuffer* rm;
     DataflowBuffer* ring;
@@ -988,10 +1002,10 @@ struct Tilize {
     }
 
     ALWI void operator()(uint32_t block, uint32_t /*num_k_blocks*/, bool is_last) const {
-        if (block % 3 != 0) {
+        if (block % kblocks_per_row != 0) {
             return;
         }
-        const uint32_t kh = block / 3;
+        const uint32_t kh = block / kblocks_per_row;
         const uint32_t m0 = st->m_row0;
         const uint32_t free_to = kh == 0 ? m0 : m0 + (bm < kh * wt ? bm : kh * wt);
         if (free_to > st->acked) {
@@ -1050,18 +1064,35 @@ struct Tilize {
     }
 };
 
-// K-block (kh, kw), subblock row i0 (one tile-row): ring row m0 + kh * wt + i0, tap kw. The row stride inside a
-// subblock never matters (one-row subblocks).
-template <uint32_t tw, uint32_t ring_rows>
+// K-block `block` (taps 3 * kh + kw0 ..), subblock row i0 (one tile-row): ring row m0 + kh * wt + i0, from tap kw0's
+// first tile (kw0 = 0 with kernel-row K-blocks). The row stride inside a subblock never matters (one-row subblocks).
+template <uint32_t tw, uint32_t ring_rows, uint32_t taps>
 struct In0Index {
     const State* st;
     ALWI uint32_t operator()(uint32_t block, uint32_t i0) const {
-        const uint32_t kh = block / 3;
+        constexpr uint32_t kblocks_per_row = 3 / taps;
+        const uint32_t kh = block / kblocks_per_row;
         uint32_t p = st->kh_pos[kh] + i0;
         if (p >= ring_rows) {
             p -= ring_rows;
         }
-        return p * (3 * tw) + (block - 3 * kh) * tw;
+        return p * (3 * tw) + (block - kblocks_per_row * kh) * taps * tw;
+    }
+};
+// Weights resident, kernel-row K-blocks: the tilize hook, then (until every round arrived, the first M-block) the wait
+// for the writer's rounds 3 kh .. 3 kh + 2 (one per tap, round_tiles each). `rounds_waited` counts those rounds.
+template <typename Inner, uint32_t cb_w, uint32_t round_tiles>
+struct ResidentRowWeightsPreKBlock {
+    Inner inner;
+    uint32_t* rounds_waited;
+    ALWI void operator()(uint32_t block, uint32_t num_k_blocks, bool is_last) const {
+        inner(block, num_k_blocks, is_last);
+        const uint32_t need = 3 * block + 3;
+        if (*rounds_waited < need) {
+            MaybeDeviceZoneScope("compute_weight_wait");
+            cb_wait_front(cb_w, need * round_tiles);
+            *rounds_waited = need;
+        }
     }
 };
 }  // namespace kh_reuse
@@ -1547,9 +1578,14 @@ void kernel_main() {
     static_assert(
         kb_tap_direct && !tile_input && !k_split && center_mode == 0 && block_k_tiles == c_in_tiles &&
             num_k_blocks == 9 && out_subblock_h == 1,
-        "kh reuse: the interleaved K-blocked tap-direct walk, one tap per K-block");
+        "kh reuse: the interleaved K-blocked tap-direct walk, one tap per weight round");
     static_assert(ragged, "kh reuse: the reader's band order ends lane 2 at the core's valid tile-rows");
     kh_reuse::State khr_state{};
+#ifdef WEIGHTS_RESIDENT
+    constexpr uint32_t khr_taps = 3;
+#else
+    constexpr uint32_t khr_taps = 1;
+#endif
     using KhrPre = kh_reuse::Tilize<
         c_in_tiles,
         KHR_RING_ROWS,
@@ -1559,7 +1595,8 @@ void kernel_main() {
         cb_im2col_tiles,
         cb_src_table,
         false,
-        relu_on_last_matmul_pack>;
+        relu_on_last_matmul_pack,
+        khr_taps>;
     const KhrPre khr_pre{&im2col_rm_dfb, &im2col_tiles_dfb, &src_table_dfb, &khr_state};
     khr_pre.init(ragged_actual);
 #endif
@@ -2508,13 +2545,18 @@ void kernel_main() {
             // kh reuse (kh_reuse::Tilize): the tilize hook and in0 from the tile ring.
             khr_pre.begin_block(m_block_idx);
             const auto khr_in0 =
-                conv2d_3x3::kblock_walk::In0Indexed<kh_reuse::In0Index<c_in_tiles, KHR_RING_ROWS>>{{&khr_state}};
+                conv2d_3x3::kblock_walk::In0Indexed<kh_reuse::In0Index<c_in_tiles, KHR_RING_ROWS, khr_taps>>{
+                    {&khr_state}};
+            constexpr uint32_t khr_bk = khr_taps * block_k_tiles;
+            constexpr uint32_t khr_k_blocks = num_k_blocks / khr_taps;
 #ifdef WEIGHTS_RESIDENT
+            // The writer's rounds (one tap each) of K-block kh are rounds 3 kh .. 3 kh + 2.
             constexpr uint32_t khr_round_tiles = block_k_tiles * block_n_tiles;
-            const ResidentWeightsPreKBlock<KhrPre, cb_weights, khr_round_tiles> khr_wr_pre{khr_pre, &wr_rounds_waited};
+            const kh_reuse::ResidentRowWeightsPreKBlock<KhrPre, cb_weights, khr_round_tiles> khr_wr_pre{
+                khr_pre, &wr_rounds_waited};
             const auto& khr_hook = khr_wr_pre;
             constexpr bool khr_resident = true;
-            const ResidentIn1Offset<khr_round_tiles> khr_in1{};
+            const ResidentIn1Offset<khr_taps * khr_round_tiles> khr_in1{};
 #else
             const auto& khr_hook = khr_pre;
             constexpr bool khr_resident = false;
@@ -2535,8 +2577,8 @@ void kernel_main() {
                 in1_num_subblocks,
                 out_subblock_h,
                 out_subblock_w,
-                block_k_tiles,
-                num_k_blocks>(khr_hook, CenterTapIn0<center_mode, cb_center_tiles>{}, khr_in1, khr_in0, ragged_groups);
+                khr_bk,
+                khr_k_blocks>(khr_hook, CenterTapIn0<center_mode, cb_center_tiles>{}, khr_in1, khr_in0, ragged_groups);
 #elif defined(WEIGHTS_RESIDENT)
             // Weights resident (see ResidentIn1Offset): the rounds stay fronted across the M-blocks.
             constexpr uint32_t wr_round_tiles = block_k_tiles * block_n_tiles;

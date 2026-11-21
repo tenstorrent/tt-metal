@@ -595,7 +595,10 @@ BLOCK_FILL_GATE = True
 # kh reuse (kernels: KH_REUSE): on the interleaved ROW_MAJOR ring-slab walk at stride 1, d 1, W_out == W_in a multiple
 # of 32 and one tap per K-block, tap (kh, kw) of output tile-row t is tap (0, kw) of tile-row t + kh * W / 32, so
 # compute tilizes each input tile-row once, as one three-tap unit, into a tile ring of max(2 W / 32, bm) rows x 3 taps,
-# and K-block (kh, kw) reads in0 from it: 3x fewer tilized tiles, ~9x fewer units. The ring costs 3 x the tap's tiles
+# and K-block (kh, kw) reads in0 from it: 3x fewer tilized tiles, ~9x fewer units. With the weights resident, compute
+# merges a kernel row's three taps (three consecutive weight rounds, one contiguous ring row) into one K-block of
+# 3 C_in / 32 tiles (kernels/conv2d_3x3_compute.cpp, kh_reuse); the blocking keeps bk = C_in / 32 (one weight round per
+# tap) and needs no extra L1. The ring costs 3 x the tap's tiles
 # per row; the ROW_MAJOR ring slab shrinks to the reader's lookahead (two FIFOs' worth of tile-rows), and bm
 # is re-solved against both (the weights stay resident). Measured (Blackhole p150b, FLUX.2 bh2x4, bit-identical, device
 # kernel us, medians of 2-6 runs): 258x512 64->256 448.1 -> 398.9, 514x1024 64->128 798.5 -> 754.6, 130x256 128->512
@@ -1597,8 +1600,9 @@ def _rm_ring_delta(g: Conv3x3Geometry, fit, ring_px):
 
 def kh_reuse_capable(g: Conv3x3Geometry, b: Conv3x3Blocking):
     """kh reuse (KH_REUSE): the ROW_MAJOR ring-slab walk (interleaved, no K split) at stride 1, d 1, W_out == W_in a
-    multiple of 32 (a tile-row is one image-row run and the kh offset whole tile-rows), one tap per K-block, one-row
-    subblocks (a ring tile index per subblock row)."""
+    multiple of 32 (a tile-row is one image-row run and the kh offset whole tile-rows), one tap per K-block of the
+    blocking (compute merges a kernel row's three when the weights are resident), one-row subblocks (a ring tile index
+    per subblock row)."""
     return (
         b.rm_ring_px > 0
         and not g.tile_input
