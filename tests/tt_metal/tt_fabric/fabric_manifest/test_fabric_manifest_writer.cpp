@@ -151,7 +151,7 @@ json expand_field_sets(json manifest) {
         if (!node.is_object()) {
             return;
         }
-        for (auto& [key, value] : node.items()) {
+        for (const auto& [key, value] : node.items()) {
             if (key == "fields" && value.is_string()) {
                 value = field_sets.at(value.get<std::string>());
             } else {
