@@ -293,17 +293,12 @@ def save(
     replicas that drifted apart, say through a gradient that was not all-reduced, load back as that one copy on every
     device. ``ttml.Sharding.from_tensor(t).gather(t, verify_replicas=True)`` checks a tensor when in doubt.
 
-    Under ``tt-run`` with several ranks the call is collective: every rank calls it at the same point with the same
-    ``ckpt_dir``; each rank writes the shards of the coordinates it holds into its own files in a shared directory, and
-    rank 0 merges the ranks' parts into one index (``_coordinator``). The ranks' scheduler and dataloader states must be
-    equal, and so must their optimizers' scalars (steps, learning rates; every rank passes an optimizer or none), since
-    the checkpoint stores one copy; their generators are stored per rank. The user header stored is rank 0's. A failure
-    on any rank, the local work included, makes every rank raise the same error class, and no point-to-point MPI traffic
-    between the ranks may be outstanding when save is called. No other code may use the MPI tag ``DCP_TAG`` (``0x7DC0``)
-    on the world communicator while it runs: the ranks' metadata travels under it. Every rank of the world must call
-    save (#65436 tracks a subset of the ranks; #65666 a communicator of its own, without the reserved tag). The result
-    on each rank lists that rank's files and bytes; ``keys`` counts the whole checkpoint. A single process is the group
-    of one and takes the same path.
+    Under ``tt-run`` with several ranks the call is collective (the package docstring has the rules): each rank writes
+    the shards of the coordinates it holds into its own files in a shared directory, and rank 0 merges the ranks' parts
+    into one index. The ranks' scheduler and dataloader states must be equal, and so must their optimizers' scalars
+    (steps, learning rates; every rank passes an optimizer or none), since the checkpoint stores one copy; their
+    generators are stored per rank. The user header stored is rank 0's. The result on each rank lists that rank's files
+    and bytes; ``keys`` counts the whole checkpoint.
     """
     t0 = time.perf_counter()
     stats: dict[str, float] = {}

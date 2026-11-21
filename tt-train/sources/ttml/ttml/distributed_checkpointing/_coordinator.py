@@ -5,9 +5,8 @@
 """Multi-rank coordination for save and load.
 
 One communicator, the MPI world ``tt-run`` launches as seen through ttnn's distributed context, gives every rank its
-rank and the group size. So save and load always span every rank of the world: a world where some ranks never call
-them (the rollout ranks of a GRPO run, say) waits for those ranks at the first collective. Saving from a subset of the
-ranks is #65436; a communicator of the coordinator's own, in place of the world and its reserved tag, is #65666.
+rank and the group size, so save and load span every rank of the world. The rules callers follow are in the package
+docstring.
 
 Save and load each run as a fixed sequence of phases. A phase is one named step of local work that every rank reaches at
 the same point (collecting its live tensors, writing its shards or, on rank 0 alone, merging the ranks' plan parts),
@@ -22,10 +21,9 @@ input, so save and load take the same path on one process and on many.
 An error raised by a collective itself, a peer that died under ULFM, is fatal: ``CheckpointFatalError`` propagates and
 the transport, one per process, records it, so neither this save or load nor any later one attempts another exchange.
 MPI pairs collectives by order, so another exchange could hang or be paired with an unrelated one on a rank that moved
-on. Metadata travels over MPI point-to-point (gathered to rank 0, broadcast from rank 0) under the tag ``DCP_TAG``; no
-other point-to-point traffic between the ranks may be outstanding when save or load is called. Every payload is
-serialized and size-checked inside a phase, so a payload the transport cannot carry fails on every rank. Data files go
-through the shared filesystem and are only ever opened by exact name.
+on. Metadata travels over MPI point-to-point (gathered to rank 0, broadcast from rank 0) under the tag ``DCP_TAG``.
+Every payload is serialized and size-checked inside a phase, so a payload the transport cannot carry fails on every
+rank. Data files go through the shared filesystem and are only ever opened by exact name.
 
 Save. Every rank describes its tensors and the mesh coordinates it holds (its plan part); rank 0 merges the parts,
 checking that the ranks describe every key they share alike and together hold every box, and elects one owner per box,
@@ -64,7 +62,7 @@ from ._train_state import RNG_FORMAT, this_world_rank
 # The MPI tag of every coordinator transfer. It is reserved: the coordinator shares the world communicator with every
 # other user of ttnn's point-to-point calls (tag 0 by default; tt-train's GRPO rollout uses 22010-22013 and
 # 22101-22106), so no other protocol may use this tag while a save or load runs. A communicator of the coordinator's
-# own (MPI_Comm_dup of the world) would make the reservation unnecessary: #65666.
+# own (MPI_Comm_dup of the world) would make the reservation unnecessary.
 DCP_TAG = 0x7DC0
 # The largest payload one transfer can carry: its length travels through distributed_context_allgather_int, a C int,
 # and MPI_Send / MPI_Recv take an int count (ttnn's MPI context throws past INT_MAX).

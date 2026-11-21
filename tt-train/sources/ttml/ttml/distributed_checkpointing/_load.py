@@ -341,14 +341,9 @@ def load(
     say so after, and raises a ``CheckpointError`` naming it, with the tensors, the optimizer scalars and the scheduler
     (when the dataloader refuses) already restored.
 
-    Under ``tt-run`` with several ranks the call is collective: every rank calls it with the same ``ckpt_dir``,
-    ``strict`` and optimizer-or-not (checked before anything is read), restores the shards of the coordinates it holds,
-    and ``strict`` judges unexpected entries over the union of the ranks' live tensors. A failure on any rank makes
-    every rank raise the same error class, and no point-to-point MPI traffic between the ranks may be outstanding when
-    load is called. No other code may use the MPI tag ``DCP_TAG`` (``0x7DC0``) on the world communicator while it runs:
-    the ranks' metadata travels under it. Every rank of the world must call load (#65436 tracks a subset of the ranks;
-    #65666 a communicator of its own, without the reserved tag). A single process is the group of one and takes the same
-    path.
+    Under ``tt-run`` with several ranks the call is collective (the package docstring has the rules): every rank
+    restores the shards of the coordinates it holds, and ``strict`` judges unexpected entries over the union of the
+    ranks' live tensors.
     """
     t0 = time.perf_counter()
     rng_by_default = rng is None

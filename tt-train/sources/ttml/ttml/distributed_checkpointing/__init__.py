@@ -19,10 +19,12 @@ saved beside the header. A load restores the scheduler and dataloader passed, an
 defaults to restoring them whenever a scheduler or dataloader is); see ``load`` and ``_train_state``.
 
 Under ``tt-run`` with several ranks (a mesh spread over hosts, or one mesh per host) ``save`` and ``load`` are
-collective: every rank calls them at the same point, each writes and reads only the shards of the coordinates it holds,
-and rank 0 merges the ranks' parts into one ``index.json``; see ``_coordinator``. While a save or load runs, no other
-point-to-point MPI traffic may be outstanding between the ranks, and no other code may use the MPI tag ``DCP_TAG``
-(``0x7DC0``) on the world communicator.
+collective: every rank of the world calls them at the same point, with the same directory and options (checked before
+anything is written or read); each writes and reads only the shards of the coordinates it holds, and rank 0 merges the
+ranks' parts into one ``index.json`` (``_coordinator``). A failure on any rank makes every rank raise the same error
+class. While a save or load runs, no other point-to-point MPI traffic may be outstanding between the ranks, and no
+other code may use the MPI tag ``DCP_TAG`` (``0x7DC0``) on the world communicator: the ranks' metadata travels under
+it. A single process is the group of one and takes the same path.
 
 Topology labels are trusted. The one fact a label cannot carry, the segment order inside a fused projection, is
 declared by the layer that fuses it (``ColumnParallelLinear(fused_segments=...)``), and a padded vocab weight
