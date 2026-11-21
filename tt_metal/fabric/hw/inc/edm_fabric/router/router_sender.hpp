@@ -8,11 +8,12 @@
 // receiver channel of the same VC, and credits each slot to its producer once the remote receiver completes it (or, on
 // first-level-ack VCs, acks it).
 //
-// A pass: the first reads (the worker channels' connection semaphores and the free-slots registers of every VC with a
-// worker channel, together; a VC without one reads its registers right before its visit, so a packet landing during the
-// earlier visits does not wait a pass); each worker channel's connection (checked every pass, by rule; a change out of
-// line); then one visit per VC against its remote receiver channel's progress: its worker channel, then its forwarding
-// channels (skipped with one test when none has work). A channel with work sends, takes completions (and acks) and
+// A pass: the first reads (the free-slots registers of every VC with a worker channel, forwarding channels' first, then
+// the worker channels' connection semaphores; a VC without a worker channel reads its registers right before its
+// visit, so a packet landing during the earlier visits does not wait a pass); then one visit per VC against its remote
+// receiver channel's progress: its forwarding channels (skipped with one test when none has work), then its worker
+// channel; each worker channel's connection is checked every pass, by rule (a later VC's before the visits, the
+// loop-local VC's after them; a change out of line). A channel with work sends, takes completions (and acks) and
 // credits its producer. The loop-local VC is visited every pass; a later VC is skipped with one test when none of its
 // channels has work. The pass makes no call while it sends and takes no closures (a lambda capturing the loop's state
 // can keep that state in memory), so helpers recurse over channel masks.
@@ -508,7 +509,9 @@ template <uint32_t MASK>
 struct FreeSlotsRegisters {
     uint32_t raw[MASK == 0 ? 1 : mask_width(MASK)];
 
-    // Reads them, lowest channel first.
+    // Reads them: the forwarding channels' first, then the worker channels' (each lowest channel first). The pass tests
+    // the forwarding channels first, so their registers land first; the worker channels' and the connection semaphores
+    // (read after) land while that test runs.
     FORCE_INLINE void read() { read_free_slots_registers<MASK>(raw); }
 
     template <size_t CH>
@@ -635,7 +638,7 @@ FORCE_INLINE void credit_slots(const SenderChannelState<CH>& state, uint32_t n, 
 
 // The loop-local VC's worker channel, on the loop's copy of its state (visited every pass): send if it has a packet and
 // the remote receiver channel has room, take completions (and first-level acks), credit the worker. (Its connection is
-// checked at the top of the pass: check_worker_connection.)
+// checked after the pass's visits: check_worker_connection.)
 template <size_t CH>
 FORCE_INLINE void visit_worker(
     SenderChannelState<CH>& state,
@@ -711,34 +714,54 @@ FORCE_INLINE void visit_channel_with_work(
             state.progress.sent = sent;
         }
     }
-    if (!did_send && sent != completed) {
-        completions =
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SenderChannel<CH>::completion_counter_addr) - completed;
-    }
-    if (completions != 0) {
-        remote.add_free_slots(completions);
-        completed += completions;
-        state.progress.completed = completed;
-        if constexpr (!SenderChannel<CH>::first_level_ack) {
+    if constexpr (SenderChannel<CH>::first_level_ack) {
+        // Unless the send read them: completions, then acks, as one read group (as visit_worker), so a pass with both
+        // outstanding waits on one L1 latency, not two in a row. Completions first: the acks seen are never fewer.
+        uint32_t acked = state.progress.first_level_acked;
+        const bool read_completions = !did_send && sent != completed;
+        const bool read_acks = !did_send && sent != acked;
+        uint32_t reported_completions = 0;
+        uint32_t reported_acks = sent_acks;
+        begin_read_group();
+        if (read_completions) {
+            reported_completions =
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SenderChannel<CH>::completion_counter_addr);
+        }
+        if (read_acks) {
+            reported_acks =
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SenderChannel<CH>::first_level_ack_counter_addr);
+        }
+        end_read_group();
+        if (read_completions) {
+            completions = reported_completions - completed;
+        }
+        if (completions != 0) {
+            remote.add_free_slots(completions);
+            completed += completions;
+            state.progress.completed = completed;
+        }
+        if ((did_send || read_acks) && reported_acks != acked) {
+            const uint32_t acks = reported_acks - acked;
+            acked = reported_acks;
+            state.progress.first_level_acked = acked;
+            credit_slots<CH>(state, acks, acked);
+        }
+        const bool busy = sent != completed || sent != acked;
+        channels_in_flight = busy ? (channels_in_flight | (1u << CH)) : (channels_in_flight & ~(1u << CH));
+    } else {
+        if (!did_send && sent != completed) {
+            completions =
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SenderChannel<CH>::completion_counter_addr) - completed;
+        }
+        if (completions != 0) {
+            remote.add_free_slots(completions);
+            completed += completions;
+            state.progress.completed = completed;
             credit_slots<CH>(state, completions, completed);
         }
+        const bool busy = sent != completed;
+        channels_in_flight = busy ? (channels_in_flight | (1u << CH)) : (channels_in_flight & ~(1u << CH));
     }
-    bool busy = sent != completed;
-    if constexpr (SenderChannel<CH>::first_level_ack) {
-        if (sent != state.progress.first_level_acked) {
-            const uint32_t reported_acks =
-                did_send
-                    ? sent_acks
-                    : *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SenderChannel<CH>::first_level_ack_counter_addr);
-            const uint32_t acks = reported_acks - state.progress.first_level_acked;
-            if (acks != 0) {
-                state.progress.first_level_acked += acks;
-                credit_slots<CH>(state, acks, state.progress.first_level_acked);
-            }
-        }
-        busy = busy || sent != state.progress.first_level_acked;
-    }
-    channels_in_flight = busy ? (channels_in_flight | (1u << CH)) : (channels_in_flight & ~(1u << CH));
     keep_in_memory(state);
 }
 
@@ -825,9 +848,11 @@ FORCE_INLINE void visit_forwarding_channels(
 }
 
 // VC's channels against its remote receiver progress (`remote`), from their free-slots registers (`registers`): its
+// forwarding channels, skipped with one combined test when none holds a packet or has packets in flight, then its
 // worker channel (visited every pass where VC is the loop-local VC, otherwise when it holds a packet or has packets in
-// flight), then its forwarding channels, skipped with one combined test when none holds a packet or has packets in
-// flight (the compiler may compute it early, in the shadow of the pass's first reads).
+// flight). Forwarding first: their test needs only their registers (read first), not the worker channel's register or
+// the connection semaphore, so a forwarded packet is reached without waiting on those reads or passing the worker
+// channel's tests; the worker channel's test then costs one predicted branch more.
 template <size_t VC, typename Remote, typename Registers>
 FORCE_INLINE void visit_channels(
     SenderChannelStates& states,
@@ -981,12 +1006,23 @@ FORCE_INLINE void pass(
     FreeSlotsRegisters<SenderChannels::read_at_pass_start> registers;
     registers.read();
     read_connection_semaphores<worker_channels>(connection_semaphores);
-    check_worker_connection<0>(loop_copy, states, connection_semaphores);
-    check_worker_connection<1>(loop_copy, states, connection_semaphores);
-    check_worker_connection<2>(loop_copy, states, connection_semaphores);
+    // Each worker channel's connection, every pass: a later VC's before the visits, the loop-local VC's after them, so
+    // no visit waits on the semaphore read (the pass's last read). (A change seen after the visits is handled the same
+    // way: a worker that connected during the pass was credited into its read counter, and the open credits it all.)
+    constexpr size_t loop_local_vc = SenderChannelStates::loop_local_vc;
+    if constexpr (loop_local_vc != 0) {
+        check_worker_connection<0>(loop_copy, states, connection_semaphores);
+    }
+    if constexpr (loop_local_vc != 1) {
+        check_worker_connection<1>(loop_copy, states, connection_semaphores);
+    }
+    if constexpr (loop_local_vc != 2) {
+        check_worker_connection<2>(loop_copy, states, connection_semaphores);
+    }
     visit_vc<0>(loop_copy, states, registers, channels_in_flight, send_yielded);
     visit_vc<1>(loop_copy, states, registers, channels_in_flight, send_yielded);
     visit_vc<2>(loop_copy, states, registers, channels_in_flight, send_yielded);
+    check_worker_connection<loop_local_vc>(loop_copy, states, connection_semaphores);
 }
 
 // The sender's round state: every loop's round counters, whether a send yielded this round (the TX queue was busy) and
