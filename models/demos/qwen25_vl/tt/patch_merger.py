@@ -34,6 +34,7 @@ class PatchMerger(LightweightModule):
         )
 
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
+        torch_bias = lambda name: self.state_dict[f"{state_dict_prefix}.{name}.bias"]
 
         if args.dummy_weights or weight_cache_path is None:
             cache_name = lambda _: None
@@ -50,11 +51,22 @@ class PatchMerger(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name),
         )
+        as_bias_tensor = lambda name, type: ttnn.as_tensor(
+            torch_bias(name).reshape(1, 1, 1, -1),
+            dtype=type,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_name(f"{name}.bias"),
+        )
 
         # First layer: hidden_size -> hidden_size
         self.w1 = as_weight_tensor("feed_forward.0", dtype, self.mlp_size, self.mlp_size)
         # Second layer: hidden_size -> out_dim
         self.w2 = as_weight_tensor("feed_forward.2", dtype, self.mlp_size, args.hf_config.vision_config.out_hidden_size)
+        self.b1 = as_bias_tensor("feed_forward.0", dtype)
+        self.b2 = as_bias_tensor("feed_forward.2", dtype)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # Apply RMSNorm
@@ -71,6 +83,7 @@ class PatchMerger(LightweightModule):
         x = ttnn.linear(
             x,
             self.w1,
+            bias=self.b1,
             compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -80,6 +93,7 @@ class PatchMerger(LightweightModule):
         x = ttnn.linear(
             x,
             self.w2,
+            bias=self.b2,
             compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
