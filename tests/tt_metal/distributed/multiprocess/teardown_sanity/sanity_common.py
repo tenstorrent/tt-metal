@@ -446,13 +446,9 @@ def run_case(
         shm = sorted(s for s in (_shm() - before_shm) if s not in mapped)  # our dead leftovers, not a live job's
     finally:
         # leave the host as we found it for the next row, whatever this one left — always, even on an assertion or
-        # an error above. Scoped to this job (tag) and to unmapped segments (never a concurrent job's live memory).
+        # an error above. Scoped to this job (tag). A shared-memory segment is left alone: nothing proves it is this
+        # job's (a concurrent job's may not be mapped yet), and tt-run's next launch sweeps one that stays unmapped.
         kill_job()
-        for f in sorted(s for s in (_shm() - before_shm) if s not in _shm_mapped()):
-            try:
-                os.remove(f)
-            except OSError:
-                pass
         shutil.rmtree(piddir, ignore_errors=True)
     reached, rcs = _parse(out)
     res = Result(

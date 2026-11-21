@@ -191,6 +191,13 @@ def test_ttrun_stop_on_each_mpi_install(prefix):
     print(f"\n[sanity] MPI install {prefix or '(PATH)'}: {ident}")
     if major < 5:
         pytest.skip(f"{prefix or '(PATH)'} is {ident}: tt-run needs Open MPI 5+ (PRRTE)")
+    if prefix:
+        # tt-run takes the mpirun beside the first mpirun-ulfm on PATH: with the install's bin put first, that must be
+        # this install's, else the row would test another launcher than the one it names.
+        path = f"{Path(prefix) / 'bin'}:{os.environ.get('PATH', '')}"
+        ulfm = shutil.which("mpirun-ulfm", path=path)
+        if ulfm and not os.path.realpath(ulfm).startswith(os.path.realpath(prefix)):
+            pytest.skip(f"tt-run would launch {ulfm} (the first mpirun-ulfm on PATH), not {prefix}")
     _ttrun_stop(signal.SIGINT, "delivered", mpi_prefix=prefix)
 
 

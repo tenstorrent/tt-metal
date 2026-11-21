@@ -338,6 +338,15 @@ int main(int argc, char** argv) {
     if (::pipe2(status_pipe, O_CLOEXEC) != 0) {
         status_pipe[0] = status_pipe[1] = -1;
     }
+    // Held from before the handlers are installed until the child exists, so a signal in between is delivered (and
+    // forwarded) once there is a child to forward it to, never dropped.
+    sigset_t forwarded{};
+    sigset_t previous_mask{};
+    ::sigemptyset(&forwarded);
+    for (const int s : kForwarded) {
+        ::sigaddset(&forwarded, s);
+    }
+    ::sigprocmask(SIG_BLOCK, &forwarded, &previous_mask);
     struct sigaction action{};
     action.sa_handler = forward;
     ::sigemptyset(&action.sa_mask);
@@ -351,12 +360,14 @@ int main(int argc, char** argv) {
     const pid_t child = ::fork();
     if (child < 0) {
         std::perror("tt-run-rank: fork");
+        ::sigprocmask(SIG_SETMASK, &previous_mask, nullptr);
         return 127;
     }
     if (child == 0) {
         for (const int s : kForwarded) {
             ::signal(s, SIG_DFL);
         }
+        ::sigprocmask(SIG_SETMASK, &previous_mask, nullptr);
         // The launcher kills the process it started, this wrapper, not its child: without this a program the
         // launcher's SIGKILL reached only through the wrapper would outlive the job.
         ::prctl(PR_SET_PDEATHSIG, SIGKILL);
@@ -372,6 +383,7 @@ int main(int argc, char** argv) {
         ::_exit(127);
     }
     g_child = child;
+    ::sigprocmask(SIG_SETMASK, &previous_mask, nullptr);  // a signal held since startup is forwarded now
     if (status_pipe[1] >= 0) {
         ::close(status_pipe[1]);
     }

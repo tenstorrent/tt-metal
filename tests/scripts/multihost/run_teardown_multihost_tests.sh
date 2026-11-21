@@ -76,9 +76,14 @@ probe_loads="ldd '$probe' 2>&1 | grep -q 'not found' && exit 1 || exit 0"
 for host in $(host_names); do
   remote_sh "$host" "mkdir -p '$(dirname "$probe")'" \
     || { echo "::error::could not create the probe directory on $host"; exit 1; }
-  if [ "${TEARDOWN_REMOTE:-ssh}" != srun ]; then  # under srun the temp dir is on a shared filesystem (TMPDIR)
-    scp -q "${SSH_OPTS[@]}" "$probe" "$probe_src" "$(rtarget "$host"):$(dirname "$probe")/" 2>/dev/null || true  # a no-op on the compile host; verified next
-  fi
+  for f in "$probe" "$probe_src"; do  # a no-op on the compile host (or a shared TMPDIR); verified next
+    if [ "${TEARDOWN_REMOTE:-ssh}" = srun ]; then
+      srun --overlap -N1 -n1 -w "$host" dd status=none of="$(dirname "$probe")/$(basename "$f")" <"$f" 2>/dev/null || true
+      srun --overlap -N1 -n1 -w "$host" chmod +x "$(dirname "$probe")/$(basename "$f")" 2>/dev/null || true
+    else
+      scp -q "${SSH_OPTS[@]}" "$f" "$(rtarget "$host"):$(dirname "$probe")/" 2>/dev/null || true
+    fi
+  done
   if ! remote_sh "$host" "$probe_loads"; then
     remote_sh "$host" "mpicxx -O1 -o '$probe' '$(dirname "$probe")/$(basename "$probe_src")'" >/dev/null 2>&1 || true
   fi
@@ -119,7 +124,9 @@ trap 'rm -f "$binding" "$rankfile"' EXIT
 # tt-run's own pid (timeout passes on only one signal).
 bound=(timeout 120)
 ttrun_job() {
-  "${bound[@]}" "${ttrun_cmd[@]}" --rank-binding "$binding" \
+  local run=("${bound[@]}")
+  [ -n "${exec_ttrun:-}" ] && run=(exec "${run[@]}")
+  "${run[@]}" "${ttrun_cmd[@]}" --rank-binding "$binding" \
     --mpi-args "--rankfile $rankfile --oversubscribe --bind-to none --tag-output -x PROBE_SCENARIO -x PROBE_VICTIM -x PROBE_NP $*" \
     "$probe"
 }
@@ -246,7 +253,8 @@ echo "       in all_hang each rank prints 'caught signal 15' from its handler an
 echo "       all $num_hosts ranks (so a remote rank got it too) and nothing left. A killed rank never prints it."
 sig_log="$(mktemp)"
 bound=()
-PROBE_SCENARIO=all_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" ttrun_job >"$sig_log" 2>&1 &
+# exec in the background subshell, so $! is tt-run's own pid (a backgrounded function would be a subshell's)
+( export PROBE_SCENARIO=all_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts"; exec_ttrun=1 ttrun_job ) >"$sig_log" 2>&1 &
 ttrun_pid=$!
 # all ranks up first (each rank counts twice under tt-run: its tt-run-rank wrapper carries the probe path too)
 for _ in $(seq 1 60); do [ "$(ranks_still_alive)" -ge "$num_hosts" ] 2>/dev/null && break; sleep 1; done
@@ -258,10 +266,10 @@ caught=$(grep -c "caught signal 15" "$sig_log" 2>/dev/null)  # grep -c prints 0 
 caught=${caught:-0}
 sleep 2; sig_alive=$(ranks_still_alive)
 grep "caught signal" "$sig_log" 2>/dev/null | sed 's/^/    /'
-if [ "$caught" -eq "$num_hosts" ] && [ "$sig_alive" = 0 ]; then
+if [ "$caught" -eq "$num_hosts" ] && [ "$sig_alive" = 0 ] && [ "$sig_rc" -eq 130 ]; then
   echo "  PASS  multihost_interrupt_forwarded_to_ranks  ($caught/$num_hosts ranks caught SIGTERM, nothing left; exit $sig_rc)"
 else
-  echo "::error::  FAIL  multihost_interrupt_forwarded_to_ranks  (caught SIGTERM=$caught/$num_hosts, alive=$sig_alive, exit $sig_rc — a rank was killed without receiving SIGTERM, or a leftover remains)"
+  echo "::error::  FAIL  multihost_interrupt_forwarded_to_ranks  (caught SIGTERM=$caught/$num_hosts, alive=$sig_alive, exit $sig_rc, expected 130 — a rank was killed without receiving SIGTERM, a leftover remains, or tt-run did not end the job)"
   echo "---- tt-run output ----"; tail -40 "$sig_log"
   failures=$((failures + 1)); kill_stragglers
 fi
