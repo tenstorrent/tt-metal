@@ -149,9 +149,10 @@ struct py_to_<DtypeID::INT32> {
     constexpr static auto ttnn_DataType = DataType::INT32;
 };
 
+// ttnn has no INT16; INT32 holds every int16 value, while UINT16 would wrap negatives
 template <>
 struct py_to_<DtypeID::INT16> {
-    constexpr static auto ttnn_DataType = DataType::UINT16;
+    constexpr static auto ttnn_DataType = DataType::INT32;
 };
 
 template <>
