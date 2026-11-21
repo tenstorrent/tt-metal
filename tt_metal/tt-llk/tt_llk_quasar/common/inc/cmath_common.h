@@ -285,8 +285,10 @@ inline void _set_dst_write_addr_(const std::uint32_t tile_index)
 
 /**
  * @brief Computes the tile-shape index (a log2-style shift exponent derived from
- *        the number of rows per tile) and stores it in GPR TEMP0 for later reuse
- *        by @ref _set_dst_write_addr_by_gpr_ and the reduce MOP instruction stream.
+ *        the number of rows per tile) and records it in TRISC local memory
+ *        (ckernel::trisc::dest_tile_shape_idx) for the per-tile Dest addressing.
+ *        It is also written to the TILE_SHAPE_IDX GPR; the LLK does not read the
+ *        GPR back (a RISC-V read of it stalls the math thread).
  *
  *        This is the "compute once" half of the pair that splits
  *        @ref _set_dst_write_addr_by_rows_ so the shift amount is calculated a
@@ -301,12 +303,13 @@ inline void _set_tile_shape_idx_gpr_(const std::uint32_t num_rows_per_tile)
         (num_rows_per_tile == 64)
             ? 6
             : ((num_rows_per_tile == 32) ? 5 : ((num_rows_per_tile == 16) ? 4 : ((num_rows_per_tile == 8) ? 3 : ((num_rows_per_tile == 4) ? 2 : 1))));
+    ckernel::trisc::dest_tile_shape_idx          = tile_shape_idx;
     ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX] = tile_shape_idx;
 }
 
 /**
  * @brief Sets the destination register base address depending on the tile index,
- *        using the tile-shape index previously stored in GPR TEMP0 by
+ *        using the tile-shape index previously recorded by
  *        @ref _set_tile_shape_idx_gpr_ as the left-shift amount that converts
  *        tile_index into a dest offset.
  *
@@ -320,7 +323,7 @@ inline void _set_tile_shape_idx_gpr_(const std::uint32_t num_rows_per_tile)
  */
 inline void _set_dst_write_addr_by_rows_(const std::uint32_t tile_index)
 {
-    const std::uint32_t tile_shape_idx = ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX];
+    const std::uint32_t tile_shape_idx = ckernel::trisc::dest_tile_shape_idx;
     const std::uint32_t dst_index      = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
     ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
 }
