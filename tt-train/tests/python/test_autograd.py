@@ -30,6 +30,7 @@ def supported_autograd_types_except(*except_types):
         )
         + ttnn.MX_DTYPES  # Quasar-only block formats, not supported by ttml autograd
         + tuple(except_type for except_type in except_types)
+        and not ttnn.is_gguf_dtype(data_type)  # GGUF weights come only from GGUF blocks
     )
 
 

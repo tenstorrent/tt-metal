@@ -295,6 +295,7 @@ from ttnn.types import (
     gguf_iq1_m_expanded,
     gguf_tq1_0_expanded,
     GGUF_EXPANDED,
+    is_gguf_dtype,
     float32,
     MathFidelity,
     MemoryConfig,

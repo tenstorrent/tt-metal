@@ -32,7 +32,11 @@ def get_types_from_binding_framwork():
             for _, dtype in ttnn.DataType._member_map_.items()
             # skipping FP8_E4M3 for now, until it is fully supported in tt-metal
             # MX formats are Quasar-only and covered by tests/ttnn/unit_tests/tensor/test_mx_dtypes.py
-            if dtype != ttnn.DataType.INVALID and dtype != ttnn.DataType.FP8_E4M3 and not ttnn.is_mx_dtype(dtype)
+            # GGUF formats come only from GGUF blocks and are covered by tests/ttnn/unit_tests/tensor/test_gguf_dtypes.py
+            if dtype != ttnn.DataType.INVALID
+            and dtype != ttnn.DataType.FP8_E4M3
+            and not ttnn.is_mx_dtype(dtype)
+            and not ttnn.is_gguf_dtype(dtype)
         ]
         FLOAT_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if is_ttnn_float_type(dtype)]
     else:

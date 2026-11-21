@@ -105,6 +105,10 @@ GGUF_EXPANDED = {
 }
 
 
+def is_gguf_dtype(dtype) -> bool:
+    return dtype in GGUF_DTYPES or dtype in GGUF_EXPANDED.values()
+
+
 def is_mx_dtype(dtype) -> bool:
     return dtype in MX_DTYPES
 
