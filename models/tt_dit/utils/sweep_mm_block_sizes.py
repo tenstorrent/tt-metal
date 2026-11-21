@@ -173,6 +173,11 @@ SHAPES = [
     (4736, 3584, 5376, 12, 7, False, "mmrs"),
     (4736, 3584, 5376, 12, 8, False, "mmrs"),
     (4736, 3584, 5376, 12, 9, False, "mmrs"),
+    # Non-transposed grid, as the Blackhole MiniMax-H3 pins run to_qkv / ff1.
+    (4736, 5376, 5376, 11, 10, True, "qkv_nt"),
+    (9184, 5376, 5376, 11, 10, True, "qkv_nt"),
+    (4736, 5376, 7168, 11, 10, True, "ff1_swiglu_nt"),
+    (9184, 5376, 7168, 11, 10, True, "ff1_swiglu_nt"),
     # -----------------------------------------------------------------------
     # MiniMax-H3 on WH Galaxy (device config wh_4x8_ring), TP=4 / SP=8.
     #
@@ -554,6 +559,16 @@ USE_CASE_CONFIGS = {
     "ff1_swiglu": {
         "fuse_swiglu": True,
     },
+    "qkv_nt": {
+        "chunks": 3,
+        "math_approx_mode": True,
+        "transpose_core_grid": False,
+    },
+    "ff1_swiglu_nt": {
+        "fuse_swiglu": True,
+        "math_approx_mode": True,
+        "transpose_core_grid": False,
+    },
 }
 
 # Whether the sweep uses fp32 dest accumulator. With fp32 dest, the DEST tile
@@ -675,6 +690,13 @@ def get_per_core_dims(shape, cluster_size):
         # per device in K_block-sized chunks, same rule as the agmm path.
         return -(-M_tiles // cgy), K_tiles // cluster_size, N_per_core
 
+    if USE_CASE_CONFIGS.get(use_case, {}).get("transpose_core_grid", True) is False:
+        M_per_core = -(-M_tiles // cgy)
+        N_per_core = -(-N_tiles // cgx)
+        if USE_CASE_CONFIGS[use_case].get("fuse_swiglu", False):
+            N_per_core = 2 * (-(-(N_tiles // 2) // cgx))
+        K_per_device = K_tiles // cluster_size if is_agmm else K_tiles
+        return M_per_core, K_per_device, N_per_core
     M_per_core = -(-M_tiles // cgx)  # ceiling
     N_per_core = -(-N_tiles // cgy)
     K_per_device = K_tiles // cluster_size if is_agmm else K_tiles
@@ -1144,7 +1166,8 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     if is_agmm:
         sp_axis = cfg["sp_axis"]
         tp_axis = cfg["tp_axis"]
-        sp_size = cfg["mesh_shape"][sp_axis]
+        # mesh_device is the cluster-axis submesh.
+        sp_size = mesh_shape[sp_axis]
         full_M = M * sp_size
 
         tt_input = ttnn.from_torch(
@@ -1204,6 +1227,14 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
             )
 
+        if uc_cfg.get("transpose_core_grid", True) is False:
+            agmm_orientation_kw = {
+                "transpose_core_grid": False,
+                "num_workers_per_link": -(-core_grid.y // cfg["num_links"]),
+            }
+        else:
+            agmm_orientation_kw = {"num_workers_per_link": cfg["num_workers_per_link"]}
+
         def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
             ttnn.experimental.all_gather_minimal_matmul_async(
                 tt_input,
@@ -1219,7 +1250,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 cluster_axis=cfg["cluster_axis"],
                 barrier_semaphore=None,
                 force_transpose=True,
-                num_workers_per_link=cfg["num_workers_per_link"],
+                **agmm_orientation_kw,
                 num_buffers_per_channel=24 if is_blackhole() else 48,
                 scalar=scalar,
                 addcmul_input_tensor1=addcmul_tensor1,
