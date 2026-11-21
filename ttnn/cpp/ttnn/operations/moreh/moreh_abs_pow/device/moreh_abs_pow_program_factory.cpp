@@ -196,10 +196,18 @@ ttnn::device_operation::ProgramArtifacts MorehAbsPowOperation::MorehAbsPowProgra
     // kernel never reads (its loop count is the RTA num_rows_per_core). See METAL2_PORT_PLAN.md.
     // The compute-only intermediate DFBs (xabs/xpow/logx/exp_lxmd) are self-looped (bound both
     // PRODUCER and CONSUMER on this one kernel).
+    // The kernel switches data formats between its input and the Float32 intermediates only when
+    // FP32_DEST_ACC_EN is defined; without it, the intermediates are written and read back as the
+    // input's format.
+    m2::KernelSpec::CompilerOptions::Defines compute_defines;
+    if (fp32_dest_acc_en) {
+        compute_defines.insert({"FP32_DEST_ACC_EN", "1"});
+    }
+
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
         .source = COMPUTE_KERNEL_PATH,
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.defines = std::move(compute_defines), .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
                 m2::DFBBinding{

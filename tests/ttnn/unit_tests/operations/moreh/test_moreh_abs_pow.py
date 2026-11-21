@@ -69,3 +69,32 @@ def test_moreh_abs_pow(p, device):
 def test_moreh_abs_pow_corner_cases(input_shape, fp32_dest_acc_en, provide_output, device):
     torch.manual_seed(0)
     run_moreh_abs_pow_test(input_shape, 2.5, device, fp32_dest_acc_en=fp32_dest_acc_en, provide_output=provide_output)
+
+
+def bf16_ulp_error(expected, actual):
+    """Distance from the correctly rounded bf16 value, in bf16 ULPs."""
+    rounded = expected.to(torch.bfloat16).float()
+    ulp = torch.ldexp(torch.ones_like(rounded), torch.frexp(rounded)[1] - 8)
+    return (actual.float() - rounded).abs() / ulp
+
+
+# With fp32_dest_acc_en the intermediates are Float32, so the result should be within one bf16 ULP
+# of the exact value. The 10% tolerance above cannot tell this apart from bf16 intermediates.
+@pytest.mark.parametrize("p", [2.5, -1.5], ids=["p_2_5", "p_negative"])
+def test_moreh_abs_pow_fp32_dest_acc_accuracy(p, device):
+    torch.manual_seed(1)
+    shape = [128, 128]
+    magnitude = torch.rand(shape) * 1.5 + 0.5
+    sign = torch.randint(0, 2, shape) * 2 - 1
+    torch_input = (magnitude * sign).to(torch.bfloat16)
+    expected = torch.abs(torch_input.double()) ** p
+
+    result = ttnn.moreh_abs_pow(
+        create_ttnn_tilized_tensor(torch_input, device, ttnn.bfloat16),
+        p,
+        compute_kernel_config=get_compute_kernel_options(True),
+    )
+    ulps = bf16_ulp_error(expected, ttnn.to_torch(result))
+
+    assert ulps.max().item() <= 1.0, f"max error {ulps.max().item()} ULP"
+    assert ulps.mean().item() <= 0.3, f"mean error {ulps.mean().item():.3f} ULP"
