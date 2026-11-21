@@ -36,6 +36,9 @@ class TtShiftedWindowAttentionV2:
         if self.window_size[1] >= W:
             self.shift_size[1] = 0
 
+        if sum(self.shift_size) > 0:
+            x = ttnn.roll(x, (-self.shift_size[0], -self.shift_size[1]), (1, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
+
         num_windows = (H // self.window_size[0]) * (W // self.window_size[1])
 
         x = ttnn.reshape(
@@ -152,6 +155,9 @@ class TtShiftedWindowAttentionV2:
         x = ttnn.permute(x, (0, 1, 3, 2, 4, 5), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         x = ttnn.reshape(x, (B, H, W, C), memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        if sum(self.shift_size) > 0:
+            x = ttnn.roll(x, self.shift_size, (1, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         x = x[:, :H, :W, :]
         return x
