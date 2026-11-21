@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sort.hpp"
+
+#include <limits>
 #include "device/sort_device_operation.hpp"
 
 #include "ttnn/operations/core/core.hpp"
@@ -226,7 +228,8 @@ std::vector<Tensor> post_sort_transform_tensor(
 void validate_preallocated_output_tensors(
     const std::optional<std::tuple<Tensor&, Tensor&>>& optional_output_tensors,
     const Shape& original_lshape,
-    const DataType input_dtype) {
+    const DataType input_dtype,
+    const uint32_t sort_dim_size) {
     if (!optional_output_tensors.has_value()) {
         return;
     }
@@ -263,6 +266,15 @@ void validate_preallocated_output_tensors(
             "Preallocated sort indices tensor dtype must be UINT32 when input dtype is FLOAT32 or UINT16, got {}",
             indices.dtype());
     }
+    // UINT16 indices hold the positions 0 to 65535, so a longer sort dimension needs UINT32 indices.
+    constexpr uint32_t max_uint16_sort_dim = std::numeric_limits<uint16_t>::max() + 1;
+    TT_FATAL(
+        indices.dtype() == DataType::UINT32 || sort_dim_size <= max_uint16_sort_dim,
+        "Preallocated sort indices tensor dtype must be UINT32 when the sort dimension has more than {} elements, got "
+        "{} for {} elements",
+        max_uint16_sort_dim,
+        indices.dtype(),
+        sort_dim_size);
 }
 
 std::vector<Tensor> fill_preallocated_early_exit_outputs(
@@ -300,15 +312,17 @@ std::vector<Tensor> sort(
     const bool idx_is_uint32 = (input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::UINT16);
     const DataType index_dtype = idx_is_uint32 ? DataType::UINT32 : DataType::UINT16;
 
-    operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_preallocated_output_tensors(
-        optional_output_tensors, original_lshape, input_tensor.dtype());
-
     TT_FATAL(
         (dim >= -static_cast<int8_t>(rank) && dim < static_cast<int8_t>(rank)) ||
             (rank == 0 && (dim == 0 || dim == -1)),
         "Sort dim {} is out of range for rank-{} tensor",
         dim,
         rank);
+
+    const uint32_t sort_dim_size =
+        rank == 0 ? 1 : original_lshape[dim < 0 ? static_cast<int32_t>(rank) + dim : static_cast<int32_t>(dim)];
+    operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_preallocated_output_tensors(
+        optional_output_tensors, original_lshape, input_tensor.dtype(), sort_dim_size);
 
     // Check for early exit for scalar tensors
     if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {
