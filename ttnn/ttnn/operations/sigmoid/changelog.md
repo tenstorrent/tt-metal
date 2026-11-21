@@ -1,6 +1,26 @@
-# sigmoid changelog
+# Changelog: sigmoid
 
-## Phase 0 (ttnn-implementer)
+## Phase 0 — Core Implementation
+- **Date**: 2026-11-21
+- **What was done**: Initial implementation via incremental pipeline (planner → implementer → verifier). Regime
+  R-stream: one `ttnn.ProgramSpec` / one `ttnn.generic_op` per call, full 32-cluster grid, thread plan (2, 4, 2),
+  fused `eltwise_chain(CopyTile → SigmoidAccurate → PackTile)` per NEO.
+- **SUPPORTED at Phase 0**: dtype=[bfloat16], fp32_dest_acc_en=[True], layout=[TILE], memory_config=[DRAM, L1],
+  sharding=[interleaved], alignment=[tile_aligned, w_non_aligned, h_non_aligned], rank=[2, 3, 4]
+- **Accuracy achieved**: PCC ≥ 0.99986 (0.999991 on N(0,1)), max_abs_err=1.95e-3, rel_rms_err ≤ 1.7e-2
+  (4.2e-3 on N(0,1)), **0 bf16 ULP on every element** (measured on 4 shapes × 3 distributions + 2 config
+  variants via test_sigmoid_precision_baseline.py)
+- **Golden suite at Phase 0**: 80 / 599 passing (74 PHASE0 cells + 6 NUMERIC regression), 518 xfail_expected,
+  0 loud (per `verifier_report.json`)
+- **Issues encountered**: verifier fix — `compute_kernel_config.dst_full_sync_en` was dropped; now mapped to
+  `double_buffer_dest = not dst_full_sync_en`, with `block_tiles = DEST_TILES[(fp32_dest_acc_en,
+  dst_full_sync_en)]`. No drift fixes needed.
+- **Tests added**: test_sigmoid.py (harness), test_sigmoid_threads.py, test_sigmoid_precision_baseline.py
+- **Structural perf counts (no clock on ttsim)**: 4 NEOs × up to 32 clusters at work, ⌈n/128⌉ pages max per NEO
+  (the minimum), one DRAM crossing per tensor, one ring handshake per DEST block (4 tiles), 57 SFPU instructions
+  per DEST row in the sigmoid element (compiled math TRISC).
+
+### Phase 0 implementer notes
 
 Built regime **R-stream** of `op_design.md` as designed: one `ttnn.ProgramSpec`, one `ttnn.generic_op`
 dispatch per call.
@@ -32,8 +52,7 @@ Deviations from the design (advisory items only):
   `{reader,compute,writer}.cpp`.
 - The session test uses `ttnn.to_layout(..., TILE_LAYOUT)` as the program before the op instead of
   `ttnn.add`: `ttnn.add` is a Metal 1 op and is refused on Quasar (`kernel.hpp:605`).
-- `dst_full_sync_en` is not mapped onto `double_buffer_dest` (the design's config table lists three fields);
-  `block_tiles` assumes half-sync DEST accordingly.
+- `dst_full_sync_en` was not mapped onto `double_buffer_dest` (fixed by the verifier, above).
 
 Performance: this backend has no clock, so no timing is claimed. Structural counts: 4 NEOs per cluster at work,
 up to 32 clusters, DEST-sized sync blocks (one ring handshake per 4 tiles), one DRAM crossing per tensor. The

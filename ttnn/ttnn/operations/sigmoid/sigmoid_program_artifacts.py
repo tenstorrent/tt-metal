@@ -32,9 +32,11 @@ E = ttnn.experimental
 THREAD_PLAN = (2, 4, 2)
 # Sync blocks of slack per NEO in each ring: 2 = the reader fills block k+1 while the NEO computes block k.
 BUFFER_DEPTH = 2
-# Tiles one DEST window holds in half-sync mode (the ComputeHardwareConfig default), keyed by
-# fp32_dest_acc_en. block_tiles = the coarsest sync block DEST holds; the chain clamps to the same bound.
-DEST_TILES = {True: 4, False: 8}
+# Tiles one DEST window holds, keyed by (fp32_dest_acc_en, dst_full_sync_en): half-sync (the default,
+# double_buffer_dest=True) halves DEST so the packer drains one half while math fills the other. block_tiles =
+# the coarsest sync block DEST holds; the chain clamps to the same bound (kernel_lib/dest_helpers.hpp,
+# get_dest_limit()).
+DEST_TILES = {(True, False): 4, (False, False): 8, (True, True): 8, (False, True): 16}
 
 # --- the cluster model of the target page (.claude/references/targets/quasar.md); no Python query exists ---
 FREE_DM_THREADS = 6  # of 8 DM cores: DM0 serves the ring interrupts, DM1 is the remapper
@@ -77,7 +79,8 @@ def create_program_artifacts(input_tensor, output, compute_kernel_config, *, thr
     validate_thread_plan(threads)
     R, C, W = threads
     fp32_dest = bool(compute_kernel_config.fp32_dest_acc_en)
-    block_tiles = DEST_TILES[fp32_dest]
+    full_sync = bool(compute_kernel_config.dst_full_sync_en)
+    block_tiles = DEST_TILES[(fp32_dest, full_sync)]
 
     num_tiles = input_tensor.buffer_num_pages()
     in_page = input_tensor.buffer_page_size()
@@ -122,6 +125,8 @@ def create_program_artifacts(input_tensor, output, compute_kernel_config, *, thr
             fpu_math_fidelity=compute_kernel_config.math_fidelity,
             sfpu_precision_mode=_sfpu_precision(compute_kernel_config.math_approx_mode),
             enable_32_bit_dest=fp32_dest,
+            # The ComputeConfigDescriptor field is the inverse (tt-metal's compute_kernel_config.cpp mapping).
+            double_buffer_dest=not full_sync,
         ),
         num_threads=C,
         dfb_bindings=[

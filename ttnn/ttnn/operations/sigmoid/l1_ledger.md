@@ -14,7 +14,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking axe
 | Symbol | Bound | Predicate / source |
 |--------|-------|--------------------|
 | `BUFFER_DEPTH` | 2 (Phase 0). Any integer ≥ 1 with the ring cap below | host constant in `sigmoid_program_artifacts.py` |
-| `block_tiles` | ≤ `chain_max_block_v` (4 at fp32 half-sync DEST, 8 at 16-bit). Phase 0 4 | host `DEST_TILES[fp32_dest_acc_en]`. The chain clamps (`chain.inl:3339-3351`) |
+| `block_tiles` | = DEST capacity (`get_dest_limit()`): 4 at fp32 half-sync, 8 at 16-bit half-sync or fp32 full-sync, 16 at 16-bit full-sync. Phase 0 default 4 | host `DEST_TILES[(fp32_dest_acc_en, dst_full_sync_en)]`; `dst_full_sync_en` reaches `double_buffer_dest` (verifier fix). The chain clamps (`chain.inl:3339-3351`) |
 | `C` | ∈ {1, 2, 4}. Phase 0 4 | `THREAD_PLAN` host constant, target page limits |
 | `page_size` | bfloat16 2,048 B (Phase 0), float32 4,096 B | `tensor.buffer_page_size()` |
 | ring cap | `BUFFER_DEPTH * block_tiles * C * page_size ≤ 1,048,560 B` per ring | target page (DFB compute-side limit). Host assert |
@@ -28,7 +28,7 @@ footprint = 2 * BUFFER_DEPTH * block_tiles * C * page_size
           = 2 * 2 * 4 * 4 * 2048 B = 131,072 B   (quasar, Phase 0: 3.3 % of 3,963,328 B)
 ```
 
-Every term scales with the knobs `BUFFER_DEPTH`, `block_tiles` and `C` and with the dtype's `page_size`. No term scales with the tensor. The worst TARGET corner (float32, 16-bit DEST excluded by R1, so `block_tiles` = 4) is `2·2·4·4·4096 = 262,144 B`, so the op never needs a fits-in-L1 predicate.
+Every term scales with the knobs `BUFFER_DEPTH`, `block_tiles` and `C` and with the dtype's `page_size`. No term scales with the tensor. The worst TARGET corner at the default half-sync DEST (float32, 16-bit DEST excluded by R1, so `block_tiles` = 4) is `2·2·4·4·4096 = 262,144 B`. A caller passing `dst_full_sync_en=True` doubles `block_tiles`: worst case `2·2·8·4·4096 = 2·2·16·4·2048 = 524,288 B` (13 % of the budget; each ring 262,144 B, under the 1,048,560 B ring cap the host asserts). The op never needs a fits-in-L1 predicate.
 
 ## Data-movement budget
 
