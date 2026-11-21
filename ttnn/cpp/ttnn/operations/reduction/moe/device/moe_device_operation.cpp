@@ -81,6 +81,34 @@ void MoeDeviceOperation::validate_on_program_cache_miss(
         input_logical_shape[-1]);
     TT_FATAL(topk_shape[-2] == 32, "Topk shape inner dim must be padded to 32, got {}", topk_shape[-2]);
     TT_FATAL(expert_shape[-2] == 32, "Expert shape inner dim must be padded to 32, got {}", expert_shape[-2]);
+
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto& output_tensor = tensor_args.preallocated_output.value();
+        const auto& output_shape = output_tensor.padded_shape();
+        const auto& output_logical_shape = output_tensor.logical_shape();
+        TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Preallocated output must be on device");
+        TT_FATAL(output_tensor.is_allocated(), "Preallocated output must be allocated on device");
+        TT_FATAL(!output_tensor.memory_config().is_sharded(), "Sharded implementation not supported yet");
+        TT_FATAL(output_tensor.layout() == Layout::TILE, "Preallocated output must be in tiled format");
+        TT_FATAL(
+            output_tensor.dtype() == DataType::BFLOAT16,
+            "Preallocated output must be BFLOAT16, got {}",
+            output_tensor.dtype());
+        const ttnn::Shape expected_padded_shape({input_shape[0], input_shape[1], input_shape[2], args.k});
+        TT_FATAL(
+            output_shape == expected_padded_shape,
+            "Preallocated output padded shape must be {}, got {}",
+            expected_padded_shape,
+            output_shape);
+        TT_FATAL(
+            output_logical_shape.rank() == 4 && output_logical_shape[0] == input_logical_shape[0] &&
+                output_logical_shape[1] == input_logical_shape[1] &&
+                output_logical_shape[2] == input_logical_shape[2] &&
+                (output_logical_shape[3] == 1 || output_logical_shape[3] == args.k),
+            "Preallocated output logical shape {} is incompatible with input logical shape {}",
+            output_logical_shape,
+            input_logical_shape);
+    }
 }
 
 tt::tt_metal::TensorSpec MoeDeviceOperation::compute_output_specs(
