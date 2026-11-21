@@ -213,7 +213,7 @@ void resolve_sibling_producers(
         return std::ranges::find(
             routers, eth_chan, [](const manifest::Router& router) { return router.identity.eth_chan; });
     };
-    
+
     for (const auto& connection : connections) {
         // Gather source and destination routers
         const auto source = find_router(connection.source_eth_chan);

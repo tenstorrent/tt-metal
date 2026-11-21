@@ -95,8 +95,8 @@ std::string source_text(const manifest::Source& source) {
 std::string description_text(const manifest::RouterField& field) {
     std::string out = cell(field.description.value);
     if (field.written_when.has_value()) {
-        out += fmt::format(
-            " Written only while `{}` is nonzero; otherwise the region is inactive.", *field.written_when);
+        out +=
+            fmt::format(" Written only while `{}` is nonzero; otherwise the region is inactive.", *field.written_when);
     }
     return out;
 }

@@ -137,8 +137,8 @@ std::optional<manifest::content::L1> collect_leftover_l1(const ManifestRouterInp
         return std::nullopt;
     }
     // Nothing is placed there, so it's never active. Its bytes are still captured, so a write there shows.
-    auto leftover = manifest::register_l1_region<std::byte>(
-        static_cast<uint32_t>(start), static_cast<uint32_t>(end - start), 1);
+    auto leftover =
+        manifest::register_l1_region<std::byte>(static_cast<uint32_t>(start), static_cast<uint32_t>(end - start), 1);
     leftover.active = false;
     return leftover;
 }
@@ -362,9 +362,8 @@ bool is_written(
         return true;
     }
     // gates_name_flag_or_number_fields checks the gate is in the table.
-    const auto gate = std::ranges::find(table, *field.written_when, [](const manifest::RouterField& other) {
-        return other.key.value;
-    });
+    const auto gate = std::ranges::find(
+        table, *field.written_when, [](const manifest::RouterField& other) { return other.key.value; });
     const std::optional<uint32_t>& gate_value = values[std::distance(table.begin(), gate)];
     TT_FATAL(
         gate_value.has_value(),

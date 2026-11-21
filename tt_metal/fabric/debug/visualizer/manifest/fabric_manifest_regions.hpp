@@ -59,7 +59,7 @@ void visit_optional_l1(std::string_view path, const std::optional<content::L1>& 
 
 // Calls `on_region(path, const content::L1&)` or `on_region(path, const content::StreamReg&)` for every L1 region and
 // stream register `router` names, in the order the writer writes them. `path` is the region's JSON pointer below the
-// router's node in a PER_ROUTER manifest, without a leading slash, such as "fields/erisc0/edm_status" or 
+// router's node in a PER_ROUTER manifest, without a leading slash, such as "fields/erisc0/edm_status" or
 // "channels/senders/vc0/ch1/ring_buffer". Fields that hold a number, flag or enum, or no content, aren't regions and
 // are skipped. A stream register named by several fields comes once per field.
 template <typename OnRegion>
