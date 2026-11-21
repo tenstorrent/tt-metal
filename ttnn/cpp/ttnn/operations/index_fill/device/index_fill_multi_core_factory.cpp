@@ -61,10 +61,11 @@ WorkSplit split_rows_across_cores(const ttnn::Tensor& input, uint32_t num_rows) 
         case TensorMemoryLayout::HEIGHT_SHARDED: {
             const auto& shard_spec = input.shard_spec().value();
             split.all_cores = shard_spec.grid;
+            const bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
             const uint32_t shard_h = shard_spec.shape[0];
 
             uint32_t start_row = 0;
-            for (const auto& core : corerange_to_cores(split.all_cores, std::nullopt, false)) {
+            for (const auto& core : corerange_to_cores(split.all_cores, std::nullopt, rm_orientation)) {
                 split.cores.push_back({core, clamp_row(start_row), clamp_row(start_row + shard_h), 0, 1});
                 start_row += shard_h;
             }
@@ -76,9 +77,11 @@ WorkSplit split_rows_across_cores(const ttnn::Tensor& input, uint32_t num_rows) 
             const auto cores = corerange_to_cores(
                 split.all_cores, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-            const uint32_t KW = cores.size();
-            for (uint32_t k = 0; k < KW; ++k) {
-                split.cores.push_back({cores[k], 0, num_rows, k, KW});
+            const uint32_t shard_w = shard_spec.shape[1];
+            const uint32_t KW = (input.padded_shape()[-1] + shard_w - 1) / shard_w;
+            for (uint32_t k = 0; k < cores.size(); ++k) {
+                const uint32_t end_row = k < KW ? num_rows : 0;
+                split.cores.push_back({cores[k], 0, end_row, k < KW ? k : 0, KW});
             }
             break;
         }
@@ -92,11 +95,18 @@ WorkSplit split_rows_across_cores(const ttnn::Tensor& input, uint32_t num_rows) 
             const uint32_t shard_w = shard_spec.shape[1];
             const uint32_t KW = (input.padded_shape()[-1] + shard_w - 1) / shard_w;
             const uint32_t KH = (num_rows + shard_h - 1) / shard_h;
+            const auto bbox = split.all_cores.bounding_box();
+            const uint32_t grid_w = bbox.end_coord.x - bbox.start_coord.x + 1;
+            const uint32_t grid_h = bbox.end_coord.y - bbox.start_coord.y + 1;
             for (uint32_t i = 0; i < cores.size(); ++i) {
-                const uint32_t kh = rm_orientation ? (i / KW) : (i % KH);
-                const uint32_t kw = rm_orientation ? (i % KW) : (i / KH);
-                const uint32_t row_start = kh * shard_h;
-                split.cores.push_back({cores[i], clamp_row(row_start), clamp_row(row_start + shard_h), kw, KW});
+                const uint32_t kh = rm_orientation ? (i / grid_w) : (i % grid_h);
+                const uint32_t kw = rm_orientation ? (i % grid_w) : (i / grid_h);
+                if (kh >= KH || kw >= KW) {
+                    split.cores.push_back({cores[i], 0, 0, 0, KW});
+                } else {
+                    const uint32_t row_start = kh * shard_h;
+                    split.cores.push_back({cores[i], clamp_row(row_start), clamp_row(row_start + shard_h), kw, KW});
+                }
             }
             break;
         }
@@ -245,9 +255,16 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::create_descriptor(
         // This holds for row-major L1 sharded buffers used here; revisit if padded page sizes are introduced.
         out_write_size = output.mesh_buffer().aligned_page_size();
         out_KW = (input.padded_shape()[-1] * input.element_size()) / out_write_size;
-    } else {
-        // INTERLEAVED or HEIGHT_SHARDED output: write size = full input page
+    } else if (is_col_sharded(input.memory_config().memory_layout())) {
+        // WIDTH_SHARDED or BLOCK_SHARDED input -> INTERLEAVED or HEIGHT_SHARDED output:
+        // each core writes its column shard fragment at col_byte_offset.
         out_write_size = input_page_size;
+        out_KW = 1;
+    } else {
+        // INTERLEAVED or HEIGHT_SHARDED input -> INTERLEAVED or HEIGHT_SHARDED output:
+        // cap the write size to the destination row slot so a 64B-aligned DRAM input page
+        // does not overrun a 16B-aligned L1 output row slot (#63680).
+        out_write_size = std::min(input_page_size, static_cast<uint32_t>(output.mesh_buffer().aligned_page_size()));
         out_KW = 1;
     }
 
