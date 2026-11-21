@@ -70,7 +70,7 @@ public:
         // Inside a run the address just walks forward, no lookup needed.
         if (run_pages_per_step_ != 0 && run_pages_per_step_ < run_pages_left_) {
             run_pages_left_ -= run_pages_per_step_;
-            current_noc_addr += accessor.get_aligned_page_size() * run_pages_per_step_;
+            current_noc_addr += accessor.get_bank_page_stride() * run_pages_per_step_;
         } else {
             set_noc_addr(current_page_id);
             set_run_pages_left(current_page_id);

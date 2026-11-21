@@ -81,23 +81,31 @@ private:
         ConditionalField<!DSpec::has_static_rank, uint32_t[tensor_accessor::MAX_RANK]> _page_coord;
 
 public:
+    /// A page size passed by the kernel is the size of each page transfer (see get_aligned_page_size() and
+    /// get_bank_page_stride()).
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(
         DSpec_&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in = 0) :
         dspec_instance(std::forward<DSpec_>(dspec)),
         bank_base_address(bank_base_address_in),
-        aligned_page_size(page_size_in) {}
+        page_size(page_size_in),
+        bank_page_stride(align_to_bank(page_size_in)) {}
 
     template <typename DSpec_ = DSpec, std::enable_if_t<DSpec_::is_static, int> = 0>
     TensorAccessor(const size_t bank_base_address_in = 0, uint32_t page_size_in = 0) :
-        bank_base_address(bank_base_address_in), aligned_page_size(page_size_in) {}
+        bank_base_address(bank_base_address_in),
+        page_size(page_size_in),
+        bank_page_stride(align_to_bank(page_size_in)) {}
 
     template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
     TensorAccessor(
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const size_t bank_base_address_in,
         const uint32_t page_size_in = TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::AlignedPageSize) :
-        dspec_instance(args), bank_base_address(bank_base_address_in), aligned_page_size(page_size_in) {}
+        dspec_instance(args),
+        bank_base_address(bank_base_address_in),
+        page_size(page_size_in),
+        bank_page_stride(align_to_bank(page_size_in)) {}
 
     // Construct TensorAccessor directly from a Metal 2.0 binding token.
     // The token instance is emitted by host codegen into kernel_bindings_generated.h,
@@ -153,8 +161,15 @@ public:
         }
     }
 
+    /// The size of one page transfer: the page size the kernel passed, or the buffer's aligned page size by default.
+    /// Despite the name, a size passed by the kernel can be unaligned; step through a bank by get_bank_page_stride().
     FORCE_INLINE
-    const uint32_t get_aligned_page_size() const { return aligned_page_size; }
+    const uint32_t get_aligned_page_size() const { return page_size; }
+
+    /// Distance between consecutive pages in a bank: the page size rounded up to the allocator alignment. Equal to
+    /// get_aligned_page_size() unless the kernel passed an unaligned page size, such as a ROW_MAJOR row.
+    FORCE_INLINE
+    uint32_t get_bank_page_stride() const { return bank_page_stride; }
 
     // Op-to-op R/W inference: the public address getters hand the kernel a raw address, which it can then use with any
     // NoC call (noc_async_read/write, a UnicastEndpoint, ...) or none, so the access can't be attributed later. Each
@@ -182,7 +197,8 @@ public:
 
     // Number of pages from page_id (inclusive) contiguous in memory: page ids page_id + k * contiguous_page_stride()
     // at get_noc_addr(page_id) + k * get_aligned_page_size(). A run stops at a shard edge, even if the next shard
-    // follows in the same bank, and at the tensor edge. Use shard_pages() to cover a whole shard.
+    // follows in the same bank, and at the tensor edge. Use shard_pages() to cover a whole shard. If the page size is
+    // not aligned, pages are get_bank_page_stride() apart instead, so every run is 1 page.
     FORCE_INLINE
     uint32_t num_contiguous_pages(uint32_t page_id) const {
         return num_contiguous_pages(page_id, dspec().tensor_volume());
@@ -192,6 +208,9 @@ public:
     uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id) const {
         ASSERT(page_id < end_page_id);
         ASSERT(end_page_id <= dspec().tensor_volume());
+        if (page_size != bank_page_stride) {
+            return 1;
+        }
 
         const int d = contiguous_page_dim();
         const uint32_t stride = dspec().tensor_strides()[d];
@@ -372,8 +391,19 @@ public:
     }
 
 private:
+    static constexpr uint32_t align_to_bank(const uint32_t size) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        return align_power_of_2(size, interleaved_addr_gen::get_allocator_alignment<is_dram>());
+#else
+        // Host builds use the accessor's page mapping only; they have no allocator alignment.
+        return size;
+#endif
+    }
+
     const uint32_t bank_base_address = 0;
-    const uint32_t aligned_page_size = 0;
+    const uint32_t page_size = 0;
+    // Computed once, so that page addressing costs the same as with an aligned page size.
+    const uint32_t bank_page_stride = 0;
 
     // get_noc_addr / get_shard_noc_addr without the note, for the library's transfer paths (see get_noc_addr).
     FORCE_INLINE
@@ -399,7 +429,7 @@ private:
         auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
         auto bank_start = DSpec::is_dram ? tensor_accessor::get_dram_bank_base_offset(bank_x, noc)
                                          : noc_address_backend::worker_address(bank_x, bank_y, 0, noc);
-        return bank_start + bank_base_address + (page_mapping.bank_page_offset * aligned_page_size) + offset;
+        return bank_start + bank_base_address + (page_mapping.bank_page_offset * bank_page_stride) + offset;
     }
 
     struct BankShard {

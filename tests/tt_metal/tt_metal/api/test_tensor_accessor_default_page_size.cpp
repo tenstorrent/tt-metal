@@ -45,6 +45,9 @@ namespace {
 constexpr const char* KERNEL_PATH =
     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/tensor_accessor/report_page_size.cpp";
 
+constexpr const char* EXPLICIT_PAGE_SIZE_KERNEL_PATH =
+    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/tensor_accessor/read_pages_explicit_page_size.cpp";
+
 constexpr const char* RUNTIME_PAGE_SIZE_KERNEL_PATH =
     "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/tensor_accessor/report_runtime_page_size.cpp";
 
@@ -205,6 +208,73 @@ void verify_runtime_page_size(
         << "Output accessor page size must be intact -- proves the input's A-collapse (one fewer CTA "
            "word) did not shift the output accessor's CTA offset. Expected "
         << expected_output << ", got " << result[1];
+}
+
+// Reads every row of a ROW_MAJOR buffer through an accessor built with the unaligned row size, as kernels that pass a
+// row size do. Each row must come from its own page, which sits at the aligned page size in the bank, and the read
+// must move only the row: the rest of each slot keeps the kernel's 0xFF fill.
+void verify_explicit_page_size(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    std::shared_ptr<distributed::MeshBuffer> input_buffer) {
+    constexpr uint32_t slot_size = 256;
+    static_assert(slot_size >= RM_PAGE_SIZE);
+    auto& cq = mesh_device->mesh_command_queue();
+
+    std::vector<uint16_t> input(RM_NUM_ROWS * RM_NUM_COLS);
+    for (uint32_t i = 0; i < input.size(); i++) {
+        input[i] = static_cast<uint16_t>(i + 1);
+    }
+    distributed::EnqueueWriteMeshBuffer(cq, input_buffer, input, true);
+
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
+    Program program = CreateProgram(*mesh_device);
+    workload.add_program(device_range, std::move(program));
+    auto& prog = workload.get_programs().at(device_range);
+
+    constexpr uint32_t output_size = RM_NUM_PAGES * slot_size;
+    auto output_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = output_size},
+        {.page_size = output_size, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+
+    CircularBufferConfig cb_config =
+        CircularBufferConfig(output_size, {{0, tt::DataFormat::RawUInt32}}).set_page_size(0, output_size);
+    CreateCircularBuffer(prog, KERNEL_CORE, cb_config);
+
+    std::vector<uint32_t> compile_time_args;
+    TensorAccessorArgs(*input_buffer).append_to(compile_time_args);
+    TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
+
+    auto kernel = CreateKernel(
+        prog,
+        EXPLICIT_PAGE_SIZE_KERNEL_PATH,
+        KERNEL_CORE,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = compile_time_args});
+
+    SetRuntimeArgs(
+        prog,
+        kernel,
+        KERNEL_CORE,
+        {input_buffer->address(), output_buffer->address(), RM_PAGE_SIZE, RM_NUM_PAGES, slot_size});
+
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+
+    std::vector<uint16_t> result;
+    distributed::EnqueueReadMeshBuffer(cq, result, output_buffer, true);
+
+    constexpr uint32_t slot_elements = slot_size / RM_ELEMENT_SIZE;
+    for (uint32_t row = 0; row < RM_NUM_ROWS; row++) {
+        for (uint32_t col = 0; col < slot_elements; col++) {
+            const uint16_t expected = col < RM_NUM_COLS ? input[row * RM_NUM_COLS + col] : 0xFFFF;
+            ASSERT_EQ(result[row * slot_elements + col], expected) << "row " << row << ", element " << col;
+        }
+    }
 }
 
 std::shared_ptr<distributed::MeshBuffer> create_interleaved_buffer(
@@ -374,6 +444,36 @@ TEST_F(MeshDispatchFixture, TensixTensorAccessorRuntimePageSizeRejectedForSharde
             [&]() { TensorAccessorArgs(*buffer, tensor_accessor::ArgConfig::RuntimePageSize); },
             ::testing::ThrowsMessage<std::runtime_error>(
                 ::testing::HasSubstr("RuntimePageSize is not supported for a sharded buffer")));
+    }
+}
+
+// A kernel that passes the unaligned row size of a sharded ROW_MAJOR buffer reads each row from its page and moves only
+// the row.
+TEST_F(MeshDispatchFixture, TensixTensorAccessorExplicitPageSizeNdShardedDramRowMajor) {
+    for (auto& mesh_device : devices_) {
+        auto buffer = create_nd_sharded_buffer(
+            *mesh_device,
+            RM_PAGE_SIZE,
+            RM_TOTAL_SIZE,
+            BufferType::DRAM,
+            Shape({RM_NUM_ROWS, RM_NUM_COLS}),
+            Shape({RM_NUM_ROWS, RM_NUM_COLS}),
+            Shape2D(1, RM_NUM_COLS));
+        verify_explicit_page_size(mesh_device, buffer);
+    }
+}
+
+TEST_F(MeshDispatchFixture, TensixTensorAccessorExplicitPageSizeNdShardedL1RowMajor) {
+    for (auto& mesh_device : devices_) {
+        auto buffer = create_nd_sharded_buffer(
+            *mesh_device,
+            RM_PAGE_SIZE,
+            RM_TOTAL_SIZE,
+            BufferType::L1,
+            Shape({RM_NUM_ROWS, RM_NUM_COLS}),
+            Shape({RM_NUM_ROWS, RM_NUM_COLS}),
+            Shape2D(1, RM_NUM_COLS));
+        verify_explicit_page_size(mesh_device, buffer);
     }
 }
 

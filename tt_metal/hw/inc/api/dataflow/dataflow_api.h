@@ -1621,11 +1621,13 @@ template <typename DSpec>
 FORCE_INLINE void noc_async_read_shard(
     const uint32_t shard_id, const TensorAccessor<DSpec>& s, std::uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
     auto shard_volume = s.dspec().shard_volume();
+    // Use the bank stride, not the page size: with an unaligned page size, page_size * shard_volume would stop short of
+    // the shard's last pages in the bank.
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::READ,
         dst_local_l1_addr,
         tensor_accessor::detail::transfer_shard_noc_addr(s, shard_id, /*offset=*/0, noc),
-        s.get_aligned_page_size() * shard_volume,
+        s.get_bank_page_stride() * shard_volume,
         -1,
         false,
         noc);
@@ -1633,7 +1635,7 @@ FORCE_INLINE void noc_async_read_shard(
     noc_async_read_impl<NOC_MAX_BURST_SIZE + 1, false>(
         tensor_accessor::detail::transfer_shard_noc_addr(s, shard_id, /*offset=*/0, noc),
         dst_local_l1_addr,
-        s.get_aligned_page_size() * shard_volume,
+        s.get_bank_page_stride() * shard_volume,
         noc);
 }
 
@@ -1659,11 +1661,13 @@ template <typename DSpec, bool posted = false>
 FORCE_INLINE void noc_async_write_shard(
     const uint32_t shard_id, const TensorAccessor<DSpec>& s, std::uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
     auto shard_volume = s.dspec().shard_volume();
+    // Use the bank stride, not the page size: with an unaligned page size, page_size * shard_volume would stop short of
+    // the shard's last pages in the bank.
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::WRITE_,
         src_local_l1_addr,
         tensor_accessor::detail::transfer_shard_noc_addr(s, shard_id, /*offset=*/0, noc),
-        s.get_aligned_page_size() * shard_volume,
+        s.get_bank_page_stride() * shard_volume,
         NOC_UNICAST_WRITE_VC,
         posted,
         noc);
@@ -1671,7 +1675,7 @@ FORCE_INLINE void noc_async_write_shard(
     noc_async_write_impl<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr,
         tensor_accessor::detail::transfer_shard_noc_addr(s, shard_id, /*offset=*/0, noc),
-        s.get_aligned_page_size() * shard_volume,
+        s.get_bank_page_stride() * shard_volume,
         noc);
 }
 

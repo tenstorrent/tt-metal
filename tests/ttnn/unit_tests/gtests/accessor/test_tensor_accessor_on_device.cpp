@@ -17,6 +17,7 @@
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/api/ttnn/distributed/api.hpp"
@@ -967,6 +968,32 @@ TEST_P(InterleavedAccessorTestsUnalignedPageSizeOnDevice, SingleCoreCopyAllPages
 INSTANTIATE_TEST_SUITE_P(
     InterleavedAccessorTests,
     InterleavedAccessorTestsUnalignedPageSizeOnDevice,
+    testing::Values(BufferType::DRAM, BufferType::L1));
+
+// As above, for sharded accessors: pages in a bank sit get_bank_page_stride() apart, so num_contiguous_pages must
+// return runs of 1 for a page size that is not aligned.
+class ShardedAccessorTestsUnalignedPageSizeOnDevice : public GenericMeshDeviceFixture,
+                                                      public ::testing::WithParamInterface<BufferType> {};
+
+TEST_P(ShardedAccessorTestsUnalignedPageSizeOnDevice, SingleCoreCopyAllPagesNumContiguousPages) {
+    // Row-major pages of 500 bfloat16 = 1000 B, in shards of 32 rows: two shards per node, so a bank holds runs of many
+    // pages. DRAM nodes are banks.
+    const NodeRangeSet nodes = GetParam() == BufferType::DRAM ? NodeRangeSet(NodeRange({0, 0}, {3, 0}))
+                                                              : NodeRangeSet(NodeRange({0, 0}, {1, 1}));
+    const CopyParams params{
+        .tensor_shape = tt::tt_metal::Shape{256, 500},
+        .layout = Layout::ROW_MAJOR,
+        .dtype = DataType::BFLOAT16,
+        .buffer_type = GetParam(),
+        .input_shard_spec = NdShardSpec{.shard_shape = tt::tt_metal::Shape{32, 500}, .grid = nodes},
+    };
+    test_single_core_copy_num_contiguous_pages<bfloat16>(
+        params, mesh_device_.get(), /*is_interleaved=*/false, /*explicit_page_size=*/true);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ShardedAccessorTests,
+    ShardedAccessorTestsUnalignedPageSizeOnDevice,
     testing::Values(BufferType::DRAM, BufferType::L1));
 
 TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPages) {
