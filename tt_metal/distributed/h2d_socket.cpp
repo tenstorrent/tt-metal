@@ -383,37 +383,18 @@ void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_de
     // per-write driver reconfig. The window holds one of the device's TLBs until the socket is destroyed;
     // when none is free, the socket writes through cluster.write_core, which holds none.
     //
-    // The window posts its writes on a static write VC. A Strict window would wait for each write's ack, one
-    // write per round trip (about 0.4 us per 128 B page into a DRAM core; the strict MMIO rate into Tensix L1,
-    // #64622). Posted writes are ordered only by the VC: a packet on a dynamic VC may switch VCs at each router
-    // (and a DRAM core gives each VC its own AXI ID), so bytes_sent could overtake the pages it counts; on one
-    // static VC, writes to the receiver arrive in issue order. Nothing reads through this write-only window.
+    // The window posts its writes on one static VC (create_posted_window), so bytes_sent cannot overtake the
+    // pages it counts. Nothing reads through this write-only window.
     if (!cluster.is_mock_or_emulated() && env.get_hal().get_arch() == tt::ARCH::BLACKHOLE) {
-        std::unique_ptr<tt::umd::IoWindow> window;
-        try {
-            window = cluster.get_driver()->create_io_window(
-                recv_device_id,
-                cluster.get_soc_desc(recv_device_id).get_coord_at(recv_virtual_core, tt::CoordSystem::TRANSLATED),
-                /*addr=*/l1_offset,
-                /*host=*/{},
-                tt::umd::IoOrdering::Posted,
-                /*core_end=*/std::nullopt,
-                tt::umd::WindowFlags::UnicastWrite);
-        } catch (const std::runtime_error& e) {
-            log_warning(
-                LogMetal,
-                "H2DSocket: no TLB window for receiver core {} on device {}; its writes go through the driver, "
-                "which is slower: {}",
-                recv_virtual_core.str(),
-                recv_device_id,
-                e.what());
-        }
         // The window is addressed from its anchor, so a local L1 address is its offset into the window.
         const uint64_t fifo_end = static_cast<uint64_t>(aligned_data_buf_start_) + fifo_size_;
         const uint64_t config_end = static_cast<uint64_t>(config_buffer_address_) + sizeof(receiver_socket_md);
-        if (window != nullptr && std::max(fifo_end, config_end) <= window->get_size()) {
-            receiver_core_window_ = std::move(window);
-        }
+        receiver_core_window_ = create_posted_window(
+            *cluster.get_driver(),
+            static_cast<int>(recv_device_id),
+            cluster.get_soc_desc(recv_device_id).get_coord_at(recv_virtual_core, tt::CoordSystem::TRANSLATED),
+            /*addr=*/l1_offset,
+            std::max(fifo_end, config_end));
     }
 
     if (receiver_core_window_ != nullptr) {
@@ -1038,6 +1019,11 @@ std::string H2DSocketImpl::export_descriptor(const std::string& socket_id) {
     return descriptor_path_;
 }
 
+bool H2DSocketImpl::writes_through_window() const {
+    return receiver_core_window_ != nullptr ||
+           (pcie_writer_instance_ != nullptr && pcie_writer_instance_->writes_through_window());
+}
+
 std::unique_ptr<H2DSocketImpl> H2DSocketImpl::connect_from_descriptor(const HDSocketDescriptor& desc) {
     auto socket = std::unique_ptr<H2DSocketImpl>(new H2DSocketImpl());
     socket->is_owner_ = false;
@@ -1065,7 +1051,15 @@ std::unique_ptr<H2DSocketImpl> H2DSocketImpl::connect_from_descriptor(const HDSo
 
     socket->pcie_writer_instance_ =
         std::make_unique<PCIeCoreWriter>(desc.device_id, desc.virtual_core_x, desc.virtual_core_y);
-    socket->pcie_writer = socket->pcie_writer_instance_->get_pcie_writer();
+    // A HOST_PUSH page and its bytes_sent update go to the receiver's L1 through one posted window, as the owner's
+    // do (init_receiver_tlb); DEVICE_PULL writes only bytes_sent, through the driver as before.
+    if (socket->h2d_mode_ == H2DMode::HOST_PUSH) {
+        const uint64_t fifo_end = static_cast<uint64_t>(desc.aligned_data_buf_start) + desc.fifo_size;
+        const uint64_t config_end = static_cast<uint64_t>(desc.config_buffer_address) + sizeof(receiver_socket_md);
+        socket->pcie_writer = socket->pcie_writer_instance_->get_posted_pcie_writer(std::max(fifo_end, config_end));
+    } else {
+        socket->pcie_writer = socket->pcie_writer_instance_->get_pcie_writer();
+    }
 
     // Restore connector-mutable state left behind by any prior driver process.
     // First connector after owner-init sees an all-zero struct (version stamped

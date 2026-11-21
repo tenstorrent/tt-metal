@@ -12,11 +12,14 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <functional>
 #include <iostream>
 #include <numeric>
+#include <optional>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -32,10 +35,15 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/buffers/d2h_socket_internal.hpp"
+#include "impl/buffers/h2d_socket_internal.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 static int g_world_rank = -1;
 static int g_world_size = -1;
 static int test_counter = 0;
+// The launcher world (both ranks), kept for the tests that need the two ranks to agree on whether to run.
+static std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> g_world_ctx;
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -595,6 +603,128 @@ TEST_F(MultiProcLoopbackFixture, MultiProcessConnectorReuse) {
     }
 }
 
+// Rank 0 decides whether a Blackhole-only test runs and tells rank 1, so both skip together (the connector has no
+// device of its own to ask, and a connector whose launcher skipped would wait for a socket that never appears).
+bool both_ranks_run(int rank, bool launcher_runs) {
+    std::byte flag{static_cast<uint8_t>(launcher_runs)};
+    if (rank == 0) {
+        g_world_ctx->send(ttsl::Span<std::byte>(&flag, 1), Rank(1), Tag(0x6462));
+    } else {
+        g_world_ctx->recv(ttsl::Span<std::byte>(&flag, 1), Rank(0), Tag(0x6462));
+    }
+    return flag != std::byte{0};
+}
+
+// Rank 1's half of ConnectorHostPushOrderingStress: attach to rank 0's sockets and loop num_pages pages through them,
+// each checked as it comes back. Page p carries pattern p % kNumPatterns, and there are more patterns than FIFO
+// pages, so a bytes_sent update that lands before its page does (the kernel then sends the slot's previous contents)
+// reads back as a different pattern. The H2D socket must write through its posted window, not the driver.
+void run_connector_ordering_stress(
+    const LoopbackConfig& cfg, uint32_t num_pages, const std::string& socket_id_suffix) {
+    constexpr uint32_t kNumPatterns = 61;
+    ASSERT_LT(cfg.fifo_size / cfg.page_size, kNumPatterns);
+    auto h2d_socket = H2DSocket::connect(fmt::format("test_h2d_xproc_{}", socket_id_suffix), 30000);
+    auto d2h_socket = D2HSocket::connect(fmt::format("test_d2h_xproc_{}", socket_id_suffix), 30000);
+    h2d_socket->set_page_size(cfg.page_size);
+    d2h_socket->set_page_size(cfg.page_size);
+    // Keep the loop going if this fails, so rank 0's kernel still finishes and the run does not hang.
+    EXPECT_TRUE(experimental::detail::writes_through_window(*h2d_socket))
+        << "the connector writes through the driver; its posted window is not under test";
+
+    const uint32_t page_words = cfg.page_size / sizeof(uint32_t);
+    std::vector<uint32_t> patterns(static_cast<size_t>(kNumPatterns) * page_words);
+    std::mt19937 rng(64622);
+    std::generate(patterns.begin(), patterns.end(), rng);
+
+    // A run takes seconds, so a socket that stops moving for this long has stalled. Rank 0's kernel would then wait
+    // for pages that never come, so a stall aborts both ranks instead of hanging them.
+    constexpr auto kStallTimeout = std::chrono::seconds(10);
+    auto retry_until_stalled = [&](auto&& operation, const char* stall_message, uint32_t page_index) {
+        if (operation()) {
+            return;
+        }
+        const auto deadline = std::chrono::steady_clock::now() + kStallTimeout;
+        while (!operation()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                log_error(
+                    tt::LogTest, "{} at page {} of {}; aborting both ranks", stall_message, page_index, num_pages);
+                g_world_ctx->abort(1);
+            }
+            std::this_thread::yield();
+        }
+    };
+
+    std::chrono::steady_clock::duration write_time{};
+    std::thread write_thread([&]() {
+        const auto start = std::chrono::steady_clock::now();
+        for (uint32_t p = 0; p < num_pages; p++) {
+            retry_until_stalled(
+                [&]() {
+                    return experimental::detail::try_write(
+                        *h2d_socket, patterns.data() + (static_cast<size_t>(p % kNumPatterns) * page_words), 1);
+                },
+                "H2D socket stalled",
+                p);
+        }
+        write_time = std::chrono::steady_clock::now() - start;
+    });
+    std::vector<uint32_t> page(page_words);
+    uint32_t num_bad_pages = 0;
+    std::optional<uint32_t> first_bad_page;
+    for (uint32_t p = 0; p < num_pages; p++) {
+        retry_until_stalled(
+            [&]() { return experimental::detail::try_read(*d2h_socket, page.data(), 1); }, "D2H socket stalled", p);
+        if (!std::equal(
+                page.begin(), page.end(), patterns.begin() + (static_cast<size_t>(p % kNumPatterns) * page_words))) {
+            num_bad_pages++;
+            first_bad_page = first_bad_page.value_or(p);
+        }
+    }
+    write_thread.join();
+    h2d_socket->barrier(10000);
+    d2h_socket->barrier(10000);
+
+    const double us_per_page = std::chrono::duration<double, std::micro>(write_time).count() / num_pages;
+    log_info(
+        tt::LogTest,
+        "H2D HOST_PUSH connector loopback ({}): {} pages of {} B, {:.2f} us per page, {:.2f} GB/s, {} bad",
+        experimental::detail::writes_through_window(*h2d_socket) ? "posted window" : "driver writes",
+        num_pages,
+        cfg.page_size,
+        us_per_page,
+        cfg.page_size / us_per_page / 1e3,
+        num_bad_pages);
+    EXPECT_EQ(num_bad_pages, 0u) << "first bad page: " << first_bad_page.value_or(0);
+}
+
+// HOST_PUSH from a connector, which another process attaches through the socket's descriptor (as a serving process
+// does), at the owner's speed and with its ordering (#64622): a grammar-mask page and a token page, 100k pages each.
+TEST_F(MultiProcLoopbackFixture, ConnectorHostPushOrderingStress) {
+    bool runs = true;
+    if (rank_ == 0) {
+        runs = experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc &&
+               mesh_device_->arch() == tt::ARCH::BLACKHOLE;
+    }
+    if (!both_ranks_run(rank_, runs)) {
+        GTEST_SKIP() << "Blackhole only, with host memory mapped to the NOC";
+    }
+    constexpr uint32_t kNumPages = 100000;
+    constexpr uint32_t kPagesPerIteration = 1000;
+    const LoopbackConfig configs[] = {
+        {4 * 19456, 19456, kPagesPerIteration * 19456},
+        {16 * 384, 384, kPagesPerIteration * 384},
+    };
+    for (const auto& cfg : configs) {
+        std::string suffix = fmt::format("order_{}", test_counter);
+        if (rank_ == 0) {
+            run_launcher(mesh_device_, H2DMode::HOST_PUSH, cfg, kNumPages / kPagesPerIteration, suffix);
+        } else {
+            run_connector_ordering_stress(cfg, kNumPages, suffix);
+        }
+        test_counter++;
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed
 
@@ -605,6 +735,7 @@ int main(int argc, char** argv) {
     const auto& world = DistributedContext::get_current_world();
     g_world_rank = *world->rank();
     g_world_size = *world->size();
+    g_world_ctx = world;
 
     auto local_ctx = world->split(Color(g_world_rank), Key(0));
     DistributedContext::set_current_world(local_ctx);
