@@ -550,6 +550,24 @@ timeout is 1200 s as a backstop. That has to stay well inside
 kills the process group and takes the report with it — so raise it when running
 any tier on a host that has the package.
 
+## tray 12 V feed phase
+
+On `pre_bmc_reboot` and `post_bmc_reboot`, right after the snapshot and before
+any reset (a re-power clears the latches), each tray's two hot-swap controllers
+(HSCs 0x40 and 0x42) and its CPLD are read in-band with `ipmitool raw 0x06 0x52`:
+STATUS_WORD, STATUS_INPUT and STATUS_IOUT per HSC, and CPLD reg 0x1E (ff while
+the tray is up). Only these seven reads are allowed; nothing is written. The
+phase never gates the run.
+
+| Status | Meaning |
+|---|---|
+| **PASS** | HSC latches clean and the tray is up. |
+| **FAIL** | Cause POWER: an HSC latched OFF, IOUT_OC, VIN_UV_FAULT or VIN_UV_WARN. `details` names the tray, its BDF range, the HSC and the raw bytes: check the bus bar / tray 12 V feed. |
+| **WARN** | Cause CHIP/BOARD: the tray is down with clean latches; or some reads got no reply ("not read"). |
+| **SKIP** | No route (no ipmitool, no sudo, no read succeeded), dry run, or `--skip-tray-power`. |
+
+Each ipmitool call is bounded at 15 s and the phase at 120 s.
+
 ## sys-triage phase
 
 The last phase runs `sys-triage`, the syseng tool that collects a Blackhole
@@ -625,6 +643,7 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 | `--qsfp-tool-path PATH` | `tt-bh-glx-cluster-debug` on PATH | Override the collector binary. A path that doesn't resolve is reported as its own SKIP rather than silently ignored. |
 | `--qsfp-descriptor PATH` | — | `factory_system_descriptor.textproto`, which gives the cage-attached links an expected partner. Without it only the soldered internal links are compared against a topology. |
 | `--qsfp-gating` | off | Report QSFP findings at their real severity and let them gate the run. Off records every finding in `details`/`data` but holds the status at PASS. |
+| `--skip-tray-power` | off | Skip the tray 12 V feed latch reads |
 | `--skip-sys-triage` | off | Skip the sys-triage bundle entirely |
 | `--sys-triage-path PATH` | `sys-triage` on PATH | Override the sys-triage binary. A path that doesn't resolve is reported as its own SKIP. |
 | `--bmc-ip IP` | `$BMC_IP` | BMC address for sys-triage |

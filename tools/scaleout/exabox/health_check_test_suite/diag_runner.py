@@ -52,6 +52,7 @@ from diag.snapshot import (  # noqa: E402
 )
 from diag.snapshot_checks import validate_snapshot  # noqa: E402
 from diag.sys_triage import SYS_TRIAGE_BIN, run_sys_triage  # noqa: E402
+from diag.tray_power import run_tray_power  # noqa: E402
 from diag.triage import TRIAGE_DIR_ENV, TRIAGE_SUBDIR, default_triage_dir, run_triage  # noqa: E402
 from tiers import DEPRECATED_TIER_ALIASES, TIERS  # noqa: E402
 
@@ -114,6 +115,11 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
             "--triage-gating: findings are recorded either way, but a tool still bedding in "
             "cannot ticket the fleet."
         ),
+    )
+    ap.add_argument(
+        "--skip-tray-power",
+        action="store_true",
+        help="Skip the tray 12 V feed latch reads (pre_bmc_reboot and post_bmc_reboot).",
     )
     ap.add_argument(
         "--skip-sys-triage",
@@ -251,6 +257,7 @@ def run_diag(
     qsfp_tool_path: str | None = None,
     qsfp_descriptor: Path | None = None,
     qsfp_gating: bool = False,
+    skip_tray_power: bool = False,
     skip_sys_triage: bool = False,
     sys_triage_path: str | None = None,
     bmc_ip: str | None = None,
@@ -309,6 +316,17 @@ def run_diag(
     # when the tt-smi snapshot itself failed.
     collect_fru_info(snap_phase, dry_run)
     _finish(report, snap_phase, t0, summary=True)
+
+    # Phase 1b: tray 12 V feed latches. Read before anything that could reset
+    # or re-power a tray, which would clear them.
+    if plan.tray_power:
+        tray_power_phase = Phase(name="tray_power", gates=False)
+        t0 = time.time()
+        if skip_tray_power:
+            tray_power_phase.add(Check(name="tray_12v_feed", status=SKIP, details="--skip-tray-power", ip="board"))
+        else:
+            _guarded(tray_power_phase, "tray_12v_feed", SKIP, lambda: run_tray_power(tray_power_phase, dry_run))
+        _finish(report, tray_power_phase, t0, summary=True, all_skip_stays_skip=True)
 
     # Where every phase drops its raw tool output. Derived once: the reset
     # and gtest phases both write here, and collect_run_artifacts() attaches
@@ -520,6 +538,7 @@ def main() -> int:
         qsfp_tool_path=args.qsfp_tool_path,
         qsfp_descriptor=args.qsfp_descriptor,
         qsfp_gating=args.qsfp_gating,
+        skip_tray_power=args.skip_tray_power,
         skip_sys_triage=args.skip_sys_triage,
         sys_triage_path=args.sys_triage_path,
         bmc_ip=args.bmc_ip,

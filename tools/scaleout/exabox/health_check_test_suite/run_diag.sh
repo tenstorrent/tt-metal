@@ -48,8 +48,8 @@ Tiers:
   weekly          3 resets + full GDDR pattern set + eth link_up + eth bandwidth
                   + didt matmul stress (pytest) + post-test reset + triage + QSFP tests
   full            weekly + sys-triage: everything, for the logs on a DIIM ticket
-  pre_bmc_reboot  Data collection before a BMC reboot: snapshot + triage + QSFP tests
-                  + sys-triage. No resets, no tests.
+  pre_bmc_reboot  Data collection before a BMC reboot: snapshot + tray 12 V feed latches
+                  + triage + QSFP tests + sys-triage. No resets, no tests.
   post_bmc_reboot The same as pre_bmc_reboot for now, run after the BMC reboot.
 
 The old names still work and print a deprecation warning: light and medium run daily,
@@ -70,6 +70,9 @@ DIAG, lspci, kernel logs, per-chip vuart) into <output dir>/logs/sys_triage/, as
 step of full, pre_bmc_reboot and post_bmc_reboot only. It runs when \`sys-triage\` is on
 PATH (same .deb) and the BMC credentials are set; otherwise the phase reports SKIP with
 the reason. It never gates the run.
+
+The tray 12 V feed check reads each tray's hot-swap controller latches and CPLD tray-alive
+register through ipmitool (reads only); see HEALTH_CHECK.md. It never gates the run.
 
 Forwarded options (see diag_runner.py --help for details):
   --dry-run              Print intended subprocess calls without executing destructive steps
@@ -92,6 +95,7 @@ Forwarded options (see diag_runner.py --help for details):
                          internal links are still checked against the collector's built-in
                          topology table; only the cabling checks narrow, and they say so
                          rather than reporting coverage they don't have
+  --skip-tray-power      Skip the tray 12 V feed latch reads
   --skip-sys-triage      Skip the sys-triage bundle
   --sys-triage-path PATH Override the sys-triage binary
   --bmc-ip IP            BMC address for sys-triage (default: \$BMC_IP)
