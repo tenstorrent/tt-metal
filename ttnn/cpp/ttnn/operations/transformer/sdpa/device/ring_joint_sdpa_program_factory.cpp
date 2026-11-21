@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <span>
 #include <cmath>
 #include <string>
 #include <deque>
@@ -4226,7 +4227,17 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared = cached_workload.shared_variables.at(coordinate_range);
         if (!shared.descriptor.resolved_bindings.empty()) {
-            tt::tt_metal::apply_resolved_bindings(program, shared.descriptor.resolved_bindings, collected.buffers);
+            ttnn::device_operation::apply_changed_bindings(
+                program, shared.descriptor.resolved_bindings, shared.bindings, collected.buffers);
+        } else if (!shared.descriptor.unpatchable_buffer_addresses.empty()) {
+            // As the adapter checks for an op without an override: an entry built from a call that passed one buffer in
+            // two tensor slots cannot be re-patched, so a hit must bring the buffers it was built with.
+            TT_FATAL(
+                descriptor_adapter_t::buffer_addresses(collected.buffers) ==
+                    shared.descriptor.unpatchable_buffer_addresses,
+                "ring_joint_sdpa: program cache hit on an entry built from a call that passed the same buffer in more "
+                "than one tensor slot. Pass distinct tensors to the first call (for example a clone of the repeated "
+                "tensor).");
         }
         const ttnn::MeshCoordinate coord = coordinate_range.start_coord();
         TT_FATAL(

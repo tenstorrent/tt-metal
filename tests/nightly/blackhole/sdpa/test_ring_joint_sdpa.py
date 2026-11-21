@@ -10182,3 +10182,70 @@ def test_ring_joint_sdpa_cache_hit_uses_new_semaphores(sliding):
         )
     finally:
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
+def test_ring_joint_sdpa_cache_hit_after_aliased_first_call(expect_error):
+    """A first call that passes one buffer as both Q and K builds an entry whose buffer bindings cannot be re-patched
+    (the binding resolver bails on the alias). A same-shape hit with distinct tensors must then raise, as the
+    descriptor adapter does for an op without an override, instead of running on the first call's addresses."""
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, num_global_semaphores=3)
+    mesh_device = runtime.mesh_device
+    try:
+        sp_dims = [None, None]
+        sp_dims[runtime.sp_axis] = 2
+        buf_dims = [None, None]
+        if MESH_CONFIG.tp_size > 1:
+            sp_dims[runtime.tp_axis] = 1
+            buf_dims[runtime.tp_axis] = 1
+
+        def to_mesh(t, dims):
+            return ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+            )
+
+        b, nh, d = 1, 4 * MESH_CONFIG.tp_size, 128
+        sq = 256 * MESH_CONFIG.sp_size
+        tt_q, tt_k, tt_v = (to_mesh(fa_rand(b, nh, sq, d), sp_dims) for _ in range(3))
+        p_buf_k = to_mesh(torch.zeros(b, nh, sq, d), buf_dims)
+        p_buf_v = to_mesh(torch.zeros(b, nh, sq, d), buf_dims)
+        fence_persistent_buffers(mesh_device)
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+
+        def run(q, k):
+            call_sdpa(
+                q,
+                k,
+                tt_v,
+                sq,
+                is_causal=False,
+                is_balanced=False,
+                p_buf_k=p_buf_k,
+                p_buf_v=p_buf_v,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                sp_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                worker_sub_device_id=runtime.worker_sub_device_id,
+                ccl_column=runtime.ccl_column,
+            )
+            ttnn.synchronize_device(mesh_device)
+
+        run(tt_q, tt_q)
+        entries = mesh_device.num_program_cache_entries()
+        with expect_error(RuntimeError, "passed the same buffer in more than one tensor slot"):
+            run(tt_q, tt_k)
+        assert mesh_device.num_program_cache_entries() == entries, "the second call must be a program-cache hit"
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)

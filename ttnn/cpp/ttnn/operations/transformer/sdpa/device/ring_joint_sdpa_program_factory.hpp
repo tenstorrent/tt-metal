@@ -5,11 +5,13 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/workload/legacy/runtime_args_data.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
@@ -50,11 +52,13 @@ struct RingJointSDPAMeshWorkloadFactory {
         ttnn::ccl::snake_ring::Orientation orientation;
         uint64_t route_plan_hash;
     };
-    // The adapter's state plus the semaphore slots recorded at create time (see apply_semaphore_arg_patch).
+    // The adapter's state plus the semaphore slots recorded at create time (see apply_semaphore_arg_patch)
+    // and the binding slots recorded on the first hit.
     struct shared_variables_t {
         typename descriptor_adapter_t::shared_variables_t descriptor;
         ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::SemaphoreArgPatch semaphore_patch;
         std::optional<FullMeshRoute> full_mesh_route;
+        ttnn::device_operation::ChangedBindingSlots bindings;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
