@@ -63,7 +63,7 @@ REDUCE_BLOCK_LENGTH_PERF_SWEEP = {
     "math_fidelity": [MathFidelity.HiFi4],
     "tile_dimensions": CORE_TILE_DIMENSION_LISTS,
     "is_reduce_to_one": [False],
-    "tile_count": BLOCK_LENGTH_TILE_COUNTS,
+    "tile_cnt": BLOCK_LENGTH_TILE_COUNTS,
 }
 
 REDUCE_SCALAR_PERF_SWEEP = {
@@ -91,7 +91,7 @@ def _run_reduce_perf(
     run_types,
     loop_factor,
     is_perf,
-    tile_count=PERF_TILE_COUNT,
+    tile_cnt=PERF_TILE_COUNT,
 ):
     _run_reduce_test(
         formats,
@@ -101,7 +101,7 @@ def _run_reduce_perf(
         math_fidelity,
         is_reduce_to_one,
         tile_dimensions,
-        input_dimensions=perf_input_dimensions(tile_dimensions, tile_count),
+        input_dimensions=perf_input_dimensions(tile_dimensions, tile_cnt),
         is_perf=is_perf,
         perf_report=perf_report,
         run_types=run_types,
@@ -180,7 +180,7 @@ def test_perf_reduce_block_length(
     math_fidelity,
     tile_dimensions,
     is_reduce_to_one,
-    tile_count,
+    tile_cnt,
     run_types,
     loop_factor,
     is_perf,
@@ -197,5 +197,5 @@ def test_perf_reduce_block_length(
         run_types,
         loop_factor,
         is_perf,
-        tile_count=tile_count,
+        tile_cnt=tile_cnt,
     )
