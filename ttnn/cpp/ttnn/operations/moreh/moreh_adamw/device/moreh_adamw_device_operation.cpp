@@ -64,6 +64,34 @@ void MorehAdamWDeviceOperation::validate_inputs(
                 tensor_args.param_in.dtype());
         }
     }
+
+    const auto& param_shape = tensor_args.param_in.logical_shape();
+    const auto check_shape = [&](const Tensor& tensor, const char* name) {
+        TT_FATAL(
+            tensor.logical_shape() == param_shape,
+            "moreh_adamw: {} shape {} must match the param shape {}",
+            name,
+            tensor.logical_shape(),
+            param_shape);
+    };
+    check_shape(tensor_args.grad, "grad");
+    check_shape(tensor_args.exp_avg_in, "exp_avg_in");
+    check_shape(tensor_args.exp_avg_sq_in, "exp_avg_sq_in");
+    if (tensor_args.max_exp_avg_sq_in.has_value()) {
+        check_shape(tensor_args.max_exp_avg_sq_in.value(), "max_exp_avg_sq_in");
+    }
+    if (tensor_args.param_out.has_value()) {
+        check_shape(tensor_args.param_out.value(), "param_out");
+    }
+    if (tensor_args.exp_avg_out.has_value()) {
+        check_shape(tensor_args.exp_avg_out.value(), "exp_avg_out");
+    }
+    if (tensor_args.exp_avg_sq_out.has_value()) {
+        check_shape(tensor_args.exp_avg_sq_out.value(), "exp_avg_sq_out");
+    }
+    if (tensor_args.max_exp_avg_sq_out.has_value()) {
+        check_shape(tensor_args.max_exp_avg_sq_out.value(), "max_exp_avg_sq_out");
+    }
 }
 
 void MorehAdamWDeviceOperation::validate_on_program_cache_miss(
