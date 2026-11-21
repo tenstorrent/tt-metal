@@ -28,6 +28,7 @@
 #include "impl/dispatch/host_transfer_stats.hpp"
 #include "impl/emulation/host_sanitizers.hpp"
 #include "impl/internal/service/service_core_manager_impl.hpp"
+#include "impl/profiler/dram_counters.hpp"
 #include "kernels/kernel.hpp"
 #include "llrt.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -379,6 +380,7 @@ void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow
 void WaitProgramDone(IDevice& device, const Program& program) {
     auto& metal_ctx = MetalContext::instance(extract_context_id(&device));
     llrt::internal_::wait_for_idle(metal_ctx, device.id(), program.impl().logical_cores());
+    dram_counters::end_pending(metal_ctx, device.id());
 }
 
 void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispatch) {
@@ -435,6 +437,10 @@ void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispa
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox (eg, storage cores) have all landed
     metal_ctx.get_cluster().l1_barrier(device_id);
+
+    if (!force_slow_dispatch) {
+        dram_counters::begin_program(metal_ctx, device, program);
+    }
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = metal_ctx.hal();

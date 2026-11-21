@@ -39,6 +39,7 @@
 #include "debug/noc_debugging.hpp"
 #include "dispatch/topology.hpp"
 #include "dispatch/dispatch_core_common.hpp"
+#include "profiler/dram_counters.hpp"
 #include "profiler/profiler_state_manager.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/mock_device/mock_device.hpp>
@@ -376,6 +377,7 @@ void MetalContext::teardown() {
     if (profiler_state_manager_) {
         profiler_state_manager_.reset();
     }
+    dram_counters::release(*this);
 
     teardown_dispatch_state();
 
