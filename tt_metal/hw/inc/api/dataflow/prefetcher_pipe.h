@@ -445,9 +445,41 @@ public:
         const uint32_t wr_offset = sender_wr_offset(iface, receiver_idx);
         assert_contiguous_write(iface, wr_offset, num_entries);
         const uint32_t num_units = fifo_size() / L1_ALIGNMENT;
-        const uint32_t used_units =
-            *local_sent_ptr(iface, receiver_idx) - load_remote_l1_credit(local_acked_ptr(iface, receiver_idx));
-        return num_units - used_units >= units_for_write(iface, wr_offset, num_entries);
+        return num_units - used_units(iface, receiver_idx) >= units_for_write(iface, wr_offset, num_entries);
+    }
+
+    // The most entries, up to max_entries, that one write to a SINGLE receiver (receiver_idx) can carry right now:
+    // as many as its ring has space for, stopping at the ring's end, which one write may not cross. 0 if it has
+    // space for none. Lets a sender with several entries ready send them in one write and one credit. Single credit
+    // lane only; the same ownership rule as receiver_has_space applies.
+    //
+    // `pending_entries` entries already written to the receiver and not credited yet (write_to_receiver_head with
+    // the same count) are counted as used, and the write goes after them, so a sender can keep several writes in
+    // flight to one receiver and credit each once it has left this core.
+    FORCE_INLINE uint32_t
+    receiver_contiguous_space(uint32_t receiver_idx, uint32_t max_entries, uint32_t pending_entries = 0) {
+        ASSERT(num_credit_lanes() == 1);
+        ASSERT(owns_receiver(receiver_idx));
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        uint32_t pending_units = 0;
+        const uint32_t wr_offset =
+            offset_after_pending(iface, sender_wr_offset(iface, receiver_idx), pending_entries, pending_units);
+        const uint32_t free_units = fifo_size() / L1_ALIGNMENT - pending_units - used_units(iface, receiver_idx);
+        // Usually all of them fit short of the ring's end, which settles it without dividing.
+        const uint32_t to_end_bytes = usable_offset(iface) - wr_offset;
+        const uint32_t free_bytes = free_units * L1_ALIGNMENT;
+        const uint32_t max_bytes = max_entries * iface.fifo_page_size;
+        if (max_bytes < to_end_bytes && max_bytes <= free_bytes) {
+            return max_entries;
+        }
+        // Otherwise as many as fit both before the end and in the free space, with one division.
+        const uint32_t fit = (to_end_bytes < free_bytes ? to_end_bytes : free_bytes) / iface.fifo_page_size;
+        uint32_t num_entries = max_entries < fit ? max_entries : fit;
+        // A write that reaches the ring's end is also credited the gap after it.
+        if (num_entries != 0 && units_for_write(iface, wr_offset, num_entries) > free_units) {
+            --num_entries;
+        }
+        return num_entries;
     }
 
 #if !defined(COMPILE_FOR_TRISC)
@@ -612,6 +644,77 @@ public:
             src, *this, len_bytes, src_args, {.receiver_idx = receiver_idx}, noc_opts);
 #endif
     }
+
+#ifdef ARCH_QUASAR
+    // The last packet of a write that write_to_receiver_head started, for write_to_receiver_tail to issue.
+    struct WriteTail {
+        uint32_t receiver_idx = 0;
+        uint32_t src_addr = 0;
+        // Its place in the receiver's ring, as an offset from the ring's base.
+        uint32_t ring_offset = 0;
+        uint32_t len_bytes = 0;
+    };
+
+    // write_to_receiver in two calls, so this core can do other work while the payload streams out of its L1. The
+    // NoC sends a transfer's packets one after another and a core's next transfer on the same command buffer waits
+    // for them, so the flush-tagged last packet, which has to be a transfer of its own, holds the core until the
+    // rest of the payload has gone out. write_to_receiver_head issues every packet but the last and returns the
+    // last for write_to_receiver_tail, which the caller issues later: before any other write from this core and
+    // before crediting the receiver, and before relying on the write's transaction id to say the write has left.
+    // Arguments as for write_to_receiver, including `pending_entries`; the write must not be empty.
+    template <NocOptions opts = NocOptions::DEFAULT, typename Src>
+    FORCE_INLINE WriteTail write_to_receiver_head(
+        const Noc& noc,
+        uint32_t receiver_idx,
+        const Src& src,
+        uint32_t num_entries,
+        const typename noc_traits_t<Src>::src_args_type& src_args = {},
+        const NocOptVals& noc_opts = {},
+        uint32_t pending_entries = 0) {
+        static_assert(
+            !has_flag(opts, NocOptions::CUSTOM_VC),
+            "A payload must go on NOC_UNICAST_WRITE_VC, the credit's VC, to reach its receiver ahead of the credit");
+        ASSERT(owns_receiver(receiver_idx));
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        const uint32_t len_bytes = num_entries * iface.fifo_page_size;
+        ASSERT(len_bytes != 0);
+        const uint32_t cursor = sender_wr_offset(iface, receiver_idx);
+        uint32_t pending_units = 0;
+        const uint32_t wr_offset = offset_after_pending(iface, cursor, pending_entries, pending_units);
+        assert_contiguous_write(iface, wr_offset, num_entries);
+        const uint32_t src_addr = local_src_addr(noc, src, src_args);
+        const uint32_t head_bytes = flush_tagged_head_bytes(len_bytes);
+        if (head_bytes != 0) {
+            destination_offset_bytes_ = wr_offset - cursor;
+            noc.async_write<opts>(
+                CoreLocalMem<uint32_t>(src_addr), *this, head_bytes, {}, {.receiver_idx = receiver_idx}, noc_opts);
+            destination_offset_bytes_ = 0;
+        }
+        return {
+            .receiver_idx = receiver_idx,
+            .src_addr = src_addr + head_bytes,
+            .ring_offset = wr_offset + head_bytes,
+            .len_bytes = len_bytes - head_bytes};
+    }
+
+    // Issues the flush-tagged last packet of a write write_to_receiver_head started, with the same NocOptions and
+    // transaction id. Credits for earlier writes to the receiver may have come in between.
+    template <NocOptions opts = NocOptions::DEFAULT>
+    FORCE_INLINE void write_to_receiver_tail(const Noc& noc, const WriteTail& tail, const NocOptVals& noc_opts = {}) {
+        // Unsigned, so a tail placed before the cursor's current place in the ring's lap comes out right.
+        destination_offset_bytes_ = tail.ring_offset - sender_wr_offset(interface_.sender, tail.receiver_idx);
+        issue_flush_tagged([&] {
+            noc.async_write<opts>(
+                CoreLocalMem<uint32_t>(tail.src_addr),
+                *this,
+                tail.len_bytes,
+                {},
+                {.receiver_idx = tail.receiver_idx},
+                noc_opts);
+        });
+        destination_offset_bytes_ = 0;
+    }
+#endif
 
     // Waits until this core's payload writes have left its L1, so their source may be reused. It does not wait
     // for them to land: the payload and the credit that follows both go on NOC_UNICAST_WRITE_VC, which reaches
@@ -795,6 +898,11 @@ public:
     }
 
     FORCE_INLINE uint32_t get_entry_size() { return interface_.sender.fifo_page_size; }
+
+    // How many entries of the current size each receiver's ring holds. Sender participants only.
+    FORCE_INLINE uint32_t ring_entries() const {
+        return usable_offset(interface_.sender) / interface_.sender.fifo_page_size;
+    }
 
     // True while the sender has published entries this receiver has not yet popped. Reads this
     // receiver's slot in each credit block -- the same two counters wait_front() compares -- so
@@ -982,16 +1090,26 @@ private:
     // the last packet is what is left after the whole ones, sent as its own transfer.
     template <typename Issue>
     FORCE_INLINE void write_flush_tagged(uint32_t src_addr, uint32_t len_bytes, Issue&& issue) {
-        const uint32_t head_bytes =
-            len_bytes == 0 ? 0 : (len_bytes - 1) / NOC_OVERLAY_MAX_BYTES_IN_PACKET * NOC_OVERLAY_MAX_BYTES_IN_PACKET;
+        const uint32_t head_bytes = flush_tagged_head_bytes(len_bytes);
         if (head_bytes != 0) {
             issue(src_addr, head_bytes);
         }
         destination_offset_bytes_ += head_bytes;
-        noc_set_packet_tags<write_cmd_buf>(/*snoop=*/false, /*flush=*/true);
-        issue(src_addr + head_bytes, len_bytes - head_bytes);
-        noc_set_packet_tags<write_cmd_buf>(/*snoop=*/false, /*flush=*/false);
+        issue_flush_tagged([&] { issue(src_addr + head_bytes, len_bytes - head_bytes); });
         destination_offset_bytes_ -= head_bytes;
+    }
+
+    // The bytes of a `len_bytes` write that go before its flush-tagged last packet (write_flush_tagged).
+    static constexpr uint32_t flush_tagged_head_bytes(uint32_t len_bytes) {
+        return len_bytes == 0 ? 0 : (len_bytes - 1) / NOC_OVERLAY_MAX_BYTES_IN_PACKET * NOC_OVERLAY_MAX_BYTES_IN_PACKET;
+    }
+
+    // Issues a write's last packet through issue() with the NoC flush tag (write_flush_tagged).
+    template <typename Issue>
+    static FORCE_INLINE void issue_flush_tagged(Issue&& issue) {
+        noc_set_packet_tags<write_cmd_buf>(/*snoop=*/false, /*flush=*/true);
+        issue();
+        noc_set_packet_tags<write_cmd_buf>(/*snoop=*/false, /*flush=*/false);
     }
 #endif
 
@@ -1311,6 +1429,28 @@ private:
 
     FORCE_INLINE static uint32_t sender_wr_offset(const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx) {
         return *local_wr_offset_ptr(iface, receiver_idx);
+    }
+
+    // Units of receiver_idx's ring credited to it and not yet acked.
+    FORCE_INLINE static uint32_t used_units(const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx) {
+        return *local_sent_ptr(iface, receiver_idx) - load_remote_l1_credit(local_acked_ptr(iface, receiver_idx));
+    }
+
+    // Where the next write lands with `pending_entries` entries already written past the cursor at `wr_offset`, and
+    // in `pending_units` the units crediting them will take. Writes never cross the ring's end, so when the pending
+    // ones reached it, the next write restarts at the base, and their credits include the gap after the end.
+    FORCE_INLINE uint32_t offset_after_pending(
+        const CrossNodeSenderDFBInterface& iface,
+        uint32_t wr_offset,
+        uint32_t pending_entries,
+        uint32_t& pending_units) const {
+        uint32_t offset = wr_offset + pending_entries * iface.fifo_page_size;
+        pending_units = pending_entries * units_per_entry(iface);
+        if (offset >= usable_offset(iface)) {
+            offset -= usable_offset(iface);
+            pending_units += (fifo_size() - usable_offset(iface)) / L1_ALIGNMENT;
+        }
+        return offset;
     }
 
     // Advance a receiver's cursor by the units just credited to it. Payload and any trailing gap
