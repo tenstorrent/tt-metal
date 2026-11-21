@@ -1,0 +1,48 @@
+{
+ "used": [
+  {
+   "id": "DS41-311",
+   "how": "history_gather imported through importlib.import_module so the probe's monkeypatch of _pack / prefetch / gather hits the live module",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-326",
+   "how": "used to estimate the pack's host cost (~0.06 ms a prepared call on common args); measured 0.13 ms a call including the Python around it",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the profile's history_gather section is 0 under HISTORY_GATHER_HIDE: the prefetch gathers book under engram_rows and the layer gathers under attention (now DS41-328)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-57",
+   "answer": "n/a",
+   "evidence": "MB.5 is tests only: no model or serving code changed, so no program-cache key or host transfer was added. The probe runs with misses refused in its timed runs (F196), and the gate passed."
+  }
+ ],
+ "cited_only": [
+  "DS41-328"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "MB.5",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T17:31:23",
+  "head": "61bfb1b6874",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.5.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.5_no_conversion.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/MB.5.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_no_conversion_probe.py"
+  ]
+ }
+}

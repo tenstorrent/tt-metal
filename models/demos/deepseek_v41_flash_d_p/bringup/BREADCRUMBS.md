@@ -1465,3 +1465,39 @@
   models/demos/deepseek_v41_flash_d_p/tests/perf/test_mb4_history_probe.py"` (MB4_POS, MB4_SIDES); the op test:
   `resident submit --cmd "scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/test_ckv_bfp4_rows.py"`; C++: ./build_metal.sh (prepared_program).
+
+## MB.5 perf (attempt 1): ASSESSMENT, the 5120 single path at 1M without the per-chunk bf16 -> 4-bit history pack (tests only)
+- Read first: OV-57 (n/a here: no model code changes), perf_guide s1-4 and s10, MB.4 above, PB.NC (batching branch
+  48bb0ee8205: its probe, its DS41-377 owned-send swap, which does not apply here because this branch has no PB.HG
+  owned sends; `_pack(ckv, lo, hi)` returns the local record buffer and every gather reads that return value).
+- Expected saving per chunk (written before any device run). Side B skips only history_gather._pack (MB.4's one
+  ttnn.bringup.ckv_bfp4_rows call a pack). Single 5120 at 1024000 has 3 sources x (a prefetch pack of the whole history
+  plus a tail pack of 2 periods), so 6 calls. Device: -0.3..-0.8 ms of pack programs (MB.4: prefetch device 3.55 ms
+  with the pack inside it). The prefetch packs run at the first engram wait, where the device idles, so the wall sees
+  less of that. Host: -0.3..-0.5 ms (6 run_prepared calls of ~0.06 ms plus the Python around them). Expected wall:
+  0..-1 ms, which is at noise level. Outputs A vs B are identical (each record is a function of its own row).
+- Load reason: "needs the ladder's executed-layers load (layers 0-20, decode, 5120, resident engram, max_seq the
+  deployment in whole chunks) because the pack's cost exists only at a 1M history through every source layer; ONE
+  load answers both sides and both runs".
+- DECIDED (as PB.NC, OV-58 there): no Setting. The task says "tests only, never a serving switch", and tt/settings.py
+  is outside this step's paths. Side B is a monkeypatch inside the probe.
+- What (tests only, no model change): tests/perf/test_no_conversion_probe.py. It is BATCH_SHARED, with BATCH_LAYERS
+  executed and the ladder's load through test_skip_positions._runtime. The steady chunk at p (default 1024000) runs on
+  model.new_state, as test_skip_positions._point / the MB.4 probe do. Side A and side B run NOCONV_REPEAT (2) times in
+  the one load.
+  Side B: one untimed collect run (prev + timed chunk) records every cache `_pack` sees; NoConv.prepack packs each
+  slab [0, R) once (the original _pack_rows) into a HistoryBuffer of its own; then `_pack` returns that buffer and
+  launches nothing. prefetch / gather are wrapped for their device-op id ranges, because this branch has no
+  history_gather.TRACE. Asserts: diff 0, A packed (calls and device > 0), B launched no pack (device 0).
+- Measured (gate unit, one load; report results/MB.5_no_conversion.md). Wall A / B ms: 86.10 / 85.93 and 87.13 /
+  85.09. Device saved 0.49 and 0.26 ms. The pack takes 0.495 ms device and 0.76-0.82 ms host across 6 calls; side B's
+  host is 0.01 ms. Outputs A vs B are 0.0 in both runs. Against the estimate: device matched (-0.3..-0.8); host was
+  higher than expected (0.8 vs 0.3-0.5 ms); the wall moved 0.2-2 ms, inside the 2-4 ms spread (DS41-328).
+- Gotcha: the profile's history_gather section reads 0.0 on this branch. The prefetch's gathers sit inside the
+  engram_rows section (A 4.55, B 4.13 ms) and the layer gathers inside attention, so the report gives the wrapped
+  ranges' device ms instead.
+- Per-chunk values (rule 20): none touched (no model code changed).
+- Gate `gate MB.5 --check` (after the last test edit, hooks clean): PASS (probe reused, determinism 0.0).
+  `orchestrator measure --task MB.5`: rc 0 (determinism 0.0, quick rc 0, host_transfers_per_layer 0).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate MB.5 --spec $BRINGUP_SPEC --check --unit MB.5`
+  (devjob). Knobs: NOCONV_POS, NOCONV_RUNS, NOCONV_REPEAT, NOCONV_OUT (JSON, default /tmp/mb5_noconv.json).

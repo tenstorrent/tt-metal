@@ -2247,6 +2247,20 @@
   "top5_overlap": 1.0,
   "top5_overlap_limit": 0.994286
  },
+ "MB.5": {
+  "noconv_single5120_a_wall_ms_p1024000_r1": 86.1,
+  "noconv_single5120_a_wall_ms_p1024000_r1_tagentic_cc": 86.1,
+  "noconv_single5120_a_wall_ms_p1024000_r2": 87.13,
+  "noconv_single5120_a_wall_ms_p1024000_r2_tagentic_cc": 87.13,
+  "noconv_single5120_b_wall_ms_p1024000_r1": 85.93,
+  "noconv_single5120_b_wall_ms_p1024000_r1_tagentic_cc": 85.93,
+  "noconv_single5120_b_wall_ms_p1024000_r2": 85.09,
+  "noconv_single5120_b_wall_ms_p1024000_r2_tagentic_cc": 85.09,
+  "noconv_single5120_max_abs_diff_p1024000_r1": 0.0,
+  "noconv_single5120_max_abs_diff_p1024000_r1_tagentic_cc": 0.0,
+  "noconv_single5120_max_abs_diff_p1024000_r2": 0.0,
+  "noconv_single5120_max_abs_diff_p1024000_r2_tagentic_cc": 0.0
+ },
  "P.51": {
   "acks_early": 0,
   "acks_early_decoder_skip": 0,
