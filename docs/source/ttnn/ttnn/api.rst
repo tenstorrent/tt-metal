@@ -65,6 +65,18 @@ Trace
    ttnn.execute_trace
    ttnn.release_trace
 
+Command List
+************
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: class.rst
+
+   ttnn.CommandListBuilder
+   ttnn.CommandList
+   ttnn.CmdListParam
+
 Memory Config
 *************
 

@@ -25,9 +25,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-// Experimental and subject to change. Command-list parameters: what callers bind and what program factories map.
-// Program factories include this header, so it must not include tt-metalium/experimental/command_list.hpp: that
-// header declares tt::tt_metal::experimental::detail, which changes unqualified `detail::` lookup in unity builds.
+// Command-list parameters: what callers bind and what program factories map.
 
 namespace ttnn::command_list {
 

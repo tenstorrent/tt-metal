@@ -693,6 +693,7 @@ typename device_operation_t::tensor_return_value_t launch(
     // marking it aborted, so the capture does not lose the failing op and misnest everything after
     // it.
     tt::tt_metal::internal::ScopedTrackedFunction tracked_function(operation_name, operation_attributes, input_tensors);
+    detail::MarkCommandListRecordingFailedOnThrow mark_recording_failed_on_throw;
 
     detail::validate_input_tensors<device_operation_t>(operation_attributes, input_tensors);
 

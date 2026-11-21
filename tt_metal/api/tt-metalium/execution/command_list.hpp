@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -16,21 +15,12 @@
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <tt-metalium/workload/utils/table.hpp>
-#include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/optional_reference.hpp>
 #include <tt_stl/strong_type.hpp>
 
-// Experimental and subject to change: this header carries no API-stability guarantee.
-
-namespace tt::tt_metal::experimental {
-
-using distributed::MeshCommandQueue;
-using distributed::MeshDevice;
-using distributed::MeshWorkload;
+namespace tt::tt_metal {
 
 class CommandList;
 namespace detail {
@@ -95,7 +85,7 @@ struct CmdListArgPatch {
 
 /**
  * @brief Records MeshWorkloads for later replay.
- * Only one active builder may exist per MeshDevice.
+ * Only one active builder may exist per MeshDevice. Destruction releases the reservation.
  */
 class CommandListBuilder {
 public:
@@ -105,7 +95,7 @@ public:
      *
      * @param device    Mesh device to record workloads on.
      */
-    explicit CommandListBuilder(MeshDevice& device);
+    explicit CommandListBuilder(distributed::MeshDevice& device);
 
     CommandListBuilder(const CommandListBuilder&) = delete;
     CommandListBuilder& operator=(const CommandListBuilder&) = delete;
@@ -123,29 +113,10 @@ public:
      * @param parameters        Fields of @p workload that built command lists can patch with
      *                          CommandList::update_args().
      */
-    void add(MeshCommandQueue& binary_upload_cq, MeshWorkload& workload, const CmdListParameters& parameters = {});
-
-    /**
-     * @brief Records one Tensor prefetcher request without sending it.
-     * Takes the same arguments and has the same preconditions as QueueTensorPrefetcherRequest(), and serializes the
-     * request now. Every EnqueueCommandList() of a built list re-queues the recorded requests, in the order they were
-     * recorded, before it enqueues the list's workloads.
-     *
-     * A list replays only these requests. WaitForCqOnTensorPrefetcher() cannot be recorded: it takes effect when
-     * called, so data the requests read, including a group selector's mask, must be written and fenced before the
-     * replay.
-     *
-     * Built lists can be replayed only while the Tensor prefetcher that was active here is still running. Keep the
-     * tensors and pipes alive until it stops.
-     *
-     * @param prefetcher_pipes  See QueueTensorPrefetcherRequest().
-     * @param device_subset     See QueueTensorPrefetcherRequest().
-     * @param input_tensors     See QueueTensorPrefetcherRequest().
-     */
-    void add_tensor_prefetcher_request(
-        const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
-        ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
-        const std::vector<TensorPrefetcherInput>& input_tensors);
+    void add(
+        distributed::MeshCommandQueue& binary_upload_cq,
+        distributed::MeshWorkload& workload,
+        const CmdListParameters& parameters = {});
 
     /**
      * @brief Builds an independent command list bound to @p cq.
@@ -155,12 +126,12 @@ public:
      * @param cq    Command queue the resulting list is bound to.
      * @return Move-only handle to the recorded command list.
      */
-    CommandList build(MeshCommandQueue& cq) const;
+    CommandList build(distributed::MeshCommandQueue& cq) const;
 
     /**
      * @brief Mesh device this builder records on.
      */
-    MeshDevice& device() const;
+    distributed::MeshDevice& device() const;
 
     /**
      * @brief Clears all recorded workloads and Tensor prefetcher requests.
@@ -168,10 +139,9 @@ public:
     void clear();
 
     /**
-     * @brief Releases the active-builder reservation and invalidates the builder.
-     * Repeated calls have no effect.
+     * @brief Implementation object, for Metal's experimental extensions of the builder. Not part of the stable API.
      */
-    void deallocate();
+    detail::CommandListBuilderImpl& impl();
 
 private:
     std::unique_ptr<detail::CommandListBuilderImpl> impl_;
@@ -192,12 +162,12 @@ public:
     /**
      * @brief Mesh device this command list was built for.
      */
-    MeshDevice& device() const;
+    distributed::MeshDevice& device() const;
 
     /**
-     * @brief Command-queue id this list is bound to.
+     * @brief Command queue this list is bound to.
      */
-    uint8_t cq_id() const;
+    distributed::MeshCommandQueue& command_queue() const;
 
     /**
      * @brief Patches parameters for all later replays.
@@ -210,16 +180,10 @@ public:
      */
     void update_args(const CmdListArgPatch& patch, bool blocking = false);
 
-    /**
-     * @brief Releases device resources and invalidates the handle.
-     * Repeated calls have no effect.
-     */
-    void deallocate();
-
 private:
     friend class detail::CommandListBuilderImpl;
     friend void EnqueueCommandList(
-        MeshCommandQueue& cq, CommandList& command_list, bool blocking, bool check_dram_overlap);
+        distributed::MeshCommandQueue& cq, CommandList& command_list, bool blocking, bool check_dram_overlap);
 
     /**
      * @brief Replays on the command queue used by build().
@@ -264,6 +228,6 @@ private:
  *                              (watcher and DPRINT change kernel binary sizes).
  */
 void EnqueueCommandList(
-    MeshCommandQueue& cq, CommandList& command_list, bool blocking, bool check_dram_overlap = false);
+    distributed::MeshCommandQueue& cq, CommandList& command_list, bool blocking, bool check_dram_overlap = false);
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal
