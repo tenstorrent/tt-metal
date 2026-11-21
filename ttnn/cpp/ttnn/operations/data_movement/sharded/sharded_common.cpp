@@ -78,8 +78,9 @@ compute_width_sharding_reshard_segments(
             // The last core might have some garbage in it because of uneven shards
             is_final_transfer = (current_local_core_idx >= local_cores.size() - 1) &&
                                 (current_remote_core_idx >= remote_cores.size() - 1);
-            const uint32_t transfer_size =
-                is_final_transfer ? remaining_output : std::min(remaining_input, remaining_output);
+            // Never transfer more than the local slot holds: a longer final transfer overruns the local shard
+            // (the last stick runs past the end of the buffer) and lands the remote's padding on the next stick.
+            const uint32_t transfer_size = std::min(remaining_input, remaining_output);
 
             const auto bank_id = device.allocator()->get_bank_ids_from_logical_core(
                 remote_buffer_type, remote_cores[current_remote_core_idx])[0];
