@@ -224,6 +224,8 @@ case "${MODEL}" in
     SC1_NUM_LAYERS=24
     SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+    # EXPERIMENT branch: room for the full-layer push path's extra semaphores (2048 B ran out).
+    RUNNER_ENV+=" export PREFILL_L1_SMALL_SIZE=3072;"
     # The golden is the 8192-token prompt of a vLLM capture, and its span bounds the compare, so no
     # length cap is needed: as for kimi_k3, the span is PCC'd and the tail is timed. Two chunks, so the
     # gate reads one chunk's KV from the next.
