@@ -176,7 +176,69 @@ void kernel_main() {
             cb_pop_front(cb_q_mc, Dt);
         }
     };
-    for (uint32_t i = 0; i < layers * n_act; i++) {
+    // rows 0..heads-1 of user (active index) k's output into row u of the staged tiles, then (the layer's last
+    // user) the layer's output to the streamers
+    auto stage_out = [&](uint32_t it) {
+        const uint32_t k = it % n_act, u = act.row[k];
+        cb_wait_front(cb_out, Dt);
+        mark_it(it, 3);
+        const uint32_t out = get_read_ptr(cb_out);
+        for (uint32_t h = 0; h < heads; h++) {
+            for (uint32_t d = 0; d < Dt; d++) {
+                const uint32_t src = out + d * kTile + row_offset(h);
+                const uint32_t dst =
+                    stage + ((u / users) * heads * Dt + h * Dt + d) * kRowTile + user_offset(u % users);
+                noc_async_read(get_noc_addr(src), dst, kFaceRow);
+                noc_async_read(get_noc_addr(src + kFace), dst + batch * kFaceRow, kFaceRow);
+            }
+        }
+        noc_async_read_barrier();
+        mark_it(it, 4);
+        cb_pop_front(cb_out, Dt);
+        if (k + 1 == n_act) {
+            layer_out(it / n_act);
+        }
+    };
+    for (uint32_t i = 0; kLeadPipelined && i < layers * n_act; i++) {
+        const uint32_t k = i % n_act;
+        mark_it(i, 0);
+        if (k == 0) {
+            send_q(i);
+        }
+        noc_semaphore_wait_min(m_sem, active * (i + 1));
+        mark_it(i, 1);
+        invalidate_l1_cache();  // the slots are written by other cores
+        {
+            volatile tt_l1_ptr uint16_t* out = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(M_addr);
+            for (uint32_t h = 0; h < qrows; h++) {
+                const uint32_t at = h < 16 ? h * 16 : 256 + (h - 16) * 16;
+                uint16_t best = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(m_slots)[at];
+                for (uint32_t w = 1; w < active; w++) {
+                    const uint16_t v = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(m_slots + w * kMSlot)[at];
+                    if (key(v) > key(best)) {
+                        best = v;
+                    }
+                }
+                out[h < 16 ? h * 16 : 512 + (h - 16) * 16] = best;
+            }
+        }
+        noc_async_write_multicast(M_addr, mc_M, top_faces ? heads * kFaceRow : kTile, mc_dests);
+        noc_async_write_barrier();
+        *M_sem = i + 1;
+        noc_semaphore_set_multicast(get_semaphore(sem_M), mc_M_sem, mc_dests);
+        mark_it(i, 2);
+        if (k + 1 < n_act) {
+            send_q(i + 1);
+        }
+        // the previous user's output (its reduction ran while this user scored), and the layer's last user's own
+        if (k > 0) {
+            stage_out(i - 1);
+        }
+        if (k + 1 == n_act) {
+            stage_out(i);
+        }
+    }
+    for (uint32_t i = 0; !kLeadPipelined && i < layers * n_act; i++) {
         const uint32_t l = i / n_act, k = i % n_act, u = act.row[k];
         mark_it(i, 0);
         // q to the workers (a later user's q goes out as soon as the workers have this user's scores)

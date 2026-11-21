@@ -143,8 +143,10 @@ void kernel_main() {
         }
         cb_wait_front(out_cb, kPart);
         const uint32_t src = get_read_ptr(out_cb);
+        // (kLeadPipelined: a group head writes iteration i's partial into half i & 1 of the leader's slots)
+        const uint32_t dst0 = part_dst + (kLeadPipelined && px == lx && py == ly ? (i & 1) * fanin * kPart * kTile : 0);
         for (uint32_t d = 0; d < kPart; d++) {
-            noc_async_write(src + d * kTile, get_noc_addr(px, py, part_dst + d * kTile), kPartBytes);
+            noc_async_write(src + d * kTile, get_noc_addr(px, py, dst0 + d * kTile), kPartBytes);
         }
         noc_async_write_barrier();
         noc_semaphore_inc(part_sem, 1);

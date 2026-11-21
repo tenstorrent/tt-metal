@@ -170,6 +170,10 @@ constexpr uint32_t kQPasses = (kUsers + kQPerPass - 1) / kQPerPass;
 constexpr uint32_t kRopeQPass = 3 * batch * groups;
 constexpr uint32_t kRopeLead = kRopePages + (kLeadBatched ? 3 * kQPasses : 0);  // the leader's cb_rope pages
 constexpr uint32_t cb_qstage = 41;  // leader writer: one user's q rows for the multicast (kLeadBatched)
+// row groups: the leader writer sends user k's M (and q of k + 1) before it stages k - 1's output; the leader's partial
+// slots (cb_parts) hold two iterations, the group heads write iteration i's at half i & 1. M(k + 1) goes out only
+// after out(k - 1) is staged, i.e. after the leader compute consumed partials(k - 1) — the half k + 1 reuses.
+constexpr bool kLeadPipelined = kLeadBatched;
 constexpr uint32_t cb_knew = 18;    // normalized + rotated k row (row 0)
 constexpr uint32_t cb_tail8 = 31;   // tail core: tail k | v tiles as read from DRAM (2 Dt bf8)
 constexpr uint32_t cb_rowsel = 12;  // tail core: per user R (ones in row r), 1 - R (packed: per tail tile the

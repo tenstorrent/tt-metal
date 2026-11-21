@@ -1318,7 +1318,15 @@ class ResidentModel:
                 cb(8, work_grid, Dt + 1),
                 # (row groups: up to 32 users' words, the -inf rows at 256 and the positions at 512)
                 cb(10, work_grid, 1, ttnn.uint32, 1088 if packed or groups > 1 else 256),
-                cb(23, attn_grid, slots_per_node * (Dt + 1)),
+                *(
+                    [cb(23, attn_grid, slots_per_node * (Dt + 1))]
+                    if groups == 1
+                    # (row groups: the leader's slots hold two iterations, attn_common.hpp kLeadPipelined)
+                    else [
+                        cb(23, work_grid, slots_per_node * (Dt + 1)),
+                        cb(23, lead_grid, 2 * slots_per_node * (Dt + 1)),
+                    ]
+                ),
                 cb(25, attn_grid, Dt + 1),
                 # leader and tail core
                 cb(13, prep_grid, Dt),
@@ -1339,7 +1347,7 @@ class ResidentModel:
                 cb(15, lead_grid, Dt),
                 cb(24, lead_grid, 2 * Dt),
                 cb(26, lead_grid, 2 * Dt),
-                cb(27, lead_grid, Dt),
+                cb(27, lead_grid, Dt if groups == 1 else 2 * Dt),
                 cb(30, lead_grid, 1),
                 *([cb(7, lead_grid, 1, ttnn.uint32, 64)] if self.rows else []),  # the token state head
                 *([cb(41, lead_grid, Dt)] if groups > 1 else []),  # (row groups: the staged q, attn_common.hpp)
