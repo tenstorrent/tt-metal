@@ -19,8 +19,17 @@ namespace x280::detail {
 // tile outlives the registry it is reached from.
 class ActiveSessionImpl {
 public:
-    ActiveSessionImpl(TileImpl& tile, SessionId id, uint64_t run_value, std::chrono::milliseconds cleanup_timeout) :
-        tile_(tile), id_(id), run_value_(run_value), cleanup_timeout_(cleanup_timeout) {}
+    ActiveSessionImpl(
+        TileImpl& tile,
+        SessionId id,
+        uint64_t run_value,
+        std::chrono::milliseconds cleanup_timeout,
+        bool revive_on_cleanup_timeout = false) :
+        tile_(tile),
+        id_(id),
+        run_value_(run_value),
+        cleanup_timeout_(cleanup_timeout),
+        revive_on_cleanup_timeout_(revive_on_cleanup_timeout) {}
 
     SessionId id() const { return id_; }
     const TileIdentity& tile() const { return tile_.id(); }
@@ -73,10 +82,19 @@ private:
         std::chrono::milliseconds timeout,
         std::string error = {});
 
+    // A timed-out restoration of a session that opted in: revive all four
+    // harts, which also releases the slot and sets the health latch. Returns
+    // Revived, or `outcome` with the failed revive attached.
+    CleanupResult escalate_cleanup(
+        CleanupOutcome outcome,
+        const std::array<HartState, kHartsPerTile>& hartstates,
+        std::chrono::milliseconds timeout);
+
     TileImpl& tile_;
     SessionId id_;
     uint64_t run_value_;
     std::chrono::milliseconds cleanup_timeout_;
+    bool revive_on_cleanup_timeout_ = false;
 
     // Set once a cleanup() has claimed this session, and never cleared: the
     // claimant erases the session from the registry instead. Guarded by

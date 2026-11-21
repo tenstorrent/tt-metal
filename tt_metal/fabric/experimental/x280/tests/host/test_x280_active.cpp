@@ -408,6 +408,7 @@ TEST(CleanupOutcome, EveryOutcomeRendersDistinctly) {
         CleanupOutcome::UnknownSession,
         CleanupOutcome::AlreadyRestoring,
         CleanupOutcome::Failed,
+        CleanupOutcome::Revived,
     };
 
     for (const CleanupOutcome outcome : outcomes) {
@@ -424,4 +425,172 @@ TEST(CleanupOutcome, EveryOutcomeRendersDistinctly) {
                 << "outcomes " << left << " and " << right;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Revive
+// ---------------------------------------------------------------------------
+
+TEST(CleanupOutcome, ARevivedSessionIsCleanedUpAndStillDistinguishable) {
+    CleanupResult result;
+    result.outcome = CleanupOutcome::ReturnedToIdle;
+    EXPECT_TRUE(result.cleaned_up());
+    result.outcome = CleanupOutcome::Revived;
+    EXPECT_TRUE(result.cleaned_up());
+    EXPECT_STRNE(to_string(CleanupOutcome::Revived), to_string(CleanupOutcome::ReturnedToIdle));
+    for (const auto outcome :
+         {CleanupOutcome::StillRunningActiveFw,
+          CleanupOutcome::IdleNotReArmed,
+          CleanupOutcome::InvalidObservation,
+          CleanupOutcome::Failed}) {
+        result.outcome = outcome;
+        EXPECT_FALSE(result.cleaned_up()) << to_string(outcome);
+    }
+}
+
+TEST(CleanupOutcome, OnlyAHartThatDidNotAnswerEscalatesToRevive) {
+    EXPECT_TRUE(cleanup_escalates_to_revive(CleanupOutcome::StillRunningActiveFw));
+    EXPECT_TRUE(cleanup_escalates_to_revive(CleanupOutcome::IdleNotReArmed));
+    // An unreadable tile is never written, and a failed transport is not a
+    // hart that ignored STOP.
+    for (const auto outcome :
+         {CleanupOutcome::ReturnedToIdle,
+          CleanupOutcome::ReturnAcknowledgementFailed,
+          CleanupOutcome::InvalidObservation,
+          CleanupOutcome::UnknownSession,
+          CleanupOutcome::AlreadyRestoring,
+          CleanupOutcome::Failed,
+          CleanupOutcome::Revived}) {
+        EXPECT_FALSE(cleanup_escalates_to_revive(outcome)) << to_string(outcome);
+    }
+}
+
+TEST(ReviveOutcome, EveryOutcomeRendersDistinctly) {
+    constexpr ReviveOutcome outcomes[] = {
+        ReviveOutcome::Revived,
+        ReviveOutcome::NotResponding,
+        ReviveOutcome::NotReArmed,
+        ReviveOutcome::NotInstalled,
+        ReviveOutcome::NotReleased,
+        ReviveOutcome::Busy,
+        ReviveOutcome::WrongRuntime,
+        ReviveOutcome::InvalidRequest,
+        ReviveOutcome::InvalidObservation,
+        ReviveOutcome::Failed,
+    };
+    for (size_t left = 0; left < std::size(outcomes); ++left) {
+        ASSERT_NE(to_string(outcomes[left]), nullptr);
+        EXPECT_STRNE(to_string(outcomes[left]), "");
+        for (size_t right = left + 1; right < std::size(outcomes); ++right) {
+            EXPECT_STRNE(to_string(outcomes[left]), to_string(outcomes[right]));
+        }
+    }
+    ReviveResult result;
+    result.outcome = ReviveOutcome::Revived;
+    EXPECT_TRUE(result.revived());
+    result.outcome = ReviveOutcome::NotResponding;
+    EXPECT_FALSE(result.revived());
+}
+
+TEST(ReviveRequest, RefusesAnEmptyOrForeignMaskAndANonPositiveTimeout) {
+    EXPECT_TRUE(validate_revive_request(ReviveRequest{}, false).ok);
+    EXPECT_TRUE(validate_revive_request(ReviveRequest{.hart_mask = 0x2}, false).ok);
+    EXPECT_FALSE(validate_revive_request(ReviveRequest{.hart_mask = 0}, false).ok);
+    EXPECT_FALSE(validate_revive_request(ReviveRequest{.hart_mask = 0x10}, false).ok);
+    EXPECT_FALSE(validate_revive_request(ReviveRequest{.hart_mask = 0x1F}, false).ok);
+    EXPECT_FALSE(
+        validate_revive_request(ReviveRequest{.hart_mask = 0xF, .timeout = std::chrono::milliseconds{0}}, false).ok);
+    EXPECT_FALSE(
+        validate_revive_request(ReviveRequest{.hart_mask = 0xF, .timeout = std::chrono::milliseconds{-1}}, false).ok);
+}
+
+TEST(ReviveRequest, ALiveSessionNeedsEveryHart) {
+    EXPECT_TRUE(validate_revive_request(ReviveRequest{.hart_mask = kAllHartsMask}, true).ok);
+    const auto partial = validate_revive_request(ReviveRequest{.hart_mask = 0x7}, true);
+    EXPECT_FALSE(partial.ok);
+    EXPECT_FALSE(partial.reason.empty());
+}
+
+TEST(ReviveTrigger, SetsAndClearsOnlyTheSelectedBits) {
+    EXPECT_EQ(rnmi_trigger_set(0x0, 0x2), 0x2u);
+    EXPECT_EQ(rnmi_trigger_set(0x8, 0x3), 0xBu);
+    EXPECT_EQ(rnmi_trigger_clear(0xB, 0x3), 0x8u);
+    EXPECT_EQ(rnmi_trigger_clear(0x0, 0xF), 0x0u);
+}
+
+namespace {
+
+HartState resident_idle(uint32_t hart_id) {
+    HartState hart;
+    hart.hart_id = hart_id;
+    hart.observation_valid = true;
+    hart.state.protocol_version = X280_HART_PROTOCOL_VERSION;
+    hart.state.heartbeat = X280_HART_IDLE_HEARTBEAT(hart_id);
+    hart.state.phase = X280_HART_PHASE_IDLE;
+    return hart;
+}
+
+}  // namespace
+
+TEST(ReviveHart, AcknowledgedOnlyWhenTheCountMoved) {
+    auto hart = resident_idle(1);
+    hart.state.revive_count = 4;
+    EXPECT_FALSE(hart_revive_acknowledged(hart, 4));
+    EXPECT_TRUE(hart_revive_acknowledged(hart, 3));
+    // Wraps like any sequence word.
+    hart.state.revive_count = 0;
+    EXPECT_TRUE(hart_revive_acknowledged(hart, 0xFFFFFFFFu));
+    // An unreadable record acknowledges nothing.
+    hart.observation_valid = false;
+    EXPECT_FALSE(hart_revive_acknowledged(hart, 0xFFFFFFFFu));
+}
+
+TEST(ReviveHart, RevivedNeedsResidentIdleAfterTheAcknowledgement) {
+    auto hart = resident_idle(2);
+    hart.state.revive_count = 1;
+    hart.state.stage = X280_HART_STAGE_REVIVED;
+    EXPECT_TRUE(hart_revived(hart, 0));
+    // Not yet re-armed: the handler clears the phase before it acknowledges.
+    hart.state.phase = 0;
+    EXPECT_FALSE(hart_revived(hart, 0));
+    hart.state.phase = X280_HART_PHASE_IDLE;
+    // A trap record the handler did not clear is not resident idle.
+    hart.trap.trap_valid = 1;
+    EXPECT_FALSE(hart_revived(hart, 0));
+}
+
+TEST(ReviveHart, RenderingCarriesWhereTheHartWas) {
+    auto hart = resident_idle(0);
+    EXPECT_FALSE(mentions(describe(hart), "revived"));
+    hart.state.revive_count = 1;
+    hart.state.revive_epc = 0x8001234;
+    hart.state.revive_cause = 0x8000000000000002ull;
+    const auto text = describe(hart);
+    EXPECT_TRUE(mentions(text, "revived(count=1")) << text;
+    EXPECT_TRUE(mentions(text, "epc=0x8001234")) << text;
+}
+
+TEST(ReviveResult, RenderingNamesEveryRequestedHart) {
+    ReviveResult result;
+    result.outcome = ReviveOutcome::NotResponding;
+    for (uint32_t hart = 0; hart < kHartsPerTile; ++hart) {
+        result.harts[hart].hart_id = hart;
+    }
+    result.harts[1].requested = true;
+    result.harts[1].acknowledged = true;
+    result.harts[1].revive_epc = 0x8001100;
+    result.harts[3].requested = true;
+    const auto text = describe(result);
+    EXPECT_TRUE(mentions(text, "not_responding")) << text;
+    EXPECT_TRUE(mentions(text, "hart 1 revived epc=0x8001100")) << text;
+    EXPECT_TRUE(mentions(text, "hart 3 no-ack")) << text;
+    EXPECT_FALSE(mentions(text, "hart 0")) << text;
+}
+
+TEST(ActiveMailbox, ReviveFieldsUseTheFormerlyReservedBytes) {
+    EXPECT_EQ(offsetof(x280_hart_state_t, revive_count), X280_HART_STATE_REVIVE_COUNT_OFFSET);
+    EXPECT_EQ(offsetof(x280_hart_state_t, revive_epc), X280_HART_STATE_REVIVE_EPC_OFFSET);
+    EXPECT_EQ(offsetof(x280_hart_state_t, revive_cause), X280_HART_STATE_REVIVE_CAUSE_OFFSET);
+    EXPECT_EQ(sizeof(x280_hart_state_t), X280_HART_RECORD_STRIDE);
+    EXPECT_EQ(X280_HART_STAGE_REVIVED, 6u);
 }

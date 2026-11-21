@@ -14,6 +14,7 @@
 #include "x280_hart_protocol.h"
 
 #include <array>
+#include <cstring>
 
 namespace x280 {
 
@@ -283,6 +284,21 @@ int l2cpu_reset_bit(int hw_index) {
         return -1;
     }
     return hw_index + 4;
+}
+
+}  // namespace x280
+
+namespace x280 {
+
+bool idle_rnmi_marker_matches(uint64_t marker) { return marker == X280_IDLE_RNMI_MAGIC; }
+
+bool idle_image_has_rnmi_entry(const uint8_t* image, size_t size) {
+    if (image == nullptr || size < X280_IDLE_RNMI_EXC_OFFSET + sizeof(uint32_t)) {
+        return false;
+    }
+    uint64_t marker = 0;
+    std::memcpy(&marker, image + X280_IDLE_RNMI_MAGIC_OFFSET, sizeof(marker));
+    return idle_rnmi_marker_matches(marker);
 }
 
 }  // namespace x280
