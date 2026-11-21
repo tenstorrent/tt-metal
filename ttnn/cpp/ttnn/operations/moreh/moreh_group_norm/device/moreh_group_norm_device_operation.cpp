@@ -70,6 +70,10 @@ void MorehGroupNormOperation::validate_tensors(
 
 void MorehGroupNormOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    TT_FATAL(
+        operation_attributes.are_required_outputs.size() == 3,
+        "are_required_outputs must have exactly 3 elements (for output, mean, rstd), got {}",
+        operation_attributes.are_required_outputs.size());
     validate_tensors(operation_attributes, tensor_args);
 };
 
