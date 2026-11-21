@@ -82,8 +82,10 @@ ROUTED_PREFILL_NUM_EXPERTS = 32
 ROUTED_PREFILL_MIN_SEQ_DEFAULT = 128
 # Tokens per routed chunk: bounds the dispatch / expert-output buffers ([4C, H] bf16 per device). 16384 vs 8192
 # measured 16K 583.2 -> 565.2 ms, 32K 1288.2 -> 1277.4, 64K 3027.4 -> 3004.9, 128K 8085.9 -> 8047.6 (fewer per-chunk
-# fixed costs); DRAM at 128K: min free 19.4 -> 19.2 GiB per device (L10 lever c).
-ROUTED_PREFILL_CHUNK_DEFAULT = 16384
+# fixed costs); DRAM at 128K: min free 19.4 -> 19.2 GiB per device (L10 lever c). 32768 vs 16384 (one-copy tree, BH 1x4,
+# TP experts): b1 32K 747.1 -> 714.0 ms, 64K 1870.6 -> 1852.4, 128K 5397.7 -> 5364.6; b32 1K 603.8 -> 591.6,
+# 8K 4922 -> 4834.5 (14.6 GB DRAM still free per device with the 32 x 64K KV cache).
+ROUTED_PREFILL_CHUNK_DEFAULT = 32768
 # Chunks of at most this many tokens take their [C, C] prefix-sum operator from a shared [8192, 8192] constant, longer
 # ones from the [chunk, chunk] one, so an 8K prompt reads the 8192 operator in place instead of a per-layer slice copy
 # of the larger one (measured +6 ms TTFT at 8K with only the 16384 operator).
