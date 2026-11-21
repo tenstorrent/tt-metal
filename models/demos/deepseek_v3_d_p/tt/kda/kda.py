@@ -299,6 +299,13 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # The decay gate's matmul (K = 128) leaves in BF16 through an FP32 bias and sigmoid: HiFi3 keeps it as accurate.
+        self.decay_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi3,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         self.input_projection_math_fidelity = program_config.input_projection_math_fidelity
         self.input_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -573,7 +580,7 @@ class ttKDA:
             program_config=self.decay_program_config,
             memory_config=self.decay_memory_config,
             dtype=ttnn.bfloat16,
-            compute_kernel_config=self.compute_config,
+            compute_kernel_config=self.decay_compute_config,
             in0_column_offset=decay_rank_offset,
         )
         if not self._bounded_gate:
