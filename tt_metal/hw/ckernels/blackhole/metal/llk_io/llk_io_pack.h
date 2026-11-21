@@ -25,8 +25,12 @@ constexpr bool llk_pack_sdpa_joint() {
     for (std::uint32_t i = 24; i < sizeof(pack_dst_format); i++) {
         high = high || pack_dst_format[i] != to_underlying(DataFormat::Invalid);
     }
-    // joint_sdpa leaves CB 4 unused; sparse_sdpa and sdpa configure it
-    return llk_pack_sdpa_api<dep * 0 + 1>::value && high && pack_dst_format[4] == to_underlying(DataFormat::Invalid);
+    // joint_sdpa leaves CBs 4, 6 and 8-15 unused; sdpa, sparse_sdpa and flash_decode configure some of them
+    bool mid = pack_dst_format[4] != to_underlying(DataFormat::Invalid) || pack_dst_format[6] != to_underlying(DataFormat::Invalid);
+    for (std::uint32_t i = 8; i < 16; i++) {
+        mid = mid || pack_dst_format[i] != to_underlying(DataFormat::Invalid);
+    }
+    return llk_pack_sdpa_api<dep * 0 + 1>::value && high && !mid;
 }
 }  // namespace ckernel::packer
 
