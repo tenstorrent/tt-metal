@@ -108,7 +108,6 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    timeout-minutes: ${{ matrix.test-group.timeout }}
     container:
       image: ${{ inputs.docker-image }}
       options: "--label runner-mode=sim"
@@ -140,6 +139,7 @@ jobs:
 
       - name: Run tests
         shell: bash
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         working-directory: ${{ env.LLK_PATH }}
         env:
           CHIP_ARCH: quasar
