@@ -27,8 +27,69 @@ sfpi_inline sfpi::vFloat _softcap_reciprocal_(const sfpi::vFloat a) {
     return y * -t - 0.0f;
 }
 
+// The kernel for |beta| >= 2^93.
+template <bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void calculate_softcap_wide_scale(std::uint32_t param0) {
+    // |beta| >= 2^93: the clamp and t at 2^-64 times |x|, against 2^64 / |beta|.
+    sfpi::vFloat input_inverse =
+        _softcap_reciprocal_(sfpi::setsgn(sfpi::vFloat(Converter::as_float(param0)), 0) * 5.421010862427522e-20f);
+    sfpi::vFloat input_bound = sfpi::setsgn(sfpi::vFloat(Converter::as_float(param0)), 0) * 2.642742795433417e-19f;
+    // A loop, not unrolled: a rare scale's code stays small.
+#pragma GCC unroll 1
+    for (int d = 0; d < ITERATIONS; d++) {
+        asm volatile("" : "+r"(d));
+        sfpi::vFloat input_x = sfpi::dst_reg[0];
+        auto [input_c, input_m] = sfpi::min_max(sfpi::setsgn(input_x, 0 /*sgn*/) * 5.421010862427522e-20f, input_bound);
+        sfpi::vFloat input_t = input_c * input_inverse;
+        sfpi::vFloat input_s = input_t * input_t;
+        sfpi::vFloat num = sfpi::setsgn(input_x, 0 /*sgn*/) * 16777216.0f;
+        v_if(input_c >= 2147483648.0f) { num = input_c * 5.764607523034235e+17f; }
+        v_endif;
+        num = sfpi::copysgn(num, input_x);
+        // 0, or NaN where an input is NaN: -(|x0| + |x1|) is otherwise at most 0, and SFPSWAP ranks the
+        // multiply-add's positive NaN above 0.
+        sfpi::vFloat nan_z = sfpi::max(input_m * -1.0f + 0.0f, 0.0f);
+        sfpi::vFloat pk = 0.000690968707203865f;
+        sfpi::vFloat pc = 0.1031409502029419f;
+        sfpi::vFloat p0 = input_s * pk + pc;
+        p0 = p0 * input_s + 1.0f;
+        num = num * p0;
+        sfpi::vFloat qk = 0.013031005859375f;
+        sfpi::vFloat qc = 0.436279296875f;
+        sfpi::vFloat q0 = input_s * qk + qc;
+        q0 = q0 * input_s + 1.0f;
+        sfpi::vFloat den = q0;
+        sfpi::vFloat out = num * _softcap_reciprocal_(den) + nan_z;
+        // out is 2^24 times the result: round it to BF16 while it is normal, then scale back.
+        if constexpr (!is_fp32_dest_acc_en) {
+            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
+            v_if(sfpi::setsgn(sfpi::vFloat(sfpi::dst_reg[0]), 0) >= 3.961408125713217e+28f) { out = out * 32.0f; }
+            v_else { out = out * 5.960464477539063e-08f; }
+            v_endif;
+        } else {
+            sfpi::vFloat lowered = out * 5.960464477539063e-08f;
+            v_if(sfpi::setsgn(sfpi::vFloat(sfpi::dst_reg[0]), 0) >= 3.961408125713217e+28f) { lowered = out * 32.0f; }
+            v_endif;
+            // Below the smallest normal the scaled result flushes; where the pack would round it
+            // to the smallest normal, keep that.
+            sfpi::vFloat magnitude = sfpi::setsgn(out, 0 /*sgn*/);
+            v_if(magnitude >= 1.9644485432749806e-31f && magnitude < 1.9721522630525295e-31f) {
+                lowered = sfpi::copysgn(sfpi::vFloat(1.1754943508222875e-38f), out);
+            }
+            v_endif;
+            out = lowered;
+        }
+        sfpi::dst_reg[0] = out;
+        sfpi::dst_reg++;
+    }
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_softcap(std::uint32_t param0, std::uint32_t param1) {
+    if ((param0 & 0x7fffffffu) >= 0x6e000000u) {
+        calculate_softcap_wide_scale<is_fp32_dest_acc_en, ITERATIONS>(param0);
+        return;
+    }
     // |x| is held at |beta| * 4.875.
     sfpi::vFloat input_inverse = Converter::as_float(param1);
     sfpi::vFloat input_bound = sfpi::setsgn(sfpi::vFloat(Converter::as_float(param0)), 0) * 4.875f;

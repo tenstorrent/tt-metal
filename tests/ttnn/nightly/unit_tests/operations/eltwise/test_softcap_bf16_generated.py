@@ -10,7 +10,7 @@ import ttnn
 from tt_py_test_utils_common.utility_functions import is_blackhole
 
 
-_GENERATED_SOFTCAP_VALUES = [1.52587890625e-05, 4.0, 5.0, 25.0, 30.0, 50.0, 65536.0]
+_GENERATED_SOFTCAP_VALUES = [1.52587890625e-05, 4.0, 5.0, 25.0, 30.0, 50.0, 65536.0, 1e30, 3e38]
 
 
 _GENERATED_SOFTCAP_CLASSES = {

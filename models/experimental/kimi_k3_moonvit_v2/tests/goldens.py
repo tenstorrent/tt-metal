@@ -4,7 +4,7 @@
 
 """Full-size reference outputs, generated once on the CPU and read back by the full-size device tests.
 
-At the full padded length (65,536 patches) the reference takes minutes per layer, so the outputs
+At full size (256x256, 65,536 patches) the reference takes minutes per layer, so the outputs
 are saved instead of recomputed. One folder per case under `$MOONVIT_GOLDEN_DIR`:
 
     patch_embed.pt         `vision_tower.patch_embed(pixels, grid_thws)`
@@ -70,7 +70,7 @@ REFERENCE_FILES = (
     "config.json",
 )
 CHUNK_SIZE = 2048
-# Query rows per chunk in `use_sampled_attention`: it runs against all 65,536 keys, so smaller chunks.
+# Query rows per chunk in `use_sampled_attention`: it runs against every key of a full-size image, so smaller chunks.
 SAMPLED_CHUNK_SIZE = 256
 # The bf16 model's RMSNorm eps (`nn.RMSNorm(eps=None)` on bf16 input), kept when running in fp32. The
 # device uses the same value (`MoonViTConfig.norm_eps`).

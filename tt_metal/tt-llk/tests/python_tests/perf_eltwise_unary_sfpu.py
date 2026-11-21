@@ -382,6 +382,21 @@ def test_perf_eltwise_unary_sfpu_comp_uint32(
 @skip_for_wormhole
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.QuickGelu],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=_EXTRA_SLICE_DIMS,
+)
+def test_perf_eltwise_unary_sfpu_quick_gelu(
+    perf_report, formats, mathop, dest_acc, input_dimensions
+):
+    _extra_slice_run(perf_report, formats, mathop, dest_acc, False, input_dimensions)
+
+
+@pytest.mark.perf
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
     mathop=[MathOperation.Softcap],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_dimensions=_EXTRA_SLICE_DIMS,

@@ -5,7 +5,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <buffer_types.hpp>
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <device.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
@@ -102,6 +102,8 @@ uint32_t checked_l1_address(DeviceAddr address, std::string_view what) {
 struct PrefetcherPipePageCommon {
     const PrefetcherPipeConfigPageLayout& layout;
     uint32_t l1_alignment;
+    // Credit-lane slots each receiver has in either credit block (the space's lane capacity).
+    uint32_t credit_lane_capacity;
     uint32_t num_receivers;
     uint32_t data_base_addr;
     uint32_t ring_size;
@@ -144,7 +146,8 @@ std::vector<uint32_t> build_receiver_config_page(
     CoreCoord sender_noc_xy) {
     std::vector<uint32_t> page(common.layout.page_size / sizeof(uint32_t), 0);
     uint32_t i = write_shared_config_words(page, common, false);
-    const uint32_t slot = receiver_index * common.l1_alignment;
+    // This receiver's lane-0 slot in each credit block, at the allocated lane stride.
+    const uint32_t slot = receiver_index * common.credit_lane_capacity * common.l1_alignment;
     page[i++] = common.layout.sent_offset + slot;
     page[i++] = common.layout.acked_offset + slot;
     page[i++] = peer_counter_offset;
@@ -604,10 +607,9 @@ void PrefetcherPipeSpaceImpl::set_dram_sender_cores(std::span<const CoreCoord> d
     }
     validate_dram_senders_across_mesh(device_, sender_mapping);
 
-    const auto& hal = device_->impl().metal_env().get_hal();
     TT_FATAL(
-        hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
-        "set_dram_sender_cores requires programmable DRAM cores");
+        device_->impl().dram_sender_placement().has_value(),
+        "set_dram_sender_cores: this device runs no DRAM-sender endpoints");
     const uint32_t alignment = config_page_alignment_for(device_);
 
     // Reserve each sender's state before a pipe on it is carved. A later carve on that sender only
@@ -858,14 +860,18 @@ std::vector<CoreCoord> PrefetcherPipeImpl::dram_sender_receiver_table() const {
 }
 
 void PrefetcherPipeImpl::build_dram_sender_config_pages() {
-    TT_FATAL(space_->credit_lane_capacity() == 1, "DRAM-sender PrefetcherPipes support one credit lane per receiver");
+    // A DRAM sender credits one lane per receiver, but its pages keep the space's lane stride, which is
+    // what the device addresses credit slots by.
+    TT_FATAL(num_credit_lanes_ == 1, "DRAM-sender PrefetcherPipes credit one lane per receiver");
     const uint32_t l1_alignment = l1_alignment_for(space_->get_device());
+    const uint32_t credit_lane_capacity = space_->credit_lane_capacity();
     const auto& layout = space_->layout();
     const auto receivers = dram_sender_receiver_table();
     const uint32_t num_receivers = static_cast<uint32_t>(receivers.size());
     const PrefetcherPipePageCommon common{
         .layout = layout,
         .l1_alignment = l1_alignment,
+        .credit_lane_capacity = credit_lane_capacity,
         .num_receivers = num_receivers,
         .data_base_addr = space_->buffer_address(),
         .ring_size = space_->ring_size(),
@@ -894,10 +900,11 @@ void PrefetcherPipeImpl::build_dram_sender_config_pages() {
         write_dram_sender_l1(
             *mesh_device, target_device, sender_core_, sender_page_addr, std::as_bytes(std::span(sender_page)));
 
-        const CoreCoord sender_virtual = target_device->virtual_core_from_logical_core(sender_core_, CoreType::DRAM);
+        const CoreCoord sender_virtual = dram_sender_virtual_core(*mesh_device, target_device, sender_core_);
         PrefetcherPipeConfigPages& pages = device_pages[mesh_device->get_view().find_device(target_device->id())];
         for (uint32_t r = 0; r < num_receivers; ++r) {
-            const uint32_t sender_acked_slot = sender_page_addr + layout.acked_offset + r * l1_alignment;
+            const uint32_t sender_acked_slot =
+                sender_page_addr + layout.acked_offset + r * credit_lane_capacity * l1_alignment;
             auto receiver_page =
                 build_receiver_config_page(common, r, sender_acked_slot - space_->config_address(), sender_virtual);
             if (!config_pages_.contains(receivers[r])) {

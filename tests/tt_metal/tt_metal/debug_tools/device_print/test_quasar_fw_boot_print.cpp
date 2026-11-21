@@ -25,7 +25,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 
