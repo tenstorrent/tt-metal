@@ -14,9 +14,9 @@
 
 namespace ttnn::experimental::prim {
 
-// The relay's persistent counters: its entry-state, final-state and final-carry arrivals, then the output gate's x's
-// and W's block counts.
-inline constexpr uint32_t relay_semaphores = 5;
+// The relay's persistent counters: its entry-state arrivals and its final-state arrivals (the relayed final state on
+// the first rank, the final carry on every other), then the output gate's x's and W's block counts.
+inline constexpr uint32_t relay_semaphores = 4;
 
 struct RelayChunkScanParams {
     uint32_t sequence_parallel_axis;

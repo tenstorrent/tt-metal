@@ -30,6 +30,7 @@ constexpr uint32_t cb_p = get_compile_time_arg_val(9);
 constexpr uint32_t cb_p_exact = get_compile_time_arg_val(10);
 // The reader's {holder, split, heads}.
 constexpr uint32_t cb_ctl = get_compile_time_arg_val(11);
+constexpr uint32_t relay_heads = get_compile_time_arg_val(12);  // cb_eout's head slots
 constexpr uint32_t state_tiles = kt * kt;
 constexpr uint32_t dst_tiles = compute_kernel_lib::DEST_AUTO_LIMIT;
 // A tile column of the next state is formed in one DST pass (the op checks K against the DST).
@@ -150,13 +151,21 @@ void kernel_main() {
     const uint32_t split = read_tile_value(cb_ctl, 0, 1);
     const uint32_t heads = read_tile_value(cb_ctl, 0, 2);
     cb_pop_front(cb_ctl, 1);
+    // cb_eout holds a state per head slot: a core with fewer heads fills the rest, which the writer releases with the
+    // heads' states.
+    const auto fill = [&]() {
+        cb_reserve_back(cb_eout, (relay_heads - heads) * state_tiles);
+        cb_push_back(cb_eout, (relay_heads - heads) * state_tiles);
+    };
     for (uint32_t h = 0; h < heads; ++h) {
         relay_hop();
     }
+    fill();
     cb_pop_front(cb_identity, 1);
     if (holder) {
         for (uint32_t h = 0; h < heads; ++h) {
             carry_pass(split);
         }
+        fill();
     }
 }

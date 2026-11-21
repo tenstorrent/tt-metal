@@ -16,11 +16,12 @@
 
 namespace ttnn::experimental::prim {
 
-// A fabric packet of whole FP32 tiles, up to three.
+// A fabric packet: the fabric's whole payload (16 B aligned), up to three FP32 tiles. A relay unit is a contiguous
+// tile column, so its packets need not hold whole tiles: the fewer the packets, the faster the relay's stream.
 inline uint32_t relay_chunk_scan_packet_bytes() {
     constexpr uint32_t state_tile = tt::constants::TILE_HW * sizeof(float);
     const uint32_t payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    return std::min(3 * state_tile, payload / state_tile * state_tile);
+    return std::min(3 * state_tile, payload / 16 * 16);
 }
 
 // The packets of one tile column of a head's state.
@@ -49,22 +50,26 @@ inline constexpr uint32_t relay_chunk_scan_max_heads_per_link =
 // The fabric connections a sender may open (the fewest RoutingPlaneConnectionManager::MaxConnections allows).
 inline constexpr uint32_t relay_chunk_scan_max_connections = 4;
 
-// The relay's hop runs on relay cores, each serving up to this many heads of one link: heads h and h + num_links,
-// consecutive in the link's sender order, so a relay core's heads arrive one after the other.
+// The relay's hop runs on relay cores, each serving up to this many heads of one link, as far apart in the link's
+// order as the link's relay cores allow: a relay core's heads then arrive one at a time.
 inline constexpr uint32_t relay_chunk_scan_heads_per_relay_core = 2;
 
 // Head h's relay core and its slot there (its landing and next-state buffers): the relay cores are link 0's, then
-// link 1's, ..., each link's heads h = link, link + num_links, ... paired in order.
+// link 1's, ...; the i-th head of a link (h = link + i * num_links) goes to its link's relay core i % cores, slot
+// i / cores.
 struct RelaySlot {
     uint32_t core;
     uint32_t slot;
 };
-// The relay cores of links [0, links).
-inline uint32_t relay_chunk_scan_relay_cores(uint32_t heads, uint32_t num_links, uint32_t links) {
+// The relay cores of a link, and of links [0, links).
+inline uint32_t relay_chunk_scan_link_relay_cores(uint32_t heads, uint32_t num_links, uint32_t link) {
     constexpr uint32_t per_core = relay_chunk_scan_heads_per_relay_core;
+    return link < heads ? ((heads - link + num_links - 1) / num_links + per_core - 1) / per_core : 0;
+}
+inline uint32_t relay_chunk_scan_relay_cores(uint32_t heads, uint32_t num_links, uint32_t links) {
     uint32_t cores = 0;
-    for (uint32_t l = 0; l < links && l < heads; ++l) {
-        cores += ((heads - l + num_links - 1) / num_links + per_core - 1) / per_core;
+    for (uint32_t l = 0; l < links; ++l) {
+        cores += relay_chunk_scan_link_relay_cores(heads, num_links, l);
     }
     return cores;
 }
@@ -72,9 +77,10 @@ inline uint32_t relay_chunk_scan_relay_cores(uint32_t heads, uint32_t num_links)
     return relay_chunk_scan_relay_cores(heads, num_links, num_links);
 }
 inline RelaySlot relay_chunk_scan_relay_slot(uint32_t head, uint32_t heads, uint32_t num_links) {
-    constexpr uint32_t per_core = relay_chunk_scan_heads_per_relay_core;
+    const uint32_t link = head % num_links;
     const uint32_t index = head / num_links;
-    return {relay_chunk_scan_relay_cores(heads, num_links, head % num_links) + index / per_core, index % per_core};
+    const uint32_t cores = relay_chunk_scan_link_relay_cores(heads, num_links, link);
+    return {relay_chunk_scan_relay_cores(heads, num_links, link) + index % cores, index / cores};
 }
 
 // Heads whose correction cores share a grid column (kernels/correction_core.hpp).
