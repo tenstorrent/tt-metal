@@ -14,6 +14,7 @@
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 #include "dev_mem_map.h"  // MEM_L1_UNCACHED_BASE
+#include "internal/local_mem/address_access.h"
 
 void kernel_main() {
     DataflowBuffer dfb(dfb::out);
@@ -33,7 +34,8 @@ void kernel_main() {
             // address. Normalize in whichever direction is required, tolerating the alias being absent --
             // it is temporary DFB API behaviour (see dataflow_buffer.h get_write_ptr). Blindly adding
             // MEM_L1_UNCACHED_BASE would double-apply it and land at 0x800000+, i.e. in RISC local memory.
-            const uint32_t lock_ptr = static_cast<uint32_t>(lk.get_ptr().get_address());
+            // Raw address: needed for the cached/uncached alias selection below.
+            const uint32_t lock_ptr = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(lk.get_ptr()));
             const bool uncached = lock_ptr >= MEM_L1_UNCACHED_BASE;
 #if defined(DFB_CACHE_NONSNOOP_PRODUCER)
             const uint32_t entry_addr = uncached ? lock_ptr : lock_ptr + MEM_L1_UNCACHED_BASE;

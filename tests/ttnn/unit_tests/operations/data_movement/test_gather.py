@@ -11,6 +11,13 @@ import ttnn
 from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 TILE_HEIGHT = 32
 
@@ -67,6 +74,7 @@ def test_gather_general(input_shape, index_shape, dim, device):
         ([64, 128, 256], [64, 128, 128], -1),
         ([1, 2048, 1, 64], [1, 2048, 1, 32], -1),
         ([1, 1, 1, 1], [1, 1, 1, 1], -1),
+        ([64], [32], 0),
     ],
 )
 def test_gather_preallocated_output(input_shape, index_shape, dim, device):
@@ -88,6 +96,33 @@ def test_gather_preallocated_output(input_shape, index_shape, dim, device):
     assert ttnn_output.shape == index.shape
 
     assert_allclose(torch_gather, ttnn.to_torch(ttnn_output))
+
+
+@pytest.mark.parametrize(
+    "input_shape, index_shape, dim",
+    [
+        ([64], [32], 0),
+        ([64], [32], -1),
+        ([128], [64], 0),
+        ([1000], [500], 0),
+    ],
+)
+def test_gather_rank1(input_shape, index_shape, dim, device):
+    torch.manual_seed(0)
+
+    torch_dtype = torch.bfloat16
+    input = torch.randn(input_shape, dtype=torch_dtype)
+    index = torch.randint(0, input_shape[dim], index_shape, dtype=torch.int64)
+
+    torch_gather = torch.gather(input, dim, index)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
+
+    assert ttnn_gather.shape == index.shape
+    assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
 @pytest.mark.parametrize(
@@ -568,3 +603,227 @@ def test_gather_codegen_invalid_index_public_reproduction(device):
     expected = torch.gather(x, 0, index.masked_fill(~valid, 0))
     assert actual.shape == expected.shape, f"Public gather reproduction returned shape {actual.shape}"
     assert torch.equal(actual[valid], expected[valid]), "Invalid index corrupted valid BF16 gather positions"
+
+
+# --- Rank > 4 ---
+# The leading rank - 3 dims are merged to reach 4D. Covers dim < rank - 3 (#60398) and an index smaller
+# than the input on a merged dim (#56880). `tile` routes to codegen, `tile_native` pins native.
+_RANK_GT_4_CASES = [
+    # (input_shape, index_shape, dim)
+    # Gathered axis inside the merged dim.
+    ([2, 2, 32, 32, 64], [2, 2, 32, 32, 64], 1),
+    ([2, 3, 1, 1, 32], [2, 3, 1, 1, 32], 0),
+    ([2, 3, 1, 1, 32], [2, 3, 1, 1, 32], 1),
+    ([2, 3, 4, 5, 64], [2, 3, 4, 5, 64], 0),
+    ([2, 3, 2, 4, 5, 32], [2, 3, 2, 4, 5, 32], 0),
+    ([2, 3, 2, 4, 5, 32], [2, 3, 2, 4, 5, 32], 1),
+    ([2, 3, 2, 4, 5, 32], [2, 3, 2, 4, 5, 32], 2),
+    # Index smaller than the input on an inner merged dim.
+    ([2, 3, 4, 5, 64], [2, 2, 4, 5, 64], -1),
+    ([2, 3, 4, 5, 64], [2, 2, 3, 5, 64], -1),
+    ([2, 3, 4, 5, 6, 64], [2, 3, 2, 5, 6, 64], -1),
+    ([2, 3, 4, 5, 64], [2, 2, 4, 5, 64], 2),
+    # Both at once.
+    ([2, 3, 4, 5, 64], [2, 2, 4, 5, 32], 0),
+    ([2, 3, 4, 5, 64], [2, 2, 4, 5, 32], 1),
+    # Controls, already correct before the fix.
+    ([2, 3, 1, 1, 32], [2, 3, 1, 1, 32], 2),
+    ([2, 3, 2, 4, 5, 32], [2, 3, 2, 4, 5, 32], 3),
+    ([1, 2, 3, 4, 64], [1, 2, 3, 4, 64], 1),
+    ([2, 3, 4, 5, 64], [1, 3, 4, 5, 64], -1),
+]
+
+
+@pytest.mark.parametrize("route", ["tile", "tile_native", "row_major"])
+@pytest.mark.parametrize("input_shape, index_shape, dim", _RANK_GT_4_CASES)
+def test_gather_rank_gt_4(input_shape, index_shape, dim, route, device):
+    torch.manual_seed(0)
+
+    input = torch.randn(input_shape, dtype=torch.bfloat16)
+    index = torch.randint(0, input_shape[dim], index_shape, dtype=torch.int64)
+    torch_gather = torch.gather(input, dim, index)
+
+    layout = ttnn.ROW_MAJOR_LAYOUT if route == "row_major" else ttnn.TILE_LAYOUT
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=layout, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=layout, device=device)
+
+    if route == "tile_native":
+        ttnn_gather = _force_native(ttnn_input, dim, ttnn_index)
+    else:
+        ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
+
+    assert ttnn_gather.shape == index.shape
+    assert_equal(torch_gather, ttnn.to_torch(ttnn_gather))
+
+
+def test_gather_rank_gt_4_index_larger_on_merged_dim(device, expect_error):
+    # [2, 3] and [3, 2] merge to the same extent; torch.gather rejects it too.
+    input_shape, index_shape, dim = [2, 3, 4, 5, 64], [3, 2, 4, 5, 64], -1
+    input = torch.randn(input_shape, dtype=torch.bfloat16)
+    index = torch.randint(0, input_shape[dim], index_shape, dtype=torch.int64)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "exceeds the input tensor size"):
+        ttnn.gather(ttnn_input, dim, index=ttnn_index)
+
+
+@pytest.mark.parametrize(
+    "input_shape, index_shape",
+    [
+        ([3, 4, 64], [1, 3, 4, 32]),
+        ([1, 2, 3, 4, 64], [2, 3, 4, 64]),
+        ([], [1]),
+        ([2], []),
+    ],
+)
+def test_gather_rank_mismatch(input_shape, index_shape, device, expect_error):
+    ttnn_input = ttnn.from_torch(
+        torch.randn(input_shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    ttnn_index = ttnn.from_torch(
+        torch.zeros(index_shape, dtype=torch.int32), ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "same number of dimensions"):
+        ttnn.gather(ttnn_input, -1, index=ttnn_index)
+
+
+@pytest.mark.parametrize("operand", ["input", "index", "output"])
+@pytest.mark.parametrize("tile", [[16, 32], [32, 16]], ids=["16x32", "32x16"])
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_gather_rejects_non_32x32_tile(device, operand, tile, dim, expect_error):
+    input = torch.randn([2, 1, 64, 128], dtype=torch.bfloat16)
+    index = torch.randint(0, input.shape[dim], [2, 1, 64, 128], dtype=torch.int32)
+
+    def tile_for(name):
+        return ttnn.Tile(tile) if operand == name else ttnn.Tile([32, 32])
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile_for("input"), device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint32, layout=ttnn.TILE_LAYOUT, tile=tile_for("index"), device=device)
+    ttnn_output = None
+    if operand == "output":
+        ttnn_output = ttnn.from_torch(
+            torch.zeros_like(input), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile(tile), device=device
+        )
+    with expect_error(RuntimeError, f"has a {tile[0]}x{tile[1]} tile"):
+        ttnn.gather(ttnn_input, dim, index=ttnn_index, out=ttnn_output)
+
+
+def test_gather_rejects_row_major_out_for_tile_input(device, expect_error):
+    torch.manual_seed(0)
+    input = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16)
+    index = torch.randint(0, 64, (1, 1, 32, 32), dtype=torch.int64)
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_output = ttnn.from_torch(torch.zeros(1, 1, 32, 32), ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    neighbour = ttnn.from_torch(
+        torch.full((1, 1, 512, 1024), 768.0), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    with expect_error(RuntimeError, "Output tensor layout must match the input tensor layout"):
+        ttnn.gather(ttnn_input, -1, index=ttnn_index, out=ttnn_output)
+    assert torch.equal(ttnn.to_torch(neighbour), torch.full((1, 1, 512, 1024), 768.0, dtype=torch.bfloat16))
+
+
+def test_gather_row_major_out_for_row_major_input(device):
+    torch.manual_seed(0)
+    input = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16)
+    index = torch.randint(0, 64, (1, 1, 32, 32), dtype=torch.int64)
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    ttnn_output = ttnn.from_torch(torch.zeros(1, 1, 32, 32), ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    ttnn.gather(ttnn_input, -1, index=ttnn_index, out=ttnn_output)
+    assert torch.equal(ttnn.to_torch(ttnn_output), torch.gather(input, -1, index))
+
+
+@pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
+@pytest.mark.parametrize("out_dtype", [ttnn.float32, ttnn.uint16])
+def test_gather_rejects_out_with_different_dtype(layout, out_dtype, device, expect_error):
+    torch.manual_seed(0)
+    input = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16)
+    index = torch.randint(0, 64, (1, 1, 32, 32), dtype=torch.int64)
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=layout, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=layout, device=device)
+    ttnn_output = ttnn.from_torch(torch.zeros(1, 1, 32, 32), out_dtype, layout=layout, device=device)
+    with expect_error(RuntimeError, "Output tensor dtype must match the input tensor dtype"):
+        ttnn.gather(ttnn_input, -1, index=ttnn_index, out=ttnn_output)
+
+
+def test_gather_rank1_nd_sharded_input(device):
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))])
+    nd_shard_spec = ttnn.NdShardSpec(
+        ttnn.Shape([64]), grid, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+    torch_input = torch.arange(256, dtype=torch.float32).to(torch.bfloat16)
+    torch_index = torch.arange(255, -1, -1, dtype=torch.int32)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    tt_index = ttnn.from_torch(
+        torch_index, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+
+    output = ttnn.gather(tt_input, 0, index=tt_index, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert_equal(torch.gather(torch_input, 0, torch_index.long()), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.gather))
+@pytest.mark.parametrize(
+    "dtype, layout", docstring_dtype_layout_params(ttnn.gather, "Supported dtypes and layouts for input tensor values")
+)
+def test_gather_docstring_supported_inputs(dtype, layout, buffer_type, device):
+    """Runs every input dtype, layout and interleaved buffer type the ttnn.gather docstring lists."""
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input((64, 128), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
+    )
+    index = torch.randint(0, 128, (32, 96), dtype=torch.int64)
+    index_tensor = ttnn.from_torch(
+        index.to(torch.int32), dtype=ttnn.uint32, layout=layout, device=device, memory_config=memory_config
+    )
+    output = ttnn.gather(input_tensor, -1, index=index_tensor, memory_config=memory_config)
+
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config().buffer_type == buffer_type
+    assert_exact(torch.gather(ttnn.to_torch(input_tensor).to(torch.float64), -1, index), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize(
+    "index_dtype, layout",
+    docstring_dtype_layout_params(ttnn.gather, "Supported dtypes and layouts for index tensor values"),
+)
+def test_gather_docstring_supported_index_inputs(index_dtype, layout, device):
+    """Runs every index dtype and layout the ttnn.gather docstring lists."""
+    check_readable(index_dtype, layout)
+    input_tensor = ttnn.from_torch(full_range_input((64, 128), ttnn.bfloat16), layout=layout, device=device)
+    index = torch.randint(0, 128, (32, 96), dtype=torch.int64)
+    index_tensor = ttnn.from_torch(index.to(torch.int32), dtype=index_dtype, layout=layout, device=device)
+    output = ttnn.gather(input_tensor, -1, index=index_tensor)
+
+    assert_exact(torch.gather(ttnn.to_torch(input_tensor), -1, index), ttnn.to_torch(output))
+
+
+def test_gather_rm_nd_sharded_subaligned_input_rows(device):
+    # [1, 1, 32, 4] ND shards: 8-byte shard rows, not a multiple of the 16-byte L1 alignment, which the sharded reads
+    # cannot split. gather moves such an input to interleaved memory first.
+    x = ((torch.arange(32 * 64) % 97 - 48) / 8).reshape(1, 1, 32, 64).to(torch.bfloat16)
+    spec = ttnn.NdShardSpec(
+        ttnn.Shape([1, 1, 32, 4]),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    )
+    t = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.MemoryConfig(ttnn.BufferType.L1, spec)
+    )
+    index = torch.randint(0, 64, (1, 1, 32, 64), generator=torch.Generator().manual_seed(0), dtype=torch.int32)
+    i = ttnn.from_torch(
+        index, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    output = ttnn.gather(t, -1, index=i)
+
+    assert_equal(torch.gather(x, -1, index.long()), ttnn.to_torch(output))

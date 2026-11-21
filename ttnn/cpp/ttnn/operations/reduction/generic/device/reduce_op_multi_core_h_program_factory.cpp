@@ -25,10 +25,7 @@ namespace {
 // workers to the shard grid, so create_program_artifacts and the cache-hit override both call
 // this: a disagreement here is a disagreement about how many core groups exist.
 bool reduce_h_use_width_sharding(const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
-    using namespace tt::tt_metal;
-    return a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-           output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED && a.memory_config().is_l1() &&
-           output.memory_config().is_l1();
+    return reduce_h_uses_width_sharded_fast_path(a.memory_config(), output.memory_config());
 }
 
 // One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result. Mirrors the
@@ -90,7 +87,6 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     const auto& a = tensor_args.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
     const bool rm_path = operation_attributes.row_major_h_dense_path;
@@ -955,13 +951,12 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-tt::tt_metal::experimental::ProgramRunArgs
-ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::override_runtime_arguments(
+tt::tt_metal::ProgramRunArgs ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
     const auto& a = tensor_args.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
 

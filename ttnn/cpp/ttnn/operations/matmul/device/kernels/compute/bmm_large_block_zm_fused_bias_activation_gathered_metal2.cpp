@@ -67,6 +67,11 @@ FORCE_INLINE void reload_from_dfb_to_dst(
 }
 
 void kernel_main() {
+    // A core that only fills out the ring's rectangle: in1 relays no pipe there, so it must not construct
+    // the buffer.
+    if (get_arg(args::is_worker_core) == 0) {
+        return;
+    }
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::in0, dfb::in1, dfb::intermed0);
 
     constexpr auto in0_block_w = get_arg(args::in0_block_w);              // inner block size in tiles

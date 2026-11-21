@@ -4,11 +4,13 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/qkv_conv_dataflow.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"
 #include "api/dataflow/dataflow_api.h"
+#include "api/tile_constants.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/scratchpad.h"
 #include "api/semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/local_mem/address_access.h"
 #include "experimental/kernel_args.h"
 
 using namespace qkv_conv;
@@ -26,31 +28,34 @@ template <
     uint32_t exchange_core_x,
     uint32_t exchange_core_y,
     uint32_t max_staged_ct,
-    uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows,
     uint32_t has_actual_end>
-TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_start, uint32_t staged_ct_count) {
+TT_KERNEL void writer(
+    uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_start, uint32_t staged_ct_count, uint32_t sp_rank) {
     const auto q = TensorAccessor(tensor::q);
     const auto k = TensorAccessor(tensor::k);
     const auto v = TensorAccessor(tensor::v);
     DataflowBuffer output(dfb::output);
     Noc noc;
 
+    uint32_t split_row = 0;
     // With the fabric exchange, stage this core's share of the rows the exchange core sends, channel tiles
     // [ct_start, ct_start + ct_count) of this rank's outgoing rows and, on the final segment's owner, its end rows.
     // The writer has nothing to write until compute's first output, so staging first does not delay the convolution.
     if constexpr (exchange) {
+        Scratchpad<uint32_t> scratch(scratch::staging);
+        // Raw: base/offset arithmetic below feeds raw reads/writes into scratch; no handle form yet.
+        const uint32_t scratch_base = local_mem::detail::AddressAccess::address(scratch.local_mem());
+        const uint32_t base = align_up(scratch_base, read_alignment);
+        const uint32_t offset = base - scratch_base;
+        const auto interval = read_chronology<has_actual_end, sp_size, local_rows>(noc, base, sp_rank);
+        split_row = interval.local_split ? interval.head_rows / tt::constants::TILE_HEIGHT : 0;
+
         const auto stage_exchanged_rows = [&](uint32_t ct_start, uint32_t ct_count) {
             const auto input = TensorAccessor(tensor::input);
             const auto exchange_buffer = TensorAccessor(tensor::exchange_buffer);
-            Scratchpad<uint32_t> scratch(scratch::staging);
             constexpr StagingScratch layout{max_staged_ct};
-            const uint32_t scratch_base = scratch.get_base_address();
-            const uint32_t base = align_up(scratch_base, read_alignment);
-            const uint32_t offset = base - scratch_base;
-
-            const auto interval = read_chronology<has_actual_end, sp_rank, sp_size, local_rows>(noc, base);
             uint32_t source_rows[StagingScratch::rows];
             for (uint32_t i = 0; i < history_rows; ++i) {
                 source_rows[i] = interval.outgoing_rows_begin() + i;
@@ -136,5 +141,5 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_s
             }
         }
     };
-    for_each_work_item(wi_start, wi_count, Mt, exchange, process);
+    for_each_work_item(wi_start, wi_count, Mt, exchange, process, split_row);
 }

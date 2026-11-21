@@ -38,6 +38,7 @@ jobs:
       common: ${{ steps.filter.outputs.common_any_changed }}
       documentation: ${{ steps.filter.outputs.documentation_any_changed }}
       github: ${{ steps.filter.outputs.github_any_changed }}
+      hardware_free: ${{ steps.filter.outputs.hardware_free_any_changed }}
       performance: ${{ steps.filter.outputs.performance_any_changed }}
       quasar: ${{ steps.filter.outputs.quasar_any_changed }}
       tests: ${{ steps.filter.outputs.tests_any_changed }}
@@ -66,10 +67,16 @@ jobs:
               - 'tests/python_tests/fuser/**'
             tests:
               - 'tests/**'
+              - '!tests/hardware_free/**'
+              - '!tests/run_hardware_free.sh'
               - '!tests/sources/quasar/**'
               - '!tests/python_tests/quasar/**'
               - '!tests/python_tests/fuser/quasar/**'
               - '!tests/python_tests/fuser/tests/quasar/**'
+            hardware_free:
+              - 'tests/hardware_free/**'
+              - 'tests/run_hardware_free.sh'
+              - 'perf/**'
             github:
               - '.github/**'
             documentation:
@@ -79,6 +86,8 @@ jobs:
             performance:
               - '**/*perf**'
               - '**/*profiler**'
+              - '!tests/hardware_free/**'
+              - '!perf/**'
 
   label-pr:
     name: "🏷️ Label PR"
@@ -97,6 +106,7 @@ jobs:
             if ("${{ needs.detect-changes.outputs.blackhole }}" === "true") expectedLabels.add("blackhole");
             if ("${{ needs.detect-changes.outputs.wormhole }}" === "true") expectedLabels.add("wormhole");
             if ("${{ needs.detect-changes.outputs.tests }}" === "true") expectedLabels.add("test-infra");
+            if ("${{ needs.detect-changes.outputs.hardware_free }}" === "true") expectedLabels.add("test-infra");
             if ("${{ needs.detect-changes.outputs.github }}" === "true") expectedLabels.add("ci");
             if ("${{ needs.detect-changes.outputs.documentation }}" === "true") expectedLabels.add("documentation");
             if ("${{ needs.detect-changes.outputs.performance }}" === "true") expectedLabels.add("performance");
@@ -215,6 +225,50 @@ jobs:
       use_durations: false
       multi_core_execution: true
 
+  hardware-free:
+    name: "Hardware-free tests"
+    needs: [build-images, detect-changes]
+    permissions:
+      contents: read
+      checks: write
+    if: ${{ github.event_name != 'push' &&
+            (needs.detect-changes.outputs.hardware_free == 'true' ||
+             needs.detect-changes.outputs.tests == 'true' ||
+             needs.detect-changes.outputs.common == 'true' ||
+             needs.detect-changes.outputs.github == 'true' ||
+             needs.detect-changes.outputs.wormhole == 'true' ||
+             needs.detect-changes.outputs.blackhole == 'true' ||
+             needs.detect-changes.outputs.quasar == 'true' ||
+             needs.detect-changes.outputs.performance == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: ${{ needs.build-images.outputs.docker-image }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install SFPI
+        shell: bash
+        run: |
+          cd tests
+          ./setup_testing_env.sh
+      - name: Run hardware-free tests
+        shell: bash
+        run: ./tests/run_hardware_free.sh
+      - name: Upload JUnit report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: junit-report-hardware-free
+          path: tests/python_tests/pytest-report-hardware-free-*.xml
+      - name: Publish Test Results
+        if: always()
+        uses: mikepenz/action-junit-report@3585e9575db828022551b4231f165eb59a0e74e3 # v5.6.2
+        with:
+          report_paths: tests/python_tests/pytest-report-hardware-free-*.xml
+          annotate_only: true
+          include_passed: true
+
   check-all-green:
     name: "✅ Check all green"
     if: always()
@@ -225,10 +279,11 @@ jobs:
       - setup-and-test-blackhole
       - build-quasar
       - perf-tests
+      - hardware-free
     runs-on: ubuntu-latest
     steps:
       - name: Check if the required jobs succeeded or failed
         uses: re-actors/alls-green@release/v1
         with:
           jobs: ${{ toJSON(needs) }}
-          allowed-skips: setup-and-test-wormhole, setup-and-test-blackhole, build-quasar, perf-tests
+          allowed-skips: setup-and-test-wormhole, setup-and-test-blackhole, build-quasar, perf-tests, hardware-free

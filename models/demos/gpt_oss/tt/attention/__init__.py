@@ -187,4 +187,5 @@ class Attention:
                 page_table=page_table,
                 ccl_manager=self.ccl_manager,
                 batch_size=batch_size,
+                fused_decode=self.fused_decode,
             )

@@ -5,6 +5,9 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 // Fills one full tile of bfloat16 with a scalar value
 // Scalar is assumed to be a 16-bit value double packed into a u32
@@ -378,13 +381,29 @@ FORCE_INLINE void fill_tile_with_first_row(uint32_t l1_write_ptr) {
     constexpr uint32_t kRowBytes = 64;
     const uint32_t f0 = l1_write_ptr;
     const uint32_t f1 = f0 + kFaceBytes;
+    Noc noc;
     for (uint32_t n = kRowBytes; n < kFaceBytes; n <<= 1) {
-        noc_async_read(get_noc_addr(f0), f0 + n, n);
-        noc_async_read(get_noc_addr(f1), f1 + n, n);
-        noc_async_read_barrier();
+        noc.async_read(
+            PrecomposedUnicastEndpoint{},
+            CoreLocalMem<uint32_t>(f0 + n),
+            n,
+            {.noc_addr = get_noc_addr(f0, noc.get_noc_id())},
+            {.offset_bytes = 0});
+        noc.async_read(
+            PrecomposedUnicastEndpoint{},
+            CoreLocalMem<uint32_t>(f1 + n),
+            n,
+            {.noc_addr = get_noc_addr(f1, noc.get_noc_id())},
+            {.offset_bytes = 0});
+        noc.async_read_barrier();
     }
-    noc_async_read(get_noc_addr(f0), f0 + 2 * kFaceBytes, 2 * kFaceBytes);
-    noc_async_read_barrier();
+    noc.async_read(
+        PrecomposedUnicastEndpoint{},
+        CoreLocalMem<uint32_t>(f0 + 2 * kFaceBytes),
+        2 * kFaceBytes,
+        {.noc_addr = get_noc_addr(f0, noc.get_noc_id())},
+        {.offset_bytes = 0});
+    noc.async_read_barrier();
 }
 
 // Reads the very first column of the CB and fills the entire tile with the same column.
@@ -486,6 +505,80 @@ FORCE_INLINE void fill_tile_with_first_row_rm_bfloat16(uint32_t ptr_arg, uint32_
         const uint32_t last_elem = row_width - 1;
         for (uint32_t i = 1; i < num_rows; i++) {
             ptr16[i * row_width + last_elem] = ptr16[last_elem];
+        }
+    }
+}
+
+// Helpers for 8-bit integers (uint8/int8).
+// Reads the very first element of the CB and fills the entire tile with that value.
+FORCE_INLINE void fill_tile_with_first_element_uint8(uint32_t l1_write_ptr) {
+    auto* read_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_ptr);
+    const uint32_t first_elem = read_ptr[0];
+
+    const uint32_t packed = first_elem * 0x01010101u;
+
+    auto* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
+    for (uint32_t i = 0; i < 256; ++i) {
+        write_ptr[i] = packed;
+    }
+}
+
+// Reads the very first row of the CB and fills the entire tile with the same row. Faces 0 and 2 take the first row
+// of face 0. Faces 1 and 3 take the first row of face 1.
+FORCE_INLINE void fill_tile_with_first_row_uint8(uint32_t l1_write_ptr) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
+    constexpr uint32_t kFaceWords = 64;  // 256 B
+    constexpr uint32_t kRowWords = 4;    // 16 B
+
+    for (uint32_t face = 0; face < 4; ++face) {
+        // Faces 0 and 1 hold the source row at their first row. Faces 2 and 3 copy it from faces 0 and 1.
+        const uint32_t src = (face & 1) * kFaceWords;
+        const uint32_t dst = face * kFaceWords;
+        for (uint32_t row = (face < 2 ? 1 : 0); row < 16; ++row) {
+            for (uint32_t w = 0; w < kRowWords; ++w) {
+                ptr[dst + row * kRowWords + w] = ptr[src + w];
+            }
+        }
+    }
+}
+
+// Reads the very first column of the CB and fills the entire tile with the same column. Faces 0 and 1 take the first
+// column of face 0. Faces 2 and 3 take the first column of face 2.
+FORCE_INLINE void fill_tile_with_first_column_uint8(uint32_t l1_write_ptr) {
+    auto* bytes = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_ptr);
+    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
+
+    constexpr uint32_t kFaceBytes = 256;  // Total bytes per face (16x16)
+    constexpr uint32_t kFaceWords = 64;   // Total 32-bit words per face
+
+    for (uint32_t pair = 0; pair < 2; ++pair) {
+        const uint32_t left = pair * 2 * kFaceBytes;
+        for (uint32_t row = 0; row < 16; ++row) {
+            const uint32_t packed = static_cast<uint32_t>(bytes[left + row * 16]) * 0x01010101u;
+            const uint32_t left_word = (left >> 2) + row * 4;
+            for (uint32_t w = 0; w < 4; ++w) {
+                words[left_word + w] = packed;               // left face
+                words[left_word + kFaceWords + w] = packed;  // right face
+            }
+        }
+    }
+}
+
+// Row-major helpers for 8-bit elements. row_width and num_rows count elements (same as 16-bit helpers).
+FORCE_INLINE void fill_tile_with_first_column_rm_uint8(uint32_t ptr_arg, uint32_t row_width) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(ptr_arg);
+    const uint8_t first_elem = ptr[0];
+    for (uint32_t i = 1; i < row_width; i++) {
+        ptr[i] = first_elem;
+    }
+}
+
+FORCE_INLINE void fill_tile_with_first_row_rm_uint8(uint32_t ptr_arg, uint32_t row_width, uint32_t num_rows) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(ptr_arg);
+    for (uint32_t row = 1; row < num_rows; row++) {
+        const uint32_t row_offset = row * row_width;
+        for (uint32_t col = 0; col < row_width; col++) {
+            ptr[row_offset + col] = ptr[col];
         }
     }
 }

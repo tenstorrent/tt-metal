@@ -15,7 +15,7 @@ reads the page_table into a Quasar SCRATCHPAD via NoC and then reads it back wit
 in that reused scratchpad L1 slot. The FIRST fill reads a fresh page_table; by the SECOND fill (after ~12 min
 of intervening ops) the RISC read-back returns a stale line → garbage ``physical_block`` → out-of-range
 ``physical_tile_id`` → the ``noc.async_write`` targets a DRAM page past the cache buffer → overrun. FIX:
-``invalidate_l2_cache_range(page_table_scratch.get_base_address(), page_table_stick_size)`` (and the batch_idx
+``invalidate_l2_cache_range`` over the page_table scratchpad's ``page_table_stick_size`` bytes (and the batch_idx
 / valid_seq_len scratchpad read-backs) before the RISC read, guarded ARCH_QUASAR, in
 writer_fill_cache_interleaved.cpp — the same primitive the quasar/pad reader uses for a reused-scratch
 NoC-write→RISC-read. WH/BH read the page_table via a DFB (no L2 hazard). (The get_entry_size migration of the

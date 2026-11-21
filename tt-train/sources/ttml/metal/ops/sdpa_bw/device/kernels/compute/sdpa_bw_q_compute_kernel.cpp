@@ -35,19 +35,28 @@
 //
 // Forward pass (for reference):
 //   P = softmax(Q @ K^T / sqrt(d) + mask)    // attention weights [B, H, S, S]
-//   O = P @ V                                 // output [B, H, S, D]
+//   O = P @ V                                 // attention output [B, H, S, D]
+//   Y = O ⊙ σ(G)                              // [HAS_GATE] gated output; otherwise Y = O
 //
-// Backward pass computes dQ given dO (upstream gradient):
+// Backward pass computes dQ given dY (upstream gradient of the forward's output):
+//   dO = dY ⊙ σ(G)                            // [HAS_GATE] otherwise dO = dY
+//   dG = dY ⊙ Y ⊙ (1 − σ(G))                  // [HAS_GATE] gradient w.r.t. the gate
 //   dP = dO @ V^T                             // gradient w.r.t. attention weights
-//   u  = rowsum(dO ⊙ O)                       // per-row scalar for softmax backward
+//   u  = rowsum(dO ⊙ O) = rowsum(dY ⊙ Y)      // per-row scalar for softmax backward
 //   dS = P ⊙ (dP - u)                         // softmax backward (element-wise)
 //   dQ = (1/sqrt(d)) * dS @ K                 // gradient w.r.t. query
 //
 // Note: We apply the scale factor inside dS computation for numerical stability.
 //
+// With HAS_GATE the kernel receives dY as grad_output and Y as attn_output (the ungated O is
+// never materialized). dO is packed twice: into a compute-local CB used as the dP operand, and
+// into a second CB that the writer kernel stores to DRAM for the KV kernel. u is computed
+// directly from dY and Y using the identity above.
+//
 // Processing order:
 //   for each query row q:
-//     compute u_scalar = rowsum(dO[q] ⊙ O[q])
+//     compute u_scalar = rowsum(dY[q] ⊙ Y[q])
+//     [HAS_GATE] compute dO[q] = dY[q] ⊙ σ(G[q]), dG[q] = dY[q] ⊙ Y[q] ⊙ (1 − σ(G[q]))
 //     for each K/V row k:
 //       P[q,k] = softmax(Q[q] @ K[k]^T / sqrt(d) + mask[q,k])  // recomputed
 //       dP[q,k] = dO[q] @ V[k]^T
@@ -67,7 +76,7 @@ constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(6);  // used to tr
 constexpr uint32_t block_size = get_compile_time_arg_val(7);       // block size for update_grad_query (divides qWt)
 
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;  // Gradient w.r.t. output
-constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;  // Attention output from forward pass
+constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;  // (Gated) attention output from forward pass
 constexpr uint32_t cb_query = tt::CBIndex::c_2;        // Original query
 constexpr uint32_t cb_key = tt::CBIndex::c_3;          // Original key
 constexpr uint32_t cb_value = tt::CBIndex::c_4;        // Original value
@@ -83,6 +92,16 @@ constexpr uint32_t cb_grad_scores = tt::CBIndex::c_11;        // Gradient w.r.t.
 constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_12;       // u_scalar per row
 constexpr uint32_t cb_grad_query = tt::CBIndex::c_13;         // Output: grad_Q
 constexpr uint32_t cb_u_scaler_output = tt::CBIndex::c_14;    // Output: u_scaler to DRAM for KV kernel
+#ifdef HAS_GATE
+constexpr uint32_t cb_gate = tt::CBIndex::c_15;                     // Input: gate G
+constexpr uint32_t cb_grad_gate = tt::CBIndex::c_16;                // Output: grad_gate
+constexpr uint32_t cb_gated_grad_output = tt::CBIndex::c_17;        // Output: gated dO to DRAM for KV kernel
+constexpr uint32_t cb_gated_grad_output_local = tt::CBIndex::c_18;  // Compute-local gated dO for dP matmul
+// Operand for dP = dO @ V^T
+constexpr uint32_t cb_dp_grad_output = cb_gated_grad_output_local;
+#else
+constexpr uint32_t cb_dp_grad_output = cb_grad_output;
+#endif
 
 const uint32_t qk_tiles = qWt;            // Q/K inner dim tiles
 const uint32_t v_tiles = vWt;             // V/dO/O inner dim tiles
@@ -111,6 +130,21 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         v_tiles,
         scaler_bits,
         cb_u_scaler_output);
+
+#ifdef HAS_GATE
+    compute_gated_grad_output_and_grad_gate(
+        cb_grad_output,
+        cb_attn_output,
+        cb_gate,
+        cb_gated_grad_output_local,
+        cb_gated_grad_output,
+        cb_grad_gate,
+        v_tiles);
+    cb_wait_front(cb_gated_grad_output_local, v_tiles);
+    // The gate helper leaves PACK in BF16; the loop below only reconfigures conditionally
+    // from FP32, so restore FP32 here.
+    pack_reconfig_data_format(cb_attention_weights);
+#endif
 
     const uint32_t q_row_tile = global_row_idx % Ht;
 
@@ -168,7 +202,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         cb_push_back(cb_attention_weights, onetile);
 
         compute_grad_attn_weights(
-            cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, cb_attention_weights, scaler_bits);
+            cb_dp_grad_output, cb_value, v_tiles, cb_grad_attn_weights, cb_attention_weights, scaler_bits);
 
         compute_grad_scores(cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
 
@@ -189,6 +223,10 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 
     pack_tiles_to_output(cb_grad_query_accum, cb_grad_query, qk_tiles);
 
+#ifdef HAS_GATE
+    cb_pop_front(cb_gated_grad_output_local, v_tiles);
+    cb_pop_front(cb_gate, v_tiles);
+#endif
     cb_pop_front(cb_u_scalar_row, onetile);
     cb_pop_front(cb_intermediates, num_of_interm_tiles);
     cb_pop_front(cb_query, qk_tiles);

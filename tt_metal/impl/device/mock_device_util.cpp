@@ -10,7 +10,7 @@ namespace tt::tt_metal::experimental {
 
 std::string get_mock_cluster_desc_name(tt::ARCH arch, uint32_t num_chips) {
     // Each entry maps to a cluster descriptor YAML in
-    // tt_metal/third_party/umd/tests/cluster_descriptor_examples/. New entries must
+    // tt_metal/third_party/umd/descriptors/cluster_descriptor_examples/. New entries must
     // reference an existing file there; otherwise mock mode will fail to load the
     // cluster at runtime.
     switch (arch) {

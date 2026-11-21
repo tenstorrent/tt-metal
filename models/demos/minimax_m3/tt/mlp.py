@@ -10,6 +10,7 @@ expert backends were removed in the prefill cleanup; this mirrors deepseek_v3_d_
 """
 
 import ttnn
+from models.demos.minimax_m3.utils.checkpoint import ROUTED_EXPERT_SWIGLU
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
@@ -100,10 +101,11 @@ class MLP:
         # substate presence (which is empty in this mode). See tt/weight_cache.py.
         cache_only = not state_dict
 
-        # M3: always-on shared expert (block_sparse_moe.shared_experts.{gate,up,down}_proj), a plain
+        # Always-on shared expert (block_sparse_moe.shared_experts.{gate,up,down}_proj), a plain
         # clamped-swigluoai FFN at shared_intermediate_size. Its output is ADDED to the routed-expert
         # output (the routed side already carries routed_scaling_factor from the router). Reuses DenseMLP.
-        # M3 MoE layers always have a shared expert -> build it from cache in cache-only mode.
+        # n_shared_experts is 1 (check_supported_config) -> build it from cache in cache-only mode.
+        assert hf_config.n_shared_experts == 1, f"n_shared_experts={hf_config.n_shared_experts}: exactly one is built"
         shared_state_dict = substate(state_dict, "shared_experts")
         self.shared_expert = (
             DenseMLP(
@@ -184,8 +186,13 @@ class MLP:
         self.overlap_shared = overlap_shared_expert and self.shared_expert is not None
         self.fuse_shared_rs = fuse_shared_rs_enabled() and self.shared_expert is not None
 
-        # Routed experts: DeepSeek EP dispatch/combine + the fused unified_routed_expert_moe kernel with
-        # M3's clamped swigluoai activation (baked alpha=1.702 / limit=7.0). See TtMiniMaxMoE.
+        # Routed experts: DeepSeek EP dispatch/combine + the fused unified_routed_expert_moe kernel with the
+        # clamped swigluoai activation, whose alpha / limit are baked into the kernel. See TtMiniMaxMoE.
+        assert (hf_config.swiglu_alpha, hf_config.swiglu_limit) == ROUTED_EXPERT_SWIGLU, (
+            f"config swiglu alpha/limit {(hf_config.swiglu_alpha, hf_config.swiglu_limit)} != the routed-expert "
+            f"kernel's {ROUTED_EXPERT_SWIGLU}"
+        )
+        assert hf_config.scoring_func == "sigmoid", f"scoring_func={hf_config.scoring_func!r}: the gate is sigmoid-only"
         self.experts = TtMiniMaxMoE(
             mesh_device=mesh_device,
             dispatch_group_size=dgs,
@@ -204,23 +211,20 @@ class MLP:
             num_links=ccl_manager.num_links,
             routed_expert_weights_dtype=expert_weight_dtype,
             weight_cache_path=_ep_cache_dir(tensor_cache_path),
-            # Must match the model's routed_scaling_factor (2.0), not the 1.0 default: the internal gate
-            # applies it to the top-k weights, so a stale 1.0 silently halves every routed contribution
-            # as soon as gate_fallback_mode selects the internal gate over the caller-supplied topk.
-            route_scale=getattr(hf_config, "routed_scaling_factor", 1.0),
+            # The model's routed_scaling_factor: the internal gate applies it to the top-k weights whenever
+            # gate_fallback_mode selects it over the caller-supplied topk.
+            route_scale=hf_config.routed_scaling_factor,
             reduce_scatter_fn=moe_reduce_scatter,
             overlap_shared_expert=self.overlap_shared,
         )
         self.ep_num_links = ccl_manager.num_links
 
-    def __call__(self, hidden_states, actual_isl=None, actual_start=0):
+    def __call__(self, hidden_states, chunks=None):
         """Forward (prefill): shared expert + expert-parallel routed experts.
 
-        actual_isl: real (non-pad) tokens in this chunk across the whole SP axis, or None for a full
-        chunk. Drives the padding config below; a wrong value silently drops real tokens, so a caller
-        that does not track it must pass None (correct, it just does the padded work).
-        actual_start: the chunk's global start (the cache offset); decides which rows of each SP chip are
-        real when the chunk starts mid-slab (see TopKRouter.build_padding_config).
+        chunks: the forward's PrefillChunks (common/prefill/prefill_chunk.py), or None for all rows real. Their real-token
+        ranges drive the padding config below (see TopKRouter.build_padding_config); a wrong range silently
+        drops real tokens.
 
         hidden_states: per-device [1,1,S,H] at FULL emb (the prompts/seq-shards live in the mesh rows).
         Under a sharded residual that full width comes from the layer's single pre-MLP all-gather, and
@@ -243,10 +247,10 @@ class MLP:
                 shared_out = self.shared_expert(hidden_states)
 
         Hfull = hidden_states.shape[-1]
-        # ONE padding config per chunk, shared by the gate and the EP dispatch. Built (and memoized) by
-        # the router; None for a full chunk. Both consumers must see the SAME tensor — the gate
+        # ONE padding config per forward, shared by the gate and the EP dispatch. Built (and memoized) by
+        # the router; None when every row is real. Both consumers must see the SAME tensor — the gate
         # sentinel-marks the padded rows and dispatch shortens its token loop to match. See tt/topk.py.
-        padding_config = self.router.build_padding_config(actual_isl, actual_start)
+        padding_config = self.router.build_padding_config(chunks)
         with zone("router_topk"):
             idx, wts = self.router(hidden_states, padding_config=padding_config)  # per-row top-k
         x3d = ttnn.squeeze(hidden_states, dim=0)  # [1,1,S,H] -> [1,S,H] per device

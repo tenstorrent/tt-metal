@@ -26,7 +26,6 @@
 namespace ttnn::experimental::prim {
 
 struct RingAttentionAllGatherAsyncParams {
-    std::vector<IDevice*> devices;
     int32_t dim = 0;
     uint32_t num_links = 1;
     uint32_t ring_size = 0;
@@ -41,9 +40,10 @@ struct RingAttentionAllGatherAsyncParams {
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
     std::optional<uint64_t> route_plan_hash;
+    // Full mesh only: tensor ranks run down the mesh columns (split KV with SP on mesh axis 1).
+    bool column_major_ranks = false;
 
     RingAttentionAllGatherAsyncParams(
-        std::vector<IDevice*> devices,
         int32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
@@ -57,8 +57,8 @@ struct RingAttentionAllGatherAsyncParams {
         ttnn::ccl::snake_ring::Orientation snake_orientation = ttnn::ccl::snake_ring::Orientation::Row,
         uint32_t mesh_rows = 0,
         uint32_t mesh_cols = 0,
-        std::optional<uint64_t> route_plan_hash = std::nullopt) :
-        devices(std::move(devices)),
+        std::optional<uint64_t> route_plan_hash = std::nullopt,
+        bool column_major_ranks = false) :
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
@@ -72,13 +72,13 @@ struct RingAttentionAllGatherAsyncParams {
         snake_orientation(snake_orientation),
         mesh_rows(mesh_rows),
         mesh_cols(mesh_cols),
-        route_plan_hash(route_plan_hash) {}
+        route_plan_hash(route_plan_hash),
+        column_major_ranks(column_major_ranks) {}
 
     // Restrict program-cache hashing and the canonical key to structure-affecting fields only.
-    // Excludes runtime-only `devices` (raw IDevice* pointers), `semaphore` (GlobalSemaphore objects
-    // whose addresses are passed to runtime args), and `core_allocation_strategy` (effectively
-    // constant; not part of the historical custom hash). `sub_device_id` is the structural source of
-    // the worker-core range set the previous custom hash encoded.
+    // Excludes `semaphore` (GlobalSemaphore objects whose addresses are passed to runtime args).
+    // `sub_device_id` is the structural source of the worker-core range set the previous custom hash
+    // encoded, and `core_allocation_strategy` picks the worker cores within it (row- vs column-major).
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim",
         "num_links",
@@ -87,11 +87,13 @@ struct RingAttentionAllGatherAsyncParams {
         "topology",
         "sub_device_id",
         "cluster_axis",
+        "core_allocation_strategy",
         "full_mesh",
         "snake_orientation",
         "mesh_rows",
         "mesh_cols",
-        "route_plan_hash");
+        "route_plan_hash",
+        "column_major_ranks");
     auto attribute_values() const {
         return std::forward_as_tuple(
             dim,
@@ -101,11 +103,13 @@ struct RingAttentionAllGatherAsyncParams {
             topology,
             sub_device_id,
             cluster_axis,
+            core_allocation_strategy,
             full_mesh,
             snake_orientation,
             mesh_rows,
             mesh_cols,
-            route_plan_hash);
+            route_plan_hash,
+            column_major_ranks);
     }
 };
 

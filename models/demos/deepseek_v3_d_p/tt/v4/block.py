@@ -17,6 +17,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import TtMHCWrap
+from models.demos.deepseek_v3_d_p.tt.mla.compressed_sparse_attention import TtCSA
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
 from models.demos.deepseek_v3_d_p.tt.mla.sliding_window_attention import TtSWA
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -27,6 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPref
 _ATTENTION = {
     "sliding_attention": TtSWA,
     "heavily_compressed_attention": TtHCA,
+    "compressed_sparse_attention": TtCSA,
 }
 
 # The only gate modes that read the hash table; the rest route by top-k and ignore it, which on a
@@ -53,7 +55,7 @@ class TtV4Block(LightweightModule):
     ``[1, 1, seq/sp, hidden/tp]``. Hidden is never gathered across the block. Within a chip the columns
     hold its own hidden slice of every stream, which is what ``mhc_expand`` and this block's own
     output already produce -- chaining layers needs no repacking. Only a host upload has to permute
-    into that order, since a mesh mapper splits the last dim globally (``_pack_streams`` in the test).
+    into that order, since a mesh mapper splits the last dim globally (``pack_streams`` in tests/v4/helpers.py).
 
     The MoE comes from ``TtPrefillBlock._build_moe``: the same TtMoe off the same model config,
     reading ``state_dict["hash_table"]`` for V4's hash-routed layers.
@@ -88,10 +90,12 @@ class TtV4Block(LightweightModule):
         is_balanced: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
         overlap_shared_expert_with_dispatch: bool = True,
+        slot_num: int = 1,
     ):
         """``seq_len`` is the padded per-chunk length; ``max_seq_len`` the full per-user length the
         attention state must span, defaulting to one chunk. ``attn_reference`` is the torch attention
         module the weights are read off, and ``mhc_weights`` the ``(fn, base, scale)`` triple per site.
+        ``slot_num`` is how many users' attention state the block holds at once.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -138,17 +142,24 @@ class TtV4Block(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
         )
 
+        assert slot_num >= 1, f"slot_num must be positive, got {slot_num}"
+        is_csa = attn_kind == "compressed_sparse_attention"
+        # The CSA indexer keeps per-slot overlap state and a user-major key cache, so it is told the
+        # slot count; SWA and HCA state is one tensor set per slot, held below.
+        attn_kwargs = {"slot_num": slot_num} if is_csa else {}
         # The full per-axis topology: the attention's SP-axis gather needs the SP element and its
         # other collectives the TP one. Its weights come off the torch module, not a state dict, so
         # there is nothing for a weight cache to hold for this half of the block.
         self.attn = _ATTENTION[attn_kind].from_reference(
-            mesh_device, attn_reference, config, sp_axis=sp_axis, tp_axis=tp_axis, topology=topology
+            mesh_device, attn_reference, config, sp_axis=sp_axis, tp_axis=tp_axis, topology=topology, **attn_kwargs
         )
-        # Allocated once: the state's shape is the same for every chunk, only its contents advance.
+        # Tables once, then one state per user slot. Each state's shape is the same for every chunk,
+        # only its contents advance.
         # TODO once a V4 transformer owns this state instead of the block, forward() needs the chunk
         # offset back the way TtPrefillBlock takes actual_start: a caller-owned cache does not
         # advance itself, so the position has to come in with the chunk.
-        self.attn_state = self.attn.alloc_state(max_seq_len or seq_len, chunk_tokens=seq_len)
+        self.attn.build_tables(max_seq_len or seq_len, chunk_tokens=seq_len)
+        self.attn_states = [self.attn.new_state(cache_user_id=slot) for slot in range(slot_num)]
 
         self.ffn = TtPrefillBlock._build_moe(
             mesh_device=mesh_device,
@@ -191,27 +202,46 @@ class TtV4Block(LightweightModule):
             mesh_device, mhc_cfg, *mhc_weights["ffn"], tp_axis=tp_axis, num_links=num_links, topology=tp_topology
         )
 
+    def reset_state(self, slot: int) -> None:
+        """Start a new request in user slot ``slot``: its attention state goes back to an empty cache at
+        position 0. The tables, and every other slot's state, stay as they are.
+
+        The fresh state is built before the old one is freed, so a failed allocation leaves the old one
+        intact. That includes the CSA indexer's overlap state for the slot, which the indexer holds and
+        ``new_state`` replaces only after the rest has been allocated. The shared index key cache is not
+        cleared: each chunk writes its rows before scoring and scores only up to its own position, so
+        nothing reads what the slot's previous request left."""
+        old = self.attn_states[slot]
+        self.attn_states[slot] = self.attn.new_state(cache_user_id=slot)
+        old.deallocate()
+
     def forward(
         self,
         x: ttnn.Tensor,
         actual_isl: Optional[int] = None,
         input_ids: Optional[torch.Tensor] = None,
         padding_side: str = "right",
+        cache_user_id: int = 0,
     ) -> ttnn.Tensor:
         """One chunk of packed residual streams in, the same shape out.
 
         ``actual_isl`` is the chunk's real pre-pad length and ``input_ids`` the chunk's token ids,
-        which a hash-routed layer indexes its expert table with and a top-k layer ignores. Where the
-        chunk begins is not an argument: the attention state tracks it and advances itself.
+        which a hash-routed layer indexes its expert table with and a top-k layer ignores.
+        ``cache_user_id`` is the user slot whose attention state the chunk continues. Where the chunk
+        begins is not an argument: that slot's state tracks it and advances itself.
 
         Each norm sits inside its site's sublayer, not before it: the hyper-connection collapses its
         streams first, and the norm belongs on what comes out of that collapse.
         """
         assert padding_side == "right", f"V4 attention is right-padded by construction, got {padding_side!r}"
+        assert (
+            0 <= cache_user_id < len(self.attn_states)
+        ), f"cache_user_id {cache_user_id} is outside [0, {len(self.attn_states)})"
+        state = self.attn_states[cache_user_id]
 
         def _attn(h):
             normed = self.attn_norm(h)
-            out = self.attn(normed, seq_len_actual=actual_isl, state=self.attn_state)
+            out = self.attn(normed, seq_len_actual=actual_isl, state=state)
             ttnn.deallocate(normed)
             return out
 

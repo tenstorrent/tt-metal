@@ -14,6 +14,7 @@
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
+#include "core/parameter_dtype.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
@@ -124,7 +125,7 @@ uint64_t get_number_of_parameters(Model &model, bool tp) {
     auto parameters = get_model_parameters(model);
     uint64_t num_params = 0;
     for (const auto &[name, tensor_ptr] : parameters) {
-        auto tensor = tensor_ptr->get_value();
+        const auto &tensor = tensor_ptr->get_value(ttml::autograd::PreferredPrecision::NATIVE);
         auto params_in_tensor = tensor.logical_volume();
         if (tp && (contains(name, "fc") || contains(name, "linear") || contains(name, "mlp/w"))) {
             auto tp_size = ttml::autograd::ctx().get_parallelism_context().get_tp_size();
@@ -392,6 +393,10 @@ int main(int argc, char **argv) {
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty()) {
         multihost_config = parse_multihost_config(YAML::LoadFile(multihost_config_name));
+    }
+
+    if (is_pipeline_parallel_enabled(multihost_config)) {
+        optimizer_node["allow_empty_param_groups"] = true;
     }
 
     // Calculate total number of devices from mesh shape (handles both 1D and 2D meshes)
@@ -699,6 +704,19 @@ int main(int argc, char **argv) {
         ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
     }
 
+    // Before anything is loaded and the optimizer is created (see core::store_trainable_parameters_as for the load
+    // order). Save-and-exit exports the weights in the dtype the model builds, so it skips the conversion. 3-tier
+    // workers keep bf16 parameters for RemoteOptimizer; the optimizer worker holds the fp32 master weights.
+    if (save_and_exit_path.empty() && !is_three_tier_training(multihost_config)) {
+        if (auto master_dtype =
+                ttml::core::apply_precision_config(yaml_config["training_config"], get_model_parameters(model))) {
+            fmt::print("Master dtype: {}\n", *master_dtype);
+        }
+        if (auto reduce_dtype = ttml::autograd::ctx().get_gradient_reduce_dtype()) {
+            fmt::print("Reduce dtype: {}\n", *reduce_dtype);
+        }
+    }
+
     if (!safetensors_path.empty()) {
         fmt::print("Loading model from safetensors path: {}\n", safetensors_path);
         model->load_from_safetensors(safetensors_path);
@@ -744,7 +762,7 @@ int main(int argc, char **argv) {
     } else {
         fmt::print("Optimizer: {}\n", optimizer->get_name());
         // TODO: Replace with print_stats() after #38756 is resolved
-        fmt::print("    Learning rate: {}\n", optimizer->get_lr());
+        fmt::print("    Learning rates: {}\n", optimizer->get_group_lrs());
     }
     auto scheduler = schedule_func(optimizer.get(), effective_max_steps);
 

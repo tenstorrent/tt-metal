@@ -302,9 +302,11 @@ def load_decode_expert_weights(
     tensor_cache_path=None,
 ) -> DecodeExpertWeights:
     from ..fused_decode.stream import (
+        EXPERT_BANK_ROT,
         NBIAS,
         as_stream_tensor,
         columns_per_bank,
+        stream_cache_exists,
         stream_down_layout,
         stream_gate_up_layout,
     )
@@ -337,7 +339,9 @@ def load_decode_expert_weights(
         # One streamed layout per TP shard: [E, H, 2 * I_pad] = [gate shard | up shard] and its [E, 2 * I_pad] bias;
         # [E, I_pad, H] down rows and the [E, H] bias.
         gu_layouts = [
-            stream_gate_up_layout(torch.cat([g[0], u[0]], -1), torch.cat([gb[:, 0], ub[:, 0]], -1), banks)
+            stream_gate_up_layout(
+                torch.cat([g[0], u[0]], -1), torch.cat([gb[:, 0], ub[:, 0]], -1), banks, EXPERT_BANK_ROT
+            )
             for g, u, gb, ub in zip(
                 torch.chunk(gate, tp, -1),
                 torch.chunk(up, tp, -1),
@@ -346,29 +350,88 @@ def load_decode_expert_weights(
             )
         ]
         dn_layouts = [
-            stream_down_layout(w[0], b[:, 0], banks)
+            stream_down_layout(w[0], b[:, 0], banks, EXPERT_BANK_ROT)
             for w, b in zip(torch.chunk(down, tp, -2), torch.chunk(down_bias, tp, -1))
         ]
 
-    suffix = f"decode_i{inter_pad}_b{banks}_nb{NBIAS}"
+    suffix0 = f"decode_i{inter_pad}_b{banks}_nb{NBIAS}"  # the unrotated layout's cache name
+    suffix = f"{suffix0}_rot{EXPERT_BANK_ROT}"
     rows = {
-        "gate_up": E * 2 * inter_pad // tile // banks * (H // tile + 1) * tile,
-        "down": E * columns_per_bank(H, banks) * (inter_pad // tile + 1) * tile,
+        "gate_up_stream": E * 2 * inter_pad // tile // banks * (H // tile + 1) * tile,
+        "down_stream": E * columns_per_bank(H, banks) * (inter_pad // tile + 1) * tile,
     }
+
+    def stream(name, layouts):
+        cache = get_cache_file_name(tensor_cache_path, f"{name}_{suffix}")
+        if layouts is None and cache is not None and not stream_cache_exists(cache, weight_dtype):
+            # no rotated cache and no state dict (a cache built before the bank rotation): rotate the unrotated
+            # cache's bank shards on the host (exact: the BFP4 blocks stay within a bank's tiles)
+            base = as_stream_tensor(
+                mesh_device, None, rows[name], weight_dtype, get_cache_file_name(tensor_cache_path, f"{name}_{suffix0}")
+            )
+            host = ttnn.to_torch(base, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[0]
+            ttnn.deallocate(base)
+            r = EXPERT_BANK_ROT * tile
+            layouts = [torch.cat([h[:, r:], h[:, :r]], dim=-1) for h in host]
+        return as_stream_tensor(mesh_device, layouts, rows[name], weight_dtype, cache)
+
     return DecodeExpertWeights(
-        gate_up_stream=as_stream_tensor(
-            mesh_device,
-            gu_layouts,
-            rows["gate_up"],
-            weight_dtype,
-            get_cache_file_name(tensor_cache_path, f"gate_up_stream_{suffix}"),
-        ),
-        down_stream=as_stream_tensor(
-            mesh_device,
-            dn_layouts,
-            rows["down"],
-            weight_dtype,
-            get_cache_file_name(tensor_cache_path, f"down_stream_{suffix}"),
-        ),
+        gate_up_stream=stream("gate_up_stream", gu_layouts),
+        down_stream=stream("down_stream", dn_layouts),
         intermediate_padded=inter_pad,
     )
+
+
+def load_decode_down_bal(
+    mesh_device, config: ExpertConfig, mesh_config: MeshConfig, dw, weight_dtype, tensor_cache_path
+):
+    """The down weights of DecodeExpertWeights dw again, in the balanced layout of the fused verify MoE
+    (fused_decode/stream.py down_bal_plan / stream_down_bal_layout: more down columns on the DRAM bank whose gate|up
+    pairs are padding, no all-padding K tiles), from its cache or rebuilt from dw.down_stream (exact: whole BFP4
+    tiles move). Returns (tensor, (bank_cols, seg_inter))."""
+    from ..fused_decode.stream import (
+        EXPERT_BANK_ROT,
+        NBIAS,
+        as_stream_tensor,
+        bank_workers,
+        columns_per_bank,
+        down_bal_plan,
+        stream_cache_exists,
+        stream_down_bal_layout,
+    )
+
+    tp = mesh_config.decode.tp
+    inter_local = config.intermediate_size // tp
+    inter_pad = dw.intermediate_padded
+    E, H = config.num_experts, config.hidden_size
+    banks = mesh_device.dram_grid_size().x
+    tile = ttnn.TILE_SIZE
+    # banks whose optimal reader cores share a row (the MoE's row placement puts their readers on it)
+    workers = bank_workers(mesh_device)
+    rows = {}
+    for b, w in enumerate(workers):
+        rows.setdefault(w.y, []).append(b)
+    shared = [g for g in rows.values() if len(g) > 1]
+    plan = down_bal_plan(H, inter_pad, inter_local, banks, EXPERT_BANK_ROT, shared_rows=shared)
+    bank_cols, seg_inter = plan
+    C = max(n for _, n in bank_cols)
+    n_tiles = -(-H // tile)
+    suffix = f"decode_i{inter_pad}_b{banks}_nb{NBIAS}_rot{EXPERT_BANK_ROT}"
+    cache = get_cache_file_name(
+        tensor_cache_path, f"down_bal_{suffix}_s{seg_inter}_" + "_".join(str(n) for _, n in bank_cols)
+    )
+    layouts = None
+    if not stream_cache_exists(cache, weight_dtype):
+        Cs = columns_per_bank(H, banks)
+        seg = inter_pad // tile + 1
+        hosts = ttnn.to_torch(dw.down_stream, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[0]
+        layouts = []
+        for h in hosts:  # [E, columns, K tiles (I_pad / 32 + bias), 32, 32] of this device, logical column order
+            cols = torch.zeros(E, Cs * banks, seg, tile, tile, dtype=h.dtype)
+            for b in range(banks):
+                L = (b + EXPERT_BANK_ROT) % banks
+                cols[:, L * Cs : (L + 1) * Cs] = h[:, b * tile : (b + 1) * tile].reshape(E, Cs, seg, tile, tile)
+            cols = torch.cat([cols[:, :n_tiles, :seg_inter], cols[:, :n_tiles, -1:]], dim=2)
+            layouts.append(stream_down_bal_layout(cols, bank_cols))
+    t = as_stream_tensor(mesh_device, layouts, E * C * (seg_inter + 1) * tile, weight_dtype, cache)
+    return t, plan

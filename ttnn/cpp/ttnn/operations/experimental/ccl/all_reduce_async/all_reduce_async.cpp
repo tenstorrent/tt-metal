@@ -205,7 +205,7 @@ ttnn::Tensor all_reduce_async(
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     const bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t dim = ttnn::operations::experimental::ccl::detail::finding_scatter_dim(
-        input_tensor, ttnn::ccl::get_active_physical_devices(input_tensor).size());
+        input_tensor, input_tensor.device_storage().get_coords().size());
 
     const auto& initial_shape = input_tensor.logical_shape();
     auto composite_dim = (dim == initial_shape.rank()) ? 0 : dim;
@@ -551,7 +551,9 @@ ttnn::Tensor all_reduce_async(
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama,
-    bool fp32_dest_acc) {
+    bool fp32_dest_acc,
+    const std::optional<ttnn::Tensor>& residual_tensor,
+    bool one_shot) {
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
 
@@ -569,7 +571,9 @@ ttnn::Tensor all_reduce_async(
         worker_subdevice_id_opt,
         use_noc1_only,
         use_optimal_ccl_for_llama,
-        fp32_dest_acc);
+        fp32_dest_acc,
+        residual_tensor,
+        one_shot);
 }
 
 }  // namespace ttnn::experimental

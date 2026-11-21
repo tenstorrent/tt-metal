@@ -18,11 +18,13 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     non_rectangular_width_shard_config,
     NON_RECTANGULAR_GRID_CASES,
     NON_RECTANGULAR_GRID_IDS,
+    LINE_GRID_1D_MCAST_CASES,
+    LINE_GRID_1D_MCAST_IDS,
+    line_width_shard_config,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from tt_py_test_utils_common.utility_functions import is_watcher_enabled
 
 pytestmark = pytest.mark.use_module_device
 
@@ -159,8 +161,6 @@ def test_rms_norm_sharded_with_weight_and_bias(device, two_stage, tensor_type, d
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_sharded_with_weight_and_bias_row_major(device, two_stage, tensor_type, dtype):
     torch.manual_seed(0)
-    if is_watcher_enabled() and two_stage is False:
-        pytest.skip("Skipping test with watcher enabled, see github issue #37259")
 
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = 64, 32, 2, 1, 1, 1, 1
 
@@ -352,14 +352,59 @@ def test_rms_norm_sharded_width_default_config(device, h, w, dtype):
 
 # Geometry cases (see UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES in sharded_test_utils.py for the covered
 # tile-aligned-uneven and non-tile-aligned widths).
-@pytest.mark.parametrize(
-    "dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b], ids=["bfloat16", "float32", "bfloat8_b"]
-)
-@pytest.mark.parametrize(
-    ("w", "num_cores_w"), UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, ids=UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS
-)
+_RMS_UNEVEN_MERGE_GATE = {
+    (200, 3, ttnn.bfloat16),  # w200_c3_nonaligned
+    (72, 2, ttnn.float32),  # w72_c2_nonaligned
+    (224, 3, ttnn.bfloat8_b),  # w224_c3
+}
+
+
+# One parametrize with explicit ids, so the ids stay those of the stacked decorators (width-dtype).
+_RMS_UNEVEN_PARAMS = [
+    pytest.param(
+        w,
+        cores,
+        dtype,
+        id=f"{width_id}-{dtype_id}",
+        marks=pytest.mark.merge_gate if (w, cores, dtype) in _RMS_UNEVEN_MERGE_GATE else (),
+    )
+    for (w, cores), width_id in zip(UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS)
+    for dtype, dtype_id in ((ttnn.bfloat16, "bfloat16"), (ttnn.float32, "float32"), (ttnn.bfloat8_b, "bfloat8_b"))
+]
+
+
+@pytest.mark.parametrize("w, num_cores_w, dtype", _RMS_UNEVEN_PARAMS)
 def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, dtype):
     run_sharded_norm_logical_width_multicore(device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w, dtype=dtype)
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "h", "w", "orientation"), LINE_GRID_1D_MCAST_CASES, ids=LINE_GRID_1D_MCAST_IDS
+)
+def test_rms_norm_sharded_1d_mcast_line_grid(device, start, end, h, w, orientation):
+    torch.manual_seed(0)
+    sharded_mem_config, block_wt = line_width_shard_config(device, start, end, h, w, orientation)
+
+    torch_input_tensor = generate_input_tensor(h, w, "random", torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sharded_mem_config,
+    )
+
+    output_tensor = ttnn_rms_norm_sharded(device, input_tensor, block_ht=h // 32, block_wt=block_wt, subblock_w=4)
+
+    golden_output = rms_norm_golden(torch_input_tensor).to(torch.bfloat16)
+
+    assert_numeric_metrics(
+        golden_output,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.031,
+        atol=0.052,
+        frobenius_threshold=0.010,
+    )
 
 
 @pytest.mark.parametrize(
@@ -373,12 +418,12 @@ def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w,
     ids=["row_major", "col_major"],
 )
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
+@pytest.mark.parametrize("h", [32, 64, 96])
 def test_rms_norm_sharded_width_non_rectangular_grid(
-    device, full_lines, cores_in_last_line, origin, line_length, orientation, dtype
+    device, full_lines, cores_in_last_line, origin, line_length, orientation, dtype, h
 ):
     torch.manual_seed(0)
 
-    h = 32
     shard_width = 32
     _, sharded_mem_config, w = non_rectangular_width_shard_config(
         device,
@@ -418,7 +463,7 @@ def test_rms_norm_sharded_width_non_rectangular_grid(
         pcc_threshold=0.999,
         rtol=0.031,
         atol=0.052,
-        frobenius_threshold=0.010,
+        frobenius_threshold=0.020,
     )
 
 

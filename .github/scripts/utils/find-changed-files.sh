@@ -31,6 +31,7 @@ LLK_QUASAR_CHANGED=false
 LLK_TESTS_CHANGED=false
 LLK_UNIT_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
+LLK_HARDWARE_FREE_CHANGED=false
 LLK_CI_CHANGED=false
 TTSIM_CI_CHANGED=false
 WORKFLOWS_CHANGED=false
@@ -38,6 +39,12 @@ WORKFLOWS_CHANGED=false
 
 while IFS= read -r FILE; do
     case "$FILE" in
+        # tt-train's specific patterns - must come before the generic CMake catch-all.
+        tt-train/*(*/)CMakeLists.txt|tt-train/*(*/)*.@(cmake|cmake.in)|cmake/packaging.cmake)
+            CMAKE_CHANGED=true
+            TTTRAIN_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
         CMakeLists.txt|**/CMakeLists.txt|**/*.cmake|*.cmake.in|**/*.cmake.in|CMakePresets.json)
             CMAKE_CHANGED=true
             ANY_CODE_CHANGED=true
@@ -53,6 +60,7 @@ while IFS= read -r FILE; do
             # Pins the ttsim release that fetch-ttsim downloads for every sim_* SKU. An
             # incompatible simulator build breaks the ttsim pipelines and nothing else, so
             # this gets its own flag rather than the blanket ANY_CODE_CHANGED fanout.
+            # The Quasar LLK PR gate subscribes to the same flag.
             TTSIM_CI_CHANGED=true
             ;;
         tests/pipeline_reorg/ttsim_merge_gate_tests.yaml|tests/pipeline_reorg/ttsim_sanity_tests.yaml|tests/pipeline_reorg/ttsim_unit_tests.yaml|tests/pipeline_reorg/ttsim-skip-list.yaml)
@@ -81,7 +89,8 @@ while IFS= read -r FILE; do
         .github/time_budget.yaml)
             TTSIM_CI_CHANGED=true
             ;;
-        .clang-tidy|**/.clang-tidy)
+        .clang-tidy|**/.clang-tidy|\
+        cmake/clang-tidy.d/.clang-tidy.v23-new-checks.yaml)
             CLANG_TIDY_CONFIG_CHANGED=true
             ;;
         tt_stl/**/*.@(h|hpp|c|cpp))
@@ -104,6 +113,16 @@ while IFS= read -r FILE; do
             ;;
         tt_metal/tt-llk/tt_llk_quasar/**|tt_metal/tt-llk/tests/sources/quasar/**|tt_metal/tt-llk/tests/python_tests/quasar/**|tt_metal/hw/ckernels/quasar/**)
             LLK_QUASAR_CHANGED=true
+            ;;
+        # Host-only tests, and the gate modules they import. Before the perf and
+        # tests catch-alls: those would start the card perf and smoke jobs.
+        tt_metal/tt-llk/tests/hardware_free/**|tt_metal/tt-llk/tests/run_hardware_free.sh)
+            LLK_HARDWARE_FREE_CHANGED=true
+            ;;
+        tt_metal/tt-llk/perf/**)
+            LLK_HARDWARE_FREE_CHANGED=true
+            TTMETALIUM_CHANGED=true
+            ANY_CODE_CHANGED=true
             ;;
         tt_metal/tt-llk/tests/**/perf/**|tt_metal/tt-llk/tests/**/*perf*)
             LLK_PERF_CHANGED=true
@@ -132,7 +151,7 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;
-        .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml)
+        .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml|tests/pipeline_reorg/llk_pr_gate_tests.yaml|tests/pipeline_reorg/llk_hardware_free_tests.yaml)
             LLK_CI_CHANGED=true
             ;;
         tt_metal/**/*.@(h|hpp|inl|c|cpp|cc|py))
@@ -162,7 +181,13 @@ while IFS= read -r FILE; do
             TTNN_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tt-train/**/*.@(h|hpp|inl|c|cpp|py))
+        # The tt-train gate test lists. They are not source files but decide what the gates
+        # run, so a PR that only edits them must still build and run the train gate jobs.
+        tt-train/tests/ops/smoke_tests.txt|tt-train/tests/ops/run_smoke_tests.sh|tests/pipeline_reorg/train_pr_gate_tests.yaml|tests/pipeline_reorg/train_merge_gate_tests.yaml)
+            TTTRAIN_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
+        tt-train/*(*/)*.@(h|hpp|inl|c|cpp|py|fbs))
             TTTRAIN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
@@ -275,7 +300,8 @@ while IFS= read -r FILE; do
         .github/workflows/clang-tidy-reusable.yaml|\
         .github/workflows/pr-gate.yaml|\
         .github/workflows/build-docker-artifact.yaml|\
-        .github/workflows/resolve-docker-pull-refs.yaml)
+        .github/workflows/resolve-docker-pull-refs.yaml|\
+        cmake/clang-tidy-export-fixes-wrapper.sh)
             CLANG_TIDY_KEY_WORKFLOW_CHANGED=true
             ;;
     esac
@@ -330,6 +356,14 @@ for submodule_path in $SUBMODULE_PATHS; do
         break
     fi
 done
+
+# A submodule bump (notably UMD) can change what the public headers should
+# include, e.g. when a header's symbol moves to another header. The api-header
+# include-cleaner gate sweeps every public header in ~40 s, so run it on any
+# submodule change instead of only when a tt_metal/api header is edited.
+if [ "$SUBMODULE_CHANGED" = true ]; then
+    TTMETALIUM_API_HEADERS_CHANGED=true
+fi
 
 # run-clang-tidy: should the code-analysis (clang-tidy) job run? Computed
 # from the dedicated C/C++-only scan and the RAW pre-fallback flags above
@@ -404,6 +438,7 @@ declare -A changes=(
     [llk-tests-changed]=$LLK_TESTS_CHANGED
     [llk-unit-tests-changed]=$LLK_UNIT_TESTS_CHANGED
     [llk-perf-changed]=$LLK_PERF_CHANGED
+    [llk-hardware-free-changed]=$LLK_HARDWARE_FREE_CHANGED
     [llk-ci-changed]=$LLK_CI_CHANGED
     [ttsim-ci-changed]=$TTSIM_CI_CHANGED
 )

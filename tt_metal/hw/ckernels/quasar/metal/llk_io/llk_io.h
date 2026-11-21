@@ -23,7 +23,7 @@ inline bool dfb_op_is_split(const LocalDFBInterface& intf) {
     }
 }
 
-// Cursor helpers shared by pack (wr_entry_idx) and unpack (rd_entry_idx).
+// Cursor helpers shared by pack and unpack (cursor_entry_idx is the write or the read cursor).
 
 // On a BLOCKED ring one op must cover exactly one block.
 inline bool dfb_op_is_whole_share(const LocalDFBInterface& intf, std::uint32_t num_tiles) {
@@ -33,20 +33,12 @@ inline bool dfb_op_is_whole_share(const LocalDFBInterface& intf, std::uint32_t n
 // Move one counter's cursor past an n-tile op: to the op's last entry, then `jump` entries to
 // this counter's next entry. Wraps to the ring base at the end.
 inline void dfb_step_slot(const LocalDFBInterface& intf, DFBTCSlot& slot, std::uint32_t n) {
-#if defined(UCK_CHLKC_PACK)
-    std::uint32_t entry_idx = slot.wr_entry_idx;
-#else
-    std::uint32_t entry_idx = slot.rd_entry_idx;
-#endif
+    std::uint32_t entry_idx = slot.cursor_entry_idx;
     entry_idx += (n - 1u) * intf.stride_size_tiles + intf.jump;
     if (dfb_slot_cursor_offset_units(intf, slot, entry_idx) >= slot.ring_size) {
         entry_idx = slot.base_entry_idx;
     }
-#if defined(UCK_CHLKC_PACK)
-    slot.wr_entry_idx = static_cast<std::uint16_t>(entry_idx);
-#else
-    slot.rd_entry_idx = static_cast<std::uint16_t>(entry_idx);
-#endif
+    slot.cursor_entry_idx = static_cast<std::uint16_t>(entry_idx);
 }
 
 // Normal op: step the current counter's cursor, then move on to the next counter.

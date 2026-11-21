@@ -6,10 +6,13 @@
 
 #include <cstddef>
 #include <functional>
+#include <memory>
+#include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <ttnn/distributed/distributed_configs.hpp>
@@ -18,8 +21,19 @@ namespace ttnn {
 class Tensor;
 }  // namespace ttnn
 
+namespace ttnn::command_list {
+struct CmdListBindings;
+}  // namespace ttnn::command_list
+
+namespace tt::tt_metal {
+class MeshTensor;
+class Program;
+class TensorTopology;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal::distributed {
 class MeshDevice;
+class MeshWorkload;
 }  // namespace tt::tt_metal::distributed
 
 namespace ttnn::device_operation::detail {
@@ -37,6 +51,21 @@ std::pair<
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
 compute_output_placements_and_shape(const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors);
+
+/**
+ * The same union over TensorTopology labels instead of tensors. The tensor overload above is this function
+ * applied to each tensor's tensor_topology(); it exists so a device operation that knows what one of its
+ * operands WILL be labelled (a collective's result feeding a fused matmul) can take the union of that label
+ * with the labels of its other operands, rather than re-implementing the rule. Semantics: among the labels of
+ * the highest distribution rank, the first Shard seen on a mesh axis wins and a tensor dim already claimed by
+ * another axis reads Replicate; the distribution shape is the per-axis maximum; lower-rank sharded labels are
+ * dropped; fully-replicated labels only decide the rank when nothing is sharded.
+ */
+std::pair<
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+    tt::tt_metal::distributed::MeshShape>
+compute_output_placements_and_shape(
+    const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& topologies);
 
 /**
  * Non-template implementation of tensor coordinate extraction.
@@ -64,5 +93,33 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> extract_tensor_coordinate
  * therefore still drop the per-core bit unnoticed; tracked in #51482.
  */
 void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_view operation_name, size_t input_index);
+
+// True while a ttnn::command_list::CommandListBuilder records on the calling thread (ttnn/command_list.hpp).
+bool is_recording_command_list();
+
+// Throws while recording on the calling thread. For calls whose meaning depends on recorded work, so running them at
+// record time would be wrong.
+void throw_if_recording_command_list(std::string_view call_name);
+
+// True while TTNN command-list parameter binds are pushed on the calling thread (ttnn/command_list_params.hpp).
+bool has_active_cmd_list_binds();
+
+// A program of a workload being recorded, with the bindings its factory stored on the cache miss and the tensor this
+// call binds to each of its TensorParameters.
+struct CmdListProgramBindings {
+    const tt::tt_metal::Program* program;
+    const ttnn::command_list::CmdListBindings* bindings;
+    std::vector<std::pair<tt::tt_metal::TensorParamName, const tt::tt_metal::MeshTensor*>> bound_tensors;
+};
+
+// Adds `workload` to the CommandListBuilder recording on the calling thread instead of enqueueing it, recording as
+// TTNN command-list parameters the active binds that match `programs`. `op_owned_tensors` are the tensors the
+// workload's factory allocated for itself; lists built from the recording keep them alive.
+void record_to_command_list(
+    std::string_view operation_name,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    std::span<const CmdListProgramBindings> programs = {},
+    std::span<const std::shared_ptr<const std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors = {});
 
 }  // namespace ttnn::device_operation::detail

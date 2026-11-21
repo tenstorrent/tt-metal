@@ -170,10 +170,10 @@
 #define TT_OP_SETADCZW_THREAD_OVERRIDE(CntSetMask, ThreadId, Ch1_W, Ch1_Z, Ch0_W, Ch0_Z, BitMask) \
     TT_OP_SETADCZW(CntSetMask, (((ThreadId) << SETADC_THREAD_OVRD_CH1_SHIFT) | (Ch1_W)), Ch1_Z, Ch0_W, Ch0_Z, BitMask)
 
-// ZEROACC that clears nothing, so the instruction is a no-op apart from applying its AddrMode to the
-// address counters.
-#define TTI_ZEROACC_ADDRMOD_ONLY(AddrMode) TTI_ZEROACC(p_zeroacc::CLR_16, 0 /*use_32_bit_mode*/, 0 /*clear_zero_flags*/, AddrMode, p_zeroacc::WHERE_NOP)
+// SFPLOAD into LReg 8 or above loads nothing, so the instruction does nothing but apply its AddrMode to the
+// RWCs, as an FPU instruction would (FidelityPhase excepted).
+#define TTI_ADDRMOD_ONLY(AddrMode) TTI_SFPLOAD(p_sfpu::LCONST_0_8373, ckernel::InstrModLoadStore::FP16B, AddrMode, 0 /*dest_reg_addr*/)
 
-#define TT_ZEROACC_ADDRMOD_ONLY(AddrMode) TT_ZEROACC(p_zeroacc::CLR_16, 0 /*use_32_bit_mode*/, 0 /*clear_zero_flags*/, AddrMode, p_zeroacc::WHERE_NOP)
+#define TT_ADDRMOD_ONLY(AddrMode) TT_SFPLOAD(p_sfpu::LCONST_0_8373, ckernel::InstrModLoadStore::FP16B, AddrMode, 0 /*dest_reg_addr*/)
 
-#define TT_OP_ZEROACC_ADDRMOD_ONLY(AddrMode) TT_OP_ZEROACC(p_zeroacc::CLR_16, 0 /*use_32_bit_mode*/, 0 /*clear_zero_flags*/, AddrMode, p_zeroacc::WHERE_NOP)
+#define TT_OP_ADDRMOD_ONLY(AddrMode) TT_OP_SFPLOAD(p_sfpu::LCONST_0_8373, ckernel::InstrModLoadStore::FP16B, AddrMode, 0 /*dest_reg_addr*/)

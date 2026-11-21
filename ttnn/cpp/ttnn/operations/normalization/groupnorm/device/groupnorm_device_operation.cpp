@@ -11,6 +11,7 @@
 #include "ttnn/operations/normalization/groupnorm/groupnorm_grid_utils.hpp"
 #include "ttnn/operations/normalization/groupnorm/device/groupnorm_program_utils.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
@@ -177,7 +178,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         "Input tensor must be BFLOAT16 or FLOAT32, got: {}",
         a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to groupnorm need to be on device!");
-    TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+    TT_FATAL(a.is_allocated(), "Operands to groupnorm need to be allocated in buffers on device!");
     TT_FATAL(
         !(args.use_welford && a.device()->arch() == tt::ARCH::QUASAR),
         "group_norm with use_welford=True is not supported on Quasar; the two-pass SFPU implementation currently "
@@ -239,8 +240,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
                 a.padded_shape()[3],
                 gamma.value().padded_shape()[3]);
             TT_FATAL(a.device() == gamma.value().device(), "Input and gamma tensors must be on same device");
-            TT_FATAL(
-                gamma.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+            TT_FATAL(gamma.value().is_allocated(), "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
                 gamma.value().padded_shape()[2] == tile_height,
                 "Gamma tensor height must equal tile height ({}), got: {}",
@@ -257,8 +257,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
                 tile_width,
                 gamma.value().padded_shape()[3]);
             TT_FATAL(a.device() == gamma.value().device(), "Input and gamma tensors must be on same device");
-            TT_FATAL(
-                gamma.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+            TT_FATAL(gamma.value().is_allocated(), "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
                 gamma.value().dtype() == DataType::BFLOAT16 || gamma.value().dtype() == DataType::FLOAT32,
                 "Gamma tensor must be BFLOAT16 or FLOAT32, got: {}",
@@ -287,8 +286,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
                 a.padded_shape()[3],
                 beta.value().padded_shape()[3]);
             TT_FATAL(a.device() == beta.value().device(), "Input and beta tensors must be on same device");
-            TT_FATAL(
-                beta.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+            TT_FATAL(beta.value().is_allocated(), "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
                 beta.value().padded_shape()[2] == tile_height,
                 "Beta tensor height must equal tile height ({}), got: {}",
@@ -305,8 +303,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
                 tile_width,
                 beta.value().padded_shape()[3]);
             TT_FATAL(a.device() == beta.value().device(), "Input and beta tensors must be on same device");
-            TT_FATAL(
-                beta.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
+            TT_FATAL(beta.value().is_allocated(), "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
                 beta.value().dtype() == DataType::BFLOAT16 || beta.value().dtype() == DataType::FLOAT32,
                 "Beta tensor must be BFLOAT16 or FLOAT32, got: {}",
@@ -323,7 +320,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             input_mask.value().storage_type() == StorageType::DEVICE,
             "Input mask must be on device, got storage type: {}",
             input_mask.value().storage_type());
-        TT_FATAL(input_mask.value().buffer() != nullptr, "Input mask must be allocated in buffers on device!");
+        TT_FATAL(input_mask.value().is_allocated(), "Input mask must be allocated in buffers on device!");
         TT_FATAL(a.device() == input_mask.value().device(), "Input and input mask tensors must be on same device");
         // For non-tile-aligned H*W on the tile-reduction path the mask carries a second, row-masked copy
         // of every group; that is the only reason dim1 may be 2 * num_groups.
@@ -361,7 +358,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             negative_mask.value().storage_type() == StorageType::DEVICE,
             "Negative mask must be on device, got storage type: {}",
             negative_mask.value().storage_type());
-        TT_FATAL(negative_mask.value().buffer() != nullptr, "Negative mask must be allocated in buffers on device!");
+        TT_FATAL(negative_mask.value().is_allocated(), "Negative mask must be allocated in buffers on device!");
         TT_FATAL(
             a.device() == negative_mask.value().device(), "Input and negative mask tensors must be on same device");
         TT_FATAL(
@@ -461,7 +458,7 @@ tt::tt_metal::TensorSpec GroupNormDeviceOperation::compute_output_specs(
             auto mem_config = args.output_mem_config;
             return tt::tt_metal::TensorSpec(
                 input_tensor.logical_shape(),
-                TensorLayout::fromPaddedShape(
+                tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                     program_config.out_data_format,
                     PageConfig(program_config.output_layout),
                     mem_config,
@@ -508,7 +505,7 @@ Tensor group_norm(
             negative_mask.value().storage_type() == StorageType::DEVICE,
             "Negative mask must be on device, got storage type: {}",
             negative_mask.value().storage_type());
-        TT_FATAL(negative_mask.value().buffer() != nullptr, "Negative mask must be allocated in buffers on device!");
+        TT_FATAL(negative_mask.value().is_allocated(), "Negative mask must be allocated in buffers on device!");
         TT_FATAL(
             input.device() == negative_mask.value().device(), "Input and negative mask tensors must be on same device");
     }

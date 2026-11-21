@@ -30,8 +30,13 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     const auto& index_dtype{index_tensor.dtype()};
     const auto& src_dtype{src_tensor.dtype()};
 
+    // Compared as untilized: ttnn::scatter runs these checks on the caller's tensors, then untilizes TILE
+    // operands, which turns BFLOAT8_B into BFLOAT16. So a BFLOAT8_B operand and a BFLOAT16 one reach the
+    // kernels with the same dtype. On the row-major tensors the device operation receives, this is the
+    // plain comparison.
     TT_FATAL(
-        input_dtype == src_dtype,
+        ttnn::operations::data_movement::untilize_output_dtype(input_dtype) ==
+            ttnn::operations::data_movement::untilize_output_dtype(src_dtype),
         "input_dtype differs from src_dtype (input_dtype: {}, src_dtype: {}).",
         enchantum::to_string(input_dtype),
         enchantum::to_string(src_dtype));
@@ -46,9 +51,9 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!index_tensor.is_sharded(), "Sharded tensors are not supported - index_tensor is sharded.");
     TT_FATAL(!src_tensor.is_sharded(), "Sharded tensors are not supported - src_tensor is sharded.");
 
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor's buffer is null.");
-    TT_FATAL(index_tensor.buffer() != nullptr, "Index tensor's buffer is null.");
-    TT_FATAL(src_tensor.buffer() != nullptr, "Src tensor's buffer is null.");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor's buffer is null.");
+    TT_FATAL(index_tensor.is_allocated(), "Index tensor's buffer is null.");
+    TT_FATAL(src_tensor.is_allocated(), "Src tensor's buffer is null.");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be allocated on a device.");
     TT_FATAL(index_tensor.storage_type() == StorageType::DEVICE, "Index tensor must be allocated on a device.");
