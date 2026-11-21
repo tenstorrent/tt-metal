@@ -824,7 +824,9 @@ class ResidentModel:
         # ---- streamer tensors
         # (row groups: a shard holds every group's rows, tile row gr = group gr: o block gr at gr * o_tiles tiles)
         LR = self.launch_rows
-        self.o_in_t = l1(torch.zeros(S * LR, d.gv), grid, [LR, d.gv])
+        # (row groups: o shares the streamers' activation CB instead, streamer_common.hpp kOinInAct)
+        self.o_in_t = l1(torch.zeros(S * LR, d.gv), grid, [LR, d.gv]) if groups == 1 else None
+        o_in_addr = self.o_in_t.buffer_address() if self.o_in_t is not None else 0
         self.logits_t = l1(torch.zeros(S * LR, nv_max * TILE), grid, [LR, nv_max * TILE]) if lm_head else None
         blk = blk_tiles * TILE * B
         # conv taps per (streamer, GDN copy): [tap][32 x 1x32 tiles], only the core's q|k|v columns
@@ -1159,7 +1161,25 @@ class ResidentModel:
             cbs = [
                 ring_cb(max(ring_bytes, lcm)),  # (row groups: resized from the L1 left below; the estimate may be < 0)
                 cb(7, grid, 1, ttnn.uint32, 16),
-                cb(8, grid, groups * d.It, page=64 * B, tiny_tile=True),
+                *(
+                    [cb(8, grid, d.It, page=64 * B, tiny_tile=True)]
+                    if groups == 1
+                    else [  # (row groups: one memory for the activation (8) and o (21), streamer_common.hpp)
+                        ttnn.CBDescriptor(
+                            total_size=groups * max(d.It, d.Ot) * 64 * B,
+                            core_ranges=grid,
+                            format_descriptors=[
+                                ttnn.CBFormatDescriptor(
+                                    buffer_index=i,
+                                    data_format=ttnn.bfloat16,
+                                    page_size=64 * B,
+                                    tile=ttnn.TileDescriptor(B, TILE),
+                                )
+                                for i in (8, 21)
+                            ],
+                        )
+                    ]
+                ),
                 tiny_cb(9, groups * nd_max),
                 tiny_cb(10, groups * nd_max),
                 *(
@@ -1175,7 +1195,7 @@ class ResidentModel:
                 aliased(18, 23, groups * blk_tiles),
                 aliased(19, 24, CONV_K * blk_tiles),
                 aliased(20, 25, groups * (CONV_K - 1) * blk_tiles),
-                T(21, self.o_in_t),
+                *([T(21, self.o_in_t)] if groups == 1 else []),
                 cb(30, grid, groups * (3 if R == 2 or self.rows else 1) * blk_tiles * B // TILE),
             ]
             if self.verify:
@@ -1346,7 +1366,11 @@ class ResidentModel:
             ]
             sems.append(ttnn.SemaphoreDescriptor(id=SEM_GROUP, core_ranges=head_grid, initial_value=0))
             if groups > 1:
-                sems.append(ttnn.SemaphoreDescriptor(id=SEM_RADDR, core_ranges=grid.merge(prep_grid), initial_value=0))
+                sems.append(
+                    ttnn.SemaphoreDescriptor(
+                        id=SEM_RADDR, core_ranges=grid.merge(prep_grid).merge(head_grid), initial_value=0
+                    )
+                )
 
             # every kernel: multi-user rows mode (active_rows.hpp)
             # (row_tiles: batch x 32 tiles per row group in the mixers' row buffer, gdn_head_reader.cpp)
@@ -1590,7 +1614,7 @@ class ResidentModel:
                     )
                     col = head_p[hh * G]
                     hw[c.x][c.y] = (
-                        [sub["state"].buffer_address(), self.o_in_t.buffer_address(), hh]
+                        [sub["state"].buffer_address(), o_in_addr, hh]
                         + peers
                         + [0, gi * nu, nu, G, col.x, col.y, tok_addr]
                     )
@@ -1633,7 +1657,7 @@ class ResidentModel:
                 w0p, w1p = wphys[0], wphys[-1]
                 lw[leader.x][leader.y] = (
                     [q_t.buffer_address(), M_t.buffer_address(), m_slots_t.buffer_address(), WORKERS]
-                    + [w0p.x, w0p.y, w1p.x, w1p.y, self.o_in_t.buffer_address()]
+                    + [w0p.x, w0p.y, w1p.x, w1p.y, o_in_addr]
                     + peers
                     + [len(groups_)]
                     + [v for grp in groups_ for v in (wphys[grp[0]].x, wphys[grp[0]].y)]
@@ -1705,7 +1729,8 @@ class ResidentModel:
                             args.append(0)
                 mesh_pd[ttnn.MeshCoordinateRange(coord, coord)] = program
             io = (
-                [sub["x"], self.o_in_t]
+                [sub["x"]]
+                + ([self.o_in_t] if self.o_in_t is not None else [])
                 + ([rows_t] if rows_t is not None else [])
                 + [q_t, M_t, m_slots_t, one_t, mean_t]
             )
@@ -2360,6 +2385,8 @@ class ResidentModel:
     def mixer_output(self):
         """the last layer's mixer output as received by streamer 0 of each chip: [n, gv], or [n, batch, gv]
         (the last sub-batch's users: the launches share the buffer)"""
+        if self.o_in_t is None:
+            raise NotImplementedError("row groups: o lives in the streamers' activation CB")
         o = ttnn.to_torch(self.o_in_t, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0)).float()
         o = o.reshape(self.d.n, self.S, self.launch_rows, -1)[:, 0]
         return o[:, 0] if self.launch_rows == 1 else o

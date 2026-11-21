@@ -56,15 +56,7 @@ void kernel_main() {
     const uint32_t q_off_gdn = get_arg_val<uint32_t>(9);
     const uint32_t nq_attn = get_arg_val<uint32_t>(10);
     const uint32_t q_off_attn = get_arg_val<uint32_t>(11);
-    uint32_t mixer_rows = get_arg_val<uint32_t>(12);
-    if constexpr (groups > 1) {
-        // row groups: the mixers' row buffer address, from the attention leader (active_rows.hpp kCbRows)
-        volatile tt_l1_ptr uint32_t* raddr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_raddr));
-        while (*raddr == 0) {
-            invalidate_l1_cache();
-        }
-        mixer_rows = *raddr;
-    }
+    uint32_t mixer_rows = get_arg_val<uint32_t>(12);  // (row groups: from the leader, read after the publishes below)
     const uint32_t n_conv = get_arg_val<uint32_t>(13);
     const uint32_t hist_addr = get_arg_val<uint32_t>(14);
     const uint32_t first_row = get_arg_val<uint32_t>(15);
@@ -91,6 +83,33 @@ void kernel_main() {
     };
     if (publish) {
         noc_inline_dw_write(get_noc_addr(hub_x, hub_y, get_semaphore(sem_addr)), cb_base(cb_x));
+        if constexpr (kOinInAct) {
+            // row groups: the o / activation memory (the same address on every streamer) to the mixer cores (a
+            // compact loop: the streamer core's kernels sit close to the kernel config buffer's size)
+            const uint32_t act_base = cb_base(cb_act);
+#pragma GCC unroll 1
+            for (uint32_t c = 0; c < gdn_heads; c++) {
+                noc_inline_dw_write(
+                    get_noc_addr(
+                        get_arg_val<uint32_t>(heads_base + 2 * c),
+                        get_arg_val<uint32_t>(heads_base + 2 * c + 1),
+                        get_semaphore(sem_raddr)),
+                    act_base);
+            }
+            noc_inline_dw_write(
+                get_noc_addr(
+                    get_arg_val<uint32_t>(attn_base), get_arg_val<uint32_t>(attn_base + 1), get_semaphore(sem_raddr)),
+                act_base);
+        }
+    }
+    if constexpr (groups > 1) {
+        // row groups: the mixers' row buffer address, from the attention leader (active_rows.hpp kCbRows) — only after
+        // this core's own publishes: the leader waits for streamer 0's before it publishes the rows
+        volatile tt_l1_ptr uint32_t* raddr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_raddr));
+        while (*raddr == 0) {
+            invalidate_l1_cache();
+        }
+        mixer_rows = *raddr;
     }
     volatile tt_l1_ptr uint32_t* hub_addr_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_addr));
     uint32_t hub_slots = 0;
@@ -314,8 +333,8 @@ void kernel_main() {
         noc_semaphore_wait_min(heads_sem, o_expected);
         mark(l, 2);
         // (row groups: the mixers wrote group gr's o at gr * Ot tiles; o_tiles == Ot, see static_assert)
-        cb_reserve_back(cb_o_in, groups * Ot);
-        cb_push_back(cb_o_in, groups * Ot);
+        cb_reserve_back(cb_o_in, kOinPages);
+        cb_push_back(cb_o_in, kOinPages);
         send_partial(2 * l + kRound0);
         mark(l, 3);
 

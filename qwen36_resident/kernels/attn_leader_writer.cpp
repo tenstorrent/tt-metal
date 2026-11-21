@@ -36,7 +36,7 @@ void kernel_main() {
     const uint32_t active = get_arg_val<uint32_t>(3);
     const uint32_t x0 = get_arg_val<uint32_t>(4), y0 = get_arg_val<uint32_t>(5);
     const uint32_t x1 = get_arg_val<uint32_t>(6), y1 = get_arg_val<uint32_t>(7);
-    const uint32_t o_in = get_arg_val<uint32_t>(8);
+    uint32_t o_in = get_arg_val<uint32_t>(8);  // (row groups: from streamer 0, read after the rows publish below)
     constexpr uint32_t peers_base = 9;
     const uint64_t mc_q = get_noc_multicast_addr(x0, y0, x1, y1, q_addr);
     const uint64_t mc_M = get_noc_multicast_addr(x0, y0, x1, y1, M_addr);
@@ -65,6 +65,12 @@ void kernel_main() {
         noc_inline_dw_write(
             get_noc_addr(get_arg_val<uint32_t>(6), get_arg_val<uint32_t>(7), get_semaphore(sem_raddr)), rows);
         noc_async_write_barrier();
+        // the streamers' o memory (their activation CB), from streamer 0 (which publishes before it waits for ours)
+        volatile tt_l1_ptr uint32_t* oaddr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_raddr));
+        while (*oaddr == 0) {
+            invalidate_l1_cache();
+        }
+        o_in = *oaddr;
     }
     constexpr uint32_t children_base = peers_base + 2 * num_streamers;
     const uint32_t children = get_arg_val<uint32_t>(children_base);

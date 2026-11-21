@@ -47,7 +47,15 @@ constexpr uint32_t kUsers = batch * groups;
 
 void kernel_main() {
     const uint32_t state = get_arg_val<uint32_t>(0);
-    const uint32_t o_in = get_arg_val<uint32_t>(1);
+    uint32_t o_in = get_arg_val<uint32_t>(1);
+    if constexpr (groups > 1) {
+        // row groups: the streamers' o memory (it is their activation CB), from streamer 0 at launch
+        volatile tt_l1_ptr uint32_t* oaddr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_raddr));
+        while (*oaddr == 0) {
+            invalidate_l1_cache();
+        }
+        o_in = *oaddr;
+    }
     const uint32_t head = get_arg_val<uint32_t>(2);
     constexpr uint32_t peers_base = 3;
     const uint32_t heads_sem_addr = get_semaphore(sem_heads);

@@ -110,6 +110,16 @@ FORCE_INLINE void matmul(
     custom_mm_block_uninit<false>();
 }
 
+// one weight block (in0 offset off within each group's Kt tiles) into every active group's DST tile g; not inlined:
+// one copy serves every entry's matmul (the streamer core's kernels must fit the kernel config buffer)
+template <bool last>
+__attribute__((noinline)) void mm_groups_step(uint32_t in0_cb, uint32_t w_cb, uint32_t kt, uint32_t off, uint32_t sb) {
+    for (uint32_t k = 0; k < groups_on(); k++) {
+        const uint32_t g = group_at(k);
+        custom_mm_block<last>(in0_cb, w_cb, g * kt + off, 0, g, sb);
+    }
+}
+
 // Row groups (active_rows.hpp groups > 1): in0 holds `groups` blocks of En::Kt tiles, group g at g * Kt. Every
 // weight block is taken from the ring once and multiplied into each group's own DST tile (dst g; the split
 // accumulation partials stay inside that tile's rows), so the weights stream once for all groups. Group g's column
@@ -132,19 +142,9 @@ FORCE_INLINE void matmul_groups(
     for (uint32_t n = 0; n < n_tiles; n++) {
         tile_regs_acquire();
         for (uint32_t kb = 0; kb + 1 < En::nkb; kb++) {
-            with_block<E>([&] {
-                for (uint32_t k = 0; k < groups_on(); k++) {
-                    const uint32_t g = group_at(k);
-                    custom_mm_block<false>(in0_cb, En::cb, g * En::Kt + kb * En::sb, 0, g, En::sb);
-                }
-            });
+            with_block<E>([&] { mm_groups_step<false>(in0_cb, En::cb, En::Kt, kb * En::sb, En::sb); });
         }
-        with_block<E>([&] {
-            for (uint32_t k = 0; k < groups_on(); k++) {
-                const uint32_t g = group_at(k);
-                custom_mm_block<true>(in0_cb, En::cb, g * En::Kt + (En::nkb - 1) * En::sb, 0, g, En::sb);
-            }
-        });
+        with_block<E>([&] { mm_groups_step<true>(in0_cb, En::cb, En::Kt, (En::nkb - 1) * En::sb, En::sb); });
         tile_regs_commit();
         tile_regs_wait();
         const bool to_b = two && n >= split;
@@ -520,14 +520,15 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
 
 // d = in0 @ W_E over this core's down-type columns; pout = d (+ x on chip 0)
 template <uint32_t E>
-FORCE_INLINE void project_to_partial(uint32_t in0_cb, uint32_t in0_tiles, uint32_t nd, uint32_t pout_off) {
+// (in0_pages: the pages in0 moves per layer, groups x in0_tiles or, for o sharing the activation's memory, more)
+FORCE_INLINE void project_to_partial(uint32_t in0_cb, uint32_t in0_pages, uint32_t nd, uint32_t pout_off) {
     if constexpr (chip == 0) {
         matmul<E>(in0_cb, cb_dout, nd, nd_max);
-        cb_pop_front(in0_cb, groups * in0_tiles);
+        cb_pop_front(in0_cb, in0_pages);
         add_residual(nd, pout_off);
     } else {
         matmul<E>(in0_cb, cb_pout, nd, nd_max);
-        cb_pop_front(in0_cb, groups * in0_tiles);
+        cb_pop_front(in0_cb, in0_pages);
     }
 }
 
@@ -612,7 +613,7 @@ void kernel_main() {
         mark(l, 2);
         conv_pass(attn ? nq_attn : nq_gdn, attn ? 0 : n_conv, !attn);
         mark(l, 3);
-        project_to_partial<kOut>(cb_o_in, Ot, nd, pout_off);
+        project_to_partial<kOut>(cb_o_in, kOinPages, nd, pout_off);
         cb_pop_front(cb_x, groups * Ht);
         mark(l, 4);
         // mlp half
@@ -627,7 +628,7 @@ void kernel_main() {
         mark(l, 7);
         silu_mul(ng);
         mark(l, 8);
-        project_to_partial<kDown>(cb_act, It, nd, pout_off);
+        project_to_partial<kDown>(cb_act, groups * It, nd, pout_off);
         cb_pop_front(cb_x, groups * Ht);
         mark(l, 9);
     }

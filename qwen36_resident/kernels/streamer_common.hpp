@@ -146,6 +146,13 @@ constexpr uint32_t nq_max = get_compile_time_arg_val(17);
 constexpr uint32_t nv_max = get_compile_time_arg_val(18);
 constexpr uint32_t conv_tiles = get_compile_time_arg_val(19);
 constexpr uint32_t Ot = get_compile_time_arg_val(20);
+// row groups: the mixers' output o (cb_o_in) and the mlp activation (cb_act) share one memory (o is consumed by the
+// out-projection before any peer's activation slice of the layer arrives; the activation by the down projection
+// before any mixer writes the next o); its address goes to the mixers at launch (SEM_RADDR on the mixer cores).
+// cb_o_in then moves groups x It pages per layer (its first groups x Ot hold o) so both FIFOs wrap every layer.
+constexpr bool kOinInAct = groups > 1;
+static_assert(!kOinInAct || It >= Ot, "o shares the activation's memory");
+constexpr uint32_t kOinPages = kOinInAct ? groups * It : groups * Ot;
 constexpr uint32_t gdn_heads = get_compile_time_arg_val(21);
 constexpr bool lm_head = get_compile_time_arg_val(22) != 0;
 constexpr uint32_t Hf = Ht / 32;
