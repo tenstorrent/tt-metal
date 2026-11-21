@@ -30,6 +30,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/services/stream_counter.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -108,6 +109,8 @@ public:
     CoreRange get_worker_cores() const;
     CoreCoord get_metadata_master_core() const;
     DeviceAddr get_write_ack_counter_addr(const distributed::MeshCoordinate& coord) const;
+    // This coord's write-ack word: one step is every worker's inc for a transfer, or the host's 1 without workers.
+    StreamCounter get_write_ack_counter(const distributed::MeshCoordinate& coord) const;
     DeviceAddr get_data_ready_counter_addr(const distributed::MeshCoordinate& coord) const;
     DeviceAddr get_transfer_done_sem_addr() const;
     DeviceAddr get_worker_metadata_addr() const;
@@ -116,6 +119,8 @@ public:
     DeviceAddr get_metadata_addr(const distributed::MeshCoordinate& coord) const;
     // Service-core control words: [0] terminate, [1] abandon data the host never read (owner only).
     DeviceAddr get_termination_addr(const distributed::MeshCoordinate& coord) const;
+    // Every coordinate's write-ack counter, service core, metadata input and control words (owner only).
+    std::shared_ptr<const StreamSenderCoordTable> get_sender_coord_table() const;
 
     std::string export_descriptor(const std::string& service_id);
     static std::unique_ptr<D2HStreamService> connect(
@@ -180,6 +185,7 @@ private:
     std::shared_ptr<distributed::MeshBuffer> metadata_worker_buffer_;
     DeviceAddr metadata_worker_l1_addr_ = 0;
     std::map<distributed::MeshCoordinate, DeviceAddr> metadata_input_addrs_;
+    mutable StreamSenderCoordTableCache sender_coord_table_cache_;
     uint32_t num_workers_ = 0;
     CoreCoord metadata_master_core_{0, 0};
 

@@ -51,6 +51,9 @@
 #include "llk_sfpu/ckernel_sfpu_fill.h"
 #include "llk_sfpu/ckernel_sfpu_fmod.h"
 #include "llk_sfpu/ckernel_sfpu_gcd.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_sfpu/ckernel_sfpu_geglu_tanh.h"
+#endif
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_hardmish.h"
 #include "llk_sfpu/ckernel_sfpu_hardshrink.h"
@@ -77,6 +80,9 @@
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
 #include "llk_sfpu/ckernel_sfpu_quant.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_sfpu/ckernel_sfpu_quick_gelu.h"
+#endif
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_relu.h"
@@ -94,6 +100,13 @@
 #include "llk_sfpu/ckernel_sfpu_silu.h"
 #include "llk_sfpu/ckernel_sfpu_snake_beta.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
+#ifndef SOFTPLUS_TEST_BETA
+#define SOFTPLUS_TEST_BETA       0x3f800000u /* beta = 1.0f */
+#define SOFTPLUS_TEST_BETA_RECIP 0x3f800000u /* 1/beta = 1.0f */
+#endif
+#ifndef SOFTPLUS_TEST_THRESHOLD
+#define SOFTPLUS_TEST_THRESHOLD 0x41a00000u /* threshold = 20.0f */
+#endif
 #include "llk_sfpu/ckernel_sfpu_softshrink.h"
 #include "llk_sfpu/ckernel_sfpu_softsign.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt.h"
@@ -578,6 +591,12 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(mish_init<APPROX_MODE>);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (OPERATION == SfpuType::quick_gelu)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(ckernel::sfpu::quick_gelu_init);
+    }
+#endif
     else if constexpr (OPERATION == SfpuType::rdiv)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(rdiv_init<APPROX_MODE>);
@@ -603,7 +622,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
     else if constexpr (OPERATION == SfpuType::gelu_tanh)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_tanh_init);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_tanh_init<is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::hardsigmoid)
     {
@@ -967,7 +986,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 _calculate_fill_int_,
-                (APPROX_MODE, ckernel::InstrModLoadStore::LO16, ITERATIONS),
+                (APPROX_MODE, ckernel::InstrModLoadStore::UINT16, ITERATIONS),
                 dst_index,
                 vector_mode,
                 static_cast<std::uint32_t>(fill_const_value));
@@ -1249,7 +1268,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         if (math_format == ckernel::to_underlying(DataFormat::UInt16))
         {
             SFPU_UNARY_CALL(
-                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logical_not, (APPROX_MODE, ckernel::InstrModLoadStore::LO16, ITERATIONS), dst_index, vector_mode);
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logical_not, (APPROX_MODE, ckernel::InstrModLoadStore::UINT16, ITERATIONS), dst_index, vector_mode);
         }
         else if (math_format == ckernel::to_underlying(DataFormat::Int32) || math_format == ckernel::to_underlying(DataFormat::UInt32))
         {
@@ -1300,6 +1319,13 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_i0, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (OPERATION == SfpuType::quick_gelu)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quick_gelu, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+#endif
     else if constexpr (OPERATION == SfpuType::rdiv)
     {
         SFPU_UNARY_CALL(
@@ -1407,7 +1433,16 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::hardmish)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, hardmish, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        if (math_format == ckernel::to_underlying(DataFormat::Float16))
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, hardmish, (APPROX_MODE, is_fp32_dest_acc_en, DataFormat::Float16, ITERATIONS), dst_index, vector_mode);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, hardmish, (APPROX_MODE, is_fp32_dest_acc_en, DataFormat::Float16_b, ITERATIONS), dst_index, vector_mode);
+        }
     }
     else if constexpr (OPERATION == SfpuType::lgamma)
     {
@@ -1625,9 +1660,9 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
             dst_index,
             vector_mode,
-            0x3f800000u /* beta = 1.0f */,
-            0x3f800000u /* 1/beta = 1.0f */,
-            0x41a00000u /* threshold = 20.0f */);
+            SOFTPLUS_TEST_BETA,
+            SOFTPLUS_TEST_BETA_RECIP,
+            SOFTPLUS_TEST_THRESHOLD);
     }
     else if constexpr (OPERATION == SfpuType::sigmoid_appx)
     {
@@ -1772,6 +1807,12 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
         // gcd_init records the per-iteration REPLAY buffer used by the binary-GCD loop.
         SFPU_BINARY_INIT_FN_NO_ARGS(add1, sfpu::calculate_sfpu_gcd_init);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (BINOP == BinaryOp::GEGLU_TANH)
+    {
+        SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::geglu_tanh_init);
+    }
+#endif
     else if constexpr (BINOP == BinaryOp::LCM)
     {
         // lcm_init records the binary-GCD REPLAY buffer (shared with gcd) and loads
@@ -2263,6 +2304,21 @@ void call_binary_sfpu_operation(
         // int32 gcd via the binary-GCD REPLAY loop recorded in gcd_init.
         SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_gcd, (PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (BINOP == BinaryOp::GEGLU_TANH)
+    {
+        // geglu_tanh(gate, up) with gate = in0 and up = in1; DST_ACCUM_MODE selects the in-kernel BF16 round.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_geglu_tanh,
+            (DST_ACCUM_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+#endif
     else if constexpr (BINOP == BinaryOp::LCM)
     {
         // int32 lcm = a/gcd(a,b) * b (binary-GCD + reciprocal); operands assumed < 2^15.

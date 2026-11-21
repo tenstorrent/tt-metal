@@ -3,15 +3,43 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import re
 
 import torch
 import transformers
+from loguru import logger
+
+NUM_LAYERS_ENV = "VIT_NUM_LAYERS"
+_ENCODER_LAYER_KEY = re.compile(r"\.(?:layer|layers)\.(\d+)\.")
+
+
+def num_layers_from_env() -> int | None:
+    value = os.environ.get(NUM_LAYERS_ENV)
+    if value is None or value == "":
+        return None
+    num_layers = int(value)
+    if num_layers < 1:
+        raise ValueError(f"{NUM_LAYERS_ENV} must be at least 1, got {num_layers}")
+    return num_layers
 
 
 def load_torch_model(model_location_generator=None, embedding=False):
+    """Load the pretrained ViT-Base classifier.
+
+    VIT_NUM_LAYERS keeps only the first encoder layers. Every encoder layer is identical, so a reduced model
+    still runs every kernel of the full one, but it is not the trained classifier.
+    """
     config = transformers.ViTConfig.from_pretrained("google/vit-base-patch16-224")
     if not embedding:
         config.num_hidden_layers = 12
+    num_layers = num_layers_from_env()
+    if num_layers is not None:
+        config.num_hidden_layers = min(num_layers, config.num_hidden_layers)
+    logger.info(
+        f"ViT encoder layers: {config.num_hidden_layers}"
+        + (f" ({NUM_LAYERS_ENV}={num_layers})" if num_layers is not None else "")
+    )
+
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
         model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224", config=config)
         return model.eval()
@@ -22,5 +50,10 @@ def load_torch_model(model_location_generator=None, embedding=False):
             / "vit_base_patch16_224.pth"
         )
         state_dict = torch.load(weights_path)
+        state_dict = {
+            key: value
+            for key, value in state_dict.items()
+            if (match := _ENCODER_LAYER_KEY.search(key)) is None or int(match.group(1)) < config.num_hidden_layers
+        }
         model.load_state_dict(state_dict)
         return model.eval()

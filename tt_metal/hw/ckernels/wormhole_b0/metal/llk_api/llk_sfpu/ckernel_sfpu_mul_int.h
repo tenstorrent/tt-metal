@@ -33,7 +33,7 @@ inline void _mul_int_(
         // Finally, the result will be lo + ((hi0 + hi1) << 8).
 
         // a0
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_3, offset0);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::UINT16, ADDR_MOD_3, offset0);
 
         // a1
         TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG2, 5);
@@ -44,7 +44,7 @@ inline void _mul_int_(
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
 
         // b0
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_3, offset1);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::UINT16, ADDR_MOD_3, offset1);
 
         // b1
         TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG3, 5);
@@ -77,7 +77,7 @@ inline void _mul_int_(
         // lo += hi
         TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
 
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_2, offset_out);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::UINT16, ADDR_MOD_2, offset_out);
     }
 #else
     constexpr int a0 = p_sfpu::LREG0;
@@ -130,15 +130,15 @@ inline void _mul_int_(
         //
         // The final result will be lo + (hi << 8).
 
-        TT_SFPLOADMACRO((0 << 2) | (b1 & 3), InstrModLoadStore::LO16, ADDR_MOD_3, offset1 | (b1 >> 2));
-        TT_SFPLOADMACRO((1 << 2) | (a0 & 3), InstrModLoadStore::LO16, ADDR_MOD_3, offset0 | (a0 >> 2));
-        TT_SFPLOADMACRO((1 << 2) | (b0 & 3), InstrModLoadStore::LO16, ADDR_MOD_3, offset1 | (b0 >> 2));
+        TT_SFPLOADMACRO((0 << 2) | (b1 & 3), InstrModLoadStore::UINT16, ADDR_MOD_3, offset1 | (b1 >> 2));
+        TT_SFPLOADMACRO((1 << 2) | (a0 & 3), InstrModLoadStore::UINT16, ADDR_MOD_3, offset0 | (a0 >> 2));
+        TT_SFPLOADMACRO((1 << 2) | (b0 & 3), InstrModLoadStore::UINT16, ADDR_MOD_3, offset1 | (b0 >> 2));
 
         TTI_SFPAND(0, p_sfpu::LREG12, a0, 0);
         TTI_SFPAND(0, p_sfpu::LREG12, b0, 0);
 
-        TT_SFPLOADMACRO((2 << 2) | (a1 & 3), InstrModLoadStore::LO16, ADDR_MOD_3, offset0 | (a1 >> 2));
-        TT_SFPLOADMACRO((3 << 2) | (out & 3), InstrModLoadStore::LO16, ADDR_MOD_2, offset_out | (out >> 2));
+        TT_SFPLOADMACRO((2 << 2) | (a1 & 3), InstrModLoadStore::UINT16, ADDR_MOD_3, offset0 | (a1 >> 2));
+        TT_SFPLOADMACRO((3 << 2) | (out & 3), InstrModLoadStore::UINT16, ADDR_MOD_2, offset_out | (out >> 2));
 
         // b1 (hi) = a0*b1 + 2.0**23
         TTI_SFPMAD(a0, b1, p_sfpu::LREG13, b1, 0);

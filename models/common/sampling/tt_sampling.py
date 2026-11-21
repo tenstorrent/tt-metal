@@ -427,6 +427,15 @@ class TTSampling(LightweightModule):
                 self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape
             ),
         )
+        self._scale_logprobs = ttnn.from_torch(
+            torch.ones_like(temp).reshape(1, 1, -1, 1).to(torch.bfloat16),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape
+            ),
+        )
 
         # Create device offset indices for global indexing
         self._create_indices_tensors()
@@ -711,6 +720,14 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _raw_log_prob_logits(self, logits):
+        calculator = self.log_probs_calculator
+        if logits is None or not calculator.enable_log_probs or calculator._use_topk_logprobs:
+            return None
+        if logits.dtype != ttnn.bfloat16:
+            logits = ttnn.typecast(logits, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
+        return self._mask_invalid_vocab_logits(logits)
+
     def _mask_invalid_vocab_logits(self, logits):
         if self.tt_invalid_vocab_tail_mask is not None:
             return self._mask_invalid_vocab_tail_logits(logits)
@@ -853,9 +870,23 @@ class TTSampling(LightweightModule):
         enable_log_probs: bool | list[bool] = None,
         num_logprobs: int | list[int] = None,
         empty_slots: list[int] | None = None,
+        log_probs_enable_temperature: list[bool] | None = None,
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         k, temp = self._normalize_device_params(k, temp)
+        if log_probs_enable_temperature is None:
+            enable_temperature = torch.zeros_like(temp, dtype=torch.bool)
+        else:
+            enable_temperature = torch.as_tensor(log_probs_enable_temperature, dtype=torch.bool)
+            if enable_temperature.ndim == 0:
+                enable_temperature = torch.full_like(temp, bool(enable_temperature.item()), dtype=torch.bool)
+            elif enable_temperature.shape != temp.shape:
+                raise ValueError(
+                    f"log_probs_enable_temperature has shape {tuple(enable_temperature.shape)}, "
+                    f"expected {tuple(temp.shape)}"
+                )
+        if enable_temperature.any() and self.log_probs_calculator._use_topk_logprobs:
+            raise ValueError("log_probs_enable_temperature is not supported with top-k log-probs (use_topk_logprobs)")
         # Top-k reporting needs the candidate pipeline, even for greedy tokens.
         # Resolve reporting before choosing the path so its parameters update too.
         self.log_probs_calculator.set_log_probs_mode(
@@ -896,21 +927,32 @@ class TTSampling(LightweightModule):
             ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
             ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
 
+            col_mapper = (
+                ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape)
+                if self._sampling_dp > 1
+                else None
+            )
+
             # Keep the greedy tie-break mask (1.0 where k==1) in sync with k, distributed like k_tensor.
             self._greedy_col_new = ttnn.from_torch(
                 (k.reshape(1, 1, -1, 1) == 1).to(torch.bfloat16),
                 device=None,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=(
-                    ttnn.ShardTensor2dMesh(
-                        self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape
-                    )
-                    if self._sampling_dp > 1
-                    else None
-                ),
+                mesh_mapper=col_mapper,
             )
             ttnn.copy_host_to_device_tensor(self._greedy_col_new, self._greedy_col)
+
+            # bf16 like temp_tensor (1/0.7 -> 1.4296875); log-probs differ from the trainer's fp32 1/T by ~1e-3.
+            scale_logprobs = torch.where(enable_temperature, temp, torch.ones_like(temp))
+            self._scale_logprobs_new = ttnn.from_torch(
+                scale_logprobs.reshape(1, 1, -1, 1).to(torch.bfloat16),
+                device=None,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=col_mapper,
+            )
+            ttnn.copy_host_to_device_tensor(self._scale_logprobs_new, self._scale_logprobs)
 
     def _greedy_col_dims(self):
         """Map the 1-D k_tensor shard dims (self._param_dims, batch on dim0) to the [1,1,N,1] greedy
@@ -1061,6 +1103,7 @@ class TTSampling(LightweightModule):
         x: ttnn.Tensor,
         tt_out_tok: ttnn.Tensor = None,
         apply_grammar: bool = False,
+        log_prob_logits: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | LogProbsResult | None]:
         """
         Perform on-device sampling on logits tensor.
@@ -1074,6 +1117,8 @@ class TTSampling(LightweightModule):
             tt_out_tok: Optional output tensor to write results to
             apply_grammar: Apply the packed mask previously staged with
                 ``update_grammar_bitmask`` before token selection.
+            log_prob_logits: Logits the single-token logprob is reported from
+                instead of ``x`` (the logits before sampling penalties).
 
         Returns:
             Sampled token indices and optional logprob output.
@@ -1094,6 +1139,7 @@ class TTSampling(LightweightModule):
             logger.info("Forcing argmax sampling")
             # Logprobs consume the vocabulary shards before argmax's gather/slice,
             # masked below. Keep token selection identical when reporting toggles.
+            raw_log_prob_logits = self._raw_log_prob_logits(log_prob_logits)
             logits_for_log_probs = x
             # BH galaxy prefetcher (unfused-CCL) keeps a split senders/worker sub-device manager
             # loaded during decode. The vocab-trim ttnn.slice auto-grids a 32-core block from origin
@@ -1108,11 +1154,13 @@ class TTSampling(LightweightModule):
             if not slice_valid_vocab:
                 x = self._mask_invalid_vocab_logits(x)
                 logits_for_log_probs = x
-            elif self.log_probs_calculator.enable_log_probs:
+            elif self.log_probs_calculator.enable_log_probs and raw_log_prob_logits is None:
                 # The valid-vocab slice only trims the gathered tensor; the shards the
                 # calculator normalizes over would otherwise keep the padded tail in sum(exp).
                 logits_for_log_probs = self._mask_invalid_vocab_logits(x)
-            owns_log_prob_logits = logits_for_log_probs is not x
+            if raw_log_prob_logits is not None:
+                logits_for_log_probs = raw_log_prob_logits
+            owns_log_prob_logits = logits_for_log_probs is not x and logits_for_log_probs is not log_prob_logits
             # Gather the output across all devices and untilize the tensor (for argmax)
             num_devices = self.mesh_device.get_num_devices()
             if num_devices > 1:
@@ -1205,7 +1253,8 @@ class TTSampling(LightweightModule):
         # The calculator derives per-shard width from its logits, which must match the
         # padded_vocab_size // num_shards offsets in tt_indices_device_offsets, so keep the
         # masked logits from before any power-of-2 pad below.
-        logits_for_log_probs = x_bf16
+        raw_log_prob_logits = self._raw_log_prob_logits(log_prob_logits)
+        logits_for_log_probs = x_bf16 if raw_log_prob_logits is None else raw_log_prob_logits
 
         # The single-device split below exists only because the stock top-k factories cap
         # out near 64K columns. When ttnn.topk would take the Blackhole topk_large_indices
@@ -1439,7 +1488,9 @@ class TTSampling(LightweightModule):
             )
         elif self.log_probs_calculator.enable_log_probs:
             # Old path: single sampled-token logprob
-            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(logits_for_log_probs, tt_out_tok)
+            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(
+                logits_for_log_probs, tt_out_tok, scale_logprobs=self._scale_logprobs
+            )
         else:
             self.tt_log_probs = None
 

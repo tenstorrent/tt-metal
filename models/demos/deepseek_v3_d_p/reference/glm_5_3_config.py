@@ -23,6 +23,8 @@ class GLM53Config:
     EMB_SIZE = 6144  # embedding dimension
     # Callers can override this default with use_fused_rmsnorm at model initialization.
     USE_FUSED_PREFILL_RMSNORM = True
+    # The dense FFN (layers 0-2) fuses its TP gather and reduce-scatter into its matmuls (TtFfn fuse_tp_collectives).
+    FUSE_DENSE_FFN_TP_COLLECTIVES = True
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
@@ -30,7 +32,7 @@ class GLM53Config:
     # routed-expert matmul shape, expert count and activation (6144x2048, 256 experts, top-8, no
     # pre-projection, SiLU). Re-measure if any of those change.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
-    # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced only). Every
+    # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced and untraced). Every
     # config that does not name it runs the routed expert then combine as separate ops.
     ROUTED_EXPERT_COMBINE_OVERLAP = True
     # Whether to use the fabric2d-optimized dispatch and combine ops in MoE
@@ -41,20 +43,18 @@ class GLM53Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
-    # Divisor on combine_fabric2d's forwarding region -- see DeepSeekV3Config.COMBINE_FWD_REDUCTION for
-    # what it trades. Measured 8x4 over 1x-64x: 16 costs this model 4.3% on hot_expert traffic and
-    # nothing on balanced, for 40 -> 20 MB a chip.
-    COMBINE_FWD_REDUCTION = 16
-    # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
-    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
-    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
-    # length. Measured 8x4 at ring8 / 5k over 16..128 pages: this is the shallowest depth inside 5% of the
-    # dense region on BOTH traffic shapes. Balanced is there by 48, hot_expert is the binding one and is
-    # not until here. 27 MB a chip.
-    DISPATCH_FWD_VC_PAGES = 64
+    # Depth of the MoE forwarding buffers, in pages per channel. Before #63483 combine_fabric2d's depth scaled with
+    # the tokens a chip holds: about 66 pages at one 5,120-token chunk on 8x4, about 267 for a packed forward of four
+    # (2,560 rows a chip). At 64, packed 8x4 forwards hang in combine_fabric2d (one TP column never finishes the
+    # routed expert / combine op), so this keeps the depth packed forwards had.
+    MOE_FWD_VC_PAGES = 256
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
+    # Cache the noaux_tc correction bias mean-centred (see centre_gate_bias). The checkpoint biases sit on
+    # per-layer offsets of ~8-34 with a spread of only ~0.06-0.15, so bf16 keeps just 3-9 distinct values a
+    # layer; centred it keeps 78-173. Every config that does not name it keeps the uncentred cache file.
+    MOE_GATE_BIAS_CENTERED = True
 
     # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
     # selected-weight distribution rather than slot alignment; 160 experts, top-8 floors at
