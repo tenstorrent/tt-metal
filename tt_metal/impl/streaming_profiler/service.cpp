@@ -95,7 +95,7 @@ struct Service::Consumer {
     std::vector<std::pair<Receiver*, bool>> control;  // (receiver, attach), in order
 };
 
-Service::Service() : steady_(new SteadyClock) { init_site_registry(); }
+Service::Service() : steady_(new SteadyClock) { init_descriptor_registry(); }
 
 SteadyClock& Service::steady() { return *steady_; }
 

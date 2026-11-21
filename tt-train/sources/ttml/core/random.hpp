@@ -47,10 +47,16 @@ static inline bool use_simd_rng() {
     return simd_enabled;
 }
 
+// use_simd, which TT_TRAIN_ENABLE_SIMD_RNG sets by default, picks the SIMD generator. It has a fast path only for some
+// element types and distributions and leaves seq unwritten for the rest, so those, integer distributions included,
+// always use the scalar generator.
 template <typename T, typename DistGenFunc>
-void sequential_generate(std::span<T> seq, const DistGenFunc& dist_factory, uint32_t seed) {
-    if (use_simd_rng()) {
-        return sse::sequential_generate(seq, dist_factory, seed);
+void sequential_generate(
+    std::span<T> seq, const DistGenFunc& dist_factory, uint32_t seed, bool use_simd = use_simd_rng()) {
+    if constexpr (sse::has_simd_fast_path<T, DistGenFunc>) {
+        if (use_simd) {
+            return sse::sequential_generate(seq, dist_factory, seed);
+        }
     }
     return legacy::sequential_generate(seq, dist_factory, seed);
 }
@@ -60,9 +66,12 @@ void parallel_generate(
     std::span<T> seq,
     DistGenFunc dist_factory,
     uint32_t seed,
-    uint32_t max_threads = std::thread::hardware_concurrency()) {
-    if (use_simd_rng()) {
-        return sse::parallel_generate(seq, dist_factory, seed, max_threads);
+    uint32_t max_threads = std::thread::hardware_concurrency(),
+    bool use_simd = use_simd_rng()) {
+    if constexpr (sse::has_simd_fast_path<T, DistGenFunc>) {
+        if (use_simd) {
+            return sse::parallel_generate(seq, dist_factory, seed, max_threads);
+        }
     }
     return legacy::parallel_generate(seq, dist_factory, seed, max_threads);
 }

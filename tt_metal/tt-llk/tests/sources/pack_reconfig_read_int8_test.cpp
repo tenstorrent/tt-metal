@@ -65,7 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /*is_int_fpu_en*/, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
+        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
     // As copy_tile_init: keep the Src zero flag disabled for the copy so the bf16 denormals in the
     // stimuli reach Dest; with it enabled MOVA2D flushes them before the packer can read them.
     math::_configure_copy_zero_flag_state_(formats.math);

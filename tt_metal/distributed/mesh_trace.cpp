@@ -11,12 +11,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
-#include <functional>
-#include <iterator>
 #include <memory>
 #include <optional>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -24,14 +21,11 @@
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "device.hpp"
-#include "hal.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "math.hpp"
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
 #include "mesh_trace_id.hpp"
-#include "dispatch/system_memory_manager.hpp"
-#include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "impl/allocator/allocator.hpp"
 #include <distributed/mesh_device_impl.hpp>
@@ -167,8 +161,72 @@ void MeshTrace::populate_mesh_buffer(
         }
         auto write_region =
             BufferRegion(write_offset_per_device_range.at(device_range), write_data.size() * sizeof(uint32_t));
-        mesh_cq.enqueue_write_shard_to_sub_grid(
-            *(trace_buffer->mesh_buffer), write_data.data(), device_range, true, write_region);
+        if (mesh_trace_data.device_patches.empty()) {
+            mesh_cq.enqueue_write_shard_to_sub_grid(
+                *(trace_buffer->mesh_buffer), write_data.data(), device_range, true, write_region);
+        } else {
+            // Per-device runtime args: the stream goes to the whole range once; then each device gets only the pages
+            // that hold its own words, patched.
+            mesh_cq.enqueue_write_shard_to_sub_grid(
+                *(trace_buffer->mesh_buffer), write_data.data(), device_range, true, write_region);
+            const size_t page_words = page_size / sizeof(uint32_t);
+            std::vector<uint32_t> pages;
+            std::vector<uint32_t> run;
+            for (const auto& coord : device_range) {
+                if (!mesh_cq.device()->impl().is_local(coord)) {
+                    continue;
+                }
+                pages.clear();
+                for (const auto& patch : mesh_trace_data.device_patches) {
+                    if (patch.device != coord || patch.words.empty()) {
+                        continue;
+                    }
+                    TT_FATAL(
+                        patch.byte_offset % sizeof(uint32_t) == 0 &&
+                            patch.byte_offset + patch.words.size() * sizeof(uint32_t) <=
+                                mesh_trace_data.data.size() * sizeof(uint32_t),
+                        "Per-device runtime args trace patch out of bounds");
+                    const uint32_t first = patch.byte_offset / page_size;
+                    const uint32_t last = (patch.byte_offset + patch.words.size() * sizeof(uint32_t) - 1) / page_size;
+                    for (uint32_t page = first; page <= last; ++page) {
+                        pages.push_back(page);
+                    }
+                }
+                std::sort(pages.begin(), pages.end());
+                pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
+                // Each run of consecutive pages is one write of the device's patched words.
+                for (size_t a = 0; a < pages.size();) {
+                    size_t b = a + 1;
+                    while (b < pages.size() && pages[b] == pages[b - 1] + 1) {
+                        ++b;
+                    }
+                    const size_t begin_word = pages[a] * page_words;
+                    const size_t end_word = (pages[b - 1] + 1) * page_words;
+                    run.assign(write_data.begin() + begin_word, write_data.begin() + end_word);
+                    for (const auto& patch : mesh_trace_data.device_patches) {
+                        if (patch.device != coord) {
+                            continue;
+                        }
+                        const size_t patch_word = patch.byte_offset / sizeof(uint32_t);
+                        for (size_t w = 0; w < patch.words.size(); ++w) {
+                            const size_t word = patch_word + w;
+                            if (word >= begin_word && word < end_word) {
+                                run[word - begin_word] = patch.words[w];
+                            }
+                        }
+                    }
+                    mesh_cq.enqueue_write_shard_to_sub_grid(
+                        *(trace_buffer->mesh_buffer),
+                        run.data(),
+                        MeshCoordinateRange(coord),
+                        true,
+                        BufferRegion(
+                            write_offset_per_device_range.at(device_range) + begin_word * sizeof(uint32_t),
+                            run.size() * sizeof(uint32_t)));
+                    a = b;
+                }
+            }
+        }
         write_offset_per_device_range.at(device_range) += mesh_trace_data.data.size() * sizeof(uint32_t);
     }
 }

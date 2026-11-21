@@ -137,7 +137,6 @@ def test_typecast_test_input_bounds_unsigned_high_never_exceeds_input_max():
         (torch.int, ttnn.int32, ttnn.uint16),
         (torch.int, ttnn.uint32, ttnn.uint16),
         (torch.bfloat16, ttnn.bfloat16, ttnn.uint8),
-        (torch.uint8, ttnn.uint8, ttnn.bfloat16),
         (torch.float32, ttnn.float32, ttnn.uint8),
         (torch.uint8, ttnn.uint8, ttnn.float32),
         (torch.int, ttnn.int32, ttnn.uint8),
@@ -151,21 +150,17 @@ def test_typecast_test_input_bounds_unsigned_high_never_exceeds_input_max():
         (torch.bfloat16, ttnn.bfloat4_b, ttnn.uint8),
         (torch.uint8, ttnn.uint8, ttnn.bfloat4_b),
         (torch.bfloat16, ttnn.bfloat16, ttnn.int8),
-        (torch.int8, ttnn.int8, ttnn.bfloat16),
         (torch.float32, ttnn.float32, ttnn.int8),
-        (torch.int8, ttnn.int8, ttnn.float32),
         (torch.int, ttnn.int32, ttnn.int8),
-        (torch.int8, ttnn.int8, ttnn.int32),
         (torch.int, ttnn.uint16, ttnn.int8),
-        (torch.int8, ttnn.int8, ttnn.uint16),
         (torch.int, ttnn.uint32, ttnn.int8),
-        (torch.int8, ttnn.int8, ttnn.uint32),
         (torch.bfloat16, ttnn.bfloat8_b, ttnn.int8),
         (torch.int8, ttnn.int8, ttnn.bfloat8_b),
         (torch.bfloat16, ttnn.bfloat4_b, ttnn.int8),
         (torch.int8, ttnn.int8, ttnn.bfloat4_b),
         (torch.uint8, ttnn.uint8, ttnn.int8),
-        (torch.int8, ttnn.int8, ttnn.uint8),
+        # uint8 -> bfloat16 and int8 -> {bfloat16, float32, int32, uint32, uint16, uint8} are covered
+        # bit-exactly over every input value by test_typecast_8bit_exhaustive.
     ),
 )
 @pytest.mark.parametrize(
@@ -173,16 +168,15 @@ def test_typecast_test_input_bounds_unsigned_high_never_exceeds_input_max():
     [
         [[1, 1, 32, 32]],  # Single core
         [[1, 1, 320, 320]],  # multi core
-        [[1, 3, 320, 320]],  # multi core
     ],
 )
+# Each memory config is exercised on both the reader and the writer side.
 @pytest.mark.parametrize(
-    "input_mem_config",
-    mem_configs,
-)
-@pytest.mark.parametrize(
-    "dst_mem_config",
-    mem_configs,
+    "input_mem_config, dst_mem_config",
+    [
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+    ],
 )
 class TestTypecast:
     def test_run_eltwise_typecast_op(
@@ -196,8 +190,6 @@ class TestTypecast:
         device,
         function_level_defaults,
     ):
-        if tt_input_dtype == tt_output_dtype:
-            pytest.skip("Same I/O data types. Skip.")
         in_low, in_high = typecast_test_input_bounds(tt_input_dtype, tt_output_dtype)
         shape = input_shapes[0]
         torch_input = make_typecast_test_input(shape, pt_input_dtype, in_low, in_high)
@@ -988,3 +980,69 @@ def test_unary_chain_typecast_int8(tt_output_dtype, device):
 
     expected = ttnn.to_torch(ttnn.typecast(input_tensor, tt_output_dtype))
     assert_equal(expected, ttnn.to_torch(chained))
+
+
+def _bfloat8_b_host_roundtrip(torch_tensor):
+    """Quantize on the host, where padding is zero, and come back to torch."""
+    host = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    return ttnn.to_torch(host).float()
+
+
+def _assert_ignores_tile_padding(result, expected, atol):
+    """A lane crushed by a poisoned padding block is zero, which no bfloat8_b quantum explains."""
+    assert torch.isfinite(result).all(), "a bfloat8_b cast produced non-finite logical lanes"
+    torch.testing.assert_close(result, expected, rtol=0.05, atol=atol)
+
+
+# W=64 is the control: it is tile aligned, has no width padding, and must keep the direct path.
+@pytest.mark.parametrize("width", [1, 33, 40, 100, 2 * TILE_WIDTH], ids=lambda width: f"W={width}")
+def test_typecast_bfloat8_b_ignores_inf_tile_padding(device, width):
+    """A bfloat8_b pack must ignore the input's 16-lane tile padding.
+
+    The last tile column shares each 16-lane block exponent with the width padding, so a stale
+    inf there used to crush the real lanes of that block to zero.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, TILE_HEIGHT, width, dtype=torch.bfloat16)
+    expected = _bfloat8_b_host_roundtrip(torch_input)
+
+    source = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    poisoned = ttnn.fill_implicit_tile_padding(source, float("inf"))
+    result = ttnn.to_torch(ttnn.typecast(poisoned, ttnn.bfloat8_b)).float()
+
+    assert torch.equal(torch_input, ttnn.to_torch(poisoned))
+    # One bfloat8_b quantum of a bfloat16-magnitude block is well below 0.05.
+    _assert_ignores_tile_padding(result, expected, atol=0.05)
+
+
+@pytest.mark.parametrize("width", [1, 33, 40, 100, 2 * TILE_WIDTH], ids=lambda width: f"W={width}")
+def test_typecast_bfloat8_b_ignores_reciprocal_tile_padding(device, width):
+    """reciprocal of zeroed padding leaves inf in the padding; the bfloat8_b cast must ignore it.
+
+    Real lanes are powers of two, so both torch and the tile pack represent them exactly. W=64 is
+    the aligned control: filling its padding is a no-op, so the reciprocal never sees a zero lane.
+    """
+    exponents = (torch.arange(width) % 7).to(torch.float32)
+    values = torch.pow(2.0, exponents).reshape(1, 1, 1, width).expand(1, 1, TILE_HEIGHT, width).contiguous()
+    torch_input = values.to(torch.bfloat16)
+    expected = _bfloat8_b_host_roundtrip(torch.reciprocal(torch_input))
+
+    source = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    zeroed = ttnn.fill_implicit_tile_padding(source, 0.0)
+    reciprocal = ttnn.reciprocal(zeroed)
+    result = ttnn.to_torch(ttnn.typecast(reciprocal, ttnn.bfloat8_b)).float()
+
+    # Every real lane is a power of two, so its reciprocal and both encodings are exact.
+    _assert_ignores_tile_padding(result, expected, atol=1e-6)

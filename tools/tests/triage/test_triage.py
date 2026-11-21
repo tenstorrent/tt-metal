@@ -33,6 +33,7 @@ sys.path.insert(0, triage_home)
 import triage
 from triage import CheckType, run_script, ScriptArguments
 from triage_hw_utils import device_has_firmware
+from serializers import strip_rich_markup
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
@@ -49,6 +50,7 @@ def logged_errors() -> list[str]:
 
 # Mapping of hang application paths to their expected test results
 HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
+HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT = f"{HANG_APP_ADD_2_INTEGERS} with lightweight asserts"
 HANG_APP_TTNN_ADD_INTEGERS = (
     "tools/tests/triage/hang_apps/ttnn_add_integers_hang/triage_hang_app_ttnn_add_integers_hang"
 )
@@ -66,7 +68,7 @@ HANG_APP_EXPECTED_RESULTS = {
             "kernel_name": "add_2_tiles_hang",
             "compute_cores_hang": True,
             "first_callstack_file": "add_2_tiles_hang.cpp",
-            "first_callstack_line": 40,
+            "first_callstack_line": 46,
         },
         "callstacks": {
             "device_to_check": 0,
@@ -74,15 +76,15 @@ HANG_APP_EXPECTED_RESULTS = {
             "cores_to_check": {
                 "trisc0": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc1": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc2": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
             },
         },
@@ -92,7 +94,7 @@ HANG_APP_EXPECTED_RESULTS = {
             "kernel_name": "add_2_tiles_hang",
             "compute_cores_hang": True,
             "first_callstack_file": "add_2_tiles_hang.cpp",
-            "first_callstack_line": 40,
+            "first_callstack_line": 46,
         },
         "callstacks": {
             "device_to_check": 0,
@@ -100,21 +102,46 @@ HANG_APP_EXPECTED_RESULTS = {
             "cores_to_check": {
                 "trisc0": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc1": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc2": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
             },
         },
         "running_operations": {
             "expected_op_name_contains": "AddIntegersHang",
             "assert_no_na": True,
+        },
+    },
+    HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT: {
+        "lightweight_asserts": {
+            "kernel_name": "add_2_tiles_hang",
+            "compute_cores_hang": True,
+            "assert_code": "ASSERT(magic == n)",
+        },
+        "callstacks": {
+            "device_to_check": 0,
+            "location_to_check": "0,0",
+            "cores_to_check": {
+                "trisc0": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 43,
+                },
+                "trisc1": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 43,
+                },
+                "trisc2": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 43,
+                },
+            },
         },
     },
 }
@@ -245,11 +272,13 @@ def cause_hang_with_app(request):
         cmd = [sys.executable, os.path.join(metal_home, app)]
     else:
         cmd = [os.path.join(metal_home, "build", app)]
+    # Pull TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS out of the outside env, so only configurations that set it get it.
+    env = {key: value for key, value in os.environ.items() if key != "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS"}
     proc = subprocess.Popen(
         cmd + args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={**os.environ, **app_configuration.get("env", {})},
+        env={**env, **app_configuration.get("env", {})},
     )
 
     output = AppOutput(proc, "Device timeout detected as expected.")
@@ -306,6 +335,7 @@ def cause_hang_with_app(request):
     [
         (
             # Automatic hang detection with timeout inside the app, fast dispatch
+            # with lightweight asserts on
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
@@ -313,8 +343,10 @@ def cause_hang_with_app(request):
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
                     "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
+                    "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS": "1",
+                    "TT_METAL_WATCHER_DISABLE_ASSERT": "1",
                 },
-                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
+                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT],
             },
             60,
         ),
@@ -634,6 +666,14 @@ class TestTriage:
                     first_entry.file_info.line == expected_line
                 ), f"{check.risc_name}: Expected line {expected_line}, got {first_entry.file_info.line}"
 
+            # Verify the quoted ASSERT if specified
+            expected_assert_code = expected.get("assert_code")
+            if expected_assert_code:
+                code = strip_rich_markup(check.result.kernel_callstack_with_message.code_line)
+                assert (
+                    code == expected_assert_code
+                ), f"{check.risc_name}: Expected {expected_assert_code!r}, got {code!r}"
+
     def test_dump_configuration(self):
         result = self.run_triage_script("dump_configuration.py")
         assert result is not None, "Expected non-None result from dump_configuration.py"
@@ -674,6 +714,15 @@ class TestTriage:
                 f"No running op with name containing '{expected_name}'. "
                 f"Got: {[op.operation_name for op in live_ops]}"
             )
+            assert any(
+                "writer_1_tile: tensor::out[0]=0x2, tensor::out[1]=0x800, ct_marker=0x5678" in op.compile_time_args
+                for op in matching
+            ), f"Writer compile-time args missing. Got: {[op.compile_time_args for op in matching]}"
+            assert any(
+                re.fullmatch(r"writer_1_tile: incremented_semaphore=0x[0-9a-f]+, tensor::out=0x[0-9a-f]+", line)
+                for op in matching
+                for line in op.common_runtime_args
+            ), f"Writer common runtime args missing. Got: {[op.common_runtime_args for op in matching]}"
 
     def test_dump_semaphores(self):
         result = self.run_triage_script("dump_semaphores.py")
@@ -741,6 +790,7 @@ class TestTriage:
     # Running dump_callstacks with --full-callstack or --gdb-callstack breaks brisc so that it cannot be halted
     # and it affects other tests in the same test class, so we move it to be run last.
     def test_dump_callstacks(self):
+        semaphores = self.run_triage_script("dump_semaphores.py")
         result = self.run_triage_script("dump_callstacks.py", argv=["--full-callstack"])
 
         assert result is not None, "Expected non-None result from dump_callstacks.py"
@@ -818,6 +868,32 @@ class TestTriage:
                         f"{risc_name}: Expected file '{expected_file}' at line {expected_line} not found. "
                         f"Found {expected_file} at lines: {[entry.file_info.line for entry in matching_entries]}"
                     )
+
+        def names_and_values(kernel_args):
+            return [(arg.name, arg.value) for arg in kernel_args]
+
+        incremented_semaphore = next(
+            row.result.address for row in semaphores if row.result.kind == "global" and row.result.initial == 5
+        )
+        args = {check.result.dispatcher_core_data.kernel_name: check.result.kernel_args for check in filtered_results}
+        writer, reader, compute = args["writer_1_tile"], args["reader_binary_1_tile"], args["add_2_tiles_hang"]
+        assert names_and_values(writer.compile_time_args) == [
+            ("tensor::out[0]", 2),
+            ("tensor::out[1]", 2048),
+            ("ct_marker", 0x5678),
+        ]
+        assert names_and_values(writer.runtime_args) == [("rt_marker", 0x9ABC), (None, 0x1234)]
+        assert [arg.name for arg in writer.common_runtime_args] == ["incremented_semaphore", "tensor::out"]
+        assert writer.common_runtime_args[0].value == incremented_semaphore
+        assert names_and_values(reader.compile_time_args) == [
+            ("tensor::in0[0]", 2),
+            ("tensor::in0[1]", 2048),
+            ("tensor::in1[0]", 2),
+            ("tensor::in1[1]", 2048),
+        ]
+        assert reader.runtime_args == []
+        assert [arg.name for arg in reader.common_runtime_args] == ["tensor::in0", "tensor::in1"]
+        assert (compute.compile_time_args, compute.runtime_args, compute.common_runtime_args) == ([], [], [])
 
     def skip_unless_circular_buffers(self, result) -> None:
         """Skip where dump_circular_buffers has nothing to read: it covers Gen1 circular buffers only.

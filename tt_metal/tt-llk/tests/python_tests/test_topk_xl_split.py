@@ -12,9 +12,15 @@ from helpers.llk_params import (
     TopKSortDirection,
     format_dict,
 )
+from helpers.perf.blaze import execute_llk, with_functional_defaults
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import DEST_SYNC, TOPK_XL
+from helpers.test_variant_parameters import (
+    DEST_SYNC,
+    LOOP_FACTOR,
+    TILE_COUNT,
+    TOPK_XL,
+)
 from test_topk_xl import (
     ELEMENTS_PER_TILE,
     FORMATS,
@@ -93,14 +99,14 @@ CASE_IDS = [
 ]
 
 
-def _config(test_name, case, ascending=None):
+def _config(test_name, case, ascending=None, loop_factor=1):
     K, num_chunks, tail, num_rows, mode, fp32, seg_base, case_ascending = case
     ascending = case_ascending if ascending is None else ascending
     formats = FP32_FORMATS if fp32 else FORMATS
     tiles_per_seq = (K + ELEMENTS_PER_TILE - 1) // ELEMENTS_PER_TILE
     src_A, rows = _build_input(K, num_chunks, tail, num_rows, mode, fp32)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=format_dict[formats.input_format])
-    config = TestConfig(
+    config_kwargs = dict(
         test_name=test_name,
         formats=formats,
         templates=[
@@ -119,6 +125,10 @@ def _config(test_name, case, ascending=None):
                 ),
             ),
         ],
+        runtimes=[
+            LOOP_FACTOR(loop_factor),
+            TILE_COUNT(tile_cnt=num_rows * num_chunks * tiles_per_seq),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,
@@ -132,20 +142,50 @@ def _config(test_name, case, ascending=None):
         dest_acc=DestAccumulation.Yes,
         unpack_to_dest=fp32,
     )
-    return config, rows, formats
+    return config_kwargs, rows, formats
 
 
 @pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
-def test_topk_xl_split(case):
+def test_topk_xl_split(
+    case,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     K, _, _, _, mode, _, seg_base, ascending = case
-    single, rows, formats = _config("sources/topk_xl_test.cpp", case)
-    split, _, _ = _config("sources/topk_xl_split_test.cpp", case)
+    split_kwargs, rows, formats = _config(
+        "sources/topk_xl_split_test.cpp", case, loop_factor=loop_factor
+    )
+    if is_perf:
+        execute_llk(
+            is_perf=True,
+            perf_report=perf_report,
+            run_types=run_types,
+            loop_factor=loop_factor,
+            test_config_kwargs=split_kwargs,
+        )
+        return
+    single = TestConfig(
+        **with_functional_defaults(
+            _config("sources/topk_xl_test.cpp", case, loop_factor=loop_factor)[0]
+        )
+    )
+    split = TestConfig(**with_functional_defaults(split_kwargs))
     # A compile-only run stops at the first run(), so build both first.
     single.prepare()
     split.prepare()
     if ascending:
-        descending, _, _ = _config(
-            "sources/topk_xl_split_test.cpp", case, ascending=False
+        descending = TestConfig(
+            **with_functional_defaults(
+                _config(
+                    "sources/topk_xl_split_test.cpp",
+                    case,
+                    ascending=False,
+                    loop_factor=loop_factor,
+                )[0]
+            )
         )
         descending.prepare()
 
@@ -189,3 +229,10 @@ def test_topk_xl_split(case):
                 f"row {r}: ascending final rebuild is not the mirror of the descending one "
                 f"in {mismatch}/{K} lanes"
             )
+
+
+def test_topk_xl_split_pack_state_repeats():
+    test_topk_xl_split(
+        (512, 2, 512, 1, "positive", False, 0, False),
+        loop_factor=2,
+    )

@@ -22,6 +22,9 @@ indices (one layout per cache — k, v, index_k — via ``kv_migration_stages``)
 A multi-turn continuation may resume mid-chunk at any 32-token boundary (the KV-cache writer's tile grid),
 as the producer's ``PREFILL_PRODUCER_MULTI_TURN_PROB`` mode does.
 
+Packed forwards: with ``PREFILL_FORWARD_TOKENS_BUDGET`` above ``PREFILL_CHUNK_SIZE`` the runner drives
+``TtPrefillRuntime.prefill_forward`` with several chunks per forward, from one or several slots.
+
 Import-safety: the heavy stack (TtPrefillRuntime / Model / transformers AutoConfig / weight loading) is
 imported lazily inside the methods that need it, so ``import ...adapters.minimax_m3`` stays cheap enough
 for the H2D producer (which reads only path/trace attributes).
@@ -116,6 +119,9 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     # importing the adapter stays cheap).
     l1_small_size = 1152
 
+    # TtPrefillRuntime.prefill_forward runs PREFILL_FORWARD_TOKENS_BUDGET / PREFILL_CHUNK_SIZE chunks per forward.
+    supports_packed_forward = True
+
     # The D2D hidden state ships in the residual stream's layer-boundary layout (see tt/residual.py).
     @property
     def pipeline_activation_emb_tp_sharded(self):
@@ -141,10 +147,12 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     # Weight cache
     # ------------------------------------------------------------------
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
         """The tilized ``.tensorbin`` cache dir, mirroring ``ModelArgs.weight_cache_path(bfloat8_b)`` (the
         layout the cache-populate run wrote): ``{default_weight_cache_root()}/tensor_cache_bfp8_{MeshShape}``.
         The model reads its per-tensor caches from here (on a hit the bf16 source is never touched)."""
+        if sp_axis != 0:
+            raise ValueError("MiniMax M3 prefill runs SP on mesh axis 0 only")
         from models.demos.minimax_m3.tt.model_config import default_weight_cache_root
 
         cache_dir = default_weight_cache_root(_model_path())
@@ -221,6 +229,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             max_seq_len=params.max_seq_len,
             mesh_shape=params.mesh_shape,
             chunk_size=params.chunk_size,
+            forward_tokens_budget=params.forward_chunks * params.chunk_size,
             num_users=params.num_users,
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,

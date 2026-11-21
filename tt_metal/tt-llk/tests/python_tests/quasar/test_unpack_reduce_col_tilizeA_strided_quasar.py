@@ -25,13 +25,14 @@ from helpers.llk_params import (
     PerfRunType,
     ReduceDimension,
     ReducePool,
-    format_dict,
 )
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
+    flat_axes,
     generate_perf_input_dimensions,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
+    quasar_dest_sync_modes,
     runtime,
     select_perf_tile_sizes,
 )
@@ -51,21 +52,11 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.tile_constants import is_mx_unsupported_tile_dims
+from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import TileShape, construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
-# 32x32 uses the four face MOP; the Nx32 tiles (N <= 8) use the tiny tile MOP in
-# llk_unpack_reduce_col_tilizeA_strided.h, where one strided unpack covers a whole face.
-# Tile shapes with a full 16 row face and fewer than four faces (16x16, 16x32, 32x16) have
-# no MOP on this path yet.
-UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES = [
-    (32, 32),
-    (1, 32),
-    (2, 32),
-    (4, 32),
-    (8, 32),
-]
+UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES = SUPPORTED_TILE_SIZES
 
 
 def generate_corner_case_input_dimensions(
@@ -78,8 +69,7 @@ def generate_corner_case_input_dimensions(
     block_rt) and max-square (both loops at capacity), where max is the number of tiles that
     fit into dest for the given dest_sync / dest_acc pair.
     """
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles_in_dest = max_dest_tiles(dest_acc, dest_sync)
     square_side = math.isqrt(max_tiles_in_dest)
 
     tile_counts = [
@@ -136,9 +126,7 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
                 and acc == DestAccumulation.No
             ):
                 continue
-            for dest_sync in (
-                (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-            ):
+            for dest_sync in quasar_dest_sync_modes(is_perf=is_perf):
                 for tile_dimensions in tile_sizes:
                     if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dimensions):
                         continue
@@ -181,6 +169,15 @@ UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS = input_output_formats(
         DataFormat.Int32,
     ],
 )
+# Column names of the tuples ``generate_unpack_reduce_col_tilizeA_strided_combinations`` returns.
+UNPACK_REDUCE_COL_TILIZEA_STRIDED_FLAT_NAMES = (
+    "formats",
+    "dest_acc",
+    "dest_sync",
+    "input_dimensions",
+    "pool_type",
+    "tile_dimensions",
+)
 ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS = (
     generate_unpack_reduce_col_tilizeA_strided_combinations(
         UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS
@@ -204,12 +201,20 @@ def generate_reduce_scaler(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
+    **flat_axes(
+        UNPACK_REDUCE_COL_TILIZEA_STRIDED_FLAT_NAMES,
+        ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
+    ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_unpack_reduce_col_tilizeA_strided_quasar(
-    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims,
+    formats,
+    dest_acc,
+    dest_sync,
+    input_dimensions,
+    pool_type,
+    tile_dimensions,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -217,15 +222,6 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (
-        formats,
-        dest_acc,
-        dest_sync_mode,
-        input_dimensions,
-        pool_type,
-        tile_dimensions,
-    ) = formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims
-
     tile_shape = construct_tile_shape(tile_dimensions)
     num_faces = tile_shape.total_num_faces()
     reduce_dim = ReduceDimension.Column
@@ -285,7 +281,7 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
         "templates": [
             MATH_OP(mathop=mathop, pool_type=pool_type),
             MATH_FIDELITY(math_fidelity),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
             generate_input_dim(
@@ -328,12 +324,7 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format, tile_shape=tile_shape

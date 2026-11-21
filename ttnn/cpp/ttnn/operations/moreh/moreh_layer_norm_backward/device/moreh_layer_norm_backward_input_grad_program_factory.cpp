@@ -21,7 +21,6 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
     tensor_return_value_t& input_grad) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& output_grad = tensor_args.output_grad;
     const auto& input = tensor_args.input;

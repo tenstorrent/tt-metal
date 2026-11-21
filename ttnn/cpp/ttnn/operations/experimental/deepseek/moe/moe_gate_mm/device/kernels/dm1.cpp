@@ -13,71 +13,12 @@
 #include "api/tile_constants.h"
 #include "api/debug/dprint_pages.h"
 
-/**
- * @brief Gather the raw scores based on the top8 indices
- * @param local_top8_partials_src_addr The address of the top8 partials
- * @param local_raw_scores_src_addr The address of the raw scores
- * @param local_gathered_scores_src_addr The address of the gathered scores
- */
-void gather_raw_scores(
-    uint32_t local_top8_partials_src_addr,
-    uint32_t local_raw_scores_src_addr,
-    uint32_t local_gathered_scores_src_addr) {
-    // Gather the raw scores based on the top8 indices
-    // Strategy: Process 2 adjacent tokens per iteration using 32-bit ops to halve stores
-    auto p_adj_scores = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_top8_partials_src_addr);
-    auto p_raw_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_raw_scores_src_addr);
-    auto p_gathered_scores = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_gathered_scores_src_addr);
-
-    // Process both faces (face 0: tokens 0-15, face 1: tokens 16-31)
-    for (uint32_t face = 0; face < 2; face++) {
-        const uint32_t face_off32 = face << 7;  // uint32 offset per face (128 elements)
-        const uint32_t tok_base = face << 4;    // Token base: 0 or 16
-
-        // Process all 8 ranks (8 top indices per token)
-        for (uint32_t rank = 0; rank < 8; rank++) {
-            const uint32_t idx_base32 = face_off32 + ((8 + rank) << 3);  // indices in rows 8-15
-            const uint32_t val_base32 = face_off32 + (rank << 3);        // values in rows 0-7
-
-            // Process 8 token pairs (16 tokens total per face)
-            for (uint32_t tp = 0; tp < 8; tp++) {
-                // ---- 1 × 32-bit L1 load: read 2 indices (2 adjacent token columns) ----
-                const uint32_t idx_pair = p_adj_scores[idx_base32 + tp];
-                const uint32_t idx0 = idx_pair & 0xFFFF;  // Expert index [0-31] for first token
-                const uint32_t idx1 = idx_pair >> 16;     // Expert index [0-31] for second token
-
-                const uint32_t tok = tok_base | (tp << 1);  // Token number (0-31)
-
-                // ---- Decode index 0: find score at [tok, idx0] in raw scores (single tile) ----
-                // Row-major faces: face = (expert[4] << 1) | token[4]
-                // Offset = (face << 8) | (row << 4) | col
-                //        = ((expert[4] << 1) | token[4]) << 8 | (token[3:0] << 4) | expert[3:0]
-                //        = (expert[4] << 9) | (token[4] << 8) | (token[3:0] << 4) | expert[3:0]
-                const uint32_t off0 = ((idx0 & 0x10) << 5) | ((tok & 0x10) << 4) | ((tok & 0xF) << 4) | (idx0 & 0xF);
-
-                // ---- Decode index 1: find score at [tok+1, idx1] in raw scores (single tile) ----
-                const uint32_t tok1 = tok + 1;
-                const uint32_t off1 = ((idx1 & 0x10) << 5) | ((tok1 & 0x10) << 4) | ((tok1 & 0xF) << 4) | (idx1 & 0xF);
-
-                // ---- 2 × 16-bit L1 loads: read 2 scores (random access, can't batch) ----
-                const uint32_t score0 = p_raw_scores[off0];
-                const uint32_t score1 = p_raw_scores[off1];
-
-                // ---- 1 × 32-bit L1 store: write 2 scores packed ----
-                p_gathered_scores[val_base32 + tp] = score0 | (score1 << 16);
-            }
-        }
-    }
-}
-
 void kernel_main() {
     // Compile time arguments
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr uint32_t collector_physical_x = get_named_compile_time_arg_val("collector_physical_x");
     constexpr uint32_t collector_physical_y = get_named_compile_time_arg_val("collector_physical_y");
-    constexpr uint32_t first_physical_x = get_named_compile_time_arg_val("first_physical_x");
-    constexpr uint32_t first_physical_y = get_named_compile_time_arg_val("first_physical_y");
     constexpr uint32_t num_mask_receivers = get_named_compile_time_arg_val("num_mask_receivers");
 
     constexpr auto in_args = TensorAccessorArgs<0>();
@@ -140,8 +81,11 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Reduction transactions
     //-------------------------------------------------------------------------
-    uint32_t semaphore_addr = get_semaphore(partial_semaphore);
-    volatile tt_l1_ptr uint32_t* my_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
+    // This kernel issues everything on NoC 1 (the writer NoC on Wormhole).
+    Noc noc_obj(1);
+    Semaphore<> partial_sem(partial_semaphore);
+    // The raw address is still needed for the remote partial-ready signal below.
+    const uint32_t semaphore_addr = get_semaphore(partial_semaphore);
 
     const uint64_t partial_semaphore_noc_addr1 =
         get_noc_addr(neighbor1_physical_x, neighbor1_physical_y, semaphore_addr);
@@ -151,8 +95,6 @@ void kernel_main() {
 
     const uint32_t local_src_addr = cb_s2c_out.get_write_ptr();
     const uint32_t local_dst_addr = cb_w2c_in2.get_write_ptr();
-    const uint64_t neighbor_dst_addr1 = get_noc_addr(neighbor1_physical_x, neighbor1_physical_y, local_dst_addr);
-    const uint64_t neighbor_dst_addr2 = get_noc_addr(neighbor2_physical_x, neighbor2_physical_y, local_dst_addr);
 
     // Use semaphore_inc<posted=true> with 1 transaction ID and flush barrier for trids
     constexpr uint32_t semaphore_trid = 0x4;
@@ -164,8 +106,6 @@ void kernel_main() {
     constexpr uint32_t COLLECTOR_CORE_ID = num_mask_receivers;
 
     const uint32_t local_collector_addr = 1024 + cb_w2c_in4.get_write_ptr();
-    const uint64_t collector_dst_base_addr =
-        get_noc_addr(collector_physical_x, collector_physical_y, local_collector_addr);
     const uint32_t collector_offset = core_id * out_tile_size;
 
     constexpr uint32_t group_score_size = tt::constants::FACE_WIDTH * sizeof(uint16_t);
@@ -187,9 +127,8 @@ void kernel_main() {
     // The collector counts group-score and top8 arrivals on its own semaphore. Sharing the partial
     // semaphore let an early increment satisfy the collector's partial wait and get zeroed, and the
     // neighbor's partial write (a set to 1) overwrite increments that had already landed.
+    Semaphore<> collector_sem(collector_semaphore);
     const uint32_t collector_semaphore_addr = get_semaphore(collector_semaphore);
-    volatile tt_l1_ptr uint32_t* my_collector_semaphore_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(collector_semaphore_addr);
     const uint64_t collector_semaphore_noc_addr =
         get_noc_addr(collector_physical_x, collector_physical_y, collector_semaphore_addr);
 
@@ -209,33 +148,27 @@ void kernel_main() {
     const uint32_t local_top8_dst_addr = local_top8_dst_base_addr + core_id * partials_size;
 
     //-------------------------------------------------------------------------
-    // Raw scores (7 cores -> 1 collector core)
-    //-------------------------------------------------------------------------
-    constexpr uint32_t raw_scores_size = tt::constants::FACE_HW * sizeof(uint16_t);
-
-    // Top8 partials: after gathering, data is in the 16-31 rows
-    const uint32_t local_raw_scores_src_addr = cb_w2c_in3.get_write_ptr();
-    const uint32_t local_gathered_scores_src_addr = local_raw_scores_src_addr + raw_scores_size;
-
-    const uint32_t local_raw_scores_dst_base_addr = cb_w2c_in7.get_write_ptr();
-    const uint32_t local_raw_scores_dst_addr = local_raw_scores_dst_base_addr + core_id * raw_scores_size;
-
-    const uint64_t raw_scores_noc_addr = get_noc_multicast_addr(
-        first_physical_x, first_physical_y, collector_physical_x, collector_physical_y, local_raw_scores_dst_base_addr);
-
-    //-------------------------------------------------------------------------
     // Semaphores start at 0 on every launch (host-initialized). Do not zero them here: a neighbor's
     // partial write can land before this core gets this far.
     if (is_send_core) {
         // Since neighbor2 is farther, we send it first.
         // Set state for the writes
-        noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_dst_addr2, out_tile_size, /*noc=*/1, vchannel);
+        noc_obj.set_async_write_state<NocOptions::POSTED | NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+            UnicastEndpoint{},
+            out_tile_size,
+            {.noc_x = neighbor2_physical_x, .noc_y = neighbor2_physical_y, .addr = local_dst_addr},
+            {.vc = vchannel});
 
         // Wait for the data1 to be ready
         cb_c2w_rdy.wait_front(1);
 
         // Send the data to the neighbor1
-        noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr2);
+        noc_obj.async_write_with_state<NocOptions::POSTED, NOC_MAX_BURST_SIZE>(
+            CoreLocalMem<uint32_t>(local_src_addr),
+            UnicastEndpoint{},
+            out_tile_size,
+            {},
+            {.noc_x = neighbor2_physical_x, .noc_y = neighbor2_physical_y, .addr = local_dst_addr});
 
         // Signal neighbor2 that data is ready (increment their semaphore)
         noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/true>(
@@ -248,17 +181,26 @@ void kernel_main() {
             /*update_val=*/false>(/*val=*/1);
 
         // Ensure write and semaphore have left the core before continuing
-        noc_async_posted_writes_flushed();
+        noc_obj.async_writes_flushed<NocOptions::POSTED>();
 
         cb_c2w_rdy.pop_front(1);
 
-        noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_dst_addr1, out_tile_size, /*noc=*/1, vchannel);
+        noc_obj.set_async_write_state<NocOptions::POSTED | NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+            UnicastEndpoint{},
+            out_tile_size,
+            {.noc_x = neighbor1_physical_x, .noc_y = neighbor1_physical_y, .addr = local_dst_addr},
+            {.vc = vchannel});
 
         // Wait for the data2 to be ready
         cb_c2w_rdy.wait_front(1);
 
         // Send the data to the neighbor1
-        noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr1);
+        noc_obj.async_write_with_state<NocOptions::POSTED, NOC_MAX_BURST_SIZE>(
+            CoreLocalMem<uint32_t>(local_src_addr),
+            UnicastEndpoint{},
+            out_tile_size,
+            {},
+            {.noc_x = neighbor1_physical_x, .noc_y = neighbor1_physical_y, .addr = local_dst_addr});
 
         // Signal neighbor1 that data is ready (increment their semaphore)
         noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/true>(
@@ -271,7 +213,7 @@ void kernel_main() {
             /*update_val=*/false>(/*val=*/1);
 
         // Ensure write and semaphore have left the core before continuing
-        noc_async_posted_writes_flushed();
+        noc_obj.async_writes_flushed<NocOptions::POSTED>();
 
         cb_c2w_rdy.pop_front(1);
 
@@ -284,8 +226,8 @@ void kernel_main() {
     cb_w2c_in2.reserve_back(1);
 
     // Wait for the data from sender cores to be ready
-    noc_semaphore_wait_min(my_semaphore_ptr, 1);
-    *my_semaphore_ptr = 0;
+    partial_sem.wait_min(1);
+    partial_sem.set(0);
     cb_w2c_in2.push_back(1);
 
     // Wait for group scores to be ready from compute
@@ -295,14 +237,25 @@ void kernel_main() {
     // Cores sending data to the collector core
     //-------------------------------------------------------------------------
     if (core_id != COLLECTOR_CORE_ID) {
-        noc_async_write_one_packet_set_state</*posted=*/true>(
-            collector_dst_base_addr, group_score_size, /*noc=*/1, vchannel);
+        noc_obj.set_async_write_state<NocOptions::POSTED | NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+            UnicastEndpoint{},
+            group_score_size,
+            {.noc_x = collector_physical_x, .noc_y = collector_physical_y, .addr = local_collector_addr},
+            {.vc = vchannel});
 
         // Send them over to the collector core
-        noc_async_write_one_packet_with_state</*posted=*/true>(
-            local_group_score_src_addr1, local_group_scores_dst_addr1);
-        noc_async_write_one_packet_with_state</*posted=*/true>(
-            local_group_score_src_addr2, local_group_scores_dst_addr2);
+        noc_obj.async_write_with_state<NocOptions::POSTED, NOC_MAX_BURST_SIZE>(
+            CoreLocalMem<uint32_t>(local_group_score_src_addr1),
+            UnicastEndpoint{},
+            group_score_size,
+            {},
+            {.noc_x = collector_physical_x, .noc_y = collector_physical_y, .addr = local_group_scores_dst_addr1});
+        noc_obj.async_write_with_state<NocOptions::POSTED, NOC_MAX_BURST_SIZE>(
+            CoreLocalMem<uint32_t>(local_group_score_src_addr2),
+            UnicastEndpoint{},
+            group_score_size,
+            {},
+            {.noc_x = collector_physical_x, .noc_y = collector_physical_y, .addr = local_group_scores_dst_addr2});
 
         // Signal the collector core that data is ready (increment their semaphore)
         noc_async_write_set_trid(semaphore_trid, /*noc=*/1);
@@ -316,8 +269,8 @@ void kernel_main() {
         cb_w2c_in5.reserve_back(1);
 
         // Wait for the group mask to be ready in the collector core
-        noc_semaphore_wait_min(my_semaphore_ptr, 1);
-        *my_semaphore_ptr = 0;
+        partial_sem.wait_min(1);
+        partial_sem.set(0);
 
         // Let compute know we got the group masks
         cb_w2c_in5.push_back(1);
@@ -325,11 +278,19 @@ void kernel_main() {
         // Wait for compute to send the top-8 values and indices
         cb_w2c_in8.wait_front(1);
 
-        noc_async_write_one_packet_set_state</*posted=*/true>(
-            collector_dst_base_addr, partials_size, /*noc=*/1, vchannel);
+        noc_obj.set_async_write_state<NocOptions::POSTED | NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+            UnicastEndpoint{},
+            partials_size,
+            {.noc_x = collector_physical_x, .noc_y = collector_physical_y, .addr = local_collector_addr},
+            {.vc = vchannel});
 
         // Send them over to the collector core
-        noc_async_write_one_packet_with_state</*posted=*/true>(local_top8_partials_src_addr, local_top8_dst_addr);
+        noc_obj.async_write_with_state<NocOptions::POSTED, NOC_MAX_BURST_SIZE>(
+            CoreLocalMem<uint32_t>(local_top8_partials_src_addr),
+            UnicastEndpoint{},
+            partials_size,
+            {},
+            {.noc_x = collector_physical_x, .noc_y = collector_physical_y, .addr = local_top8_dst_addr});
 
         // Signal the collector core that data is ready (increment their semaphore)
         noc_async_write_set_trid(semaphore_trid, /*noc=*/1);
@@ -345,15 +306,15 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     if (core_id == COLLECTOR_CORE_ID) {
         // Rejig the group scores to be in the correct location -> where everyone else also puts it
-        auto src_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_group_score_src_addr1);
-        auto dst_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_group_scores_dst_addr1);
+        CoreLocalMem<volatile uint32_t> src_ptr(local_group_score_src_addr1);
+        CoreLocalMem<volatile uint32_t> dst_ptr(local_group_scores_dst_addr1);
         for (uint32_t i = 0; i < 8; i++) {
             dst_ptr[i] = src_ptr[i];
         }
 
         // Same, but for the second row of the group scores
-        src_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_group_score_src_addr2);
-        dst_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_group_scores_dst_addr2);
+        src_ptr = CoreLocalMem<volatile uint32_t>(local_group_score_src_addr2);
+        dst_ptr = CoreLocalMem<volatile uint32_t>(local_group_scores_dst_addr2);
         for (uint32_t i = 0; i < 8; i++) {
             dst_ptr[i] = src_ptr[i];
         }
@@ -364,7 +325,7 @@ void kernel_main() {
         cb_w2c_in4.reserve_back(1);
 
         // I am collecting, let us wait for everyone else to finish sending their data to me
-        noc_semaphore_wait_min(my_collector_semaphore_ptr, num_mask_receivers);
+        collector_sem.wait_min(num_mask_receivers);
 
         // Let compute know that we got the group scores
         cb_w2c_in4.push_back(1);
@@ -377,15 +338,14 @@ void kernel_main() {
         for (uint32_t receiver = 0; receiver < num_mask_receivers; ++receiver) {
             const uint32_t receiver_x = get_arg_val<uint32_t>(argidx + (receiver * 2));
             const uint32_t receiver_y = get_arg_val<uint32_t>(argidx + (receiver * 2) + 1);
-            noc_async_write(
-                local_group_masks_addr,
-                get_noc_addr(receiver_x, receiver_y, local_group_masks_addr),
-                /*size=*/2048,
-                /*noc=*/1,
-                vchannel);
+            noc_obj.async_write<NocOptions::CUSTOM_VC>(
+                CoreLocalMem<uint32_t>(local_group_masks_addr),
+                UnicastEndpoint{},
+                /*size_bytes=*/2048,
+                {},
+                {.noc_x = receiver_x, .noc_y = receiver_y, .addr = local_group_masks_addr},
+                {.vc = vchannel});
         }
-        Noc noc_obj(1);
-        Semaphore<> partial_sem(partial_semaphore);
         noc_obj.async_write_barrier();
         for (uint32_t receiver = 0; receiver < num_mask_receivers; ++receiver) {
             const uint32_t receiver_x = get_arg_val<uint32_t>(argidx + (receiver * 2));
@@ -399,7 +359,7 @@ void kernel_main() {
         cb_w2c_in6.reserve_back(4);
 
         // Wait for the top8 partials to arrive (7 group-score + 7 top8 increments)
-        noc_semaphore_wait_min(my_collector_semaphore_ptr, num_mask_receivers + num_mask_receivers);
+        collector_sem.wait_min(num_mask_receivers + num_mask_receivers);
 
         // Let compute know that we got the top8 partials
         cb_w2c_in6.push_back(4);

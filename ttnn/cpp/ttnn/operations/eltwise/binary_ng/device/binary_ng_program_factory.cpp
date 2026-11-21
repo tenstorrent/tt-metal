@@ -190,7 +190,8 @@ public:
             shard_shape[1]);
 
         const auto [D, N, C, Ht, Wt] = get_shape_dims(tensor);
-        const auto unrolled_Ht = D * N * C * Ht;
+        const auto& padded_shape = tensor.padded_shape();
+        const uint32_t unrolled_Ht = padded_shape.volume() / (padded_shape[-2] * padded_shape[-1]) * Ht;
         last_shard_shape = {
             shard_shape[0] - (tt::round_up(unrolled_Ht, shard_shape[0]) - unrolled_Ht),
             shard_shape[1] - (tt::round_up(Wt, shard_shape[1]) - Wt),
@@ -322,6 +323,10 @@ void overwrite_compute_kernel_name_and_defines(
         compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_B ? "1" : "0";
         kernel_name = KernelName::ComputeScalarBcastNg;
     }
+}
+
+bool is_int8_sub(BinaryOpType op, DataType a_dtype) {
+    return op == BinaryOpType::SUB && (a_dtype == DataType::UINT8 || a_dtype == DataType::INT8);
 }
 
 // Returns true on the (arch, broadcast, dtype) tuple that hangs the LLK
@@ -532,9 +537,9 @@ void for_each_core_runtime_args(
 
     const bool row_major_inputs =
         CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, rt_has_sharding);
-    const uint32_t a_alignment = a.buffer()->alignment();
-    const uint32_t b_alignment = b.has_value() ? b->buffer()->alignment() : a_alignment;
-    const uint32_t c_alignment = c.buffer()->alignment();
+    const uint32_t a_alignment = a.mesh_buffer().alignment();
+    const uint32_t b_alignment = b.has_value() ? b->mesh_buffer().alignment() : a_alignment;
+    const uint32_t c_alignment = c.mesh_buffer().alignment();
 
     const uint32_t tile_height = c.tensor_spec().tile().get_height();
     const uint32_t tile_width = c.tensor_spec().tile().get_width();
@@ -549,9 +554,9 @@ void for_each_core_runtime_args(
     uint32_t writer_stride_size_bytes = 0;
 
     if (row_major_inputs) {
-        const uint32_t c_aligned_page_size = c.buffer()->aligned_page_size();
-        const uint32_t a_aligned_page_size = a.buffer()->aligned_page_size();
-        const uint32_t b_aligned_page_size = b.has_value() ? b->buffer()->aligned_page_size() : a_aligned_page_size;
+        const uint32_t c_aligned_page_size = c.mesh_buffer().aligned_page_size();
+        const uint32_t a_aligned_page_size = a.mesh_buffer().aligned_page_size();
+        const uint32_t b_aligned_page_size = b.has_value() ? b->mesh_buffer().aligned_page_size() : a_aligned_page_size;
 
         const uint32_t c_row_width_elements_aligned = c_aligned_page_size / c.element_size();
         const uint32_t a_row_width_elements_aligned = a_aligned_page_size / a.element_size();
@@ -670,8 +675,20 @@ void for_each_core_runtime_args(
             operation_attributes.scalar.value(), int_fill ? value_dtype : DataType::FLOAT32, false);
     }
     // Scalar operand (no b): goes to the writer (tile path) or reader (row-major path); 0 when b is a tensor.
+    // An 8-bit sub packs its scalar as INT32 and reads the 8-bit tensor as a zero-extended byte since the
+    // result is masked with & 0xFF. For example, int8 -5 - (-5):
+    //   1. The scalar -5 is packed as 0xFFFFFFFB.
+    //   2. The tensor value -5 is read as the byte 0xFB, which is 251.
+    //   3. The sub computes 251 - (-5) = 256.
+    //   4. The mask & 0xFF turns 256 into 0.
     const uint32_t packed_scalar =
-        b.has_value() ? 0u : pack_scalar_runtime_arg(*operation_attributes.scalar, a.dtype(), rt_is_quant_op);
+        b.has_value()
+            ? 0u
+            : pack_scalar_runtime_arg(
+                  *operation_attributes.scalar,
+                  CMAKE_UNIQUE_NAMESPACE::is_int8_sub(operation_attributes.binary_op_type, a.dtype()) ? DataType::INT32
+                                                                                                      : a.dtype(),
+                  rt_is_quant_op);
 
     // Row broadcast column group: 1 for small shares, kMaxColGroup for large; 0 = page order.
     const uint32_t col_group = [&] {
@@ -691,7 +708,7 @@ void for_each_core_runtime_args(
     // between noop and work across differently-shaped cache hits.
     const size_t noop_reader_len = row_major_inputs ? 26 : 24;
     const size_t noop_writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
-    const size_t noop_compute_len = (op_type == BinaryOpType::ISCLOSE) ? 5 : 4;
+    const size_t noop_compute_len = (op_type == BinaryOpType::ISCLOSE || op_type == BinaryOpType::REQUANT) ? 5 : 4;
 
     // Scratch lists reused for every core; each core below reassigns all three in full before fn().
     RuntimeArgList reader_runtime_args;
@@ -765,7 +782,7 @@ void for_each_core_runtime_args(
                     cND,
                     current_block,
                     num_rows_per_tile,
-                    static_cast<uint32_t>(c.buffer()->aligned_page_size()),
+                    static_cast<uint32_t>(c.mesh_buffer().aligned_page_size()),
                     c_alignment,
                     tiles_per_row_width,
                     writer_stride_size_bytes};
@@ -814,7 +831,7 @@ void for_each_core_runtime_args(
                     cND,
                     current_block,
                     num_rows_per_tile,
-                    static_cast<uint32_t>(c.buffer()->aligned_page_size()),
+                    static_cast<uint32_t>(c.mesh_buffer().aligned_page_size()),
                     c_alignment,
                     tiles_per_row_width,
                     writer_stride_size_bytes};
@@ -840,8 +857,8 @@ void for_each_core_runtime_args(
         if (row_major_inputs) {
             const std::variant<uint32_t, Buffer*> b_addr =
                 b.has_value() ? std::variant<uint32_t, Buffer*>{b->buffer()} : std::variant<uint32_t, Buffer*>{0u};
-            const uint32_t b_page_size = b.has_value() ? static_cast<uint32_t>(b->buffer()->aligned_page_size())
-                                                       : static_cast<uint32_t>(a.buffer()->aligned_page_size());
+            const uint32_t b_page_size = b.has_value() ? static_cast<uint32_t>(b->mesh_buffer().aligned_page_size())
+                                                       : static_cast<uint32_t>(a.mesh_buffer().aligned_page_size());
             const uint32_t bD_arg = b.has_value() ? bD : 1u;
             const uint32_t bN_arg = b.has_value() ? bN : 1u;
             const uint32_t bC_arg = b.has_value() ? bC : 1u;
@@ -866,7 +883,7 @@ void for_each_core_runtime_args(
                 current_block,
                 num_rows_per_tile,
                 common_row_width_elements,
-                static_cast<uint32_t>(a.buffer()->aligned_page_size()),
+                static_cast<uint32_t>(a.mesh_buffer().aligned_page_size()),
                 b_page_size,
                 a_alignment,
                 b_alignment,
@@ -900,6 +917,11 @@ void for_each_core_runtime_args(
                 bWt,
                 col_group,
             };
+        }
+
+        if (op_type == BinaryOpType::REQUANT) {
+            compute_runtime_args.push_back(std::bit_cast<uint32_t>(
+                operation_attributes.post_activations[0].get_param_if<float>(1).value_or(0.0f)));
         }
 
         fn(core, reader_runtime_args, writer_runtime_args, compute_runtime_args, /*has_work=*/true);
@@ -947,14 +969,18 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // Always pass the more accurate fp32 when the quantization scale is passed as a scalar.
     // When b is a scalar, it is packed as bfloat16 for block-float input types (BFLOAT8_B,
     // BFLOAT4_B), so the CB format must be BFLOAT16 to match — not the block-float a_dtype.
+    // An 8-bit int tensor takes its scalar as an INT32 tile, writing 16/32-bit elements and
+    // reading it as a full lane next to the zero-extended byte.
+    const bool int8_sub = CMAKE_UNIQUE_NAMESPACE::is_int8_sub(operation_attributes.binary_op_type, a.dtype());
     const auto b_dtype = b.has_value()                              ? b->dtype()
                          : is_quant_op                              ? DataType::FLOAT32
+                         : int8_sub                                 ? DataType::INT32
                          : (is_sfpu_op && !is_block_float(a_dtype)) ? a_dtype
                                                                     : DataType::BFLOAT16;
     const auto c_dtype = c.dtype();
     // Int8 input (dequant/requant operand A) is read through the UInt8 unpacker.
     const auto a_data_format = cb_dataformat_for(a_dtype);
-    const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
+    const auto b_data_format = cb_dataformat_for(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
     // Int8 output is packed through the UInt8 packer path.
     const auto c_pack_data_format = cb_dataformat_for(c_dtype);
@@ -981,38 +1007,44 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
-    // Quant/requant rounding depends on the output dtype. For uint8, we need fp32->uint8 rounding instead
-    // of the default fp32->int8. The packer narrows the int32 SFPU result to uint8.
+    // Quant/requant round to nearest even for every output dtype. The init picks the clamp range:
+    // [0, 255] for uint8 and [-128, 127] otherwise. The packer narrows the int32 SFPU result to uint8.
     // For int8 output, the SFPU crafts an offset-128 byte and stores through the UInt8 packer path.
     const char* quant_zp_arg = "(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
+    // Requant also takes the output zero point, added after rounding.
+    const char* requant_zp_args =
+        "(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX), "
+        "get_arg_val<uint32_t>(QUANT_OUT_ZERO_POINT_RT_ARGS_IDX));";
     const bool int8_in = is_quant_op && a_dtype == DataType::INT8;
-    const auto set_sfpu_op = [&](const std::string& init_fn, const std::string& op_fn) {
-        compute_kernel_defines["BINARY_SFPU_INIT"] = init_fn + quant_zp_arg;
+    const auto set_sfpu_op = [&](const std::string& init_fn, const std::string& op_fn, const char* zp_args) {
+        compute_kernel_defines["BINARY_SFPU_INIT"] = init_fn + zp_args;
         compute_kernel_defines["BINARY_SFPU_OP"] = op_fn;
     };
     if (operation_attributes.binary_op_type == BinaryOpType::QUANT) {
         if (c_dtype == DataType::UINT8) {
             compute_kernel_defines["BINARY_SFPU_INIT"] = std::string("quant_uint8_tile_init") + quant_zp_arg;
         } else if (c_dtype == DataType::INT8) {
-            set_sfpu_op("quant_int8_tile_init", "quant_int8_tile");
+            set_sfpu_op("quant_int8_tile_init", "quant_int8_tile", quant_zp_arg);
         }
     } else if (operation_attributes.binary_op_type == BinaryOpType::DEQUANT) {
         if (int8_in) {
-            set_sfpu_op("dequant_int8_tile_init", "dequant_int8_tile");
+            set_sfpu_op("dequant_int8_tile_init", "dequant_int8_tile", quant_zp_arg);
         }
     } else if (operation_attributes.binary_op_type == BinaryOpType::REQUANT) {
         if (c_dtype == DataType::INT8) {
             set_sfpu_op(
                 int8_in ? "requant_int8_in_int8_out_tile_init" : "requant_int8_tile_init",
-                int8_in ? "requant_int8_in_int8_out_tile" : "requant_int8_tile");
+                int8_in ? "requant_int8_in_int8_out_tile" : "requant_int8_tile",
+                requant_zp_args);
         } else if (c_dtype == DataType::UINT8) {
-            // uint8 output uses the standard packer narrowing (int32 SFPU result -> uint8), so it reuses
-            // the int32-output op body; only the init differs, to select FP32_TO_UINT8 rounding.
+            // uint8 output uses the standard packer narrowing (int32 SFPU result -> uint8). It reuses
+            // the int32-output op body; only the init differs, to select the [0, 255] clamp.
             set_sfpu_op(
                 int8_in ? "requant_int8_in_uint8_out_tile_init" : "requant_uint8_tile_init",
-                int8_in ? "requant_int8_in_tile" : "requant_tile");
+                int8_in ? "requant_int8_in_tile" : "requant_tile",
+                requant_zp_args);
         } else if (int8_in) {
-            set_sfpu_op("requant_int8_in_tile_init", "requant_int8_in_tile");
+            set_sfpu_op("requant_int8_in_tile_init", "requant_int8_in_tile", requant_zp_args);
         }
     }
 
@@ -1078,6 +1110,27 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             post_activations.insert(post_activations.begin(), *op_config.postprocess);
         }
 
+        // Subtract runs in an int32 lane and a negative result is not packed as its low byte. The UInt8
+        // packer returns 255 for every lane below -1. Since Torch wraps modulo 256 instead, we mask
+        // the lane to its low byte before the pack.
+        // A caller's post activations must see the wrapped result and not the raw difference.
+        //   uint8: (d & 0xFF)
+        //   int8:  ((d + 128) & 0xFF) - 128, which also sign-extends the byte for relu, abs and other such ops.
+        if (int8_sub) {
+            if (!post_activations.empty()) {
+                ttsl::SmallVector<unary::EltwiseUnaryWithParam> wrap_first;
+                if (a_dtype == DataType::INT8) {
+                    wrap_first.emplace_back(unary::UnaryOpType::ADD_UNARY_SFPU, std::int32_t{128});
+                    wrap_first.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
+                    wrap_first.emplace_back(unary::UnaryOpType::ADD_UNARY_SFPU, std::int32_t{-128});
+                } else {
+                    wrap_first.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
+                }
+                post_activations.insert(post_activations.begin(), wrap_first.begin(), wrap_first.end());
+            }
+            post_activations.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
+        }
+
         bool is_integer_division =
             (operation_attributes.binary_op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 &&
              b_dtype == DataType::INT32);
@@ -1088,6 +1141,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
             });
         }
+
+        const auto post_dtype = int8_sub ? std::optional<DataType>{DataType::INT32} : input_dtype;
 
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
@@ -1109,12 +1164,14 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             } else if (post_activations[0].type() == unary::UnaryOpType::ZERO_POINT) {
                 // Zero-point is passed as the 4th run-time kernel argument
                 compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
+                // Requant also passes its output zero point as the 5th run-time kernel argument
+                compute_kernel_defines["QUANT_OUT_ZERO_POINT_RT_ARGS_IDX"] = "4";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
             } else {
-                add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
+                add_activation_defines(compute_kernel_defines, post_activations, "POST", post_dtype);
             }
         } else {
-            add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
+            add_activation_defines(compute_kernel_defines, post_activations, "POST", post_dtype);
         }
     }
 
@@ -1130,7 +1187,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32) ||
         // Quant SFPU kernels compute on the fp32 input in DST; keep fp32 dest
         // accumulation regardless of the (possibly narrow, e.g. uint8) output format.
-        operation_attributes.is_quant_op;
+        operation_attributes.is_quant_op || int8_sub;
 
     // Determine max tiles per cycle based on sharding and output data type
     // Multi-tile processing only enabled when all tensors are sharded

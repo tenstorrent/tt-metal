@@ -11,6 +11,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "nlp_concat_heads_program_factory.hpp"
+#include "nlp_concat_heads_runtime_rows_program_factory.hpp"
 
 #include "nlp_concat_heads_device_operation_types.hpp"
 
@@ -21,9 +22,19 @@ struct NLPConcatHeadsDeviceOperation {
     using tensor_args_t = Tensor;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<NLPConcatHeadsProgramFactory>;
+    using program_factory_t = std::variant<NLPConcatHeadsProgramFactory, NLPConcatHeadsRuntimeRowsProgramFactory>;
+
+    // The runtime-rows program for an interleaved input and output with `runtime_rows` set; else the default.
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    // Runtime-rows program: the row invariants. Otherwise the miss validation, as without the attribute.
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+
+    // Runtime-rows program: attributes + input spec without the row count (a runtime word of the kernels).
+    // Otherwise the framework's default hash.
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
@@ -33,5 +44,6 @@ struct NLPConcatHeadsDeviceOperation {
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-Tensor nlp_concat_heads(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config);
+Tensor nlp_concat_heads(
+    const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config, bool runtime_rows = false);
 }  // namespace ttnn::prim
