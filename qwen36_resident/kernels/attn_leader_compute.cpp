@@ -21,11 +21,11 @@ using namespace resident_attn;
 
 namespace {
 
-FORCE_INLINE void gate_sigmoid() {
+FORCE_INLINE void gate_sigmoid(uint32_t out_cb) {
     cb_wait_front(cb_gate, Dt);
-    cb_reserve_back(cb_gs, Dt);
+    cb_reserve_back(out_cb, Dt);
     reconfig_data_format(cb_gate, cb_gate);
-    pack_reconfig_data_format(cb_gs);
+    pack_reconfig_data_format(out_cb);
     copy_init(cb_gate);
     sigmoid_tile_init();
     for (uint32_t d = 0; d < Dt; d++) {
@@ -34,10 +34,10 @@ FORCE_INLINE void gate_sigmoid() {
         sigmoid_tile(0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, cb_gs);
+        pack_tile(0, out_cb);
         tile_regs_release();
     }
-    cb_push_back(cb_gs, Dt);
+    cb_push_back(out_cb, Dt);
     cb_pop_front(cb_gate, Dt);
 }
 
@@ -109,7 +109,13 @@ void kernel_main() {
             } else {
                 norm_rope(cb_qraw, cb_qw, 0, cb_q_mc, cb_q_mc, packed ? kRopeQ + 3 * u : 3 * u);
             }
-            gate_sigmoid();
+            if constexpr (kGatePass) {
+                if (k % kQPerPass == 0) {
+                    gate_sigmoid(cb_gs_pass);  // (the pass's users; the reader extracts each one's rows)
+                }
+            } else {
+                gate_sigmoid(cb_gs);
+            }
             if (k + 1 == n_act) {
                 cb_pop_front(cb_qw, Dt);
             }

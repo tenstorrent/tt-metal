@@ -1381,6 +1381,8 @@ class ResidentModel:
                 cb(30, lead_grid, 1),
                 *([cb(7, lead_grid, 1, ttnn.uint32, 64)] if self.rows else []),  # the token state head
                 *([cb(41, lead_grid, Dt)] if groups > 1 else []),  # (row groups: the staged q, attn_common.hpp)
+                # (row groups: two passes' sigmoid(gate), attn_common.hpp kGatePass)
+                *([cb(42, lead_grid, 2 * Dt)] if groups > 1 else []),
                 # tail core
                 cb(11, tail_grid, Dt),
                 cb(12, tail_grid, 4 if packed else 2 * LR),

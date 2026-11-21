@@ -30,6 +30,24 @@ FORCE_INLINE void place_row(uint32_t src, uint32_t u, uint32_t tile, uint32_t ro
     noc_async_read(get_noc_addr(src + batch * kFaceRow), tile + kFace + off, kFaceRow);
 }
 
+// (kGatePass) rows s0 .. s0 + n - 1 of the 32x32 bf16 tile at src -> rows d0 .. d0 + n - 1 of the tile at dst,
+// in runs that stay within a face (both face halves of each run); no barrier
+FORCE_INLINE void copy_tile_rows(uint32_t src, uint32_t s0, uint32_t dst, uint32_t d0, uint32_t n) {
+    for (uint32_t i = 0; i < n;) {
+        const uint32_t s = s0 + i, d = d0 + i;
+        uint32_t m = n - i;
+        if (s < 16 && s + m > 16) {
+            m = 16 - s;
+        }
+        if (d < 16 && d + m > 16) {
+            m = 16 - d;
+        }
+        noc_async_read(get_noc_addr(src + row_offset(s)), dst + row_offset(d), m * kFaceRow);
+        noc_async_read(get_noc_addr(src + kFace + row_offset(s)), dst + kFace + row_offset(d), m * kFaceRow);
+        i += m;
+    }
+}
+
 FORCE_INLINE void zero_tiles(uint32_t cb, uint32_t n) {
     auto& iface = get_local_cb_interface(cb);
     volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.fifo_limit - iface.fifo_size);
@@ -167,12 +185,50 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_gate, Dt);
     };
+    // kGatePass: the gate rows of the pass's users into rows j * heads + h of one tile set (as place_pass)
+    auto place_gate_pass = [&](uint32_t a0) {
+        cb_reserve_back(cb_gate, Dt);
+        const uint32_t g = get_write_ptr(cb_gate);
+        for (uint32_t j = 0; j < kQPerPass && a0 + j < n_act; j++) {
+            const uint32_t ug = act.row[a0 + j];
+            const uint32_t rows = rows_base + (ug / users) * row_tiles * kRowTile;
+            for (uint32_t h = 0; h < heads; h++) {
+                for (uint32_t d = 0; d < Dt; d++) {
+                    place_row(rows + (gate0 + h * Dt + d) * kRowTile, ug % users, g + d * kTile, j * heads + h);
+                }
+            }
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_gate, Dt);
+    };
+    // kGatePass: active user ka's sigmoid(gate) rows (rows j * heads .. of its pass) into rows 0 .. heads - 1 of cb_gs
+    auto extract_gs = [&](uint32_t ka) {
+        const uint32_t j = ka % kQPerPass;
+        if (j == 0) {
+            cb_wait_front(cb_gs_pass, Dt);
+        }
+        cb_reserve_back(cb_gs, Dt);
+        const uint32_t src = get_read_ptr(cb_gs_pass), dst = get_write_ptr(cb_gs);
+        for (uint32_t d = 0; d < Dt; d++) {
+            copy_tile_rows(src + d * kTile, j * heads, dst + d * kTile, 0, heads);
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_gs, Dt);
+        if (j + 1 == kQPerPass || ka + 1 == n_act) {
+            cb_pop_front(cb_gs_pass, Dt);
+        }
+    };
     auto place_user = [&](uint32_t ka) {
         if constexpr (kLeadBatched) {
             if (ka % kQPerPass == 0) {
                 place_pass(ka);
+                if constexpr (kGatePass) {
+                    place_gate_pass(ka);
+                }
             }
-            place_gate(act.row[ka]);
+            if constexpr (!kGatePass) {
+                place_gate(act.row[ka]);
+            }
         } else {
             place(act.row[ka]);
         }
@@ -194,6 +250,9 @@ void kernel_main() {
         // the next user's rows go in before this user's partials arrive, so compute prepares its q meanwhile
         if (k + 1 < n_act) {
             place_user(k + 1);
+        }
+        if constexpr (kGatePass) {
+            extract_gs(k);
         }
 
         noc_semaphore_wait_min(part_sem, children * (i + 1));
