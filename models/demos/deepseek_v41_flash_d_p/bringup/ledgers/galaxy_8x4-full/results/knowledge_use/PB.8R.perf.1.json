@@ -1,0 +1,85 @@
+{
+ "used": [
+  {
+   "id": "DS41-314",
+   "how": "batch_call_apply refreshes only MHC_POST_V2 in the load-time snapshot (like POS_DYNAMIC), never a full settings.refresh",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-354",
+   "how": "PB.8's kernel-config-buffer fit carried over unchanged (renumbered from PB.8's DS41-343); no re-tuning",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-356",
+   "how": "new: test_no_rebuild pins ENGRAM_TABLE like test_skip_positions; ran the seq-refused unit alone",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the resident runner's batch_call_apply snapshot refresh must list every call-time switch a load-time snapshot freezes; batch_call_settings alone is not enough (only DS41-314 hints at it)",
+  "the gate's perf units differ in load seq (skip_positions: largest point + chunk = 1029120 when not fresh; no_rebuild: the deployment capacity 1044480), so they share one load only in the plan's process, not after a fresh-process move"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work; the change is PB.8's diff unchanged"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; the only choice (renumbering PB.8's known_issues ids 343/344 -> 354/355, taken since by PB.7C) recorded in BREADCRUMBS PB.8R"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "MHC_POST_V2 is call-time (hooks.batch_call_settings), so both A/B sides share one load; no load-time env added; test_mhc_post_v2.py is mesh-only BATCH_SHARED; the gate's 'needs another model' refusal of test_no_rebuild fixed in the test (ENGRAM_TABLE pinned to the shipped default as test_skip_positions does), DS41-356"
+  }
+ ],
+ "cited_only": [
+  "DS41-343"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.8R",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T04:35:29",
+  "head": "9b01cce1d8f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.8R.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.8R.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_mhc_post_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_mhc_post_v2.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_feed_common.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_feed_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_feed_sender.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_writer.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn_nanobind.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_v2.py"
+  ]
+ }
+}

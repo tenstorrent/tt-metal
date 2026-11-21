@@ -37,15 +37,69 @@ void kernel_main() {
             }
         }
     }
+#ifdef MHC_POST_LAND
+    // PB.8 (v2): cb_feed is the landing: the workers write their tiles straight into its packet slots (the stream order
+    // below, mhc_post_feed_common.hpp stream_pos), then a flag word each (page land_slots: one word a unit, in the
+    // port's stream order) once those tiles have landed. The flags are zeroed before the landing's address goes into my
+    // landing word (every port, carrying or not: the workers ask port 0, and write nothing before they have it; the
+    // word is 0 at every launch, so a worker never sees an old address or flag).
+    constexpr uint32_t sem_land_id = get_compile_time_arg_val(y_args.next_compile_time_args_offset());
+    constexpr uint32_t land_slots = get_compile_time_arg_val(y_args.next_compile_time_args_offset() + 1);
+    const uint32_t land = get_write_ptr(cb_feed);  // (nothing pushed yet: slot 0)
+    volatile tt_l1_ptr uint32_t* flags = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(land + land_slots * P * page);
+    for (uint32_t i = 0; i < (P * page) / 4; ++i) {
+        flags[i] = 0;
+    }
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_land_id)) = land;
+#endif
     if (expect == 0) {
         return;
     }
+#ifndef MHC_POST_LAND
     volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_feed_id));
     {
         MaybeDeviceZoneScope("fd_wait");
         noc_semaphore_wait_min(sem, expect);
     }
     noc_semaphore_set(sem, 0);
+#endif
+#ifdef MHC_POST_LAND
+    {  // stream the packets as their units publish: a packet is pushed once every unit up to its last tile's has set
+       // its flag (units in stream order: a packet holds tiles of at most two consecutive ones)
+        MaybeDeviceZoneScope("fd_stream");
+        uint32_t ord_base = 0, waited = 0;
+        for (uint32_t t = 0; t < ft.G; ++t) {
+            if (t == ft.me || ft.side(ft.me, t) != d) {
+                continue;
+            }
+            const uint32_t u_lo = ft.u_lo(t), u_hi = ft.u_hi(t);
+            uint32_t left = mhc_feed::count_tiles(t, u_lo, u_hi, l, links, rt, bw, ct, cpt);
+            const uint32_t k_lo = t * cpt, k_hi = k_lo + cpt;
+            uint32_t in_pkt = 0, size = 0, j = 0;
+            for (uint32_t u = u_lo + l; u < u_hi; u += links, ++j) {
+                const mhc_stats::Unit U = mhc_stats::unit_of(u, rt, bw, ct);
+                const uint32_t c0 = U.col0 < k_lo ? k_lo - U.col0 : 0;
+                const uint32_t c1 = U.col0 + U.valid > k_hi ? k_hi - U.col0 : U.valid;
+                for (uint32_t c = c0; c < c1; ++c) {
+                    if (in_pkt == 0) {
+                        size = mhc_feed::packet_size(left, P);
+                    }
+                    --left;
+                    if (++in_pkt == size) {
+                        for (; waited <= ord_base + j; ++waited) {
+                            noc_semaphore_wait_min(flags + waited, 1);
+                        }
+                        cb_reserve_back(cb_feed, 1);
+                        cb_push_back(cb_feed, 1);
+                        in_pkt = 0;
+                    }
+                }
+            }
+            ord_base += mhc_feed::stream_units(u_lo, u_hi, l, links);
+        }
+        return;
+    }
+#endif
     MaybeDeviceZoneScope("fd_read");
 
 #ifdef MHC_POST_FAST

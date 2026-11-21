@@ -132,6 +132,11 @@ MhcPostStatsDeviceOperation::tensor_return_value_t MhcPostStatsDeviceOperation::
 
 ttsl::hash::hash_t MhcPostStatsDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (attrs.v2) {  // PB.8: the hash without it, then the flag (off: every hash as before)
+        auto off = attrs;
+        off.v2 = false;
+        return tt::tt_metal::operation::hash_operation<MhcPostStatsDeviceOperation>(compute_program_hash(off, t), 2u);
+    }
     if (attrs.fast) {  // P.83: the hash without it, then the flag (off: every hash as before)
         auto off = attrs;
         off.fast = false;
@@ -241,6 +246,7 @@ std::vector<ttnn::Tensor> mhc_post_stats(
         args.hc_output = collapse->hc_output;
         args.y_output = collapse->y_output;
         attrs.fast = collapse->fast;              // P.83
+        attrs.v2 = collapse->v2;                  // PB.8
         if (collapse->norm_weight.has_value()) {  // P.35
             attrs.norm = true;
             attrs.rms_inv_w = 1.0 / static_cast<double>(input.logical_shape()[-1]);

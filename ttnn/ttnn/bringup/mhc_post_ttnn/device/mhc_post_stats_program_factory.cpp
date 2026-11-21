@@ -82,6 +82,10 @@ constexpr uint32_t SEM_NORM = 1;
 constexpr uint32_t SEM_FEED = 2;  // a port's count of finished units (one increment per (unit, target) it carries)
 constexpr uint32_t SEM_FEED_TEARDOWN = 3, SEM_FEED_BUFIDX = 4;  // a port's fabric connection's worker semaphores
 constexpr uint32_t SEM_W = 5;  // P.83 (fast, W shared): counts the W tiles the block's other cores forwarded here
+constexpr uint32_t SEM_LAND = 6;  // PB.8 (v2, feed landing): a port's landing address (its reader writes it at start)
+// PB.8 (v2): the feed landing's L1 never exceeds this (and never the workers' own CB total: the ports then fit where
+// the workers' CBs fit)
+constexpr uint32_t LAND_BUDGET = 1024 * 1024;
 
 constexpr uint32_t READER_KERNEL = 0, WRITER_KERNEL = 1, COMPUTE_KERNEL = 2;
 constexpr uint32_t FEED_READER_KERNEL = 3, FEED_SENDER_KERNEL = 4;
@@ -274,6 +278,49 @@ FeedTable feed_table(
     return ft;
 }
 
+// P.36 (feed): tiles a fabric packet carries (y's pages)
+uint32_t feed_packet_tiles(uint32_t o_page) {
+    const size_t max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    return std::max<uint32_t>(1, std::min<uint32_t>(4, static_cast<uint32_t>(max_payload / o_page)));
+}
+
+// PB.8 (v2): the packets of a stream of n tiles (mhc_post_feed_common.hpp packet_size: P a packet, the last tile alone)
+uint32_t stream_packets(uint32_t n, uint32_t P) { return n <= 1 ? n : (n - 1 + P - 1) / P + 1; }
+
+// PB.8 (v2): the most packets any port of any chip carries (the landing's slots): port (d, l) of group position me
+// carries every target t != me on side d, of each the units u in [u_lo, u_hi) with (u - u_lo) mod L == l, their tiles
+// of column block t (the feed table's sides and unit ranges)
+uint32_t max_port_packets(const FeedTable& ft, uint32_t RT, uint32_t B, uint32_t col_tiles, uint32_t cpt, uint32_t P) {
+    using namespace mhc_feed_layout;
+    const auto& h = ft.head;
+    const uint32_t G = h[FT_G], L = h[FT_L];
+    auto side = [&](uint32_t a, uint32_t b) { return (h[FT_SIDE + (a * G + b) / 32] >> ((a * G + b) % 32)) & 1u; };
+    uint32_t best = 0;
+    for (uint32_t me = 0; me < G; ++me) {
+        for (uint32_t d = 0; d < 2; ++d) {
+            for (uint32_t l = 0; l < L; ++l) {
+                uint32_t pk = 0;
+                for (uint32_t t = 0; t < G; ++t) {
+                    if (t == me || side(me, t) != d) {
+                        continue;
+                    }
+                    const uint32_t k_lo = t * cpt, k_hi = k_lo + cpt;
+                    uint32_t n = 0;
+                    for (uint32_t u = h[FT_ULO + t] + l; u < h[FT_UHI + t]; u += L) {
+                        const uint32_t col0 = (u / RT) * B, valid = std::min(B, col_tiles - col0);
+                        const uint32_t c0 = col0 < k_lo ? k_lo - col0 : 0;
+                        const uint32_t c1 = col0 + valid > k_hi ? k_hi - col0 : valid;
+                        n += c1 > c0 ? c1 - c0 : 0;
+                    }
+                    pk += stream_packets(n, P);
+                }
+                best = std::max(best, pk);
+            }
+        }
+    }
+    return best;
+}
+
 // P.36 (feed): the port cores' kernels; every port core of every chip runs both (a side with no target: none); port 0
 // also waits for the (G - 1) L arrivals into its chip's feed_output.
 void add_feed_ports(
@@ -287,7 +334,8 @@ void add_feed_ports(
     uint32_t cpt,
     uint32_t RT,
     uint32_t B,
-    uint32_t col_tiles) {
+    uint32_t col_tiles,
+    uint32_t land_slots) {
     const Tensor& y = outputs.at(4);
     const Tensor& fo = *in.feed_output;
     const uint32_t L = params.feed_links;
@@ -299,14 +347,16 @@ void add_feed_ports(
         "mhc_post stats: feed_output must be [{} rows, {} columns]",
         grp * RT * TILE_HW,
         cpt * TILE_HW);
-    const size_t max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    const uint32_t P = std::max<uint32_t>(1, std::min<uint32_t>(4, static_cast<uint32_t>(max_payload / o_page)));
+    const uint32_t P = feed_packet_tiles(o_page);
     std::vector<CoreRange> rr;
     for (const auto& c : ports) {
         rr.emplace_back(c, c);
     }
     const CoreRangeSet port_set(rr);
-    const uint32_t slots = params.fast ? FEED_SLOTS_FAST : FEED_SLOTS;
+    // PB.8 (v2, land_slots > 0): cb_feed is the landing, one slot per packet of the port's busiest stream set (the
+    // workers write the tiles in place), then one page of per-unit flags (a unit's tiles have landed; the reader pushes
+    // each packet once its units' flags are set)
+    const uint32_t slots = land_slots ? land_slots + 1 : (params.fast ? FEED_SLOTS_FAST : FEED_SLOTS);
     desc.cbs.push_back(make_cb(CB_FEED, P * o_page, slots, port_set, y.dtype()));
     for (uint32_t id : {SEM_FEED, SEM_FEED_TEARDOWN, SEM_FEED_BUFIDX}) {  // (the last two: the fabric connection's)
         desc.semaphores.push_back(SemaphoreDescriptor{
@@ -318,6 +368,10 @@ void add_feed_ports(
     rd_ct.insert(rd_ct.end(), common.begin(), common.end());
     rd_ct.push_back(SEM_FEED);
     append_accessor(rd_ct, y);
+    if (land_slots) {  // PB.8: after the accessor (the other programs keep their CT args)
+        rd_ct.push_back(SEM_LAND);
+        rd_ct.push_back(land_slots);
+    }
     std::vector<uint32_t> sd_ct = {CB_FEED, o_page};
     sd_ct.insert(sd_ct.end(), common.begin(), common.end());
     append_accessor(sd_ct, fo);
@@ -336,6 +390,11 @@ void add_feed_ports(
     desc.kernels.push_back(
         make_kernel("mhc_post_feed_sender.cpp", port_set, sd_ct, sd_rt, tt::tt_metal::WriterConfigDescriptor{}));
     TT_FATAL(desc.kernels.size() == FEED_SENDER_KERNEL + 1, "mhc_post stats: feed kernels out of place");
+    if (land_slots) {  // PB.8: the reader only waits and pushes; the sender's slot count is the landing's
+        desc.kernels[FEED_READER_KERNEL].defines.emplace_back("MHC_POST_LAND", "1");
+        desc.kernels[FEED_SENDER_KERNEL].defines.emplace_back("MHC_POST_FEED_SLOTS", std::to_string(land_slots + 1));
+        desc.kernels[FEED_SENDER_KERNEL].defines.emplace_back("MHC_POST_LAND", "1");
+    }
     auto& rc = desc.kernels[FEED_READER_KERNEL].common_runtime_args;
     rc = {addr(y)};
     rc.insert(rc.end(), ft.head.begin(), ft.head.end());
@@ -380,6 +439,8 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
     TT_FATAL(!collapse || (x16 && n <= 4), "mhc_post stats: collapse needs bf16 streams and n <= 4");
     const bool fast = params.fast;  // P.83
     TT_FATAL(!fast || collapse, "mhc_post stats: fast needs collapse");
+    const bool v2 = params.v2;  // PB.8
+    TT_FATAL(!v2 || fast, "mhc_post stats: v2 needs fast");
     const bool norm = params.norm;
     TT_FATAL(!norm || collapse, "mhc_post stats: norm needs collapse");
     TT_FATAL(!norm || n * (n + 2) + 1 < TILE_HW, "mhc_post stats: norm needs column n (n + 2) + 1 of the partial row");
@@ -404,27 +465,92 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
         const uint32_t G = grid.x * grid.y, np = 2 * params.feed_links;
         TT_FATAL(params.feed_links >= 1 && G > np + 1, "mhc_post stats: feed: {} ports do not fit {} cores", np, G);
         for (uint32_t s2 = 0; s2 < np; ++s2) {
-            const uint32_t i = G - 1 - s2;
-            ports.push_back(CoreCoord{i % grid.x, i / grid.x});
+            if (v2) {  // PB.8: the last column, bottom up (the grid's other columns stay whole for the W segments)
+                ports.push_back(CoreCoord{grid.x - 1 - s2 / grid.y, grid.y - 1 - s2 % grid.y});
+            } else {
+                const uint32_t i = G - 1 - s2;
+                ports.push_back(CoreCoord{i % grid.x, i / grid.x});
+            }
         }
         work_set = tt::tt_metal::num_cores_to_corerangeset(G - np, grid, true);
     }
     auto is_port = [&](const CoreCoord& c) { return std::find(ports.begin(), ports.end(), c) != ports.end(); };
-    auto [num_cores, all_cores, group_1, group_2, units_1, units_2] =
-        feed ? tt::tt_metal::split_work_to_cores(work_set, p.units, true)
-             : tt::tt_metal::split_work_to_cores(grid, p.units, true);
     std::vector<CoreCoord> cores;
     std::vector<uint32_t> starts, counts;
-    uint32_t start = 0;
-    for (const auto& [group, per_core] : {std::pair{group_1, units_1}, std::pair{group_2, units_2}}) {
-        for (const auto& core : tt::tt_metal::corerange_to_cores(group, std::nullopt, true)) {
-            cores.push_back(core);
-            starts.push_back(start);
-            counts.push_back(per_core);
-            start += per_core;
+    CoreRangeSet all_cores;
+    // PB.8 (v2): with one unit a core, block b's RT units on a vertical segment of RT cores (column x, rows y0 ..
+    // y0 + RT - 1; segments column-major, none holding a port), so each core's W share reaches the block's other cores
+    // in one NoC multicast (and short hops); seg_of[b] = the segment's first core
+    std::vector<CoreCoord> seg_of;
+    if (v2 && RT >= 2 && RT <= 32 && RT <= grid.y && p.units <= grid.x * grid.y - ports.size()) {
+        for (uint32_t xx = 0; xx < grid.x && seg_of.size() < NB; ++xx) {
+            for (uint32_t y0 = 0; y0 + RT <= grid.y && seg_of.size() < NB; y0 += RT) {
+                bool free = true;
+                for (uint32_t r = 0; r < RT; ++r) {
+                    free = free && !is_port(CoreCoord{xx, y0 + r});
+                }
+                if (free) {
+                    seg_of.push_back(CoreCoord{xx, y0});
+                }
+            }
+        }
+        if (seg_of.size() < NB) {
+            seg_of.clear();
         }
     }
-    TT_FATAL(start == p.units, "mhc_post stats: work split covers {} of {} units", start, p.units);
+    if (!seg_of.empty()) {
+        std::vector<CoreRange> rr;
+        for (uint32_t u = 0; u < p.units; ++u) {
+            const CoreCoord c{seg_of[u / RT].x, seg_of[u / RT].y + u % RT};
+            cores.push_back(c);
+            starts.push_back(u);
+            counts.push_back(1);
+            rr.emplace_back(c, c);
+        }
+        all_cores = CoreRangeSet(rr);
+    } else if (v2 && feed) {  // PB.8: the ports moved; the units split row-major over the other cores
+        std::vector<CoreCoord> avail;
+        for (uint32_t yy = 0; yy < grid.y; ++yy) {
+            for (uint32_t xx = 0; xx < grid.x; ++xx) {
+                if (!is_port(CoreCoord{xx, yy})) {
+                    avail.push_back(CoreCoord{xx, yy});
+                }
+            }
+        }
+        const uint32_t nc = std::min<uint32_t>(avail.size(), p.units), q = p.units / nc, rem = p.units % nc;
+        std::vector<CoreRange> rr;
+        uint32_t start = 0;
+        for (uint32_t i = 0; i < nc; ++i) {
+            const uint32_t c = q + (i < rem ? 1 : 0);
+            cores.push_back(avail[i]);
+            starts.push_back(start);
+            counts.push_back(c);
+            start += c;
+            rr.emplace_back(avail[i], avail[i]);
+        }
+        all_cores = CoreRangeSet(rr);
+    } else {
+        auto [num_cores, all_split, group_1, group_2, units_1, units_2] =
+            feed ? tt::tt_metal::split_work_to_cores(work_set, p.units, true)
+                 : tt::tt_metal::split_work_to_cores(grid, p.units, true);
+        all_cores = all_split;
+        uint32_t start = 0;
+        for (const auto& [group, per_core] : {std::pair{group_1, units_1}, std::pair{group_2, units_2}}) {
+            for (const auto& core : tt::tt_metal::corerange_to_cores(group, std::nullopt, true)) {
+                cores.push_back(core);
+                starts.push_back(start);
+                counts.push_back(per_core);
+                start += per_core;
+            }
+        }
+    }
+    {
+        uint32_t covered = 0;
+        for (const uint32_t c : counts) {
+            covered += c;
+        }
+        TT_FATAL(covered == p.units, "mhc_post stats: work split covers {} of {} units", covered, p.units);
+    }
     auto owner = [&](uint32_t u) {
         const auto it = std::upper_bound(starts.begin(), starts.end(), u);
         return static_cast<size_t>(std::distance(starts.begin(), it) - 1);
@@ -481,10 +607,23 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
     // first and only reservation), so a block's W leaves DRAM once instead of RT times. Otherwise each core reads its
     // blocks' W as before.
     const bool w_share = fast && max_count == 1 && RT >= 2 && RT <= 32;
+    // PB.8 (v2): a segment whose RT cores are contiguous in NoC coordinates (one column, consecutive rows) takes the
+    // W share by multicast; all must (one define), else the forwards stay unicast
+    bool w_mcast = w_share && !seg_of.empty();
+    for (uint32_t b = 0; w_mcast && b < NB; ++b) {
+        const CoreCoord v0 = device->worker_core_from_logical_core(seg_of[b]);
+        for (uint32_t r = 1; r < RT; ++r) {
+            const CoreCoord v = device->worker_core_from_logical_core(CoreCoord{seg_of[b].x, seg_of[b].y + r});
+            w_mcast = w_mcast && v.x == v0.x && v.y == v0.y + r;
+        }
+    }
+    // PB.8 (v2, norm): a root's hc transposes on its SFPU (the writer no longer copies the row's words)
+    const bool hct = v2 && params.norm;
 
     // P.36 (feed): the group along feed_axis, the feed table, and each unit's (target, link) pairs: chip-independent
     // (the writer skips its own block's pair and finds the port from the table)
     uint32_t grp = 1, cpt = 0;
+    uint32_t land_slots = 0, land_bytes = 0;  // PB.8 (v2, feed): the landing (0 = off)
     std::vector<uint32_t> feed_word;  // per unit: up to 2 (t + 1) | l << 8 halves, 0 = none
     FeedTable ft;
     if (feed) {
@@ -496,6 +635,13 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
         cpt = p.col_tiles / grp;
         TT_FATAL(cpt >= B, "mhc_post stats: feed: a chip's {} column tiles < the block's {}", cpt, B);
         ft = feed_table(device, params, ports, cpt, RT, B, p.col_tiles);
+        if (v2) {  // PB.8: the landing when it fits (else the y_output staging, as without v2)
+            const uint32_t o_page = outputs.at(4).buffer()->page_size();
+            const uint32_t P = feed_packet_tiles(o_page);
+            land_slots = max_port_packets(ft, RT, B, p.col_tiles, cpt, P);
+            land_bytes = (land_slots + 1) * P * o_page;  // (+ the flag page)
+            TT_FATAL(p.units * 4 <= P * o_page, "mhc_post stats: v2: {} units' flags exceed a landing page", p.units);
+        }
         const uint32_t L = params.feed_links;
         feed_word.assign(p.units, 0u);
         for (uint32_t t = 0; t < grp; ++t) {
@@ -555,6 +701,16 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
         desc.cbs.push_back(make_cb(CB_NRS, page, 2, all_cores));
     }
 
+    if (land_slots) {  // PB.8: the landing only where the workers' own CBs would fit as much (same L1 limits)
+        uint32_t worker_cb = 0;
+        for (const auto& cb : desc.cbs) {
+            worker_cb += cb.total_size;
+        }
+        if (land_bytes > std::min(LAND_BUDGET, worker_cb)) {
+            land_slots = 0;
+            land_bytes = 0;
+        }
+    }
     std::vector<uint32_t> common_ct = {n, p.col_tiles, RT, B, NB, page, coef_tiles};
     std::vector<uint32_t> reader_ct = common_ct;
     reader_ct.insert(reader_ct.end(), {CB_IN, CB_W, CB_PART, SEM_ROOT});
@@ -598,6 +754,10 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
     if (feed) {  // P.36: after the norm's
         writer_ct.insert(writer_ct.end(), {cpt, SEM_FEED});
         append_accessor(writer_ct, *in.feed_output);
+        if (land_slots) {  // PB.8: then the packet tiles and the landing-address semaphore
+            writer_ct.insert(
+                writer_ct.end(), {feed_packet_tiles(outputs.at(4).buffer()->page_size()), SEM_LAND, land_slots});
+        }
     }
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.insert(
@@ -637,6 +797,10 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
             const uint32_t b = s / RT;
             for (uint32_t rr = 0; rr < RT; ++rr) {
                 r.push_back(core_xy(owner(b * RT + rr)));
+            }
+            if (w_mcast) {  // PB.8: then the segment's first and last core (NoC 0 multicast start / end)
+                r.push_back(core_xy(owner(b * RT)));
+                r.push_back(core_xy(owner(b * RT + RT - 1)));
             }
         }
         TT_FATAL(r.size() < 300, "mhc_post stats: {} reader runtime args on one core", r.size());
@@ -720,7 +884,19 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
         auto& wc = desc.kernels[WRITER_KERNEL].common_runtime_args;
         wc.push_back(addr(*in.feed_output));
         wc.insert(wc.end(), ft.head.begin(), ft.head.end());
-        add_feed_ports(desc, params, in, outputs, ports, ft, grp, cpt, RT, B, p.col_tiles);
+        add_feed_ports(desc, params, in, outputs, ports, ft, grp, cpt, RT, B, p.col_tiles, land_slots);
+        if (land_slots) {  // PB.8: the workers write the other chips' y tiles into the ports' landing
+            desc.kernels[WRITER_KERNEL].defines.emplace_back("MHC_POST_LAND", "1");
+            std::vector<CoreRange> pr;
+            for (const auto& c : ports) {
+                pr.emplace_back(c, c);
+            }
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = SEM_LAND,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = all_cores.merge(CoreRangeSet(pr)),
+                .initial_value = 0});
+        }
     }
     if (fast) {  // P.83: the stats kernels and the feed reader; the reader also MHC_POST_WSHARE when W is shared
         for (auto& k : desc.kernels) {
@@ -728,12 +904,23 @@ tt::tt_metal::ProgramDescriptor build_descriptor(
                 k.kernel_source.find("mhc_post_feed_reader") != std::string::npos) {
                 k.defines.emplace_back("MHC_POST_FAST", "1");
             }
-            if (k.kernel_source.find("mhc_post_feed_") != std::string::npos) {
+            if (k.kernel_source.find("mhc_post_feed_") != std::string::npos &&
+                !(land_slots && k.kernel_source.find("mhc_post_feed_sender") != std::string::npos)) {
                 k.defines.emplace_back("MHC_POST_FEED_SLOTS", std::to_string(FEED_SLOTS_FAST));
             }
         }
         if (w_share) {
             desc.kernels[READER_KERNEL].defines.emplace_back("MHC_POST_WSHARE", std::to_string(SEM_W));
+        }
+        if (w_mcast) {  // PB.8
+            desc.kernels[READER_KERNEL].defines.emplace_back("MHC_POST_WMCAST", "1");
+        }
+        if (v2) {  // PB.8: the compute's bottom-half mix as the top half's code, shifted (kernel-config room)
+            desc.kernels[COMPUTE_KERNEL].defines.emplace_back("MHC_POST_V2", "1");
+        }
+        if (hct) {  // PB.8
+            desc.kernels[WRITER_KERNEL].defines.emplace_back("MHC_POST_HCT", "1");
+            desc.kernels[COMPUTE_KERNEL].defines.emplace_back("MHC_POST_HCT", "1");
         }
         // the compute builds the coefficient tiles: it needs the columns of post / comb and the comb order
         auto& kd = desc.kernels[COMPUTE_KERNEL].defines;

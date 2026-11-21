@@ -754,6 +754,18 @@ TABLE = {
         "179.7 -> 141.0 us. X', y, the feed bit-identical; stats column 24 (sum x'^2) in another fp32 order (rel "
         "<= 1e-5), so the hc within 2.4e-7. False = the P.36 program",
     ),
+    "MHC_POST_V2": Setting(
+        True,
+        (True, False),
+        "PB.8 (OWNER 2026-11-20: two ideas from a colleague's mhc_post op in OUR fork + the hc transposes). True = every "
+        "mhc_post(collapse_pre=, fast=True) call also takes the fork's v2: (1) attn_residual's feed: the other TP chips' "
+        "y tiles land straight in the port cores' L1 (cb_feed as the landing, one slot a packet; no y_output DRAM "
+        "staging, no port DRAM re-read) when the landing fits the port; (2) with one unit a core (the 5120 own-rows "
+        "split) a W block's RT cores sit in one grid column and each core's W share reaches the others in ONE NoC "
+        "multicast (was RT - 1 unicasts, ~10 MB of L1-L1 traffic a call); (3) a root's hc row transposes run on its "
+        "SFPU (lane mask + subvector rotation, exact) instead of BRISC word copies (6.4 + 5.4 us). Read per call (one "
+        "load serves both values). Bit-identical to False. False = the P.83 program",
+    ),
     "ATTN_ROOFLINE": Setting(
         True,
         (True, False),

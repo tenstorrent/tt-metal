@@ -150,6 +150,9 @@ class TtHcMixes:
             **self.norm_kwargs(),
             **self.feed_kwargs(),
             fast=bool(settings.get("MHC_POST_FAST")),  # P.83: the fork's pipelined program
+            # PB.8: the fork's v2 on the fast program (feed landing in the ports' L1, multicast W share, SFPU hc
+            # transposes); read per call
+            v2=bool(settings.get("MHC_POST_FAST")) and bool(settings.get("MHC_POST_V2")),
         )
 
     def feed_kwargs(self) -> dict:

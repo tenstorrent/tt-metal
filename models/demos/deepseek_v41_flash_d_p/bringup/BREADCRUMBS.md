@@ -691,3 +691,82 @@
 - Follow-ups for 67k on 4 x 2k: the glued sparse_sdpa call's host cost (kv_lane_rows, 6 padded lane tensors: 0.45 ms a
   call vs 0.18 on the lane path), the 80 snapshot sends a chunk (one program a segment a layer), the ~13 ms fresh-vs-
   repeat gap of the glued walls (0 builds; not attributed).
+## PB.8 perf (attempt 1): mhc_post v2 - feed lands in the ports' L1, W-share placement, hc transposes (MHC_POST_V2 False | True)
+
+- Expected saving (written before code; perf_guide sections 1-4): device a chunk at 5120 (80 mhc_post calls: 40 ffn
+  residual no feed, 40 attn residual with the feed): idea 1 (feed lands in the port L1: no y_output DRAM write + no
+  port DRAM re-read, the tail after the norm) ~-5 to -8 us an attn call = -0.2 to -0.3 ms; idea 2 (the W block's
+  sharing cores placed to cut the forward's NoC congestion) + the root's hc transposes off the BRISC (~-6 to -10 us)
+  ~-8 to -15 us a call x 80 = -0.6 to -1.2 ms. Total -0.8 to -1.5 ms device a chunk; host ~0 (same launches, one
+  program, C++ descriptor op, OV-23). Idea 2's "fused SFPU mix" is already ours (mix_vector: each operand loaded once a
+  vector, 4 accumulators in registers since P.20); what is left there is the per-column coefficient re-unpack.
+- Needs a fresh device open (scripts/run_safe_pytest.sh, not the resident runner) for the zone probe only: the device
+  profiler must be on at the open and its CSV completes at the close (P.83). Op-level, no model load; correctness
+  runs go through the resident runner (tests/test_mhc_post_fast.py).
+- Baseline zones (op probe, fast, [160, 5120], slowest chip): ffn 110.5 us, its end = the root's hc path (wr_fin
+  cols_to_soa 6.4, Sinkhorn ~5.5, wr_hc soa_to_cols 5.4: ~8 us past the units' last y write at ~102); attn 142.3 us,
+  the feed tail 42 us past the units (fd_read: port DRAM re-reads of the staged y 24-34 us, then the sends); the units'
+  columns land up to 61 us, the slowest partial ~85 us. [256, 5120] (packed 8192): 163 / 249 us, two units a core (no
+  W share there).
+- Change (fork option `v2`, CHANGELOG "v2"; model: tt/settings.py MHC_POST_V2, tt/mhc.py collapse_kwargs passes
+  v2 = MHC_POST_FAST and MHC_POST_V2): (1) feed landing in the ports' L1 (idea 1): cb_feed = one slot a packet of the
+  busiest port + a flag page; workers write each other-chip y tile at its stream position, then a flag word a unit;
+  the port pushes packets as their units' flags set (streams as published); (2) idea 2 adapted to OUR op: a W block's
+  5 cores on one grid column segment, each core's W share by ONE NoC multicast (his interleaved strips are for his
+  row-group combine tree; ours has no tree, so the segment + multicast is the same idea: short, shared W traffic);
+  his "fused SFPU mix" is already ours (P.20 mix_vector: each operand loaded once, 4 accumulators in registers), so
+  nothing to take; (3) the pending hc transposes: on the root's SFPU (exact lane moves), not the BRISC.
+- DECIDED (OV-58): the brief's switch must be listed in bringup/hooks.py batch_call_settings, which this step may not
+  edit: MHC_POST_V2 is read per call in tt/mhc.py (one load could serve both), but until hooks.py lists it the batch
+  runner treats it as load-time (a run with another value reloads the model). One-line follow-up for the overseer:
+  add "MHC_POST_V2" to batch_call_settings' tuple.
+- Measured (op probe, 8x4, device profiler, slowest chip, median of 4-6 calls; fast -> v2, us):
+  [160, 5120] ffn 111.1 -> 102.6 (-8.5: the hc path; the units' phase unchanged), attn 143-150 -> 138.4 (fast varies
+  between probe opens; -5 to -12); [256, 5120] ffn 161.8 -> 158.2, attn 249.6 -> 240.6. Expected a 5120 chunk: 40 x
+  -8.5 + 40 x ~-6 = ~-0.6 ms device (below the brief's ~1 ms keep line; the owner decides from the A/B). Not moved:
+  the multicast W share (units' column reads + mix bound the units: rd_in end max ~60, c_mix end max ~78), 8 sender
+  headers (link / packet bound, DS41-355).
+- Bit-identical to fast on every output and deterministic over 3 repeats: fork test 8 / 8 on the resident mesh
+  (tests/test_mhc_post_v2.py -> the fork's check_v2: [64, 640] ragged +-feed, [160, 5120] +-feed, [256, 5120] +-feed,
+  [640, 1280] feed, [1280, 5120] (landing too big: staging)); the probe's v2-vs-fast diffs 0 on X', stats, hc, feed.
+- Gotchas: DS41-354 (kernel-config buffer under the device profiler: v2 first did not fit, fixed by sharing the mix
+  code); the rotate direction of subvec_shflror1 (lane i -> i + 1) was taken from the bit-identical hc check (HCT_DIR);
+  a semaphore word is 0 at every launch, so it carries the landing address safely; the flags are zeroed before the
+  address is published (workers write nothing before they have it).
+- Cores: unchanged (109 of 110 with the feed; the ports moved to the last column). Host: no new launches, one program.
+- Re-run: correctness `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd
+  "scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_mhc_post_v2.py"`
+  (MHCV2_CASES=<ids> picks cases); zones (fresh open): `MHCP_FAST=v2both MHCP_T=160,256
+  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_mhc_post_probe.py -s`.
+- Gate (`gate PB.8 --check`, switch on, after the last code edit): PASS: determinism 0, contract 0 / 0, outside_history
+  0, every err_layer / err_state within its noise floor, err_final_hidden 0.135 (<= 0.242), top5 1.0; walls (switch on)
+  steady_wall_ms p145408 84.3, p1024000 97.4, agentic 78.8, multilingual 82.8. The on / off device A/B is the
+  orchestrator's (measure ran the change-on walls; no profile run by this step).
+## PB.8R perf (attempt 1): re-apply PB.8's mhc_post v2 unchanged (OWNER 2026-11-20; MHC_POST_V2 False | True)
+
+- Expected saving (written before measuring; PB.8's own numbers, perf_guide sec. 2): device ~-0.6 ms a 5120 chunk
+  (40 ffn calls x ~-8.5 us + 40 attn calls x ~-6 us), ~-0.5 ms a packed 8192 chunk ([256, 5120]: -3.6 / -9 us a
+  call); host ~0 (same launches, one C++ program a call; no new Python-built op).
+- Applied: `git cherry-pick -n 0ef6b7107f5` onto 9b01cce1d8f; the code merged clean (mhc_post_ttnn and tt/mhc.py
+  untouched since 561fc994f0f); only BREADCRUMBS.md / known_issues.md conflicted (both appended): kept both, PB.8's
+  entries renumbered DS41-343/344 -> DS41-354/355 (343/344 were taken by PB.7C since), in its BREADCRUMBS section too.
+  untracked.tgz's two tests are byte-identical to the commit's (already in the tree).
+- PB.8's follow-up done: bringup/hooks.py batch_call_settings lists MHC_POST_V2 (call-time), and batch_call_apply
+  refreshes it in the load-time snapshot like POS_DYNAMIC / PACKED_ROUTE (DS41-314: only that key, never a full
+  refresh). tt/mhc.py reads it per mhc_post call; the fork keeps both programs (v2 is in the program key; a serving
+  process uses one value, so no build after warm-up).
+- Per-chunk values touched: none (no position, slot or layout enters the change; same op arguments per chunk).
+- Rebuilt: `cmake --build build_Release --target install -j 48`.
+- Fork test (bit-identical to fast, 3 repeats each, through the resident runner; mesh only, no model load): 8 / 8 ok
+  (small_ragged +-feed, ds41_8x4 +-feed, packed8k +-feed, 640x1280_feed, 2x2). No redesign, no re-tune.
+- `orchestrator measure --task PB.8R` (switch on): the 4 perf units rc 0 in one process.
+- Gate `--check` (switch on): every accuracy unit PASS (err_final_hidden 0.135 <= 0.242, top5 1.0, determinism 0,
+  contract 0 / 0, outside_history 0); walls steady p145408 84.4, p1024000 99.4, agentic 77.8, multilingual 84.5 ms.
+  test_no_rebuild was refused twice by the one-load rule (DS41-356, OV-61): ENGRAM_TABLE (it read F222's mmap, the
+  other perf units pin the shipped resident) -> tests/test_no_rebuild.py now pins it the same way (config only, no
+  threshold); then seq (a skip_positions run moved to a fresh process held 1029120, no_rebuild needs 1044480; the
+  run order came from the resident runner still holding my first attempt's 40-layer model) -> PASS alone with
+  `gate PB.8R --check --unit PB.8R#test_no_rebuild`. All units passed on the final code.
+- Re-run: fork test `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd
+  "scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_mhc_post_v2.py"`;
+  gate `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.8R --spec $BRINGUP_SPEC --check` (devjob).

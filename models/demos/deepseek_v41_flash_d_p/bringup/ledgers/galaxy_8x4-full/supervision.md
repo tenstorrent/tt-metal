@@ -1146,3 +1146,5 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   'serving wall' column per ladder table, and no memoised history between timed repeats.
   Owner (03:40): the walls test sets no sink and no d2h service -> no acks at all (checked in code); the 5-7 ms is the
   serving entry's own host work (readback + note_tokens + device reorder), real in serving; split unmeasured -> PB.9C.
+- 04:15 heartbeat: mhc_post re-apply (PB.8R) agent attempt 1 active; watch armed.
+- 04:40 mhc_post re-apply (PB.8R) ACCEPTED: gate units all PASS (5120 ladder, determinism, decoder skip, contract, outside history, walls, no-rebuild 0 builds); fork code identical to the saved branch 0ef6b7107f5 (its unit test now in the tree), fork test bit-identical 8/8; walls within noise (-0.4..+0.4 ms); the device win is PB.8's measurement on this same code (~-0.6 ms a 5120 chunk). Owner rule: verified device win, no minimum-gain line.

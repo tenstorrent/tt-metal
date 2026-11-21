@@ -52,7 +52,12 @@ void kernel_main() {
 #else
     constexpr uint32_t slots = 8;  // cb_feed's packet slots (FEED_SLOTS)
 #endif
+#ifdef MHC_POST_LAND
+    // PB.8 (v2): the landing holds every packet (no slot is reused in a call): 8 headers in flight, a flush every 8
+    constexpr uint32_t num_headers = 8;
+#else
     constexpr uint32_t num_headers = 4;
+#endif
     constexpr uint32_t FT0 = 3;
 
     const auto f_acc = TensorAccessor(f_args, get_common_arg_val<uint32_t>(0), page);

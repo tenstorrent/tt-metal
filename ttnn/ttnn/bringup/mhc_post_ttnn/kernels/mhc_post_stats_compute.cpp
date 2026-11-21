@@ -142,6 +142,20 @@ void mix_half() {
     mix_vectors<16 * H>(std::make_integer_sequence<int, 16>{});
 }
 
+#ifdef MHC_POST_V2
+// PB.8 (v2): the bottom half (vectors 16..31) runs the top half's code 16 vectors on: its coefficient tiles are built
+// 16 vectors on as well (build_cf: q + 16, inside the CF tiles), so every access shifts alike (one code copy less in
+// the kernel-config buffer; the same arithmetic, bit for bit)
+__attribute__((noinline)) void mix_top() { mix_half<0>(); }
+void mix_bottom() {
+#pragma GCC unroll 1
+    for (int i = 0; i < 16; ++i) {
+        dst_reg++;
+    }
+    mix_top();
+}
+#endif
+
 // DEST tile A += DEST tile B, lane-wise (fp32).
 template <int A, int B>
 void add_tiles() {
@@ -209,7 +223,11 @@ sfpi_inline void cf_block(vInt mask) {
     constexpr int col = m == 0 ? FAST_POST_COL + k : FAST_COMB_COL + (FAST_COMB_T ? (m - 1) * N + k : k * N + (m - 1));
     constexpr int src_tile = m == 0 ? 0 : 1;
     constexpr int h = BLK >> 2, q4 = BLK & 3;
+#ifdef MHC_POST_V2
+    constexpr int q = 4 * TERM + q4 + 16 * h;  // PB.8: the bottom half's 16 vectors on (mix_bottom)
+#else
     constexpr int q = 4 * TERM + q4;
+#endif
     constexpr int src = T * src_tile + 16 * h + 2 * q4 + (col & 1) + 8 * ((col >> 4) & 1);
     constexpr int dst = T * (2 + h * CF + (q >> 5)) + (q & 31);
     bcast_lane<src, dst>(mask);
@@ -237,6 +255,9 @@ sfpi_inline void cf_terms(std::integer_sequence<int, Ts...>) {
 
 void build_cf() {
     static_assert(2 + 2 * CF <= 8, "fast: the raw rows and both halves' coefficient tiles in the 8 fp32 DEST tiles");
+#ifdef MHC_POST_V2
+    static_assert(4 * N * (N + 1) + 16 <= 32 * CF, "v2: the bottom half's coefficients 16 vectors on fit the CF tiles");
+#endif
     cf_terms(std::make_integer_sequence<int, N*(N + 1)>{});
 }
 
@@ -266,6 +287,94 @@ sfpi_inline void pb_cols(std::integer_sequence<int, Is...>) {
 }
 
 void build_pb() { pb_cols(std::make_integer_sequence<int, N>{}); }
+#endif
+
+#ifdef MHC_POST_HCT
+// PB.8 (v2): a root's hc row between row-major (the summed partial row: token rows, value columns) and
+// coefficient-major (vector k = value k of the row's 32 tokens), on the SFPU instead of BRISC word copies (6.4 + 5.4
+// us a call on the 8x4). Row-major: DEST vector v, lane 8 g + j = element (16 (v >> 4) + 4 ((v >> 1) & 3) + g,
+// 2 j + (v & 1) + 16 ((v >> 3) & 1)). Coefficient-major here: vector k, lane 8 g + s = value k of token
+// 16 (s >> 2) + 4 (s & 3) + g (the hc is lane-wise, so any one token order serves; soa_to_rows undoes it). Each
+// vector is gathered from 8 source vectors: mask the one lane it takes (the same lane in each 8-lane subvector),
+// rotate the partial result one lane and OR the next in (Horner): exact bit moves.
+constexpr int HCT_DIR = 1;  // subvec_shflror1 moves lane i to lane i + HCT_DIR (mod 8)
+constexpr int rot_lane(int base, int steps) { return ((base + HCT_DIR * steps) % 8 + 8) % 8; }
+// Code size (the kernel-config buffer, with the profiler's zones too): a column's parity p = c & 1 is the same
+// offset on both sides (source and destination vectors), so it is a runtime base shift (dst_reg++ between two passes)
+// and the code holds one copy per (lane group, half) only.
+
+// forward, column 2 J0 + 16 H (+ p): its vector gathers source vectors 16 (s >> 2) + 2 (s & 3) + 8 H (+ p), lane J0
+template <int SRC, int DST, int J0, int H, int I>
+sfpi_inline void soa_step(vInt& y, vInt mask) {
+    constexpr int s = rot_lane(J0, 7 - I);  // the token group this step's source holds, lands at lane s
+    const vInt x = as<vInt>(vFloat(dst_reg[T * SRC + 16 * (s >> 2) + 2 * (s & 3) + 8 * H])) & mask;
+    if constexpr (I == 0) {
+        y = x;
+    } else {
+        y = vInt(subvec_shflror1(y)) | x;
+    }
+}
+template <int SRC, int DST, int J0, int H, int... Is>
+sfpi_inline void soa_col(std::integer_sequence<int, Is...>) {
+    const vInt mask = lane_mask<J0>();
+    vInt y = 0;
+    (soa_step<SRC, DST, J0, H, Is>(y, mask), ...);
+    dst_reg[T * DST + 2 * J0 + 16 * H] = as<vFloat>(y);
+}
+template <int SRC, int DST, int H, int... Js>
+sfpi_inline void soa_half(std::integer_sequence<int, Js...>) {
+    (soa_col<SRC, DST, Js, H>(std::make_integer_sequence<int, 8>{}), ...);
+}
+// DEST SRC (row-major) -> DEST DST vectors 0 .. COUNT - 1 (coefficient-major; up to the next even count)
+template <int SRC, int DST, int COUNT>
+void rows_to_soa() {
+    static_assert(COUNT > 16 && COUNT <= 32, "rows_to_soa: the hc's columns span both halves");
+#pragma GCC unroll 1
+    for (int p = 0; p < 2; ++p) {
+        soa_half<SRC, DST, 0>(std::make_integer_sequence<int, 8>{});
+        soa_half<SRC, DST, 1>(std::make_integer_sequence<int, (COUNT - 16 + 1) / 2>{});
+        dst_reg++;
+    }
+}
+
+// inverse, destination vector 16 (S >> 2) + 2 (S & 3) + 8 H (+ p): lane j of each subvector = value 2 j + 16 H (+ p)
+// of the token at lane S of the coefficient-major vectors
+template <int SRC, int S, int H, int COUNT, int I>
+sfpi_inline void row_step(vInt& y, vInt mask) {
+    constexpr int j = rot_lane(S, 7 - I);
+    constexpr int c = 2 * j + 16 * H;  // the (even) value this step places, at lane j
+    vInt x = 0;
+    if constexpr (c < COUNT) {
+        x = as<vInt>(vFloat(dst_reg[T * SRC + c])) & mask;
+    }
+    if constexpr (I == 0) {
+        y = x;
+    } else {
+        y = vInt(subvec_shflror1(y)) | x;
+    }
+}
+template <int SRC, int DST, int COUNT, int S, int H, int... Is>
+sfpi_inline void row_vec(std::integer_sequence<int, Is...>) {
+    const vInt mask = lane_mask<S>();
+    vInt y = 0;
+    (row_step<SRC, S, H, COUNT, Is>(y, mask), ...);
+    dst_reg[T * DST + 16 * (S >> 2) + 2 * (S & 3) + 8 * H] = as<vFloat>(y);
+}
+template <int SRC, int DST, int COUNT, int H, int... Ss>
+sfpi_inline void row_half(std::integer_sequence<int, Ss...>) {
+    (row_vec<SRC, DST, COUNT, Ss, H>(std::make_integer_sequence<int, 8>{}), ...);
+}
+// DEST SRC vectors 0 .. COUNT - 1 (coefficient-major) -> DEST DST (row-major; columns COUNT .. 31 zero)
+template <int SRC, int DST, int COUNT>
+void soa_to_rows() {
+    static_assert(COUNT % 2 == 0, "soa_to_rows: an even count (the parity is the runtime shift)");
+#pragma GCC unroll 1
+    for (int p = 0; p < 2; ++p) {
+        row_half<SRC, DST, COUNT, 0>(std::make_integer_sequence<int, 8>{});
+        row_half<SRC, DST, COUNT, 1>(std::make_integer_sequence<int, 8>{});
+        dst_reg++;
+    }
+}
 #endif
 
 // DEST 0 slot 0 <- sum of slots 0..7 (lane-wise; a folded tile, coefficient-major)
@@ -468,9 +577,17 @@ ALWI void hc_row() {
     sfpu_init();
     MATH((_llk_math_eltwise_unary_sfpu_params_(HcK::coefficients, 0, VectorMode::None)));
     MATH((_llk_math_eltwise_unary_sfpu_params_(HcK::sinkhorn, 0, VectorMode::None)));
+#ifdef MHC_POST_HCT
+    // PB.8: back to row-major (DEST 1; columns n (n + 2).. zero): the writer sends the tile as it is
+    STATS_SFPU((stats_sfpu::soa_to_rows<0, 1, n_streams*(n_streams + 2)>));
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(1, cb_hsoa_out);
+#else
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, cb_hsoa_out);
+#endif
     tile_regs_release();
     cb_push_back(cb_hsoa_out, 1);
     cb_pop_front(cb_hsoa, 1);
@@ -517,13 +634,21 @@ void kernel_main() {
                 for (uint32_t t = 1; t <= n; ++t) {
                     copy_from(cb_in, t, cf + t);
                 }
+#ifdef MHC_POST_V2
+                STATS_SFPU(stats_sfpu::mix_top);
+#else
                 STATS_SFPU(stats_sfpu::mix_half<0>);
+#endif
                 srca_to(cb_cf);
                 copy_init(cb_cf);
                 for (uint32_t t = 0; t < cf; ++t) {
                     copy_from(cb_cf, cf + t, t);
                 }
+#ifdef MHC_POST_V2
+                STATS_SFPU(stats_sfpu::mix_bottom);
+#else
                 STATS_SFPU(stats_sfpu::mix_half<1>);
+#endif
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_to(cb_out);
@@ -802,16 +927,28 @@ void kernel_main() {
         cb_reserve_back(cb_nrs, 1);
         STATS_SFPU(norm_rstd);
 #endif
+#ifdef MHC_POST_HCT
+        // PB.8: the hc's coefficient-major copy of the row (its n (n + 2) + 1 columns) -> DEST 2 -> cb_hsoa (this
+        // kernel's own: hc_row below), after the rstd (it goes out first)
+        cb_reserve_back(cb_hsoa, 1);
+        STATS_SFPU((stats_sfpu::rows_to_soa<0, 2, n_streams*(n_streams + 2) + 1>));
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, cb_fin);
 #ifdef MHC_POST_NORM
         pack_tile(1, cb_nrs);
 #endif
+#ifdef MHC_POST_HCT
+        pack_tile(2, cb_hsoa);
+#endif
         tile_regs_release();
         cb_push_back(cb_fin, 1);
 #ifdef MHC_POST_NORM
         cb_push_back(cb_nrs, 1);
+#endif
+#ifdef MHC_POST_HCT
+        cb_push_back(cb_hsoa, 1);
 #endif
 #if defined(MHC_POST_NORM)
         // (the rstd went out with the sum: cb_nrs, above)

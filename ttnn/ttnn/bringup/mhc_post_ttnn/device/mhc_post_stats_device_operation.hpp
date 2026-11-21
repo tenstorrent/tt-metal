@@ -76,6 +76,13 @@ struct MhcPostStatsParams {
     // before its transpose (DS41-222), and a root copies only the hc's n (n + 2) + 1 columns. Not bit-identical to off:
     // the sum of squares (stats column n (n + 2)) is summed in another fp32 order (and so the hc's rsqrt).
     bool fast = false;
+    // Fork option v2 (deepseek_v41_flash_d_p PB.8, MHC_POST_V2; false = off: every program, arg and hash as before;
+    // needs fast): (1) the feed's other-chip y tiles land straight in the port cores' L1 (no y_output DRAM staging, no
+    // port DRAM re-read) when the landing fits; (2) with one unit a core and W shared, a block's RT cores sit in one
+    // grid column (a vertical segment) and each core's W share goes to the others in ONE NoC multicast; (3) a root's hc
+    // row transposes (row-major <-> coefficient-major) run on its SFPU (exact lane moves) instead of BRISC word copies.
+    // Bit-identical to fast: the same values move, the sums keep their order.
+    bool v2 = false;
 };
 
 // The collapse option's call arguments (P.34): the next step's pre, its coefficient scalars, the caller's buffers.
@@ -99,6 +106,8 @@ struct MhcPostCollapseArgs {
     uint32_t feed_axis = 1;
     // P.83 (fast): the pipelined program (MhcPostStatsParams::fast)
     bool fast = false;
+    // PB.8 (v2): MhcPostStatsParams::v2
+    bool v2 = false;
 };
 
 struct MhcPostStatsInputs {

@@ -1406,7 +1406,8 @@ def batch_call_settings(env=None) -> tuple:
     # PACKED_LONG_HIDE (PB.6L) likewise; PACKED_GLUED (PB.7) likewise; PACKED_GLUED_ONECALL (PB.7B) likewise;
     # PACKED_GLUED_DYNAMIC (PB.7C) likewise; POS_DYNAMIC (MB.2) likewise: both paths exist in one load (page copies vs
     # slices; batch_call_apply refreshes it in a load-time snapshot); PACKED_ROUTE (PB.9X: every packed chunk glued, or
-    # PB.7's lane routing) likewise, refreshed like POS_DYNAMIC; COMMON_VALUE_SLOTS (PB.9X) likewise
+    # PB.7's lane routing) likewise, refreshed like POS_DYNAMIC; COMMON_VALUE_SLOTS (PB.9X) likewise; MHC_POST_V2
+    # (PB.8R: tt/mhc.py reads it per mhc_post call; the fork keeps both programs) likewise, refreshed like POS_DYNAMIC
     return (
         "PREFILL_END",
         "ENGRAM_DEVICE",
@@ -1424,6 +1425,7 @@ def batch_call_settings(env=None) -> tuple:
         "POS_DYNAMIC",
         "PACKED_ROUTE",
         "COMMON_VALUE_SLOTS",
+        "MHC_POST_V2",
     ) + (() if skip == "replay128" else ("DECODER_SKIP",))
 
 
@@ -1436,6 +1438,7 @@ def batch_call_apply(model) -> None:
     if _settings.snap is not None:  # MB.2: a call-time switch the load's snapshot froze (DS41-314: only this one)
         _settings.snap["POS_DYNAMIC"] = _settings._read("POS_DYNAMIC")
         _settings.snap["PACKED_ROUTE"] = _settings._read("PACKED_ROUTE")  # PB.9X: likewise
+        _settings.snap["MHC_POST_V2"] = _settings._read("MHC_POST_V2")  # PB.8R: likewise
     want = _settings.get("DECODER_SKIP")
     have = getattr(model, "skip_mode", None)
     if have is None or want == have or "replay128" in (want, have) or getattr(model, "tail_of", None) is not None:

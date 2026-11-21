@@ -33,6 +33,7 @@ pulled-back chunk run again in two fresh slots with POS_DYNAMIC off and on gives
 from __future__ import annotations
 
 import functools
+import os
 import time
 
 import pytest
@@ -177,6 +178,11 @@ def test_no_rebuild(mesh_device, monkeypatch):
     from models.demos.deepseek_v41_flash_d_p.tests.test_skip_positions import _runtime
 
     assert settings.get("DECODER_SKIP") == "decode", "run with DS41_DECODER_SKIP=decode (the gate's serving mode)"
+    # PB.8R (OV-61, F283): the shipped ENGRAM_TABLE as test_skip_positions sets it, so the gate's perf units share one
+    # load (unset, a test process reads F222's test value mmap and the one-load rule refused this unit)
+    if os.environ.get(settings.env_name("ENGRAM_TABLE")) is None:
+        monkeypatch.setenv(settings.env_name("ENGRAM_TABLE"), str(settings.table["ENGRAM_TABLE"].default))
+    print(f"ENGRAM_TABLE={settings.get('ENGRAM_TABLE')}")
     pos = settings.get("POS_DYNAMIC")
     print(f"POS_DYNAMIC={pos}")
     chunk = int(S.get("target.chunk"))
