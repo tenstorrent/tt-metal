@@ -33,6 +33,7 @@
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/math.hpp>
@@ -40,6 +41,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
@@ -63,7 +65,9 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using ::testing::Eq;
+using ::testing::HasSubstr;
 using ::testing::Pointwise;
+using ::testing::ThrowsMessage;
 
 // Type trait tests verifying MeshTensor's semantic constraints
 
@@ -106,6 +110,73 @@ auto create_mesh_buffer(
     distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
 
     return distributed::MeshBuffer::create(buffer_config, local_config, &mesh_device);
+}
+
+// The buffer must match the spec's memory type and hold its pages, not only be large enough.
+TEST_F(MeshTensorDeviceTest, ConstructionRejectsMismatchedBuffer) {
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto row_major_spec =
+        TensorSpec(Shape{32, 32}, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config));
+
+    // A DRAM buffer for an L1 tensor.
+    auto l1_spec = TensorSpec(
+        Shape{32, 32},
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
+    EXPECT_ANY_THROW(MeshTensor::from_buffer(std::move(*create_mesh_buffer(*mesh_device_, row_major_spec)), l1_spec));
+
+    // A buffer of 64-byte rows for a tensor of 2048-byte tiles, though both hold 2048 bytes.
+    auto tile_spec =
+        TensorSpec(Shape{32, 32}, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), memory_config));
+    EXPECT_ANY_THROW(MeshTensor::from_buffer(std::move(*create_mesh_buffer(*mesh_device_, row_major_spec)), tile_spec));
+}
+
+// A ROW_MAJOR shard wider than the tensor pads the device tensor; the write pads the host data to match.
+TEST_F(MeshTensorDeviceTest, WriteTensorPadsToMemoryConfig) {
+    const Shape shape{64, 10};
+    std::vector<uint32_t> data(shape.volume());
+    std::iota(data.begin(), data.end(), 1);
+    auto host_tensor = HostTensor::from_vector(
+        data, TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{})));
+
+    const MemoryConfig memory_config{
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec{NodeRangeSet(NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}}), {32, 16}, ShardOrientation::ROW_MAJOR}};
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor, memory_config);
+    ASSERT_EQ(device_tensor.padded_shape(), Shape({64, 16}));
+
+    EXPECT_EQ(cq.enqueue_read_tensor(device_tensor).to_vector<uint32_t>(), data);
+}
+
+// Writing a host tensor with other padding is rejected by every write path: the device buffer is laid out for the
+// device tensor's padding.
+TEST_F(MeshTensorDeviceTest, WriteTensorRejectsDifferentPadding) {
+    const Shape shape{30, 30};
+    const auto device_spec = TensorSpec(
+        shape,
+        experimental::tensor_layout_with_custom_alignment(
+            DataType::UINT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, Alignment({32, 32})));
+    auto device_tensor = MeshTensor::allocate_on_device(*mesh_device_, device_spec);
+
+    const auto host_spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    ASSERT_NE(host_spec.padded_shape(), device_spec.padded_shape());
+    auto host_tensor = HostTensor::from_vector(std::vector<uint32_t>(shape.volume(), 0), host_spec);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    const auto rejects_padding = ThrowsMessage<std::exception>(HasSubstr("Host tensor has padded shape"));
+    EXPECT_THAT([&] { cq.enqueue_write_tensor(host_tensor, device_tensor); }, rejects_padding);
+    EXPECT_THAT(
+        [&] { non_uniform_data_movement::enqueue_write_tensor(cq, host_tensor, device_tensor); }, rejects_padding);
+    EXPECT_THAT(
+        [&] {
+            experimental::core_subset_write::enqueue_write_tensor(
+                cq, host_tensor, device_tensor, NodeRangeSet(NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}));
+        },
+        rejects_padding);
 }
 
 TEST_F(MeshTensorDeviceTest, ConstructionWithMeshBuffer) {

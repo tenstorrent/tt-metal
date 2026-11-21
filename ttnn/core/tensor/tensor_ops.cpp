@@ -74,6 +74,24 @@ TensorTopology replicated_over_mesh(const tt::tt_metal::distributed::MeshShape& 
     return TensorTopology{mesh_shape, std::move(placements), std::move(coordinates)};
 }
 
+// A MeshBuffer that views `source`'s memory. An interleaved view takes the page size of its `spec`. A sharded view
+// keeps the source's buffer config, which says where the shards are: a spec that places them elsewhere then differs
+// from the buffer, which ops reject, instead of a buffer that claims shards where there is no data. `shards_from_spec`
+// is for a view whose spec places the shards where they are, but in other pages.
+std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_view_buffer(
+    const Tensor& source, const TensorSpec& spec, bool shards_from_spec = false) {
+    const auto& source_buffer = source.device_storage().get_mesh_buffer();
+    tt::tt_metal::distributed::DeviceLocalBufferConfig config = source_buffer.device_local_config();
+    if (!is_sharded(config.sharding_args.buffer_layout())) {
+        config.page_size = spec.compute_page_size_bytes();
+    } else if (shards_from_spec) {
+        config.page_size = spec.compute_page_size_bytes();
+        config.sharding_args = spec.compute_buffer_sharding_args();
+    }
+    return tt::tt_metal::distributed::MeshBuffer::create(
+        source_buffer.global_config(), config, source_buffer.device(), source_buffer.address());
+}
+
 }  // namespace
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* device) {
@@ -505,13 +523,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
 
     // TODO (#25340): Review tensor topology logic for reshape
     if (input_tensor.layout() != Layout::ROW_MAJOR || !changing_last_dim) {
-        const auto& input_buffer = input_tensor.device_storage().get_mesh_buffer();
-
-        auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-            input_buffer.global_config(),
-            input_buffer.device_local_config(),
-            input_buffer.device(),
-            input_buffer.address());
+        auto view_mesh_buffer = ttnn::create_view_buffer(input_tensor, new_spec);
 
         MeshTensor view_mesh_tensor = mesh_tensor_from_buffer_with_topology(
             std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology());
@@ -519,13 +531,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         return Tensor(std::move(view_storage));
     }
     if (!input_tensor.memory_config().is_sharded()) {
-        const auto& input_buffer = input_tensor.device_storage().get_mesh_buffer();
-
-        auto new_device_config = input_buffer.device_local_config();
-        new_device_config.page_size = new_spec.compute_page_size_bytes();
-
-        auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-            input_buffer.global_config(), new_device_config, input_buffer.device(), input_buffer.address());
+        auto view_mesh_buffer = ttnn::create_view_buffer(input_tensor, new_spec);
 
         MeshTensor view_mesh_tensor = mesh_tensor_from_buffer_with_topology(
             std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology());
@@ -533,35 +539,13 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         return Tensor(std::move(view_storage));
     }
 
-    tt::tt_metal::ShardSpec new_shard_spec = output_memory_config.shard_spec().value();
-    std::array<uint32_t, 2> shard_page_shape = {1, new_shard_spec.shape[1]};
-    std::array<uint32_t, 2> tensor2d_shape_in_pages = {
-        new_spec.physical_shape().height() / shard_page_shape[0],
-        new_spec.physical_shape().width() / shard_page_shape[1]};
-    tt::tt_metal::ShardSpecBuffer new_shard_spec_buffer =
-        tt::tt_metal::ShardSpecBuffer(new_shard_spec, shard_page_shape, tensor2d_shape_in_pages);
-
-    tt::tt_metal::Shape tensor_shape_pages(tensor2d_shape_in_pages);
-    tt::tt_metal::Shape shard_shape_pages(new_shard_spec_buffer.shape_in_pages());
-    tt::tt_metal::BufferDistributionSpec new_buffer_dist_spec = tt::tt_metal::BufferDistributionSpec(
-        tensor_shape_pages, shard_shape_pages, new_shard_spec.grid, new_shard_spec.orientation);
-
-    auto device_local_config = input_tensor.mesh_buffer().device_local_config();
-    auto& sharding_args = device_local_config.sharding_args;
-    tt::tt_metal::BufferShardingArgs new_sharding_args(
-        new_buffer_dist_spec, new_shard_spec_buffer, sharding_args.buffer_layout());
-
-    tt::tt_metal::distributed::DeviceLocalBufferConfig new_device_config = {
-        .page_size = new_spec.compute_page_size_bytes(),
-        .buffer_type = device_local_config.buffer_type,
-        .sharding_args = new_sharding_args,
-        .bottom_up = device_local_config.bottom_up};
-
-    auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-        input_tensor.mesh_buffer().global_config(),
-        new_device_config,
-        input_tensor.device(),
-        input_tensor.mesh_buffer().address());
+    // A per-core allocated buffer has a different address on each core, and this view would take the mesh buffer's
+    // address, which it reports as 0.
+    TT_FATAL(
+        !tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(input_tensor.memory_config()),
+        "Reshaping a sharded ROW_MAJOR tensor with per-core allocation into a different last dimension is not "
+        "supported");
+    auto view_mesh_buffer = ttnn::create_view_buffer(input_tensor, new_spec, /*shards_from_spec=*/true);
 
     ttnn::DeviceStorage view_storage(
         input_tensor.device_storage(),
@@ -608,12 +592,21 @@ Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_la
         return Tensor(host_tensor_from_buffer_with_topology(input_tensor.host_tensor().buffer(), new_spec, topology));
     }
 
-    const auto& input_buffer = input_tensor.device_storage().get_mesh_buffer();
-    auto new_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-        input_buffer.global_config(),
-        input_buffer.device_local_config(),
-        input_buffer.device(),
-        input_buffer.address());
+    // An interleaved buffer puts page i into bank i % num_banks, so other pages would put the source's bytes into other
+    // banks and could reach past the source's allocation in each bank. A sharded view keeps each shard in place.
+    const auto source_page_size = input_tensor.device_storage().get_mesh_buffer().page_size();
+    TT_FATAL(
+        new_spec.memory_config().is_sharded() || new_spec.compute_page_size_bytes() == source_page_size,
+        "Reinterpreting an interleaved tensor as {} would change its page size from {} to {} bytes, which moves its "
+        "pages to other banks",
+        target_layout,
+        source_page_size,
+        new_spec.compute_page_size_bytes());
+
+    // shards_from_spec: the source's config describes its own pages (tiles vs. rows), which the new layout splits
+    // differently, so keeping it would give a page size that doesn't match the spec. Building it from the spec is safe
+    // because a reinterpretation leaves every shard on the same node with the same shape.
+    auto new_mesh_buffer = create_view_buffer(input_tensor, new_spec, /*shards_from_spec=*/true);
 
     MeshTensor reinterpreted = mesh_tensor_from_buffer_with_topology(std::move(*new_mesh_buffer), new_spec, topology);
     DeviceStorage reinterpreted_storage(input_tensor.device_storage(), std::move(reinterpreted));
