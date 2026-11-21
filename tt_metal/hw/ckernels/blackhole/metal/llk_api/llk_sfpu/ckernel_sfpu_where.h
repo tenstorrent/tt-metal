@@ -74,19 +74,6 @@ inline void _calculate_where_(
 
         constexpr std::uint32_t replay_len = is_fp ? 4 : 3;
 
-        if constexpr (is_fp) {
-            // Macro 3: Float32/Float16_b where(a, b, c, a) with +1 delay for the sign-bit clearing SFPSHFT step.
-            constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (1 << 3) | 4;
-            constexpr std::uint32_t mad_bits = 0;
-            constexpr std::uint32_t round_bits = 0;
-            constexpr std::uint32_t store_bits = 0x00 | 0x00 | (3 << 3) | 3;
-
-            TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-            TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-            TTI_SFPCONFIG(0, 4 + 3, 0);
-            TTI_SFPNOP;
-        }
-
         load_replay_buf(0, replay_len, [offset0, offset1, offset2] {
             if constexpr (is_fp) {
                 TT_SFPLOADMACRO((3 << 2), mod0, ADDR_MOD_7, offset0);
@@ -138,6 +125,7 @@ inline void _calculate_where_(
 
         if constexpr (is_fp) {
             TTI_SFPCONFIG((0 << 3) | 4, 4 + 1, 1);
+            TTI_SFPNOP;
         }
     }
 #endif
@@ -180,8 +168,20 @@ inline void _init_where_() {
         TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 2, 1);
     }
 
-    // Misc: {UsesLoadMod0ForStore=1, WaitForElapsedInstructions=1} for all 4 macros (Macro 3 configured on demand for FP).
-    TTI_SFPCONFIG(0xFF0, 8, 1);
+    // Macro 3: Float32/Float16_b handling for where(a, b, c, a) with +1 delay for the sign-bit clearing SFPSHFT step.
+    {
+        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (1 << 3) | 4;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0;
+        constexpr std::uint32_t store_bits = 0x00 | 0x00 | (3 << 3) | 3;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 3, 0);
+    }
+
+    // Misc: {UsesLoadMod0ForStore=1 for all 4 macros, WaitForElapsedInstructions=1 for Simple/MAD/Round sub-units}.
+    TTI_SFPCONFIG(0xF70, 8, 1);
 #endif
 }
 
