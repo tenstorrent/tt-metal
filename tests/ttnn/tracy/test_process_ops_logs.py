@@ -271,3 +271,80 @@ def test_enrich_ops_from_perf_csv_still_asserts_on_a_device_missing_from_the_rep
 
     with pytest.raises(AssertionError, match="no rows at all"):  # allow-pytest.raises: runs with --noconftest
         process_ops_logs._enrich_ops_from_perf_csv(host_ops, device_rows, None)
+
+
+def test_generate_reports_keeps_metal_trace_id_of_host_op(tmp_path):
+    log_folder = tmp_path / "logs"
+    report_folder = tmp_path / "reports"
+    log_folder.mkdir(parents=True, exist_ok=True)
+
+    ops = {
+        10: {
+            "global_call_count": 10,
+            "device_id": 0,
+            "host_time": {"ns_since_start": 10, "exec_time_ns": 20},
+            "metal_trace_id": 5,
+            "input_tensors": [],
+            "output_tensors": [],
+        }
+    }
+
+    process_ops_logs.generate_reports(
+        ops=ops,
+        deviceOps={},
+        traceOps={},
+        signposts={},
+        logFolder=log_folder,
+        outputFolder=report_folder,
+        date=False,
+        nameAppend=None,
+    )
+
+    with (Path(report_folder) / "ops_perf_results.csv").open("r", newline="") as csv_file:
+        row = next(csv.DictReader(csv_file))
+    assert row["METAL TRACE ID"] == "5"
+
+
+@pytest.mark.parametrize("freq_mhz, expected_ns", [(1000, 3200), (1200, 2667)])
+def test_device_only_per_core_op_to_op_times_are_in_ns(tmp_path, freq_mhz, expected_ns):
+    log_folder = tmp_path / "logs"
+    report_folder = tmp_path / "reports"
+    log_folder.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+
+    def mark(core_x, risc, time, zone, zone_type, op_id):
+        rows.append(f"0,{core_x},0,{risc},1,{time},0,{op_id},,,{zone},{zone_type},1,k.cpp,")
+
+    # Two ops on two cores, 3200 cycles apart in the op-to-op measurement.
+    for core_x in (0, 1):
+        for op_id, start in ((7, 1000), (8, 5000)):
+            mark(core_x, "BRISC", start, "BRISC-FW", "ZONE_START", op_id)
+            mark(core_x, "BRISC", start + 100, "BRISC-KERNEL", "ZONE_START", op_id)
+            mark(core_x, "BRISC", start + 900, "BRISC-KERNEL", "ZONE_END", op_id)
+            mark(core_x, "BRISC", start + 1000, "BRISC-FW", "ZONE_END", op_id)
+            mark(core_x, "TRISC_0", start + 150, "TRISC-KERNEL", "ZONE_START", op_id)
+            mark(core_x, "TRISC_0", start + 850, "TRISC-KERNEL", "ZONE_END", op_id)
+
+    (log_folder / "profile_log_device.csv").write_text(
+        "\n".join(
+            [
+                f"ARCH: wormhole_b0, CHIP_FREQ[MHz]: {freq_mhz}, Max Compute Cores: 64",
+                "PCIe slot,core_x,core_y,RISC processor type,timer_id,time[cycles since reset],data,run host ID,trace id,trace id counter,zone name,type,source line,source file,meta data",
+                *rows,
+            ]
+        )
+        + "\n"
+    )
+
+    process_ops_logs.get_device_data_generate_report(log_folder, report_folder, False, None)
+
+    with (Path(report_folder) / "ops_perf_results.csv").open("r", newline="") as csv_file:
+        op_to_op = [row["OP TO OP LATENCY [ns]"] for row in csv.DictReader(csv_file)]
+    assert op_to_op[-1] == str(expected_ns)
+
+    overhead = process_ops_logs.PROFILER_OP_TO_OP_OVERHEAD_NANO_SEC
+    with (Path(report_folder) / f"{process_ops_logs.PER_CORE_OP_TO_OP_OUT_NAME}.csv").open("r", newline="") as csv_file:
+        per_core = next(csv.DictReader(csv_file))
+    for core in ("0; 0 [ns]", "1; 0 [ns]"):
+        assert per_core[core] == str(expected_ns - overhead)
