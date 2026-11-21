@@ -14,7 +14,6 @@ Implements the DeepSeek-V3 architecture:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import lcm
 from typing import Literal, Optional
 
 import ttml
@@ -90,7 +89,9 @@ class DeepSeek(AbstractModuleBase):
         if config.use_tp:
             tp_size = ttml.mesh().axis_size("tp")
             self._validate_tp(config, tp_size)
-            align = lcm(32, tp_size)
+            # The head splits the vocab across TP, so each rank's share must be whole tiles: a multiple of 32 * tp_size.
+            # lcm(32, tp_size) only makes the whole vocab divisible by both (see test_tp_vocab_padding.py).
+            align = 32 * tp_size
             self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
             self.head = ColumnParallelLinear(
                 config.dim,
