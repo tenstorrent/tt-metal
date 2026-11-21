@@ -79,8 +79,9 @@ params += [
     )
 ]
 
-# pad_value == 0.0 exercises the zero-fill path in the row-major tilize_with_val_padding
-# reader kernel (the scalar fill_l1_range store loop that also handles non-zero pads).
+# pad_value == 0.0 takes the zero-fill paths of the row-major tilize_with_val_padding multicore reader: the
+# padding inside a block's rows (64x64 output), and whole extra tile rows of padding past the tile-rounded input
+# height (128x64 output), which the reader fills with the NoC zero engine (pad_blocks, n_pads > 0).
 # Only the multicore reader is covered: the single-core reader path is a broken legacy
 # path (garbage output on device, unsupported oversized reads on the simulator) and is
 # never used in production, where tilize_with_val_padding always runs multicore.
@@ -88,15 +89,18 @@ params += [
     pytest.param(
         [[1, 1, 50, 50]],
         {
-            "dtype": [ttnn.bfloat16],
+            "dtype": [dtype],
             "layout": [ttnn.ROW_MAJOR_LAYOUT],
             "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
             "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            "output_tensor_shape": [1, 1, 64, 64],
+            "output_tensor_shape": out_shape,
             "pad_value": 0.0,
             "use_multicore": True,
         },
+        id=f"zero_pad-{dtype_id}-{out_shape[-2]}x{out_shape[-1]}",
     )
+    for dtype, dtype_id in [(ttnn.bfloat16, "bf16"), (ttnn.float32, "fp32")]
+    for out_shape in [[1, 1, 64, 64], [1, 1, 128, 64], [1, 1, 160, 96]]
 ]
 
 # Column padding wider than one sub-block of the block-interleaved factory: every sub-block after
@@ -125,6 +129,8 @@ params += [
 def test_run_tilize_with_val_padding_test(input_shapes, tilize_with_val_padding_args, device, function_level_defaults):
     shape = input_shapes[0]
     torch_input = (torch.rand(shape) * 200 - 100).to(torch.bfloat16)
+    if tilize_with_val_padding_args["dtype"][0] == ttnn.float32:
+        torch_input = torch_input.float()
 
     output_tensor_shape = tilize_with_val_padding_args["output_tensor_shape"]
     pad_value = tilize_with_val_padding_args["pad_value"]
