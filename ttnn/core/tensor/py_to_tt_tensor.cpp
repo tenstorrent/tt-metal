@@ -376,6 +376,17 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
                                          ? DataType::BFLOAT16
                                          : (is_mx(dst_dtype) ? DataType::FLOAT32 : dst_dtype);
 
+    if (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) {
+        // Block formats are packed from a plain host buffer, not through the on-device sharded typecast,
+        // so the tile-size restriction below does not apply to them. Keep the source in the widest exact
+        // representation the packer accepts: FLOAT16 is exact in FLOAT32, and FLOAT64 uses FLOAT32 (the
+        // packer's widest input), so the bfp pack rounds once instead of through a BFLOAT16 intermediate.
+        if (src_dtype == ttnn::PyDType::FLOAT16 || src_dtype == ttnn::PyDType::FLOAT64) {
+            return DataType::FLOAT32;
+        }
+        return to_ttnn_dtype(src_dtype) == DataType::INVALID ? mapped_dst_type : to_ttnn_dtype(src_dtype);
+    }
+
     if (to_ttnn_dtype(src_dtype) == DataType::INVALID) {
         return mapped_dst_type;
     }
