@@ -11,7 +11,7 @@
 //
 // Run (once the HSIO0.eth0 <-> HSIO1.eth0 loopback is up in packet mode):
 //   export TT_METAL_EMU_SERVER=<host>:<port>
-//   export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/tests/soc_descs/mmk.yaml
+//   export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/descriptors/soc_descs/mmk.yaml
 //   export TT_METAL_SLOW_DISPATCH_MODE=1 TT_KERAUNOS_ETH_LOOPBACK=1
 //   ./build/test/tt_metal/unit_tests_context --gtest_filter='KeraunosEthSend/Ordering.Run/*'
 // A host timeout means a kernel is stuck in an unbounded wait (a send's queue-space spin): the test prints the result
