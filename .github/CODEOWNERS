@@ -28,6 +28,7 @@ setup.py @tenstorrent/metalium-developers-infra @FConstantinos @aliaksei-sala
 .github/instructions/tt-train.instructions.md @tenstorrent/tt-train @kevinwuTT @abustamanteTT
 .github/instructions/ttnn-core.instructions.md @tenstorrent/metalium-developers-ttnn-core @aliaksei-sala
 .github/instructions/ttnn-ops.instructions.md @tenstorrent/metalium-developers-ops-leads
+.github/instructions/ttnn-python-deprecation.instructions.md @tenstorrent/metalium-developers-ttnn-core @aliaksei-sala
 .github/instructions/ttnn.instructions.md @tenstorrent/metalium-developers-ttnn-core
 .github/llk_sfpu_report/ @nstamatovicTT @fvranicTT
 .github/scripts/utils/cluster_recover.py @sott0n @changh95

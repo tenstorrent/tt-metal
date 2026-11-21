@@ -15,6 +15,7 @@
 #include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn-nanobind/deprecation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/types.hpp"
@@ -860,12 +861,28 @@ void bind_tanh_like(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none()});
 }
 
+// Forwarding binding: warns Python callers and keeps calling the deprecated C++ ttnn::sigmoid_accurate.
+Tensor sigmoid_accurate_with_deprecation_warning(
+    const Tensor& input,
+    bool fast_and_approximate_mode,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    ttnn::warn_deprecated(
+        "ttnn.sigmoid_accurate",
+        "ttnn.sigmoid (with mode=ttnn.SigmoidMode.AccurateWithFastExp for fast_and_approximate_mode=True)");
+    return ttnn::sigmoid_accurate(
+        input, fast_and_approximate_mode, memory_config, optional_output_tensor, sub_core_grids);
+}
+
 void bind_sigmoid_accurate(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
-        Deprecated in favor of ttnn.sigmoid.
-
         Applies {0} to :attr:`input_tensor` element-wise.
+
+        .. deprecated:: 0.83
+           Use ``ttnn.sigmoid`` instead. Callers that passed ``fast_and_approximate_mode=True``
+           use ``ttnn.sigmoid`` with ``mode=ttnn.SigmoidMode.AccurateWithFastExp``.
 
         .. math::
             \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
@@ -899,7 +916,7 @@ void bind_sigmoid_accurate(nb::module_& mod) {
     ttnn::bind_function<"sigmoid_accurate">(
         mod,
         doc.c_str(),
-        &ttnn::sigmoid_accurate,
+        &sigmoid_accurate_with_deprecation_warning,
         nb::arg("input_tensor"),
         nb::arg("fast_and_approximate_mode") = false,
         nb::kw_only(),

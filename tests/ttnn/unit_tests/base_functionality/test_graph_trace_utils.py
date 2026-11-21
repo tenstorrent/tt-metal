@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import warnings
 
 import torch
@@ -511,8 +512,7 @@ def test_peak_l1_memory_usage_includes_every_program_l1_kind():
 
 
 def test_extract_resource_usage_per_core_deprecated_kwarg():
-    """The legacy interleaved_storage_cores kwarg must still be accepted (with a
-    DeprecationWarning) until the removal date 2026-06-07."""
+    """The deprecated interleaved_storage_cores kwarg is still accepted, with a FutureWarning at the caller's line."""
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
     captured_graph = ttnn.graph.end_graph_capture()
 
@@ -520,11 +520,19 @@ def test_extract_resource_usage_per_core_deprecated_kwarg():
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
+        expected_line = inspect.currentframe().f_lineno + 1
         legacy = ttnn.graph.extract_resource_usage_per_core(captured_graph, interleaved_storage_cores=64)
 
-    assert any(
-        issubclass(w.category, DeprecationWarning) and "interleaved_storage_cores" in str(w.message) for w in caught
-    ), f"Expected DeprecationWarning mentioning interleaved_storage_cores, got {[str(w.message) for w in caught]}"
+    found = [(w.category, str(w.message), w.filename, w.lineno) for w in caught]
+    assert found == [
+        (
+            FutureWarning,
+            "the interleaved_storage_cores argument of ttnn.graph.extract_resource_usage_per_core is deprecated and "
+            "will be removed; use a call without interleaved_storage_cores instead.",
+            __file__,
+            expected_line,
+        )
+    ], f"unexpected warnings: {found}"
     assert legacy.peak_cb == baseline.peak_cb
     assert legacy.peak_l1 == baseline.peak_l1
     assert legacy.peak_total == baseline.peak_total
