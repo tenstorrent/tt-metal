@@ -187,7 +187,7 @@ class TorchFunction:
             current_length = 0
         for index, (name, value) in enumerate(self.arg_name_value_pairs):
             if isinstance(value, torch.Tensor):
-                value = f"torch.Tensor(...)"
+                value_as_str = "torch.Tensor(...)"
             elif isinstance(name, PositionalArgumentName):
                 value_as_str = f"{value}"
             else:
