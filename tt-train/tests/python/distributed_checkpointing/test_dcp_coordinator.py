@@ -8,6 +8,7 @@ number; a failing collective is fatal and ends the exchanges)."""
 
 import dataclasses
 import json
+import os
 import threading
 
 import ttnn
@@ -384,6 +385,32 @@ def test_a_failing_rank_stops_every_rank_and_names_itself():
     assert set(errors) == {0, 1, 2}
     assert all(isinstance(e, CheckpointError) and "rank(s) [1]" in str(e) for e in errors.values())
     assert all("rank 1: ValueError: disk full" in str(e) for e in errors.values()), "every rank sees the cause"
+
+
+def test_a_message_that_cannot_be_encoded_or_rendered_still_reaches_every_rank():
+    """A failing rank's message is built after the status exchange, while the others wait in the gather that follows,
+    so building it must not raise: a lone surrogate (a non-UTF-8 file name, as os.fsdecode returns it) is escaped, and
+    an exception whose message cannot be rendered is named by its class."""
+
+    class Unprintable(Exception):
+        def __str__(self):
+            raise ValueError("no message")
+
+    def body(group, fake):
+        def work():
+            if group.rank == 1:
+                raise OSError("cannot open " + os.fsdecode(b"ckpt_\xff"))  # the name in its own text, not a repr
+            if group.rank == 2:
+                raise Unprintable()
+
+        group.phase("reading", work)
+
+    results, errors = _run_ranks(3, body)
+    assert set(errors) == {0, 1, 2}, "every rank raises; none waits in the gather"
+    for err in errors.values():
+        assert type(err) is CheckpointError and "rank(s) [1, 2] of 3" in str(err), err
+        assert "rank 1: OSError: cannot open ckpt_\\udcff" in str(err), err
+        assert "rank 2: Unprintable (its message could not be rendered)" in str(err), err
 
 
 def test_a_failing_collective_is_fatal_and_ends_the_exchanges(expect_error):

@@ -91,6 +91,21 @@ def error_status(err: BaseException) -> int:
     return 1
 
 
+def describe_error(err: BaseException) -> str:
+    """``"<class>: <message>"``; never raises: an exception whose ``__str__`` raises is named by its class alone."""
+    try:
+        return f"{type(err).__name__}: {err}"
+    except Exception:  # noqa: BLE001
+        return f"{type(err).__name__} (its message could not be rendered)"
+
+
+def failure_message(rank: int, err: BaseException) -> bytes:
+    """What a failing rank tells the others: UTF-8, at most ``MESSAGE_LIMIT`` bytes. It is built between the status
+    exchange and the gather every rank then waits in, so it must not raise: a message that cannot be rendered is
+    replaced, and a lone surrogate (a non-UTF-8 file name from ``os.fsdecode``) is escaped."""
+    return f"rank {rank}: {describe_error(err)}".encode("utf-8", errors="backslashreplace")[:MESSAGE_LIMIT]
+
+
 def checked_payload(payload: bytes, what: str) -> bytes:
     """``payload`` when the transport can carry it; run inside a phase, so an oversized payload fails every rank."""
     if len(payload) > MAX_PAYLOAD:
@@ -226,8 +241,7 @@ class Group:
             # the failing ranks' own messages: one gather and one broadcast, on the failure path only.
             code = statuses[failed[0]]
             cls = ERROR_CLASSES[code - 1] if 0 < code <= len(ERROR_CLASSES) else CheckpointError
-            mine = f"rank {self.rank}: {type(err).__name__}: {err}" if err is not None else ""
-            parts = self.gather(mine.encode("utf-8")[:MESSAGE_LIMIT])
+            parts = self.gather(failure_message(self.rank, err) if err is not None else b"")
             joined = b"\n".join(part for part in parts if part) if self.is_coordinator else None
             messages = self.broadcast(joined).decode("utf-8", errors="replace")
             if err is not None and not isinstance(err, Exception):
