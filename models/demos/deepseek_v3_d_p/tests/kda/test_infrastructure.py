@@ -39,9 +39,10 @@ def _cache_artifact_names(path: Path) -> set[str]:
 
 def test_cache_identity_changes_with_weight_content() -> None:
     baseline = {"weight": torch.tensor([1.0, 2.0], dtype=torch.bfloat16)}
+    rebuilt = {"weight": torch.tensor([1.0, 2.0], dtype=torch.bfloat16)}
     changed = {"weight": torch.tensor([1.0, 3.0], dtype=torch.bfloat16)}
 
-    assert kda_state_dict_sha256(baseline) == kda_state_dict_sha256(baseline)
+    assert kda_state_dict_sha256(baseline) == kda_state_dict_sha256(rebuilt)
     assert kda_state_dict_sha256(baseline) != kda_state_dict_sha256(changed)
 
 

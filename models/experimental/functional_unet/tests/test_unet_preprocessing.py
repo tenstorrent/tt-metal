@@ -41,6 +41,6 @@ def test_unet_preprocessing(batch, groups, device, reset_seeds):
 
     ttnn_output_tensor = ttnn.to_torch(ttnn_output_tensor)
     assert list(torch_output_tensor.shape) == list(
-        torch_output_tensor.shape
+        ttnn_output_tensor.shape
     ), "Expected torch and TTNN input shapes to match"
     verify_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.99999)
