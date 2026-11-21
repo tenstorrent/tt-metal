@@ -346,10 +346,6 @@ std::string mesh_graph_desc(uint32_t num_chips) {
         num_chips);
 }
 
-}  // namespace
-
-namespace {
-
 PackageFacts facts_of(const YAML::Node& package, const std::filesystem::path& package_soc_desc) {
     PackageFacts facts;
     for (const auto& entry :
