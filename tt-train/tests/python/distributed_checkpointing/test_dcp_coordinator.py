@@ -290,12 +290,61 @@ def test_merge_results_builds_one_index(expect_error):
     assert index.scalars == {"optimizer/steps": 3}
     assert header["user"] == {"step": 3} and header["train_state"]["scheduler"] == {"m_last_step": 3}
     assert header["train_state"]["rng"]["ranks"] == {"0": {"ttml": "gen0"}, "1": {"ttml": "gen1"}}
-    # The index must hold exactly the elected chunks.
-    short = _result(1, r1.files, {"model/w": _entry("model/w", [_chunk(2, 0)])}, "gen1")
-    with expect_error(CheckpointError, r"model/[wb]: \d chunk\(s\) reported by the ranks, \d elected"):
-        merge_results([r0, short], election, "x")
+    assert [len(p.entries["model/w"].chunks) for p in (r0, r1)] == [2, 2], "the parts are left as they were"
     # Parts travel as bytes without loss.
     assert ResultPart.from_bytes(r1.to_bytes()).to_bytes() == r1.to_bytes()
+
+
+def _differently(entry, **changes):
+    return dataclasses.replace(entry, chunks=list(entry.chunks), **changes)
+
+
+MERGE_REFUSALS = {
+    # rank 1 reports one of its two columns of model/w
+    "too_few_chunks": (
+        lambda r1: {"model/w": _entry("model/w", [_chunk(2, 0)]), "model/b": r1.entries["model/b"]},
+        r"model/w: 3 chunk\(s\) reported by the ranks, 4 elected",
+    ),
+    # rank 1 reports a column twice
+    "too_many_chunks": (
+        lambda r1: {
+            "model/w": _entry("model/w", [_chunk(2, 0), _chunk(3, 1), _chunk(3, 1)]),
+            "model/b": r1.entries["model/b"],
+        },
+        r"model/w: 5 chunk\(s\) reported by the ranks, 4 elected",
+    ),
+    # rank 1 was elected for the bias but reports no entry for it
+    "unreported_key": (
+        lambda r1: {"model/w": r1.entries["model/w"]},
+        r"model/b: 0 chunk\(s\) reported by the ranks, 1 elected",
+    ),
+    **{
+        f"different_{name}": (
+            lambda r1, change=change: {
+                "model/w": _differently(r1.entries["model/w"], **change),
+                "model/b": r1.entries["model/b"],
+            },
+            r"model/w: rank 1 reports a different entry than earlier ranks",
+        )
+        for name, change in (
+            ("role", {"role": "buffer"}),
+            ("dtype", {"dtype": "F32"}),
+            ("global_shape", {"global_shape": (1, 1, 32, 128)}),
+            ("label", {"label": _label([R, S(2)], (1, 4))}),
+            ("tp_split", {"tp_split": (1, 1, 1, 1)}),
+        )
+    },
+}
+
+
+@pytest.mark.parametrize("case", sorted(MERGE_REFUSALS))
+def test_merge_results_refuses_parts_that_do_not_match_the_election(case, expect_error):
+    """The index must hold exactly one chunk per elected box, and the ranks must report a key alike. Each case starts
+    from a fresh save, so no case sees entries another merge extended."""
+    entries_of, message = MERGE_REFUSALS[case]
+    election, r0, r1 = _big_mesh_save()
+    with expect_error(CheckpointError, f"^{message}$"):
+        merge_results([r0, dataclasses.replace(r1, entries=entries_of(r1))], election, "x")
 
 
 class _Fake:

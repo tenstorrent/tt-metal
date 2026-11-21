@@ -594,7 +594,8 @@ class ResultPart:
 
 def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: str) -> tuple[Index, dict]:
     """Rank 0's merge: one file table, one entry per key with every rank's chunks (exactly one per elected box), the
-    world record, and the header (rank 0's user header and scheduler/dataloader state, every rank's generators)."""
+    world record, and the header (rank 0's user header and scheduler/dataloader state, every rank's generators). The
+    parts are left as they were: the index holds entries of its own."""
     parts = sorted(parts, key=lambda p: p.record.rank)
     files: list[FileRecord] = []
     entries: dict[str, Entry] = {}
@@ -618,8 +619,7 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
                     )
                 have.chunks.extend(chunks)
             else:
-                entry.chunks = chunks
-                entries[key] = entry
+                entries[key] = dataclasses.replace(entry, chunks=chunks)
     for key, entry in entries.items():
         # The writers' parts carry only their own names for a key; the election has every rank's.
         entry.live_keys = tuple(sorted(set(entry.live_keys) | set(election.live_keys.get(key, ()))))
