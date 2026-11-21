@@ -264,6 +264,7 @@ inline void _llk_unpack_A_mop_config_(
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
+ * @note ROW broadcast with 32-bit unpack to dest does not support a 32x16 tile (2x1 face grid).
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
  * @ref _llk_unpack_A_ is the matching execute call.
@@ -290,6 +291,12 @@ inline void _llk_unpack_A_init_(
     LLK_ASSERT(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
+    // The unpack-to-dest ROW MOP copies row 0 of faces 0 and 1 into dest faces 0 and 1. On a 32x16 tile
+    // face 1 is the bottom face, so its half of the output takes the wrong row.
+    LLK_ASSERT(
+        !(BType == BroadcastType::ROW && should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format) &&
+          is_tensor_shape_2x1_face_grid(tensor_shape)),
+        "Row broadcast with unpack to dest does not support 32x16 tiles");
 
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
@@ -394,9 +401,6 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     // Run MOP
     ckernel::ckernel_template::run();
 
-    // T6::SEMGET for context release
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
-
     if (unpack_to_dest)
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
@@ -404,6 +408,10 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
             unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
         }
     }
+
+    // T6::SEMGET for context release, after unpack_to_dest_tile_done's config writes so that
+    // configure_unpack_AB's wait_for_idle also waits for them
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
 
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);

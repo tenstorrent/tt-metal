@@ -1,0 +1,417 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// topk_xl_test.cpp's fused K = 512, 1024 and 2048 rows with each chunk split across MATH and PACK (sfpu/experimental/ckernel_sfpu_topk_xl_split.h);
+// it must pack the same result bit for bit. It reads TOPK_XL_K, FUSED_E2E, NUM_CHUNKS, TAIL_ELEMENTS, NUM_ROWS, SEG_BASE and ASCENDING (the
+// direction of the last chunk's rebuild); the other TOPK_XL parameters must stay at their defaults. Blackhole only.
+
+#include <cstdint>
+
+#include "ckernel.h"
+#include "counters.h"
+#include "llk_defs.h"
+#include "params.h"
+#include "perf.h"
+#include "profiler.h"
+
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
+
+static_assert(
+    (TOPK_XL_K == 512 || TOPK_XL_K == 1024 || TOPK_XL_K == 2048) && TOPK_XL_FUSED_E2E, "the split pipeline covers the fused K = 512, 1024 and 2048 chunks");
+static_assert(
+    TOPK_XL_INDEX_OP == 0 && TOPK_XL_SORT_MODE == 0 && !TOPK_XL_FUSED_REDUCE && !TOPK_XL_LSB_ROW_MAJOR && !TOPK_XL_REINIT_AFTER_COPY,
+    "the split kernel ignores these parameters, so they must stay at their defaults");
+
+constexpr std::uint32_t ELEMENTS_PER_TILE = ckernel::TILE_R_DIM * ckernel::TILE_C_DIM;
+constexpr std::uint32_t TILES_PER_SEQ     = TOPK_XL_K / ELEMENTS_PER_TILE + (TOPK_XL_K < ELEMENTS_PER_TILE ? 1 : 0);
+static_assert(TOPK_XL_NUM_CHUNKS >= 1 && TOPK_XL_NUM_CHUNKS <= 32, "the chunk id stamp holds 32 chunks");
+
+inline constexpr std::uint32_t chunk_active_elements(std::uint32_t c)
+{
+    return (c == TOPK_XL_NUM_CHUNKS - 1) ? TOPK_XL_TAIL_ELEMENTS : TOPK_XL_K;
+}
+
+inline constexpr std::uint32_t tile_active_elements(std::uint32_t active, std::uint32_t t)
+{
+    return (t == 0) ? ((active < ELEMENTS_PER_TILE) ? active : ELEMENTS_PER_TILE) : ((active > ELEMENTS_PER_TILE) ? (active - ELEMENTS_PER_TILE) : 0);
+}
+
+#ifdef LLK_TRISC_UNPACK
+
+#include "ckernel_template.h"
+#include "experimental/llk_unpack_A_topk_xl_copy.h"
+#include "llk_unpack_common.h"
+
+__attribute__((noinline)) void unpack_copy_tile(const Operand& buffer_A, std::uint32_t r, std::uint32_t c, std::uint32_t src_format, std::uint32_t dst_format)
+{
+    const std::uint32_t active = chunk_active_elements(c);
+    for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
+    {
+        const std::uint32_t elements = tile_active_elements(active, t);
+        TT_SETADCXX(p_setadc::UNP_A, (elements == 0) ? (ELEMENTS_PER_TILE - 1) : (elements - 1), 0x0);
+        ckernel::_llk_unpack_topk_xl_copy_(L1_ADDRESS(buffer_A[(r * TOPK_XL_NUM_CHUNKS + c) * TILES_PER_SEQ + t]), src_format, dst_format, elements);
+    }
+    TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+}
+
+inline void topk_xl_split_perf_unpack_mock(std::uint32_t elements)
+{
+    if constexpr (unpack_to_dest)
+    {
+        if (elements == 0)
+        {
+            _perf_unpack_stream_set_valid<true, true, PERF_RUN_TYPE>(1);
+            return;
+        }
+        (void)mailbox_read(ThreadId::MathThreadId);
+        wait_for_dest_available();
+        t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
+        if (elements < ELEMENTS_PER_TILE)
+        {
+            _perf_unpack_stream_set_valid<true, true, PERF_RUN_TYPE>(1);
+        }
+    }
+    else
+    {
+        _perf_unpack_stream_set_valid<true, true, PERF_RUN_TYPE>(1);
+    }
+}
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const Operand& buffer_A         = params.buffer_A;
+#endif
+    const std::uint32_t src_format = formats.unpack_A_src;
+    const std::uint32_t dst_format = formats.unpack_A_dst;
+
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format, dst_format, dst_format, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
+        ckernel::_llk_unpack_topk_xl_copy_init_(src_format, dst_format);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+                {
+                    for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; c++)
+                    {
+                        const std::uint32_t active = chunk_active_elements(c);
+                        for (std::uint32_t t = 0; t < TILES_PER_SEQ; ++t)
+                        {
+                            topk_xl_split_perf_unpack_mock(tile_active_elements(active, t));
+                        }
+                        _perf_unpack_stream_set_valid<true, true, PERF_RUN_TYPE>(1); // local sort
+                        if (c > 0)
+                        {
+                            _perf_unpack_stream_set_valid<true, true, PERF_RUN_TYPE>(1); // rebuild
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+                {
+                    for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; c++)
+                    {
+                        unpack_copy_tile(buffer_A, r, c, src_format, dst_format);
+                        _llk_unpack_set_srcb_dummy_valid_();
+                        if (c > 0)
+                        {
+                            _llk_unpack_set_srcb_dummy_valid_();
+                        }
+                    }
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+}
+
+#endif // LLK_TRISC_UNPACK
+
+#ifdef LLK_TRISC_MATH
+
+#include "experimental/llk_math_eltwise_unary_datacopy_topk_xl_copy.h"
+#include "llk_lib_math_wrappers.h"
+#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_sfpu/ckernel_sfpu_fill.h"
+#include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
+#include "sfpu/experimental/ckernel_sfpu_topk_xl_split.h"
+#include "topk_xl_scrub_dest.h"
+
+using namespace ckernel;
+
+static __attribute__((noinline)) void copy_chunk(std::uint32_t chunk, std::uint32_t tile, std::uint32_t dst_format)
+{
+    for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
+    {
+        ckernel::_llk_math_topk_xl_copy_(tile + t, dst_format, tile_active_elements(chunk_active_elements(chunk), t));
+    }
+}
+
+inline void topk_xl_split_perf_math_drain_copy(std::uint32_t elements, std::uint32_t dst_tile)
+{
+    if constexpr (unpack_to_dest)
+    {
+        if (elements == 0)
+        {
+            _perf_math_stream_clear_valid<true, true, PERF_RUN_TYPE>(1);
+            return;
+        }
+        math_unpack_to_dest_math_ready();
+        if (elements < ELEMENTS_PER_TILE)
+        {
+            _perf_math_stream_clear_valid<true, true, PERF_RUN_TYPE>(1);
+        }
+        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_tile);
+        math::math_unpack_to_dest_tile_ready();
+    }
+    else
+    {
+        _perf_math_stream_clear_valid<true, true, PERF_RUN_TYPE>(1);
+    }
+}
+
+inline void topk_xl_split_perf_math_drain(std::uint32_t loop_factor)
+{
+    for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
+    {
+        for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; ++r)
+        {
+            for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; ++c)
+            {
+                const std::uint32_t active = chunk_active_elements(c);
+                for (std::uint32_t t = 0; t < TILES_PER_SEQ; ++t)
+                {
+                    topk_xl_split_perf_math_drain_copy(tile_active_elements(active, t), 2 * TILES_PER_SEQ + t);
+                }
+                _perf_math_stream_clear_valid<true, true, PERF_RUN_TYPE>(1); // local sort
+                if (c > 0)
+                {
+                    _perf_math_stream_clear_valid<true, true, PERF_RUN_TYPE>(1); // rebuild
+                }
+            }
+        }
+    }
+}
+
+inline void topk_xl_split_perf_math_mock_pack(std::uint32_t loop_factor)
+{
+    for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
+    {
+        for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; ++r)
+        {
+            std::uint32_t posted  = 0;
+            std::uint32_t taken   = 0;
+            bool prev_step_busy   = false;
+            constexpr bool paired = topk_xl_split::paired_head<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS);
+            for (std::uint32_t c1 = 0; c1 <= TOPK_XL_NUM_CHUNKS; ++c1)
+            {
+                if (paired && c1 == 1)
+                {
+                    continue;
+                }
+                const bool head           = paired && c1 == 0;
+                const std::uint32_t steps = head ? topk_xl_split::HEAD_STEPS : topk_xl_split::STEPS_PER_CHUNK;
+                for (std::uint32_t step = 0; step < steps; ++step)
+                {
+                    std::uint32_t chunk = 0;
+                    std::uint32_t stage = 0;
+                    if (!head && !topk_xl_split::decode_step(c1, step, TOPK_XL_NUM_CHUNKS, chunk, stage))
+                    {
+                        prev_step_busy = false;
+                        continue;
+                    }
+                    if (paired && c1 == 2 && (step & 1))
+                    {
+                        stage += 2;
+                        if (stage >= topk_xl_split::STAGES_MERGING_CHUNK)
+                        {
+                            prev_step_busy = false;
+                            continue;
+                        }
+                    }
+                    const std::uint32_t need = ((paired && c1 == 0 && step == 1) || !prev_step_busy) ? posted : posted - 1;
+                    for (; taken < need; ++taken)
+                    {
+                        topk_xl_split::take_pack_token();
+                    }
+                    if (posted == 0)
+                    {
+                        topk_xl_split::post_token();
+                    }
+                    else
+                    {
+                        ckernel::t6_semaphore_post<ckernel::p_stall::MATH>(topk_xl_split::F2S);
+                    }
+                    ++posted;
+                    prev_step_busy = true;
+                }
+            }
+            for (; taken < posted; ++taken)
+            {
+                topk_xl_split::take_pack_token();
+            }
+            topk_xl_split::take_pack_token(); // pack_row epilogue
+        }
+    }
+}
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
+    const std::uint32_t math_format = formats.math;
+
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+        ckernel::_llk_math_topk_xl_copy_init_(math_format);
+        topk_xl_split::init_tokens();
+        topk_xl_scrub_dest();
+        topk_xl_split::start_pack();
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+            topk_xl_split_perf_math_mock_pack(LOOP_FACTOR);
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+            topk_xl_split_perf_math_drain(LOOP_FACTOR);
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+                {
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_wait_for_dest_available_<dest_sync>();
+                    }
+                    constexpr bool prefetch = topk_xl_split::can_prefetch<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS);
+                    topk_xl_split::math_row<TOPK_XL_K>(
+                        TOPK_XL_NUM_CHUNKS,
+                        [math_format](std::uint32_t chunk, std::uint32_t tile) { copy_chunk(chunk, tile, math_format); },
+                        prefetch && r > 0,
+                        prefetch && r + 1 < TOPK_XL_NUM_ROWS);
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+
+    topk_xl_scrub_dest();
+}
+
+#endif // LLK_TRISC_MATH
+
+#ifdef LLK_TRISC_PACK
+
+#include "llk_lib_pack_wrappers.h"
+#include "llk_pack_common.h"
+#include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
+#include "sfpu/experimental/ckernel_sfpu_topk_xl_split.h"
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const Operand& buffer_Res       = params.buffer_Res;
+#endif
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+            formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+        topk_xl_split::wait_start();
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        // Only the full split algorithm posts F2S and waits on S2F.
+        constexpr bool exchange_tokens = PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE;
+        constexpr bool pack_l1         = PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE;
+        if constexpr (exchange_tokens || pack_l1)
+        {
+            constexpr bool sync_with_math = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
+                {
+                    if constexpr (exchange_tokens)
+                    {
+                        topk_xl_split::pack_row<TOPK_XL_K>(
+                            TOPK_XL_NUM_CHUNKS,
+                            TOPK_XL_ASCENDING /*mirror_last*/,
+                            [] { topk_xl_split::split_indices<TOPK_XL_K, true /*stall_after*/>(TOPK_XL_SEG_BASE); });
+                    }
+                    if constexpr (pack_l1)
+                    {
+                        if constexpr (sync_with_math)
+                        {
+                            _llk_packer_wait_for_math_done_();
+                        }
+                        _llk_pack_mop_config_<PackMode::Default, false /* zero_output */>(FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, 1 /* num_tiles */);
+                        for (std::uint32_t t = 0; t < 2 * TILES_PER_SEQ; t++)
+                        {
+                            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(t, L1_ADDRESS(buffer_Res[2 * TILES_PER_SEQ * r + t]));
+                        }
+                        if constexpr (sync_with_math)
+                        {
+                            if (topk_xl_split::can_prefetch<TOPK_XL_K>(TOPK_XL_NUM_CHUNKS) && r + 1 < TOPK_XL_NUM_ROWS)
+                            {
+                                topk_xl_split::release_dest_bank0<is_fp32_dest_acc_en>();
+                            }
+                            else
+                            {
+                                _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+}
+
+#endif // LLK_TRISC_PACK

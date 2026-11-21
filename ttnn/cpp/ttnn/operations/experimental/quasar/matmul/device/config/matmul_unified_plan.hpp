@@ -103,6 +103,10 @@ struct MatmulUnifiedPlan {
     bool borrow_A = false;
     bool borrow_B = false;
     bool borrow_C = false;
+    // B arrives over prefetcher pipes: B_slice is a relay over the pipes on their receivers (the cores), one pipe entry
+    // per K chunk. B is neither read, borrowed nor multicast, and takes no program L1.
+    bool B_from_pipes = false;
+    uint32_t B_pipe_entry_bytes = 0;
 
     // DFB sizing; entry sizes are in bytes. Every entry holds one tile; C_slice / C_partials hold
     // C_entries_per_thread entries per thread (see above).
@@ -142,6 +146,9 @@ struct MatmulUnifiedPlan {
     // alone, which breaks ties between plans that DRAM bandwidth bounds equally. See ArchCostModel.
     std::pair<double, double> estimated_cycles;
 };
+
+// Entries a prefetcher pipe of B holds at least: the reader publishes one while compute multiplies the previous one.
+constexpr uint32_t MIN_PIPE_ENTRIES = 2;
 
 // `output` is the C tensor when the caller supplied one (or the op already created it); it decides whether
 // C can be packed in place. Without it the op allocates C, a sharded C without a shard spec with C_slice_shard_spec's.

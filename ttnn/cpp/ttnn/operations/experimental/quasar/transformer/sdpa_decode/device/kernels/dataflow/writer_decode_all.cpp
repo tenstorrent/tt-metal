@@ -224,35 +224,55 @@ void kernel_main() {
     }
     uint32_t num_tiles_to_wait = (out_chunk_tiles + 2 * PNHt) * num_cores_to_wait;
 
+    DataflowBuffer identity_scale_dfb(dfb_identity_scale_in);
+#ifdef SLIDING_WINDOW
+    DataflowBuffer sliding_window_mask_dfb(dfb_sliding_window_mask_in);
+#endif
+#ifdef HAS_BLOCK_PADDING
+    DataflowBuffer block_pad_mask_dfb(dfb_block_pad_mask);
+#endif
+#ifdef IS_CAUSAL
+    DataflowBuffer mask_dfb(dfb_mask_in);
+#endif
+#ifdef HAS_INTERMED_OUT
+    DataflowBuffer l_in_dfb(dfb_l_in);
+    DataflowBuffer m_in_dfb(dfb_m_in);
+    DataflowBuffer out_o_dfb(dfb_out_o);
+    DataflowBuffer out_worker_dfb(dfb_out_worker);
+    DataflowBuffer out_m_dfb(dfb_out_m);
+    DataflowBuffer out_l_dfb(dfb_out_l);
+#endif
+    DataflowBuffer out_dfb(dfb_out);
+
     // generate and send scaler to compute
     // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         dfb_identity_scale_in,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(identity_scale_dfb);
     // Zero tile goes behind the scaler in the same DFB (entry 1); see the factory's identity_scale note.
-    dataflow_kernel_lib::prepare_zero_tile<dfb_identity_scale_in>();
+    dataflow_kernel_lib::prepare_zero_tile(identity_scale_dfb);
 
     // Generate sliding window mask only if we have local data and need it
 #ifdef SLIDING_WINDOW
     if (has_local_data && k_chunk_start == window_start_chunk && window_start_unaligned > 0) {
         // If this core processes the first chunk and we need to apply sliding window mask, generate it here
         generate_sliding_window_mask<dfb_sliding_window_mask_in, PNHt>(
-            k_num_chunks, Sk_chunk_t_dynamic, window_start_unaligned);
+            sliding_window_mask_dfb, k_num_chunks, Sk_chunk_t_dynamic, window_start_unaligned);
     }
 #endif
 
     // Generate block padding mask: rows [0, block_size) = 0, rows [block_size, 32) = -inf.
     // Pushed once and reused (not popped) by compute for every K chunk.
 #ifdef HAS_BLOCK_PADDING
-    generate_block_padding_mask<dfb_block_pad_mask, PNHt>(Sk_chunk_t_dynamic, original_block_size);
+    generate_block_padding_mask<dfb_block_pad_mask, PNHt>(block_pad_mask_dfb, Sk_chunk_t_dynamic, original_block_size);
 #endif
 
     // generate and send mask to compute if causal (only if we have local data to process)
 #ifdef IS_CAUSAL
     // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
-    generate_mask<dfb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
+    generate_mask<dfb_mask_in, PNHt>(mask_dfb, k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
 #endif
 
     // *** Tree Reduction Logic ***
@@ -316,9 +336,8 @@ void kernel_main() {
 
                     // Reserve space in CBs and read data
                     // Order: l, m, o (same as sender writes)
-                    DataflowBuffer dfb_l(dfb_l_in);
-                    dfb_l.reserve_back(PNHt);
-                    uint32_t l_write_ptr = dfb_l.get_write_ptr();
+                    l_in_dfb.reserve_back(PNHt);
+                    uint32_t l_write_ptr = l_in_dfb.get_write_ptr();
                     noc.async_read(
                         intermed_scratch,
                         CoreLocalMem<uint32_t>(l_write_ptr),
@@ -327,11 +346,10 @@ void kernel_main() {
                         {});
                     intermed_read_offset += ml_read_size;
                     noc.async_read_barrier();
-                    dfb_l.push_back(PNHt);
+                    l_in_dfb.push_back(PNHt);
 
-                    DataflowBuffer dfb_m(dfb_m_in);
-                    dfb_m.reserve_back(PNHt);
-                    uint32_t m_write_ptr = dfb_m.get_write_ptr();
+                    m_in_dfb.reserve_back(PNHt);
+                    uint32_t m_write_ptr = m_in_dfb.get_write_ptr();
                     noc.async_read(
                         intermed_scratch,
                         CoreLocalMem<uint32_t>(m_write_ptr),
@@ -340,11 +358,10 @@ void kernel_main() {
                         {});
                     intermed_read_offset += ml_read_size;
                     noc.async_read_barrier();
-                    dfb_m.push_back(PNHt);
+                    m_in_dfb.push_back(PNHt);
 
-                    DataflowBuffer dfb_o(dfb_out_o);
-                    dfb_o.reserve_back(out_chunk_tiles);
-                    uint32_t o_write_ptr = dfb_o.get_write_ptr();
+                    out_o_dfb.reserve_back(out_chunk_tiles);
+                    uint32_t o_write_ptr = out_o_dfb.get_write_ptr();
                     noc.async_read(
                         intermed_scratch,
                         CoreLocalMem<uint32_t>(o_write_ptr),
@@ -352,7 +369,7 @@ void kernel_main() {
                         {.offset_bytes = intermed_read_offset},
                         {});
                     noc.async_read_barrier();
-                    dfb_o.push_back(out_chunk_tiles);
+                    out_o_dfb.push_back(out_chunk_tiles);
                 }
             }
         }
@@ -361,12 +378,9 @@ void kernel_main() {
         // We have data (checked at function start), so send it
         if (!is_tree_root && should_send_to_parent) {
             // Wait for compute to finish writing to dfb_out_worker, dfb_out_m, dfb_out_l
-            DataflowBuffer dfb_out_w(dfb_out_worker);
-            DataflowBuffer dfb_out_m_buf(dfb_out_m);
-            DataflowBuffer dfb_out_l_buf(dfb_out_l);
-            dfb_out_w.wait_front(out_chunk_tiles);
-            dfb_out_m_buf.wait_front(PNHt);
-            dfb_out_l_buf.wait_front(PNHt);
+            out_worker_dfb.wait_front(out_chunk_tiles);
+            out_m_dfb.wait_front(PNHt);
+            out_l_dfb.wait_front(PNHt);
 
             constexpr uint32_t tile_bytes_w = get_tile_size(dfb_out_worker);
             uint32_t block_offset = send_at_round * (out_chunk_tiles + 2 * PNHt) * tile_bytes_w;
@@ -385,21 +399,21 @@ void kernel_main() {
 
             // Send l, m, o to parent (same order as original worker_compute)
             noc.async_write(
-                CoreLocalMem<uint32_t>(dfb_out_l_buf.get_read_ptr()),
+                CoreLocalMem<uint32_t>(out_l_dfb.get_read_ptr()),
                 output_dst,
                 ml_write_size,
                 {},
                 {.noc_x = parent_noc_x, .noc_y = parent_noc_y, .addr = output_write_addr});
             output_write_addr += ml_write_size;
             noc.async_write(
-                CoreLocalMem<uint32_t>(dfb_out_m_buf.get_read_ptr()),
+                CoreLocalMem<uint32_t>(out_m_dfb.get_read_ptr()),
                 output_dst,
                 ml_write_size,
                 {},
                 {.noc_x = parent_noc_x, .noc_y = parent_noc_y, .addr = output_write_addr});
             output_write_addr += ml_write_size;
             noc.async_write(
-                CoreLocalMem<uint32_t>(dfb_out_w.get_read_ptr()),
+                CoreLocalMem<uint32_t>(out_worker_dfb.get_read_ptr()),
                 output_dst,
                 o_write_size,
                 {},
@@ -410,9 +424,9 @@ void kernel_main() {
             reducer_sem.up(noc, parent_noc_x, parent_noc_y, step_semaphore_inc[send_at_round]);
 
             // pop front
-            dfb_out_w.pop_front(out_chunk_tiles);
-            dfb_out_m_buf.pop_front(PNHt);
-            dfb_out_l_buf.pop_front(PNHt);
+            out_worker_dfb.pop_front(out_chunk_tiles);
+            out_m_dfb.pop_front(PNHt);
+            out_l_dfb.pop_front(PNHt);
             noc.async_atomic_barrier();
             // Senders can return, dont need to participate
             return;
@@ -426,9 +440,8 @@ void kernel_main() {
         // ROOT CORE REMAINING WRITER WORK
         // Offset for current batch
         uint32_t out_tile_id = cur_batch * out_chunk_tiles;
-        DataflowBuffer dfb_out_buf(dfb_out);
         if constexpr (num_kv_heads > 1 || !is_out_sharded) {
-            dfb_out_buf.wait_front(out_chunk_tiles);
+            out_dfb.wait_front(out_chunk_tiles);
         }
         noc.async_writes_flushed();
 
@@ -439,7 +452,7 @@ void kernel_main() {
             constexpr uint32_t num_heads_to_write = num_q_heads / num_kv_heads;  // each head is one row in a tile
 #ifndef IS_OUT_SHARDED
             barrier_count = write_partial_tiles_to_memory<dfb_out, ELEMENT_SIZE, barrier_threshold, PNHt>(
-                out_tile_id, out_writer, barrier_count, cur_head, num_heads_to_write, out_chunk_tiles);
+                out_dfb, out_tile_id, out_writer, barrier_count, cur_head, num_heads_to_write, out_chunk_tiles);
 #else
             // sharded out case
             if (do_output) {
@@ -452,7 +465,7 @@ void kernel_main() {
                 uint32_t reduce_core_read_index_start = (cur_batch * num_cores_per_batch) / num_cores_per_head;
 
                 UnicastEndpoint out_src;
-                const uint32_t peer_l1_base = dfb_out_buf.get_read_ptr();
+                const uint32_t peer_l1_base = out_dfb.get_read_ptr();
                 for (uint32_t reduce_core_read_index = reduce_core_read_index_start + 1;
                      reduce_core_read_index < reduce_core_read_index_start + num_reducers_per_output;
                      reduce_core_read_index++) {
@@ -460,7 +473,7 @@ void kernel_main() {
                     uint32_t reduce_core_read_noc_y = get_vararg(reducer_y_base + reduce_core_read_index);
 
                     for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
-                        uint32_t l1_write_addr = dfb_out_buf.get_write_ptr() + tile * tile_bytes;
+                        uint32_t l1_write_addr = out_dfb.get_write_ptr() + tile * tile_bytes;
                         uint32_t peer_tile_base = peer_l1_base + tile * tile_bytes;
                         // write partial output for each head
                         for (uint32_t head = 0; head < num_heads_to_write; ++head) {
@@ -511,12 +524,12 @@ void kernel_main() {
             // tiles to memory
 #ifndef IS_OUT_SHARDED
             barrier_count = write_tiles_to_memory<dfb_out, out_chunk_tiles, barrier_threshold>(
-                out_tile_id, out_writer, barrier_count);
+                out_dfb, out_tile_id, out_writer, barrier_count);
 #endif
         }
         if constexpr (num_kv_heads > 1 || !is_out_sharded) {
             noc.async_write_barrier();
-            dfb_out_buf.pop_front(out_chunk_tiles);
+            out_dfb.pop_front(out_chunk_tiles);
         }
     }
 }

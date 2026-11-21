@@ -98,7 +98,9 @@ def test_pplx_profile(mesh_device):
     sub = model_mesh(mesh_device)
     mesh_shape = tuple(sub.shape)
     try:
-        logger.info(f"fabric config: {ttnn.get_fabric_config()} cluster type: {ttnn.cluster.get_cluster_type()}")
+        logger.info(
+            f"fabric config: {ttnn.get_fabric_config(mesh_device)} cluster type: {ttnn.cluster.get_cluster_type()}"
+        )
     except Exception as e:  # informational only
         logger.warning(f"fabric/cluster query failed: {e!r}")
     logger.info(

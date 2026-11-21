@@ -31,7 +31,8 @@
 // On ht<=8 the output DFB is the borrowed output shard and this kernel is its only producer and consumer
 // (self-loop). Pop each column once it is packed so the buffer is left balanced. dummy_unpack orders the pop
 // after the wait on Quasar (a bare wait_front -> pop_front traps the unpacker); nothing unpacks this buffer.
-ALWI void release_out_column(DataflowBuffer& cb_out_buf, uint32_t num_pages) {
+template <typename OutDFB>
+ALWI void release_out_column(OutDFB& cb_out_buf, uint32_t num_pages) {
     if constexpr (get_arg(args::out_is_self_loop) == 1) {
         cb_out_buf.wait_front(num_pages);
         dummy_unpack(cb_out_buf.get_id());
@@ -155,6 +156,7 @@ void kernel_main() {
     constexpr bool use_narrow_row = last_output_row_num_datums < TILE_WIDTH ? true : false;
     constexpr uint32_t row_size = last_output_row_num_datums < TILE_WIDTH ? last_output_row_num_datums : TILE_WIDTH;
 
+    DataflowBuffer cb_in_buf(dfb::cb_in);
     DataflowBuffer cb_tilize_buf(dfb::cb_tilize);
     DataflowBuffer cb_out(dfb::cb_out);
 
@@ -172,7 +174,7 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
-            compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(Ht);
+            compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(cb_in_buf, cb_tilize_buf, Ht);
 
         // transpose
         cb_tilize_buf.wait_front(HtWt);

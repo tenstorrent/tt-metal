@@ -9,18 +9,24 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_allclose, assert_numeric_metrics, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_allclose, assert_numeric_metrics, assert_with_ulp, merge_gate_subset
 from tt_py_test_utils_common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
 
 
-@pytest.mark.merge_gate
-@pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [32, 64, 41, 37])
-@pytest.mark.parametrize("w", [32, 64, 31, 63])
-@pytest.mark.parametrize("dim", [-1, -2, (2, 1)])
-@pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "keepdim": [True, False],
+            "dim": [-1, -2, (2, 1)],
+            "w": [32, 64, 31, 63],
+            "h": [32, 64, 41, 37],
+            "batch_size": [1, 16],
+        },
+        keep=lambda batch_size, h, w, **_: batch_size == 16 and h in (64, 41) and w in (64, 31),
+    )
+)
 def test_sum(device, batch_size, h, w, dim, keepdim):
     torch.manual_seed(0)
 
@@ -119,6 +125,7 @@ def test_sum_4d(device, n, c, h, w, dim):
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "shapes",
     [
@@ -238,14 +245,15 @@ def test_sum_fp32_fast_and_approximate_mode(device, input_shape, dim, fast_and_a
 
 
 @pytest.mark.parametrize("dim", [None, [0, 1, 2, 3]])
-def test_sum_full_tensor_bf16(device, dim):
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_sum_full_tensor_bf16(device, dim, layout):
     torch_input = torch.zeros((1, 2, 32, 64), dtype=torch.bfloat16)
     torch_input[0, 0, :, :32] = 1024.0
     torch_input[0, 0, :, 32:] = -1024.0
     torch_input[0, 1, :, :32] = 1.0
     torch_output = torch.sum(torch_input.double()).to(torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input, layout=layout, device=device)
     output_tensor = ttnn.sum(input_tensor, dim=dim)
 
     assert torch.equal(ttnn.to_torch(output_tensor).flatten(), torch_output.flatten())
@@ -263,3 +271,117 @@ def test_sum_hw_bf16(device):
     output_tensor = ttnn.sum(input_tensor, dim=[2, 3], keepdim=True)
 
     assert torch.equal(ttnn.to_torch(output_tensor), torch_output)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, dtype",
+    [
+        ((8, 16, 64, 64), [0, 1], ttnn.float32),
+        ((3, 7, 37, 63), [1], ttnn.float32),
+        ((8, 16, 64, 64), [1, 2, 3], ttnn.float32),
+        ((8, 16, 64, 64), [0, 1], ttnn.int32),
+    ],
+)
+def test_sum_nc_int32_fp32(device, shape, dim, dtype):
+    torch.manual_seed(0)
+    if dtype == ttnn.int32:
+        torch_input = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    else:
+        torch_input = torch.rand(shape, dtype=torch.float32)
+    torch_output = torch.sum(torch_input, dim=dim, keepdim=True)
+
+    input_tensor = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.sum(input_tensor, dim=dim, keepdim=True))
+
+    if dtype == ttnn.int32:
+        assert torch.equal(output_tensor, torch_output)
+    else:
+        assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=2)
+
+
+@pytest.mark.parametrize("dim", [[0], [3]])
+def test_sum_int32_requires_fp32_dest_acc(device, expect_error, dim):
+    x = ttnn.from_torch(
+        torch.randint(-1000, 1000, (4, 8, 32, 32), dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    config = ttnn.init_device_compute_kernel_config(device.arch(), fp32_dest_acc_en=False)
+    with expect_error(RuntimeError, "requires fp32_dest_acc_en=true"):
+        ttnn.sum(x, dim=dim, keepdim=True, compute_kernel_config=config)
+
+
+@pytest.mark.parametrize("op", [ttnn.sum, ttnn.mean])
+def test_reduce_rank0_dim(device, op):
+    torch_input = torch.tensor(3.0, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(op(input_tensor, dim=0))
+
+    assert torch.equal(output_tensor, torch_input)
+
+
+@pytest.mark.parametrize("shape, dim", [((2, 1, 64, 64), [0, 1]), ((2, 1, 64, 64), [1, 2]), ((1, 3, 1, 64), [0, 2])])
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_sum_size_one_dims(device, shape, dim, keepdim):
+    torch.manual_seed(0)
+    torch_input = torch.randint(-8, 8, shape, dtype=torch.int32)
+    torch_output = torch.sum(torch_input, dim=dim, keepdim=keepdim)
+
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.sum(input_tensor, dim=dim, keepdim=keepdim))
+
+    assert torch.equal(output_tensor, torch_output)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32, ttnn.int32])
+def test_sum_nc_ignores_tile_padding(device, dtype):
+    dim = [0, 1]
+    torch.manual_seed(0)
+    N, C, H, W = 3, 7, 37, 63
+    torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.bfloat8_b: torch.bfloat16, ttnn.float32: torch.float32}.get(
+        dtype, torch.int32
+    )
+    torch_input = torch.randint(-8, 8, (N, C, H, W), dtype=torch.int32).to(torch_dtype)
+    torch_output = torch.sum(torch_input.double(), dim=dim, keepdim=True).to(torch_dtype)
+
+    padded = torch.full((N, C, 64, 64), TEST_PADDING_VALUE, dtype=torch_dtype)
+    padded[:, :, :H, :W] = torch_input
+    input_tensor = ttnn.from_torch(padded, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.reshape(input_tensor, ttnn.Shape([N, C, H, W]), ttnn.Shape([N, C, 64, 64]))
+    output_tensor = ttnn.to_torch(ttnn.sum(input_tensor, dim=dim, keepdim=True))
+
+    assert torch.equal(output_tensor, torch_output)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, dtype",
+    [
+        ((8, 16, 64, 64), [0], ttnn.bfloat16),
+        ((7, 9, 64, 64), [0, 1], ttnn.float32),
+        ((3, 7, 100, 100), [1], ttnn.bfloat16),
+        ((8, 16, 64, 64), [1, 3], ttnn.float32),
+        ((8, 16, 64, 64), [0], ttnn.int32),
+    ],
+)
+def test_sum_nc_scalar(device, shape, dim, dtype):
+    torch.manual_seed(0)
+    scalar = 3.0
+    if dtype == ttnn.int32:
+        torch_input = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    else:
+        torch_input = torch.randn(shape) * 0.25 + 1.0
+    input_tensor = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    device_input = ttnn.to_torch(input_tensor)
+    if dtype != ttnn.int32:
+        device_input = device_input.float()
+    torch_output = torch.sum(device_input, dim=dim, keepdim=True) * int(scalar)
+
+    output_tensor = ttnn.to_torch(ttnn.sum(input_tensor, dim=dim, keepdim=True, scalar=scalar))
+
+    if dtype == ttnn.int32:
+        assert torch.equal(output_tensor, torch_output)
+    elif dtype == ttnn.float32:
+        assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=8)
+    else:
+        assert_allclose(torch_output.float(), output_tensor.float(), rtol=1e-2, atol=0)

@@ -37,7 +37,7 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
         enchantum::to_string(input_tensor.storage_type()));
 
     TT_FATAL(
-        input_tensor.buffer() != nullptr,
+        input_tensor.is_allocated(),
         "ttnn accumulation operations (cumprod, cumsum) require to be allocated in buffers on the device. "
         "The buffer is null.");
 
@@ -77,8 +77,8 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             acc_dim < logical_rank - 2 ||
                 is_tile_axis_accumulation(input_tensor, acc_dim, attributes.dtype, attributes.flip, attributes.op),
-            "Accumulation along tile axis {} of a rank-{} tensor is only supported for forward bf16 cumsum on 32x32 "
-            "tiles",
+            "Accumulation along tile axis {} of a rank-{} tensor is only supported for forward bf16/fp32 cumsum "
+            "and cumprod on 32x32 tiles (only bf16 cumsum on Quasar)",
             acc_dim,
             logical_rank);
     }
@@ -91,11 +91,21 @@ bool is_tile_axis_accumulation(
         return false;
     }
     const auto& tile = input_tensor.tensor_spec().tile();
-    // cumsum_tile only adds floats, and only forward. fp32 keeps the permuted path for now so that it
-    // keeps the compensated (Kahan) accumulation from #56811.
-    return op == AccumulationOp::CUMSUM && !flip && input_tensor.layout() == Layout::TILE &&
-           input_tensor.dtype() == DataType::BFLOAT16 && output_dtype == DataType::BFLOAT16 &&
-           tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
+    // cumsum_tile and cumprod_tile only scan floats, and only forward.
+    if (flip || input_tensor.layout() != Layout::TILE || input_tensor.dtype() != output_dtype ||
+        tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+        return false;
+    }
+    // cumprod_tile and the compensated cumsum scan have no Quasar port.
+    // preprocess_input_tensor also calls this on host tensors, which have no device.
+    const bool not_quasar = input_tensor.device() != nullptr && input_tensor.device()->arch() != tt::ARCH::QUASAR;
+    switch (op) {
+        case AccumulationOp::CUMSUM:
+            return output_dtype == DataType::BFLOAT16 || (output_dtype == DataType::FLOAT32 && not_quasar);
+        case AccumulationOp::CUMPROD:
+            return (output_dtype == DataType::BFLOAT16 || output_dtype == DataType::FLOAT32) && not_quasar;
+    }
+    return false;
 }
 
 AccumulationDeviceOperation::spec_return_value_t AccumulationDeviceOperation::compute_output_specs(

@@ -64,6 +64,19 @@ ttnn::Shape squeeze_output_shape(const ttnn::Shape& output_shape) {
     return output_shape;
 }
 
+namespace {
+
+// The device op rejects a host or deallocated input in its validation, but the paths here reach the
+// device first: the empty-tensor branch passes input_tensor.device() to create_device_tensor, and the
+// tilize setup sizes its buffers from it. device() is null for such an input, so check it here with
+// the device op's own messages.
+void validate_input_on_device(const ttnn::Tensor& input_tensor) {
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands need to be allocated in buffers on device!");
+}
+
+}  // namespace
+
 }  // namespace ttnn::operations::experimental::quasar
 
 namespace ttnn::operations::experimental::quasar {
@@ -79,6 +92,8 @@ ttnn::Tensor tilize_with_val_padding(
     if (input_tensor.layout() == Layout::TILE) {
         return input_tensor;
     }
+
+    validate_input_on_device(input_tensor);
 
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
@@ -99,10 +114,7 @@ ttnn::Tensor tilize_with_val_padding(
                                  : input_single_tile_size;
 
     uint32_t num_tiles_per_row = output_padded_shape[-1] / tt::constants::TILE_WIDTH;
-    uint32_t num_tiles_per_col = output_padded_shape[-2] / tt::constants::TILE_HEIGHT;
 
-    bool enough_space_width = operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
     bool enough_space_height = operations::data_movement::is_enough_space(
         input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
 
@@ -114,7 +126,6 @@ ttnn::Tensor tilize_with_val_padding(
             memory_config.value_or(input_tensor.memory_config()),
             output_dtype.value_or(input_tensor.dtype()),
             use_multicore,
-            enough_space_width,
             enough_space_height,
             sub_core_grids);
     };
@@ -132,6 +143,7 @@ ttnn::Tensor tilize_with_val_padding(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
+        validate_input_on_device(input_tensor);
         // Create output tensor with same properties
         tt::tt_metal::TensorSpec spec(
             ttnn::Shape{output_padded_shape},
@@ -171,6 +183,7 @@ ttnn::Tensor tilize_with_zero_padding(
 
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
+        validate_input_on_device(input_tensor);
         // Create output tensor with same properties
         tt::tt_metal::TensorSpec spec(
             padded_shape,

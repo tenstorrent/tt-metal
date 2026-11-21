@@ -27,7 +27,6 @@ test reaches.
 """
 
 import pytest
-import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
@@ -37,7 +36,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import NUM_FACES, TEST_FACE_DIMS
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 @parametrize(
@@ -115,11 +114,7 @@ def test_unpack_tilize_uninit_restore(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,
