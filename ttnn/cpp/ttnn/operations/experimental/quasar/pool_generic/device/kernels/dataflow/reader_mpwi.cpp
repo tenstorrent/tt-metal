@@ -31,6 +31,7 @@ struct IndexType<false> {
 
 template <
     typename IndexType,
+    bool sign_magnitude,
     uint32_t kernel_h,
     uint32_t kernel_w,
     uint32_t fill_c,
@@ -49,6 +50,12 @@ void fill_indexes(IdxDFB& idx_cb, uint32_t init_index) {
             if (!is_large_kernel || hw < sticks_per_chunk) {
                 volatile tt_l1_ptr IndexType* base_ptr = &idx_ptr[hw * TILE_WIDTH];
                 IndexType index = static_cast<IndexType>(init_index + kernel_idx);
+                // Int32 indices (Quasar) are added sign-magnitude: encode negative padding indices to match.
+                if constexpr (sign_magnitude) {
+                    if (static_cast<int32_t>(index) < 0) {
+                        index = 0x80000000u | static_cast<uint32_t>(-static_cast<int32_t>(index));
+                    }
+                }
 
                 for (uint32_t c = 0; c < fill_c; ++c) {
                     base_ptr[c] = index;
@@ -78,6 +85,7 @@ template <
     uint32_t intra_kernel_right_inc,
     uint32_t intra_kernel_down_left_wrap_inc,
     bool indexes_32_bit,
+    bool indexes_int32,
     typename IdxDFB,
     typename RightIncDFB,
     typename DownLeftWrapIncDFB,
@@ -135,6 +143,7 @@ ALWI void initialize_return_indices_data(
     idx_cb.reserve_back(1);
     fill_indexes<
         typename IndexType<indexes_32_bit>::type,
+        indexes_int32,
         kernel_h,
         kernel_w,
         fill_c,
@@ -150,6 +159,12 @@ ALWI void initialize_return_indices_data(
     constexpr uint32_t inc_rows = is_large_kernel ? sticks_per_chunk : window_size_hw;
     if constexpr (indexes_32_bit) {
         auto fill_inc_32 = [&](auto& inc_cb, uint32_t inc) __attribute__((always_inline)) {
+            // Sign-magnitude, as for the indices (wrap and large-kernel increments are negative).
+            if constexpr (indexes_int32) {
+                if (static_cast<int32_t>(inc) < 0) {
+                    inc = 0x80000000u | static_cast<uint32_t>(-static_cast<int32_t>(inc));
+                }
+            }
             volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inc_cb.get_write_ptr());
             for (uint32_t k = 0; k < inc_rows; ++k) {
                 for (uint32_t c = 0; c < fill_c; ++c) {
@@ -242,17 +257,22 @@ template <
     uint32_t reader_id,
     uint32_t pack_tmp_cb_id,
     uint32_t pack_idx_tmp_cb_id,
-    uint32_t indexes_32_bit>
+    uint32_t indexes_32_bit,
 #if READER_ID == 0
-template <typename InDFB>
+    typename InDFB>
 ALWI void read_kernel_with_top_left_index(InDFB& in_cb, uint32_t ind, uint32_t in_l1_read_base_addr) {
 #else
-template <typename OutDFB, typename OutIdxDFB, typename PackTmpDFB, typename PackIdxTmpDFB>
+    typename OutDFB,
+    typename OutIdxDFB,
+    typename PackTmpDFB,
+    typename PackIdxTmpDFB>
 ALWI void read_kernel_with_top_left_index(
     OutDFB& out_cb,
     OutIdxDFB& out_idx_cb,
     PackTmpDFB& pack_tmp_cb,
     PackIdxTmpDFB& pack_idx_tmp_cb,
+    uint32_t& out_offset,
+    uint32_t& out_idx_offset,
     uint32_t ind,
     uint32_t in_l1_read_base_addr) {
 #endif
@@ -340,16 +360,16 @@ ALWI void read_kernel_with_top_left_index(
                             uint32_t output_faces =
                                 c_i == in_nblocks_c - 1 ? num_faces_in_last_output_tile : num_faces_in_output_tile;
 
-                            out_cb.reserve_back(output_faces);
-                            out_idx_cb.reserve_back(output_faces);
-
+                            // The outputs are borrowed full-shard views with no consumer, so write by
+                            // offset instead of reserve/push: unconsumed credits hang the Quasar DFB
+                            // finish at kernel exit.
                             pack_tmp_cb.wait_front(1);
                             noc.async_read(
                                 self_ep,
                                 out_cb,
                                 output_faces * FACE_WIDTH * BYTES_PER_ELEM,
                                 experimental::local_addr(pack_tmp_cb.get_read_ptr()),
-                                {});
+                                {.offset_bytes = out_offset});
 
                             pack_idx_tmp_cb.wait_front(1);
                             constexpr uint32_t BYTES_PER_ELEM_IDX = indexes_32_bit ? 4 : 2;
@@ -358,13 +378,13 @@ ALWI void read_kernel_with_top_left_index(
                                 out_idx_cb,
                                 output_faces * FACE_WIDTH * BYTES_PER_ELEM_IDX,
                                 experimental::local_addr(pack_idx_tmp_cb.get_read_ptr()),
-                                {});
+                                {.offset_bytes = out_idx_offset});
                             noc.async_read_barrier();
                             pack_tmp_cb.pop_front(1);
                             pack_idx_tmp_cb.pop_front(1);
 
-                            out_cb.push_back(output_faces);
-                            out_idx_cb.push_back(output_faces);
+                            out_offset += output_faces * out_cb.get_entry_size();
+                            out_idx_offset += output_faces * out_idx_cb.get_entry_size();
                         }
                     }
 #endif
@@ -474,6 +494,7 @@ void kernel_main() {
     constexpr uint32_t intra_kernel_right_inc = get_arg(args::intra_kernel_right_inc);
     constexpr uint32_t intra_kernel_down_left_wrap_inc = get_arg(args::intra_kernel_down_left_wrap_inc);
     constexpr uint32_t indexes_32_bit = get_arg(args::indexes_32_bit);
+    constexpr bool indexes_int32 = get_arg(args::indexes_int32);
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
@@ -518,7 +539,8 @@ void kernel_main() {
             up_left_wrap_inc,
             intra_kernel_right_inc,
             intra_kernel_down_left_wrap_inc,
-            indexes_32_bit>(
+            indexes_32_bit,
+            indexes_int32>(
             in_idx_cb,
             right_inc_cb,
             down_left_wrap_inc_cb,
@@ -540,6 +562,8 @@ void kernel_main() {
     DataflowBuffer out_idx_cb(out_idx_cb_id);
     DataflowBuffer pack_tmp_cb(pack_tmp_cb_id);
     DataflowBuffer pack_idx_tmp_cb(pack_idx_tmp_cb_id);
+    uint32_t out_offset = 0;
+    uint32_t out_idx_offset = 0;
 #endif  // READER_ID == 0
     const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
 
@@ -613,6 +637,8 @@ void kernel_main() {
                 out_idx_cb,
                 pack_tmp_cb,
                 pack_idx_tmp_cb,
+                out_offset,
+                out_idx_offset,
 #endif
                 ind,
                 in_l1_read_base_addr);

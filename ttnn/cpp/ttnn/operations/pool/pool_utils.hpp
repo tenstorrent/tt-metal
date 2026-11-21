@@ -185,8 +185,7 @@ FactoryParameters get_factory_parameters(
     bool return_indices,
     uint32_t in_h,
     uint32_t in_w,
-    const Layout& output_layout,
-    bool single_reader_stream = false);
+    const Layout& output_layout);
 
 pool_op_l1_usage calculate_L1_usage(
     DataType input_dtype,
