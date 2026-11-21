@@ -1452,7 +1452,12 @@ class ttMLA:
     def _is_q_gather_buffer(self, qr: ttnn.Tensor) -> bool:
         """True when qr is the persistent q_a gather buffer, shared across layers: borrowed, never deallocated."""
         gather = self._q_a_latent_gather_output
-        return gather is not None and qr.buffer_address() == gather.buffer_address()
+        # Addresses are per buffer type: an L1 tensor can share the DRAM gather buffer's numeric address.
+        return (
+            gather is not None
+            and qr.memory_config().buffer_type == gather.memory_config().buffer_type
+            and qr.buffer_address() == gather.buffer_address()
+        )
 
     def _tp_all_reduce(self, x: ttnn.Tensor, gather_output: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         x = ttnn.experimental.reduce_scatter_minimal_async(
