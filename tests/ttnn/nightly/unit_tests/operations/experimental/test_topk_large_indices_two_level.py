@@ -462,13 +462,32 @@ def test_two_level_and_single_level_programs_are_cached_apart(device):
     device.enable_program_cache()
     device.clear_program_cache()
     rows, width = 4, 131_072
-    tt_input = _dev(generate("iid", rows, width, 2).reshape(1, 1, rows, width), device)
+    torch_input = generate("iid", rows, width, 2)
+    tt_input = _dev(torch_input.reshape(1, 1, rows, width), device)
     ttnn.experimental.topk_large_indices(tt_input, k=K)
     single = device.num_program_cache_entries()
     ttnn.experimental.topk_large_indices(tt_input, k=K, block_select=32)
     assert device.num_program_cache_entries() == single + 1
     ttnn.experimental.topk_large_indices(tt_input, k=K, block_select=32, two_level_cutover=FORCE_TWO_LEVEL)
     assert device.num_program_cache_entries() == single + 1, "the cutover is a runtime argument"
+    # A cache hit takes the new cutover: the mode flips with it on one cached program.
+    modes = []
+    for cutover in (FORCE_TWO_LEVEL, FORCE_SINGLE_LEVEL, FORCE_TWO_LEVEL):
+        mode = _scalar(device, 7)
+        out = ttnn.experimental.topk_large_indices_with_test_outputs(
+            tt_input, k=K, block_select=32, two_level_cutover=cutover, mode_output=mode
+        )
+        modes.append(_mode(mode))
+        _check_rows(torch_input, _indices(out, rows), width, range(rows))
+    assert device.num_program_cache_entries() == single + 2
+    assert modes == [1, 0, 1]
+
+
+def test_public_api_takes_no_test_outputs(device, expect_error):
+    tt_input = _dev(generate("iid", 2, 131_072, 3).reshape(1, 1, 2, 131_072), device)
+    for name in ("block_max_output", "mode_output"):
+        with expect_error(TypeError, "incompatible function arguments"):
+            ttnn.experimental.topk_large_indices(tt_input, k=K, block_select=32, **{name: _scalar(device, 0)})
 
 
 @pytest.mark.parametrize("k,width", [(1024, 131_072), (K, 131_088), (K, 65_504), (K, 2_097_184)])
