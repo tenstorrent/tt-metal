@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.matmul / ttnn.linear with a GGUF weight (ttnn.from_gguf) on Blackhole, against gguf-py's dequantization of the
-same blocks times the same bf16 input in float64: PCC >= 0.9999 and the largest error within 1 % of the largest
-output."""
+"""ttnn.matmul / ttnn.linear with a GGUF weight (ttnn.experimental.from_gguf) on Blackhole, against gguf-py's
+dequantization of the same blocks times the same bf16 input in float64: PCC >= 0.9999 and the largest error within 1 %
+of the largest output."""
 
 import statistics
 import time
@@ -38,7 +38,7 @@ def _run(device, dtype, shape, k, n, seed=0, linear=False):
     blocks = _blocks(dtype, k, n, seed)
     torch.manual_seed(seed)
     x = torch.randn(*shape, k).bfloat16()
-    w = ttnn.from_gguf(blocks, (k, n), dtype, device=device)
+    w = ttnn.experimental.from_gguf(blocks, (k, n), dtype, device=device)
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     out = ttnn.linear(x_tt, w) if linear else ttnn.matmul(x_tt, w)
     assert out.dtype == ttnn.bfloat16
@@ -129,10 +129,10 @@ def test_prefill(device, dtype, m):
 def test_expanded_round_trip(device, dtype):
     k, n = _k(dtype), 96
     blocks = _blocks(dtype, k, n)
-    w = ttnn.from_gguf(blocks, (k, n), dtype)
+    w = ttnn.experimental.from_gguf(blocks, (k, n), dtype)
     assert w.dtype == dtype
-    np.testing.assert_array_equal(ttnn.to_gguf(w), blocks.reshape(-1))
-    np.testing.assert_array_equal(ttnn.to_gguf(ttnn.to_device(w, device)), blocks.reshape(-1))
+    np.testing.assert_array_equal(ttnn.experimental.to_gguf(w), blocks.reshape(-1))
+    np.testing.assert_array_equal(ttnn.experimental.to_gguf(ttnn.to_device(w, device)), blocks.reshape(-1))
 
 
 @pytest.mark.parametrize("m", [1, 32, 128])
@@ -152,7 +152,7 @@ def test_expanded_matches_compact(device, dtype, m):
     x = torch.randn(1, m, k).bfloat16()
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     compact, expanded = (
-        ttnn.to_torch(ttnn.linear(x_tt, ttnn.from_gguf(b, (k, n), d, device=device)))
+        ttnn.to_torch(ttnn.linear(x_tt, ttnn.experimental.from_gguf(b, (k, n), d, device=device)))
         for b, d in ((reference_blocks, reference), (blocks, dtype))
     )
     assert torch.equal(compact, expanded)
@@ -163,9 +163,9 @@ def test_expanded_refusals(expect_error):
     blocks = _blocks(ttnn.gguf_tq1_0, 256, 32)
     blocks[0, 0] = 1  # TQ1_0 quantization never writes 1
     with expect_error(RuntimeError, "TQ1_0 quantization does not write"):
-        ttnn.from_gguf(blocks, (256, 32), ttnn.gguf_tq1_0_expanded)
+        ttnn.experimental.from_gguf(blocks, (256, 32), ttnn.gguf_tq1_0_expanded)
     with expect_error(RuntimeError, "bytes of blocks"):
-        ttnn.from_gguf(_blocks(ttnn.gguf_iq2_xs, 256, 32), (256, 32), ttnn.gguf_iq2_xxs_expanded)
+        ttnn.experimental.from_gguf(_blocks(ttnn.gguf_iq2_xs, 256, 32), (256, 32), ttnn.gguf_iq2_xxs_expanded)
 
 
 # The prefill program's blockings: a K split (few rows), a padded odd number of row blocks with N tiles that leave
@@ -188,7 +188,7 @@ def test_prefill_n_passes(device, dtype, m, k):
     blocks = _blocks(dtype, k, n)
     torch.manual_seed(0)
     x = torch.randn(1, m, k).bfloat16()
-    w = ttnn.from_gguf(blocks, (k, n), dtype, device=device)
+    w = ttnn.experimental.from_gguf(blocks, (k, n), dtype, device=device)
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     entries = device.num_program_cache_entries()
     out = ttnn.matmul(x_tt, w)
@@ -233,7 +233,7 @@ def test_prefill_k_split_odd_units(device, dtype, m, k, n):
     blocks = _blocks(dtype, k, n)
     torch.manual_seed(0)
     x = torch.randn(1, m, k).bfloat16()
-    w = ttnn.from_gguf(blocks, (k, n), dtype, device=device)
+    w = ttnn.experimental.from_gguf(blocks, (k, n), dtype, device=device)
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     _check_tiles(ttnn.to_torch(ttnn.matmul(x_tt, w)), x, blocks, dtype, k, n)
 
@@ -268,7 +268,7 @@ def test_l1_small_kept(device, device_params, m, k, n):
     blocks = _blocks(dtype, k, n)
     torch.manual_seed(0)
     x = torch.randn(1, m, k).bfloat16()
-    w = ttnn.from_gguf(blocks, (k, n), dtype, device=device)
+    w = ttnn.experimental.from_gguf(blocks, (k, n), dtype, device=device)
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     out = ttnn.to_torch(ttnn.matmul(x_tt, w))
     changed = int((ttnn.to_torch(canary) != ones).sum())
@@ -283,7 +283,7 @@ def test_l1_buffer_replans(device):
     blocks = _blocks(dtype, k, n)
     torch.manual_seed(0)
     x = torch.randn(1, 1, k).bfloat16()
-    w = ttnn.from_gguf(blocks, (k, n), dtype, device=device)
+    w = ttnn.experimental.from_gguf(blocks, (k, n), dtype, device=device)
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     _check(ttnn.to_torch(ttnn.matmul(x_tt, w)), x, blocks, dtype, k, n)
     entries = device.num_program_cache_entries()
@@ -303,7 +303,7 @@ def test_leading_dims_and_bias(device):
     blocks = _blocks(dtype, k, n)
     x = torch.randn(2, 3, 20, k).bfloat16()
     bias = torch.randn(1, n).bfloat16()
-    w = ttnn.from_gguf(blocks, (k, n), dtype, device=device)
+    w = ttnn.experimental.from_gguf(blocks, (k, n), dtype, device=device)
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     b_tt = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     out = ttnn.linear(x_tt, w, bias=b_tt)
@@ -323,10 +323,10 @@ def test_refusals(device, expect_error):
     dtype = ttnn.gguf_q4_k
     blocks = _blocks(dtype, 512, 64)
     with expect_error(RuntimeError, "needs K %"):  # K = 96: whole MXFP4 blocks, not whole pages of 64 rows
-        ttnn.from_gguf(_blocks(ttnn.gguf_mxfp4, 96, 64), (96, 64), ttnn.gguf_mxfp4)
+        ttnn.experimental.from_gguf(_blocks(ttnn.gguf_mxfp4, 96, 64), (96, 64), ttnn.gguf_mxfp4)
     with expect_error(RuntimeError, "N % 32 == 0"):
-        ttnn.from_gguf(blocks[:48], (512, 48), dtype)
-    w = ttnn.from_gguf(blocks, (512, 64), dtype, device=device)
+        ttnn.experimental.from_gguf(blocks[:48], (512, 48), dtype)
+    w = ttnn.experimental.from_gguf(blocks, (512, 64), dtype, device=device)
     x = ttnn.from_torch(torch.randn(1, 256).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "must equal the weight's K"):
         ttnn.matmul(x, w)
@@ -341,7 +341,7 @@ def test_refusals(device, expect_error):
         ttnn.matmul(x, w, core_grid=ttnn.CoreGrid(y=1, x=1))
     with expect_error(RuntimeError, "no compute kernel config, core grid or sub-device ID"):
         ttnn.matmul(x, w, sub_device_id=ttnn.SubDeviceId(0))
-    w_l1 = ttnn.from_gguf(blocks, (512, 64), dtype, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    w_l1 = ttnn.experimental.from_gguf(blocks, (512, 64), dtype, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
     with expect_error(RuntimeError, "must be DRAM interleaved"):
         ttnn.matmul(x, w_l1)
 
@@ -383,7 +383,7 @@ _PERF_DTYPES = [
 def test_perf(device, dtype, k, n):
     """Decode (M = 1): µs per op and GGUF weight bytes / time."""
     blocks = _blocks(dtype, k, n)
-    w = ttnn.from_gguf(blocks, (k, n), dtype, device=device)
+    w = ttnn.experimental.from_gguf(blocks, (k, n), dtype, device=device)
     x = ttnn.from_torch(torch.randn(1, k).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
     fastest, median, out = _time_op(device, lambda: ttnn.matmul(x, w))
     _check(ttnn.to_torch(out), ttnn.to_torch(x), blocks, dtype, k, n)
@@ -484,7 +484,7 @@ def _print_prefill(name, m, k, n, fastest, median):
 def test_perf_prefill(device, dtype, k, n):
     """Prefill (M = 128, 512, 2048 rows): µs per op, TFLOP/s and the fraction of the HiFi2 peak."""
     blocks = _blocks(dtype, k, n)
-    w = ttnn.from_gguf(blocks, (k, n), dtype, device=device)
+    w = ttnn.experimental.from_gguf(blocks, (k, n), dtype, device=device)
     for m in PREFILL_PERF_ROWS:
         x = ttnn.from_torch(torch.randn(m, k).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
         fastest, median, out = _time_op(device, lambda: ttnn.matmul(x, w))

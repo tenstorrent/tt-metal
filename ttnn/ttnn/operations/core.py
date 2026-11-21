@@ -758,7 +758,7 @@ def _golden_function_load_tensor(file_name, *, device=None, **_):
     return host_tensor.to_torch()
 
 
-@ttnn.register_python_operation(name="ttnn.from_gguf", golden_function=None)
+@ttnn.register_python_operation(name="ttnn.experimental.from_gguf", is_experimental=True, golden_function=None)
 def from_gguf(
     blocks: "numpy.ndarray",
     shape: Union[ttnn.Shape, Tuple[int, int]],
@@ -794,11 +794,11 @@ def from_gguf(
     return tensor
 
 
-@ttnn.register_python_operation(name="ttnn.to_gguf", golden_function=None)
+@ttnn.register_python_operation(name="ttnn.experimental.to_gguf", is_experimental=True, golden_function=None)
 def to_gguf(tensor: ttnn.Tensor) -> "numpy.ndarray":
     """
-    Returns the GGUF blocks of a GGUF tensor as a uint8 numpy array, the exact inverse of ttnn.from_gguf (for an expanded
-    layout, the blocks of its format).
+    Returns the GGUF blocks of a GGUF tensor as a uint8 numpy array, the exact inverse of ttnn.experimental.from_gguf
+    (for an expanded layout, the blocks of its format).
     Dequantize them with gguf.quants.dequantize (gguf-py).
     """
     if ttnn.is_tensor_storage_on_device(tensor):

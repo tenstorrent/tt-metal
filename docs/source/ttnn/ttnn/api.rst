@@ -94,8 +94,9 @@ Core
    ttnn.cpu_shards
    ttnn.deallocate
    ttnn.dump_tensor
+   ttnn.experimental.from_gguf
+   ttnn.experimental.to_gguf
    ttnn.from_device
-   ttnn.from_gguf
    ttnn.from_torch
    ttnn.get_device_tensors
    ttnn.get_optimal_worker_cores_for_sharded_tensor
@@ -104,7 +105,6 @@ Core
    ttnn.split_work_to_cores
    ttnn.to_device
    ttnn.to_dtype
-   ttnn.to_gguf
    ttnn.to_layout
    ttnn.to_memory_config
    ttnn.to_torch

@@ -25,11 +25,11 @@ def _blocks(dtype, k, n, seed=0):
 def test_round_trip(dtype):
     k = _k(dtype)
     blocks = _blocks(dtype, k, N)
-    tensor = ttnn.from_gguf(blocks, (k, N), dtype)
+    tensor = ttnn.experimental.from_gguf(blocks, (k, N), dtype)
     assert tensor.dtype == dtype
     assert tensor.layout == ttnn.TILE_LAYOUT
     assert tuple(tensor.shape) == (k, N)
-    out = ttnn.to_gguf(tensor)
+    out = ttnn.experimental.to_gguf(tensor)
     assert out.dtype == np.uint8
     np.testing.assert_array_equal(out, blocks.reshape(-1))
 
@@ -39,44 +39,44 @@ def test_dump_load(dtype, tmp_path):
     k = _k(dtype)
     blocks = _blocks(dtype, k, N)
     path = tmp_path / "w.tensorbin"
-    ttnn.dump_tensor(path, ttnn.from_gguf(blocks, (k, N), dtype))
+    ttnn.dump_tensor(path, ttnn.experimental.from_gguf(blocks, (k, N), dtype))
     loaded = ttnn.load_tensor(path)
     assert loaded.dtype == dtype
-    np.testing.assert_array_equal(ttnn.to_gguf(loaded), blocks.reshape(-1))
+    np.testing.assert_array_equal(ttnn.experimental.to_gguf(loaded), blocks.reshape(-1))
 
 
 def test_rejects_wrong_sizes(expect_error):
     dtype = ttnn.gguf_q4_k
     blocks = _blocks(dtype, 256, 64)
     with expect_error(RuntimeError, "bytes of blocks"):
-        ttnn.from_gguf(blocks[:, :-1], (256, 64), dtype)
+        ttnn.experimental.from_gguf(blocks[:, :-1], (256, 64), dtype)
     with expect_error(RuntimeError, "N % 32 == 0"):
-        ttnn.from_gguf(blocks[:48], (256, 48), dtype)
+        ttnn.experimental.from_gguf(blocks[:48], (256, 48), dtype)
 
 
 def test_tq2_0_refuses_code_3(expect_error):
     dtype = ttnn.gguf_tq2_0
     blocks = _blocks(dtype, 512, 32).copy()
-    ttnn.from_gguf(blocks, (512, 32), dtype)
+    ttnn.experimental.from_gguf(blocks, (512, 32), dtype)
     blocks.reshape(-1, 66)[3, 10] |= 0x30  # block 3: column 1, K block 1
     with expect_error(RuntimeError, "holds code 3") as error:
-        ttnn.from_gguf(blocks, (512, 32), dtype)
+        ttnn.experimental.from_gguf(blocks, (512, 32), dtype)
     assert "block 3 (column 1, K block 1)" in str(error.value)
 
 
 def test_nvfp4_refuses_signed_scale(expect_error):
     dtype = ttnn.gguf_nvfp4
     blocks = _blocks(dtype, 128, 32).copy()
-    ttnn.from_gguf(blocks, (128, 32), dtype)
+    ttnn.experimental.from_gguf(blocks, (128, 32), dtype)
     blocks.reshape(-1, 36)[1, 2] |= 0x80  # block 1: column 0, K block 1
     with expect_error(RuntimeError, "UE4M3 scales have bit 7 clear") as error:
-        ttnn.from_gguf(blocks, (128, 32), dtype)
+        ttnn.experimental.from_gguf(blocks, (128, 32), dtype)
     assert "block 1 (column 0, K block 1)" in str(error.value)
 
 
 def test_values_need_gguf_py(expect_error):
     dtype = ttnn.gguf_q4_0
-    tensor = ttnn.from_gguf(_blocks(dtype, 64, 32), (64, 32), dtype)
+    tensor = ttnn.experimental.from_gguf(_blocks(dtype, 64, 32), (64, 32), dtype)
     with expect_error(RuntimeError, "to_gguf"):
         ttnn.to_torch(tensor)
     with expect_error(RuntimeError, "Unsupported"):
@@ -99,13 +99,13 @@ def test_device_round_trip(device, dtype):
     k, n_tiles = _k(dtype), 13  # not a multiple of the bank count: the last shard is partly empty
     blocks = _blocks(dtype, k, 32 * n_tiles)
     memory_config = _width_sharded_dram(device, k, n_tiles)
-    tensor = ttnn.from_gguf(blocks, (k, 32 * n_tiles), dtype, device=device, memory_config=memory_config)
+    tensor = ttnn.experimental.from_gguf(blocks, (k, 32 * n_tiles), dtype, device=device, memory_config=memory_config)
     assert ttnn.is_tensor_storage_on_device(tensor)
-    np.testing.assert_array_equal(ttnn.to_gguf(tensor), blocks.reshape(-1))
+    np.testing.assert_array_equal(ttnn.experimental.to_gguf(tensor), blocks.reshape(-1))
 
 
 def test_device_unaware_op_fails(device, expect_error):
     dtype = ttnn.gguf_q4_0
-    tensor = ttnn.from_gguf(_blocks(dtype, 64, 64), (64, 64), dtype, device=device)
+    tensor = ttnn.experimental.from_gguf(_blocks(dtype, 64, 64), (64, 64), dtype, device=device)
     with expect_error(RuntimeError, "not supported for binary operation"):
         ttnn.add(tensor, tensor)

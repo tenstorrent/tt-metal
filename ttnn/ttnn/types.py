@@ -29,7 +29,7 @@ mxint4 = DataType.MXINT4
 mxint2 = DataType.MXINT2
 MX_DTYPES = (mxfp8_e4m3, mxfp8_e5m2, mxfp6_e2m3, mxfp6_e3m2, mxfp4, mxint8, mxint4, mxint2)
 
-# GGUF quantized weights, TILE layout [K, N], made with ttnn.from_gguf.
+# GGUF quantized weights, TILE layout [K, N], made with ttnn.experimental.from_gguf.
 gguf_q8_0 = DataType.GGUF_Q8_0
 gguf_q4_0 = DataType.GGUF_Q4_0
 gguf_iq4_nl = DataType.GGUF_IQ4_NL
@@ -55,8 +55,9 @@ gguf_q4_1 = DataType.GGUF_Q4_1
 gguf_q5_0 = DataType.GGUF_Q5_0
 gguf_q5_1 = DataType.GGUF_Q5_1
 gguf_tq1_0 = DataType.GGUF_TQ1_0
-# Expanded layouts of some GGUF formats: ttnn.from_gguf takes the format's blocks and ttnn.to_gguf returns them, exactly;
-# the pages are larger and the matmul is faster. Opt-in, for when the memory is there.
+# Expanded layouts of some GGUF formats: ttnn.experimental.from_gguf takes the format's blocks and
+# ttnn.experimental.to_gguf returns them, exactly; the pages are larger and the matmul is faster. Opt-in, for when the
+# memory is there.
 gguf_iq2_xxs_expanded = DataType.GGUF_IQ2_XXS_EXPANDED
 gguf_iq1_s_expanded = DataType.GGUF_IQ1_S_EXPANDED
 gguf_iq2_s_expanded = DataType.GGUF_IQ2_S_EXPANDED

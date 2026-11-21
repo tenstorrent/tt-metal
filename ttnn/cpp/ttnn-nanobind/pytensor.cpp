@@ -251,7 +251,7 @@ RowMajorHostBuffer convert_block_float_to_logical_row_major(const HostBuffer& bu
 RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, const bool padded_output) {
     TT_FATAL(
         !is_gguf(tt_tensor.dtype()),
-        "{} holds GGUF records, not values: read its blocks with ttnn.to_gguf and dequantize them with "
+        "{} holds GGUF records, not values: read its blocks with ttnn.experimental.to_gguf and dequantize them with "
         "gguf.quants.dequantize",
         tt_tensor.dtype());
     // conversion to Host storage after
