@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","what":"probe_002: (1,1,32,64) DRAM, (1,80,400) L1, (1,1,17,50) DRAM","detail":"0 bf16 ULP vs rounded float64 reference; L1 input -> L1 output","ts":"2026-11-21T05:19:58+00:00"}
