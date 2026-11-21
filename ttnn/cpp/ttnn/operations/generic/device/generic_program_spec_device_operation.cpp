@@ -16,6 +16,10 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/workload/specification/global_semaphore_parameter.hpp>
 #include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt_stl/assert.hpp>
@@ -277,6 +281,34 @@ void check_tensor_args(
     }
 }
 
+// A later call keeps the GlobalSemaphore of a parameter that it leaves out, which may since have been freed, and Metal
+// checks the names and the MeshDevice only on the first call and, on later calls, with validate_program_args on.
+void check_global_semaphore_args(
+    const m2::ProgramSpec& spec, const m2::ProgramRunArgs& run_args, const m2::IDevice* program_device) {
+    const auto& parameters = spec.global_semaphore_parameters;
+    const auto& semaphores = run_args.global_semaphore_args;
+    for (const auto& parameter : parameters) {
+        TT_FATAL(
+            semaphores.contains(parameter.unique_id),
+            "generic_op: GlobalSemaphoreParameter '{}' has no GlobalSemaphore in run_args.global_semaphore_args",
+            parameter.unique_id);
+    }
+    for (const auto& [name, semaphore] : semaphores) {
+        TT_FATAL(
+            std::ranges::find(parameters, name, &m2::GlobalSemaphoreParameter::unique_id) != parameters.end(),
+            "generic_op: run_args.global_semaphore_args has a GlobalSemaphore for '{}', which the ProgramSpec does not "
+            "declare",
+            name);
+        // The semaphore's MeshDevice may since have been closed and freed, so the message names only the program's.
+        TT_FATAL(
+            semaphore.get().device() == program_device,
+            "generic_op: the GlobalSemaphore for '{}' is on another MeshDevice than the one the program runs on, "
+            "MeshDevice {}",
+            name,
+            program_device->id());
+    }
+}
+
 void check_prefetcher_pipe_args(const m2::ProgramSpec& spec, const m2::ProgramRunArgs& run_args) {
     const auto& parameters = spec.advanced_options.prefetcher_pipe_parameters;
     const auto& pipes = run_args.advanced_options.prefetcher_pipe_args;
@@ -327,10 +359,12 @@ void check_dfb_run_overrides(const m2::ProgramSpec& spec, const m2::ProgramRunAr
 
 // The checks every call runs before Metal sees the run args. Metal checks them only on the first call, and on later
 // calls only with validate_program_args on, and even then it keeps the previous value of anything left out.
+// program_device is the MeshDevice the program runs on, the output's.
 void check_program(
     const m2::ProgramSpec& spec,
     const m2::ProgramRunArgs& run_args,
     const std::vector<Tensor>& io_tensors,
+    const m2::IDevice* program_device,
     bool check_nodes) {
     // Kept by name. A kernel declared twice is checked once, against its first declaration, so when its run args fit
     // that one, the call gets past these checks to Metal's, which names the duplicate.
@@ -358,6 +392,7 @@ void check_program(
             kernel.unique_id);
     }
     check_tensor_args(spec, run_args, io_tensors);
+    check_global_semaphore_args(spec, run_args, program_device);
     check_prefetcher_pipe_args(spec, run_args);
     check_dfb_run_overrides(spec, run_args);
 }
@@ -504,9 +539,14 @@ void GenericProgramSpecDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     check_mesh_ranges(operation_attributes, tensor_args);
     check_tensors_on_program_devices(operation_attributes, tensor_args);
-    // SetProgramRunArgs checks the nodes too, but only after the kernels compile.
+    // Program::set_program_run_args checks the nodes too, but only after the kernels compile.
     for (const auto& program : operation_attributes.programs) {
-        check_program(program.spec, program.run_args, tensor_args.io_tensors, /*check_nodes=*/true);
+        check_program(
+            program.spec,
+            program.run_args,
+            tensor_args.io_tensors,
+            tensor_args.output_tensor.device(),
+            /*check_nodes=*/true);
     }
 }
 
@@ -515,7 +555,8 @@ void GenericProgramSpecDeviceOperation::validate_on_program_cache_hit(
     check_tensors_on_program_devices(operation_attributes, tensor_args);
     const bool check_nodes = ttnn::CONFIG.get<"validate_program_args">();
     for (const auto& program : operation_attributes.programs) {
-        check_program(program.spec, program.run_args, tensor_args.io_tensors, check_nodes);
+        check_program(
+            program.spec, program.run_args, tensor_args.io_tensors, tensor_args.output_tensor.device(), check_nodes);
     }
 }
 
