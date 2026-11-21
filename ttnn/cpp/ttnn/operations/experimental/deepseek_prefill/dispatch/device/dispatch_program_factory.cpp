@@ -113,7 +113,7 @@ std::vector<uint32_t> compute_per_neighbor_forwarding_links(
             axis_label,
             src_fabric_node_id,
             dst_node,
-            tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node).value(),
+            tt::tt_fabric::get_eth_forwarding_direction(mesh_device, src_fabric_node_id, dst_node).value(),
             core_link,
             links.size(),
             links[core_link % links.size()]);
@@ -168,7 +168,8 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     const bool local_only = num_links == 0;
     TT_FATAL(
         !local_only || ((mesh_device->shape().mesh_size() == 1 ||
-                         (operation_attributes.axis == 0 && mesh_device->shape()[0] == 1)) &&
+                         (operation_attributes.axis.has_value() && *operation_attributes.axis <= 1 &&
+                          mesh_device->shape()[*operation_attributes.axis] == 1)) &&
                         operation_attributes.dispatch_group_size == 1 && topology == tt::tt_fabric::Topology::Linear),
         "Zero-link prefill dispatch requires a singleton communication domain, dispatch_group_size=1, and Linear "
         "topology");
@@ -426,7 +427,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // configs and topologies (any mesh shape) with fabric present. FABRIC_2D uses a portable
     // RoutingPlaneConnectionManager (not array-indexable) and is excluded; this is_2d_fabric gate mirrors
     // the kernel's FABRIC_2D #ifdef (same INVARIANT as the is_2d_fabric derivation further below).
-    const bool is_1d_fabric = !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const bool is_1d_fabric = !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device));
     const bool sparse_has_fabric = (operation_attributes.num_links > 0);
     // fp8_scaled_input is supported: it extends metadata to 3 routing fields + one word per
     // per-128-block scale, and because a group is one token fanned out to several chips, that scale tail
@@ -579,7 +580,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // injects based on the control plane's is_2D_routing_enabled(). If the two ever diverge, the host
     // pushes 2D-shaped args while the kernel compiles the 1D #else branch (or vice-versa) and arg
     // parsing corrupts.
-    const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device));
     TT_FATAL(
         !is_2d_fabric || (operation_attributes.axis.has_value() && operation_attributes.axis.value() < 2),
         "FABRIC_2D dispatch requires cluster_axis 0 or 1; got {}",
@@ -1072,7 +1073,8 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
                         continue;
                     }
                     const auto peer_node = mesh_device->get_fabric_node_id(peer_coordinate);
-                    const auto direction = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, peer_node);
+                    const auto direction =
+                        tt::tt_fabric::get_eth_forwarding_direction(*mesh_device, src_fabric_node_id, peer_node);
                     TT_FATAL(
                         direction.has_value(),
                         "No Fabric2D forwarding direction from dispatch source {} to peer {}",

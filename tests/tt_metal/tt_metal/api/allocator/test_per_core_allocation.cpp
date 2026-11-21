@@ -13,6 +13,7 @@
 #include <functional>
 #include <numeric>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,6 +26,7 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
@@ -33,6 +35,7 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -84,6 +87,33 @@ TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
     }
 }
 
+TEST_F(PerCoreAllocationTest, TensorAccessorArgsRejectsPerCoreBuffer) {
+    auto* device = this->devices_[0]->impl().get_devices()[0];
+    NodeRange node_range(NodeCoord(0, 0), NodeCoord(1, 0));
+    ShardSpecBuffer shard_spec(NodeRangeSet(node_range), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
+
+    auto per_core_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    per_core::set_per_core_allocation(per_core_args, true);
+    auto per_core_buf = BufferImpl::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, per_core_args);
+    auto lockstep_buf = BufferImpl::create(
+        device,
+        2 * PAGE_SIZE,
+        PAGE_SIZE,
+        BufferType::L1,
+        BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED));
+
+    EXPECT_THROW(TensorAccessorArgs{*per_core_buf}, std::runtime_error);
+    EXPECT_NO_THROW(TensorAccessorArgs{*lockstep_buf});
+
+    // The MeshBuffer constructor, which MeshTensor ops go through, reads the reference device buffer.
+    auto per_core_mesh_buf = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 2 * PAGE_SIZE},
+        distributed::DeviceLocalBufferConfig{
+            .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = per_core_args},
+        this->devices_[0].get());
+    EXPECT_THROW(TensorAccessorArgs{*per_core_mesh_buf}, std::runtime_error);
+}
+
 TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
     auto* device = this->devices_[0]->impl().get_devices()[0];
     auto compute_grid = device->compute_with_storage_grid_size();
@@ -129,7 +159,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
     auto space = experimental::CreatePrefetcherPipeSpace(
-        *mesh_device,
+        mesh_device->mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange(sender)),
             .receiver_domain = CoreRangeSet(CoreRange(receiver)),
@@ -548,7 +578,7 @@ TEST_F(PerCoreAllocationTest, OccupiedRangesIncludePersistentL1) {
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
     auto space = experimental::CreatePrefetcherPipeSpace(
-        mesh_device,
+        mesh_device.mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange(sender)),
             .receiver_domain = CoreRangeSet(CoreRange(receiver)),
@@ -576,7 +606,7 @@ TEST_F(PerCoreAllocationTest, OccupiedRangesIncludePersistentL1AcrossSubmeshes) 
     // A pipe reserves persistent L1 on the mesh it is created on; the other mesh must still see it.
     for (const auto& [owner, viewer] : {std::pair{parent, submesh}, std::pair{submesh, parent}}) {
         auto space = experimental::CreatePrefetcherPipeSpace(
-            *owner,
+            owner->mesh_command_queue(0),
             experimental::PrefetcherPipeSpaceConfig{
                 .sender_cores = CoreRangeSet(CoreRange(sender)),
                 .receiver_domain = CoreRangeSet(CoreRange(receiver)),

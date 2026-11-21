@@ -40,7 +40,6 @@ MAX_EVICTIONS = int(os.environ.get("TTNOP_MAX_EVICTIONS", "8"))
 MIN_WORKERS = int(os.environ.get("TTNOP_MIN_WORKERS", "5"))
 REAP_TIMEOUT = float(os.environ.get("TTNOP_REAP_TIMEOUT", "120"))
 EVICT_GRACE = float(os.environ.get("TTNOP_EVICT_GRACE", "30"))
-RESET_TIMEOUT = float(os.environ.get("TTNOP_RESET_TIMEOUT", "180"))
 RESET_COST = float(os.environ.get("TTNOP_RESET_COST", "240"))
 
 
@@ -213,7 +212,11 @@ def reap(child, timeout: float) -> bool:
 
 def reset_card() -> bool:
     try:
-        subprocess.run(["tt-smi", "-r"], check=True, timeout=RESET_TIMEOUT)
+        import tt_umd
+
+        # Warm reset, then verify with topology discovery; retries either step.
+        if not tt_umd.WarmResetWithRecovery.warm_reset(max_attempts=3):
+            raise RuntimeError("UMD warm reset failed")
         return True
     except Exception as err:
         log(f"card reset FAILED: {type(err).__name__}: {err}")

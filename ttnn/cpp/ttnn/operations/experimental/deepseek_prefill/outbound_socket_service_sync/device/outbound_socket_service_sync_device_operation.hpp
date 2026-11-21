@@ -27,13 +27,15 @@ struct OutboundSocketServiceSyncOperation {
     using operation_attributes_t = OutboundSocketServiceSyncParams;
     using tensor_args_t = OutboundSocketServiceSyncInputs;
     // The op fills the service-owned backing tensor in place; the (single) output IS
-    // that backing tensor (no new allocation).
+    // that backing tensor (no new allocation), or the metadata tensor in metadata-only mode.
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using program_factory_t = std::variant<OutboundSocketServiceSyncProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);

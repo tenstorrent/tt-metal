@@ -2457,6 +2457,7 @@ class UnarySFPUGolden:
             MathOperation.UnaryBitwiseOr: self._unary_bitwise_or,
             MathOperation.UnaryBitwiseXor: self._unary_bitwise_xor,
             MathOperation.RsubScalarInt32: self._rsub_scalar_int32,
+            MathOperation.QuickGelu: self._quick_gelu,
             MathOperation.RemainderUint32: self._remainder_uint32,
             MathOperation.SumIntCol: self._sum_int_col,
             MathOperation.SumIntRow: self._sum_int_row,
@@ -3117,8 +3118,16 @@ class UnarySFPUGolden:
         return math.tanh(x)
 
     def _tanhshrink(self, x):
-        # tanhshrink(x) = x - tanh(x)
-        return x - math.tanh(x)
+        # Torch's result at its special inputs, else x - tanh(x), rounded once onto Dest's grid.
+        if math.isnan(x):
+            return math.nan
+        if math.isinf(x):
+            return math.inf if x > 0 else -math.inf
+        if x == 0.0:
+            return 0.0 if math.copysign(1.0, x) > 0 else 0.0
+        with mpmath.workprec(320):
+            x = mpmath.mpf(x)
+            return self._round_once_to_dest(x - mpmath.tanh(x))
 
     def _floor(self, x):
         return math.floor(x) if math.isfinite(x) else x
@@ -3541,6 +3550,12 @@ class UnarySFPUGolden:
         phi = math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
         cdf = 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
         return cdf + x * phi
+
+    def _quick_gelu(self, x):
+        # The exact value of the leaf in float64,
+        # at the input as the SFPU reads it (a subnormal as 0).
+        x = 0.0 if abs(float(x)) < 2.0**-126 else x
+        return self._in_fp64(x, lambda a: (a / (1 + torch.exp(-1.702 * a))))
 
     def _rand(self, x):
         # No element-wise golden exists: the midpoint is only valid ahead of a downstream op whose
@@ -4379,6 +4394,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuRemainderUint32: self._remainder_int,
                 MathOperation.SfpuLgammaStirlingFp32: self._lgamma_stirling_fp32,
                 MathOperation.SfpuFmodInt32: self._fmod_int,
+                MathOperation.SfpuGegluTanh: self._geglu_tanh,
                 MathOperation.SfpuIntSumAdd: self._int_sum_add,
                 MathOperation.SfpuClampedSiluGlu: self._clamped_silu_glu,
                 MathOperation.SfpuSituGlu: self._situ_glu,
@@ -4789,6 +4805,26 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
     # guard either.
     def _lt(self, t1, t2):
         return (t1 < t2).to(torch.float32)
+
+    def _geglu_tanh(self, t1, t2):
+        # The exact product of the leaves in float64,
+        # each at its input as the SFPU reads it (a subnormal as 0).
+        a, b = (
+            torch.tensor(
+                0.0 if abs(float(t)) < 2.0**-126 else float(t), dtype=torch.float64
+            )
+            for t in (t1, t2)
+        )
+        return float(
+            (
+                a
+                / (
+                    1
+                    + torch.exp(-(1.5957691216057308 * a + 0.07135481627260025 * a**3))
+                )
+            )
+            * (b)
+        )
 
     def _gt(self, t1, t2):
         return (t1 > t2).to(torch.float32)
