@@ -27,6 +27,9 @@ void ConvertToCHWDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(HW % TILE_HEIGHT == 0, "HW must be divisible by tile size");
 
     TT_FATAL(input.is_sharded(), "Input tensor must be sharded");
+    TT_FATAL(
+        input.memory_config().shard_spec().has_value(),
+        "Convert to CHW: sharded input must have shard_spec (ND_SHARDED not supported)");
 
     const auto& input_shard_spec = input.memory_config().shard_spec().value();
     TT_FATAL(
