@@ -51,6 +51,10 @@ class DispatchContext;
 class HostRegion;
 }  // namespace experimental
 
+namespace internal {
+class ServiceCoreManagerImpl;
+}  // namespace internal
+
 namespace program_cache::detail {
 struct ProgramCache;
 }  // namespace program_cache::detail
@@ -257,7 +261,8 @@ private:
     // One sub-device spanning the current compute grid, the shape of the default sub-device manager.
     std::vector<SubDevice> full_grid_sub_devices() const;
     // Re-derives the property caches and the default sub-device from the devices' current compute grid.
-    // Manual fast dispatch calls it on entry and exit, since the dispatch cores leave and rejoin the grid.
+    // Manual fast dispatch calls it on entry and exit, since the dispatch cores leave and rejoin the grid. The service
+    // core manager calls it when the last claim on a chip is released and the chip's grid grows back.
     void refresh_compute_grid();
 
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
@@ -271,6 +276,7 @@ private:
     mutable std::shared_ptr<distributed::multihost::DistributedContext> coowner_context_;
 
     friend class ::tt::tt_metal::experimental::DispatchContext;
+    friend class ::tt::tt_metal::internal::ServiceCoreManagerImpl;
 
 public:
     MeshDeviceImpl(
