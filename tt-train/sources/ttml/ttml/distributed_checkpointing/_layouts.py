@@ -205,8 +205,7 @@ DECLARATIONS = ("fused", "logical_extent")
 def check_fused_segments(sizes: Sequence[int], extent: int, shards: int) -> tuple[int, ...]:
     """``sizes`` as ints, checked as the segments of a fused dim of ``extent`` rows split across ``shards`` TP shards:
     positive, summing to ``extent``, and each divisible by ``shards``, since every shard holds an equal piece of every
-    segment. The one check of a fused declaration, run where the fusing layer is built and again when a checkpoint is
-    planned."""
+    segment. The one check of a fused declaration, which every save and load runs when it plans the checkpoint."""
     sizes = tuple(int(s) for s in sizes)
     if not sizes or shards < 1 or any(s <= 0 for s in sizes):
         raise LayoutError(f"fused_segments: bad sizes {sizes} or shard count {shards}")

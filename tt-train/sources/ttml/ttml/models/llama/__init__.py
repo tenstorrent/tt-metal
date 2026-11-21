@@ -270,6 +270,10 @@ class Llama(AbstractModuleBase):
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight
+        # The vocab is padded to a multiple of 32 (times the TP size), so the padded extent depends on the parallel
+        # configuration; the logical row count lets ttml.distributed_checkpointing reshard the weight across it.
+        self.fc.weight.checkpoint_layout = {"logical_extent": (2, config.vocab_size)}
+        self.tok_emb.weight.checkpoint_layout = {"logical_extent": (2, config.vocab_size)}
 
         rope_params = build_rope_params_from_config(config, config.hidden_size // config.num_attention_heads)
 

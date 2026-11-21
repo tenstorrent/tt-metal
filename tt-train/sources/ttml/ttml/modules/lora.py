@@ -69,6 +69,14 @@ def _create_lora_B(rank: int, out_features: int, mapper=None):
     return ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
+def lora_b_layout(base_weight: Parameter) -> dict:
+    """The checkpoint layout declarations of ``base_weight`` that describe its output rows (dim 2): a fused segment
+    order and a padded vocab's logical extent. lora_B's rows add onto those rows shard by shard, so lora_B is laid out
+    the same way and needs the same declarations to reshard across TP sizes."""
+    declared = getattr(base_weight, "checkpoint_layout", None) or {}
+    return {kind: value for kind, value in declared.items() if int(value[0]) in (2, -2)}
+
+
 class LoraLinear(AbstractModuleBase):
     """LinearLayer with frozen base weights and a trainable low-rank path.
 
@@ -94,6 +102,7 @@ class LoraLinear(AbstractModuleBase):
 
         self.lora_A = Parameter(_create_lora_A(self.in_features, config.rank))
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features))
+        self.lora_B.checkpoint_layout = lora_b_layout(self.weight)
 
     def forward(self, x):
         bias = self.bias.tensor if self.bias is not None else None
@@ -136,6 +145,8 @@ class LoraColumnParallelLinear(AbstractModuleBase):
         self.lora_A = Parameter(_create_lora_A(self.in_features, config.rank))
         lora_B_mapper = ttml.mesh().axis_mapper(self.axis_name, tdim=2)
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features, mapper=lora_B_mapper))
+        # On a fused base layer lora_B's rows are in the same per-shard [Q_d | K_d | V_d] order as the base output's.
+        self.lora_B.checkpoint_layout = lora_b_layout(self.weight)
 
     def forward(self, x):
         bias_t = self.bias.tensor if self.bias is not None else None
@@ -194,6 +205,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
         lora_A_mapper = ttml.mesh().axis_mapper(self.axis_name, tdim=3)
         self.lora_A = Parameter(_create_lora_A(self.in_features, config.rank, mapper=lora_A_mapper))
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features))
+        self.lora_B.checkpoint_layout = lora_b_layout(self.weight)
 
     def forward(self, x):
         if not self.input_is_parallel:
