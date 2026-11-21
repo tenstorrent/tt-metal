@@ -19,14 +19,15 @@
 #include "context/metal_context.hpp"
 #include "debug/l1_ecc_halt.hpp"
 #include "impl/context/context_descriptor.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/noc_logging.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/topology.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "impl/buffers/dram_sender_topology.hpp"
+#include "impl/dispatch/kernel_config/tensor_prefetcher.hpp"
 #include "impl/dispatch/host_transfer_stats.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
@@ -185,9 +186,9 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                 generate_worker_logical_to_virtual_map(
                     device_id, *refs.worker_logical_col_to_virtual_col, *refs.worker_logical_row_to_virtual_row);
             }
-            // Only BH brisc/ncrisc FW loads the Tensor prefetcher signal table; elsewhere it stays empty and
-            // nothing is written.
-            if (cluster_.arch() == ARCH::BLACKHOLE) {
+            // Only BH brisc/ncrisc and Quasar DM FW load the Tensor prefetcher signal table; elsewhere it stays
+            // empty and nothing is written.
+            if (cluster_.arch() == ARCH::BLACKHOLE || cluster_.arch() == ARCH::QUASAR) {
                 generate_tensor_prefetcher_signal_table(
                     device_id, refs.dram_bank_offset_map->size(), *refs.tensor_prefetcher_signal_noc_xy);
             }
@@ -712,7 +713,15 @@ void RiscFirmwareInitializer::generate_worker_logical_to_virtual_map(
 void RiscFirmwareInitializer::generate_tensor_prefetcher_signal_table(
     tt::ChipId device_id, size_t num_dram_banks, std::vector<uint32_t>& tensor_prefetcher_signal_noc_xy) const {
     tensor_prefetcher_signal_noc_xy.assign(num_dram_banks, 0);
-    if (!hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+    const auto placement = dram_sender_placement(descriptor_->metal_context(), num_hw_cqs_);
+    if (!placement.has_value()) {
+        return;
+    }
+    if (*placement == DramSenderPlacement::DispatchEngine) {
+        // The engine keeps one table of counters for every bank, so every bank names it.
+        const CoreCoord xy = cluster_.get_virtual_coordinate_from_logical_coordinates(
+            device_id, tensor_prefetcher_dispatch_engine(dispatch_core_manager_, device_id), CoreType::DISPATCH);
+        tensor_prefetcher_signal_noc_xy.assign(num_dram_banks, pack_bank_noc_xy(xy.x, xy.y));
         return;
     }
     const auto& soc_desc = cluster_.get_soc_desc(device_id);
