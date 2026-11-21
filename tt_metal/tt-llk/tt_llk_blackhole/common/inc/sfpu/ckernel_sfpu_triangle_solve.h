@@ -265,7 +265,7 @@ inline void _triangle_solve_restore_group_layout_(const std::uint32_t base)
  * @param l1_base: L1 byte address of the L tile in standard TILE layout; must stay resident for the whole call.
  * @note DEST is addressed absolutely (tile index * TRIANGLE_SOLVE_DEST_TILE_ROWS): bracket the call with
  *       @ref _llk_math_eltwise_sfpu_start_ at DEST base 0 and @ref _llk_math_eltwise_sfpu_done_, with 32-bit destination
- *       accumulation enabled and ADDR_MOD_7 programmed by @ref _llk_math_eltwise_binary_sfpu_init_. L is read through the
+ *       accumulation enabled and ADDR_MOD_7 left at its zero-advance invariant by every op. L is read through the
  *       RISC's L1 data cache: invalidate it (invalidate_l1_cache) first if the tile may have been rewritten since it was
  *       last read. Writes LREG0..4 and LREG7.
  */

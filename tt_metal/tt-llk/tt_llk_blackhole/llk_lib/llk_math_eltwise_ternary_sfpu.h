@@ -19,13 +19,6 @@
 template <SfpuType sfpu_op>
 inline void eltwise_ternary_sfpu_configure_addrmod()
 {
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7);
-
     if constexpr (sfpu_op == SfpuType::where)
     {
         addr_mod_t {

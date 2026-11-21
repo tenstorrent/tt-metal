@@ -22,12 +22,11 @@ namespace ckernel {
 #if defined(ARCH_BLACKHOLE)
 
 // Public API (visible to all TRISCs; only TRISC_MATH does work).
-// Unary SFPU init (ADDR_MOD_7 dest-incr 0). This op does not call it:
-// exp_tile_init already programs the same slot immediately before
-// sinkhorn_row_max_sub / sinkhorn_4x4.
+// This op does not program ADDR_MOD_7: it relies on the zero-advance
+// invariant that hw_configure sets and every op leaves in place.
 inline void sinkhorn_4x4_init() { MATH((_llk_math_sinkhorn_4x4_init_())); }
 
-// Comb 4x4 per-row max-sub. Runs after exp_tile_init (ADDR_MOD_7) and before
+// Comb 4x4 per-row max-sub. Runs after exp_tile_init and before
 // exp_tile; must not clobber LREG12..14.
 ALWI void sinkhorn_row_max_sub(std::uint32_t input_index) { MATH((_llk_math_sinkhorn_row_max_sub_(input_index))); }
 

@@ -31,12 +31,6 @@ inline void sfpu_sdpa_reduce_row_subblock_8x32_configure_addrmod()
     addr_mod_t {
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(sdpa_reduce_row::ZERO_ADDR_MOD);
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
         .dest = {.incr = 16},
     }
         .set(sdpa_reduce_row::TILE_OFFSET_ADDR_MOD);
