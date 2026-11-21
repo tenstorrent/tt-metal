@@ -104,14 +104,19 @@ sliding_window::ParallelConfig determine_output_parallel_config(
 // Both are used as host divisors, so a zero (or, for the override, a non-tile multiple) must be rejected
 // before any division.
 void validate_stride(const std::array<uint32_t, 2>& stride);
-// Rejects zero channels, batch, kernel size, stride or groups, which the conv setup divides by.
+// Rejects zero channels, batch, kernel size, stride or groups, which the conv setup divides by;
+// out_channels / in_channels not divisible by groups, which the weight reshaping divides by; zero
+// dilation, which multiplies the effective kernel; and output_padding at least both the stride and
+// the dilation, which torch rejects. Callers with no dilation or output_padding pass 1 for both.
 void validate_conv_params(
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
     const std::array<uint32_t, 2>& kernel_size,
     const std::array<uint32_t, 2>& stride,
-    uint32_t groups);
+    uint32_t groups,
+    const std::array<uint32_t, 2>& dilation = {1, 1},
+    const std::array<uint32_t, 2>& output_padding = {0, 0});
 void validate_act_block_h_override(uint32_t act_block_h_override);
 
 std::tuple<uint32_t, uint32_t> calculate_output_image_size(

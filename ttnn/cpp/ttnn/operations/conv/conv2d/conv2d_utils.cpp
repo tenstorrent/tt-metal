@@ -280,7 +280,9 @@ void validate_conv_params(
     uint32_t batch_size,
     const std::array<uint32_t, 2>& kernel_size,
     const std::array<uint32_t, 2>& stride,
-    uint32_t groups) {
+    uint32_t groups,
+    const std::array<uint32_t, 2>& dilation,
+    const std::array<uint32_t, 2>& output_padding) {
     validate_stride(stride);
     TT_FATAL(
         kernel_size[0] > 0 && kernel_size[1] > 0,
@@ -294,6 +296,34 @@ void validate_conv_params(
         out_channels);
     TT_FATAL(batch_size > 0, "batch_size must be greater than 0");
     TT_FATAL(groups > 0, "groups must be greater than 0");
+    TT_FATAL(
+        in_channels % groups == 0,
+        "in_channels ({}) must be divisible by groups ({}), got a remainder of {}",
+        in_channels,
+        groups,
+        in_channels % groups);
+    TT_FATAL(
+        out_channels % groups == 0,
+        "out_channels ({}) must be divisible by groups ({}), got a remainder of {}",
+        out_channels,
+        groups,
+        out_channels % groups);
+    // Dilation is a host multiplier for the effective kernel and for the padding it contributes to
+    // the output image size, so a zero makes the effective kernel size wrap.
+    TT_FATAL(
+        dilation[0] > 0 && dilation[1] > 0, "dilation must be greater than 0, got ({}, {})", dilation[0], dilation[1]);
+    // Torch rejects output_padding only when it is at least both the stride and the dilation for a
+    // dimension; a value below either one is valid ("smaller than either stride or dilation").
+    TT_FATAL(
+        (output_padding[0] < stride[0] || output_padding[0] < dilation[0]) &&
+            (output_padding[1] < stride[1] || output_padding[1] < dilation[1]),
+        "output_padding ({}, {}) must be smaller than either stride ({}, {}) or dilation ({}, {})",
+        output_padding[0],
+        output_padding[1],
+        stride[0],
+        stride[1],
+        dilation[0],
+        dilation[1]);
 }
 
 void validate_act_block_h_override(uint32_t act_block_h_override) {
