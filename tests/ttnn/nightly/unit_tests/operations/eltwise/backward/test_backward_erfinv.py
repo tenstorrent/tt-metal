@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 import pytest
 import ttnn
@@ -29,6 +31,40 @@ def test_bw_erfinv(input_shapes, device):
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "x_value, grad_value",
+    [
+        (1.0, float("nan")),
+        (-1.0, float("nan")),
+        (1.0, 0.0),
+        (-1.0, 0.0),
+        (1.0, 2.0),
+        (-1.0, -2.0),
+    ],
+)
+def test_bw_erfinv_poles_keep_the_upstream_gradient(device, x_value, grad_value):
+    """grad * d/dx erfinv(x) at x = +-1 is grad * inf, so a NaN or zero grad stays NaN and a finite
+    grad keeps its sign."""
+    x = torch.full((1, 1, 32, 32), 0.5)
+    grad = torch.zeros(1, 1, 32, 32)
+    x[0, 0, 0, 0] = x_value
+    grad[0, 0, 0, 0] = grad_value
+
+    x_ref = x.clone().requires_grad_(True)
+    torch.erfinv(x_ref).backward(gradient=grad)
+    want = x_ref.grad[0, 0, 0, 0].item()
+
+    tt_x = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_grad = ttnn.from_torch(grad, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.erfinv_bw(tt_grad, tt_x)[0]
+    got = ttnn.to_torch(result).float()[0, 0, 0, 0].item()
+
+    if math.isnan(want):
+        assert math.isnan(got), f"x={x_value}, grad={grad_value}: expected NaN, got {got}"
+    else:
+        assert got == want, f"x={x_value}, grad={grad_value}: expected {want}, got {got}"
 
 
 # Exhaustive BF16 accuracy of ttnn.erfinv_bw: every BF16 bit pattern with each gradient in ERFINV_BW_GRADS.
