@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "lltt.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"  // math::reset_counters, p_setrwc
 
@@ -14,8 +15,6 @@
 #include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
-#include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
-#include "ckernel_sfpu_piecewise_rational.h"
 #include "ckernel_sfpu_tanh.h"  // _sfpu_tanh_fp32_accurate_ for gelu_tanh
 #include "sfpi.h"
 
@@ -99,112 +98,20 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
     return result;
 }
 
-// =============================================================================
-// Forward GELU - Piecewise CDF Approximation
-// =============================================================================
-// GELU(x) = x * Phi(x) where Phi(x) = 0.5*(1+erf(x/sqrt(2))) is the CDF
-//
-// Three active regions (plus zero default):
-//   x >= 2.78125:                  Identity (result = x)
-//   -3.125 <= x < 2.78125:         Core CDF polynomial (degree-13 in u=x²)
-//   -5.54259443 < x < -3.125:      Moroz exp_21f: GELU = x · round_to_grid(H), H = exp(-x²/2)·corr_H
-//   x <= -5.54259443:               Zero (matches torch.gelu BF16 saturation)
-//
-// Deep-tail grid rounding: in the deep tail (-5.54259443, -4.828125] torch computes
-// GELU(x) = x · float32(½·erfc(|x|/√2)) where the float32 ½·erfc is a *staircase*
-// (multiple BF16 inputs share one float32 bucket). Every bucket is an exact integer
-// multiple of 2⁻²⁵ (k ∈ {1..21}). A smooth polynomial diverges from this staircase by
-// up to 116 BF16 ULP. Instead we compute the smooth H and round it to the nearest multiple
-// of 2⁻²⁵ before multiplying by x — reproducing torch's exact bucket at 2 ops
-// (vs a 27-op step-function cascade). Above -4.828125 the 2⁻²⁵ grid is far finer than
-// BF16 so the rounding is lossless, letting one rounded multiply serve the whole exp region.
-// Result: ULP ≤ 1 across the tail (0 ULP for almost all of it), with DKD below main.
-//
-// v_if/v_and narrowing: widest region first, each v_and overwrites for narrower set.
-// =============================================================================
-
-// Degree-13 CDF polynomial for Phi(x) over [-3.125, 2.78125]
-// Phi(x) = 0.5 + x * p(x²); only odd powers, evaluated via u=x² Horner (7 MADs).
-// Minimax-fitted with BF16-ULP weighting → MaxULP = 0.87 < 1.
-constexpr float GELU_CDF_CORE_C0 = 5.000000000e-01f;
-constexpr float GELU_CDF_CORE_C1 = 3.9894227818e-01f;
-constexpr float GELU_CDF_CORE_C3 = -6.6361041488e-02f;
-constexpr float GELU_CDF_CORE_C5 = 9.7720050615e-03f;
-constexpr float GELU_CDF_CORE_C7 = -1.0717806322e-03f;
-constexpr float GELU_CDF_CORE_C9 = 8.1812159812e-05f;
-constexpr float GELU_CDF_CORE_C11 = -3.8082057209e-06f;
-constexpr float GELU_CDF_CORE_C13 = 7.9821413868e-08f;
-
-// Degree-3 H-form correction polynomial for the exp-based region (-5.54259443, -3.125].
-// H(x) = ½·erfc(|x|/√2) ≈ exp(-x²/2) · corr_H(x), and GELU(x) = x · H(x).
-// Fitted (uniform relative error) so the deep-tail snap is exact and the smooth
-// region stays ULP ≤ 1. See deep-tail snap below for why the H-form matters.
-constexpr float GELU_HCORR_C0 = 3.0369991064e-01f;
-constexpr float GELU_HCORR_C1 = 9.5413386822e-02f;
-constexpr float GELU_HCORR_C2 = 1.3809983619e-02f;
-constexpr float GELU_HCORR_C3 = 7.5950479368e-04f;
-
-// Forward GELU Evaluation with CDF Polynomial Approximation
-// GELU(x) = x * Phi(x) where Phi is approximated piecewise
-sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
-    sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -5.54259443 (torch saturation)
-    sfpi::vFloat x2 = x * x;
-
-    v_if(x > -5.54259443f) {
-        // Shared smooth H ≈ ½·erfc(|x|/√2) via Moroz exp_21f · corr_H.
-        constexpr float NEG_HALF_ONE_LN2 = -0.72134752044f;  // -0.5 / ln(2)
-        sfpi::vFloat xlog2 = x2 * NEG_HALF_ONE_LN2 + 127.0f;
-
-        sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
-        sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::Biased);
-        sfpi::vMag fractional_part = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
-
-        sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
-        frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
-        sfpi::vFloat exp_val = sfpi::setexp(frac, exponential_part);
-
-        sfpi::vFloat H =
-            exp_val * PolynomialEvaluator::eval(x, GELU_HCORR_C0, GELU_HCORR_C1, GELU_HCORR_C2, GELU_HCORR_C3);
-
-        // Exp region (-5.54259443, -3.125]: GELU = x · round_to_grid(H).
-        // Round H to the nearest multiple of 2⁻²⁵: adding 0.375 = (2²³+2²²)·2⁻²⁵ shifts H's
-        // 2⁻²⁵ place to the FP32 round-to-nearest-even boundary (safe since H ∈ [3e-8, 9e-4] ≪ 0.25),
-        // so (H + 0.375) - 0.375 == round(H / 2⁻²⁵) · 2⁻²⁵. In the deep tail (-5.5426, -4.828]
-        // this reproduces torch's exact float32 ercc staircase (0 BF16 ULP); above -4.828 the
-        // 2⁻²⁵ grid is far finer than BF16 so rounding is lossless. One constant serves the
-        // whole exp region — no separate branch or multiply.
-        constexpr float ROUND_TO_GRID = 0.375f;
-        sfpi::vFloat Hs = (H + ROUND_TO_GRID) - ROUND_TO_GRID;
-        result = x * Hs;
-
-        // Core CDF region [-3.125, 2.78125): GELU = x · Phi_core(x).
-        v_and(x >= -3.125f);
-        sfpi::vFloat odd_poly = PolynomialEvaluator::eval(
-            x2,
-            GELU_CDF_CORE_C1,
-            GELU_CDF_CORE_C3,
-            GELU_CDF_CORE_C5,
-            GELU_CDF_CORE_C7,
-            GELU_CDF_CORE_C9,
-            GELU_CDF_CORE_C11,
-            GELU_CDF_CORE_C13);
-        sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;
-        result = x * phi;
-
-        // Identity region x >= 2.78125.
-        v_and(x >= 2.78125f);
-        result = x;
-    }
-    v_endif;
-
-    return result;
-}
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void gelu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
         sfpi::vConstFloatPrgm0 = 0.5f;
+#ifndef DISABLE_SFPLOADMACRO
+        TTI_SFPMAD(p_sfpu::LREG12, 0, p_sfpu::LREG7, 12, 0);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (0x80 | 0x40 | (2 << 3) | 4) << 8);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (0x40 | (4 << 3) | 3) << 8);
+        TTI_SFPCONFIG(0, 4 + 0, 0);
+        TTI_SFPCONFIG(0, 8, 1);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+#endif
 
         // LUT segments (6-entry piecewise linear)
         sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.1928f, 0.4939f);
@@ -218,12 +125,38 @@ void gelu_init() {
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         sfpu_reciprocal_init<false>();
+    } else {
+        sfpi::vConstFloatPrgm0 = -0.72134752044f;
+        sfpi::vConstFloatPrgm1 = 1.0017248f;
     }
-    // BF16 accurate mode: no init needed (correction polynomial has no reciprocal)
 }
+
+#ifndef DISABLE_SFPLOADMACRO
+template <int D, int N>
+sfpi_inline void _gelu_appx_lm_rows_() {
+    if constexpr (D < N) {
+        TTI_SFPLOADMACRO((0 << 2) | 3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2 * D);
+        TTI_SFPLUTFP32(p_sfpu::LREG7, 2);
+        TTI_SFPNOP;
+        _gelu_appx_lm_rows_<D + 1, N>();
+    }
+}
+#endif
 
 template <int ITERATIONS>
 inline void calculate_gelu_appx() {
+#ifndef DISABLE_SFPLOADMACRO
+    TTI_SFPCONFIG(0xf00, 8, 1);
+    TTI_SFPNOP;
+    _gelu_appx_lm_rows_<0, ITERATIONS>();
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPCONFIG(0, 8, 1);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+#else
     sfpi::vLut16ss s01 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vLut16ss s23 = sfpi::l_reg[sfpi::LRegs::LReg1];
     sfpi::vLut16ss s45 = sfpi::l_reg[sfpi::LRegs::LReg2];
@@ -249,94 +182,423 @@ inline void calculate_gelu_appx() {
     sfpi::l_reg[sfpi::LRegs::LReg4] = i01;
     sfpi::l_reg[sfpi::LRegs::LReg5] = i23;
     sfpi::l_reg[sfpi::LRegs::LReg6] = i45;
+#endif
 }
-
-// FP32 erf: n16/d16 parity rational coefficients, MaxULP=1 vs FP64.
-// Split from ERF_LUT (ckernel_sfpu_erf.h INP_FLOAT32 branch) entries [2..18] (num) and [19..35] (den).
-// piecewise_rational_eval_parity_numer_denom() takes const float* — no std::array needed.
-constexpr float GELU_ERF_NUM[17] = {  // odd powers only (c0=0, c2=0, ..., c16=0)
-    0.0f,
-    1.1283791065e+00f,
-    0.0f,
-    2.1477432549e-01f,
-    0.0f,
-    6.2133435160e-02f,
-    0.0f,
-    5.6230435148e-03f,
-    0.0f,
-    6.1307044234e-04f,
-    0.0f,
-    1.7678321456e-05f,
-    0.0f,
-    2.7384647439e-08f,
-    0.0f,
-    -2.8632063387e-10f,
-    0.0f};
-constexpr float GELU_ERF_DEN[17] = {  // even powers only (c1=0, c3=0, ..., c15=0)
-    1.0f,
-    0.0f,
-    5.2367275953e-01f,
-    0.0f,
-    1.2961706519e-01f,
-    0.0f,
-    1.9642570987e-02f,
-    0.0f,
-    1.9545555115e-03f,
-    0.0f,
-    1.3179056987e-04f,
-    0.0f,
-    1.3156344494e-06f,
-    0.0f,
-    -3.5153888689e-09f,
-    0.0f,
-    -6.7350725691e-12f};
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {
     if constexpr (APPROXIMATION_MODE) {
         calculate_gelu_appx<ITERATIONS>();
     } else if constexpr (is_fp32_dest_acc_en) {
-        // FP32 accurate mode: GELU(x) = x * 0.5 * (1 + erf(x/√2))
-        // using the n16/d16 piecewise rational erf (MaxULP=1 vs FP64).
-        // unroll 8 fills the SFPU pipeline across 8 independent dst-tile chains.
-        constexpr float INV_SQRT2 = 0.7071067811865475f;
-        constexpr float GELU_SAT = -5.54259443f;  // 0xc0b15cef: first x where libm erff=-1.0
+        TTI_SFPLOADI(7, 2, 1267);
+        TTI_SFPLOADI(7, 8, 16181);
+        TTI_SFPLOADI(6, 2, 37728);
+        TTI_SFPLOADI(6, 8, 45425);
+        TTI_SFPLOADI(5, 2, 15226);
+        TTI_SFPLOADI(5, 8, 13035);
+        static_assert(ITERATIONS % 1 == 0, "gelu: 1 rows per loop");
+        lltt::record<lltt::Exec>(0, 16);
+        TTI_SFPLOAD(0, 0, 3, 0);
+        TTI_SFPMUL(0, 7, 9, 1, 0);
+        TTI_SFPLOADI(2, 0, 16672);
+        TTI_SFPSWAP(0, 2, 1, 1);
+        TTI_SFPNOP;
+        TTI_SFPMUL(1, 1, 9, 3, 0);
+        TTI_SFPLOADI(4, 2, 26636);
+        TTI_SFPLOADI(4, 8, 44957);
+        TTI_SFPLOADI(0, 2, 63524);
+        TTI_SFPLOADI(0, 8, 44268);
+        TTI_SFPMAD(0, 3, 6, 2, 0);
+        TTI_SFPMAD(4, 3, 5, 0, 0);
+        TTI_SFPLOADI(4, 2, 38107);
+        TTI_SFPLOADI(4, 8, 13744);
+        TTI_SFPMAD(2, 3, 4, 2, 0);
+        TTI_SFPLOADI(4, 2, 19432);
+        TTI_SFPLOADI(4, 8, 14228);
+        TTI_SFPMAD(0, 3, 4, 4, 0);
+        TTI_SFPLOADI(0, 2, 12611);
+        TTI_SFPLOADI(0, 8, 14602);
+        TTI_SFPMAD(2, 3, 0, 0, 0);
+        TTI_SFPLOADI(2, 2, 46710);
+        TTI_SFPLOADI(2, 8, 14880);
+        TTI_SFPMAD(4, 3, 2, 4, 0);
+        TTI_SFPLOADI(2, 2, 6144);
+        TTI_SFPLOADI(2, 8, 15104);
+        TTI_SFPMAD(0, 3, 2, 2, 0);
+        TTI_SFPLOADI(0, 2, 16770);
+        TTI_SFPLOADI(0, 8, 15288);
+        TTI_SFPMAD(4, 3, 0, 0, 0);
+        TTI_SFPLOADI(4, 2, 59765);
+        TTI_SFPLOADI(4, 8, 15520);
+        TTI_SFPMAD(2, 3, 4, 2, 0);
+        TTI_SFPLOADI(4, 2, 32673);
+        TTI_SFPLOADI(4, 8, 15742);
+        TTI_SFPMAD(0, 3, 4, 4, 0);
+        TTI_SFPLOADI(0, 2, 47702);
+        TTI_SFPLOADI(0, 8, 15876);
+        TTI_SFPMAD(2, 3, 0, 2, 0);
+        TTI_SFPLOADI(0, 2, 60877);
+        TTI_SFPLOADI(0, 8, 15963);
+        TTI_SFPMAD(4, 3, 0, 0, 0);
+        TTI_SFPLOADI(4, 2, 3947);
+        TTI_SFPLOADI(4, 8, 16134);
+        TTI_SFPMAD(2, 3, 4, 4, 0);
+        TTI_SFPLOADI(2, 2, 28346);
+        TTI_SFPLOADI(2, 8, 16272);
+        TTI_SFPMAD(0, 3, 2, 0, 0);
+        TTI_SFPMAD(4, 3, 10, 2, 0);
+        TTI_SFPMUL(0, 1, 9, 4, 0);
+        TTI_SFPMOV(0, 2, 3, 2);
+        TTI_SFPSETMAN(0, 11, 3, 0);
+        TTI_SFPMAD(12, 3, 13, 1, 0);
+        TTI_SFPNOT(0, 2, 0, 0);
+        TTI_SFPMAD(1, 3, 14, 2, 0);
+        TTI_SFPSETMAN(0, 0, 1, 1);
+        TTI_SFPMAD(3, 2, 10, 0, 0);
+        TTI_SFPMULI(48896, 1, 0);
+        TTI_SFPMAD(2, 0, 2, 0, 0);
+        TTI_SFPLOAD(2, 0, 3, 0);
+        TTI_SFPMAD(3, 0, 10, 3, 0);
+        TTI_SFPNOP;
+        TTI_SFPMAD(0, 3, 0, 0, 0);
+        TTI_SFPLOADI(3, 0, 16128);
+        TTI_SFPMUL(0, 1, 9, 1, 0);
+        TTI_SFPLOADI(0, 2, 23791);
+        TTI_SFPMUL(4, 1, 9, 4, 0);
+        TTI_SFPLOADI(0, 8, 49329);
+        TTI_SFPMAD(3, 4, 3, 1, 0);
+        TTI_SFPMAD(2, 11, 0, 3, 0);
+        TTI_SFPSWAP(0, 10, 1, 1);
+        TTI_SFPNOP;
+        TTI_SFPIADD(4095, 1, 4, 1);
+        TTI_SFPLOADI(1, 0, 13056);
+        TTI_SFPENCC(3, 0, 0, 10);
+        TTI_SFPMUL(2, 1, 9, 0, 0);
+        TTI_SFPMAD(2, 11, 2, 4, 0);
+        TTI_SFPSETCC(0, 3, 0, 0);
+        TTI_SFPMOV(0, 0, 4, 0);
+        TTI_SFPENCC(3, 0, 0, 10);
+        TTI_SFPSTORE(4, 0, 3, 0);
+        TTI_INCRWC(0, 2, 0, 0);
 #pragma GCC unroll 0
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat x = sfpi::dst_reg[0];
-            // Default for lanes that fail `x > GELU_SAT` below. x - x is 0 for finite x and NaN for
-            // NaN, so a negative NaN (which also fails the compare) still propagates (#59247).
-            sfpi::vFloat result = x - x;
-            v_if(x > GELU_SAT) {
-                sfpi::vFloat scaled = x * INV_SQRT2;
-                scaled = sfpi::min(scaled, 10.0f);
-                sfpi::vFloat x2 = scaled * scaled;
-                sfpi::vFloat erf_n, erf_d;
-                piecewise_rational_eval_parity_numer_denom<16, 16>(
-                    GELU_ERF_NUM, GELU_ERF_DEN, scaled, x2, erf_n, erf_d);
-                sfpi::vFloat erf_val = erf_n * sfpu_reciprocal<false>(erf_d);
-                erf_val = sfpi::clamp(erf_val, -1.0f, 1.0f);
-                result = x * (0.5f + 0.5f * erf_val);
-                // Stuck-erff guard: when rational rounds erf to -1.0 inside computation zone,
-                // glibc/torch overestimates erfc → first stuck level = x * 2^-25.
-                constexpr float HALF_ULP_AT_1 = 2.9802322387695313e-08f;  // 2^-25
-                v_if(erf_val == -1.0f) { result = x * HALF_ULP_AT_1; }
-                v_endif;
-            }
-            v_endif;
-            sfpi::dst_reg[0] = result;
-            sfpi::dst_reg++;
+        for (int d = 1; d < ITERATIONS; d += 1) {
+            lltt::replay(0, 16);
+            TTI_SFPLOADI(4, 8, 14228);
+            TTI_SFPMAD(0, 3, 4, 4, 0);
+            TTI_SFPLOADI(0, 2, 12611);
+            TTI_SFPLOADI(0, 8, 14602);
+            TTI_SFPMAD(2, 3, 0, 0, 0);
+            TTI_SFPLOADI(2, 2, 46710);
+            TTI_SFPLOADI(2, 8, 14880);
+            TTI_SFPMAD(4, 3, 2, 4, 0);
+            TTI_SFPLOADI(2, 2, 6144);
+            TTI_SFPLOADI(2, 8, 15104);
+            TTI_SFPMAD(0, 3, 2, 2, 0);
+            TTI_SFPLOADI(0, 2, 16770);
+            TTI_SFPLOADI(0, 8, 15288);
+            TTI_SFPMAD(4, 3, 0, 0, 0);
+            TTI_SFPLOADI(4, 2, 59765);
+            TTI_SFPLOADI(4, 8, 15520);
+            TTI_SFPMAD(2, 3, 4, 2, 0);
+            TTI_SFPLOADI(4, 2, 32673);
+            TTI_SFPLOADI(4, 8, 15742);
+            TTI_SFPMAD(0, 3, 4, 4, 0);
+            TTI_SFPLOADI(0, 2, 47702);
+            TTI_SFPLOADI(0, 8, 15876);
+            TTI_SFPMAD(2, 3, 0, 2, 0);
+            TTI_SFPLOADI(0, 2, 60877);
+            TTI_SFPLOADI(0, 8, 15963);
+            TTI_SFPMAD(4, 3, 0, 0, 0);
+            TTI_SFPLOADI(4, 2, 3947);
+            TTI_SFPLOADI(4, 8, 16134);
+            TTI_SFPMAD(2, 3, 4, 4, 0);
+            TTI_SFPLOADI(2, 2, 28346);
+            TTI_SFPLOADI(2, 8, 16272);
+            TTI_SFPMAD(0, 3, 2, 0, 0);
+            TTI_SFPMAD(4, 3, 10, 2, 0);
+            TTI_SFPMUL(0, 1, 9, 4, 0);
+            TTI_SFPMOV(0, 2, 3, 2);
+            TTI_SFPSETMAN(0, 11, 3, 0);
+            TTI_SFPMAD(12, 3, 13, 1, 0);
+            TTI_SFPNOT(0, 2, 0, 0);
+            TTI_SFPMAD(1, 3, 14, 2, 0);
+            TTI_SFPSETMAN(0, 0, 1, 1);
+            TTI_SFPMAD(3, 2, 10, 0, 0);
+            TTI_SFPMULI(48896, 1, 0);
+            TTI_SFPMAD(2, 0, 2, 0, 0);
+            TTI_SFPLOAD(2, 0, 3, 0);
+            TTI_SFPMAD(3, 0, 10, 3, 0);
+            TTI_SFPNOP;
+            TTI_SFPMAD(0, 3, 0, 0, 0);
+            TTI_SFPLOADI(3, 0, 16128);
+            TTI_SFPMUL(0, 1, 9, 1, 0);
+            TTI_SFPLOADI(0, 2, 23791);
+            TTI_SFPMUL(4, 1, 9, 4, 0);
+            TTI_SFPLOADI(0, 8, 49329);
+            TTI_SFPMAD(3, 4, 3, 1, 0);
+            TTI_SFPMAD(2, 11, 0, 3, 0);
+            TTI_SFPSWAP(0, 10, 1, 1);
+            TTI_SFPNOP;
+            TTI_SFPIADD(4095, 1, 4, 1);
+            TTI_SFPLOADI(1, 0, 13056);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPMUL(2, 1, 9, 0, 0);
+            TTI_SFPMAD(2, 11, 2, 4, 0);
+            TTI_SFPSETCC(0, 3, 0, 0);
+            TTI_SFPMOV(0, 0, 4, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSTORE(4, 0, 3, 0);
+            TTI_INCRWC(0, 2, 0, 0);
         }
     } else {
-        // BF16 accurate mode: piecewise CDF with Max ULP=1 vs true GELU.
-        // unroll 8 fills the SFPU pipeline across 8 independent dst-tile chains.
-#pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat result = calculate_gelu_piecewise(in);
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-            sfpi::dst_reg[0] = result;
-            sfpi::dst_reg++;
+        TTI_SFPLOADI(7, 0, 49202);
+        static_assert(ITERATIONS % 2 == 0, "gelu: 2 rows per loop");
+        lltt::record<lltt::Exec>(0, 16);
+        TTI_SFPLOAD(0, 0, 3, 0);
+        TTI_SFPLOAD(1, 0, 3, 2);
+        TTI_SFPMUL(0, 0, 9, 2, 0);
+        TTI_SFPMUL(1, 1, 9, 3, 0);
+        TTI_SFPLOADI(4, 2, 27209);
+        TTI_SFPLOADI(5, 2, 27209);
+        TTI_SFPLOADI(4, 8, 13227);
+        TTI_SFPLOADI(5, 8, 13227);
+        TTI_SFPLOADI(6, 2, 36986);
+        TTI_SFPLOADI(6, 8, 46719);
+        TTI_SFPMAD(2, 4, 6, 4, 0);
+        TTI_SFPMAD(3, 5, 6, 6, 0);
+        TTI_SFPLOADI(5, 2, 37522);
+        TTI_SFPLOADI(5, 8, 14507);
+        TTI_SFPMAD(2, 4, 5, 4, 0);
+        TTI_SFPMAD(3, 6, 5, 6, 0);
+        TTI_SFPLOADI(5, 2, 31486);
+        TTI_SFPLOADI(5, 8, 47756);
+        TTI_SFPMAD(2, 4, 5, 4, 0);
+        TTI_SFPMAD(3, 6, 5, 5, 0);
+        TTI_SFPLOADI(6, 2, 6851);
+        TTI_SFPLOADI(6, 8, 15392);
+        TTI_SFPMAD(2, 4, 6, 4, 0);
+        TTI_SFPMAD(3, 5, 6, 5, 0);
+        TTI_SFPLOADI(6, 2, 59468);
+        TTI_SFPLOADI(6, 8, 48519);
+        TTI_SFPMAD(2, 4, 6, 4, 0);
+        TTI_SFPMAD(3, 5, 6, 6, 0);
+        TTI_SFPLOADI(5, 2, 16938);
+        TTI_SFPLOADI(5, 8, 16076);
+        TTI_SFPMAD(2, 4, 5, 2, 0);
+        TTI_SFPMAD(3, 6, 5, 4, 0);
+        TTI_SFPLOADI(6, 0, 16128);
+        TTI_SFPMAD(0, 2, 6, 3, 0);
+        TTI_SFPMAD(1, 4, 6, 5, 0);
+        TTI_SFPMUL(0, 3, 9, 2, 0);
+        TTI_SFPMUL(1, 5, 9, 6, 0);
+        TTI_SFPLOADI(4, 0, 16456);
+        TTI_SFPMAD(0, 10, 4, 3, 0);
+        TTI_SFPMAD(1, 10, 4, 5, 0);
+        TTI_SFPMAD(0, 10, 7, 4, 0);
+        TTI_SFPMUL(0, 0, 9, 0, 0);
+        TTI_SFPSETCC(0, 3, 0, 4);
+        TTI_SFPSETCC(0, 4, 0, 0);
+        TTI_SFP_STOCH_RND(0, 0, 9, 2, 2, 1);
+        TTI_SFPSTORE(2, 0, 3, 0);
+        TTI_SFPENCC(3, 0, 0, 10);
+        TTI_SFPMAD(1, 10, 7, 3, 0);
+        TTI_SFPMUL(1, 1, 9, 4, 0);
+        TTI_SFPSETCC(0, 5, 0, 4);
+        TTI_SFPSETCC(0, 3, 0, 0);
+        TTI_SFP_STOCH_RND(0, 0, 9, 6, 6, 1);
+        TTI_SFPSTORE(6, 0, 3, 2);
+        TTI_SFPENCC(3, 0, 0, 10);
+        TTI_SFPLOADI(2, 0, 17150);
+        TTI_SFPMAD(0, 12, 2, 1, 0);
+        TTI_SFPMAD(4, 12, 2, 5, 0);
+        TTI_SFPEXEXP(0, 1, 3, 0);
+        TTI_SFPEXEXP(0, 5, 6, 0);
+        TTI_SFPEXMAN(0, 1, 0, 0);
+        TTI_SFPEXMAN(0, 5, 4, 0);
+        TTI_SFPSHFT(0, 3, 0, 0);
+        TTI_SFPSHFT(0, 6, 4, 0);
+        TTI_SFPEXEXP(0, 0, 2, 1);
+        TTI_SFPEXEXP(0, 4, 1, 1);
+        TTI_SFPEXMAN(0, 0, 5, 1);
+        TTI_SFPEXMAN(0, 4, 3, 1);
+        TTI_SFPCAST(5, 6, 0);
+        TTI_SFPCAST(3, 0, 0);
+        TTI_SFPLOADI(4, 2, 42008);
+        TTI_SFPLOADI(5, 2, 42008);
+        TTI_SFPLOADI(4, 8, 10156);
+        TTI_SFPLOADI(5, 8, 10156);
+        TTI_SFPLOADI(3, 2, 23258);
+        TTI_SFPLOADI(3, 8, 13224);
+        TTI_SFPMAD(6, 4, 3, 4, 0);
+        TTI_SFPMAD(0, 5, 3, 5, 0);
+        TTI_SFPMAD(6, 4, 13, 3, 0);
+        TTI_SFPMAD(0, 5, 13, 4, 0);
+        TTI_SFPSETEXP(0, 3, 2, 0);
+        TTI_SFPSETEXP(0, 4, 1, 0);
+        TTI_SFPLOAD(6, 0, 3, 0);
+        TTI_SFPLOAD(0, 0, 3, 2);
+        TTI_SFPLOADI(5, 2, 6529);
+        TTI_SFPLOADI(3, 2, 6529);
+        TTI_SFPLOADI(5, 8, 14919);
+        TTI_SFPLOADI(3, 8, 14919);
+        TTI_SFPLOADI(4, 2, 17221);
+        TTI_SFPLOADI(4, 8, 15458);
+        TTI_SFPMAD(6, 5, 4, 5, 0);
+        TTI_SFPMAD(0, 3, 4, 4, 0);
+        TTI_SFPLOADI(3, 2, 26648);
+        TTI_SFPLOADI(3, 8, 15811);
+        TTI_SFPMAD(6, 5, 3, 5, 0);
+        TTI_SFPMAD(0, 4, 3, 4, 0);
+        TTI_SFPLOADI(3, 2, 32398);
+        TTI_SFPLOADI(3, 8, 16027);
+        TTI_SFPMAD(6, 5, 3, 5, 0);
+        TTI_SFPMAD(0, 4, 3, 3, 0);
+        TTI_SFPLOADI(4, 0, 16064);
+        TTI_SFPMAD(2, 5, 4, 5, 0);
+        TTI_SFPMAD(1, 3, 4, 2, 0);
+        TTI_SFPADDI(48832, 5, 0);
+        TTI_SFPADDI(48832, 2, 0);
+        TTI_SFPMUL(6, 5, 9, 1, 0);
+        TTI_SFPMUL(0, 2, 9, 3, 0);
+        TTI_SFPLOADI(4, 2, 23791);
+        TTI_SFPLOADI(5, 2, 23791);
+        TTI_SFPLOADI(4, 8, 49329);
+        TTI_SFPLOADI(5, 8, 49329);
+        TTI_SFPMAD(6, 11, 4, 2, 0);
+        TTI_SFPMAD(0, 11, 5, 4, 0);
+        TTI_SFPADDI(16456, 6, 0);
+        TTI_SFPADDI(16456, 0, 0);
+        TTI_SFPSETCC(0, 6, 0, 0);
+        TTI_SFP_STOCH_RND(0, 0, 9, 1, 1, 1);
+        TTI_SFPSTORE(1, 0, 3, 0);
+        TTI_SFPENCC(3, 0, 0, 10);
+        TTI_SFPSETCC(0, 0, 0, 0);
+        TTI_SFP_STOCH_RND(0, 0, 9, 3, 3, 1);
+        TTI_SFPSTORE(3, 0, 3, 2);
+        TTI_SFPENCC(3, 0, 0, 10);
+        TTI_SFPSETCC(0, 2, 0, 4);
+        TTI_SFPSTORE(9, 0, 3, 0);
+        TTI_SFPENCC(3, 0, 0, 10);
+        TTI_SFPSETCC(0, 4, 0, 4);
+        TTI_SFPSTORE(9, 0, 3, 2);
+        TTI_SFPENCC(3, 0, 0, 10);
+        TTI_INCRWC(0, 4, 0, 0);
+#pragma GCC unroll 0
+        for (int d = 2; d < ITERATIONS; d += 2) {
+            lltt::replay(0, 16);
+            TTI_SFPLOADI(5, 2, 31486);
+            TTI_SFPLOADI(5, 8, 47756);
+            TTI_SFPMAD(2, 4, 5, 4, 0);
+            TTI_SFPMAD(3, 6, 5, 5, 0);
+            TTI_SFPLOADI(6, 2, 6851);
+            TTI_SFPLOADI(6, 8, 15392);
+            TTI_SFPMAD(2, 4, 6, 4, 0);
+            TTI_SFPMAD(3, 5, 6, 5, 0);
+            TTI_SFPLOADI(6, 2, 59468);
+            TTI_SFPLOADI(6, 8, 48519);
+            TTI_SFPMAD(2, 4, 6, 4, 0);
+            TTI_SFPMAD(3, 5, 6, 6, 0);
+            TTI_SFPLOADI(5, 2, 16938);
+            TTI_SFPLOADI(5, 8, 16076);
+            TTI_SFPMAD(2, 4, 5, 2, 0);
+            TTI_SFPMAD(3, 6, 5, 4, 0);
+            TTI_SFPLOADI(6, 0, 16128);
+            TTI_SFPMAD(0, 2, 6, 3, 0);
+            TTI_SFPMAD(1, 4, 6, 5, 0);
+            TTI_SFPMUL(0, 3, 9, 2, 0);
+            TTI_SFPMUL(1, 5, 9, 6, 0);
+            TTI_SFPLOADI(4, 0, 16456);
+            TTI_SFPMAD(0, 10, 4, 3, 0);
+            TTI_SFPMAD(1, 10, 4, 5, 0);
+            TTI_SFPMAD(0, 10, 7, 4, 0);
+            TTI_SFPMUL(0, 0, 9, 0, 0);
+            TTI_SFPSETCC(0, 3, 0, 4);
+            TTI_SFPSETCC(0, 4, 0, 0);
+            TTI_SFP_STOCH_RND(0, 0, 9, 2, 2, 1);
+            TTI_SFPSTORE(2, 0, 3, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPMAD(1, 10, 7, 3, 0);
+            TTI_SFPMUL(1, 1, 9, 4, 0);
+            TTI_SFPSETCC(0, 5, 0, 4);
+            TTI_SFPSETCC(0, 3, 0, 0);
+            TTI_SFP_STOCH_RND(0, 0, 9, 6, 6, 1);
+            TTI_SFPSTORE(6, 0, 3, 2);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPLOADI(2, 0, 17150);
+            TTI_SFPMAD(0, 12, 2, 1, 0);
+            TTI_SFPMAD(4, 12, 2, 5, 0);
+            TTI_SFPEXEXP(0, 1, 3, 0);
+            TTI_SFPEXEXP(0, 5, 6, 0);
+            TTI_SFPEXMAN(0, 1, 0, 0);
+            TTI_SFPEXMAN(0, 5, 4, 0);
+            TTI_SFPSHFT(0, 3, 0, 0);
+            TTI_SFPSHFT(0, 6, 4, 0);
+            TTI_SFPEXEXP(0, 0, 2, 1);
+            TTI_SFPEXEXP(0, 4, 1, 1);
+            TTI_SFPEXMAN(0, 0, 5, 1);
+            TTI_SFPEXMAN(0, 4, 3, 1);
+            TTI_SFPCAST(5, 6, 0);
+            TTI_SFPCAST(3, 0, 0);
+            TTI_SFPLOADI(4, 2, 42008);
+            TTI_SFPLOADI(5, 2, 42008);
+            TTI_SFPLOADI(4, 8, 10156);
+            TTI_SFPLOADI(5, 8, 10156);
+            TTI_SFPLOADI(3, 2, 23258);
+            TTI_SFPLOADI(3, 8, 13224);
+            TTI_SFPMAD(6, 4, 3, 4, 0);
+            TTI_SFPMAD(0, 5, 3, 5, 0);
+            TTI_SFPMAD(6, 4, 13, 3, 0);
+            TTI_SFPMAD(0, 5, 13, 4, 0);
+            TTI_SFPSETEXP(0, 3, 2, 0);
+            TTI_SFPSETEXP(0, 4, 1, 0);
+            TTI_SFPLOAD(6, 0, 3, 0);
+            TTI_SFPLOAD(0, 0, 3, 2);
+            TTI_SFPLOADI(5, 2, 6529);
+            TTI_SFPLOADI(3, 2, 6529);
+            TTI_SFPLOADI(5, 8, 14919);
+            TTI_SFPLOADI(3, 8, 14919);
+            TTI_SFPLOADI(4, 2, 17221);
+            TTI_SFPLOADI(4, 8, 15458);
+            TTI_SFPMAD(6, 5, 4, 5, 0);
+            TTI_SFPMAD(0, 3, 4, 4, 0);
+            TTI_SFPLOADI(3, 2, 26648);
+            TTI_SFPLOADI(3, 8, 15811);
+            TTI_SFPMAD(6, 5, 3, 5, 0);
+            TTI_SFPMAD(0, 4, 3, 4, 0);
+            TTI_SFPLOADI(3, 2, 32398);
+            TTI_SFPLOADI(3, 8, 16027);
+            TTI_SFPMAD(6, 5, 3, 5, 0);
+            TTI_SFPMAD(0, 4, 3, 3, 0);
+            TTI_SFPLOADI(4, 0, 16064);
+            TTI_SFPMAD(2, 5, 4, 5, 0);
+            TTI_SFPMAD(1, 3, 4, 2, 0);
+            TTI_SFPADDI(48832, 5, 0);
+            TTI_SFPADDI(48832, 2, 0);
+            TTI_SFPMUL(6, 5, 9, 1, 0);
+            TTI_SFPMUL(0, 2, 9, 3, 0);
+            TTI_SFPLOADI(4, 2, 23791);
+            TTI_SFPLOADI(5, 2, 23791);
+            TTI_SFPLOADI(4, 8, 49329);
+            TTI_SFPLOADI(5, 8, 49329);
+            TTI_SFPMAD(6, 11, 4, 2, 0);
+            TTI_SFPMAD(0, 11, 5, 4, 0);
+            TTI_SFPADDI(16456, 6, 0);
+            TTI_SFPADDI(16456, 0, 0);
+            TTI_SFPSETCC(0, 6, 0, 0);
+            TTI_SFP_STOCH_RND(0, 0, 9, 1, 1, 1);
+            TTI_SFPSTORE(1, 0, 3, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSETCC(0, 0, 0, 0);
+            TTI_SFP_STOCH_RND(0, 0, 9, 3, 3, 1);
+            TTI_SFPSTORE(3, 0, 3, 2);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSETCC(0, 2, 0, 4);
+            TTI_SFPSTORE(9, 0, 3, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSETCC(0, 4, 0, 4);
+            TTI_SFPSTORE(9, 0, 3, 2);
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_INCRWC(0, 4, 0, 0);
         }
     }
 }
