@@ -206,8 +206,16 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 mask.padded_shape() == tensors_args.input_tensor.padded_shape(),
                 "Sharded mask shape must match input tensor shape");
+            TT_FATAL(
+                tensors_args.input_tensor.is_sharded() &&
+                    mask.memory_config().memory_layout() == tensors_args.input_tensor.memory_config().memory_layout() &&
+                    mask.shard_spec() == tensors_args.input_tensor.shard_spec(),
+                "Sharded mask memory layout and shard_spec (grid, shape, orientation) must match input tensor");
         } else {
             if (mask.layout() == Layout::ROW_MAJOR) {
+                TT_FATAL(
+                    !attributes.is_causal_mask,
+                    "ROW_MAJOR mask layout is not supported when is_causal_mask=True; causal masks require TILE layout");
                 const auto tile_width = tensors_args.input_tensor.tensor_spec().tile().get_width();
                 const auto tile_height = tensors_args.input_tensor.tensor_spec().tile().get_height();
                 ttnn::Shape expected_shape(
@@ -272,6 +280,11 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
 
                         TT_FATAL(attributes.inplace, "Operation must be inplace for sharded multi-core program config");
                         if (!attributes.is_scale_causal_mask_hw_dims_softmax) {
+                            TT_FATAL(
+                                mask.padded_shape()[0] == 1 || mask.padded_shape()[0] == shape[0],
+                                "Sharded softmax non-sharded mask batch size ({}) must be 1 or match input batch size ({})",
+                                mask.padded_shape()[0],
+                                shape[0]);
                             // grid
                             auto num_cores_c = program_config.compute_with_storage_grid_size.x;
                             auto num_cores_r = program_config.compute_with_storage_grid_size.y;
