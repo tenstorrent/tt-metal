@@ -371,9 +371,10 @@ def check_undeclared_fusion(live: LiveTensor, entry: Entry) -> None:
 def check_param_groups(optimizer, scalars: dict[str, Any], strict: bool) -> None:
     """The live optimizer's param groups must fit the checkpoint's: the same number of groups, and every live member
     of a group among the checkpoint's members of that group. The checkpoint records each group's members over every
-    rank of the saving world (a rank of a multi-mesh world holds only its own), so a live optimizer holding fewer is
-    allowed (strict judges missing tensors), while a param in another group, or one the checkpoint never saw, is
-    refused. Checked before any tensor is placed, so a mismatch leaves the model and optimizer untouched.
+    rank of the saving world (a rank of a multi-mesh world holds only its own), so one rank's optimizer may hold fewer
+    (under ``strict``, ``check_member_union`` then requires the ranks to hold every one between them), while a param
+    in another group, or one the checkpoint never saw, is refused. Checked before any tensor is placed, so a mismatch
+    leaves the model and optimizer untouched.
 
     A checkpoint without optimizer scalars was saved without an optimizer. A strict load refuses it when the live
     optimizer records param groups: an optimizer whose state is scalars only (SGD without momentum, say) would
@@ -414,6 +415,37 @@ def check_param_groups(optimizer, scalars: dict[str, Any], strict: bool) -> None
             raise CheckpointError(
                 f"optimizer param group {group} holds params the checkpoint's group {group} does not: "
                 f"{sorted(extra)[:3]}; build the optimizer with the same param groups"
+            )
+
+
+def live_group_members(optimizer) -> dict[str, list[str]]:
+    """The live optimizer's members per param group (the group's index as a string), for ``check_member_union``; a
+    group without a member list is left out."""
+    state = optimizer.get_state_dict()
+    members: dict[str, list[str]] = {}
+    for group in range(int(state.get("num_param_groups") or 0)):
+        names = state.get(f"param_groups.{group}.params")
+        if names is not None:
+            members[str(group)] = sorted(n for n in names.split("\n") if n)
+    return members
+
+
+def check_member_union(scalars: dict[str, Any], live_by_rank: list[dict[str, list[str]]]) -> None:
+    """Under ``strict``: the ranks' live members of each param group, together, must be the checkpoint's members of
+    that group. A param the checkpoint's group holds and no rank's optimizer holds would otherwise stop being trained
+    without a word when the optimizer keeps no per-parameter state (SGD without momentum), since no state tensor of
+    it is left over for ``strict`` to refuse. ``live_by_rank`` holds each rank's ``live_group_members``; on one process
+    that is its own, and the members must equal the checkpoint's."""
+    for group in range(int(scalars.get("optimizer/num_param_groups") or 0)):
+        saved = scalars.get(f"optimizer/param_groups.{group}.params")
+        lists = [live[str(group)] for live in live_by_rank if str(group) in live]
+        if saved is None or not lists:  # no member list to compare: check_param_groups warned
+            continue
+        missing = {n for n in saved.split("\n") if n} - set().union(*lists)
+        if missing:
+            raise CheckpointError(
+                f"optimizer param group {group}: the checkpoint's group holds params no rank's optimizer holds: "
+                f"{sorted(missing)[:3]}; build the optimizer with the same param groups, or load with strict=False"
             )
 
 

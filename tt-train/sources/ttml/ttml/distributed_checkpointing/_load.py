@@ -36,11 +36,13 @@ from ._state_dict import (
     TTNN_DTYPES,
     LiveTensor,
     check_label_unchanged,
+    check_member_union,
     check_param_groups,
     check_threads,
     check_undeclared_fusion,
     collect_model,
     collect_optimizer,
+    live_group_members,
     local_coords,
     mesh_device,
     reshard_fsdp_modules,
@@ -428,8 +430,11 @@ def load(
     def plan_and_report() -> tuple[LoadPlan, bytes]:
         plan = plan_locally()
         files.open(ckpt_dir, index, plan)  # before any rank places anything
-        used = sorted({kp.entry.key for kp in plan.keys.values()})
-        return plan, checked_payload(json.dumps(used).encode(), "this rank's planned keys")
+        report = {
+            "keys": sorted({kp.entry.key for kp in plan.keys.values()}),
+            "members": live_group_members(optimizer) if optimizer is not None else {},
+        }
+        return plan, checked_payload(json.dumps(report).encode(), "this rank's planned keys")
 
     try:
         plan, used_bytes = group.phase("planning the load", plan_and_report)
@@ -438,7 +443,10 @@ def load(
         def judge() -> bytes | None:
             if not group.is_coordinator:
                 return None
-            union_used = {key for part in gathered for key in json.loads(part.decode("utf-8"))}
+            reports = [json.loads(part.decode("utf-8")) for part in gathered]
+            union_used = {key for report in reports for key in report["keys"]}
+            if strict and optimizer is not None:
+                check_member_union(index.scalars, [report["members"] for report in reports])
             return checked_payload(
                 json.dumps(unexpected_keys(index, union_used, roles)).encode(), "the unexpected keys"
             )

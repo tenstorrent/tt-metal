@@ -273,6 +273,28 @@ def test_a_failed_write_stops_the_save(tmp_path, monkeypatch, expect_error):
     assert os.listdir(tmp_path) == [], "no checkpoint and no staging directory left"
 
 
+def test_strict_refuses_a_momentum_free_optimizer_lacking_saved_params(tmp_path, expect_error):
+    """SGD without momentum keeps no per-parameter state, so its member lists are the only record of what it trains.
+    A strict load into one whose group lacks a param the saved group held is refused before anything is placed (that
+    param would stop being trained without a word); a non-strict load is allowed."""
+    cfg = ttml.optimizers.SGDConfig.make(lr=1e-2, momentum=0.0, dampening=0.0, weight_decay=0.0, nesterov=False)
+    model = _Pair(DIM)
+    opt = ttml.optimizers.SGD(model.parameters(), cfg)
+    train_step(model, opt, DIM)
+    path = str(tmp_path / "step_0000001")
+    dcp.save(path, model=model, optimizer=opt)
+    fresh = _Pair(DIM)
+    params = fresh.parameters()
+    without_b = {name: p for name, p in params.items() if "/b/" not in name}
+    assert len(without_b) == 1
+    before = model_shards(params)
+    with expect_error(dcp.CheckpointError, r"optimizer param group 0: the checkpoint's group holds params no rank's"):
+        dcp.load(path, model=fresh, optimizer=ttml.optimizers.SGD(without_b, cfg))
+    assert_same_shards(model_shards(params), before, "nothing was placed")
+    dcp.load(path, model=fresh, optimizer=ttml.optimizers.SGD(without_b, cfg), strict=False)
+    assert_same_shards(model_shards(params), model_shards(model.parameters()))
+
+
 def test_one_process_keeps_its_parts_as_objects(tmp_path, monkeypatch):
     """The group of one has no peer to send its plan part, election or result part to, so it keeps them as objects:
     encoding and decoding them would only cost time and a copy of every tensor's description."""
