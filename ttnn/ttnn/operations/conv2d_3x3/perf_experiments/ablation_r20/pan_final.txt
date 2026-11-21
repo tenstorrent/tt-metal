@@ -1,0 +1,66 @@
+final	res3.0.conv2	20316
+final	stem.conv1|conv2d_3x3	9718
+final	stem.conv1	38940
+final	stem.conv1|ttnn.conv2d	51800
+final	stem.conv2|conv2d_3x3	25970
+final	stem.conv2	69502
+final	stem.conv2|ttnn.conv2d	92316
+final	stem.conv3|conv2d_3x3	46630
+final	stem.conv3	62716
+final	stem.conv3|ttnn.conv2d	116019
+final	res2.{0;1;2}.conv2|conv2d_3x3	9288
+final	res2.{0;1;2}.conv2	19506
+final	res2.{0;1;2}.conv2|ttnn.conv2d	25640
+final	res3.0.conv2|conv2d_3x3	13135
+final	res3.0.conv2|ttnn.conv2d	31130
+final	res5.2.conv2	44432
+final	res3.{1;2;3}.conv2 + instance res3.fuse_conv.1|conv2d_3x3	9107
+final	res3.{1;2;3}.conv2 + instance res3.fuse_conv.1	17504
+final	res3.{1;2;3}.conv2 + instance res3.fuse_conv.1|ttnn.conv2d	25013
+final	res4.0.conv2|conv2d_3x3	10113
+final	res4.0.conv2	25117
+final	res4.0.conv2|ttnn.conv2d	39660
+final	res4.{1..5}.conv2|conv2d_3x3	9899
+final	res4.{1..5}.conv2	30599
+final	res4.{1..5}.conv2|ttnn.conv2d	35442
+final	res5.0.conv2|conv2d_3x3	25446
+final	res5.0.conv2	49123
+final	res5.0.conv2|ttnn.conv2d	73001
+final	res5.1.conv2|conv2d_3x3	25710
+final	res5.1.conv2	50077
+final	res5.1.conv2|ttnn.conv2d	75585
+final	res5.2.conv2|conv2d_3x3	24599
+final	res5.2.conv2|ttnn.conv2d	79857
+final	semantic decoder.res3.fuse_conv.1	58178
+final	aspp.convs.1 (x2 heads)|conv2d_3x3	44898
+final	aspp.convs.1 (x2 heads)	99745
+final	aspp.convs.1 (x2 heads)|ttnn.conv2d	159390
+final	aspp.convs.2 (x2 heads)|conv2d_3x3	40372
+final	aspp.convs.2 (x2 heads)	119878
+final	aspp.convs.2 (x2 heads)|ttnn.conv2d	220371
+final	aspp.convs.3 (x2 heads; 1024-ch slice)|conv2d_3x3	19269
+final	aspp.convs.3 (x2 heads; 1024-ch slice)	77007
+final	aspp.convs.3 (x2 heads; 1024-ch slice)|ttnn.conv2d	120188
+final	semantic decoder.res3.fuse_conv.0|conv2d_3x3	33860
+final	semantic decoder.res3.fuse_conv.0	53421
+final	semantic decoder.res3.fuse_conv.0|ttnn.conv2d	87957
+final	instance decoder.res3.fuse_conv.0|conv2d_3x3	18619
+final	instance decoder.res3.fuse_conv.0	44314
+final	instance decoder.res3.fuse_conv.0|ttnn.conv2d	60976
+final	semantic decoder.res3.fuse_conv.1|conv2d_3x3	27803
+final	semantic decoder.res3.fuse_conv.1|ttnn.conv2d	71917
+final	center_head.1 + offset_head.1	66312
+final	semantic decoder.res2.fuse_conv.0|conv2d_3x3	92477
+final	semantic decoder.res2.fuse_conv.0	102509
+final	semantic decoder.res2.fuse_conv.0|ttnn.conv2d	177702
+final	instance decoder.res2.fuse_conv.0|conv2d_3x3	28402
+final	instance decoder.res2.fuse_conv.0	79068
+final	instance decoder.res2.fuse_conv.0|ttnn.conv2d	75276
+final	semantic res2.fuse_conv.1 + semantic_head.head.{0;1}|conv2d_3x3	83001
+final	semantic res2.fuse_conv.1 + semantic_head.head.{0;1}	84622
+final	semantic res2.fuse_conv.1 + semantic_head.head.{0;1}|ttnn.conv2d	146154
+final	instance res2.fuse_conv.1 + center_head.0 + offset_head.0|conv2d_3x3	23395
+final	instance res2.fuse_conv.1 + center_head.0 + offset_head.0	33464
+final	instance res2.fuse_conv.1 + center_head.0 + offset_head.0|ttnn.conv2d	57903
+final	center_head.1 + offset_head.1|conv2d_3x3	9026
+final	center_head.1 + offset_head.1|ttnn.conv2d	40011

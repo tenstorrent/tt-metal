@@ -1,0 +1,66 @@
+base	res3.{1;2;3}.conv2 + instance res3.fuse_conv.1	17643
+base	stem.conv1|conv2d_3x3	9750
+base	stem.conv1	38782
+base	stem.conv1|ttnn.conv2d	51377
+base	stem.conv2|conv2d_3x3	26002
+base	stem.conv2	69474
+base	stem.conv2|ttnn.conv2d	92365
+base	stem.conv3|conv2d_3x3	46636
+base	stem.conv3	62766
+base	stem.conv3|ttnn.conv2d	115877
+base	res2.{0;1;2}.conv2|conv2d_3x3	9293
+base	res2.{0;1;2}.conv2	19410
+base	res2.{0;1;2}.conv2|ttnn.conv2d	25628
+base	res3.0.conv2|conv2d_3x3	13115
+base	res3.0.conv2	19926
+base	res3.0.conv2|ttnn.conv2d	31156
+base	res3.{1;2;3}.conv2 + instance res3.fuse_conv.1|conv2d_3x3	9089
+base	res3.{1;2;3}.conv2 + instance res3.fuse_conv.1|ttnn.conv2d	24924
+base	aspp.convs.1 (x2 heads)	84724
+base	res4.0.conv2|conv2d_3x3	10071
+base	res4.0.conv2	24830
+base	res4.0.conv2|ttnn.conv2d	39685
+base	res4.{1..5}.conv2|conv2d_3x3	9968
+base	res4.{1..5}.conv2	30512
+base	res4.{1..5}.conv2|ttnn.conv2d	35393
+base	res5.0.conv2|conv2d_3x3	25381
+base	res5.0.conv2	49130
+base	res5.0.conv2|ttnn.conv2d	72932
+base	res5.1.conv2|conv2d_3x3	25676
+base	res5.1.conv2	50013
+base	res5.1.conv2|ttnn.conv2d	75581
+base	res5.2.conv2|conv2d_3x3	24490
+base	res5.2.conv2	62190
+base	res5.2.conv2|ttnn.conv2d	79769
+base	aspp.convs.1 (x2 heads)|conv2d_3x3	45023
+base	aspp.convs.1 (x2 heads)|ttnn.conv2d	159431
+base	semantic decoder.res3.fuse_conv.1	57380
+base	aspp.convs.2 (x2 heads)|conv2d_3x3	40097
+base	aspp.convs.2 (x2 heads)	120092
+base	aspp.convs.2 (x2 heads)|ttnn.conv2d	220307
+base	aspp.convs.3 (x2 heads; 1024-ch slice)|conv2d_3x3	19430
+base	aspp.convs.3 (x2 heads; 1024-ch slice)	76982
+base	aspp.convs.3 (x2 heads; 1024-ch slice)|ttnn.conv2d	120120
+base	semantic decoder.res3.fuse_conv.0|conv2d_3x3	33782
+base	semantic decoder.res3.fuse_conv.0	53436
+base	semantic decoder.res3.fuse_conv.0|ttnn.conv2d	88234
+base	instance decoder.res3.fuse_conv.0|conv2d_3x3	18467
+base	instance decoder.res3.fuse_conv.0	44388
+base	instance decoder.res3.fuse_conv.0|ttnn.conv2d	61203
+base	semantic decoder.res3.fuse_conv.1|conv2d_3x3	27627
+base	semantic decoder.res3.fuse_conv.1|ttnn.conv2d	71922
+base	center_head.1 + offset_head.1	66206
+base	semantic decoder.res2.fuse_conv.0|conv2d_3x3	92610
+base	semantic decoder.res2.fuse_conv.0	102608
+base	semantic decoder.res2.fuse_conv.0|ttnn.conv2d	176599
+base	instance decoder.res2.fuse_conv.0|conv2d_3x3	28433
+base	instance decoder.res2.fuse_conv.0	79363
+base	instance decoder.res2.fuse_conv.0|ttnn.conv2d	75208
+base	semantic res2.fuse_conv.1 + semantic_head.head.{0;1}|conv2d_3x3	82944
+base	semantic res2.fuse_conv.1 + semantic_head.head.{0;1}	84680
+base	semantic res2.fuse_conv.1 + semantic_head.head.{0;1}|ttnn.conv2d	145977
+base	instance res2.fuse_conv.1 + center_head.0 + offset_head.0|conv2d_3x3	23480
+base	instance res2.fuse_conv.1 + center_head.0 + offset_head.0	33741
+base	instance res2.fuse_conv.1 + center_head.0 + offset_head.0|ttnn.conv2d	58070
+base	center_head.1 + offset_head.1|conv2d_3x3	8970
+base	center_head.1 + offset_head.1|ttnn.conv2d	40064

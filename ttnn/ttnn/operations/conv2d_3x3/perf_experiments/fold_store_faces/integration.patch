@@ -1,0 +1,208 @@
+diff -ruN -x __pycache__ op_base/conv2d_3x3.py op_copy/conv2d_3x3.py
+--- op_base/conv2d_3x3.py	2026-11-21 11:49:19.226490950 +0000
++++ op_copy/conv2d_3x3.py	2026-11-21 12:30:06.836965225 +0000
+@@ -185,7 +185,8 @@
+     "bias_mode": ["with_bias", "no_bias"],
+     "activation": ["none", "relu"],
+     # C_out off the tile grid needs no kernel work: prepared weight and bias columns past C_out are
+-    # zero tile padding, so the output's padding columns come out zero.
++    # zero tile padding. The output's tile padding is unspecified: a DRAM output's last N tile with at
++    # most 16 real lanes is stored as faces 0 and 2 only (kernels/conv2d_3x3_left_faces.hpp).
+     "channel_alignment": ["tile_aligned", "c_in_unaligned", "c_out_unaligned", "both_unaligned"],
+     "hw_alignment": ["hw_aligned"],
+     "stride_mode": ["unit", "strided"],
+diff -ruN -x __pycache__ op_base/conv2d_3x3_program_descriptor.py op_copy/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-21 11:49:19.226490950 +0000
++++ op_copy/conv2d_3x3_program_descriptor.py	2026-11-21 12:22:15.336138165 +0000
+@@ -42,6 +42,7 @@
+ TILE = 32
+ TILE_BYTES_BF16 = 2 * TILE * TILE
+ TILE_BYTES_FP32 = 4 * TILE * TILE
++TILE_BYTES_BFP8 = TILE * TILE + 64  # bfloat8_b: 1024 mantissa bytes, 64 shared exponents
+ BF16_BYTES = 2
+ 
+ # fp32 DEST, half sync: 4 tiles per DEST half. Bounds the matmul subblock, never a block.
+@@ -3900,6 +3901,15 @@
+         _store_defines = [("STORE_ROUTE", "1"), ("STORE_SEM_DONE", str(len(sem_ids)))]
+         sem_ids += (len(sem_ids),)
+         assert len(sem_ids) <= MAX_SEMAPHORES, sem_ids
++    if not g.sharded_output and 1 <= g.c_out % TILE <= TILE // 2:
++        # Left-face store (kernels/conv2d_3x3_left_faces.hpp): the last N tile's real lanes sit in faces 0 and 2, so
++        # its tiles are stored as those two faces (the DRAM-interleaved output; a sharded output is packed in place).
++        assert g.out_tile_bytes in (TILE_BYTES_BF16, TILE_BYTES_BFP8), g.out_tile_bytes
++        _store_defines += [
++            ("OUT_LEFT_FACES", "1"),
++            ("OUT_LEFT_FACES_BFP", "1" if g.out_tile_bytes == TILE_BYTES_BFP8 else "0"),
++            ("OUT_TILE_BYTES", str(g.out_tile_bytes)),
++        ]
+     row_peer_coords = {}
+     if g.k_split:
+         for core, row, _ in work:
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_left_faces.hpp op_copy/kernels/conv2d_3x3_left_faces.hpp
+--- op_base/kernels/conv2d_3x3_left_faces.hpp	1970-01-01 00:00:00.000000000 +0000
++++ op_copy/kernels/conv2d_3x3_left_faces.hpp	2026-11-21 12:22:01.581938937 +0000
+@@ -0,0 +1,46 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// Left-face output store (OUT_LEFT_FACES): an output tile whose real lanes all sit in columns [0, 16) (the last N tile
++// where C_out % 32 is 1..16, so every tile of the C_out fold) holds output only in faces 0 and 2. The store writes
++// those two faces and leaves faces 1 and 3 (columns 16..31, tile padding) as the output buffer held them; lanes
++// [C_out % 32, 16) of faces 0 and 2 are written (zero, as packed). The logical output is unchanged: ttnn leaves tile
++// padding unspecified, and the ops that need a neutral value there fill it (ttnn.fill_implicit_tile_padding).
++//
++// Face byte ranges: bf16 tile (2048 B) faces 0 / 2 at [0, 512) / [1024, 1536); bfp8_b tile (1088 B: 64 B of
++// exponents, 16 per face, then 256 B of mantissas per face) the exponents and face 0's mantissas at [0, 320), face 2's
++// mantissas at [576, 832). A bfp8_b face row shares one exponent, so the unwritten faces never share an exponent with
++// an output lane.
++//
++// Measured (Blackhole p150b, 110 cores, bit-identical logical output, us): 1026x2048 128->3 (fold) 1824 -> 1698,
++// 514x1024 128->3 (fold) 527 -> 498, TILE-input 1024x1024 128->3 1297 -> 1238. One run through face 2 ([0, 1536))
++// writes 75% of the tile and measured 1721 on the first: the two-run store's extra NoC write costs less than the face
++// it skips.
++//
++// Raw NoC (ergonomics): noc_async_write_page moves a whole page; a sub-page run is the page's NoC address plus an
++// offset (TensorAccessor::get_noc_addr) and a sized noc_async_write.
++
++#pragma once
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++
++namespace conv2d_3x3 {
++
++template <uint32_t tile_bytes, bool bfp>
++struct LeftFaces {
++    static_assert(bfp ? tile_bytes == 64 + 4 * 256 : tile_bytes % 4 == 0);
++    static constexpr uint32_t face_bytes = bfp ? 256 : tile_bytes / 4;
++    // Run A [0, a_len): the exponents (bfp8_b) and face 0; run B [b_off, b_off + face_bytes): face 2.
++    static constexpr uint32_t a_len = (bfp ? 64 : 0) + face_bytes;
++    static constexpr uint32_t b_off = (bfp ? 64 : 0) + 2 * face_bytes;
++
++    // Faces 0 and 2 of the tile at L1 src into the page whose NoC address is dst.
++    static FORCE_INLINE void write(uint32_t src, uint64_t dst) {
++        noc_async_write(src, dst, a_len);
++        noc_async_write(src + b_off, dst + b_off, face_bytes);
++    }
++};
++
++}  // namespace conv2d_3x3
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_store_split.hpp op_copy/kernels/conv2d_3x3_store_split.hpp
+--- op_base/kernels/conv2d_3x3_store_split.hpp	2026-11-21 11:49:19.229490993 +0000
++++ op_copy/kernels/conv2d_3x3_store_split.hpp	2026-11-21 12:22:15.335138150 +0000
+@@ -75,30 +75,47 @@
+         }
+     }
+ 
++    // One NoC0 write of size bytes (at most one packet) from L1 src to byte offset of page.
++    template <typename Accessor>
++    FORCE_INLINE void write0(uint32_t page, const Accessor& acc, uint32_t src, uint32_t offset, uint32_t size) {
++        while (!noc_cmd_buf_ready(noc0, cmd_buf0)) {
++        }
++        ncrisc_noc_fast_write<DM_DEDICATED_NOC, false, false>(
++            noc0,
++            cmd_buf0,
++            src,
++            acc.get_noc_addr(page, offset, noc0),
++            size,
++            NOC_UNICAST_WRITE_VC,
++            false,
++            false,
++            1,
++            false,
++            false);
++        ++sent0;
++        ++acked0;
++    }
++
+     template <typename Accessor>
+     FORCE_INLINE void write_page(uint32_t page, const Accessor& acc, uint32_t src) {
+         if ((mask0 >> (page % NUM_DRAM_BANKS)) & 1) {
+-            while (!noc_cmd_buf_ready(noc0, cmd_buf0)) {
+-            }
+-            ncrisc_noc_fast_write<DM_DEDICATED_NOC, false, false>(
+-                noc0,
+-                cmd_buf0,
+-                src,
+-                acc.get_noc_addr(page, 0, noc0),
+-                acc.get_aligned_page_size(),
+-                NOC_UNICAST_WRITE_VC,
+-                false,
+-                false,
+-                1,
+-                false,
+-                false);
+-            ++sent0;
+-            ++acked0;
++            write0(page, acc, src, 0, acc.get_aligned_page_size());
+         } else {
+             noc_async_write_page(page, acc, src);
+         }
+     }
+ 
++    // Faces 0 and 2 only (conv2d_3x3_left_faces.hpp), on the page's NoC.
++    template <typename LeftFaces, typename Accessor>
++    FORCE_INLINE void write_left_faces(uint32_t page, const Accessor& acc, uint32_t src) {
++        if ((mask0 >> (page % NUM_DRAM_BANKS)) & 1) {
++            write0(page, acc, src, 0, LeftFaces::a_len);
++            write0(page, acc, src + LeftFaces::b_off, LeftFaces::b_off, LeftFaces::face_bytes);
++        } else {
++            LeftFaces::write(src, acc.get_noc_addr(page));
++        }
++    }
++
+     // Every write issued so far left L1 (both NoCs).
+     FORCE_INLINE void flushed() {
+         noc_async_writes_flushed();
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_writer.cpp op_copy/kernels/conv2d_3x3_writer.cpp
+--- op_base/kernels/conv2d_3x3_writer.cpp	2026-11-21 11:49:19.230491008 +0000
++++ op_copy/kernels/conv2d_3x3_writer.cpp	2026-11-21 12:22:15.334138136 +0000
+@@ -137,6 +137,7 @@
+ #ifdef STORE_ROUTE
+ #include "conv2d_3x3_store_split.hpp"
+ #endif
++#include "conv2d_3x3_left_faces.hpp"
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+@@ -298,6 +299,10 @@
+     conv2d_3x3::RoutedStore out_store;
+     out_store.init(TensorAccessor(output_args, output_addr, get_tile_size(cb_output_tiles)));
+ #endif
++#ifdef OUT_LEFT_FACES
++    // Left-face store (conv2d_3x3_left_faces.hpp): the output tiles of N tile tensor_n_tiles - 1.
++    using left_faces = conv2d_3x3::LeftFaces<OUT_TILE_BYTES, OUT_LEFT_FACES_BFP != 0>;
++#endif
+     const uint32_t weight_tile_bytes = get_tile_size(cb_weights);
+     const auto weights = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+ 
+@@ -2574,7 +2579,11 @@
+                 }
+ #endif
+                 cb_wait_front(cb_output_tiles, j + 1);
++#ifdef OUT_LEFT_FACES
++                left_faces::write(l1, output.get_noc_addr((m_tile_start + t0 + j) * tensor_n_tiles));
++#else
+                 noc_async_write_page((m_tile_start + t0 + j) * tensor_n_tiles, output, l1);
++#endif
+             }
+             noc_async_writes_flushed();
+             cb_pop_front(cb_output_tiles, cnt);
+@@ -2758,6 +2767,16 @@
+                     if (local_tile_row < actual_m_tiles) {
+                         const uint32_t row_page = (m_tile_start + local_tile_row) * tensor_n_tiles + n_tile_start;
+                         for (uint32_t n = 0; n < block_n_tiles; ++n) {
++#ifdef OUT_LEFT_FACES
++                            if (n_tile_start + n == tensor_n_tiles - 1) {
++#ifdef STORE_ROUTE
++                                out_store.write_left_faces<left_faces>(row_page + n, output, l1 + n * out_tile_bytes);
++#else
++                                left_faces::write(l1 + n * out_tile_bytes, output.get_noc_addr(row_page + n));
++#endif
++                                continue;
++                            }
++#endif
+ #ifdef STORE_ROUTE
+                             out_store.write_page(row_page + n, output, l1 + n * out_tile_bytes);
+ #else
