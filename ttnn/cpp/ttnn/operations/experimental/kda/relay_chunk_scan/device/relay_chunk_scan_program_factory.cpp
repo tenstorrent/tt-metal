@@ -318,8 +318,9 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t gate_bytes = core_chunks * kt * state_tile;
     // In the workspace, on the correction cores: K blocks of x (once the matmul is done, a pair's partial sums of this
     // core's head, then each chunk's sigmoid(gate) * weight: in place all of the core's, streamed one), then K blocks
-    // of W, then a pair's partial sums of its other head. The heads pair up (`ways` 2, each core forming two heads over
-    // half of K) where their buffers fit, else each core forms its head over all of K; x's and W's buffers hold `depth`
+    // of W, then a pair's partial sums of its other head. Each core forms its head over all of K where the buffers fit,
+    // else the heads pair up (`ways` 2, each core forming two heads over half of K, then swapping partial sums: their
+    // FP32 transfer waits on both cores' matmuls and shares the column's links); x's and W's buffers hold `depth`
     // K tiles of 2 and of 2 (paired) or 3 and 4 slots, the largest that fit. They hold them in the smallest K blocks
     // that divide `depth` and the core's K and whose slots have read transaction ids (gate_matmul_dataflow.hpp): small
     // blocks keep each operand's reads and multicasts close behind the matmul.
@@ -349,7 +350,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     };
     uint32_t gate_ways = 0;
     uint32_t gate_depth = 0;
-    for (const uint32_t ways : {2u, 1u}) {
+    for (const uint32_t ways : {1u, 2u}) {
         for (const uint32_t depth : {8u, 4u, 2u}) {
             if (gate_ways == 0 && attrs.num_heads % ways == 0 && gate_k % (ways * depth) == 0 &&
                 fits(depth, ways, depth)) {
