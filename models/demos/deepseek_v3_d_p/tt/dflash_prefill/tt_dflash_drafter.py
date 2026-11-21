@@ -13,7 +13,7 @@ The FC context projection is decomposed across target layers because
 its layers.
 
 SHARDING (sequence-parallel):
-  * hidden is TP-sharded on the verifier residual stream -> the FC tap is row-parallel + a TP reduce_scatter.
+  * hidden is TP-sharded on the verifier residual stream -> the FC tap is row-parallel with a fused TP reduce-scatter.
   * k_proj/v_proj are column-parallel: KV heads are split across the TP axis (kv_heads/tp per device) —
     num_kv_heads=8, head_dim=128.
   * the sequence is SP-sharded — each SP chip builds + holds ONLY its cache_seq/sp tokens (separate GQA
@@ -102,7 +102,7 @@ class TtDFlashDrafter:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-        # The fused tap matmul + reduce-scatter takes a program-descriptor compute config.
+        # matmul_reduce_scatter_prefill takes a ComputeConfigDescriptor, not a ComputeKernelConfig.
         self._fused_tap_compute_config = ttnn.ComputeConfigDescriptor(
             math_fidelity=self.default_compute_kernel_config.math_fidelity
         )
@@ -123,7 +123,7 @@ class TtDFlashDrafter:
             )
         # K/V caches are owned by the CALLER (see allocate_dflash_kv_cache) and passed into
         # forward() — the drafter does not hold them, mirroring the MLA prefill model's kvpe_cache.
-        self._reduced_accum: Optional[ttnn.Tensor] = None  # running TP-partial FC sum (Σ fc_slice_i @ h_i)
+        self._reduced_accum: Optional[ttnn.Tensor] = None  # running TP-reduced FC sum [1,1,seq,H/tp]
         # Scratch for the non-first tap's matmul. Both this and _reduced_accum are allocated ONCE (on the
         # first tap, which happens during the runtime's pre-capture warmup) and then written in place, so a
         # trace capture of the verifier forward records no allocation, no deallocate and no shape change.
@@ -203,7 +203,7 @@ class TtDFlashDrafter:
         # hidden_norm spans the full H=7168 → it MUST be the DISTRIBUTED (TP-sharded) norm, exactly
         # like the model's attn_norm/ffn_norm. A plain ttnn.rms_norm over the replicated 7168 forces
         # one core to hold 7168-wide (224-tile) CBs and overflows L1. cluster_axis=tp_axis matches the
-        # H/tp shard it consumes (see forward(): reduce_scatter -> norm -> all_gather).
+        # H/tp shard it consumes (see tap(): fused reduce-scatter; forward(): norm -> all_gather).
         self.hidden_norm = TtDistributedRmsNorm(
             mesh_device=self.mesh_device,
             emb_dim=cfg.hidden_size,
@@ -254,7 +254,7 @@ class TtDFlashDrafter:
         slice — NO SP-gather).
 
         Streams the FC-slice matmul with the cross-TP reduce-scatter fused in, and accumulates the reduced
-        [1,1,seq,H/tp] shards (scatter-then-sum == sum-then-scatter).
+        [1,1,seq,H/tp] shards (scatter-then-sum == sum-then-scatter up to rounding).
         The caller RETAINS ownership of ``hidden_states`` — this only reads it for the matmul (does not
         store or free it). Silently skips a target layer this rank does not own (its fc block lives on
         another pipeline rank)."""
@@ -279,8 +279,8 @@ class TtDFlashDrafter:
     def _tap_matmul(self, hidden_states: ttnn.Tensor, global_layer_idx: int, out: Optional[ttnn.Tensor] = None):
         """``hidden_states @ fc_slice``, summed across TP and scattered on hidden: [1,1,seq,H/tp] (full H when
         tp==1). Under TP the reduce-scatter is fused into the matmul, whose semaphores and mailbox are the mesh's
-        (already made by MLA and KDA), so the drafter adds no L1 of its own; a standalone reduce_scatter would
-        create four L1 semaphores below ring_mla's static circular buffers."""
+        (already made by MLA and KDA, in L1_SMALL), so the drafter adds no persistent regular-L1 buffers; a
+        standalone reduce_scatter would create four regular-L1 semaphores below ring_mla's static circular buffers."""
         weight = self.fc_slices[global_layer_idx]
         if self.tp_factor > 1:
             return ttnn.experimental.matmul_reduce_scatter_prefill(
@@ -289,7 +289,7 @@ class TtDFlashDrafter:
                 cluster_axis=self.tp_axis,
                 scatter_dim=-1,
                 topology=self.topology,
-                num_links=self.num_links,
+                num_links=min(self.num_links, 2),  # the fused op supports 1 or 2 links
                 compute_kernel_config=self._fused_tap_compute_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 output_tensor=out,
@@ -372,7 +372,7 @@ class TtDFlashDrafter:
         trace_controller=None,
     ) -> None:
         """Finalize into the caller-owned ``k_cache``/``v_cache`` (allocate via
-        ``allocate_dflash_kv_cache``): consume the accumulated TP-partial FC output, TP-reduce it,
+        ``allocate_dflash_kv_cache``): consume the accumulated TP-reduced FC shard,
         hidden_norm, then per draft layer project/norm/rope K and project V, writing each into its cache
         slot. The caches are passed in (not owned by the drafter) so the runner drives their lifecycle +
         dtype, exactly like the MLA prefill model takes ``kvpe_cache`` in ``forward()``.
