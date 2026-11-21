@@ -217,11 +217,21 @@
   cmd: |
     # under the job timeout, so a hang still prints both domains' logs
     export TIMEOUT=150 TT_METAL_OPERATION_TIMEOUT_SECONDS=60
+    # DIAG (temporary): plain fabric traffic, inter-domain off, same 2-chip P300 setup
+    export TT_MESH_GRAPH_DESC_PATH=$PWD/tt_metal/fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.textproto
+    F='Fabric1DFixture.TestUnicastConnAPI*:Fabric1DFixture.TestUnicastRaw:Fabric1DFixture.TestMCastConnAPI:Fabric2DFixture.TestUnicast*'
+    B=./build/test/tt_metal/tt_fabric/fabric_unit_tests
+    run() { TT_VISIBLE_DEVICES=$2 TT_METAL_CACHE=/tmp/diag$1$2 timeout 300 $B --gtest_filter="$F" > /tmp/diag.$1.$2.log 2>&1; echo "DIAG $1 devs $2 rc=$?"; grep -hE '^\[ *(OK|FAILED|SKIPPED|PASSED) *\]|TIMEOUT|Timeout' /tmp/diag.$1.$2.log | head -30; }
+    TT_METAL_FABRIC_GRAPH_BUILDER=1 run gb-1proc 0,1
+    TT_METAL_FABRIC_GRAPH_BUILDER=1 run gb-1proc 2,3
+    export TT_METAL_FABRIC_GRAPH_BUILDER=1; run gb-2proc 0,1 & run gb-2proc 2,3 & wait
+    export TT_METAL_FABRIC_GRAPH_BUILDER=0; run stock-2proc 0,1 & run stock-2proc 2,3 & wait
+    unset TT_MESH_GRAPH_DESC_PATH TT_METAL_FABRIC_GRAPH_BUILDER
     ./tests/tt_metal/tt_fabric/inter_domain/run_inter_domain_sanity.sh 0 1
     ./tests/tt_metal/tt_fabric/inter_domain/run_inter_domain_sanity.sh 0,1 2,3 tt_metal/fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.textproto
   skus:
     bh_quietbox_2:
-      timeout: 10
+      timeout: 30
   team: scaleout
   budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
