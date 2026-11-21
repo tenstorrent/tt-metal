@@ -29,3 +29,8 @@ RISC-V performance monitor: `headers.riscv_event_tables(arch)` and `riscv_select
 the `riscv_pmc_*.h` tables (core kinds `baby`, `trisc`, `dm`); `riscv_pmc.py` decodes the profiler markers
 9092 to 9096 into event names; `riscv_metrics.py` derives IPC, stall and per-instruction metrics (kept out of
 `metrics.py`, whose keys are the warehouse metric catalog). Adding an event needs no Python change.
+
+NoC interface counters: `headers.noc_counter_table(arch)` and `noc_selected_counters(arch, group_mask)` parse the
+`noc_counters_*.h` tables (capture order, NoC count, data word bytes); `noc_counters.py` decodes the profiler markers
+9100 to 9116 into per-NoC counts; `noc_metrics.py` derives byte and request totals. Adding a counter needs no Python
+change.

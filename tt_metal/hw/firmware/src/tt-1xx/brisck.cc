@@ -19,6 +19,7 @@
 #include "internal/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
 #include "internal/debug/stack_usage.h"
 #include "internal/profiler/riscv_pmc.hpp"
+#include "internal/profiler/noc_counters.hpp"
 #include <kernel_includes.hpp>
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "api/remote_circular_buffer.h"
@@ -73,6 +74,8 @@ uint32_t _start() {
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
+    // The NIU counters belong to the tile, so the window opens before the go message releases every core.
+    NocCountersBegin();
     wait_for_go_message();
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
@@ -100,6 +103,7 @@ uint32_t _start() {
             WAYPOINT("NKFD");
         }
     }
+    NocCountersEnd();
     EARLY_RETURN_FOR_DEBUG_EXIT;
 #endif
     return measure_stack_usage();
