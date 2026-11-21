@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
