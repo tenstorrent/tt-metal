@@ -42,18 +42,24 @@ inline void _llk_unpack_reduce_mop_config_(
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
 
     std::uint32_t unpack_data_face;
+    std::uint32_t unpack_data_face_last; // last face of a non-final tile: also advances the data tile index
     std::uint32_t unpack_scaler;
     if (num_faces == NUM_FACES)
     {
         unpack_data_face = swap_operands ? TT_OP_UNPACR1_FACE_INC(0, 1 /*Src Face Idx*/, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/)
                                          : TT_OP_UNPACR0_FACE_INC(0, 1 /*Src Face Idx*/, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
-        unpack_scaler    = swap_operands ? TT_OP_UNPACR0_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/)
-                                         : TT_OP_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+        // The data face counter wraps at the buffer descriptor's z_dim without carrying into the tile index
+        unpack_data_face_last = swap_operands ? TT_OP_UNPACR1_FACE_INC(0, 1 /*Src Face Idx*/, 0, 1 /*Src Tile Offset Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/)
+                                              : TT_OP_UNPACR0_FACE_INC(0, 1 /*Src Face Idx*/, 0, 1 /*Src Tile Offset Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/);
+        unpack_scaler         = swap_operands ? TT_OP_UNPACR0_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/)
+                                              : TT_OP_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
     }
     else
     {
         unpack_data_face = swap_operands ? TT_OP_UNPACR1_TILE_INC(0, 1 /*Src Tile Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/)
                                          : TT_OP_UNPACR0_TILE_INC(0, 1 /*Src Tile Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/);
+        // UNPACR_TILE_INC already advances the data tile index
+        unpack_data_face_last = unpack_data_face;
         unpack_scaler =
             swap_operands ? TT_OP_UNPACR0_TILE_INC(0, 0, buf_desc_id_1, 1 /*Set Dvalid*/) : TT_OP_UNPACR1_TILE_INC(0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
     }
@@ -65,12 +71,14 @@ inline void _llk_unpack_reduce_mop_config_(
 
         ckernel_template temp(num_tiles, num_faces, clear_data_bank, unpack_data_face);
         temp.set_start_op(unpack_scaler);
+        temp.set_last_inner_loop_instr(unpack_data_face_last);
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
     else
     {
         ckernel_template temp(num_tiles, num_faces, unpack_data_face);
         temp.set_start_op(unpack_scaler);
+        temp.set_last_inner_loop_instr(unpack_data_face_last);
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
 }
@@ -116,6 +124,9 @@ inline void _llk_unpack_reduce_init_(
 
 /**
  * @brief Unpacks operands for reduce kernels into SrcA and SrcB.
+ *
+ * Unpacks the num_tiles data tiles programmed by @ref _llk_unpack_reduce_init_, starting at start_l1_tile_idx_0; the
+ * first face of scaler tile start_l1_tile_idx_1 is unpacked once per data tile.
  *
  * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
  * @tparam REDUCE_DIMENSION: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
