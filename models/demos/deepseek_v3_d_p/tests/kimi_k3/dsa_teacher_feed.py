@@ -57,7 +57,7 @@ CHECK_ROWS = 64  # rows per segment the input check samples
 # Stability bars, every one held per window of context positions (proposed, pending the owner's decision; measured on
 # layer 92 at 10K and 128K, 4x4-sp1, against the vLLM trace):
 # * attention output per-row NRMSE against the trace, window median <= 0.06 (measured 0.044-0.048). On sampled rows
-#   the device reads 0.051 against an fp32 host recompute from the trace's own KV and top-k, and the trace itself
+#   the device reads 0.053 against an fp32 host recompute from the trace's own KV and top-k, and the trace itself
 #   0.032 against it; which part of the device's distance is its own is left to an FP64 golden. And no window more
 #   than 15% above the first (measured +3.4% at most): growth with context is what the run looks for.
 # * kvpe latent / rope and index key PCC >= 0.999 / 0.9999 / 0.999 (measured 0.99958 / 0.99999 / 0.99994, flat).
@@ -263,7 +263,13 @@ def chunk_path(out: Path, index: int) -> Path:
 
 def start_run(out: Path, manifest: dict) -> None:
     """Begin a device run in ``out``: remove every file an earlier run left (so no stale chunk or cache can be
-    scored with this run's) and write this run's manifest, not yet marked complete."""
+    scored with this run's) and write this run's manifest, not yet marked complete. Refuses ``out`` when it is the
+    run's input directory or holds a manifest that is not a device run's (no ``chunk``), so a mistyped directory is
+    never cleared."""
+    if "input" in manifest and out.resolve() == Path(manifest["input"]).resolve():
+        raise ValueError(f"{out} is the run's input directory; a device run needs its own output directory")
+    if (out / MANIFEST).is_file() and "chunk" not in json.loads((out / MANIFEST).read_text()):
+        raise ValueError(f"{out} holds a manifest that is not a device run's; refusing to clear it")
     out.mkdir(parents=True, exist_ok=True)
     for pattern in RUN_FILES:
         for stale in out.glob(pattern):

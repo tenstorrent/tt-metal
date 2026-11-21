@@ -122,3 +122,16 @@ def test_a_new_run_clears_stale_outputs_and_score_needs_completion(tmp_path: Pat
         score(trace=None, out=tmp_path, window=1)
     finish_run(tmp_path, {"layer": 92, "count": 1, "chunk": 1}, 1.0)
     assert json.loads((tmp_path / MANIFEST).read_text())["complete"] is True
+
+
+def test_a_run_refuses_its_input_dir_or_a_foreign_manifest(tmp_path: Path, expect_error):
+    """`start_run` clears nothing in the run's input directory or in a directory whose manifest is not a device
+    run's (here an input's: segments, no chunk)."""
+    source = tmp_path / "input"
+    source.mkdir()
+    (source / MANIFEST).write_text(json.dumps({"layer": 92, "segment": 4096, "segments": []}))
+    with expect_error(ValueError, "input directory"):
+        start_run(source, {"layer": 92, "count": 1, "chunk": 1, "input": str(source)})
+    with expect_error(ValueError, "not a device run"):
+        start_run(source, {"layer": 92, "count": 1, "chunk": 1, "input": str(tmp_path / "other")})
+    assert json.loads((source / MANIFEST).read_text())["segment"] == 4096
