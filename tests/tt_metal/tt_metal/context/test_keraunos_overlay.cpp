@@ -140,5 +140,51 @@ TEST_F(KeraunosOverlay, IdmaCopyReadVcs) {
         0xAF);
 }
 
+// Exploratory, last: IDMA L1 atomic accumulate with the API defaults (format 0, operation 9), the
+// candidate remote-credit primitive (Blackhole fabric's atomic increment). The source block is all ones
+// and is applied three times to a destination that starts at 100 + i, so an integer add leaves 103 + i.
+// The test prints what lands either way: the encodings are not documented.
+class KeraunosAtomics : public KeraunosCceTest {
+protected:
+    void expect_accumulate(uint32_t dst_hsio) {
+        const auto a = hsio_core(0);
+        const auto b = hsio_core(dst_hsio);
+        ASSERT_TRUE(a.has_value() && b.has_value());
+        constexpr uint32_t kWords = 16;
+        constexpr uint32_t kRepeats = 3;
+        std::vector<uint32_t> start(kWords);
+        std::vector<uint32_t> expected(kWords);
+        for (uint32_t i = 0; i < kWords; i++) {
+            start[i] = 100 + i;
+            expected[i] = 100 + i + kRepeats;
+        }
+        write_words(*a, kSrcOffset, std::vector<uint32_t>(kWords, 1));
+        write_words(*b, kDstOffset, start);
+        write_words(*a, kStatusOffset, std::vector<uint32_t>(kStatusWords, 0));
+        Program program = CreateProgram();
+        const KernelHandle k = CreateKernel(
+            program,
+            std::string(kKernelDir) + "keraunos_cce_idma_atomic_accum.cpp",
+            a->logical,
+            EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0});
+        std::vector<uint32_t> args = split(global_addr(*a, kSrcOffset));
+        const auto dst = split(global_addr(*b, kDstOffset));
+        args.insert(args.end(), dst.begin(), dst.end());
+        args.insert(args.end(), {kWords * 4, kRepeats, /*fmt=*/0, /*op=*/9, unreserved_ + kStatusOffset});
+        SetRuntimeArgs(program, k, a->logical, args);
+        launch(program, *a);
+        const auto status = read_words(*a, kStatusOffset, kStatusWords);
+        EXPECT_EQ(status[4], kAcked) << fmt::format("status: {:#010x}", fmt::join(status, " "));
+        const auto got = read_words(*b, kDstOffset, kWords);
+        EXPECT_EQ(got, expected) << fmt::format("destination: {}", fmt::join(got, " "));
+    }
+};
+
+// Disabled: they use format 0, which is not an accumulate format, and the package address, which copies even with
+// a valid format. The working form (format 4 INT32_NORMAL, the SoC-form SRAM address, same tile only) is covered by
+// KeraunosAccumulateForms in test_keraunos_atomics.cpp; see keraunos_worklog.md for the full matrix.
+TEST_F(KeraunosAtomics, DISABLED_IdmaAtomicAccumulateOwnSram) { expect_accumulate(0); }
+TEST_F(KeraunosAtomics, DISABLED_IdmaAtomicAccumulateOtherTileSram) { expect_accumulate(1); }
+
 }  // namespace
 }  // namespace tt::tt_metal

@@ -1,0 +1,169 @@
+Clone `chippy` and `grendelemulation` under `/proj_sw/user_dev/$USER`. That directory is shared across machines, and both repos must be reachable from the soc machines (`soc-l-#`) and from the machine running tt-metal.
+
+The `export CHIPPY_DIR` and `export GRENDELEMU_DIR` lines below only apply to the current terminal. Set them again in every terminal that uses them (on the soc machines and on the tt-metal machine), or add them to `~/.bashrc`.
+
+## Setup 'chippy'
+
+Modify the below for your preferred workspace. Note that chippy is used to setup the emulator FW, so needs to be on a system that has access to SoC commands (e.g. can be done on `soc-l-#` machines) and `tt-metal` also needs to link to it (typically from `ird`) so it is strongly recommended to setup your chippy directory in a shared area such as `/proj_sw/user_dev`. Beyond the initial compilation of chippy, which only happens once, I did not notice any impact on development speed.
+
+```
+cd /proj_sw/user_dev/$USER
+git clone git@yyz-gitlab.local.tenstorrent.com:syseng-platform/chippy.git
+cd chippy
+git checkout kstevens/metal_bringup
+export CHIPPY_DIR=/proj_sw/user_dev/$USER/chippy
+```
+
+The metal bring-up scripts (`validation/metal_bringup/`) only exist on the `kstevens/metal_bringup` branch, not on `main`.
+
+Log into one of the soc machines (e.g. `soc-l-#`) or another machine with GCC 13 available.
+
+```
+source /tools_soc/tt/bin/bashrc
+module load cmake/3.30.3
+module load gcc/13
+cd $CHIPPY_DIR
+
+cmake -S lib -B ../chippy-build \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O3 -DNDEBUG" \
+  -DCHIPPY_BUILD_UNIT_TESTS=OFF \
+  -DBUILD_EXCLUDE_JLINK=TRUE \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+
+cmake --build $CHIPPY_DIR/../chippy-build --target grendel
+```
+
+## Build tt-metal
+
+Use branches:
+- `kstevens/enable_mimir` for tt-metal
+- `kstevens/grendel-emu-additions` for tt-umd (`tt_metal/third_party/umd`)
+
+UMD must be on the `kstevens/grendel-emu-additions` branch. The submodule commit recorded in tt-metal is older, so `git submodule update` will move UMD off this branch; re-run the checkout below if that happens.
+
+```
+cd tt_metal/third_party/umd
+git fetch origin
+git checkout kstevens/grendel-emu-additions
+cd -
+```
+
+With `TT_UMD_BUILD_GRENDEL_JTAG=ON`, the Clang build needs libstdc++ 13 at `/usr/lib/gcc/x86_64-linux-gnu/13`. The `gcc/13` module does not satisfy this. On Ubuntu 22.04, install it with:
+
+```
+sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+sudo apt update
+sudo apt install -y g++-13
+```
+
+Need to add additional defines to build. After building the first time, can just run usual `./build_metal.sh` commands unless the CMAKE files are removed (e.g. with a `--clean` or `git clean`).
+
+```
+export CHIPPY_DIR=/proj_sw/user_dev/$USER/chippy
+
+./build_metal.sh --build-tests --build-umd-tests --configure-only
+
+cmake -DTT_UMD_BUILD_GRENDEL_JTAG=ON \
+  -DCHIPPY_SOURCE_DIR=$CHIPPY_DIR \
+  -DCHIPPY_BUILD_DIR=$CHIPPY_DIR/../chippy-build \
+  -B build
+
+cmake --build build --target install
+```
+
+**_NOTE:_** Probably don't need this, but keeping it here in case I'm wrong.
+`  -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/12 \ `
+
+
+## Launch Emulation Server
+
+```
+cd /proj_sw/user_dev/$USER
+git clone git@yyz-gitlab.local.tenstorrent.com:tensix/soc/grendelemulation.git
+cd grendelemulation
+git checkout kstevens/metal_bringup
+export GRENDELEMU_DIR=/proj_sw/user_dev/$USER/grendelemulation
+```
+
+Each model launches a different server test:
+
+| Model directory | Emulates | Server test |
+|---|---|---|
+| `models/mimir` | 1 Mimir chiplet (1 emulation module) | `tests/test_sival_server.py` |
+| `models/mmk` | 2 Mimir chiplets + 1 Keraunos (4 emulation modules) | `tests/test_metal_server.py` |
+
+`models/mmk/tests/test_metal_server.py` is on the `kstevens/metal_bringup` branch, not on `main`. The `mimir` model has no `test_metal_server.py`; launching it there collects no tests and the job exits.
+
+1. Log into one of the soc machines (e.g. `soc-l-#`)
+2. Setup your environment. Choose either the `mimir` or the `mmk` model directory depending on your needs.
+```
+source /tools_soc/tt/bin/bashrc
+cd $GRENDELEMU_DIR/models/mimir    # or models/mmk
+source bin/setup_env.sh
+```
+3. Launch the emulation server with the server test for that model
+```
+emu run -t 3600 -- -sv tests/test_sival_server.py --disable-dpi    # mimir
+emu run -t 3600 -- -sv tests/test_metal_server.py --disable-dpi    # mmk
+```
+
+**_NOTE:_** Sometimes just re-launching the server doesn't work properly (it exits immediately thinking there is no design) and the setup commands must be re-run before re-launching the server.
+
+**_NOTE:_** If you are switching between emulation models, sometimes the previous setup leaves behind paths that cause failures. To be safe, start from a fresh terminal whenever you switch emulation models.
+
+**_NOTE:_** Both chippy & tt-metal will need to know the server host & port to connect to the emulation server. You will see host listed several times in the output. The default port is `8080` for emulation (and is explicit in the last example below). Note the host & port for future steps.
+`Running on host soc-zebu-01`
+`Running on emulation host: soc-zebu-01`
+`INFO     server._start_server        SiVal server bound to soc-zebu-01:8080`
+
+## Use 'chippy' to load firmware
+
+There are 4 FW bring-up scripts:
+- `bringup_mimir_1x1.py` -> Requires at least 1 Mimir chiplets. Brings up 2 CCEs & connections to adjacent DRAM.
+- `bringup_two_mimir.py` -> Requires at least 2 Mimir chiplets connected to each other. Brings up 2 CCEs in each mimir, connections to adjacent DRAM from each mimir & D2D connections between the mimirs.
+- `bringup_mmk.py` -> Requires at least 2 Mimir chiplets connected to each other & connected to 1 Keraunos. Brings up CCEs for all 3 chiplets, connections to adjacent DRAM from each mimir & D2D connections between all 3 chiplets. Host-only: it programs everything from Python and loads no firmware. Keraunos reaches Mimir 1 over D2D (CCE SRAM and GDDR) only with `bringup_mmk_fw.py`; with this script those accesses do not complete.
+- `bringup_mmk_fw.py` -> Same package and result as `bringup_mmk.py`, but SysEng's SMC firmware does the chip bring-up on all 3 chiplets (reset and PLL sequencing, D2D configuration and link-up, Mimir NOC init), and the host adds the rest. This is the `emu` default for the `mmk` model. It needs the SysEng firmware images, see below.
+
+Command:
+```
+cd $CHIPPY_DIR
+uv run --project validation python validation/metal_bringup/<script> <emu_host> <emu_port>
+```
+
+### SysEng firmware for `bringup_mmk_fw.py`
+
+`bringup_mmk_fw.py` loads SysEng's K2M-remap firmware (the `mimir_smc_k2m_chip_init` and `ker_smc_k2m_chip_init` SMC apps and their CCE blobs, the same images as the `mmk_m2k_dma_remap` test). The images are not in git. Build them once on a machine with apptainer (the `soc-l-#` machines); the output goes to `validation/firmware/build/bin/` in your chippy directory, so any machine that sees that directory can use them:
+
+```
+source /tools_soc/tt/bin/bashrc
+$CHIPPY_DIR/validation/metal_bringup/build_mmk_fw.sh
+```
+
+`bringup_mmk_fw.py` checks for the images and builds them itself only if apptainer is available where it runs (a container usually has none); otherwise it stops with this command. Rebuild after changing anything under `validation/firmware/`.
+
+With the `emu` tool nothing else is needed: `emu` runs `bringup_mmk_fw.py` for the `mmk` model, on `tests/test_metal_server.py` (rounded SiVal clocks). To run it by hand against a server:
+
+```
+cd $CHIPPY_DIR
+uv run --project validation python validation/metal_bringup/bringup_mmk_fw.py <emu_host> <emu_port>
+```
+
+Bring-up takes about 6 minutes on the emulator. The script returns once the host steps are done and leaves the server running; the CCE harts are held, ready for tt-metal.
+
+One known mismatch: SysEng's Mimir SMC app hard-codes 1.5 GB per GDDR channel (`mimir_smc_k2m_chip_init/src/main.c`, `.noc.channel_capacity`) when it sizes the D2D BAR2, ATT entry 5 and the CCE remappers, while the host tooling and tt-metal use 1 GB. The script re-applies the 1 GB values after the firmware finishes. If SysEng's app took the density from `fw_params` (as `chip_enable_fill_noc_from_fw_params()` does in other apps), the host could choose it and this step would go away.
+
+The first run downloads packages from `syseng-pypi.yyz2.tenstorrent.com`. If it fails with `invalid peer certificate: UnknownIssuer`, the machine (or container) does not trust the Tenstorrent IT root CA. Install it with the "Ubuntu / Debian" script on the [Tenstorrent Enterprise IT Root CA Certificate](https://tenstorrent.atlassian.net/wiki/spaces/IT/pages/1287454725) page. The script writes the cert to `/usr/local/share/ca-certificates/tenstorrent-enterprise-it-root-ca-2025-06.crt` and runs `sudo update-ca-certificates`. Inside a docker container this only changes the container, and must be redone if the container is recreated.
+
+## Run tt-metal test
+
+Choose between `mimir_1x1.yaml` & `mimir_2x_package.yaml` depending on needs.
+
+```
+export TT_METAL_HOME=<dir>
+export TT_METAL_EMU_SERVER=<host>:<port>
+export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/descriptors/soc_descs/<yaml_file>
+```
+
+Run Mimir tests from `$TT_METAL_HOME`. A Mimir-only package has no Tensix cores. Set `TT_METAL_SLOW_DISPATCH_MODE=1` to run it; with that variable unset the suite skips. E.g.
+`TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_grendel_emu --gtest_filter=*MimirEmu*`
