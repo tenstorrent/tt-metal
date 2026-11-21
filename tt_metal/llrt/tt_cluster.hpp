@@ -377,6 +377,13 @@ public:
         return this->target_type_ == tt::TargetDevice::Mock || this->target_type_ == tt::TargetDevice::Emule;
     }
 
+    /// Returns true on a Mock target that builds no firmware and links no kernels: Quasar, unless
+    /// TT_METAL_QUASAR_MOCK_JIT is set.
+    bool mock_skips_kernel_jit() const {
+        return this->target_type_ == tt::TargetDevice::Mock && this->arch_ == tt::ARCH::QUASAR &&
+               !this->rtoptions_.get_quasar_mock_jit();
+    }
+
     void register_sim_fabric_endpoint_direction(
         ChipId chip_id, tt_fabric::chan_id_t eth_chan_id, tt_fabric::eth_chan_directions direction) const;
 

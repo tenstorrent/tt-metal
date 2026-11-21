@@ -417,6 +417,8 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        // No base Ethernet firmware runs beside metal on an Ethernet core (Hal::has_eth_base_firmware()).
+        defines.push_back("ETH_NO_BASE_FIRMWARE");
         // Emit a per-variant define so kernel headers can gate on the specific Quasar IP.
         // The variant is set by Cluster::get_quasar_ip_variant(), which reads ip_variant
         // from the SoC descriptor (shipped beside the simulator binary).
