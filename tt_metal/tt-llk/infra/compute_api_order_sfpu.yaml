@@ -1,0 +1,435 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# GENERATED FILE - do not edit by hand.
+# Regenerate with: python3 tt_metal/tt-llk/infra/gen_compute_api_order_sfpu.py
+#
+# SFPU *_tile_init / *_tile pairs mined from
+#   ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp
+# which emits both calls as adjacent source strings. The LLK sanitizer does not
+# model SFPU, so these rules are not part of the sanitizer-agreement test.
+sfpu_groups:
+  - id: sfpu.fill_tile
+    init: [fill_tile_init]
+    execute: [fill_tile_bitcast, fill_tile_int]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:162
+  - id: sfpu.rounding_op_tile
+    init: [rounding_op_tile_init]
+    execute: [ceil_tile, floor_tile, frac_tile, round_tile, trunc_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:172
+  - id: sfpu.relu_max_tile
+    init: [relu_max_tile_init]
+    execute: [relu_max_tile, relu_max_tile_int32, relu_max_tile_uint16, relu_max_tile_uint32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:183
+  - id: sfpu.relu_min_tile
+    init: [relu_min_tile_init]
+    execute: [relu_min_tile, relu_min_tile_int32, relu_min_tile_uint16, relu_min_tile_uint32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:217
+  - id: sfpu.power_tile
+    init: [power_tile_init]
+    execute: [power_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:237
+  - id: sfpu.power_iterative_tile
+    init: [power_iterative_tile_init]
+    execute: [power_iterative_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:245
+  - id: sfpu.leaky_relu_tile
+    init: [leaky_relu_tile_init]
+    execute: [leaky_relu_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:253
+  - id: sfpu.elu_tile
+    init: [elu_tile_init]
+    execute: [elu_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:255
+  - id: sfpu.gelu_tile
+    init: [gelu_tile_init]
+    execute: [gelu_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:258
+  - id: sfpu.gelu_tanh_tile
+    init: [gelu_tanh_tile_init]
+    execute: [gelu_tanh_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:262
+  - id: sfpu.log_tile
+    init: [log_tile_init]
+    execute: [log_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:266
+  - id: sfpu.log_with_base_tile
+    init: [log_with_base_tile_init]
+    execute: [log_with_base_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:270
+  - id: sfpu.log1p_tile
+    init: [log1p_tile_init]
+    execute: [log1p_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:278
+  - id: sfpu.tanh_tile
+    init: [tanh_tile_init]
+    execute: [tanh_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:282
+  - id: sfpu.heaviside_tile
+    init: [heaviside_tile_init]
+    execute: [heaviside_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:285
+  - id: sfpu.bitwise_xor_tile
+    init: [bitwise_xor_tile_init]
+    execute: [bitwise_xor_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:288
+  - id: sfpu.bitwise_and_tile
+    init: [bitwise_and_tile_init]
+    execute: [bitwise_and_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:293
+  - id: sfpu.bitwise_or_tile
+    init: [bitwise_or_tile_init]
+    execute: [bitwise_or_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:300
+  - id: sfpu.right_shift_tile
+    init: [right_shift_tile_init]
+    execute: [right_shift_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:305
+  - id: sfpu.left_shift_tile
+    init: [left_shift_tile_init]
+    execute: [left_shift_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:313
+  - id: sfpu.remainder_tile_uint32
+    init: [remainder_tile_uint32_init]
+    execute: [remainder_tile_uint32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:330
+  - id: sfpu.remainder_tile
+    init: [remainder_tile_init]
+    execute: [remainder_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:335
+  - id: sfpu.fmod_tile
+    init: [fmod_tile_init]
+    execute: [fmod_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:343
+  - id: sfpu.exp_tile
+    init: [exp_tile_init]
+    execute: [exp_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:349
+  - id: sfpu.sigmoid_tile
+    init: [sigmoid_tile_init]
+    execute: [sigmoid_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:361
+  - id: sfpu.erf_tile
+    init: [erf_tile_init]
+    execute: [erf_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:366
+  - id: sfpu.erfc_tile
+    init: [erfc_tile_init]
+    execute: [erfc_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:369
+  - id: sfpu.rdiv_tile
+    init: [rdiv_tile_init]
+    execute: [rdiv_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:382
+  - id: sfpu.rsub_unary_int32_tile
+    init: [rsub_unary_int32_tile_init]
+    execute: [rsub_unary_int32_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:393
+  - id: sfpu.rsub_tile
+    init: [rsub_tile_init]
+    execute: [rsub_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:398
+  - id: sfpu.rpow_tile
+    init: [rpow_tile_init]
+    execute: [rpow_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:400
+  - id: sfpu.binop_with_scalar_tile
+    init: [binop_with_scalar_tile_init]
+    execute: [add_unary_tile, add_unary_tile_int32, div_unary_tile, mul_unary_tile, sub_unary_tile, sub_unary_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:405
+  - id: sfpu.unary_ne_tile
+    init: [unary_ne_tile_init]
+    execute: [unary_ne_tile, unary_ne_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:452
+  - id: sfpu.unary_eq_tile
+    init: [unary_eq_tile_init]
+    execute: [unary_eq_tile, unary_eq_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:465
+  - id: sfpu.unary_gt_tile
+    init: [unary_gt_tile_init]
+    execute: [unary_gt_tile, unary_gt_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:477
+  - id: sfpu.unary_lt_tile
+    init: [unary_lt_tile_init]
+    execute: [unary_lt_tile, unary_lt_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:489
+  - id: sfpu.unary_ge_tile
+    init: [unary_ge_tile_init]
+    execute: [unary_ge_tile, unary_ge_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:501
+  - id: sfpu.unary_le_tile
+    init: [unary_le_tile_init]
+    execute: [unary_le_tile, unary_le_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:513
+  - id: sfpu.softplus_tile
+    init: [softplus_tile_init]
+    execute: [softplus_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:523
+  - id: sfpu.xielu_tile
+    init: [xielu_tile_init]
+    execute: [xielu_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:532
+  - id: sfpu.prelu_tile
+    init: [prelu_tile_init]
+    execute: [prelu_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:538
+  - id: sfpu.typecast_tile
+    init: [typecast_tile_init]
+    execute: [typecast_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:545
+  - id: sfpu.unary_max_int32_tile
+    init: [unary_max_int32_tile_init]
+    execute: [unary_max_int32_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:565
+  - id: sfpu.unary_max_uint32_tile
+    init: [unary_max_uint32_tile_init]
+    execute: [unary_max_uint32_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:571
+  - id: sfpu.unary_max_tile
+    init: [unary_max_tile_init]
+    execute: [unary_max_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:575
+  - id: sfpu.unary_min_int32_tile
+    init: [unary_min_int32_tile_init]
+    execute: [unary_min_int32_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:582
+  - id: sfpu.unary_min_uint32_tile
+    init: [unary_min_uint32_tile_init]
+    execute: [unary_min_uint32_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:586
+  - id: sfpu.unary_min_tile
+    init: [unary_min_tile_init]
+    execute: [unary_min_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:589
+  - id: sfpu.celu_tile
+    init: [celu_tile_init]
+    execute: [celu_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:593
+  - id: sfpu.softcap_tile
+    init: [softcap_tile_init]
+    execute: [softcap_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:601
+  - id: sfpu.polygamma_tile
+    init: [polygamma_tile_init]
+    execute: [polygamma_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:611
+  - id: sfpu.hardshrink_tile
+    init: [hardshrink_tile_init]
+    execute: [hardshrink_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:625
+  - id: sfpu.softshrink_tile
+    init: [softshrink_tile_init]
+    execute: [softshrink_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:630
+  - id: sfpu.clamp_tile
+    init: [clamp_tile_init]
+    execute: [clamp_tile, clamp_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:658
+  - id: sfpu.hardtanh_tile
+    init: [hardtanh_tile_init]
+    execute: [hardtanh_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:667
+  - id: sfpu.threshold_tile
+    init: [threshold_tile_init]
+    execute: [threshold_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:673
+  - id: sfpu.selu_tile
+    init: [selu_tile_init]
+    execute: [selu_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:681
+  - id: sfpu.hardmish_tile
+    init: [hardmish_tile_init]
+    execute: [hardmish_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:684
+  - id: sfpu.mish_tile
+    init: [mish_tile_init]
+    execute: [mish_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:689
+  - id: sfpu.rsqrt_tile
+    init: [rsqrt_tile_init]
+    execute: [rsqrt_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:693
+  - id: sfpu.sqrt_tile
+    init: [sqrt_tile_init]
+    execute: [sqrt_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:697
+  - id: sfpu.bitwise_not_tile
+    init: [bitwise_not_tile_init]
+    execute: [bitwise_not_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:708
+  - id: sfpu.recip_tile
+    init: [recip_tile_init]
+    execute: [recip_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:710
+  - id: sfpu.relu_tile
+    init: [relu_tile_init]
+    execute: [relu_tile, relu_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:736
+  - id: sfpu.signbit_tile_int32
+    init: [signbit_tile_int32_init]
+    execute: [signbit_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:746
+  - id: sfpu.sin_tile
+    init: [sin_tile_init]
+    execute: [sin_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:750
+  - id: sfpu.cos_tile
+    init: [cos_tile_init]
+    execute: [cos_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:752
+  - id: sfpu.cosh_tile
+    init: [cosh_tile_init]
+    execute: [cosh_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:756
+  - id: sfpu.sinh_tile
+    init: [sinh_tile_init]
+    execute: [sinh_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:758
+  - id: sfpu.isfinite_tile
+    init: [isfinite_tile_init]
+    execute: [isfinite_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:759
+  - id: sfpu.isinf_tile
+    init: [isinf_tile_init]
+    execute: [isinf_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:760
+  - id: sfpu.isposinf_tile
+    init: [isposinf_tile_init]
+    execute: [isposinf_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:761
+  - id: sfpu.isneginf_tile
+    init: [isneginf_tile_init]
+    execute: [isneginf_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:762
+  - id: sfpu.isnan_tile
+    init: [isnan_tile_init]
+    execute: [isnan_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:763
+  - id: sfpu.logical_not_tile
+    init: [logical_not_tile_init]
+    execute: [logical_not_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:780
+  - id: sfpu.i0_tile
+    init: [i0_tile_init]
+    execute: [i0_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:782
+  - id: sfpu.i1_tile
+    init: [i1_tile_init]
+    execute: [i1_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:784
+  - id: sfpu.erfinv_tile
+    init: [erfinv_tile_init]
+    execute: [erfinv_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:790
+  - id: sfpu.abs_tile
+    init: [abs_tile_init]
+    execute: [abs_tile, abs_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:797
+  - id: sfpu.sign_tile
+    init: [sign_tile_init]
+    execute: [sign_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:800
+  - id: sfpu.mul_int_tile
+    init: [mul_int_tile_init]
+    execute: [mul_int_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:805
+  - id: sfpu.square_tile
+    init: [square_tile_init]
+    execute: [square_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:814
+  - id: sfpu.tiled_prod_tile
+    init: [tiled_prod_tile_init]
+    execute: [tiled_prod_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:815
+  - id: sfpu.eqz_tile
+    init: [eqz_tile_init]
+    execute: [eqz_tile, eqz_tile_int32, eqz_tile_uint16, eqz_tile_uint32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:819
+  - id: sfpu.nez_tile
+    init: [nez_tile_init]
+    execute: [nez_tile, nez_tile_int32, nez_tile_uint16, nez_tile_uint32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:829
+  - id: sfpu.ltz_tile
+    init: [ltz_tile_init]
+    execute: [ltz_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:840
+  - id: sfpu.gtz_tile
+    init: [gtz_tile_init]
+    execute: [gtz_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:848
+  - id: sfpu.gez_tile
+    init: [gez_tile_init]
+    execute: [gez_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:854
+  - id: sfpu.lez_tile
+    init: [lez_tile_init]
+    execute: [lez_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:862
+  - id: sfpu.cbrt_tile
+    init: [cbrt_tile_init]
+    execute: [cbrt_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:869
+  - id: sfpu.exp2_tile
+    init: [exp2_tile_init]
+    execute: [exp2_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:871
+  - id: sfpu.expm1_tile
+    init: [expm1_tile_init]
+    execute: [expm1_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:872
+  - id: sfpu.asin_tile
+    init: [asin_tile_init]
+    execute: [asin_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:874
+  - id: sfpu.asinh_tile
+    init: [asinh_tile_init]
+    execute: [asinh_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:876
+  - id: sfpu.acos_tile
+    init: [acos_tile_init]
+    execute: [acos_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:878
+  - id: sfpu.acosh_tile
+    init: [acosh_tile_init]
+    execute: [acosh_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:880
+  - id: sfpu.atan_tile
+    init: [atan_tile_init]
+    execute: [atan_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:882
+  - id: sfpu.atanh_tile
+    init: [atanh_tile_init]
+    execute: [atanh_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:883
+  - id: sfpu.tan_tile
+    init: [tan_tile_init]
+    execute: [tan_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:886
+  - id: sfpu.silu_tile
+    init: [silu_tile_init]
+    execute: [silu_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:888
+  - id: sfpu.negative_tile
+    init: [negative_tile_init]
+    execute: [negative_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:919
+  - id: sfpu.alt_complex_rotate90_tile
+    init: [alt_complex_rotate90_tile_init]
+    execute: [alt_complex_rotate90_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:921
+  - id: sfpu.hardsigmoid_tile
+    init: [hardsigmoid_tile_init]
+    execute: [hardsigmoid_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:923
+  - id: sfpu.softsign_tile
+    init: [softsign_tile_init]
+    execute: [softsign_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:925
+  - id: sfpu.digamma_tile
+    init: [digamma_tile_init]
+    execute: [digamma_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:932
+  - id: sfpu.tanhshrink_tile
+    init: [tanhshrink_tile_init]
+    execute: [tanhshrink_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:933
