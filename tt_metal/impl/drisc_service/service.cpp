@@ -522,9 +522,13 @@ SeatClient::~SeatClient() {
     } catch (const std::exception& e) {
         log_error(tt::LogMetal, "drisc_service: drain at detach failed: {}", e.what());
     }
-    exit_write_.reset();
     bool freed = false;
+    // Held until the KMD's own DETACH is sent, so no client takes the freed slot and has its DETACH overwritten.
+    std::optional<SeatGate> gate;
     try {
+        gate.emplace(seat_.id, gate_timeout);
+        // Not through exit_write_: closing its fd unpins the control page and batch, which must wait for FREED.
+        core_.write_l1_u32(abi::L1CommandBlockLayout::exit_mailbox_addr(slot_), abi::slot_word(abi::SLOT_DETACH, gen_));
         freed = wait_until(std::chrono::milliseconds(abi::DETACH_TIMEOUT_MS), [&] { return !acked(); });
         if (!freed) {
             log_error(
@@ -539,6 +543,8 @@ SeatClient::~SeatClient() {
     } catch (const std::exception& e) {
         log_error(tt::LogMetal, "drisc_service: detach failed; leaking its host buffers: {}", e.what());
     }
+    exit_write_.reset();
+    gate.reset();
     if (!freed) {
         // The kernel may still write into them.
         (void)control_page_memory_.release();

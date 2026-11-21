@@ -469,6 +469,8 @@ bool scan_slots() {
             carve.state = CARVE_IDLE;
         }
         if (client.state == SLOT_DETACHING && client.inflight == 0) {
+            // FREED lets the host unpin the client's pages, so a control-page publish still in flight lands first.
+            while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, PUBLISH_TRID));
             client.state = SLOT_IDLE;
             slot.ack = abi::slot_word(abi::SLOT_FREED, client.gen);
         }

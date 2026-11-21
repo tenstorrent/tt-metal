@@ -14,7 +14,7 @@
 namespace tt::tt_metal::drisc_service::abi {
 
 // Bump on any change to this file that the kernel and the host must agree on.
-inline constexpr uint32_t ABI_VERSION = 9;
+inline constexpr uint32_t ABI_VERSION = 10;
 inline constexpr size_t CONTROL_PAGE_SIZE = 4096;
 
 // The kernel's build. Its ELF carries one in section BUILD_BLOCK_SECTION, which the host checks before loading it,
@@ -41,7 +41,7 @@ enum SlotWordType : uint32_t {
     SLOT_FREE = 0,
     SLOT_ATTACH = 1,  // request: host asks to attach; ack: kernel serves the slot
     SLOT_DETACH = 2,  // exit_mailbox: the client left, cleanly or by dying
-    SLOT_FREED = 3,   // ack: kernel finished the client's work and dropped the slot
+    SLOT_FREED = 3,   // ack: kernel finished the client's work and will not touch its memory again
 };
 inline constexpr uint32_t SLOT_TYPE_SHIFT = 30;
 inline constexpr uint32_t SLOT_GEN_MASK = (1u << SLOT_TYPE_SHIFT) - 1;
@@ -153,14 +153,16 @@ struct ServiceHeader {
 
 // One client's slot. The host fills control_page and doorbell, then writes
 // request = ATTACH|gen. The kernel attaches when request is an ATTACH whose
-// gen differs from ack's, and answers ack = request. When the client's
-// ExitWrite fd closes, on a clean exit or a crash, the KMD writes
-// exit_mailbox = DETACH|gen. The kernel then stops carving the client's commands,
-// lets its started reads and CMD_LOCAL copies finish, issues none of its NoC
-// writes not yet started, and answers ack = FREED|gen.
+// gen differs from ack's, and answers ack = request. A client leaving cleanly
+// writes exit_mailbox = DETACH|gen; when its ExitWrite fd closes, on a clean exit
+// or a crash, the KMD writes the same. The kernel then stops carving the client's
+// commands, lets its started reads and CMD_LOCAL copies finish, issues none of its
+// NoC writes not yet started, and answers ack = FREED|gen once every read and write
+// it issued for the client, control-page publishes included, has completed. It
+// issues nothing for the slot after FREED, so the client may then unpin its memory.
 struct ClientSlot {
     alignas(64) uint32_t request;  // host
-    uint32_t exit_mailbox;         // KMD only, when the client's ExitWrite fd closes
+    uint32_t exit_mailbox;         // host on a clean detach; KMD when the client's ExitWrite fd closes
     uint32_t ack;                  // kernel
     uint32_t doorbell;             // host: commands submitted
     NocEndpoint control_page;      // host: {host IOVA, PCIe tile coord}

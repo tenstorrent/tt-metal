@@ -105,7 +105,8 @@ public:
         const ll_api::ElfFile& image,
         IssuePath issue_path = IssuePath::Window);
 
-    // Drains for up to abi::DETACH_TIMEOUT_MS, detaches, and waits as long again for the kernel to free the slot.
+    // Drains for up to abi::DETACH_TIMEOUT_MS, detaches, and waits as long again for the kernel to free the slot, after
+    // which nothing the kernel issued for this client is in flight; only then does it unpin the control page and batch.
     // Never throws: a failure is logged, and when the slot is not freed the host buffers the kernel may still write are
     // leaked. Call drain() first to get the drain failure as an exception.
     ~SeatClient();

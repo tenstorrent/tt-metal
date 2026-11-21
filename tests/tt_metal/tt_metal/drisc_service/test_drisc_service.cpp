@@ -1072,6 +1072,24 @@ TEST_F(DriscService, StaleDetachIsIgnored) {
     expect_all_stopped({0});
 }
 
+// A detach holds the seat's gate until the KMD's own DETACH is sent, so no client takes the freed slot before then.
+TEST_F(DriscService, DetachWaitsForTheSeatGate) {
+    std::optional<Client> client;
+    attach(client, {0});
+    const SeatClient& seat = client->seat(0, 0);
+    const DriscCore core = device().core(seat.seat());
+    const uint32_t ack_addr = abi::L1CommandBlockLayout::ack_addr(seat.slot());
+    const uint32_t attached = abi::slot_word(abi::SLOT_ATTACH, seat.gen());
+    std::optional<drisc_service::SeatGate> gate(std::in_place, seat.seat().id, std::chrono::milliseconds(1000));
+    std::thread detach([&] { client.reset(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_EQ(core.read_l1_u32(ack_addr), attached) << "the client detached without taking the seat's gate";
+    gate.reset();
+    detach.join();
+    EXPECT_NE(core.read_l1_u32(ack_addr), attached) << "the slot was not freed once the gate was free";
+    expect_all_stopped({0});
+}
+
 TEST_F(DriscService, MetalSeatLockRefusesClients) {
     const Seat seat = device().seats(0)[0];
     const std::optional<drisc_service::SeatLock> metal = drisc_service::SeatLock::try_acquire(seat.id);
@@ -1710,9 +1728,11 @@ TEST_F(DriscService, DetachWithWorkInFlight) {
         << "ack " << ack() << ", want " << freed;
     const std::vector<uint32_t> at_free(host.at(0), host.at(0) + slot_size / sizeof(uint32_t));
     const uint32_t in_flight_at_free = seat.in_flight();
+    const uint32_t heartbeat_at_free = seat.heartbeat();
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     EXPECT_TRUE(std::equal(at_free.begin(), at_free.end(), host.at(0))) << "the kernel wrote host memory after freeing";
     EXPECT_EQ(seat.in_flight(), in_flight_at_free) << "the kernel published a done_count after freeing";
+    EXPECT_EQ(seat.heartbeat(), heartbeat_at_free) << "the kernel published a heartbeat after freeing";
     // Drains in vain for abi::DETACH_TIMEOUT_MS, as its done_count stays behind, then finds the slot already freed.
     client.reset();
     expect_all_stopped({0});
