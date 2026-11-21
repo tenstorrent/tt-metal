@@ -28,89 +28,8 @@ from models.experimental.retinanet.tt.custom_preprocessor import (
     preprocess_classification_head_parameters,
 )
 
-# LUT
-COCO_INSTANCE_CATEGORY_NAMES = [
-    "person",
-    "bicycle",
-    "car",
-    "motorcycle",
-    "airplane",
-    "bus",
-    "train",
-    "truck",
-    "boat",
-    "traffic light",
-    "fire hydrant",
-    "stop sign",
-    "parking meter",
-    "bench",
-    "bird",
-    "cat",
-    "sheep",
-    "horse",
-    "dog",
-    "cow",
-    "elephant",
-    "bear",
-    "zebra",
-    "giraffe",
-    "backpack",
-    "umbrella",
-    "handbag",
-    "tie",
-    "suitcase",
-    "frisbee",
-    "skis",
-    "snowboard",
-    "sport ball",
-    "kite",
-    "baseball bat",
-    "baseball glove",
-    "skateboard",
-    "surfboard",
-    "tennis racket",
-    "bottle",
-    "wineglass",
-    "cup",
-    "fork",
-    "knife",
-    "spoon",
-    "bowl",
-    "banana",
-    "apple",
-    "sandwich",
-    "orange",
-    "broccoli",
-    "carrot",
-    "hotdog",
-    "pizza",
-    "donut",
-    "cake",
-    "chair",
-    "couch",
-    "potted plant",
-    "bed",
-    "dining table",
-    "toilet",
-    "tv",
-    "laptop",
-    "mouse",
-    "remote",
-    "keyboard",
-    "cell phone",
-    "microwave",
-    "oven",
-    "toaster",
-    "sink",
-    "refrigerator",
-    "book",
-    "clock",
-    "vase",
-    "scissors",
-    "teddy bear",
-    "hair drier",
-    "toothbrush",
-]
+# torchvision's RetinaNet predicts COCO category ids (91 classes, gaps are 'N/A'), not an 80-class index
+COCO_INSTANCE_CATEGORY_NAMES = RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT.meta["categories"]
 
 device = ttnn.open_device(device_id=0, l1_small_size=24576)
 
@@ -229,7 +148,7 @@ class Demo:
     def preprocess_image(self, image_path: str, device, target_size=(800, 800)):
         """PREPROCESS IMAGE"""
         image = Image.open(image_path).convert("RGB")
-        og_size = [tuple(image.size)]
+        og_size = [(image.height, image.width)]  # (H, W), the order resize_boxes unpacks
 
         # Resize image to the target size
         image = image.resize(target_size, Image.BILINEAR)
