@@ -857,6 +857,9 @@ public:
             }
         }
 
+        keep_senders_whole_where_cores_run_out(
+            config, receive_configs, device_info_provider, fixed_receiver_configs_per_core, max_configs_per_piece);
+
         const size_t num_senders_before = config.senders.size();
         size_t largest_before = 0;
         size_t largest_after = 0;
@@ -905,7 +908,109 @@ public:
         }
     }
 
+    // The links on which each device has two or more senders (devices without any are left out). Those senders' flows
+    // share a (direction, link), so they reach the fabric through a mux there, which every other client of that link
+    // must also go through.
+    static std::map<FabricNodeId, std::set<uint32_t>> find_links_shared_by_senders(const TestConfig& config) {
+        std::map<std::pair<FabricNodeId, uint32_t>, uint32_t> senders_per_device_and_link;
+        for (const auto& sender : config.senders) {
+            senders_per_device_and_link[{sender.device, sender.link_id}]++;
+        }
+        std::map<FabricNodeId, std::set<uint32_t>> shared_links;
+        for (const auto& [device_and_link, num_senders] : senders_per_device_and_link) {
+            if (num_senders > 1) {
+                shared_links[device_and_link.first].insert(device_and_link.second);
+            }
+        }
+        return shared_links;
+    }
+
 private:
+    /**
+     * Undo the sender split on any device whose worker grid can't hold the result of the split. Each resulting piece of
+     * the split takes a sender core, and two senders on one link need a mux core in every direction they send in.
+     * A device that doesn't fit the split keeps all its senders whole.
+     */
+    static void keep_senders_whole_where_cores_run_out(
+        const TestConfig& config,
+        const std::map<std::pair<FabricNodeId, uint32_t>, uint32_t>& receive_configs,
+        const IDeviceInfoProvider& device_info_provider,
+        std::optional<uint32_t> fixed_receiver_configs_per_core,
+        std::vector<size_t>& max_configs_per_piece) {
+        const CoreCoord worker_grid = device_info_provider.get_worker_grid_size();
+        const uint32_t total_worker_cores = worker_grid.x * worker_grid.y;
+        const uint32_t mux_cores_per_link = device_info_provider.get_max_connections_per_device();
+        const uint32_t receiver_configs_per_core =
+            std::max(fixed_receiver_configs_per_core.value_or(MAX_CONFIGS_PER_CORE_CEILING), 1u);
+
+        // Sender cores per (device, link) after the split, and which senders of each device would be split
+        std::map<std::pair<FabricNodeId, uint32_t>, uint32_t> sender_cores_per_device_and_link;
+        std::map<FabricNodeId, std::vector<size_t>> split_senders_per_device;
+        for (size_t s = 0; s < config.senders.size(); s++) {
+            const auto& sender = config.senders[s];
+            const size_t num_patterns = sender.patterns.size();
+            const bool split = max_configs_per_piece[s] != 0 && num_patterns > max_configs_per_piece[s];
+            sender_cores_per_device_and_link[{sender.device, sender.link_id}] +=
+                split ? tt::div_up(num_patterns, max_configs_per_piece[s]) : 1;
+            if (split) {
+                split_senders_per_device[sender.device].push_back(s);
+            }
+        }
+
+        // Go through each device that had a split sender, and ensure that the worker grid can hold the result of the
+        // split (enough cores exist for the sender cores, mux cores, receiver cores, sync core, and safety margin).
+        for (const auto& [device, split_senders] : split_senders_per_device) {
+            uint32_t sender_cores = 0;
+            uint32_t mux_cores = 0;
+            for (const auto& [device_and_link, cores] : sender_cores_per_device_and_link) {
+                // Only count cores for this device
+                if (device_and_link.first != device) {
+                    continue;
+                }
+                // Increment # of mux cores needed
+                sender_cores += cores;
+                if (cores > 1 || config.enable_flow_control) {
+                    mux_cores += mux_cores_per_link;
+                }
+            }
+
+            // Count receiver cores needed for this device
+            uint32_t receiver_cores = 0;
+            for (const auto& [device_and_link, num_configs] : receive_configs) {
+                if (device_and_link.first == device) {
+                    receiver_cores += tt::div_up(num_configs, receiver_configs_per_core);
+                }
+            }
+
+            // Count sync core needed for this device
+            const uint32_t sync_cores = config.global_sync ? 1 : 0;
+
+            // Grid can fit all the cores needed so we can fit the split
+            const uint32_t cores_needed = sender_cores + mux_cores + receiver_cores + sync_cores + SAFETY_MARGIN_CORES;
+            if (cores_needed <= total_worker_cores) {
+                continue;
+            }
+
+            // Undo the split for this device
+            log_info(
+                tt::LogTest,
+                "Keeping {} senders on device {} whole: split, they would need {} of its {} worker cores ({} sender, "
+                "{} mux, {} receiver, {} sync, {} margin)",
+                split_senders.size(),
+                device,
+                cores_needed,
+                total_worker_cores,
+                sender_cores,
+                mux_cores,
+                receiver_cores,
+                sync_cores,
+                SAFETY_MARGIN_CORES);
+            for (const size_t s : split_senders) {
+                max_configs_per_piece[s] = 0;
+            }
+        }
+    }
+
     // Receive configs landing on each device, keyed by (device, link of the sending core). A multicast counts once on
     // every device it reaches.
     static std::map<std::pair<FabricNodeId, uint32_t>, uint32_t> count_receive_configs_per_device_and_link(
@@ -964,19 +1069,25 @@ private:
         CoreCoord worker_grid = device_info_provider_.get_worker_grid_size();
         uint32_t total_worker_cores = worker_grid.x * worker_grid.y;
 
-        // 2. Determine mux cores per device and num_links (if flow control enabled)
-        uint32_t mux_cores_per_device = 0;
-        uint32_t num_links = 1;  // Default to 1 link
-        if (config.enable_flow_control) {
-            // Determine num_links from test config
-            uint32_t max_link_id = 0;
-            for (const auto& sender : config.senders) {
-                max_link_id = std::max(max_link_id, sender.link_id);
-            }
-            num_links = max_link_id + 1;  // link_id is 0-indexed
-
-            mux_cores_per_device = device_info_provider_.get_max_connections_per_device() * num_links;
+        // 2. Determine num_links and where muxes go. With flow control every device has a mux per direction on every
+        // link (receivers return credits over the senders' links). Otherwise a device has them only on the links where
+        // two or more of its senders share the link (e.g. the pieces of a split sender).
+        uint32_t max_link_id = 0;
+        for (const auto& sender : config.senders) {
+            max_link_id = std::max(max_link_id, sender.link_id);
         }
+        const uint32_t num_links = max_link_id + 1;  // link_id is 0-indexed
+        const uint32_t mux_cores_per_link = device_info_provider_.get_max_connections_per_device();
+        const auto links_shared_by_senders = find_links_shared_by_senders(config);
+        const auto count_mux_cores_on_device = [&](const FabricNodeId& device_id) -> uint32_t {
+            if (config.enable_flow_control) {
+                return mux_cores_per_link * num_links;
+            }
+            const auto shared_it = links_shared_by_senders.find(device_id);
+            return shared_it == links_shared_by_senders.end()
+                       ? 0
+                       : mux_cores_per_link * static_cast<uint32_t>(shared_it->second.size());
+        };
 
         // 3. Build per-device receiver load histogram
         std::unordered_map<FabricNodeId, uint32_t> receiver_load_per_device;
@@ -1007,8 +1118,9 @@ private:
                 }
             }
 
+            const uint32_t mux_cores_on_device = count_mux_cores_on_device(device_id);
             uint32_t reserved_cores =
-                (has_sync ? 1 : 0) + sender_cores_on_device + mux_cores_per_device + SAFETY_MARGIN_CORES;
+                (has_sync ? 1 : 0) + sender_cores_on_device + mux_cores_on_device + SAFETY_MARGIN_CORES;
 
             // Feasibility check 1: No cores left for receivers
             if (reserved_cores >= total_worker_cores) {
@@ -1025,7 +1137,7 @@ private:
                     total_worker_cores,
                     (has_sync ? 1 : 0),
                     sender_cores_on_device,
-                    mux_cores_per_device,
+                    mux_cores_on_device,
                     SAFETY_MARGIN_CORES,
                     num_receivers);
                 TT_FATAL(false, "Infeasible allocation configuration");
