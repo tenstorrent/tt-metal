@@ -9,7 +9,11 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.common.utility_functions import divup, is_blackhole, is_wormhole_b0
 from models.demos.vision.classification.vit.common.common import load_torch_model
-from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
+from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import (
+    available_iterations,
+    get_batch,
+    get_data_loader,
+)
 
 if is_wormhole_b0():
     from models.demos.vision.classification.vit.wormhole.tt import (
@@ -56,7 +60,10 @@ class VitTestInfra:
         model = load_torch_model(model_location_generator, embedding=True)
         config = model.config
 
-        self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+        if is_blackhole():
+            self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, device)
+        else:
+            self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
         image_processor = AutoImageProcessor.from_pretrained(model_name)
 
         self.parameters = preprocess_model_parameters(
@@ -84,8 +91,9 @@ class VitTestInfra:
         )
 
         if use_random_input_tensor == False:
-            ## IMAGENET INFERENCE
-            data_loader = get_data_loader("ImageNet_data", batch_size * self.num_devices, 2)
+            data_loader = get_data_loader(
+                batch_size * self.num_devices, available_iterations(batch_size * self.num_devices, 1)
+            )
             self.torch_pixel_values, labels = get_batch(data_loader, image_processor)
         else:
             self.torch_pixel_values = torch.randn(
@@ -112,19 +120,23 @@ class VitTestInfra:
 
         N, H, W, C = torch_pixel_values.shape
         N = N // self.num_devices
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 1),
-                ),
-            }
-        )
-        n_cores = 16
-        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
-        input_mem_config = ttnn.MemoryConfig(
-            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-        )
+        if is_blackhole():
+            # The Blackhole model derives the pixels' shard grid from the device's grid.
+            input_mem_config = ttnn_optimized_sharded_vit.pixel_values_memory_config(self.config, device, (N, H, W, C))
+        else:
+            shard_grid = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 1),
+                    ),
+                }
+            )
+            n_cores = 16
+            shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
+            input_mem_config = ttnn.MemoryConfig(
+                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+            )
         tt_inputs_host = ttnn.from_torch(
             torch_pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.inputs_mesh_mapper
         )
@@ -135,13 +147,11 @@ class VitTestInfra:
         tt_inputs_host, input_mem_config = self.setup_l1_sharded_input(
             device, self.torch_pixel_values, mesh_mapper=mesh_mapper, mesh_composer=mesh_composer
         )
-        dram_grid_size = device.dram_grid_size()
+        dram_shards = dram_shard_count(device)
         dram_shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
-            ),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_shards - 1, 0))}),
             [
-                divup(tt_inputs_host.volume() // tt_inputs_host.shape[-1], dram_grid_size.x),
+                divup(tt_inputs_host.volume() // tt_inputs_host.shape[-1], dram_shards),
                 tt_inputs_host.shape[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
@@ -162,6 +172,14 @@ class VitTestInfra:
             parameters=self.parameters,
         )
         return self.output_tensor
+
+
+def dram_shard_count(device):
+    """How many DRAM banks a DRAM-sharded input spreads over: all of them, unless the worker grid
+    has fewer cores. The allocator caps a sharded buffer's shards at the worker core count even in
+    DRAM, so on a small grid the input takes one bank per core."""
+    grid = device.compute_with_storage_grid_size()
+    return min(device.dram_grid_size().x, grid.x * grid.y)
 
 
 def create_test_infra(

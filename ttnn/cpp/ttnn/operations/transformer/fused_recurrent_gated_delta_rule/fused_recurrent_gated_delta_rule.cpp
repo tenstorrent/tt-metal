@@ -17,7 +17,6 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/device.hpp"
 
 using namespace tt::tt_metal;
@@ -61,6 +60,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const ttnn::Tensor& beta_in,
     std::optional<float> scale_opt,
     const std::optional<ttnn::Tensor>& initial_state,
+    const std::optional<ttnn::Tensor>& initial_state_block_idx,
     bool output_final_state,
     bool output_per_token_state,
     bool use_qk_l2norm,
@@ -77,7 +77,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const uint32_t K = qs[3];
     const uint32_t HV = vs[2];
     const uint32_t V = vs[3];
-    TT_FATAL(HV % H == 0, "HV ({}) must be divisible by H ({})", HV, H);
+    TT_FATAL(H > 0 && HV % H == 0, "HV ({}) must be divisible by H ({}) and H must be greater than 0", HV, H);
     const uint32_t G = HV / H;
     const uint32_t BH = B * HV;
 
@@ -94,12 +94,12 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     }
     ttnn::Tensor v = head_split(v_in, B, T, HV, V);  // [BH, T, V]
 
-    // decay = exp(g); beta as-is (already sigmoid'd).
-    ttnn::Tensor decay = ttnn::exp(headvec_split(g_in, B, T, HV));  // [BH, T]
-    ttnn::Tensor beta = headvec_split(beta_in, B, T, HV);           // [BH, T]
+    // g (log decay) as-is: the kernel computes exp(g) on the SFPU; beta as-is (already sigmoid'd).
+    ttnn::Tensor g = headvec_split(g_in, B, T, HV);        // [BH, T]
+    ttnn::Tensor beta = headvec_split(beta_in, B, T, HV);  // [BH, T]
 
     // Per-token layout: each (head, token) its own zero-padded tile-block.
-    //   q/k [BH*T,1,K], v [BH*T,1,V], decay/beta [BH*T,1,1].
+    //   q/k [BH*T,1,K], v [BH*T,1,V], g/beta [BH*T,1,1].
     // T==1 fast path: head_split already yields [BH,1,D] == [BH*T,1,D], so the q/k/v relayout is a
     // no-op — skip the RM round-trip (it is ~5x the cost of the permute; see test_headsplit_bench).
     if (T > 1) {
@@ -107,21 +107,27 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         k = reshape_rm(k, ttnn::Shape({BH * T, 1, K}));
         v = reshape_rm(v, ttnn::Shape({BH * T, 1, V}));
     }
-    // decay/beta come from headvec_split as [BH,T] (BH packed in tile-rows); they always need the
-    // relayout to per-scalar tiles [BH*T,1,1] so bcast_scalar reads element [0,0]. They are tiny.
-    decay = reshape_rm(decay, ttnn::Shape({BH * T, 1, 1}));
+    // g/beta come from headvec_split as [BH,T] (BH packed in tile-rows); they always need the
+    // relayout to per-scalar tiles [BH*T,1,1] so the reader finds the value at element [0,0]. They are tiny.
+    g = reshape_rm(g, ttnn::Shape({BH * T, 1, 1}));
     beta = reshape_rm(beta, ttnn::Shape({BH * T, 1, 1}));
 
     // Initial state [B,HV,K,V] -> [BH,K,V] fp32 TILE. Always provide (zeros if absent) so the reader
     // always reads S (it takes the unconditional path; there is no in-kernel zeroing). Traced callers
     // pass a persistent state buffer (never absent); the zeros() fallback here is eager-only
     // (device-side fill, uncached), same caveat as chunk_gated_delta_rule.
-    std::optional<ttnn::Tensor> s0;
-    if (initial_state.has_value()) {
-        s0 = ttnn::reshape(as_f32(*initial_state), ttnn::Shape({BH, K, V}));
-    } else {
-        s0 = ttnn::zeros(
-            ttnn::Shape({BH, K, V}), DataType::FLOAT32, Layout::TILE, std::ref(*dev), ttnn::DRAM_MEMORY_CONFIG);
+    //
+    // Ring mode: initial_state is the [T*BH,K,V] ring and also the state output; pass it through untouched, since a
+    // reshape or typecast would break the in-place aliasing. The device op validates it.
+    const bool ring = initial_state_block_idx.has_value();
+    std::optional<ttnn::Tensor> s0 = initial_state;
+    if (!ring) {
+        if (initial_state.has_value()) {
+            s0 = ttnn::reshape(as_f32(*initial_state), ttnn::Shape({BH, K, V}));
+        } else {
+            s0 = ttnn::zeros(
+                ttnn::Shape({BH, K, V}), DataType::FLOAT32, Layout::TILE, std::ref(*dev), ttnn::DRAM_MEMORY_CONFIG);
+        }
     }
 
     const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
@@ -138,9 +144,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         q,
         k,
         v,
-        decay,
+        g,
         beta,
         s0,
+        initial_state_block_idx,
         T,
         want_state && !output_per_token_state,
         output_per_token_state,
@@ -156,7 +163,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     o = ttnn::to_layout(o, Layout::TILE);
 
     std::optional<ttnn::Tensor> state_opt;
-    if (output_per_token_state) {
+    if (ring) {
+        // res[1] is the caller's ring; return it as-is so the buffer stays aliased.
+        state_opt = st;
+    } else if (output_per_token_state) {
         // The writer lays per-token state out token-major, so the raw [BH*T,K,V] buffer already
         // reads as [T,B,HV,K,V]. At B==1 -- the speculative-decode case -- that IS the requested
         // [B,T,HV,K,V] element order, and K,V (the tiled dims) are untouched, so this is a pure

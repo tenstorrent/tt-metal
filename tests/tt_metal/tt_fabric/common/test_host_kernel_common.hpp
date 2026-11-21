@@ -30,4 +30,13 @@ enum NocPacketType : uint8_t {
     NOC_PACKET_TYPE_COUNT = NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC + 1
 };
 
+// Payload pattern for the fused write + atomic inc tests: each word carries the 1-based packet index it was
+// sent in and its own word index, so the receiver can detect data that is older than the semaphore value.
+constexpr uint32_t FUSED_ATOMIC_INC_PATTERN_WORD_IDX_BITS = 12;
+constexpr uint32_t FUSED_ATOMIC_INC_PATTERN_WORD_IDX_MASK = (1u << FUSED_ATOMIC_INC_PATTERN_WORD_IDX_BITS) - 1;
+
+inline uint32_t fused_atomic_inc_pattern_word(uint32_t packet_idx, uint32_t word_idx) {
+    return (packet_idx << FUSED_ATOMIC_INC_PATTERN_WORD_IDX_BITS) | (word_idx & FUSED_ATOMIC_INC_PATTERN_WORD_IDX_MASK);
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

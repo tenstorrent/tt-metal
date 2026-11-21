@@ -12,8 +12,9 @@
 //   - the two dead compile-time args of the legacy SHARDED path (pack_num_pages, pack_num_pages_last_row)
 //     are dropped — they were read into constexprs the kernel never used.
 // The producer-side cb_out_buf.wait_front in transpose_with_pack_untilize is preserved verbatim: it
-// reads the received-tiles counter the kernel just bumped (returns immediately) and is a producer-side
-// barrier, not a consume — so the factory binds compute as PRODUCER-only of the output DFB.
+// reads the received-tiles counter the kernel just bumped (returns immediately). On ht>8 it is not a
+// consume (compute is PRODUCER-only of the staging DFB); on ht<=8 compute self-loops the output shard and
+// pops each column (release_out_column).
 // The interleaved (non-sharded) row-major path lives in transpose_wh_rm.cpp.
 
 #include <cstdint>
@@ -22,9 +23,22 @@
 #include "api/compute/transpose.h"
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
+#include "api/compute/tile_move_copy.h"  // dummy_unpack
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+
+// On ht<=8 the output DFB is the borrowed output shard and this kernel is its only producer and consumer
+// (self-loop). Pop each column once it is packed so the buffer is left balanced. dummy_unpack orders the pop
+// after the wait on Quasar (a bare wait_front -> pop_front traps the unpacker); nothing unpacks this buffer.
+template <typename OutDFB>
+ALWI void release_out_column(OutDFB& cb_out_buf, uint32_t num_pages) {
+    if constexpr (get_arg(args::out_is_self_loop) == 1) {
+        cb_out_buf.wait_front(num_pages);
+        dummy_unpack(cb_out_buf.get_id());
+        cb_out_buf.pop_front(num_pages);
+    }
+}
 
 template <
     uint32_t Wt,
@@ -34,8 +48,9 @@ template <
     uint32_t row_size,
     uint32_t pack_num_pages_last_col,
     uint32_t pack_num_pages_last_row_col,
-    uint32_t cb_out>
-ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, DataflowBuffer& cb_out_buf) {
+    uint32_t cb_out,
+    typename DFB>
+ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, DFB& cb_out_buf) {
     uint32_t tile_idx = 0;
 
     transpose_init(cb_tilize);
@@ -55,12 +70,14 @@ ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, DataflowBu
             pack_untilize_dest<Ht, Ht, false, use_narrow_row, row_size>(cb_out);
             tile_regs_release();
             cb_out_buf.push_back(pack_num_pages_last_row_col);
+            release_out_column(cb_out_buf, pack_num_pages_last_row_col);
         } else {
             cb_out_buf.reserve_back(pack_num_pages_last_col);
             tile_regs_wait();
             pack_untilize_dest<Ht, Ht, false, use_narrow_row, row_size>(cb_out);
             tile_regs_release();
             cb_out_buf.push_back(pack_num_pages_last_col);
+            release_out_column(cb_out_buf, pack_num_pages_last_col);
         }
         tile_idx = tile_idx - HtWt + 1;
     }
@@ -80,8 +97,8 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
     return 1;
 }
 
-template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t cb_out>
-ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DataflowBuffer& cb_out_buf) {
+template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t cb_out, typename DFB>
+ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DFB& cb_out_buf) {
     uint32_t tile_idx = 0;
 
     transpose_init(cb_tilize);
@@ -105,9 +122,14 @@ ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DataflowBuffer& cb_ou
         }
         cb_out_buf.push_back(Ht);
 
-        // Producer-side barrier on the just-pushed column (reads the received-tiles counter this
-        // kernel bumped; returns immediately). Not a consume — there is no pop_front.
-        cb_out_buf.wait_front(Ht);
+        if constexpr (get_arg(args::out_is_self_loop) == 1) {
+            // Self-loop (ht<=8): wait for, then pop, the column this kernel just pushed.
+            release_out_column(cb_out_buf, Ht);
+        } else {
+            // Producer-side barrier on the just-pushed column (reads the received-tiles counter this
+            // kernel bumped; returns immediately).
+            cb_out_buf.wait_front(Ht);
+        }
         tile_idx = tile_idx - HtWt + 1;
     }
     pack_untilize_uninit(cb_out);
@@ -134,6 +156,7 @@ void kernel_main() {
     constexpr bool use_narrow_row = last_output_row_num_datums < TILE_WIDTH ? true : false;
     constexpr uint32_t row_size = last_output_row_num_datums < TILE_WIDTH ? last_output_row_num_datums : TILE_WIDTH;
 
+    DataflowBuffer cb_in_buf(dfb::cb_in);
     DataflowBuffer cb_tilize_buf(dfb::cb_tilize);
     DataflowBuffer cb_out(dfb::cb_out);
 
@@ -151,7 +174,7 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
-            compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(Ht);
+            compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(cb_in_buf, cb_tilize_buf, Ht);
 
         // transpose
         cb_tilize_buf.wait_front(HtWt);

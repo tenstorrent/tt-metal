@@ -80,8 +80,8 @@ void kernel_main() {
     uint32_t writable = dest_page_size_bytes - write_start_offset;
     Scratchpad<uint8_t> source_scratch(scratch::in0);
     Scratchpad<uint8_t> dest_scratch(scratch::in1);
-    const uint32_t source_buffer = source_scratch.get_base_address();
-    const uint32_t dest_buffer = dest_scratch.get_base_address();
+    const auto source_buffer = source_scratch.local_mem();
+    const auto dest_buffer = dest_scratch.local_mem();
 
     uint64_t dst_noc_addr = d.get_noc_addr(write_page);
     uint64_t write_offset = (dst_noc_addr & OFFSET_16) + write_start_offset;
@@ -112,9 +112,11 @@ void kernel_main() {
                 noc, src_noc_addr & MASK_64, source_buffer, source_read_size_bytes);
             read_offset = src_noc_addr & OFFSET_64;
         } else {  // L1 but not aligned to 16
-            tt::data_movement::common::enhanced_noc_async_read<(source_page_size_bytes + 128), false>(
-                noc, src_noc_addr & MASK_16, source_buffer, source_read_size_bytes);
+            // Read only the page (plus its sub-16B lead-in): the DRAM-sized source_read_size_bytes
+            // over-reads ~128 B past the page, which runs off the end of L1 for a top-of-L1 page.
             read_offset = src_noc_addr & OFFSET_16;
+            tt::data_movement::common::enhanced_noc_async_read<(source_page_size_bytes + 128), false>(
+                noc, src_noc_addr & MASK_16, source_buffer, source_page_size_bytes + read_offset);
         }
 
         readable = source_page_size_bytes;
@@ -132,7 +134,7 @@ void kernel_main() {
                     dst_noc_addr_offset = dst_noc_addr_offset + readable;
                 } else {
                     acquire_dest_slot(noc, slots_in_flight, num_dest_write_slots);
-                    const uint32_t slot_base = dest_buffer + dest_slot * dest_slot_size_bytes;
+                    const auto slot_base = dest_buffer + dest_slot * dest_slot_size_bytes;
                     // use_read_datamover=true: sync via read barrier so prior DRAM dest writes stay in flight.
                     tt::data_movement::common::tt_memmove<false, false, true, dest_page_size_bytes>(
                         noc, slot_base + write_offset, source_buffer + read_offset, readable);
@@ -155,7 +157,7 @@ void kernel_main() {
                         noc, source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, readable);
                 } else {
                     acquire_dest_slot(noc, slots_in_flight, num_dest_write_slots);
-                    const uint32_t slot_base = dest_buffer + dest_slot * dest_slot_size_bytes;
+                    const auto slot_base = dest_buffer + dest_slot * dest_slot_size_bytes;
                     // use_read_datamover=true: sync via read barrier so prior DRAM dest writes stay in flight.
                     tt::data_movement::common::tt_memmove<false, false, true, dest_page_size_bytes>(
                         noc, slot_base + write_offset, source_buffer + read_offset, readable);
@@ -184,7 +186,7 @@ void kernel_main() {
                         noc, source_buffer + read_offset, dst_noc_addr + dst_noc_addr_offset, writable);
                 } else {
                     acquire_dest_slot(noc, slots_in_flight, num_dest_write_slots);
-                    const uint32_t slot_base = dest_buffer + dest_slot * dest_slot_size_bytes;
+                    const auto slot_base = dest_buffer + dest_slot * dest_slot_size_bytes;
                     // use_read_datamover=true: sync via read barrier so prior DRAM dest writes stay in flight.
                     tt::data_movement::common::tt_memmove<false, false, true, dest_page_size_bytes>(
                         noc, slot_base + write_offset, source_buffer + read_offset, writable);

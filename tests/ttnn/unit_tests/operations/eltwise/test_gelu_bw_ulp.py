@@ -25,7 +25,7 @@ Two derivative formulas are covered:
    where:
      z = beta * (x + kappa * x^3)
      beta = sqrt(2/pi), kappa = 0.044715
-   Tests: TestGeluBwTanhDerivativeAtZero, TestGeluBwTanhPositiveValues,
+   Tests: TestGeluBwTanhDerivativeAtZero, TestGeluBwTanhPositiveValues, TestGeluBwTanhNegativeValues,
           TestGeluBwTanhNearZero, TestGeluBwTanhWithGradientScaling, TestGeluBwTanhShapes
 
 Hardware Model: Tenstorrent SFPU uses DAZ+FTZ (Denormals-Are-Zero + Flush-To-Zero)
@@ -456,6 +456,40 @@ class TestGeluBwTanhPositiveValues:
         ulp_error = ulp_distance_bf16_daz(actual, expected)
 
         logger.debug(f"x={input_value}: expected={expected:.4f}, actual={actual:.4f}, ULP={ulp_error}")
+        assert ulp_error <= max_expected_ulp, f"Expected ULP <= {max_expected_ulp}, got {ulp_error}"
+
+
+class TestGeluBwTanhNegativeValues:
+    """For x <= -3, tanh(z) rounds to -1 in bf16, so a 1 - tanh^2 / 1 + tanh formulation collapses to exactly 0.
+    The derivative is a near-cancelling sum of two small terms there, hence the looser deep-tail thresholds."""
+
+    @pytest.mark.parametrize(
+        "input_value,max_expected_ulp",
+        [
+            (-2.0, 2),
+            (-3.0, 8),
+            (-3.25, 4),
+            (-3.5, 8),
+            (-4.0, 4),
+            (-5.0, 8),
+            (-6.0, 32),
+            (-8.0, 32),
+        ],
+    )
+    def test_negative_values(self, device, input_value, max_expected_ulp):
+        torch_input = torch.tensor([[input_value]], dtype=torch.bfloat16)
+        torch_grad = torch.tensor([[1.0]], dtype=torch.bfloat16)
+
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_grad = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+        result = ttnn.gelu_bw(tt_grad, tt_input, variant=ttnn.GeluVariant.Tanh)
+        actual = ttnn.to_torch(result[0]).item()
+
+        expected = gelu_derivative_tanh_expected_bf16_daz(input_value)
+        ulp_error = ulp_distance_bf16_daz(actual, expected)
+
+        logger.debug(f"x={input_value}: expected={expected:.6e}, actual={actual:.6e}, ULP={ulp_error}")
         assert ulp_error <= max_expected_ulp, f"Expected ULP <= {max_expected_ulp}, got {ulp_error}"
 
 

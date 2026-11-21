@@ -16,6 +16,14 @@ from models.demos.gemma4_d_p.tt.matmul_config import (
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
+# Gemma4's gate GELU is the tanh form (HF gelu_pytorch_tanh). GELU_TANH's param 1 evaluates it as
+# x / (1 + exp(-2u)): within 1 BF16 ULP of the FP32 tanh form and cheaper on the SFPU.
+_GATE_GELU = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0)
+
+
+# Weight columns per core of the short-M down projection (the gate and up projections keep the 1D default of 2).
+_DOWN_PER_CORE_N = 4
+
 
 class MLP:
     def __init__(
@@ -115,7 +123,7 @@ class MLP:
     def _project(self, hidden_states, weight, memory_config, gelu=False, per_core_n=None):
         """hidden_states @ weight, on the explicit config when there is one and the core grid otherwise.
         With gelu, the GELU is fused either way. per_core_n sets the 1D config's columns per core."""
-        fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH) if gelu else None
+        fused_activation = _GATE_GELU if gelu else None
         program_config, compute_kernel_config = self._matmul_configs(
             hidden_states, weight, fused_activation, per_core_n
         )
@@ -149,11 +157,15 @@ class MLP:
         hidden = ttnn.mul(gate, up, memory_config=act_mc)
         gate.deallocate(True)
         up.deallocate(True)
+        # Short M: down runs 4 columns per core (the 1D config only applies there) and writes its output width-sharded
+        # straight into the reduce-scatter, which reads it as fast as DRAM. Taller slabs write the output to DRAM.
+        down_mc = ttnn.DRAM_MEMORY_CONFIG
         if short_m:
             sharded = to_l1_width_sharded(hidden)
             hidden.deallocate(True)
             hidden = sharded
-        output = self._project(hidden, self.down_proj, ttnn.DRAM_MEMORY_CONFIG, per_core_n=4)
+            down_mc = short_m_output_memcfg(hidden, self.down_proj, per_core_n=_DOWN_PER_CORE_N)
+        output = self._project(hidden, self.down_proj, down_mc, per_core_n=_DOWN_PER_CORE_N)
         hidden.deallocate(True)
         output = ccl_reduce_scatter_rows(output, self.mesh_config, self.ccl_manager)
         return output

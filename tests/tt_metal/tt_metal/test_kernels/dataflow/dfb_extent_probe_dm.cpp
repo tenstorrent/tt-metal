@@ -20,7 +20,8 @@ inline uint32_t l1_ptr_addr(uint32_t byte_addr) {
 #endif
 }
 
-inline void snapshot_extent(DataflowBuffer& dfb, uint32_t result_l1_addr, uint32_t record_index) {
+template <typename DFB>
+inline void snapshot_extent(DFB& dfb, uint32_t result_l1_addr, uint32_t record_index) {
     constexpr uint32_t extent_record_bytes = 8 * sizeof(uint32_t);
     const uint32_t out_addr = l1_ptr_addr(result_l1_addr + record_index * extent_record_bytes);
     volatile tt_l1_ptr uint32_t* const out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);

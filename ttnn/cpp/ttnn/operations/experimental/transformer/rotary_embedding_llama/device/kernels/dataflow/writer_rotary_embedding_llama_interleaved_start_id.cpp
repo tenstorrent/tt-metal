@@ -61,13 +61,14 @@ void kernel_main() {
                     dfb_out.wait_front(Wt);
                 }
 
-                uint32_t l1_read_addr = write_rotary_output ? dfb_out.get_read_ptr() : zero_stage.get_base_address();
+                CoreLocalMem<volatile uint32_t> l1_read = write_rotary_output
+                                                              ? CoreLocalMem<volatile uint32_t>(dfb_out.get_read_ptr())
+                                                              : zero_stage.local_mem();
                 const uint32_t l1_read_stride = write_rotary_output ? tile_bytes : zero_tile_bytes;
                 const uint32_t write_bytes = write_rotary_output ? tile_bytes : zero_tile_bytes;
                 for (uint32_t j = 0; j < Wt; j++) {
-                    noc.async_write(
-                        CoreLocalMem<uint32_t>(l1_read_addr), s, write_bytes, {}, {.page_id = output_curr_idx});
-                    l1_read_addr += l1_read_stride;
+                    noc.async_write(l1_read, s, write_bytes, {}, {.page_id = output_curr_idx});
+                    l1_read += l1_read_stride / sizeof(uint32_t);
                     output_curr_idx++;
                 }
                 noc.async_write_barrier();

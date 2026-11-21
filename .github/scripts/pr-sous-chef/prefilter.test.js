@@ -19,8 +19,8 @@ const path = require('node:path');
 const https = require('node:https');
 
 const {
-  run, FLOW_LABEL, HANDOFF_LABEL, WORKFLOW_ID, HANDOFF_MARKER, MAX_NUDGES_PER_PR, COOLDOWN_MS, SESSION_STALE_MS, PRE_ACTIVATION_LOGIN,
-  matchesWorkflowId, isCopilotCodingAgent, isResolvableReviewerBot, isConflicting,
+  run, FLOW_LABEL, HANDOFF_LABEL, WORKFLOW_ID, HANDOFF_MARKER, MAX_NUDGES_PER_PR, COOLDOWN_MS, ACTIVE_RUN_MAX_AGE_MS, PRE_ACTIVATION_LOGIN,
+  COPILOT_REVIEWER_APP_SLUG, isActiveAgentRunFor, isCopilotReviewerEvent, matchesWorkflowId, isCopilotCodingAgent, isResolvableReviewerBot, isConflicting,
   makeIdentity, verifyFix, buildHandoffComment
 } = require('./prefilter.js');
 
@@ -171,8 +171,26 @@ const nudgeAt = (minutesAgo) => ({ user: bot, body: `@copilot pr-gate failed, pl
 const handoffAt = (minutesAgo) => ({ user: bot, body: `${HANDOFF_MARKER}\nhanding off`, created_at: ago(minutesAgo) });
 const humanAt = (minutesAgo) => ({ user: { login: 'alice', type: 'User' }, body: 'looking', created_at: ago(minutesAgo) });
 const labelEvent = (event, name, minutesAgo) => ({ event, label: { name }, actor: { login: 'maintainer' }, created_at: ago(minutesAgo) });
-const workEvent = (kind, minutesAgo) => ({ event: `copilot_work_${kind}`, created_at: ago(minutesAgo) });
-const SESSION_STALE_MIN = SESSION_STALE_MS / MIN;
+// `app` = performed_via_github_app.slug as the REST timeline reports it; omitted -> no app field.
+const workEvent = (kind, minutesAgo, app) => ({
+  event: `copilot_work_${kind}`, created_at: ago(minutesAgo), ...(app ? { performed_via_github_app: { slug: app } } : {})
+});
+const SWE_APP = 'copilot-swe-agent';
+const REVIEWER_APP = COPILOT_REVIEWER_APP_SLUG;
+// A `dynamic` Actions run as `GET /repos/{o}/{r}/actions/runs?branch=..&event=dynamic`
+// returns it (shapes copied from PR #60257's two runs). Defaults: belongs to PR 1.
+const CODING_AGENT_PATH = 'dynamic/copilot-swe-agent/copilot';
+const REVIEWER_PATH = 'dynamic/agents/copilot-pull-request-reviewer';
+const dynRun = (path, status, o = {}) => {
+  const number = o.number ?? 1;
+  return {
+    id: o.id ?? 100, name: path === REVIEWER_PATH ? 'Running Copilot Code Review' : 'Running Copilot cloud agent',
+    path, status, conclusion: status === 'completed' ? 'success' : null, event: 'dynamic',
+    head_branch: o.head_branch ?? `copilot/fix-${number}`,
+    pull_requests: o.pull_requests ?? [{ number }],
+    run_started_at: ago(o.startedMinutesAgo ?? 3), created_at: ago(o.startedMinutesAgo ?? 3)
+  };
+};
 const failingCheck = { __typename: 'CheckRun', name: 'pr-gate', status: 'COMPLETED', conclusion: 'FAILURE', startedAt: ago(200), detailsUrl: 'https://x/pr-gate' };
 const greenCheck = { __typename: 'CheckRun', name: 'pr-gate', status: 'COMPLETED', conclusion: 'SUCCESS', startedAt: ago(200), detailsUrl: 'https://x/pr-gate' };
 
@@ -181,15 +199,25 @@ const greenCheck = { __typename: 'CheckRun', name: 'pr-gate', status: 'COMPLETED
 // returns, so a stale snapshot can be simulated by making them disagree.
 const scenario = (o = {}) => ({
   number: 1, labels: [FLOW_LABEL], freshLabels: undefined, freshState: 'open', freshDraft: false,
-  comments: [], timeline: [], checks: [failingCheck], headCommittedAt: ago(24 * 60), assignees: ['Copilot'],
+  comments: [], timeline: [], runs: [], runsError: null, checks: [failingCheck], headCommittedAt: ago(24 * 60), assignees: ['Copilot'],
   mergeStateStatus: 'BLOCKED', mergeable: 'MERGEABLE', threads: [], changedFiles: 3, createdAt: ago(48 * 60), ...o
 });
 
 async function runPrefilter(scenarios) {
   const byNumber = new Map(scenarios.map(s => [s.number, s]));
   const writes = []; // ordered log of every REST call that matters to the findings
+  const runQueries = []; // actions.listWorkflowRunsForRepo calls (reads; kept out of `writes`)
   const github = {
     rest: {
+      actions: {
+        listWorkflowRunsForRepo: async (p) => {
+          runQueries.push(p);
+          const s = [...byNumber.values()].find(x => `copilot/fix-${x.number}` === p.branch);
+          if (!s) throw new Error(`unexpected branch ${p.branch}`);
+          if (s.runsError) throw s.runsError;
+          return { data: { total_count: s.runs.length, workflow_runs: s.runs } };
+        }
+      },
       search: { issuesAndPullRequests: async () => ({ data: { items: scenarios.map(s => ({ number: s.number })) } }) },
       issues: {
         listEventsForTimeline: async ({ issue_number }) => { writes.push(`timeline#${issue_number}`); return byNumber.get(issue_number).timeline; },
@@ -234,7 +262,7 @@ async function runPrefilter(scenarios) {
   const result = await run({ github, context, core });
   const created = writes.filter(w => w.startsWith('createComment')).length;
   const labeled = writes.filter(w => w.startsWith('addLabels')).length;
-  return { ...result, outputs, logs, writes, created, labeled };
+  return { ...result, outputs, logs, writes, runQueries, created, labeled };
 }
 
 const sixNudgesEndingAt = (lastMinutesAgo) => Array.from({ length: MAX_NUDGES_PER_PR }, (_, i) => nudgeAt(lastMinutesAgo + (MAX_NUDGES_PER_PR - 1 - i) * 90));
@@ -247,24 +275,129 @@ test('run(): a failing, never-nudged flow PR is eligible and nothing is written'
   assert.equal(r.outputs.eligible_numbers, '1');
 });
 
-test('run(): a recent copilot_work_started with no finished event is treated as an active session', async () => {
-  const r = await runPrefilter([scenario({ timeline: [workEvent('started', SESSION_STALE_MIN - 1)] })]);
+// ---- Filter 2: liveness from Actions runs, not copilot_work_* timeline events ----
+
+test('isActiveAgentRunFor: active dynamic/ run referencing the PR by number or head branch', () => {
+  const pr = { number: 1, headRefName: 'copilot/fix-1' };
+  assert.equal(isActiveAgentRunFor(dynRun(REVIEWER_PATH, 'in_progress'), pr), true);
+  assert.equal(isActiveAgentRunFor(dynRun(CODING_AGENT_PATH, 'queued'), pr), true);
+  for (const st of ['pending', 'requested', 'waiting']) assert.equal(isActiveAgentRunFor(dynRun(CODING_AGENT_PATH, st), pr), true, st);
+  assert.equal(isActiveAgentRunFor(dynRun(CODING_AGENT_PATH, 'completed'), pr), false);
+  assert.equal(isActiveAgentRunFor(dynRun(CODING_AGENT_PATH, 'in_progress', { pull_requests: [] }), pr), true, 'head_branch alone suffices');
+  assert.equal(isActiveAgentRunFor(dynRun(CODING_AGENT_PATH, 'in_progress', { head_branch: 'other' }), pr), true, 'PR number alone suffices');
+  assert.equal(isActiveAgentRunFor(dynRun(CODING_AGENT_PATH, 'in_progress', { number: 2 }), pr), false);
+  assert.equal(isActiveAgentRunFor({ ...dynRun(CODING_AGENT_PATH, 'in_progress'), path: '.github/workflows/pr-gate.yaml' }, pr), false, 'only dynamic/ paths');
+  assert.equal(isActiveAgentRunFor({ ...dynRun(CODING_AGENT_PATH, 'in_progress', { pull_requests: [] }), head_branch: null }, { number: 1, headRefName: null }), false);
+});
+
+test('isCopilotReviewerEvent: denylists only the code-review app slug', () => {
+  assert.equal(isCopilotReviewerEvent(workEvent('started', 1, REVIEWER_APP)), true);
+  assert.equal(isCopilotReviewerEvent(workEvent('started', 1, 'Copilot-Pull-Request-Reviewer')), true);
+  assert.equal(isCopilotReviewerEvent(workEvent('started', 1, SWE_APP)), false);
+  assert.equal(isCopilotReviewerEvent(workEvent('started', 1)), false, 'no app field -> still counted');
+});
+
+test('run() Filter 2 (a): an in-progress Copilot code-review run on the branch holds the PR', async () => {
+  const r = await runPrefilter([scenario({ runs: [dynRun(REVIEWER_PATH, 'in_progress', { startedMinutesAgo: 1 })] })]);
+  assert.equal(r.counters.filtered_copilot_session_active, 1);
+  assert.equal(r.counters.eligible, 0);
+  assert.match(r.reasons[1], /Copilot is working on it \(Running Copilot Code Review: in_progress\)/);
+  assert.deepEqual(r.runQueries.map(q => [q.branch, q.event]), [['copilot/fix-1', 'dynamic']]);
+  assert.equal(r.writes.length, 0, 'a busy PR does not even read its timeline');
+});
+
+test('run() Filter 2 (b, PR #60257): reviewer run completed -> eligible despite its unmatched copilot_work_started 3+ min ago', async () => {
+  const r = await runPrefilter([scenario({
+    runs: [dynRun(REVIEWER_PATH, 'completed', { id: 2, startedMinutesAgo: 6 }), dynRun(CODING_AGENT_PATH, 'completed', { id: 1, startedMinutesAgo: 14 })],
+    timeline: [workEvent('started', 13, SWE_APP), workEvent('finished', 10, SWE_APP), workEvent('started', 4, REVIEWER_APP)]
+  })]);
+  assert.equal(r.counters.filtered_copilot_session_active, 0);
+  assert.equal(r.counters.eligible, 1);
+  assert.equal(r.selected[0].copilot_session, 'copilot_work_finished', 'the reviewer event is not the latest coding-session outcome');
+});
+
+test('run() Filter 2 (c): an in-progress coding-agent run holds the PR', async () => {
+  const r = await runPrefilter([scenario({ runs: [dynRun(CODING_AGENT_PATH, 'in_progress', { startedMinutesAgo: 20 })] })]);
   assert.equal(r.counters.filtered_copilot_session_active, 1);
   assert.equal(r.counters.eligible, 0);
 });
 
-test('run(): a copilot_work_started older than SESSION_STALE_MS with no finished event is treated as stale, not active (PR #58341)', async () => {
-  const r = await runPrefilter([scenario({ timeline: [workEvent('started', SESSION_STALE_MIN + 1)] })]);
-  assert.equal(r.counters.filtered_copilot_session_active, 0, 'a stale started event must not block the PR forever');
-  assert.equal(r.counters.session_stale_override, 1);
+test('run() Filter 2 (d): an active run for a DIFFERENT PR / branch does not hold this one', async () => {
+  const other = { ...dynRun(CODING_AGENT_PATH, 'in_progress', { number: 2 }) };
+  const r = await runPrefilter([scenario({ runs: [other] })]);
+  assert.equal(r.counters.filtered_copilot_session_active, 0);
   assert.equal(r.counters.eligible, 1);
-  assert.ok(r.logs.info.some(m => m.includes('treating the session as stale')));
+  // ... and in a two-PR run, PR 12's live session does not hold PR 11.
+  const two = await runPrefilter([scenario({ number: 11 }), scenario({ number: 12, runs: [dynRun(CODING_AGENT_PATH, 'in_progress', { number: 12 })] })]);
+  assert.equal(two.outputs.eligible_numbers, '11');
+  assert.equal(two.counters.filtered_copilot_session_active, 1);
 });
 
-test('run(): copilot_work_finished after a started event is not affected by the staleness override', async () => {
-  const r = await runPrefilter([scenario({ timeline: [workEvent('started', SESSION_STALE_MIN + 100), workEvent('finished', 5)] })]);
+test('run() Filter 2 (e): runs lookup throws -> PR skipped this tick (fail closed), no timeline read, no writes', async () => {
+  const r = await runPrefilter([scenario({ comments: sixNudgesEndingAt(COOLDOWN_MIN + 1), runsError: new Error('HTTP 403') })]);
+  assert.equal(r.counters.filtered_agent_runs_unreadable, 1);
+  assert.equal(r.counters.eligible + r.counters.handed_off_now, 0);
+  assert.equal(r.writes.length, 0);
+  assert.match(r.reasons[1], /could not read Copilot's Actions runs \(HTTP 403\)/);
+  assert.ok(r.logs.warning.some(m => m.includes('fail closed')));
+  // A malformed response is treated the same way.
+  const bad = await runPrefilter([scenario({ runs: null })]);
+  assert.equal(bad.counters.filtered_agent_runs_unreadable, 1);
+  assert.equal(bad.counters.eligible, 0);
+});
+
+test('run() Filter 2 (f, #49020): same-second finished+started in the timeline does not block when no run is active', async () => {
+  const r = await runPrefilter([scenario({
+    runs: [dynRun(CODING_AGENT_PATH, 'completed', { startedMinutesAgo: 30 })],
+    timeline: [workEvent('started', 30, SWE_APP), workEvent('finished', 5, SWE_APP), workEvent('started', 5, SWE_APP)]
+  })]);
   assert.equal(r.counters.filtered_copilot_session_active, 0);
-  assert.equal(r.counters.session_stale_override, undefined, 'the override only applies when the LATEST event is a started with no finished after it');
+  assert.equal(r.counters.eligible, 1);
+});
+
+test('run() Filter 2 (i): an unmatched copilot_work_started (dropped finished event, PR #58341) no longer needs a 90 min staleness backstop', async () => {
+  // Formerly held for SESSION_STALE_MS (90 min); run status is the authority now.
+  const r = await runPrefilter([scenario({ timeline: [workEvent('started', 5, SWE_APP)] })]);
+  assert.equal(r.counters.filtered_copilot_session_active, 0);
+  assert.equal(r.counters.eligible, 1);
+});
+
+test('run() Filter 2: an "active" dynamic run older than ACTIVE_RUN_MAX_AGE_MS is ignored and logged, not a permanent hold', async () => {
+  const maxMin = ACTIVE_RUN_MAX_AGE_MS / MIN;
+  const stuck = await runPrefilter([scenario({ runs: [dynRun(CODING_AGENT_PATH, 'queued', { startedMinutesAgo: maxMin + 1 })] })]);
+  assert.equal(stuck.counters.filtered_copilot_session_active, 0);
+  assert.equal(stuck.counters.agent_run_stale_ignored, 1);
+  assert.equal(stuck.counters.eligible, 1);
+  assert.ok(stuck.logs.warning.some(m => m.includes('older than 3 h')));
+  const young = await runPrefilter([scenario({ runs: [dynRun(CODING_AGENT_PATH, 'in_progress', { startedMinutesAgo: maxMin - 1 })] })]);
+  assert.equal(young.counters.filtered_copilot_session_active, 1);
+});
+
+test('run() Filter 4 (g, #57754): a lone reviewer-app finished_failure after the nudge is NOT a silent coding session', async () => {
+  const r = await runPrefilter([scenario({
+    comments: [nudgeAt(70)],
+    timeline: [workEvent('started', 30, REVIEWER_APP), workEvent('finished_failure', 20, REVIEWER_APP)]
+  })]);
+  assert.equal(r.counters.silent_session_since_nudge, undefined);
+  assert.equal(r.counters.filtered_last_comment_from_sous_chef, 1, 'plain unanswered-nudge blocking applies');
+  assert.equal(r.counters.eligible, 0);
+});
+
+test('run() Filter 4 (h): events WITHOUT an app field still count as coding-session outcomes', async () => {
+  const r = await runPrefilter([scenario({
+    comments: [nudgeAt(70)],
+    timeline: [workEvent('started', 30), workEvent('finished_failure', 20)]
+  })]);
+  assert.equal(r.counters.silent_session_since_nudge, 1);
+  assert.equal(r.counters.eligible, 1);
+});
+
+test('run() Filter 4: a coding-agent silent session is still detected when a reviewer event comes after it', async () => {
+  const r = await runPrefilter([scenario({
+    comments: [nudgeAt(70)],
+    timeline: [workEvent('started', 30, SWE_APP), workEvent('finished', 20, SWE_APP), workEvent('started', 10, REVIEWER_APP)]
+  })]);
+  assert.equal(r.counters.silent_session_since_nudge, 1);
   assert.equal(r.counters.eligible, 1);
 });
 

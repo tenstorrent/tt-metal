@@ -17,7 +17,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range_batch_norm
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range_batch_norm
 
 TIMEOUT = 30
 
@@ -109,20 +109,30 @@ def run_batch_norm(
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
+    channels = input_shape[1]
+    ref_mean_data = (
+        mean_data
+        if mean_data is not None
+        else (torch.zeros(channels, dtype=in_data.dtype) if var_data is not None else None)
+    )
+    ref_var_data = (
+        var_data
+        if var_data is not None
+        else (torch.ones(channels, dtype=in_data.dtype) if mean_data is not None else None)
+    )
     torch_result = torch.nn.functional.batch_norm(
         input=in_data,
-        running_mean=mean_data,
-        running_var=var_data,
+        running_mean=ref_mean_data,
+        running_var=ref_var_data,
         weight=weight_data,
         bias=bias_data,
         training=training,
-        eps=eps,
+        eps=eps if eps > 0 else 1e-12,
         momentum=momentum,
     )
 
     expected_pcc = 0.99
     if training:
-        channels = input_shape[1]
         if check_mean:
             tt_updated_mean = ttnn.to_torch(mean_tensor)
             passed_, output_string_ = check_with_pcc(tt_updated_mean, mean_data.view(1, channels, 1, 1), expected_pcc)

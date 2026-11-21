@@ -8,11 +8,11 @@
 
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include <tt_stl/reflection.hpp>
+#include <tt_stl/small_vector.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::operations::ccl::common {
-namespace {
 
 std::optional<uint32_t> normalize_tensor_dim(int dim, uint32_t rank) {
     const int normalized_dim = dim < 0 ? static_cast<int>(rank) + dim : dim;
@@ -21,8 +21,6 @@ std::optional<uint32_t> normalize_tensor_dim(int dim, uint32_t rank) {
     }
     return static_cast<uint32_t>(normalized_dim);
 }
-
-}  // namespace
 
 ttnn::MeshCoordinate snake_ring_coordinate(
     uint32_t transport_rank,
@@ -37,22 +35,32 @@ ttnn::MeshCoordinate snake_ring_coordinate(
         ttnn::ccl::snake_ring::coordinate_col(transport_rank, shape[0], shape[1], orientation));
 }
 
-bool has_row_major_mesh_coordinates(const ttnn::Tensor& tensor) {
-    if (tensor.device() == nullptr) {
+bool has_row_major_mesh_coordinates(
+    const std::vector<tt::tt_metal::distributed::MeshCoordinate>& coords,
+    const tt::tt_metal::distributed::MeshShape& shape) {
+    if (coords.empty() || coords.size() != shape.mesh_size()) {
         return false;
     }
-    const auto& mesh_coords = tensor.tensor_topology().mesh_coords();
-    const auto shape = tensor.device()->shape();
-    if (mesh_coords.size() != shape.mesh_size()) {
+    const auto& origin = coords.front();
+    if (origin.dims() != shape.dims()) {
         return false;
     }
-    uint32_t index = 0;
-    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(shape)) {
-        if (mesh_coords[index++] != coord) {
+    size_t index = 0;
+    for (const auto& offset : tt::tt_metal::distributed::MeshCoordinateRange(shape)) {
+        ttsl::SmallVector<uint32_t> expected(shape.dims(), 0);
+        for (size_t dim = 0; dim < shape.dims(); ++dim) {
+            expected[dim] = origin[static_cast<int32_t>(dim)] + offset[static_cast<int32_t>(dim)];
+        }
+        if (coords[index++] != tt::tt_metal::distributed::MeshCoordinate(expected)) {
             return false;
         }
     }
     return true;
+}
+
+bool has_row_major_mesh_coordinates(const ttnn::Tensor& tensor) {
+    return tensor.device() != nullptr &&
+           has_row_major_mesh_coordinates(tensor.tensor_topology().mesh_coords(), tensor.device()->shape());
 }
 
 bool placement_shards_tensor_dim(
@@ -136,7 +144,8 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
                               : (*cluster_axis == 0 ? ttnn::MeshCoordinate(destination_rank, group)
                                                     : ttnn::MeshCoordinate(group, destination_rank));
                 const auto destination = mesh_device->get_fabric_node_id(destination_coord);
-                const auto direction = tt::tt_fabric::pipeline_get_forwarding_direction(source, destination);
+                const auto direction =
+                    tt::tt_fabric::pipeline_get_forwarding_direction(*mesh_device, source, destination);
                 if (!direction.has_value()) {
                     if (log_rejection) {
                         log_warning(
@@ -148,7 +157,7 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
                     }
                     return std::nullopt;
                 }
-                const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(source, *direction);
+                const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(*mesh_device, source, *direction);
                 const auto mesh_it = neighbors.find(*destination.mesh_id);
                 if (mesh_it == neighbors.end() ||
                     std::find(mesh_it->second.begin(), mesh_it->second.end(), destination.chip_id) ==
@@ -163,7 +172,7 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
                     }
                     return std::nullopt;
                 }
-                const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(source, destination);
+                const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(*mesh_device, source, destination);
                 for (uint32_t link = 0; link < num_links; ++link) {
                     if (std::find(link_indices.begin(), link_indices.end(), link) == link_indices.end()) {
                         if (log_rejection) {
@@ -211,7 +220,7 @@ std::optional<ResolvedMeshRoute> resolve_mesh_ring_plan(
     if (shape.dims() != 2) {
         return std::nullopt;
     }
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     if (!cluster_axis.has_value() && !tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
         if (log_rejection) {
             log_warning(
@@ -370,8 +379,8 @@ MeshRingPosition get_mesh_ring_position(
         }
         return MeshRingPosition{
             .transport_rank = transport_rank,
-            .tensor_rank = ttnn::ccl::snake_ring::row_major_index(
-                transport_rank, plan.mesh_rows, plan.mesh_cols, plan.orientation),
+            .tensor_rank = ttnn::ccl::snake_ring::tensor_index(
+                transport_rank, plan.mesh_rows, plan.mesh_cols, plan.orientation, plan.column_major_ranks),
             .forward_coord = forward_coord,
             .backward_coord = backward_coord};
     }
@@ -382,10 +391,10 @@ MeshRingPosition get_mesh_ring_position(
     return MeshRingPosition{
         .transport_rank = transport_rank,
         .tensor_rank = transport_rank,
-        .forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            tensor, coordinate, 1, topology, plan.cluster_axis),
-        .backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-            tensor, coordinate, -1, topology, plan.cluster_axis)};
+        .forward_coord =
+            ttnn::ccl::get_physical_neighbor_from_physical_coord(tensor, coordinate, 1, topology, plan.cluster_axis),
+        .backward_coord =
+            ttnn::ccl::get_physical_neighbor_from_physical_coord(tensor, coordinate, -1, topology, plan.cluster_axis)};
 }
 
 }  // namespace ttnn::operations::ccl::common

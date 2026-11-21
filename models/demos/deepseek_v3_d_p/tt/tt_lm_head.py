@@ -34,6 +34,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import global_to_local_token_id
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -55,9 +56,11 @@ class TtLMHead(LightweightModule):
     """
 
     @staticmethod
-    def _weight_shard_dims(is_column_parallel: bool) -> tuple:
-        # column: shard vocab (last dim) across TP; row: shard emb (second-to-last) across TP.
-        return (None, -1) if is_column_parallel else (None, -2)
+    def _weight_shard_dims(is_column_parallel: bool, tp_axis: int = 1) -> tuple:
+        # column: shard vocab (last dim) across TP; row: shard emb (second-to-last) across TP. Replicated
+        # on the other mesh axis (SP), whichever one TP is.
+        dim = -1 if is_column_parallel else -2
+        return (None, dim) if tp_axis == 1 else (dim, None)
 
     @staticmethod
     def check_cache_complete(cache_path: Path) -> bool:
@@ -82,6 +85,7 @@ class TtLMHead(LightweightModule):
         cache_path: Path | None,
         device: ttnn.MeshDevice | None = None,
         is_column_parallel: bool = False,
+        tp_axis: int = 1,
     ) -> ttnn.Tensor | None:
         """
         Shared logic for converting LM head weight to ttnn with caching.
@@ -96,6 +100,7 @@ class TtLMHead(LightweightModule):
             cache_path: Cache directory path
             device: None for cache-only, mesh_device for cache+load
             is_column_parallel: True - column-parallel sharding (vocab dim), False - row-parallel (emb dim).
+            tp_axis: Mesh axis the weight is TP-sharded on.
 
         Returns:
             ttnn.Tensor if device is not None, else None
@@ -114,7 +119,7 @@ class TtLMHead(LightweightModule):
         mesh_mapper = ttnn.ShardTensor2dMesh(
             mesh_device,
             mesh_shape=mesh_device.shape,
-            dims=TtLMHead._weight_shard_dims(is_column_parallel),
+            dims=TtLMHead._weight_shard_dims(is_column_parallel, tp_axis),
         )
 
         cache_file_name = str(cache_path / "lm_head_weight") if cache_path else None
@@ -127,6 +132,7 @@ class TtLMHead(LightweightModule):
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
             cache_file_name=cache_file_name,
+            cache_dump_mode=weight_cache_dump_mode(),
         )
 
         if device is not None:
@@ -147,6 +153,7 @@ class TtLMHead(LightweightModule):
         cache_path: Path,
         dtype: ttnn.DataType = ttnn.bfloat16,
         is_column_parallel: bool = False,
+        tp_axis: int = 1,
     ):
         """Build TTNN cache for LM head weight without device copy."""
         TtLMHead._convert_and_cache_weight(
@@ -158,6 +165,7 @@ class TtLMHead(LightweightModule):
             cache_path,
             device=None,
             is_column_parallel=is_column_parallel,
+            tp_axis=tp_axis,
         )
 
     def __init__(
@@ -235,12 +243,13 @@ class TtLMHead(LightweightModule):
                 self.weight_cache_path,
                 device=self.mesh_device,
                 is_column_parallel=self.is_column_parallel,
+                tp_axis=self.tp_axis,
             )
         else:
             logger.debug("Creating random sharded weight")
             self.weight = self._create_random_sharded_weight(
                 shape=(emb_dim, vocab_size),
-                dims=self._weight_shard_dims(self.is_column_parallel),
+                dims=self._weight_shard_dims(self.is_column_parallel, self.tp_axis),
                 name="lm_head_weight",
                 dtype=self.weights_dtype,
             )
@@ -319,11 +328,12 @@ class TtLMHead(LightweightModule):
             self.weight_cache_path,
             device=self.mesh_device,
             is_column_parallel=self.is_column_parallel,
+            tp_axis=self.tp_axis,
         )
         logger.debug(f"Created sharded LM head weight: {tt_weight.shape}")
         return tt_weight
 
-    def forward(self, x: ttnn.Tensor, global_token_id: int) -> tuple[ttnn.Tensor, tuple[int, int]]:
+    def forward(self, x: ttnn.Tensor, global_token_id: Optional[int]) -> tuple[ttnn.Tensor, tuple[int, int]]:
         """
         Forward pass: project hidden states to vocabulary logits.
 
@@ -331,7 +341,8 @@ class TtLMHead(LightweightModule):
             x: Input tensor [dispatch_group_size, seq_len, emb_dim]
             global_token_id: Which token's logits we need, indexed the way
                 ``global_to_local_token_id`` reads it: ``seq_len`` here is ``x``'s own extent, so in
-                chunked prefill this is a chip-major ROW of ``x``, not a global position.
+                chunked prefill this is a chip-major ROW of ``x``, not a global position. None when ``x``
+                is already the one tile to project (a trace selects it on device); the location is then None.
 
         Returns:
             tuple[ttnn.Tensor, tuple[int, int]]:
@@ -347,21 +358,29 @@ class TtLMHead(LightweightModule):
         # ========================================
         # Extract the tile containing the target token
         # ========================================
-        # Use negative indexing: seq_len is at dim -2, emb_dim at dim -1
-        seq_len_per_device = x.shape[-2]
-        seq_len = seq_len_per_device * self.sp_factor
+        if global_token_id is None:
+            assert x.shape[-2] == ttnn.TILE_SIZE, f"a preselected tile must be {ttnn.TILE_SIZE} rows, got {x.shape[-2]}"
+            device_id = token_offset = None
+        else:
+            # Use negative indexing: seq_len is at dim -2, emb_dim at dim -1
+            seq_len_per_device = x.shape[-2]
+            seq_len = seq_len_per_device * self.sp_factor
 
-        # Convert global token ID to local token ID on this device.
-        device_id, local_token_id = global_to_local_token_id(
-            global_token_id, self.sp_factor, seq_len, is_balanced=self.is_balanced
-        )
+            # Convert global token ID to local token ID on this device.
+            device_id, local_token_id = global_to_local_token_id(
+                global_token_id, self.sp_factor, seq_len, is_balanced=self.is_balanced
+            )
 
-        # We only need logits for a single token, but matmul operates on tiles.
-        # Find the tile-aligned start position that contains local_token_id.
-        tile_start = (local_token_id // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        token_offset = local_token_id % ttnn.TILE_SIZE
-        x = ttnn.narrow(x, dim=-2, start=tile_start, length=ttnn.TILE_SIZE)
-        logger.debug(f"[TtLMHead.forward] After narrow ({local_token_id=} {tile_start=}): {x.shape=} {token_offset=}")
+            # We only need logits for a single token, but matmul operates on tiles.
+            # Find the tile-aligned start position that contains local_token_id.
+            tile_start = (local_token_id // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            token_offset = local_token_id % ttnn.TILE_SIZE
+            # ttnn.narrow bounds-checks the window against x's logical shape, so a token in a trailing partial
+            # tile (tile_start + TILE_SIZE > seq_len_per_device) is rejected there; other tokens are unaffected.
+            x = ttnn.narrow(x, dim=-2, start=tile_start, length=ttnn.TILE_SIZE)
+            logger.debug(
+                f"[TtLMHead.forward] After narrow ({local_token_id=} {tile_start=}): {x.shape=} {token_offset=}"
+            )
 
         if self.is_column_parallel:
             # ========================================
@@ -422,16 +441,19 @@ class TtLMHead(LightweightModule):
         """
         ttnn.synchronize_device(self.mesh_device)
         shards = ttnn.get_device_tensors(tt_logit)
-        # Mesh row-major flat index: sp_i * tp + tp_j
-        base_idx = device_id * self.tp_factor
+        # Mesh row-major flat index of SP rank device_id, TP rank tp_j.
+        cols = self.mesh_device.shape[1]
+
+        def flat(tp_j: int) -> int:
+            return device_id * cols + tp_j if self.tp_axis == 1 else tp_j * cols + device_id
 
         if not self.is_column_parallel:
             # Row-parallel: all TP slices on this SP row are identical (TP-replicated by all-reduce).
             # Take from the first device in the row.
-            return ttnn.to_torch(shards[base_idx + 0]).to(torch.bfloat16)
+            return ttnn.to_torch(shards[flat(0)]).to(torch.bfloat16)
 
         # column: 4 TP slices, each holds vocab/tp; concat on vocab dim to assemble the full vocab on host.
-        host_pieces = [ttnn.to_torch(shards[base_idx + j]).to(torch.bfloat16) for j in range(self.tp_factor)]
+        host_pieces = [ttnn.to_torch(shards[flat(j)]).to(torch.bfloat16) for j in range(self.tp_factor)]
         return torch.cat(host_pieces, dim=-1)
 
     def select_first_token(self, logit_host: torch.Tensor, token_offset: int) -> torch.Tensor:

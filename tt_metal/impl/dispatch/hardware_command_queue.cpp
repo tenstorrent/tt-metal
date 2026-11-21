@@ -13,7 +13,6 @@
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/xy_pair.hpp>
 #include "llrt/tt_cluster.hpp"
 #include "dispatch_query_manager.hpp"
 #include "device_command.hpp"
@@ -67,7 +66,6 @@ const CoreCoord& HWCommandQueue::virtual_enqueue_program_dispatch_core() const {
 
 void HWCommandQueue::terminate() {
     TTZoneScopedDN(DISPATCH, "HWCommandQueue_terminate");
-    TT_FATAL(!this->manager_.get_bypass_mode(), "Terminate cannot be used with tracing");
     log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
     // CQ_PREFETCH_CMD_TERMINATE

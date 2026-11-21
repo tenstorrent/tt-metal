@@ -189,7 +189,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     const uint32_t block_wt = geometry.block_width_tiles;
     const uint32_t num_groups_per_reset = geometry.num_groups_per_reset;
     const uint32_t block_ht_group_1 = geometry.block_height_tiles_group_1;
-    uint32_t subblock_wt = get_max_subblock(block_wt, 8);
+    // The statistics loops in the compute kernel fill subblock_wt tiles in one DEST acquire; FP32 DEST
+    // has room for four tiles under half sync (same bound as the sharded factory).
+    uint32_t subblock_wt = get_max_subblock(block_wt, fp32_dest_acc_en && !dst_full_sync_en ? 4 : 8);
     uint32_t num_subblocks_w = block_wt / subblock_wt;
     const uint32_t block_wt_last = geometry.last_block_width_tiles;
 
@@ -215,7 +217,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
 
     const bool equal_batches_per_core = geometry.equal_batches_per_core;
 
-    uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.buffer()->alignment());
+    uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.mesh_buffer().alignment());
     bool reader_repack_output = (per_core_N % tile_width) != 0;
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
@@ -365,7 +367,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
     std::vector<CoreCoord> virtual_core_coords = grid_to_cores(num_cores, num_virtual_cols, num_virtual_rows, row_wise);
     if ((device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0) && use_welford &&
-        !sfpu_two_pass_l1_replay && a.layout() == Layout::TILE && a.buffer()->buffer_type() == BufferType::DRAM &&
+        !sfpu_two_pass_l1_replay && a.layout() == Layout::TILE && a.memory_config().buffer_type() == BufferType::DRAM &&
         per_core_Nt == 1 && num_actual_cols == num_virtual_cols && num_virtual_cols == device->num_dram_channels() &&
         Wt == num_virtual_cols && detail::preferred_noc_for_dram_read(device->arch()) == NOC::NOC_0) {
         // Each virtual column reads one DRAM bank. Keep NoC0 responses near their

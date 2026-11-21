@@ -23,7 +23,6 @@ namespace tt::tt_metal {
 
     namespace distributed {
     class MeshDeviceImpl;
-    class MeshWorkloadImpl;
     class MeshBuffer;
     }
 }
@@ -101,12 +100,6 @@ struct MeshWorkloadRuntimeEntry {
 };
 
 std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs);
-
-struct MeshWorkloadData {
-    const distributed::MeshWorkloadImpl* mesh_workload = nullptr;
-    uint64_t mesh_workload_id{};
-    std::unordered_map<int, ProgramBinaryStatus> binary_status_per_device;
-};
 
 struct CoreInfo {
     tt::tt_metal::DispatchWorkerType worker_type;

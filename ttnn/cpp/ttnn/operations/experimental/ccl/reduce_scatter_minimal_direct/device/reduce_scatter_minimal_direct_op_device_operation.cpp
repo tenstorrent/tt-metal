@@ -7,6 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
@@ -103,7 +104,7 @@ static void validate_direct_tensors_every_invocation(
     const ReduceScatterMinimalDirectDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in a buffer on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in a buffer on device!");
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Input tensor must be on a mesh device!");
 
@@ -114,7 +115,7 @@ static void validate_direct_tensors_every_invocation(
         }
         const auto& tensor = maybe.value();
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Persistent {} tensor must be on device!", what);
-        TT_FATAL(tensor.buffer() != nullptr, "Persistent {} tensor must be allocated in a buffer on device!", what);
+        TT_FATAL(tensor.is_allocated(), "Persistent {} tensor must be allocated in a buffer on device!", what);
         TT_FATAL(
             tensor.device() == mesh_device,
             "Persistent {} tensor must live on the same mesh device as the input",
@@ -199,6 +200,18 @@ ReduceScatterMinimalDirectDeviceOperation::create_output_tensors(
     return {std::move(output), std::move(staging)};
 }
 
+std::vector<tt::tt_metal::TensorTopology> ReduceScatterMinimalDirectDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // [0] is the reduce_scatter result: `dim` sharded along `cluster_axis` (or over the whole mesh), the other axes
+    // as the input had them; a caller-supplied persistent output buffer is that result and takes the same label.
+    // [1] is device-local staging for the incoming contributions and keeps the input's label, as does [0] with no
+    // honest label (nullopt, already reported).
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    const auto output_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
+        tensor_args.input_tensor, args.cluster_axis, args.dim);
+    return {output_topology.value_or(input_topology), input_topology};
+}
+
 ReduceScatterMinimalDirectDeviceOperation::program_factory_t
 ReduceScatterMinimalDirectDeviceOperation::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
     return program_factory_t{ReduceScatterMinimalDirectProgramFactory{}};
@@ -245,7 +258,7 @@ static std::tuple<ReduceScatterMinimalDirectParams, ReduceScatterMinimalDirectIn
         "reduce_scatter_minimal_direct requires an explicit cluster_axis on a {} mesh: with both extents "
         "greater than one there is no single implied ring axis",
         mesh_shape);
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     std::array<tt::tt_fabric::Topology, 2> axis_topology{
         tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
     std::array<uint32_t, 2> axis_num_devices{1u, 1u};

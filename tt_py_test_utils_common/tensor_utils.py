@@ -12,6 +12,11 @@ import re
 import torch
 
 import ttnn
+from ttnn.config_serialization import (
+    compute_kernel_config_to_dict,
+    memory_config_to_dict,
+    program_config_to_dict,
+)
 
 # Standard tile size - hardware constant
 TILE_SIZE = ttnn.TILE_SIZE  # 32
@@ -38,6 +43,56 @@ def num_to_core_range_set(num_cores: int):
             )
         }
     )
+
+
+# Opt-in switch for the multi-core DRAM-sharded decode matmul (use_multicore_pipeline with
+# num_workers_per_dram_bank >= 2 on a call without bias or fused activation). Unset or "0" leaves the program
+# configs as the model built them.
+DRAM_SHARDED_MULTICORE_ENV = "TT_DRAM_SHARDED_MULTICORE"
+
+
+def dram_sharded_decode_cores_per_bank(m: int, k: int, n: int, num_cores: int, fused_activation=None) -> int:
+    """Cores per DRAM bank for a DRAM-sharded decode matmul, or 0 to leave the program config as built.
+
+    0 unless TT_DRAM_SHARDED_MULTICORE=1, the activation is one tile high and nothing is fused. num_cores is
+    the activation's shard count. The rule was fitted on the served decode shapes (per-shape sweeps in the
+    PR that added the multi-core pipeline):
+      Blackhole: about one core per 8 weight columns of a bank, between 2 and 4, so every core keeps its
+        columns within one or two fp32 Dest passes.
+      Wormhole: 2 cores per bank for 8-32 columns per bank on at most 16 shards when the activation is on
+        more than 8 shards or K >= 2N; otherwise the single-reader path (every core reading the activation
+        from few shards costs more than the multicast it replaces, and extra readers on a bank lower its
+        stream).
+    """
+    import os
+
+    if os.environ.get(DRAM_SHARDED_MULTICORE_ENV, "0") in ("", "0"):
+        return 0
+    if math.ceil(m / TILE_SIZE) != 1 or fused_activation is not None:
+        return 0
+    if "wormhole_b0" in ttnn.get_arch_name():
+        columns_per_bank = math.ceil(n / (TILE_SIZE * 12))
+        if num_cores <= 8 and k < 2 * n:
+            return 0
+        return 2 if (8 <= columns_per_bank <= 32 and num_cores <= 16) else 0
+    columns_per_bank = math.ceil(n / (TILE_SIZE * 8))
+    return max(2, min(4, math.ceil(columns_per_bank / 8)))
+
+
+def with_dram_sharded_cores_per_bank(program_config, m: int, k: int, n: int, num_cores: int):
+    """program_config opted into the multi-core pipeline (use_multicore_pipeline) with num_workers_per_dram_bank
+    from dram_sharded_decode_cores_per_bank (unchanged when 0).
+
+    A num_workers_per_dram_bank >= 2 without use_multicore_pipeline keeps the single-reader program, so the
+    flag is what selects the pipeline. The multi-core variant streams the weight in blocks of in0_block_w K tiles and reads the activation
+    from its shards directly, so the block width no longer has to fit the activation shard grid; 2 is the
+    measured best on both architectures."""
+    cores = dram_sharded_decode_cores_per_bank(m, k, n, num_cores, program_config.fused_activation)
+    if cores:
+        program_config.num_workers_per_dram_bank = cores
+        program_config.use_multicore_pipeline = True
+        program_config.in0_block_w = 2
+    return program_config
 
 
 def get_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
@@ -173,48 +228,16 @@ def parse_shard_dims_from_mesh_mapper_config(mesh_mapper_config: ttnn.MeshMapper
     return [int(d) for d in matches]
 
 
-def memory_config_to_dict(memory_config: ttnn.MemoryConfig):
-    # Convert to plain types for deterministic serialization.
-    return {
-        "memory_layout": str(memory_config.memory_layout),
-        "buffer_type": str(memory_config.buffer_type),
-        "shard_spec": str(memory_config.shard_spec),
-        "is_sharded": bool(memory_config.is_sharded()),
-        "interleaved": bool(memory_config.interleaved),
-        "hash": int(memory_config.__hash__()),
-    }
-
-
 def compute_kernel_config_to_str(compute_kernel_config: ttnn.WormholeComputeKernelConfig):
     # Backward compat shim; prefer compute_kernel_config_to_dict + serialize_config.
     cfg = compute_kernel_config_to_dict(compute_kernel_config)
     return serialize_config(cfg)
 
 
-def compute_kernel_config_to_dict(compute_kernel_config: ttnn.WormholeComputeKernelConfig):
-    return {
-        "math_fidelity": str(compute_kernel_config.math_fidelity),
-        "math_approx_mode": str(compute_kernel_config.math_approx_mode),
-        "fp32_dest_acc_en": bool(compute_kernel_config.fp32_dest_acc_en),
-        "packer_l1_acc": bool(compute_kernel_config.packer_l1_acc),
-        "dst_full_sync_en": bool(compute_kernel_config.dst_full_sync_en),
-        "throttle_level": str(compute_kernel_config.throttle_level),
-    }
-
-
 def program_config_to_str(program_config: ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig):
     # Backward compat shim; prefer program_config_to_dict + serialize_config.
     cfg = program_config_to_dict(program_config)
     return serialize_config(cfg)
-
-
-def program_config_to_dict(program_config):
-    if hasattr(program_config, "to_json"):
-        d = json.loads(program_config.to_json())
-        d["type"] = type(program_config).__name__
-        return d
-    else:
-        return {"type": type(program_config).__name__, "repr": repr(program_config)}
 
 
 def serialize_config(cfg_dict: dict, fmt: str = "json") -> str:

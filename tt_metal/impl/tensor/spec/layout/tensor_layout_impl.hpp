@@ -13,8 +13,14 @@ namespace tt::tt_metal {
 
 class TensorLayoutImpl {
 public:
+    // **alignment** is merged with the Alignment derived from page_config / dtype / memory_config.
+    // Prefer the three-argument overload unless intentionally overriding Alignment
+    // (see experimental/tensor_layout_apis_with_custom_alignment.hpp).
     TensorLayoutImpl(
         DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
+
+    TensorLayoutImpl(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config) :
+        TensorLayoutImpl(dtype, page_config, memory_config, Alignment{}) {}
 
     TensorLayoutImpl(const TensorLayoutImpl&) = default;
     TensorLayoutImpl(TensorLayoutImpl&&) noexcept = default;

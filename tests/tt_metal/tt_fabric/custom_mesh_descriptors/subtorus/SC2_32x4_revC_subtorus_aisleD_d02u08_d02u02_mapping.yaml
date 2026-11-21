@@ -1,0 +1,7 @@
+# Two-host (2-rank) mock cluster mapping for the SC16 revC subtorus (Aisle D): hosts
+# bh-glx-110-d02u08 and bh-glx-110-d02u02 only. Used by the Phase 1 / Phase 2 regression in
+# run_fabric_cpu_only_unit_tests.sh (bh-subtorus): with just these two hosts the single solve
+# of subtorus_4x4x2_ring_line_1x2_two_profile_pins has to seat one 4x4 mesh across the pair.
+rank_to_cluster_mock_cluster_desc:
+  0: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revC_subtorus_aisleD/SC16_32x4_revC_subtorus_aisleD_cluster_desc/SC16_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-110-d02u08_rank_15.yaml"
+  1: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revC_subtorus_aisleD/SC16_32x4_revC_subtorus_aisleD_cluster_desc/SC16_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-110-d02u02_rank_0.yaml"

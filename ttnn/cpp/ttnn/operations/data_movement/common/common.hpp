@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <concepts>
+#include <functional>
+#include <optional>
+#include <type_traits>
 #include <utility>
 
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
@@ -17,6 +21,32 @@ struct TileDescriptor;
 }  // namespace tt::tt_metal
 
 namespace ttnn::operations::data_movement {
+
+// 32-bit Dest covers true 32-bit datums and the 8-bit integer formats BH reconstructs via int-FPU.
+inline bool requires_32bit_dest(tt::DataFormat fmt) {
+    return fmt == tt::DataFormat::Float32 || fmt == tt::DataFormat::Int32 ||
+           fmt == tt::DataFormat::UInt32 || fmt == tt::DataFormat::UInt8 || fmt == tt::DataFormat::Int8;
+}
+inline bool requires_32bit_dest(tt::tt_metal::DataType dtype) {
+    return dtype == tt::tt_metal::DataType::FLOAT32 || dtype == tt::tt_metal::DataType::INT32 ||
+           dtype == tt::tt_metal::DataType::UINT32 || dtype == tt::tt_metal::DataType::UINT8 ||
+           dtype == tt::tt_metal::DataType::INT8;
+}
+
+// UnpackMode::UnpackToDest lowers to UnpackToDestFp32 which bypasses SrcA; only 32-bit formats
+// are safe. 8-bit integer formats must stay on the SrcA/int-FPU path.
+inline bool requires_unpack_to_dest(tt::DataFormat fmt) {
+    return fmt == tt::DataFormat::Float32 || fmt == tt::DataFormat::Int32 || fmt == tt::DataFormat::UInt32;
+}
+inline bool requires_unpack_to_dest(tt::tt_metal::DataType dtype) {
+    return dtype == tt::tt_metal::DataType::FLOAT32 || dtype == tt::tt_metal::DataType::INT32 ||
+           dtype == tt::tt_metal::DataType::UINT32;
+}
+
+// Deprecated: use requires_unpack_to_dest(fmt) directly. Kept until all callers migrate.
+inline bool needs_fp32_unpack_to_dest(bool fp32_dest_acc_en, tt::tt_metal::DataType dtype) {
+    return fp32_dest_acc_en && requires_unpack_to_dest(dtype);
+}
 
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& output_shape, uint32_t);
 ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& output_shape);
@@ -87,6 +117,9 @@ uint32_t get_estimated_size_of_cbs(
     uint32_t fixed_staging_bytes = 0);
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a);
+
+// L1 per worker core the allocator can ever hand out, independent of current occupancy.
+uint32_t get_static_l1_space(const Tensor& input_tensor_a);
 
 // One set of buffers, sized for a single block width.
 //
@@ -197,7 +230,37 @@ BlockPlan make_block_plan(
     uint32_t output_single_tile_size,
     uint32_t tile_height,
     uint32_t tile_width,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> max_block_tiles = std::nullopt);
+
+// Widest row-major block the Quasar unpacker may tilize in one pass. On the RTL emulator a
+// tilize_with_val_padding block of 191 or more tiles never completes (176 does; emu-quasar-2x3
+// sweep, #56622), so Quasar keeps every tilize block at or under this width.
+constexpr uint32_t QUASAR_MAX_TILIZE_BLOCK_TILES = 128;
+
+// The part of make_block_plan's split that free L1 (and `max_block_tiles`) decides. When the
+// unconstrained block is over that limit, the split falls back to the smaller `sizes` (nullopt if
+// none fits); everything else in the plan follows from the shapes and the grid. Two calls with
+// equal attributes and tensor specs build the same plan exactly when this is equal, so a
+// compute_program_hash can key on it per dispatch without building the plan. Pass the same
+// `max_block_tiles` as to make_block_plan. The output is given by its padded shape, since a hash has
+// no output tensor.
+struct BlockL1Fit {
+    bool limited = false;
+    std::optional<ttnn::NcoresWHsb> sizes;
+};
+
+BlockL1Fit block_l1_fit(
+    BlockDirection direction,
+    BlockCoreOrder core_order,
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_padded_shape,
+    uint32_t input_single_tile_size,
+    uint32_t output_single_tile_size,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> max_block_tiles = std::nullopt);
 
 // The buffer set whose block width this core was assigned. Asserts the core belongs to exactly one
 // set: an unmatched core silently defaulting to `full_set` would bind the wrong-width buffers, and
@@ -272,6 +335,10 @@ uint32_t wrap_index(int index, int size);
 uint16_t float_to_uint16(float f);
 
 uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s);
+
+// Packs `value` as `dtype` into a 32-bit word; 16-bit types fill both halves, UINT8 fills all four bytes,
+// UINT8 and 32-bit integers truncate, integer types saturate.
+uint32_t pack_scalar_into_uint32(DataType dtype, float value);
 
 template <typename OpOutputType, typename... OpInputTypes>
 struct MassagedOperationParams {
@@ -436,5 +503,91 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor);
 
 // B/W-sh → shard_W*E (feeds split branch); other sharded → buffer->aligned_page_size() (16-aligned L1 stride).
 uint32_t per_shard_page_size_bytes(const ttnn::Tensor& tensor, uint32_t row_bytes);
+
+// True for a BLOCK/WIDTH-sharded memory config whose shard row (shard width * element_size) is not a
+// multiple of the buffer alignment. For an RM buffer with such a config, one page is one shard row,
+// and the device stores pages at the aligned page size. The kernel-side TensorAccessor uses a single
+// page size both as the distance between pages and, in `noc_async_*_sharded`, as the bytes moved per
+// page, so one value is correct for both uses only when the shard row is a multiple of the alignment.
+// Always false for HEIGHT sharding. TensorSpec requires a HEIGHT-sharded tensor's shard width to equal
+// the tensor width, so for RM one page is a whole tensor row, which `noc_async_*_sharded` moves in a
+// single transfer of the size the caller asks for, using the page size only as the distance between pages.
+bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, uint32_t element_size);
+
+// True for a ROW_MAJOR tensor whose rows each span several pages (BLOCK or WIDTH sharding, or an ND shard
+// narrower than the row) when one page, a shard row, is not a multiple of the buffer alignment. That is
+// has_subaligned_shard_row for the tensor's actual spec: it also covers ND shard specs, and it is false for a
+// shard as wide as the row, which `noc_async_*_sharded` move in one transfer.
+bool has_subaligned_split_row(const tt::tt_metal::TensorSpec& spec);
+
+namespace detail {
+
+// False when no ROW_MAJOR tensor with this config has rows that span several pages. An ND shard spec can be
+// HEIGHT sharding for one shape and split the rows of the output an operation reindexes it to, so it counts.
+bool may_split_rows(const tt::tt_metal::MemoryConfig& memory_config);
+
+using ShardRowLaunch = std::function<Tensor(const Tensor&, const std::optional<tt::tt_metal::MemoryConfig>&)>;
+
+Tensor launch_through_interleaved(
+    const Tensor& input,
+    const tt::tt_metal::TensorSpec& output_spec,
+    const std::optional<Tensor>& preallocated_output,
+    const ShardRowLaunch& launch);
+
+}  // namespace detail
+
+// compute_output_spec() returns the spec the operation gives its output.
+template <typename F>
+concept OutputSpecFn = std::invocable<F&> && std::convertible_to<std::invoke_result_t<F&>, tt::tt_metal::TensorSpec>;
+
+// launch(input, explicit_output_config) launches the operation and returns its output.
+template <typename F>
+concept ShardRowLaunchFn =
+    std::invocable<F&, const Tensor&, const std::optional<tt::tt_metal::MemoryConfig>&> &&
+    std::convertible_to<
+        std::invoke_result_t<F&, const Tensor&, const std::optional<tt::tt_metal::MemoryConfig>&>,
+        Tensor>;
+
+// Launches a device operation whose kernels move ROW_MAJOR rows with `noc_async_{read,write}_sharded` so that
+// it never gets a tensor with a sub-aligned split row (has_subaligned_split_row). Those helpers move a full
+// aligned page per shard row, so for such a tensor they drop or misplace part of every row (#58402 item 17).
+// Such an input is copied to interleaved memory of its buffer type first. Such an output is written to
+// interleaved memory of its buffer type, then copied into the memory config the operation would have given it,
+// or into `preallocated_output`.
+// - `output_memory_config`: the output config the operation was given. Only used to skip the check cheaply.
+// - `compute_output_spec()`: the spec the operation gives its output for `input` when there is no
+//   `preallocated_output`.
+// - `launch(input, std::nullopt)` launches the operation as requested. `launch(input, config)` launches it with
+//   `config` as its explicit output config and without the preallocated output.
+template <OutputSpecFn ComputeOutputSpec, ShardRowLaunchFn Launch>
+Tensor launch_with_aligned_shard_rows(
+    const Tensor& input,
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    const std::optional<Tensor>& preallocated_output,
+    ComputeOutputSpec&& compute_output_spec,
+    Launch&& launch) {
+    if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+        (detail::may_split_rows(input.memory_config()) || detail::may_split_rows(output_memory_config) ||
+         (preallocated_output.has_value() && detail::may_split_rows(preallocated_output->memory_config())))) {
+        // Some operations' compute_output_specs ignore a preallocated output, which is what they write to.
+        const tt::tt_metal::TensorSpec output_spec =
+            preallocated_output.has_value() ? preallocated_output->tensor_spec() : compute_output_spec();
+        if (has_subaligned_split_row(input.tensor_spec()) || has_subaligned_split_row(output_spec)) {
+            return detail::launch_through_interleaved(input, output_spec, preallocated_output, launch);
+        }
+    }
+    // Skipping the output-spec check when neither config may split rows relies on no operation deriving a WIDTH,
+    // BLOCK or ND output from a HEIGHT or interleaved config. None of the wrapped operations does: they keep the
+    // given config's layout and reindex into ND only from an ND config. Fold passes its input's config here as a
+    // stand-in for the output config it synthesizes, which keeps the input's layout. The output is checked in every
+    // build, so an operation that breaks this fails instead of returning wrong values.
+    Tensor output = launch(input, std::nullopt);
+    TT_FATAL(
+        input.layout() != tt::tt_metal::Layout::ROW_MAJOR || !has_subaligned_split_row(output.tensor_spec()),
+        "An operation launched without staging produced a row-major output with sub-aligned split rows");
+    return output;
+}
+
+bool codegen_supported_on_arch(const ttnn::Tensor& input);
 
 }  // namespace ttnn::operations::data_movement

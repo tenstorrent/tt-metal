@@ -66,6 +66,8 @@ class DataFormat(Enum):
     UInt16 = DataFormatInfo("UInt16", 2)  # WH/BH specific
     Int8 = DataFormatInfo("Int8", 1)
     UInt8 = DataFormatInfo("UInt8", 1)
+    Int4 = DataFormatInfo("Int4", Fraction(1, 2))  # QSR specific
+    UInt4 = DataFormatInfo("UInt4", Fraction(1, 2))  # QSR specific
     MxFp8R = DataFormatInfo("MxFp8R", 1)  # QSR specific
     MxFp8P = DataFormatInfo("MxFp8P", 1)  # QSR specific
     MxFp4 = DataFormatInfo(
@@ -109,6 +111,10 @@ class DataFormat(Enum):
         """Returns the string representation of the data format."""
         return self.value.name
 
+    def __reduce_ex__(self, protocol):
+        # Pickled by name: a DataFormatInfo value has no equality to look a member up by.
+        return getattr, (type(self), self.name)
+
     def is_integer(self) -> bool:
         """Checks if the data format is an integer type."""
         return self in {
@@ -118,11 +124,17 @@ class DataFormat(Enum):
             DataFormat.UInt16,
             DataFormat.Int8,
             DataFormat.UInt8,
+            DataFormat.Int4,
+            DataFormat.UInt4,
         }
 
     def needs_int8_math_config(self) -> bool:
         """Checks if the format requires int8 math mode in the ALU."""
         return self in {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
+
+    def is_4bit_integer(self) -> bool:
+        """Checks if the data format is Int4 or UInt4."""
+        return self in {DataFormat.Int4, DataFormat.UInt4}
 
     def is_32_bit(self) -> bool:
         """Checks if the data format is a 32-bit type."""
@@ -184,6 +196,14 @@ class DataFormat(Enum):
             DataFormat.MxInt2,
         }
 
+    def is_2x_format(self) -> bool:
+        return self in {
+            DataFormat.MxFp4_2x_A,
+            DataFormat.MxFp4_2x_B,
+            DataFormat.Int8_2x,
+            DataFormat.UInt8_2x,
+        }
+
     def is_mx_int_format(self) -> bool:
         """Checks if the data format is an MX integer format."""
         return self in {
@@ -218,6 +238,11 @@ class DataFormat(Enum):
             DataFormat.Float16_b,
         }
 
+
+FOUR_BIT_INTEGER_RANGE = {
+    DataFormat.Int4: (-7, 7),
+    DataFormat.UInt4: (0, 15),
+}
 
 # ============================================================================
 # MX (Microscaling) Format Value Maps
@@ -511,18 +536,38 @@ class FormatConfig:
         self.pack_S_src = pack_S_src if pack_S_src is not None else self.pack_src
         self.pack_S_dst = pack_S_dst if pack_S_dst is not None else self.pack_dst
 
-        # MxFp4_2x_A/B and Int8_2x/UInt8_2x are 2x-packed Src Register formats. They have no L1,
-        # math, or pack representation — only unpack_A_dst / unpack_B_dst (the in-register format) may use them.
-        srcab_only = {
-            DataFormat.MxFp4_2x_A,
-            DataFormat.MxFp4_2x_B,
-            DataFormat.Int8_2x,
-            DataFormat.UInt8_2x,
-        }
+        # MxFp4_2x_A/B and Int8_2x/UInt8_2x are 2x-packed Src Register formats. They have no L1
+        # or pack representation, only unpack_A_dst / unpack_B_dst and the matching math format may use them.
         for field_name, value in (
             ("unpack_A_src", self.unpack_A_src),
             ("unpack_B_src", self.unpack_B_src),
             ("unpack_S_src", self.unpack_S_src),
+            ("unpack_S_dst", self.unpack_S_dst),
+            ("sfpu_src", self.sfpu_src),
+            ("sfpu_dst", self.sfpu_dst),
+            ("pack_src", self.pack_src),
+            ("pack_dst", self.pack_dst),
+            ("pack_S_src", self.pack_S_src),
+            ("pack_S_dst", self.pack_S_dst),
+        ):
+            if value.is_2x_format():
+                raise ValueError(
+                    f"{value.name} is a 2x-packed SrcA/SrcB-only format and cannot be used "
+                    f"as {field_name}. It is only valid for unpack_A_dst / unpack_B_dst / math. "
+                    f"For L1 input use DataFormat.MxFp4."
+                )
+        if self.math.is_2x_format() and (
+            self.math != self.unpack_A_dst or self.math != self.unpack_B_dst
+        ):
+            raise ValueError(
+                f"math={self.math.name} is a 2x register format but unpack_A_dst is "
+                f"{self.unpack_A_dst.name} and unpack_B_dst is {self.unpack_B_dst.name}: "
+                "the ALU SrcA/SrcB formats must be the formats the unpackers wrote."
+            )
+
+        for field_name, value in (
+            ("unpack_A_dst", self.unpack_A_dst),
+            ("unpack_B_dst", self.unpack_B_dst),
             ("unpack_S_dst", self.unpack_S_dst),
             ("math", self.math),
             ("sfpu_src", self.sfpu_src),
@@ -532,11 +577,9 @@ class FormatConfig:
             ("pack_S_src", self.pack_S_src),
             ("pack_S_dst", self.pack_S_dst),
         ):
-            if value in srcab_only:
+            if value is not None and value.is_4bit_integer():
                 raise ValueError(
-                    f"{value.name} is a 2x-packed SrcA/SrcB-only format and cannot be used "
-                    f"as {field_name}. It is only valid for unpack_A_dst / unpack_B_dst. "
-                    f"For L1 input use DataFormat.MxFp4."
+                    f"{value.name} is an L1 input-only format and cannot be used as {field_name}."
                 )
 
     @property
@@ -677,6 +720,8 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.UInt8: 17,
     DataFormat.UInt16: 130,
     DataFormat.Int16: 9,
+    DataFormat.Int4: 23,
+    DataFormat.UInt4: 25,
 }
 
 

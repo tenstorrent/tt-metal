@@ -14,7 +14,7 @@ from transformers import AutoConfig
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedding
 
 import ttnn
-from models.common.modules.tt_ccl import TT_CCL
+from models.common.tt_ccl import TT_CCL
 from models.demos.qwen38_27b_qb2.tt.decoder import DecoderState
 from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder, validate_qb2_mesh
 from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precision
@@ -155,7 +155,8 @@ class Qwen38Model:
             packer_l1_acc=True,
         )
         rope = Qwen3_5TextRotaryEmbedding(self.config)
-        cc, ss = rope(torch.empty(1, self.context, 1, dtype=torch.bfloat16), torch.arange(self.context)[None])
+        positions = torch.arange(self.context)[None, None].expand(3, 1, -1)
+        cc, ss = rope(torch.empty(1, self.context, 1, dtype=torch.bfloat16), positions)
         self.cos_table, self.sin_table = [self.upload(v.squeeze(0), layout=ttnn.ROW_MAJOR_LAYOUT) for v in (cc, ss)]
         self.rotary_width = cc.shape[-1]
         logger.info("Qwen3.8 model loaded")

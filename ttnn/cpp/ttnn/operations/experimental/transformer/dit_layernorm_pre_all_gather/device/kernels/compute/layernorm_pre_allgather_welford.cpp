@@ -81,7 +81,8 @@ void kernel_main() {
                 welford_update<W>(dst0, start_N, *p_reciprocals);
                 start_N += 32;
             }
-            if (wt + r == Wt - 1) {
+            // r == block_size: the block ran out first, and the last tile is in the next block.
+            if (r < block_size && wt + r == Wt - 1) {
                 // This block contains the last tile
                 if constexpr (welford_unpack_fp32_active) {
                     transpose_init(cb_inp);

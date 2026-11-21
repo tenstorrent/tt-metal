@@ -8,6 +8,7 @@
 
 namespace ttnn {
 
+[[deprecated("moreh_matmul is deprecated and will be removed after 2026-12-16. Use ttnn::matmul instead.")]]
 Tensor moreh_matmul(
     const Tensor& input,
     const Tensor& other,

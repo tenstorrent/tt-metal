@@ -24,6 +24,7 @@
 #include "api/compute/xlogy.h"
 #include "api/compute/binary_comp.h"
 #include "api/compute/isclose.h"
+#include "api/compute/situ_glu.h"
 #include "api/compute/atan2.h"
 #include "api/compute/nextafter.h"
 #include "api/compute/logaddexp.h"

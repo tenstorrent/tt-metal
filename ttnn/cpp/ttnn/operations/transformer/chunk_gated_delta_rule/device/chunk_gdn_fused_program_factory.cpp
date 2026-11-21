@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Program factory for the fused prep→scan chunk_gdn op: ONE program, two disjoint core sets.
-// Per head h, NP PRODUCER cores run {unchanged prep reader, unchanged prep compute, fused writer}
-// and NV RECEIVER cores run {fused-receiver reader variant, unchanged scan compute, unchanged scan
-// writer}. Receiver (h, v) is exactly the phased scan's V-block core — it carries the state slice
-// S[:, v*Vtl : (v+1)*Vtl] and produces that V-slice of o — fed over the NoC instead of from DRAM.
-// Each producer's writer hands the 7 computed intermediates of chunk c straight into the head's NV
-// receivers' CBs: the six V-independent tensors as multicasts to the head's 1xNV row rectangle, v_beta
-// as NV per-receiver slice writes — zero DRAM intermediates.
+// PRODUCER cores (NP per head, or one pool of P serving every head) run {unchanged prep reader, unchanged
+// prep compute, fused writer}; per head h, NV RECEIVER cores run {fused-receiver reader variant, unchanged
+// scan compute, unchanged scan writer}. Receiver (h, v) is exactly the phased scan's V-block core — it carries the
+// state slice S[:, v*Vtl : (v+1)*Vtl] and produces that V-slice of o — fed over the NoC instead of from DRAM. Each
+// producer's writer hands the 7 computed intermediates of chunk c straight into the head's NV receivers' CBs: the six
+// V-independent tensors as multicasts to the head's 1xNV row rectangle, v_beta as NV per-receiver slice writes — zero
+// DRAM intermediates.
 //
 // Geometry (computed by fused_placement() in chunk_gdn_device_operation.cpp, which the host-side
 // geometry tests check per grid). Placement 0 (row-major):
@@ -20,15 +20,22 @@
 // Placement 1 (row-local, the default whenever it fits): each head's NV receivers and NP producers
 // share one row segment, producers east of receivers, so NOC_1's -x-then-y routes of different heads
 // never share a link; heads that do not fit the rows go to the leftover columns as vertical blocks.
+// Placement 2 (producer pool, attrs.np = the pool size P): the row-local map of NPH home producers per
+// head for the largest NPH with BH*NPH <= P, plus P - BH*NPH EXTRA producers on the remaining cores.
+// Which producer computes chunk c of head h, and each producer's item list, is the one formula of
+// kernels/dataflow/chunk_gdn_fused_map.hpp, evaluated here and in the three dataflow kernels: the home
+// producers take their head's chunks round-robin, the extras take the share num/den of every head's
+// chunks chunk-major. Placements 0/1 are its NX = 0 case.
 //
-// Handshake: receiver (h, v) reserves its 7 slots for chunk c, resets its VALID word,
-// then atomically increments credit[h] on the producer that owns chunk c. That producer sends only
-// at credit[h] == NV, resets the word, writes, waits for the write ACKS (a flush proves departure
-// only), then multicasts VALID to the rectangle. The credit words are BH plain L1 words in the last
-// tile of the u/mask CB, which is declared on the UNION of both core sets so it has one address on
-// every core; because dispatch re-initializes only Semaphore objects per launch, each producer zeroes
-// its words at start and bumps the `init` semaphore on its receivers, which wait for all NP before
-// their first credit.
+// Handshake (specification: chunk_gdn_handoff_protocol.md in this directory): receiver (h, v) reserves its 7 slots for
+// chunk c, resets slot (c % nbuf)'s VALID flag, then atomically increments credit[h][c % nbuf] on the producer that
+// owns chunk c. That producer sends only at credit[h][c % nbuf] == NV, resets the word, writes, waits for the write
+// ACKS (a flush proves departure only), then sets VALID[c % nbuf] on the receivers. A receiver keeps nbuf-1 hand-offs
+// in flight; the per-slot flags keep their VALIDs apart. The credit words are BH x nbuf plain L1 words in the last tile
+// of the u/mask CB, which is declared on the UNION of both core sets so it has one address on every core; because
+// dispatch re-initializes only Semaphore objects per launch, each producer zeroes its words at start and bumps the
+// `init` semaphore on the receivers of every head it serves, which wait for all their distinct producers before their
+// first credit.
 //
 // Hand-off CB addressing: the 7 hand-off CBs are declared on the UNION of producer+receiver cores,
 // so they get identical base addresses on both sides. The receiver reserves/pushes each shared CB
@@ -46,9 +53,12 @@
 
 #include "chunk_gdn_device_operation.hpp"
 #include "chunk_gdn_compute_config.hpp"
+#include "kernels/dataflow/chunk_gdn_fused_map.hpp"
+#include "kernels/dataflow/chunk_gdn_handoff.hpp"
 
 #include <algorithm>
 #include <bit>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -57,23 +67,32 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <hostdevcommon/common_values.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace ttnn::prim {
 
+// Kickoff staggering (cycles at the 1.35 GHz core clock), keeping chunk 0's reads out of one burst: a producer
+// whose first chunk is c waits c * kProducerKickoffStaggerCycles (chunk c is needed c receiver steps after
+// chunk 0); receivers issue their first credits, then hold the initial-state read back by
+// kReceiverKickoffWaitCycles.
+constexpr uint32_t kProducerKickoffStaggerCycles = 4050;  // ~3 us
+constexpr uint32_t kReceiverKickoffWaitCycles = 5400;     // ~4 us
+
 // CB index plan — kept in sync with the prep/scan compute + dataflow kernels (post-renumber).
 // Uniquely named (fcb) so it does not ODR-clash with the phased factory's pcb:: under unity builds.
 namespace fcb {
-// The 7 hand-off CBs: prep OUTPUT index == scan INPUT index (that identity is the whole design).
-constexpr uint32_t Tinv = tt::CBIndex::c_13;    // t_inv
-constexpr uint32_t vbeta = tt::CBIndex::c_14;   // v_beta
-constexpr uint32_t nkd = tt::CBIndex::c_18;     // nkd (prep's cb_w)
-constexpr uint32_t qdecay = tt::CBIndex::c_19;  // q_decay
-constexpr uint32_t intra = tt::CBIndex::c_20;   // intra
-constexpr uint32_t dl = tt::CBIndex::c_22;      // dl (1 tile; prep aliases its cb_vnew slot)
-constexpr uint32_t kdec_t = tt::CBIndex::c_24;  // k_dec_t
+// The 7 hand-off CBs: prep OUTPUT index == scan INPUT index (that identity is the whole design). The values
+// come from kernels/dataflow/chunk_gdn_handoff.hpp, which every GDN kernel static_asserts against.
+constexpr uint32_t Tinv = gdn_handoff::kCbTinv;      // t_inv
+constexpr uint32_t vbeta = gdn_handoff::kCbVbeta;    // v_beta
+constexpr uint32_t nkd = gdn_handoff::kCbNkd;        // nkd (prep's cb_w)
+constexpr uint32_t qdecay = gdn_handoff::kCbQdecay;  // q_decay
+constexpr uint32_t intra = gdn_handoff::kCbIntra;    // intra
+constexpr uint32_t dl = gdn_handoff::kCbDl;          // dl (1 tile; prep aliases its cb_vnew slot)
+constexpr uint32_t kdec_t = gdn_handoff::kCbKdecT;   // k_dec_t
 // Producer-only (prep) CBs — same indices/sizes/formats as the phased prep factory.
 constexpr uint32_t q = tt::CBIndex::c_0;
 constexpr uint32_t k = tt::CBIndex::c_1;
@@ -89,16 +108,17 @@ constexpr uint32_t decayfac = tt::CBIndex::c_11;
 constexpr uint32_t lmask = tt::CBIndex::c_12;
 constexpr uint32_t kbeta = tt::CBIndex::c_15;
 // u: the prep's mask holder (3 tiles, pushed once, never popped) PLUS one trailing tile that holds the
-// BH producer-side credit words. Declared on the UNION so producers and receivers agree on its address
+// BH x nbuf producer-side credit words. Declared on the UNION so producers and receivers agree on its address
 // (receivers never touch the CB's data; they only compute the credit-word address from its base).
-constexpr uint32_t u = tt::CBIndex::c_17;
+constexpr uint32_t u = gdn_handoff::kCbU;
 constexpr uint32_t scr2 = tt::CBIndex::c_29;
 constexpr uint32_t scr3 = tt::CBIndex::c_30;
 // Shared-index CBs (producer and receiver both declare them, on their own disjoint core sets;
 // sizes may differ per side). Post-renumber scan indices: vnew moved 22 -> 11.
 constexpr uint32_t S = tt::CBIndex::c_8;
 constexpr uint32_t vnew = tt::CBIndex::c_11;  // scan-only (receiver); producer's c_11 is decayfac
-constexpr uint32_t out = tt::CBIndex::c_16;
+constexpr uint32_t out = tt::CBIndex::c_16;   // receiver; the producer's c_16 is kdec
+constexpr uint32_t kdec = tt::CBIndex::c_16;  // producer-only: k_dec before its transpose
 constexpr uint32_t s2 = tt::CBIndex::c_21;
 constexpr uint32_t ointer = tt::CBIndex::c_23;
 constexpr uint32_t supd = tt::CBIndex::c_25;
@@ -111,20 +131,21 @@ constexpr uint32_t s3 = tt::CBIndex::c_31;
 tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const ChunkGdnParams& attrs, const ChunkGdnInputs& in, std::vector<Tensor>& outputs) {
     const uint32_t BH = attrs.BH;
+    const uint32_t h0 = attrs.head_offset;  // DRAM row of head 0; the map and the hand-off protocol index heads from 0
     const uint32_t NC = attrs.num_chunks;
     const uint32_t Ct = attrs.chunk_size / TILE_HEIGHT;
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;  // full V (tiles): the producer's v_beta width
 
-    const uint32_t NP = attrs.np;  // producers per head (the op host clamps it to NC)
     const uint32_t NV = attrs.nv;  // receivers per head (validated: divides Vt, rectangles fit)
     TT_FATAL(NV >= 1 && Vt % NV == 0, "chunk_gdn_fused: nv={} must divide Vt={}", NV, Vt);
     const uint32_t Vtl = Vt / NV;  // per-receiver V-slice width (tiles)
 
     // Producer-side (full-V) tile counts — the phased prep factory's.
     const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt, kc = Kt * Ct;
-    // Prep scratch sizes, as in the phased prep factory (see the comment there and qwen36-gdn-cb-inventory.md).
-    const uint32_t scr1_tiles = ck, scr2_tiles = 1, scr3_tiles = cc, qk_tiles = ck, one_tile = 1;
+    // Prep scratch sizes, as in the phased prep factory (see the comment there). Each scratch CB receives blocks of
+    // one size, equal to its capacity: scr1 decay_row (Ct), kdec k_dec (ck), scr2 / ointer single tiles, scr3 cc.
+    const uint32_t scr1_tiles = Ct, scr2_tiles = 1, scr3_tiles = cc, kdec_tiles = ck, qk_tiles = ck, one_tile = 1;
     // Receiver-side (V-sliced) tile counts — the phased scan factory's at Vt = Vtl.
     const uint32_t cvl = Ct * Vtl, kvl = Kt * Vtl;
 
@@ -133,13 +154,16 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
 
     auto* device = in.q.device();
     const CoreCoord grid = device->compute_with_storage_grid_size();
-    const uint32_t R = BH * NV;  // receiver cores
-    const uint32_t P = BH * NP;  // producer cores
-    // Placement is a pure function of (grid, BH, NV, NP, placement), shared with the
+    // Placement is a pure function of (grid, BH, NV, np, placement), shared with the
     // nanobind geometry oracle so the host-side tests assert the core map this factory uses.
-    const FusedPlacement layout = fused_placement(grid.x, grid.y, BH, NV, NP, attrs.placement);
+    const FusedPlacement layout = fused_placement(grid.x, grid.y, BH, NV, attrs.np, attrs.placement);
     const std::vector<CoreCoord>& rcv_cores = layout.receivers;
     const std::vector<CoreCoord>& prod_cores = layout.producers;
+    const uint32_t R = BH * NV;                                   // receiver cores
+    const uint32_t P = static_cast<uint32_t>(prod_cores.size());  // producer cores
+    // The producer map (chunk_gdn_fused_map.hpp): home producers per head, extras, the extras' share.
+    const GdnFusedMap map{
+        BH, NC, layout.home_per_head, P - BH * layout.home_per_head, attrs.pool_extra_num, attrs.pool_extra_den};
 
     // CoreRangeSet(Span<const CoreCoord>) merges the per-core coordinates into rectangles.
     const CoreRangeSet rcv_set(rcv_cores);
@@ -178,8 +202,10 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // (1b) The u/mask CB, ALSO on the union: 3 mask tiles (prep reads them once) + 1 credit tile whose
     // BH x nbuf leading words are the producer-side credit counters credit[h][slot].
     // Union-declared so the receivers can address a producer's credit word from their own CB base.
-    const uint32_t u_tiles = 3 + 1;
-    const uint32_t credit_off_bytes = (u_tiles - 1) * tile_f32;
+    // + one canary tile behind the credit tile when the run-time checks are compiled in (the kernels derive its
+    // offset as CREDIT_OFF + tile_bytes).
+    const uint32_t u_tiles = gdn_handoff::kMaskTiles + 1 + (attrs.handoff_checks ? 1 : 0);
+    const uint32_t credit_off_bytes = gdn_handoff::kMaskTiles * tile_f32;
     add_cb(union_set, fcb::u, u_tiles);
 
     // (2) The remaining prep CBs on the PRODUCER cores only — the phased prep factory's sizes (scratch
@@ -204,8 +230,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     add_cb(prod_set, fcb::decayfac, Ct + 1);  // + the dl = exp(g_sum) column tile
     add_cb(prod_set, fcb::lmask, cc);
     add_cb(prod_set, fcb::kbeta, ck);
+    add_cb(prod_set, fcb::kdec, kdec_tiles);
     add_cb(prod_set, fcb::s2, one_tile);      // invert_block scratch C
-    add_cb(prod_set, fcb::ointer, one_tile);  // Ct == 2: the off-diagonal inverse block
+    add_cb(prod_set, fcb::ointer, one_tile);  // invert_block's tmpN; Ct == 2: the off-diagonal inverse block
     add_cb(prod_set, fcb::supd, qk_tiles);
     add_cb(prod_set, fcb::stmp, qk_tiles);
     add_cb(prod_set, fcb::final_s, one_tile);  // invert_block scratch B
@@ -230,18 +257,23 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // producer and receiver. Ids reach both kernels as trailing compile-time args.
     //   id 0 = ready  — legacy single counter; superseded by the credit words (kept so the shared
     //                   scan reader's trailing-arg layout is uniform across its variants)
-    //   id 1 = init   — producer -> receivers: "my credit words are zeroed"; receivers wait for NP
+    //   id 1 = init   — producer -> receivers: "my credit words are zeroed"; a receiver waits for N_INIT,
+    //                   the distinct producers serving its head
     //   ids 2 .. 2+nbuf-1 = valid[slot] — producer -> receivers: "chunk c (slot c % nbuf) is in your
     //                   CBs". One flag per hand-off slot lets a receiver keep nbuf-1 hand-offs in
     //                   flight. Consecutive ids => consecutive L1 words, so the kernels
     //                   address slot s as id (sem_valid_id + s). Program cap is 16 semaphores: nbuf <= 8.
-    constexpr uint32_t sem_ready_id = 0;
-    constexpr uint32_t sem_init_id = 1;
-    constexpr uint32_t sem_valid_id = 2;
-    TT_FATAL(sem_valid_id + kHandoffNbuf <= 16, "chunk_gdn_fused: nbuf {} needs too many semaphores", kHandoffNbuf);
+    constexpr uint32_t sem_ready_id = gdn_handoff::kFusedSemReady;
+    constexpr uint32_t sem_init_id = gdn_handoff::kFusedSemInit;
+    constexpr uint32_t sem_valid_id = gdn_handoff::kFusedSemValid;
+    TT_FATAL(
+        sem_valid_id + kHandoffNbuf <= gdn_handoff::kMaxSemaphores,
+        "chunk_gdn_fused: nbuf {} needs too many semaphores",
+        kHandoffNbuf);
+    // INVALID (0) is what the kernels assume at launch: dispatch rewrites it on every launch.
     for (uint32_t id = 0; id < sem_valid_id + kHandoffNbuf; id++) {
         desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = union_set, .initial_value = 0});
+            .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = union_set, .initial_value = INVALID});
     }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
@@ -255,10 +287,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     TensorAccessorArgs(*in.v.buffer()).append_to(prep_reader_ct);
     TensorAccessorArgs(*in.g.buffer()).append_to(prep_reader_ct);
     TensorAccessorArgs(*in.beta.buffer()).append_to(prep_reader_ct);
-    TensorAccessorArgs(*in.eye_c.buffer()).append_to(prep_reader_ct);
-    TensorAccessorArgs(*in.tril_c.buffer()).append_to(prep_reader_ct);
-    TensorAccessorArgs(*in.ones_c.buffer()).append_to(prep_reader_ct);
-    TensorAccessorArgs(*in.masks_c.buffer()).append_to(prep_reader_ct);
     // OPT-A: trailing compile args after all TensorAccessorArgs — 1 => read that tensor flat token-major.
     prep_reader_ct.push_back(attrs.v_flat ? 1u : 0u);
     prep_reader_ct.push_back(attrs.qk_flat ? 1u : 0u);
@@ -268,7 +296,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     prep_compute_ct.push_back(std::bit_cast<uint32_t>(attrs.scale));
     prep_compute_ct.push_back(std::bit_cast<uint32_t>(1e-6f));
 
-    // Fused writer: plain scalars, no accessors (it writes no DRAM at all).
+    // Fused writer: plain scalars, no accessors (it writes no DRAM at all). Vtl is derived in the kernel from
+    // Vt and NV. The protocol tag is LAST; the kernel static_asserts on it (layout drift fails to compile).
     const std::vector<uint32_t> fused_writer_ct = {
         Ct,
         Kt,
@@ -277,17 +306,18 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         sem_init_id,
         kHandoffNbuf,
         NV,
-        Vtl,
         fcb::u,
         credit_off_bytes,
         attrs.unicast ? 1u : 0u,
-        attrs.posted ? 1u : 0u};
+        attrs.posted ? 1u : 0u,
+        gdn_handoff::kHandoffTag};
 
     // ---- Receiver-side CT args: the phased SCAN layout at the V-slice width, with Vt_full for strides ----
     const std::vector<uint32_t> ct_scan = {Ct, Kt, Vtl, Vt};
 
     // Fused-receiver reader: s0 is its ONLY DRAM tensor (chain of one accessor, starting at CT
-    // index 5), then the semaphore ids and the credit-word location as trailing args.
+    // index 4), then the semaphore ids and the credit-word location as trailing args, and the protocol tag
+    // LAST (the kernel static_asserts on it).
     std::vector<uint32_t> receiver_ct = ct_scan;
     TensorAccessorArgs(*in.initial_state.buffer()).append_to(receiver_ct);
     receiver_ct.push_back(sem_ready_id);
@@ -296,6 +326,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     receiver_ct.push_back(fcb::u);
     receiver_ct.push_back(credit_off_bytes);
     receiver_ct.push_back(kHandoffNbuf);
+    receiver_ct.push_back(gdn_handoff::kHandoffTag);
 
     std::vector<uint32_t> scan_writer_ct = ct_scan;
     TensorAccessorArgs(*outputs[0].buffer()).append_to(scan_writer_ct);
@@ -308,6 +339,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = prod_set,
         .compile_time_args = prep_reader_ct,
+        // The fused producer variant: items from the shared producer map instead of a strided slice.
+        .defines = {{"GDN_FUSED_PRODUCER", "1"}},
         // Size-optimised like the phased prep reader (see chunk_gdn_phased_program_factory.cpp).
         .opt_level = KernelBuildOptLevel::Os,
         .config = ReaderConfigDescriptor{},
@@ -332,11 +365,24 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // and identical on both NoCs.
     const bool writer_on_noc1 = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch()) == NOC::NOC_1;
 
+    // The protocol's run-time checks (handoff_checks) are a define on both hand-off kernels.
+    KernelDescriptor::Defines writer_defines;
+    KernelDescriptor::Defines receiver_defines{{"GDN_FUSED_RECEIVER", "1"}};
+    if (attrs.handoff_checks) {
+        writer_defines.push_back({"GDN_HANDOFF_CHECKS", "1"});
+        receiver_defines.push_back({"GDN_HANDOFF_CHECKS", "1"});
+        if (attrs.handoff_fault != 0) {  // test-only fault injection, gdn_handoff::HandoffFault
+            writer_defines.push_back({"GDN_HANDOFF_FAULT", std::to_string(attrs.handoff_fault)});
+            receiver_defines.push_back({"GDN_HANDOFF_FAULT", std::to_string(attrs.handoff_fault)});
+        }
+    }
+
     KernelDescriptor fused_writer{
         .kernel_source = kdir + "dataflow/writer_chunk_gdn_fused.cpp",
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = prod_set,
         .compile_time_args = fused_writer_ct,
+        .defines = writer_defines,
         .config = WriterConfigDescriptor{},
     };
     fused_writer.runtime_args.reserve(P);
@@ -346,7 +392,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = rcv_set,
         .compile_time_args = receiver_ct,
-        .defines = {{"GDN_FUSED_RECEIVER", "1"}},
+        .defines = receiver_defines,
         .config = ReaderConfigDescriptor{},
     };
     receiver_reader.runtime_args.reserve(R);
@@ -374,25 +420,63 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     auto* v_buf = in.v.buffer();
     auto* g_buf = in.g.buffer();
     auto* beta_buf = in.beta.buffer();
-    auto* eye_buf = in.eye_c.buffer();
-    auto* tril_buf = in.tril_c.buffer();
-    auto* ones_buf = in.ones_c.buffer();
-    auto* masks_buf = in.masks_c.buffer();
     auto* s0_buf = in.initial_state.buffer();
     auto* o_buf = outputs[0].buffer();
     auto* fs_buf = outputs[1].buffer();
 
+    // Virtual worker coords, packed x | y << 8 (Blackhole's virtual grid is below 256 on both axes).
+    auto pack_xy = [&](const CoreCoord& logical) {
+        const CoreCoord c = device->worker_core_from_logical_core(logical);
+        TT_FATAL(c.x < 256 && c.y < 256, "chunk_gdn_fused: virtual core ({}, {}) does not pack into a byte", c.x, c.y);
+        return static_cast<uint32_t>(c.x) | (static_cast<uint32_t>(c.y) << 8);
+    };
+
+    // Common runtime args. Receiver reader: the P producers' coords, two per word (producer p in word p/2,
+    // high half when p is odd). Fused writer: per head, the multicast rectangle word (start x | start y << 8
+    // | end x << 16 | end y << 24, ordered for the writer's NoC) then the NV receivers' coords, two per word.
+    const uint32_t head_words = 1 + (NV + 1) / 2;
+    std::vector<uint32_t> producer_table((P + 1) / 2, 0);
+    std::vector<uint32_t> head_table(BH * head_words, 0);
+    for (uint32_t p = 0; p < P; p++) {
+        producer_table[p / 2] |= pack_xy(prod_cores[p]) << (16 * (p % 2));
+    }
+
+    // Each producer's items from the shared map: count, first chunk (kickoff stagger), the heads it serves
+    // (init bumps), and per head the distinct producers serving it (the receivers' N_INIT).
+    const uint32_t mask_words = (BH + 31) / 32;
+    std::vector<uint32_t> n_items(P), c_first(P, 0), head_mask(P * mask_words, 0), n_init(BH, 0);
+    for (uint32_t p = 0; p < P; p++) {
+        n_items[p] = gdn_fused_item_count(map, p);
+        for (uint32_t n = 0; n < n_items[p]; n++) {
+            const GdnFusedItem it = gdn_fused_item(map, p, n);
+            TT_FATAL(
+                it.h < BH && it.c < NC && gdn_fused_owner(map, it.h, it.c) == p,
+                "chunk_gdn_fused: producer map inconsistent at producer {} item {} (head {}, chunk {})",
+                p,
+                n,
+                it.h,
+                it.c);
+            if (n == 0) {
+                c_first[p] = it.c;
+            }
+            uint32_t& mask = head_mask[p * mask_words + it.h / 32];
+            if (((mask >> (it.h % 32)) & 1u) == 0) {
+                mask |= 1u << (it.h % 32);
+                n_init[it.h]++;
+            }
+        }
+    }
+    TT_FATAL(
+        std::accumulate(n_items.begin(), n_items.end(), 0u) == BH * NC,
+        "chunk_gdn_fused: the producer map does not cover the {} items exactly once",
+        BH * NC);
+
+    // The output row of head h: its row of the shared preallocated outputs (every wave of a batch writes its
+    // head range of the same [rows, ...] tensors), else row h of this program's own [BH, ...] outputs.
+    const auto out_row = [&](uint32_t h) { return in.o_out.has_value() ? h0 + h : h; };
     for (uint32_t h = 0; h < BH; h++) {
-        // Virtual worker coords of this head's NV receivers (a rectangle: 1xNV row in placement 0,
-        // rw x rh block for the leftover heads of placement 1) and NP producers.
-        std::vector<CoreCoord> rv(NV), pv(NP);
-        for (uint32_t v = 0; v < NV; v++) {
-            rv[v] = device->worker_core_from_logical_core(rcv_cores[h * NV + v]);
-        }
-        for (uint32_t j = 0; j < NP; j++) {
-            pv[j] = device->worker_core_from_logical_core(prod_cores[h * NP + j]);
-        }
-        // Multicast rectangle = the receivers' bounding box. Density is checked in LOGICAL coords (no
+        // Multicast rectangle = the receivers' bounding box (a 1xNV row in placement 0, an rw x rh block
+        // for the leftover heads of placements 1/2). Density is checked in LOGICAL coords (no
         // other worker of the program inside); the virtual box may additionally span non-worker
         // columns (Blackhole's virtual grid skips the DRAM/ethernet columns: logical 7 -> virtual 10),
         // which the multicast tolerates — the row-major 1xNV row rectangles crossed that gap all along.
@@ -407,72 +491,87 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
             "chunk_gdn_fused: head {} receivers do not form a dense {}-core rectangle in logical coords",
             h,
             NV);
-        const CoreCoord m_tl = device->worker_core_from_logical_core(l_tl);
-        const CoreCoord m_br = device->worker_core_from_logical_core(l_br);
-        const CoreCoord& m_start = writer_on_noc1 ? m_br : m_tl;  // NOC_1: bottom-right -> top-left
-        const CoreCoord& m_end = writer_on_noc1 ? m_tl : m_br;
-
-        // Producer j of head h owns the interleaved chunks c = j, j+NP, ... — as flat work-items
-        // wi = h*NC + c that is start h*NC + j with stride NP (trailing reader arg). The op host
-        // clamps NP <= NC, so every producer owns at least one chunk.
-        for (uint32_t j = 0; j < NP; j++) {
-            const CoreCoord& pc = prod_cores[h * NP + j];
-            const uint32_t cnt = (NC - j + NP - 1) / NP;
-            prep_reader.emplace_runtime_args(
-                pc,
-                {h * NC + j,
-                 cnt,
-                 q_buf,
-                 k_buf,
-                 v_buf,
-                 g_buf,
-                 beta_buf,
-                 eye_buf,
-                 tril_buf,
-                 ones_buf,
-                 masks_buf,
-                 NC,
-                 attrs.HV,
-                 attrs.Hk,
-                 NP});
-            prep_compute.emplace_runtime_args(pc, {cnt});
-            std::vector<std::variant<uint32_t, Buffer*>> w_args = {
-                NC,
-                NP,
-                j,
-                h,
-                BH,
-                static_cast<uint32_t>(m_start.x),
-                static_cast<uint32_t>(m_start.y),
-                static_cast<uint32_t>(m_end.x),
-                static_cast<uint32_t>(m_end.y)};
-            for (uint32_t v = 0; v < NV; v++) {
-                w_args.push_back(static_cast<uint32_t>(rv[v].x));
-                w_args.push_back(static_cast<uint32_t>(rv[v].y));
-            }
-            fused_writer.emplace_runtime_args(pc, w_args);
+        const CoreCoord& l_start = writer_on_noc1 ? l_br : l_tl;  // NOC_1: bottom-right -> top-left
+        const CoreCoord& l_end = writer_on_noc1 ? l_tl : l_br;
+        head_table[h * head_words] = pack_xy(l_start) | (pack_xy(l_end) << 16);
+        for (uint32_t v = 0; v < NV; v++) {
+            head_table[h * head_words + 1 + v / 2] |= pack_xy(rcv_cores[h * NV + v]) << (16 * (v % 2));
         }
 
-        // Receiver (h, v): its V-slice index, s0 from DRAM, then NP and N_INIT (= NP: every producer
-        // of this head bumps `init` once) and the producers' coords for the rotating credit.
+        // Receiver (h, v): its V-slice index, s0 from DRAM, N_INIT (the distinct producers serving this
+        // head, each bumps `init` once), the kickoff hold, the map and the DRAM row offset of its initial
+        // state; the producers' coords are common. The writer takes the DRAM row of its head.
         for (uint32_t v = 0; v < NV; v++) {
             const CoreCoord& rc = rcv_cores[h * NV + v];
-            std::vector<std::variant<uint32_t, Buffer*>> r_args = {h, v, NC, s0_buf, NP, NP};
-            for (uint32_t j = 0; j < NP; j++) {
-                r_args.push_back(static_cast<uint32_t>(pv[j].x));
-                r_args.push_back(static_cast<uint32_t>(pv[j].y));
-            }
+            std::vector<std::variant<uint32_t, Buffer*>> r_args = {
+                h, v, NC, s0_buf, n_init[h], kReceiverKickoffWaitCycles, BH, map.NPH, map.NX, map.num, map.den};
+            TT_FATAL(
+                r_args.size() == fused_rt::kReceiverHeadOffsetArg,
+                "chunk_gdn_fused: receiver head_offset arg slot moved ({} != {})",
+                r_args.size(),
+                fused_rt::kReceiverHeadOffsetArg);
+            r_args.push_back(h0);
             receiver_reader.emplace_runtime_args(rc, r_args);
             scan_compute.emplace_runtime_args(rc, {NC});
-            scan_writer.emplace_runtime_args(rc, {h, v, NC, o_buf, fs_buf});
+            scan_writer.emplace_runtime_args(rc, {out_row(h), v, NC, o_buf, fs_buf});
         }
     }
+    receiver_reader.common_runtime_args = producer_table;
 
+    // Producer p: its map index and item count (the reader and writer walk the same list), the map, the gates'
+    // source (tokens, tile sizes), for the reader the DRAM row of head 0, and for the writer the heads it
+    // serves; the receivers' coords are common.
+    const uint32_t T = in.g.logical_shape()[1];
+    const uint32_t g_tile_bytes = in.g.buffer()->page_size();
+    const uint32_t beta_tile_bytes = in.beta.buffer()->page_size();
+    for (uint32_t p = 0; p < P; p++) {
+        const CoreCoord& pc = prod_cores[p];
+        std::vector<std::variant<uint32_t, Buffer*>> p_args = {
+            p,
+            n_items[p],
+            q_buf,
+            k_buf,
+            v_buf,
+            g_buf,
+            beta_buf,
+            NC,
+            attrs.HV,
+            attrs.Hk,
+            BH,
+            c_first[p] * kProducerKickoffStaggerCycles,
+            map.NPH,
+            map.NX,
+            map.num,
+            map.den,
+            T,
+            g_tile_bytes,
+            beta_tile_bytes};
+        TT_FATAL(
+            p_args.size() == fused_rt::kPrepReaderHeadOffsetArg,
+            "chunk_gdn_fused: prep reader head_offset arg slot moved ({} != {})",
+            p_args.size(),
+            fused_rt::kPrepReaderHeadOffsetArg);
+        p_args.push_back(h0);
+        prep_reader.emplace_runtime_args(pc, p_args);
+        prep_compute.emplace_runtime_args(pc, {n_items[p]});
+        std::vector<std::variant<uint32_t, Buffer*>> w_args = {
+            p, n_items[p], BH, NC, map.NPH, map.NX, map.num, map.den};
+        for (uint32_t w = 0; w < mask_words; w++) {
+            w_args.push_back(head_mask[p * mask_words + w]);
+        }
+        fused_writer.emplace_runtime_args(pc, w_args);
+    }
+    fused_writer.common_runtime_args = head_table;
+
+    // Push order = the kernel indices of fused_rt (get_dynamic_runtime_args addresses them by index).
+    TT_FATAL(desc.kernels.size() == fused_rt::kPrepReaderKernel, "chunk_gdn_fused: kernel push order changed");
     desc.kernels.push_back(std::move(prep_reader));
     desc.kernels.push_back(std::move(prep_compute));
     desc.kernels.push_back(std::move(fused_writer));
+    TT_FATAL(desc.kernels.size() == fused_rt::kReceiverReaderKernel, "chunk_gdn_fused: kernel push order changed");
     desc.kernels.push_back(std::move(receiver_reader));
     desc.kernels.push_back(std::move(scan_compute));
+    TT_FATAL(desc.kernels.size() == fused_rt::kScanWriterKernel, "chunk_gdn_fused: kernel push order changed");
     desc.kernels.push_back(std::move(scan_writer));
     return desc;
 }

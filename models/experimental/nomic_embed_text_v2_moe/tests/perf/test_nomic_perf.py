@@ -35,14 +35,14 @@ MB = 1024 * 1024
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("batch, seqlen", BENCHMARK_SHAPES)
-def test_model_latency(device, config, state_dict, batch, seqlen):
+def test_model_latency(device, config, tt_config, state_dict, batch, seqlen):
     """Backbone latency on an input already resident on device.
 
     Token ids are uploaded once outside the timed loop, so this isolates the model from
     host-to-device transfer. That is the number sharding, precision and program configs move;
     test_request_latency is the one trace and the host path move.
     """
-    model, upload_s = build_model(device, config, state_dict)
+    model, upload_s = build_model(device, config, tt_config, state_dict)
     weights_mb = dram_allocated_bytes(device) / MB
 
     input_ids, attention_mask = random_input_ids(batch, seqlen, config)
@@ -70,14 +70,14 @@ def test_model_latency(device, config, state_dict, batch, seqlen):
 
 
 @pytest.mark.models_performance_bare_metal
-def test_request_latency(device, config, state_dict, tokenizer):
+def test_request_latency(device, config, tt_config, state_dict, tokenizer):
     """One user request end to end: tokenize, upload, backbone, pool, normalize, read back.
 
     This is what a caller of `encode` waits for. It differs from test_model_latency by the host
     work the backbone measurement excludes on purpose, and the gap between the two is the budget
     for removing host boundaries and enabling trace.
     """
-    model, _ = build_model(device, config, state_dict)
+    model, _ = build_model(device, config, tt_config, state_dict)
 
     def run():
         encode(model, tokenizer, BENCHMARK_TEXTS, prompt_prefix=NomicPromptPrefix.PASSAGE)
@@ -93,7 +93,7 @@ def test_request_latency(device, config, state_dict, tokenizer):
 
 
 @pytest.mark.parametrize("batch, seqlen", [HEADLINE_SHAPE])
-def test_device_perf_target(device, config, state_dict, batch, seqlen):
+def test_device_perf_target(device, config, tt_config, state_dict, batch, seqlen):
     """One warmed forward at the headline shape, bracketed by signposts for the profiler.
 
     run_device_perf sums every op in the log, so the measured region has to hold exactly one
@@ -102,7 +102,7 @@ def test_device_perf_target(device, config, state_dict, batch, seqlen):
     """
     from tracy import signpost
 
-    model, _ = build_model(device, config, state_dict)
+    model, _ = build_model(device, config, tt_config, state_dict)
     input_ids, attention_mask = random_input_ids(batch, seqlen, config)
 
     ttnn.deallocate(model(input_ids, attention_mask))

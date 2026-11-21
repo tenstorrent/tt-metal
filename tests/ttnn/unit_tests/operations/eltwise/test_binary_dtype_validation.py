@@ -69,7 +69,8 @@ def _make_mixed_binary_tensors(device, dtype_a, dtype_b, shape=TENSOR_SHAPE):
         # arithmetic_fpu
         pytest.param(ttnn.add, ttnn.uint8, id="arithmetic_fpu_add_uint8"),
         pytest.param(ttnn.mul, ttnn.uint8, id="arithmetic_fpu_mul_uint8"),
-        pytest.param(ttnn.subtract, ttnn.uint8, id="arithmetic_fpu_subtract_uint8"),
+        pytest.param(ttnn.add, ttnn.int8, id="arithmetic_fpu_add_int8"),
+        pytest.param(ttnn.mul, ttnn.int8, id="arithmetic_fpu_mul_int8"),
         # int32_only (GCD, LCM, DIV_FLOOR, DIV_TRUNC)
         pytest.param(ttnn.gcd, ttnn.uint8, id="int32_only_gcd_uint8"),
         pytest.param(ttnn.gcd, ttnn.uint16, id="int32_only_gcd_uint16"),
@@ -206,3 +207,47 @@ def test_binary_mixed_dtype_rejected(device, expect_error, op, dtype_a, dtype_b)
     tensor_a, tensor_b = _make_mixed_binary_tensors(device, dtype_a, dtype_b)
     with expect_error(RuntimeError, MIXED_DTYPE_ERROR):
         op(tensor_a, tensor_b)
+
+
+@pytest.mark.parametrize("operand", ["a", "b", "output"])
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16), (16, 16)], ids=lambda s: f"tile_{s[0]}x{s[1]}")
+def test_binary_rejects_non_default_tile(device, expect_error, operand, tile_shape):
+    """The circular buffers are sized for a 32x32 tile, so a smaller tile would be read past its pages."""
+    torch_input = torch.rand(TENSOR_SHAPE, dtype=torch.bfloat16)
+
+    def to_device(tile=None):
+        return ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
+
+    small_tile = ttnn.Tile(tile_shape)
+    tensor_a = to_device(small_tile if operand == "a" else None)
+    tensor_b = to_device(small_tile if operand == "b" else None)
+    output = to_device(small_tile) if operand == "output" else None
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.add(tensor_a, tensor_b, output_tensor=output)
+
+
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16), (16, 16)], ids=lambda s: f"tile_{s[0]}x{s[1]}")
+def test_binary_scalar_rejects_non_default_tile(device, expect_error, tile_shape):
+    """The tensor-scalar path reaches the same 32x32 circular buffers through input A."""
+    tensor_a = ttnn.from_torch(
+        torch.rand(TENSOR_SHAPE, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.add(tensor_a, 2.0)
+
+
+def test_binary_rejects_non_default_output_tile_on_cache_hit(device, expect_error):
+    """The program hash ignores the preallocated output's tile, so the check must also run on a cache hit."""
+    torch_input = torch.rand(TENSOR_SHAPE, dtype=torch.bfloat16)
+
+    def to_device(tile=None):
+        return ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
+
+    tensor_a, tensor_b = to_device(), to_device()
+    ttnn.add(tensor_a, tensor_b, output_tensor=to_device())
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.add(tensor_a, tensor_b, output_tensor=to_device(ttnn.Tile((16, 32))))

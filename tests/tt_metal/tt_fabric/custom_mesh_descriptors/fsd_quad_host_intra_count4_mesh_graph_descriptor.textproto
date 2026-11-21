@@ -1,0 +1,43 @@
+# Same four-host pod as fsd_quad_host_mesh_graph_descriptor, with intra-mesh count 4.
+# The mesh connection is two factory cables with one removed. Planes drop from 4 to the factory
+# count of 2. The one missing factory cable stays downed.
+# Every intermesh connection is RELAXED, and each boundary asks for a different count.
+# Mesh 2 to mesh 3 is the boundary missing one factory cable (16 factory, 15 live). Count 16
+# still needs that cable, so it stays downed and 15 live cables are registered.
+mesh_descriptors {
+  name: "M"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 4 policy: RELAXED }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M" mesh_id: 3 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 2 } }
+    channels { count: 6 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 3 } }
+    channels { count: 16 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 0 } }
+    channels { count: 12 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

@@ -7,6 +7,7 @@
 #include <optional>
 #include <sstream>
 
+#include "core/distributed/distributed.hpp"
 #include "core/tt_profiler.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
@@ -78,6 +79,13 @@ void AutoContext::close_profiler() {
 }
 
 void AutoContext::close_device() {
+    // The CCL semaphores are L1 buffers of the mesh being closed; the next mesh allocates its own, and a set kept
+    // from this one would point at addresses the next mesh hands out to other buffers.
+    m_ccl_resources.reset();
+    m_device_constants.clear();
+    // Its axes and sizes were derived from the mesh being closed.
+    m_parallelism_context.reset();
+    m_gradient_reduce_dtype = std::nullopt;
     m_device = nullptr;
     // Drop the process-global fabric config that open_device_mesh may have
     // installed via enable_fabric(). Without this, fabric stays armed for
@@ -128,6 +136,10 @@ void AutoContext::initialize_distributed_context(int argc, char** argv) {
     m_distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 }
 
+bool AutoContext::is_distributed_context_initialized() const {
+    return m_distributed_context != nullptr;
+}
+
 core::TTProfiler& AutoContext::get_profiler() {
     if (!m_profiler) {
         m_profiler = std::make_unique<core::TTProfiler>();
@@ -140,6 +152,15 @@ core::TTProfiler& AutoContext::get_profiler() {
         m_ccl_resources = std::make_unique<core::distributed::CCLResources>();
     }
     return *m_ccl_resources;
+}
+
+[[nodiscard]] const ttnn::Tensor& AutoContext::get_device_constant(
+    const std::string& key, const std::function<ttnn::Tensor()>& make) {
+    auto it = m_device_constants.find(key);
+    if (it == m_device_constants.end()) {
+        it = m_device_constants.emplace(key, make()).first;
+    }
+    return it->second;
 }
 
 void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket_type) {
@@ -217,6 +238,17 @@ ParallelismContext::ParallelismContext(
             m_num_tp_devices = mesh_shape[m_tp_axis.value()];
         }
     }
+
+    // ring_shift pairs even and odd devices, so CP needs an even ring of at least 2. Check it at setup rather than
+    // at the first ring step.
+    if (m_cp_axis.has_value()) {
+        TT_FATAL(
+            m_num_cp_devices >= 2U && m_num_cp_devices % 2U == 0U,
+            "Context parallelism needs an even CP axis of at least 2 devices (mesh shape {}, CP axis {} has {})",
+            mesh_shape,
+            m_cp_axis.value(),
+            m_num_cp_devices);
+    }
 }
 
 [[nodiscard]] const ParallelismContext& AutoContext::get_parallelism_context() const {
@@ -235,6 +267,15 @@ void AutoContext::initialize_parallelism_context(const DistributedConfig& config
         throw std::runtime_error("ParallelismContext is already initialized.");
     }
     m_parallelism_context = std::make_unique<ParallelismContext>(get_device(), config);
+}
+
+void AutoContext::set_gradient_reduce_dtype(std::optional<ttnn::DataType> dtype) {
+    core::distributed::check_reduce_dtype(dtype);
+    m_gradient_reduce_dtype = dtype;
+}
+
+std::optional<ttnn::DataType> AutoContext::get_gradient_reduce_dtype() const {
+    return m_gradient_reduce_dtype;
 }
 
 const uint32_t ParallelismContext::get_ddp_size() const {

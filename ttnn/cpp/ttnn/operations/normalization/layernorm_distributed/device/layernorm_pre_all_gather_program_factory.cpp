@@ -8,8 +8,8 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -22,7 +22,7 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 namespace {
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using namespace ttnn::prim::layernorm_distributed_metal2;
 
 // ---- Pre 1D spec names ----
@@ -491,8 +491,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
 
     auto grid_size = device->compute_with_storage_grid_size();
 
+    uint32_t max_cores_x = grid_size.x;
     uint32_t max_cores_y = grid_size.y;
-    uint32_t cores_x = std::min(max_cores_y, num_tile_rows);
+    uint32_t cores_x = std::min(max_cores_x, num_tile_rows);
     while (num_tile_rows % cores_x != 0 && cores_x > 1) {
         cores_x--;
     }

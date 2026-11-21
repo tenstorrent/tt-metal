@@ -14,6 +14,10 @@
 void kernel_main() {
     compute_kernel_hw_startup(dfb::in, dfb::scaler, dfb::out);
 
+    DataflowBuffer in(dfb::in);
+    DataflowBuffer scaler(dfb::scaler);
+    DataflowBuffer out(dfb::out);
+
     uint32_t Ht = get_arg(args::Ht);
     uint32_t Wt = get_arg(args::Wt);
     uint32_t NC = get_arg(args::NC);
@@ -34,6 +38,9 @@ void kernel_main() {
         dfb::out,
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+        in,
+        scaler,
+        out,
         compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
         compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
         compute_kernel_lib::NoAccumulation{},
@@ -50,5 +57,5 @@ void kernel_main() {
 
     // The reduce helper waits on the scaler DFB but never pops it (the single scaler tile is reused for
     // the whole reduction). Pop it here so the DFB is left balanced.
-    DataflowBuffer(dfb::scaler).pop_front(1);
+    scaler.pop_front(1);
 }

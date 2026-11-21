@@ -18,6 +18,9 @@ table Tile {
     tile_shape_h: uint32;
     tile_shape_w: uint32;
     transpose_tile: bool;
+    // 0 in files written before the face shape was stored; the face shape is then derived from the tile shape.
+    face_shape_h: uint32;
+    face_shape_w: uint32;
 }
 
 enum TensorMemoryLayout: ushort {
@@ -83,7 +86,16 @@ enum DataType : ubyte {
     UInt16 = 6,
     Int32 = 7,
     Int8 = 8,
-    Invalid = 9
+    Invalid = 9,
+    // Appended after Invalid so existing serialized values keep their meaning.
+    MxFp8E4M3 = 10,
+    MxFp8E5M2 = 11,
+    MxFp6E2M3 = 12,
+    MxFp6E3M2 = 13,
+    MxFp4 = 14,
+    MxInt8 = 15,
+    MxInt4 = 16,
+    MxInt2 = 17
 }
 
 table RowMajorPageConfig {}

@@ -8,11 +8,10 @@ from helpers.llk_params import (
     PERF_RUN_TYPES_QUASAR,
     EltwiseBinaryReuseDestType,
 )
-from helpers.param_config import parametrize, runtime
+from helpers.param_config import parametrize, quasar_dest_sync_modes, runtime
 from quasar.test_eltwise_binary_reuse_dest_quasar import (
     INPUT_DIMENSIONS,
     REUSE_DEST_FORMATS,
-    reuse_dest_dest_sync_modes,
     reuse_dest_mathops,
 )
 from quasar.test_eltwise_binary_reuse_dest_quasar import (
@@ -33,7 +32,7 @@ from quasar.test_eltwise_binary_reuse_dest_quasar import (
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
-    dest_sync_mode=lambda: reuse_dest_dest_sync_modes(is_perf=True),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=True),
     input_dimensions=runtime(INPUT_DIMENSIONS),
     output_dimensions=runtime(valid_output_dimensions),
     run_types=PERF_RUN_TYPES_QUASAR,
@@ -46,7 +45,7 @@ def test_perf_eltwise_binary_reuse_dest_quasar(
     mathop,
     reuse_dest_type,
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
     input_dimensions,
     output_dimensions,
     run_types,
@@ -58,7 +57,7 @@ def test_perf_eltwise_binary_reuse_dest_quasar(
         mathop,
         reuse_dest_type,
         math_fidelity,
-        dest_sync_mode,
+        dest_sync,
         input_dimensions,
         output_dimensions,
         run_types=run_types,

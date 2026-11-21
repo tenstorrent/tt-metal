@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from models.common.utility_functions import get_debug_tensor
+from tt_py_test_utils_common.utility_functions import get_debug_tensor
 from tests.ttnn.utils_for_testing import assert_equal
 from enum import Enum
 

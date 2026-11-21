@@ -44,10 +44,10 @@ void ChainAffineTransformsOperation::validate_on_program_cache_miss(
     kda_factory_detail::check_same_device(in.transforms, in.initial_state, operation_name, "initial_state");
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
-    TT_FATAL(
-        attrs.compute_kernel_config.fp32_dest_acc_en,
-        "{}: fp32_dest_acc_en must be enabled; the FP32 product unpacks to DST for the add",
-        operation_name);
+    kda_factory_detail::check_fp32_dest_acc(
+        attrs.compute_kernel_config,
+        operation_name,
+        "the product, B and an exact copy of the state are summed in FP32 DST");
 
     const auto& t_shape = in.transforms.logical_shape();
     const auto& s_shape = in.initial_state.logical_shape();
@@ -68,7 +68,7 @@ void ChainAffineTransformsOperation::validate_on_program_cache_miss(
         t_shape[0] == mesh->shape()[attrs.sequence_parallel_axis],
         "{}: transforms must hold one transition per sequence-parallel rank",
         operation_name);
-    // One core per head.
+    // Each head needs at least one core; spare cores split its value columns further.
     const auto grid = mesh->compute_with_storage_grid_size();
     TT_FATAL(
         attrs.batch_heads <= grid.x * grid.y,
@@ -76,6 +76,7 @@ void ChainAffineTransformsOperation::validate_on_program_cache_miss(
         operation_name,
         grid.x * grid.y,
         attrs.batch_heads);
+    // Sized for one value block per head, the most L1 any distribution needs.
     const uint64_t dfb_bytes = chain_affine_transforms_l1_bytes(
         attrs.key_dim / tt::constants::TILE_WIDTH, attrs.value_dim / tt::constants::TILE_WIDTH);
     const uint64_t l1_bytes =

@@ -15,7 +15,7 @@ import ttnn
 from models.common.utility_functions import nearest_y
 from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def _debug_mtp_enabled() -> bool:
@@ -223,6 +223,7 @@ def test_deepseek_v3_mla_flash_mla_trace_mode(
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
+        max_cores_per_head_batch=4 if ttnn.device.is_blackhole(device) else 16,  # as in mla1d
     )
 
     # Compute kernel config

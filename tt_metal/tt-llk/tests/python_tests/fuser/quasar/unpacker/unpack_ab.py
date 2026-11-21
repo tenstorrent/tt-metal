@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.unpack_ab import unpack_ab_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource
+from fuser.operand import BfdId
 from helpers.llk_params import BroadcastType
 
 
@@ -72,19 +72,18 @@ class UnpackerAB(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        bfd_program = compute_unit.src_a.bfd_alloc_and_program(
-            BfdResource.UNP0, result_name="bfd_a"
-        ) + compute_unit.src_b.bfd_alloc_and_program(
-            BfdResource.UNP1, result_name="bfd_b"
-        )
+        bfd_program = compute_unit.src_a.program_bfd(
+            BfdId.UNP0, result_name="bfd_a"
+        ) + compute_unit.src_b.program_bfd(BfdId.UNP1, result_name="bfd_b")
 
         if compute_unit.broadcast_type != BroadcastType.None_:
             broadcast_type = compute_unit.broadcast_type.cpp_enum_value
+            tensor_shape = compute_unit.src_a.tile_shape.cpp_value
             return (
                 "{\n"
                 + bfd_program
                 + f"_llk_unpack_binary_broadcast_operands_init_<{broadcast_type}>"
-                "(bfd_a, bfd_b, 1);\n}\n"
+                f"(bfd_a, bfd_b, {tensor_shape}, 1);\n}}\n"
             )
 
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
@@ -103,7 +102,8 @@ class UnpackerAB(Unpacker):
     ) -> str:
         if compute_unit.broadcast_type != BroadcastType.None_:
             tile_id_b = block.tile_id_src_b
-            return f"_llk_unpack_binary_broadcast_operands_({block.tile_id_src_a}, {tile_id_b});\n"
+            tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+            return f"_llk_unpack_binary_broadcast_operands_({block.tile_id_src_a}, {tile_id_b}, {tensor_shape});\n"
 
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         return f"_llk_unpack_binary_operands_({block.tile_id_src_a}, {block.tile_id_src_b}, {tensor_shape});\n"
