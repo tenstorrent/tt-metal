@@ -1,0 +1,664 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Reader of the modulated deformable conv: it gathers the bilinear corners each block's columns are
+// sampled from, for a matmul that runs in the same op, so the columns never leave L1.
+//
+// The kernel positions run outermost and each core's blocks of 32 output rows inside them, so one
+// position's slice of the weight serves all of the core's blocks before the next slice replaces it.
+// An input wider than a chunk of channels takes one pass per chunk at each position, with that
+// chunk's rows of the weight; a pass reads only its chunk of each corner. Two copies of this kernel
+// run per core, one on each data-movement RISC-V and, for an interleaved input, on its own NoC (with
+// a sharded input both issue on either NoC): the first takes the core's even blocks, the second the
+// odd ones, and the one with fewer blocks on the busiest cores also loads the weight slices and the
+// bias. Each copy stages the geometry inputs of its own blocks; compute returns each block's
+// geometry, every sample's top-left corner page within its image and its four weights, to the same
+// copy, which keeps it for all kernel positions.
+//
+// The geometry is staged during the first kernel position, a copy's next block once it has handed
+// compute the corners of the current one, and compute derives it two blocks ahead of the block's
+// corners. Staging is scalar work on the RISC-V, so each copy does it for its own blocks.
+//
+// For each (pass, block) a copy hands compute the four corners as one row-major block, 32 rows of
+// [corner 0 | corner 1 | corner 2 | corner 3] chunk-wide input sticks, landed by the NoC reads, and
+// one scalar tile per corner whose column 0 holds the row's weight. After the last position it
+// writes its blocks' C_out-wide output.
+//
+// A corner is read only when its weight is nonzero. A corner of zero weight, which includes every
+// corner of a row past the block's end, is zeroed rather than skipped: a stale NaN or Inf times a
+// zero scalar would still be NaN.
+//
+// The geometry runs on compute because the data-movement RISC-Vs have no FPU; the reader only moves
+// bits. Offsets saturate at +-OFFSET_CLAMP pixels, which keeps every coordinate exact in fp32 and
+// puts a non-finite offset outside the input. Mask logits saturate the same way: a NaN one would
+// give its row NaN weights, nonzero even for corners outside the input, whose pages the reader
+// would then read.
+
+#include <cstdint>
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "hostdevcommon/common_values.hpp"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+
+constexpr uint32_t offset_mask_arena_cb_index = get_named_compile_time_arg_val("offset_mask_arena_cb");
+constexpr uint32_t corner_block_cb_index = get_named_compile_time_arg_val("corner_block_cb");
+constexpr uint32_t scalar_tile_cb_index = get_named_compile_time_arg_val("scalar_tile_cb");
+constexpr uint32_t geom_in_cb_index = get_named_compile_time_arg_val("geom_in_cb");
+constexpr uint32_t geom_index_cb_index = get_named_compile_time_arg_val("geom_index_cb");
+constexpr uint32_t geom_weight_cb_index = get_named_compile_time_arg_val("geom_weight_cb");
+constexpr uint32_t output_cb_index = get_named_compile_time_arg_val("output_cb");
+constexpr uint32_t geom_kernel_cb_index = get_named_compile_time_arg_val("geom_kernel_cb");
+// The two halves of the core's input band: the first copy fills the first, the second the other.
+constexpr uint32_t band_a_cb_index = get_named_compile_time_arg_val("band_a_cb");
+constexpr uint32_t band_b_cb_index = get_named_compile_time_arg_val("band_b_cb");
+constexpr uint32_t conv_weight_cb_index = get_named_compile_time_arg_val("conv_weight_cb");
+constexpr uint32_t bias_cb_index = get_named_compile_time_arg_val("bias_cb");
+// This copy's role: the parity of the blocks it takes. The copy of WEIGHT_PARITY loads the weight
+// and the bias, the other writes the kernel offset tiles.
+constexpr uint32_t BLOCK_PARITY = get_named_compile_time_arg_val("block_parity");
+constexpr uint32_t WEIGHT_PARITY = get_named_compile_time_arg_val("weight_parity");
+constexpr uint32_t C = get_named_compile_time_arg_val("channels");
+constexpr int32_t IN_H = get_named_compile_time_arg_val("in_h");
+constexpr int32_t IN_W = get_named_compile_time_arg_val("in_w");
+constexpr uint32_t OUT_H = get_named_compile_time_arg_val("out_h");
+constexpr uint32_t OUT_W = get_named_compile_time_arg_val("out_w");
+constexpr uint32_t KERNEL_W = get_named_compile_time_arg_val("kernel_w");
+constexpr uint32_t kernel_positions = get_named_compile_time_arg_val("kernel_positions");
+constexpr int32_t STRIDE_H = get_named_compile_time_arg_val("stride_h");
+constexpr int32_t STRIDE_W = get_named_compile_time_arg_val("stride_w");
+constexpr int32_t PAD_H = get_named_compile_time_arg_val("pad_h");
+constexpr int32_t PAD_W = get_named_compile_time_arg_val("pad_w");
+constexpr int32_t DILATION_H = get_named_compile_time_arg_val("dilation_h");
+constexpr int32_t DILATION_W = get_named_compile_time_arg_val("dilation_w");
+// Page strides of the two row-major tensors, as their buffers lay them out.
+constexpr uint32_t input_page_nbytes = get_named_compile_time_arg_val("input_page_nbytes");
+constexpr uint32_t offset_mask_page_nbytes = get_named_compile_time_arg_val("offset_mask_page_nbytes");
+// The host validates that each input size plus its padding, and the kernel span, are at most this.
+constexpr uint32_t OFFSET_CLAMP = get_named_compile_time_arg_val("offset_clamp");
+constexpr uint32_t tile_nbytes = get_named_compile_time_arg_val("tile_nbytes");
+constexpr uint32_t OUT_TILES = get_named_compile_time_arg_val("out_tiles");      // C_out / 32
+constexpr uint32_t CHUNK_TILES = get_named_compile_time_arg_val("chunk_tiles");  // input channels per pass / 32
+constexpr bool HAS_BIAS = get_named_compile_time_arg_val("has_bias");
+// One core reads each weight slice from DRAM and multicasts it to the others, so the slices cost
+// one DRAM read instead of one per core; the per-core reads otherwise congest the corner gather.
+constexpr bool MCAST_WEIGHT = get_named_compile_time_arg_val("mcast_weight");
+constexpr uint32_t MCAST_NUM_DESTS = get_named_compile_time_arg_val("mcast_num_dests");
+constexpr uint32_t weight_sender_sem_id = get_named_compile_time_arg_val("weight_sender_sem_id");
+constexpr uint32_t weight_receiver_sem_id = get_named_compile_time_arg_val("weight_receiver_sem_id");
+// A height-sharded input holds each core's own blocks' rows; corners outside them lie in a
+// neighbour's shard. Its pages per shard, 0 for an interleaved input.
+constexpr uint32_t INPUT_SHARD_PAGES = get_named_compile_time_arg_val("input_shard_pages");
+constexpr bool INPUT_SHARDED = INPUT_SHARD_PAGES != 0;
+constexpr bool LOADS_WEIGHT = BLOCK_PARITY == WEIGHT_PARITY;
+constexpr bool WRITES_KERNEL_TILES = !LOADS_WEIGHT;
+// The tensor accessors' args are the only positional ones, chained from index 0.
+constexpr auto input_args = TensorAccessorArgs<0>();
+constexpr auto offset_mask_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+constexpr auto output_args = TensorAccessorArgs<offset_mask_args.next_compile_time_args_offset()>();
+constexpr auto weight_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+
+constexpr uint32_t TILE_ROWS = 32;
+// Offset-mask rows a copy's staging arena holds; the two copies share the L1 of one block's rows.
+constexpr uint32_t ARENA_ROWS = TILE_ROWS / 2;
+constexpr uint32_t CHANNEL_TILES = C / 32;
+constexpr uint32_t CHUNKS = CHANNEL_TILES / CHUNK_TILES;
+constexpr uint32_t PASSES = kernel_positions * CHUNKS;
+constexpr uint32_t CORNERS = 4;
+constexpr uint32_t PAGE_NBYTES = C * sizeof(uint16_t);  // an input page's channels, as the band holds them
+constexpr uint32_t STICK_NBYTES = CHUNK_TILES * 32 * sizeof(uint16_t);  // the channels a pass reads per corner
+constexpr uint32_t BLOCK_ROW_NBYTES = CORNERS * STICK_NBYTES;
+// One pass's slice of the (K*K*C, C_out) weight, CHUNK_TILES x OUT_TILES tiles. The weight's rows
+// run (kernel position, channel), so pass p's slice is the p-th run of WEIGHT_SLICE_TILES tiles.
+constexpr uint32_t WEIGHT_SLICE_TILES = CHUNK_TILES * OUT_TILES;
+static_assert(CHANNEL_TILES % CHUNK_TILES == 0, "the channels split into whole chunks");
+// A shard's pages lie back to back in its L1, as corners c and c + 1 of a row do in the block, so
+// when a pass reads whole pages the two corners of one input row come in a single read, which
+// costs the reader less to issue than two.
+constexpr bool PAIR_CORNERS = INPUT_SHARDED && CHUNKS == 1 && input_page_nbytes == STICK_NBYTES;
+static_assert(!PAIR_CORNERS || STICK_NBYTES <= MEM_ZEROS_SIZE, "a paired gather zeros a stick in one read");
+
+// Tiles of geom_in_cb, per block, and of geom_kernel_cb, once, in compute's order: fp32
+// [row, kernel position].
+constexpr uint32_t IN_DY = 0;
+constexpr uint32_t IN_DX = 1;
+constexpr uint32_t IN_MASK = 2;  // the logits; compute applies the sigmoid
+constexpr uint32_t IN_ORIGIN_Y = 3;
+constexpr uint32_t IN_ORIGIN_X = 4;
+constexpr uint32_t GEOM_IN_TILES = 5;
+constexpr uint32_t KERNEL_Y = 0;
+constexpr uint32_t KERNEL_X = 1;
+constexpr uint32_t TILE_ELEMENTS = 32 * 32;
+
+static_assert(kernel_positions <= 32, "the geometry tiles hold one kernel position per column");
+static_assert((OFFSET_CLAMP & (OFFSET_CLAMP - 1)) == 0, "the offset clamp works on the bfloat16 exponent");
+
+namespace {
+
+// bfloat16 exponent field of OFFSET_CLAMP, a power of two, and OFFSET_CLAMP itself.
+constexpr uint32_t CLAMP_EXPONENT = 127 + (31 - __builtin_clz(OFFSET_CLAMP));
+constexpr uint16_t CLAMP_BF16 = static_cast<uint16_t>(CLAMP_EXPONENT << 7);
+
+// A value of magnitude OFFSET_CLAMP or more, inf and NaN, become +-OFFSET_CLAMP.
+inline uint32_t saturate_to_fp32(uint16_t bf16) {
+    if (__builtin_expect(((bf16 >> 7) & 0xFFu) >= CLAMP_EXPONENT, 0)) {
+        const bool negative = (bf16 & 0x8000u) && (bf16 & 0x7FFFu) <= 0x7F80u;  // NaN goes positive
+        return static_cast<uint32_t>(negative ? (0x8000u | CLAMP_BF16) : CLAMP_BF16) << 16;
+    }
+    return static_cast<uint32_t>(bf16) << 16;
+}
+
+// An integer of magnitude below 2^24 as fp32 bits.
+inline uint32_t int_to_fp32(int32_t value) {
+    if (value == 0) {
+        return 0;
+    }
+    const uint32_t sign = value < 0 ? 0x80000000u : 0;
+    const uint32_t magnitude = static_cast<uint32_t>(value < 0 ? -value : value);
+    const int32_t msb = 31 - __builtin_clz(magnitude);
+    return sign | (static_cast<uint32_t>(127 + msb) << 23) | ((magnitude << (23 - msb)) & 0x7FFFFFu);
+}
+
+// Element (row, col) of a 32 x 32 tile in its four 16 x 16 faces.
+inline uint32_t tile_element(uint32_t row, uint32_t col) {
+    return ((row >> 4) * 2 + (col >> 4)) * 256 + (row & 15) * 16 + (col & 15);
+}
+
+// Zeros a stick with NoC reads of the core's zero region, which cost one read issue each where
+// storing the words would cost one store per word; corners outside the input are many on cores
+// whose rows lie along an image edge, and the slowest core sets the op's time.
+inline void zero_stick(uint32_t l1_addr) {
+    const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+    for (uint32_t offset = 0; offset < STICK_NBYTES; offset += MEM_ZEROS_SIZE) {
+        const uint32_t nbytes = STICK_NBYTES - offset < MEM_ZEROS_SIZE ? STICK_NBYTES - offset : MEM_ZEROS_SIZE;
+        noc_async_read(zeros, l1_addr + offset, nbytes);
+    }
+}
+
+inline uint32_t valid_rows_of(uint32_t block, uint32_t num_rows) {
+    const uint32_t row0 = block * TILE_ROWS;
+    return num_rows - row0 < TILE_ROWS ? num_rows - row0 : TILE_ROWS;
+}
+
+}  // namespace
+
+void kernel_main() {
+    const uint32_t input_addr = get_arg_val<uint32_t>(0);
+    const uint32_t offset_mask_addr = get_arg_val<uint32_t>(1);
+    const uint32_t start_block = get_arg_val<uint32_t>(2);
+    const uint32_t num_blocks = get_arg_val<uint32_t>(3);
+    const uint32_t num_rows = get_arg_val<uint32_t>(4);
+    const uint32_t output_addr = get_arg_val<uint32_t>(5);
+    // The core's band of input pages, [band_first_page, band_first_page + band_pages).
+    const uint32_t band_first_page = get_arg_val<uint32_t>(6);
+    const uint32_t band_pages = get_arg_val<uint32_t>(7);
+    const uint32_t weight_addr = get_arg_val<uint32_t>(8);
+    const uint32_t bias_addr = get_arg_val<uint32_t>(9);
+    // The multicast's sender and its destination rectangle, in NoC coordinates.
+    const bool is_weight_sender = get_arg_val<uint32_t>(10);
+    const uint32_t sender_noc_x = get_arg_val<uint32_t>(11);
+    const uint32_t sender_noc_y = get_arg_val<uint32_t>(12);
+    uint32_t mcast_x0 = get_arg_val<uint32_t>(13);
+    uint32_t mcast_y0 = get_arg_val<uint32_t>(14);
+    uint32_t mcast_x1 = get_arg_val<uint32_t>(15);
+    uint32_t mcast_y1 = get_arg_val<uint32_t>(16);
+    if (noc_index == 1) {
+        // NoC 1 runs the other way, so its rectangle starts at the far corner.
+        const uint32_t x = mcast_x0, y = mcast_y0;
+        mcast_x0 = mcast_x1;
+        mcast_y0 = mcast_y1;
+        mcast_x1 = x;
+        mcast_y1 = y;
+    }
+
+    const auto input_acc = TensorAccessor(input_args, input_addr, input_page_nbytes);
+    const auto offset_mask_acc = TensorAccessor(offset_mask_args, offset_mask_addr, offset_mask_page_nbytes);
+    const auto output_acc = TensorAccessor(output_args, output_addr, tile_nbytes);
+    const auto weight_acc = TensorAccessor(weight_args, weight_addr, tile_nbytes);
+    const auto bias_acc = TensorAccessor(bias_args, bias_addr, tile_nbytes);
+
+    Noc noc;
+    CircularBuffer corner_block_cb(corner_block_cb_index);
+    CircularBuffer scalar_tile_cb(scalar_tile_cb_index);
+    CircularBuffer geom_in_cb(geom_in_cb_index);
+    CircularBuffer index_cb(geom_index_cb_index);
+    CircularBuffer corner_weight_cb(geom_weight_cb_index);
+    CircularBuffer output_cb(output_cb_index);
+    CircularBuffer conv_weight_cb(conv_weight_cb_index);
+
+    Semaphore<> weight_sender_sem(weight_sender_sem_id);
+    Semaphore<> weight_receiver_sem(weight_receiver_sem_id);
+    if (LOADS_WEIGHT && MCAST_WEIGHT && is_weight_sender) {
+        // The value the sender multicasts into every receiver's flag once a slice has landed.
+        weight_receiver_sem.set(VALID);
+    }
+
+    // Loads one pass's slice of the weight, tiles in row-major order, in two steps so the wait for
+    // it can trail the previous pass's corners: begin reserves the slot and, on a receiver, reports
+    // it free; finish reads or awaits the data and hands it to compute, which needs it once it is
+    // through the previous pass's last block. Every core reserves the same slot in the same order, so
+    // the slot's address matches on all of them.
+    uint32_t weight_slot_l1 = 0;
+    auto begin_weight_slice = [&]() {
+        conv_weight_cb.reserve_back(WEIGHT_SLICE_TILES);
+        weight_slot_l1 = conv_weight_cb.get_write_ptr();
+        if (MCAST_WEIGHT && !is_weight_sender) {
+            weight_receiver_sem.set(INVALID);
+            weight_sender_sem.up(noc, sender_noc_x, sender_noc_y, 1);
+        }
+    };
+    auto finish_weight_slice = [&](uint32_t pass) {
+        if (!MCAST_WEIGHT || is_weight_sender) {
+            const uint32_t first_tile = pass * WEIGHT_SLICE_TILES;
+            for (uint32_t t = 0; t < WEIGHT_SLICE_TILES; ++t) {
+                CoreLocalMem<uint32_t> dst(weight_slot_l1 + t * tile_nbytes);
+                noc.async_read(weight_acc, dst, tile_nbytes, {.page_id = first_tile + t}, {.offset_bytes = 0});
+            }
+            noc.async_read_barrier();
+            if constexpr (MCAST_WEIGHT) {
+                // Every receiver has freed the slot.
+                weight_sender_sem.wait(MCAST_NUM_DESTS);
+                weight_sender_sem.set(0);
+                const MulticastEndpoint mcast_dst;
+                noc.async_write_multicast(
+                    CoreLocalMem<uint32_t>(weight_slot_l1),
+                    mcast_dst,
+                    WEIGHT_SLICE_TILES * tile_nbytes,
+                    MCAST_NUM_DESTS,
+                    {},
+                    {.noc_x_start = mcast_x0,
+                     .noc_y_start = mcast_y0,
+                     .noc_x_end = mcast_x1,
+                     .noc_y_end = mcast_y1,
+                     .addr = weight_slot_l1},
+                    /*linked=*/!INPUT_SHARDED);
+                // A linked multicast holds its path until the semaphore follows it. With a sharded
+                // input the other reader issues on this NoC too, and its reads crossing a held path
+                // deadlock, so the slice goes unlinked and lands before the semaphore.
+                if constexpr (INPUT_SHARDED) {
+                    noc.async_write_barrier();
+                } else {
+                    noc.async_writes_flushed();
+                }
+                weight_receiver_sem.set_multicast(noc, mcast_x0, mcast_y0, mcast_x1, mcast_y1, MCAST_NUM_DESTS);
+            }
+        } else {
+            weight_receiver_sem.wait(VALID);
+        }
+        conv_weight_cb.push_back(WEIGHT_SLICE_TILES);
+    };
+    auto load_weight_slice = [&](uint32_t pass) {
+        begin_weight_slice();
+        finish_weight_slice(pass);
+    };
+
+    // The arena is reserved once and used as flat L1; nothing waits on it.
+    CircularBuffer offset_mask_arena_cb(offset_mask_arena_cb_index);
+    offset_mask_arena_cb.reserve_back(ARENA_ROWS);
+    const uint32_t offset_mask_l1 = offset_mask_arena_cb.get_write_ptr();
+    if constexpr (WRITES_KERNEL_TILES) {
+        CircularBuffer geom_kernel_cb(geom_kernel_cb_index);
+        geom_kernel_cb.reserve_back(2);
+        const uint32_t kernel_l1 = geom_kernel_cb.get_write_ptr();
+        for (uint32_t r = 0; r < TILE_ROWS; ++r) {
+            for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
+                const uint32_t element = tile_element(r, kk) * sizeof(uint32_t);
+                CoreLocalMem<volatile uint32_t> ky(kernel_l1 + KERNEL_Y * TILE_ELEMENTS * sizeof(uint32_t) + element);
+                CoreLocalMem<volatile uint32_t> kx(kernel_l1 + KERNEL_X * TILE_ELEMENTS * sizeof(uint32_t) + element);
+                ky[0] = int_to_fp32(static_cast<int32_t>(kk / KERNEL_W) * DILATION_H);
+                kx[0] = int_to_fp32(static_cast<int32_t>(kk % KERNEL_W) * DILATION_W);
+            }
+        }
+        geom_kernel_cb.push_back(2);
+    }
+
+    // Stages a block's offsets and mask logits and hands compute its geometry tiles.
+    auto stage_geometry = [&](uint32_t block) {
+        const uint32_t row0 = block * TILE_ROWS;
+        const uint32_t valid_rows = valid_rows_of(block, num_rows);
+        geom_in_cb.reserve_back(GEOM_IN_TILES);
+        const uint32_t geom_l1 = geom_in_cb.get_write_ptr();
+
+        // (h_out, w_out) of the block's first row, then stepped row by row.
+        uint32_t h_o = (row0 / OUT_W) % OUT_H;
+        uint32_t w_o = row0 % OUT_W;
+        tt_l1_ptr uint32_t* geom = reinterpret_cast<tt_l1_ptr uint32_t*>(geom_l1);
+        for (uint32_t r = 0; r < valid_rows; ++r) {
+            // The arena holds a share of the block's rows; the next share lands once this one is used.
+            if (r % ARENA_ROWS == 0) {
+                const uint32_t rows = valid_rows - r < ARENA_ROWS ? valid_rows - r : ARENA_ROWS;
+                for (uint32_t a = 0; a < rows; ++a) {
+                    CoreLocalMem<uint32_t> dst(offset_mask_l1 + a * offset_mask_page_nbytes);
+                    noc.async_read(
+                        offset_mask_acc, dst, offset_mask_page_nbytes, {.page_id = row0 + r + a}, {.offset_bytes = 0});
+                }
+                noc.async_read_barrier();
+            }
+            const uint32_t origin_y = int_to_fp32(static_cast<int32_t>(h_o) * STRIDE_H - PAD_H);
+            const uint32_t origin_x = int_to_fp32(static_cast<int32_t>(w_o) * STRIDE_W - PAD_W);
+            const tt_l1_ptr uint16_t* off = reinterpret_cast<const tt_l1_ptr uint16_t*>(
+                offset_mask_l1 + (r % ARENA_ROWS) * offset_mask_page_nbytes);
+            // The mask logits follow the row's 2*K*K offsets.
+            const tt_l1_ptr uint16_t* msk = off + 2 * kernel_positions;
+            tt_l1_ptr uint32_t* row = geom + tile_element(r, 0);
+            // A kernel position's (dy, dx) pair is one aligned word of the row. The row's loads all
+            // go out before its stores, which the compiler cannot move them past, so their latencies
+            // overlap.
+            const tt_l1_ptr uint32_t* off_pairs = reinterpret_cast<const tt_l1_ptr uint32_t*>(off);
+            uint32_t pairs[kernel_positions];
+            uint16_t logits[kernel_positions];
+#pragma GCC unroll 32
+            for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
+                pairs[kk] = off_pairs[kk];
+                logits[kk] = msk[kk];
+            }
+#pragma GCC unroll 32
+            for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
+                tt_l1_ptr uint32_t* dst = row + tile_element(0, kk);
+                dst[IN_DY * TILE_ELEMENTS] = saturate_to_fp32(static_cast<uint16_t>(pairs[kk]));
+                dst[IN_DX * TILE_ELEMENTS] = saturate_to_fp32(static_cast<uint16_t>(pairs[kk] >> 16));
+                dst[IN_MASK * TILE_ELEMENTS] = saturate_to_fp32(logits[kk]);
+            }
+            // The window origin is the same at every kernel position; compute broadcasts column 0.
+            row[IN_ORIGIN_Y * TILE_ELEMENTS] = origin_y;
+            row[IN_ORIGIN_X * TILE_ELEMENTS] = origin_x;
+            if (++w_o == OUT_W) {
+                w_o = 0;
+                if (++h_o == OUT_H) {
+                    h_o = 0;
+                }
+            }
+        }
+        geom_in_cb.push_back(GEOM_IN_TILES);
+    };
+
+    // The copy's first block; compute derives the first two blocks' geometry before any corners.
+    if (BLOCK_PARITY < num_blocks) {
+        stage_geometry(start_block + BLOCK_PARITY);
+    }
+    if constexpr (LOADS_WEIGHT) {
+        load_weight_slice(0);
+        if constexpr (HAS_BIAS) {
+            CircularBuffer bias_cb(bias_cb_index);
+            bias_cb.reserve_back(OUT_TILES);
+            const uint32_t dst_l1 = bias_cb.get_write_ptr();
+            for (uint32_t t = 0; t < OUT_TILES; ++t) {
+                CoreLocalMem<uint32_t> dst(dst_l1 + t * tile_nbytes);
+                noc.async_read(bias_acc, dst, tile_nbytes, {.page_id = t}, {.offset_bytes = 0});
+            }
+            noc.async_read_barrier();
+            bias_cb.push_back(OUT_TILES);
+        }
+    }
+
+    // Each copy brings in its half of the band, then both wait for the whole of it.
+    const uint32_t band_half = (band_pages + 1) / 2;
+    CircularBuffer band_a_cb(band_a_cb_index);
+    CircularBuffer band_b_cb(band_b_cb_index);
+    {
+        CircularBuffer& own = BLOCK_PARITY == 0 ? band_a_cb : band_b_cb;
+        const uint32_t begin = BLOCK_PARITY == 0 ? 0 : band_half;
+        const uint32_t end = BLOCK_PARITY == 0 ? band_half : band_pages;
+        own.reserve_back(1);
+        const uint32_t own_l1 = own.get_write_ptr();
+        for (uint32_t p = begin; p < end; ++p) {
+            CoreLocalMem<uint32_t> dst(own_l1 + (p - begin) * input_page_nbytes);
+            noc.async_read(input_acc, dst, PAGE_NBYTES, {.page_id = band_first_page + p}, {.offset_bytes = 0});
+        }
+        noc.async_read_barrier();
+        own.push_back(1);
+    }
+    band_a_cb.wait_front(1);
+    band_b_cb.wait_front(1);
+    const uint32_t band_a_l1 = band_a_cb.get_read_ptr();
+    const uint32_t band_b_l1 = band_b_cb.get_read_ptr();
+
+    // A sharded input's own shard and its two neighbours hold nearly every corner. Their pages lie
+    // back to back from a base the accessor resolves once here, so a corner in them costs an add
+    // rather than an accessor lookup. Corners in the previous shard go over NoC 0 and in the next over
+    // NoC 1, so each neighbour's reads take that neighbour's short NoC direction.
+    const uint32_t shard_first = start_block * TILE_ROWS;
+    const uint32_t prev_first = shard_first - INPUT_SHARD_PAGES;
+    const uint32_t next_first = shard_first + INPUT_SHARD_PAGES;
+    uint64_t own_base = 0, prev_base = 0, next_base = 0;
+    if constexpr (INPUT_SHARDED) {
+        own_base = get_noc_addr(input_addr);
+        if (start_block != 0) {
+            prev_base = input_acc.get_noc_addr(prev_first, 0, 0);
+        }
+        if (next_first < num_rows) {
+            next_base = input_acc.get_noc_addr(next_first, 0, 1);
+        }
+    }
+
+    // A block's C_out-wide output, which compute hands over once the block is through its last pass.
+    auto write_output = [&](uint32_t block) {
+        output_cb.wait_front(OUT_TILES);
+        const uint32_t tiles_l1 = output_cb.get_read_ptr();
+        const uint32_t first_tile = block * OUT_TILES;
+        for (uint32_t t = 0; t < OUT_TILES; ++t) {
+            CoreLocalMem<uint32_t> src(tiles_l1 + t * tile_nbytes);
+            noc.async_write(src, output_acc, tile_nbytes, {.offset_bytes = 0}, {.page_id = first_tile + t});
+        }
+        noc.async_writes_flushed();
+        output_cb.pop_front(OUT_TILES);
+    };
+
+    const uint32_t index_tile_nbytes = get_tile_size(geom_index_cb_index);
+    const uint32_t corner_weight_slot_nbytes = CORNERS * get_tile_size(geom_weight_cb_index);
+    uint32_t page[TILE_ROWS];
+
+    for (uint32_t pass = 0; pass < PASSES; ++pass) {
+        const uint32_t kk = pass / CHUNKS;
+        const uint32_t chunk_offset = (pass % CHUNKS) * STICK_NBYTES;
+        // The next slice's slot frees only once compute is through the previous pass, so it is
+        // claimed after this pass's first block of corners, not before them; the CB holds two.
+        bool slice_begun = !LOADS_WEIGHT || pass + 1 >= PASSES;
+        uint32_t slot = 0;  // this copy's blocks, in order; their geometry stays in its CBs
+        for (uint32_t j = BLOCK_PARITY; j < num_blocks; j += 2, ++slot) {
+            const uint32_t block = start_block + j;
+            const uint32_t valid_rows = valid_rows_of(block, num_rows);
+            if (pass == 0) {
+                index_cb.wait_front(slot + 1);
+                corner_weight_cb.wait_front(CORNERS * (slot + 1));
+            }
+            const uint32_t index_l1 = index_cb.get_read_ptr() + slot * index_tile_nbytes;
+            const uint32_t corner_weight_l1 = corner_weight_cb.get_read_ptr() + slot * corner_weight_slot_nbytes;
+
+            // The first page of the row's image, stepped row by row.
+            uint32_t image_first_page = block * TILE_ROWS / (OUT_H * OUT_W) * static_cast<uint32_t>(IN_H * IN_W);
+            uint32_t rows_left_in_image = OUT_H * OUT_W - block * TILE_ROWS % (OUT_H * OUT_W);
+            // Bit r of present[c]: row r reads corner c, its weight being nonzero. Rows past the
+            // block's end weigh zero.
+            uint32_t present[CORNERS] = {0, 0, 0, 0};
+
+            // Only column 0 of each row is read by the column broadcast.
+            scalar_tile_cb.reserve_back(CORNERS);
+            const uint32_t scalar_l1 = scalar_tile_cb.get_write_ptr();
+            const tt_l1_ptr uint32_t* index =
+                reinterpret_cast<const tt_l1_ptr uint32_t*>(index_l1) + tile_element(0, kk);
+            const tt_l1_ptr uint16_t* w =
+                reinterpret_cast<const tt_l1_ptr uint16_t*>(corner_weight_l1) + tile_element(0, kk);
+            tt_l1_ptr uint16_t* lane = reinterpret_cast<tt_l1_ptr uint16_t*>(scalar_l1);
+#pragma GCC unroll 4
+            for (uint32_t r = 0; r < TILE_ROWS; ++r) {
+                const uint32_t row = tile_element(r, 0);
+                // A row's loads all go out before any of them is used, so their latencies overlap.
+                const uint32_t corner_page = index[row];
+                const uint32_t keep = r < valid_rows ? 0xFFFFu : 0u;
+                const uint32_t w0 = w[row] & keep;
+                const uint32_t w1 = w[TILE_ELEMENTS + row] & keep;
+                const uint32_t w2 = w[2 * TILE_ELEMENTS + row] & keep;
+                const uint32_t w3 = w[3 * TILE_ELEMENTS + row] & keep;
+                lane[row] = w0;
+                lane[TILE_ELEMENTS + row] = w1;
+                lane[2 * TILE_ELEMENTS + row] = w2;
+                lane[3 * TILE_ELEMENTS + row] = w3;
+                present[0] |= static_cast<uint32_t>(w0 != 0) << r;
+                present[1] |= static_cast<uint32_t>(w1 != 0) << r;
+                present[2] |= static_cast<uint32_t>(w2 != 0) << r;
+                present[3] |= static_cast<uint32_t>(w3 != 0) << r;
+                page[r] = image_first_page + corner_page;
+                if (--rows_left_in_image == 0) {
+                    image_first_page += IN_H * IN_W;
+                    rows_left_in_image = OUT_H * OUT_W;
+                }
+            }
+            scalar_tile_cb.push_back(CORNERS);
+
+            corner_block_cb.reserve_back(CORNERS * CHUNK_TILES);
+            const uint32_t block_l1 = corner_block_cb.get_write_ptr();
+            // Corner c of row r, nbytes of it and of the corners after it in the same input row.
+            auto gather = [&](uint32_t c, uint32_t r, uint32_t nbytes) {
+                const uint32_t dst_l1 = block_l1 + r * BLOCK_ROW_NBYTES + c * STICK_NBYTES;
+                // A zero weight also marks a corner outside the input, whose page is not one.
+                if (((present[c] >> r) & 1) == 0) {
+                    zero_stick(dst_l1);
+                    return;
+                }
+                const uint32_t page_id = page[r] + (c >> 1) * IN_W + (c & 1);
+                // Unsigned, so a page before the band also falls outside it.
+                const uint32_t in_band = page_id - band_first_page;
+                if (in_band < band_pages) {
+                    const uint32_t src_l1 =
+                        chunk_offset + (in_band < band_half ? band_a_l1 + in_band * input_page_nbytes
+                                                            : band_b_l1 + (in_band - band_half) * input_page_nbytes);
+                    noc_async_read(get_noc_addr(src_l1), dst_l1, nbytes);
+                } else if constexpr (INPUT_SHARDED) {
+                    // Unsigned, so a page before a shard also falls outside it.
+                    const uint32_t in_own = page_id - shard_first;
+                    const uint32_t in_prev = page_id - prev_first;
+                    const uint32_t in_next = page_id - next_first;
+                    if (in_own < INPUT_SHARD_PAGES) {
+                        noc_async_read(own_base + in_own * input_page_nbytes + chunk_offset, dst_l1, nbytes);
+                    } else if (prev_base != 0 && in_prev < INPUT_SHARD_PAGES) {
+                        noc_async_read(prev_base + in_prev * input_page_nbytes + chunk_offset, dst_l1, nbytes, 0);
+                    } else if (next_base != 0 && in_next < INPUT_SHARD_PAGES) {
+                        noc_async_read(next_base + in_next * input_page_nbytes + chunk_offset, dst_l1, nbytes, 1);
+                    } else {
+                        CoreLocalMem<uint32_t> dst(dst_l1);
+                        Noc(page_id < shard_first ? 0 : 1)
+                            .async_read(
+                                input_acc,
+                                dst,
+                                nbytes,
+                                {.page_id = page_id, .offset_bytes = chunk_offset},
+                                {.offset_bytes = 0});
+                    }
+                } else {
+                    CoreLocalMem<uint32_t> dst(dst_l1);
+                    noc.async_read(
+                        input_acc,
+                        dst,
+                        nbytes,
+                        {.page_id = page_id, .offset_bytes = chunk_offset},
+                        {.offset_bytes = 0});
+                }
+            };
+            if constexpr (PAIR_CORNERS) {
+                // The page's source and NoC, and its index within its shard. The core's own shard
+                // and its neighbours hold nearly every corner; any other page goes through the
+                // accessor and is never paired.
+                auto locate = [&](uint32_t page_id, uint64_t& src, uint8_t& read_noc)
+                                  __attribute__((always_inline)) -> uint32_t {
+                    uint32_t in_shard = page_id - shard_first;
+                    if (in_shard < INPUT_SHARD_PAGES) {
+                        src = own_base + in_shard * input_page_nbytes;
+                        read_noc = noc_index;
+                        return in_shard;
+                    }
+                    in_shard = page_id - prev_first;
+                    if (prev_base != 0 && in_shard < INPUT_SHARD_PAGES) {
+                        src = prev_base + in_shard * input_page_nbytes;
+                        read_noc = 0;
+                        return in_shard;
+                    }
+                    in_shard = page_id - next_first;
+                    if (next_base != 0 && in_shard < INPUT_SHARD_PAGES) {
+                        src = next_base + in_shard * input_page_nbytes;
+                        read_noc = 1;
+                        return in_shard;
+                    }
+                    read_noc = page_id < shard_first ? 0 : 1;
+                    src = input_acc.get_noc_addr(page_id, 0, read_noc);
+                    return INPUT_SHARD_PAGES - 1;
+                };
+                const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+                // Corners 2 * y and 2 * y + 1 of a row are pages x0 and x0 + 1 of one input row.
+                for (uint32_t y = 0; y < 2; ++y) {
+                    const uint32_t left_present = present[2 * y];
+                    const uint32_t right_present = present[2 * y + 1];
+                    uint32_t dst_l1 = block_l1 + 2 * y * STICK_NBYTES;
+                    for (uint32_t r = 0; r < TILE_ROWS; ++r, dst_l1 += BLOCK_ROW_NBYTES) {
+                        const bool left = (left_present >> r) & 1;
+                        const bool right = (right_present >> r) & 1;
+                        const uint32_t left_page = page[r] + y * IN_W;
+                        uint64_t src = zeros;
+                        uint8_t read_noc = noc_index;
+                        if (left) {
+                            const uint32_t in_shard = locate(left_page, src, read_noc);
+                            if (right && in_shard + 1 < INPUT_SHARD_PAGES) {
+                                noc_async_read<NOC_MAX_BURST_SIZE>(src, dst_l1, 2 * STICK_NBYTES, read_noc);
+                                continue;
+                            }
+                        }
+                        noc_async_read<NOC_MAX_BURST_SIZE>(src, dst_l1, STICK_NBYTES, read_noc);
+                        src = zeros;
+                        read_noc = noc_index;
+                        if (right) {
+                            locate(left_page + 1, src, read_noc);
+                        }
+                        noc_async_read<NOC_MAX_BURST_SIZE>(src, dst_l1 + STICK_NBYTES, STICK_NBYTES, read_noc);
+                    }
+                }
+            } else {
+                for (uint32_t c = 0; c < CORNERS; ++c) {
+                    for (uint32_t r = 0; r < TILE_ROWS; ++r) {
+                        gather(c, r, STICK_NBYTES);
+                    }
+                }
+            }
+            noc.async_read_barrier();
+            if constexpr (INPUT_SHARDED) {
+                Noc(1 - noc_index).async_read_barrier();
+            }
+            corner_block_cb.push_back(CORNERS * CHUNK_TILES);
+            if (!slice_begun) {
+                begin_weight_slice();
+                slice_begun = true;
+            }
+            // Compute took this block's inputs before its geometry came back, so the slot is free
+            // for the copy's next block, which compute needs once it is through this one.
+            if (pass == 0 && j + 2 < num_blocks) {
+                stage_geometry(start_block + j + 2);
+            }
+            // In the last pass the copy's previous block is through compute by the time this one's
+            // corners are in, and its output goes out while the core works on the blocks after it.
+            if (pass + 1 == PASSES && j >= BLOCK_PARITY + 2) {
+                write_output(block - 2);
+            }
+        }
+        if constexpr (LOADS_WEIGHT) {
+            if (pass + 1 < PASSES) {
+                // A copy without blocks still joins every slice's multicast.
+                if (!slice_begun) {
+                    begin_weight_slice();
+                }
+                finish_weight_slice(pass + 1);
+            }
+        }
+    }
+
+    // The copy's last block.
+    if (BLOCK_PARITY < num_blocks) {
+        write_output(start_block + BLOCK_PARITY + (num_blocks - 1 - BLOCK_PARITY) / 2 * 2);
+    }
+    // A multicast receiver's semaphore increments are atomics, which a write barrier does not wait
+    // for; the kernel exits with none of this NoC's transactions outstanding.
+    noc.async_full_barrier();
+}

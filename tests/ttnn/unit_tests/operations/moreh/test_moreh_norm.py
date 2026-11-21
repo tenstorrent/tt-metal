@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_allclose
+from tt_py_test_utils_common.utility_functions import comp_allclose
 from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_norm import (
     make_no_tie_inf_input,
     make_torch_tensors,

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dram_prefetcher_validator.hpp"
+#include "ttnn/core.hpp"
 
 #include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
@@ -23,9 +24,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include <unordered_map>
 
@@ -122,7 +123,7 @@ ValidatorGeometry compute_validator_geometry(const ttnn::Tensor& source_tensor, 
     // WIDTH_SHARDED (one shard per bank) and ND_SHARDED (num_shards = ring_size,
     // receiver-contiguous) layouts. The per-(ring_pos, block) tile mapping is
     // layout-mode-invariant; only the ring_pos -> (bank, recv_idx) formula differs.
-    Buffer* tensor_buffer = source_tensor.buffer();
+    const auto* tensor_buffer = &source_tensor.mesh_buffer();
     const auto& padded_shape = source_tensor.padded_shape();
     TT_FATAL(
         padded_shape.rank() >= 2,
@@ -164,12 +165,14 @@ ValidatorGeometry compute_validator_geometry(const ttnn::Tensor& source_tensor, 
     // pairing is strided (bank b feeds ring positions b, b + num_senders, ...). Under
     // CONTIGUOUS_1D, bank b owns a contiguous run of shards, so it feeds the contiguous ring arc
     // b*R .. b*R+R-1 (same pairing as legacy WIDTH_SHARDED).
-    const bool is_recv_contig = source_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED &&
-                                tensor_buffer->buffer_distribution_spec().has_value() &&
-                                tensor_buffer->buffer_distribution_spec()->num_shards() == ring_size;
+    const bool is_recv_contig =
+        source_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED &&
+        tensor_buffer->device_local_config().sharding_args.buffer_distribution_spec().has_value() &&
+        tensor_buffer->device_local_config().sharding_args.buffer_distribution_spec()->num_shards() == ring_size;
     const bool is_shard_contiguous_recv_contig =
-        is_recv_contig && tensor_buffer->buffer_distribution_spec()->shard_distribution_strategy() ==
-                              ShardDistributionStrategy::CONTIGUOUS_1D;
+        is_recv_contig &&
+        tensor_buffer->device_local_config().sharding_args.buffer_distribution_spec()->shard_distribution_strategy() ==
+            ShardDistributionStrategy::CONTIGUOUS_1D;
     const bool strided_pairing = is_recv_contig && !is_shard_contiguous_recv_contig;
 
     // Per-receiver plan.
@@ -191,6 +194,41 @@ ValidatorGeometry compute_validator_geometry(const ttnn::Tensor& source_tensor, 
         }
     }
     return geom;
+}
+
+// The groups of a grouped weight the pipe validator expects, as its kernel takes them: the weight's group
+// count (dim -3 of its shape, 1 for an ungrouped weight) and a bit per group that arrives.
+struct GroupSelection {
+    uint32_t num_groups = 1;
+    uint32_t mask = 1;
+};
+
+// `groups` lists the groups the prefetcher delivers, ascending; empty means every group.
+GroupSelection select_validated_groups(const ttnn::Tensor& source_tensor, const std::vector<uint32_t>& groups) {
+    const auto& shape = source_tensor.padded_shape();
+    GroupSelection selection;
+    selection.num_groups = shape.rank() >= 3 ? shape[-3] : 1;
+    constexpr uint32_t kMaskBits = 32;
+    TT_FATAL(
+        selection.num_groups <= kMaskBits,
+        "Validator: the pipe validator follows at most {} groups in its group mask, but the weight has {}",
+        kMaskBits,
+        selection.num_groups);
+    if (groups.empty()) {
+        selection.mask = selection.num_groups == kMaskBits ? ~0u : (1u << selection.num_groups) - 1;
+        return selection;
+    }
+    selection.mask = 0;
+    for (size_t k = 0; k < groups.size(); ++k) {
+        TT_FATAL(
+            groups[k] < selection.num_groups && (k == 0 || groups[k] > groups[k - 1]),
+            "Validator: groups must be ascending group indices below the weight's {} groups; entry {} is {}",
+            selection.num_groups,
+            k,
+            groups[k]);
+        selection.mask |= 1u << groups[k];
+    }
+    return selection;
 }
 
 // Physical block the receiver at `ring_pos` expects at FIFO position 0 under streaming:
@@ -245,7 +283,7 @@ ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
     // On the tensor side, create_at derives k_tiles, total_n_tiles, n_per_recv_tiles, is_recv_contig,
     // tile_bytes and the CB page sizes from the real shape, tile and memory config, and emits
     // TensorAccessorArgs as compile-time args, so the address alone is not a sufficient identity.
-    const auto* tensor_buffer = tensor_args.source_tensor.buffer();
+    const auto* tensor_buffer = &tensor_args.source_tensor.mesh_buffer();
     const tt::DataFormat dataformat = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.source_tensor.dtype());
     return ttsl::hash::hash_objects_with_default_seed(
         ttsl::hash::type_hash<DramPrefetcherValidatorDeviceOperation>,
@@ -281,10 +319,10 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
 
     const ValidatorGeometry geom = compute_validator_geometry(
         source_tensor, bank_plan_from_factory_order_mapping(global_cb.sender_receiver_core_mapping()));
-    Buffer* tensor_buffer = source_tensor.buffer();
+    const auto* tensor_buffer = &source_tensor.mesh_buffer();
     const CoreRangeSet receiver_cores = global_cb.receiver_cores();
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*source_tensor.device());
 
     // Receiver-side remote CB: wait_front/pop_front units are one full per-receiver block.
     CircularBufferConfig remote_cfg(geom.page_bytes_per_recv);
@@ -363,7 +401,7 @@ void test_dram_prefetcher_validator(
     ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
 
-void test_tensor_prefetcher_pipe_validator(
+tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_workload(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,
@@ -371,7 +409,8 @@ void test_tensor_prefetcher_pipe_validator(
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool streaming,
-    const std::vector<uint32_t>& rotation) {
+    const std::vector<uint32_t>& rotation,
+    const std::vector<uint32_t>& groups) {
     using namespace tt::tt_metal;
 
     TT_FATAL(!prefetcher_pipes.empty(), "prefetcher_pipes must hold at least one pipe");
@@ -403,7 +442,7 @@ void test_tensor_prefetcher_pipe_validator(
 
     std::vector<metal_exp::PrefetcherPipeParamName> names;
     std::vector<metal_exp::PrefetcherPipeParameter> parameters;
-    metal_exp::ProgramRunArgs run_args;
+    ProgramRunArgs run_args;
     for (size_t i = 0; i < prefetcher_pipes.size(); ++i) {
         metal_exp::PrefetcherPipeParamName name{fmt::format("pipe_{}", i)};
         names.push_back(name);
@@ -412,22 +451,26 @@ void test_tensor_prefetcher_pipe_validator(
              .receivers = prefetcher_pipes[i]->receiver_cores(),
              .ring_size = prefetcher_pipes[i]->ring_size(),
              .entry_size = geom.page_bytes_per_recv});
-        run_args.advanced_options.prefetcher_pipe_args.emplace(name, metal_exp::PrefetcherPipeArgument{*prefetcher_pipes[i]});
+        run_args.advanced_options.prefetcher_pipe_args.emplace(
+            name, metal_exp::PrefetcherPipeArgument{*prefetcher_pipes[i]});
     }
-    const metal_exp::TensorParamName source_name{"source_tensor"};
-    const metal_exp::ScratchpadSpecName scratch_name{"expected"};
-    metal_exp::KernelSpec receiver{
-        .unique_id = metal_exp::KernelSpecName{"receiver"},
+    const TensorParamName source_name{"source_tensor"};
+    const ScratchpadSpecName scratch_name{"expected"};
+    KernelSpec receiver{
+        .unique_id = KernelSpecName{"receiver"},
         .source =
             std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/misc/prefetcher_pipe_validator_receiver.cpp"}};
     receiver.tensor_bindings = {{.tensor_parameter_name = source_name, .accessor_name = "source_tensor"}};
     receiver.scratchpad_bindings = {{.scratchpad_spec_name = scratch_name, .accessor_name = "expected"}};
     receiver.advanced_options.prefetcher_pipe_bindings = {{.pipe_parameter_names = names, .accessor_name = "in"}};
+    const GroupSelection selection = select_validated_groups(source_tensor, groups);
     receiver.compile_time_args = {
         {"num_layers", num_layers},
         {"num_blocks", geom.num_blocks},
         {"print_stride", print_stride},
-        {"streaming", streaming ? 1u : 0u}};
+        {"streaming", streaming ? 1u : 0u},
+        {"num_groups", selection.num_groups},
+        {"group_mask", selection.mask}};
     receiver.runtime_arg_schema.runtime_arg_names = {
         "bank_id",
         "recv_idx_in_bank",
@@ -436,24 +479,24 @@ void test_tensor_prefetcher_pipe_validator(
         "n_per_recv_tiles",
         "n_col_start",
         "lead_block"};
-    receiver.hw_config = metal_exp::DataMovementHardwareConfig{
-        .config_1xx = metal_exp::DataMovementHardwareConfig::DataMovement1XXConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}};
-    metal_exp::ProgramSpec spec{
+    receiver.hw_config = DataMovementHardwareConfig{
+        .config_1xx =
+            DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
+        .config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{}};
+    ProgramSpec spec{
         .name = "tensor_prefetcher_pipe_validator",
         .kernels = {std::move(receiver)},
         .scratchpads = {{.unique_id = scratch_name, .size_per_node = geom.page_bytes_per_recv}},
         .tensor_parameters = {{.unique_id = source_name, .spec = source_tensor.tensor_spec()}},
         .work_units =
-            {{.name = "receiver_wu",
-              .kernels = {metal_exp::KernelSpecName{"receiver"}},
-              .target_nodes = receiver_cores}},
+            {{.name = "receiver_wu", .kernels = {KernelSpecName{"receiver"}}, .target_nodes = receiver_cores}},
         .advanced_options = {.prefetcher_pipe_parameters = std::move(parameters)}};
-    Program program = metal_exp::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
-    metal_exp::ProgramRunArgs::KernelRunArgs kernel_args{.kernel = metal_exp::KernelSpecName{"receiver"}};
+    ProgramRunArgs::KernelRunArgs kernel_args{.kernel = KernelSpecName{"receiver"}};
     for (const auto& plan : geom.receivers) {
-        metal_exp::AddRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             kernel_args.runtime_arg_values,
             plan.core,
             {{"bank_id", plan.bank_id},
@@ -465,13 +508,37 @@ void test_tensor_prefetcher_pipe_validator(
              {"lead_block", lead_block_for(rotation, plan.ring_pos)}});
     }
     run_args.kernel_run_args.push_back(std::move(kernel_args));
-    run_args.tensor_args.emplace(source_name, metal_exp::TensorArgument{source_tensor.mesh_tensor()});
-    metal_exp::SetProgramRunArgs(program, run_args);
+    run_args.tensor_args.emplace(source_name, TensorArgument{source_tensor.mesh_tensor()});
+    program.set_program_run_args(run_args);
 
     tt::tt_metal::distributed::MeshWorkload workload;
     workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
-    tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+    return workload;
+}
+
+void test_tensor_prefetcher_pipe_validator(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const ttnn::Tensor& source_tensor,
+    uint32_t num_layers,
+    uint32_t print_stride,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    bool streaming,
+    const std::vector<uint32_t>& rotation,
+    const std::vector<uint32_t>& groups) {
+    tt::tt_metal::distributed::MeshWorkload workload = make_tensor_prefetcher_pipe_validator_workload(
+        mesh_device,
+        source_tensor,
+        num_layers,
+        print_stride,
+        prefetcher_pipes,
+        bank_to_receivers,
+        streaming,
+        rotation,
+        groups);
+    tt::tt_metal::distributed::EnqueueMeshWorkload(
+        ttnn::core::current_mesh_command_queue(*mesh_device), workload, /*blocking=*/false);
+    tt::tt_metal::distributed::Finish(ttnn::core::current_mesh_command_queue(*mesh_device));
 }
 
 }  // namespace ttnn::operations::experimental::test

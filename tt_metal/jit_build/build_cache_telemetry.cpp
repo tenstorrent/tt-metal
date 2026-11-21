@@ -19,7 +19,7 @@
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 
-#include "env_lib.hpp"
+#include "common/env_lib.hpp"
 #include "common/executor.hpp"
 
 namespace tt::tt_metal {

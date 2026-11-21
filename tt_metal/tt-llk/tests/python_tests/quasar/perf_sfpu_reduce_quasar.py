@@ -64,7 +64,7 @@ PERF_INPUT_BOUNDS = (-100, 100)
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    reduce_pool=PERF_POOLS,
+    pool_type=PERF_POOLS,
     formats=PERF_FORMATS,
     mathop=get_supported_reduce_axes,
     dimension_combinations=perf_input_dimensions,
@@ -74,7 +74,7 @@ PERF_INPUT_BOUNDS = (-100, 100)
 )
 def test_perf_sfpu_reduce_quasar(
     perf_report,
-    reduce_pool,
+    pool_type,
     formats,
     mathop,
     dimension_combinations,
@@ -90,7 +90,7 @@ def test_perf_sfpu_reduce_quasar(
     run_sfpu_reduce_quasar(
         formats,
         mathop,
-        reduce_pool,
+        pool_type,
         PERF_INPUT_BOUNDS,
         dimension_combinations,
         TILE_DIM,
