@@ -231,4 +231,6 @@ void kernel_main() {
     // Pop the same number of tiles that were waited for.
     dfb_out.pop_front(out_num_tiles);
 #endif
+    // Retire semaphore-increment replies before the next kernel snapshots the NoC counters.
+    noc.async_atomic_barrier();
 }
