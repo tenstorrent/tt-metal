@@ -88,6 +88,7 @@
   "perf_sfpu_sdpa": 51.5,
   "perf_sfpu_sdpa_exp_unclamped": 3.3,
   "perf_sfpu_sdpa_fw": 3.2,
+  "perf_sfpu_sparse_k_filter": 1.0,
   "perf_sfpu_ternary": 9.8,
   "perf_sum_reduce_scalar": 18.9,
   "perf_top32_rm": 38.8,
