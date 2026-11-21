@@ -7,11 +7,10 @@ The Tensix core architecture's secret weapon is its full user control over memor
 
 ::
 
-    export ARCH_NAME=<arch name>
     export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh
-    ./build/programming_examples/matmul_multi_core_reuse
-    ./build/programming_examples/matmul_multi_core_reuse_mcast
+    ./build_metal.sh --build-programming-examples
+    ./build/programming_examples/metal_example_matmul_multicore_reuse
+    ./build/programming_examples/metal_example_matmul_multicore_reuse_mcast
 
 .. toctree::
 
