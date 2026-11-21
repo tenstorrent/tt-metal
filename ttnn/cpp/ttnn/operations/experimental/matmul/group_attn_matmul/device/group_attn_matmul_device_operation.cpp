@@ -82,6 +82,19 @@ void GroupAttnMatmulDeviceOperation::validate_on_program_cache_miss(
             input_tensor_b.shard_spec().value().orientation == shard_orientation,
             "Any sharded memory configs must have the same shard orientation as one another!");
         TT_FATAL(input_tensor_b.shard_spec().value().num_cores() == bshape[0], "KV heads must be sharded on batch!");
+        // The first 32 cores of the op's grid read their in1 shard in place and mcast it, so the shard
+        // grid must be exactly those cores, in the same order; an offset grid would be read from the wrong
+        // cores. The cores are compared in order, so an equivalent split into ranges is accepted.
+        TT_FATAL(
+            corerange_to_cores(
+                input_tensor_b.shard_spec().value().grid, std::nullopt, operation_attributes.row_major) ==
+                grid_to_cores(
+                    bshape[0],
+                    operation_attributes.compute_with_storage_grid_size.x,
+                    operation_attributes.compute_with_storage_grid_size.y,
+                    operation_attributes.row_major),
+            "Input tensor B shard grid must be the first {} cores of the compute grid, starting at core (0, 0)!",
+            bshape[0]);
         auto shard_shape = input_tensor_b.shard_spec().value().shape;
         TT_FATAL(
             shard_shape[0] == bshape[1] * bshape[2],
