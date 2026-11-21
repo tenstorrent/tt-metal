@@ -16,6 +16,14 @@
 #include "llk_pack_common.h"
 #include "llk_size_mode.h"
 #include "llk_pack_block_tile.h"
+#include "llk_copy_kernel.h"
+
+namespace ckernel::packer {
+template <>
+struct llk_pack_copy_api<1> {
+    static constexpr bool value = LLK_COPY_KERNEL;
+};
+}  // namespace ckernel::packer
 
 namespace ckernel::packer {
 template <>

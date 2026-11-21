@@ -941,6 +941,21 @@ constexpr int llk_pack_one_output()
     return llk_pack_one_output_of<dep>(std::make_integer_sequence<int, 64> {});
 }
 
+// Specialized by the metal pack API (llk_copy_kernel.h): a half-sync 16-bit DEST copy kernel with no math between unpack and pack.
+template <int api>
+struct llk_pack_copy_api
+{
+    static constexpr bool value = false;
+};
+
+// Such a kernel keeps main's late pack start: the word-form destination write and the DEST offset after the drain, as its
+// pack runs while its unpacker reads the next tile (sharded identity +0.25 %).
+template <std::uint32_t dep>
+constexpr bool llk_pack_copy(const bool is_fp32_dest_acc_en)
+{
+    return !is_fp32_dest_acc_en && llk_pack_copy_api<static_cast<int>(dep * 0 + 1)>::value;
+}
+
 // Specialized where the kernel's formats are known (llk_pack_block_tile.h): whether output cb is block float or 32 bit.
 template <int api>
 struct llk_pack_pre_format_api
