@@ -21,10 +21,11 @@ from models.experimental.bevformer.tt.model_preprocessing import create_percepti
 from models.experimental.bevformer.tt.tt_perception_transformer import TTPerceptionTransformer
 
 CASES = [
-    # (name, bev_shape, num_layers, batch_size, yaw_step_deg, num_frames)
-    ("base", BEV_SHAPES["base"], ENCODER_NUM_LAYERS, 1, 0.0, 2),
+    # (name, bev_shape, num_layers, batch_size, yaw_step_deg, num_frames). The grids are fixed; the
+    # layers, the feature levels and the cameras are the selected variant's.
+    ("bev200", BEV_SHAPES["base"], ENCODER_NUM_LAYERS, 1, 0.0, 2),
     # A third frame refills the frame's buffers once more.
-    ("tiny", BEV_SHAPES["tiny"], ENCODER_NUM_LAYERS, 1, 0.0, 3),
+    ("bev50", BEV_SHAPES["tiny"], ENCODER_NUM_LAYERS, 1, 0.0, 3),
 ]
 
 

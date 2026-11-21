@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 / DataflowBuffer (DFB) writer for binary_ng's no-broadcast binary op, Quasar-native.
+// Metal 2.0 / DataflowBuffer (DFB) writer for binary_ng, Quasar-native. The output is never broadcast, so this writer
+// serves every operand mode unchanged.
 //
 // Diverges from kernels_dfb/dataflow/writer_no_bcast_dfb.cpp in three ways, all licensed by
 // matches_quasar_native_slice:
@@ -14,10 +15,9 @@
 // The output is written over the NoC, or borrowed from this core's L1 (DST_SHARDED): its shard, or its
 // slice of an L1-interleaved tensor, which the compute packs in place.
 //
-// The writer's cascade is the milder case: an output is never broadcast, so its strides are dense. Without an
-// anchor each core writes a linear page range, and the sharding-aware TensorAccessor maps each page to its
-// shard. The reader's cascade is the load-bearing one; see the note in reader_no_bcast_dfb.cpp before widening
-// the gate.
+// The output's strides are dense, so the writer needs no Map: without an anchor each core writes a linear page range,
+// and the sharding-aware TensorAccessor maps each page to its shard. The reader reads the inputs through their Maps
+// (reader_binary_dfb.cpp).
 
 #include <cstdint>
 

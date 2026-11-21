@@ -27,7 +27,7 @@ TEST_F(UnitMeshFixture, AddTwoInts) {
 
     auto device_range = distributed::MeshCoordinateRange(this->device().shape());
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, CreateProgram());
+    workload.add_program(device_range, CreateProgram(this->device()));
     Program& program = workload.get_programs().at(device_range);
 
     CoreCoord core = {0, 0};

@@ -26,7 +26,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <internal/mesh_device.hpp>
 #include <tt_stl/small_vector.hpp>
 
@@ -125,7 +125,7 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
         const uint32_t consumed_counter_addr =
             static_cast<uint32_t>(service.get_consumed_counter_addr(coord));
 
-        auto program = tt::tt_metal::CreateProgram();
+        auto program = tt::tt_metal::CreateProgram(*mesh_device);
 
         auto cb_cfg = tt::tt_metal::CircularBufferConfig(
                           page_size, {{scratch_cb_index, tt::DataFormat::UInt32}})

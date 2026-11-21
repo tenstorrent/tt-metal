@@ -6,6 +6,8 @@ set(SOURCES
     core/mesh_1x2_utils_test.cpp
     core/scoped_test.cpp
     core/clip_grad_norm_test.cpp
+    core/parameter_dtype_test.cpp
+    core/synchronize_tensor_test.cpp
     core/random_tests.cpp
     core/program_utils_test.cpp
     model/linear_regression_ddp_test.cpp
@@ -41,7 +43,7 @@ set(SOURCES
     ops/newton_schulz_op_test.cpp
     ops/frobenius_normalize_test.cpp
     ops/k_split_gram_matmul_op_test.cpp
-    optimizers/adamw_full_precision_test.cpp
+    optimizers/adamw_fp32_parameter_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
     serialization/model_serializer_test.cpp
@@ -59,9 +61,12 @@ set(SOURCES
     ops/distributed/ring_sdpa_test.cpp
     ops/distributed/ring_sdpa_schedule_test.cpp
     ops/distributed/mesh_workload_cache_hit_test.cpp
+    ops/distributed/gumbel_sample_mesh_test.cpp
+    ops/distributed/moe_ep_mesh_test.cpp
     ops/distributed/vocab_parallel_cross_entropy_loss_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
+    ops/program_cache_placement_test.cpp
     ops/cross_entropy_bw_op_test.cpp
     ops/rope_test.cpp
     ops/rmsnorm_op_test.cpp
@@ -77,6 +82,7 @@ set(SOURCES
     ops/layernorm_bw_fused_op_test.cpp
     ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
+    ops/swiglu_packed_op_test.cpp
     ops/moe_ffn_swiglu_op_test.cpp
     ops/moe_group_op_test.cpp
     ops/moe_ungroup_op_test.cpp
@@ -108,9 +114,12 @@ set_target_properties(
     PROPERTIES
         POSITION_INDEPENDENT_CODE
             TRUE
+        INSTALL_RPATH
+            "$ORIGIN/../lib"
 )
 target_compile_options(ttml_tests PRIVATE -fPIC)
 tt_reuse_precompile_headers(ttml_tests ttml_pch)
+install(TARGETS ttml_tests RUNTIME COMPONENT ttml-validation)
 
 # Suppress false-positive -Wnonnull from xtensor internals on GCC < 13.
 # At -O3, GCC over-inlines xbroadcast::has_linear_assign and wrongly flags std::equal as null.

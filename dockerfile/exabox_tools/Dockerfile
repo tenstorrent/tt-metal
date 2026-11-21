@@ -62,7 +62,7 @@ RUN --mount=type=bind,target=/ctx \
       | tar -C /out/tt-metal -xf - \
     && test -x /out/tt-metal/build/tools/scaleout/run_cluster_validation \
     && test -d /out/tt-metal/runtime/sfpi \
-    && test -d /out/tt-metal/tt_metal/third_party/umd/tests \
+    && test -d /out/tt-metal/tt_metal/third_party/umd/descriptors \
     && chmod -R a+rwX /out/tt-metal
 
 #############################################################
@@ -92,6 +92,8 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 #   gh, curl, ca-certificates  the tt-syseng-diag download
 #   openssh-server             MPI operator workers; it brings the client that
 #                              generate_rank_bindings.py's multi-host mpirun needs
+#   python3-venv               ensurepip, for callers that make their own venv on top
+#                              (tt-orchestration's health-check job)
 #   socat                      port and socket relays when the image runs as an
 #                              operations container on exabox hosts
 # journalctl (systemd) is left to the pre_reboot launchers, the only tier that reads it.
@@ -114,6 +116,7 @@ RUN apt-get update \
         openssh-server \
         pciutils \
         python3 \
+        python3-venv \
         socat \
         sudo \
     && rm -rf /var/lib/apt/lists/*
@@ -135,7 +138,9 @@ ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:/opt/openmpi-v5.0.7-ulfm/bin:${PATH}"
 
 # torch, pytest and loguru are the deploy tier's didt pytest; versions follow
-# tt_metal/python_env/requirements-dev.txt. The wheel brings ttnn's own dependencies.
+# tt_metal/python_env/requirements-dev.txt. tools/triage/requirements.txt (tt-exalens,
+# tt-umd, pycapnp) is what tools/triage/triage.py needs, which the health check's ETH
+# status read runs. The wheel brings ttnn's own dependencies.
 # unsafe-best-match because the CPU torch index also serves numpy and friends.
 RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
     --mount=type=bind,target=/ctx \
@@ -148,17 +153,17 @@ RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
         pytest-timeout==2.4.0 \
         loguru==0.6.0 \
         -r /ctx/tools/scaleout/exabox/health_check_test_suite/test_infrastructure/requirements.txt \
+        -r /ctx/tools/triage/requirements.txt \
         /ctx/ttnn-*.whl
 
 COPY --from=tree --link --chown=1001:1001 /out/tt-metal /home/user/tt-metal
 
-# UMD api_tests embed UMD_TESTS_ROOT_PATH=/work/tt_metal/third_party/umd/tests at compile time.
-# The metal build runs at /work, but this image keeps sources under /home/user/tt-metal.
+# UMD api_tests locate their YAML descriptors relative to the working directory unless
+# UMD_DESCRIPTORS_PATH is set; this image keeps sources under /home/user/tt-metal.
 # COPY creates the destination directory itself 0755, whatever the source's mode, so it and
 # /home/user are opened up here, for cross-user MPI runs that write generated/ at the root.
-RUN mkdir -p /work/tt_metal/third_party/umd \
-    && ln -sfn /home/user/tt-metal/tt_metal/third_party/umd/tests /work/tt_metal/third_party/umd/tests \
-    && chmod 0777 /home/user /home/user/tt-metal
+ENV UMD_DESCRIPTORS_PATH=/home/user/tt-metal/tt_metal/third_party/umd/descriptors
+RUN chmod 0777 /home/user /home/user/tt-metal
 
 ENV PYTHONPATH=/home/user/tt-metal
 ENV LD_LIBRARY_PATH=/home/user/tt-metal/build/lib
@@ -214,7 +219,10 @@ RUN for bin in \
     && python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --help > /dev/null \
     && TRACY_NO_INVARIANT_CHECK=1 PYTHONDONTWRITEBYTECODE=1 \
         python3 -c 'import ttnn, pytest_timeout, conftest, tests.didt.op_test_base' \
-    && rm -rf generated build/profiler /home/user/.cache
+    && python3 -c 'import ttexalens, capnp, docopt, rich' \
+    && python3 -m venv --system-site-packages /tmp/venv-smoke \
+    && /tmp/venv-smoke/bin/python3 -m pip --version \
+    && rm -rf /tmp/venv-smoke generated build/profiler /home/user/.cache
 
 # Callers supply the command.
 ENTRYPOINT []

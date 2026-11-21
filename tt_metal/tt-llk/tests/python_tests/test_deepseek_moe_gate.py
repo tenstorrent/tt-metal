@@ -14,7 +14,6 @@ DEST holds four tiles and the op only touches face 0 of each: tile 0 the payload
 tile 1 a 16-bit id, tile 2 the payload+bias sort key, tile 3 scratch.
 """
 
-import struct
 
 import torch
 from conftest import skip_for_quasar
@@ -38,6 +37,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_FACES,
     TILE_COUNT,
+    fp32_bits,
 )
 
 pytestmark = skip_for_quasar
@@ -52,11 +52,6 @@ SCORES, IDS, KEYS, INTERMEDIATE = 0, 1, 2, 3
 
 EPS = 0.5
 SCALE = 2.5
-
-
-def _fp32_bits(value):
-    """The fp32 bit pattern Converter::as_float expects."""
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _zeros():
@@ -246,7 +241,7 @@ def _config(
     gate,
     tiles,
     src_b=None,
-    math_op=MathOperation.Elwadd,
+    mathop=MathOperation.Elwadd,
     fidelity=MathFidelity.HiFi4,
     approx=ApproximationMode.No,
     dest_sync=DestSync.Half,
@@ -258,7 +253,7 @@ def _config(
         FORMATS,
         templates=[
             gate,
-            MATH_OP(mathop=math_op),
+            MATH_OP(mathop=mathop),
             MATH_FIDELITY(fidelity),
             APPROX_MODE(approx),
             ACC_TO_DEST(acc_to_dest),
@@ -300,7 +295,7 @@ def test_deepseek_moe_gate(seed, approx):
     regions = _regions(
         _config(
             DEEPSEEK_MOE_GATE(
-                dmg_mode=MODE_GATE, dmg_eps=_fp32_bits(EPS), dmg_scale=_fp32_bits(SCALE)
+                dmg_mode=MODE_GATE, dmg_eps=fp32_bits(EPS), dmg_scale=fp32_bits(SCALE)
             ),
             _gate_tiles(payload),
             src_b=bias,
@@ -325,8 +320,8 @@ def test_deepseek_moe_gate_sigmoid(seed):
             DEEPSEEK_MOE_GATE(
                 dmg_mode=MODE_GATE,
                 dmg_sigmoid=True,
-                dmg_eps=_fp32_bits(EPS),
-                dmg_scale=_fp32_bits(SCALE),
+                dmg_eps=fp32_bits(EPS),
+                dmg_scale=fp32_bits(SCALE),
             ),
             # Not _gate_tiles: this front-end does its transpose in transpose_tile on the raw L1
             # tile, so the payload goes up as-is and the golden transposes.
@@ -365,7 +360,7 @@ def test_deepseek_moe_gate_normalization(norm):
     regions = _regions(
         _config(
             DEEPSEEK_MOE_GATE(
-                dmg_mode=MODE_GATE, dmg_eps=_fp32_bits(eps), dmg_scale=_fp32_bits(scale)
+                dmg_mode=MODE_GATE, dmg_eps=fp32_bits(eps), dmg_scale=fp32_bits(scale)
             ),
             _gate_tiles(payload),
             src_b=bias,
@@ -387,7 +382,7 @@ def test_deepseek_moe_gate_shipping_config(dest_sync, num_faces):
     regions = _regions(
         _config(
             DEEPSEEK_MOE_GATE(
-                dmg_mode=MODE_GATE, dmg_eps=_fp32_bits(EPS), dmg_scale=_fp32_bits(SCALE)
+                dmg_mode=MODE_GATE, dmg_eps=fp32_bits(EPS), dmg_scale=fp32_bits(SCALE)
             ),
             _gate_tiles(payload),
             src_b=bias,
@@ -429,7 +424,7 @@ def _binary_tiles(scores, acc_base=None):
     ]
 
 
-def _assert_binary(faces, scores, bias, math_op, acc_base=None):
+def _assert_binary(faces, scores, bias, mathop, acc_base=None):
     """tile 0 holds SrcA verbatim, tile 2 holds srcA (op) srcB, over every face packed back.
 
     The MOP is a MOVA2D of SrcA into Dest tile 0 followed by the binary at dst_math_offset = 2 * 64
@@ -439,7 +434,7 @@ def _assert_binary(faces, scores, bias, math_op, acc_base=None):
     num_faces = faces.shape[1]
     scores, bias = scores[:num_faces], bias[:num_faces]
 
-    expected = _BINARY_GOLDEN[math_op](scores.to(torch.float32), bias.to(torch.float32))
+    expected = _BINARY_GOLDEN[mathop](scores.to(torch.float32), bias.to(torch.float32))
     if acc_base is not None:
         expected = expected + acc_base[:num_faces].to(torch.float32)
 
@@ -448,21 +443,21 @@ def _assert_binary(faces, scores, bias, math_op, acc_base=None):
     ), "Dest tile 0 is not SrcA verbatim"
     assert torch.equal(
         _from_dest(faces[KEYS]), expected
-    ), f"Dest tile 2 is not SrcA {math_op.name} srcB"
+    ), f"Dest tile 2 is not SrcA {mathop.name} srcB"
 
 
 # ELWADD is what the Compute API instantiates; ELWSUB and ELWMUL are reachable through the same
 # template and are here because the MOP selects a different instruction for each. ELWMUL takes LoFi
 # only.
 @parametrize(
-    math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
-    fidelity=lambda math_op: (
+    mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
+    fidelity=lambda mathop: (
         [MathFidelity.LoFi]
-        if math_op == MathOperation.Elwmul
+        if mathop == MathOperation.Elwmul
         else [MathFidelity.LoFi, MathFidelity.HiFi4]
     ),
 )
-def test_deepseek_moe_gate_binary(math_op, fidelity):
+def test_deepseek_moe_gate_binary(mathop, fidelity):
     scores, bias = _binary_stimuli(seed=11)
 
     faces = _run(
@@ -470,12 +465,12 @@ def test_deepseek_moe_gate_binary(math_op, fidelity):
             DEEPSEEK_MOE_GATE(dmg_mode=MODE_BINARY),
             _binary_tiles(scores),
             src_b=bias,
-            math_op=math_op,
+            mathop=mathop,
             fidelity=fidelity,
         )
     )
 
-    _assert_binary(faces, scores, bias, math_op)
+    _assert_binary(faces, scores, bias, mathop)
 
 
 # RELOAD swaps the MOP's MOVA2D for a replayed MOVD2A, so SrcA comes back out of Dest tile 0.

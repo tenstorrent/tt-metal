@@ -8,7 +8,8 @@
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 namespace tt::tt_metal {
 
@@ -16,45 +17,39 @@ using namespace tt::test_utils;
 
 namespace unit_tests::dm::quasar_im2col {
 
-bool should_skip_test() {
-    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    if (arch != tt::ARCH::QUASAR) {
-        return true;
-    }
-    return std::getenv("TT_METAL_SIMULATOR") == nullptr;
-}
+bool should_skip_test() { return tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::QUASAR; }
 
 bool run_im2col_test(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::string& kernel_path,
     uint32_t num_of_addresses) {
-    const experimental::KernelSpecName DM_KERNEL{"addrgen"};
-    const experimental::NodeCoord node{0, 0};
+    const KernelSpecName DM_KERNEL{"addrgen"};
+    const NodeCoord node{0, 0};
 
-    experimental::KernelSpec dm_kernel_spec{
+    KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source = kernel_path,
         .num_threads = 1,
         .compile_time_args = {{"num_of_addresses", num_of_addresses}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec main_wu{
+    WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {DM_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "im2col",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_KERNEL}};
-    experimental::SetProgramRunArgs(program, params);
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{.kernel = DM_KERNEL}};
+    program.set_program_run_args(params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
@@ -81,7 +76,7 @@ class QuasarIm2ColOps : public MeshDeviceSingleCardFixture {};
 
 TEST_F(QuasarIm2ColOps, Im2Col_FullImage) {
     if (unit_tests::dm::quasar_im2col::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
+        GTEST_SKIP() << "Test requires Quasar";
     }
     // Image 6x7, kernel 3x3, dil_w=2: 3 vert x 3 horz x 9 patch = 81 total addresses
     EXPECT_TRUE(
@@ -90,7 +85,7 @@ TEST_F(QuasarIm2ColOps, Im2Col_FullImage) {
 
 TEST_F(QuasarIm2ColOps, Im2Col_Dilation1) {
     if (unit_tests::dm::quasar_im2col::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
+        GTEST_SKIP() << "Test requires Quasar";
     }
     // Image 4x5, kernel 3x3: matrix_size(20) * kH*kW(9) = 180 total addresses
     EXPECT_TRUE(unit_tests::dm::quasar_im2col::run_im2col_test(

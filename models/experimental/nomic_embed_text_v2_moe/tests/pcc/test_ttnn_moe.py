@@ -24,15 +24,16 @@ from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import 
     MOE_LAYER,
     TOKEN_SHAPES,
     assert_bias_added_once,
+    device_selection,
     from_block_layout,
     hidden_states,
     load_reference,
+    selection_of,
     to_block_layout,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.common import flatten_tokens, to_device
-from models.experimental.nomic_embed_text_v2_moe.tt.experts import HELD_MAX_TILES, StackedBuffers
 from models.experimental.nomic_embed_text_v2_moe.tt.moe import TtNomicMoELayer
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
 
@@ -43,6 +44,10 @@ MODULE_PCC = 0.998
 MAX_DISAGREEING_FRACTION = 0.01
 
 PREFIX = f"encoder.layers.{MOE_LAYER}.mlp."
+
+# TOKEN_SHAPES plus 4096 tokens, the most whose router selection sits in L1 beside the whole
+# chain, 5000, past it and off the tile grid, and 8192, the largest chunk a forward runs.
+MOE_SHAPES = [*TOKEN_SHAPES, (8, 512), (10, 500), (16, 512)]
 
 
 @pytest.fixture
@@ -62,8 +67,10 @@ def agreeing_tokens(config, reference, tt_moe, x: torch.Tensor, x_tt: ttnn.Tenso
     the order of the two positions does not reach the result.
     """
     batch, seqlen, _ = x.shape
-    _, values, indices = tt_moe.router.select(flatten_tokens(x_tt))
-    selected = ttnn.to_torch(indices).long().reshape(batch * seqlen, config.moe_top_k)
+    routing, rows = tt_moe.router(flatten_tokens(x_tt))
+    ttnn.deallocate(rows)
+    _, selected = selection_of(routing, config.moe_top_k, config.num_experts)
+    routing.deallocate()
 
     with torch.no_grad():
         _, _, ref_indices = reference.router(x)
@@ -74,7 +81,7 @@ def agreeing_tokens(config, reference, tt_moe, x: torch.Tensor, x_tt: ttnn.Tenso
     return agreeing.reshape(batch, seqlen)
 
 
-@pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
+@pytest.mark.parametrize("batch, seqlen", MOE_SHAPES)
 def test_moe_layer(device, config, reference, tt_moe, batch, seqlen):
     """Route each token and combine its experts, against the reference layer.
 
@@ -113,18 +120,22 @@ def test_renormalizing_the_routed_weights_is_measurably_wrong(device, config, re
         ref = reference(x)
     agreeing = agreeing_tokens(config, reference, tt_moe, x, x_tt)
 
-    dense = tt_moe.router(flat)
-    renormalized = ttnn.divide(dense, ttnn.sum(dense, dim=-1, keepdim=True))
+    routing, rows = tt_moe.router(flat)
+    ttnn.deallocate(rows)
+    values, indices = selection_of(routing, config.moe_top_k, config.num_experts)
+    routing.deallocate()
+    renormalized = device_selection(values / values.sum(dim=-1, keepdim=True), indices, config.num_experts, device)
 
     correct = from_block_layout(tt_moe(x_tt))
-    wrong = ttnn.to_torch(tt_moe.experts(flat, renormalized)).float().reshape(batch, seqlen, config.hidden_size)
+    wrong = ttnn.to_torch(tt_moe.experts(flat, renormalized))
+    wrong = wrong.float().reshape(batch, seqlen, config.hidden_size)
+    renormalized.deallocate()
 
     assert compute_pcc(correct[agreeing], ref[agreeing]) > MODULE_PCC
     assert compute_pcc(wrong[agreeing], ref[agreeing]) < MODULE_PCC
 
 
-@pytest.mark.parametrize("batch, seqlen", [(2, 128), (2, 512)])
-def test_the_shared_bias_lands_outside_the_reduce(device, config, reference, tt_moe, tt_config, batch, seqlen):
+def test_the_shared_bias_lands_outside_the_reduce(device, config, reference, tt_moe, tt_config):
     """Negative control: the bias placement PCC cannot see.
 
     Adding the shared expert bias inside the per-expert loop scales it by the routed-weight sum,
@@ -135,8 +146,9 @@ def test_the_shared_bias_lands_outside_the_reduce(device, config, reference, tt_
     below it, so comparing against the reference would measure the dtype rather than the
     placement. The output's difference from the bias-zeroed run is projected onto the bias over every
     token, which averages away the rounding the two runs do differently when the bias is added inside
-    a matmul. 2x128 runs a stacked expert pass, 2x512 a transposed one.
+    an accumulator.
     """
+    batch, seqlen = 2, 512
     x = hidden_states(batch, seqlen, config.hidden_size)
     x_tt = to_device(to_block_layout(x), device)
 
@@ -150,23 +162,3 @@ def test_the_shared_bias_lands_outside_the_reduce(device, config, reference, tt_
     assert_bias_added_once(
         got, weighted_sum, reference.experts.bias.detach(), top_weights.sum(-1).reshape(batch, seqlen, 1)
     )
-
-
-@pytest.mark.parametrize("batch, seqlen", [(1, 128), (2, 64), (5, 1), (120, 1)])
-def test_buffers_are_held_only_for_a_small_block_input(device, config, tt_config, state_dict, batch, seqlen):
-    """A stacked pass's buffers are held only for at most HELD_MAX_TILES tile rows as the blocks count them.
-
-    The blocks pad each sequence to the tile, so the flat token axis undercounts a batch of short
-    sequences: 120 one-token sequences are 4 tile rows to the experts and 120 to every dense layer.
-    Held at 120x1, the buffers overflowed L1 beside the next layer's fc1.
-    """
-    buffers = StackedBuffers()
-    moe = TtNomicMoELayer(device, config, tt_config, state_dict, PREFIX, buffers=buffers)
-    x_tt = to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device)
-    try:
-        moe(x_tt)
-        held = buffers.get(batch * seqlen) is not None
-    finally:
-        buffers.release()
-
-    assert held == (batch * ttnn.core.divup(seqlen, ttnn.TILE_SIZE) <= HELD_MAX_TILES)
