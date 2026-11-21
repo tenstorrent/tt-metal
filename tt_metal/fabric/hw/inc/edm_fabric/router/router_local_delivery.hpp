@@ -41,16 +41,32 @@ FORCE_INLINE void local_write_init() {
     }
 }
 
+// The local-write buffer's ready state, read by the receiver with the packet's header loads so the read's latency
+// overlaps theirs. Only this ERISC issues on the buffer, so seen ready it stays ready until its next command: good for
+// a packet's first local write only. False (the write waits) where the buffer keeps no preset.
+FORCE_INLINE bool read_local_write_buffer_ready() {
+    if constexpr (CommandBuffers::presets) {
+        return noc_cmd_buf_ready(LOCAL_NOC, CommandBuffers::local_writes);
+    } else {
+        return false;
+    }
+}
+
 // One local write of `size` bytes tagged with `trid`. COUNTED adds it to the software write counters
 // (noc_nonposted_writes_num_issued/acked), as the write API always does on Blackhole; a scatter packet counts its
-// writes once, after the last one.
+// writes once, after the last one, and the common send types after their write (count_local_writes), so the counter
+// update is not ahead of the command. `ready`: the buffer was seen ready (read_local_write_buffer_ready).
 template <bool COUNTED>
-FORCE_INLINE void local_write(uint32_t src_addr, uint64_t dst_noc_addr, uint32_t size, uint32_t trid) {
+FORCE_INLINE void local_write(
+    uint32_t src_addr, uint64_t dst_noc_addr, uint32_t size, uint32_t trid, bool ready = false) {
     WAYPOINT("NAWW");
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size, -1, false, LOCAL_NOC);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(LOCAL_NOC, dst_noc_addr, src_addr, size);
     if constexpr (CommandBuffers::presets) {
-        ncrisc_noc_set_transaction_id(LOCAL_NOC, CommandBuffers::local_writes, trid);  // waits for the command buffer
+        if (__builtin_expect(!ready, 0)) {
+            while (!noc_cmd_buf_ready(LOCAL_NOC, CommandBuffers::local_writes));
+        }
+        ncrisc_noc_set_transaction_id</*skip_cmdbuf_chk=*/true>(LOCAL_NOC, CommandBuffers::local_writes, trid);
         noc_write_with_state<
             noc_mode,
             CommandBuffers::local_writes,
@@ -127,15 +143,21 @@ __attribute__((noinline)) void deliver_other(
 }
 
 // Writes the packet to this chip; every write that reads the slot is tagged with `trid`. CH: the host's index of the
-// receiver channel (receiver_channel_of), for the channel-trimming capture and the channel's flush.
+// receiver channel (receiver_channel_of), for the channel-trimming capture and the channel's flush. `ready`: the
+// local-write buffer was seen ready (read_local_write_buffer_ready), for the first write.
 template <size_t CH>
 FORCE_INLINE void deliver(
-    tt_l1_ptr PACKET_HEADER_TYPE* header, uint16_t payload_size, tt::tt_fabric::NocSendType type, uint8_t trid) {
+    tt_l1_ptr PACKET_HEADER_TYPE* header,
+    uint16_t payload_size,
+    tt::tt_fabric::NocSendType type,
+    uint8_t trid,
+    bool ready = false) {
     using tt::tt_fabric::NocSendType;
     const uint32_t payload = reinterpret_cast<uint32_t>(header) + sizeof(PACKET_HEADER_TYPE);
     if (type == NocSendType::NOC_UNICAST_WRITE) {
         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
-        local_write<counts_local_writes>(payload, header->command_fields.unicast_write.noc_address, payload_size, trid);
+        local_write<false>(payload, header->command_fields.unicast_write.noc_address, payload_size, trid, ready);
+        count_local_writes(1);
         return;
     }
 
@@ -157,7 +179,7 @@ FORCE_INLINE void deliver(
         // value carried in the chunk size).
         uint32_t offset = scatter.chunk_size[0];
         uint32_t writes = 1;
-        local_write<false>(payload, scatter.noc_address[0], offset, trid);
+        local_write<false>(payload, scatter.noc_address[0], offset, trid, ready);
         shift_to_next_chunk(encoding);
         if (chunks > 2) {
             const uint32_t chunk1_size = scatter.chunk_size[1];
@@ -210,7 +232,8 @@ FORCE_INLINE void deliver(
     if (type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
         const auto& fused = header->command_fields.unicast_seminc_fused;
-        local_write<counts_local_writes>(payload, fused.noc_address, payload_size, trid);
+        local_write<false>(payload, fused.noc_address, payload_size, trid, ready);
+        count_local_writes(1);  // before the atomic: a flushed one checks the counters
 #if defined(ARCH_WORMHOLE)
         inc_noc_addr = fused.semaphore_noc_address;
         inc_value = fused.val;

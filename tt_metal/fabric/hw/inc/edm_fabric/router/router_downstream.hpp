@@ -152,6 +152,43 @@ struct DownstreamSenderChannelProgress {
     uint32_t next_slot_addr;  // its next slot
 };
 
+// The ready states of a VC's two forward command buffers, read by the receiver with the packet's header loads so the
+// reads' latency overlaps theirs (read_forward_buffers_ready). Only this ERISC issues on the buffers, so one seen ready
+// stays ready until its next command: the first forward of a packet may use them, any later one waits (forward_each).
+// Unused by stateless forwards, whose API calls wait themselves.
+struct ForwardBuffersReady {
+    bool data = false;
+    bool credit = false;
+};
+
+// Both of VC's forward buffers' ready states, as a pair (where the forward commands keep presets; else none).
+template <size_t VC>
+FORCE_INLINE ForwardBuffersReady read_forward_buffers_ready() {
+    if constexpr (CommandBuffers::forward_presets) {
+        constexpr uint8_t noc = tt::tt_fabric::edm_to_downstream_noc;
+        ForwardBuffersReady ready;
+        ready.data = noc_cmd_buf_ready(noc, CommandBuffers::forward_data[VC]);
+        ready.credit = noc_cmd_buf_ready(noc, CommandBuffers::forward_credits[VC]);
+        return ready;
+    } else {
+        return {};
+    }
+}
+
+// A preset forward's two posted writes (data, then the credit register) go into the posted-write counter once, after
+// both are issued, rather than one read-modify-write each with the first between the two commands. Blackhole counts
+// both (the write API always counts there, issue 28758; a later emulated inline write on this NoC waits for the
+// counter to match the NIU's), Wormhole neither. Nothing reads the counter between the two commands.
+constexpr uint32_t posted_writes_per_preset_forward = is_blackhole_arch ? 2 : 0;
+template <uint8_t NOC>
+FORCE_INLINE void count_preset_forward_writes() {
+    if constexpr (posted_writes_per_preset_forward != 0) {
+        // Keep the counter's read-modify-write after the commands: the compiler may otherwise hoist it between them.
+        asm volatile("" ::: "memory");
+        noc_posted_writes_num_issued[NOC] += posted_writes_per_preset_forward;
+    }
+}
+
 // A stateless forward's two commands: the packet into `dst` on the node at `link`, tagged with `trid`, then -1 on the
 // node's free-slots register (its doorbell).
 template <uint8_t NOC, uint8_t DATA_CMD_BUF>
@@ -196,7 +233,12 @@ struct StatelessForwards {
 
     template <size_t ENTRY>
     FORCE_INLINE static void forward(
-        const DownstreamLink& link, uint32_t dst, uint32_t src_addr, uint32_t size_bytes, uint8_t trid) {
+        const DownstreamLink& link,
+        uint32_t dst,
+        uint32_t src_addr,
+        uint32_t size_bytes,
+        uint8_t trid,
+        ForwardBuffersReady /*ready: the API waits*/) {
         forward_stateless<Traits::noc, Traits::data_cmd_buf>(link, dst, src_addr, size_bytes, trid);
     }
 };
@@ -231,39 +273,44 @@ struct FullPresetForwards {
 
     template <size_t ENTRY>
     FORCE_INLINE static void forward(
-        const DownstreamLink&, uint32_t dst, uint32_t src_addr, uint32_t size_bytes, uint8_t trid) {
-        // The two commands' buffers' ready states are read as a pair, so the reads overlap instead of each being a lone
-        // read inside the NoC API; a buffer not ready is waited for just before its command. Only this ERISC issues on
-        // them, so a buffer seen ready stays ready until its next command. Blackhole counts the write (issue 28758).
-        const bool data_ready = noc_cmd_buf_ready(Traits::noc, Traits::data_cmd_buf);
-        const bool sync_ready = noc_cmd_buf_ready(Traits::noc, Traits::sync_cmd_buf);
-        if (!data_ready) {
+        const DownstreamLink&,
+        uint32_t dst,
+        uint32_t src_addr,
+        uint32_t size_bytes,
+        uint8_t trid,
+        ForwardBuffersReady ready) {
+        // The buffers' ready states come read as a pair (ForwardBuffersReady); a buffer not seen ready is waited for
+        // just before its command. The credit command follows the data command with nothing between them (the
+        // downstream sees the packet when the credit lands); both are counted after (count_preset_forward_writes).
+        if (__builtin_expect(!ready.data, 0)) {
             while (!noc_cmd_buf_ready(Traits::noc, Traits::data_cmd_buf));
         }
         ncrisc_noc_set_transaction_id</*skip_cmdbuf_chk=*/true>(Traits::noc, Traits::data_cmd_buf, trid);
         ncrisc_noc_write_with_state<
             DM_DEDICATED_NOC,
             /*posted=*/true,
-            /*update_counter=*/is_blackhole_arch,
+            /*update_counter=*/false,
             /*one_packet=*/false,
             /*skip_cmdbuf_chk=*/true>(Traits::noc, Traits::data_cmd_buf, src_addr, dst, size_bytes);
         // The credit register, where it is set on every forward (credit_register_varies): one command-buffer register
         // write.
-        if (!sync_ready) {
+        if (__builtin_expect(!ready.credit, 0)) {
             while (!noc_cmd_buf_ready(Traits::noc, Traits::sync_cmd_buf));
         }
-        noc_inline_dw_write_with_state<
+        noc_fast_write_dw_inline_with_state<
+            DM_DEDICATED_NOC,
             /*update_addr_lo=*/credit_register_varies,
-            /*update_counter=*/false,
-            /*posted=*/true,
             /*update_addr_hi=*/false,
             /*update_val=*/false,
+            /*posted=*/true,
+            /*update_counter=*/false,
             InlineWriteDst::REG,
             /*skip_cmdbuf_chk=*/true>(
-            0,
-            get_stream_reg_write_addr<Traits::template remote_credit_stream<ENTRY>>(),
+            Traits::noc,
             Traits::sync_cmd_buf,
-            Traits::noc);
+            0,
+            get_stream_reg_write_addr<Traits::template remote_credit_stream<ENTRY>>());
+        count_preset_forward_writes<Traits::noc>();
     }
 
 private:
@@ -295,12 +342,15 @@ struct PartialPresetForwards {
     // before either command, so no ready state is held across the data command.
     template <size_t ENTRY>
     FORCE_INLINE static void forward(
-        const DownstreamLink& link, uint32_t dst, uint32_t src_addr, uint32_t size_bytes, uint8_t trid) {
+        const DownstreamLink& link,
+        uint32_t dst,
+        uint32_t src_addr,
+        uint32_t size_bytes,
+        uint8_t trid,
+        ForwardBuffersReady ready) {
         // Read once: the register writes below store through uint32_t pointers, which may alias the field.
         const uint32_t node = link.noc_coord;
-        const bool data_ready = noc_cmd_buf_ready(Traits::noc, Traits::data_cmd_buf);
-        const bool credit_ready = noc_cmd_buf_ready(Traits::noc, Traits::sync_cmd_buf);
-        if (!(data_ready & credit_ready)) {
+        if (__builtin_expect(!(ready.data & ready.credit), 0)) {
             while (!noc_cmd_buf_ready(Traits::noc, Traits::data_cmd_buf));
             while (!noc_cmd_buf_ready(Traits::noc, Traits::sync_cmd_buf));
         }
@@ -311,22 +361,24 @@ struct PartialPresetForwards {
             CQ_NOC_SNDL,
             CQ_NOC_SEND,
             CQ_NOC_wait,
-            /*update_counter=*/is_blackhole_arch,
-            /*posted=*/true,
-            /*update_addr_mid=*/false>(Traits::noc, src_addr, node, dst, size_bytes);
-        noc_inline_dw_write_with_state<
-            /*update_addr_lo=*/true,
             /*update_counter=*/false,
             /*posted=*/true,
+            /*update_addr_mid=*/false>(Traits::noc, src_addr, node, dst, size_bytes);
+        noc_fast_write_dw_inline_with_state<
+            DM_DEDICATED_NOC,
+            /*update_addr_lo=*/true,
             /*update_addr_hi=*/true,
             /*update_val=*/false,
+            /*posted=*/true,
+            /*update_counter=*/false,
             InlineWriteDst::REG,
             /*skip_cmdbuf_chk=*/true>(
+            Traits::noc,
+            Traits::sync_cmd_buf,
             0,
             get_stream_reg_write_addr<Traits::template remote_credit_stream<ENTRY>>(),
-            Traits::sync_cmd_buf,
-            Traits::noc,
             node);
+        count_preset_forward_writes<Traits::noc>();
     }
 
 private:
@@ -398,7 +450,7 @@ struct Downstreams {
     // only when one the packet needs is used up are the live local credit registers re-read, as one group (measured
     // without it: a VC1 router's 2-hop row about 4 cycles per packet slower, single-ERISC forwarding up to 2.6 faster).
     FORCE_INLINE bool admit(uint32_t forward_to) {
-        if (!any_without_free_slot<live>(forward_to)) {
+        if (__builtin_expect(!any_without_free_slot<live>(forward_to), 1)) {
             return true;
         }
         uint32_t raw[Traits::count];  // by entry
@@ -409,21 +461,27 @@ struct Downstreams {
         return !any_without_free_slot<live>(forward_to);
     }
 
-    // One full-packet copy into downstream NAME, tagged with `trid`, then its credits.
+    // One full-packet copy into downstream NAME, tagged with `trid`, then its credits. The progress and the ring's
+    // first slot are read before the commands and written after: the commands' register stores go through uint32_t
+    // pointers, which may alias them, so values read before would be read again after.
     template <size_t NAME>
-    FORCE_INLINE void forward(uint32_t src_addr, uint32_t size_bytes, uint8_t trid) {
+    FORCE_INLINE void forward(uint32_t src_addr, uint32_t size_bytes, uint8_t trid, ForwardBuffersReady ready) {
         constexpr size_t entry = downstream_entry(NAME);
         DownstreamSenderChannelProgress& downstream = progress[entry];
         const uint32_t dst = downstream.next_slot_addr;
-        ForwardCommands<VC>::template forward<entry>(links[entry], dst, src_addr, size_bytes, trid);
-        downstream.next_slot_addr = slot_after(dst, links[entry].first_slot_addr, Traits::last_slot_offset);
-        downstream.free_slots--;
+        const uint32_t free_slots = downstream.free_slots;
+        const uint32_t first_slot_addr = links[entry].first_slot_addr;
+        ForwardCommands<VC>::template forward<entry>(links[entry], dst, src_addr, size_bytes, trid, ready);
+        downstream.next_slot_addr = slot_after(dst, first_slot_addr, Traits::last_slot_offset);
+        downstream.free_slots = free_slots - 1;
         increment_local_update_ptr_val<Traits::template local_credit_stream<entry>>(-1);
     }
 
-    // Forwards to every downstream in `forward_to` (live names), lowest name first.
-    FORCE_INLINE void forward_all(uint32_t forward_to, uint32_t src_addr, uint32_t size_bytes, uint8_t trid) {
-        forward_each<live>(forward_to, src_addr, size_bytes, trid);
+    // Forwards to every downstream in `forward_to` (live names), lowest name first. `ready`: the forward buffers' ready
+    // states read before (read_forward_buffers_ready), good for the first forward only.
+    FORCE_INLINE void forward_all(
+        uint32_t forward_to, uint32_t src_addr, uint32_t size_bytes, uint8_t trid, ForwardBuffersReady ready = {}) {
+        forward_each<live>(forward_to, src_addr, size_bytes, trid, ready);
     }
 
 private:
@@ -463,13 +521,19 @@ private:
     }
 
     template <uint32_t NAMES>
-    FORCE_INLINE void forward_each(uint32_t forward_to, uint32_t src_addr, uint32_t size_bytes, uint8_t trid) {
+    FORCE_INLINE void forward_each(
+        uint32_t forward_to, uint32_t src_addr, uint32_t size_bytes, uint8_t trid, ForwardBuffersReady ready) {
         if constexpr (NAMES != 0) {
             constexpr size_t name = lowest_bit(NAMES);
-            if (((forward_to >> name) & 1u) != 0) {
-                forward<name>(src_addr, size_bytes, trid);
+            const bool taken = ((forward_to >> name) & 1u) != 0;
+            if (taken) {
+                forward<name>(src_addr, size_bytes, trid, ready);
             }
-            forward_each<without_lowest_bit(NAMES)>(forward_to, src_addr, size_bytes, trid);
+            if constexpr (without_lowest_bit(NAMES) != 0) {
+                // After a forward its buffers are busy: the next forward waits for them.
+                forward_each<without_lowest_bit(NAMES)>(
+                    forward_to, src_addr, size_bytes, trid, taken ? ForwardBuffersReady{} : ready);
+            }
         }
     }
 };

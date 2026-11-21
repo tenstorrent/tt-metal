@@ -181,11 +181,17 @@ struct ReceiverChannelProgress {
     uint32_t idle_passes_with_partial_group = 0;  // completion groups of several slots only
 };
 
+// One test for the wrap: the index and the address move together (testing the new index again for the address costs a
+// second branch).
 template <size_t VC>
 FORCE_INLINE void advance(ReceiverChannelProgress& progress) {
-    progress.next_index = ReceiverChannel<VC>::index_after(progress.next_index);
-    progress.next_slot_addr =
-        progress.next_index == 0 ? ReceiverChannel<VC>::first_slot_addr : progress.next_slot_addr + channel_buffer_size;
+    if (progress.next_index + 1 == ReceiverChannel<VC>::num_slots) {
+        progress.next_index = 0;
+        progress.next_slot_addr = ReceiverChannel<VC>::first_slot_addr;
+    } else {
+        progress.next_index++;
+        progress.next_slot_addr += channel_buffer_size;
+    }
 }
 
 // The sender channel each slot's packet came from, byte k of word w for slot 4w + k, so an aligned group lies in one
@@ -331,65 +337,93 @@ __attribute__((noinline)) void sparse_multicast_hop(
     record_forwarded<VC>(forward_to);
 }
 
+// The command buffers' ready states a packet's commands may start from, read with its header loads (receive) so the
+// reads overlap them instead of following the route decode. Only this ERISC issues on these buffers, so a buffer seen
+// ready stays ready until its next command: each state is good for the packet's first command on its buffer.
+struct CommandBuffersReady {
+    ForwardBuffersReady forward;  // VC's forward buffers (forwarding channels)
+    bool local_write = false;     // the local-write buffer
+};
+
+template <size_t VC>
+FORCE_INLINE CommandBuffersReady read_command_buffers_ready() {
+    CommandBuffersReady ready;
+    if constexpr (ReceiverChannel<VC>::forwards) {
+        ready.forward = read_forward_buffers_ready<ReceiverChannel<VC>::forwards_on_vc>();
+    }
+    if constexpr (!ReceiverChannel<VC>::delivers_through_relay) {
+        ready.local_write = read_local_write_buffer_ready();
+    }
+    return ready;
+}
+
 // Admits, forwards and/or delivers, then retires the next slot's packet. Returns false when a downstream had no room;
-// the packet stays for a later pass.
+// the packet stays for a later pass. A forwarding packet takes one test (forwards) to its admit and commands, so the
+// forward path is one straight run; the trid and size are known before the admit (ALU only).
 template <size_t VC, typename Connections>
 FORCE_INLINE bool handle(
     ReceiverChannelProgress& progress,
     SlotSourcesOf<VC>& sources,
     Connections& downstreams,
     uint32_t header_word,
-    uint32_t route_word) {
+    uint32_t route_word,
+    CommandBuffersReady ready) {
     using Routing = typename ReceiverChannel<VC>::Routing;
     const auto packet = PACKET_HEADER_TYPE::PackedPayloadAndSendType::unpack(header_word);
     auto* const header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(progress.next_slot_addr);
+    const uint8_t trid = ReceiverChannel<VC>::CompletionTrids::of_slot(progress.next_index);
+    const uint32_t size = packet.payload_size_bytes + sizeof(PACKET_HEADER_TYPE);
     if constexpr (ReceiverChannel<VC>::forwards) {
         auto& routers = downstreams.template of<ReceiverChannel<VC>::forwards_on_vc>();
         const typename Routing::Route route(route_word);
-        if (route.forwards() && !routers.admit(route.forward_to())) {
-            return false;
-        }
-        if constexpr (ReceiverChannel<VC>::delivers_through_relay) {
-            if (route.delivers() && !downstreams.relay.admit()) {
+        bool delivers = route.delivers();
+        if (route.forwards()) {
+            if (!routers.admit(route.forward_to())) {
                 return false;
             }
-        }
-        const uint8_t trid = ReceiverChannel<VC>::CompletionTrids::of_slot(progress.next_index);
-        const uint32_t size = packet.payload_size_bytes + sizeof(PACKET_HEADER_TYPE);
-        note_received<VC>(size);
-        if (!is_2d && route.delivers() && route.forwards() &&
-            packet.noc_send_type == tt::tt_fabric::NocSendType::NOC_SPARSE_MCAST_WRITE) {
-            sparse_multicast_hop<VC>(
-                header,
-                packet.payload_size_bytes,
-                route_word,
-                route.forward_to(),
-                routers,
-                progress.next_slot_addr,
-                size,
-                trid);
-        } else {
-            // Forward first (the downstream router starts sooner), then write here.
-            if (route.forwards()) {
+            if constexpr (ReceiverChannel<VC>::delivers_through_relay) {
+                if (delivers && !downstreams.relay.admit()) {
+                    return false;
+                }
+            }
+            note_received<VC>(size);
+            if (!is_2d && delivers && packet.noc_send_type == tt::tt_fabric::NocSendType::NOC_SPARSE_MCAST_WRITE) {
+                sparse_multicast_hop<VC>(
+                    header,
+                    packet.payload_size_bytes,
+                    route_word,
+                    route.forward_to(),
+                    routers,
+                    progress.next_slot_addr,
+                    size,
+                    trid);
+                delivers = false;  // the hop wrote this chip's page group
+            } else {
+                // Forward first (the downstream router starts sooner), then write here.
                 Routing::update_for_next_hop(header, route_word);
-                routers.forward_all(route.forward_to(), progress.next_slot_addr, size, trid);
+                routers.forward_all(route.forward_to(), progress.next_slot_addr, size, trid, ready.forward);
                 record_forwarded<VC>(route.forward_to());
             }
-            if (route.delivers()) {
-                if constexpr (ReceiverChannel<VC>::delivers_through_relay) {
-                    downstreams.relay.forward(progress.next_slot_addr, size, trid);
-                } else {
-                    deliver<ReceiverChannel<VC>::rx>(header, packet.payload_size_bytes, packet.noc_send_type, trid);
+        } else {
+            if constexpr (ReceiverChannel<VC>::delivers_through_relay) {
+                if (delivers && !downstreams.relay.admit()) {
+                    return false;
                 }
+            }
+            note_received<VC>(size);
+        }
+        if (delivers) {
+            if constexpr (ReceiverChannel<VC>::delivers_through_relay) {
+                downstreams.relay.forward(progress.next_slot_addr, size, trid);
+            } else {
+                deliver<ReceiverChannel<VC>::rx>(
+                    header, packet.payload_size_bytes, packet.noc_send_type, trid, ready.local_write);
             }
         }
     } else {
-        note_received<VC>(packet.payload_size_bytes + sizeof(PACKET_HEADER_TYPE));
+        note_received<VC>(size);
         deliver<ReceiverChannel<VC>::rx>(
-            header,
-            packet.payload_size_bytes,
-            packet.noc_send_type,
-            ReceiverChannel<VC>::CompletionTrids::of_slot(progress.next_index));
+            header, packet.payload_size_bytes, packet.noc_send_type, trid, ready.local_write);
     }
     retire<VC>(progress, sources, source_channel(packet.src_ch_id));
     return true;
@@ -422,7 +456,9 @@ FORCE_INLINE bool receive(
     if constexpr (ReceiverChannel<VC>::forwards) {
         route_word = ReceiverChannel<VC>::Routing::read(header, my_chip);
     }
-    return handle<VC>(progress, sources, downstreams, header_word, route_word);
+    // After the header loads in program order (all volatile), so all are in flight together.
+    const CommandBuffersReady ready = read_command_buffers_ready<VC>();
+    return handle<VC>(progress, sources, downstreams, header_word, route_word, ready);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
