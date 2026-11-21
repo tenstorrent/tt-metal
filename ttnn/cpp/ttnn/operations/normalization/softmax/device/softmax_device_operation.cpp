@@ -238,6 +238,15 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                 [&](const auto& program_config) {
                     using ProgramConfigType = std::decay_t<decltype(program_config)>;
                     if constexpr (std::is_same_v<ProgramConfigType, SoftmaxDefaultProgramConfig>) {
+                        if (mask.layout() == Layout::TILE) {
+                            // The readers walk one mask tile per input tile column: a narrower mask is read past
+                            // its buffer and a wider one is silently truncated. scale_mask_softmax already checks this.
+                            TT_FATAL(
+                                tensors_args.input_tensor.padded_shape()[-1] == mask.padded_shape()[-1],
+                                "Input and mask inner dimensions must match, got input: {} vs mask: {}",
+                                tensors_args.input_tensor.padded_shape()[-1],
+                                mask.padded_shape()[-1]);
+                        }
                         TT_FATAL(
                             tensors_args.input_tensor.padded_shape()[0] == tensors_args.mask.value().padded_shape()[0],
                             "Input and mask batch sizes must match, got {} for input and {} for mask",
