@@ -17,6 +17,8 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::core::CMAKE_UNIQUE_NAMESPACE {
@@ -61,11 +63,30 @@ Tensor to_layout_impl(
     const float pad_value) {
     if (tensor_arg.layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.dtype()) {
+            if (ttnn::is_device_tensor(tensor_arg)) {
+                // The tensor is already in the requested layout, so honour the dtype by typecasting instead of
+                // silently dropping it. The dtype change materializes a new tensor anyway, so the requested
+                // memory config is honoured here too, unlike the unchanged-dtype path below, which keeps
+                // to_layout a no-op and only warns. Typecast does not reshard, so a different memory config
+                // is applied with to_memory_config. The cast runs on the interleaved side of that move: after it
+                // when a sharded tensor moves to an interleaved config (no second, possibly larger, shard on the
+                // same L1 cores), before it otherwise. The move itself keeps the dtype, because the data-movement
+                // kernels change dtype only through the CB data format, which is not a value conversion for
+                // every dtype pair.
+                if (memory_config.has_value() && tensor_arg.is_sharded() && !memory_config->is_sharded()) {
+                    auto moved = ttnn::to_memory_config(tensor_arg, memory_config.value());
+                    return ttnn::typecast_keeping_memory_config(moved, dtype.value(), "ttnn::to_layout", sub_core_grids);
+                }
+                auto casted =
+                    ttnn::typecast_keeping_memory_config(tensor_arg, dtype.value(), "ttnn::to_layout", sub_core_grids);
+                return memory_config.has_value() ? ttnn::to_memory_config(casted, memory_config.value()) : casted;
+            }
+            // A host tensor does not support a dtype override (see the host path below), so keep the
+            // previous behaviour and leave the dtype unchanged.
             log_warning(
                 tt::LogOp,
-                "ttnn::to_layout: dtype is specified but the tensor is already in the requested layout! So, the "
-                "dtype "
-                "won't be changed!");
+                "ttnn::to_layout: dtype is specified but the tensor is a host tensor already in the "
+                "requested layout! So, the dtype won't be changed!");
         }
         // Host and deallocated tensors have no memory config.
         const auto current_mem_config = get_memory_config(tensor_arg);

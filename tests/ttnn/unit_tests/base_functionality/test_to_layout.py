@@ -467,6 +467,167 @@ def test_to_layout_host_same_layout_with_memory_config():
     assert_equal(torch_input, ttnn.to_torch(output))
 
 
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype, make_input",
+    [
+        (ttnn.int32, ttnn.float32, lambda shape: torch.randint(0, 100, shape, dtype=torch.int32)),
+        (ttnn.bfloat16, ttnn.float32, lambda shape: torch.randn(shape, dtype=torch.bfloat16)),
+    ],
+)
+def test_to_layout_same_layout_dtype_change(device, input_dtype, output_dtype, make_input):
+    torch.manual_seed(0)
+    shape = (1, 1, 32, 64)
+    torch_input = make_input(shape)
+    input_tensor = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=output_dtype)
+    assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output_tensor.dtype == output_dtype
+    assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor).to(torch.float32))
+
+
+def _same_layout_height_sharded_config(shape):
+    return ttnn.create_sharded_memory_config(
+        shape,
+        core_grid=ttnn.CoreGrid(y=1, x=2),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+
+def test_to_layout_same_layout_dtype_change_interleaved_to_sharded(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 64, 64)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sharded_config = _same_layout_height_sharded_config(shape)
+
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, dtype=ttnn.float32, memory_config=sharded_config)
+    assert output_tensor.dtype == ttnn.float32
+    assert output_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor))
+
+
+def test_to_layout_same_layout_dtype_change_sharded_to_interleaved(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 64, 64)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_same_layout_height_sharded_config(shape),
+    )
+
+    output_tensor = ttnn.to_layout(
+        input_tensor, ttnn.TILE_LAYOUT, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    assert output_tensor.dtype == ttnn.float32
+    assert output_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor))
+
+
+def test_to_layout_same_layout_dtype_change_sharded_to_different_shard_grid(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 128, 64)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_same_layout_height_sharded_config(shape),
+    )
+    output_config = ttnn.create_sharded_memory_config(
+        shape,
+        core_grid=ttnn.CoreGrid(y=1, x=4),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, dtype=ttnn.float32, memory_config=output_config)
+    assert output_tensor.dtype == ttnn.float32
+    assert output_tensor.memory_config() == output_config
+    assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_to_layout_same_layout_row_major_block_float_raises(device, dtype, expect_error):
+    torch_input = torch.randn((1, 1, 32, 64), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "to_layout"):
+        ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+
+
+def test_to_layout_same_layout_dtype_change_sharded_unaligned_page(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 64, 4)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    sharded_config = ttnn.create_sharded_memory_config(
+        shape,
+        core_grid=ttnn.CoreGrid(y=1, x=2),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=False,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=sharded_config
+    )
+
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32)
+    assert output_tensor.dtype == ttnn.float32
+    assert output_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor))
+
+
+def test_to_layout_same_layout_dtype_change_sub_core_grids(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 64, 64)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sub_core_grids = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 0))])
+
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, dtype=ttnn.float32, sub_core_grids=sub_core_grids)
+    assert output_tensor.dtype == ttnn.float32
+    assert_equal(torch_input.to(torch.float32), ttnn.to_torch(output_tensor))
+
+
+def test_to_layout_same_layout_dtype_unchanged(device):
+    torch.manual_seed(0)
+    shape = (1, 1, 32, 64)
+    torch_input = torch.randint(0, 100, shape, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    for output_tensor in (
+        ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT),
+        ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32),
+    ):
+        assert output_tensor.dtype == ttnn.int32
+        assert_equal(torch_input, ttnn.to_torch(output_tensor))
+
+
+def test_to_layout_same_layout_dtype_change_host():
+    torch.manual_seed(0)
+    shape = (1, 1, 32, 64)
+    torch_input = torch.randint(0, 100, shape, dtype=torch.int32)
+    host_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    # A host tensor does not support a dtype override on the same-layout path: it must not crash and
+    # must keep its original dtype.
+    output_tensor = ttnn.to_layout(host_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32)
+    assert output_tensor.dtype == ttnn.int32
+    assert_equal(torch_input, ttnn.to_torch(output_tensor))
+
+    for output_tensor in (
+        ttnn.to_layout(host_tensor, ttnn.ROW_MAJOR_LAYOUT),
+        ttnn.to_layout(host_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32),
+    ):
+        assert output_tensor.dtype == ttnn.int32
+        assert_equal(torch_input, ttnn.to_torch(output_tensor))
+
+
 @pytest.mark.parametrize("shape", [(32, 32), (64, 128), (9, 256)])
 def test_int8_to_layout_roundtrip_on_host(shape):
     torch.manual_seed(0)
