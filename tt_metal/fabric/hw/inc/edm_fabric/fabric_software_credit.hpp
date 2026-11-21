@@ -14,12 +14,18 @@
 // path; callers include it by this root-relative path.
 
 // Software credits: write a producer's free-running write count @p write_count into the SenderChannelProducerCursor
-// write_counter at L1 address @p write_counter_addr on core (@p noc_x, @p noc_y), once every non-posted write this core
-// issued on @p noc has departed (noc_async_writes_flushed()). Posted writes are not covered.
+// write_counter at NOC address @p write_counter_noc_addr, once every non-posted write this core issued on @p noc has
+// departed (noc_async_writes_flushed()). Posted writes are not covered.
+FORCE_INLINE void fabric_publish_producer_write_count(
+    uint64_t write_counter_noc_addr, uint32_t write_count, uint8_t noc = noc_index) {
+    noc_async_writes_flushed(noc);
+    noc_inline_dw_write<InlineWriteDst::L1>(write_counter_noc_addr, write_count, 0xF, noc);
+}
+
+// The same, with the write_counter at L1 address @p write_counter_addr on core (@p noc_x, @p noc_y).
 FORCE_INLINE void fabric_publish_producer_write_count(
     uint8_t noc_x, uint8_t noc_y, uint32_t write_counter_addr, uint32_t write_count, uint8_t noc = noc_index) {
-    noc_async_writes_flushed(noc);
-    noc_inline_dw_write<InlineWriteDst::L1>(get_noc_addr(noc_x, noc_y, write_counter_addr, noc), write_count, 0xF, noc);
+    fabric_publish_producer_write_count(get_noc_addr(noc_x, noc_y, write_counter_addr, noc), write_count, noc);
 }
 
 // A producer connecting to a router found @p router_credit_mode (EDMChannelWorkerLocationInfo::credit_mode) differ from

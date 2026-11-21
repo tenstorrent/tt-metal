@@ -13,7 +13,9 @@
 // credit completions. A channel that does not forward only delivers: no decode, no admit.
 // Decode: router_route_decode.hpp; admit, forward: router_downstream.hpp; deliver: router_local_delivery.hpp;
 // rounds: router_round.hpp.
-// The packets-received register is the source of truth for arrivals; the count kept from it is a lower bound.
+// The packets-received register is the source of truth for arrivals; the count kept from it is a lower bound. Without
+// stream registers it is the remote sender's count in this router's L1 less the packets taken here
+// (fabric_router_flow_control.hpp).
 //
 // One channel per serviced VC; the code is keyed by VC (ReceiverChannel<VC>). Only the host's per-channel arrays are
 // indexed by receiver channel, receiver_channel_of(VC) (VC2's is 1 on routers without VC1).
@@ -247,7 +249,7 @@ FORCE_INLINE bool accumulate_first_level_acks(ReceiverChannelProgress& progress,
         return false;
     }
     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-    increment_local_update_ptr_val<ReceiverChannel<VC>::packets_received_stream>(-static_cast<int32_t>(arrived));
+    consume_packets_sent_credit<ReceiverChannel<VC>::packets_received_stream>(arrived);
     uint32_t index = index_add<ReceiverChannel<VC>::num_slots>(progress.next_index, progress.packets_ready);
     for (uint32_t i = 0; i < arrived; i++) {
         const auto* header =
@@ -271,7 +273,7 @@ FORCE_INLINE void retire(ReceiverChannelProgress& progress, SlotSourcesOf<VC>& s
     progress.uncredited++;
     progress.packets_ready--;
     if constexpr (!ReceiverChannel<VC>::first_level_ack) {
-        increment_local_update_ptr_val<ReceiverChannel<VC>::packets_received_stream>(-1);
+        consume_packets_sent_credit<ReceiverChannel<VC>::packets_received_stream>();
     }
     advance<VC>(progress);
 }
@@ -605,10 +607,12 @@ FORCE_INLINE void step(
 // VC's packets-received register, raw, for the pass's grouped reads; 0 where its channel does not run.
 template <size_t VC>
 FORCE_INLINE uint32_t read_packets_received() {
-    if constexpr (runs_vc(VC)) {
+    if constexpr (!runs_vc(VC)) {
+        return 0;
+    } else if constexpr (stream_registers_available) {
         return read_stream_raw<ReceiverChannel<VC>::packets_received_stream>();
     } else {
-        return 0;
+        return get_packets_sent_unprocessed<ReceiverChannel<VC>::packets_received_stream>();
     }
 }
 
@@ -630,7 +634,13 @@ FORCE_INLINE bool send_credit_frame(Credits& credits, uint32_t txq_status_at_pas
 
 // Telemetry's RX heartbeat idle test, once per round: VC0's register only, so the heartbeat still moves while another
 // VC's channel is stuck.
-FORCE_INLINE bool vc0_register_empty() { return read_stream_count<ReceiverChannel<0>::packets_received_stream>() == 0; }
+FORCE_INLINE bool vc0_register_empty() {
+    if constexpr (stream_registers_available) {
+        return read_stream_count<ReceiverChannel<0>::packets_received_stream>() == 0;
+    } else {
+        return get_packets_sent_unprocessed<ReceiverChannel<0>::packets_received_stream>() == 0;
+    }
+}
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Where the channel states live, and the loop
@@ -714,10 +724,15 @@ FORCE_INLINE void pass(
 // ---------------------------------------------------------------------------------------------------------------------
 
 // Before the Ethernet handshake and the ERISCs' first sync, so before the remote sender can increment them: every
-// receiver channel's packets-received register at 0, serviced or not.
+// receiver channel's packets-received register (without stream registers, its software counts) at 0, serviced or
+// not.
 __attribute__((noinline)) void init_channel_streams() {
-    for_each_index<NUM_RECEIVER_CHANNELS>(
-        [](auto rx) { init_stream_if_used<to_receiver_packets_sent_streams[decltype(rx)::value]>(0); });
+    for_each_index<NUM_RECEIVER_CHANNELS>([](auto rx) {
+        constexpr uint32_t stream = to_receiver_packets_sent_streams[decltype(rx)::value];
+        if constexpr (stream != tt::tt_fabric::k_unused_stream_id) {
+            init_packets_sent_credit<stream>();
+        }
+    });
 }
 
 // A single-ERISC router's loop takes them whatever channel trimming left it (empty without a receiver channel).
@@ -731,9 +746,15 @@ FORCE_INLINE Connections set_up_channels(const RuntimeArgs& args) {
     if constexpr (is_receiver_role) {
         if constexpr (any_forwards_on_vc(0)) {
             init_downstreams(downstreams.vc0, args.vc0());
+            if constexpr (!stream_registers_available) {
+                init_downstream_write_counts(downstreams.vc0, args.vc0(), args.vc0_args.producer_cursors);
+            }
         }
         if constexpr (any_forwards_on_vc(1)) {
             init_downstreams(downstreams.vc1, args.vc1());
+            if constexpr (!stream_registers_available) {
+                init_downstream_write_counts(downstreams.vc1, args.vc1(), args.vc1_args.producer_cursors);
+            }
         }
         if constexpr (udm_mode) {
             init_relay(downstreams.relay, args.relay);

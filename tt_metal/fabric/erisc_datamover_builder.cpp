@@ -104,9 +104,14 @@ void validate_router_config(tt::ARCH arch, const std::unordered_map<std::string,
     const uint32_t local_tensix_connections = arg("NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS");
 
     TT_FATAL(
-        arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0,
-        "the router supports Blackhole and Wormhole only");
+        arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::QUASAR,
+        "the router supports Blackhole, Wormhole and Quasar (a Keraunos CCE) only");
     TT_FATAL(arch != tt::ARCH::WORMHOLE_B0 || num_active_eriscs == 1, "the router runs on one ERISC on Wormhole");
+    // Without stream registers (a Keraunos CCE) the router's credits are software counters: one hart runs both roles
+    // (the ERISCs' sync word is a stream scratch register), and the relay and the muxes have no software-counter form.
+    TT_FATAL(
+        arg("STREAM_REGISTERS_AVAILABLE") != 0 || (num_active_eriscs == 1 && !udm_mode && !tensix_mux_mode),
+        "without stream registers the router runs on one ERISC, without UDM or the Tensix mux extension");
     // VC1 traffic would go router to router around the muxes, but the host gives VC1's sender channels no slots there.
     TT_FATAL(!(tensix_mux_mode && has_vc1), "VC1 with the Tensix mux extension is not supported");
     // VC2 as FabricBuilderConfig builds it (Blackhole 2D, not UDM or the mux), with or without VC1: one worker channel

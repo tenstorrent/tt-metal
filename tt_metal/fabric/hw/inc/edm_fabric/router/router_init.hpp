@@ -112,6 +112,9 @@ FORCE_INLINE void finish_phase() {
 // default off Blackhole) leaves the firmware's value.
 constexpr uint32_t keepalive_timeout = eth_txq_seq_update_timeout;
 constexpr bool sets_keepalive = keepalive_timeout != 0 && is_teardown_master;
+#if defined(ARCH_QUASAR)
+static_assert(!sets_keepalive, "a Keraunos CCE has no TX-queue registers to set a keepalive in");
+#endif
 struct FirmwareKeepalive {
     uint32_t sender_queue;
     uint32_t receiver_queue;
@@ -119,6 +122,7 @@ struct FirmwareKeepalive {
 FirmwareKeepalive firmware_keepalive;  // the firmware's values, restored at teardown
 
 __attribute__((noinline)) void set_keepalive() {
+#if !defined(ARCH_QUASAR)  // a Keraunos CCE has no TX-queue registers
     if constexpr (sets_keepalive) {
         firmware_keepalive.sender_queue = eth_txq_reg_read(sender_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT);
         eth_txq_reg_write(sender_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, keepalive_timeout);
@@ -127,15 +131,18 @@ __attribute__((noinline)) void set_keepalive() {
             eth_txq_reg_write(receiver_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, keepalive_timeout);
         }
     }
+#endif
 }
 
 __attribute__((noinline)) void restore_keepalive() {
+#if !defined(ARCH_QUASAR)
     if constexpr (sets_keepalive) {
         eth_txq_reg_write(sender_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, firmware_keepalive.sender_queue);
         if constexpr (receiver_txq_id != sender_txq_id) {
             eth_txq_reg_write(receiver_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, firmware_keepalive.receiver_queue);
         }
     }
+#endif
 }
 
 // Zeroes one block of L1 credit counters (a word per sender channel): this router's receiver's first-level-ack and
@@ -148,7 +155,7 @@ FORCE_INLINE void zero_credit_counters(size_t block_addr) {
 }
 
 __attribute__((noinline)) void init_txqs() {
-    eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+    eth_txq_set_data_packet_accept_ahead(sender_txq_id, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     set_keepalive();
     if constexpr (receiver_txq_id != sender_txq_id) {
         if constexpr (is_receiver_role) {
@@ -157,8 +164,7 @@ __attribute__((noinline)) void init_txqs() {
             eth_enable_packet_mode(receiver_txq_id);
             zero_credit_counters(local_receiver_ack_counters_base_address);
             zero_credit_counters(local_receiver_completion_counters_base_address);
-            eth_txq_reg_write(
-                receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+            eth_txq_set_data_packet_accept_ahead(receiver_txq_id, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
         }
         if constexpr (is_sender_role) {
             zero_credit_counters(to_sender_remote_ack_counters_base_address);
@@ -232,6 +238,8 @@ struct VcDownstreamArgs {
     uint32_t noc_y;
     std::array<uint32_t, N> registration;
     std::array<uint32_t, N> location_info;
+    // The downstream sender channels' producer-cursor blocks: read without stream registers only.
+    [[no_unique_address]] Present<!stream_registers_available, std::array<uint32_t, N>, 0> producer_cursors;
 };
 
 struct RuntimeArgs {
@@ -273,7 +281,15 @@ FORCE_INLINE void read_vc_downstream_args(VcDownstreamArgs<N>& a, size_t& i) {
     for (auto& v : a.location_info) {
         v = get_arg_val<uint32_t>(i++);
     }
-    i += N;  // buffer-index semaphores (unused by router-to-router connections)
+    // The buffer-index semaphores (the producer-cursor blocks): unused by router-to-router connections with stream
+    // registers.
+    if constexpr (stream_registers_available) {
+        i += N;
+    } else {
+        for (auto& v : a.producer_cursors) {
+            v = get_arg_val<uint32_t>(i++);
+        }
+    }
 }
 
 // UDM: the relay block (RelayArgs); there is none on other routers (R is then NoRelayArgs).
@@ -295,11 +311,12 @@ FORCE_INLINE void read_relay_args(R& r, size_t& i) {
 
 __attribute__((noinline)) void read_runtime_args(RuntimeArgs& a) {
     size_t i = 0;
+    // The connection semaphores and producer-cursor blocks are kept in this router's own view.
     for (auto& v : a.connection_semaphores) {
-        v = get_arg_val<uint32_t>(i++);
+        v = router_l1(get_arg_val<uint32_t>(i++));
     }
     for (auto& v : a.producer_cursors) {
-        v = get_arg_val<uint32_t>(i++);
+        v = router_l1(get_arg_val<uint32_t>(i++));
     }
     read_vc_downstream_args(a.vc0_args, i);
     if constexpr (has_vc1) {
@@ -345,23 +362,27 @@ __attribute__((noinline, optimize("Os"))) void run_handshakes() {
         *edm_status() = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
 
         if constexpr (wait_for_host_signal) {
+            // Another router's word is named by its plain offset; this router polls its own through its own view.
             const uint32_t sync = edm_local_sync_ptr_addr;
             if constexpr (is_local_handshake_master) {
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(sync, num_local_edms - 1, termination);
+                // The master's notification to itself goes through its own view, not the plain offset: on a Keraunos
+                // CCE that store must be uncached, as its line also holds the termination word, and the NoC routes
+                // take the other routers' words from the SRAM offset of either view.
                 notify_subordinate_routers(
                     edm_channels_mask, std::numeric_limits<uint32_t>::max(), sync, num_local_edms);
             } else {
-                notify_master_router(local_handshake_master_eth_chan, sync);
+                notify_master_router(local_handshake_master_eth_chan, router_l1_offset(sync));
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(sync, num_local_edms, termination);
             }
             *edm_status() = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
             wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
-                reinterpret_cast<uint32_t>(edm_status()), tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC, termination);
+                edm_status_ptr_addr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC, termination);
             if constexpr (is_local_handshake_master) {
                 notify_subordinate_routers(
                     edm_channels_mask,
                     local_handshake_master_eth_chan,
-                    reinterpret_cast<uint32_t>(edm_status()),
+                    router_l1_offset(edm_status_ptr_addr),
                     tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
             }
         }
@@ -401,7 +422,10 @@ __attribute__((noinline, cold)) void teardown() {
     if constexpr (wait_for_host_signal && is_local_handshake_master) {
         auto* termination = termination_signal();
         notify_subordinate_routers(
-            edm_channels_mask, local_handshake_master_eth_chan, reinterpret_cast<uint32_t>(termination), *termination);
+            edm_channels_mask,
+            local_handshake_master_eth_chan,
+            router_l1_offset(termination_signal_addr),
+            *termination);
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();

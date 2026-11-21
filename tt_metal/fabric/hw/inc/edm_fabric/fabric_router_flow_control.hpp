@@ -65,13 +65,13 @@ FORCE_INLINE int32_t get_packets_sent_unprocessed() {
     }
 }
 
-// The receiver consumed one packet.
+// The receiver consumed @p num_packets packets.
 template <uint32_t PKTS_SENT_ID>
-FORCE_INLINE void consume_packets_sent_credit() {
+FORCE_INLINE void consume_packets_sent_credit(uint32_t num_packets = 1) {
     if constexpr (stream_registers_available) {
-        increment_local_update_ptr_val<PKTS_SENT_ID>(-1);
+        increment_local_update_ptr_val<PKTS_SENT_ID>(-static_cast<int32_t>(num_packets));
     } else {
-        packets_sent_processed[receiver_channel_of_packets_sent_stream<PKTS_SENT_ID>()]++;
+        packets_sent_processed[receiver_channel_of_packets_sent_stream<PKTS_SENT_ID>()] += num_packets;
     }
 }
 
