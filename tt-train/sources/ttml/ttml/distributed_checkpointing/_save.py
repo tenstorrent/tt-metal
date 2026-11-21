@@ -372,9 +372,20 @@ def save(
             ) from None
         created_staging = True
 
+    def join_staging() -> None:
+        # The other ranks join the directory the coordinator made. One that does not see it is on a filesystem the
+        # coordinator does not share (a path on each host's own disk): it must not make a copy of its own, into which
+        # it would write every shard before the coordinator found its files missing, and which nothing would remove.
+        if not group.is_coordinator and not os.path.isdir(staging):
+            raise CheckpointError(
+                f"{staging}, which rank 0 created, does not exist on rank {rank}: the checkpoint directory must be on "
+                f"a filesystem every rank shares"
+            )
+        begin_staging(ckpt_dir, nonce)  # its data directory
+
     try:
         group.phase("checking the target directory", check_target)
-        group.phase("creating the staging directory", lambda: begin_staging(ckpt_dir, nonce))
+        group.phase("creating the staging directory", join_staging)
         t1 = time.perf_counter()
         gathered = group.gather(part)
 

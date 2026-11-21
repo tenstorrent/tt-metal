@@ -19,6 +19,7 @@ system temporary directory otherwise. Without ``tt-run`` the module skips.
 
 import os
 import random
+import shutil
 
 import numpy as np
 import pytest
@@ -202,6 +203,36 @@ def test_truncated_file_on_one_rank_stops_all(two_ranks, expect_error):
     ):
         dcp.load(path, model=fresh)
     assert_same_shards(model_shards(fresh_params, local), before, "no rank placed anything")
+    ttnn.distributed_context_barrier()
+
+
+def test_a_directory_the_ranks_do_not_share_is_refused_before_any_write(two_ranks, monkeypatch, expect_error):
+    """A checkpoint directory on each host's own disk: rank 1 does not see the staging directory rank 0 created, and
+    must not make one of its own. Every rank raises before anything is written, and rank 1's disk is left as it was.
+    Rank 1 stands in for the other host by resolving the staging directory under a directory of its own."""
+    rank, local, root = two_ranks
+    model, params, opt = fresh_tp(DIM)
+    path = os.path.join(root, "not_shared")
+    own_disk = os.path.join(root, "rank1_disk")
+    if rank == 1:
+        os.makedirs(own_disk)
+        real_staging_dir = _save.staging_dir
+        monkeypatch.setattr(
+            _save, "staging_dir", lambda d, nonce: os.path.join(own_disk, os.path.basename(real_staging_dir(d, nonce)))
+        )
+    with expect_error(
+        dcp.CheckpointError,
+        r"creating the staging directory failed on rank\(s\) \[1\] of 2: rank 1: CheckpointError: .*, which rank 0 "
+        r"created, does not exist on rank 1: the checkpoint directory must be on a filesystem every rank shares",
+    ):
+        dcp.save(path, model=model, optimizer=opt)
+    monkeypatch.undo()
+    ttnn.distributed_context_barrier()
+    assert not os.path.exists(path) and not any(n.startswith("not_shared.partial-") for n in os.listdir(root))
+    assert os.listdir(own_disk) == [], "rank 1 made no staging directory of its own"
+    ttnn.distributed_context_barrier()
+    if rank == 0:
+        shutil.rmtree(own_disk)
     ttnn.distributed_context_barrier()
 
 
