@@ -302,25 +302,6 @@ std::string end_label(std::size_t link, char side, const LinkEnd& end) {
 // True when [base, base + size) ends beyond `sram` bytes, computed without forming base + size.
 bool beyond_sram(const Region& region, uint64_t sram) { return region.base > sram || region.size > sram - region.base; }
 
-const Device* find_device(const Manifest& manifest, const std::string& name) {
-    const auto it =
-        std::find_if(manifest.devices.begin(), manifest.devices.end(), [&](const Device& d) { return d.name == name; });
-    return it == manifest.devices.end() ? nullptr : &*it;
-}
-
-// The router slot `end` names: the slot of that device with role router and that port. Null when the device or the
-// port does not exist.
-const Slot* find_router(const Manifest& manifest, const LinkEnd& end) {
-    const Device* device = find_device(manifest, end.device);
-    if (device == nullptr) {
-        return nullptr;
-    }
-    const auto it = std::find_if(device->slots.begin(), device->slots.end(), [&](const Slot& s) {
-        return s.role == SlotRole::Router && s.port == end.port;
-    });
-    return it == device->slots.end() ? nullptr : &*it;
-}
-
 // Row 1.
 void check_reserved_values(const Manifest& manifest, const PackageFacts& facts, Findings& findings) {
     for (const Device& device : manifest.devices) {
@@ -616,6 +597,23 @@ Findings in_row_order(Findings findings) {
 }
 
 }  // namespace
+
+const Device* find_device(const Manifest& manifest, const std::string& name) {
+    const auto it =
+        std::find_if(manifest.devices.begin(), manifest.devices.end(), [&](const Device& d) { return d.name == name; });
+    return it == manifest.devices.end() ? nullptr : &*it;
+}
+
+const Slot* find_router(const Manifest& manifest, const LinkEnd& end) {
+    const Device* device = find_device(manifest, end.device);
+    if (device == nullptr) {
+        return nullptr;
+    }
+    const auto it = std::find_if(device->slots.begin(), device->slots.end(), [&](const Slot& s) {
+        return s.role == SlotRole::Router && s.port == end.port;
+    });
+    return it == device->slots.end() ? nullptr : &*it;
+}
 
 Manifest parse_manifest(std::string_view yaml_text) {
     std::vector<YAML::Node> documents;

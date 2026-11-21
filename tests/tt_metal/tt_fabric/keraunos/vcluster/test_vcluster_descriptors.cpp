@@ -28,6 +28,7 @@
 
 #include "tt_metal/tt_fabric/keraunos/vcluster/descriptors.hpp"
 #include "tt_metal/tt_fabric/keraunos/vcluster/manifest.hpp"
+#include "tt_metal/tt_fabric/keraunos/vcluster/test_support.hpp"
 
 namespace tt::tt_fabric::vcluster {
 namespace {
@@ -37,15 +38,7 @@ namespace fs = std::filesystem;
 // The Keraunos fabric test directory, located from the source path, so the test runs from any working directory.
 const fs::path kKeraunosDir = fs::path(__FILE__).parent_path().parent_path();
 
-// The package descriptor is UMD descriptors/soc_descs/mmk.yaml. VCLUSTER_PACKAGE_SOC_DESC overrides it, for
-// a tree whose UMD checkout is elsewhere.
-fs::path package_soc_desc() {
-    if (const char* path = std::getenv("VCLUSTER_PACKAGE_SOC_DESC"); path != nullptr && *path != '\0') {
-        return path;
-    }
-    return kKeraunosDir.parent_path().parent_path().parent_path().parent_path() /
-           "tt_metal/third_party/umd/descriptors/soc_descs/mmk.yaml";
-}
+using test::package_soc_desc;
 
 // A fresh, empty directory under gtest's temp dir, named for this process so that two runs cannot remove each other's,
 // and removed when the test ends.
@@ -77,11 +70,7 @@ void write_text(const fs::path& path, std::string_view text) { std::ofstream(pat
 
 // `text` with `from` replaced by `to`; `from` must occur exactly once.
 std::string replaced(std::string text, std::string_view from, std::string_view to) {
-    const size_t at = text.find(from);
-    if (at == std::string::npos || text.find(from, at + 1) != std::string::npos) {
-        throw std::logic_error("replaced: '" + std::string(from) + "' is not in the text exactly once");
-    }
-    return text.replace(at, from.size(), to);
+    return test::edited(std::move(text), {{from, to}});
 }
 
 // YAML equality as parsed data: maps compare by key set and values, whatever the key order; sequences in order;
@@ -243,11 +232,7 @@ links:
 )yaml";
 
 std::string line_with(std::initializer_list<std::pair<std::string_view, std::string_view>> edits) {
-    std::string text(kLine);
-    for (const auto& [from, to] : edits) {
-        text = replaced(std::move(text), from, to);
-    }
-    return text;
+    return test::edited(std::string(kLine), edits);
 }
 
 using Refusals = std::set<uint32_t>;

@@ -135,6 +135,12 @@ Manifest parse_manifest(std::string_view yaml_text);
 // ManifestLoadError naming the path when the file cannot be opened or read, and as parse_manifest() otherwise.
 Manifest load_manifest(const std::filesystem::path& path);
 
+// The device of `manifest` named `name`, or null.
+const Device* find_device(const Manifest& manifest, const std::string& name);
+// The router slot `end` names: the slot of that device with role router and that port. Null when the device or the
+// port does not exist.
+const Slot* find_router(const Manifest& manifest, const LinkEnd& end);
+
 // Runs the check rows in stages against `manifest` and `facts`: stage A (row 1); if it found nothing,
 // stage B (rows 2 and 12); if that found nothing, stage C (rows 3 to 8 and 13). Returns every failing instance of
 // every row the last stage run checked, in row order; empty means the manifest passes stages A to C. Stage D (rows

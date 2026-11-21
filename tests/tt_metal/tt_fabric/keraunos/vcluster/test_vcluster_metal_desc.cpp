@@ -39,6 +39,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_fabric/keraunos/vcluster/descriptors.hpp"
 #include "tt_metal/tt_fabric/keraunos/vcluster/manifest.hpp"
+#include "tt_metal/tt_fabric/keraunos/vcluster/test_support.hpp"
 
 namespace tt::tt_fabric::vcluster_metal_desc_tests {
 namespace {
@@ -48,14 +49,7 @@ namespace vc = tt::tt_fabric::vcluster;
 
 const fs::path kVclusterDir = fs::path(__FILE__).parent_path();
 
-// The package descriptor, UMD descriptors/soc_descs/mmk.yaml; VCLUSTER_PACKAGE_SOC_DESC overrides it.
-fs::path package_soc_desc() {
-    if (const char* path = std::getenv("VCLUSTER_PACKAGE_SOC_DESC"); path != nullptr && *path != '\0') {
-        return path;
-    }
-    return kVclusterDir.parent_path().parent_path().parent_path().parent_path().parent_path() /
-           "tt_metal/third_party/umd/descriptors/soc_descs/mmk.yaml";
-}
+using vc::test::package_soc_desc;
 
 fs::path temp_dir(const std::string& name) {
     return fs::path(::testing::TempDir()) / ("vcluster_metal_desc_" + std::to_string(::getpid()) + "_" + name);

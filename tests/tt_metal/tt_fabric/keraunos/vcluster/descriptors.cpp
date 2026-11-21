@@ -71,24 +71,8 @@ YAML::Node package_key(const YAML::Node& package, const char* key, const std::fi
     return value;
 }
 
-// The package descriptor's keraunos.cores entry of `cce`, or an undefined node.
-YAML::Node keraunos_core_entry(const YAML::Node& cores, CceId cce) {
-    for (const auto& entry : cores) {
-        if (entry["hsio"].as<uint32_t>() == cce.tile && entry["eth_cce"].as<uint32_t>() == cce.cce) {
-            return entry;
-        }
-    }
-    return YAML::Node(YAML::NodeType::Undefined);
-}
-
 bool is_eth_core(const YAML::Node& eth, const std::string& core) {
     return std::any_of(eth.begin(), eth.end(), [&](const YAML::Node& e) { return e.as<std::string>() == core; });
-}
-
-const Device* device_named(const Manifest& manifest, const std::string& name) {
-    const auto it =
-        std::find_if(manifest.devices.begin(), manifest.devices.end(), [&](const Device& d) { return d.name == name; });
-    return it == manifest.devices.end() ? nullptr : &*it;
 }
 
 // A device's Ethernet cores, its router and idle slots, in port order. Fatal when one has no port, which
@@ -125,8 +109,8 @@ std::vector<GenerationFinding> refusals(
     std::map<uint32_t, std::size_t> hops;  // lower chip of each link -> number of links
     for (std::size_t i = 0; i < manifest.links.size(); i++) {
         const Link& link = manifest.links[i];
-        const Device* a = device_named(manifest, link.a.device);
-        const Device* b = device_named(manifest, link.b.device);
+        const Device* a = find_device(manifest, link.a.device);
+        const Device* b = find_device(manifest, link.b.device);
         if (a == nullptr || b == nullptr) {
             findings.push_back(
                 {GenerationRefusal::NotALine, fmt::format("links[{}] names a device the manifest does not have", i)});
@@ -280,8 +264,8 @@ std::string cluster_desc(const Manifest& manifest) {
     for (const Link& link : manifest.links) {
         // The end with the lower chip first, whatever the manifest's a and b.
         std::pair<uint32_t, uint32_t> ends[] = {
-            {device_named(manifest, link.a.device)->fabric_chip, link.a.port},
-            {device_named(manifest, link.b.device)->fabric_chip, link.b.port}};
+            {find_device(manifest, link.a.device)->fabric_chip, link.a.port},
+            {find_device(manifest, link.b.device)->fabric_chip, link.b.port}};
         if (ends[1].first < ends[0].first) {
             std::swap(ends[0], ends[1]);
         }
@@ -420,6 +404,15 @@ GeneratedDescriptors generate(
 
 }  // namespace
 
+YAML::Node keraunos_core_entry(const YAML::Node& cores, CceId cce) {
+    for (const auto& entry : cores) {
+        if (entry["hsio"].as<uint32_t>() == cce.tile && entry["eth_cce"].as<uint32_t>() == cce.cce) {
+            return entry;
+        }
+    }
+    return YAML::Node(YAML::NodeType::Undefined);
+}
+
 // A package value that is missing or of the wrong type surfaces as a YAML::Exception from a read of an entry; it is
 // rethrown naming the package file, with yaml-cpp's line and column of the value.
 GeneratedDescriptors generate_descriptors(
@@ -437,8 +430,8 @@ std::vector<std::pair<uint32_t, uint32_t>> noc_links(const Manifest& manifest) {
         if (link.backend != LinkBackend::Noc) {
             continue;
         }
-        const Device* a = device_named(manifest, link.a.device);
-        const Device* b = device_named(manifest, link.b.device);
+        const Device* a = find_device(manifest, link.a.device);
+        const Device* b = find_device(manifest, link.b.device);
         TT_FATAL(
             a != nullptr && b != nullptr,
             "Link {}-{} names a device the manifest does not have; check_manifest() refuses it as row 7",

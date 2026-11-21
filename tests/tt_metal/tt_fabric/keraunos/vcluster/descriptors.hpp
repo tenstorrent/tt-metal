@@ -16,6 +16,10 @@
 
 #include "tt_metal/tt_fabric/keraunos/vcluster/manifest.hpp"
 
+namespace YAML {
+class Node;
+}
+
 namespace tt::tt_fabric::vcluster {
 
 // Why generate_descriptors() refused a manifest; the value is the G number its message cites.
@@ -46,6 +50,9 @@ private:
     std::vector<ManifestFinding> rows_;
     std::vector<GenerationFinding> findings_;
 };
+
+// The entry of `cce` in `cores`, a package SoC descriptor's keraunos.cores, or an undefined node.
+YAML::Node keraunos_core_entry(const YAML::Node& cores, CceId cce);
 
 // Absolute paths of the files generate_descriptors() wrote.
 struct GeneratedDescriptors {

@@ -41,26 +41,6 @@ const char* env(const char* name) {
     return value != nullptr && *value != '\0' ? value : nullptr;
 }
 
-// The router slot of `device` at Ethernet channel `port`, if any.
-std::optional<vc::Slot> router_at(const vc::Device& device, uint32_t port) {
-    for (const auto& slot : device.slots) {
-        if (slot.role == vc::SlotRole::Router && slot.port == port) {
-            return slot;
-        }
-    }
-    return std::nullopt;
-}
-
-// The device of `manifest` named `name`; check_manifest() refuses a link end naming no device, so a miss is a bug.
-const vc::Device& device_named(const vc::Manifest& manifest, const std::string& name) {
-    for (const auto& device : manifest.devices) {
-        if (device.name == name) {
-            return device;
-        }
-    }
-    TT_THROW("the manifest has no device named {}", name);
-}
-
 const vc::Device& device_of_chip(const vc::Manifest& manifest, uint32_t fabric_chip) {
     for (const auto& device : manifest.devices) {
         if (device.fabric_chip == fabric_chip) {
@@ -71,17 +51,6 @@ const vc::Device& device_of_chip(const vc::Manifest& manifest, uint32_t fabric_c
 }
 
 // Step 3: the opened cluster is the manifest's, and the failure names the first difference.
-// The core keraunos.cores of the package SoC descriptor gives CCE `cce` of HSIO tile `tile`, as "x-y"; empty when it
-// lists none.
-std::string package_core(const YAML::Node& package, uint32_t tile, uint32_t cce) {
-    for (const auto& entry : package["keraunos"]["cores"]) {
-        if (entry["hsio"].as<uint32_t>() == tile && entry["eth_cce"].as<uint32_t>() == cce) {
-            return entry["core"].as<std::string>();
-        }
-    }
-    return "";
-}
-
 void expect_cluster_is_manifest(const vc::Manifest& manifest, const YAML::Node& package) {
     const auto& control_plane = MetalContext::instance().get_control_plane();
     const auto& cluster = MetalContext::instance().get_cluster();
@@ -112,9 +81,11 @@ void expect_cluster_is_manifest(const vc::Manifest& manifest, const YAML::Node& 
         }
         ASSERT_EQ(chans, ports) << "device " << device.name << ": fabric router channels are not its router ports";
         for (const uint32_t port : ports) {
-            const vc::Slot slot = *router_at(device, port);
+            const vc::Slot slot = *vc::find_router(manifest, {device.name, port});
             const CoreCoord core = cluster.get_soc_desc(chip).get_eth_core_for_channel(port, tt::CoordSystem::NOC0);
-            const std::string expected = package_core(package, slot.tile, slot.cce);
+            // The package's core for the slot's CCE, as "x-y"; empty when keraunos.cores lists none.
+            const YAML::Node entry = vc::keraunos_core_entry(package["keraunos"]["cores"], {slot.tile, slot.cce});
+            const std::string expected = entry ? entry["core"].as<std::string>() : "";
             ASSERT_EQ(fmt::format("{}-{}", core.x, core.y), expected)
                 << "device " << device.name << " port " << port << ": router core " << core.str()
                 << ", the package's core for the slot's tile " << slot.tile << " cce " << slot.cce << " is '"
@@ -125,8 +96,9 @@ void expect_cluster_is_manifest(const vc::Manifest& manifest, const YAML::Node& 
     // The cluster's connection of each link's two ports joins exactly those two.
     for (size_t i = 0; i < manifest.links.size(); ++i) {
         const auto& link = manifest.links[i];
-        const uint32_t a_chip = device_named(manifest, link.a.device).fabric_chip;
-        const uint32_t b_chip = device_named(manifest, link.b.device).fabric_chip;
+        // check_manifest() refuses a link end naming no device.
+        const uint32_t a_chip = vc::find_device(manifest, link.a.device)->fabric_chip;
+        const uint32_t b_chip = vc::find_device(manifest, link.b.device)->fabric_chip;
         const auto [peer, peer_chan] =
             control_plane.get_connected_mesh_chip_chan_ids(FabricNodeId(mesh, a_chip), link.a.port);
         ASSERT_EQ(peer, FabricNodeId(mesh, b_chip))
@@ -145,9 +117,9 @@ void expect_workers_are_the_lines(const vc::Manifest& manifest) {
     std::set<std::pair<uint32_t, uint32_t>> expected;  // (fabric_chip, tile)
     for (const Worker& end : {line.sender, line.receiver}) {
         const vc::Device& device = device_of_chip(manifest, end.node.chip_id);
-        const auto router = router_at(device, end.router_chan);
-        ASSERT_TRUE(router.has_value()) << "device " << device.name << " has no router slot at channel "
-                                        << static_cast<uint32_t>(end.router_chan) << ", which faces the line";
+        const vc::Slot* router = vc::find_router(manifest, {device.name, end.router_chan});
+        ASSERT_NE(router, nullptr) << "device " << device.name << " has no router slot at channel "
+                                   << static_cast<uint32_t>(end.router_chan) << ", which faces the line";
         expected.insert({device.fabric_chip, router->tile});
     }
     std::set<std::pair<uint32_t, uint32_t>> workers;
@@ -167,8 +139,6 @@ class VclusterLine : public KeraunosCoLaunchedWorkers {
 protected:
     void SetUp() override {}
 };
-
-bool is_mock() { return MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock; }
 
 TEST_F(VclusterLine, FromManifest) {
     const char* manifest_path = env("VCLUSTER_MANIFEST");

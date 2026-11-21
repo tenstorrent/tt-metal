@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "tt_metal/tt_fabric/keraunos/vcluster/manifest.hpp"
+#include "tt_metal/tt_fabric/keraunos/vcluster/test_support.hpp"
 
 namespace tt::tt_fabric::vcluster {
 namespace {
@@ -73,17 +74,9 @@ PackageFacts mmk_with_tile_4() {
     return facts;
 }
 
-// kLine with each `from` replaced by its `to`. Each `from` must occur exactly once, so an edit cannot land elsewhere.
+// kLine with each `from` replaced by its `to`.
 std::string edit(std::initializer_list<std::pair<std::string_view, std::string_view>> edits) {
-    std::string text(kLine);
-    for (const auto& [from, to] : edits) {
-        const size_t at = text.find(from);
-        if (at == std::string::npos || text.find(from, at + 1) != std::string::npos) {
-            throw std::logic_error("edit: '" + std::string(from) + "' is not in the line exactly once");
-        }
-        text.replace(at, from.size(), to);
-    }
-    return text;
+    return test::edited(std::string(kLine), edits);
 }
 
 // The loader fails, listing every load error it found, and reports no row. The loader throws
