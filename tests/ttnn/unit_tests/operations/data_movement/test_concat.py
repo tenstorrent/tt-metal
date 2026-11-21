@@ -1412,3 +1412,137 @@ def test_concat_docstring_supported_inputs(dtype, layout, buffer_type, device):
     assert output.layout == layout
     assert output.memory_config().buffer_type == buffer_type
     assert_exact(torch.concat([ttnn.to_torch(t) for t in inputs], dim=2), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "rm"])
+def test_concat_height_sharded_taller_output_shard(device, expect_error, layout):
+    """Width concat of HEIGHT_SHARDED inputs must reject an output shard taller than the inputs'.
+
+    The height-sharded zero-copy factories (ConcatS2STiledProgramFactory for TILE and
+    ConcatS2SRMProgramFactory for ROW_MAJOR) alias one input shard per core and write one
+    input-shard-height row band into that core's output shard. The output shard's own height is
+    what maps logical rows onto the grid, so a taller output shard used to be accepted by
+    validate_on_program_cache_miss (which compared layout, grid and orientation but not shard
+    shape) and copy every band to the wrong rows while leaving the tail of each shard stale. The
+    failure was silent: right shape, in-bounds writes, wrong values.
+
+    The control below keeps the natural output shard (same height, summed width) and stays on the
+    same zero-copy path, so the fix must not perturb it. The second control is the one mismatch
+    that is still correct: a tensor smaller than a single shard, where every row is on core 0 at
+    offset 0 in both layouts.
+    """
+    dtype = ttnn.bfloat16
+    shape = (1, 1, 128, 32)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    input_shard = (32, 32)
+
+    def mem(shard_shape, grid=shard_grid):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    torch_inputs = [random_torch_tensor(dtype, shape) for _ in range(2)]
+    torch_output = torch.cat(torch_inputs, dim=3)
+    ttnn_inputs = [
+        ttnn.from_torch(t, dtype=dtype, layout=layout, device=device, memory_config=mem(input_shard))
+        for t in torch_inputs
+    ]
+
+    # Control: matching spec, so the zero-copy sharded factories still run and must stay exact.
+    control_mem = mem((input_shard[0], 2 * input_shard[1]))
+    control = ttnn.concat(ttnn_inputs, dim=3, memory_config=control_mem)
+    assert control.memory_config() == control_mem
+    assert_equal(torch_output, ttnn.to_torch(control))
+
+    # Regression: a taller output shard on the same grid cannot be served zero-copy correctly.
+    taller_mem = mem((2 * input_shard[0], 2 * input_shard[1]))
+    with expect_error(RuntimeError, "requires the output shard height to match the input shard heights"):
+        ttnn.concat(ttnn_inputs, dim=3, memory_config=taller_mem)
+
+    # A tensor that fits in one shard stays correct with a taller output shard: all of its rows
+    # are on core 0 at offset 0 in both layouts, so this must not be rejected.
+    small_height = 32 if layout == ttnn.TILE_LAYOUT else 30
+    small_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    small_shape = (1, 1, small_height, 32)
+    small_torch_inputs = [random_torch_tensor(dtype, small_shape) for _ in range(2)]
+    small_inputs = [
+        ttnn.from_torch(t, dtype=dtype, layout=layout, device=device, memory_config=mem(input_shard, small_grid))
+        for t in small_torch_inputs
+    ]
+    small_out = ttnn.concat(small_inputs, dim=3, memory_config=mem((64, 64), small_grid))
+    assert_equal(torch.cat(small_torch_inputs, dim=3), ttnn.to_torch(small_out))
+
+
+_BLOCK_WIDTH_SHARD_ERR = "requires the output shard height to match the input shard heights"
+_BLOCK_HEIGHT_SHARD_ERR = "requires the output shard width to match the input shard widths"
+
+
+# Block-sharded zero-copy concat reads the concat-dim shard size from the output shard and lays
+# that dimension out from the plan, but it copies the OTHER dimension straight from each source
+# shard (concat_block_sharded_program_factory.cpp:273-315 for width concat, :320-383 for height
+# concat). A different shard size in that other dimension therefore reads the wrong source rows or
+# columns. Probe results on stock 54effbfbb42: width concat with a shorter output shard height had
+# 12284/16384 wrong values and height concat with a narrower output shard width had 12285/16384,
+# both accepted with mc_match=true (silent). Taller/wider variants crashed the simulator. The concat
+# dimension itself is handled by the plan and may differ (out shard width 48 vs 32, out shard
+# height 64 vs 32 both exact). A tensor that fits in one shard stays correct with a different other
+# dimension as long as the copied band fits inside the source shard, which the validation keeps.
+@pytest.mark.parametrize(
+    "layout, shapes, shard_shape, out_shard, grid_cols, grid_rows, dim, error",
+    [
+        # Controls: natural output shard, concat dimension summed.
+        (ttnn.TILE_LAYOUT, [(1, 1, 128, 64)] * 2, (32, 64), (32, 128), 1, 4, 3, None),
+        (ttnn.TILE_LAYOUT, [(1, 1, 64, 128)] * 2, (32, 128), (32, 128), 1, 4, 2, None),
+        # The concat dimension may differ: handled by the block plan, values exact on stock.
+        (ttnn.ROW_MAJOR_LAYOUT, [(1, 1, 128, 64)] * 2, (32, 32), (32, 48), 4, 4, 3, None),
+        (ttnn.TILE_LAYOUT, [(1, 1, 64, 128)] * 2, (32, 128), (64, 128), 1, 4, 2, None),
+        # Single-shard allowance: the whole tensor fits in one shard and the copy band fits in the
+        # source shard, so the other dimension may differ.
+        (ttnn.TILE_LAYOUT, [(1, 1, 32, 64)] * 2, (64, 64), (32, 64), 2, 1, 3, None),
+        (ttnn.TILE_LAYOUT, [(1, 1, 64, 32)] * 2, (64, 64), (128, 32), 2, 1, 2, None),
+        # Silent on stock: rejected after the fix.
+        (ttnn.TILE_LAYOUT, [(1, 1, 128, 64)] * 2, (64, 64), (32, 128), 1, 4, 3, _BLOCK_WIDTH_SHARD_ERR),
+        (ttnn.TILE_LAYOUT, [(1, 1, 64, 128)] * 2, (64, 64), (128, 32), 4, 1, 2, _BLOCK_HEIGHT_SHARD_ERR),
+    ],
+    ids=[
+        "width_control",
+        "height_control",
+        "width_out_shard_width_diff",
+        "height_out_shard_height_diff",
+        "width_single_shard_allowed",
+        "height_single_shard_allowed",
+        "width_shorter_out_shard_height",
+        "height_narrower_out_shard_width",
+    ],
+)
+def test_concat_block_sharded_output_shard_shape_mismatch(
+    device, expect_error, layout, shapes, shard_shape, out_shard, grid_cols, grid_rows, dim, error
+):
+    dtype = ttnn.bfloat16
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_cols - 1, grid_rows - 1))})
+
+    def mem(shard):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, shard, ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    torch_inputs = [random_torch_tensor(dtype, s) for s in shapes]
+    torch_output = torch.cat(torch_inputs, dim=dim)
+    ttnn_inputs = [
+        ttnn.from_torch(t, dtype=dtype, layout=layout, device=device, memory_config=mem(shard_shape))
+        for t in torch_inputs
+    ]
+    output_mem = mem(out_shard)
+
+    if error is not None:
+        with expect_error(RuntimeError, error):
+            ttnn.concat(ttnn_inputs, dim=dim, memory_config=output_mem)
+        return
+
+    output = ttnn.concat(ttnn_inputs, dim=dim, memory_config=output_mem)
+    assert output.memory_config() == output_mem
+    assert_equal(torch_output, ttnn.to_torch(output))
