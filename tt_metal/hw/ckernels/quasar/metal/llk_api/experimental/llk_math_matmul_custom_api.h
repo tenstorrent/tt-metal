@@ -42,7 +42,8 @@ inline bool operands_use_2x_format(const std::uint32_t operand0, const std::uint
  * @param rt_dim: number of tiles in the row dimension for a matrix multiply
  * @note Run @ref llk_math_matmul_no_mop with matching template args to execute the configured matmul.
  * @note Run @ref llk_math_matmul_reinit_no_mop instead when only the replay buffer and addrmods need
- *       restoring, e.g. after an interleaved op that recorded over replay buffer slot 0.
+ *       restoring (it also re-checks the ALU data formats), e.g. after an interleaved op that recorded
+ *       over replay buffer slot 0.
  */
 template <ckernel::MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void llk_math_matmul_init_no_mop(
@@ -69,7 +70,7 @@ inline void llk_math_matmul_init_no_mop(
 
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operandA_id));
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operandB_id));
-    _configure_default_alu_data_format_state_<DST_ACCUM_MODE>(srcA_format, srcB_format);
+    _configure_alu_cfg_<AluCfgType::DEFAULT, DST_ACCUM_MODE>(srcA_format, srcB_format);
 
     if (operands_use_2x_format(operandA, operandB)) {
         _llk_math_matmul_init_no_mop_<math_fidelity, true /*EN_X2*/>(srcA_format, srcB_format, ct_dim, rt_dim);
@@ -122,9 +123,10 @@ inline void llk_math_matmul_no_mop(
 }
 
 /**
- * @brief Restores the no-mop matmul math state without touching the ALU data-format state.
+ * @brief Restores the no-mop matmul math state.
  *
- * Reprograms the matmul addrmods and re-records the replay buffer. Unlike Wormhole/Blackhole where the
+ * Re-checks the ALU data formats (free when already programmed), reprograms the matmul addrmods and
+ * re-records the replay buffer. Unlike Wormhole/Blackhole where the
  * math thread owns a dedicated replay-buffer offset and a reinit only has to restore addrmods every
  * Quasar LLK records at replay buffer slot 0, so an interleaved op overwrites this matmul's image and it
  * must be re-recorded here.
@@ -154,6 +156,7 @@ inline void llk_math_matmul_reinit_no_mop(
 
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operandB)));
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operandA)));
+    _configure_alu_cfg_<AluCfgType::DEFAULT, DST_ACCUM_MODE>(srcA_format, srcB_format);
 
     if (operands_use_2x_format(operandA, operandB)) {
         _llk_math_matmul_init_no_mop_<math_fidelity, true /*EN_X2*/>(srcA_format, srcB_format, ct_dim, rt_dim);

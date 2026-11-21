@@ -25,6 +25,7 @@ from models.experimental.ops.quasar.panoptic_deeplab.tt.model_preprocessing impo
     fuse_conv_bn_parameters,
 )
 from models.experimental.ops.quasar.panoptic_deeplab.tt.model_configs import ModelOptimisations
+from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import block_float_dtype, has_tuned_profile
 
 PDL_L1_SMALL_SIZE = 4 * 1024  # Minimum L1 small size for Panoptic DeepLab
 
@@ -255,19 +256,24 @@ def preprocess_nchw_input_tensor(device, torch_input, move_to_device: bool = Tru
     # convert to channel last
     torch_input = torch_input.permute(0, 2, 3, 1)
 
-    core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device.core_grid.x - 1, device.core_grid.y - 1))}
-    )
-    num_cores = device.core_grid.x * device.core_grid.y
-    shard_height = (1 * HW + num_cores - 1) // num_cores  # = 26215
+    if has_tuned_profile(device):
+        core_range_set = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device.core_grid.x - 1, device.core_grid.y - 1))}
+        )
+        num_cores = device.core_grid.x * device.core_grid.y
+        shard_height = (1 * HW + num_cores - 1) // num_cores  # = 26215
 
-    sharded_memory_config = ttnn.create_sharded_memory_config_(
-        shape=(shard_height, SHARD_WIDTH),
-        core_grid=core_range_set,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
+        sharded_memory_config = ttnn.create_sharded_memory_config_(
+            shape=(shard_height, SHARD_WIDTH),
+            core_grid=core_range_set,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    else:
+        # A 512x1024x8 image is 8 MB: height-sharded over a small grid (2 cores on the Quasar
+        # emulator) it overflows L1, so leave it in DRAM and let the stem conv slice it.
+        sharded_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     return ttnn.from_torch(
         torch_input,
@@ -471,8 +477,8 @@ def create_ttnn_model(
     if model_configs is None:
         model_configs = ModelOptimisations(
             device=device,
-            conv_act_dtype=ttnn.bfloat8_b,
-            conv_w_dtype=ttnn.bfloat8_b,
+            conv_act_dtype=block_float_dtype(device),
+            conv_w_dtype=block_float_dtype(device),
         )
         model_configs.setup_resnet_backbone()
         model_configs.setup_aspp()

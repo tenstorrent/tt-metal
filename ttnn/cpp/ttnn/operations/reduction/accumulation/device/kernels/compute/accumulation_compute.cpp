@@ -69,6 +69,15 @@ inline void kahan_step_tile() {
 }
 #endif
 
+// TEN-4746 orderings, Quasar only: WH/BH need neither (and dummy_unpack would add a SrcA flush there).
+#ifdef ARCH_QUASAR
+#define QSR_DUMMY_PACK(dfb_id) dummy_pack(dfb_id)
+#define QSR_DUMMY_UNPACK(dfb_id) dummy_unpack(dfb_id)
+#else
+#define QSR_DUMMY_PACK(dfb_id)
+#define QSR_DUMMY_UNPACK(dfb_id)
+#endif
+
 void kernel_main() {
     constexpr auto default_acc_value = get_arg(args::default_acc_value);
 
@@ -98,20 +107,27 @@ void kernel_main() {
     constexpr uint32_t DST_T = 3;
 #endif
 
+    // Prime the accumulator FIFO with an (unwritten) entry. TEN-4746: Quasar orders a PUSH after its WAIT_FREE only
+    // across a real packer op, so a bare reserve/push needs dummy_pack between (guarded to Quasar).
     dfb_acc_obj.reserve_back(ONE_TILE);
+    QSR_DUMMY_PACK(dfb::acc);
     dfb_acc_obj.push_back(ONE_TILE);
 #ifdef COMPENSATED_SUM
     dfb_comp_obj.reserve_back(ONE_TILE);
+    QSR_DUMMY_PACK(dfb::comp);
     dfb_comp_obj.push_back(ONE_TILE);
 #endif
 
     for (uint32_t i = 0; i < num_rows; i++) {
         // Synchronize unpacker-packer between iterations
         // This is necessary to avoid data-races on the accumulator buffer
+        // TEN-4746: a bare wait_front/pop_front needs a real unpacker op between on Quasar (QSR_DUMMY_UNPACK).
         dfb_acc_obj.wait_front(ONE_TILE);
+        QSR_DUMMY_UNPACK(dfb::acc);
         dfb_acc_obj.pop_front(ONE_TILE);
 #ifdef COMPENSATED_SUM
         dfb_comp_obj.wait_front(ONE_TILE);
+        QSR_DUMMY_UNPACK(dfb::comp);
         dfb_comp_obj.pop_front(ONE_TILE);
 #endif
 
@@ -230,9 +246,11 @@ void kernel_main() {
 
     // Clean-up and empty the accumulator buffer
     dfb_acc_obj.wait_front(ONE_TILE);
+    QSR_DUMMY_UNPACK(dfb::acc);
     dfb_acc_obj.pop_front(ONE_TILE);
 #ifdef COMPENSATED_SUM
     dfb_comp_obj.wait_front(ONE_TILE);
+    QSR_DUMMY_UNPACK(dfb::comp);
     dfb_comp_obj.pop_front(ONE_TILE);
 #endif
 }

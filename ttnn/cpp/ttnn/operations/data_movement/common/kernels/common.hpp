@@ -422,6 +422,9 @@ struct ByteSizeAddressType<Size, typename std::enable_if<Size == 4>::type> {
 //
 // pages_per_row = ceil(tensor_W_pages / shard_W_pages); HEIGHT-sh collapses to 1 for any W·E.
 // Split-branch stride is exact iff shard_W_pages == 1 (RM B/W-sh: one shard-row = one page).
+// The split branch moves each page as a full aligned page, so it needs the shard row to be a multiple of the
+// buffer alignment; the host keeps other tensors away from it (launch_with_aligned_shard_rows in
+// data_movement/common/common.hpp).
 template <typename AddrGenType>
 FORCE_INLINE void noc_async_write_sharded(
     Noc noc, uint32_t l1_addr, AddrGenType tensor, uint32_t dest_id, uint32_t offset, uint32_t size) {
