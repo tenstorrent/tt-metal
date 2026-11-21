@@ -63,6 +63,10 @@ uint32_t _start() {
 
     if (hartid == thread_0_hartid) {
         do_crt1(&tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
+#ifdef KERAUNOS_CCE
+        // The kernel's globals are zeroed: fill what its NOC calls read of the host records.
+        internal_::cce_noc::latch();
+#endif
         (*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
         asm volatile("fence" ::: "memory");
     }

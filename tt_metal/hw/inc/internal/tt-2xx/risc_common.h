@@ -404,8 +404,8 @@ inline void risc_init() {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
 #ifdef KERAUNOS_CCE
         // A CCE has no NOC node id: its coordinate is its core's (hostdev/keraunos_noc_channels.h).
-        my_x[n] = KERAUNOS_NOC_CCE0_X + internal_::cce_noc::my_eth_cce;
-        my_y[n] = internal_::cce_noc::spa_routes().hsio;
+        my_x[n] = KERAUNOS_NOC_CCE0_X + experimental::keraunos::my_eth_cce();
+        my_y[n] = experimental::keraunos::my_hsio();
 #else
         uint32_t noc_id_reg = MY_NOC_ENCODING(n);
         my_x[n] = noc_id_reg & NOC_NODE_ID_MASK;

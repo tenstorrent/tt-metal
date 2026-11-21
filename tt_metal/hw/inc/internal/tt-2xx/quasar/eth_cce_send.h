@@ -111,7 +111,7 @@ inline LinkCopy link_copy;
     const volatile EthLink& slot = eth_link();
     const uint32_t kind = slot.kind;
     const uint32_t peer_tile = slot.peer_tile;
-    const uint32_t own_tile = internal_::cce_noc::spa_routes().hsio;
+    const uint32_t own_tile = experimental::keraunos::my_hsio();
     if (kind != ETH_LINK_KIND_ETHERNET && kind != ETH_LINK_KIND_NOC) {
         halt(HaltCode::BadLinkKind, kind);
     }
@@ -122,7 +122,7 @@ inline LinkCopy link_copy;
     if (kind == ETH_LINK_KIND_NOC) {
         // Not repeated per send: txq_busy reads each queue's ack count, and no document says a reset keeps it.
         reset_cmdbuf<kCmdBuf>();
-        dest_base = internal_::cce_noc::dma_addr(internal_::cce_noc::Target{peer_tile, 0, 0});
+        dest_base = experimental::keraunos::hsio_sram_addr(peer_tile, 0, 0);
     }
     link_copy = LinkCopy{.kind = kind, .latched = true, .src_base = sram_local_base(own_tile), .dest_base = dest_base};
 }
