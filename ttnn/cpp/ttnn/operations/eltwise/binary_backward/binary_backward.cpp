@@ -133,10 +133,14 @@ std::vector<Tensor> atan2_bw(
         std::nullopt,
         output_mem_config);
     Tensor grad_a = ttnn::multiply(other, recip_mul, std::nullopt, output_mem_config);
-    Tensor cond = ttnn::logical_and(ttnn::eqz(input_a, output_mem_config), ttnn::eqz(other, output_mem_config));
+    Tensor cond = ttnn::logical_and(
+        ttnn::eqz(input_a, output_mem_config),
+        ttnn::eqz(other, output_mem_config),
+        std::nullopt,
+        output_mem_config);
     grad_a = ttnn::where(cond, t_nan, grad_a, output_mem_config);
     grad.emplace_back(grad_a);
-    Tensor grad_b = ttnn::multiply(ttnn::neg(input_a), recip_mul, std::nullopt, output_mem_config);
+    Tensor grad_b = ttnn::multiply(ttnn::neg(input_a, output_mem_config), recip_mul, std::nullopt, output_mem_config);
     grad_b = ttnn::where(cond, t_nan, grad_b, output_mem_config);
     recip_mul.deallocate();
     cond.deallocate();
@@ -533,21 +537,22 @@ std::vector<Tensor> logaddexp_bw(
         "BFLOAT8_B/BFLOAT4_B dtypes are not supported !!");
 
     std::vector<Tensor> grad;
+    auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     Tensor opexp = ttnn::add(
-        ttnn::exp(ttnn::subtract(other, input_a, std::nullopt, output_mem_config), false, output_mem_config),
+        ttnn::exp(ttnn::subtract(other, input_a, std::nullopt, output_memory_config), false, output_memory_config),
         1,
         std::nullopt,
-        output_mem_config);
+        output_memory_config);
     Tensor grad_a =
-        ttnn::multiply(grad_tensor, ttnn::reciprocal(opexp, output_mem_config), std::nullopt, output_mem_config);
+        ttnn::multiply(grad_tensor, ttnn::reciprocal(opexp, output_memory_config), std::nullopt, output_memory_config);
     grad.emplace_back(grad_a);
     opexp = ttnn::add(
-        ttnn::exp(ttnn::subtract(input_a, other, std::nullopt, output_mem_config), false, output_mem_config),
+        ttnn::exp(ttnn::subtract(input_a, other, std::nullopt, output_memory_config), false, output_memory_config),
         1,
         std::nullopt,
-        output_mem_config);
+        output_memory_config);
     Tensor grad_b =
-        ttnn::multiply(grad_tensor, ttnn::reciprocal(opexp, output_mem_config), std::nullopt, output_mem_config);
+        ttnn::multiply(grad_tensor, ttnn::reciprocal(opexp, output_memory_config), std::nullopt, output_memory_config);
     grad.emplace_back(grad_b);
     return grad;
 }
@@ -601,7 +606,7 @@ std::vector<Tensor> remainder_bw(
     std::vector<Tensor> grad;
     grad.emplace_back(grad_tensor);
     Tensor result_div = ttnn::div(input_a, other, false, "floor", std::nullopt, output_mem_config);
-    Tensor grad_b = ttnn::multiply(ttnn::neg(grad_tensor), result_div, std::nullopt, output_mem_config);
+    Tensor grad_b = ttnn::multiply(ttnn::neg(grad_tensor, output_mem_config), result_div, std::nullopt, output_mem_config);
     grad.emplace_back(grad_b);
     return grad;
 }
@@ -624,7 +629,7 @@ std::vector<Tensor> fmod_bw(
     std::vector<Tensor> grad;
     grad.emplace_back(grad_tensor);
     Tensor result_div = ttnn::div(input_a, other, false, "trunc", std::nullopt, output_mem_config);
-    Tensor grad_b = ttnn::multiply(ttnn::neg(grad_tensor), result_div, std::nullopt, output_mem_config);
+    Tensor grad_b = ttnn::multiply(ttnn::neg(grad_tensor, output_mem_config), result_div, std::nullopt, output_mem_config);
     grad.emplace_back(grad_b);
     return grad;
 }
@@ -635,7 +640,7 @@ std::vector<Tensor> squared_difference_bw(
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad;
-    Tensor difference = ttnn::subtract(input_a, other);
+    Tensor difference = ttnn::subtract(input_a, other, std::nullopt, output_mem_config);
     Tensor grad_a = ttnn::multiply(
         ttnn::multiply(grad_tensor, difference, std::nullopt, output_mem_config), 2, std::nullopt, output_mem_config);
     grad.emplace_back(grad_a);
@@ -837,7 +842,7 @@ std::vector<Tensor> bias_gelu_bw(
     operations::unary::GeluVariant variant,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor_res;
-    Tensor input = ttnn::add(input_a, input_b);
+    Tensor input = ttnn::add(input_a, input_b, std::nullopt, output_mem_config);
     std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad_tensor, input, variant, output_mem_config);
     if (gelu_result[0].has_value()) {
         grad_tensor_res.push_back(gelu_result[0].value());
@@ -853,7 +858,7 @@ std::vector<Tensor> bias_gelu_bw(
     operations::unary::GeluVariant variant,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor_res;
-    Tensor input = ttnn::add(input_tensor, bias);
+    Tensor input = ttnn::add(input_tensor, bias, std::nullopt, output_mem_config);
     std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad_tensor, input, variant, output_mem_config);
     if (gelu_result[0].has_value()) {
         grad_tensor_res.push_back(gelu_result[0].value());
