@@ -13,6 +13,7 @@ void kernel_main() {
     const uint32_t padded_row_size_bytes = get_arg(args::padded_row_size_bytes);
     const uint32_t pad_size_bytes = padded_row_size_bytes - unpadded_row_size_bytes;
     constexpr uint32_t output_elem_size = get_arg(args::output_elem_size);
+    constexpr uint32_t pad_value_bits = get_arg(args::pad_value_bits);
 
     Noc noc;
     DataflowBuffer dfb_out(dfb::out);
@@ -41,17 +42,17 @@ void kernel_main() {
     if constexpr (output_elem_size == 1) {
         volatile tt_l1_ptr uint8_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(pad_addr);
         for (uint32_t i = 0; i < num_elements_per_row; ++i) {
-            pad_ptr[i] = 0;
+            pad_ptr[i] = static_cast<uint8_t>(pad_value_bits);
         }
     } else if constexpr (output_elem_size == 2) {
         volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pad_addr);
         for (uint32_t i = 0; i < num_elements_per_row; ++i) {
-            pad_ptr[i] = 0;
+            pad_ptr[i] = static_cast<uint16_t>(pad_value_bits);
         }
     } else if constexpr (output_elem_size == 4) {
         volatile tt_l1_ptr uint32_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_addr);
         for (uint32_t i = 0; i < num_elements_per_row; ++i) {
-            pad_ptr[i] = 0;
+            pad_ptr[i] = static_cast<uint32_t>(pad_value_bits);
         }
     }
 
