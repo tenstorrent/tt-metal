@@ -17,8 +17,9 @@ jobs:
         arch: amd64
         image: {from-job: ci-build-image, image: ci-build}
         resources:
-          requests: {cpu: '16', memory: 48Gi, ephemeral-storage: 100Gi}
-          limits: {memory: 64Gi, ephemeral-storage: 150Gi}
+          # Measured: 16 jobs peak at 11.3 GiB.
+          requests: {cpu: '16', memory: 16Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 24Gi, ephemeral-storage: 150Gi}
     env:
       - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
       - {name: CCACHE_COMPILERCHECK, value: content}
