@@ -42,6 +42,7 @@ constexpr uint32_t F_GU = 1, F_GATE = 2, F_EXTRA = 4, F_DN = 8;
 constexpr uint32_t sem_ids_id = get_named_compile_time_arg_val("sem_ids");
 #endif
 constexpr uint32_t TINY = 64;
+constexpr uint32_t DN_TRID0 = 8;  // transaction ids of the down reads (one per expert)
 constexpr uint32_t FACE_BYTES = 512;
 
 // convert/bank_layout.py extra_bank / gu_slot (one extra pair per expert)
@@ -112,24 +113,29 @@ void kernel_main() {
         eid[e] = id16[e];
     }
 
-    // down column of every routed expert, [e][kt] (the gathered hidden is [e][kt]): one run per expert
+    // down column of every routed expert, [e][kt] (the gathered hidden is [e][kt]): one run per expert, each on its
+    // own transaction id, pushed as it lands, so the down chain runs behind the reads instead of after them
+    static_assert(nbuf < DN_TRID0 && DN_TRID0 + topk - 1 <= NOC_MAX_TRANSACTION_ID, "stream: 1..nbuf, down: 8..15");
     auto read_down = [&]() {
         const uint32_t tb = get_tile_size(cb_wd);
         cb_reserve_back(cb_wd, topk * kt_dn);
         uint32_t wr = get_write_ptr(cb_wd);
-        noc_async_read_set_trid(0);
         for (uint32_t e = 0; e < topk; ++e) {
             const uint32_t slot = (eid[e] * dn_slots + dslot) * kt_dn;
+            noc_async_read_set_trid(DN_TRID0 + e);
             noc_async_read(dn.get_noc_addr(slot * nb + bank), wr, kt_dn * tb);
             wr += kt_dn * tb;
         }
+        for (uint32_t e = 0; e < topk; ++e) {
+            noc_async_read_barrier_with_trid(DN_TRID0 + e);
+            cb_push_back(cb_wd, kt_dn);
+        }
+        noc_async_read_set_trid(0);
     };
 
     if (!(flags & F_GU)) {
         if (flags & F_DN) {
             read_down();
-            noc_async_read_barrier();
-            cb_push_back(cb_wd, topk * kt_dn);
         }
         return;
     }
@@ -165,8 +171,6 @@ void kernel_main() {
     s.drain();
     if (flags & F_DN) {
         read_down();
-        noc_async_read_barrier();
-        cb_push_back(cb_wd, topk * kt_dn);
     }
     noc_async_read_set_trid(0);
 }
