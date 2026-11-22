@@ -163,7 +163,9 @@ void kernel_main() {
         }
         const uint32_t my_plan_blocks = header[plan_table::kWordActiveBlocks];
         const uint32_t my_active_blocks = std::min(my_plan_blocks, num_blocks);
-        // REST after a PREFIX of the same plan (PUSH_REUSE_INBOX): the inbox already holds every slice.
+        // REST after a PREFIX of the same plan (PUSH_REUSE_INBOX): the inbox already holds every slice. Without a
+        // fence, a fast chip's REST done counts can end a slow chip's PREFIX before every prefix row has landed there;
+        // the counts balance by the end of its REST, and nothing reads the buffer before that.
         if constexpr (PUSH_REUSE_INBOX == 0) {
             // The slices this sender sends: one per owner its channel serves, dealt to the channel's senders in turn,
             // built in a kData slot behind the header copy, handed on as a slice packet (PacketMeta::rows =

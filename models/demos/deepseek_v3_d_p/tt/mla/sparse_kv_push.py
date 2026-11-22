@@ -200,6 +200,12 @@ class SparseKvPushPlanner:
         self, indices, stripe_chunk, page_bytes, max_rows, chunk_start, chunk_start_tensor, dense_below, dense_below_2=0
     ):
         n = self.mesh_device.get_num_devices()
+        # Inbox mode needs a table slot to fit one fabric packet; larger caches on small meshes keep the all-gather.
+        slot_bytes = ttnn._ttnn.operations.experimental.sparse_kv_push_inbox_slot_bytes(max_rows, stripe_chunk, n)
+        pages_per_packet, _ = ttnn._ttnn.operations.experimental._sparse_kv_push_packet_shape(
+            self.mesh_device, page_bytes
+        )
+        inbox_mode = self.inbox_mode and slot_bytes <= pages_per_packet * page_bytes
         outputs = ttnn.experimental.sparse_push_plan(
             indices,
             stripe_chunk=stripe_chunk,
@@ -209,13 +215,11 @@ class SparseKvPushPlanner:
             chunk_start_tensor=chunk_start_tensor,
             dense_below=dense_below,
             dense_below_2=dense_below_2,
-            owner_major=self.inbox_mode,
+            owner_major=inbox_mode,
         )
         table, compact_indices = outputs[0], outputs[1]
-        if self.inbox_mode:
-            slot_words = (
-                ttnn._ttnn.operations.experimental.sparse_kv_push_inbox_slot_bytes(max_rows, stripe_chunk, n) // 4
-            )
+        if inbox_mode:
+            slot_words = slot_bytes // 4
             if self._inbox is None or self._inbox.shape[3] != slot_words:
                 self._inbox = _replicated(
                     self.mesh_device,

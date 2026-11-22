@@ -114,7 +114,12 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanProgramFactory::create_descriptor(
     add_cb(kDirtyChunks, tt::round_up(chunks, kCbAlignBytes));  // one byte per chunk
     add_cb(kDirtyMaps, kNumDirtyMaps * array_words * sizeof(uint32_t));
     // Every core's copy of every reduce chunk this core owns, worst case.
-    add_cb(kScratch, max_chunks * cores * kChunkWords * sizeof(uint32_t));
+    // Owner-major tables are built one slot at a time in kScratch, so it holds at least a slot.
+    add_cb(
+        kScratch,
+        std::max<uint32_t>(
+            max_chunks * cores * kChunkWords * sizeof(uint32_t),
+            attrs.owner_major ? inbox_slot_bytes(attrs.max_rows, attrs.stripe_chunk, num_devices) : 0u));
     add_cb(kPartials, tt::round_up(max_ranges * owner_stride(num_devices) * sizeof(uint32_t), kCbAlignBytes));
     add_cb(kMisc, misc_words(max_chunks) * sizeof(uint32_t));
     // Step 1's buckets (kWorkers x kWorkers of bucket_cap words), then step 2's copy lists: uint16 core ids, one list
