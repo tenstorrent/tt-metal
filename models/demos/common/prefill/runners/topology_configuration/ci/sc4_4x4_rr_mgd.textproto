@@ -1,0 +1,167 @@
+# Prefill on SC4 as 8 stages of 4x4 [RING,RING] tori along the pod's cabling ring h0 -> h1 -> h2 -> h3.
+# The carve is the one blitz decode runs (blitz_decode_quad_galaxy_4x4_mesh_graph_descriptor.textproto):
+#   - even meshes (0,2,4,6): the in-Galaxy torus of host k, ASICs {3,4,7,8} on all four trays. One host.
+#   - odd meshes (1,3,5,7): a seam torus, ASICs {1,2,5,6}: rows 0-1 on trays of host k, rows 2-3 on the
+#     trays of host k+1 (mesh 7 closes the ring to h0). Two hosts, mesh_host_rank 0 on host k, 1 on host k+1.
+# Each Galaxy holds one in-Galaxy torus and two seam halves, so neighbouring stages share 8 links.
+#
+# Inside a mesh both axes are rings: SP on mesh axis 1, TP on axis 0, FABRIC_2D_TORUS_XY. Stage chain
+# 0 -> 1 -> ... -> 7 (no 7 -> 0 connection: prefill does not close the ring).
+#
+# Intra-mesh channels are STRICT 2: every torus edge of the pod must have 2 links.
+#
+# The pins are the subtorus_4x4_pipeline_8stage profiles that TestSubtorus4x4PipelineMgdPinningsExact
+# checks (corner pins and one orientation anchor per mesh, per board revision).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 2, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 3 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 5 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 7 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+    assign_z_direction: true
+  }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 8 policy: RELAXED }
+    assign_z_direction: true
+  }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 3 } }
+    channels { count: 8 policy: RELAXED }
+    assign_z_direction: true
+  }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+    channels { count: 8 policy: RELAXED }
+    assign_z_direction: true
+  }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 5 } }
+    channels { count: 8 policy: RELAXED }
+    assign_z_direction: true
+  }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 5 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
+    channels { count: 8 policy: RELAXED }
+    assign_z_direction: true
+  }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 6 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 7 } }
+    channels { count: 8 policy: RELAXED }
+    assign_z_direction: true
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+
+# --- Pinnings ---------------------------------------------------------------
+# Per-board-revision corner pinnings: each 4x4 corner is locked to one Galaxy tray, which fixes the torus
+# orientation (no rotation, folding or reflection) so SP is mesh axis 1 and TP axis 0 on every stage. Even
+# meshes take the asic-3 column; odd meshes the asic-2 column, whose rows 0-1 and 2-3 sit on the two hosts.
+# Rev A/B and Rev C swap trays 2/3, so each corner pin names its revision.
+# Middle column (even meshes, asic 3)
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 1 }
+  physical_asic_position { tray_id: 1 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 3 }
+  physical_asic_position { tray_id: 3 asic_location: 3 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 12 }
+  physical_asic_position { tray_id: 2 asic_location: 3 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 3 }
+  physical_asic_position { tray_id: 2 asic_location: 3 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 12 }
+  physical_asic_position { tray_id: 3 asic_location: 3 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+
+# Edge column (odd meshes, asic 2)
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 0 }
+  physical_asic_position { tray_id: 2 asic_location: 2 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 15 }
+  physical_asic_position { tray_id: 3 asic_location: 2 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 0 }
+  physical_asic_position { tray_id: 3 asic_location: 2 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 15 }
+  physical_asic_position { tray_id: 2 asic_location: 2 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}

@@ -1,0 +1,27 @@
+# [RING,RING] 4x4 prefill on two neighbouring Galaxies h0 -> h1: 3 stages, 4 ranks. Stage 0 is h0's in-Galaxy
+# torus, stage 1 the seam torus split over both hosts (mesh_host_rank 0 on h0, 1 on h1), stage 2 h1's in-Galaxy
+# torus. The descriptor is ci/sc2_4x4_rr_mgd.textproto.
+# Ranks are ordered mesh-major, host-rank-minor. TEMPLATE for rr_pipeline_binding.py (see
+# pipeline_prefill_request_sc4_rr_12rank_4x4_sp1.yaml); h1 must follow h0 in the pod's cabling ring.
+
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 2, mesh_id: 1, mesh_host_rank: 1, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 3, mesh_id: 2, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/ci/sc2_4x4_rr_mgd.textproto
+
+global_env:
+  # Both mesh axes are rings (dim_types [RING, RING]).
+  PREFILL_FABRIC_MODE: "2d_torus_xy"
+  PREFILL_SP: "4"
+  PREFILL_TP: "4"
+  PREFILL_SP_AXIS: "1"
+  # Hosts per stage, in stage order (rank -> stage mapping of the runner); the seam stages span two.
+  PREFILL_STAGE_HOSTS: "1,2,1"
+  PREFILL_TP_SHARD_KV: "1"
+  PREFILL_CHUNK_SIZE: "2560"
+  PREFILL_MAX_SEQ_LEN: "61440"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  LOGURU_LEVEL: "INFO"

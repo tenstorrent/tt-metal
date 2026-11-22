@@ -11,12 +11,14 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/unique_ptr.h>
+#include <nanobind/stl/vector.h>
 
 #include <internal/disaggregation/layer_completion_message.hpp>
 #include <internal/disaggregation/layer_completion_queue.hpp>
@@ -99,11 +101,13 @@ void bind_layer_completion_api(nb::module_& mod) {
                const std::string& scheduler_shm_name,
                int completions_per_chunk,
                int poll_idle_us,
-               int teardown_timeout_ms) {
+               int teardown_timeout_ms,
+               std::vector<int> participant_ranks) {
                 LayerCompletionRouterConfig cfg;
                 cfg.rank = rank;
                 cfg.world_size = world_size;
                 cfg.master_rank = master_rank;
+                cfg.participant_ranks = std::move(participant_ranks);
                 cfg.ring_shm_name = ring_shm_name;
                 cfg.scheduler_shm_name = scheduler_shm_name;
                 if (completions_per_chunk <= 0) {
@@ -122,9 +126,11 @@ void bind_layer_completion_api(nb::module_& mod) {
             nb::arg("completions_per_chunk"),
             nb::arg("poll_idle_us") = 100,
             nb::arg("teardown_timeout_ms") = 5000,
+            nb::arg("participant_ranks") = std::vector<int>{},
             "Create the host's router: owns the local ring, spawns the listener thread, and on the master "
             "rank owns the scheduler-facing ring at scheduler_shm_name, forwarding self-describing messages "
-            "as they arrive.")
+            "as they arrive. rank and master_rank are MPI world ranks; participant_ranks lists the world ranks "
+            "that run a router (default: 0..world_size-1).")
         .def(
             "stop",
             &LayerCompletionRouter::stop,

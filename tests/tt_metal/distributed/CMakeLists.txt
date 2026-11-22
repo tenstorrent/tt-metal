@@ -158,3 +158,29 @@ set_target_properties(
 )
 
 add_subdirectory(multiprocess)
+
+# Multi-rank LayerCompletionRouter test (`mpirun -n 4`, host-only). Keeps its own main so the context sees argv.
+if(TARGET OpenMPI::MPI)
+    add_executable(layer_completion_router_mpi_test test_layer_completion_router_mpi.cpp)
+    target_precompile_headers(layer_completion_router_mpi_test REUSE_FROM metal_test_pch)
+    target_link_libraries(
+        layer_completion_router_mpi_test
+        PRIVATE
+            tt_metal
+            test_common_libs
+            OpenMPI::MPI
+    )
+    target_include_directories(
+        layer_completion_router_mpi_test
+        PRIVATE
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+            ${PROJECT_SOURCE_DIR}/tests
+            ${PROJECT_SOURCE_DIR}
+    )
+    set_target_properties(
+        layer_completion_router_mpi_test
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+    )
+endif()

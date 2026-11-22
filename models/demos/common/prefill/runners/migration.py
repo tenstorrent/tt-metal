@@ -14,6 +14,7 @@ from typing import NamedTuple
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.runners.stage_layout import StageLayout, collapse_to_stages
 
 _DEFAULT_DEVICE_MAP_FILE = "/tmp/prefill_device_map.txt"
 
@@ -500,9 +501,21 @@ def get_num_dram_banks(mesh_device):
 
 
 def setup_kv_chunk_table(
-    runtime, kv_caches, mesh_device, mesh_shape, *, rank: int, num_ranks: int, first_layer_idx: int, num_my_layers: int
+    runtime,
+    kv_caches,
+    mesh_device,
+    mesh_shape,
+    *,
+    rank: int,
+    num_ranks: int,
+    first_layer_idx: int,
+    num_my_layers: int,
+    stage_layout: StageLayout | None = None,
 ):
     """Gather every rank's KV stage layouts, have rank 0 build the merged chunk table, and hand it on.
+
+    ``stage_layout`` maps ranks to pipeline stages (None: every rank is its own stage); the gathered layouts are
+    collapsed to one entry per stage that records which host owns each chip.
 
     ``PREFILL_MIGRATION_EXPORT_TO_FILE=1`` writes the device-map file and leaves the table on disk;
     otherwise ``PREFILL_ENABLE_MIGRATION=1`` delivers the device map and publishes the table to the
@@ -589,6 +602,8 @@ def setup_kv_chunk_table(
         device_map_path = rank_scoped_device_map_path(device_map_json_path, rank, num_ranks)
         serialize_device_map(mesh_device, device_map_path)
         logger.info(f"[migration] rank {rank}: local device map -> {device_map_path}")
+
+    stage_layouts = collapse_to_stages(stage_layouts, stage_layout, mesh_shape[0])
 
     if rank != 0:
         logger.info(
