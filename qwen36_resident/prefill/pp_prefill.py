@@ -1037,6 +1037,7 @@ class PPPrefill:
         it keeps them finite. Zero-filled on device (zero_dram) rather than uploaded from the host (~65 MB per chip:
         S 12 x 48 x 128 x 128 fp32, x_last of 4 chunk sizes, carry)"""
         self._use(self.C)
+        self._span_floor = 0
         if not HOST_ZERO:
             zero_dram(
                 self.mesh,
@@ -1206,21 +1207,24 @@ class PPPrefill:
             ttnn.copy_host_to_device_tensor(host, self.carry[j])
         ttnn.synchronize_device(self.mesh)
 
-    def run_from(self, token_ids, h, chunk=None):
+    def run_from(self, token_ids, h, chunk=None, drain=True):
         """after load_prefix(model, h, ...): prefill positions h .. T - 1 of token_ids [T] (the whole prompt; its first
         h tokens are not read) — chip 0 starts at chunk h / C and chip p runs chunk h / C + t - p, as run() starts at
-        chunk 0 (not run_span: its wavefront continues chunks already in flight)"""
+        chunk 0 (not run_span: its wavefront continues chunks already in flight). drain False: a split prompt's first
+        resumed span (T a whole number of chunks) — the chunks stay in flight and run_span continues them, never
+        below chunk h / C (the floor)"""
         T = token_ids.shape[0]
         assert 0 < h < T <= self.max_len
         self._check_trace_layout()
         self._use(chunk or self.pick_chunk(T))
         n, C = self.n, self.C
-        assert h % C == 0, (h, C)
+        assert h % C == 0 and (drain or T % C == 0), (h, T, C)
         c0, chunks = h // C, (T + C - 1) // C
+        self._span_chunk, self._span_floor = C, c0
         ids = torch.zeros(chunks * C, dtype=torch.int32)
         ids[:T] = token_ids.to(torch.int32)
         shard = ttnn.ShardTensorToMesh(self.mesh, dim=0)
-        for t in range(chunks - c0 + n - 1):
+        for t in range(chunks - c0 + (n - 1 if drain else 0)):
             chunk_ids = torch.zeros(n, 1, C, dtype=torch.int32)
             if c0 + t < chunks:
                 chunk_ids[0, 0] = ids[(c0 + t) * C : (c0 + t + 1) * C]
@@ -1259,7 +1263,7 @@ class PPPrefill:
         if not drain and T % C:
             raise ValueError(f"run_span: only the draining call may end on a partial chunk ({T} tokens, chunk {C})")
         if first_chunk == 0:
-            self._span_chunk = C
+            self._span_chunk, self._span_floor = C, 0
         elif getattr(self, "_span_chunk", None) != C:
             raise ValueError(
                 f"run_span: chunk {C} differs from the prompt's first span ({getattr(self, '_span_chunk', None)})"
@@ -1272,11 +1276,13 @@ class PPPrefill:
         ids = torch.zeros(new * C, dtype=torch.int32)
         ids[:T] = token_ids.to(torch.int32)
         shard = ttnn.ShardTensorToMesh(self.mesh, dim=0)
+        floor = getattr(self, "_span_floor", 0)  # (a prompt resumed from a cached prefix: no chunk below it)
         for t in range(first_chunk, chunks + n - 1 if drain else chunks):
             chunk_ids = torch.zeros(n, 1, C, dtype=torch.int32)
             if t < chunks:
                 chunk_ids[0, 0] = ids[(t - first_chunk) * C : (t - first_chunk + 1) * C]
-            writes = self._control(t, n_tokens) + [
+            work = [(t - p, n_tokens) if floor <= t - p < chunks else None for p in range(n)]
+            writes = self._control_chips(work) + [
                 (
                     ttnn.from_torch(chunk_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=shard),
                     self.ids,

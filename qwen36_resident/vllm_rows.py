@@ -344,6 +344,8 @@ class ResidentRowsAdapter:
         C = self.chunk
         if trace is not None:
             trace.append(dict(start=start, end=end, total=total, final=final))
+        if getattr(self.engine, "prefix_cache", None) is not None:
+            return self._prefill_row_cached(ids, table_row, vslot, start, end, final, total)
         if start == 0:
             if final:
                 raise RuntimeError("a whole prompt goes through _prefill_wholes")
@@ -378,6 +380,79 @@ class ResidentRowsAdapter:
         # the churn check counts these: split prompts are the ones whose numerics the per-sequence chunk keeps whole
         logger.info(f"split prefill: resident slot {r}, {T} tokens in {calls + 1} calls at PP chunk {c}")
         return r, int(ids[T - 1]), T - 1, table_row
+
+    def _prefill_row_cached(self, ids, table_row, vslot, start, end, final, total):
+        """_prefill_row through the host-tier prefix cache (RowsEngine.prefix_cache). vLLM allocates a split prompt's
+        blocks span by span and the adapter sees its tokens up to the span's end, so: spans are deferred (no PP work)
+        while a cached entry's prefix still runs through the tokens seen; then the longest cached prefix h is restored
+        into the slot through the blocks so far, the pipeline loaded from it and run from h (non-draining: later spans
+        continue it with run_span, never below h); nothing cached: the plain split path from 0. At the final span a
+        boundary at its start (RESIDENT_PREFIX_CACHE_STEP past the restored prefix) is stored: the pipeline drains
+        there, hands off, the snapshot goes to host, the pipeline reloads from the slot and runs to the end."""
+        from qwen36_resident.prefix_cache import block_keys
+
+        eng = self.engine
+        pc, model, pp = eng.prefix_cache, eng.model, eng.pp
+        if start == 0:
+            if final:
+                raise RuntimeError("a whole prompt goes through _prefill_wholes")
+            r = self._start_prompt(vslot)
+            self.pp_cache = dict(r=r, total=total, c=self._pp_chunk(total), chain=b"", nblk=0, live=False, h=0)
+            self.pp_partial = (r, 0, total, self.pp_cache["c"], 0)
+        st = self.pp_cache
+        r, c = st["r"], st["c"]
+        _, fed, seq_total, _, calls = self.pp_partial
+        if start != fed or total != seq_total or self.slots.res_of.get(vslot) != r:
+            raise RuntimeError(f"continuation for vLLM slot {vslot} at {start} but the PP holds {self.pp_partial}")
+        if not final and end % self.chunk:
+            raise RuntimeError(f"chunk ends at {end}, not a multiple of the PP chunk unit {self.chunk}")
+        blocks = self._blocks_for(table_row, end)
+        upto = end - 1 if final else end  # (the PP takes every prompt token but the last)
+        tokens = [int(t) for t in ids[:end]]
+        keys = block_keys(tokens[:upto], pc.block, start=st["nblk"], prev=st["chain"])
+        if keys:
+            st["chain"], st["nblk"] = keys[-1], st["nblk"] + len(keys)
+        if not st["live"]:
+            if not final and st["nblk"] and pc.extends(st["chain"]):
+                self.pp_partial = (r, end, total, c, calls + 1)  # (deferred: a cached prefix may still cover more)
+                return None
+            h, snap = pc.lookup(tokens[: upto + 1] if final else tokens)
+            st["live"], st["h"] = True, h
+            if h:
+                model.restore_slot(r, model.snapshot_from_host(snap), table=blocks)
+                if h < upto:
+                    pp.load_prefix(model, h, slot=r, block_table=blocks)
+                    pp.run_from(torch.as_tensor(tokens[:upto]), h, chunk=c, drain=final)
+                    if final:
+                        pp.handoff(model, upto, block_table=blocks, slot=r)
+            elif final:
+                pp.reset()
+                pp.run(torch.as_tensor(tokens[:upto]), chunk=c)
+                pp.handoff(model, upto, block_table=blocks, slot=r)
+            else:
+                pp.reset()
+                pp.run_span(torch.as_tensor(tokens[:end]), 0, end, drain=False, chunk=c)
+        elif not final:
+            eng.prefill_span(tokens[start:end], start // c, end, c)
+        else:
+            if start - st["h"] >= PREFIX_CACHE_STEP and start % pc.block == 0:
+                # store the final span's start: drain there, hand off, snapshot, reload, on to the end
+                pp.run_span(torch.as_tensor(tokens[start:start]), start // c, start, drain=True, chunk=c)
+                pp.handoff(model, start, block_table=blocks, slot=r)
+                host = model.snapshot_to_host(model.snapshot_slot(r, n_tokens=start, table=blocks))
+                pc.insert(tokens, start, host, _host_bytes(host))
+                if start < upto:
+                    pp.load_prefix(model, start, slot=r, block_table=blocks)
+                    pp.run_from(torch.as_tensor(tokens[:upto]), start, chunk=c)
+                    pp.handoff(model, upto, block_table=blocks, slot=r)
+            else:
+                eng.prefill_end(tokens[start:upto], start // c, upto, r, blocks, c)
+        if not final:
+            self.pp_partial = (r, end, total, c, calls + 1)
+            return None
+        self.pp_partial, self.pp_cache = None, None
+        logger.info(f"split prefill (prefix cache): resident slot {r}, {end} tokens, cached prefix {st['h']}")
+        return r, int(ids[end - 1]), end - 1, table_row
 
     def _first_tokens(self, handed, waiting=()):
         """the first-token launches of resident slots whose prompts were just handed off, handed = [(slot, last prompt

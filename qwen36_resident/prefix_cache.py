@@ -15,10 +15,11 @@ from collections import OrderedDict
 BLOCK = 1024
 
 
-def block_keys(tokens, block=BLOCK):
-    """the hash chain keys of the prompt's whole blocks: keys[i] covers tokens[: (i + 1) * block]"""
-    keys, prev = [], b""
-    for i in range(len(tokens) // block):
+def block_keys(tokens, block=BLOCK, start=0, prev=b""):
+    """the hash chain keys of the prompt's whole blocks: keys[i] covers tokens[: (start + i + 1) * block]; start /
+    prev continue a chain (prev = the key of tokens[: start * block])"""
+    keys = []
+    for i in range(start, len(tokens) // block):
         h = hashlib.sha256(prev)
         h.update(b",".join(str(int(t)).encode() for t in tokens[i * block : (i + 1) * block]))
         prev = h.digest()
@@ -34,7 +35,8 @@ class PrefixCache:
 
     def __init__(self, budget_bytes, block=BLOCK):
         self.budget, self.block = int(budget_bytes), block
-        self._entries = OrderedDict()  # key -> (h, value, nbytes)
+        self._entries = OrderedDict()  # key -> (h, value, nbytes, its chain keys)
+        self._chains = {}  # every stored entry's chain keys -> the entries through them (split prompts' lookups)
         self.bytes = 0
         self.stats = dict(lookups=0, hits=0, hit_tokens=0, inserts=0, evictions=0)
 
@@ -52,26 +54,41 @@ class PrefixCache:
         if best is None:
             return 0, None
         self._entries.move_to_end(best)
-        h, value, _ = self._entries[best]
+        h, value = self._entries[best][:2]
         self.stats["hits"] += 1
         self.stats["hit_tokens"] += h
         return h, value
 
     def insert(self, tokens, h, value, nbytes):
         assert h > 0 and h % self.block == 0 and h <= len(tokens), h
-        key = block_keys(tokens[:h], self.block)[-1]
+        chain = block_keys(tokens[:h], self.block)
+        key = chain[-1]
         if key in self._entries:
-            self.bytes -= self._entries.pop(key)[2]
+            self._drop(key)
         if nbytes > self.budget:
             return False
-        self._entries[key] = (h, value, int(nbytes))
+        self._entries[key] = (h, value, int(nbytes), chain)
+        for k in chain:
+            self._chains[k] = self._chains.get(k, 0) + 1
         self.bytes += int(nbytes)
         self.stats["inserts"] += 1
         while self.bytes > self.budget:
-            _, (_, _, nb) = self._entries.popitem(last=False)
-            self.bytes -= nb
+            self._drop(next(iter(self._entries)))
             self.stats["evictions"] += 1
         return True
+
+    def _drop(self, key):
+        _, _, nb, chain = self._entries.pop(key)
+        self.bytes -= nb
+        for k in chain:
+            self._chains[k] -= 1
+            if not self._chains[k]:
+                del self._chains[k]
+
+    def extends(self, chain_key):
+        """whether a stored entry's prefix runs through the prefix whose chain key this is (a split prompt's span:
+        keep deferring while it does)"""
+        return chain_key in self._chains
 
     def boundaries(self, n_tokens):
         """the prefix lengths worth snapshotting for a prompt of n_tokens: its last whole block (the prompt's end
