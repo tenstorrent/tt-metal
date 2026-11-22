@@ -151,7 +151,7 @@ class _DramShardedLinear:
 
     def __call__(self, x, dtype, ckc, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         y = ttnn.linear(
-            ttnn.to_memory_config(x, self.act_mem),
+            x if x.is_sharded() else ttnn.to_memory_config(x, self.act_mem),  # sharded: already in act_mem
             self.weight,
             program_config=self.cfg,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -324,9 +324,9 @@ class Inkling2Attention:
         """QK_CLIP L2 clip over head_dim of [1,1,heads,128]; returns bf16."""
         return ttnn.multiply(x, self._clip_factor(x, self.qk_red if red is None else red, tau), dtype=ttnn.bfloat16)
 
-    def _window_project(self, state, xq, xk, xv):
-        """Shift the step's inputs into the conv window, project it, apply the k/v conv.
-        Returns (projection [1,1,32,N] bf16 (row 0 = q input), k conv [1,1,1,1024], v conv) fp32."""
+    def _window(self, state, xq, xk, xv):
+        """Shift the step's inputs into the conv window and project it. Returns (projection [1,1,32,N] bf16
+        (row 0 = q input), mode)."""
         mode = "single" if (xk is xq and xv is xq) else "triple"
         m = self.modes[mode]
         new = [xq] if mode == "single" else [xq, xk, xv]
@@ -335,7 +335,13 @@ class Inkling2Attention:
         for i, (x, onehot) in enumerate(zip(new, m["onehots"])):
             last = i == len(new) - 1
             win = ttnn.addcmul(win, x, onehot, value=1.0, output_tensor=state.x_hist if last else None)
-        proj = self.w_all(state.x_hist, ttnn.bfloat16, self.mm_cfg)
+        return self.w_all(state.x_hist, ttnn.bfloat16, self.mm_cfg), mode
+
+    def _window_project(self, state, xq, xk, xv):
+        """Shift the step's inputs into the conv window, project it, apply the k/v conv.
+        Returns (projection [1,1,32,N] bf16 (row 0 = q input), k conv [1,1,1,1024], v conv) fp32."""
+        proj, mode = self._window(state, xq, xk, xv)
+        m = self.modes[mode]
         p_kv = ttnn.slice(proj, [0, 0, 0, KV0], [1, 1, 32, KV0 + self.n_kv])
         taps = m["taps"]
         if self.is_global:

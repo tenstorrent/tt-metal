@@ -35,17 +35,23 @@ import torch
 import ttnn
 from models.demos.inkling2_mini.tt.attention import (
     D_REL,
+    EPS,
     GROUPS,
     HEAD_DIM,
+    KV0,
     N_HEADS,
     N_KV,
     NEG,
     QK_CLIP,
+    REL_CLIP,
+    ROWS,
+    TAPS,
     WINDOW,
     AttentionState,
     DecodePositions,
     Inkling2Attention,
 )
+from models.demos.inkling2_mini.tt.fused.attn import AttnOut, AttnPrep
 
 V_WIDTH = 160  # v(128) + mass column block
 KV_WIDTH = V_WIDTH + HEAD_DIM  # 288
@@ -119,11 +125,17 @@ class FastAttentionState(AttentionState):
 
 
 class Inkling2AttentionFast(Inkling2Attention):
-    """`Inkling2Attention` with the scores / softmax on sdpa_decode (module doc)."""
+    """`Inkling2Attention` with the scores / softmax on sdpa_decode (module doc).
+
+    FUSED: the glue between the projections and the attention core runs as two multi-core programs
+    (tt/fused/attn.py) instead of ~50 ttnn ops; False keeps the op-by-op path (reference / A-B timing)."""
+
+    FUSED = True
 
     def __init__(self, device, weights, is_global, prefetcher=None):
         super().__init__(device, weights, is_global, prefetcher)
         dram = ttnn.DRAM_MEMORY_CONFIG
+        self._init_fused(weights)
 
         def put(t, dtype=ttnn.bfloat16):
             return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
@@ -164,6 +176,37 @@ class Inkling2AttentionFast(Inkling2Attention):
             use_height_and_width_as_shard_shape=True,
         )
 
+    def _init_fused(self, weights):
+        def torch_of(name):
+            return ttnn.to_torch(weights[name]).float()
+
+        width = N_KV * HEAD_DIM
+        taps = {}
+        for kv in ("k", "v"):
+            w = torch_of(f"{kv}_conv").view(TAPS, width).clone()
+            w[0] += 1.0
+            taps[kv] = w * self.conv_scale
+        q_scale = torch_of("q_clip_scale").view(N_HEADS, HEAD_DIM)
+        q_inv = QK_CLIP**-2
+        if not self.is_global:  # local core runs at scale=1 (see below)
+            q_scale = q_scale * SCALE
+            q_inv = QK_CLIP**-2 / SCALE**2
+        self.prep = AttnPrep(
+            self.device,
+            q_scale,
+            torch_of("rel_clip_scale").view(N_HEADS, D_REL),
+            torch_of("rel_proj").view(D_REL, WINDOW),
+            taps,
+            q_inv=q_inv,
+            k_inv=QK_CLIP**-2,
+            rel_inv=REL_CLIP**-2,
+            eps=EPS,
+            kv0=KV0,
+            dyn=self.is_global,
+            conv_scale=self.conv_scale,
+        )
+        self.out = AttnOut(self.device, self.w_o.act_mem)
+
     def new_state(self, max_ctx, cache_dtype=ttnn.bfloat16):
         if self.is_global and max_ctx % FAR_CHUNK:
             raise ValueError(f"max_ctx {max_ctx} not a multiple of {FAR_CHUNK}")
@@ -198,11 +241,14 @@ class Inkling2AttentionFast(Inkling2Attention):
             compute_kernel_config=self.hifi4,
         )  # [1,1,24,128] bf16
 
-    def _global(self, q, bias, sink, state, positions):
+    def _global(self, q, bias, sink, state, positions, masked=False):
+        """masked: `bias` already holds the near mask (fused prep)."""
         # near + sink partial: normalized output and log-sum-exp
         qg = ttnn.reshape(q, [1, N_KV, GROUPS, HEAD_DIM])
         near = ttnn.matmul(qg, state.k_ring, transpose_b=True, dtype=ttnn.float32, compute_kernel_config=self.hifi4)
-        near = ttnn.add(ttnn.add(ttnn.multiply(near, SCALE), bias), positions.near_mask)
+        near = ttnn.add(ttnn.multiply(near, SCALE), bias)
+        if not masked:
+            near = ttnn.add(near, positions.near_mask)
         logits = ttnn.concat([near, ttnn.add(self.sink_pad, ttnn.typecast(sink, ttnn.float32))], dim=-1)
         probs = ttnn.softmax(logits, dim=-1, compute_kernel_config=self.hifi4, numeric_stable=True)
         p_near = ttnn.typecast(ttnn.slice(probs, [0, 0, 0, 0], [1, N_KV, GROUPS, WINDOW]), ttnn.bfloat16)
@@ -241,6 +287,33 @@ class Inkling2AttentionFast(Inkling2Attention):
         """Same contract as `Inkling2Attention.decode`; `positions` is a `DecodePositionsFast`."""
         xk = xq if xk is None else xk
         xv = xq if xv is None else xv
+        if not self.FUSED:
+            return self._decode_ops(xq, state, positions, xk, xv)
+        proj, mode = self._window(state, xq, xk, xv)
+        rows = ROWS[mode]
+        q, mask, sink_t = self.prep(proj, positions, {"q": 0, "k": rows["k"], "v": rows["v"]})
+        ttnn.experimental.paged_update_cache(state.k_ring, self.prep.k_row, update_idxs_tensor=positions.ring)
+        ttnn.experimental.paged_update_cache(state.v_ring, self.prep.v_row, update_idxs_tensor=positions.ring)
+        if self.is_global:
+            ttnn.experimental.paged_update_cache(state.kv_full, self.prep.kv_row, update_idxs_tensor=positions.pos)
+            sink = ttnn.reshape(ttnn.slice(sink_t, [0, 0], [N_HEADS, 1]), [1, N_KV, GROUPS, 1])
+            attn = self._global(q, ttnn.reshape(mask, [1, N_KV, GROUPS, WINDOW]), sink, state, positions, masked=True)
+            attn = ttnn.reshape(attn, [1, 1, N_HEADS, HEAD_DIM])
+        else:
+            attn = ttnn.transformer.scaled_dot_product_attention_decode(
+                q,
+                state.k_ring,
+                state.v_ring,
+                is_causal=False,
+                attn_mask=mask,
+                attention_sink=sink_t,
+                scale=1.0,
+                program_config=self.local_cfg,
+                compute_kernel_config=self.hifi4,
+            )
+        return self.w_o(self.out(attn, proj), ttnn.bfloat16, self.mm_cfg)
+
+    def _decode_ops(self, xq, state, positions, xk, xv):
         q, rel, gate, sink, k, v = self._project(state, positions, xq, xk, xv)  # E3 seam
         if FUSED_KV_WRITE:
             ttnn.experimental.paged_fused_update_cache(
