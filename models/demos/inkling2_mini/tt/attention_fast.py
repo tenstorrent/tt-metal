@@ -60,6 +60,12 @@ V_WIDTH = 160  # v(128) + mass column block
 KV_WIDTH = V_WIDTH + HEAD_DIM  # 288
 SCALE = HEAD_DIM**-0.5
 FAR_CHUNK = 128  # sdpa K chunk of the far cache (measured at 120K: 128 beats 256 and 512)
+# needs the sdpa_decode options of the custom C++ build; a stock build has neither field
+FAR_OPTS = (
+    dict(qk_skip_head_dim=V_WIDTH, const_k_tile_col=HEAD_DIM // 32)
+    if hasattr(ttnn.SDPAProgramConfig, "qk_skip_head_dim")
+    else {}
+)
 # local ring (1024 slots): 4 cores per kv head x 256-key chunks, 37.4 -> 31.7 us per call vs the default 13 cores x 128
 # (each of 13 cores got < 1 chunk; the tree reduction dominated)
 LOCAL_CHUNK = 256
@@ -150,13 +156,14 @@ class Inkling2AttentionFast(Inkling2Attention):
 
         grid = device.compute_with_storage_grid_size()
 
-        def sdpa_cfg(chunk, cores_per_head=16):
+        def sdpa_cfg(chunk, cores_per_head=16, **kw):
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=grid,
                 q_chunk_size=0,
                 k_chunk_size=chunk,
                 exp_approx_mode=False,
                 max_cores_per_head_batch=cores_per_head,
+                **kw,
             )
 
         self.sink_cols = put(torch.ones(1, 1, N_HEADS, 32), ttnn.float32)
@@ -179,7 +186,9 @@ class Inkling2AttentionFast(Inkling2Attention):
         mass[..., 0] = 1.0
         self.mass_col = put(mass)
         self.q_pad = put(torch.zeros(1, 1, N_HEADS, V_WIDTH))
-        self.far_cfg = sdpa_cfg(FAR_CHUNK)
+        # far q is zero on the v / mass columns: QK skips them; the mass column block [1, 0 x 31] is the same for
+        # every written key (unwritten keys are causally masked), so it is read once per K buffer slot
+        self.far_cfg = sdpa_cfg(FAR_CHUNK, **FAR_OPTS)
         self.kv_full_shard = ttnn.create_sharded_memory_config(
             shape=(32, KV_WIDTH),
             core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
