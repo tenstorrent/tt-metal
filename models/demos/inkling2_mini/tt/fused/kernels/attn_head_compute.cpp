@@ -25,6 +25,10 @@
 namespace {
 constexpr uint32_t cb_x = 0, cb_t = 1, cb_d = 2, cb_scaler = 3, cb_tau = 4, cb_massin = 5;
 constexpr uint32_t cb_y = 16, cb_sq = 17, cb_f = 18, cb_out = 19, cb_mass = 20;
+// SFPU work on faces 0, 1 only: a head is elements 0..127 of its dense page (face 0); the reader zero-fills the rest
+// of x, so y stays 0 there either way (y^2 is still squared over the whole tile, it feeds the full-tile reduce), and
+// the norm factor is read at [0, 0] only (scalar broadcast).
+constexpr VectorMode R = VectorMode::R;
 
 FORCE_INLINE void load(uint32_t cb, uint32_t tile, uint32_t dst) {
     reconfig_data_format_srca(cb);
@@ -72,15 +76,15 @@ void kernel_main() {
             if constexpr (dyn) {
                 load(cb_d, l, 3);
                 binop_with_scalar_tile_init();
-                mul_unary_tile(3, cs);
+                mul_unary_tile(3, cs, R);
                 add_binary_tile_init();
-                add_binary_tile(2, 3, 2);
+                add_binary_tile(2, 3, 2, R);
             }
             mul_binary_tile_init();
-            mul_binary_tile(acc, 2, acc);
+            mul_binary_tile(acc, 2, acc, R);
             if (l > 0) {
                 add_binary_tile_init();
-                add_binary_tile(0, 1, 0);
+                add_binary_tile(0, 1, 0, R);
             }
         }
         mul_binary_tile_init();
@@ -101,19 +105,19 @@ void kernel_main() {
         reduce_tile<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(cb_sq, cb_scaler, 0, 0, 0);
         reduce_uninit();
         binop_with_scalar_tile_init();
-        mul_unary_tile(0, inv);
+        mul_unary_tile(0, inv, R);
         if constexpr (norm == 1) {
-            add_unary_tile(0, eps);
+            add_unary_tile(0, eps, R);
         } else {
             unary_max_tile_init();
             unary_max_tile(0, one);
         }
         rsqrt_tile_init();
-        rsqrt_tile(0);
+        rsqrt_tile(0, R);
         if constexpr (has_tau) {
             load(cb_tau, 0, 1);
             mul_binary_tile_init();
-            mul_binary_tile(0, 1, 0);
+            mul_binary_tile(0, 1, 0, R);
         }
         tile_regs_commit();
         tile_regs_wait();
