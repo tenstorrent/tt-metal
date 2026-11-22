@@ -391,6 +391,8 @@ No data is copied or moved.</p>
 with <code class="docutils literal notranslate"><span class="pre">start</span></code> pointing to the first DRAM bank.</p></li>
 <li><p>For L1 sharded tensors, narrow is supported only when the narrowed region consists of complete
 full shards, or spans multiple shards with the same page offset.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">start</span></code> and <code class="docutils literal notranslate"><span class="pre">length</span></code> are bounds-checked against the logical shape, not the tile-padded shape, so
+the window must lie within the logical size of <code class="docutils literal notranslate"><span class="pre">dim</span></code> (same as <cite>torch.narrow</cite>).</p></li>
 <li><p>For TILE_LAYOUT, <code class="docutils literal notranslate"><span class="pre">start</span></code> and <code class="docutils literal notranslate"><span class="pre">length</span></code> on the height or width dimension must be multiples of 32.</p></li>
 <li><p>Negative values for <code class="docutils literal notranslate"><span class="pre">dim</span></code> and <code class="docutils literal notranslate"><span class="pre">start</span></code> are supported.</p></li>
 </ul>

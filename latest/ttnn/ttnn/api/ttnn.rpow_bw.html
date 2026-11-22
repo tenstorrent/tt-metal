@@ -448,7 +448,7 @@
 <ul class="simple">
 <li><p><span class="tt-api-param-name"><strong>grad_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input gradient tensor.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>exponent</strong> (<em>float</em>)</span><span class="tt-api-param-desc">Exponent value.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>exponent</strong> (<em>float</em>)</span><span class="tt-api-param-desc">The scalar base: rpow computes exponent ** input_tensor, so the gradient is grad * ln(exponent) * exponent ** input_tensor.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>

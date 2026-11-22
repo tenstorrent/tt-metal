@@ -375,13 +375,81 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.chunk">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">chunk</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.chunk" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">chunk</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn.Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#ttnn.chunk" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Splits a tensor into multiple chunks along a specified dimension.</p>
-<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: The tensor to split.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">chunks</span></code>: Number of chunks to divide the tensor into.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>: Dimension along which to split.</p>
+<p>Splits <cite>input_tensor</cite> into chunks along dimension <cite>dim</cite>.</p>
+<p>Every chunk but the last has <code class="docutils literal notranslate"><span class="pre">ceil(input_tensor.shape[dim]</span> <span class="pre">/</span> <span class="pre">chunks)</span></code> elements along <cite>dim</cite>, the chunk size,
+and the last chunk holds the rest. So fewer than <cite>chunks</cite> chunks can come back: a dimension of 5 split with
+<code class="docutils literal notranslate"><span class="pre">chunks=4</span></code> gives chunks of 2, 2 and 1.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor, on device. A TILE input must use 32x32 tiles.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>chunks</strong> (<em>int</em>)</span><span class="tt-api-param-desc">the number of chunks to split into. Must be at least 1.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dim</strong> (<em>int</em>)</span><span class="tt-api-param-desc">the dimension to split along, in <code class="docutils literal notranslate"><span class="pre">[-r,</span> <span class="pre">r)</span></code> for an input of rank <code class="docutils literal notranslate"><span class="pre">r</span></code>. Negative values count from the last dimension.</span></p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<p><span class="tt-api-param-name"><em>List[ttnn.Tensor]</em></span><span class="tt-api-param-desc">the chunks, in order along <cite>dim</cite>, with the dtype, layout and memory configuration of <cite>input_tensor</cite>.</span></p>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported dtypes and layouts:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, FLOAT32, INT32, UINT32, UINT16</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>UINT8</p></td>
+<td><p>ROW_MAJOR</p></td>
+</tr>
+<tr class="row-even">
+<td><p>BFLOAT8_B</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<p><code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> tensors need a rank of 2 or more and, when <cite>dim</cite> is one of the last two dimensions, a chunk
+size that is a multiple of 32.</p>
+<p><code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> TILE input values must not be NaN when the input has rank 1, or when <cite>dim</cite> is one of the last
+two dimensions and the chunk size is not a multiple of 32.</p>
+<p>On Blackhole, the input can also be an <code class="docutils literal notranslate"><span class="pre">FP8_E4M3</span></code> tensor in ROW_MAJOR layout.</p>
+</div>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+</ul>
+</dd>
+</dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a tensor to split</span>
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">96</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Split the last dimension into 3 chunks; the output is a list of tensors</span>
+<span class="n">chunks</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">chunk</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Number of chunks: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">chunks</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># 3</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Chunk Shape: </span><span class="si">{</span><span class="n">chunks</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 64, 32])</span>
+</pre></div>
+</div>
+</div>
 </dd>
 </dl>
 

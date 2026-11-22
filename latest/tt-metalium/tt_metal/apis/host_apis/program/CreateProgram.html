@@ -309,13 +309,19 @@
 <h1>CreateProgram<a class="headerlink" href="#createprogram" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N2tt8tt_metal13CreateProgramEv">
-<span class="target" id="namespacett_1_1tt__metal_1a48b1af1b20561d626ff34f39282f1dea"></span><span class="n"><span class="pre">Program</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">tt</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">tt_metal</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">CreateProgram</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N2tt8tt_metal13CreateProgramEv" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N2tt8tt_metal13CreateProgramERN11distributed10MeshDeviceE">
+<span class="target" id="namespacett_1_1tt__metal_1aa47e3fb20880d5cea356d2cfc57cb105"></span><span class="n"><span class="pre">Program</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">tt</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">tt_metal</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">CreateProgram</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">distributed</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">MeshDevice</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">mesh_device</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N2tt8tt_metal13CreateProgramERN11distributed10MeshDeviceE" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Creates a Program object which is the main container that bundles kernels, circular buffers, and/or semaphores for execution on device</p>
-<p>The Program is bound to the default MetalContext, so this overload cannot be used with a MeshDevice that belongs to a different MetalEnv. Prefer the overload that takes a MeshDevice.</p>
-<p>Return value: Program </p>
+<p>The Program is bound to the MetalEnv that owns <code class="docutils literal notranslate"><span class="pre">mesh_device</span></code>. All later operations on the Program (CreateKernel, CreateCircularBuffer, …) resolve their hardware description, runtime options, and build environment from that env. The Program can only be compiled and enqueued on devices from the same MetalEnv.</p>
+<p>Return value: Program</p>
+<p></p>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Argument  </span><span class="tt-api-param-desc">Description  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">mesh_device  </span><span class="tt-api-param-desc">The mesh device whose MetalEnv the Program will be bound to  </span></p>
+</div>
+
 </dd>
 </dl>
 

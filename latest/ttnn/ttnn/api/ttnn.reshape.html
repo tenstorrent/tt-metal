@@ -432,7 +432,7 @@ viewed, unless only the logical shape changes.</p>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, FLOAT32, INT32, UINT32</p></td>
+<td><p>BFLOAT16, FLOAT32, INT32, UINT32, UINT8</p></td>
 <td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 <tr class="row-odd">
@@ -449,6 +449,9 @@ viewed, unless only the logical shape changes.</p>
 L1, TILE tiles padded only in the last two dims (ROW_MAJOR input unpadded), no explicit <code class="docutils literal notranslate"><span class="pre">pad_value</span></code> on
 a padded TILE output, and enough L1 for one of the reshape programs.</p>
 <p><code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> and <code class="docutils literal notranslate"><span class="pre">BFLOAT4_B</span></code> reshapes that move data go through a <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> typecast.</p>
+<p><code class="docutils literal notranslate"><span class="pre">UINT8</span></code> reshapes run directly, except that an explicit <code class="docutils literal notranslate"><span class="pre">pad_value</span></code> on a TILE output with tile padding
+fills that padding through a <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> typecast, which needs a temporary tensor twice the size of the
+output. A fractional <code class="docutils literal notranslate"><span class="pre">pad_value</span></code> is truncated and one above 255 is clamped to 255.</p>
 </div>
 <dl class="simple">
 <dt>Memory Support:</dt>

@@ -375,83 +375,91 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.bcast">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">bcast</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.bcast" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">bcast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_a</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_b</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">math_op</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.BcastOpMath</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.BcastOpDim</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.bcast" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Perform a binary elementwise operation <code class="docutils literal notranslate"><span class="pre">math_op</span></code> between tensors <code class="docutils literal notranslate"><span class="pre">input_a</span></code> and <code class="docutils literal notranslate"><span class="pre">input_b</span></code>, where values from tensor <code class="docutils literal notranslate"><span class="pre">input_b</span></code> are broadcast.</p>
-<p>Let tensor <code class="docutils literal notranslate"><span class="pre">input_a</span></code> have shape <code class="docutils literal notranslate"><span class="pre">[W0,</span> <span class="pre">Z0,</span> <span class="pre">Y0,</span> <span class="pre">X0]</span></code> and tensor <code class="docutils literal notranslate"><span class="pre">input_b</span></code> shape <code class="docutils literal notranslate"><span class="pre">[W1,</span> <span class="pre">Z1,</span> <span class="pre">Y1,</span> <span class="pre">X1]</span></code>. <code class="docutils literal notranslate"><span class="pre">dim</span></code> determines the type of broadcast performed.</p>
-<p>For <code class="docutils literal notranslate"><span class="pre">dim=BcastOpDim::W</span></code> broadcast is performed on dimension <code class="docutils literal notranslate"><span class="pre">X</span></code>. <code class="docutils literal notranslate"><span class="pre">Y0</span></code> and <code class="docutils literal notranslate"><span class="pre">Y1</span></code> must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).</p>
-<p>For <code class="docutils literal notranslate"><span class="pre">dim=BcastOpDim::H</span></code> broadcast is performed on dimension  <code class="docutils literal notranslate"><span class="pre">Y</span></code>. <code class="docutils literal notranslate"><span class="pre">X0</span></code> and <code class="docutils literal notranslate"><span class="pre">X1</span></code> must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).</p>
-<p>For <code class="docutils literal notranslate"><span class="pre">dim=BcastOpDim::HW</span></code> broadcast is performed on dimensions <code class="docutils literal notranslate"><span class="pre">X</span></code> and <code class="docutils literal notranslate"><span class="pre">Y</span></code>. Either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1) must hold for input shapes.</p>
-<p>Both input tensors must have BFLOAT16 data type.</p>
-<p>Output tensor will have BFLOAT16 data type.</p>
+<p>Applies <cite>math_op</cite> elementwise to <cite>input_a</cite> and <cite>input_b</cite>, broadcasting <cite>input_b</cite> over the last two
+dimensions of <cite>input_a</cite> as <cite>dim</cite> sets. For an <cite>input_a</cite> of shape <code class="docutils literal notranslate"><span class="pre">[...,</span> <span class="pre">H,</span> <span class="pre">W]</span></code>:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">ttnn.BcastOpDim.H</span></code>: <cite>input_b</cite> has shape <code class="docutils literal notranslate"><span class="pre">[...,</span> <span class="pre">1,</span> <span class="pre">W]</span></code>. Its row is applied to every row of <cite>input_a</cite>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ttnn.BcastOpDim.W</span></code>: <cite>input_b</cite> has shape <code class="docutils literal notranslate"><span class="pre">[...,</span> <span class="pre">H,</span> <span class="pre">1]</span></code>. Its column is applied to every column of <cite>input_a</cite>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ttnn.BcastOpDim.HW</span></code>: <cite>input_b</cite> has shape <code class="docutils literal notranslate"><span class="pre">[...,</span> <span class="pre">1,</span> <span class="pre">1]</span></code>. Its value is applied to every element of <cite>input_a</cite>.</p></li>
+</ul>
+<p>The dimensions of <cite>input_b</cite> before the last two are either all 1, which applies the same <cite>input_b</cite> to every
+batch of <cite>input_a</cite>, or equal to those of <cite>input_a</cite>, which applies each batch of <cite>input_b</cite> to the same batch
+of <cite>input_a</cite>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><span class="tt-api-param-name"><strong>input_a</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the first operand, of rank 2, 3 or 4.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_b</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the operand to broadcast, with the shape that <cite>dim</cite> sets and the same dtype and layout as <cite>input_a</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>math_op</strong> (<em>ttnn.BcastOpMath</em>)</span><span class="tt-api-param-desc">the operation. <code class="docutils literal notranslate"><span class="pre">ttnn.BcastOpMath.ADD</span></code> computes <cite>input_a</cite> + <cite>input_b</cite>, <code class="docutils literal notranslate"><span class="pre">ttnn.BcastOpMath.SUB</span></code> computes <cite>input_a</cite> - <cite>input_b</cite>, and <code class="docutils literal notranslate"><span class="pre">ttnn.BcastOpMath.MUL</span></code> computes <cite>input_a</cite> * <cite>input_b</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dim</strong> (<em>ttnn.BcastOpDim</em>)</span><span class="tt-api-param-desc">how <cite>input_b</cite> is broadcast: <code class="docutils literal notranslate"><span class="pre">ttnn.BcastOpDim.H</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.BcastOpDim.W</span></code> or <code class="docutils literal notranslate"><span class="pre">ttnn.BcastOpDim.HW</span></code>, as described above.</span></p></li>
+</ul>
+</dd>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<ul class="simple">
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration of the output. Defaults to <cite>None</cite>, which uses the memory configuration of <cite>input_a</cite>. For an interleaved <cite>input_a</cite> it must be interleaved, and for a sharded <cite>input_a</cite> it must be <cite>None</cite> or the memory configuration of <cite>input_a</cite>. When <cite>output_tensor</cite> is given, it must be <cite>None</cite> or the memory configuration of <cite>output_tensor</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated output tensor for an interleaved <cite>input_a</cite>. It must be interleaved and in TILE layout, with the shape and dtype of <cite>input_a</cite>. Defaults to <cite>None</cite>.</span></p></li>
+</ul>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor, in TILE layout with the shape and dtype of <cite>input_a</cite>. When <cite>output_tensor</cite> is given, it is returned with the output written to it.</span></p>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Supported dtypes and layouts:</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Argument</p></th>
-<th class="head"><p>Description</p></th>
-<th class="head"><p>Data type</p></th>
-<th class="head"><p>Valid range</p></th>
-<th class="head"><p>Required</p></th>
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>input_a</p></td>
-<td><p>Input tensor</p></td>
-<td><p>Tensor</p></td>
-<td><p>Tensor of shape [W0, Z0, Y0, X0]</p></td>
-<td><p>Yes</p></td>
+<td><p>BFLOAT16</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 <tr class="row-odd">
-<td><p>input_b</p></td>
-<td><p>Input tensor to broadcast</p></td>
-<td><p>Tensor</p></td>
-<td><p>Tensor of shape [W1, Z1, Y1, X1]</p></td>
-<td><p>Yes</p></td>
-</tr>
-<tr class="row-even">
-<td><p>math_op</p></td>
-<td><p>Aggregating math operation</p></td>
-<td>
-<blockquote>
-<div>
-<p>BcastOpMath</p>
-</div>
-</blockquote>
-</td>
-<td><p>ADD, SUB, MUL</p></td>
-<td><p>Yes</p></td>
-</tr>
-<tr class="row-odd">
-<td><p>dim</p></td>
-<td><p>Dimension on which to broadcast</p></td>
-<td><p>BcastOpDim</p></td>
-<td><p>W, H, HW</p></td>
-<td><p>Yes</p></td>
-</tr>
-<tr class="row-even">
-<td><p>memory_config</p></td>
-<td><p>Layout of tensor in TT Accelerator device memory banks</p></td>
-<td><p>MemoryConfig</p></td>
-<td><p>Default is interleaved in DRAM</p></td>
-<td><p>No</p></td>
-</tr>
-<tr class="row-odd">
-<td><p>output_tensor</p></td>
-<td><p>Optional preallocated output tensor</p></td>
-<td><p>Tensor</p></td>
-<td><p>Default is None</p></td>
-<td><p>No</p></td>
+<td><p>BFLOAT8_B</p></td>
+<td><p>TILE</p></td>
 </tr>
 </tbody>
 </table>
-<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_a</span></code>: First Input Tensor for bcast.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_b</span></code>: Second Input Tensor for bcast.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">math_op</span></code>: Operation to be performed during broadcasting.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>: the dimension to reduce. If None, the bcast of the flattened input is returned</p>
-<p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: Memory Config of the output tensor
-:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_tensor</span></code>: Preallocated output tensor</p>
+<p><cite>input_a</cite> and <cite>input_b</cite> must have the same dtype and layout, and their values must be finite.</p>
+</div>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Sharded, with <code class="docutils literal notranslate"><span class="pre">ttnn.BcastOpDim.H</span></code>: a TILE <cite>input_a</cite> that is WIDTH_SHARDED in L1 on one row of cores starting at core (0, 0), or BLOCK_SHARDED in L1 on a rectangular core grid starting at core (0, 0)</p></li>
+<li><p>Sharded, with <code class="docutils literal notranslate"><span class="pre">ttnn.BcastOpDim.HW</span></code>: a TILE <cite>input_a</cite> that is HEIGHT_SHARDED in L1</p></li>
+<li><p>A sharded <cite>input_a</cite> needs an interleaved <cite>input_b</cite> whose dimensions before the last two are all 1, and gives an output with the same sharding</p></li>
+</ul>
+</dd>
+</dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a tensor and a single row to broadcast over its height</span>
+<span class="n">input_tensor_a</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">input_tensor_b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Add the row of input_tensor_b to every row of input_tensor_a</span>
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bcast</span><span class="p">(</span><span class="n">input_tensor_a</span><span class="p">,</span> <span class="n">input_tensor_b</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">BcastOpMath</span><span class="o">.</span><span class="n">ADD</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">BcastOpDim</span><span class="o">.</span><span class="n">H</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Bcast Tensor Shape: </span><span class="si">{</span><span class="n">output_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 64, 32])</span>
+</pre></div>
+</div>
+</div>
 </dd>
 </dl>
 
