@@ -278,9 +278,10 @@ class LlamaProvider(ModelProvider):
         checkpointing.load_checkpoint(str(file), model_params=self._tt_parameters(model))
 
     def _check_base_model(self, directory: Path, base: Optional[str]) -> None:
-        """A checkpoint that records no base model is taken as this model's."""
+        """A checkpoint that records no base model is taken as this model's. A PEFT adapter records
+        ``model_source()``, a ``tt`` checkpoint ``model.name``."""
         name = self.config.model.name
-        if base and base != name:
+        if base and base not in (name, self.model_source()):
             _fail("checkpoint", f"{directory} is for {base!r}, this model is {name!r}")
 
     # ------------------------------------------------------------------ PEFT adapters
@@ -292,8 +293,9 @@ class LlamaProvider(ModelProvider):
         lora = self.config.model.lora
         return AdapterState(
             tensors=tensors,
+            # PEFT loads the base model from here, so it's where the weights are, not the registered name.
             config=peft_adapter_config(
-                self.config.model.name,
+                self.model_source(),
                 r=lora.r,
                 alpha=lora.alpha,
                 dropout=lora.dropout,

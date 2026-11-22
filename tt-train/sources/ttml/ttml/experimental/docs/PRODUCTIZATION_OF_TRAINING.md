@@ -261,7 +261,9 @@ k and v fused, the q and k rows permuted for RoPE, and the vocabulary padded.
 The base model comes back from what the checkpoint records:
 
 - A PEFT adapter names it in `adapter_config.json`, as `base_model_name_or_path`, so
-  `AutoPeftModelForCausalLM.from_pretrained(path)` loads the adapter on the model it was trained on.
+  `AutoPeftModelForCausalLM.from_pretrained(path)` loads the adapter on the model it was trained on. It records the
+  provider's `model_source()`: the hub id, or for a model that isn't on the hub, the local directory, which must be
+  there wherever the adapter is loaded.
 - A `tt` checkpoint names it in the header of `checkpoint.pkl`, with the LoRA `r`, `alpha` and `target_modules`.
 
 The `checkpoint` section:

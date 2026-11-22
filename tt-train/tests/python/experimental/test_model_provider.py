@@ -58,6 +58,22 @@ def test_a_provider_registered_from_outside_builds_its_model(tmp_path):
     assert provider.hf_config["hidden_size"] == 64
 
 
+def test_a_provider_registered_from_outside_takes_back_checkpoints_of_its_model(tmp_path, expect_error):
+    source = _local_model(tmp_path / "Mistral-7B-v0.1")
+
+    class MistralProvider(LlamaProvider):
+        def model_source(self) -> str:
+            return source
+
+    register_provider("mistralai/Mistral-7B-v0.1", MistralProvider)
+    provider = get_provider(_config("mistralai/Mistral-7B-v0.1"))
+    # A PEFT adapter records model_source(), a tt checkpoint model.name.
+    provider._check_base_model(tmp_path, source)
+    provider._check_base_model(tmp_path, "mistralai/Mistral-7B-v0.1")
+    with expect_error(UnsupportedTrainingConfig, r"^checkpoint: .* is for 'meta-llama/Llama-3.2-1B'"):
+        provider._check_base_model(tmp_path, "meta-llama/Llama-3.2-1B")
+
+
 def test_registering_the_same_provider_again_is_a_no_op():
     register_provider("meta-llama/Llama-3.2-1B", LlamaProvider)
     assert providers()["meta-llama/Llama-3.2-1B"] is LlamaProvider
