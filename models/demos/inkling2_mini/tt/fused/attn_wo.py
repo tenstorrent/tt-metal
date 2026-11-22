@@ -67,12 +67,7 @@ class AttnWo:
         compute.unpack_to_dest_mode = modes
         dm = ttnn.DataMovementConfigDescriptor
         kernels = [
-            ttnn.KernelDescriptor(
-                kernel_source=f"{F.KDIR}/bank_linear_reader.cpp", core_ranges=b.grid,
-                compile_time_args=acc(b.weight), named_compile_time_args=list(named.items()),
-                runtime_args=[(k, v) for k, v in r_args.items()],
-                config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
-            ),
+            *self._reader(acc(b.weight), named, r_args),
             ttnn.KernelDescriptor(
                 kernel_source=f"{F.KDIR}/attn_wo_compute.cpp", core_ranges=b.grid,
                 named_compile_time_args=list(named.items()), runtime_args=[(k, v) for k, v in c_args.items()],
@@ -106,3 +101,18 @@ class AttnWo:
             cbs.append(cb(5, tw[0].dtype, 1024 * res_es, 1))
         ttnn.generic_op([x, b.weight, *io], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
         return y  # the conv module's cached object: its dense twin is keyed by identity
+
+    def _reader(self, acc, named, r_args):
+        """The weight reader kernels (cb 1); tt/mk/pipe_stage.py swaps in ones that read a prefetcher ring."""
+        return [
+            ttnn.KernelDescriptor(
+                kernel_source=f"{F.KDIR}/bank_linear_reader.cpp",
+                core_ranges=self.bank.grid,
+                compile_time_args=acc,
+                named_compile_time_args=list(named.items()),
+                runtime_args=[(k, v) for k, v in r_args.items()],
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0
+                ),
+            )
+        ]
