@@ -66,6 +66,9 @@ FAR_OPTS = (
     if hasattr(ttnn.SDPAProgramConfig, "qk_skip_head_dim")
     else {}
 )
+# far call with the kv groups as the batch (q [1, 8, 3, 288], cache viewed as [8, 1, S, 288]): 16-row Q tiles, so
+# the softmax runs on half the rows; exact exp keeps it bit-equal to the 24-head call (custom C++ build only)
+FAR_GRP = hasattr(ttnn.SDPAProgramConfig, "exact_exp_half_tile")
 # local ring (1024 slots): 4 cores per kv head x 256-key chunks, 37.4 -> 31.7 us per call vs the default 13 cores x 128
 # (each of 13 cores got < 1 chunk; the tree reduction dominated)
 LOCAL_CHUNK = 256
@@ -73,8 +76,9 @@ LOCAL_CORES_PER_HEAD = 4
 
 
 class DecodePositionsFast(DecodePositions):
-    """`DecodePositions` minus `kpos` / `far_mask`; adds `far = (far_pos, far_valid)`:
-    far_pos = max(pos - 1024, 0) (int32 [1]), far_valid = (pos >= 1024) (fp32 [1,1,1,1])."""
+    """`DecodePositions` minus `kpos` / `far_mask`; adds `far = (far_pos, far_valid)` and `far_grp = (far_pos8,
+    far_valid)`: far_pos = max(pos - 1024, 0) (int32 [1]; far_pos8 the same x 8, one per kv group), far_valid =
+    (pos >= 1024) (fp32 [1,1,1,1])."""
 
     def __init__(self, device, max_ctx):
         self.device = device
@@ -84,6 +88,9 @@ class DecodePositionsFast(DecodePositions):
     def _host(self, pos):
         host = super()._host(pos)
         host["far_pos"] = ttnn.from_torch(torch.tensor([max(pos - WINDOW, 0)], dtype=torch.int32), dtype=ttnn.int32)
+        host["far_pos8"] = ttnn.from_torch(
+            torch.tensor([max(pos - WINDOW, 0)] * N_KV, dtype=torch.int32), dtype=ttnn.int32
+        )
         valid = torch.tensor(float(pos >= WINDOW)).view(1, 1, 1, 1)
         host["far_valid"] = ttnn.from_torch(valid, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
         return host
@@ -96,6 +103,7 @@ class DecodePositionsFast(DecodePositions):
         self.pos = inp["pos"]
         self.ring = inp["ring"]
         self.far = (inp["far_pos"], inp["far_valid"])
+        self.far_grp = (inp["far_pos8"], inp["far_valid"])
 
 
 class FastAttentionState(AttentionState):
@@ -103,11 +111,14 @@ class FastAttentionState(AttentionState):
 
     def __init__(self, device, is_global, max_ctx, cache_dtype):
         super().__init__(device, False, max_ctx, cache_dtype)  # ring + conv histories
-        self.kv_full = None
+        self.kv_full = self.kv_grp = None
         if is_global:
             self.kv_full = ttnn.zeros(
                 [1, N_KV, max_ctx, KV_WIDTH], dtype=cache_dtype, layout=ttnn.TILE_LAYOUT, device=device
             )
+            # the same buffer as [8, 1, max_ctx, 288] (the far call with kv groups as the batch)
+            self.kv_grp = ttnn.reshape(self.kv_full, [N_KV, 1, max_ctx, KV_WIDTH])
+            assert self.kv_grp.buffer_address() == self.kv_full.buffer_address()
 
     def tensors(self):
         out = super().tensors()
@@ -189,6 +200,7 @@ class Inkling2AttentionFast(Inkling2Attention):
         # far q is zero on the v / mass columns: QK skips them; the mass column block [1, 0 x 31] is the same for
         # every written key (unwritten keys are causally masked), so it is read once per K buffer slot
         self.far_cfg = sdpa_cfg(FAR_CHUNK, **FAR_OPTS)
+        self.far_grp_cfg = sdpa_cfg(FAR_CHUNK, **FAR_OPTS, exact_exp_half_tile=True) if FAR_GRP else None
         self.kv_full_shard = ttnn.create_sharded_memory_config(
             shape=(32, KV_WIDTH),
             core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
@@ -226,7 +238,7 @@ class Inkling2AttentionFast(Inkling2Attention):
         self.out = AttnOut(self.device, self.w_o.act_mem)
         # o-projection + post-attention conv in one program (decode(post=...))
         self.wo = AttnWo(self.w_o.bank, HIDDEN) if self.w_o.bank is not None else None
-        self.near = AttnNear(self.device) if self.is_global else None
+        self.near = AttnNear(self.device, sink_grp=FAR_GRP) if self.is_global else None
         # the prefetcher's projection takes an interleaved input: keep the op-by-op window there
         self.window = (
             AttnWindow(self.device, self.w_all.act_mem) if isinstance(self.w_all, _DramShardedLinear) else None
@@ -325,6 +337,20 @@ class Inkling2AttentionFast(Inkling2Attention):
         q, mask, sink_t = self.prep(proj, positions, {"q": 0, "k": rows["k"], "v": rows["v"]}, state)
         if self.is_global:  # q pre-scaled; prep's mask (bias + near mask) and q_grp are in kv-group layout
             o_near, r, sink_far = self.near(self.prep.q_grp, mask, sink_t, state.k_ring, state.v_ring)
+            if FAR_GRP:
+                far_pos, valid = positions.far_grp
+                far = ttnn.transformer.flash_multi_latent_attention_decode(
+                    self.prep.q_far,  # [1, 8, 3, 288], written by the prep
+                    state.kv_grp,
+                    head_dim_v=V_WIDTH,
+                    is_causal=True,
+                    cur_pos_tensor=far_pos,
+                    attention_sink=sink_far,  # [8 x 32, 32]
+                    scale=1.0,
+                    program_config=self.far_grp_cfg,
+                    compute_kernel_config=self.hifi4,
+                )
+                return self._out_proj(self.out(far, proj, (o_near, r, valid)), post)
             far_pos, valid = positions.far
             far = ttnn.transformer.flash_multi_latent_attention_decode(
                 ttnn.concat([self.q_pad, q], dim=-1),  # [1,1,24,288], zeros meet the v / mass columns

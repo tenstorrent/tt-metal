@@ -69,15 +69,15 @@ FORCE_INLINE void gather_row(
     noc_async_read_barrier();
 }
 
-// Issue the read of the 64B block holding element (r, c) of a row-form DRAM tensor into stage; returns the L1
-// address the element will have there (valid after a read barrier).
-FORCE_INLINE uint32_t
-stage_elem_block(uint32_t base, uint32_t tile_bytes, uint32_t es, uint32_t r, uint32_t c, uint32_t stage) {
+// Issue the read of the 64B block holding element (r, c) of a row-form DRAM tensor (tile row starting at page t0)
+// into stage; returns the L1 address the element will have there (valid after a read barrier).
+FORCE_INLINE uint32_t stage_elem_block(
+    uint32_t base, uint32_t tile_bytes, uint32_t es, uint32_t r, uint32_t c, uint32_t stage, uint32_t t0 = 0) {
     const InterleavedAddrGen<true> src = {.bank_base_address = base, .page_size = tile_bytes};
     const uint32_t cc = c & 31;
     const uint32_t off = row_offset(r, es) + (cc >> 4) * 256 * es + (cc & 15) * es;
     const uint32_t blk = off & ~(ALIGN - 1);
-    noc_async_read(src.get_noc_addr(c >> 5, blk), stage, 64);
+    noc_async_read(src.get_noc_addr(t0 + (c >> 5), blk), stage, 64);
     return stage + off - blk;
 }
 

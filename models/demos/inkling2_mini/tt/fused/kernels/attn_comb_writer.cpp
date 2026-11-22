@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Near partial combine, writer (kv group g): o tiles -> pages 4g .. of o_near [1, 8, 3, 128] fp32, the r tile ->
-// page g of [1, 8, 3, 1] fp32, rows 0..2 of the bf16 sink tile -> rows 3g .. 3g + 2 of the far call's sink [24, 32].
+// page g of [1, 8, 3, 1] fp32, rows 0..2 of the bf16 sink tile -> rows 3g .. 3g + 2 of the far call's sink [24, 32]
+// (sink_grp: rows 0..2 of page g of the per-group sink [8 x 32, 32]).
 #include "attn_io.hpp"
 
 namespace {
@@ -20,6 +21,7 @@ FORCE_INLINE void rows3(uint32_t src, const InterleavedAddrGen<true>& d, uint32_
 
 void kernel_main() {
     constexpr uint32_t cb_out = 17, cb_st = 19, cb_r = 20, dt = 4;
+    constexpr uint32_t sink_grp = get_named_compile_time_arg_val("sink_grp");
     const uint32_t out = get_arg_val<uint32_t>(0);
     const uint32_t r = get_arg_val<uint32_t>(1);
     const uint32_t sink = get_arg_val<uint32_t>(2);
@@ -35,7 +37,7 @@ void kernel_main() {
     {
         cb_wait_front(cb_st, 1);
         const InterleavedAddrGen<true> sd = {.bank_base_address = sink, .page_size = 2048};
-        rows3(get_read_ptr(cb_st), sd, 0, g);
+        rows3(get_read_ptr(cb_st), sd, sink_grp ? g : 0, sink_grp ? 0 : g);
         cb_wait_front(cb_r, 1);
         const InterleavedAddrGen<true> rd = {.bank_base_address = r, .page_size = 4096};
         noc_async_write(get_read_ptr(cb_r), rd.get_noc_addr(g), 4096);

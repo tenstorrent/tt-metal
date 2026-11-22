@@ -7,7 +7,8 @@
 // merge (global layers, nh = 3 = one kv group g): the attention output is the far partial [1, 1, 24, 160] (A | a);
 // also the near partial o_near [1, 8, 3, 128] fp32 rows -> dense fp32 page, and per head the far mass a and the
 // sink correction r ([1, 8, 3, 1] fp32) broadcast over the head's 128 elements (fp32 pages). far_valid == 0 (the
-// far cache is empty): A and a read as zero.
+// far cache is empty): A and a read as zero. far_grp: the far partial is per kv group, [1, 8, 3, 160] (rows 0..2 of
+// tile row g).
 #include "attn_io.hpp"
 
 namespace {
@@ -23,12 +24,15 @@ void kernel_main() {
     constexpr uint32_t nh = get_named_compile_time_arg_val("nh");
     constexpr uint32_t gate_tile = get_named_compile_time_arg_val("gate_tile");  // projection tile of gate col 0
     constexpr uint32_t merge = get_named_compile_time_arg_val("merge");
+    constexpr uint32_t far_grp = get_named_compile_time_arg_val("far_grp");
     constexpr uint32_t cb_a = 0, cb_g = 1, cb_m = 2, cb_r = 3, cb_o = 4, cb_stage = 24;
 
     const uint32_t attn = get_arg_val<uint32_t>(0);
     const uint32_t proj = get_arg_val<uint32_t>(1);
     const uint32_t h0 = get_arg_val<uint32_t>(2);
     const uint32_t stage = align_power_of_2(get_write_ptr(cb_stage), attnio::ALIGN);
+    // attention output rows: r0 + k of the tile row starting at page t0
+    const uint32_t t0 = far_grp ? (h0 / nh) * 5 : 0, r0 = far_grp ? 0 : h0;
 
     // stage: [0, 128 nh*4) gate blocks; attn rows k at st_a + 512 k; merge: valid at st_v, o_near rows at
     // st_o + 512 k, r blocks at st_r + 64 k, a blocks at st_m + 64 k
@@ -43,7 +47,7 @@ void kernel_main() {
     attnio::zero_l1(gw + nh * 256, 2048 - nh * 256);
     attnio::stage_row(proj, 2048, 2, gate_tile + h0 * 4, nh * 4, 0, stage);
     for (uint32_t k = 0; k < nh; ++k) {
-        attnio::stage_row(attn, 2048, 2, 0, 4, h0 + k, stage + st_a + 512 * k);
+        attnio::stage_row(attn, 2048, 2, t0, 4, r0 + k, stage + st_a + 512 * k);
     }
     if constexpr (merge) {
         const uint32_t o_near = get_arg_val<uint32_t>(3);
@@ -63,7 +67,7 @@ void kernel_main() {
         for (uint32_t k = 0; k < nh; ++k) {
             attnio::stage_row(o_near, 4096, 4, 4 * g, 4, k, stage + st_o + 512 * k);
             noc_async_read(rg.get_noc_addr(g, k * 64), stage + st_r + 64 * k, 64);  // r at (k, 0) of tile g
-            e_a[k] = attnio::stage_elem_block(attn, 2048, 2, h0 + k, 128, stage + st_m + 64 * k);
+            e_a[k] = attnio::stage_elem_block(attn, 2048, 2, r0 + k, 128, stage + st_m + 64 * k, t0);
         }
     }
     noc_async_read_barrier();
@@ -72,7 +76,7 @@ void kernel_main() {
     const bool valid = !merge || *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + st_v) != 0;
     for (uint32_t k = 0; k < nh; ++k) {
         if (valid) {
-            attnio::unstage_row(2, 4, h0 + k, aw + k * 256, stage + st_a + 512 * k);
+            attnio::unstage_row(2, 4, r0 + k, aw + k * 256, stage + st_a + 512 * k);
         }
     }
     if (!valid) {  // far cache empty: A and a read as zero

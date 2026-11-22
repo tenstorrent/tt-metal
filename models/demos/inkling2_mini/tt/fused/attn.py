@@ -130,6 +130,8 @@ class AttnPrep:
         self.q = zeros([1, 1, N_HEADS, HEAD_DIM])
         # global layers: q also, and the mask only, in kv-group layout [1, 8, 32, .] for AttnNear (rows 0..2 used)
         self.q_grp = zeros([1, N_KV, 32, HEAD_DIM]) if dyn else None
+        # and the far call's q per kv group [1, 8, 3, 288]: zeros on the v / mass columns, q on the last 128
+        self.q_far = zeros([1, N_KV, GROUPS, 288]) if dyn else None
         self.mask = zeros([1, N_KV, 32, WINDOW] if dyn else [1, 1, N_HEADS, WINDOW])
         self.sink = zeros([N_HEADS, 32])
         # global layers: near softmax sink block [1, 8, 3, 32] fp32 (rows 3..31 stay zero)
@@ -166,6 +168,7 @@ class AttnPrep:
                     w += [self.q.buffer_address(), 0, 0, 0, 0, h]
                     if self.dyn:
                         w += [self.q_grp.buffer_address(), 0, 0, 0, g * (HEAD_DIM // 32), i]
+                        w += [self.q_far.buffer_address(), 0, 0, 0, g * 9 + 5, i]
             else:
                 c0 = self.kv0 + (0 if kind == "k" else N_KV * HEAD_DIM) + g * HEAD_DIM
                 r += [c0 // 32, mode_rows[kind], g * TAPS]
@@ -194,7 +197,7 @@ class AttnPrep:
             writer = _kernel(
                 "attn_head_writer.cpp",
                 cores,
-                dict(nitems=nitems, ndst=1 + int(self.dyn)),
+                dict(nitems=nitems, ndst=1 + 2 * int(self.dyn)),
                 w_rt,
                 ttnn.WriterConfigDescriptor(),
             )
@@ -302,7 +305,9 @@ class AttnPrep:
         cbs += c
         io = [proj, self.q_taps, self.kv_taps["k"], self.kv_taps["v"], self.scaler, tau, self.rel_scale, self.g]
         io += [positions.near_mask, positions.ring, positions.pos, self.table, self.mass, self.sink, self.mask]
-        io += [state.k_ring, state.v_ring] + ([state.kv_full, self.sink_blk, self.q_grp] if self.dyn else [])
+        io += [state.k_ring, state.v_ring] + (
+            [state.kv_full, self.sink_blk, self.q_grp, self.q_far] if self.dyn else []
+        )
         io += [self.q]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
         return self.q, self.mask, self.sink_blk if self.dyn else self.sink
@@ -322,7 +327,8 @@ class AttnOut:
 
     def __call__(self, attn, proj, merge=None):
         """attn: [1, 1, 24, 128] bf16 TILE DRAM, or with merge = (o_near [1, 8, 3, 128] fp32, r [1, 8, 3, 1] fp32,
-        far_valid [1, 1, 1, 1] fp32) the far partial [1, 1, 24, 160] bf16. proj as AttnPrep. Returns self.act."""
+        far_valid [1, 1, 1, 1] fp32) the far partial [1, 1, 24, 160] or per kv group [1, 8, 3, 160] bf16. proj as
+        AttnPrep. Returns self.act."""
         F.check_row_input(attn)
         width = HEAD_DIM if merge is None else HEAD_DIM + 32
         assert attn.dtype == ttnn.bfloat16 and tuple(attn.padded_shape)[-2:] == (32, width), attn.padded_shape
@@ -340,11 +346,12 @@ class AttnOut:
             ]
             io += list(merge)
         flag = int(merge is not None)
+        far_grp = int(flag and attn.padded_shape[1] == N_KV)
         kernels = [
             _kernel(
                 "attn_out_reader.cpp",
                 self.cores,
-                dict(nh=nh, gate_tile=self.GATE_COL // 32, merge=flag),
+                dict(nh=nh, gate_tile=self.GATE_COL // 32, merge=flag, far_grp=far_grp),
                 rt,
                 ttnn.ReaderConfigDescriptor(),
             ),
@@ -409,8 +416,9 @@ class AttnNear:
 
     NSPLIT = 4
 
-    def __init__(self, device):
+    def __init__(self, device, sink_grp=False):
         self.device = device
+        self.sink_grp = sink_grp  # far sink per kv group [8 x 32, 32] (rows 0..2 of each tile) instead of [24, 32]
 
         def put(shape, dt):
             return ttnn.from_torch(
@@ -426,7 +434,7 @@ class AttnNear:
         self.op = put([1, p, 32, HEAD_DIM], ttnn.float32)
         self.out = put([1, N_KV, GROUPS, HEAD_DIM], ttnn.float32)
         self.r = put([1, N_KV, GROUPS, 1], ttnn.float32)
-        self.sink = put([N_HEADS, 32], ttnn.bfloat16)
+        self.sink = put([N_KV * 32 if sink_grp else N_HEADS, 32], ttnn.bfloat16)
         self.ones = put([1, 1, 32, 32], ttnn.bfloat16)
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(torch.ones(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self.ones
@@ -483,7 +491,13 @@ class AttnNear:
         w_rt = [[self.out.buffer_address(), self.r.buffer_address(), self.sink.buffer_address(), g] for g in range(n)]
         kernels = [
             _kernel("attn_comb_reader.cpp", cc, named, r_rt, ttnn.ReaderConfigDescriptor()),
-            _kernel("attn_comb_writer.cpp", cc, named, w_rt, ttnn.WriterConfigDescriptor()),
+            _kernel(
+                "attn_comb_writer.cpp",
+                cc,
+                dict(named, sink_grp=int(self.sink_grp)),
+                w_rt,
+                ttnn.WriterConfigDescriptor(),
+            ),
             _kernel("attn_comb_compute.cpp", cc, named, [[]] * n, F.compute_config([0, 1, 2, 16, 18, 21, 22])),
         ]
         crs = _crs(cc)
