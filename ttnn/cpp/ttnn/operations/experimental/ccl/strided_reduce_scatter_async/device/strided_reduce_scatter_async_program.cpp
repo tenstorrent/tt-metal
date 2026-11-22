@@ -672,7 +672,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
 
     // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_reader.cpp
     std::vector<uint32_t> sender_reader_compile_args = {
-        ring_index,                         // [0]  my_chip_id
+        0,                                  // [0]  unused: my_chip_id is a common runtime arg
         ring_size,                          // [1]  ring_size
         input_cb_index,                     // [2]  cb_input_id
         intermediate_cb_index,              // [3]  cb_intermediate_id
@@ -728,7 +728,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     static_assert(
         ReaderCrta::slice_Ht == 0 && ReaderCrta::input == 1 && ReaderCrta::intermediate == 2 &&
         ReaderCrta::semaphore_0 == 3 && ReaderCrta::semaphore_1 == 4 && ReaderCrta::addcmul_a == 5 &&
-        ReaderCrta::addcmul_b == 6 && ReaderCrta::count == 7);
+        ReaderCrta::addcmul_b == 6 && ReaderCrta::my_chip_id == 7 && ReaderCrta::count == 8);
     KernelDescriptor::RTArgList reader_common_args;
     reader_common_args.reserve(ReaderCrta::count);
     reader_common_args.push_back(slice_Ht);  // smuggled-rta-ok: runtime row count, re-applied on cache hit
@@ -742,13 +742,14 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                                       // re-applied on cache hit
     push_optional_buffer(reader_common_args, fuse_rs_addcmul ? addcmul_input_tensor1->buffer() : nullptr);
     push_optional_buffer(reader_common_args, fuse_rs_addcmul ? addcmul_input_tensor2->buffer() : nullptr);
+    reader_common_args.push_back(ring_index);
     program.kernels[reader_kernel_id].emplace_common_runtime_args(reader_common_args);
 
     // Writer
     // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_writer.cpp
     // NOTE: writer does not receive fuse_mm_op; only reader needs to wait on the MM semaphore.
     std::vector<uint32_t> sender_writer_compile_args = {
-        ring_index,                      // [0]  my_chip_id
+        0,                               // [0]  unused: my_chip_id is a common runtime arg
         ring_size,                       // [1]  ring_size
         compute_output_cb_index,         // [2]  cb_compute_output_id
         reader_output_cb_index,          // [3]  cb_reader_output_id
@@ -811,7 +812,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     static_assert(
         WriterCrta::slice_Ht == 0 && WriterCrta::intermediate == 1 && WriterCrta::output == 2 &&
         WriterCrta::semaphore_0 == 3 && WriterCrta::semaphore_1 == 4 && WriterCrta::batch_ready == 5 &&
-        WriterCrta::barrier == 6 && WriterCrta::count == 7);
+        WriterCrta::barrier == 6 && WriterCrta::my_chip_id == 7 && WriterCrta::count == 8);
     KernelDescriptor::RTArgList writer_common_args;
     writer_common_args.reserve(WriterCrta::count);
     writer_common_args.push_back(slice_Ht);  // smuggled-rta-ok: runtime row count, re-applied on cache hit
@@ -832,6 +833,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                   barrier_semaphore.value().address())  // smuggled-rta-ok: caller semaphore is outside the
                                                         // program hash and re-applied on cache hit
             : 0);
+    writer_common_args.push_back(ring_index);
     program.kernels[writer_kernel_id].emplace_common_runtime_args(writer_common_args);
 
     // Reduce kernel
@@ -849,7 +851,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         chunks_per_mm_N_full_block_val,  // [9]  chunks_per_mm_N_full_block
         slice_Wt,                        // [10] slice_Wt
         mm_N_full_block_wt_val,          // [11] mm_N_full_block_wt
-        ring_index,                      // [12] my_chip_id
+        0,                               // [12] unused: my_chip_id is a common runtime arg
     };
     // Append addcmul CB indices for the compute kernel.
     if (fuse_rs_addcmul) {
@@ -873,9 +875,13 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     });
 
     using ReduceCrta = ttnn::experimental::ccl::strided_reduce_scatter_common_args::Reduce;
-    static_assert(ReduceCrta::slice_Ht == 0 && ReduceCrta::addcmul_scalar == 1 && ReduceCrta::count == 2);
+    static_assert(
+        ReduceCrta::slice_Ht == 0 && ReduceCrta::addcmul_scalar == 1 && ReduceCrta::my_chip_id == 2 &&
+        ReduceCrta::count == 3);
     program.kernels[sender_reduce_kernel_id].emplace_common_runtime_args(
-        {slice_Ht, addcmul_scalar_bits(fused_ternary_scalar)});  // smuggled-rta-ok: row count and scalar, override
+        {slice_Ht,
+         addcmul_scalar_bits(fused_ternary_scalar),
+         ring_index});  // smuggled-rta-ok: row count and scalar, override
 
     auto worker_core_iter = sender_worker_core_range_set.ranges().cbegin();
     auto mux_core_iter = mux_core_range_set.ranges().cbegin();

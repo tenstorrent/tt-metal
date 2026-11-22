@@ -41,7 +41,7 @@ void kernel_main() {
     constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(9);
     constexpr uint32_t slice_Wt = get_compile_time_arg_val(10);
     constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(11);
-    constexpr uint32_t my_chip_id = get_compile_time_arg_val(12);
+    // [12] unused: my_chip_id is a common runtime arg
 
 #ifdef FUSE_RS_ADDCMUL
     constexpr uint32_t addcmul_temp_cb = get_compile_time_arg_val(13);
@@ -57,6 +57,7 @@ void kernel_main() {
     // The row count (and the addcmul scalar) are common runtime args; same split as reader and writer.
     namespace Crta = ttnn::experimental::ccl::strided_reduce_scatter_common_args;
     const uint32_t slice_Ht = get_common_arg_val<uint32_t>(Crta::Reduce::slice_Ht);
+    const uint32_t my_chip_id = get_common_arg_val<uint32_t>(Crta::Reduce::my_chip_id);
 #ifdef FUSE_RS_ADDCMUL
     const uint32_t fused_ternary_scalar_uint = get_common_arg_val<uint32_t>(Crta::Reduce::addcmul_scalar);
 #endif

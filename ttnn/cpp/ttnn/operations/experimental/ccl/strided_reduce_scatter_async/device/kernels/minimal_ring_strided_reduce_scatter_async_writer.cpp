@@ -52,7 +52,7 @@ namespace Crta = ttnn::experimental::ccl::strided_reduce_scatter_common_args;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
+// [0] unused: my_chip_id is a common runtime arg
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
 constexpr uint32_t cb_compute_output_id = get_compile_time_arg_val(2);
 constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(3);
@@ -116,6 +116,7 @@ void kernel_main() {
     const size_t out_ready_sem = get_common_arg_val<uint32_t>(Crta::Writer::semaphore_0 + direction);
     const size_t batch_ready_sem = get_common_arg_val<uint32_t>(Crta::Writer::batch_ready);
     const size_t barrier_sem = get_common_arg_val<uint32_t>(Crta::Writer::barrier);
+    const uint32_t my_chip_id = get_common_arg_val<uint32_t>(Crta::Writer::my_chip_id);
     // Same split as the reader and the matmul's in0 kernels.
     const uint32_t slice_Ht_per_core = ttnn::runtime_length::div_up(slice_Ht, mm_cores_y);
     const uint32_t mm_M_unit_blocks_per_core = ttnn::runtime_length::div_up(slice_Ht_per_core, mm_block_ht);

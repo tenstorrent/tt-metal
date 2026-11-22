@@ -257,8 +257,9 @@ MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const MinimalMatmulStridedReduceScatterAsyncInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
-    auto adapted =
-        descriptor_adapter_t::create_mesh_workload(operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+    // override_runtime_arguments patches values that are the same on every chip, so it handles merged ranges.
+    auto adapted = descriptor_adapter_t::create_mesh_workload(
+        operation_attributes, tensor_coords, tensor_args, tensor_return_value, ttnn::MergePerDevicePrograms{});
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (auto& [range, descriptor] : adapted.shared_variables) {
         shared_variables[range].descriptor = std::move(descriptor);

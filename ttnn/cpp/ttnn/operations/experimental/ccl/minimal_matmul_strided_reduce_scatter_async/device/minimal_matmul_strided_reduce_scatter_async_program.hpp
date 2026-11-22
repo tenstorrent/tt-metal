@@ -7,6 +7,7 @@
 #include "minimal_matmul_strided_reduce_scatter_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
+#include "ttnn/per_device_program_merge.hpp"
 #include <tt-metalium/runtime_args_data.hpp>
 #include <array>
 #include <optional>
@@ -27,6 +28,9 @@ struct MinimalMatmulStridedReduceScatterAsyncProgramFactory {
     static constexpr uint32_t kMatmulIn0ReceiverKernelIdx = 5;
     static constexpr uint32_t kMatmulIn1SenderKernelIdx = 6;
     static constexpr uint32_t kMatmulIn1ReceiverKernelIdx = 7;
+    // The per-coordinate programs of a range merge into one: they differ only in runtime args (the ring rank and the
+    // fabric connections).
+    static constexpr bool merge_per_device_programs = true;
 
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const MinimalMatmulStridedReduceScatterAsyncParams& operation_attributes,
@@ -49,7 +53,8 @@ struct MinimalMatmulStridedReduceScatterAsyncAdapterOperation {
 
 // The descriptor workload plus, per cached program, the slots of the resolved buffer bindings and of the caller-owned
 // progress and credit counters: a cache hit rewrites a slot only when its address changes, instead of re-applying
-// every binding and walking every reader and matmul core of every per-device program.
+// every binding and walking every reader and matmul core of every program. All of these values are the same on every
+// chip, so one patch serves a merged range.
 struct MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory {
     using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
         detail::MinimalMatmulStridedReduceScatterAsyncAdapterOperation>::
