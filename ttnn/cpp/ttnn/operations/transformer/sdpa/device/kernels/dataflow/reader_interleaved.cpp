@@ -127,10 +127,42 @@ FORCE_INLINE void rel_fill_tile(
         }
         return;
     }
+    const bool interior =
+        dmin >= 0 && dmax < static_cast<int32_t>(kRelW) && (window == 0 || dmax < static_cast<int32_t>(window));
+    // The scratch rows were written by the NoC (after a read barrier) and the tile is pushed to compute next: keep the
+    // compiler from moving the plain loads and stores below across either.
+    asm volatile("" ::: "memory");
+    if (interior) {
+        // Every element is a bias value: row r, column c is element D - c of the row, a reversed run of 32. Build
+        // each 32-bit pair (c even in the low half) from at most one new word load.
+        for (uint32_t r = 0; r < 32; ++r) {
+            const int32_t e = D0 + static_cast<int32_t>(r) - static_cast<int32_t>(row_base[r]);  // element of c = 0
+            const tt_l1_ptr uint32_t* src = reinterpret_cast<const tt_l1_ptr uint32_t*>(scratch + r * kRelRowBytes);
+            tt_l1_ptr uint32_t* dst = reinterpret_cast<tt_l1_ptr uint32_t*>(tile) + (r >> 4) * 256 + (r & 15) * 8;
+            const int32_t k = e >> 1;
+            if (e & 1) {
+#pragma GCC unroll 16
+                for (int32_t w = 0; w < 16; ++w) {
+                    const uint32_t x = src[k - w];
+                    dst[(w >> 3) * 128 + (w & 7)] = (x >> 16) | (x << 16);
+                }
+            } else {
+                uint32_t a = src[k];
+#pragma GCC unroll 16
+                for (int32_t w = 0; w < 16; ++w) {
+                    const uint32_t b = src[k - w - 1];
+                    dst[(w >> 3) * 128 + (w & 7)] = (a & 0xFFFFu) | (b & 0xFFFF0000u);
+                    a = b;
+                }
+            }
+        }
+        asm volatile("" ::: "memory");
+        return;
+    }
     for (uint32_t r = 0; r < 32; ++r) {
         const int32_t D = D0 + static_cast<int32_t>(r);  // d at column c is D - c
-        const volatile tt_l1_ptr uint16_t* src =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch + r * kRelRowBytes) - row_base[r];
+        const tt_l1_ptr uint16_t* src =
+            reinterpret_cast<const tt_l1_ptr uint16_t*>(scratch + r * kRelRowBytes) - row_base[r];
         volatile tt_l1_ptr uint16_t* dst = t + (r >> 4) * 512 + (r & 15) * 16;
         for (uint32_t c = 0; c < 32; ++c) {
             const int32_t d = D - static_cast<int32_t>(c);
