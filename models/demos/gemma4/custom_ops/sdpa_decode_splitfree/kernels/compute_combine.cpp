@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Phase 2 compute of sdpa_decode_splitfree: per (row, group) pair of this core, the live units' partials merged
 // in ascending unit order with the stock tree-reduction step (sdpa_flash_decode.cpp's child merge on
-// compute_common.hpp: correction_block gives m' = max(m, m_u), a = exp((m - m') scale), a_u = exp((m_u - m')
+// sdpa_block_ops.hpp: correction_block gives m' = max(m, m_u), a = exp((m - m') scale), a_u = exp((m_u - m')
 // scale), l' = l a + l_u a_u; then O' = O a + O_u a_u), every value fp32; then O / l once, packed to bf16.
 // The order is fixed by the unit indices, so the result does not depend on the batch, the cores or the grid.
 //
@@ -24,7 +24,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_block_ops.hpp"
 #include "splitfree_common.hpp"
 
 void kernel_main() {
