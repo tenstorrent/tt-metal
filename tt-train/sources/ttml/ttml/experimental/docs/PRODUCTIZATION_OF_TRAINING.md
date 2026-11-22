@@ -92,7 +92,9 @@ that isn't targeted stay zero. So `[q_proj, v_proj]` trains adapters on q and v 
 `[q_proj, k_proj, v_proj, o_proj]` trains attention. The one difference from PEFT is that the projections of a fused
 layer share a dropout mask.
 
-**Optimizer.** AdamW at a constant learning rate; it is the only optimizer supported so far.
+**Optimizer.** AdamW at a constant learning rate; it is the only optimizer supported so far. Several of them can
+train different weights (see [Several optimizers](#several-optimizers)). Checkpoints don't save the optimizer state
+yet; that is planned.
 
 **Data.** The `id` of the `dataset` section picks one:
 
@@ -335,11 +337,15 @@ checkpoint:
 ```
 
 `init`, the only `type` so far, loads the checkpoint's weights onto the pretrained weights of `model.name`: training
-starts at step 0 with a fresh optimizer. The checkpoint must be in the layout the run saves, by `checkpoint.format` and
-whether it trains LoRA (see the table above), and of the run's `model.name`, with the run's LoRA `r`, `alpha` and
-`target_modules`.
+starts at step 0 with a fresh optimizer, since checkpoints don't save its state yet. The checkpoint must be in the
+layout the run saves, by `checkpoint.format` and whether it trains LoRA (see the table above), and of the run's
+`model.name`, with the run's LoRA `r`, `alpha` and `target_modules`.
 
 It takes effect with or without `CheckpointCallback`, and a checkpoint that doesn't load fails `setup`.
+
+So a LoRA run starts from LoRA adapters only: the config can't yet train new adapters on a full-model checkpoint or
+on a local copy of a model. Until it can, which is planned, save that model in the `hf` layout and register a provider
+whose `model_source()` returns its directory, as under [Adding a model](#adding-a-model).
 
 ---
 
