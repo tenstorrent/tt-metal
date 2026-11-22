@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace tt::tt_fabric {
@@ -80,11 +81,11 @@ struct EDMChannelWorkerLocationInfo {
     uint32_t align_pad_8{};
 
     uint32_t edm_read_counter = 0;
+    uint32_t align_pad_9{};  // Padding added for safe reading over noc
     // How the router takes sender-channel credits, written by the router at bring-up:
     // connection_interface::credit_mode_stream_registers or credit_mode_software_counters. A producer
-    // checks it against its own mode when it connects.
+    // checks it against its own mode when it connects, reading it into SenderChannelProducerCursor::align_pad_0.
     uint32_t credit_mode{};
-    uint32_t align_pad_10{};
     uint32_t align_pad_11{};
 };
 
@@ -108,5 +109,8 @@ struct SenderChannelProducerCursor {
 };
 
 static_assert(sizeof(SenderChannelProducerCursor) == 16);
+// A NOC read needs its source and destination at the same offset within a 16-byte beat.
+static_assert(
+    offsetof(EDMChannelWorkerLocationInfo, credit_mode) % 16 == offsetof(SenderChannelProducerCursor, align_pad_0) % 16);
 
 }  // namespace tt::tt_fabric
