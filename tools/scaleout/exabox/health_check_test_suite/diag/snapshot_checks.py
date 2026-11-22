@@ -96,7 +96,7 @@ PLAUSIBLE = {
     "current": (1.0, 2000.0),
     "voltage": (0.3, 1.5),
 }
-# C8 WARN thresholds, as tray-test's: max temperature, power, current and min vcore.
+# C8 WARN thresholds: max temperature, power, current and min vcore.
 C8_TEMP_C, C8_POWER_W, C8_CURRENT_A, C8_VCORE_V = 75.0, 320.0, 400.0, 0.66
 
 

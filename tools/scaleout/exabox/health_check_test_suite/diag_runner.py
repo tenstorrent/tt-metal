@@ -626,6 +626,8 @@ def main() -> int:
         ap.error(str(e))
     if (args.steps is not None or any(v is not None for v in overrides.values())) and not (args.mode or args.plan):
         ap.error("--steps and the bus-bar overrides need --mode (without it no bus-bar step runs)")
+    if args.mode and not TIERS[DEPRECATED_TIER_ALIASES.get(args.tier, args.tier)].busbar:
+        ap.error(f"--mode runs the galaxy load, which tier {args.tier} does not have; use --tier galaxy")
     if args.plan:
         for step in steps:
             print(step.line())
