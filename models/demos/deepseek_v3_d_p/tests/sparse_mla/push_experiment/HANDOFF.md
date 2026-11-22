@@ -125,6 +125,12 @@ to its repeated prompt.
 - GLM full-depth sweep (1M request): shared-layer dense threshold 15,360 / 30,720 (default) / 61,440 and full-layer
   cutoff 153,600 / 204,800 (default) all land at 87,287-87,339 ms: flat optimum, defaults kept.
 
+- **Exposed GLM PREFIX push (full depth, 1M real prompt).** Gap between a shared layer's sparse SDPA end and the next
+  op (the prefetched PREFIX push outlasting attention), summed per chunk: 0-0.2 ms below 160k, 5-10 ms at 250-450k,
+  12-22 ms at 490-780k (up to 2.7 ms on single layers), 0.3-5 ms past 820k. That is 1-5% of the chunk in the
+  mid-range: the case for the multicast-tree push (busiest link 1.6-1.9x lower). Hiding more behind the Q/KV stems
+  is capped at ~0.42 ms/layer and needs the stems on the attention sub-device grid.
+
 ### 0.4 Harness (`tools/`, also see tools/README.md)
 
 - `run_local.patch`: local copy of `run_multirank_pcc.sh` with `LOCAL_NUM_LAYERS/LOCAL_REQUEST_LEN/LOCAL_CHECK_PCC/
