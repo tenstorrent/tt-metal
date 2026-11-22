@@ -38,6 +38,7 @@ if [ -n "$shard" ]; then
     | sed -n -e 's/.*Building CXX object //p' -e 's/.*Building C object //p' | sort >"$out/$label-all-objects.txt"
   awk -v s="$shard" -v n="$shards" '(NR - 1) % n == s' "$out/$label-all-objects.txt" >"$out/$label-objects.txt"
   echo "shard $shard/$shards: $(wc -l <"$out/$label-objects.txt") of $(wc -l <"$out/$label-all-objects.txt") compile edges"
+  [ -s "$out/$label-objects.txt" ] || { echo "no compile edges found for the shard"; exit 1; }
   # shellcheck disable=SC2046
   ninja -C .build/clang-tidy -f build-Debug.ninja -k 0 -j "${CMAKE_BUILD_PARALLEL_LEVEL:-16}" \
     $(cat "$out/$label-objects.txt") >"$out/$label-build.log" 2>&1 || build_exit=$?

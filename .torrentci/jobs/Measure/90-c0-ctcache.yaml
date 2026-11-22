@@ -362,3 +362,43 @@ jobs:
         shell:
           run:
             - .torrentci/c0-ctcache/parity.sh
+  - id: c0-ctcache-debug
+    description: C0 - inspect the build graph for the shard split
+    timeout: 1h
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '4', memory: 8Gi, ephemeral-storage: 50Gi}
+          limits: {memory: 12Gi, ephemeral-storage: 80Gi}
+    env:
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: prep
+        kind: shell
+        shell:
+          run:
+            - .torrentci/c0-ctcache/prep.sh
+      - id: inspect
+        kind: shell
+        shell:
+          run:
+            - ninja --version; cmake --version | head -1
+            - ls .build/clang-tidy | head -30
+            - ninja -C .build/clang-tidy -f build-Debug.ninja -n all all_verify_interface_header_sets 2>&1 | head -8 | cut -c1-300
+            - ninja -C .build/clang-tidy -f build-Debug.ninja -n all all_verify_interface_header_sets 2>&1 | wc -l
+            - ninja -C .build/clang-tidy -f build-Debug.ninja -t targets all 2>&1 | awk '{print $NF}' | sort | uniq -c | sort -rn | head -15
+            - python3 -c "import json;d=json.load(open('.build/clang-tidy/compile_commands.json'));print(len(d), sorted(d[0].keys()))" || true
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
