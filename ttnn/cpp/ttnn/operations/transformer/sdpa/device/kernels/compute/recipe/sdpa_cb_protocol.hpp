@@ -4,7 +4,7 @@
 #pragma once
 
 // Shared streaming buffer protocol, independent of numerical policy. Include
-// after compute_common.hpp and the compute API, just like compute_streaming.hpp.
+// after recipe_block_ops.hpp (the compute API), like recipe_streaming.hpp.
 // These functions retain their original linkage and inlining attributes: both
 // affect device code size and the hot PACK-thread path.
 #include "api/dataflow/circular_buffer.h"

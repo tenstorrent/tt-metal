@@ -17,7 +17,7 @@
 #endif
 
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "compute_common.hpp"
+#include "recipe/recipe_block_ops.hpp"
 #include "recipe/recipe_tail.hpp"
 
 #include "recipe/recipe_sfpu.hpp"

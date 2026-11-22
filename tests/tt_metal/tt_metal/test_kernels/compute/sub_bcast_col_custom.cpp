@@ -10,7 +10,7 @@
 // calling the stock one-tile broadcast CT_DIM times.
 //
 // Mirrors the call sequence in sub_exp_block_bcast_cols() in
-// ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp, including
+// ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/recipe/recipe_fused_chunk.inc, including
 // its per-row advance of the srcA tile index, the srcB tile index and the dest base within a single
 // tile_regs_acquire().
 

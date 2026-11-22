@@ -27,7 +27,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/tile_constants.h"
-#include "compute_common.hpp"
+#include "recipe/recipe_block_ops.hpp"
 #include "recipe/recipe_tail.hpp"
 #include "recipe/recipe_sfpu.hpp"
 #include "recipe/recipe_streaming.hpp"
