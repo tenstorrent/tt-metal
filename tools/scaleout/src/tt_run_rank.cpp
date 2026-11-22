@@ -55,6 +55,7 @@
 #include <fcntl.h>
 #include <glob.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -133,16 +134,28 @@ unsigned long long start_time(pid_t pid) {
     return p != nullptr ? std::strtoull(p, nullptr, 10) : 0;
 }
 
+// Whether path is this user's own entry, not a symlink: the only kind read from the shared tmpdir.
+bool owned(const char* path) {
+    struct stat st{};
+    return ::lstat(path, &st) == 0 && st.st_uid == ::getuid() && !S_ISLNK(st.st_mode);
+}
+
 // prterun's PMIx server URI for tools: the first line of <tmpdir>/prterun.<host>.<pid>.<uid>/pmix.<host>.tool.<pid>
-// (ttrun.py prterun_tool_uri), empty while it is not there.
+// (ttrun.py LaunchedJob.prterun_tool_uri), empty while it is not there. Only this user's directory and file count (by
+// name and by owner): another user cannot point the stop at a server of theirs.
 std::string tool_uri(pid_t pid) {
     const char* tmp = std::getenv("TMPDIR");
     const std::string pattern = std::string(tmp != nullptr && *tmp != '\0' ? tmp : "/tmp") + "/prterun.*." +
-                                std::to_string(pid) + ".*/pmix.*.tool." + std::to_string(pid);
+                                std::to_string(pid) + "." + std::to_string(::getuid()) + "/pmix.*.tool." +
+                                std::to_string(pid);
     std::string uri;
     glob_t found{};
     if (::glob(pattern.c_str(), 0, nullptr, &found) == 0) {
         for (size_t i = 0; i < found.gl_pathc && uri.empty(); ++i) {
+            const std::string file = found.gl_pathv[i];
+            if (!owned(file.substr(0, file.rfind('/')).c_str()) || !owned(file.c_str())) {
+                continue;
+            }
             if (FILE* f = std::fopen(found.gl_pathv[i], "r")) {
                 char line[1024] = {};
                 if (std::fgets(line, sizeof line, f) != nullptr) {

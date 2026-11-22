@@ -18,6 +18,7 @@ import shlex
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -293,10 +294,25 @@ class LaunchedJob:
     """
 
     @staticmethod
+    def _owned(path: str) -> bool:
+        """Whether ``path`` is this user's own entry, not a symlink: the only kind tt-run reads or removes in a shared
+        directory (/tmp, /dev/shm)."""
+        try:
+            st = os.lstat(path)
+        except OSError:
+            return False
+        return st.st_uid == os.getuid() and not stat.S_ISLNK(st.st_mode)
+
+    @staticmethod
     def prterun_tool_uri(prterun_pid: int) -> Optional[str]:
         """The PMIx server URI prterun publishes for tools: the first line of
-        ``<tmpdir>/prterun.<host>.<pid>.<uid>/pmix.<host>.tool.<pid>``, or None while it is not there yet."""
-        for f in glob.glob(f"{tempfile.gettempdir()}/prterun.*.{prterun_pid}.*/pmix.*.tool.{prterun_pid}"):
+        ``<tmpdir>/prterun.<host>.<pid>.<uid>/pmix.<host>.tool.<pid>``, or None while it is not there yet. The tmpdir is
+        shared, so only this user's directory and file count (by name and by owner, never through a symlink): another
+        user cannot point tt-run's stop at a server of theirs."""
+        uid = os.getuid()
+        for f in glob.glob(f"{tempfile.gettempdir()}/prterun.*.{prterun_pid}.{uid}/pmix.*.tool.{prterun_pid}"):
+            if not (LaunchedJob._owned(os.path.dirname(f)) and LaunchedJob._owned(f)):
+                continue
             try:
                 with open(f) as fh:
                     uri = fh.readline().strip()
@@ -412,7 +428,7 @@ class LaunchedJob:
                 except OSError:
                     continue
             for seg in mine:
-                if seg in mapped:
+                if seg in mapped or not LaunchedJob._owned(seg):
                     continue
                 try:
                     # Uncertain ownership: a just-created segment may be a concurrent same-user job's that has not
@@ -426,7 +442,7 @@ class LaunchedJob:
                     pass
         # PRRTE session directories whose launcher pid is dead (prterun.<host>.<pid>.<uid>).
         for d in glob.glob(f"{tempfile.gettempdir()}/prterun.*.{uid}"):
-            if not os.path.isdir(d):
+            if not LaunchedJob._owned(d) or not os.path.isdir(d):
                 continue
             try:
                 pid = int(d.rsplit(".", 2)[-2])

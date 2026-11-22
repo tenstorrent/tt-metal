@@ -2075,6 +2075,28 @@ class TestJobOwnership:
         assert result.exit_code == 0, result.output
         assert ("btl_tcp_if_exclude" in result.output) == (site_include is None), result.output
 
+    def test_the_prterun_address_is_read_only_from_this_users_own_files(self, tmp_path, monkeypatch):
+        import tempfile
+
+        from ttnn.distributed.ttrun import LaunchedJob
+
+        # The tmpdir is shared: a decoy another user plants (their uid in the name) or a symlink with this user's name
+        # must not point tt-run's stop at another server. Only this user's own directory and file count.
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+        pid, uid = 4242, os.getuid()
+        decoy = tmp_path / f"prterun.h.{pid}.{uid + 1}"
+        decoy.mkdir()
+        (decoy / f"pmix.h.tool.{pid}").write_text("tcp4://decoy:1\n")
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / f"pmix.h.tool.{pid}").write_text("tcp4://symlinked:1\n")
+        (tmp_path / f"prterun.h.{pid}.{uid}").symlink_to(elsewhere)
+        assert LaunchedJob.prterun_tool_uri(pid) is None
+        real = tmp_path / f"prterun.h2.{pid}.{uid}"
+        real.mkdir()
+        (real / f"pmix.h2.tool.{pid}").write_text("tcp4://real:1\n")
+        assert LaunchedJob.prterun_tool_uri(pid) == "tcp4://real:1"
+
     def test_launch_env_drops_a_tcp_interface_variable_the_line_contradicts(self, monkeypatch):
         from ttnn.distributed.ttrun import LaunchedJob
 
