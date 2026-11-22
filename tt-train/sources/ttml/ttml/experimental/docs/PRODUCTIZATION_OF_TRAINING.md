@@ -322,8 +322,8 @@ same `project_dir`, such as the one a run started from, are kept. `<project_dir>
 lists the run's checkpoints that are kept, oldest first, with their path, step, epoch and metrics; a run replaces an
 earlier run's list on its first save. So its last entry is the checkpoint of the run's last step, which is also logged
 as the run's `model` artifact. Every run logs a new version of that one artifact, so `model:latest` is the newest
-trained model; the checkpoint's directory name is in the artifact's `checkpoint` metadata. A checkpoint is written to a staging directory and moved into place when complete, so a
-failed save leaves the previous one intact.
+trained model; the checkpoint's directory name is in the artifact's `checkpoint` metadata. A checkpoint is written to
+a staging directory and moved into place when complete, so a failed save leaves the previous one intact.
 
 ### Starting from a checkpoint
 
