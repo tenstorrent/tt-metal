@@ -105,6 +105,23 @@ K3.1 per-layer table (committed in run_multirank_pcc.sh's kimi_k3_1 case): `3:30
   is the 8k golden prompt repeated (`_load_token_pool` tiles the trace), so the indexer picks the same tokens in many
   copies; real long documents likely favor the push much more. Get a real 1M K3.1 trace before tuning K3.1 further.
 
+### 0.3c K3.1 on a real 1M prompt (`k3_vllm_code_debug_1M_head_tail`, InfiniteBench code-debug, K3 tokenizer)
+
+Producer pointed at the real trace (`PREFILL_TRACE_DIR`; its PCC golden is K3's, so the PCC gate fails, timings are
+valid). L24, local 8x4, host times:
+
+| Run | 1M request | 900k-1M per chunk |
+|---|---|---|
+| Baseline (full push off) | 45,146 ms | 242.6 ms |
+| Push everywhere | 44,688 ms | -10.2 ms (-4.2%); loses +1.5..3 ms below ~470k |
+| Per-layer cutoffs (code default since this commit) | **44,384 ms (-1.7%)** | -10.8 ms (-4.4%); never loses beyond noise |
+| One 300k cutoff | 44,415 ms | -10.7 ms |
+
+Real text makes the push much cheaper than the repeated 8k prompt (layer 11 at 972k: 2.9 vs 5.2 ms). Per-layer
+crossovers: layer 3 ~256k, 15 ~307k, 7 ~512k, 19 ~614k, 11 ~666k -> `_K31_FULL_PUSH_DENSE_BELOW` in mla.py (Kimi K3
+family, detected by `mla_use_output_gate`; unmeasured DSA layers 614,400). The CI L24 leg keeps its env table, tuned
+to its repeated prompt.
+
 ### 0.4 Harness (`tools/`, also see tools/README.md)
 
 - `run_local.patch`: local copy of `run_multirank_pcc.sh` with `LOCAL_NUM_LAYERS/LOCAL_REQUEST_LEN/LOCAL_CHECK_PCC/

@@ -41,6 +41,8 @@ _SPARSE_KV_PUSH_DENSE_SLABS = 6
 
 # EXPERIMENT default for SPARSE_MLA_FULL_PUSH.
 _FULL_PUSH_DEFAULT = "1"
+# EXPERIMENT: Kimi K3.1 per-layer full-push cutoffs (tokens), real 1M prompt; see push_experiment/HANDOFF.md 0.3c.
+_K31_FULL_PUSH_DENSE_BELOW = {3: 256_000, 7: 512_000, 11: 665_600, 15: 307_200, 19: 614_400}
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 
@@ -838,6 +840,10 @@ class ttMLA:
             full_rows = dense.shape[2] if self._push_buffer_parity[layer_idx] is None else self._push_rows
             env_full_below = os.environ.get("SPARSE_MLA_FULL_PUSH_DENSE_BELOW")
             default_full_below = 204_800 if getattr(config, "indexer_types", None) else 300_000
+            if getattr(config, "mla_use_output_gate", False):
+                # Kimi K3 family (K3.1 DSA layers): per layer, measured on a real 1M prompt (InfiniteBench code-debug,
+                # L24, push-always vs baseline per layer). Unmeasured deeper layers take the slowest measured crossover.
+                default_full_below = _K31_FULL_PUSH_DENSE_BELOW.get(layer_idx, 614_400)
             full_below = int(env_full_below) if env_full_below is not None else default_full_below
             # Per layer (SPARSE_MLA_FULL_PUSH_DENSE_BELOW_LAYERS="layer:tokens,..."): the push volume depends on how
             # spread the layer's top-k is, so layers differ (K3.1 L24, 900k: push 1.9 ms at layer 15, 4.8 ms at 11).
