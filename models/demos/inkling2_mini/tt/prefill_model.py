@@ -61,6 +61,7 @@ from models.demos.inkling2_mini.tt.fused.common import dense_matrix
 from models.demos.inkling2_mini.tt.fused.pf_attnres import PfAttnRes
 from models.demos.inkling2_mini.tt.fused.pf_conv import PfConv
 from models.demos.inkling2_mini.tt.fused.pf_gate import PfGateTail
+from models.demos.inkling2_mini.tt.fused.pf_heads import PfHeads, scale_rows
 from models.demos.inkling2_mini.tt.model import APPS, HIDDEN, LOOP_END, LOOP_START, SOFTCAP, VOCAB_REAL
 from models.demos.inkling2_mini.tt.moe import INTER, NUM_EXPERTS, RMS_EPS, ROUTE_SCALE, TOP_K, softcapped_swiglu
 from models.demos.inkling2_mini.tt.residual import cache_index
@@ -194,6 +195,30 @@ def _has_r2(dev):
     return bool(ttnn.to_torch(out).float().flatten()[0] == 32.0)
 
 
+def _has_unified(dev, w_gate_up, w_down):
+    """Does this build's deepseek_prefill.unified_routed_expert_moe take stacked expert weights (the same
+    [1, E, K, 2I] tensor in every gate / up slot) ? A no-expert call: older builds reject the shapes."""
+    op = getattr(getattr(ttnn.experimental, "deepseek_prefill", None), "unified_routed_expert_moe", None)
+    if op is None:
+        return False
+    rm = ttnn.ROW_MAJOR_LAYOUT
+    u32 = lambda v: ttnn.from_torch(
+        torch.tensor(v, dtype=torch.int32).view(1, -1), dtype=ttnn.uint32, layout=rm, device=dev
+    )  # noqa: E731
+    x = ttnn.from_torch(torch.zeros(32, HIDDEN), dtype=ttnn.bfloat16, layout=rm, device=dev)
+    ckc = ttnn.init_device_compute_kernel_config(
+        dev.arch(), math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False
+    )
+    e = [w_gate_up] * NUM_EXPERTS
+    try:
+        op(x, u32([0] * NUM_EXPERTS), u32([0] * NUM_EXPERTS), u32(list(range(NUM_EXPERTS))), e, e,
+           [w_down] * NUM_EXPERTS, 32, compute_kernel_config=ckc, activation=ttnn.RoutedExpertActivation.SituGlu,
+           x_row_index=u32([32] * 64), output_row_major=True, zero_output_row=32)  # fmt: skip
+    except (RuntimeError, TypeError):
+        return False
+    return True
+
+
 def _host(t):
     return (ttnn.to_torch(t) if isinstance(t, ttnn.Tensor) else t).float()
 
@@ -293,6 +318,7 @@ class _LayerPF:
 
         self.w_qgrs, self.w_k, self.w_v, self.w_o = (dev_of(f"attn.{n}") for n in ("w_qgrs", "w_k", "w_v", "w_o"))
         self.q_scale = put(_host(w["attn.q_clip_scale"]).view(1, N_HEADS, 1, HEAD_DIM))
+        self.q_scale_rows = put(scale_rows(_host(w["attn.q_clip_scale"]).view(N_HEADS, HEAD_DIM)))  # PfHeads form
         self.rel_scale = put(_host(w["attn.rel_clip_scale"]).view(1, N_HEADS, 1, D_REL))
         rel_p = _host(w["attn.rel_proj"]).view(D_REL, WINDOW)
         self.rel_proj = put(rel_p.view(1, 1, D_REL, WINDOW), ttnn.bfloat16)
@@ -360,6 +386,8 @@ class Inkling2Prefill:
         weighted_reduce=False,
         fused_glue=True,
         trace=True,
+        experts="auto",
+        fused_heads=True,
         profile=False,
         debug=False,
     ):
@@ -373,6 +401,11 @@ class Inkling2Prefill:
         weighted_reduce: MoE combine by attn_res_weighted_reduce_nc. fused_glue: one-program attn-res, short convs
         (+ residual) and message-gate tail (tt/fused/pf_*.py, bit-equal to the op chains). trace: replay captured
         chunks (see "traced chunks" below; the outputs are bit-equal to the eager run).
+        fused_heads: q / k / v head split + scale + L2 clip / RMS in one program each (tt/fused/pf_heads.py; same
+        rounding points as the op chain, sums in another order: not bit-equal).
+        experts: "unified" (all experts in one deepseek_prefill.unified_routed_expert_moe program, LoFi, BFP8
+        activations: needs a build that takes stacked expert weights), "sparse" (grouped sparse_matmul), "auto":
+        unified when the build has it.
         profile: synchronized per-section times in self.times. debug: print each application."""
         assert self._chunk_ok(chunk), chunk
         self.m = model
@@ -387,10 +420,18 @@ class Inkling2Prefill:
         self.r3 = r3
         self.fused_glue = fused_glue
         self._pfconv = PfConv(dev) if fused_glue else None
+        self._pfheads = PfHeads(dev) if fused_heads else None
         self.ckc = model.rows.ckc  # HiFi4, fp32 acc
         self.hifi4 = model.hifi4
         self.mm_cfg = model.mm_cfg
         self.layers = [_LayerPF(self, lay, root) for lay in model.layers]
+        if experts == "auto":
+            experts = "unified" if _has_unified(dev, self.layers[0].w_gate_up, self.layers[0].w_down) else "sparse"
+        self.unified = experts == "unified"
+        # fp32 DEST: the op's precise mode (fp32 partials, bf16 activations; bf8 activations miss the gate)
+        self.unified_ckc = ttnn.init_device_compute_kernel_config(
+            dev.arch(), math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=True
+        )
         g = _load(root, None, {"final_res_q", "msg_q"})
         self.final_res = (PfAttnRes if self.fused_glue else _AttnRes)(dev, g["final_res_q"], 1, self.ckc)
         # cross-pass message queries [C, 64] (rows 4l+j = loop layer l, message j), 1/sqrt(C) folded
@@ -450,6 +491,7 @@ class Inkling2Prefill:
         self.c_zero_row = put(torch.zeros(1, 1, 1, HIDDEN), bf)
         self.c_zx = {m: put(torch.zeros(1, 1, 32 - m, HIDDEN), bf) for m in (TAPS, 1 + 2 * TAPS)}
         self.c_ztail = {w: put(torch.zeros(1, 1, 32, w), bf) for w in (N_KV * HEAD_DIM, HIDDEN)}  # conv tails at s = 0
+        self.c_etab = put(torch.arange(NUM_EXPERTS, dtype=torch.int32).view(1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         for lp in self.layers:  # router bias, one row per token
             lp.router_bias_rows = put(lp.router_bias_row.expand(1, 1, T, NUM_EXPERTS).contiguous())
         if self.r3:
@@ -521,17 +563,23 @@ class Inkling2Prefill:
             )
         else:
             cur = proj
-        _, lags = tail.window(cur)
-        acc = None
-        for lag, xl in enumerate(lags):
-            wt = lp.taps[kv][lag]
+        if is_global or not self.fused_glue:
+            _, lags = tail.window(cur)
+            acc = None
+            for lag, xl in enumerate(lags):
+                wt = lp.taps[kv][lag]
+                if is_global:
+                    wt = ttnn.add(_cols(dyn_all, lag * width, (lag + 1) * width), wt)
+                term = ttnn.multiply(xl, wt, dtype=ttnn.float32)  # bf16 x fp32: exact, no typecast
+                acc = term if acc is None else ttnn.add(acc, term)
             if is_global:
-                wt = ttnn.add(_cols(dyn_all, lag * width, (lag + 1) * width), wt)
-            term = ttnn.multiply(xl, wt, dtype=ttnn.float32)  # bf16 x fp32: exact, no typecast
-            acc = term if acc is None else ttnn.add(acc, term)
-        if is_global:
-            acc = ttnn.multiply(ttnn.add(acc, _f32(lags[0])), lp.conv_scale)
-        heads = _f32(_heads(ttnn.typecast(acc, ttnn.bfloat16), N_KV, HEAD_DIM))
+                acc = ttnn.multiply(ttnn.add(acc, _f32(lags[0])), lp.conv_scale)
+            acc = ttnn.typecast(acc, ttnn.bfloat16)
+        else:  # local: static taps, the same op chain in one program
+            acc = self._pfconv(lp.taps[kv], cur, tail)
+        if self._pfheads is not None:
+            return self._pfheads(acc, N_KV, 0, "l2" if kv == "k" else "rms", QK_CLIP, EPS)
+        heads = _f32(_heads(acc, N_KV, HEAD_DIM))
         if kv == "k":
             out = self._l2_clip(heads, QK_CLIP)
         else:
@@ -597,7 +645,10 @@ class Inkling2Prefill:
         qgrs = self._linear(xq, lp.w_qgrs)
         self._tick("a.qgrs")
         tau_g = tau if is_global else None
-        q = self._scaled_clip(_heads(_cols(qgrs, 0, 3072), N_HEADS, HEAD_DIM), lp.q_scale, QK_CLIP, tau_g)
+        if self._pfheads is not None:  # q * scale, clipped, * tau (global), * SCALE: the SDPA's q
+            qs = self._pfheads(qgrs, N_HEADS, 0, "l2", QK_CLIP, scale=lp.q_scale_rows, tau=tau_g, mult=SCALE)
+        else:
+            q = self._scaled_clip(_heads(_cols(qgrs, 0, 3072), N_HEADS, HEAD_DIM), lp.q_scale, QK_CLIP, tau_g)
         rel = self._scaled_clip(_heads(_cols(qgrs, 6144, 6528), N_HEADS, D_REL), lp.rel_scale, REL_CLIP, tau_g)
         gate = _cols(qgrs, 3072, 6144)
         sink = ttnn.permute(_cols(qgrs, 6528, 6552), (0, 3, 2, 1))  # [1,24,T,1]
@@ -611,7 +662,8 @@ class Inkling2Prefill:
         cdt = st.k_ring.dtype
         k_c = ttnn.typecast(k, cdt) if cdt != ttnn.bfloat16 else k
         v_c = ttnn.typecast(v, cdt) if cdt != ttnn.bfloat16 else v
-        qs = ttnn.typecast(ttnn.multiply(_f32(q), SCALE), ttnn.bfloat16)  # kernel adds mask to raw q.k
+        if self._pfheads is None:
+            qs = ttnn.typecast(ttnn.multiply(_f32(q), SCALE), ttnn.bfloat16)  # kernel adds mask to raw q.k
 
         if is_global:  # far cache rows [v | 1, 0 x 31 | k] (attention_fast kv_full)
             mass = _rows(self.c_mass[cdt], 0, t)
@@ -894,10 +946,44 @@ class Inkling2Prefill:
         self._tick("moe.route")
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [t, HIDDEN])
         b = self._route(indices, n, t)  # host sync (a segment boundary when traced)
+        if self.unified:
+            return self._experts_unified(lp, x_rm, b, weights, t)
         nslot = b["nslot"]
         xs = ttnn.reshape(ttnn.embedding(b["gi"], x_rm, layout=ttnn.TILE_LAYOUT), [1, nslot, self.gm, HIDDEN])
         self._tick("moe.dispatch")
         return self._experts_combine(lp, moe, xs, b["ei"], b["bi"], nslot, weights, n, t)
+
+    def _experts_unified(self, lp, x_rm, b, weights, t):
+        """All experts in one program (deepseek_prefill.unified_routed_expert_moe on the stacked weights, SiTU-GLU =
+        the softcapped SwiGLU): expert e reads its region of rows (token rows through the row index), the output
+        rows are gathered back per (k, token) and weighted -> [1,1,T,C] bf16. Pad tokens read the zeroed spare
+        row."""
+        e = [lp.w_gate_up] * NUM_EXPERTS
+        y = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+            x_rm,
+            b["u_off"],
+            b["u_cnt"],
+            self.c_etab,
+            e,
+            e,
+            [lp.w_down] * NUM_EXPERTS,
+            t,
+            compute_kernel_config=self.unified_ckc,
+            activation=ttnn.RoutedExpertActivation.SituGlu,
+            x_row_index=b["u_xri"],
+            output_row_major=True,
+            zero_output_row=b["u_rows"] - 32,
+        )
+        self._tick("moe.experts")
+        yb = ttnn.reshape(ttnn.embedding(b["bi"], y, layout=ttnn.TILE_LAYOUT), [1, TOP_K, t, HIDDEN])
+        ttnn.deallocate(y)
+        wk = _bf16(ttnn.permute(weights, (0, 3, 2, 1)))  # [1,8,T,1]
+        return _bf16(ttnn.sum(ttnn.multiply(yb, wk), dim=1, keepdim=True))
+
+    def _urows(self, t):
+        """Fixed row count of the unified expert buffer: tile-aligned expert regions (sum < 8 t + 128 * 31) + a
+        zeroed spare tile row."""
+        return -(-(t * TOP_K + NUM_EXPERTS * 31) // 32) * 32 + 32
 
     def _nslot(self, t):
         """Fixed slot count of a t-row chunk (same program shapes for every routing): sum_e ceil(count_e / GM) <
@@ -922,6 +1008,8 @@ class Inkling2Prefill:
         self._tick("moe.read_ids")
         flat = ids.reshape(-1)  # pair p = tok * 8 + k
         counts = np.bincount(flat, minlength=NUM_EXPERTS)
+        if self.unified:
+            return self._route_unified(b, flat, counts, n)
         # slots of GM rows, each bound to one expert: ceil(count / GM) slots per expert (load imbalance is
         # large: one expert can take most tokens of a chunk). Pad slots repeat the last expert (its weights
         # are already in place: no DRAM reads) and are never gathered back.
@@ -1093,6 +1181,11 @@ class Inkling2Prefill:
             "ei": [put(i32(1, 1, 1, min(self.r2_step, ns - g0)), ttnn.uint16, rm) for g0 in range(0, ns, self.r2_step)],
             "bi": put(i32(1, TOP_K * t), ttnn.uint32, rm),
         }
+        if self.unified:
+            b["u_rows"] = self._urows(t)
+            b["u_off"] = put(i32(1, NUM_EXPERTS), ttnn.uint32, rm)
+            b["u_cnt"] = put(i32(1, NUM_EXPERTS), ttnn.uint32, rm)
+            b["u_xri"] = put(i32(1, b["u_rows"]), ttnn.uint32, rm)
         if nblk:  # blocks a full chunk writes into the ring (the rest are skipped)
             src = self._ring_src(t)
             b["ring_used"] = [bool(((src >= k * WINDOW) & (src < (k + 1) * WINDOW)).any()) for k in range(nblk)]
@@ -1108,6 +1201,27 @@ class Inkling2Prefill:
     @staticmethod
     def _write(buf, host, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(host, dtype=dtype, layout=layout), buf)
+
+    def _route_unified(self, b, flat, counts, n):
+        """Expert e's region: rows [off_e, off_e + count_e) of the buffer, off_e tile-aligned; row r reads token
+        xri[r] (pad rows: t, never read); back[k, tok] = buffer row of pair (tok, k)."""
+        t, nrows = b["t"], b["u_rows"]
+        cap = -(-counts // 32) * 32
+        off = np.concatenate([[0], np.cumsum(cap)[:-1]])
+        assert int(cap.sum()) <= nrows - 32, (int(cap.sum()), nrows)
+        order = np.argsort(flat, kind="stable")
+        starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
+        rank = np.empty_like(order)
+        rank[order] = np.arange(order.size) - starts[flat[order]]
+        dest = off[flat] + rank
+        xri = np.full(nrows, t, dtype=np.int32)
+        xri[dest] = np.arange(flat.size) // TOP_K
+        back = np.full((TOP_K, t), nrows - 32, dtype=np.int32)  # pad tokens read the zeroed spare row
+        back[:, :n] = dest.reshape(n, TOP_K).T
+        self._write(b["u_off"], torch.from_numpy(off.astype(np.int32)).view(1, -1), ttnn.uint32)
+        self._write(b["u_cnt"], torch.from_numpy(counts.astype(np.int32)).view(1, -1), ttnn.uint32)
+        self._write(b["u_xri"], torch.from_numpy(xri).view(1, -1), ttnn.uint32)
+        self._write(b["bi"], torch.from_numpy(back).view(1, -1), ttnn.uint32)
 
     def _set_inputs(self, ids, s, n):
         """Write the chunk's host inputs (before its device work or replay) and make its buffers current."""
