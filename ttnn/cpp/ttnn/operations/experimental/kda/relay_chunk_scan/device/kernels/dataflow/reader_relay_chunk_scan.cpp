@@ -39,10 +39,9 @@ constexpr auto weight_args = TensorAccessorArgs<norm_ct + 4>();
 using Gate = kda_gate::Operands<weight_args.next_compile_time_args_offset()>;
 constexpr uint32_t state_tiles = kt * kt;
 constexpr uint32_t num_chunks = Chronology::local_rows / tt::constants::TILE_HEIGHT;
-// The common args after the chronology's: the terms, the norm weight, then every correction core's NoC x | y << 16.
+// The common args after the chronology's: the terms, then the norm weight.
 constexpr uint32_t terms_arg = Chronology::next_common;
 constexpr uint32_t weight_arg = terms_arg + 1;
-constexpr uint32_t cores_arg = weight_arg + 1;
 
 // Every correction core of a head corrects its share of the head's chunks from the seeds its relay core writes into
 // it, and moves the head's W for its own matmul and the head's other cores (the writer moves x).
@@ -72,11 +71,8 @@ void kernel_main() {
     ctl[1] = group_chunks;
     cb_push_back(Chronology::cb_ctl, 1);
 
-    // The head's W for the core's matmul, then the partial sums with the core at this place of the pair's other head.
+    // The head's W for the core's matmul.
     Gate::move_w(head);
-    if constexpr (Gate::ways == 2) {
-        Gate::swap(get_common_arg_val<uint32_t>(cores_arg + Gate::partner(head) * cores_per_head + place));
-    }
 
     // The norm's scaler and weight.
     if (chunks != 0) {

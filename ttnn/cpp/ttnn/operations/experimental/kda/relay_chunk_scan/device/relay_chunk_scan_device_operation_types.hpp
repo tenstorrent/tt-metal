@@ -15,8 +15,8 @@
 namespace ttnn::experimental::prim {
 
 // The relay's persistent counters: its entry-state arrivals and its final-state arrivals (the relayed final state on
-// the first rank, the final carry on every other), then the output gate's x's and W's block counts.
-inline constexpr uint32_t relay_semaphores = 4;
+// the first rank, the final carry on every other).
+inline constexpr uint32_t relay_semaphores = 2;
 
 struct RelayChunkScanParams {
     uint32_t sequence_parallel_axis;
@@ -34,8 +34,8 @@ struct RelayChunkScanParams {
     tt::tt_metal::DataType output_dtype;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
-    // L1 addresses of the caller's relay_semaphores counters, kept alive across calls (each call subtracts what it
-    // consumed): a peer counts into the first three before this rank's call starts.
+    // L1 addresses of the caller's relay_semaphores counters, kept alive across calls: a peer counts into them before
+    // this rank's call starts, and each call subtracts what it consumed.
     std::array<uint32_t, relay_semaphores> semaphore_addresses{};
     uint32_t slab_index_scale = 1;
     uint32_t slab_index_offset = 0;
