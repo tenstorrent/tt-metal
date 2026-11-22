@@ -58,7 +58,10 @@ V_WIDTH = 160  # v(128) + mass column block
 KV_WIDTH = V_WIDTH + HEAD_DIM  # 288
 SCALE = HEAD_DIM**-0.5
 FAR_CHUNK = 128  # sdpa K chunk of the far cache (P1 sweep: 128 < 256 < 512 ms at 120K)
-LOCAL_CHUNK = 128
+# local ring (1024 slots): 4 cores per kv head x 256-key chunks, 37.4 -> 31.7 us per call vs the default 13 cores x 128
+# (each of 13 cores got < 1 chunk; the tree reduction dominated)
+LOCAL_CHUNK = 256
+LOCAL_CORES_PER_HEAD = 4
 # k and v ring writes as one paged_fused_update_cache program; INKLING_KV_FUSED=0: two paged_update_cache calls
 FUSED_KV_WRITE = os.environ.get("INKLING_KV_FUSED", "1") != "0"
 
@@ -144,13 +147,17 @@ class Inkling2AttentionFast(Inkling2Attention):
 
         grid = device.compute_with_storage_grid_size()
 
-        def sdpa_cfg(chunk):
+        def sdpa_cfg(chunk, cores_per_head=16):
             return ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=grid, q_chunk_size=0, k_chunk_size=chunk, exp_approx_mode=False
+                compute_with_storage_grid_size=grid,
+                q_chunk_size=0,
+                k_chunk_size=chunk,
+                exp_approx_mode=False,
+                max_cores_per_head_batch=cores_per_head,
             )
 
         self.sink_cols = put(torch.ones(1, 1, N_HEADS, 32), ttnn.float32)
-        self.local_cfg = sdpa_cfg(LOCAL_CHUNK)
+        self.local_cfg = sdpa_cfg(LOCAL_CHUNK, LOCAL_CORES_PER_HEAD)
         # k and v ring writes in one paged_fused_update_cache program: k's row on core (0, 0), v's on (0, 1)
         self.kv_shard_v = ttnn.create_sharded_memory_config(
             shape=(32, HEAD_DIM),
