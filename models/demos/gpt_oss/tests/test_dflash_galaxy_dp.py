@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Batched DFlash, data parallel on a Blackhole Galaxy: one QuietBox 2 replica of gpt-oss-20b (1 x 4 tensor parallel)
-per 2 x 2 ring of chips (demo/galaxy_dp.py), 8 on a Galaxy, each running tests/test_dflash_batched.py for its 32 / 128
+per 2 x 2 ring of chips (demo/galaxy_dp.py), 8 on a Galaxy, each running tests/test_dflash_batched.py for its 32 - 256
 users in its own process, all at once. Checks that every replica passes that test (its acceptance and its agreement
 with the batch-32 decode), that the replicas, which serve the same prompts, decode the same tokens (they run the same
 programs on identical rings, so any difference is a device-side race), and logs the aggregate tokens / s.
@@ -66,7 +66,7 @@ def run_replicas(rings, cpus, users, out_dir):
 
 
 @pytest.mark.timeout(7200)
-@pytest.mark.parametrize("users", [32, 128], ids=["users_32", "users_128"])
+@pytest.mark.parametrize("users", [32, 64, 128, 256], ids=["users_32", "users_64", "users_128", "users_256"])
 def test_dflash_galaxy_dp(users, tmp_path):
     rings = galaxy_rings()
     n = min(len(rings), int(os.getenv("GALAXY_DP_REPLICAS", len(rings))))
