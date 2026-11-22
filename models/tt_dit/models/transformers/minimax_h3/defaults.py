@@ -46,6 +46,10 @@ DEFAULTS: dict[str, str] = {
     "MINIMAX_H3_SOL_PREFIX_SPREAD": "1",
     "MINIMAX_H3_SOL_PREFIX_WEIGHTS": "1",
     "MINIMAX_H3_SOL_RUNTIME_LEN": "1",
+    # Sol as the reference computes it: exact partial prefix blocks, no forced block 0, one residual per Q block
+    "MINIMAX_H3_SOL_PREFIX_PARTIAL": "1",
+    "MINIMAX_H3_SOL_NO_FORCE_BLOCK0": "1",
+    "MINIMAX_H3_SOL_BLOCK_RESIDUAL": "1",
     "TT_SPARSE_RING_Q_PERM": "1",
     "TT_SPARSE_RING_FAST_PBIAS": "2",
     "TT_SPARSE_RING_DYN_SPLIT": "on",
