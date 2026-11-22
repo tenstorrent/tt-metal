@@ -112,7 +112,7 @@ def test_k31_layers_run_free(mesh_device, device_params):
     schedule = model.schedule
     mla = [schedule.is_mla(l) for l in range(num_layers)]
     assert mla == [l in spec.dsa for l in range(num_layers)], f"device layers' attention {mla} is not the chain's"
-    kda_slab = {l: i for i, l in enumerate(schedule.rank_kda_layer_ids())}  # the KDA state slabs' layer axis
+    assert schedule.rank_kda_layer_ids() == spec.kda, f"device KDA layers {schedule.rank_kda_layer_ids()}"
 
     taps: dict[str, torch.Tensor] = {}
     rows = {"n": 0}  # this chunk's real rows
@@ -218,7 +218,7 @@ def test_k31_layers_run_free(mesh_device, device_params):
                 for l in spec.kda:
                     name = f"state_{hi:08d}.pt"
                     torch.save(
-                        read_carry(mesh_device, caches.kda_states, kda_slab[l], layout.sp_axis, layout.tp_axis),
+                        read_carry(mesh_device, caches.kda_states, l, layout.sp_axis, layout.tp_axis),
                         dirs[f"kda-l{l}"] / name,
                     )
                     states[l].append({"row": hi, "file": name})
