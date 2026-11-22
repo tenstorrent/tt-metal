@@ -20,9 +20,6 @@ namespace ckernel {
 // Kept for callers that size DEST slots against the rope's tile geometry.
 constexpr std::uint32_t ROPE_SFPU_TILE_ROWS = 64;
 
-// No init entry: the rope loads/stores through ADDR_MOD_7 only, which hw_configure
-// (compute_kernel_hw_startup) leaves at zero advance.
-
 /**
  * Rotate in place, x tiles laid out at an arbitrary DEST stride.
  * Requires compute_kernel_hw_startup: hw_configure establishes the load formats and the

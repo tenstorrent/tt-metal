@@ -127,9 +127,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     // ADDR_MOD_7 is invariant (zero advance): every op that needs a different
                     // stride sets and restores it in its own execute, so no leftover state to scrub.
-                    // The restore contract is pinned by fuser/tests/sdpa_inner_loop_step.yaml
-                    // (SubBcastColCustom set/restore walk, then an Exp that loads/stores through
-                    // slot 7, golden-checked), not by this test's datacopy victim.
+                    // A missing restore fails the step 5 Reciprocal of fuser/tests/sdpa_inner_loop_step.yaml,
+                    // not this datacopy victim.
                     llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
                     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_csa_index_remap_<32, CSA_ROW_OFFSET>, DST_INDEX, VectorMode::RC_custom);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)

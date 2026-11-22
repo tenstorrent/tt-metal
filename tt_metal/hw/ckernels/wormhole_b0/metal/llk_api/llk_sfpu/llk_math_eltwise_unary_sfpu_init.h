@@ -113,11 +113,8 @@ inline void unused_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 template <SfpuType sfpu_op, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_init() {
     SAN_HOOK(unsupported());
-    // Per-op common SFPU init (config reg): no separate once-init is needed, but not fully
-    // self-contained: the executes assume the ADDR_MOD_7 zero-advance invariant, which
-    // _llk_math_hw_configure_ (compute_kernel_hw_startup) establishes and must already have
-    // run on this thread. The co-located sfpu::<op>_init() below then programs only the op's
-    // residual state (op-specific ADDR_MOD_6 where needed + counter reset).
+    // Per-op common SFPU init (config reg). The executes assume the ADDR_MOD_7 zero-advance invariant,
+    // so _llk_math_hw_configure_ (compute_kernel_hw_startup) must already have run on this thread.
     _llk_math_eltwise_unary_sfpu_init_once_();
     if constexpr (sfpu_op == SfpuType::abs) {
         sfpu::abs_init();
@@ -236,11 +233,8 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     } else if constexpr (sfpu_op == SfpuType::typecast) {
         sfpu::typecast_init();
     } else if constexpr (sfpu_op == SfpuType::exponential) {
-        // SDPA and other direct LLK callers use this no-arg overload to get the generic unary SFPU
-        // state (config reg + counter reset) without an op-specific init; the ADDR_MOD_7
-        // zero-advance invariant the exp walk assumes comes from _llk_math_hw_configure_
-        // (compute_kernel_hw_startup), which must already have run on the issuing thread,
-        // so route it to the full generic init.
+        // No-arg overload for SDPA and other direct LLK callers: generic init only; the exp walk's slot-7
+        // invariant comes from _llk_math_hw_configure_, which must already have run on this thread.
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::exponential>();
     } else {
         // Generic fallback (pre-restructuring behavior): ops without a self-contained sfpu::<op>_init()
