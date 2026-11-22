@@ -2067,7 +2067,7 @@ class ResidentModel:
             kernel_source=pdir + "hist_scatter.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=one_core,
-            compile_time_args=[K, G, B, CONV_K - 1, self._blk * TILE * B, CONV_K - 1, 1],
+            compile_time_args=[K, G, B, CONV_K - 1, self._blk * TILE * B, CONV_K - 1, 1, 0],
             runtime_args=rt,
             config=ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
@@ -2080,6 +2080,187 @@ class ResidentModel:
         ttnn.generic_op([zh, sub["hist"]], hist_pd)
         ttnn.synchronize_device(mesh)
         ttnn.deallocate(jobs_t)
+
+    # ---- slot snapshots (Strata S1 / S3): a slot's GDN states and conv history <-> device staging tensors
+    def _page_copy(self, copies):
+        """device DRAM -> DRAM page copies on every chip (prefill/kernels/handoff.cpp kind-0 jobs, chip-local):
+        copies = [(src tensor, src page, dst tensor, dst page, pages[, page bytes])], pages of 4 KB (fp32 tiles) by
+        default; a KV pool page (one position tile of K or V, 8 bf8 tiles) is KV_ROW B"""
+        n, mesh = self.d.n, self.mesh
+        core = ttnn.CoreCoord(0, 0)
+        one_core = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+        jobs = torch.zeros(n, len(copies), 16, dtype=torch.int64)
+        for j, (src, sp, dst, dp, cnt, *pb) in enumerate(copies):
+            jobs[:, j, 1], jobs[:, j, 2], jobs[:, j, 3] = src.buffer_address(), sp, pb[0] if pb else 4096
+            jobs[:, j, 5], jobs[:, j, 6], jobs[:, j, 7] = dst.buffer_address(), dp, cnt
+        jobs[:, :, 0] = torch.arange(n)[:, None]
+        table = (jobs & 0xFFFFFFFF).numpy().astype(np.uint32).view(np.int32)
+        jobs_t = ttnn.from_torch(
+            torch.from_numpy(table.reshape(n * len(copies), 16).copy()),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cb = lambda idx, total, page: ttnn.CBDescriptor(  # noqa: E731
+            total_size=total,
+            core_ranges=one_core,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.bfloat16, page_size=page)],
+        )
+        pd = ttnn.MeshProgramDescriptor()
+        for chip in range(n):
+            rt = ttnn.RuntimeArgs()
+            rt[core.x][core.y] = [jobs_t.buffer_address(), len(copies), chip, self._snap_sem_addr(), 0, 0, 0]
+            kern = ttnn.KernelDescriptor(
+                kernel_source=f"{PKG_DIR}/prefill/kernels/handoff.cpp",
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=one_core,
+                compile_time_args=[],
+                runtime_args=rt,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+                ),
+            )
+            coord = ttnn.MeshCoordinate(0, chip)
+            pd[ttnn.MeshCoordinateRange(coord, coord)] = ttnn.ProgramDescriptor(
+                kernels=[kern], semaphores=[], cbs=[cb(0, 8 * 4096, 4096), cb(1, 64 * 64, 64)]
+            )
+        ttnn.generic_op([jobs_t] + list({id(t): t for c in copies for t in (c[0], c[2])}.values()), pd)
+        ttnn.synchronize_device(mesh)
+        ttnn.deallocate(jobs_t)
+
+    def _snap_sem_addr(self):
+        if not hasattr(self, "_snap_sem"):
+            core = ttnn.CoreCoord(0, 0)
+            self._snap_sem = ttnn.create_global_semaphore(self.mesh, ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]), 0)
+        return ttnn.get_global_semaphore_address(self._snap_sem)
+
+    def _hist_row(self, s, compact, gather):
+        """slot s's row of every conv history <-> the compact tensor (hist_scatter.cpp one target row; gather: history
+        -> compact, else compact -> history)"""
+        k, r = divmod(s, self.launch_rows)
+        gr, u = divmod(r, self.batch)
+        sub, n, B = self.subs[k], self.d.n, self.batch
+        rows, cols, _ = self.hist_index()
+        K, G = len(rows), self._gdn_copies
+        core = ttnn.CoreCoord(0, 0)
+        one_core = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+        tiles = (cols[::TILE] // TILE).tolist()
+        rt = ttnn.RuntimeArgs()
+        pairs = [v for i in range(K) for v in (int(rows[i]) + gr * self._S, tiles[i])]
+        rt[core.x][core.y] = [compact.buffer_address(), sub["hist"].buffer_address(), 0, G] + pairs + [u]
+        kern = ttnn.KernelDescriptor(
+            kernel_source=f"{PKG_DIR}/prefill/kernels/hist_scatter.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=one_core,
+            compile_time_args=[K, G, B, CONV_K - 1, self._blk * TILE * B, CONV_K - 1, 1, int(gather)],
+            runtime_args=rt,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+            ),
+        )
+        cbd = ttnn.CBDescriptor(
+            total_size=K * 64 + 64 * B,
+            core_ranges=one_core,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=64)],
+        )
+        pd = ttnn.MeshProgramDescriptor()
+        pd[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, n - 1))] = ttnn.ProgramDescriptor(
+            kernels=[kern], semaphores=[], cbs=[cbd]
+        )
+        ttnn.generic_op([compact, sub["hist"]], pd)
+        ttnn.synchronize_device(self.mesh)
+
+    def _kv_page_runs(self, table, n_tiles):
+        """(pool page, tile, run length) runs of the first n_tiles position tiles through a block table (paged KV;
+        a block's tiles are consecutive pages)"""
+        tpb, runs = self.kv_tpb, []
+        for t0 in range(0, n_tiles, tpb):
+            runs.append((int(table[t0 // tpb]) * tpb, t0, min(tpb, n_tiles - t0)))
+        return runs
+
+    def _kv_copies(self, table, n_tiles, staging, save):
+        """page copies between the pools' pages of the first n_tiles tiles (every attention copy, K then V) and the
+        staging tensor (page (kv * copies + c) * n_tiles + t)"""
+        out, C = [], self._attn_copies
+        for kv, pool in enumerate((self.K_t, self.V_t)):
+            for c in range(C):
+                for page, t, cnt in self._kv_page_runs(table, n_tiles):
+                    pp, sp = c * self.kv_copy_pages + page, (kv * C + c) * n_tiles + t
+                    out.append((pool, pp, staging, sp, cnt, KV_ROW) if save else (staging, sp, pool, pp, cnt, KV_ROW))
+        return out
+
+    def snapshot_slot(self, s, n_tokens=0):
+        """rows mode: slot s's recurrent state as device staging tensors {state: its GDN states (per chip copies x
+        heads x 16 fp32 tiles), hist: its conv history row (per chip copies x 3 x K compact 64 B pages)} and, with
+        n_tokens (paged KV), {kv: its K / V pages of positions < n_tokens (per chip 2 x attention copies x tiles pages
+        of KV_ROW B)} — restore_slot puts them into any slot (a prefix cache entry / a swapped-out user, Strata
+        S1 / S3)"""
+        assert self.rows
+        d, mesh, G = self.d, self.mesh, self._gdn_copies
+        k, r = divmod(s, self.launch_rows)
+        K = len(self.hist_index()[0])
+        shard = ttnn.ShardTensorToMesh(mesh, dim=0)
+        state = ttnn.from_torch(
+            torch.zeros(d.n * G * d.nv * 16 * TILE, TILE),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard,
+        )
+        hist = ttnn.from_torch(
+            torch.zeros(d.n * G * (CONV_K - 1) * K, TILE),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard,
+        )
+        LR, sub = self.launch_rows, self.subs[k]
+        self._page_copy(
+            [
+                (sub["state"], ((c * d.nv + h) * LR + r) * 16, state, (c * d.nv + h) * 16, 16)
+                for c in range(G)
+                for h in range(d.nv)
+            ]
+        )
+        self._hist_row(s, hist, gather=True)
+        snap = dict(state=state, hist=hist, n_tokens=0)
+        if n_tokens:
+            assert self.kv_paged
+            n_tiles = -(-n_tokens // TILE)
+            kv = ttnn.from_torch(
+                torch.zeros(d.n * 2 * self._attn_copies * n_tiles, KV_ROW // 4, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=shard,
+            )
+            self._page_copy(self._kv_copies(self.block_tables[s], n_tiles, kv, save=True))
+            snap.update(kv=kv, n_tokens=n_tokens)
+        return snap
+
+    def restore_slot(self, s, snap):
+        """rows mode: a snapshot_slot result into slot s (its GDN states and conv history row, and the snapshot's KV
+        pages into slot s's own blocks — set its block table first; other slots untouched)"""
+        assert self.rows
+        d, G = self.d, self._gdn_copies
+        k, r = divmod(s, self.launch_rows)
+        LR, sub = self.launch_rows, self.subs[k]
+        self._page_copy(
+            [
+                (snap["state"], (c * d.nv + h) * 16, sub["state"], ((c * d.nv + h) * LR + r) * 16, 16)
+                for c in range(G)
+                for h in range(d.nv)
+            ]
+        )
+        self._hist_row(s, snap["hist"], gather=False)
+        if snap.get("n_tokens"):
+            n_tiles = -(-snap["n_tokens"] // TILE)
+            self._page_copy(self._kv_copies(self.block_tables[s], n_tiles, snap["kv"], save=False))
 
     def _token_state(self, x0, pos, ring, slot=0, extra=None, active=None, preserve=False):
         B = self.launch_rows

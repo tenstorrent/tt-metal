@@ -14,6 +14,9 @@
 // this core, then K x (row, tile), then (one target row) the target row.
 // One target row (a multi-user decode's slot, rows mode): a compact page holds one row (32 columns, 64 B) and only
 // that row's two face rows of each tile are written, so the other rows keep their history.
+// Gather (compile-time arg 7, one target row only): the reverse — the target row of the history goes into the compact
+// pages (a slot's snapshot, Strata S1 / S3). The tile's rows are read whole (64 B aligned DRAM reads) into a scratch
+// past the K compact chunks, then the target row's two face rows are copied out.
 
 #include <cstdint>
 
@@ -26,6 +29,8 @@ void kernel_main() {
     constexpr uint32_t slot_elems = get_compile_time_arg_val(4);
     constexpr uint32_t written = get_compile_time_arg_val(5);
     constexpr bool one_row = get_compile_time_arg_val(6) != 0;
+    constexpr bool gather = get_compile_time_arg_val(7) != 0;
+    static_assert(!gather || one_row, "gather: one target row");
     constexpr uint32_t chunk = one_row ? 64 : 64 * rows, row_bytes = slots * slot_elems * 2, cb_buf = 0;
     const uint32_t target = one_row ? get_arg_val<uint32_t>(4 + 2 * K) : 0;
     const uint32_t compact = get_arg_val<uint32_t>(0), hist = get_arg_val<uint32_t>(1);
@@ -34,7 +39,29 @@ void kernel_main() {
     const InterleavedAddrGen<true> dst{.bank_base_address = hist, .page_size = row_bytes};
     const uint32_t buf = get_write_ptr(cb_buf);
 
-    for (uint32_t g = first; g < first + count; g++) {
+    for (uint32_t g = first; gather && g < first + count; g++) {
+        for (uint32_t slot = 0; slot < written; slot++) {
+            const uint32_t scratch = buf + K * chunk;
+            for (uint32_t k = 0; k < K; k++) {
+                const uint32_t row = get_arg_val<uint32_t>(4 + 2 * k), tile = get_arg_val<uint32_t>(5 + 2 * k);
+                const uint32_t off = (slot * slot_elems + tile * 32 * rows) * 2;
+                noc_async_read(get_noc_addr(row * copies + g, dst, off), scratch, 64 * rows);
+                noc_async_read_barrier();
+                volatile tt_l1_ptr uint32_t* from = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+                volatile tt_l1_ptr uint32_t* to = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buf + k * chunk);
+                for (uint32_t f = 0; f < 2; f++) {
+                    for (uint32_t w = 0; w < 8; w++) {
+                        to[f * 8 + w] = from[(f * rows + target) * 8 + w];
+                    }
+                }
+            }
+            for (uint32_t k = 0; k < K; k++) {
+                noc_async_write(buf + k * chunk, get_noc_addr((g * written + slot) * K + k, src), chunk);
+            }
+            noc_async_write_barrier();
+        }
+    }
+    for (uint32_t g = first; !gather && g < first + count; g++) {
         for (uint32_t slot = 0; slot < written; slot++) {
             for (uint32_t k = 0; k < K; k++) {
                 noc_async_read(get_noc_addr((g * written + slot) * K + k, src), buf + k * chunk, chunk);

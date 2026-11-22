@@ -1833,7 +1833,7 @@ class PPPrefill:
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=all_cores,
                     compile_time_args=[K, copies, rows_per_tile, slots, model._blk * TILE * model.batch, written]
-                    + [int(rows_mode)],
+                    + [int(rows_mode), 0],  # (one target row; no gather)
                     runtime_args=rt,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
