@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 // Phase 1 compute of sdpa_decode_splitfree: for every unit of this core, the stock flash-decode recurrence over
-// the unit's live chunks in ascending order (sdpa_flash_decode.cpp's per-chunk body on compute_common.hpp's
+// the unit's live chunks in ascending order (sdpa_flash_decode.cpp's per-chunk body on sdpa_block_ops.hpp's
 // helpers: QK^T, the causal / window mask adds, the running row max, exp((s - m) * scale), the row sum, P V,
 // the lazy-softmax rescale of the accumulator) with the statistics and the accumulator in fp32 CBs, then the
 // unit's (O, m, l) to the writer. Identical code over identical data in a fixed order on every core and
@@ -25,7 +25,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_block_ops.hpp"
 #include "splitfree_common.hpp"
 
 void kernel_main() {

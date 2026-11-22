@@ -9,7 +9,7 @@ allocates once (``allocate_scratch``) and passes in:
 1. partials (``kernels/*_partials.cpp``): every (row, KV group, unit) of fixed ``unit`` tokens is assigned to a
    core by the planner's static mapping (``planner.py``: core ``(u mod M + row*G + group) mod n_cores``, so a
    row's units sit on consecutive cores whatever the padded batch; independent of ``cur_pos``). A core walks its units in a fixed order; per live unit it runs the stock flash-decode recurrence
-   (``sdpa_flash_decode.cpp``'s chunk body on ``compute_common.hpp``) over the unit's fixed ``chunk``-token
+   (``sdpa_flash_decode.cpp``'s chunk body on ``sdpa_block_ops.hpp``) over the unit's fixed ``chunk``-token
    sub-chunks in ascending order, fp32 statistics and accumulator, masking the chunk that holds ``cur_pos`` (and
    the window start on a sliding layer) exactly as the stock kernels mask it, and writes the unit's (m, l, O) as
    fp32 tiles to its scratch slot.
