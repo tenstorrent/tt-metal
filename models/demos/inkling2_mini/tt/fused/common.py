@@ -58,9 +58,11 @@ def zeros_row_form(device, rows, c, dtype):
     )
 
 
-def check_row_input(t):
+def check_row_input(t, l1_ok=False):
+    """l1_ok: also accept an L1-interleaved row tensor (only kernels that handle input kind 2, see input_args)."""
     assert t.layout == ttnn.TILE_LAYOUT and t.dtype in ES, (t.layout, t.dtype)
-    assert t.memory_config().buffer_type == ttnn.BufferType.DRAM and not t.is_sharded(), t.memory_config()
+    kinds = (ttnn.BufferType.DRAM, ttnn.BufferType.L1) if l1_ok else (ttnn.BufferType.DRAM,)
+    assert t.memory_config().buffer_type in kinds and not t.is_sharded(), t.memory_config()
 
 
 def tile_bytes(dtype):
@@ -135,8 +137,8 @@ def twin(t):
 
 
 def input_args(t, row=0):
-    """Reader runtime args (addr, page bytes, elem bytes, row / first page, is_dense) of a row-form input t:
-    its dense twin when it has one."""
+    """Reader runtime args (addr, page bytes, elem bytes, row / first page, kind) of a row-form input t: its dense
+    twin when it has one (kind 1), else its rows in DRAM (0) or, interleaved, in L1 (2: conv's x only)."""
     tw = twin(t)
     if tw is not None:
         dense, nvec = tw
@@ -147,7 +149,8 @@ def input_args(t, row=0):
             min(row, nvec - 1) * pages(t.shape[-1]),
             1,
         ]
-    return [t.buffer_address(), tile_bytes(t.dtype), ES[t.dtype], row, 0]
+    l1 = t.memory_config().buffer_type == ttnn.BufferType.L1
+    return [t.buffer_address(), tile_bytes(t.dtype), ES[t.dtype], row, 2 if l1 else 0]
 
 
 def input_dtype(t):

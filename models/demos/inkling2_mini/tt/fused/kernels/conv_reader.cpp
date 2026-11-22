@@ -26,11 +26,17 @@ void kernel_main() {
 
     DeviceZoneScopedN("R_x");
     cb_reserve_back(cb_x, T);
-    if (x_dense) {
+    if (x_dense == 1) {
         rowio::read_pages(x_addr, x_tile, x_row, T, get_write_ptr(cb_x));
         noc_async_read_barrier();
     } else {
-        rowio::gather_row(x_addr, x_tile, x_es, ntc, x_row, get_write_ptr(cb_x), T * 1024 * x_es, stage, 0, ntc / 2);
+        if (x_dense == 2) {  // row form in L1
+            rowio::gather_row<false>(
+                x_addr, x_tile, x_es, ntc, x_row, get_write_ptr(cb_x), T * 1024 * x_es, stage, 0, ntc / 2);
+        } else {
+            rowio::gather_row(
+                x_addr, x_tile, x_es, ntc, x_row, get_write_ptr(cb_x), T * 1024 * x_es, stage, 0, ntc / 2);
+        }
     }
     cb_reserve_back(cb_taps, 4 * T);
     rowio::read_pages(taps, 4096, 0, 4 * T, get_write_ptr(cb_taps));

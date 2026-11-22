@@ -33,6 +33,7 @@ FORCE_INLINE void zero_words(uint32_t l1, uint32_t bytes) {
 // into dense L1 at dst (C = 32 * ntc elements; the pad up to pad_bytes is zeroed). stage: 64B-aligned scratch of
 // ntc * 128 bytes. DRAM reads must be 64B aligned, so whole 64B blocks are staged and the chunks copied out.
 // [j0, j1): only these tiles (the two data-movement RISCs can each gather a part; the pad goes with the last part).
+template <bool DRAM = true>  // false: an L1-interleaved input (E10d: the MoE output)
 FORCE_INLINE void gather_row(
     uint32_t base,
     uint32_t tile_bytes,
@@ -45,7 +46,7 @@ FORCE_INLINE void gather_row(
     uint32_t j0 = 0,
     uint32_t j1 = 0xffffffff) {
     j1 = j1 < ntc ? j1 : ntc;
-    const InterleavedAddrGen<true> src = {.bank_base_address = base, .page_size = tile_bytes};
+    const InterleavedAddrGen<DRAM> src = {.bank_base_address = base, .page_size = tile_bytes};
     const uint32_t off = row_offset(r, es);
     const uint32_t blk = off & ~(DRAM_RD_ALIGN - 1);
     const uint32_t in_blk = off - blk;

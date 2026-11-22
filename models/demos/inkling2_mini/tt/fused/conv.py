@@ -44,7 +44,7 @@ class FusedShortConv:
     def conv_add(self, x, ring, phase, resid=None, out_dtype=None, row_out=True):
         """out = conv(x) rounded to x's dtype, plus resid (fp32 add) if given, in out_dtype (default: x's dtype;
         with resid: resid's dtype)."""
-        F.check_row_input(x)
+        F.check_row_input(x, l1_ok=True)  # E10d: the MoE output y straight from L1
         if resid is not None:
             F.check_row_input(resid)
         out_dtype = out_dtype or (resid.dtype if resid is not None else x.dtype)

@@ -40,8 +40,11 @@ void kernel_main() {
 
         DeviceZoneScopedN("W_inputs");
         cb_reserve_back(cb_sync, 1);
-        if (!x_dense) {  // second half of x, into the reader's (not yet pushed) cb_x pages
+        if (x_dense == 0) {  // second half of x, into the reader's (not yet pushed) cb_x pages
             rowio::gather_row(
+                x_addr, x_tile, x_es, ntc, x_row, get_write_ptr(cb_x), T * 1024 * x_es, stage, ntc / 2, ntc);
+        } else if (x_dense == 2) {  // row form in L1
+            rowio::gather_row<false>(
                 x_addr, x_tile, x_es, ntc, x_row, get_write_ptr(cb_x), T * 1024 * x_es, stage, ntc / 2, ntc);
         }
         cb_push_back(cb_sync, 1);

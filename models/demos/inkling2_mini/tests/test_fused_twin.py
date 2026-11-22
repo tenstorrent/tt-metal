@@ -130,3 +130,51 @@ def test_twin_app(device, kind):
             )
     assert all(torch.equal(a, b) for a, b in zip(on, off)), "twins change the result"
     assert all(torch.equal(a, b) for a, b in zip(skip, off)), "skipping rows changes the result"
+
+
+@pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
+def test_conv_l1_input(device):
+    """E10d: conv_mlp reads the MoE output y straight from L1 (bit-equal to the DRAM copy the model makes today,
+    which this removes: one to_memory_config program per layer application)."""
+    g = torch.Generator().manual_seed(8)
+    w, _ = weights(g, False)
+    rows = R.RowOps(device)
+    cm = FusedShortConv(rows, w, "post_mlp_conv")
+    resid = ttnn.from_torch(
+        torch.randn(1, 1, 1, C, generator=g), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    y = ttnn.from_torch(
+        torch.randn(1, 1, 1, C, generator=g),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    def via_dram(ring):
+        return cm.conv_add(ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG), ring, 1, resid, ttnn.bfloat16)
+
+    def direct(ring):
+        return cm.conv_add(y, ring, 1, resid, ttnn.bfloat16)
+
+    res = {}
+    for name, fn in (("dram", via_dram), ("l1", direct)):
+        ring = cm.alloc_state(0)
+        fn(ring)
+        tid = ttnn.begin_trace_capture(device, cq_id=0)
+        out = fn(ring)
+        ttnn.end_trace_capture(device, tid, cq_id=0)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+        r1 = host(out)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+        assert torch.equal(r1, host(out)), name
+        t0 = time.perf_counter()
+        for _ in range(200):
+            ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(device)
+        res[name] = ((time.perf_counter() - t0) / 200 * 1e6, r1)
+        ttnn.release_trace(device, tid)
+    if RESULTS:
+        with open(RESULTS, "a") as f:
+            f.write(json.dumps(dict(name="conv_l1_input", us_dram_copy=res["dram"][0], us_l1=res["l1"][0])) + "\n")
+    assert torch.equal(res["dram"][1], res["l1"][1]), "L1 input changes the result"
