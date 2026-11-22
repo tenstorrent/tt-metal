@@ -9,7 +9,10 @@
 // The kernel ends once this chip has sent its pages and received `expected` packets (taken off the semaphore).
 //
 // Job (16 words, 64 B: DRAM reads land 64 B aligned): dst_chip, src_base, src_page, page_bytes, kind, dst_base,
-// dst_page (kind 0) / bank (kind 1), count, 8 unused. Runtime args: 0 jobs address (DRAM interleaved, 64 B pages), 1
+// dst_page (kind 0) / bank (kind 1), count, 8 unused.
+// Kind 2 (the reverse of kind 1, a decode slot's KV pages back into the prefill's scratch, Strata S1): the source is
+// `count` x page_bytes consecutive bytes of DRAM bank src_page at src_base, the destination consecutive pages of an
+// interleaved tensor (as kind 0). Runtime args: 0 jobs address (DRAM interleaved, 64 B pages), 1
 // jobs, 2 chip, 3 semaphore address (global semaphore), 4 expected packets, then FabricConnectionManager args (fwd,
 // bwd).
 
@@ -81,11 +84,16 @@ void kernel_main() {
             const uint32_t slots = page_bytes <= 1024 * 4 ? (kSlots * 4096) / page_bytes : 1;
             for (uint32_t i0 = 0; i0 < count; i0 += slots) {
                 const uint32_t n = count - i0 < slots ? count - i0 : slots;
-                for (uint32_t i = 0; i < n; i++) {
-                    noc_async_read(src.get_noc_addr(src_page + i0 + i), buf + i * page_bytes, page_bytes);
+                if (kind == 2) {
+                    noc_async_read(
+                        get_noc_addr_from_bank_id<true>(src_page, job[1] + i0 * page_bytes), buf, n * page_bytes);
+                } else {
+                    for (uint32_t i = 0; i < n; i++) {
+                        noc_async_read(src.get_noc_addr(src_page + i0 + i), buf + i * page_bytes, page_bytes);
+                    }
                 }
                 noc_async_read_barrier();
-                if (kind == 0) {
+                if (kind == 0 || kind == 2) {
                     for (uint32_t i = 0; i < n; i++) {
                         send(dst_chip, buf + i * page_bytes, dst.get_noc_addr(dst_idx + i0 + i), page_bytes);
                     }

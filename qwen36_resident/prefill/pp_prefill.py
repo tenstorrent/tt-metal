@@ -1109,6 +1109,137 @@ class PPPrefill:
         ttnn.synchronize_device(self.mesh)
         return T
 
+    # ------------------------------------------------------------------ a cached prefix (Strata S1)
+    def load_prefix(self, model, h, slot=None, block_table=None):
+        """a cached prefix into the pipeline: the decode slot's positions < h — its GDN states, conv history row and KV
+        pages, e.g. just restored from a prefix-cache snapshot (model.restore_slot) — become the pipeline's state as
+        if it had prefilled them, so run_from(ids, h) prefills only h .. T - 1 and handoff() then hands the whole
+        prompt back. Reverse handoff jobs on the decode chips (kernels/handoff.cpp: kind 0 GDN state pages into the
+        stage chips' S, kind 2 KV pool rows into their K / V scratch), the conv carries through the host (the inverse
+        of _ho_hist's packing). h: a multiple of 1,024 (every chunk size divides it)."""
+        n, Ls, d = self.n, self.Ls, model.d
+        assert 0 < h <= self.max_len and h % 1024 == 0, h
+        rows_mode, slot, row, target = self._ho_target(model, slot)
+        assert rows_mode and getattr(model, "kv_paged", False), "load_prefix: a rows-mode slot with paged KV"
+        self.reset()
+        self._ho_setup(model)
+        table = torch.as_tensor(list(model.block_tables[slot] if block_table is None else block_table))
+        tiles = h // TILE
+        assert len(table) * model.kv_tpb >= tiles, "the block table does not cover the prefix"
+        banks, kv_row, per_block, LR = d.banks, (HD // TILE) * 1088, self.block // TILE, model.launch_rows
+        t = torch.arange(tiles, dtype=torch.int64)
+        bk, rt = t // per_block, t % per_block
+        jobs, pks = [[] for _ in range(n)], [[] for _ in range(n)]  # per decode chip c (its KV head, its GDN heads)
+        g_i = a_i = 0
+        for i in range(self.layers):
+            p, j = divmod(i, Ls)
+            if self.kinds[j]:
+                a = a_i % model._attn_copies
+                page = a * model.kv_copy_pages + table[t // model.kv_tpb] * model.kv_tpb + t % model.kv_tpb
+                for pool, dst in ((model.K_t, self.K[j]), (model.V_t, self.V[j])):
+                    for c in range(n):
+                        r = torch.empty(tiles, 8, dtype=torch.int64)
+                        r[:, 0] = p
+                        r[:, 1] = pool.buffer_address() + (page // banks) * kv_row
+                        r[:, 2] = page % banks
+                        r[:, 3] = 1088
+                        r[:, 4] = 2
+                        r[:, 5] = dst.buffer_address()
+                        r[:, 6] = ((bk * NKV + c) * per_block + rt) * (HD // TILE)
+                        r[:, 7] = HD // TILE
+                        jobs[c].append(r)
+                        pks[c].append(torch.full((tiles,), HD // TILE if c != p else 0, dtype=torch.int64))
+                a_i += 1
+            else:
+                for c in range(n):
+                    for hh in range(d.nv):
+                        src_page = ((g_i * d.nv + hh) * LR + row) * 16
+                        row8 = [p, target["state"].buffer_address(), src_page, 4096, 0]
+                        row8 += [self.S[j].buffer_address(), (c * d.nv + hh) * 16, 16]
+                        jobs[c].append(torch.tensor([row8], dtype=torch.int64))
+                        pks[c].append(torch.tensor([16 if c != p else 0], dtype=torch.int64))
+                g_i += 1
+        jobs = [torch.cat(x) for x in jobs]
+        pks = [torch.cat(x) for x in pks]
+        L = len(self._ho["cores"])  # (the jobs split over the handoff lanes, one fabric link each)
+        lanes = [([jb[k::L] for jb in jobs], [pk[k::L] for pk in pks]) for k in range(L)]
+        jobs_ts = [self._ho_upload(ln[0]) for ln in lanes]
+        self._ho_copy(model, jobs_ts, lanes, slot)
+        for jt in jobs_ts:
+            ttnn.deallocate(jt)
+        # conv carries: the slot's compact history row (hist_scatter gather) -> every GDN layer's full conv input rows
+        # -> rows 0 .. 2 (oldest first) of its stage chip's carry, the rest zero (finite)
+        hrows, _, hsrc = model.hist_index()
+        K, G = len(hrows), model._gdn_copies
+        shard = ttnn.ShardTensorToMesh(self.mesh, dim=0)
+        compact_t = ttnn.from_torch(
+            torch.zeros(n * G * (CONV_K - 1) * K, TILE),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard,
+        )
+        model._hist_row(slot, compact_t, gather=True)
+        compact = ttnn.to_torch(compact_t, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0)).reshape(
+            n, G, CONV_K - 1, K * TILE
+        )
+        ttnn.deallocate(compact_t)
+        gq, gv = d.gq, d.gv
+        full = torch.zeros(G, CONV_K - 1, CONV_CH, dtype=compact.dtype)
+        for chip in range(d.n):
+            local = torch.cat(
+                [
+                    torch.arange(chip * gq, (chip + 1) * gq),
+                    QD + torch.arange(chip * gq, (chip + 1) * gq),
+                    2 * QD + torch.arange(chip * gv, (chip + 1) * gv),
+                ]
+            )
+            full[:, :, local[hsrc]] = compact[chip]
+        gdn_js = [j for j in range(Ls) if not self.kinds[j]]
+        order = [(p, j) for p, j in (divmod(i, Ls) for i in range(self.layers)) if not self.kinds[j]]
+        carries = {j: torch.zeros(n, 1, TILE, CONV_CH) for j in gdn_js}
+        for g, (p, j) in enumerate(order):
+            carries[j][p, 0, : CONV_K - 1] = full[g].float()
+        for j in gdn_js:
+            host = ttnn.from_torch(carries[j], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=shard)
+            ttnn.copy_host_to_device_tensor(host, self.carry[j])
+        ttnn.synchronize_device(self.mesh)
+
+    def run_from(self, token_ids, h, chunk=None):
+        """after load_prefix(model, h, ...): prefill positions h .. T - 1 of token_ids [T] (the whole prompt; its first
+        h tokens are not read) — chip 0 starts at chunk h / C and chip p runs chunk h / C + t - p, as run() starts at
+        chunk 0 (not run_span: its wavefront continues chunks already in flight)"""
+        T = token_ids.shape[0]
+        assert 0 < h < T <= self.max_len
+        self._check_trace_layout()
+        self._use(chunk or self.pick_chunk(T))
+        n, C = self.n, self.C
+        assert h % C == 0, (h, C)
+        c0, chunks = h // C, (T + C - 1) // C
+        ids = torch.zeros(chunks * C, dtype=torch.int32)
+        ids[:T] = token_ids.to(torch.int32)
+        shard = ttnn.ShardTensorToMesh(self.mesh, dim=0)
+        for t in range(chunks - c0 + n - 1):
+            chunk_ids = torch.zeros(n, 1, C, dtype=torch.int32)
+            if c0 + t < chunks:
+                chunk_ids[0, 0] = ids[(c0 + t) * C : (c0 + t + 1) * C]
+            work = [(c0 + t - p, T) if c0 <= c0 + t - p < chunks else None for p in range(n)]
+            writes = self._control_chips(work) + [
+                (
+                    ttnn.from_torch(chunk_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=shard),
+                    self.ids,
+                )
+            ]
+            for host, dev in writes:
+                ttnn.copy_host_to_device_tensor(host, dev)
+            if self.trace_id is not None:
+                ttnn.execute_trace(self.mesh, self.trace_id, cq_id=0, blocking=False)
+            else:
+                self._body()
+        ttnn.synchronize_device(self.mesh)
+        return T
+
     def run_span(self, token_ids, first_chunk, n_tokens, drain=True, chunk=None):
         """resume one prompt's prefill across calls (chunked serving; reset() starts a prompt): feed token_ids,
         the prompt's tokens from position first_chunk * C, as chunks first_chunk, first_chunk + 1, .... n_tokens is
