@@ -30,11 +30,11 @@ from models.demos.inkling2_mini.tt.fused.bank_linear import BankLinear
 from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv
 from models.demos.inkling2_mini.tt.fused.gate import FusedMessageGate, FusedQKVGate
 from models.demos.inkling2_mini.tt.fused.head import FusedLogitsTail
+from models.demos.inkling2_mini.tt.fused.messages import FusedMessages
 from models.demos.inkling2_mini.tt.fused.norm import FusedRowNorm
 from models.demos.inkling2_mini.tt.moe import Inkling2MoE
 from models.demos.inkling2_mini.tt.prefetch import PrefetchedLinear
 from models.demos.inkling2_mini.tt.residual import (
-    MessageAttnRes,
     RowOps,
     _torch,
     cache_index,
@@ -216,7 +216,7 @@ class Inkling2Model:
         ):
             self.head_tail = FusedLogitsTail(device, self.unembed, VOCAB_PAD, VOCAB_REAL, SOFTCAP)
         self.final_res = FusedAttnRes(self.frows, g, "final_res_q", 1)
-        self.msg = MessageAttnRes(self.rows, g, "msg_q")
+        self.msg = FusedMessages(device, g, "msg_q")  # loop messages + per-layer split, 2 programs per pass
         mask = torch.zeros(1, 1, 1, VOCAB_PAD)
         mask[..., VOCAB_REAL:] = -1.0e4
         self.vocab_mask = ttnn.from_torch(mask, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -254,10 +254,9 @@ class Inkling2Model:
 
     # ------------------------------------------------------------ helpers
     def _messages(self, h12_in, h17_out):
-        """Cross-pass messages for all 12 loop layers: [(qkv [1,1,3,C], mlp row)] (MessageAttnRes math)."""
-        r, q = self.rows, self.msg
-        out = q.all_messages(h12_in, h17_out)  # [1,1,48,C], row 4l+j
-        return [(r.mm(q.qkv_sel(l), out), r.mm(q.mlp_sel(l), out)) for l in range(LOOP_END - LOOP_START)]
+        """Cross-pass messages for all 12 loop layers: [(qkv [1,1,3,C], mlp row)], with dense twins. Cached
+        tensors: the next pass's call overwrites them (each pass consumes its messages first)."""
+        return self.msg(h12_in, h17_out)
 
     def _rms(self, x, w):
         """Weighted RMSNorm (Olmo2 style: fp32 math), result bf16."""
@@ -317,8 +316,7 @@ class Inkling2Model:
         m = lay.mlp_res(stack, resid, n_sealed + 1, row_out=msgs is None)[0]
         if msgs is not None:
             m = lay.mlp_gate(m, msgs[1])
-        y, _ = lay.moe(m)  # bf16 row (L1)
-        y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)  # fused kernels read DRAM rows only
+        y, _ = lay.moe(m)  # bf16 row (L1); conv_mlp reads it from L1
         out = lay.conv_mlp.conv_add(y, conv_m, self.phase, resid, ttnn.bfloat16)  # fp32 add, bf16 out
         return out, stack, n_sealed
 
