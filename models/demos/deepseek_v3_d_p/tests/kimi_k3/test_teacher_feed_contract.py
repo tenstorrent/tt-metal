@@ -1005,7 +1005,7 @@ def test_fp64_chain_refuses_a_different_run(tmp_path: Path, expect_error):
 # --- GPU trace vs the FP64 chain (chain_vs_trace.py) ---------------------------------------------------------------
 
 
-def test_chain_vs_trace_scores_hand_made_differences_incrementally(tmp_path: Path, expect_error):
+def test_chain_vs_trace_scores_hand_made_differences_incrementally(tmp_path: Path, expect_error, monkeypatch):
     """A trace made from the chain's own products with three planted differences scores them exactly: row 2's
     layer-1 set loses its FP64 rank-1 expert (recall 1/2, that expert's weight dropped, miss rank 1), the index key is
     twice the FP64 one (PCC 1, NRMSE exactly 1), row 7's selection loses the FP64 best key (recall 5/6, miss rank 0,
@@ -1075,10 +1075,15 @@ def test_chain_vs_trace_scores_hand_made_differences_incrementally(tmp_path: Pat
     assert d("routing_2_dropped_p99") == d("index_key_nrmse") == d("topk_miss_top_half_fraction") == 1
     assert d("routing_1_margin_median_all") is None and d("topk_cut_gap_median") is None
     assert "routing_1_margin_median_all" in s["trend"] and "worst" not in s["trend"]["routing_1_margin_median_all"]
-    # the cut gap: FP64 score at rank k-1-min(100, k-1) minus the cut (here k = 6: the top minus the 6th)
-    full = torch.arange(10) >= topk.shape[1] - 1
-    ordered = p["topk_scores_3"][full].double().sort(dim=1, descending=True).values
-    assert o["topk_cut_gap_median"] == pytest.approx(float((ordered[:, 0] - ordered[:, -1]).float().median()))
+    # the cut gap: the FP64 score at rank k-1-CUT_GAP_RANKS minus the cut (rank k-1); the chain stores scores best
+    # first. k = 6 here: CUT_GAP_RANKS 100 > k-1 takes the top; CUT_GAP_RANKS 2 (as 100 < 2048 at 1M) takes rank 3.
+    scores = p["topk_scores_3"]
+    assert (scores[8, :-1] >= scores[8, 1:]).all()
+    seg2 = chain_vs_trace.score_segment(chain, 2, trace, {})  # rows 8 and 9
+    assert float(seg2["topk"]["cut_gap"][0]) == pytest.approx(float(scores[8, 0] - scores[8, 5]))
+    monkeypatch.setattr(chain_vs_trace, "CUT_GAP_RANKS", 2)
+    seg2 = chain_vs_trace.score_segment(chain, 2, trace, {})
+    assert float(seg2["topk"]["cut_gap"][0]) == pytest.approx(float(scores[8, 3] - scores[8, 5]))
     identity = json.loads((out / "identity.json").read_text())
     assert identity["scorer_version"] == chain_vs_trace.SCORER_VERSION and identity["chain_producer_version"] == 2
     # a chain rebuilt at the same path by another producer version is not mixed with its cached scores
