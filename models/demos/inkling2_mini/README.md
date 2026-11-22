@@ -32,6 +32,7 @@ Build tt-metal and activate its python env as usual. The scripts take their data
 |---|---|
 | `INKLING_CKPT` | the Hugging Face checkpoint directory (safetensors, config.json, tokenizer) |
 | `INKLING_CACHE` | the converted weight cache the model loads |
+| `INKLING_TILE_CACHE` | a cache without `--stick-experts`, for the chunked prefill and its test |
 | `INKLING_GOLDEN` | CPU golden outputs (per-prompt hidden states and logits), for the golden check and perf gate |
 | `INKLING_PERF_DIR` | where perf.py appends its results and keeps its baseline |
 | `INKLING_REF_PYTHON` | a python with transformers >= 5.24 (Inkling2), for the HF-reference tests |
