@@ -1305,3 +1305,8 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 03:25 back on batching (model_bringup ready to push: 10 commits incl. MB.6 / MB.7 block-max + F299). QUEUED PB.GAP: measure the 4x2k-vs-single gap item by item at 139264 and 1M (whole stack, device + host), then remove the largest item exactly (switch for the A/B). Launched --until PB.GAP.
 - 03:39 heartbeat: PB.GAP agent active; watch armed.
 - 04:09 heartbeat: PB.GAP agent active; watch armed.
+- 04:25 PB.GAP ACCEPTED. Gap probe (139264): single 102.9 / 4x2k 114.2 ms; largest item = the compressor's per-segment
+  served writes (+15 ms launch host: 31 slices, 32 update_padded_kv_cache vs 8; +1.9 ms device, 1.13 of it one
+  single-core glued_derive program); at 1M the plain top-k (+8.8 ms device; packed has no block-select). Fix
+  (PACKED_CWRITE_FAST): batched served writes (fork option on update_padded_kv_cache) + a cheaper ckeep. 4x2k: 139k
+  73.5k (111.5 ms, was ~113.8), 1M 58.6k (139.7, was ~142); single 99.7 / 122.7 ms. Gap now ~11.8 ms (139k), ~17 ms (1M).
