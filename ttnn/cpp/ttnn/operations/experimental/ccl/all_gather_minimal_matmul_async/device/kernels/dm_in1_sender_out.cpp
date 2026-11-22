@@ -44,7 +44,7 @@ void kernel_main() {
 #endif
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(12);
     constexpr uint32_t num_devices = get_compile_time_arg_val(13);
-    constexpr uint32_t my_rank = get_compile_time_arg_val(14);
+    // Compile-time arg 14 is unused: the rank is a common runtime arg, so every device runs one binary.
     constexpr uint32_t N_chunks = get_compile_time_arg_val(15);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(16);
     // Per-chunk tile widths + prefix-sum offsets (from CHUNK_TILE_WIDTHS/CHUNK_TILE_OFFSETS defines).
@@ -89,6 +89,7 @@ void kernel_main() {
     const uint32_t in1_addr = get_common_arg_val<uint32_t>(cargidx++);
     const uint32_t in2_addr = get_common_arg_val<uint32_t>(cargidx++);
     const uint32_t M_tiles = get_common_arg_val<uint32_t>(cargidx++);
+    const uint32_t my_rank = get_common_arg_val<uint32_t>(cargidx++);
 
 #ifdef FUSE_TERNARY
     const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(cargidx++);

@@ -16,6 +16,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/operations/common/hash_without_rows.hpp"
+#include "ttnn/per_device_program_merge.hpp"
 #include <algorithm>
 #include <bit>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -44,7 +45,7 @@ constexpr uint32_t kComputeKernelIdx = 5;
 constexpr uint32_t kMuxKernelIdx = 6;
 constexpr uint32_t kFsdpMuxKernelIdx = 7;
 
-// in0 common: [in0, bias, ag_input, sem_backward, sem_forward, barrier_sem, M_tiles,
+// in0 common: [in0, bias, ag_input, sem_backward, sem_forward, barrier_sem, M_tiles, rank,
 //              (ternary_a, ternary_b, broadcast)?, outputs...]
 constexpr uint32_t kIn0BufferSlot = 0;
 constexpr uint32_t kIn0BiasSlot = 1;
@@ -53,14 +54,14 @@ constexpr uint32_t kIn0SemBackwardSlot = 3;
 constexpr uint32_t kIn0SemForwardSlot = 4;
 constexpr uint32_t kIn0BarrierSemSlot = 5;
 constexpr uint32_t kIn0LenSlot = 6;
-constexpr uint32_t kIn0TernaryASlot = 7;
+constexpr uint32_t kIn0TernaryASlot = 8;
 
-// in1 common: [in1, bias, M_tiles, (ternary_a, ternary_b, broadcast)?, (local_weight, fsdp_sem_bwd, fsdp_sem_fwd)?,
-//              outputs...]
+// in1 common: [in1, bias, M_tiles, rank, (ternary_a, ternary_b, broadcast)?, (local_weight, fsdp_sem_bwd,
+//              fsdp_sem_fwd)?, outputs...]
 constexpr uint32_t kIn1BufferSlot = 0;
 constexpr uint32_t kIn1BiasSlot = 1;
 constexpr uint32_t kIn1LenSlot = 2;
-constexpr uint32_t kIn1FixedArgCount = 3;
+constexpr uint32_t kIn1FixedArgCount = 4;
 constexpr uint32_t kIn1TernaryArgCount = 3;
 constexpr uint32_t kIn1FsdpLocalWeightArgCount = 1;
 constexpr uint32_t kIn1FsdpSemaphoreArgCount = 2;
@@ -1118,7 +1119,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         true,
         ring_size,
-        skewed_rank,  // my_rank (skewed for fsdp; == ring_index otherwise)
+        0u,  // unused: the rank is a common runtime arg
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -1188,7 +1189,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         false,  // is_injector_core
         ring_size,
-        skewed_rank,  // my_rank (skewed for fsdp; == ring_index otherwise)
+        0u,  // unused: the rank is a common runtime arg
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -1233,7 +1234,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         false,  // is_injector_core
         ring_size,
-        skewed_rank,  // my_rank (skewed for fsdp; == ring_index otherwise)
+        0u,  // unused: the rank is a common runtime arg
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -1296,7 +1297,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             in1_is_output_writer,
             (uint32_t)is_injector,  // is_injector_core
             ring_size,
-            skewed_rank,                      // my_rank (skewed for fsdp; == ring_index otherwise)
+            0u,                               // unused: the rank is a common runtime arg
             N_chunks,                         // N_chunks
             N_tiles_per_chunk,                // N_tiles_per_chunk
             static_cast<uint32_t>(topology),  // topology
@@ -1495,7 +1496,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
 
     // Common runtime args (same for all cores). Buffer addresses, global-semaphore addresses, the row
     // count M_tiles and the fused-ternary scalar are re-applied in override_runtime_arguments.
-    // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, barrier_sem, M_tiles,
+    // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, barrier_sem, M_tiles, rank,
     // [ternary_a, ternary_b, broadcast], output_addrs...]
     {
         tt::tt_metal::KernelDescriptor::RTArgList in0_common_args;
@@ -1510,6 +1511,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_common_args.push_back(sem_forward);   // smuggled-rta-ok: semaphore, override
         in0_common_args.push_back(barrier_sem);   // smuggled-rta-ok: semaphore, override
         in0_common_args.push_back(M_tiles);       // smuggled-rta-ok: runtime length, override
+        in0_common_args.push_back(skewed_rank);   // per device, so the devices' programs merge into one
         if (use_fused_ternary) {
             in0_common_args.push_back(allocated_buffer(fused_ternary_input_a.value(), "fused ternary a"));
             in0_common_args.push_back(allocated_buffer(fused_ternary_input_b.value(), "fused ternary b"));
@@ -1523,13 +1525,14 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         desc.kernels[kIn0ReceiverNoFabricKernelIdx].emplace_common_runtime_args(in0_common_args);
     }
 
-    // in1 common args: [in1_addr, in2_addr, M_tiles, [ternary_a, ternary_b, broadcast_ternary_b],
+    // in1 common args: [in1_addr, in2_addr, M_tiles, rank, [ternary_a, ternary_b, broadcast_ternary_b],
     //                   [local_weight_addr, fsdp_sem_backward, fsdp_sem_forward], output_addrs...]
     {
         tt::tt_metal::KernelDescriptor::RTArgList in1_common_args;
         in1_common_args.push_back(in1_buffer);
         in1_common_args.push_back(in2_buffer);
         in1_common_args.push_back(M_tiles);  // smuggled-rta-ok: runtime length, override
+        in1_common_args.push_back(skewed_rank);
         if (use_fused_ternary) {
             in1_common_args.push_back(allocated_buffer(fused_ternary_input_a.value(), "fused ternary a"));
             in1_common_args.push_back(allocated_buffer(fused_ternary_input_b.value(), "fused ternary b"));
@@ -2175,9 +2178,10 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_mesh_workload(
     std::vector<ttnn::Tensor>& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& coord : tensor_coords.coords()) {
-        tt::tt_metal::Program program{
-            build_program_descriptor_at(operation_attributes, coord, tensor_args, tensor_return_value)};
+    const auto add = [&](const ttnn::MeshCoordinateRange& range,
+                         const tt::tt_metal::ProgramDescriptor& descriptor,
+                         const std::vector<ttnn::PerDeviceRuntimeArgsField>& per_device_runtime_args) {
+        tt::tt_metal::Program program{descriptor};
         shared_variables_t sv{
             .in0_sender = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0SenderKernelIdx),
             .in0_receiver_no_fabric = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0ReceiverNoFabricKernelIdx),
@@ -2186,9 +2190,33 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_mesh_workload(
             .in1_receiver = tt::tt_metal::GetCommonRuntimeArgs(program, kIn1ReceiverKernelIdx),
             .compute = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIdx),
         };
-        const ttnn::MeshCoordinateRange range(coord);
         workload.add_program(range, std::move(program));
+        if (!per_device_runtime_args.empty()) {
+            ttnn::apply_per_device_runtime_args(workload, range, per_device_runtime_args);
+        }
         shared_variables.emplace(range, sv);
+    };
+    // Where the devices' programs differ only in runtime args (the rank, fabric connections), a range runs one program
+    // with per-device runtime args. override_runtime_arguments writes values that are the same on every device.
+    auto& mesh_device = *tensor_args.input_tensor.device();
+    for (const auto& range : tensor_coords.ranges()) {
+        std::vector<tt::tt_metal::ProgramDescriptor> descriptors;
+        for (const auto& coord : range) {
+            descriptors.push_back(
+                build_program_descriptor_at(operation_attributes, coord, tensor_args, tensor_return_value));
+        }
+        std::optional<ttnn::MergedProgramDescriptor> merged;
+        if (descriptors.size() > 1 && tt::tt_metal::distributed::ArePerDeviceRuntimeArgsSupported(mesh_device, range)) {
+            merged = ttnn::merge_per_device_program_descriptors(descriptors);
+        }
+        if (merged.has_value()) {
+            add(range, merged->descriptor, merged->per_device_runtime_args);
+            continue;
+        }
+        size_t i = 0;
+        for (const auto& coord : range) {
+            add(ttnn::MeshCoordinateRange(coord), descriptors[i++], {});
+        }
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }

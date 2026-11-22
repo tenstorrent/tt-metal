@@ -39,7 +39,7 @@ constexpr uint32_t in2_tile_size = get_compile_time_arg_val(10);
 constexpr uint32_t is_output_writer = get_compile_time_arg_val(11);
 constexpr uint32_t is_injector_core = get_compile_time_arg_val(12);
 constexpr uint32_t num_devices = get_compile_time_arg_val(13);
-constexpr uint32_t my_rank = get_compile_time_arg_val(14);
+// Compile-time arg 14 is unused: the rank is a common runtime arg, so every device runs one binary.
 constexpr uint32_t in3_tile_size = get_compile_time_arg_val(15);
 constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(16);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(17);
@@ -120,6 +120,7 @@ void kernel_main() {
     size_t out_ready_sem_forward = get_common_arg_val<uint32_t>(cargidx++);
     const uint32_t barrier_sem = get_common_arg_val<uint32_t>(cargidx++);
     const uint32_t M_tiles = get_common_arg_val<uint32_t>(cargidx++);
+    const uint32_t my_rank = get_common_arg_val<uint32_t>(cargidx++);
 
 #ifdef FUSE_TERNARY
     const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(cargidx++);
