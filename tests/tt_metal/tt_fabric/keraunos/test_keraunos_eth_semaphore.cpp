@@ -357,13 +357,15 @@ TEST(KeraunosTileCounter, CrossTileAdds) {
     constexpr uint32_t kStageArmed = 0x7C000001;
     constexpr uint32_t kStageDone = 0x7C00000F;
     constexpr auto kTimeout = std::chrono::minutes(20);
+    if (MetalContext::instance().get_cluster().arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Keraunos chips only";
+    }
 
     auto meshes = distributed::MeshDevice::create_unit_meshes({0, 1});
     ASSERT_EQ(meshes.size(), 2u);
     std::vector<IDevice*> devices;
     for (auto& [id, mesh] : meshes) {
         devices.push_back(&slow_dispatch::physical_device_from_unit_mesh(*mesh));
-        ASSERT_EQ(devices.back()->arch(), tt::ARCH::QUASAR);
     }
     const auto& cluster = MetalContext::instance().get_cluster();
     const auto& chiplet = cluster.get_soc_desc(devices[1]->id()).get_arch_descriptor().get_keraunos();
