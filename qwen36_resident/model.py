@@ -1448,8 +1448,17 @@ class ResidentModel:
                 cb(12, tail_grid, 4 * (self.vusers or groups) if packed else 2 * LR),
                 cb(16, tail_grid, Dt),
                 cb(18, tail_grid, Dt),
-                cb(19, tail_grid, (2 if packed else 1) * Dt),
-                cb(20, tail_grid, (2 if packed else 1) * Dt),
+                # (verify rows: the tail tiles in bf8, as stored — a verify row then attends to the step's earlier rows
+                # exactly as a later step reads them back from the cache: the verify decode is bit-exact to the one-token
+                # decode of the same model; bf16 kept them unrounded within the step)
+                *(
+                    [
+                        cb(19, tail_grid, 2 * Dt, ttnn.bfloat8_b, kv_page),
+                        cb(20, tail_grid, 2 * Dt, ttnn.bfloat8_b, kv_page),
+                    ]
+                    if self.vrows
+                    else [cb(19, tail_grid, (2 if packed else 1) * Dt), cb(20, tail_grid, (2 if packed else 1) * Dt)]
+                ),
                 cb(21, tail_grid, Dt),
                 cb(22, tail_grid, 2 * attn_users * groups if packed else LR),
                 cb(28, tail_grid, (4 if packed else 2) * Dt, ttnn.bfloat8_b, kv_page),

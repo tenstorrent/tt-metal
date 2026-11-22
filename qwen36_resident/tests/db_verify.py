@@ -158,6 +158,69 @@ def run_random(mesh, G, layers, interval, steps, max_pos=512, seed=0, use_taps=T
     return dict(U=U, layers=layers, interval=interval, worst=worst, ok=ok, rows=rows)
 
 
+def run_leak(mesh, G, R, layers=4, interval=4, max_pos=512):
+    """bit-exactness of a verify row against its later rows: the same step twice from the same state (reset in
+    between), the second with rows 1 .. R - 1 of every user replaced — row 0's x after every layer (taps) and at the end
+    must be bit-identical (it sees none of the later rows)"""
+    U = G * 8 // R
+    n = mesh.get_num_devices()
+    d = Dims(n, mesh.dram_grid_size().x, vocab=VOCAB)
+    n_attn = sum(is_attn(l, interval) for l in range(layers))
+    n_gdn = layers - n_attn
+    w = random_weights(d, n_gdn, n_attn, layers, seed=0)
+    g = torch.Generator().manual_seed(3)
+    emb_host = (torch.randn(VOCAB, HIDDEN, generator=g) * 0.5).bfloat16()
+    embed = ttnn.from_torch(
+        emb_host,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+    starts = [40 + 53 * u + (27 if u % 2 else 0) for u in range(U)]
+    sts = [State(d, n_gdn, n_attn, starts[u], max_pos, seed=30 + u) for u in range(U)]
+    blocks, tables = shuffled_tables(U, max_pos, seed=4)
+    tap_layers = list(range(min(layers, 5)))
+    taps = tap_tensors(mesh, len(tap_layers), 32)
+    m = ResidentModel(
+        mesh,
+        d,
+        w,
+        sts,
+        layers,
+        interval,
+        lm_head=True,
+        embed=embed,
+        kv_pool_blocks=blocks,
+        block_tables=tables,
+        rows=True,
+        groups=G,
+        verify=R,
+        taps=list(zip(tap_layers, taps)),
+    )
+    gen = torch.Generator().manual_seed(7)
+    x0 = torch.randn(U, R, HIDDEN, generator=gen)
+    outs = []
+    for variant in range(2):
+        xv = x0.clone()
+        if variant:
+            xv[:, 1:] = torch.randn(U, R - 1, HIDDEN, generator=gen)
+        m.reset()
+        m.step(m.token_state_vrows(xv, starts, [0] * U, [0] * U))
+        ttnn.synchronize_device(mesh)
+        outs.append(([read_tap(mesh, t, 32) for t in taps], m.x().reshape(U * R, HIDDEN)))
+    res = {}
+    for u in range(U):
+        row = u * R
+        per = [float((outs[0][0][k][row] - outs[1][0][k][row]).abs().max()) for k in range(len(tap_layers))]
+        res[u] = dict(taps=per, x=float((outs[0][1][row] - outs[1][1][row]).abs().max()))
+        print(f"user {u}: row 0 |diff| after layers {tap_layers} = {per}, x {res[u]['x']}", flush=True)
+    ok = all(v["x"] == 0.0 for v in res.values())
+    print(f"leak check ({U} x {R}, {layers} layers): {'bit-identical' if ok else 'DIFFERS'}", flush=True)
+    return dict(ok=ok, users=res)
+
+
 def run_real(mesh, U, L, corpus, contexts, time_steps=32, warm_steps=4, block=64):
     ck = Q.Checkpoint(Q.checkpoint_dir())
     cfg = ck.config
@@ -293,7 +356,7 @@ def run_real(mesh, U, L, corpus, contexts, time_steps=32, warm_steps=4, block=64
 def main():
     faulthandler.enable()
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["random", "real"])
+    ap.add_argument("mode", choices=["random", "real", "leak"])
     ap.add_argument("--corpus", default="/home/ttuser/experiments/qwen38/results/native/corpus_ids_40k.pt")
     ap.add_argument("--len", type=int, default=256)
     ap.add_argument("--contexts", default="128,8192,32768")
@@ -309,7 +372,9 @@ def main():
     a = ap.parse_args()
     mesh = open_mesh()
     try:
-        if a.mode == "real":
+        if a.mode == "leak":
+            out = run_leak(mesh, a.groups, a.rows, layers=a.layers)
+        elif a.mode == "real":
             ctx = [int(t) for t in a.contexts.split(",")] if a.contexts else []
             out = run_real(mesh, a.groups, a.len, a.corpus, ctx)
         else:
