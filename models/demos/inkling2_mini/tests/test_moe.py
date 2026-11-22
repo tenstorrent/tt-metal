@@ -3,21 +3,22 @@
 
 """Inkling-2-Mini MoE block on device vs HF ``Inkling2SparseMoeBlock`` (random weights, batch-1 decode).
 
-Reference: transformers >= 5.24. If it is not importable here, the reference runs in a subprocess with
-``$INKLING_REF_PYTHON`` (default /work/inkling-bringup/ref-venv/bin/python), which executes this file with
-``--ref in.pt out.pt`` (no ttnn needed on that side).
+Reference: transformers >= 5.24 and the model's config.json (see tests/hf_ref.py). If transformers is too old
+here, the reference runs in ``$INKLING_REF_PYTHON``, which executes this file with ``--ref in.pt out.pt`` (no ttnn
+needed on that side). Without either the test skips.
 
 Two references per expert dtype: A = the bf16 weights (truth), B = the bf16 of the BFP4/BFP8 round-trip.
-Gated on B (kernel error only, review r3 #11); A (adds weight quantization error) is reported.
+B measures kernel error alone and has the tight bar. A adds the weight quantization error and has a looser
+per-dtype floor; it is the check that catches a packing error (gate/up swap, bad transpose), since B's weights
+come from the packing under test.
 The input is the layer state before post_attention_layernorm (mlp_norm), which this block owns.
 
-    flock /tmp/tt-card.lock pytest -s models/demos/inkling2_mini/tests/test_moe.py
+    pytest -s models/demos/inkling2_mini/tests/test_moe.py
 """
 
 import json
 import math
 import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -33,10 +34,14 @@ except ImportError:  # the --ref side runs without ttnn
 
 HIDDEN, INTER, NUM_EXPERTS, TOP_K = 2304, 1152, 128, 8
 N_TOKENS = 16
-REF_SOURCES = "/work/inkling-bringup/ref-sources"
-REF_PYTHON = os.environ.get("INKLING_REF_PYTHON", "/work/inkling-bringup/ref-venv/bin/python")
-TMP_DIR = os.environ.get("INKLING_T4_TMP", "/work/inkling-bringup/tmp-T4")
-RESULTS = os.environ.get("INKLING_T4_RESULTS")  # optional JSON path for the measured numbers
+RESULTS = os.environ.get("INKLING_MOE_RESULTS")  # optional JSONL path for the measured numbers
+# Floor on PCC vs the bf16 weights (A): 4-bit experts measure ~0.979, 8-bit ~0.99987.
+PCC_A_FLOOR = {"bfp4": 0.97, "bfp8": 0.999}
+
+
+def _text_config():
+    with open(os.environ["INKLING_CONFIG"]) as f:  # set by hf_ref (both sides)
+        return json.load(f)["text_config"]
 
 
 # ---------------------------------------------------------------- HF reference (both sides)
@@ -44,8 +49,7 @@ def _hf_block():
     from transformers.models.inkling2.configuration_inkling2 import Inkling2TextConfig
     from transformers.models.inkling2.modeling_inkling2 import Inkling2SparseMoeBlock
 
-    with open(os.path.join(REF_SOURCES, "config.json")) as f:
-        tc = json.load(f)["text_config"]
+    tc = _text_config()
     keys = ("hidden_size", "n_routed_experts", "num_experts_per_tok", "intermediate_size")
     keys += ("mlp_gate_softcap", "mlp_up_softcap", "route_scale", "n_shared_experts")
     config = Inkling2TextConfig(**{k: tc[k] for k in keys})
@@ -57,8 +61,7 @@ def _hf_block():
 def _hf_norm(norm_w):
     from transformers.models.inkling2.modeling_inkling2 import Inkling2RMSNorm
 
-    with open(os.path.join(REF_SOURCES, "config.json")) as f:
-        eps = json.load(f)["text_config"]["rms_norm_eps"]
+    eps = _text_config()["rms_norm_eps"]
     norm = Inkling2RMSNorm(HIDDEN, eps)
     norm.weight.data = norm_w.bfloat16()  # the model's norm weight is bf16
     return norm
@@ -87,17 +90,13 @@ def _hf_run(h, norm_w, router_w, bias, variants):
 
 
 def _reference(h, norm_w, router_w, bias, variants):
-    try:
-        import transformers.models.inkling2  # noqa: F401
-
+    os.environ.setdefault("INKLING_CONFIG", hf_ref.config_path())
+    if hf_ref.in_process(HF_MODULE):
         return _hf_run(h, norm_w, router_w, bias, variants)
-    except ImportError:
-        pass
-    os.makedirs(TMP_DIR, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=TMP_DIR) as tmp:
+    with tempfile.TemporaryDirectory(dir=hf_ref.cache_dir("moe")) as tmp:
         src, dst = os.path.join(tmp, "in.pt"), os.path.join(tmp, "out.pt")
         torch.save({"h": h, "norm_w": norm_w, "router_w": router_w, "bias": bias, "variants": variants}, src)
-        subprocess.run([REF_PYTHON, "-I", os.path.abspath(__file__), "--ref", src, dst], check=True)
+        hf_ref.run(__file__, "--ref", src, dst, isolated=True)
         res = torch.load(dst)
     return res["outs"], res["indices"]
 
@@ -129,13 +128,17 @@ def _to_dev(x_row, device):
 
 BYTES_PER_PARAM = {"bfp4": 576 / 1024, "bfp8": 1088 / 1024}
 
+HF_MODULE = "transformers.models.inkling2"
+
 if ttnn is not None:
+    from models.demos.inkling2_mini.tests import hf_ref
 
     @pytest.mark.parametrize("device_params", [{"trace_region_size": 64 * 1024 * 1024}], indirect=True)
     @pytest.mark.parametrize("dtype_name", ["bfp4", "bfp8"])
     def test_moe(device, dtype_name):
         from models.demos.inkling2_mini.tt.moe import Inkling2MoE, prepare_moe_weights
 
+        hf_ref.require(HF_MODULE, config=True)
         expert_dtype = {"bfp4": ttnn.bfloat4_b, "bfp8": ttnn.bfloat8_b}[dtype_name]
         x, norm_w, router_w, bias, gate_up, down = _random_inputs()
         weights = prepare_moe_weights(norm_w, router_w, bias, gate_up, down, expert_dtype)
@@ -199,15 +202,16 @@ if ttnn is not None:
             "gate_up_grid": str(moe.gate_up_config.compute_with_storage_grid_size),
             "down_grid": str(moe.down_config.compute_with_storage_grid_size),
         }
-        print("T4-RESULT", json.dumps(res))
+        print("MOE-RESULT", json.dumps(res))
         if RESULTS:
             with open(RESULTS, "a") as f:
                 f.write(json.dumps(res) + "\n")
 
-        # Gate (review r3 #11): kernel error only, vs HF on the same round-tripped weights. pcc_vs_A (weight
-        # quantization included) is reported, not gated.
+        # B: kernel error only, vs HF on the same round-tripped weights. A: weight quantization included.
+        hf_ref.finite_min([pcc_a, pcc_b, trace_vs_eager])
         assert overlap >= 0.97, res
         assert pcc_b >= 0.999, res
+        assert pcc_a >= PCC_A_FLOOR[dtype_name], res
         assert trace_same and trace_vs_eager > 0.9999, res
 
 

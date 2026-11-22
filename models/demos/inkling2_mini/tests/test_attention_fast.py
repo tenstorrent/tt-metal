@@ -6,24 +6,20 @@
   global_long 0..8399 (covers 0-3, 1022-1025, 8192).
 - seeded cases at 9000, 32K, 120K (local and global, max_ctx 128K): P synthetic post-norm k/v are
   loaded into HF's DynamicCache and into the device state (conv history zero on both sides), then
-  4 tokens are decoded. HF runs in the ref venv; refs cached in `INKLING_P1_REF_CACHE`.
+  4 tokens are decoded. HF runs in the reference python (tests/hf_ref.py); refs are cached.
 - trace replay bit-identical; per-use time vs v1 at max_ctx 4K and 128K.
 
-    flock /tmp/tt-card.lock pytest -q -s models/demos/inkling2_mini/tests/test_attention_fast.py
+    pytest -q -s models/demos/inkling2_mini/tests/test_attention_fast.py
 """
 
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import time
 
 import torch
 
-REF_PYTHON = os.environ.get("INKLING_REF_PYTHON", "/work/inkling-bringup/ref-venv/bin/python")
-REF_CONFIG = os.environ.get("INKLING_CONFIG", "/work/inkling-bringup/ref-sources/config.json")
-REF_CACHE = os.environ.get("INKLING_P1_REF_CACHE", "/work/inkling-bringup/P1-scratch/ref-b")
 HIDDEN = 2304
 LOCAL_LAYER, GLOBAL_LAYER = 0, 5
 MAX_CTX = 128 * 1024
@@ -45,7 +41,7 @@ def run_seeded_reference(in_path, out_path):
     torch.set_num_threads(int(os.environ.get("INKLING_REF_THREADS", "4")))
     data = torch.load(in_path)
     is_global = data["is_global"]
-    cfg = Inkling2LoopTextConfig(**json.load(open(REF_CONFIG))["text_config"])
+    cfg = Inkling2LoopTextConfig(**json.load(open(os.environ["INKLING_CONFIG"]))["text_config"])
     cfg._attn_implementation = "eager"
     layer = GLOBAL_LAYER if is_global else LOCAL_LAYER
     attn = (M.Inkling2LoopFullAttention if is_global else M.Inkling2LoopSlidingAttention)(cfg, layer)
@@ -91,6 +87,7 @@ import pytest  # noqa: E402
 
 import models.demos.inkling2_mini.tests.test_attention as t3  # noqa: E402
 import ttnn  # noqa: E402
+from models.demos.inkling2_mini.tests import hf_ref  # noqa: E402
 from models.demos.inkling2_mini.tt.attention import (  # noqa: E402
     QK_CLIP,
     DecodePositions,
@@ -152,11 +149,11 @@ def test_fast_decode(device, case, cache_dtype):
     report = {
         "case": case,
         "cache": cache_dtype,
-        "min": round(min(per_step), 6),
+        "min": round(hf_ref.finite_min(per_step), 6),
         "marks": {m: round(per_step[m], 6) for m in marks},
     }
-    print("P1BRESULT", json.dumps(report))
-    assert min(per_step) >= 0.999, report
+    print("ATTN-FAST-RESULT", json.dumps(report))
+    assert hf_ref.finite_min(per_step) >= 0.999, report
 
 
 def seeded_prefix(p, seed):
@@ -173,13 +170,15 @@ def seeded_case(is_global, p):
     sd = t3.random_state_dict(is_global, seed=11 if is_global else 7)
     inputs = t3.make_inputs(SEEDED_STEPS, is_global, seed=p)
     pk, pv = seeded_prefix(p, seed=p + 1)
-    os.makedirs(REF_CACHE, exist_ok=True)
-    out_path = os.path.join(REF_CACHE, f"{'global' if is_global else 'local'}_{p}.pt")
-    if not os.path.exists(out_path):
-        with tempfile.TemporaryDirectory(dir=REF_CACHE) as tmp:
+    hf_ref.require(config=True)
+    cache = hf_ref.cache_dir("attention_fast")
+    out_path = cache / f"{'global' if is_global else 'local'}_{p}.pt"
+    if not out_path.exists():
+        with tempfile.TemporaryDirectory(dir=cache) as tmp:
             in_path = os.path.join(tmp, "in.pt")
             torch.save({"state_dict": sd, "is_global": is_global, "pk": pk, "pv": pv, **inputs}, in_path)
-            subprocess.run([REF_PYTHON, os.path.abspath(__file__), "ref", in_path, out_path], check=True)
+            hf_ref.run(__file__, "ref", in_path, os.path.join(tmp, "out.pt"))
+            os.replace(os.path.join(tmp, "out.pt"), out_path)
     return sd, inputs, pk, pv, torch.load(out_path)
 
 
@@ -204,10 +203,10 @@ def test_fast_decode_seeded(device, is_global, at, cache_dtype):
     finally:
         runner.release()
     print(
-        "P1BRESULT",
+        "ATTN-FAST-RESULT",
         json.dumps({"case": f"{'global' if is_global else 'local'}_{at}", "cache": cache_dtype, "pcc": per_step}),
     )
-    assert min(per_step.values()) >= 0.999, per_step
+    assert hf_ref.finite_min(per_step.values()) >= 0.999, per_step
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
@@ -248,12 +247,13 @@ def _median_ms(device, trace, n=15):
     return 1e3 * sorted(samples)[n // 2]
 
 
+@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("impl", ["v1", "fast"])
 @pytest.mark.parametrize("max_ctx", [4096, MAX_CTX], ids=["4k", "128k"])
 @pytest.mark.parametrize("is_global", [False, True], ids=["local", "global"])
 def test_use_time(device, is_global, max_ctx, impl):
-    """Device time of one layer use = traced (prepare + decode) - traced prepare; bfp8 cache."""
+    """Benchmark (perf marker), not a correctness test. Device time of one layer use = traced (prepare + decode) - traced prepare; bfp8 cache."""
     sd = t3.random_state_dict(is_global, seed=5)
     runner = Runner(device, is_global, sd, max_ctx, ttnn.bfloat8_b, V1 if impl == "v1" else FAST)
     xs = [x[0] for x in _xs(t3.make_inputs(1, is_global, seed=1), is_global)]
@@ -275,6 +275,7 @@ def test_use_time(device, is_global, max_ctx, impl):
     finally:
         ttnn.release_trace(device, prep_trace)
         runner.release()
+    assert all(0 < t < 1e3 for t in list(times.values()) + [prep_ms]), times
     kind = "global" if is_global else "local"
     print(
         "P1BTIME", json.dumps({"kind": kind, "max_ctx": max_ctx, "impl": impl, "use_ms": times, "prepare_ms": prep_ms})

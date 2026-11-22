@@ -3,7 +3,7 @@
 
 # Per layer-application residual path, E2 (tt/residual.py + model glue) vs E10 fused, attention / MoE replaced by
 # fixed rows. Reports device-op count (graph capture), traced replay time and output agreement per app kind.
-# usage: python bench_app.py [out.jsonl]
+# usage: python -m models.demos.inkling2_mini.demo.bench_fused_app [out.jsonl]
 import collections
 import json
 import sys

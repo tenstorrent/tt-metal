@@ -4,15 +4,14 @@
 
 Each op runs eagerly, then under trace twice: both replays must match bit for bit and reach PCC >= 0.9995.
 
-The HF reference needs transformers >= 5.24, which the tt-metal venv lacks, so this file doubles as the
-reference generator, run with another python (INKLING_REF_PYTHON):
+The HF reference needs transformers >= 5.24 (see tests/hf_ref.py), so this file doubles as the reference
+generator, run with that python:
     $INKLING_REF_PYTHON test_residual.py OUT.pt
-The test calls it once when INKLING_T5_REF (default /tmp/inkling2_mini_t5_ref.pt) does not exist.
+The test calls it once per reference cache directory; without a reference python the tests that need it skip.
 """
 
 import json
 import os
-import subprocess
 import sys
 import time
 
@@ -22,9 +21,7 @@ H = 2304
 DEPTHS = (1, 2, 3, 4, 5)
 CONV_STEPS = 12
 PCC_MIN = 0.9995
-REF_PATH = os.environ.get("INKLING_T5_REF", "/tmp/inkling2_mini_t5_ref.pt")
-REF_PYTHON = os.environ.get("INKLING_REF_PYTHON", "/work/inkling-bringup/ref-venv/bin/python")
-RESULTS = os.environ.get("INKLING_T5_RESULTS")  # optional jsonl of pcc / timings for the report
+RESULTS = os.environ.get("INKLING_RESIDUAL_RESULTS")  # optional jsonl of pcc / timings
 
 
 # ---------------------------------------------------------------- reference (runs in the HF venv)
@@ -94,6 +91,7 @@ if __name__ == "__main__":
 import pytest
 
 import ttnn
+from models.demos.inkling2_mini.tests import hf_ref
 from models.demos.inkling2_mini.tt.residual import (
     TILE,
     AttnRes,
@@ -109,9 +107,13 @@ TRACE_PARAMS = [{"trace_region_size": 8 * 1024 * 1024}]
 
 @pytest.fixture(scope="module")
 def ref():
-    if not os.path.exists(REF_PATH):
-        subprocess.run([REF_PYTHON, "-I", os.path.abspath(__file__), REF_PATH], check=True)
-    return torch.load(REF_PATH)
+    hf_ref.require()
+    path = hf_ref.cache_dir("residual") / "ref.pt"
+    if not path.exists():
+        tmp = path.with_suffix(".tmp")
+        hf_ref.run(__file__, tmp, isolated=True)
+        tmp.replace(path)
+    return torch.load(path)
 
 
 @pytest.fixture
@@ -194,7 +196,7 @@ def test_block_attn_res(device, rows, ref, nq, depth):
     per_q = [pcc(traced[j, 0], case["out"][j]) for j in range(nq)]
     p = pcc(traced[:, 0], case["out"])
     record(f"block_attn_res_nq{nq}", depth=depth, pcc=p, pcc_min_query=min(per_q), trace_us=us)
-    assert min(per_q + [p, pcc(eager[:, 0], case["out"])]) >= PCC_MIN, (p, per_q)
+    assert hf_ref.finite_min(per_q + [p, pcc(eager[:, 0], case["out"])]) >= PCC_MIN, (p, per_q)
 
 
 @pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
@@ -208,7 +210,7 @@ def test_messages_for_pass(device, rows, ref):
     per = [pcc(got[l, j], case["out"][l, j]) for l in range(12) for j in range(4)]
     p = pcc(got, case["out"])
     record("messages_for_pass", depth=2, pcc=p, pcc_min_message=min(per), trace_us=us)
-    assert min(per + [p, pcc(eager[:, 0].reshape(12, 4, -1), case["out"])]) >= PCC_MIN, (p, min(per))
+    assert hf_ref.finite_min(per + [p, pcc(eager[:, 0].reshape(12, 4, -1), case["out"])]) >= PCC_MIN, (p, min(per))
 
 
 @pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
@@ -224,7 +226,7 @@ def test_message_gate(device, rows, ref):
     eager, traced, us = traced_twice(device, lambda: [gate(h, m)])
     per_row = [pcc(traced[0, i], case["out"][i]) for i in range(4)]
     record("message_gate", pcc=pcc(traced[0, :4], case["out"]), pcc_min_row=min(per_row), trace_us=us)
-    assert min(per_row + [pcc(eager[0, :4], case["out"])]) >= PCC_MIN, per_row
+    assert hf_ref.finite_min(per_row + [pcc(eager[0, :4], case["out"])]) >= PCC_MIN, per_row
 
 
 @pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
@@ -262,7 +264,7 @@ def test_short_conv(device, rows, ref, channels):
     assert torch.equal(first, second), "trace replays differ"
     p = pcc(first, case["out"])
     record(f"short_conv_c{channels}", pcc=p, steps=CONV_STEPS, trace_us=us)
-    assert min(p, pcc(eager, case["out"])) >= PCC_MIN, p
+    assert hf_ref.finite_min([p, pcc(eager, case["out"])]) >= PCC_MIN, p
 
 
 def test_cache_index():

@@ -19,6 +19,8 @@ import torch
 from models.demos.inkling2_mini.convert.source import deinterleave_gate_up, dequant_experts
 
 core = pytest.importorskip("transformers.core_model_loading")
+if not hasattr(core, "Inkling2LoopDequantizeExperts"):
+    pytest.skip("transformers here has no Inkling2Loop (needs >= 5.24)", allow_module_level=True)
 CKPT = Path(os.environ.get("INKLING_CKPT", "/work/models/Inkling-2-Mini"))
 SRC = ["w", "w_scale", "w_amax", "w_denominator"]
 

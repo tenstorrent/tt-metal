@@ -117,10 +117,12 @@ def test_fused_moe_unit(device, dtype_name, layout):
 def test_fused_moe_block(device, dtype_name, layout):
     """T4's gate (tests/test_moe.py) with the expert step replaced by the fused program: PCC >= 0.999 vs HF on the
     round-tripped weights, top-8 overlap >= 0.97, trace replayed twice bit-equal; baseline vs fused expert time."""
+    from models.demos.inkling2_mini.tests import hf_ref
     from models.demos.inkling2_mini.tests import test_moe as t4
     from models.demos.inkling2_mini.tt.fused.moe_expert import FusedMoeExperts, stick_weights
     from models.demos.inkling2_mini.tt.moe import Inkling2MoE, prepare_moe_weights
 
+    hf_ref.require(t4.HF_MODULE, config=True)
     expert_dtype, down_dtype = (getattr(ttnn, n) for n in DTYPES[dtype_name])
     x, norm_w, router_w, bias, gate_up, down = t4._random_inputs()
     weights = prepare_moe_weights(norm_w, router_w, bias, gate_up, down, expert_dtype)
@@ -132,8 +134,8 @@ def test_fused_moe_block(device, dtype_name, layout):
     down_dev = ttnn.to_torch(weights["experts.w_down"])[0].bfloat16()  # [E, I, H]
     gate_up_b, down_b = gate_up_dev.transpose(1, 2), down_dev.transpose(1, 2)
     # The HF reference is CPU-only but slow; cache it so later card runs hold the lock for less time.
-    cache = f"/work/inkling-bringup/E12-scratch/ref_{dtype_name}.pt"
-    if os.path.exists(cache):
+    cache = hf_ref.cache_dir("fused_moe") / f"ref_{dtype_name}.pt"
+    if cache.exists():
         r = torch.load(cache)
         refs, ref_idx = r["refs"], r["idx"]
     else:
@@ -210,8 +212,10 @@ def test_fused_moe_block(device, dtype_name, layout):
     if os.environ.get("E12_RESULTS"):
         with open(os.environ["E12_RESULTS"], "a") as f:
             f.write(json.dumps(res) + "\n")
+    hf_ref.finite_min([pcc_a, pcc_b, pcc_vs_base, trace_vs_eager])
     assert overlap >= 0.97, res
     assert pcc_b >= 0.999, res
+    assert pcc_a >= t4.PCC_A_FLOOR["bfp8" if dtype_name == "bfp8" else "bfp4"], res
     assert trace_same and trace_vs_eager > 0.9999, res
 
 

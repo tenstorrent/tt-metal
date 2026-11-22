@@ -2,25 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 """Inkling-2-Mini attention decode vs the HF reference, random weights in §4 dtypes.
 
-The HF reference needs transformers >= 5.24 (inkling2_loop), which the ttnn venv
-does not have. The test writes weights + inputs to a temp file and runs this file
-as a script under `INKLING_REF_PYTHON` (default: /work/inkling-bringup/ref-venv),
-which replays HF decode token by token with its own DynamicCache.
+The HF reference needs transformers >= 5.24 (inkling2_loop) and the model's config.json
+(see tests/hf_ref.py). The test writes weights + inputs to a temp file and runs this file
+as a script under the reference python, which replays HF decode token by token with its
+own DynamicCache. Without a reference the HF comparisons skip.
 
-    flock /tmp/tt-card.lock pytest models/demos/inkling2_mini/tests/test_attention.py
+    pytest models/demos/inkling2_mini/tests/test_attention.py
 """
 
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import time
 
 import torch
 
-REF_PYTHON = os.environ.get("INKLING_REF_PYTHON", "/work/inkling-bringup/ref-venv/bin/python")
-REF_CONFIG = os.environ.get("INKLING_CONFIG", "/work/inkling-bringup/ref-sources/config.json")
 HIDDEN = 2304
 LOCAL_LAYER, GLOBAL_LAYER = 0, 5
 
@@ -29,7 +26,7 @@ LOCAL_LAYER, GLOBAL_LAYER = 0, 5
 def _hf_config():
     from transformers.models.inkling2_loop.configuration_inkling2_loop import Inkling2LoopTextConfig
 
-    cfg = Inkling2LoopTextConfig(**json.load(open(REF_CONFIG))["text_config"])
+    cfg = Inkling2LoopTextConfig(**json.load(open(os.environ["INKLING_CONFIG"]))["text_config"])
     cfg._attn_implementation = "eager"
     return cfg
 
@@ -137,15 +134,17 @@ def random_state_dict(is_global, seed):
 
 
 def reference_outputs(sd, inputs, is_global, tag):
-    cache_dir = os.environ.get("INKLING_REF_CACHE", "/tmp/inkling-t3-ref")
-    os.makedirs(cache_dir, exist_ok=True)
-    out_path = os.path.join(cache_dir, f"{tag}.pt")
-    if os.path.exists(out_path):
+    from models.demos.inkling2_mini.tests import hf_ref
+
+    hf_ref.require(config=True)
+    out_path = hf_ref.cache_dir("attention") / f"{tag}.pt"
+    if out_path.exists():
         return torch.load(out_path)
     with tempfile.TemporaryDirectory() as tmp:
         in_path = os.path.join(tmp, "in.pt")
         torch.save({"state_dict": sd, "is_global": is_global, **inputs}, in_path)
-        subprocess.run([REF_PYTHON, os.path.abspath(__file__), "ref", in_path, out_path], check=True)
+        hf_ref.run(__file__, "ref", in_path, out_path.with_suffix(".tmp"))
+        out_path.with_suffix(".tmp").replace(out_path)
     return torch.load(out_path)
 
 
@@ -163,6 +162,7 @@ if __name__ == "__main__" and len(sys.argv) == 4 and sys.argv[1] == "ref":
 import pytest  # noqa: E402
 
 import ttnn  # noqa: E402
+from models.demos.inkling2_mini.tests import hf_ref  # noqa: E402
 from models.demos.inkling2_mini.tt.attention import (  # noqa: E402
     DecodePositions,
     Inkling2Attention,
@@ -289,8 +289,8 @@ def test_attention_decode(device, case, cache_dtype):
         "step_ms_median": round(1e3 * times[len(times) // 2], 3),
         "min_pcc": min(per_step),
     }
-    print("T3RESULT", json.dumps(report))
-    assert min(per_step) >= 0.999, report
+    print("ATTN-RESULT", json.dumps(report))
+    assert hf_ref.finite_min(per_step) >= 0.999, report
 
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": TRACE_REGION}], indirect=True)
