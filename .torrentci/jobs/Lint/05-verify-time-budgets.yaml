@@ -18,14 +18,6 @@ jobs:
     env:
       - {name: HOME, value: /tmp/home}
     steps:
-      - id: probe
-        kind: shell
-        shell:
-          run:
-            - git remote -v || true
-            - git branch -a | head -20 || true
-            - git log --oneline -3 || true
-            - git rev-parse --is-shallow-repository || true
       - id: setup
         kind: shell
         shell:
@@ -36,6 +28,7 @@ jobs:
         kind: shell
         shell:
           run:
+            # The baseline may only shrink relative to the target branch's.
             - git show origin/main:.github/pipeline_cmd_lint_baseline.yaml > /tmp/base_baseline.yaml
             - /tmp/venv/bin/python .github/scripts/utils/lint_pipeline_cmds.py --base-baseline /tmp/base_baseline.yaml
       - id: verify-time-budget
