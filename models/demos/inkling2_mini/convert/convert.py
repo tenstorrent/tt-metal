@@ -283,10 +283,10 @@ def convert_layer_dense(ck: Checkpoint, w: Writer, layer: int):
 
 
 def stick_layer(w: Writer, layer: int, stick_dtypes) -> bool:
-    """Rewrite the layer's two expert tensors in the stick layout, in place, if they share a dtype in
-    ``stick_dtypes`` (the fused MoE kernel needs one dtype for both)."""
+    """Rewrite the layer's two expert tensors in the stick layout, in place, if both dtypes are in
+    ``stick_dtypes`` (the fused MoE kernel reads either dtype, mixed or not)."""
     ex = [i for i, e in enumerate(w.entries) if e["layer"] == layer and e["name"].startswith("experts.")]
-    if len({w.entries[i]["dtype"] for i in ex}) != 1 or w.entries[ex[0]]["dtype"] not in stick_dtypes:
+    if not {w.entries[i]["dtype"] for i in ex} <= set(stick_dtypes):
         return False
     for i in ex:
         f = w.out / w.entries[i]["file"]
@@ -425,7 +425,7 @@ def main(argv=None):
     ap.add_argument(
         "--stick-experts",
         default="",
-        help="dtypes (BFP4,BFP8) whose layers, when gate_up and down share that dtype, get the stick expert layout",
+        help="dtypes (BFP4,BFP8): layers whose gate_up and down dtypes are both listed get the stick expert layout",
     )
     ap.add_argument(
         "--bf16-store",

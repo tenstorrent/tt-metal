@@ -5,8 +5,8 @@
 
     python -m models.demos.inkling2_mini.convert.relayout_sticks --src cache/v1 --dst cache/v1-stick [--dtypes BFP4]
 
-The source cache is only read. A layer is rewritten when its gate_up and down share a dtype listed in --dtypes
-(the fused kernel needs one dtype for both); every other file is hard-linked (copied across filesystems). Each
+The source cache is only read. A layer is rewritten when its gate_up and down are TILE and both dtypes are listed in
+--dtypes (mixed BFP4 gate_up / BFP8 down included); every other file is hard-linked (copied across filesystems). Each
 rewritten tensor is checked: un-sticking it gives back the source tile bytes exactly. --dry-run prints the plan and
 the disk space it needs. --check re-verifies an existing --dst from disk (e.g. after a crash) and writes nothing.
 """
@@ -22,6 +22,7 @@ import shutil
 import time
 from pathlib import Path
 
+from models.demos.inkling2_mini.convert.bank_layout import bank_pages, check_bank, write_bank
 from models.demos.inkling2_mini.convert.stick import N_BANKS, TILE_BYTES, check_sticks, stick_pages, write_sticks
 
 MARGIN = 2 << 30  # free space left on the destination filesystem after the run
@@ -36,14 +37,15 @@ def plan(m: dict, dtypes) -> set[tuple[int, str]]:
     out = set()
     for L, ex in by_layer.items():
         kinds = {(e["dtype"], e["layout"]) for e in ex}
-        if len(ex) == 2 and len(kinds) == 1 and kinds <= {(d, "TILE") for d in dtypes}:
+        if len(ex) == 2 and kinds <= {(d, "TILE") for d in dtypes}:
             out |= {(L, e["name"]) for e in ex}
     return out
 
 
-def stick_bytes(e: dict, n_banks: int) -> int:
+def stick_bytes(e: dict, n_banks: int, layout: str = "stick") -> int:
     _, E, K, N = e["shape"]
-    return len(stick_pages(E, K // 32, N // 32, n_banks)) * TILE_BYTES[e["dtype"]] + 4096  # + header
+    n = len(bank_pages(e["name"], e["shape"]) if layout == "bank" else stick_pages(E, K // 32, N // 32, n_banks))
+    return n * TILE_BYTES[e["dtype"]] + 4096  # + header
 
 
 def link_or_copy(src: Path, dst: Path):
@@ -62,7 +64,9 @@ def check(src: Path, dst: Path) -> int:
     for e in json.loads((dst / "manifest.json").read_text())["tensors"]:
         s, d = src / e["file"], dst / e["file"]
         try:
-            if e["layout"] == "STICK":
+            if e["layout"] == "BANK":
+                check_bank(s, d, e)
+            elif e["layout"] == "STICK" and srcm[(e["layer"], e["name"])]["layout"] != "STICK":
                 check_sticks(s, d, srcm[(e["layer"], e["name"])], e["stick_banks"])
             elif not os.path.samefile(s, d) and s.read_bytes() != d.read_bytes():
                 raise ValueError("differs from source")
@@ -78,6 +82,7 @@ def main(argv=None):
     ap.add_argument("--src", type=Path, required=True, help="cache to read")
     ap.add_argument("--dst", type=Path, required=True, help="new cache to write")
     ap.add_argument("--dtypes", default="BFP4", help="comma list of BFP4, BFP8")
+    ap.add_argument("--layout", choices=("stick", "bank"), default="stick", help="bank: tt/fused/moe_bank.py layout")
     ap.add_argument("--n-banks", type=int, default=N_BANKS)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--check", action="store_true", help="only re-verify an existing --dst")
@@ -94,7 +99,7 @@ def main(argv=None):
         raise SystemExit(f"{args.src}: manifest not complete")
     todo = plan(m, dtypes)
     entries = {(e["layer"], e["name"]): e for e in m["tensors"]}
-    need = sum(stick_bytes(entries[k], args.n_banks) for k in todo)
+    need = sum(stick_bytes(entries[k], args.n_banks, args.layout) for k in todo)
     dst_fs = args.dst if args.dst.exists() else args.dst.parent
     free = shutil.disk_usage(dst_fs).free
     same_fs = os.stat(args.src).st_dev == os.stat(dst_fs).st_dev
@@ -116,7 +121,7 @@ def main(argv=None):
         dst.parent.mkdir(parents=True, exist_ok=True)
         if (e["layer"], e["name"]) in todo:
             t1 = time.time()
-            out.append(write_sticks(src, dst, e, args.n_banks))
+            out.append(write_bank(src, dst, e) if args.layout == "bank" else write_sticks(src, dst, e, args.n_banks))
             rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20
             print(f"L{e['layer']:02d} {e['name']} {e['dtype']}: {time.time() - t1:.1f}s, peak RSS {rss:.2f} GiB",
                   flush=True)  # fmt: skip
