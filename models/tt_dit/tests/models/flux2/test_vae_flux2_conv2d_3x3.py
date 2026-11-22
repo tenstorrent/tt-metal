@@ -116,8 +116,10 @@ def _decoder_case(mesh_device, tp_axis, h_axis, height, width, conv):
         [(1, 1), single_device_params_flux2, 0, 1],
         [(2, 2), line_params_flux2, 1, 0],
         [(2, 4), line_params_flux2, 1, 0],
+        # The Galaxy preset splits channels on axis 0 (4) and rows on axis 1 (8), not 1/0 like the smaller meshes.
+        [(4, 8), line_params_flux2, 0, 1],
     ],
-    ids=["1x1", "bh2x2", "bh2x4"],
+    ids=["1x1", "bh2x2", "bh2x4", "bh4x8"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("height", "width"), [(1024, 1024), (2048, 2048)], ids=["1024", "2048"])
@@ -170,8 +172,9 @@ def test_vae_flux2_decoder_conv2d_3x3(
         [(1, 1), {**single_device_params_flux2, "trace_region_size": 4 * TRACE_REGION_SIZE}, 0, 1],
         [(2, 2), {**line_params_flux2, "trace_region_size": TRACE_REGION_SIZE}, 1, 0],
         [(2, 4), {**line_params_flux2, "trace_region_size": TRACE_REGION_SIZE}, 1, 0],
+        [(4, 8), {**line_params_flux2, "trace_region_size": TRACE_REGION_SIZE}, 0, 1],
     ],
-    ids=["1x1", "bh2x2", "bh2x4"],
+    ids=["1x1", "bh2x2", "bh2x4", "bh4x8"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("height", "width"), [(1024, 1024), (2048, 2048)], ids=["1024", "2048"])
