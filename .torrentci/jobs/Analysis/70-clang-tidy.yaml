@@ -1,0 +1,96 @@
+---
+# PR Gate code-analysis, Clang Tidy (Full) as the merge queue runs it
+# (clang-tidy-reusable.yaml with no targets): every target and every public
+# header set compiled through clang-tidy-23 (cmake preset
+# clang-tidy-fix-parallel), each diagnostic an error. The build keeps going
+# past failures so all findings are reported; any finding, or a build failure
+# without findings, fails the job.
+jobs:
+  - id: clang-tidy
+    name: Clang Tidy (Full)
+    description: Full clang-tidy scan of tt-metal (all targets and header sets), warnings as errors
+    timeout: 4h
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '16', memory: 48Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 64Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - {name: CCACHE_COMPILERCHECK, value: content}
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+    # asan-build's CPM source cache: the same dependencies.
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: cpm-cache
+        kind: shell
+        shell:
+          run:
+            - >-
+              cat cmake/CPM.cmake third_party/CMakeLists.txt tt_metal/third_party/CMakeLists.txt
+              tt_metal/third_party/umd/third_party/CMakeLists.txt tt-train/cmake/dependencies.cmake
+              third_party/*.patch tt-train/cmake/*.patch .gitmodules | sha256sum | cut -d' ' -f1 > /tmp/cpm-deps.sha256
+            - >-
+              if [ ! -f .cpmcache/.deps.sha256 ]; then echo "CPM cache: miss";
+              elif cmp -s .cpmcache/.deps.sha256 /tmp/cpm-deps.sha256; then
+              echo "CPM cache: hit, $(du -sh .cpmcache | cut -f1)"; touch /tmp/cpm-unchanged;
+              else echo "CPM cache: dependencies changed, dropping it"; rm -rf .cpmcache; fi
+            - mkdir -p .cpmcache && cp /tmp/cpm-deps.sha256 .cpmcache/.deps.sha256
+      - id: configure
+        kind: shell
+        shell:
+          run:
+            - mkdir -p .build/clang-tidy/fixes
+            - >-
+              configure() { cmake --preset clang-tidy-fix-parallel
+              -DCMAKE_CXX_CLANG_TIDY="$PWD/cmake/clang-tidy-export-fixes-wrapper.sh;$PWD/.build/clang-tidy/fixes;--warnings-as-errors=*"
+              -DCMAKE_C_CLANG_TIDY="$PWD/cmake/clang-tidy-export-fixes-wrapper.sh;$PWD/.build/clang-tidy/fixes;--warnings-as-errors=*"
+              -DTT_USE_SYSTEM_SFPI=ON; }
+            - configure
+            # After a fresh download, normalise the tree the way the cache
+            # stores it (no .git, symlinks or sparse files) and reconfigure, so
+            # ccache keys match later restored runs.
+            - if [ -f /tmp/cpm-unchanged ]; then exit 0; fi
+            - find .cpmcache -name .git -prune -exec rm -rf {} +
+            - >-
+              find .cpmcache -type l -exec sh -c 'for l; do
+              t=$(readlink -f "$l") && rm "$l" && cp -rL "$t" "$l" || true; done' _ {} +
+            - find .cpmcache -type l -delete
+            - >-
+              find .cpmcache -type f -size +0 -printf '%S %p\n' | awk '$1 < 1 {sub(/^[^ ]+ /, ""); print}'
+              | while IFS= read -r f; do cp --sparse=never "$f" "$f.dense" && mv "$f.dense" "$f"; done
+            - rm -rf .build/clang-tidy && mkdir -p .build/clang-tidy/fixes
+            - configure
+      - id: analyze
+        kind: shell
+        shell:
+          run:
+            # Violations fail compile edges but still export their fixes; the
+            # counts below decide the verdict.
+            - ccache -z
+            - build_exit=0; cmake --build --preset clang-tidy-fix-parallel || build_exit=$?
+            - echo "cmake --build exited with $build_exit"
+            - ccache -s
+            - uv pip install --quiet PyYAML
+            - >-
+              violations=$(python3 .github/scripts/clang_tidy_report.py .build/clang-tidy/fixes
+              --format count --repo-root "$PWD")
+            - python3 .github/scripts/clang_tidy_report.py .build/clang-tidy/fixes --format list --repo-root "$PWD"
+            - if [ "$violations" -gt 0 ]; then echo "clang-tidy found $violations violation(s)"; exit 1; fi
+            - if [ "$build_exit" -ne 0 ]; then echo "clang-tidy build failed (exit $build_exit) with no violations"; exit 1; fi
+            - echo "clang-tidy found no violations"
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            # An unchanged restored tree is already stored; don't re-upload it.
+            - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi

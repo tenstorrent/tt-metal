@@ -1,0 +1,50 @@
+---
+# PR Gate verify-time-budgets: lint the cmd blocks of the test yamls and
+# check every team's test timeouts against its time budget, across all test
+# yamls at once.
+jobs:
+  - id: verify-time-budgets
+    name: Verify time budgets
+    description: Lint the test yamls' cmd blocks and check test timeouts against the team time budgets
+    timeout: 10m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/library/python:3.10-bookworm@sha256:f72a86806f92fe13a49f49aeca1db0b19ea5cf4a0470b842a01b0e14314945b8
+        resources:
+          requests: {cpu: '1', memory: 1Gi, ephemeral-storage: 2Gi}
+          limits: {memory: 2Gi, ephemeral-storage: 4Gi}
+    env:
+      - {name: HOME, value: /tmp/home}
+    steps:
+      - id: probe
+        kind: shell
+        shell:
+          run:
+            - git remote -v || true
+            - git branch -a | head -20 || true
+            - git log --oneline -3 || true
+            - git rev-parse --is-shallow-repository || true
+      - id: setup
+        kind: shell
+        shell:
+          run:
+            - python3 -m venv /tmp/venv
+            - /tmp/venv/bin/pip install -q PyYAML
+      - id: lint-cmd-blocks
+        kind: shell
+        shell:
+          run:
+            - git show origin/main:.github/pipeline_cmd_lint_baseline.yaml > /tmp/base_baseline.yaml
+            - /tmp/venv/bin/python .github/scripts/utils/lint_pipeline_cmds.py --base-baseline /tmp/base_baseline.yaml
+      - id: verify-time-budget
+        kind: shell
+        shell:
+          run:
+            - /tmp/venv/bin/python -m unittest discover -s .github/scripts/utils -p test_verify_time_budget.py
+            - >-
+              /tmp/venv/bin/python .github/scripts/utils/verify_time_budget.py
+              --tests-dir tests/pipeline_reorg --budget-file .github/time_budget.yaml
+              --comment-file /tmp/budget-report.md
+              || { status=$?; cat /tmp/budget-report.md 2>/dev/null; exit $status; }

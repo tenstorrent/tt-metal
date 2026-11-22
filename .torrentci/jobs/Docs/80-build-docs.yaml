@@ -1,0 +1,50 @@
+---
+# PR Gate build-docs (docs-latest-public.yaml, dry run): import ttnn in place
+# from asan-build's precompiled libraries, check that every registered ttnn op
+# is documented, then build the Sphinx docs with warnings as errors.
+jobs:
+  - id: build-docs
+    name: Build docs
+    description: Check that every ttnn op is documented and build the Sphinx docs against asan-build's libraries
+    timeout: 45m
+    needs: [asan-build]
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-test-image, image: ci-test}
+        resources:
+          requests: {cpu: '4', memory: 16Gi, ephemeral-storage: 20Gi}
+          limits: {memory: 16Gi, ephemeral-storage: 30Gi}
+    artifacts:
+      restore:
+        - from-job: asan-build
+          name: ttnn-import-ASan
+          path: ttnn-import.tar.zst
+    env:
+      - {name: TT_METAL_HOME, value: /workspace}
+      - {name: PYTHONPATH, value: /workspace}
+      - {name: LD_LIBRARY_PATH, value: /workspace/build/lib}
+      - {name: LOGURU_LEVEL, value: INFO}
+      # Python is not ASan-built: preload the runtime so the instrumented ttnn
+      # extension imports, and skip LeakSanitizer's exit-time reports on
+      # Python internals.
+      - {name: ASAN_OPTIONS, value: detect_leaks=0}
+    steps:
+      - id: install-ttnn
+        kind: shell
+        shell:
+          run:
+            # build/lib and runtime, the TT_FROM_PRECOMPILED_DIR layout.
+            - tar -I zstd -xf ttnn-import.tar.zst -C .
+            - TT_FROM_PRECOMPILED_DIR=$PWD uv pip install .
+      - id: undocumented-ops
+        kind: shell
+        shell:
+          run:
+            - LD_PRELOAD="$(clang-20 -print-resource-dir)/lib/linux/libclang_rt.asan-x86_64.so" python3 scripts/detect_undocumented_ttnn_ops.py
+      - id: build-docs
+        kind: shell
+        shell:
+          run:
+            - LD_PRELOAD="$(clang-20 -print-resource-dir)/lib/linux/libclang_rt.asan-x86_64.so" ./tests/scripts/run_build_docs.sh
