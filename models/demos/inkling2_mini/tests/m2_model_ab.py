@@ -28,7 +28,7 @@ dev = ttnn.open_device(device_id=0, trace_region_size=512 << 20)
 
 
 def run(m, tag, ov=None):
-    g = Generator(m)
+    g = Generator(m, overlap=False)  # this script installs its own variants
     g.capture()
     toks = [200005, 17, 4000, 123, 9, 77]
 
