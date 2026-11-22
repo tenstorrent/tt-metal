@@ -88,7 +88,9 @@ class PfConv:
         F.run(io, kernels, cbs)
         # advance the tail as _Tail.window does: new tail = rows [t, t + 32) of [old tail ++ x] = last 32 rows of x
         keep = getattr(tail, "keep", None)
-        if keep is not None:  # last chunk: the conv-history handoff reads [old tail ++ chunk]
-            keep[0][keep[1]] = ttnn.concat([tail.t, x], dim=2)
+        if keep is not None:  # last chunk: the conv-history handoff reads the last 160 rows of [old tail ++ chunk]
+            keep[0][keep[1]] = (
+                ttnn.concat([tail.t, x], dim=2) if t + 32 <= 160 else ttnn.slice(x, [0, 0, t - 160, 0], [1, 1, t, c])
+            )
         tail.t = ttnn.slice(x, [0, 0, t - 32, 0], [1, 1, t, c])
         return out

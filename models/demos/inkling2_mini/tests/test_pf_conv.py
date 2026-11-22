@@ -59,8 +59,8 @@ def test_pf_conv(device, t, mode):
     resid = None
     if mode in ("resid", "hres"):  # hres: the bf16 residual stream h
         resid = put(torch.randn(1, 1, t, 2304, generator=g) * 2, ttnn.float32 if mode == "resid" else ttnn.bfloat16)
-    ta, tb = _Tail(dev, 2304), _Tail(dev, 2304)
-    ta.t = tb.t = put(tail0, ttnn.bfloat16)
+    ta = _Tail(put(tail0, ttnn.bfloat16))
+    tb = _Tail(ta.t)
     pc = PfConv(dev)
     a = ttnn.to_torch(ref(mode, taps, x, ta, resid))
     b = ttnn.to_torch(pc(taps, x, tb, mode, resid))

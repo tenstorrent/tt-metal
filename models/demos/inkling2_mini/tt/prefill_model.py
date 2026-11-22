@@ -28,6 +28,9 @@ Trace rule: every constant device tensor (and every weight copy) is made in __in
 call allocates only per-call tensors. So make the Inkling2Prefill before `Generator.capture()` (a buffer first
 allocated after a capture and kept can sit in memory the trace replays write to); prefill calls after the capture
 are safe, for any prompt length.
+
+Traced chunks (trace=True): a chunk shape seen once is captured on its next use and replayed after that, as
+segments split at each MoE routing readback (see "traced chunks" below).
 """
 
 from __future__ import annotations
@@ -68,6 +71,9 @@ GROUPS = N_HEADS // N_KV
 SCALE = HEAD_DIM**-0.5
 FAR_DH = HEAD_DIM + 32  # far part head dim: q ++ [lse_hi, lse_lo, 0...]
 QB = 128  # local attention query block (SDPA batch element)
+# rows kept from the end of the last chunk for the decode handoff: the last real row n - 1 lies in the last QB rows,
+# its lags 1..3 go back 3 more, and the conv tails put 32 rows in front: QB + 32 covers both
+KEEP = QB + 32
 
 
 def _f32(x):
@@ -101,12 +107,13 @@ def _unheads(x):
 
 
 class _Tail:
-    """Last 32 input rows of a causal conv stream (rows 29..31 = lags 3..1 before the chunk), bf16."""
+    """Last 32 input rows of a causal conv stream (rows 29..31 = lags 3..1 before the chunk), bf16. `t` starts as a
+    shared zero constant (never written: each window makes a new tail). keep: set on the last chunk; then
+    window() stores the last KEEP rows of [old tail ++ chunk] there (the conv-history handoff)."""
 
-    def __init__(self, device, width):
-        self.t = ttnn.from_torch(
-            torch.zeros(1, 1, 32, width), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
+    def __init__(self, zero):
+        self.t = zero
+        self.keep = None
 
     def window(self, x):
         """x [1,1,T,W] bf16 -> (ext [1,1,32+T,W], lags[r] = input r steps back, r = 0..3) and advances the tail."""
@@ -114,6 +121,8 @@ class _Tail:
         t = x.shape[2]
         ext = ttnn.concat([self.t, x], dim=2)
         lags = [x] + [_rows(ext, 32 - r, 32 - r + t) for r in range(1, TAPS)]
+        if self.keep is not None:
+            self.keep[0][self.keep[1]] = _rows(ext, t + 32 - KEEP, t + 32)
         self.t = _rows(ext, t, t + 32)
         return ext, lags
 
@@ -350,6 +359,7 @@ class Inkling2Prefill:
         r3_chunks=(128, 128),
         weighted_reduce=False,
         fused_glue=True,
+        trace=True,
         profile=False,
         debug=False,
     ):
@@ -361,7 +371,8 @@ class Inkling2Prefill:
         slot_rows: rows per expert slot. group_grid / group_ibw: grouped expert matmul grid and in0 block widths
         (gate_up, down); None: whole K with r2 (the weight reuse needs it), else (12, 18).
         weighted_reduce: MoE combine by attn_res_weighted_reduce_nc. fused_glue: one-program attn-res, short convs
-        (+ residual) and message-gate tail (tt/fused/pf_*.py, bit-equal to the op chains).
+        (+ residual) and message-gate tail (tt/fused/pf_*.py, bit-equal to the op chains). trace: replay captured
+        chunks (see "traced chunks" below; the outputs are bit-equal to the eager run).
         profile: synchronized per-section times in self.times. debug: print each application."""
         assert self._chunk_ok(chunk), chunk
         self.m = model
@@ -413,6 +424,11 @@ class Inkling2Prefill:
         self.r3_chunks = tuple(r3_chunks)
         self.debug = debug
         self.profile = profile
+        self.trace = trace
+        self._traces, self._warm, self._in = {}, set(), {}
+        self._cap = self._cur = self._mem = None
+        self.n_dropped = 0  # times the traces were dropped (memory use changed between calls)
+        self.slots_used = []  # real expert slots per routing (of _nslot(t)); the caller may clear it
         self.times = defaultdict(float)
         self._t = None
         self._consts()
@@ -433,7 +449,7 @@ class Inkling2Prefill:
         self.c_mass = {d: put(torch.nn.functional.pad(torch.ones(1, N_KV, T, 1), (0, 31)), d) for d in cdts}
         self.c_zero_row = put(torch.zeros(1, 1, 1, HIDDEN), bf)
         self.c_zx = {m: put(torch.zeros(1, 1, 32 - m, HIDDEN), bf) for m in (TAPS, 1 + 2 * TAPS)}
-        self.c_row_idx = put(torch.arange(T, dtype=torch.float32).view(1, 1, T, 1))  # MoE valid-row mask
+        self.c_ztail = {w: put(torch.zeros(1, 1, 32, w), bf) for w in (N_KV * HEAD_DIM, HIDDEN)}  # conv tails at s = 0
         for lp in self.layers:  # router bias, one row per token
             lp.router_bias_rows = put(lp.router_bias_row.expand(1, 1, T, NUM_EXPERTS).contiguous())
         if self.r3:
@@ -475,12 +491,6 @@ class Inkling2Prefill:
     # ------------------------------------------------------------------ constants
     def _put(self, t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT):
         return ttnn.from_torch(t, dtype=dtype, layout=layout, device=self.device)
-
-    def _pos_cols(self, s, t):
-        """tau per position [1,1,t,1] fp32 and per-row validity masks."""
-        pos = torch.arange(s, s + t, dtype=torch.float64)
-        tau = torch.tensor([log_scale(int(p)) for p in pos], dtype=torch.float32).view(1, 1, t, 1)
-        return self._put(tau)
 
     # ------------------------------------------------------------------ attention
     def _linear(self, x, w, dtype=ttnn.bfloat16):
@@ -532,19 +542,17 @@ class Inkling2Prefill:
         """Chunk rows [0, n) -> ring slots s%1024 ...; pad rows keep the old slot contents."""
         t = k.shape[2]
         o = s % WINDOW
+        b = self._cur
         if t > WINDOW:  # long chunk (s % 1024 == 0): slot q gets the last real row j < n with j % 1024 == q
             assert o == 0 and WINDOW < n <= t, (s, n, t)
-            q = torch.arange(WINDOW)
-            src = q + WINDOW * ((n - 1 - q) // WINDOW)  # chunk row per slot
             new = None
-            for blk in range(-(-t // WINDOW)):
+            for blk, m in enumerate(b["ringm"]):  # m: slot mask of block blk (chunk inputs)
                 lo, hi = blk * WINDOW, min(t, (blk + 1) * WINDOW)
-                if not bool(((src >= lo) & (src < hi)).any()):
+                if n == t and not b["ring_used"][blk]:  # full chunk: the used blocks depend on t only
                     continue
                 part = _bf16(_rows(k, lo, hi))
                 if hi - lo < WINDOW:
                     part = ttnn.concat([part, _rows(self.c_zring, 0, WINDOW - (hi - lo))], dim=2)
-                m = self._put(((src >= lo) & (src < hi)).float().view(1, 1, WINDOW, 1), ttnn.bfloat16)
                 term = ttnn.multiply(part, m)
                 new = term if new is None else ttnn.add(new, term)
             ttnn.fill_cache(
@@ -553,9 +561,8 @@ class Inkling2Prefill:
             return
         kc = ttnn.typecast(k, ring.dtype) if k.dtype != ring.dtype else k
         if n < t:
-            mask = self._put(torch.cat([torch.ones(n), torch.zeros(t - n)]).view(1, 1, t, 1), ttnn.bfloat16)
             old = _bf16(_rows(ring, o, o + t))
-            new = ttnn.add(old, ttnn.multiply(ttnn.subtract(_bf16(k), old), mask))
+            new = ttnn.add(old, ttnn.multiply(ttnn.subtract(_bf16(k), old), b["valid"]))
             kc = ttnn.typecast(new, ring.dtype) if ring.dtype != ttnn.bfloat16 else new
         ttnn.fill_cache(ring, kc, 0, update_idx=o)
 
@@ -572,22 +579,15 @@ class Inkling2Prefill:
 
     def _record_inputs(self, lp, conv, xq, xk, xv, n, t):
         """Keep what the decode k/v conv window (state.x_hist) needs: the q/k/v inputs at lags 0..3 of the last
-        position. Non-last chunks keep their last 3 rows (for a last chunk shorter than 4 rows)."""
+        position. Non-last chunks keep their last 3 rows (for a last chunk shorter than 4 rows); the last chunk keeps
+        its last KEEP rows, where _handoff picks the rows of position n - 1 (static slices: a traced chunk serves
+        any n)."""
         xs = (xq, xk, xv)
         if not self._last:
             conv["xprev"] = [_rows(x, t - 3, t) for x in xs]
             return
-        prev = conv.get("xprev")
-
-        def lag(x, i, k):  # input row at position (last - k)
-            r = n - 1 - k
-            if r >= 0:
-                return _rows(x, r, r + 1)
-            if prev is None:
-                return None
-            return _rows(prev[i], 3 + r, 4 + r)
-
-        conv["xwin"] = [[lag(x, i, k) for k in range(TAPS)] for i, x in enumerate(xs)]
+        lo = max(0, t - KEEP)
+        conv["xend"] = (lo, [_rows(x, lo, t) for x in xs])
 
     def _attention(self, lp, xq, xk, xv, st, conv, s, n, tau):
         """One attention layer over the chunk. xq/xk/xv [1,1,T,C] bf16 (normed). Returns [1,1,T,C] bf16."""
@@ -893,18 +893,46 @@ class Inkling2Prefill:
         )
         self._tick("moe.route")
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [t, HIDDEN])
-        rows = self.gm
+        b = self._route(indices, n, t)  # host sync (a segment boundary when traced)
+        nslot = b["nslot"]
+        xs = ttnn.reshape(ttnn.embedding(b["gi"], x_rm, layout=ttnn.TILE_LAYOUT), [1, nslot, self.gm, HIDDEN])
+        self._tick("moe.dispatch")
+        return self._experts_combine(lp, moe, xs, b["ei"], b["bi"], nslot, weights, n, t)
+
+    def _nslot(self, t):
+        """Fixed slot count of a t-row chunk (same program shapes for every routing): sum_e ceil(count_e / GM) <
+        t * 8 / GM + 128, rounded up to 32."""
+        return -(-(-(-t * TOP_K // self.gm) + NUM_EXPERTS) // 32) * 32
+
+    def _route(self, indices, n, t):
+        """Host routing of one MoE application into the chunk's routing buffers (self._cur). While capturing, the
+        device work so far is one segment: close it, run it, route, open the next."""
+        if self._cap is not None:
+            self._cap["routes"].append(indices)
+            self._seg_close()
+        self._route_host(indices, n)
+        if self._cap is not None:
+            self._seg_open()
+        return self._cur
+
+    def _route_host(self, indices, n):
+        b = self._cur
+        t, rows, nslot = b["t"], self.gm, b["nslot"]
         ids = ttnn.to_torch(indices).reshape(t, TOP_K)[:n].to(torch.int64).numpy()  # host sync
         self._tick("moe.read_ids")
         flat = ids.reshape(-1)  # pair p = tok * 8 + k
         counts = np.bincount(flat, minlength=NUM_EXPERTS)
         # slots of GM rows, each bound to one expert: ceil(count / GM) slots per expert (load imbalance is
-        # large: one expert can take most tokens of a chunk), slot count rounded up to 32 (few program shapes)
+        # large: one expert can take most tokens of a chunk). Pad slots repeat the last expert (its weights
+        # are already in place: no DRAM reads) and are never gathered back.
         per = -(-counts // rows)
-        nslot = max(32, int(-(-per.sum() // 32) * 32))
+        used = int(per.sum())
+        assert used <= nslot, (used, nslot)
+        self.slots_used.append(used)
         slot0 = np.concatenate([[0], np.cumsum(per)[:-1]])
-        eid = np.zeros(nslot, dtype=np.int32)
-        eid[: per.sum()] = np.repeat(np.arange(NUM_EXPERTS), per)
+        eid = np.empty(nslot, dtype=np.int32)
+        eid[:used] = np.repeat(np.arange(NUM_EXPERTS), per)
+        eid[used:] = eid[used - 1]
         order = np.argsort(flat, kind="stable")
         starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
         rank = np.empty_like(order)
@@ -914,17 +942,11 @@ class Inkling2Prefill:
         gidx[dest] = np.arange(flat.size) // TOP_K
         back = np.zeros((TOP_K, t), dtype=np.int32)  # k-major; pad tokens read row 0 with weight 0
         back[:, :n] = dest.reshape(n, TOP_K).T
-        gi = self._put(torch.from_numpy(gidx).view(1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-        xs = ttnn.reshape(ttnn.embedding(gi, x_rm, layout=ttnn.TILE_LAYOUT), [1, nslot, rows, HIDDEN])
-        self._tick("moe.dispatch")
-        ei = [
-            self._put(
-                torch.from_numpy(eid[g0 : g0 + self.r2_step]).view(1, 1, 1, -1), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT
-            )
-            for g0 in range(0, nslot, self.r2_step)
-        ]  # sparse_matmul takes at most 128 (= experts) indices per call; builds with repeated sorted ids lift that (one call)
-        bi = self._put(torch.from_numpy(back).view(1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-        return self._experts_combine(lp, moe, xs, ei, bi, nslot, weights, n, t)
+        self._write(b["gi"], torch.from_numpy(gidx).view(1, -1), ttnn.uint32)
+        for i, e in enumerate(b["ei"]):
+            g0 = i * self.r2_step
+            self._write(e, torch.from_numpy(eid[g0 : g0 + e.shape[-1]]).view(1, 1, 1, -1), ttnn.uint16)
+        self._write(b["bi"], torch.from_numpy(back).view(1, -1), ttnn.uint32)
 
     def _experts_combine(self, lp, moe, xs, ei, bi, nslot, weights, n, t):
         """Grouped expert FFN over the slots, gathered back per (k, token) and weighted -> [1,1,T,C] bf16."""
@@ -948,7 +970,7 @@ class Inkling2Prefill:
         ttnn.deallocate(y_rm)
         wk = _bf16(ttnn.permute(weights, (0, 3, 2, 1)))  # [1,8,T,1]
         if n < t:
-            wk = ttnn.multiply(wk, ttnn.lt(_rows(self.c_row_idx, 0, t), float(n), dtype=ttnn.bfloat16))
+            wk = ttnn.multiply(wk, self._cur["valid"])
         if self.wred:  # one pass over the 8 planes, no full-size product
             out = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(yb, wk, dim=1)
         else:
@@ -1045,31 +1067,76 @@ class Inkling2Prefill:
 
     # ------------------------------------------------------------------ chunk / prompt
     def _new_ctx(self):
-        dev = self.device
         tails = {}
+        widths = (("k", N_KV * HEAD_DIM), ("v", N_KV * HEAD_DIM), ("attn", HIDDEN), ("mlp", HIDDEN))
         for L, p in APPS:
-            c = cache_index(L, p)
-            tails[c] = {
-                "k": _Tail(dev, N_KV * HEAD_DIM),
-                "v": _Tail(dev, N_KV * HEAD_DIM),
-                "attn": _Tail(dev, HIDDEN),
-                "mlp": _Tail(dev, HIDDEN),
-            }
+            tails[cache_index(L, p)] = {k: _Tail(self.c_ztail[w]) for k, w in widths}
         return {"tails": tails}
 
-    def _chunk(self, ids, s, n, ctx, logits_rows, force=None, collect=None):
-        """Run positions [s, s + t) (t = len(ids), first n real). Returns logits [rows, 200058] fp32 (host) for
-        logits_rows (chunk-local row indices) or None.
+    def _inputs(self, t):
+        """Device buffers of a t-row chunk that the host writes: before the chunk (tokens, tau, row masks) and at
+        each MoE routing (gather / expert / back indices). Made on first use of t, before its first capture."""
+        b = self._in.get(t)
+        if b is not None:
+            return b
+        put, ns, rm, bf = self._put, self._nslot(t), ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16
+        i32 = lambda *sh: torch.zeros(*sh, dtype=torch.int32)  # noqa: E731
+        nblk = -(-t // WINDOW) if t > WINDOW else 0
+        b = {
+            "t": t,
+            "nslot": ns,
+            "tok": put(i32(1, t), ttnn.uint32, rm),
+            "tau": put(torch.zeros(1, 1, t, 1)),
+            "valid": put(torch.zeros(1, 1, t, 1), bf),  # rows < n (last chunk)
+            "ringm": [put(torch.zeros(1, 1, WINDOW, 1), bf) for _ in range(nblk)],  # ring slot masks per block
+            "gi": put(i32(1, ns * self.gm), ttnn.uint32, rm),
+            "ei": [put(i32(1, 1, 1, min(self.r2_step, ns - g0)), ttnn.uint16, rm) for g0 in range(0, ns, self.r2_step)],
+            "bi": put(i32(1, TOP_K * t), ttnn.uint32, rm),
+        }
+        if nblk:  # blocks a full chunk writes into the ring (the rest are skipped)
+            src = self._ring_src(t)
+            b["ring_used"] = [bool(((src >= k * WINDOW) & (src < (k + 1) * WINDOW)).any()) for k in range(nblk)]
+        self._in[t] = b
+        return b
+
+    @staticmethod
+    def _ring_src(n):
+        """Chunk row written to each ring slot q by a long chunk with n real rows: the last j < n with j % 1024 == q."""
+        q = torch.arange(WINDOW)
+        return q + WINDOW * ((n - 1 - q) // WINDOW)
+
+    @staticmethod
+    def _write(buf, host, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(host, dtype=dtype, layout=layout), buf)
+
+    def _set_inputs(self, ids, s, n):
+        """Write the chunk's host inputs (before its device work or replay) and make its buffers current."""
+        t = len(ids)
+        b = self._cur = self._inputs(t)
+        self._write(b["tok"], torch.tensor(ids, dtype=torch.int32).view(1, t), ttnn.uint32)
+        tau = torch.tensor([log_scale(p) for p in range(s, s + t)], dtype=torch.float32).view(1, 1, t, 1)
+        self._write(b["tau"], tau, ttnn.float32, ttnn.TILE_LAYOUT)
+        if n < t:
+            self._write(b["valid"], (torch.arange(t) < n).float().view(1, 1, t, 1), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        if b["ringm"]:
+            src = self._ring_src(n)
+            for k, m in enumerate(b["ringm"]):
+                mask = ((src >= k * WINDOW) & (src < (k + 1) * WINDOW)).float().view(1, 1, WINDOW, 1)
+                self._write(m, mask, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        return b
+
+    def _chunk(self, ids, s, n, ctx, want_x, force=None, collect=None):
+        """Device work of positions [s, s + t) (t = len(ids), first n real; host inputs already written by
+        _set_inputs). Returns the final normed rows x [1,1,t,C] if want_x, else None.
 
         force(a, s, t) -> torch [t, C] golden input of app a (teacher forcing, also used for the message keys) or None.
         collect: list that gets the host bf16 output [n, C] of each app."""
         m = self.m
         t = len(ids)
         self._s = s
-        tok = self._put(torch.tensor(ids, dtype=torch.int32).view(1, t), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-        e = ttnn.embedding(tok, m.embed, layout=ttnn.TILE_LAYOUT)
+        e = ttnn.embedding(self._cur["tok"], m.embed, layout=ttnn.TILE_LAYOUT)
         h = self._rms(ttnn.reshape(e, [1, 1, t, HIDDEN]), m.embed_norm)
-        tau = self._pos_cols(s, t)
+        tau = self._cur["tau"]
         stack = []
         pre = None
         h12_in = None
@@ -1092,16 +1159,15 @@ class Inkling2Prefill:
             h, stack = self._app(L, p, h, stack, lm, s, n, tau, ctx)
             if collect is not None:
                 collect.append(ttnn.to_torch(h).reshape(t, HIDDEN)[:n].clone())
-        ctx["last_h"] = (h, stack)
-        if not logits_rows:
+        if not want_x:
             return None
-        return self._logits(h, stack, logits_rows)
+        x = self.final_res([nn for _, nn in stack], h)[0]
+        return self._rms(x, m.final_norm)
 
-    def _logits(self, h, stack, rows):
+    def _logits(self, x, rows):
+        """Logits of chunk rows `rows` from the final normed rows x."""
         m = self.m
         out = []
-        x = self.final_res([nn for _, nn in stack], h)[0]
-        x = self._rms(x, m.final_norm)
         rows = list(rows)
         blk = 32  # the model's DRAM-sharded unembed takes one 32-row tile row
         for b0 in range(0, len(rows), blk):
@@ -1130,17 +1196,24 @@ class Inkling2Prefill:
         conv_rows = []
         for c, tails in ctx["tails"].items():
             st = self.m.states[c][0]
-            q, k, v = (row or [None] * TAPS for row in tails["xwin"])
-            fix = lambda r: zero if r is None else _bf16(r)  # noqa: E731
+            lo, xend = tails["xend"]
+            prev = tails.get("xprev")
+
+            def lag(i, k):  # q/k/v input row at position P - k, or None before position 0
+                r = n - 1 - k
+                if r >= 0:
+                    return _bf16(_rows(xend[i], r - lo, r - lo + 1))
+                return zero if prev is None else _bf16(_rows(prev[i], 3 + r, 4 + r))
+
             if tails["triple"]:
-                rows = [fix(q[0])] + [fix(r) for r in k] + [fix(r) for r in v]
+                rows = [lag(0, 0)] + [lag(1, k) for k in range(TAPS)] + [lag(2, k) for k in range(TAPS)]
             else:
-                rows = [fix(r) for r in k]
+                rows = [lag(1, k) for k in range(TAPS)]
             z = self.c_zx[len(rows)]
             ttnn.copy(ttnn.concat(rows + [z], dim=2), st.x_hist)
             pad = ctx["t"] - n
             for name in ("attn", "mlp"):
-                ext = ctx["ext"][c][name]
+                ext = ctx["ext"][c][name]  # last KEEP rows of [old tail ++ chunk]
                 e = ext.shape[2] - pad
                 conv_rows.append(_bf16(_rows(ext, e - TAPS, e)))  # positions P-3 .. P
         host = ttnn.to_torch(ttnn.concat(conv_rows, dim=2)).float().reshape(-1, TAPS, HIDDEN)  # one read
@@ -1156,10 +1229,80 @@ class Inkling2Prefill:
                     )
                 i += 1
 
+    # ------------------------------------------------------------------ traced chunks
+    # A chunk's device work is captured as segments split at each MoE routing (the host reads the expert ids,
+    # sorts, writes the routing buffers, then the next segment runs). Key (chunk size, t, s, last, n < t): the
+    # shapes, cache offsets and kept rows depend on those only; tokens, tau, row masks and routing are device
+    # buffers written before each replay. First use of a key runs eagerly (compiles every program), the second
+    # captures, later ones replay. Carry state (conv tails, kept rows) is held by the record, so the chunk after it
+    # reads what the replay wrote. Allocations between two prefill calls may sit where a trace writes: a changed
+    # device memory use since the last call drops every trace (shortcut: a byte-count check, not an address map;
+    # call release_traces() after allocating anything that must survive a prefill).
+
+    def _seg_open(self):
+        self._cap["tid"] = ttnn.begin_trace_capture(self.device, cq_id=0)
+
+    def _seg_close(self):
+        tid = self._cap.pop("tid")
+        ttnn.end_trace_capture(self.device, tid, cq_id=0)
+        self._cap["segs"].append(tid)
+        ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
+
+    @staticmethod
+    def _snap(ctx):
+        tails = {c: {k: (v.t if isinstance(v, _Tail) else v) for k, v in d.items()} for c, d in ctx["tails"].items()}
+        return {"tails": tails, "ext": ctx.get("ext")}
+
+    @staticmethod
+    def _restore(ctx, snap):
+        names = ("k", "v", "attn", "mlp")
+        ctx["tails"] = {c: {k: (_Tail(v) if k in names else v) for k, v in d.items()} for c, d in snap["tails"].items()}
+        if snap["ext"] is not None:
+            ctx["ext"] = snap["ext"]
+
+    def _capture(self, key, ids, s, n, ctx, want_x):
+        rec = self._cap = {"segs": [], "routes": []}
+        try:
+            self._seg_open()
+            x = self._chunk(ids, s, n, ctx, want_x)
+            self._seg_close()
+        except BaseException:
+            if "tid" in rec:
+                ttnn.end_trace_capture(self.device, rec["tid"], cq_id=0)
+                rec["segs"].append(rec.pop("tid"))
+            for tid in rec["segs"]:
+                ttnn.release_trace(self.device, tid)
+            raise
+        finally:
+            self._cap = None
+        rec["x"], rec["snap"] = x, self._snap(ctx)
+        self._traces[key] = rec
+        return x
+
+    def _replay(self, rec, ctx, n):
+        for i, tid in enumerate(rec["segs"]):
+            ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
+            if i < len(rec["routes"]):
+                self._route_host(rec["routes"][i], n)
+        self._restore(ctx, rec["snap"])
+        return rec["x"]
+
+    def release_traces(self):
+        for rec in self._traces.values():
+            for tid in rec["segs"]:
+                ttnn.release_trace(self.device, tid)
+        self._traces.clear()
+        self._warm.clear()
+
+    def _mem_print(self):
+        views = [ttnn.get_memory_view(self.device, bt) for bt in (ttnn.BufferType.DRAM, ttnn.BufferType.L1)]
+        return tuple(v.total_bytes_allocated_per_bank for v in views)
+
+    # ------------------------------------------------------------------ prompt
     def prefill(self, ids, logits_all=False, log=None, force=None, collect=None, chunk=None):
         """ids: prompt token list. Fills the model's decode state for positions [0, len). Returns logits fp32 host
         tensor: [len, 200058] if logits_all else [1, 200058] (last position). chunk: tokens per pass (default
-        self.chunk, at most self.chunk)."""
+        self.chunk, at most self.chunk). Traced (self.trace) unless logits_all / force / collect / profile / debug."""
         m = self.m
         if getattr(m, "overlap", None) is not None:
             raise RuntimeError(
@@ -1170,6 +1313,10 @@ class Inkling2Prefill:
         assert 0 < L <= m.max_ctx
         chunk = chunk or self.chunk
         assert chunk <= self.chunk and self._chunk_ok(chunk), (chunk, self.chunk)
+        traced = self.trace and not (logits_all or force or collect is not None or self.profile or self.debug)
+        if traced and self._traces and self._mem_print() != self._mem:
+            self.n_dropped += 1
+            self.release_traces()  # something was allocated since the last prefill call
         m.reset()
         ctx = self._new_ctx()
         ctx["L"] = L
@@ -1183,36 +1330,32 @@ class Inkling2Prefill:
             last = s + n == L
             rows = list(range(n)) if logits_all else ([n - 1] if last else [])
             self._last = last
-            if last:
-                self._keep_ext(ctx)
-            col = [] if collect is not None else None
-            r = self._chunk(chunk_ids, s, n, ctx, rows, force, col)
-            if collect is not None:
-                collect.append(col)
-            if r is not None:
-                outs.append(r)
+            if last:  # the conv tails keep the end of [old tail ++ chunk] (conv-history handoff)
+                ctx["ext"] = {c: {} for c in ctx["tails"]}
+                for c, tails in ctx["tails"].items():
+                    for name in ("attn", "mlp"):
+                        tails[name].keep = (ctx["ext"][c], name)
+            self._set_inputs(chunk_ids, s, n)
+            key = (chunk, t, s, last, n < t)
+            if traced and key in self._traces:
+                x = self._replay(self._traces[key], ctx, n)
+            elif traced and key in self._warm:
+                x = self._capture(key, chunk_ids, s, n, ctx, bool(rows))
+            else:
+                col = [] if collect is not None else None
+                x = self._chunk(chunk_ids, s, n, ctx, bool(rows), force, col)
+                if collect is not None:
+                    collect.append(col)
+                if traced:
+                    self._warm.add(key)
+            if rows:
+                outs.append(self._logits(x, rows))
             if log:
                 log(s, n)
             if last:
                 ctx["t"] = t
                 self._handoff(ctx, n)
             s += n
+        if traced:
+            self._mem = self._mem_print()
         return torch.cat(outs)
-
-    def _keep_ext(self, ctx):
-        """Make the tails keep [old tail ++ chunk] of the last chunk (for the conv-history handoff)."""
-        ctx["ext"] = {}
-        for c, tails in ctx["tails"].items():
-            ctx["ext"][c] = {}
-            for name, tl in tails.items():
-                if not isinstance(tl, _Tail):
-                    continue
-                tl.keep = (ctx["ext"][c], name)
-                orig = tl.window
-
-                def window(x, tl=tl, orig=orig):
-                    ext, lags = orig(x)
-                    tl.keep[0][tl.keep[1]] = ext
-                    return ext, lags
-
-                tl.window = window
