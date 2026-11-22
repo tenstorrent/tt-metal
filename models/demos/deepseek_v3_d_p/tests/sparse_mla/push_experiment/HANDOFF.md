@@ -49,6 +49,14 @@ K3.1 per-layer table (committed in run_multirank_pcc.sh's kimi_k3_1 case): `3:30
 19:972800` (layer 11 never pushes). GLM per-layer crossovers (from RT, linear gather model) range 205k-717k
 (layers 38-62 ~300-512k, 42 at 717k), but applying them changed nothing measurable.
 
+### 0.2c CI A/B (run 44977580756, `topk_push_long`, commit b17f7c4d819)
+
+- **GLM-5.3 1M SC1:** 11,138 tok/s @1020k (configured baseline 9,906, handoff experiment 10,917), TTFT 84.17 s
+  (88.20 / 85.61), chunk 452 ms (507). PCC gates pass; the job "fails" only on the two-sided gate (faster than the band).
+- **K3.1 L24 SC1 (repeated 8k prompt, env per-layer table):** 26,808 / 25,971 / 24,822 / 23,125 / 20,802 tok/s at
+  5k / 100k / 255k / 510k / 1M vs the handoff baseline 26,805 / 26,015 / 24,904 / 22,960 / 20,597: no loss beyond
+  noise below 255k, +0.7% at 510k, +1.0% at 1M (handoff experiment: -0.8..-1.1% up to 510k, +0.3% at 1M). Passed.
+
 ### 0.3 Answers to the open questions
 
 - **Why the push is slow at long context / low eth utilization.** It is fabric-bound, not kernel-bound. With
