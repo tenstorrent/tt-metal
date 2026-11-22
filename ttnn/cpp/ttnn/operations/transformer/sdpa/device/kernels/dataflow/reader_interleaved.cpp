@@ -158,9 +158,15 @@ FORCE_INLINE void rel_fill_tile(
                     a = b;
                 }
             } else {
+                // all 16 loads first (they pipeline), then the stores
+                uint32_t v[16];
 #pragma GCC unroll 16
                 for (int32_t w = 0; w < 16; ++w) {
-                    dst[(w >> 3) * 128 + (w & 7)] = src[k + w];
+                    v[w] = src[k + w];
+                }
+#pragma GCC unroll 16
+                for (int32_t w = 0; w < 16; ++w) {
+                    dst[(w >> 3) * 128 + (w & 7)] = v[w];
                 }
             }
         }
