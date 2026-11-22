@@ -177,6 +177,7 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             residual_input_tensor (ttnn.Tensor, optional): Defaults to `None`.
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig)
+            dtype (ttnn.DataType, optional): output data type. Defaults to `None` (the input's).
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -216,7 +217,7 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
                * - BFLOAT16, FLOAT32, BFLOAT8_B
                  - TILE
 
-            Output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
+            Output tensor will be in TILE layout and have the dtype of :attr:`dtype`, or of :attr:`input_tensor` if unset
 
         Memory Support:
             - Interleaved: DRAM and L1
@@ -244,7 +245,8 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             const std::optional<ttnn::MemoryConfig>&,
             const std::optional<const ttnn::prim::LayerNormProgramConfig>&,
             std::optional<const ttnn::DeviceComputeKernelConfig>,
-            const std::optional<const ttnn::Tensor>&>(&ttnn::layer_norm),
+            const std::optional<const ttnn::Tensor>&,
+            const std::optional<const ttnn::DataType>&>(&ttnn::layer_norm),
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("epsilon") = 1e-12,
@@ -254,7 +256,8 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("recip_tensor") = nb::none());
+        nb::arg("recip_tensor") = nb::none(),
+        nb::arg("dtype") = nb::none());
 }
 
 void bind_normalization_layernorm_params_and_inputs(nb::module_& mod) {

@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, run_for_wormhole_b0_or_blackhole
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, merge_gate_subset
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc, merge_gate_subset
 
 pytestmark = pytest.mark.use_module_device
 
@@ -992,3 +992,32 @@ def test_large_layer_norm_row_major_input_affine(device, dtype, expect_error):
     bias_rm = ttnn.from_torch(torch_bias.reshape(w // 32, 32), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     with expect_error(RuntimeError, "does not support row-major gamma/beta"):
         ttnn.layer_norm(input_tensor, weight=weight_rm, bias=bias_rm)
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b, ttnn.float32])
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_layer_norm_output_dtype(device, output_dtype, use_welford):
+    """dtype sets the output data type on the interleaved path (bf16 in, `output_dtype` out)."""
+    torch.manual_seed(0)
+    h, w = 640, 128
+    torch_input = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((w,), dtype=torch.bfloat16)
+    torch_output = torch.nn.functional.layer_norm(
+        torch_input.float(), normalized_shape=[w], weight=torch_weight.float(), bias=torch_bias.float()
+    )
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.layer_norm(
+        input_tensor,
+        weight=weight,
+        bias=bias,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford),
+        recip_tensor=create_recip_tensor(device, w, use_welford),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=output_dtype,
+    )
+    assert output.dtype == output_dtype
+    assert_with_pcc(torch_output, ttnn.to_torch(output).float(), 0.999)

@@ -27,7 +27,8 @@ Tensor layer_norm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const Tensor>& recip_tensor) {
+    const std::optional<const Tensor>& recip_tensor,
+    const std::optional<const DataType>& dtype) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().rank();
 
@@ -36,7 +37,7 @@ Tensor layer_norm(
 
     // For 0V tensors
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
-        return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, output_memory_config, compute_kernel_config);
+        return ttnn::clone(input_tensor, dtype, output_memory_config, compute_kernel_config);
     }
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
@@ -55,7 +56,7 @@ Tensor layer_norm(
             input_tensor.tensor_spec().tile().get_height(),
             input_tensor.tensor_spec().tile().get_width())),
         kernel_config_val,
-        std::nullopt,                                      // dtype
+        dtype,
         prim::LayerNormType::LAYERNORM,                    // norm_type
         prim::DistributedLayerNormStage::NOT_DISTRIBUTED,  // distributed_norm_stage
         std::nullopt,                                      // stats
