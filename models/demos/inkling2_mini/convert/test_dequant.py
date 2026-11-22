@@ -46,7 +46,7 @@ def check(weight, scale, amax, denominator, is_w13):
     got = ours(weight, scale, amax, denominator, is_w13).float()
     assert got.shape == ref.shape and got.dtype == ref.dtype
     pcc = torch.corrcoef(torch.stack([got.flatten(), ref.flatten()]))[0, 1].item()
-    # minimax divides by denominator/amax where transformers multiplies by amax/denominator: fp32 rounding may
+    # dequant_nvfp4 divides by denominator/amax where transformers multiplies by amax/denominator: fp32 rounding may
     # move a value by one bf16 ulp, nothing more.
     torch.testing.assert_close(got, ref, rtol=2**-7, atol=0)
     assert pcc > 0.99999, pcc

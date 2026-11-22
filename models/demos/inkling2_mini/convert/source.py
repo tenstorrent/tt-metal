@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +11,9 @@ The checkpoint stores each expert tensor as ``[E, rows, K]`` (torch ``[out, in]`
   ``w = e2m1 * scale * amax[e] / denominator``.
 * MXFP8 (layers 20-23): ``w`` float8_e4m3fn ``[E, rows, K]`` + ``w_scale`` uint8 UE8M0 ``[E, rows, K/32]``.
 
-Same math as transformers' ``Inkling2LoopDequantizeExperts``; reuses the minimax_m3 per-matrix helpers.
+Same math as transformers' ``Inkling2LoopDequantizeExperts``. The per-matrix helpers ``dequant_mxfp8`` /
+``dequant_nvfp4`` are copied from models/demos/minimax_m3/utils/checkpoint.py, so a change there cannot change
+this converter.
 ``Checkpoint`` reads the safetensors shards by mmap, one tensor (or expert slice) at a time.
 """
 
@@ -24,7 +27,52 @@ from pathlib import Path
 import torch
 from safetensors import safe_open
 
-from models.demos.minimax_m3.utils.checkpoint import dequant_mxfp8, dequant_nvfp4
+MXFP8_BLOCK_SIZE = 32
+NVFP4_GROUP_SIZE = 16
+# E2M1 code -> value; bit 3 is the sign.
+E2M1_VALUES = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0)
+
+
+def dequant_mxfp8(weight: torch.Tensor, scale_inv: torch.Tensor, block_size: int = MXFP8_BLOCK_SIZE) -> torch.Tensor:
+    """float8_e4m3fn ``[N, K]`` + UE8M0 uint8 ``[N, K/block]`` -> bf16 ``[N, K]``."""
+    if weight.dtype != torch.float8_e4m3fn:
+        raise ValueError(f"MXFP8 weight must be float8_e4m3fn, got {weight.dtype}")
+    if scale_inv.dtype != torch.uint8:
+        raise ValueError(f"MXFP8 scale must be uint8 (UE8M0), got {scale_inv.dtype}")
+    n, k = weight.shape
+    if k % block_size or tuple(scale_inv.shape) != (n, k // block_size):
+        raise ValueError(f"MXFP8 scale shape {tuple(scale_inv.shape)} does not match weight {(n, k)} / {block_size}")
+    scale = torch.exp2(scale_inv.to(torch.float32) - 127.0).unsqueeze(-1)
+    out = weight.to(torch.float32).view(n, k // block_size, block_size) * scale
+    return out.view(n, k).to(torch.bfloat16)
+
+
+def unpack_e2m1(packed: torch.Tensor) -> torch.Tensor:
+    """uint8 ``[..., K/2]`` -> fp32 ``[..., K]`` (low nibble first)."""
+    if packed.dtype != torch.uint8:
+        raise ValueError(f"packed E2M1 must be uint8, got {packed.dtype}")
+    table = torch.tensor(E2M1_VALUES, dtype=torch.float32)
+    codes = torch.stack((packed & 0x0F, packed >> 4), dim=-1).flatten(-2)
+    return table[codes.long()]
+
+
+def dequant_nvfp4(
+    packed: torch.Tensor,
+    scale: torch.Tensor,
+    global_scale: torch.Tensor,
+    group_size: int = NVFP4_GROUP_SIZE,
+) -> torch.Tensor:
+    """uint8 ``[N, K/2]`` + float8_e4m3fn ``[N, K/group]`` + fp32 scalar -> bf16 ``[N, K]``."""
+    if scale.dtype != torch.float8_e4m3fn:
+        raise ValueError(f"NVFP4 block scale must be float8_e4m3fn, got {scale.dtype}")
+    if global_scale.numel() != 1:
+        raise ValueError(f"NVFP4 global scale must be a scalar, got shape {tuple(global_scale.shape)}")
+    n, k = packed.shape[0], packed.shape[1] * 2
+    if k % group_size or tuple(scale.shape) != (n, k // group_size):
+        raise ValueError(f"NVFP4 scale shape {tuple(scale.shape)} does not match weight {(n, k)} / {group_size}")
+    values = unpack_e2m1(packed).view(n, k // group_size, group_size)
+    block_scale = scale.to(torch.float32).unsqueeze(-1) / global_scale.to(torch.float32).reshape(())
+    return (values * block_scale).view(n, k).to(torch.bfloat16)
 
 
 def dequant_experts(
