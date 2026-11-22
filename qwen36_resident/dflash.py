@@ -272,7 +272,7 @@ class ResidentDFlash:
         self._last_row = k - 1
         return g[k - 1]
 
-    def _fill_context(self, n_tokens, host=False, phys=0):
+    def _fill_context(self, n_tokens, host=False, phys=0, offset=0):
         """the drafter's context (its window) from the last prefill's taps of positions < n_tokens, one fill of
         fill_rows rows from s0 = the window's first block. On device: each tap's rows masked to the chip that holds
         them, one reduce-scatter -> the taps dim-fractured as the drafter reads them. host: through the host
@@ -304,7 +304,9 @@ class ResidentDFlash:
             )
             dev = [ttnn.slice(fr, (0, 0, t * rows, 0), (1, 1, (t + 1) * rows, fr.shape[-1])) for t in range(nt)]
             ttnn.deallocate(fr)
-        self.drafter.fill_context(dev, s0, phys=phys, valid_len=n_tokens - s0)  # (phys: the drafter slot, multi-user)
+        # (phys: the drafter slot, multi-user; offset: the last prefill's position 0 is the user's position offset, a
+        # re-prefill of a sequence's tail as a fresh prompt: DB3 phase 2's drafter refill)
+        self.drafter.fill_context(dev, s0 + offset, phys=phys, valid_len=n_tokens - s0)
         for t in dev:
             ttnn.deallocate(t)
         if FILL_SYNC:
@@ -583,8 +585,8 @@ class ResidentDFlashRows:
         self.m.capture_trace()
         self.drafter.arm_traces()
 
-    def _fill_context(self, n_tokens, phys=0):
-        ResidentDFlash._fill_context(self, n_tokens, phys=phys)
+    def _fill_context(self, n_tokens, phys=0, offset=0):
+        ResidentDFlash._fill_context(self, n_tokens, phys=phys, offset=offset)
 
     def _reset_ptrs(self):
         U = self.U
