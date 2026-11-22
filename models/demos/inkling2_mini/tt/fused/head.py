@@ -23,18 +23,21 @@ import torch
 
 import ttnn
 from models.demos.inkling2_mini.tt.fused import common as F
+from models.demos.inkling2_mini.tt.fused.bank_linear import BankLinear
 
 PAGES_PER_CORE = 2
 
 
 class FusedLogitsTail:
     def __init__(self, device, unembed, vocab_pad, vocab_real, softcap):
-        """unembed: tt/dram_sharded.DramShardedLinear with fp32 output (its chunks and program are reused)."""
+        """unembed: tt/dram_sharded.DramShardedLinear with fp32 output (its chunks and program are reused), or
+        tt/fused/bank_linear.BankLinear (same output, one program that writes the raw row itself)."""
         assert unembed.out_dtype == ttnn.float32, unembed.out_dtype
         self.device = device
         self.mm = unembed
         self.vocab_pad, self.vocab_real = vocab_pad, vocab_real
-        width = len(unembed.chunks) * unembed.chunk  # raw row: whole chunks
+        self.bank = isinstance(unembed, BankLinear)
+        width = (unembed.n_chunks if self.bank else len(unembed.chunks)) * unembed.chunk  # raw row: whole chunks
         assert width >= vocab_pad
         self.n_pages = math.ceil(width / F.PAGE)
         self.raw_width = self.n_pages * F.PAGE
@@ -57,6 +60,10 @@ class FusedLogitsTail:
     def __call__(self, x):
         """x [1,1,1,K] bf16 (final-norm output) -> (logits, token) module buffers."""
         mm = self.mm
+        if self.bank:
+            mm(x, self.raw)
+            self._cap()
+            return self.logits, self.token
         xs = ttnn.to_memory_config(x, mm.act_mem)
         for i, w in enumerate(mm.chunks):
             y = ttnn.linear(

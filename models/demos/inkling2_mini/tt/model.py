@@ -26,6 +26,7 @@ from models.demos.inkling2_mini.tt.attention_fast import DecodePositionsFast as 
 from models.demos.inkling2_mini.tt.attention_fast import Inkling2AttentionFast as Inkling2Attention
 from models.demos.inkling2_mini.tt.dram_sharded import DramShardedLinear
 from models.demos.inkling2_mini.tt.fused.attnres import FusedAttnRes, FusedRowOps
+from models.demos.inkling2_mini.tt.fused.bank_linear import BankLinear
 from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv
 from models.demos.inkling2_mini.tt.fused.gate import FusedMessageGate, FusedQKVGate
 from models.demos.inkling2_mini.tt.fused.head import FusedLogitsTail
@@ -51,6 +52,7 @@ VOCAB_PAD = 200064
 VOCAB_REAL = 200058
 SOFTCAP = 30.0
 UNEMBED_CHUNK = 14336  # columns per DRAM-sharded unembed matmul (7 banks x 64 tiles; fp32 out fits L1)
+UNEMBED_SPLIT = 1  # bank-streamed unembed: cores per DRAM-sharded column group (1: 1183 us, 2: 1234 us)
 EPS = 1e-6
 
 # (layer, pass) of each of the 48 applications, in call order (= golden hidden_XX order)
@@ -175,7 +177,24 @@ class Inkling2Model:
         self.final_norm = ttnn.to_device(g["final_norm"], device, memory_config=dram)
         # Unembed: DRAM WIDTH_SHARDED column chunks, bank-local readers (tt/dram_sharded.py); 3.9 -> 2.5 ms head (E7).
         # INKLING_HEAD_DS=0: the v1 interleaved linear (A/B runs).
-        if os.environ.get("INKLING_HEAD_DS", "1") != "0":
+        if os.environ.get("INKLING_HEAD_BANK", "1") != "0":
+            # one bank-streamed program for all chunks, bit-equal to the DRAM-sharded chunks below (same in0_block_w,
+            # 3 readers per bank); writes the head's raw logits row itself. INKLING_HEAD_BANK=0: the chunked matmuls.
+            uw = ttnn.to_torch(g["unembed"])
+            uw = uw.reshape(uw.shape[-2], uw.shape[-1])
+            kt = uw.shape[0] // (32 * 8)  # DramShardedLinear's act_cores = 8
+            self.unembed = BankLinear(
+                device,
+                uw,
+                g["unembed"].dtype,
+                UNEMBED_CHUNK,
+                kb=next(b for b in range(8, 0, -1) if kt % b == 0),
+                cores_per_bank=3,
+                compute_kernel_config=self.mm_cfg,
+                split=UNEMBED_SPLIT,
+            )
+            del uw
+        elif os.environ.get("INKLING_HEAD_DS", "1") != "0":
             self.unembed = DramShardedLinear(
                 device,
                 g["unembed"],
@@ -191,7 +210,10 @@ class Inkling2Model:
         # Decode logits tail (tt/fused/head.py): softcap + argmax per unembed chunk, no full-vocab tile ops.
         # INKLING_HEAD_FUSED=0: the ttnn op chain below (A/B runs).
         self.head_tail = None
-        if isinstance(self.unembed, DramShardedLinear) and os.environ.get("INKLING_HEAD_FUSED", "1") != "0":
+        if (
+            isinstance(self.unembed, (DramShardedLinear, BankLinear))
+            and os.environ.get("INKLING_HEAD_FUSED", "1") != "0"
+        ):
             self.head_tail = FusedLogitsTail(device, self.unembed, VOCAB_PAD, VOCAB_REAL, SOFTCAP)
         self.final_res = FusedAttnRes(self.frows, g, "final_res_q", 1)
         self.msg = MessageAttnRes(self.rows, g, "msg_q")
