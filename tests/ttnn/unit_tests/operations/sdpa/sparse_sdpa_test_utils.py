@@ -31,10 +31,8 @@ def golden(q, kv, indices, scale, v_dim, attention_sink=None):
     return sparse_mla(q, kv[0, 0], indices.to(torch.int64), scale, v_dim, attention_sink)  # [1,H,S,v_dim]
 
 
-def to_dev(t, device, dtype):
-    return ttnn.from_torch(
-        t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+def to_dev(t, device, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    return ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config)
 
 
 def run_op(
@@ -47,9 +45,10 @@ def run_op(
     compute_kernel_config=None,
     kv_dtype=ttnn.bfloat16,
     q_dtype=ttnn.bfloat16,
+    q_memory_config=ttnn.DRAM_MEMORY_CONFIG,
 ):
     q_host = q.to(torch.bfloat16) if q_dtype == ttnn.bfloat16 else q.to(torch.float32)
-    tt_q = to_dev(q_host, device, q_dtype)  # ttnn quantizes float -> fp8 when q_dtype is fp8_e4m3
+    tt_q = to_dev(q_host, device, q_dtype, q_memory_config)  # ttnn quantizes float -> fp8 when q_dtype is fp8_e4m3
     kv_host = kv.to(torch.bfloat16) if kv_dtype == ttnn.bfloat16 else kv.to(torch.float32)
     tt_kv = to_dev(kv_host, device, kv_dtype)  # ttnn quantizes float -> fp8 when kv_dtype is fp8_e4m3
     tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)

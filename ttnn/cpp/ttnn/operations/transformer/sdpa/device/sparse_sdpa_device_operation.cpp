@@ -15,12 +15,12 @@ namespace ttnn::prim {
 
 namespace {
 // All input invariants the program hash does NOT key on, so they can vary while hitting the same cached
-// program and must be re-checked on EVERY dispatch (miss AND hit). The hash keys only on q/indices shape+dtype
-// and kv dtype+memory_config — NOT on tensor layout, padding, q/indices buffer type/sharding, the logical shape
-// of a plain interleaved kv, cache_batch_idx (a dynamic runtime arg), or device placement. The accessors assume
-// ROW_MAJOR, unpadded, DRAM, interleaved q/indices, so a cache hit with a tiled/padded/L1/sharded/off-device tensor
-// would otherwise run on wrong assumptions. K_DIM comes from q, whose shape IS hashed, so it is pinned. Shared by
-// validate_on_program_cache_miss and _hit.
+// program and must be re-checked on EVERY dispatch (miss AND hit). The hash keys only on q/indices shape+dtype,
+// q's buffer type, and kv dtype+memory_config — NOT on tensor layout, padding, indices buffer type, q/indices
+// sharding, the logical shape of a plain interleaved kv, cache_batch_idx (a dynamic runtime arg), or device
+// placement. The accessors assume ROW_MAJOR, unpadded, interleaved q/indices (q in DRAM or L1, indices in DRAM), so
+// a cache hit with a tiled/padded/sharded/L1-indices/off-device tensor would otherwise run on wrong assumptions. K_DIM
+// comes from q, whose shape IS hashed, so it is pinned. Shared by validate_on_program_cache_miss and _hit.
 void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
     const auto& q = t.q;
     const auto& kv = t.kv;
@@ -53,10 +53,14 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
         TT_FATAL(sink.padded_shape() == sink.logical_shape(), "Attention sink must not be padded");
     }
 
-    // q and indices: ROW_MAJOR, DRAM, interleaved, unpadded (row-major paged-accessor assumptions).
+    // q and indices: ROW_MAJOR, interleaved, unpadded (row-major paged-accessor assumptions). Indices live in
+    // DRAM; q may also sit in L1, where the reader's per-(head, token) row reads don't wait on DRAM latency.
+    TT_FATAL(
+        q.memory_config().buffer_type() == BufferType::DRAM || q.memory_config().buffer_type() == BufferType::L1,
+        "sparse_sdpa q must be in DRAM or L1");
+    TT_FATAL(idx.memory_config().buffer_type() == BufferType::DRAM, "sparse_sdpa indices must be in DRAM");
     for (const Tensor* tp : {&q, &idx}) {
         TT_FATAL(tp->layout() == Layout::ROW_MAJOR, "sparse_sdpa q/indices must be ROW_MAJOR");
-        TT_FATAL(tp->memory_config().buffer_type() == BufferType::DRAM, "sparse_sdpa q/indices must be in DRAM");
         TT_FATAL(!tp->memory_config().is_sharded(), "sparse_sdpa q/indices must be interleaved");
         TT_FATAL(tp->padded_shape() == tp->logical_shape(), "sparse_sdpa q/indices must not be padded");
     }
@@ -259,6 +263,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.compute_kernel_config,
         t.q.logical_shape(),
         t.q.dtype(),
+        // q's buffer type: its TensorAccessor compile-time args differ between DRAM and L1.
+        t.q.memory_config().buffer_type(),
         t.kv.dtype(),
         // kv.memory_config(): an ND-sharded kv produces different TensorAccessor compile-time args than an
         // interleaved one, so they must be distinct programs.
