@@ -90,6 +90,28 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             is_mx(a.dtype()),
         "Input tensor must be FLOAT32, BFLOAT16, BFLOAT8_B or an MX format, got: {}",
         a.dtype());
+    if (operation_attributes.dtype.has_value() && *operation_attributes.dtype != a.dtype()) {
+        const auto out_dtype = *operation_attributes.dtype;
+        TT_FATAL(
+            out_dtype == DataType::FLOAT32 or out_dtype == DataType::BFLOAT16 or out_dtype == DataType::BFLOAT8_B or
+                is_mx(out_dtype),
+            "Output dtype must be FLOAT32, BFLOAT16, BFLOAT8_B or an MX format, got: {}",
+            out_dtype);
+        TT_FATAL(
+            a.layout() == Layout::TILE,
+            "An output dtype other than the input's ({}) needs a TILE input, got {} with dtype {}",
+            a.dtype(),
+            a.layout(),
+            out_dtype);
+        const auto* sharded = std::get_if<LayerNormShardedMultiCoreProgramConfig>(&operation_attributes.program_config);
+        // Distributed stages keep their existing (sharded) dtype handling.
+        TT_FATAL(
+            operation_attributes.distributed_norm_stage != DistributedLayerNormStage::NOT_DISTRIBUTED ||
+                sharded == nullptr || !sharded->inplace,
+            "An inplace layernorm keeps the input dtype ({}); got output dtype {}",
+            a.dtype(),
+            out_dtype);
+    }
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
 

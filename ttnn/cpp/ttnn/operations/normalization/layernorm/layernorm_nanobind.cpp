@@ -217,7 +217,7 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
                * - BFLOAT16, FLOAT32, BFLOAT8_B
                  - TILE
 
-            Output tensor will be in TILE layout and have the dtype of :attr:`dtype`, or of :attr:`input_tensor` if unset
+            Output has the input's layout. Its dtype is :attr:`dtype` if set, else the input's; changing the dtype needs a TILE input.
 
         Memory Support:
             - Interleaved: DRAM and L1
