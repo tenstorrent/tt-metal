@@ -112,6 +112,7 @@ RING_MARGIN = 64 * 1024  # L1 left free below the lowest L1 buffer (later small 
 RING_MIN = 96 * 1024  # a smaller weight ring is refused (row groups), not run slowly
 HUB_MC_NOCS = int(os.environ.get("RESIDENT_HUB_MC_NOCS", "2"))  # NOCs the hub multicasts x over (mlp_hub.cpp mc_nocs)
 DM_OS_KERNELS = ("streamer_reader.cpp", "streamer_writer.cpp")  # (verify rows: -Os, see kernel())
+SNAP_COPY_CORES = int(os.environ.get("RESIDENT_SNAP_COPY_CORES", "8"))  # (slot snapshots: page-copy cores per chip)
 TOK_PREV = 14  # token state word: the previous verify step's accepted drafts (chunked GDN; none: 0xFFFFFFFF)
 TOK_X0 = 64
 TOK_SLOT = 4  # token state word: the GDN state slot of row 0 (verify)
@@ -2101,17 +2102,22 @@ class ResidentModel:
         """device DRAM -> DRAM page copies on every chip (prefill/kernels/handoff.cpp kind-0 jobs, chip-local):
         copies = [(src tensor, src page, dst tensor, dst page, pages[, page bytes])], pages of 4 KB (fp32 tiles) by
         default; a KV pool page (one position tile of K or V, 8 bf8 tiles) is KV_ROW B"""
-        n, mesh = self.d.n, self.mesh
-        core = ttnn.CoreCoord(0, 0)
-        one_core = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
-        jobs = torch.zeros(n, len(copies), 16, dtype=torch.int64)
+        n, mesh, K = self.d.n, self.mesh, SNAP_COPY_CORES
+        cores = [ttnn.CoreCoord(k, 0) for k in range(K)]
+        grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+        # (core k walks jobs k, k + K, ...: its rows k * most .. of one table; most a multiple of the DRAM banks, so a
+        # core's jobs are the table's 64 B pages from its own base address)
+        banks = self.d.banks
+        most = -(-max(1, -(-len(copies) // K)) // banks) * banks
+        jobs = torch.zeros(n, K * most, 16, dtype=torch.int64)
         for j, (src, sp, dst, dp, cnt, *pb) in enumerate(copies):
-            jobs[:, j, 1], jobs[:, j, 2], jobs[:, j, 3] = src.buffer_address(), sp, pb[0] if pb else 4096
-            jobs[:, j, 5], jobs[:, j, 6], jobs[:, j, 7] = dst.buffer_address(), dp, cnt
+            row = (j % K) * most + j // K
+            jobs[:, row, 1], jobs[:, row, 2], jobs[:, row, 3] = src.buffer_address(), sp, pb[0] if pb else 4096
+            jobs[:, row, 5], jobs[:, row, 6], jobs[:, row, 7] = dst.buffer_address(), dp, cnt
         jobs[:, :, 0] = torch.arange(n)[:, None]
         table = (jobs & 0xFFFFFFFF).numpy().astype(np.uint32).view(np.int32)
         jobs_t = ttnn.from_torch(
-            torch.from_numpy(table.reshape(n * len(copies), 16).copy()),
+            torch.from_numpy(table.reshape(n * K * most, 16).copy()),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh,
@@ -2120,17 +2126,20 @@ class ResidentModel:
         )
         cb = lambda idx, total, page: ttnn.CBDescriptor(  # noqa: E731
             total_size=total,
-            core_ranges=one_core,
+            core_ranges=grid,
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.bfloat16, page_size=page)],
         )
         pd = ttnn.MeshProgramDescriptor()
         for chip in range(n):
             rt = ttnn.RuntimeArgs()
-            rt[core.x][core.y] = [jobs_t.buffer_address(), len(copies), chip, self._snap_sem_addr(), 0, 0, 0]
+            for k, c in enumerate(cores):
+                n_k = len(range(k, len(copies), K))
+                base = jobs_t.buffer_address() + (k * most // banks) * 64
+                rt[c.x][c.y] = [base, n_k, chip, self._snap_sem_addr(), 0, 0, 0]
             kern = ttnn.KernelDescriptor(
                 kernel_source=f"{PKG_DIR}/prefill/kernels/handoff.cpp",
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                core_ranges=one_core,
+                core_ranges=grid,
                 compile_time_args=[],
                 runtime_args=rt,
                 config=ttnn.DataMovementConfigDescriptor(
@@ -2147,8 +2156,9 @@ class ResidentModel:
 
     def _snap_sem_addr(self):
         if not hasattr(self, "_snap_sem"):
-            core = ttnn.CoreCoord(0, 0)
-            self._snap_sem = ttnn.create_global_semaphore(self.mesh, ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]), 0)
+            cores = [ttnn.CoreCoord(k, 0) for k in range(SNAP_COPY_CORES)]
+            grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+            self._snap_sem = ttnn.create_global_semaphore(self.mesh, grid, 0)
         return ttnn.get_global_semaphore_address(self._snap_sem)
 
     def _hist_row(self, s, compact, gather):
