@@ -14,6 +14,9 @@
 // (weights in row 0). Scaling a tile's columns by a tap is a matmul with that tap's diagonal, so the four taps
 // accumulate in the destination registers with no partial round trip; SiLU then runs in place. The diagonals are
 // built here once per channel block, as the identity times the row-broadcast tap.
+// PoC switch (decay fused into the convolution): add the decay's compute load and measure the convolution's time.
+constexpr bool poc_decay_load = true;
+
 template <uint32_t block_ct, uint32_t Mt, uint32_t group, uint32_t dest_limit, uint32_t defer_first_rows>
 TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     using qkv_conv::tap_count;
@@ -82,6 +85,24 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             }
             tile_regs_release();
             output.push_back(group);
+            if constexpr (poc_decay_load) {
+                // PoC (decay fused into the convolution, measurement only): one decay output tile's work per work item,
+                // 4 K-tile matmuls into DST and the exact-BF16 sigmoid on the pack thread, discarded unpacked. About
+                // 25 per core against the ~15 the fused decay needs, so it overstates the load.
+                if (ct0 == 0) {
+                    tile_regs_acquire();
+                    for (uint32_t tap = 0; tap < tap_count; ++tap) {
+                        matmul_tiles(dfb::act_tile, dfb::weights, tap, tap * block_ct, 0);
+                    }
+                    tile_regs_commit();
+                    pack_sfpu_begin();
+                    ActivationInitHelper<KernelActivation::SIGMOID, 0, 2>::init();
+                    ActivationApplyHelper<KernelActivation::SIGMOID, 0, 2, 0>::apply(0);
+                    ActivationInitHelper<KernelActivation::SILU>::init();
+                    pack_sfpu_end();
+                    tile_regs_release();
+                }
+            }
             activation.pop_front(group * tap_count);
         }
     };
