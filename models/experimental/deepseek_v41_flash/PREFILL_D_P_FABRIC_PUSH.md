@@ -239,7 +239,7 @@ The push is synchronous, so it blocks the scheduler where TCP sends ahead; async
 4. Bandwidth: per-link accounting from the route map, spreading destinations over exit chips, larger packets for KV
    (several 1 KiB rows a packet when destination pages are contiguous within a block). Written: the work table in
    runs of a cache block (section 5.3) instead of pages, ~64x fewer entries; byte-exact at 16k (210 MiB, plan 11 ms,
-   device 743 ms); 1M to do.
+   device 743 ms); 1M with the op (item 5).
 5. The push as a C++ op, a launch per prefill chunk:
    `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/kv_fabric_push` (`KvFabricPush`, driven by
    `FabricPush` in `tt/prefill/d_p_push.py`). `begin` takes the request's layout (sources, destinations, per layer
@@ -250,8 +250,13 @@ The push is synchronous, so it blocks the scheduler where TCP sends ahead; async
    of 32 runs at a time). A launch is a header page (runs, destination-table bytes), the destination table, then the
    runs; nothing a launch moves is in the program, so every launch hits the program cache. The kernel reads metal_2's
    ND-sharded slabs in place through runtime-configured accessors (no slices) and tilizes the index-key blocks in L1
-   (no device tilize). Next (option B): one persistent kernel on a reserved core, gated per chunk by a semaphore,
-   several packets in flight and multi-page packets.
+   (no device tilize). Byte-exact at 16k (post-prefill push 42 ms) and at 1044480 tokens: 11755520 pages, 12760
+   MiB, 1.41 s after the prefill + `finish_remote_commit` 0.06 s (the Python push: 6.6 s; the host path 14.1 s:
+   readback 4.82 s + send 6.90 s + commit 2.37 s). End-to-end (`--instances 1`, 8.6k prompt): the replies match TCP;
+   with `--no-dspark --num-users 2` one user streams through another's 34.8k-token prompt (push 0.07 s after its
+   0.66 s prefill, 0 s blocking the scheduler; the stream's 2.8 s gap is the 255-token tail replayed through decode,
+   which `_PrefillFirst` runs before any decode step). Next (option B): one persistent kernel on a reserved core,
+   gated per chunk by a semaphore, several packets in flight and multi-page packets.
 
 ## 7. Separate track: prefill state correctness
 
