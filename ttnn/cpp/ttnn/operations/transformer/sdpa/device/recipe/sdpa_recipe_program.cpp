@@ -176,17 +176,6 @@ uint64_t recipe_drop_fused(ProgramDescriptor::CBDescriptors& cbs, NamedCompileTi
     return freed;
 }
 
-namespace {
-// Legacy SDPA's granularity rule: the largest value <= limit that divides the tile count.
-uint32_t recipe_granularity(uint32_t tiles, uint32_t limit) {
-    uint32_t g = std::min(tiles, limit);
-    while (g > 1 && tiles % g != 0) {
-        --g;
-    }
-    return g;
-}
-}  // namespace
-
 ProgramDescriptor recipe_compute_program(
     const PrecisionPolicy& policy,
     const CoreRangeSet& grid,
@@ -312,13 +301,7 @@ ProgramDescriptor recipe_compute_program(
              {"recipe_qk_w", recipe_qk_subblock_width(k_tiles, policy)},
              {"recipe_pv_w", recipe_subblock_width(vd)},
              {"recipe_pv_fold", policy.pv_fold_tiles}},
-        .defines =
-            {{"EXP_APPROX_MODE", "1"},
-             {"STATS_GRANULARITY", std::to_string(recipe_granularity(q_tiles, fp32 ? 4 : 8))},
-             {"SUB_EXP_GRANULARITY", std::to_string(recipe_granularity(k_tiles, fp32 ? 4 : 8))},
-             {"MUL_BCAST_GRANULARITY", std::to_string(recipe_granularity(q_tiles * k_tiles, fp32 ? 4 : 8))},
-             {"DHT_GRANULARITY", std::to_string(recipe_granularity(vd, 8))},
-             {"REDUCE_GRANULARITY", std::to_string(recipe_granularity(q_tiles, fp32 ? 2 : 4))}},
+        .defines = {{"EXP_APPROX_MODE", "1"}},
         .config = compute_config};
     // The recipes record their exp programs in the replay buffer once and replay them per tile from other
     // functions; the SFPI compiler's replay optimization would overwrite them (tenstorrent/tt-metal#58433).

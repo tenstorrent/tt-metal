@@ -457,7 +457,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t k_piece_tiles = Sk_chunk_t * DHt;
     const uint32_t v_piece_tiles = Sk_chunk_t * vDHt;
     uint32_t kv_cb_pages = group_mcast ? 3u : 2u;  // decided with the pass split
-    uint32_t out0_t = Sq_chunk_t * vDHt;
 
     log_debug(tt::LogOp, "k_piece_tiles: {}, v_piece_tiles: {}", k_piece_tiles, v_piece_tiles);
 
@@ -497,19 +496,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 
-    // Shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp) when the save-to-staging branch cannot fire
-    // (ring_size == 1 or one Q block per core) and the full output fits in 2 row groups.
-    const bool streaming_shrink_fits = Sq_chunk_t <= 2 * writer_out_row_group_h;
-    const bool streaming_shrink_safe = (ring_size == 1 || max_q_per_core == 1) && streaming_shrink_fits;
-    if (streaming_shrink_safe) {
-        out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
-        TT_FATAL(
-            Sq_chunk_t % out_out_subblock_h == 0,
-            "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
-            Sq_chunk_t,
-            out_out_subblock_h);
-    }
-    log_debug(tt::LogOp, "streaming_shrink_safe={} out0_t={}", streaming_shrink_safe, out0_t);
     log_debug(
         tt::LogOp,
         "qk subblock {}x{} ({}x{} subblocks), out subblock {}x{} ({}x{} subblocks)",
@@ -522,25 +508,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         out_in0_num_subblocks,
         out_in1_num_subblocks);
 
-    // Determine granularity for statistics computation
-    // Each granularity must evenly divide its tile count to avoid dropping tiles
-    const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
-    const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
-    // DHT_GRANULARITY is used in the kernel with both DHt and vDHt as the cols parameter,
-    // so the granularity must evenly divide both to avoid dropping tiles.
-    uint32_t dht_granularity = std::min({DHt, vDHt, dst_size});
-    while (dht_granularity > 1 && (DHt % dht_granularity != 0 || vDHt % dht_granularity != 0)) {
-        dht_granularity--;
-    }
-    const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
-
-    log_debug(
-        tt::LogOp,
-        "granularity: stats {}, sub_exp {}, dht {}, reduce {}",
-        stats_granularity,
-        sub_exp_granularity,
-        dht_granularity,
-        reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -798,10 +765,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     std::map<std::string, std::string> defines;
     defines["GROUPED_KV_SOURCE_COUNT"] = "1";
-    defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
 
     // NOTE: KernelDescriptors are built after chain construction.
 
@@ -1208,9 +1171,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     recipes::set_named_arg(recipe_args, "recipe_mask_flagged", pooled_route ? 1u : 0u);
     compute_kernel.named_compile_time_args.insert(
         compute_kernel.named_compile_time_args.end(), recipe_args.begin(), recipe_args.end());
-    // The granularity defines of a one-block step (they divide the stacked step's counts too): the stacked step's
-    // larger divisors only unroll the helpers further (kernel config buffer).
-    compute_kernel.defines = stack_slots == 1 ? recipe_compute.defines : make_recipe_program(1).kernels.front().defines;
+    compute_kernel.defines = recipe_compute.defines;
     // Built at O2 to fit the kernel config buffer.
     compute_kernel.opt_level = recipes::recipe_opt_level(tt::tt_metal::KernelBuildOptLevel::O2);
     compute_kernel.config = recipe_compute.config;
