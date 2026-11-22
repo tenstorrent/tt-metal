@@ -386,7 +386,11 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
     }
     const uint32_t r = kblk.resident ? 1 : 0;
     pl.depth_hold = geo.hold_depths[r];
-    pl.half_split = kblk.resident ? mirror_split : HalfSplit::K;
+    // The halves of a balanced ring sum a block's partials in opposite orders, so the split decides which output tiles
+    // round which way. Scattering on N, split on N in the streamed regime too (its schedule stays unmirrored): a row's
+    // result must not depend on its M position, or a packed forward's second chunk rounds differently from the same
+    // chunk alone (the K split below is row-major over the grid: the top rows of cores against the bottom ones).
+    pl.half_split = kblk.resident || mirror_split == HalfSplit::N ? mirror_split : HalfSplit::K;
     pl.sched = sched_of[r];
     pl.waves = geo.waves_of[r];
     pl.P = pl.waves.P;
