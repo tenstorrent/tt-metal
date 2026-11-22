@@ -84,7 +84,8 @@ serve:                         # common to every profile; a profile's env MERGES
     tt:
       fabric_config: FABRIC_1D
       trace_region_size: 134217728     # resident decode trace + PP prefill traces + the DFlash2 drafter's (128 MiB)
-      sample_on_device_mode: decode_only
+      # (sample_on_device_mode is per profile: additional_config deep-merges, so a profile cannot unset it, and
+      # batch-spec samples on the host)
   env:
     ARCH_NAME: blackhole
     MESH_DEVICE: P150x4
@@ -114,6 +115,9 @@ serve_profiles:
       # its cache has no refs/main). `hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68a...` once before
       # `tt-model serve` (quickstart). Also the code default (qwen36_resident.dflash.DRAFTER_WEIGHTS).
       DFLASH_WEIGHTS: incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4
+    additional_config:
+      tt:
+        sample_on_device_mode: decode_only   # the prefill's first token; blocks come from the model's own sampler
   - name: batch
     description: 1-32 concurrent requests on the rows-mode resident engine, all of them in one decode launch (one KV pool shared by the users, device sampling, full sampling controls); waiting prompts prefill together before their decodes start, so each user decodes at the decode-step speed. TTFT-first scheduling is an option (prefill_gang_tokens 0).
     max_num_seqs: 32                     # one launch of 4 row groups (32 rows)
@@ -135,6 +139,19 @@ serve_profiles:
         prefill_chunk_tokens: 1024       # the TT chunk core: a prompt over the gang cap splits into 1024-token spans
         prefill_gang_tokens: 2048        # prefill gangs; 0 = the interleaved (TTFT-first) policy
         sample_on_device_mode: decode_only   # the rows-mode hub feed
+  - name: batch-spec
+    description: 1-8 concurrent requests with lossless DFlash2 speculative decoding (greedy only), up to 32K context each. All users verify in one launch (8 users x 4 verify rows, 3 drafts per verify). Phase 1 of DFlash2 in the batch engine.
+    max_num_seqs: 8                      # one launch: 8 users x 4 verify rows
+    max_model_len: 32768                 # phase 1: the drafter's KV is still sized per user to max_model_len
+    env:
+      TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=qwen36_resident.vllm_spec_rows:Qwen36ResidentSpecRowsForCausalLM"
+      DFLASH_WEIGHTS: incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4
+      # the verify-rows build's core split: 28 attention workers leave the free cores its 4 GDN head groups need
+      RESIDENT_ATTN_WORKERS: "28"
+    # replaces serve.args (no --async-scheduling: the verify / propose steps run synchronously). The drafter is the
+    # model's own (vllm-tt-plugin runner-model spec contract: custom_class + the model_owned_drafter sentinel); K = 3
+    args:
+      - ["--speculative-config", '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 3}']
 default_profile: batch                   # user decision 2026-11-21: one engine for 1-32 users
 
 card:
@@ -274,6 +291,8 @@ card:
 verify:
   - "from qwen36_resident.generator_vllm import Qwen36ResidentForCausalLM, Qwen36ResidentDFlashForCausalLM; assert Qwen36ResidentDFlashForCausalLM"
   - "from qwen36_resident.dflash import ResidentDFlash, DRAFTER_WEIGHTS; assert DRAFTER_WEIGHTS.endswith('dedf8df68adfb1afeaf7b7480c0a0243108177b4')"
+  # batch-spec: the spec rows class and its plan (K = 3 at up to 8 users, refused above)
+  - "from qwen36_resident.vllm_spec_rows import Qwen36ResidentSpecRowsForCausalLM as C; p = C.spec_plan(None, 8, 3); assert p.effective_k == 3 and p.accept_modes == ('argmax_ids',); assert type(C.spec_plan(None, 9, 3)).__name__ == 'SpecReject'"
   # batch: the row groups reach the adapter (one launch of 4 groups for 32 users)
   - "import os; os.environ['RESIDENT_ROW_GROUPS'] = '4'; from qwen36_resident.generator_vllm import ROW_GROUPS; assert ROW_GROUPS == 4, ROW_GROUPS"
   # batch's chunk list reaches the adapter (ae776ee280c); without it the build keeps the 128 chunk and OOMs
