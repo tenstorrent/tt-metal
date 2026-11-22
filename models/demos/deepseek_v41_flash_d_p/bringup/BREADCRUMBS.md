@@ -1591,3 +1591,28 @@
   builds on every path; block-select set mismatches 0 (single / packed, 139264 / 1024000). Ladder steady (gate units):
   single 100.1 / 105.6 / 119.8 ms, 4 x 2k 111.7 / 123.4 / 134.9 at 139264 / 524288 / 1024000 (before: 100.3 / 107.0 /
   122.1 and 110.2 / 125.4 / 139.5). Report: results/PB.FBM_ladder.md.
+
+## PB.LAD (perf, tests only): the full ladder + 4x1792s
+
+- Expected saving per chunk: none (tests only, no model code changed; perf_guide read): device 0, host 0. The new
+  case measures what a fully packed chunk gives: 8192 real tokens vs 4x1600s' 7424, so tok/s should be ~+10 % over
+  4x1600s at a similar wall, if the wall barely depends on the real rows.
+- What: tests/packed/ladder_common.CASES `4x1792s` = (1792, 1792, 1792, 1792, 1024): four requests of 7 whole chips
+  each (256 rows a chip on the 8x4) + the 5th request's first 1024 tokens (4 chips), 8192 real tokens, no pad row; run as
+  4x1600s is (GluedChunk, steady + resumed); test_packed_walls._ladder accepts it (path lanes4x1792s, metrics
+  ladder_lanes4x1792s_*). CPU check: GluedChunk(8192, ..., align=256) ext / rows = 1792 x 4 + 1024 = 8192 for steady
+  and resumed (write_start + 128).
+- Load reasons: none beyond the gate's own (one perf load, layers 0-20, shared by its units).
+- Rule 20: no per-chunk value is touched (tests only); the case's segment starts / write_starts reach the device the
+  way the glued path already sends them (the chunk header, derived on the device).
+- Gotcha (DS41-371, again): the first gate check stopped at the load, "'MoEBlockConfig' object has no attribute
+  'shared_scatter_columns'": _ttnn.so was built at 06:06 on model_bringup (MB.8), the checkout to the batching branch at
+  06:55. ./build_metal.sh (no source change) fixed it; the next check ran every unit.
+- Gate `gate PB.LAD --check` (devjob lad_gate2): PASS. Determinism 0.0; cold strict no-rebuild 0 builds on every path
+  (first in the shared process, it loaded the model; skip_positions / walls reused that load). Steady at 139264 / 1024000:
+  single 99.8 / 120.5 ms, 4x2k 112.1 / 134.0, 4x1792s 116.4 / 137.8 (tok/s 70378 / 59448: below 4x2k's 73078 / 61134
+  despite no pad rows: five segments cost +1.4..+4.8 ms device and up to +5 ms host). Report: results/PB.LAD_ladder.md.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.LAD --spec $BRINGUP_SPEC --check` (devjob);
+  one path: the walls unit with LADDER_CASES=4x1792s LADDER_POS=<histories>.
+- `orchestrator measure --task PB.LAD` (devjob lad_measure): rc 0, failed []; determinism 0.0; quick min layer PCC
+  0.7321 (L39, = PB.9G / PB.FX), host_transfers_per_layer 0, chunk wall 216.5 ms (single-request quick chunk, 40 layers).

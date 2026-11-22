@@ -1,0 +1,54 @@
+{
+ "used": [
+  {
+   "id": "DS41-371",
+   "how": "first gate check stopped at the load ('MoEBlockConfig' has no 'shared_scatter_columns'; _ttnn.so built 06:06 on model_bringup, checkout to batching 06:55): ran ./build_metal.sh before re-running the gate",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the orchestrator switches branches before a task without rebuilding; the brief does not say the build is the other branch's (DS41-371 recurs: PB.MB4, PB.LAD)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "4x1792s pads nothing: 4 x 1792 + 1024 = 8192 real rows (GluedChunk align=256 ext sums to 8192, CPU check)"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; on the stale-build failure, rebuilt (DS41-371) and kept going"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "no load-time switch or max_seq added: 4x1792s uses the same slots (5) and capacity as 4x1600s in _ladder; the gate's units share one load"
+  }
+ ],
+ "cited_only": [
+  "DS41-361",
+  "DS41-363",
+  "DS41-364"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.LAD",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-22T07:25:49",
+  "head": "688e78f5e1a",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.LAD.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.LAD_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.LAD.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/ladder_common.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py"
+  ]
+ }
+}

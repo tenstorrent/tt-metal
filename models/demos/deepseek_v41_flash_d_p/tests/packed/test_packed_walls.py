@@ -71,7 +71,8 @@ WALLS_FRESH_PROBE more under the build probe (the ops that built).
 PB.9C (OWNER 2026-11-21, the performance LADDER): LADDER_POS=<histories> runs the ladder instead of the cases
 (tests/packed/ladder_common.py): PB.9G (chip-aligned lanes, PACKED_CHIPS): LADDER_CASES=4x2k (path lanes4x2k: four
 2048-token requests, 8 chips each), 4x1600s (path lanes4x1600s: four 1600-token requests, 7 chips each, + a 1024-row
-split piece, 4 chips; packed_fallback_chunks_<path> recorded, 0: no fallback exists), every
+split piece, 4 chips), 4x1792s (PB.LAD, path lanes4x1792s: four 1792-token requests, 7 whole chips each, + the
+5th request's first 1024 tokens, 4 chips: 8192 real tokens, no pad row; packed_fallback_chunks_<path> recorded, 0: no fallback exists), every
 segment its own serving slot at history h, steady and resumed, the real previous chunk first, warm_up + WALL_RUNS median,
 one profiled run (device ms), the serving wall through runtime.prefill_packed with the D2H ack a layer and segment.
 Metrics ladder_<path>_{steady,resumed}_wall_ms_p<h>, ladder_<path>_tok_s_p<h>, ladder_<path>_device_ms_p<h>,
@@ -875,7 +876,9 @@ def _ladder(mesh, layers, monkeypatch) -> None:
     (adapter.build_runtime through the model's one load path; its KV cache of one slot a segment at the walls'
     capacity). PB.9G (chip-aligned lanes, PACKED_CHIPS=on): LADDER_CASES 4x2k (path lanes4x2k: four 2048-token
     requests, 8 chips each) and 4x1600s (path lanes4x1600s: four 1600-token requests, 7 chips each, + the 5th request's
-    first 1024 rows, 4 chips: a split piece); every chunk runs the one-call glued path (no fallback)."""
+    first 1024 rows, 4 chips: a split piece); PB.LAD: 4x1792s (path lanes4x1792s: four 1792-token requests, 7 whole
+    chips each, + the 5th request's first 1024 tokens, 4 chips: 8192 real tokens, no pad row); every chunk runs the
+    one-call glued path (no fallback)."""
     from models.demos.deepseek_v41_flash_d_p.tests import test_skip_positions as SP
     from models.demos.deepseek_v41_flash_d_p.tests.packed import ladder_common as L
     from models.demos.deepseek_v41_flash_d_p.tt import packed_device as PD
@@ -883,7 +886,11 @@ def _ladder(mesh, layers, monkeypatch) -> None:
 
     L = importlib.reload(L)
     cases = L.cases(["4x2k"])
-    assert set(cases) <= {"4x2k", "4x1600s"}, f"test_packed_walls' ladder runs 4x2k / 4x1600s (got {cases})"
+    assert set(cases) <= {
+        "4x2k",
+        "4x1600s",
+        "4x1792s",
+    }, f"test_packed_walls' ladder runs 4x2k / 4x1600s / 4x1792s (got {cases})"
     chips = settings.get("PACKED_CHIPS")
     deploy = int(S.get("deploy.seq") or S.get("target.seq"))
     cap = _cap(deploy)
@@ -922,11 +929,12 @@ def _ladder(mesh, layers, monkeypatch) -> None:
                     cap,
                 )
             L.record(f"packed_fallback_chunks_{path}", int(PD.STATS["fallback"]))
-            what = (
-                "four 2048-token segments, each at history h"
-                if case == "4x2k"
-                else "four 1600-token segments + a 1024-row split piece, each at history h"
-            )
+            what = {
+                "4x2k": "four 2048-token segments, each at history h",
+                "4x1600s": "four 1600-token segments + a 1024-row split piece, each at history h",
+                "4x1792s": "four 1792-token segments (7 whole chips each) + a 1024-token split piece (4 chips), "
+                "8192 real tokens (no pad row), each at history h",
+            }[case]
             L.ladder_table(path, f"{what} (chip-aligned lanes, PACKED_CHIPS={chips})", rows)
             all_rows += rows
     finally:

@@ -1322,3 +1322,4 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 07:05 back on batching (model_bringup: MB.8 committed 8ea94892532; its 5120 ladder 69.1k .. 61.6k; 16 commits to push).
   OWNER: the full ladder with every row a real token: QUEUED PB.LAD (tests only: new case 4x1792s = 4 x 1792 + a 1024 split;
   ladder for single 8192, chip-aligned 4x2k, 4x1792s at 51200 .. 1024000, steady + resumed; cold no-rebuild).
+- 07:08 heartbeat: PB.LAD agent active; watch armed (PB.LAD prior_work line to add at the stop, F278).

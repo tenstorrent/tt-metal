@@ -41,6 +41,9 @@ CASES = {
     # PB.9G (chip-aligned lanes, 8x4: 256 rows a chip): four 1.6k requests (7 chips each, the last one padded) and the
     # 5th request's first 1024 rows (4 chips: the split piece; its rest continues in a later chunk)
     "4x1600s": (1600, 1600, 1600, 1600, 1024),
+    # PB.LAD (OWNER 2026-11-22): four 1792-token requests (7 whole chips each, no pad row) + the 5th request's first
+    # 1024 tokens (4 chips; its rest continues in a later chunk) = 8192 real tokens, no padding anywhere
+    "4x1792s": (1792, 1792, 1792, 1792, 1024),
 }
 REPLAY = 128  # resumed: write_start = start + 128 (DeepSeek's Encoder SWA Bounded Replay)
 SPLIT_POS = 139264  # the host split's history (AgentX p50)
