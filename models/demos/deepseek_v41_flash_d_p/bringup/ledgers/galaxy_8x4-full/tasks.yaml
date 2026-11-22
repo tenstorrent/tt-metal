@@ -7337,3 +7337,74 @@ tasks:
       steady_tok_s_p*: '> 0'
       ladder_lanes4x2k_tok_s_p*: '> 0'
       ladder_lanes4x1600s_tok_s_p*: '> 0'
+- id: PB.GAP
+  title: 'OWNER 2026-11-22: the biggest remaining cost of a chip-aligned 4x2k chunk over a single 8192 request (same FLOPs):
+    measure the gap item by item at 139264 and 1024000, then remove the largest item'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - PB.KR
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/drafts
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9G_ladder.md
+  - models/demos/deepseek_v41_flash_d_p/reference
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.HG_ladder.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.KR_ladder.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.GAP_ladder.md
+  brief:
+    prior_work: 'Steady 8192-row chunk, harness wall (PB.BM / PB.KR ladders): single 99.9 ms (139264) / ~120.6 ms (1024000,
+      block-select on); chip-aligned 4x2k ~113.8 ms / ~142 ms. PB.KR probe (a) at 1M (tests/perf/test_kr_probe.py, per-op
+      rows): the 4x2k attention section''s extra over single: the 12 history index-key decodes (fp8 192 B served rows -> bfloat8_b,
+      every chunk, 4 segments x 3 sources) +3.7 ms, region-send waits for the slowest peer ~2.5 ms, exposed history gathers
+      +1.4, contention beside the region''s gathers +1.7 (rope chains, matmuls, concat), attn_index +0.4. Earlier: per-segment
+      bookkeeping (window region / index tables, served writes, ~80 snapshot sends), host enqueue (4x2k exposed host ~16-18
+      ms vs single ~14), the D2H acks (84 a 4-segment chunk vs 21: 16.7 ms host enqueue, PB.9C).'
+    details: 'OWNER 2026-11-22: (1) MEASURE first (one probe load, ~20 device-min): per-op device rows and the host split
+      of ONE 4x2k chunk vs ONE single chunk at 139264 and at 1024000 (steady), the whole layer stack (not only attention):
+      a table ''item | single | 4x2k | extra (device / host / exposed)'', every ms of the wall gap named. (2) ATTACK the largest
+      item (by wall ms at 139264 first, then 1M), exactly (outputs bit-identical, packed oracle 0), rule 20 (no program keyed
+      on a layout, no host table), behind a call-time switch for the A/B. Candidates the overseer expects, not binding: the
+      per-chunk index-key decodes (score straight from the served fp8 rows as a fork option, or decode only each chip''s own
+      segment''s rows once), the region-send waits (balance or decouple the slowest peer), the per-segment host enqueue. If
+      the largest item is not fixable exactly within this task, fix the next one and say why. Ladder (PB.9C''s method) at
+      139264 / 1024000 for 4x2k and single, before / after; cold strict no-rebuild. Report (the gap table + the fix) in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.GAP_ladder.md
+      after the last gate check. Read models/demos/deepseek_v41_flash_d_p/bringup/PACKED_RULES.md and rule 20 of models/demos/common/bringup/agents/bringup-engineer.md.'
+  gate:
+    cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_MHC_POST_V2=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_fast_tier.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode SKIP_POS=139264,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode LADDER_POS=139264,1024000
+      LADDER_CASES=4x2k scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
+      && NO_REBUILD_PACKED_STRICT=1 BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on
+      DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on
+      DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    metrics:
+      packed_alone_vs_today_max_abs_diff: == 0
+      packed_lane_equiv_max_abs_diff: == 0
+      packed_slot_digest_mismatches: == 0
+      packed_determinism_max_abs_diff: == 0
+      no_rebuild_pass_*: == 1
+      program_builds_after_warmup_*: == 0
+      ids_uploads_per_chunk*: == 0
+      packed_fallback_chunks*: == 0
+      steady_tok_s_p*: '> 0'
+      ladder_lanes4x2k_tok_s_p*: '> 0'
