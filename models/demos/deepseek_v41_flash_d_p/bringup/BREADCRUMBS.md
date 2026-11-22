@@ -1306,3 +1306,102 @@
 - Re-run: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "BRINGUP_CHUNK=8192
   [ATTN_CASES=sdpa_,gather,mm_] scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/perf/test_attention_roofline_probe.py"`.
+
+## PB.BM perf (attempt 1): indexer top-k by EXACT block-max pre-selection (INDEXER_BLOCK_SELECT on | off)
+- Read first: OV-3 / OV-58 / OV-61, PACKED_RULES.md, rule 20, perf_guide s1-6, DS41-170 / DS41-286 / DS41-342 (top-k tie
+  order), DS41-333 (the indexer at long lanes), indexer_score README (block epilogue: block_max_out needs block_keys <= 8).
+- Expected saving per chunk (written before the first model run; from the op probe below, perf_guide s1-4). The
+  plain indexers that run under DECODER_SKIP=decode: layers 2 / 8 / 14 (ratio 2; 256 query rows a chip at 8192).
+  At 1024000 (512k keys a row): plain top-k 3.22 ms a layer (probe, pipelined) -> block path ~1.0 ms (B 32) = -2.2 ms
+  a layer, -6.6 ms a chunk, minus the score writer's block max (P.16 measured +17 % of the score op at 2x2: 0 .. +1.2
+  ms a layer if the writer becomes the score's bound): device -3 .. -6.6 ms a chunk, single 8192 and each chip-aligned
+  4 x 2k pass alike. Host: +4 launches a layer (block_max_bf16, 2nd top-k, block_gather, block_keys): +12 launches,
+  ~+0.5 .. +1 ms a chunk. At 139264 (69632 keys): the block path costs MORE (probe 1.31 vs 0.47 ms a layer: its
+  fixed cost), so INDEXER_BLOCK_SELECT_MIN keeps the plain top-k below the crossover (expected ~150-200k keys); 0 there.
+  4 x 2k at 1M: the top-k is a gather-hide cover region (PB.6L): a shorter top-k hides less gather (cover 1.55 -> 0.5
+  ms a layer), so part of the device saving may come back as exposed gather.
+- DECIDED (OV-58): the stock ttnn.gather cannot do the block gather at this size: its ROW_MAJOR kernel keeps each
+  core's WHOLE input row in L1 (a 512k-key bf16 row is 1 MiB; 2 MiB at ratio 1) and reads it once a core; and
+  ttnn.embedding would need the [Sq, T] scores viewed as [Sq T / B, B] rows (a copy of 256 MiB a chip). So three
+  small data-movement Python ops in a new bring-up folder (ttnn/ttnn/bringup/block_select_ttnn; rule 16.3: no fork or
+  library op does a per-row block gather): block_gather (64-byte DRAM reads of each chosen block), block_keys
+  (positions -> key ids), block_max_bf16 (the writer's fp32 8-key maxes -> bf16 32-key maxes in one pass; 0.39 ms at
+  1M vs 0.79 for stock tilize + typecast + untilize, which also cannot fold 4 blocks into one).
+- Load reasons: (1) tests/perf/test_block_select_probe.py, mesh only (0 loads): "the ops' bytes and the chain's time
+  at the per-chip 1M shape on synthetic scores: op level". (2) tests/test_indexer_block_select.py on the accuracy
+  load with tables to 1032192 (BATCH_MAX_SEQ): "needs the full accuracy load because the real-text request runs
+  layers 0-14 to 1M and its state's positions need the load's tables; one load serves every iteration".
+- What (INDEXER_BLOCK_SELECT=on, call-time; off = the plain top-k, unchanged): tt/indexer.py TtIndexer.block_topk
+  (score op's block_max_out at block_keys 8, no pin -> ttnn.bringup.block_max_bf16 factor 4 -> topk_large_indices of
+  the 32-key block maxes -> ttnn.bringup.block_gather -> topk_large_indices of the 512 x 32 gathered scores ->
+  ttnn.bringup.block_keys), use_block_select (a host decision on the chunk's largest kv_len vs
+  INDEXER_BLOCK_SELECT_MIN / _MIN_PACKED), force_block_select (runtime.compile: the first warm chunk / glued layout on
+  the block path, the second on the plain one: both programs built whatever the thresholds), BSEL_CHECK (tests).
+  Single path: TtIndexer.__call__ / topk_of. Glued packed path: tt/packed_glued._index_dynamic (score epilogue,
+  per-pass block counts from the derive, block maxes rolled with the scores' phase table). tt/glued_derive.py: the idx
+  program of a plain indexer with block A3 > 1 also writes each pass's block counts (lens / 32, D_BSEL).
+  tt/gather_hide.py: the top-k region's cover is BSEL_TOPK_COVER_MS (0.5) when the packed block path runs.
+  Sections (profile): indexer_bmax (the fold), indexer_topk (both top-k's; the plain top-k too, on and off alike),
+  indexer_gather. Plain indexers only (TtIndexer: layers 2 / 8 / 14 under decode): the candidate source's block maxes
+  are pinned and the re-index layers' scores biased.
+- DECIDED (OV-58): block 32 (the writer writes 8-key maxes, block_keys <= 8; the fold to 32 costs nothing extra in
+  block_max_bf16 and the first top-k runs over 4x fewer blocks: probe chain 1.00 ms vs 1.44 at block 8).
+- DECIDED (OV-58): every block-select op on the matmul grid (max_grid, 11 x 10): the gather-hide regions' compute
+  sub-device is exactly that rectangle (tt/gather_hide.Split), so the ops are safe inside the top-k region.
+- Measured, same code, on (MIN 0: block path everywhere) vs off, the gate's ladder env, 8x4 (resident logs
+  20261121-222324 on, 20261121-222754 off). Single 8192 steady: 139264 wall 101.6 vs 99.7, device 86.20 vs 85.71;
+  1024000 wall 122.7 vs 126.7, device 110.93 vs 115.79 (indexer_topk -8.66, indexer_bmax +1.17, indexer_gather +1.10,
+  indexer (the score op, block-max epilogue) +2.02). Chip-aligned 4 x 2k steady: 139264 wall 115.6 vs 112.0, device
+  100.22 vs 95.09 (indexer +4.13); 1024000 wall 152.2 vs 150.0, device 135.53 vs 134.69 (indexer +12.9, top-k -8.77).
+- Why the packed path loses (tests/perf/test_bsel_score_probe.py, held perf model's indexer objects, random data, a
+  1M slot's capacity): the score op with vs without block_max_out, ms a call: single ring 1.33 -> 1.67 (139264), 9.60
+  -> 12.72 (1M); the glued lane_ranges ring (q chunk 32) 1.60 -> 2.92 (139264), 12.01 -> 14.57 (1M). The writer-core
+  block max (one RISC-V compare a score) is the cost; in the ranges ring it exceeds what the top-k saves.
+- DECIDED (OV-58): INDEXER_BLOCK_SELECT_MIN = 131072 keys (single path; crossover ~111k keys from the two points),
+  INDEXER_BLOCK_SELECT_MIN_PACKED = 2^30 (never at the default: the packed ring's writer cost; the packed path stays
+  built, warmed and tested: force_block_select). Next lever (not built in this attempt): the block max on the score
+  op's compute kernel (reduce_block_max_row over each score tile on the FPU, the fork's MSA block-pool path) with a
+  block-major [Sq / 32, NB, 32] output the writer can write in 128-byte runs, then a transpose in block_max_bf16:
+  removes the +0.34..3.1 ms a layer the writer adds, which would turn the packed path into a win at 1M.
+- block_gather v2 (after the A/B above): K / 4 blocks a work unit over both RISCs: 0.44 -> 0.34 ms a call (probe).
+- Correctness (tests/test_indexer_block_select.py, accuracy load, real agentic text, point 32768 iteration run):
+  single 24576 rows / 3 calls, packed 24576 rows: 0 mismatches; 12642 / 9433 rows differ only by 512th-value ties
+  (bf16 scores tie often; the plain op's tie choice is as undefined).
+- Gotchas: DS41-379 (ttnn.gather), DS41-380 (test hooks on a reloaded module), DS41-381 (one capacity a packed chunk);
+  the walls need their own load after skip_positions (DS41-356 again: run the walls first in one submit); the
+  resident runner refuses `--one-process` (use `A && B`).
+- Rule 20, per-chunk values this change touches and how they reach the device: the valid block count (kv_len / 32):
+  single path a prepared-program value slot (block_max_bf16 common arg n) and topk_large_indices' valid_length
+  (runtime, not hashed); glued path the derive's per-pass block-count tensors ([1] uint32 a chip, made on the device
+  from the chunk header: D_BSEL), read by block_max_bf16 (n_tensor) and topk_large_indices (valid_length_tensor). The
+  scores' kv_len to the score op as before. Block ids / positions / keys are device data. The path choice (block vs
+  plain) is a host decision on the chunk's length; every program depends on shapes (capacity) only and both paths are
+  warmed by runtime.compile. Nothing new is uploaded per chunk.
+- DECIDED (OV-58; answers the owner rule on kernel work): the compute-kernel block max is NOT built in this attempt.
+  The brief's trigger ("the writer-core block max costs more than the top-k saves") holds for the packed lane_ranges
+  ring only, where INDEXER_BLOCK_SELECT_MIN_PACKED keeps the plain top-k at the default; on the single path the writer
+  costs +0.67 ms a layer at 1M in the model against -2.9 saved. An EXACT FPU block max needs, per score tile: a bf16
+  pack (the score output's own rounding; the fp32 accumulator would reach srcA as TF32, and max(TF32) rounded to bf16
+  is not always the max of the written bf16 scores), reduce_block_max_row<1> on it with a 1.0 scaler tile from the
+  reader (as the MSA block-pool path), a bf16 column tile to the writer, 64-byte strip-major writes ([Sq / 32, NB x 32]:
+  one query strip's 32 maxes of one block a write), and a transpose to [Sq, NB] in block_max_bf16 (a strip's blocks
+  are one contiguous read). Files: ring factory (CBs, defines, validation), compute PHASE 3, writer, reader (scaler),
+  device-op attributes + hash, nanobind, the fork's tests + regression baseline. Expected: packed 4 x 2k at 1M about
+  -5..-7 ms device a chunk, single -2 ms more.
+- Defaults' A/B (orchestrator measure --part test, then measure --task PB.BM reused them; switch on, MIN 131072,
+  MIN_PACKED never): single 8192 steady 1024000 wall 122.6 ms, device 110.75 (off: 126.7 / 115.79); 139264 99.1 /
+  86.02 (plain path; off 99.7 / 85.71); 4 x 2k 1024000 151.7 / 133.53, 139264 114.3 / 94.91 (plain path; off 150.0 /
+  134.69, 112.0 / 95.09). test_no_rebuild cold strict: every path PASS, 0 builds after warm-up (both paths warmed).
+- Gate check #1 (devjob pbbm_gate): every threshold ok except idx_block_select_set_mismatches* MISSING: the test's
+  1M packed check hook used ttnn.clone inside the top-k's gather-hide region (DS41-382; whole grid across two
+  sub-devices). The 139264 point had passed: single 24576 rows 0 mismatches (15564 tie rows), packed 24576 rows 0
+  (9681 tie rows). Fixed in the test (block_keys over an iota on the matmul grid); unit re-run alone.
+- Gate check #2 (devjob pbbm_gate2, final code, hooks clean): PASS PB.BM. idx_block_select_set_mismatches 0 (single
+  and packed, 139264 and 1024000; tie rows 15564 / 9681 / 19470 / 10626 of 24576 each); packed oracle 0 / 0 / 0 / 0;
+  determinism 0; no-rebuild cold strict every path 0 builds; single steady 139264 100.4 ms, 1024000 122.9; 4 x 2k
+  111.5 / 151.0. Report: results/PB.BM_ladder.md.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.BM --spec $BRINGUP_SPEC --check` (devjob);
+  op probe: `resident submit --cmd "BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_block_select_probe.py"`; score-epilogue probe: the walls env +
+  tests/perf/test_bsel_score_probe.py; an A/B at threshold 0: DS41_INDEXER_BLOCK_SELECT_MIN=0
+  DS41_INDEXER_BLOCK_SELECT_MIN_PACKED=0 with the walls / skip_positions units.

@@ -36,6 +36,11 @@ PYTHON_OPS = {
     # batched matmul with one weight per group, one grid row a group (deepseek_v41_flash_d_p P.81: the attention's
     # grouped wo_a, ATTN_ROOFLINE)
     "grouped_matmul": ("grouped_matmul_ttnn", "grouped_matmul"),
+    # an exact block pre-selected top-k's data-movement steps: each row's chosen blocks of scores, and the second
+    # top-k's positions back to key ids (deepseek_v41_flash_d_p PB.BM, INDEXER_BLOCK_SELECT)
+    "block_gather": ("block_select_ttnn", "block_gather"),
+    "block_keys": ("block_select_ttnn", "block_keys"),
+    "block_max_bf16": ("block_select_ttnn", "block_max_bf16"),
 }
 
 # Retired forks (INDEX.md, "Retired forks"): python name -> what replaced it. The fork's folder and binding are gone; a

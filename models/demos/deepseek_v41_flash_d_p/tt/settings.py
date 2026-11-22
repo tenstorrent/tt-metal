@@ -1101,6 +1101,39 @@ TABLE = {
         "262144 2258 -> 954 us on one p150b; candidate k 2048 182 -> 138 us). stock = "
         "ttnn.experimental.topk_large_indices (the path before)",
     ),
+    "INDEXER_BLOCK_SELECT": Setting(
+        "on",
+        ("on", "off"),
+        "PB.BM (OWNER 2026-11-21), read per call (CALL-TIME, listed in bringup/hooks.py batch_call_settings and "
+        "refreshed in batch_call_apply). The plain indexers' top-512 (enc_source layers: TtIndexer; not the candidate "
+        "source, whose block maxes are pinned, nor the re-index layers, whose scores are biased) by EXACT block-max "
+        "pre-selection: the score op's writer also writes each query's max over every 8 keys (block_max_out), "
+        "ttnn.bringup.block_max_bf16 folds them to blocks of 32 (bf16), the top-512 blocks by max "
+        "(topk_large_indices), their 512 x 32 scores (ttnn.bringup.block_gather), the top-512 of those, back to key ids "
+        "(ttnn.bringup.block_keys). The top-512 keys always lie in the top-512 blocks by max, so the selected SET is "
+        "the plain top-k's up to ties at the 512th value (which the plain op leaves undefined too); the order of tied "
+        "keys may differ. Taken when the chunk's key count is >= INDEXER_BLOCK_SELECT_MIN (a host decision on the "
+        "length; both paths' programs depend on shapes only and runtime.compile warms both). off = the plain "
+        "top-k over every visible key (the path before)",
+    ),
+    "INDEXER_BLOCK_SELECT_MIN": Setting(
+        "131072",
+        None,
+        "PB.BM (INDEXER_BLOCK_SELECT=on): the smallest key count (the scores' kv_len: compressed keys, positions / "
+        "ratio) at which a single-request indexer call takes the block path; below it the plain top-k. 131072 (262144 "
+        "positions at ratio 2): the 8x4 ladder, single 8192, on - off device +0.5 ms at 69632 keys (139264), -4.9 ms at "
+        "516096 (1024000): crossover ~111k keys (the block path's fixed cost: the score writer's block max, the fold, "
+        "the gather). Call-time",
+    ),
+    "INDEXER_BLOCK_SELECT_MIN_PACKED": Setting(
+        "1073741824",
+        None,
+        "PB.BM (INDEXER_BLOCK_SELECT=on): the same threshold for the glued packed path's one-call ring (lane_ranges). "
+        "Default: never (above any capacity): that ring's writer-core block max costs +1.3 ms a layer at 139264 and "
+        "+2.6 at 1M (tests/perf/test_bsel_score_probe.py), more than the top-k saves (8x4 4 x 2k ladder, on - off "
+        "device +5.1 ms at 139264, +0.8 at 1M). Next lever: the block max on the compute kernel's FPU (row reduce). "
+        "Call-time",
+    ),
     "CKV_BFP4_PREPARED": Setting(
         "on",
         ("on", "off"),

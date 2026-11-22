@@ -18,7 +18,8 @@ writes a persistent output (allocated once, pinned). A program's cache key holds
             a per-run mask of the segments whose carry is masked: class 0)
     ckeep   the chunk's n compressed rows below the used rows ([1, 1, n, 1] bf16 TILE, every chip; GluedCall._ckeep)
     idx     per pass p < GLUED_SEGS: the top-k valid length of each chip ([1, 1, 1, 1] uint32), and for the candidate
-            indexer the pool's valid length and its -inf cap row ([1, 1, 1, ctopk] bf16 TILE); the ChipRows piece
+            indexer the pool's valid length and its -inf cap row ([1, 1, 1, ctopk] bf16 TILE); for a plain indexer's block
+            pre-selection (PB.BM, INDEXER_BLOCK_SELECT: block A3 > 1) its valid length in blocks; the ChipRows piece
             tables of the passes (phase rolls, keeps, candidate keeps; GluedCall._index_dynamic's Call pieces) in one
             [1, 1, 1, N_TABLES x TABLE_WORDS] uint32 page a chip, at fixed table slots (``slot``)
     srv     the server-order index rows of the segments that write ((d + off) mod S: GluedCall._srv), concatenated
@@ -44,6 +45,12 @@ N_TABLES = 64  # (tt/packed_glued: ChipRows tables a chunk, words a table)
 TABLE_WORDS = 32
 WINDOW = 128
 REGION_CORES = 16  # region rows split over this many cores a chip (data movement only)
+
+
+def _bsel(params: tuple) -> bool:
+    """PB.BM (INDEXER_BLOCK_SELECT): an idx program of a plain indexer with a block (A3 > 1) also writes each pass's
+    block counts (the valid length in blocks: lens / A3) at outputs GLUED_SEGS + p."""
+    return len(params) >= 6 and not bool(params[5]) and int(params[3]) > 1
 
 
 def slot(kind: str, p: int, phased: bool = False, long_: bool = False) -> int:
@@ -282,6 +289,12 @@ void kernel_main() {
             u[0] = e ? lens[j] : 32;
             noc_async_write(buf, TensorAccessor(vl0_args, get_arg_val<uint32_t>(1 + p), 4).get_noc_addr(0), 4);
             noc_async_write_barrier();
+#if D_BSEL
+            // PB.BM (INDEXER_BLOCK_SELECT): the chip's block count of the block pre-selection (lens / A3; an idle chip's 32)
+            u[0] = (e ? lens[j] : 32) / A3;
+            noc_async_write(buf, TensorAccessor(vlb0_args, get_arg_val<uint32_t>(7 + p), 4).get_noc_addr(0), 4);
+            noc_async_write_barrier();
+#endif
 #if D_CAND
             const uint32_t v = e ? nbv[j] : 0;
             u[0] = (e && v >= A4) ? v : A4;
@@ -462,6 +475,8 @@ class Derive:
         elif kind == "idx":
             ctopk, cand = int(params[4]), bool(params[5])
             outs = [self._alloc([self.sp, self.tp, 1, 1], U32, RM, True) for _ in range(GLUED_SEGS)]
+            if _bsel(params):  # PB.BM: each pass's block counts
+                outs += [self._alloc([self.sp, self.tp, 1, 1], U32, RM, True) for _ in range(GLUED_SEGS)]
             if cand:
                 outs += [self._alloc([self.sp, self.tp, 1, 1], U32, RM, True) for _ in range(GLUED_SEGS)]
                 outs += [self._alloc([self.sp, self.tp, 1, ctopk], BF, TL, True) for _ in range(GLUED_SEGS)]
@@ -481,6 +496,8 @@ class Derive:
         if kind == "idx":
             cand = bool(params[5])
             names = [f"vl{p}" for p in range(GLUED_SEGS)]
+            if _bsel(params):
+                names += [f"vlb{p}" for p in range(GLUED_SEGS)]
             if cand:
                 names += [f"vlc{p}" for p in range(GLUED_SEGS)] + [f"cap{p}" for p in range(GLUED_SEGS)]
             names.append("tab")
@@ -491,10 +508,12 @@ class Derive:
             prev = f"{nm}_args"
         for i, t in enumerate(outs):
             defs.append(f"constexpr uint32_t P{i} = {_page_bytes(t)};")
-        flags = {"D_KEEP": 0, "D_REGION": 0, "D_CKEEP": 0, "D_IDX": 0, "D_SRV": 0, "D_CAND": 0}
+        flags = {"D_KEEP": 0, "D_REGION": 0, "D_CKEEP": 0, "D_IDX": 0, "D_SRV": 0, "D_CAND": 0, "D_BSEL": 0}
         flags[{"keep": "D_KEEP", "region": "D_REGION", "ckeep": "D_CKEEP", "idx": "D_IDX", "srv": "D_SRV"}[kind]] = 1
         if kind == "idx" and bool(params[5]):
             flags["D_CAND"] = 1
+        if kind == "idx" and _bsel(params):
+            flags["D_BSEL"] = 1
         head = "".join(f"#define {k} {v}\n" for k, v in flags.items())
         head += f"#define NOUT {len(outs)}\n"
         head += f"#define ALIGN_ROWS {self.align}\n"

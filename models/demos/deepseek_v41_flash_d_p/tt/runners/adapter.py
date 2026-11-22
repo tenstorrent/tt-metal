@@ -378,9 +378,21 @@ class DS41PrefillRuntime:
             if 2 * c + tail + 32 <= m and tail >= 64:
                 ws = 2 * c if self.model.skip_mode == "decode" else None
                 chunks.append((c + tail + 32, 2 * c + tail + 20, ws))  # (end 20 past a block: cap < end)
-        for start, end, ws in chunks:
+        from ..indexer import force_block_select
+
+        # PB.BM (INDEXER_BLOCK_SELECT, a host decision on a chunk's length): the first kind on the block path, the
+        # second on the plain one, whatever their lengths: both paths' programs (shapes only) are built here
+        force = [True, False]
+        for n_, (start, end, ws) in enumerate(chunks):
             ids = self.make_chunk_input([0] * (end - start), start)
-            self._run(ids, kv_cache, 0, start, end, acks=False, write_start=ws)
+            with force_block_select(force[n_] if n_ < len(force) else None):
+                self._run(ids, kv_cache, 0, start, end, acks=False, write_start=ws)
+            ttnn.deallocate(ids)
+        if len(chunks) == 1:  # (no second kind fits: the first again on the plain path)
+            start, end, ws = chunks[0]
+            ids = self.make_chunk_input([0] * (end - start), start)
+            with force_block_select(False):
+                self._run(ids, kv_cache, 0, start, end, acks=False, write_start=ws)
             ttnn.deallocate(ids)
         from ..packed_device import glued_on, packed_on, warm_glued_chunks
 
@@ -391,10 +403,13 @@ class DS41PrefillRuntime:
             import torch
 
             slots = list(range(min(6, int(kv_cache.contract.num_users))))
-            for desc in warm_glued_chunks(c, slots, m, self.mesh_device, replay=self.model.skip_mode == "decode"):
+            descs = list(warm_glued_chunks(c, slots, m, self.mesh_device, replay=self.model.skip_mode == "decode"))
+            # PB.BM: the first layout twice more, on the block path and on the plain one (both paths' programs)
+            for n_, desc in enumerate(descs[:1] * 2 + descs):
                 ids = [torch.zeros(sg.length, dtype=torch.int64) for sg in desc.segments]
                 inp = self.make_packed_input(desc, ids)
-                self.prefill_packed(inp, kv_cache, desc, acks=False)
+                with force_block_select(force[n_] if n_ < len(force) else None):
+                    self.prefill_packed(inp, kv_cache, desc, acks=False)
                 ttnn.deallocate(inp)
         ttnn.synchronize_device(self.mesh_device)
 

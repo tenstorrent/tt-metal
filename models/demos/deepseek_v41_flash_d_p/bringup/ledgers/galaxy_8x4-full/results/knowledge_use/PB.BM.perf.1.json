@@ -1,0 +1,108 @@
+{
+ "used": [
+  {
+   "id": "K-42",
+   "how": "the block path is judged on index SETS with ties at the 512th value counted apart (sorted score lists equal), never on positions",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-170",
+   "how": "tie order of topk_large_indices is undefined: the test compares sets and verifies differences are 512th-value ties via the scores at both id lists",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-342",
+   "how": "the glued path's block maxes are rolled with the same phase table as its scores before the block top-k (block_topk phase=), so tie order stays per alone chip row",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-286",
+   "how": "every block-select op runs on the matmul grid (max_grid: 11x10), the compute sub-device of the gather-hide regions the top-k runs in",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-328",
+   "how": "the packed check gives all four segment states one capacity (DS41-381)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-311",
+   "how": "test hooks set on the held instances' module globals as well as the current module (DS41-380)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "ttnn.gather's ROW_MAJOR kernel holds whole input rows in L1 per core (unusable for long-row block gathers): DS41-379",
+  "the score fork's block_max_out cannot write blocks wider than 8 keys (16-byte fp32 runs per tile row); a wider block needs a separate fold",
+  "ops a test or a model step adds beside the index top-k run inside a gather-hide region (sub-devices): only grid-limited ops work there (DS41-382)",
+  "the score fork's writer-core block max costs ~3-4x more in the glued lane_ranges ring than in the single ring (+1.3 vs +0.34 ms a layer at 139264): measured in tests/perf/test_bsel_score_probe.py"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated: block_max_bf16 reads only the valid blocks (n a runtime value / device tensor, rounded up to 8 output columns for 16-byte writes inside the existing row); buffers sized once at capacity"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "decisions taken autonomously and marked DECIDED in BREADCRUMBS (new block_select_ttnn ops instead of ttnn.gather; block 32; the length threshold INDEXER_BLOCK_SELECT_MIN with both paths warmed)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "tests/test_indexer_block_select.py is BATCH_SHARED on the accuracy load, no load-time env; its 1M state needs tables to 1032192, declared with BATCH_MAX_SEQ (core/batch.hints raises the one accuracy load for every unit alike)"
+  }
+ ],
+ "cited_only": [
+  "DS41-379",
+  "DS41-382"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.BM",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T23:36:09",
+  "head": "3ed453546a4",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.BM.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.BM_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.BM.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_block_select_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_bsel_score_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_indexer_block_select.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/gather_hide.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/glued_derive.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_glued.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/__init__.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/block_select_ttnn/README.md",
+   "ttnn/ttnn/bringup/block_select_ttnn/__init__.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/block_select.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/kernels/block_gather.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/kernels/block_keys.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/kernels/block_max_bf16.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/tests/__init__.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/tests/unit/__init__.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/tests/unit/test_block_select.py"
+  ]
+ }
+}

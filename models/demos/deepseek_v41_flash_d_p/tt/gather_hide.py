@@ -305,6 +305,7 @@ DEC_COVER = 1.2  # the decodes' region measured 5.3-8.5 ms at 1M against ~3.9 ms
 PACKS_A_REGION, PACK_COVER_MS = 2, 0.2
 TOPK_MS_A_POSITION, DEC_ROWS_US_WIDE, DEC_ROWS_US_NARROW = 3.1e-6, 200.0, 17.6
 DRAM_BOUND_SLOWDOWN = 2.0  # (the top-k's)
+BSEL_TOPK_COVER_MS = 0.5  # PB.BM: the block pre-selected top-k's region (probe: ~1 ms of steps at 1M, mostly not DRAM)
 MIN_PIECE_ROWS = 512  # a smaller remainder of a region's cover is left unused; of an item, goes with its last piece
 # at most a region: a later gather's launch waits for the one before it (and holds the compute launches behind it)
 REGION_GATHERS = {"attn": 2, "dec": 4, "topk": 2, "tails": 1}
@@ -613,6 +614,13 @@ class Hide:
             if blk is not None and getattr(blk, "indexer", None) is not None and m.cfg.is_index_source(i):
                 order.append(("topk", i))
                 cover[("topk", i)] = TOPK_MS_A_POSITION * top / DRAM_BOUND_SLOWDOWN
+                ix = blk.indexer
+                if ix.__dict__.get("_kbuf"):  # PB.BM: the block path's top-k is shorter (INDEXER_BLOCK_SELECT)
+                    from .indexer import use_block_select
+
+                    t = max(ix._kbuf)
+                    if use_block_select(ix, ix.kv_len_of(top, t), t, packed=True):
+                        cover[("topk", i)] = min(cover[("topk", i)], BSEL_TOPK_COVER_MS)
             if self.dec_layer == i:
                 order.append(("dec",))
             order.append(("attn", i))

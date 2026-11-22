@@ -1486,7 +1486,15 @@ class GluedCall(OneCall):
         then per pass p (each chip's p-th segment) its top-k at its alone chip rows (DS41-342) with each chip's own
         valid length, copied back to the segment's rows."""
         from . import cores
-        from .indexer import Kept, TtCandidateIndexer, TtReindexer, topk_large_indices
+        from .indexer import (
+            BSEL_BLOCK,
+            SCORE_BLOCK,
+            Kept,
+            TtCandidateIndexer,
+            TtReindexer,
+            topk_large_indices,
+            use_block_select,
+        )
 
         ix, i, cfg = block.indexer, block.layer, block.cfg
         assert ix.glue, "PACKED_ATTN_ONECALL=on: INDEXER_GLUE=on"
@@ -1532,10 +1540,15 @@ class GluedCall(OneCall):
         # bindings, resolved once at the program's creation, follow another call's duplicate pattern)
         kl = k_locals + [_scratch_keys(mesh, k_locals[0], b) for b in range(len(k_locals), GLUED_SEGS)]
         ep = {}
+        # PB.BM (INDEXER_BLOCK_SELECT): a plain indexer's top-k by block-max pre-selection (the score op writes the
+        # block maxes; a host decision on the chunk's largest key count, both paths' programs warmed)
+        bsel = use_block_select(ix, max(lens), t, packed=True)
         if cand:
             ep = dict(block_keys=ix.block, block_max_out=ix._bmax[t], block_max_pin=True)
         elif reidx:
             ep = dict(block_keys=ix.block, block_bias=bias_full)
+        elif bsel:
+            ep = dict(block_keys=SCORE_BLOCK, block_max_out=ix.bsel_buffers(t)[0])
         profiler.signpost("indexer")
         logits = ttnn.bringup.ring_indexer_score_dsa(
             q,
@@ -1571,7 +1584,7 @@ class GluedCall(OneCall):
         if dv is not None:  # (attempt 3: valid lengths, caps and piece tables of every pass, derived from the header)
             from .glued_derive import slot
 
-            iparams = (int(ix.chunk), int(ix.ratio), int(t), int(ix.block) if cand else 1)
+            iparams = (int(ix.chunk), int(ix.ratio), int(t), int(ix.block) if cand else BSEL_BLOCK if bsel else 1)
             iparams += (int(ix.ctopk) if cand else 0, bool(cand))
             douts = dv.run("idx", iparams)
             tabs = douts[-1]
@@ -1609,8 +1622,22 @@ class GluedCall(OneCall):
             vl = douts[p] if dv is not None else _chip_u32(mesh, tuple(clens))
             got = {}
 
-            def topk_step(_, lg=lg, vl=vl):
-                got["top"] = topk_large_indices(lg, k=ix.topk, valid_length_tensor=vl)
+            vlb = None
+            if bsel:  # (each chip's valid length in blocks: the derived lens / BSEL_BLOCK)
+                vlb = (
+                    douts[GLUED_SEGS + p] if dv is not None else _chip_u32(mesh, tuple(v // BSEL_BLOCK for v in clens))
+                )
+
+            def topk_step(_, lg=lg, vl=vl, vlb=vlb):
+                if vlb is not None:
+                    bcols = -(-(max(clens) // BSEL_BLOCK * 2) // 64) * 64
+                    got["top"] = ix.block_topk(
+                        lg, t, n_tensor=vlb, phase=(lambda b: at_phase(b, bcols)) if phased else None, keys_vl=vl
+                    )
+                else:
+                    profiler.signpost("indexer_topk")  # (PB.BM: the top-k its own section, on and off alike)
+                    got["top"] = topk_large_indices(lg, k=ix.topk, valid_length_tensor=vl)
+                profiler.signpost("indexer_pass" if p else "indexer")
                 return got["top"]
 
             if self.hide is not None and p == 0:

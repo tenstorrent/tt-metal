@@ -1275,3 +1275,19 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   (-0.6..-1.0), lazy rescale (-0.3..-0.6): ~-4 of 8.8 ms together. Indexer agent (read-only) reported too (summary to
   the owner): block-max pre-selection, key ring to owning chips, 110-core scoring.
 - 21:50 OWNER: try block-max pre-selection. QUEUED PB.BM (ab INDEXER_BLOCK_SELECT off/on): top-512 blocks by block max (B 8 / 32), then top-512 keys over their keys; prototype with block_max_out, compute-side block max if the writer cost dominates; gate = fast tier, oracle, selection-set test (mismatches == 0 beyond 512th-value ties), ladder single + 4x2k at 139264 / 1024000, cold strict no-rebuild. Launched --until PB.BM.
+- 21:50 heartbeat: PB.BM agent active; watch armed.
+- 22:00 OWNER: queue option 1 for the key ring: PB.KR (patch_kr, applied at PB.BM's stop): packed chunks' index keys gathered only to owning chips with owned_gather (in the index-key prefetch), local non-ring scoring; probe the local scorer vs the ring at 1M first; exact; ladder 4x2k / 4x1600s at 139264 / 1024000.
+- 22:00 OWNER: block-max applies to model_bringup (single path, same top-k at 1M) -> port after PB.BM passes (MB.6: 5120 ladder + cold no-rebuild + selection-set test); the key-ring fix (PB.KR) is packed-only (one request owns all chips).
+- 22:10 OWNER plan (autonomous): fold into PB.KR's first step a per-op profile of 4x2k vs single at 1M inside the attention section (split the +11 ms). After PB.BM and PB.KR pass: port block-max to model_bringup (MB.6), then find the biggest single-vs-batched offender from the profiles and attack it (a new task, decided by the overseer).
+- 22:21 heartbeat: PB.BM agent active; watch armed.
+- 22:50 heartbeat: PB.BM agent active; watch armed.
+- 23:21 heartbeat: PB.BM agent active (~95 min); watch armed.
+- 23:50 PB.BM ACCEPTED (7 units PASS; selection sets identical: 0 mismatches single / packed at 139264 / 1024000). Block 32,
+  writer-core block max (block_max_out) + new block_select_ttnn ops (block_gather, block_keys, block_max_bf16). On only
+  where it wins: INDEXER_BLOCK_SELECT_MIN 131072 keys (single), packed threshold 2^30 (off: the glued ring's writer cost
+  +1.3..2.6 ms a call). Single 8192 steady 1M 64.2k -> 67.9k (+5.7 %), 139k unchanged; packed unchanged by default
+  (noise +-1.5 %). Both programs built at warm-up (no rebuild across the threshold). Open: compute-side (FPU) block max,
+  which would also win on packed and below 262k context.
+- 23:55 PB.BM final gate FAIL 'MISSING' on the accuracy metrics (oracle, determinism, selection-set): every unit was reused (0 s) and results/PB.BM.json was rewritten with the perf group's metrics only (the metrics were present at 23:48). Framework bug (to investigate + fix). Action: gate --continue --rerun the 4 accuracy units to re-record them, then commit.
+- 23:58 F-bug lead: kept units merge delta[u]['metrics'] (core/gate.py ~1008); the 4 accuracy units' delta records evidently carried no metrics (they passed). Investigate the delta store after the --rerun finishes; fix + selftest.
+- 23:51 heartbeat: PB.BM accuracy-unit --rerun running (resident busy).
