@@ -127,7 +127,7 @@ from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill
 )
 from models.experimental.deepseek_v4_flash.tests.prefill.test_prefill_decode_demo import (
     _DECODE_REPLAY_AHEAD,
-    _DEVICE_PARAMS,
+    _DEVICE_PARAMS as _V4_DEVICE_PARAMS,
     _LONGBENCH_FILE as _V4_LONGBENCH_FILE,
     _Prompt,
     _Result,
@@ -148,6 +148,9 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 # prefill share; the other rows stay idle.
 _NUM_STAGES = pipeline_stage_count()
 _MESH = (8, _TP_SIZE)
+# V4's params with V4.1 decode's L1_SMALL (as test_full_model_decode_demo / demo/server.py): its global semaphores
+# overflow V4's 8 KB.
+_DEVICE_PARAMS = {**_V4_DEVICE_PARAMS, "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "10240"))}
 # Opt-in: the KV-only prefill on a placement of its own over every stage (see the module docstring).
 _PREFILL_ALL_STAGES = os.environ.get("DEEPSEEK_V41_PREFILL_ALL_STAGES", "0") == "1"
 # Opt-in: per-chunk host timers of the traced prefill (see the module docstring).
