@@ -35,18 +35,19 @@ _STREAMS = "bank_"  # bank_linear_*, moe_bank_*: weight streams
 # where the profile showed the host stretched more than the staged bytes saved. Measured and left out: attn_bias
 # (32 cores, 14.5 us: 90 KB stretched it to 20.2 us; 30 KB at budget 0.8: +0.08 ms), attn_near / attn_comb (global
 # layers; +0.02 ms). The router (rows 2..5, DRAM idle while its collector runs) takes the largest piece: with it,
-# budget 0.8 on all hosts is best (router 150 KB x budget, j14: 16.70 ms vs 16.93 without; 1.0: 16.98, 0.75 and
-# router 180-200 KB worse).
+# budget 0.8 on all hosts is best (router 150 KB: 16.70 ms vs 16.93 without; budget 1.0: 16.98; 0.75 and router
+# 180-200 KB worse), then router 130 KB with window / out pieces x1.5: 16.63 (x2: 16.65; attn-res x0.85 or conv
+# x1.3: worse).
 HOST_KB = {
     ("conv_compute", "conv_reader", "conv_writer", 1): 89,  # 10.6 us -> 11.5 with a fill
     ("attnres_compute", "attnres_reader", "attnres_writer", 1): 89,  # 10.8 -> 13.3
     ("attnres_compute", "attnres_reader", "rownorm_writer", 1): 89,
     ("attnres_compute", "attnres_reader", "rownorm_writer", 3): 37,  # 5.8 -> 8.7
     ("attnres_compute", "attnres_reader", "attnres_writer", 12): 60,
-    ("attn_window", 8): 30,  # 5.4 -> 5.9
-    ("attn_out_compute", "attn_out_reader", "attn_out_writer", 8): 33,  # 6.6 -> 7.1
+    ("attn_window", 8): 45,  # 5.4 -> 5.9 (30 KB); 45 with the router host
+    ("attn_out_compute", "attn_out_reader", "attn_out_writer", 8): 50,  # 6.6 -> 7.1 (33 KB); 50 with the router host
     ("gatez_compute", "gatez_reader", "gatez_writer", 18): 60,  # 14.3 -> 16.1 (mlp gate 8.7, QKV gate 18.8)
-    ("router_compute", "router_reader", "router_writer", 36): 150,
+    ("router_compute", "router_reader", "router_writer", 36): 130,
 }
 BUDGET = 0.8
 
