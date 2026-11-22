@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Batched DFlash (tt/dflash/batched.py BatchedDFlashRunner): greedy DFlash for 32 / 128 users on the batched decode
-model, every user's block of rows in one pass (32 users: 8-row blocks, a 256-row pass; 128 users: 4-row blocks, a
-512-row pass). Each user's prompt is the demo's chat-template book prompt (256 tokens, its book cut at offset 997 p, 32
+"""Batched DFlash (tt/dflash/batched.py BatchedDFlashRunner): greedy DFlash for 32 / 64 / 128 / 256 users on the
+batched decode model, every user's block of rows in one pass (32 users: 8-row blocks, a 256-row pass; 64: 4-row blocks,
+256 rows; 128: 4-row blocks, a 512-row pass; 256: 2-row blocks, 512 rows). Each user's prompt is the demo's chat-template book prompt (256 tokens, its book cut at offset 997 p, 32
 distinct prompts; user u reads prompt u % 32's K / V blocks). Checks the DFlash tokens against the target's own greedy
 decode, teacher-forced (the batch-32 decode fed DFlash's tokens, its argmax at every position compared with DFlash's
 next token; the first and last 32-user groups), and the mean accepted tokens per round; logs the tokens / s / user.
@@ -34,10 +34,12 @@ NEW_TOKENS = 256  # decoded tokens per user
 PROMPTS = 32  # distinct prompts (user u reads prompt u % 32)
 N_CHECK = 32  # teacher-forced positions per user
 # (measured on QuietBox 2, 2026-10-23: agreement 0.96-0.98 over 16 positions; 4.47 / 3.13 tokens per round, 234 / 106
-# tok/s/user)
+# tok/s/user; on a Galaxy ring, 2026-11-22: 32 / 64 / 128 / 256 users 4.77 / 3.23 / 3.23 / 1.85 tokens per round,
+# 242.8 / 167.6 / 105.8 / 57.0 tok/s/user)
 MIN_AGREEMENT = 0.9
-MIN_ACCEPT = {32: 3.5, 128: 2.5}
+MIN_ACCEPT = {32: 3.5, 64: 3.0, 128: 2.5, 256: 1.7}
 RESULT_ENV = "DFLASH_BATCHED_RESULT"  # a JSON file to write the run's result to (tests/test_dflash_galaxy_dp.py)
+ROWS_ENV = "DFLASH_ROWS_PER_PASS"  # rows per draft / verify pass (BatchedDFlashRunner rows_per_pass; the block follows)
 
 
 def book_prompts(tokenizer, n, isl):
@@ -62,7 +64,7 @@ def book_prompts(tokenizer, n, isl):
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("users", [32, 128], ids=["users_32", "users_128"])
+@pytest.mark.parametrize("users", [32, 64, 128, 256], ids=["users_32", "users_64", "users_128", "users_256"])
 @parametrize_dflash_mesh()
 def test_dflash_batched(mesh_device, device_params, users):
     import models.demos.gpt_oss.demo.text_demo as text_demo
@@ -103,7 +105,8 @@ def test_dflash_batched(mesh_device, device_params, users):
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
     V = model[0].vocab_size
     prompts = book_prompts(tokenizer, PROMPTS, ISL)
-    runner = BatchedDFlashRunner(generator, model[0], table, kv_cache, users=U)  # (the default block / rows per pass)
+    rows_per_pass = int(os.getenv(ROWS_ENV, "0")) or None  # (default: the runner's block / rows per pass)
+    runner = BatchedDFlashRunner(generator, model[0], table, kv_cache, users=U, rows_per_pass=rows_per_pass)
 
     # the prompts: prompt p into its blocks (the prefill's page table row: its blocks, then padding); the drafter's
     # context for every user reading it
