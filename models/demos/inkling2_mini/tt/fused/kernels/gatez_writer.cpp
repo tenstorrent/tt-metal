@@ -4,7 +4,7 @@
 // Message-gate prep + down_proj (E10c), writer of K part s. Prep cores wait for their rms row (cb_np), then bump
 // sem_x on every core (args 0..2 unused). s > 0: send rows 0..R-1 of the kz partial tiles into packed rows of the
 // root's cb_recv (same L1 address on every core) and bump the root's sem_z. Root: wait for all partials, hand them
-// to compute, write z (kz fp32 tiles) to DRAM.
+// to compute, write z rows (compact, several copies) to DRAM.
 #include "rowio.hpp"
 #include "api/debug/kernel_profiler.hpp"
 
@@ -66,7 +66,22 @@ void kernel_main() {
         cb_reserve_back(cb_recv, nb * kz);
         cb_push_back(cb_recv, nb * kz);
         cb_wait_front(cb_z, kz);
-        rowio::write_pages(z_addr, 4096, 0, kz, get_read_ptr(cb_z));
+        // z out in compact form: rows 0..rows-1 only, block (t, r) = 128 B at (t * rows + r) * 128 of one page,
+        // written as n_copies pages (on different DRAM banks: the 72 combine cores each read one copy)
+        constexpr uint32_t n_copies = get_named_compile_time_arg_val("z_copies");
+        const uint32_t zl = get_read_ptr(cb_z), zc = get_write_ptr(31);
+        for (uint32_t t = 0; t < kz; ++t) {
+            for (uint32_t r = 0; r < rows; ++r) {
+                const uint32_t so = zl + t * 4096 + rowio::row_offset(r, 4), d = zc + (t * rows + r) * 128;
+                noc_async_read(get_noc_addr(so), d, 64);
+                noc_async_read(get_noc_addr(so + 1024), d + 64, 64);
+            }
+        }
+        noc_async_read_barrier();
+        const InterleavedAddrGen<true> zo = {.bank_base_address = z_addr, .page_size = 4096};
+        for (uint32_t c = 0; c < n_copies; ++c) {
+            noc_async_write(zc, zo.get_noc_addr(c), kz * rows * 128);
+        }
         noc_async_write_barrier();
         return;
     }
