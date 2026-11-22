@@ -55,6 +55,9 @@ from models.demos.inkling2_mini.tt.attention import (
 )
 from models.demos.inkling2_mini.tt.attention_fast import KV_WIDTH, V_WIDTH
 from models.demos.inkling2_mini.tt.fused.common import dense_matrix
+from models.demos.inkling2_mini.tt.fused.pf_attnres import PfAttnRes
+from models.demos.inkling2_mini.tt.fused.pf_conv import PfConv
+from models.demos.inkling2_mini.tt.fused.pf_gate import PfGateTail
 from models.demos.inkling2_mini.tt.model import APPS, HIDDEN, LOOP_END, LOOP_START, SOFTCAP, VOCAB_REAL
 from models.demos.inkling2_mini.tt.moe import INTER, NUM_EXPERTS, RMS_EPS, ROUTE_SCALE, TOP_K, softcapped_swiglu
 from models.demos.inkling2_mini.tt.residual import cache_index
@@ -224,7 +227,7 @@ class _AttnRes:
 class _Gate:
     """MessageGate on [1,1,T,C] rows: (1 - tanh(F z)) h + tanh(G z) m, z = down(cat(rms h, rms m)) (bf16 down out)."""
 
-    def __init__(self, dev, w, which, ckc):
+    def __init__(self, dev, w, which, ckc, fused=False):
         p = f"msg_gate.{which}."
         down = _host(w[p + "down"]).reshape(2 * HIDDEN, -1)
         self.down = ttnn.from_torch(
@@ -235,12 +238,16 @@ class _Gate:
         )
         self.forget, self.gain = put(w[p + "forget"]), put(w[p + "gain"])
         self.ckc = ckc
+        self.tail = PfGateTail(dev) if fused else None
 
     def __call__(self, h, m):
         h, m = _f32(h), _f32(m)
         nh = ttnn.rms_norm(h, epsilon=EPS, compute_kernel_config=self.ckc)
         nm = ttnn.rms_norm(m, epsilon=EPS, compute_kernel_config=self.ckc)
         x = ttnn.typecast(ttnn.concat([nh, nm], dim=-1), ttnn.bfloat16)
+        if self.tail is not None:  # typecast z .. addcmul in one program
+            zb = ttnn.matmul(x, self.down, dtype=ttnn.bfloat16, compute_kernel_config=self.ckc)
+            return self.tail(zb, self.forget, self.gain, h, m)
         z = ttnn.typecast(ttnn.matmul(x, self.down, dtype=ttnn.bfloat16, compute_kernel_config=self.ckc), ttnn.float32)
         f = ttnn.tanh(ttnn.matmul(z, self.forget, dtype=ttnn.float32, compute_kernel_config=self.ckc))
         g = ttnn.tanh(ttnn.matmul(z, self.gain, dtype=ttnn.float32, compute_kernel_config=self.ckc))
@@ -302,8 +309,9 @@ class _LayerPF:
         self.norms = [
             dev_of(n) for n in (("q_input_norm", "k_input_norm", "v_input_norm") if lay.is_global else ("attn_norm",))
         ]
-        self.attn_res = _AttnRes(dev, w["attn_res_q"], 3 if lay.is_global else 1, pf.ckc) if L > 0 else None
-        self.mlp_res = _AttnRes(dev, w["mlp_res_q"], 1, pf.ckc)
+        AR = PfAttnRes if pf.fused_glue else _AttnRes
+        self.attn_res = AR(dev, w["attn_res_q"], 3 if lay.is_global else 1, pf.ckc) if L > 0 else None
+        self.mlp_res = AR(dev, w["mlp_res_q"], 1, pf.ckc)
         # post-attn / post-mlp conv taps (residual and 1/sqrt(5) folded), one broadcast row per lag
         self.conv_taps = {}
         for k, name in (("attn", "post_attn_conv"), ("mlp", "post_mlp_conv")):
@@ -312,7 +320,9 @@ class _LayerPF:
             t /= math.sqrt(5)
             self.conv_taps[k] = [put(t[r].view(1, 1, 1, -1)) for r in range(TAPS)]
         if lay.is_loop:
-            self.gates = {g: _Gate(dev, w, g, pf.ckc) for g in ("q", "k", "v", "mlp")}
+            # shortcut: PfGateTail stays off: its per-core runtime-arg count depends on T, so a cached program
+            # clashes when the chunk length changes (8K: 2048 then 256 rows); on again once S5 pads the args
+            self.gates = {g: _Gate(dev, w, g, pf.ckc, False) for g in ("q", "k", "v", "mlp")}
         rw = ttnn.to_torch(moe.router_w).float().reshape(HIDDEN, NUM_EXPERTS)
         self.router_w = put(rw.view(1, 1, HIDDEN, NUM_EXPERTS))
         self.router_bias_row = ttnn.to_torch(moe.router_bias).float().reshape(1, 1, 1, NUM_EXPERTS)
@@ -341,6 +351,7 @@ class Inkling2Prefill:
         group_ibw=None,
         r3_chunks=(128, 128),
         weighted_reduce=False,
+        fused_glue=True,
         profile=False,
         debug=False,
     ):
@@ -351,8 +362,9 @@ class Inkling2Prefill:
         ids (needs that build; None: probe for it).
         slot_rows: rows per expert slot. group_grid / group_ibw: grouped expert matmul grid and in0 block widths
         (gate_up, down); None: whole K with r2 (the weight reuse needs it), else (12, 18).
-        weighted_reduce: MoE combine by attn_res_weighted_reduce_nc. profile: synchronized per-section times in
-        self.times. debug: print each application."""
+        weighted_reduce: MoE combine by attn_res_weighted_reduce_nc. fused_glue: one-program attn-res, short convs
+        (+ residual) and message-gate tail (tt/fused/pf_*.py, bit-equal to the op chains).
+        profile: synchronized per-section times in self.times. debug: print each application."""
         assert self._chunk_ok(chunk), chunk
         self.m = model
         self.device = dev = model.device
@@ -364,12 +376,14 @@ class Inkling2Prefill:
         if r3 is None:
             r3 = "rel_logits" in (ttnn.transformer.scaled_dot_product_attention.__doc__ or "")
         self.r3 = r3
+        self.fused_glue = fused_glue
+        self._pfconv = PfConv(dev) if fused_glue else None
         self.ckc = model.rows.ckc  # HiFi4, fp32 acc
         self.hifi4 = model.hifi4
         self.mm_cfg = model.mm_cfg
         self.layers = [_LayerPF(self, lay, root) for lay in model.layers]
         g = _load(root, None, {"final_res_q", "msg_q"})
-        self.final_res = _AttnRes(dev, g["final_res_q"], 1, self.ckc)
+        self.final_res = (PfAttnRes if self.fused_glue else _AttnRes)(dev, g["final_res_q"], 1, self.ckc)
         # cross-pass message queries [C, 64] (rows 4l+j = loop layer l, message j), 1/sqrt(C) folded
         mq = _host(g["msg_q"]).reshape(LOOP_END - LOOP_START, 32, HIDDEN)[:, :4].reshape(-1, HIDDEN)
         mq = torch.nn.functional.pad(mq * HIDDEN**-0.5, (0, 0, 0, 64 - mq.shape[0]))
@@ -421,6 +435,7 @@ class Inkling2Prefill:
         self.c_mass = {d: put(torch.nn.functional.pad(torch.ones(1, N_KV, T, 1), (0, 31)), d) for d in cdts}
         self.c_zero_row = put(torch.zeros(1, 1, 1, HIDDEN), bf)
         self.c_zx = {m: put(torch.zeros(1, 1, 32 - m, HIDDEN), bf) for m in (TAPS, 1 + 2 * TAPS)}
+        self.c_row_idx = put(torch.arange(T, dtype=torch.float32).view(1, 1, T, 1))  # MoE valid-row mask
         for lp in self.layers:  # router bias, one row per token
             lp.router_bias_rows = put(lp.router_bias_row.expand(1, 1, T, NUM_EXPERTS).contiguous())
         if self.r3:
@@ -879,13 +894,14 @@ class Inkling2Prefill:
             stable_sort=True,
         )
         self._tick("moe.route")
+        x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [t, HIDDEN])
+        rows = self.gm
         ids = ttnn.to_torch(indices).reshape(t, TOP_K)[:n].to(torch.int64).numpy()  # host sync
         self._tick("moe.read_ids")
         flat = ids.reshape(-1)  # pair p = tok * 8 + k
         counts = np.bincount(flat, minlength=NUM_EXPERTS)
         # slots of GM rows, each bound to one expert: ceil(count / GM) slots per expert (load imbalance is
         # large: one expert can take most tokens of a chunk), slot count rounded up to 32 (few program shapes)
-        rows = self.gm
         per = -(-counts // rows)
         nslot = max(32, int(-(-per.sum() // 32) * 32))
         slot0 = np.concatenate([[0], np.cumsum(per)[:-1]])
@@ -900,8 +916,6 @@ class Inkling2Prefill:
         gidx[dest] = np.arange(flat.size) // TOP_K
         back = np.zeros((TOP_K, t), dtype=np.int32)  # k-major; pad tokens read row 0 with weight 0
         back[:, :n] = dest.reshape(n, TOP_K).T
-        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        x_rm = ttnn.reshape(x_rm, [t, HIDDEN])
         gi = self._put(torch.from_numpy(gidx).view(1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         xs = ttnn.reshape(ttnn.embedding(gi, x_rm, layout=ttnn.TILE_LAYOUT), [1, nslot, rows, HIDDEN])
         self._tick("moe.dispatch")
@@ -911,19 +925,32 @@ class Inkling2Prefill:
             )
             for g0 in range(0, nslot, self.r2_step)
         ]  # sparse_matmul takes at most 128 (= experts) indices per call; builds with repeated sorted ids lift that (one call)
+        bi = self._put(torch.from_numpy(back).view(1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        return self._experts_combine(lp, moe, xs, ei, bi, nslot, weights, n, t)
+
+    def _experts_combine(self, lp, moe, xs, ei, bi, nslot, weights, n, t):
+        """Grouped expert FFN over the slots, gathered back per (k, token) and weighted -> [1,1,T,C] bf16."""
+        rows = self.gm
+        # DRAM is nearly full: free each slot buffer once read (python refs alone keep them past the next one)
         gu = self._grouped_mm(xs, lp.w_gate_up, moe, ei, 2 * INTER, HIDDEN)
-        hid = softcapped_swiglu(_cols(gu, 0, INTER), _cols(gu, INTER, 2 * INTER))
+        ttnn.deallocate(xs)
+        g, u = _cols(gu, 0, INTER), _cols(gu, INTER, 2 * INTER)
+        ttnn.deallocate(gu)
+        hid = softcapped_swiglu(g, u)
+        ttnn.deallocate(g)
+        ttnn.deallocate(u)
         self._tick("moe.gate_up")
         y = self._grouped_mm(hid, lp.w_down, moe, ei, HIDDEN, INTER)
+        ttnn.deallocate(hid)
         self._tick("moe.down")
         cap = rows
         y_rm = ttnn.reshape(ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT), [nslot * cap, HIDDEN])
-        bi = self._put(torch.from_numpy(back).view(1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(y)
         yb = ttnn.reshape(ttnn.embedding(bi, y_rm, layout=ttnn.TILE_LAYOUT), [1, TOP_K, t, HIDDEN])
+        ttnn.deallocate(y_rm)
         wk = _bf16(ttnn.permute(weights, (0, 3, 2, 1)))  # [1,8,T,1]
         if n < t:
-            vrow = self._put((torch.arange(t) < n).float().view(1, 1, t, 1), ttnn.bfloat16)  # per call, not cached
-            wk = ttnn.multiply(wk, vrow)
+            wk = ttnn.multiply(wk, ttnn.lt(_rows(self.c_row_idx, 0, t), float(n), dtype=ttnn.bfloat16))
         if self.wred:  # one pass over the 8 planes, no full-size product
             out = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(yb, wk, dim=1)
         else:
@@ -933,6 +960,8 @@ class Inkling2Prefill:
     # ------------------------------------------------------------------ conv / one application
     def _conv(self, taps, x, tail):
         """Static k=4 conv over the chunk (residual + 1/sqrt(5) folded), fp32 math, bf16 out (HF .to(input))."""
+        if self.fused_glue:
+            return self._pfconv(taps, x, tail)
         _, lags = tail.window(x)
         acc = None
         for r, xl in enumerate(lags):
@@ -975,22 +1004,30 @@ class Inkling2Prefill:
         tails["triple"] = lay.is_global or msgs is not None  # decode conv-window mode (attention.ROWS)
         a = self._attention(lp, qn, kn, vn, st, tails, s, n, tau)
         self._tick("attn_global" if lay.is_global else "attn_local")
-        a = _f32(self._conv(lp.conv_taps["attn"], a, tails["attn"]))
+        if self.fused_glue:  # conv in fp32 out; non-boundary layers add the residual h in the same program
+            a = self._pfconv(
+                lp.conv_taps["attn"], a, tails["attn"], "f32" if lay.boundary else "hres", None if lay.boundary else h
+            )
+        else:
+            a = _f32(self._conv(lp.conv_taps["attn"], a, tails["attn"]))
 
         if lay.boundary:
             hf = _f32(h)
             stack = stack + [(hf, ttnn.rms_norm(hf, epsilon=EPS, compute_kernel_config=self.ckc))]
             resid = a
         else:
-            resid = ttnn.add(_f32(h), a)
+            resid = a if self.fused_glue else ttnn.add(_f32(h), a)
         m = lp.mlp_res([nn for _, nn in stack], resid)[0]
         if msgs is not None:
             m = lp.gates["mlp"](m, msgs[3])
         self._tick("resid_mid")
         y = self._moe(lp, m, n)
         self._tick("moe")
-        y = self._conv(lp.conv_taps["mlp"], y, tails["mlp"])
-        out = ttnn.typecast(ttnn.add(resid, _f32(y)), ttnn.bfloat16)
+        if self.fused_glue:
+            out = self._pfconv(lp.conv_taps["mlp"], y, tails["mlp"], "resid", resid)
+        else:
+            y = self._conv(lp.conv_taps["mlp"], y, tails["mlp"])
+            out = ttnn.typecast(ttnn.add(resid, _f32(y)), ttnn.bfloat16)
         self._tick("conv_out")
         return out, stack
 
