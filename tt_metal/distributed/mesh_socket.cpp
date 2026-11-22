@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+#include <string_view>
 #include <tt_stl/reflection.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
@@ -260,7 +262,15 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
     //
     // create_socket_pair and mesh-scoped sockets are built by every co-owner, so lockstep buffers
     // remain correct there and are not checked.
-    if ((rank_scoped_socket_ || same_mesh) && mesh_is_coowned(*device)) {
+    // TT_METAL_SOCKET_COOWNERS_MIRROR=1: every rank co-owning the mesh builds a matching socket of the same shape in
+    // the same order (a [RING,RING] seam stage's two hosts each build one row-block D2D receiver and sender over their
+    // own rows), so lockstep socket buffers land at the same address on every co-owner and nothing is left
+    // unreserved; the caller vouches for that, and the per-core requirement below does not apply.
+    static const bool coowners_mirror = [] {
+        const char* v = std::getenv("TT_METAL_SOCKET_COOWNERS_MIRROR");
+        return v != nullptr && std::string_view(v) == "1";
+    }();
+    if ((rank_scoped_socket_ || same_mesh) && mesh_is_coowned(*device) && !coowners_mirror) {
         const auto sender_cores = socket_endpoint_cores(config_, SocketEndpoint::SENDER).size();
         const auto receiver_cores = socket_endpoint_cores(config_, SocketEndpoint::RECEIVER).size();
         TT_FATAL(

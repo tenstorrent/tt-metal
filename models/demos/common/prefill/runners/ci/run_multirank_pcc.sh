@@ -200,6 +200,8 @@ case "${MODEL}" in
           PP_RANKS=12
           RUNNER_ENV+=" export PREFILL_STAGE_HOSTS=1,2,1,2,1,2,1,2; export PREFILL_FABRIC_MODE=2d_torus_xy;"
           RUNNER_ENV+=" export TT_METAL_FABRIC_DISABLE_INTERMESH_VC=${PREFILL_RR_RELAY:-0};"
+          # Both hosts of a seam stage build matching row-block D2D sockets (see mesh_socket.cpp).
+          RUNNER_ENV+=" export TT_METAL_SOCKET_COOWNERS_MIRROR=1;"
           PRODUCER_ENV+=" export PREFILL_STAGE_HOSTS=1,2,1,2,1,2,1,2;"
         fi
         # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
