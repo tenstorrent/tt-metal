@@ -27,6 +27,10 @@ FULL_RESET = os.environ.get("RESIDENT_PREFILL_FULL_RESET", "0") == "1"
 # 0: no host synchronization between the drafter's context fill and the prompt's verify step (the first-step race, A/B
 # only; see _fill_context)
 FILL_SYNC = os.environ.get("RESIDENT_DFLASH_FILL_SYNC", "1") == "1"
+# verify rows (ResidentDFlashRows): the drafter's KV as a per-user ring of window + 2 blocks (DFlash2 is all
+# sliding-window: a key older than the window is never read), not max_pos per user (20 KB / token: 8 users x 256K =
+# 42 GB). 0: each user's own max_pos blocks (the A/B reference)
+DRAFTER_RING = os.environ.get("RESIDENT_DFLASH_RING", "1") == "1"
 
 
 # The drafter checkpoint the resident engine was validated with, pinned to its commit: resolve_weights_dir finds
@@ -538,7 +542,19 @@ class ResidentDFlashRows:
             taps=list(zip(tap_layers, self.taps)),
         )
         self.drafter = build_drafter(mesh, ck, weights_dir, embed=emb, block=R)
-        self.drafter.alloc(torch.arange(users * nb, dtype=torch.int32).reshape(users, nb), block_size, self.taps)
+        widest = max(self.drafter.windows) if all(self.drafter.windows) else 0
+        if DRAFTER_RING and widest:  # (window + 2 blocks: a block row never evicts a key it attends; >= the fill)
+            ring = -(-(max(widest, self.window if prefill else 0) + 2 * block_size) // block_size) * block_size
+            nbd = ring // block_size
+            self.drafter.alloc(
+                torch.arange(users * nbd, dtype=torch.int32).reshape(users, nbd),
+                block_size,
+                self.taps,
+                ring_tokens=ring,
+            )
+        else:
+            self.drafter.alloc(torch.arange(users * nb, dtype=torch.int32).reshape(users, nb), block_size, self.taps)
+        self.drafter_ring = self.drafter.ring
         self.max_pos = max_pos
         self._reset_ptrs()
         # every program once, eagerly, then the target's trace (the drafter's on their first armed calls)
