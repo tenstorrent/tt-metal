@@ -51,7 +51,7 @@ def dev_states(model):
     return t.reshape(d.n, model._gdn_copies, d.nv, LR, 128, 128)
 
 
-def run_random(mesh, U, layers, interval, steps, max_pos=512, seed=0, use_taps=True, only=None):
+def run_random(mesh, U, layers, interval, steps, max_pos=512, seed=0, use_taps=True, only=None, starts=None):
     n = mesh.get_num_devices()
     d = Dims(n, mesh.dram_grid_size().x, vocab=VOCAB)
     n_attn = sum(is_attn(l, interval) for l in range(layers))
@@ -68,7 +68,7 @@ def run_random(mesh, U, layers, interval, steps, max_pos=512, seed=0, use_taps=T
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
     )
     # start positions over several KV tiles, some near a tile's end (the rows cross into the next tile)
-    starts = [40 + 53 * u + (27 if u % 2 else 0) for u in range(U)]
+    starts = starts or [40 + 53 * u + (27 if u % 2 else 0) for u in range(U)]
     sts = [State(d, n_gdn, n_attn, starts[u], max_pos, seed=30 + u) for u in range(U)]
     refs = [copy.deepcopy(s) for s in sts]
     blocks, tables = shuffled_tables(U, max_pos, seed=4)
@@ -149,7 +149,10 @@ def run_random(mesh, U, layers, interval, steps, max_pos=512, seed=0, use_taps=T
                 acc[u],
             )
         print(f"step {s}: " + "; ".join(line), flush=True)
-    ok = worst["pcc"] >= 0.995 and worst["tap_pcc"] >= 0.995 and worst["state"] < 0.15 and worst["idle_state"] == 0.0
+    # (bars by depth: single-user verify, dfl_verify random R=8, reaches pcc 0.9974 / state 0.065 at 4 layers and
+    # 0.9905 / 0.16 at 16 — bf16 rounding over random layers)
+    bar, st_bar = (0.995, 0.15) if layers <= 4 else (0.985, 0.25)
+    ok = worst["pcc"] >= bar and worst["tap_pcc"] >= bar and worst["state"] < st_bar and worst["idle_state"] == 0.0
     print(f"verify rows: worst {json.dumps(worst)}  {'PASS' if ok else 'FAIL'}", flush=True)
     return dict(U=U, layers=layers, interval=interval, worst=worst, ok=ok, rows=rows)
 
@@ -223,7 +226,9 @@ def run_real(mesh, U, L, corpus, contexts, time_steps=32, warm_steps=4, block=64
         for u in range(U):
             for r in range(R):
                 x0[u, r] = emb[seqs[u][min(pos[u] + r, len(seqs[u]) - 1)]]
+        print(f"step {s}: pos {pos}", flush=True)
         m.step(m.token_state_vrows(x0, pos, ring, slot, prev, active=active))
+        ttnn.synchronize_device(mesh)
         lg = m.logits()[:, :, : d.vocab_chip].reshape(LR, -1)[:, :vocab].float()
         fed = m.fed_token()
         for u in range(U):
@@ -298,6 +303,7 @@ def main():
     ap.add_argument("--json", default=None)
     ap.add_argument("--no-taps", action="store_true")
     ap.add_argument("--only", default=None, help="comma list: only these users run (diagnostics)")
+    ap.add_argument("--starts", default=None, help="comma list: the users' start positions")
     a = ap.parse_args()
     mesh = open_mesh()
     try:
@@ -306,7 +312,10 @@ def main():
             out = run_real(mesh, a.groups, a.len, a.corpus, ctx)
         else:
             only = None if a.only is None else [int(x) for x in a.only.split(",")]
-            out = run_random(mesh, a.groups, a.layers, a.interval, a.steps, use_taps=not a.no_taps, only=only)
+            starts = None if a.starts is None else [int(x) for x in a.starts.split(",")]
+            out = run_random(
+                mesh, a.groups, a.layers, a.interval, a.steps, use_taps=not a.no_taps, only=only, starts=starts
+            )
     finally:
         close_mesh(mesh)
     if a.json:

@@ -160,7 +160,7 @@ void kernel_main() {
             // through its last pass's page list)
             const uint32_t copy_stride = get_arg_val<uint32_t>(tail_args + 2);
             const uint32_t tp0 = tile_of((u / users) * batch), n_tail = n_tail_of(u / users);
-            cb_wait_front(cb_flush, 2 * n_tail * Dt);
+            cb_wait_front(cb_flush, 2 * tail_pages(n_tail) * Dt);
             for (uint32_t kv = 0; kv < 2; kv++) {
                 for (uint32_t j = 0; j < n_tail; j++) {
                     const uint32_t t = tp0 + j;
@@ -177,7 +177,7 @@ void kernel_main() {
                 }
             }
             noc_async_write_barrier();
-            cb_pop_front(cb_flush, 2 * n_tail * Dt);
+            cb_pop_front(cb_flush, 2 * tail_pages(n_tail) * Dt);
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_tail)) = l + 1;
         }
         if (!packed && role >= 2 && !has_chunk) {

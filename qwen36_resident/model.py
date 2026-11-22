@@ -111,6 +111,7 @@ RING_AUTO = os.environ.get("RESIDENT_RING_AUTO", "1") == "1"
 RING_MARGIN = 64 * 1024  # L1 left free below the lowest L1 buffer (later small allocations, e.g. global semaphores)
 RING_MIN = 96 * 1024  # a smaller weight ring is refused (row groups), not run slowly
 HUB_MC_NOCS = int(os.environ.get("RESIDENT_HUB_MC_NOCS", "2"))  # NOCs the hub multicasts x over (mlp_hub.cpp mc_nocs)
+DM_OS_KERNELS = ("streamer_reader.cpp", "streamer_writer.cpp")  # (verify rows: -Os, see kernel())
 TOK_PREV = 14  # token state word: the previous verify step's accepted drafts (chunked GDN; none: 0xFFFFFFFF)
 TOK_X0 = 64
 TOK_SLOT = 4  # token state word: the GDN state slot of row 0 (verify)
@@ -1495,12 +1496,16 @@ class ResidentModel:
             ]
 
             def kernel(src, core_ranges, ct, rt, config, named=()):
+                # (verify rows: the streamer's data-movement kernels built for size, see streamer_common.hpp — the
+                # streamer core's kernels sit at the kernel config buffer's limit)
+                defines = [("RESIDENT_DM_OS", "1")] if self.vrows and src in DM_OS_KERNELS else []
                 return ttnn.KernelDescriptor(
                     kernel_source=KDIR + src,
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=core_ranges,
                     compile_time_args=ct,
                     named_compile_time_args=list(named) + common_named,
+                    defines=defines,
                     runtime_args=rt,
                     config=config,
                 )

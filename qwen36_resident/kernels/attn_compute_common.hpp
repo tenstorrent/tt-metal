@@ -332,11 +332,12 @@ FORCE_INLINE void update_tail(uint32_t sel = 0) {
 // placement matrix P at tiles 2 j + 1, 2 j of cb_rowsel (exact: 0/1 products)
 // (verify rows: the user's placement / keep tiles from sel0 of cb_rowsel)
 FORCE_INLINE void update_tail_rows(uint32_t n_tail, uint32_t sel0 = 0) {
-    cb_wait_front(cb_tail8, 2 * n_tail * Dt);
+    const uint32_t tp = tail_pages(n_tail);
+    cb_wait_front(cb_tail8, 2 * tp * Dt);
     cb_wait_front(cb_knew, Dt);
     cb_wait_front(cb_vraw, Dt);
-    cb_reserve_back(cb_tailk, n_tail * Dt);
-    cb_reserve_back(cb_tailv, n_tail * Dt);
+    cb_reserve_back(cb_tailk, tp * Dt);
+    cb_reserve_back(cb_tailv, tp * Dt);
     pack_reconfig_data_format(cb_tailk);
     for (uint32_t kv = 0; kv < 2; kv++) {
         const uint32_t row_cb = kv == 0 ? cb_knew : cb_vraw;
@@ -362,9 +363,9 @@ FORCE_INLINE void update_tail_rows(uint32_t n_tail, uint32_t sel0 = 0) {
             }
         }
     }
-    cb_push_back(cb_tailk, n_tail * Dt);
-    cb_push_back(cb_tailv, n_tail * Dt);
-    cb_pop_front(cb_tail8, 2 * n_tail * Dt);
+    cb_push_back(cb_tailk, tp * Dt);
+    cb_push_back(cb_tailv, tp * Dt);
+    cb_pop_front(cb_tail8, 2 * tp * Dt);
     cb_pop_front(cb_knew, Dt);
     cb_pop_front(cb_vraw, Dt);
 }
@@ -406,7 +407,8 @@ FORCE_INLINE void update_tail_user(uint32_t sel) {
 
 // the updated tail tiles (n_tail of them) as bf8 for the DRAM write-back, k of each tile then v; pops them
 FORCE_INLINE void pack_tail_bf8(uint32_t n_tail = 1) {
-    cb_reserve_back(cb_flush, 2 * n_tail * Dt);
+    const uint32_t tp = tail_pages(n_tail);  // (verify rows: a fixed 2 tiles' pages)
+    cb_reserve_back(cb_flush, 2 * tp * Dt);
     reconfig_data_format(cb_tailk, cb_tailk);
     pack_reconfig_data_format(cb_flush);
     copy_init(cb_tailk);
@@ -418,9 +420,9 @@ FORCE_INLINE void pack_tail_bf8(uint32_t n_tail = 1) {
         pack_tile(0, cb_flush);
         tile_regs_release();
     }
-    cb_push_back(cb_flush, 2 * n_tail * Dt);
-    cb_pop_front(cb_tailk, n_tail * Dt);
-    cb_pop_front(cb_tailv, n_tail * Dt);
+    cb_push_back(cb_flush, 2 * tp * Dt);
+    cb_pop_front(cb_tailk, tp * Dt);
+    cb_pop_front(cb_tailv, tp * Dt);
 }
 
 }  // namespace resident_attn

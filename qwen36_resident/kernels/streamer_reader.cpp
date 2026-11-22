@@ -18,6 +18,10 @@
 // Rows mode (active_rows.hpp): the history slots are read in canonical order, and the writer gets the active
 // rows and the preserve word instead of the ring step.
 
+// (verify rows: built for size — the streamer core's kernels sit at the kernel config buffer's limit; model.py)
+#ifdef RESIDENT_DM_OS
+#pragma GCC optimize("Os")
+#endif
 #include "api/dataflow/dataflow_api.h"
 #include "streamer_common.hpp"
 #include "active_rows.hpp"

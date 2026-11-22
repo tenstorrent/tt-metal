@@ -37,6 +37,10 @@
 // the hub's on-device sampling (sampling.hpp): batch 1, or (rows mode) one list per row, the active rows' filled,
 // laid out [row][streamer] on the hub.
 
+// (verify rows: built for size — the streamer core's kernels sit at the kernel config buffer's limit; model.py)
+#ifdef RESIDENT_DM_OS
+#pragma GCC optimize("Os")
+#endif
 #include "api/dataflow/dataflow_api.h"
 #include "sampling.hpp"
 #include "streamer_common.hpp"

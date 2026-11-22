@@ -269,8 +269,8 @@ void kernel_main() {
                 norm_rope(cb_kraw, cb_kw, 0, cb_knew, cb_knew, kRopeK + 3 * gr);
                 cb_pop_front(cb_kw, Dt);
                 update_tail_rows(n_tail, 4 * gr);
-                cb_wait_front(cb_tailk, n_tail * Dt);
-                cb_wait_front(cb_tailv, n_tail * Dt);
+                cb_wait_front(cb_tailk, tail_pages(n_tail) * Dt);
+                cb_wait_front(cb_tailv, tail_pages(n_tail) * Dt);
             }
             cb_wait_front(cb_q, Dt);
             scores(cb_q, cb_tailk, 0, n_tail, true, 2 * u);

@@ -108,6 +108,10 @@ constexpr uint32_t kUsers = users * groups;
 constexpr uint32_t kRows = kVRows ? batch * groups : (groups == 1 ? batch : kUsers);
 // the active mask the attention kernels iterate over: rows mode's bit per row, or (verify rows) bit ug per pass, set
 // when its group's row 0 is active (a user's rows run together)
+// verify rows: a user's tail takes 1 or 2 tiles, users of one launch differ; the tail CBs (tail8, tailk / tailv, flush)
+// then move a fixed 2 tiles' pages per user so a reservation never wraps around a CB's end mid-way (its pages are
+// addressed as one contiguous block); a single user keeps one size per launch
+FORCE_INLINE uint32_t tail_pages(uint32_t n_tail) { return kVRows ? 2 : n_tail; }
 FORCE_INLINE uint32_t pass_mask(uint32_t row_mask) {
     if constexpr (!kVRows) {
         return row_mask;

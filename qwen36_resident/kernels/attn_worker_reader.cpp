@@ -336,7 +336,7 @@ void kernel_main() {
             // (verify rows: per user, at its first pass; its rows in its group's block of the row buffer)
             const uint32_t n_tail = n_tail_of(u / users);
             if (u % users == 0) {
-                cb_reserve_back(cb_tail8, 2 * n_tail * Dt);
+                cb_reserve_back(cb_tail8, 2 * tail_pages(n_tail) * Dt);
                 read_rows(ch, k_addr, 0, n_tail, get_write_ptr(cb_tail8), pages, copy_page);
                 read_rows(ch, v_addr, 0, n_tail, get_write_ptr(cb_tail8) + n_tail * kKvRow, pages, copy_page);
                 cb_reserve_back(cb_kw, Dt);
@@ -344,7 +344,7 @@ void kernel_main() {
                     noc_async_read_page((l % copies) * Dt + d, kw_dram, get_write_ptr(cb_kw) + d * kTile);
                 }
                 noc_async_read_barrier();
-                cb_push_back(cb_tail8, 2 * n_tail * Dt);
+                cb_push_back(cb_tail8, 2 * tail_pages(n_tail) * Dt);
                 cb_push_back(cb_kw, Dt);
                 noc_semaphore_wait_min(rows_sem, num_streamers * (l + 1));
                 cb_reserve_back(cb_kraw, Dt);
