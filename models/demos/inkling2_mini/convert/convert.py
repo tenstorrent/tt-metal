@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Inkling-2-Mini checkpoint -> fixed tt weight cache v1 (design.md §4, §5). Host only, no device.
+"""Inkling-2-Mini checkpoint -> fixed tt weight cache v1. Host only (ttnn host conversions, no device program).
 
     python -m models.demos.inkling2_mini.convert [--ckpt DIR] [--out DIR] [--layers 0,20] [--skip-global]
 
@@ -36,13 +36,14 @@ CONVERTER_VERSION = 2
 N_LAYERS = 24
 GLOBAL_LAYERS = {5, 11, 17, 23}
 LOOP_LAYERS = range(6, 18)
-MXFP8_LAYERS = range(20, 24)  # publisher kept these at MXFP8: stored BFP8 by policy (design §3)
+MXFP8_LAYERS = range(20, 24)  # publisher kept these at MXFP8: always stored BFP8
 HIDDEN = 2304
 N_EXPERTS = 128
 EXPERT_CHUNK = 8
 VOCAB_REAL, VOCAB_TT = 200058, 200064
 QGRS_COLS = 6560
-# Layers 0-19 whose experts are promoted from BFP4 to BFP8 by default (T1-report.md, MoE-block PCC ranking).
+# Layers 0-19 whose experts are all promoted from BFP4 to BFP8 by default; the per-tensor picks (ranked by MoE-block
+# output PCC vs the bf16 dequant) live in default_dtype_map.json.
 DEFAULT_BFP8_EXPERT_LAYERS: tuple[int, ...] = ()
 # Sanity floor on per-tensor weight PCC vs the bf16 dequant (4-bit formats sit near 0.993): BFP4 experts below it
 # fall back to BFP8; any other tensor below it is a bug.
@@ -102,7 +103,7 @@ def lag_taps(conv1d_weight: torch.Tensor) -> torch.Tensor:
 
 
 def expected_shape(name: str, layer: int | None) -> tuple:
-    """§4 shapes, without the leading [1, X] dims."""
+    """cache shapes, without the leading [1, X] dims."""
     is_global = layer in GLOBAL_LAYERS
     return {
         "embed": (201024, HIDDEN),
@@ -140,7 +141,9 @@ class Writer:
         if tensor.dim() == 2:
             tensor = tensor[None, None]
         if tuple(tensor.shape[2:]) != expected_shape(name, layer):
-            raise ValueError(f"{name} L{layer}: shape {tuple(tensor.shape)} != §4 {expected_shape(name, layer)}")
+            raise ValueError(
+                f"{name} L{layer}: shape {tuple(tensor.shape)} != cache shape {expected_shape(name, layer)}"
+            )
         tensor = tensor.to(TORCH_DTYPES[dtype]).contiguous()
         if pcc is None and dtype in ("BFP8", "BFP4"):
             pcc, _ = roundtrip_pcc(tensor, dtype)
@@ -184,7 +187,7 @@ def convert_global(ck: Checkpoint, w: Writer):
 
 def expert_tensor_dtype(dtype_map: dict, layer: int, name: str, default: str) -> str:
     """Resolve one expert tensor's dtype from ``--dtype-map``: ``"L08/experts.w_down": "BFP8"`` (per tensor) or
-    ``{"default": "BFP4", "BFP8": [3, 17]}`` (per expert). A §4 file holds one dtype, so a per-expert map that
+    ``{"default": "BFP4", "BFP8": [3, 17]}`` (per expert). A cache file holds one dtype, so a per-expert map that
     mixes dtypes inside one tensor is refused until the model splits experts into two groups."""
     spec = dtype_map.get(f"L{layer:02d}/{name}", default)
     if isinstance(spec, dict):
@@ -192,7 +195,7 @@ def expert_tensor_dtype(dtype_map: dict, layer: int, name: str, default: str) ->
         if other:
             raise SystemExit(
                 f"L{layer:02d}/{name}: per-expert dtypes {sorted(other)} + {spec.get('default', default)} cannot be "
-                "stored in one §4 tensor; needs the two-group expert split (later model change)"
+                "stored in one cache tensor; needs the two-group expert split (later model change)"
             )
         spec = spec.get("default", default)
     if spec not in ("BFP4", "BFP8"):
@@ -209,7 +212,7 @@ def convert_layer(
     store: Checkpoint | None = None,
     stick_dtypes: tuple[str, ...] = (),
 ):
-    """Writes every §4 tensor of one layer; experts in ``expert_dtype`` unless ``dtype_map`` overrides. Experts
+    """Writes every cache tensor of one layer; experts in ``expert_dtype`` unless ``dtype_map`` overrides. Experts
     whose gate_up and down share a dtype in ``stick_dtypes`` are stored in the stick layout (convert/stick.py)."""
     convert_layer_dense(ck, w, layer)
     p = f"{P}layers.{layer}."
@@ -220,7 +223,7 @@ def convert_layer(
 
 
 def convert_layer_dense(ck: Checkpoint, w: Writer, layer: int):
-    """Every §4 tensor of one layer except the routed experts."""
+    """Every cache tensor of one layer except the routed experts."""
     p = f"{P}layers.{layer}."
     is_global = layer in GLOBAL_LAYERS
 
@@ -416,7 +419,7 @@ def main(argv=None):
         type=Path,
         default=Path(__file__).with_name("default_dtype_map.json"),
         help='JSON {"L08/experts.w_down": "BFP8" | {"default": "BFP4", "BFP8": [expert ids]}}, over --bfp8-expert-layers;'
-        " default = the T1-report.md pick; pass an empty file ({}) for none",
+        " default = the shipped pick (MoE-block PCC ranking); pass an empty file ({}) for none",
     )
     ap.add_argument("--force", action="store_true", help="reconvert listed units even if the manifest has them")
     ap.add_argument(

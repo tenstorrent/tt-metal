@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 
-# Per layer-application residual path, E2 (tt/residual.py + model glue) vs E10 fused, attention / MoE replaced by
+# Per layer-application residual path, unfused (tt/residual.py + model glue) vs the fused kernels, attention / MoE replaced by
 # fixed rows. Reports device-op count (graph capture), traced replay time and output agreement per app kind.
 # usage: python -m models.demos.inkling2_mini.demo.bench_fused_app [out.jsonl]
 import collections
@@ -82,7 +82,7 @@ def main():
             ttnn.from_torch(1 + rnd(1, 1, 1, C, scale=0.1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
             for _ in range(3 if is_global else 1)
         ]
-        e2 = dict(
+        unfused = dict(
             attn=R.AttnRes(rows, w, "attn_res_q", nq),
             mlp=R.AttnRes(rows, w, "mlp_res_q", 1),
             ca=R.ShortConv(rows, w, "post_attn_conv"),
@@ -99,15 +99,15 @@ def main():
             mg=FusedMessageGate(rows, w, "mlp"),
             norm=FusedRowNorm(dev, norms),
         )
-        ring = {k: (e2[k].alloc_state(0), fu[k].alloc_state(0)) for k in ("ca", "cm")}
+        ring = {k: (unfused[k].alloc_state(0), fu[k].alloc_state(0)) for k in ("ca", "cm")}
         depth_states = [rnd(1, C, scale=s) for s in (1.0, 2.0)]  # 2 sealed states -> depth 3 / 4
         h = row(rnd(1, C, scale=1.5), ttnn.bfloat16)
         A = row(rnd(1, C), ttnn.bfloat16)  # attention output stand-in
         Y = row(rnd(1, C), ttnn.bfloat16)  # MoE output stand-in
         msgs = (row(rnd(3, C), ttnn.float32), row(rnd(1, C), ttnn.float32))
-        e2_stack = None
+        unfused_stack = None
         for k, s in enumerate(depth_states):
-            e2_stack = rows.seal(e2_stack, row(s, ttnn.bfloat16), k)
+            unfused_stack = rows.seal(unfused_stack, row(s, ttnn.bfloat16), k)
             frows.seal(None, row(s, ttnn.bfloat16), k)
         n0 = len(depth_states)
 
@@ -123,7 +123,7 @@ def main():
             return [ttnn.slice(xn, [0, 0, i, 0], [1, 1, i + 1, C]) for i in range(3)]
 
         def app(M, fused, with_msg):
-            stack, n = (frows.stack if fused else e2_stack), n0
+            stack, n = (frows.stack if fused else unfused_stack), n0
             rep = 3 if (fused and with_msg and not is_global) else None
             x = M["attn"](stack, h, n + 1, split=False, **({"repeat_rows": rep} if rep else {}))
             if with_msg:
@@ -151,15 +151,15 @@ def main():
             rec = dict(kind=("global" if is_global else "local") + ("+msg" if with_msg else ""))
             outs = {}
             for fused in (False, True):
-                M = fu if fused else e2
+                M = fu if fused else unfused
                 app(M, fused, with_msg)  # compile
                 ttnn.synchronize_device(dev)
                 ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
                 app(M, fused, with_msg)
                 c = count(ttnn.graph.end_graph_capture())
-                rec[f"ops_{'fused' if fused else 'e2'}"] = sum(c.values())
+                rec[f"ops_{'fused' if fused else 'unfused'}"] = sum(c.values())
                 if MOCK:  # no command queue: op counts only
-                    rec[f"ops_detail_{'fused' if fused else 'e2'}"] = dict(c.most_common(8))
+                    rec[f"ops_detail_{'fused' if fused else 'unfused'}"] = dict(c.most_common(8))
                     continue
                 tid = ttnn.begin_trace_capture(dev, cq_id=0)
                 o = app(M, fused, with_msg)
@@ -174,14 +174,14 @@ def main():
                 ttnn.synchronize_device(dev)
                 us = (time.perf_counter() - t0) / 200 * 1e6
                 ttnn.release_trace(dev, tid)
-                tag = "fused" if fused else "e2"
+                tag = "fused" if fused else "unfused"
                 rec[f"ops_{tag}"] = sum(c.values())
                 rec[f"us_{tag}"] = round(us, 1)
                 rec[f"bitequal_{tag}"] = all(torch.equal(a, b) for a, b in zip(first, second))
                 rec[f"ops_detail_{tag}"] = dict(c.most_common(8))
                 outs[tag] = first
             if not MOCK:
-                rec["pcc_out_vs_e2"] = min(pcc(a, b) for a, b in zip(outs["e2"], outs["fused"]))
+                rec["pcc_out_vs_unfused"] = min(pcc(a, b) for a, b in zip(outs["unfused"], outs["fused"]))
             print(json.dumps(rec), flush=True)
             results.append(rec)
     ttnn.close_device(dev)

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Host-only ttnn checks (no device): the torch BFP emulation used by moe_pcc.py matches ttnn's round trip, and
-cache.py loads what the converter's Writer wrote, under the §4 names, dtypes and layouts.
+cache.py loads what the converter's Writer wrote, under the cache names, dtypes and layouts.
 
     TT_METAL_MOCK_CLUSTER_DESC_PATH=<p100 cluster desc yaml> pytest --noconftest -c /dev/null \
         models/demos/inkling2_mini/convert/test_cache.py
@@ -92,7 +92,7 @@ def test_expert_dtype_map():
     assert expert_tensor_dtype(m, 8, "experts.w_down", "BFP4") == "BFP8"
     assert expert_tensor_dtype(m, 8, "experts.w_gate_up", "BFP4") == "BFP4"
     assert expert_tensor_dtype(m, 2, "experts.w_gate_up", "BFP4") == "BFP8"
-    with pytest.raises(SystemExit):  # mixed dtypes inside one §4 tensor
+    with pytest.raises(SystemExit):  # mixed dtypes inside one cache tensor
         expert_tensor_dtype({"L03/experts.w_down": {"default": "BFP4", "BFP8": [5]}}, 3, "experts.w_down", "BFP4")
 
 

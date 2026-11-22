@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Full model vs the CPU golden (needs the weight cache $INKLING_CACHE and the golden dir $INKLING_GOLDEN).
 
-Hidden-forced (each application gets its golden input): design.md §7 per-layer and logits bars.
+Hidden-forced (each application gets its golden input): per-layer and logits bars.
 Token-only (golden tokens, no hidden forcing): reported, gated on logits PCC only.
 """
 

@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 
-"""E8: tensor-prefetcher linear (tt/prefetch.py) matches ttnn.linear and replays in a trace.
+"""Tensor-prefetcher linear (tt/prefetch.py) matches ttnn.linear and replays in a trace.
 
-    flock /tmp/tt-card.lock pytest -s models/demos/inkling2_mini/tests/test_prefetch.py
+    pytest -s models/demos/inkling2_mini/tests/test_prefetch.py
 """
 
 import pytest

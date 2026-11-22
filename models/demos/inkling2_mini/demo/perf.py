@@ -12,14 +12,14 @@ The line is printed and appended to ``<results>/results.jsonl`` (with branch, co
 Paths: ``--golden`` (default ``$INKLING_GOLDEN``), ``--results`` (default ``$INKLING_PERF_DIR``); weights
 ``$INKLING_CACHE``.
 
-Gate (design §7), short golden prompts prompt0/prompt1/chat/math, eager:
+Gate, short golden prompts prompt0/prompt1/chat/math, eager:
   forced:     per-app PCC >= 0.99 and >= baseline - 0.0005, logits PCC >= 0.98, top-1 >= 90 %,
               top-5 contains ref top-1 >= 98 %
   token-only: logits PCC >= 0.98, top-1 hits >= baseline - 1
   long (code1500, prose8k; traced prefill, ALL positions vs golden v1, last position vs v2): regression gate =
               top-1, top-5, logits PCC (full for code1500, ref top-32 entries for prose8k) >= baseline - 0.01.
-              Design §7 absolute bars are reported per prompt as "bars_7" (v1 baseline does not meet them).
-              No per-app PCC on long prompts: two valid CPU refs differ to 0.958 there (golden-v2.md).
+              The absolute bars are reported per prompt as "bars_7" (the v1 baseline does not meet them).
+              No per-app PCC on long prompts: two valid CPU references differ to 0.958 there.
 Baseline = <results>/baseline.json, written by --set-baseline only from a run that has the gate and passes it.
 Without it only the absolute bars apply.
 
@@ -352,7 +352,7 @@ def main():
             "logits_pcc>=0.98": r.get("logits_pcc_mean", r.get("top32_pcc_mean", 0)) >= 0.98,
             "last_argmax": r.get("last_argmax_eq_v1", False),
         }
-        line["prefill"][name]["bars_7"] = bars  # absolute design §7 bars (reported; baseline does not meet them)
+        line["prefill"][name]["bars_7"] = bars  # absolute bars (reported; the baseline does not meet them)
         b = (base or {}).get("long", {}).get(name)
         if b:  # regression gate vs baseline
             for k in ("top1", "top5", "top32_pcc_mean", "logits_pcc_mean"):

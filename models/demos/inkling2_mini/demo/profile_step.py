@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Device profile of one traced decode step (max_ctx 4K by default).
 
-    flock /tmp/tt-card.lock python -m tracy -r -p --no-web-server --op-support-count 12000 \
+    python -m tracy -r -p --no-web-server --op-support-count 12000 \
         -m models.demos.inkling2_mini.demo.profile_step [max_ctx]
 then: python -m models.demos.inkling2_mini.demo.profile_report <ops_perf_results csv>
 """

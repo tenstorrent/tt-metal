@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-"""Fused residual-path kernels (tt/fused) vs the HF Inkling2Loop modules: T5's cases and bar (PCC >= 0.9995,
-eager + traced, two replays bit-equal), plus before/after replay time against E2's tt/residual.py ops.
+"""Fused residual-path kernels (tt/fused) vs the HF Inkling2Loop modules: test_residual.py's cases and bar
+(PCC >= 0.9995, eager + traced, two replays bit-equal), plus before/after replay time against the unfused
+tt/residual.py ops.
 
 Reference: the one test_residual.py makes (skips without it); timings go to INKLING_FUSED_RESULTS (jsonl) if set.
 """
@@ -78,7 +79,7 @@ def conv_sequence(device, conv, state, x, xs, step):
 @pytest.mark.parametrize("channels", [1024, 2304])
 def test_fused_short_conv(device, rows, ref, channels):
     case = ref[f"conv_c{channels}"]
-    taps = case["weight"].flip(-1).T[None, None].contiguous()  # §4 [1,1,4,C], row r = lag r
+    taps = case["weight"].flip(-1).T[None, None].contiguous()  # cache form [1,1,4,C], row r = lag r
     w = {"post_attn_conv": taps}
     conv = FusedShortConv(rows, w, "post_attn_conv")
     state = conv.alloc_state(R.cache_index(17, loop_pass=3))
@@ -99,14 +100,14 @@ def test_fused_short_conv(device, rows, ref, channels):
     assert torch.equal(first, second), "trace replays differ"
     p = pcc(first, case["out"])
 
-    # before: E2's ShortConv, same input, replay time
+    # before: the unfused ShortConv, same input, replay time
     old = R.ShortConv(rows, w, "post_attn_conv")
     ring = old.alloc_state(0)
     old(x, ring, 0)
     tid, _ = capture(device, lambda: old(x, ring, 0))
     us_old = replay_us(device, [tid])
     ttnn.release_trace(device, tid)
-    record(f"short_conv_c{channels}", pcc=p, pcc_eager=pcc(eager, case["out"]), us=us, us_e2=us_old)
+    record(f"short_conv_c{channels}", pcc=p, pcc_eager=pcc(eager, case["out"]), us=us, us_unfused=us_old)
     assert finite_min([p, pcc(eager, case["out"])]) >= PCC_MIN, p
 
 
@@ -167,12 +168,12 @@ def test_fused_attn_res(device, rows, ref, nq, depth):
     eager, traced, us = traced_twice(device, lambda: attn(stack, partial, depth, split=False))
     per_q = [pcc(traced[j], case["out"][j]) for j in range(nq)]
     p_eager = min(pcc(eager[j], case["out"][j]) for j in range(nq))
-    # seal of a fresh tensor (one program) vs E2's seal (4 ops)
+    # seal of a fresh tensor (one program) vs the unfused seal (4 ops)
     _, _, us_seal = traced_twice(
         device, lambda: (frows.fresh.clear(), frows.seal(stack, block[0] if block else partial, 0), partial)[2]
     )
 
-    # before: E2 AttnRes (seal of the partial + attend), same inputs
+    # before: the unfused AttnRes (seal of the partial + attend), same inputs
     old = R.AttnRes(rows, w, "attn_res_q", nq)
     st = None
     for k in range(depth - 1):
@@ -187,10 +188,10 @@ def test_fused_attn_res(device, rows, ref, nq, depth):
         pcc_min_query=min(per_q),
         pcc_eager_min=p_eager,
         us=us,
-        us_e2=us_old,
+        us_unfused=us_old,
         us_seal=us_seal,
-        us_seal_e2=us_seal_old,
-        max_abs_vs_e2=(traced - old_out).abs().max().item(),
+        us_seal_unfused=us_seal_old,
+        max_abs_vs_unfused=(traced - old_out).abs().max().item(),
     )
     assert finite_min(per_q + [p_eager]) >= PCC_MIN, per_q
 
@@ -198,7 +199,7 @@ def test_fused_attn_res(device, rows, ref, nq, depth):
 # ---------------------------------------------------------------- message gates
 def gate_weights(case, names):
     w = {}
-    for g in names:  # §4: down [1,1,2C,64] bf16, forget / gain [1,1,64,C] fp32 ([in, out])
+    for g in names:  # cache form: down [1,1,2C,64] bf16, forget / gain [1,1,64,C] fp32 ([in, out])
         w[f"msg_gate.{g}.down"] = case["down"].T[None, None].contiguous().bfloat16()
         w[f"msg_gate.{g}.forget"] = case["forget"].T[None, None].contiguous()
         w[f"msg_gate.{g}.gain"] = case["gain"].T[None, None].contiguous()
@@ -221,8 +222,8 @@ def test_fused_message_gate(device, rows, ref):
         "message_gate",
         pcc_min_row=min(per_row),
         us=us,
-        us_e2=us_old,
-        max_abs_vs_e2=(traced - old_out).abs().max().item(),
+        us_unfused=us_old,
+        max_abs_vs_unfused=(traced - old_out).abs().max().item(),
     )
     assert finite_min(per_row + [pcc(eager[i], case["out"][i]) for i in range(4)]) >= PCC_MIN, per_row
 
@@ -242,7 +243,11 @@ def test_fused_qkv_gate(device, rows, ref):
     old = _QKVGate(rows, w)
     _, old_out, us_old = traced_twice(device, lambda: old(h, m))
     record(
-        "qkv_gate", pcc_min_row=min(per_row), us=us, us_e2=us_old, max_abs_vs_e2=(traced - old_out).abs().max().item()
+        "qkv_gate",
+        pcc_min_row=min(per_row),
+        us=us,
+        us_unfused=us_old,
+        max_abs_vs_unfused=(traced - old_out).abs().max().item(),
     )
     assert finite_min(per_row + [pcc(eager[i], case["out"][i]) for i in range(3)]) >= PCC_MIN, per_row
 
@@ -251,7 +256,7 @@ def test_fused_qkv_gate(device, rows, ref):
 @pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
 @pytest.mark.parametrize("n_weights", [1, 3])
 def test_fused_row_norm(device, rows, n_weights):
-    """vs E2's rows.rms (model._rms) on each row: global layers 3 weights, loop passes 1 weight for 3 rows."""
+    """vs the unfused rows.rms (model._rms) on each row: global layers 3 weights, loop passes 1 weight for 3 rows."""
     from models.demos.inkling2_mini.tt.fused.norm import FusedRowNorm
 
     torch.manual_seed(3)
@@ -287,6 +292,6 @@ def test_fused_row_norm(device, rows, n_weights):
         for i in range(3)
     ]
     p = min(pcc(first[i][0], want[i]) for i in range(3))
-    p_e2 = min(pcc(old[i][0], want[i]) for i in range(3))
-    record(f"row_norm_w{n_weights}", pcc_min=p, pcc_e2_min=p_e2, us=us)
-    assert finite_min([p] + [pcc(eager[i][0], want[i]) for i in range(3)]) >= 0.99999, (p, p_e2)
+    p_unfused = min(pcc(old[i][0], want[i]) for i in range(3))
+    record(f"row_norm_w{n_weights}", pcc_min=p, pcc_unfused_min=p_unfused, us=us)
+    assert finite_min([p] + [pcc(eager[i][0], want[i]) for i in range(3)]) >= 0.99999, (p, p_unfused)

@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Loader for the Inkling-2-Mini tt weight cache v1 (design.md §4).
+"""Loader for the Inkling-2-Mini tt weight cache v1 (written by convert.py).
 
-``load_layer(root, L, device)`` / ``load_global(root, device)`` return ``{§4 name: ttnn.Tensor}`` in the stored
+``load_layer(root, L, device)`` / ``load_global(root, device)`` return ``{cache name: ttnn.Tensor}`` in the stored
 dtype + layout. ``device=None`` (default) returns host tensors, so a module can place them once itself; with a
 ``device`` they go to DRAM interleaved.
 """
@@ -39,7 +39,7 @@ def manifest(root: Path | str | None = DEFAULT_ROOT) -> dict:
 
 
 def layouts(root: Path | str, layer: int | None) -> dict[str, str]:
-    """{§4 name: "RM" | "TILE" | "STICK"} for one layer (None = global). A "STICK" tensor (convert/stick.py) is a
+    """{cache name: "RM" | "TILE" | "STICK"} for one layer (None = global). A "STICK" tensor (convert/stick.py) is a
     [1, 1, rows, 32] TILE tensor holding the expert tiles of its ``tile_shape`` reordered for the fused MoE kernel;
     it must sit DRAM interleaved on a device with ``stick_banks`` DRAM banks."""
     return {e["name"]: e["layout"] for e in manifest(root)["tensors"] if e["layer"] == layer}

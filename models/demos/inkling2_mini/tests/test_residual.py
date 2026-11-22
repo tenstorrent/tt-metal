@@ -133,7 +133,7 @@ def record(name, **kw):
 
 
 def cache_tensor(t, dtype):
-    """§4 cache form: host ttnn TILE tensor (what ttnn.load_tensor returns)."""
+    """cache form: host ttnn TILE tensor (what ttnn.load_tensor returns)."""
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
 
@@ -202,7 +202,7 @@ def test_block_attn_res(device, rows, ref, nq, depth):
 @pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
 def test_messages_for_pass(device, rows, ref):
     case = ref["msg"]
-    msg_q = torch.nn.functional.pad(case["query"], (0, 0, 0, TILE - 4))[None]  # §4 [1,12,32,C]
+    msg_q = torch.nn.functional.pad(case["query"], (0, 0, 0, TILE - 4))[None]  # cache form [1,12,32,C]
     mod = MessageAttnRes(rows, {"msg_q": cache_tensor(msg_q, ttnn.float32)})
     h12, h17 = tok(case["h12"][None], device, ttnn.bfloat16), tok(case["h17"][None], device, ttnn.bfloat16)
     eager, traced, us = traced_twice(device, lambda: [m for layer in mod.messages_for_pass(h12, h17) for m in layer])
@@ -216,7 +216,7 @@ def test_messages_for_pass(device, rows, ref):
 @pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
 def test_message_gate(device, rows, ref):
     case = ref["gate"]
-    weights = {  # §4: down [1,1,2C,64] bf16, forget / gain [1,1,64,C] fp32 ([in, out])
+    weights = {  # cache form: down [1,1,2C,64] bf16, forget / gain [1,1,64,C] fp32 ([in, out])
         "msg_gate.k.down": cache_tensor(case["down"].T[None, None].contiguous(), ttnn.bfloat16),
         "msg_gate.k.forget": cache_tensor(case["forget"].T[None, None].contiguous(), ttnn.float32),
         "msg_gate.k.gain": cache_tensor(case["gain"].T[None, None].contiguous(), ttnn.float32),
@@ -233,7 +233,7 @@ def test_message_gate(device, rows, ref):
 @pytest.mark.parametrize("channels", [2304, 1024])
 def test_short_conv(device, rows, ref, channels):
     case = ref[f"conv_c{channels}"]
-    taps = case["weight"].flip(-1).T[None, None].contiguous()  # §4 [1,1,4,C], row r = lag r
+    taps = case["weight"].flip(-1).T[None, None].contiguous()  # cache form [1,1,4,C], row r = lag r
     conv = ShortConv(rows, {"post_attn_conv": cache_tensor(taps, ttnn.float32)}, "post_attn_conv")
     state = conv.alloc_state(cache_index(17, loop_pass=3))
     zero = ttnn.from_torch(torch.zeros(1, 1, TILE, channels), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)

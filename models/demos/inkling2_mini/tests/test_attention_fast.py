@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """`attention_fast.py` (sdpa_decode core, local + global) vs the HF reference.
 
-- T3 cases of test_attention.py (same weights, inputs and cached HF refs): local / global 0..1099,
+- the cases of test_attention.py (same weights, inputs and cached HF refs): local / global 0..1099,
   global_long 0..8399 (covers 0-3, 1022-1025, 8192).
 - seeded cases at 9000, 32K, 120K (local and global, max_ctx 128K): P synthetic post-norm k/v are
   loaded into HF's DynamicCache and into the device state (conv history zero on both sides), then
@@ -85,7 +85,7 @@ if __name__ == "__main__" and len(sys.argv) == 4 and sys.argv[1] == "ref":
 # ------------------------------------------------------------------ device side
 import pytest  # noqa: E402
 
-import models.demos.inkling2_mini.tests.test_attention as t3  # noqa: E402
+import models.demos.inkling2_mini.tests.test_attention as ta  # noqa: E402
 import ttnn  # noqa: E402
 from models.demos.inkling2_mini.tests import hf_ref  # noqa: E402
 from models.demos.inkling2_mini.tt.attention import (  # noqa: E402
@@ -102,8 +102,8 @@ FAST = (Inkling2AttentionFast, DecodePositionsFast)
 V1 = (Inkling2Attention, DecodePositions)
 
 
-class Runner(t3.Runner):
-    """t3.Runner with a choice of attention / positions class."""
+class Runner(ta.Runner):
+    """ta.Runner with a choice of attention / positions class."""
 
     def __init__(self, device, is_global, sd, max_ctx, cache_dtype, classes=FAST):
         attn_cls, pos_cls = classes
@@ -113,7 +113,7 @@ class Runner(t3.Runner):
         self.state = self.attn.new_state(max_ctx, cache_dtype)
         self.positions = pos_cls(device, max_ctx)
         zero = torch.zeros(HIDDEN)
-        self.x = [ttnn.to_device(t3._x_host(zero), device) for _ in range(3 if is_global else 1)]
+        self.x = [ttnn.to_device(ta._x_host(zero), device) for _ in range(3 if is_global else 1)]
         self.trace = None
         self.out = None
 
@@ -128,12 +128,12 @@ def _xs(inputs, is_global):
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("cache_dtype", ["bf16", "bfp8"])
-@pytest.mark.parametrize("case", list(t3.CASES))
+@pytest.mark.parametrize("case", list(ta.CASES))
 def test_fast_decode(device, case, cache_dtype):
-    is_global, steps, max_ctx = t3.CASES[case]
-    sd = t3.random_state_dict(is_global, seed=11 if is_global else 7)
-    inputs = t3.make_inputs(steps, is_global, seed=3)
-    ref = t3.reference_outputs(sd, inputs, is_global, tag=f"{case}-{steps}")
+    is_global, steps, max_ctx = ta.CASES[case]
+    sd = ta.random_state_dict(is_global, seed=11 if is_global else 7)
+    inputs = ta.make_inputs(steps, is_global, seed=3)
+    ref = ta.reference_outputs(sd, inputs, is_global, tag=f"{case}-{steps}")
     runner = Runner(device, is_global, sd, max_ctx, _dtype(cache_dtype))
     xs = _xs(inputs, is_global)
     runner.set_inputs(0, [x[0] for x in xs])
@@ -142,7 +142,7 @@ def test_fast_decode(device, case, cache_dtype):
     try:
         for t in range(steps):
             runner.set_inputs(t, [x[t] for x in xs])
-            per_step.append(t3.pcc(runner.run(), ref[t].float()))
+            per_step.append(ta.pcc(runner.run(), ref[t].float()))
     finally:
         runner.release()
     marks = [m for m in (0, 1, 2, 3, 1022, 1023, 1024, 1025, 8191, 8192, 8193) if m < steps]
@@ -167,8 +167,8 @@ def seeded_prefix(p, seed):
 
 
 def seeded_case(is_global, p):
-    sd = t3.random_state_dict(is_global, seed=11 if is_global else 7)
-    inputs = t3.make_inputs(SEEDED_STEPS, is_global, seed=p)
+    sd = ta.random_state_dict(is_global, seed=11 if is_global else 7)
+    inputs = ta.make_inputs(SEEDED_STEPS, is_global, seed=p)
     pk, pv = seeded_prefix(p, seed=p + 1)
     hf_ref.require(config=True)
     cache = hf_ref.cache_dir("attention_fast")
@@ -199,7 +199,7 @@ def test_fast_decode_seeded(device, is_global, at, cache_dtype):
     try:
         for i in range(SEEDED_STEPS):
             runner.set_inputs(p + i, [x[i] for x in xs])
-            per_step[p + i] = round(t3.pcc(runner.run(), ref[i].float()), 6)
+            per_step[p + i] = round(ta.pcc(runner.run(), ref[i].float()), 6)
     finally:
         runner.release()
     print(
@@ -213,9 +213,9 @@ def test_fast_decode_seeded(device, is_global, at, cache_dtype):
 @pytest.mark.parametrize("is_global", [False, True], ids=["local", "global"])
 def test_fast_trace_replay_deterministic(device, is_global):
     """Same inputs + same state -> bit-identical outputs, at a step past the 1024 boundary."""
-    sd = t3.random_state_dict(is_global, seed=5)
+    sd = ta.random_state_dict(is_global, seed=5)
     steps = 1040
-    inputs = t3.make_inputs(steps + 1, is_global, seed=9)
+    inputs = ta.make_inputs(steps + 1, is_global, seed=9)
     runner = Runner(device, is_global, sd, 2048, ttnn.bfloat16)
     xs = _xs(inputs, is_global)
     saved = [ttnn.clone(s) for s in runner.state.tensors()]  # before capture (trace scratch aliasing)
@@ -254,9 +254,9 @@ def _median_ms(device, trace, n=15):
 @pytest.mark.parametrize("is_global", [False, True], ids=["local", "global"])
 def test_use_time(device, is_global, max_ctx, impl):
     """Benchmark (perf marker), not a correctness test. Device time of one layer use = traced (prepare + decode) - traced prepare; bfp8 cache."""
-    sd = t3.random_state_dict(is_global, seed=5)
+    sd = ta.random_state_dict(is_global, seed=5)
     runner = Runner(device, is_global, sd, max_ctx, ttnn.bfloat8_b, V1 if impl == "v1" else FAST)
-    xs = [x[0] for x in _xs(t3.make_inputs(1, is_global, seed=1), is_global)]
+    xs = [x[0] for x in _xs(ta.make_inputs(1, is_global, seed=1), is_global)]
     runner.set_inputs(0, xs)
     runner.capture()
     prep = runner.positions

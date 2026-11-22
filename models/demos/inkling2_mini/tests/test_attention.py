@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-"""Inkling-2-Mini attention decode vs the HF reference, random weights in §4 dtypes.
+"""Inkling-2-Mini attention decode vs the HF reference, random weights in the cache dtypes.
 
 The HF reference needs transformers >= 5.24 (inkling2_loop) and the model's config.json
 (see tests/hf_ref.py). The test writes weights + inputs to a temp file and runs this file
@@ -89,7 +89,7 @@ def run_reference(in_path, out_path):
 
 # ------------------------------------------------------------------ weights + inputs
 def random_state_dict(is_global, seed):
-    """Random HF state dict; every value representable in its §4 dtype (BFP8 / BF16)."""
+    """Random HF state dict; every value representable in its cache dtype (BFP8 / BF16)."""
     import ttnn
 
     g = torch.Generator().manual_seed(seed)
@@ -128,7 +128,7 @@ def random_state_dict(is_global, seed):
         else:
             sd[f"{kv}_proj.linear.weight"] = bfp8(lin)
             sd[f"{kv}_proj.sconv.conv1d.weight"] = bf16(uniform((1024, 1, 4), -0.5, 0.5))
-    # Pieces of the packed §4 tensors start at multiples of 32 columns, so quantizing each
+    # Pieces of the packed cache tensors start at multiples of 32 columns, so quantizing each
     # piece alone gives the same BFP8 blocks as the packed tensor.
     return sd
 
