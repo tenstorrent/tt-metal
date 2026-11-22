@@ -119,13 +119,16 @@ class Qwen36ResidentSpecRowsForCausalLM(ResidentRowsAdapter):
         if empty_slots is None:
             raise RuntimeError("a stateful multi-user model needs the plugin's empty_slots (destination slots)")
         out = torch.zeros(n, 1, self.vocab)
+        items = []
         for j in range(n):
             T = int(prompt_lens[j])
             r = self._start_prompt(int(empty_slots[j]))
             # (the whole row: the first verify's rows write past the prompt; vLLM's padding is its null block 0)
             blocks = expand_blocks(page_table[j].tolist(), self.pages_per_block)
             self.tables[r] = list(blocks)
-            lg = self.sess.start(r, [int(t) for t in tokens[j, :T]], table=blocks)
+            items.append((r, [int(t) for t in tokens[j, :T]], blocks))
+        # (every prompt through the PP prefill, then one verify step of all their last tokens)
+        for j, ((r, _, _), lg) in enumerate(zip(items, self.sess.start_many(items))):
             self.live.add(r)
             masked = torch.full_like(lg, float("-inf"))
             masked[int(lg.argmax())] = 0.0  # (greedy: the runner samples the argmax)

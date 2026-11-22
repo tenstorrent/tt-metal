@@ -53,6 +53,9 @@ class FakeSession:
         lg[nxt(ids[-1], len(ids) - 1)] = 5.0
         return lg
 
+    def start_many(self, items):
+        return [self.start(u, ids, table) for u, ids, table in items]
+
     def verify(self, tokens, positions, active):
         self.calls.append(("verify", [list(t) for t in tokens], list(positions), list(active)))
         g = [[0] * R for _ in range(U)]

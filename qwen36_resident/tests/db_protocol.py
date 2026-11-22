@@ -47,18 +47,18 @@ def main():
         sess = SpecRowsSession(eng)
         active, gen, t, pos, acc = [False] * U, [[] for _ in range(U)], [0] * U, [0] * U, [1] * U
 
-        def start(u):
-            lg = sess.start(u, prompts[u])
-            t[u], pos[u], acc[u], active[u] = int(lg.argmax()), len(prompts[u]), 1, True
-            gen[u].append(t[u])
+        def start(us):  # (several users in one call: their prompts through the PP, one verify step for all)
+            t0 = time.perf_counter()
+            for u, lg in zip(us, sess.start_many([(u, prompts[u], None) for u in us])):
+                t[u], pos[u], acc[u], active[u] = int(lg.argmax()), len(prompts[u]), 1, True
+                gen[u].append(t[u])
+            print(f"started users {list(us)} in {time.perf_counter() - t0:.2f} s", flush=True)
 
-        for u in range(U - a.late):
-            start(u)
+        start(list(range(U - a.late)))
         t0, steps, accepted_total = time.perf_counter(), 0, 0
         while any(active[u] and len(gen[u]) < a.new for u in range(U)) or not all(active):
             if steps == a.late_steps:
-                for u in range(U - a.late, U):
-                    start(u)
+                start(list(range(U - a.late, U)))
             run = [active[u] and len(gen[u]) < a.new for u in range(U)]
             drafts = sess.propose(t, pos, acc, run)
             tokens = [[t[u]] + list(drafts[u]) if run[u] else [0] * R for u in range(U)]

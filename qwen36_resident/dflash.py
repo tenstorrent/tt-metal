@@ -725,33 +725,43 @@ class SpecRowsSession:
         self.committed = [1] * U
 
     def start(self, u, ids, table=None):
+        return self.start_many([(u, ids, table)])[0]
+
+    def start_many(self, items):
+        """start several users, items = [(u, prompt ids, block table or None)]: each prompt but its last token through
+        the PP prefill (handoff into the user's first state slot, its drafter context filled), then ONE verify step of
+        every started user's last prompt token (the other users held). Returns each user's logits there"""
         e, R, U = self.e, self.e.R, self.e.U
-        ids = [int(t) for t in ids]
-        P = len(ids)
-        if table is not None:
+        items = [(int(u), [int(t) for t in ids], table) for u, ids, table in items]
+        assert len({u for u, _, _ in items}) == len(items), "a user started twice in one call"
+        if any(table is not None for _, _, table in items):
             tbl = [list(t) for t in e.m.block_tables]
-            for r in range(u * R, (u + 1) * R):
-                tbl[r] = list(table)
+            for u, _, table in items:
+                if table is not None:
+                    for r in range(u * R, (u + 1) * R):
+                        tbl[r] = list(table)
             e.m.set_page_table(tbl)
-        if P > 1:
-            e.pp.reset()
-            e.pp.run(torch.as_tensor(ids[: P - 1]))
-            e.pp.handoff(e.m, P - 1, slot=u * R, block_table=e.m.block_tables[u * R])
-            e._fill_context(P - 1, phys=u)
-        e.ring[u], e.slot[u], e.prev[u] = 0, 0, None
         toks = [[0] * R for _ in range(U)]
-        toks[u] = [ids[-1]] * R
         pos = list(self.pos)
-        pos[u] = P - 1
+        active = [False] * U
+        for u, ids, _ in items:
+            P = len(ids)
+            if P > 1:
+                e.pp.reset()
+                e.pp.run(torch.as_tensor(ids[: P - 1]))
+                e.pp.handoff(e.m, P - 1, slot=u * R, block_table=e.m.block_tables[u * R])
+                e._fill_context(P - 1, phys=u)
+            e.ring[u], e.slot[u], e.prev[u] = 0, 0, None
+            toks[u], pos[u], active[u] = [ids[-1]] * R, P - 1, True
         x0 = torch.stack([e.emb[list(t)] for t in toks])
-        e.m.step(e.m.token_state_vrows(x0, pos, e.ring, e.slot, e.prev, active=[k == u for k in range(U)]))
-        lg = e.m.logits()[u * R, :, : e.d.vocab_chip].reshape(-1)[: e.vocab].float().clone()
-        n_valid = [0] * U
-        n_valid[u] = 1
-        e.drafter.extend_context([max(p, 0) for p in pos], n_valid)
-        e.ring[u], e.slot[u], e.prev[u] = 1, 0, 0  # (the last prompt token committed as row 0)
-        self.pos[u], self.started[u], self.committed[u] = P, True, 1
-        return lg
+        e.m.step(e.m.token_state_vrows(x0, pos, e.ring, e.slot, e.prev, active=active))
+        logits = e.m.logits()
+        out = [logits[u * R, :, : e.d.vocab_chip].reshape(-1)[: e.vocab].float().clone() for u, _, _ in items]
+        e.drafter.extend_context([max(p, 0) for p in pos], [int(a) for a in active])
+        for u, ids, _ in items:
+            e.ring[u], e.slot[u], e.prev[u] = 1, 0, 0  # (the last prompt token committed as row 0)
+            self.pos[u], self.started[u], self.committed[u] = len(ids), True, 1
+        return out
 
     def verify(self, tokens, positions, active):
         """one verify step: per active user its committed token and R - 1 drafts (tokens[u]) at positions[u] (row 0);
