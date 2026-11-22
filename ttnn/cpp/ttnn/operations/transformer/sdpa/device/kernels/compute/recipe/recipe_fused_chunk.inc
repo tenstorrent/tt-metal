@@ -36,7 +36,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     constexpr bool qk_ragged = Sk_chunk_t % sbw != 0;
     constexpr uint32_t n_kb = (Sk_chunk_t + sbw - 1) / sbw;
     static_assert(!qk_ragged || (sbw == 4 && Sk_chunk_t % 4 == 2));
-    static_assert(vDHt % qktv_subblock_w == 0 && vDHt <= DHt);
+    static_assert(vDHt % qktv_subblock_w == 0);
     auto kb_w = [](uint32_t kb) -> uint32_t { return qk_ragged && kb == n_kb - 1 ? Sk_chunk_t % sbw : sbw; };
     // PV of a pipelined group runs in n_pieces K pieces, each after QK subblocks of the next group: two when the QK
     // subblocks split evenly, and at least enough that no piece accumulates more than the recipe's fold interval in
@@ -180,22 +180,30 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             }
         }
         tile_regs_acquire();
-        uint32_t in0_index = row0 * DHt;
-        uint32_t in1_index = col0;
-        srcb_to_q();
-        for (uint32_t inner = 0; inner < DHt; ++inner) {
-            matmul_block_no_mop(cb_q_in, cb_kt_in, in0_index, in1_index, 0, true, w, h, DHt);
-            in0_index++;
-            in1_index += KT;
+        // Block mask: a subblock with no valid key skips its matmuls (the mask below stamps all of it).
+        bool qk_needed = true;
+        if constexpr (recipe::ring && recipe::ring_mask == 3) {
+            qk_needed = !recipe_ring_tiles_empty(col0, w);
         }
-        srcb_from_q();
-        // - m_ref: M (row r's m in column 0) x (-e0 transposed: -1 in row 0). Both operands are exact in one
-        // fidelity phase (m_ref has 7 significant bits for srcB, -1 has one for srcA), so a HiFi build replays
-        // its image once here, and only its inner 0-15 half (the rest multiplies zeros).
-        UNPACK((llk_unpack_AB_matmul(prev.max, neg_unit_cb, row0, 0, w, h, 1)));
-        // A LoFi image has no halves; this keeps FAST's matmul instantiations (and code size) as they were.
-        constexpr bool m_inner_half = !recipe::lofi;
-        MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE, 1, m_inner_half>(prev.max, neg_unit_cb, 0, w, h)));
+        if (qk_needed) {
+            uint32_t in0_index = row0 * DHt;
+            uint32_t in1_index = col0;
+            srcb_to_q();
+            for (uint32_t inner = 0; inner < DHt; ++inner) {
+                matmul_block_no_mop(cb_q_in, cb_kt_in, in0_index, in1_index, 0, true, w, h, DHt);
+                in0_index++;
+                in1_index += KT;
+            }
+            srcb_from_q();
+            // - m_ref: M (row r's m in column 0) x (-e0 transposed: -1 in row 0). Both operands are exact in one
+            // fidelity phase (m_ref has 7 significant bits for srcB, -1 has one for srcA), so a HiFi build replays
+            // its image once here, and only its inner 0-15 half (the rest multiplies zeros).
+            UNPACK((llk_unpack_AB_matmul(prev.max, neg_unit_cb, row0, 0, w, h, 1)));
+            // A LoFi image has no halves; this keeps FAST's matmul instantiations (and code size) as they were.
+            constexpr bool m_inner_half = !recipe::lofi;
+            MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE, 1, m_inner_half>(
+                prev.max, neg_unit_cb, 0, w, h)));
+        }
         tile_regs_commit();
         tile_regs_wait();
         if constexpr (recipe::ring) {
@@ -320,7 +328,8 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     bool v_ready = false;
     // In-place latent V (sdpa_inner_loop_step: the K CB passed as V): V tile (k, d) is K^T tile (d, k).
     constexpr bool v_in_k = cb_v_in == cb_kt_in;
-    static_assert(!v_in_k || Sq_chunk_t == 1, "in-place V packs one-row PV subblocks only");
+    // The unpacker's column stride needs PV subblocks at least as wide as tall (one-row Q chunks: any width).
+    static_assert(!v_in_k || Sq_chunk_t == 1 || pv_w >= H, "in-place V subblocks");
     auto pv_piece = [&](uint32_t g, uint32_t k0, uint32_t k_len, uint32_t plane, bool accumulate) SDPA_FUSED_STEP {
         SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
@@ -363,6 +372,34 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         PACK((llk_pack_reconfig_l1_acc(0)));
         if constexpr (v_in_k) {
             matmul_set_in1_column_stride(cb_v_in, 1);
+        }
+    };
+
+    // Block mask: PV over the piece's runs of valid K tiles only (the others' P is zero), accumulating onto O. With no
+    // valid tile, only the waits a PV would do (V, and the group's scores before the chunk pops them).
+    [[maybe_unused]] auto pv_piece_kept = [&](uint32_t g, uint32_t k0, uint32_t k_len) SDPA_FUSED_STEP {
+        bool any = false;
+        for (uint32_t t = k0; t < k0 + k_len;) {
+            if (recipe_ring_tile_valid[t] == 0) {
+                ++t;
+                continue;
+            }
+            uint32_t e = t + 1;
+            while (e < k0 + k_len && recipe_ring_tile_valid[e] != 0) {
+                ++e;
+            }
+            pv_piece(g, t, e - t, 0, true);
+            any = true;
+            t = e;
+        }
+        if (!any) {
+            if (!v_ready) {
+                if constexpr (!v_in_k) {
+                    CircularBuffer(cb_v_in).wait_front(KT * vDHt);
+                }
+                v_ready = true;
+            }
+            CircularBuffer(cb_qkt_im).wait_front((H * g + rows(g)) * KT);
         }
     };
 
@@ -604,7 +641,11 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
                 check_groups(cg_last - cg_last % CG, cg_last % CG + 1);
             }
             if (do_pv) {
-                pv_piece(pg, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), 0, true);
+                if constexpr (recipe::ring && recipe::ring_mask == 3) {
+                    pv_piece_kept(pg, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece));
+                } else {
+                    pv_piece(pg, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), 0, true);
+                }
             }
         }
         if (do_pv) {
@@ -645,7 +686,9 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         PACK((llk_pack_reconfig_l1_acc(0)));
     }
     // K and Q stay until here: a redone group recomputes its scores.
-    CircularBuffer(cb_kt_in).pop_front(DHt * KT);
+    if constexpr (!recipe::kv_hold) {
+        CircularBuffer(cb_kt_in).pop_front(DHt * KT);
+    }
     if (independent_q_release ? release_q : is_last_iter) {
         sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
     }
@@ -656,7 +699,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     CircularBuffer(psum_cb).push_back(Sq_chunk_t * sbw);
     CircularBuffer(psum_cb).wait_front(Sq_chunk_t * sbw);
     CircularBuffer(psum_cb).pop_front(Sq_chunk_t * sbw);
-    if constexpr (!v_in_k) {
+    if constexpr (!v_in_k && !recipe::kv_hold) {
         CircularBuffer(cb_v_in).pop_front(KT * vDHt);
     }
     CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT);

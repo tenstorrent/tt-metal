@@ -26,11 +26,15 @@ constexpr bool krange = get_named_compile_time_arg_val("recipe_krange") != 0;
 // Attention sink: its page CB (0: no sink), and whether the sink tensor is BF16 (else FP32).
 constexpr uint32_t sink_cb = get_named_compile_time_arg_val("recipe_sink_cb");
 constexpr bool sink_bf16 = get_named_compile_time_arg_val("recipe_sink_bf16") != 0;
+// Per-row sinks (sparse SDPA, whose Q rows are heads): the sink CB holds one tile per Q tile row, each row's logit in
+// column 0, fronted for the whole kernel (recipe_sink_row_base names a Q chunk's first tile).
+constexpr bool sink_rows = get_named_compile_time_arg_val("recipe_sink_rows") != 0;
 // Ring and exp ring kernels: per-chunk key masks (recipe_tail.hpp: RecipeRingMask) and the ring continuation.
 constexpr bool ring = get_named_compile_time_arg_val("recipe_ring") != 0;
 // Ring positional masks (recipe_tail.hpp): 0 none (only key padding), 1 causal in the device's shard frame (Q and K
 // tiles both counted from the shard's start), 2 the sequence frame (chunked prefill, sliding windows, KV-pad rotation:
-// absolute positions, a local K tile mapped through the chunk groups' regions).
+// absolute positions, a local K tile mapped through the chunk groups' regions), 3 a block mask (sparse ring: the
+// wrapper gives each K tile of the chunk its valid columns, recipe_ring_tile_valid).
 constexpr uint32_t ring_mask = get_named_compile_time_arg_val("recipe_ring_mask");
 // Causal sliding window in keys (0: none): key k is visible to query q iff q - window < k <= q.
 constexpr uint32_t ring_window = get_named_compile_time_arg_val("recipe_ring_window");
@@ -41,6 +45,11 @@ constexpr bool ring_rotation = get_named_compile_time_arg_val("recipe_ring_rotat
 constexpr bool ring_circular = get_named_compile_time_arg_val("recipe_ring_circular") != 0;
 // Streamed ring checkpoints (the writer serves both protocols); only with fused chunks.
 constexpr bool ring_stream_state_requested = get_named_compile_time_arg_val("recipe_ring_stream_state") != 0;
+// The attn_mask applies to the K chunks the wrapper flags (recipe_edge_chunk), not to every chunk: the sparse ring's
+// pooled entries carry a column bias, its exact pieces none, so those stay fused.
+constexpr bool mask_flagged = get_named_compile_time_arg_val("recipe_mask_flagged") != 0;
+// K and V stay in their CBs after a step (the wrapper pops them): the sparse ring runs several Q blocks over one piece.
+constexpr bool kv_hold = get_named_compile_time_arg_val("recipe_kv_hold") != 0;
 // Joint dense recipes with unaligned key lengths: valid primary and joint key rows (0: no key tail masking).
 constexpr uint32_t k_primary_rows = get_named_compile_time_arg_val("recipe_k_primary_rows");
 constexpr uint32_t k_joint_rows = get_named_compile_time_arg_val("recipe_k_joint_rows");
@@ -55,7 +64,7 @@ constexpr bool k_tail = k_primary_rows > 0;
 constexpr bool sink = sink_cb != 0;
 // Fused chunks run without an attn_mask (a masked build keeps every chunk on the reduce path); key-range calls mask
 // only their edge K chunks, so their full chunks stay fused.
-constexpr bool fused_active = fused && (!mask || krange);
+constexpr bool fused_active = fused && (!mask || krange || mask_flagged);
 // Streamed ring checkpoints rely on every restored block's first chunk being a fused chunk (it waits for each
 // group's O rows); without fused chunks compute keeps the synchronous protocol.
 constexpr bool ring_stream_state = ring_stream_state_requested && fused_active;

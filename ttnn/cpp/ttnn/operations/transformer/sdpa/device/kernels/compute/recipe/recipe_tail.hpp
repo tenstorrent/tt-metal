@@ -118,10 +118,26 @@ struct RecipeRingFrame {
 static RecipeRingFrame recipe_ring_frame;
 // The first Q tile row of the subblock being packed (set by the QK pack sites).
 static uint32_t recipe_mask_row0;
+// Block mask (recipe::ring_mask == 3): the valid columns (0-32) of each K tile of the current chunk, set by the
+// wrapper.
+constexpr uint32_t kRecipeRingBlockTableTiles = 64;
+static uint8_t recipe_ring_tile_valid[kRecipeRingBlockTableTiles];
+
+// Block mask: whether K tiles [t0, t0 + n) of the chunk hold no valid key.
+ALWI bool recipe_ring_tiles_empty(uint32_t t0, uint32_t n) {
+    for (uint32_t t = t0; t < t0 + n; ++t) {
+        if (recipe_ring_tile_valid[t] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
 
 ALWI uint32_t recipe_valid_k_columns(uint32_t tile) {
     uint32_t remaining;
-    if constexpr (recipe::ring) {
+    if constexpr (recipe::ring && recipe::ring_mask == 3) {
+        return recipe_ring_tile_valid[tile];
+    } else if constexpr (recipe::ring) {
         remaining = tile * 32 < recipe_ring_mask.valid_rows ? recipe_ring_mask.valid_rows - tile * 32 : 0;
     } else {
         constexpr uint32_t primary_padded = ((recipe::k_primary_rows + 31) / 32) * 32;
