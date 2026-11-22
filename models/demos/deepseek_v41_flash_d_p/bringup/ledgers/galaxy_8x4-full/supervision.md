@@ -1334,3 +1334,20 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   DeepSeek research (agent, 2026-11-22): per-request window state (SGLang / ATOM), minutes-TTL host-DRAM window pool
   (DeepSeek, exact resumes), decoder tail computed in prefill (DeepSeek) vs our DECODER_SKIP=decode; prefix cache =
   compressed KV + index keys only; layers 2 / 8 / 14 score all keys (candidate pool only for layers > 20: decode side).
+
+### HAND-OFF 2026-11-22 ~08:45 UTC (owner done for now; both branches pushed by the owner: model_bringup 2db6ea2edd3, batching 3461960e708)
+- Nothing running. Box idle. Heartbeat cron stopped.
+- OPEN (owner, binding): NO STATE IN THE SERVING PATH (default of dnijemcevic/model_bringup). Audit (agent, 2026-11-22): the
+  default still carries (A) rtail, (B) window ring, (C) pin, (D) ring bookkeeping (device / host, per slot) and (E) the
+  engram token-id tail (host); slot-state page items 2 (window ring) and 1 (engram tail) were never fixed (the 11-17/18 phase
+  fixed items 3 and 4: P.76, FIX.38, FIX.39). Decisions: E -> tt-d-gen sends the tail ids (owner OK); A-D -> tt-d-gen sends
+  every chunk with the 128-row bounded replay (then no carry is read). TODO: (1) a permanent stateless gate test on
+  model_bringup (state wiped between chunks + another request in the slot between; outputs identical), gated window_carry /
+  no_prefix_ids variants of test_outside_history; (2) make the default never read A-D (replay always; ring / rtail / pin
+  behind a non-default switch); (3) check whether the device re-index layers (24-36, run under DECODER_SKIP=off, the default)
+  score only layer 20's candidate pool (exact opportunity if not).
+- Tables sent to the owner: same-slot hint (steady) vs replay (resumed) for model_bringup 5120 and batching 8192 (single,
+  4x2k, 4x1792+1024); the replay numbers were not measured with state wiped (the stateless test would confirm them).
+- Framework fixes today: F296 (determinism keeps the gate's chunk), F297 (build counters run cold), F298 (BATCH_MAX_SEQ),
+  F299 (no timing-only A/B side reused as the accept gate), F300 (agent reports survive the gate); OPEN: test_perf_ab.py has
+  15 pre-existing failures in this checkout (harness regression, to bisect).
