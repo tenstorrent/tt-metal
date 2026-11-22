@@ -30,6 +30,9 @@ std::size_t completion_group_size(const ReceiverChannel& channel) {
     if (channel.slots < 16) {
         return 2;
     }
+    if (channel.single_source && channel.slots >= 32) {
+        return 8;
+    }
     return 4;
 }
 

@@ -79,7 +79,7 @@ FORCE_INLINE uint32_t oldest_uncredited(uint32_t next_index, uint32_t waiting) {
 // shared by mask (Completions).
 template <uint32_t GROUP_SIZE, uint32_t FIRST_ID, uint32_t NUM_IDS, uint32_t NUM_GROUPS>
 struct CompletionGroupTrids {
-    static_assert(GROUP_SIZE == 1 || GROUP_SIZE == 2 || GROUP_SIZE == 4);
+    static_assert(GROUP_SIZE == 1 || GROUP_SIZE == 2 || GROUP_SIZE == 4 || GROUP_SIZE == 8);
     static_assert(NUM_IDS >= 1 && FIRST_ID + NUM_IDS <= NOC_MAX_TRANSACTION_ID + 1);
     static constexpr bool shared = NUM_IDS < NUM_GROUPS;
     static_assert(!shared || is_power_of_2(NUM_IDS), "groups share transaction IDs by mask: a power of 2 of them");
@@ -743,7 +743,10 @@ FORCE_INLINE bool credit_completions(
     ReceiverChannelProgress& progress, const SlotSourcesOf<VC>& sources, bool handled_packet, CreditSender& credits) {
     constexpr uint32_t completion_group_size = ReceiverChannel<VC>::completion_group_size;
     constexpr uint32_t num_slots = ReceiverChannel<VC>::num_slots;
-    static_assert(completion_group_size >= 1 && completion_group_size <= 4 && completion_group_size <= num_slots);
+    // Groups of 8 only without per-slot source records (a group's sources fill one 4-byte word).
+    static_assert(
+        completion_group_size >= 1 && completion_group_size <= (single_source ? 8 : 4) &&
+        completion_group_size <= num_slots);
     const uint32_t next_index = progress.next_index;
     const uint32_t waiting = progress.uncredited;
     const uint32_t count = slots_due_for_credit<completion_group_size, num_slots>(progress, next_index, handled_packet);

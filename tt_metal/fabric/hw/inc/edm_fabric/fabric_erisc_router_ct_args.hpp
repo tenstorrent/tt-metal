@@ -830,14 +830,15 @@ constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS = {
     static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_2_TRID_START")),
 };
 static_assert(MAX_NUM_RECEIVER_CHANNELS == 3, "the host emits RX_CH_<c> transaction-ID args for three channels");
-// Every channel the router runs: a group size of 1, 2 or 4, at least one ID, and the ranges one after another within
-// the NoC's IDs.
+// Every channel the router runs: a group size of 1, 2 or 4 (8 on a router with one sender channel, whose receivers keep
+// no per-slot source record), at least one ID, and the ranges one after another within the NoC's IDs.
 constexpr bool receiver_trid_ranges_valid = [] {
     uint32_t next = 0;
     for (size_t c = 0; c < NUM_RECEIVER_CHANNELS; c++) {
         const uint32_t group_size = RX_CH_COMPLETION_GROUP_SIZE[c];
-        if ((group_size != 1 && group_size != 2 && group_size != 4) || RX_CH_NUM_TRIDS[c] == 0 ||
-            RX_CH_TRID_STARTS[c] != next) {
+        const bool size_ok =
+            group_size == 1 || group_size == 2 || group_size == 4 || (group_size == 8 && NUM_SENDER_CHANNELS == 1);
+        if (!size_ok || RX_CH_NUM_TRIDS[c] == 0 || RX_CH_TRID_STARTS[c] != next) {
             return false;
         }
         next += RX_CH_NUM_TRIDS[c];
@@ -846,7 +847,8 @@ constexpr bool receiver_trid_ranges_valid = [] {
 }();
 static_assert(
     receiver_trid_ranges_valid,
-    "receiver transaction IDs: group sizes 1/2/4, at least one ID per channel, consecutive ranges, 16 at most");
+    "receiver transaction IDs: group sizes 1/2/4 (8 with one sender channel), at least one ID per channel, consecutive "
+    "ranges, 16 at most");
 
 constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
     take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(

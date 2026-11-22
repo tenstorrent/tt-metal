@@ -1609,9 +1609,14 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             const bool wormhole_forwards = config.arch == tt::ARCH::WORMHOLE_B0 &&
                                            named_args.at(fmt::format("DISABLE_RX_CH{}_FORWARDING", vc)) == 0;
             const bool credit_each_slot = first_level_ack || wormhole_forwards;
+            // One sender channel on this router (the NUM_SENDER_CHANNELS the device reads): its receivers credit only
+            // remote channel 0 (router_receiver.hpp, single_source).
+            const bool single_source = named_args.at("NUM_SENDER_CHANNELS") == 1;
             for (size_t i = 0; i < config.num_used_receiver_channels_per_vc[vc]; ++i) {
                 receivers.push_back(
-                    {static_channel_allocator->get_receiver_channel_number_of_slots(vc, i), credit_each_slot});
+                    {static_channel_allocator->get_receiver_channel_number_of_slots(vc, i),
+                     credit_each_slot,
+                     single_source});
             }
         }
         TT_FATAL(

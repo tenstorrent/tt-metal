@@ -9,7 +9,9 @@
 //
 // assign_transaction_ids() is a pure function of each channel's final slot count and whether the router credits it
 // slot by slot (the caller decides when). Per channel it returns the group size, the number of IDs and the first ID:
-//   1. Group size: 1 for a channel credited slot by slot; else 1 / 2 / 4 for < 8 / 8-15 / >= 16 slots.
+//   1. Group size: 1 for a channel credited slot by slot; else 1 / 2 / 4 for < 8 / 8-15 / >= 16 slots, and 8 for a
+//      single-source channel of >= 32 slots (no per-slot source record to fit in a word, and half the completion work
+//      per packet).
 //      Groups = ceil(slots / group size).
 //   2. If every channel's groups fit in the IDs, each group gets its own.
 //   3. Otherwise the largest count shrinks until they fit (a power of 2 halves, any other count rounds down to one). A
@@ -31,11 +33,13 @@ inline constexpr std::size_t noc_transaction_ids = 16;  // NOC_MAX_TRANSACTION_I
 struct ReceiverChannel {
     std::size_t slots = 0;
     bool credit_each_slot = false;  // the router credits this channel slot by slot (rule 1)
+    // Every packet comes from one remote sender channel (the router has one sender channel): rule 1's groups of 8.
+    bool single_source = false;
 };
 
 // A receiver channel's transaction IDs.
 struct ChannelIds {
-    std::size_t group_size = 1;  // slots per completion group: 1, 2 or 4
+    std::size_t group_size = 1;  // slots per completion group: 1, 2, 4 or 8 (single source)
     std::size_t groups = 0;      // ceil(slots / group_size)
     std::size_t num_ids = 0;     // IDs in the channel's range; fewer than groups: shared by mask (a power of 2)
     std::size_t start = 0;       // the range's first ID
