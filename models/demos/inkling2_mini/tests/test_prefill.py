@@ -83,7 +83,7 @@ def test_prefill_code1500(device):
 
     # decode after prefill; the prefills of new lengths come after the capture
     p0 = torch.load(GOLDEN / "prompt0" / "input_ids.pt")[0].tolist()
-    gen = Generator(model)
+    gen = Generator(model, overlap=False)  # prefill runs between capture and release
     gen.capture()
     last = pf.prefill(p0)
     toks = [int(last[-1].argmax())]

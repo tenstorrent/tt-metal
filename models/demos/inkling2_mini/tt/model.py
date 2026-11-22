@@ -222,6 +222,7 @@ class Inkling2Model:
         self.vocab_mask = ttnn.from_torch(mask, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
         del g, emb
 
+        self.overlap = None  # decode weight staging (tt/mk/overlap.py), set by Generator.capture .. release
         self.layers = []
         for L in range(N_LAYERS):
             lroot = (layer_roots or {}).get(L, root)

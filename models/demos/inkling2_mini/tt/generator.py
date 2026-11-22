@@ -7,24 +7,41 @@ v1 prefill = decode token by token (design.md §6)."""
 
 from __future__ import annotations
 
+import os
 import time
 
 import ttnn
 from models.demos.inkling2_mini.tt.residual import ShortConv
 
+# Weight staging (tt/mk/overlap.py) from capture() to release(); INKLING_OVERLAP=0 turns it off (A/B runs).
+# Decode only: its staging tensor holds ~535 KB of L1 on every core, which prefill programs need, so a session that
+# runs Inkling2Prefill between capture() and release() builds Generator(model, overlap=False).
+# shortcut: such sessions decode without the staging (~0.47 ms/token); upgrade: free and re-capture around prefill.
+OVERLAP = os.environ.get("INKLING_OVERLAP", "1") != "0"
+
 
 class Generator:
-    def __init__(self, model):
+    def __init__(self, model, overlap=None):
         self.model = model
+        self.use_overlap = OVERLAP if overlap is None else overlap
         self.device = model.device
         self.trace = None  # [phase] -> trace id
         self.out = None  # [phase] -> output dict
+        self.overlap = None  # tt/mk/overlap.Overlap while installed (capture .. release)
 
     def capture(self):
         """Compile eagerly once (program cache), then capture one full decode step per conv phase."""
         m = self.model
         m.set_inputs(0, 0)
         m.step()  # compile
+        if self.use_overlap and self.overlap is None:
+            # stage the next app's w_all into L1 during the single-core residual programs (tt/mk/overlap.py); the
+            # attach pattern is periodic from the 2nd eager step on, which the capture needs
+            from models.demos.inkling2_mini.tt.mk.overlap import install
+
+            self.overlap = m.overlap = install(m)
+            m.step()
+            m.step()
         ttnn.synchronize_device(self.device)
         self.trace, self.out = [], []
         for ph in range(ShortConv.PHASES):
@@ -38,6 +55,9 @@ class Generator:
         for t in self.trace or []:
             ttnn.release_trace(self.device, t)
         self.trace = None
+        if self.overlap is not None:
+            self.overlap.uninstall(self.model)
+            self.overlap = self.model.overlap = None
 
     def decode(self, token, pos, traced=True):
         """One step. Returns device result dict (logits, token)."""

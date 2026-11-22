@@ -1126,6 +1126,11 @@ class Inkling2Prefill:
         tensor: [len, 200058] if logits_all else [1, 200058] (last position). chunk: tokens per pass (default
         self.chunk, at most self.chunk)."""
         m = self.m
+        if getattr(m, "overlap", None) is not None:
+            raise RuntimeError(
+                "decode weight staging is on (Generator.capture): its L1 tensor clashes with prefill programs; "
+                "use Generator(model, overlap=False) in sessions that prefill between capture() and release()"
+            )
         L = len(ids)
         assert 0 < L <= m.max_ctx
         chunk = chunk or self.chunk
