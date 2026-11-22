@@ -7,6 +7,7 @@ v1 prefill = decode token by token."""
 
 from __future__ import annotations
 
+import os
 import time
 
 import ttnn
@@ -17,10 +18,15 @@ from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv as ShortConv
 # Decode only: its staging tensor holds ~535 KB of L1 on every core, which prefill programs need, so a session that
 # runs Inkling2Prefill between capture() and release() builds Generator(model, overlap=False).
 # shortcut: such sessions decode without the staging (~0.47 ms/token); upgrade: free and re-capture around prefill.
+# experts=True (default: INKLING_EXPERT_PREFETCH=1) also streams each MoE step's guessed experts into L1 ahead of it
+# (tt/mk/expert_overlap.py; needs a PF-layout cache, ~0.47 ms/token at 4K). Once per process: its 300 KB L1 ring is
+# not given back by release().
 class Generator:
-    def __init__(self, model, overlap=True):
+    def __init__(self, model, overlap=True, experts=None):
         self.model = model
         self.use_overlap = overlap
+        self.use_experts = os.environ.get("INKLING_EXPERT_PREFETCH") == "1" if experts is None else experts
+        self.experts = None  # tt/mk/expert_overlap.ExpertOverlap while installed
         self.device = model.device
         self.trace = None  # [phase] -> trace id
         self.out = None  # [phase] -> output dict
@@ -37,6 +43,10 @@ class Generator:
             from models.demos.inkling2_mini.tt.mk.overlap import install
 
             self.overlap = m.overlap = install(m)
+            if self.use_experts:
+                from models.demos.inkling2_mini.tt.mk.expert_overlap import ExpertOverlap
+
+                self.experts = ExpertOverlap(m)
             m.step()
             m.step()
         ttnn.synchronize_device(self.device)
@@ -52,6 +62,9 @@ class Generator:
         for t in self.trace or []:
             ttnn.release_trace(self.device, t)
         self.trace = None
+        if self.experts is not None:
+            self.experts.uninstall(self.model)
+            self.experts = None
         if self.overlap is not None:
             self.overlap.uninstall(self.model)
             self.overlap = self.model.overlap = None
