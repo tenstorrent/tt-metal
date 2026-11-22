@@ -254,7 +254,8 @@ card:
       logged warning).
     - `batch` has no speculative decoding yet (DFlash2 for several users is planned).
     - `batch`: a request with presence / frequency / repetition penalties or logprobs sends the whole decode step to
-      host sampling for every user in it.
+      host sampling for every user in it: a 16-user step goes from 27.9 to about 62 ms (one penalized request) or 68 ms
+      (one logprobs request).
     - `batch` fits the users' contexts in a 1,408,000-token KV pool; requests that do not fit wait.
     - No prefix caching: a repeated long prompt is prefilled again (131,072 tokens: about 21 s for one user).
     - On an earlier test machine with a failed fan, one card dropped off PCIe under heavy 32-request prefill;
