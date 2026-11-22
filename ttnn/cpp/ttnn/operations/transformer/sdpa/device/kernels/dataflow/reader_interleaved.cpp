@@ -117,6 +117,69 @@ FORCE_INLINE void rel_read_rows(
     noc.async_read_barrier();
 }
 
+#ifdef SDPA_REL_TILIZE
+// Skewed layout, compute tilizes: one row-major [32, kc] bias block for global Q tile row q_tile and the K chunk at
+// key k0. Row r's bias for keys k0 .. sits at columns C0 .. of its skewed row (C0 = W - q_tile * 32 - off + k0, the
+// same for every row, 64 B aligned), so each row is one DMA; then only the out-of-band entries are stored: d < 0
+// and keys past the valid ones masked, d >= W zero (masked past a sliding window).
+template <uint32_t kc, uint32_t window, typename Reader>
+FORCE_INLINE void rel_rm_block(
+    Noc& noc,
+    const Reader& rel_reader,
+    uint32_t rel_page0,
+    uint32_t q_tile,
+    uint32_t k0,
+    uint32_t valid_k,
+    bool q_valid,
+    uint32_t blk) {
+    constexpr int32_t W = static_cast<int32_t>(kRelW);
+    constexpr int32_t row_cols = W + 32;
+    volatile tt_l1_ptr uint16_t* b = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(blk);
+    if (!q_valid) {
+        volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(blk);
+        for (uint32_t i = 0; i < 32 * kc / 2; ++i) {
+            w[i] = uint32_t{kRelMasked} << 16 | kRelMasked;
+        }
+        return;
+    }
+    const int32_t C0 = W - static_cast<int32_t>(q_tile * 32 + kRelQOff) + static_cast<int32_t>(k0);
+    const int32_t y_lo = C0 < 0 ? 0 : C0;
+    const int32_t y_hi = C0 + static_cast<int32_t>(kc) > row_cols ? row_cols : C0 + static_cast<int32_t>(kc);
+    if (y_lo < y_hi) {
+        for (uint32_t r = 0; r < 32; ++r) {
+            noc.async_read(
+                rel_reader,
+                CoreLocalMem<uint32_t>(blk + r * kc * 2 + (y_lo - C0) * 2),
+                (y_hi - y_lo) * 2,
+                {.page_id = rel_page0 + q_tile * 32 + r, .offset_bytes = static_cast<uint32_t>(y_lo) * 2},
+                {});
+        }
+        noc.async_read_barrier();
+    }
+    asm volatile("" ::: "memory");
+    for (uint32_t r = 0; r < 32; ++r) {
+        const int32_t p = static_cast<int32_t>(q_tile * 32 + r + kRelQOff) - static_cast<int32_t>(k0);  // d at c = 0
+        volatile tt_l1_ptr uint16_t* row = b + r * kc;
+        // c > p: d < 0, masked (also keys past valid_k)
+        int32_t c_mask = p + 1 < 0 ? 0 : p + 1;
+        const int32_t c_valid = static_cast<int32_t>(valid_k) - static_cast<int32_t>(k0);
+        if (c_valid < c_mask) {
+            c_mask = c_valid < 0 ? 0 : c_valid;
+        }
+        for (int32_t c = c_mask; c < static_cast<int32_t>(kc); ++c) {
+            row[c] = kRelMasked;
+        }
+        // c <= p - W: d >= W, no bias (or masked past the window)
+        const int32_t c_far = p - W + 1;  // columns [0, c_far)
+        const int32_t c_end = c_far > c_mask ? c_mask : c_far;
+        for (int32_t c = 0; c < c_end; ++c) {
+            row[c] = (window > 0 && p - c >= static_cast<int32_t>(window)) ? kRelMasked : uint16_t{0};
+        }
+    }
+    asm volatile("" ::: "memory");
+}
+#endif
+
 // Fill one bf16 mask tile at `tile` for global Q tile q_tile and K tile k_tile.
 template <uint32_t window>
 FORCE_INLINE void rel_fill_tile(
@@ -1062,8 +1125,6 @@ void kernel_main() {
                     for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
                         const uint32_t global_q_tile = q_chunk * Sq_chunk_t + row;
                         const bool q_valid = !use_padded_mask || (global_q_tile < valid_Sqt);
-                        cb_mask.reserve_back(Sk_chunk_t);
-                        uint32_t mask_write_ptr = cb_mask.get_write_ptr();
 #ifdef SDPA_REL_BIAS
                         {
                             // No bias for this K chunk at all (every key >= W behind the chunk's first query): no
@@ -1075,6 +1136,28 @@ void kernel_main() {
                                 break;
                             }
                         }
+#ifdef SDPA_REL_TILIZE
+                        {
+                            // compute tilizes this row-major block into the mask CB
+                            CircularBuffer cb_rel_rm(cb_id_rel_scratch);
+                            cb_rel_rm.reserve_back(Sk_chunk_t);
+                            rel_rm_block<Sk_chunk_t * tt::constants::TILE_HEIGHT, sliding_window_size>(
+                                noc,
+                                rel_reader,
+                                (nb * NQH + nq) * valid_Sqt * tt::constants::TILE_HEIGHT,
+                                global_q_tile,
+                                k_chunk * Sk_chunk_t * tt::constants::TILE_HEIGHT,
+                                valid_Skt * tt::constants::TILE_HEIGHT,
+                                q_valid,
+                                cb_rel_rm.get_write_ptr());
+                            cb_rel_rm.push_back(Sk_chunk_t);
+                            continue;
+                        }
+#endif
+#endif
+                        cb_mask.reserve_back(Sk_chunk_t);
+                        uint32_t mask_write_ptr = cb_mask.get_write_ptr();
+#ifdef SDPA_REL_BIAS
                         if (q_valid) {
                             const uint32_t scratch = (CircularBuffer(cb_id_rel_scratch).get_write_ptr() + 63) & ~63u;
                             rel_read_rows<Sk_chunk_t * tt::constants::TILE_HEIGHT>(

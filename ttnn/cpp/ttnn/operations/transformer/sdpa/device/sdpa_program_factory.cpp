@@ -1738,7 +1738,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         const bool skewed = operation_attributes.rel_skewed;
         defines_map["SDPA_REL_W"] = std::to_string(rel_shape[3] - (skewed ? TILE_WIDTH : 0));
         if (skewed) {
+            // the reader DMAs row-major [32, Sk_chunk] bias blocks and compute tilizes them into the mask CB
             defines_map["SDPA_REL_SKEW"] = "1";
+            defines_map["SDPA_REL_TILIZE"] = "1";
         }
         defines_map["SDPA_REL_Q_OFF"] = std::to_string(k_shape[2] - q_shape[2]);
         defines_map["SDPA_REL_ROW_BYTES"] = std::to_string(rel_row_bytes);
@@ -1867,7 +1869,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     }
     const uint32_t block_map_stick_size = allocate_mask_block_map_cb(tensor_args, cb_ids, allocate_cb);
     if (use_rel_bias) {
-        cb_ids.rel_scratch = allocate_cb(rel_row_bytes * TILE_HEIGHT + 64, 1, tt::DataFormat::Float16_b);
+        // skewed: the reader builds every row of a K chunk's bias before it pushes that chunk's K, so the row-major
+        // blocks need room for two whole chunks (as the mask CB), else reader and compute wait on each other
+        cb_ids.rel_scratch =
+            operation_attributes.rel_skewed
+                ? allocate_cb(TILE_HEIGHT * TILE_WIDTH * 2, 2 * Sq_chunk_t * Sk_chunk_t, tt::DataFormat::Float16_b)
+                : allocate_cb(rel_row_bytes * TILE_HEIGHT + 64, 1, tt::DataFormat::Float16_b);
         if (cb_ids.windowed_k_range == cb_ids.q_in) {
             cb_ids.windowed_k_range = allocate_cb(16, 2, tt::DataFormat::Int32);
         }
@@ -2048,6 +2055,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = compute_compile_time_args;
     compute_desc.defines = defines;
+    if (use_rel_bias && operation_attributes.rel_skewed) {
+        compute_desc.defines.emplace_back("SDPA_REL_RM_CB", std::to_string(cb_ids.rel_scratch));
+    }
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

@@ -24,6 +24,9 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
+#ifdef SDPA_REL_TILIZE
+#include "api/compute/tilize.h"
+#endif
 #include "api/dataflow/circular_buffer.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
@@ -1941,6 +1944,24 @@ void sdpa_inner_loop(
             }
 
             if (apply_mask) {
+#ifdef SDPA_REL_TILIZE
+                {
+                    // rel bias, skewed layout: the reader pushed one row-major [32, Sk_chunk] block per Q tile row
+                    CircularBuffer cb_rel_rm(SDPA_REL_RM_CB);
+                    CircularBuffer cb_mask(cb_mask_in);
+                    reconfig_data_format_srca(SDPA_REL_RM_CB);
+                    pack_reconfig_data_format(cb_mask_in);
+                    tilize_init(SDPA_REL_RM_CB, Sk_chunk_t, cb_mask_in);
+                    for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
+                        cb_rel_rm.wait_front(Sk_chunk_t);
+                        cb_mask.reserve_back(Sk_chunk_t);
+                        tilize_block(SDPA_REL_RM_CB, Sk_chunk_t, cb_mask_in);
+                        cb_mask.push_back(Sk_chunk_t);
+                        cb_rel_rm.pop_front(Sk_chunk_t);
+                    }
+                    tilize_uninit(SDPA_REL_RM_CB, cb_mask_in);
+                }
+#endif
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
                 if constexpr (lightweight_mask_enabled) {
