@@ -94,8 +94,8 @@ FORCE_INLINE void setup_prefetcher_pipe_interface(
         iface.fifo_limit_page_aligned = fifo_limit;
     } else {
         volatile tt_l1_ptr uint32_t* xy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(noc_xy_addr);
-        const uint32_t sender_noc_x = xy[0];
-        const uint32_t sender_noc_y = xy[1];
+        const uint32_t sender_noc_x = load_prefetcher_pipe_config_word(xy, 0);
+        const uint32_t sender_noc_y = load_prefetcher_pipe_config_word(xy, 1);
 
         CrossNodeReceiverDFBInterface& iface = interface.receiver;
         iface.config_ptr = config_page_ptr;

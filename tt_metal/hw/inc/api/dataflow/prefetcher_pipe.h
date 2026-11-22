@@ -1221,7 +1221,8 @@ private:
         const CrossNodeSenderDFBInterface& iface, uint32_t receiver_idx, uint8_t noc) {
         volatile tt_l1_ptr uint32_t* xy =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + 2 * receiver_idx;
-        return noc_address_backend::worker_address(xy[0], xy[1], 0, noc);
+        return noc_address_backend::worker_address(
+            load_prefetcher_pipe_config_word(xy, 0), load_prefetcher_pipe_config_word(xy, 1), 0, noc);
     }
 
     // Active pipe-consumer lanes P (kernel-config slot, cached in the ctor).
