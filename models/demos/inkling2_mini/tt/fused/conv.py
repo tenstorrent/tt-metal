@@ -56,8 +56,13 @@ class FusedShortConv:
         in_args = (
             F.input_args(x) + [s.buffer_address() for s in slots[1:]] + [self.taps.buffer_address()] + F.input_args(res)
         )
-        reader = F.kernel("conv_reader.cpp", ttnn.ReaderConfigDescriptor(), dict(ntc=ntc, pages=T), in_args[:9])
         cb_out = 17
+        reader = F.kernel(
+            "conv_reader.cpp",
+            ttnn.ReaderConfigDescriptor(),
+            dict(ntc=ntc, pages=T, row_out=int(row_out), cb_out=cb_out),
+            in_args[:9] + [out.buffer_address(), F.tile_bytes(out_dtype), F.ES[out_dtype]],
+        )
         writer = F.kernel(
             "conv_writer.cpp",
             ttnn.WriterConfigDescriptor(),

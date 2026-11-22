@@ -71,7 +71,7 @@ void kernel_main() {
             rowio::write_pages(out_dense, out_tile, 0, T, get_read_ptr(cb_out));
         }
         if constexpr (row_out) {
-            rowio::scatter_row(out_addr, out_tile, out_es, ntc, 0, get_read_ptr(cb_out));
+            rowio::scatter_row(out_addr, out_tile, out_es, ntc, 0, get_read_ptr(cb_out), ntc / 2, ntc);  // reader: rest
         }
         noc_async_write_barrier();
     }

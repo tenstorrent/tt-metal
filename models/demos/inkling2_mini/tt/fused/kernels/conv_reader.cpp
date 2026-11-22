@@ -45,4 +45,15 @@ void kernel_main() {
     cb_push_back(cb_x, T);
     cb_push_back(cb_taps, 4 * T);
     cb_push_back(cb_ring, 3 * T);
+
+    // first half of the output row scatter (the writer does the rest)
+    constexpr uint32_t row_out = get_named_compile_time_arg_val("row_out");
+    if constexpr (row_out) {
+        constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
+        const uint32_t out_addr = get_arg_val<uint32_t>(9), out_tile = get_arg_val<uint32_t>(10);
+        const uint32_t out_es = get_arg_val<uint32_t>(11);
+        cb_wait_front(cb_out, T);
+        rowio::scatter_row(out_addr, out_tile, out_es, ntc, 0, get_read_ptr(cb_out), 0, ntc / 2);
+        noc_async_write_barrier();
+    }
 }
