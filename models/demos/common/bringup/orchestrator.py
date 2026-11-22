@@ -1874,18 +1874,19 @@ class Orchestrator:
         """F122: the pick's A/B mode: tasks.yaml ab_mode, else the spec's perf.ab_mode (defaults.yaml: quick)."""
         return (task.get("ab_mode") or self.spec.get("perf.ab_mode") or "full") == "quick"
 
-    def ab_items(self, task: dict) -> list[tuple[str, str, str, dict]]:
+    def ab_items(self, task: dict, trim: bool = True) -> list[tuple[str, str, str, dict]]:
         """The A/B report's runs as (name, kind, command, extra env): each frozen test command of the gate (as the gate
         runs it, gate_command), the ladder at every A/B rung, and the plain profile (with F114's clean wall run)."""
         # FIX.25: the model determinism check on every side (first in the side's process: core/batch.phase); the
         # accept gate needs it on the 'on' side (gate_on), quick or full. F281: not while a resident runner serves the
         # spec: the check needs a cold process, which the accept gate runs once (not one per side)
-        det = [] if self.resident_serves() else [("determinism", "determinism", B.DETERMINISM_CMD, {})]
+        det = [] if (trim and self.resident_serves()) else [("determinism", "determinism", B.DETERMINISM_CMD, {})]
         if self.ab_quick(task):  # F122: one process a side
             quick = f"BRINGUP_QUICK=1 BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --no-precompile --run-all {PROFILE_TEST}"
             if not any(DETERMINISM_IN.search(c) for _, c in gate_units(task)):  # not a model-level device gate
                 det = []
-            return self.ab_timing_only(det + [("quick", "quick", quick, {})] + self.ab_position_items(task))
+            q = det + [("quick", "quick", quick, {})] + self.ab_position_items(task)
+            return self.ab_timing_only(q) if trim else q
         segs = [x.strip() for x in gate_command(task).split("&&") if x.strip()]
         tests = [x for x in segs if "test_profile.py" not in x and "test_ladder.py" not in x]
         if any(B.DETERMINISM_TEST in x for x in tests):  # the gate's own (injected) check: the determinism item
@@ -1897,7 +1898,7 @@ class Orchestrator:
         items += [(r, "ladder", ladder, {"BRINGUP_RUNG": r}) for r in self.ab_rungs(task)]
         prof = " && ".join(re.sub(r"\bBRINGUP_PROFILE_OPS=\S+\s*", "", x) for x in segs if "test_profile.py" in x)
         items += ([("profile", "profile", prof, {})] if prof else []) + self.ab_position_items(task)
-        return self.ab_timing_only(items)
+        return self.ab_timing_only(items) if trim else items
 
     @staticmethod
     def ab_test_names(tests: list[str]) -> list[tuple[str, str]]:
@@ -2476,6 +2477,13 @@ class Orchestrator:
             return {"metrics": got, "source": f"quick A/B {side / 'quick'}; full gate pending", "partial": True}
         kept = json.loads(stamp_file.read_text())
         code = self.ab_code_key(task)
+        # F299 (DeepSeek-V4.1 PB.BM / PB.KR, 2026-11-22): while a resident runner serves the spec, an A/B side is timing
+        # only (F285: accuracy units, the ladder and determinism are left to the accept gate). Reusing that side as the
+        # accept gate skipped the accuracy units and wrote results/<task>.json without their metrics: the gate then
+        # failed MISSING on them. Reuse only a side that covered every unit of the gate; else the gate runs (its passed
+        # units are still kept by their own records, F169)
+        if {n for n, *_ in self.ab_items(task, trim=False)} - {n for n, *_ in self.ab_items(task)}:
+            return None
         if kept.get("version") == 2:  # F116: per-run stamps; every run of the report's 'on' side, on this code
             items = kept.get("items", {})
             want = [n for n, _, _, _ in self.ab_items(task)]
