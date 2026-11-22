@@ -77,7 +77,7 @@ class FusedShortConv:
         compute = F.kernel(
             "conv_compute.cpp",
             F.compute_config(fp32_cbs + ([18] if x.dtype == ttnn.float32 else [])),
-            dict(pages=T, has_resid=int(resid is not None), stage2=stage2),
+            dict(pages=T, has_resid=int(resid is not None), stage2=stage2, tail=self.c - (T - 1) * F.PAGE),
         )
         cbs = [
             F.cb(0, x_in, T),

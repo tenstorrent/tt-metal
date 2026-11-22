@@ -33,6 +33,8 @@ void kernel_main() {
     constexpr uint32_t T = get_named_compile_time_arg_val("pages");
     constexpr uint32_t has_resid = get_named_compile_time_arg_val("has_resid");
     constexpr uint32_t stage2 = get_named_compile_time_arg_val("stage2");  // 0: yr is the output
+    constexpr uint32_t tail = get_named_compile_time_arg_val("tail");      // elements in the last page
+    constexpr VectorMode tail_mode = tail <= 256 ? VectorMode::None : tail <= 512 ? VectorMode::R : VectorMode::RC;
     constexpr uint32_t cb_x = 0, cb_ring = 1, cb_taps = 2, cb_resid = 3, cb_xf = 16, cb_y = 17, cb_yr = 18;
 
     compute_kernel_hw_startup(cb_x, cb_xf);
@@ -42,18 +44,21 @@ void kernel_main() {
     {
         DeviceZoneScopedN("C_conv");
         for (uint32_t t = 0; t < T; ++t) {
+            // the last page holds only C - (T - 1) * 1024 elements: SFPU on the faces that hold them (the pad
+            // faces keep the copied taps, which are zero there)
+            const VectorMode vm = t + 1 < T ? VectorMode::RC : tail_mode;
             tile_regs_acquire();
             load(cb_x, t, 0);
             load(cb_taps, t, 1);
             mul_binary_tile_init();
-            mul_binary_tile(0, 1, 1);
+            mul_binary_tile(0, 1, 1, vm);
             for (uint32_t k = 1; k < 4; ++k) {
                 load(cb_ring, (k - 1) * T + t, 2);
                 load(cb_taps, k * T + t, 3);
                 mul_binary_tile_init();
-                mul_binary_tile(2, 3, 2);
+                mul_binary_tile(2, 3, 2, vm);
                 add_binary_tile_init();
-                add_binary_tile(1, 2, 1);
+                add_binary_tile(1, 2, 1, vm);
             }
             tile_regs_commit();
             tile_regs_wait();
