@@ -1319,3 +1319,6 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   score's compute kernel (fork option); thresholds re-measured (packed ~196608 keys). new tok/s off -> on: 4x2k 1M 57.9k ->
   60.9k (+5.3 %), 524k 65.3 -> 67.1k (+2.8 %); single 8192 1M 66.8 -> 68.6k (+2.7 %), 524k +1.2 %; 139k within noise. Next:
   port to model_bringup (MB.8, threshold re-measured at 5120).
+- 07:05 back on batching (model_bringup: MB.8 committed 8ea94892532; its 5120 ladder 69.1k .. 61.6k; 16 commits to push).
+  OWNER: the full ladder with every row a real token: QUEUED PB.LAD (tests only: new case 4x1792s = 4 x 1792 + a 1024 split;
+  ladder for single 8192, chip-aligned 4x2k, 4x1792s at 51200 .. 1024000, steady + resumed; cold no-rebuild).
