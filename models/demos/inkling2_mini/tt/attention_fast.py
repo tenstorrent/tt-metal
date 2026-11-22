@@ -38,6 +38,7 @@ from models.demos.inkling2_mini.tt.attention import (
     EPS,
     GROUPS,
     HEAD_DIM,
+    HIDDEN,
     KV0,
     N_HEADS,
     N_KV,
@@ -52,7 +53,9 @@ from models.demos.inkling2_mini.tt.attention import (
     Inkling2Attention,
     _DramShardedLinear,
 )
+from models.demos.inkling2_mini.tt.fused import common as F
 from models.demos.inkling2_mini.tt.fused.attn import AttnNear, AttnOut, AttnPrep, AttnWindow
+from models.demos.inkling2_mini.tt.fused.attn_wo import AttnWo
 
 V_WIDTH = 160  # v(128) + mass column block
 KV_WIDTH = V_WIDTH + HEAD_DIM  # 288
@@ -212,6 +215,8 @@ class Inkling2AttentionFast(Inkling2Attention):
             conv_scale=self.conv_scale,
         )
         self.out = AttnOut(self.device, self.w_o.act_mem)
+        # o-projection + post-attention conv in one program (decode(post=...))
+        self.wo = AttnWo(self.w_o.bank, HIDDEN) if self.w_o.bank is not None else None
         self.near = AttnNear(self.device) if self.is_global else None
         # the prefetcher's projection takes an interleaved input: keep the op-by-op window there
         self.window = (
@@ -293,12 +298,14 @@ class Inkling2AttentionFast(Inkling2Attention):
         return ttnn.typecast(ttnn.multiply(num, ttnn.reciprocal(den)), ttnn.bfloat16)
 
     # ---------------------------------------------------------------- decode
-    def decode(self, xq, state, positions, xk=None, xv=None):
-        """Same contract as `Inkling2Attention.decode`; `positions` is a `DecodePositionsFast`."""
+    def decode(self, xq, state, positions, xk=None, xv=None, post=None):
+        """Same contract as `Inkling2Attention.decode`; `positions` is a `DecodePositionsFast`.
+        post = (FusedShortConv, ring, phase, resid or None): returns conv_add(a, ring, phase, resid, fp32,
+        row_out=False) instead of a; the fused path runs that conv inside the o-projection program."""
         xk = xq if xk is None else xk
         xv = xq if xv is None else xv
         if not self.FUSED:
-            return self._decode_ops(xq, state, positions, xk, xv)
+            return self._post(self._decode_ops(xq, state, positions, xk, xv), post)
         if self.window is None:
             proj, mode = self._window(state, xq, xk, xv)
         else:
@@ -321,7 +328,7 @@ class Inkling2AttentionFast(Inkling2Attention):
                 program_config=self.far_cfg,
                 compute_kernel_config=self.hifi4,
             )
-            return self.w_o(self.out(far, proj, (o_near, r, valid)), ttnn.bfloat16, self.mm_cfg)
+            return self._out_proj(self.out(far, proj, (o_near, r, valid)), post)
         attn = ttnn.transformer.scaled_dot_product_attention_decode(
             q,
             state.k_ring,
@@ -333,7 +340,21 @@ class Inkling2AttentionFast(Inkling2Attention):
             program_config=self.local_cfg,
             compute_kernel_config=self.hifi4,
         )
-        return self.w_o(self.out(attn, proj), ttnn.bfloat16, self.mm_cfg)
+        return self._out_proj(self.out(attn, proj), post)
+
+    @staticmethod
+    def _post(a, post):
+        if post is None:
+            return a
+        conv, ring, phase, resid = post
+        return conv.conv_add(a, ring, phase, resid, ttnn.float32, row_out=False)
+
+    def _out_proj(self, gated, post):
+        if post is not None and self.wo is not None:
+            resid = post[3]
+            if resid is None or (F.twin(resid) is not None and F.twin(resid)[1] == 1):
+                return self.wo(gated, conv=post)
+        return self._post(self.w_o(gated, ttnn.bfloat16, self.mm_cfg), post)
 
     def _decode_ops(self, xq, state, positions, xk, xv):
         q, rel, gate, sink, k, v = self._project(state, positions, xq, xk, xv)  # E3 seam

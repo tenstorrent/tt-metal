@@ -303,14 +303,13 @@ class Inkling2Model:
         xs = lay.norm(x)  # one bf16 row per input row (row i uses norm min(i, n_norms - 1))
         qn, kn, vn = xs if len(xs) == 3 else xs * 3
 
-        a = lay.attn.decode(qn, attn_st, self.positions, kn, vn)  # bf16 row
+        # resid = [h +] bf16(conv(a)), fp32 (no row form), a = attention output; the fused attention runs the conv
+        # inside its o-projection program
+        post = (lay.conv_attn, conv_a, self.phase, None if lay.boundary else h)
+        resid = lay.attn.decode(qn, attn_st, self.positions, kn, vn, post=post)
         if lay.boundary:
             stack = self.frows.seal(stack, h, n_sealed)  # free: the attn-res above left rms(h) in that row
             n_sealed += 1
-            resid = lay.conv_attn.conv_add(a, conv_a, self.phase, out_dtype=ttnn.float32, row_out=False)
-        else:  # h + bf16(conv(a)), fp32
-            resid = lay.conv_attn.conv_add(a, conv_a, self.phase, h, ttnn.float32, row_out=False)
-        # resid feeds only fused ops (mlp attn-res, conv_mlp's resid), hence no row form (row_out=False above)
 
         # with messages m feeds only FusedMessageGate (no row form); otherwise the MoE reads its rows
         m = lay.mlp_res(stack, resid, n_sealed + 1, row_out=msgs is None)[0]
