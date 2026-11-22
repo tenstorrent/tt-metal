@@ -2910,3 +2910,24 @@ A model test file may now declare ``BATCH_MAX_SEQ = <int>``. core/batch.hints lo
 (never past deploy.seq), so the determinism check, whichever unit loads first, loads it once at that length (F283's one
 load). Selftest: selftest/test_resident_gate.py::test_a_plans_model_is_loaded_for_a_declared_max_seq. Cost: RoPE tables
 of 114688 positions instead of 64512 on the accuracy load of a gate that holds such a test.
+
+## OPEN (2026-11-22, DeepSeek-V4.1 PB.BM): an all-kept final gate reported its accuracy metrics MISSING
+The accept gate reused all 7 units (0 s) and failed with MISSING on the oracle / determinism / selection-set metrics,
+though results/PB.BM.json held them at 23:48 and every unit had passed (the agent's gate --check at 23:35). A kept unit
+merges delta[u]["metrics"] (core/gate.py, the _kept branch); the inference is that the accuracy units' delta records
+lacked metrics at 23:50, cause not established: `gate --continue --rerun <the 4 units>` re-recorded them (then PASS)
+and overwrote the evidence. No blanket guard: 51 legitimate PASS records carry no metrics (contract tests). NEXT TIME:
+copy runs/<run>/delta/<task>.json (and results/<task>.json) before any re-run, then compare the records' metrics with
+the MISSING list.
+
+## F299 (2026-11-22, DeepSeek-V4.1 PB.BM / PB.KR): F105 reused a timing-only A/B side as the accept gate
+Cause of the OPEN entry above (found on PB.KR with the delta / results snapshot: every unit's delta record HAD its
+metrics). While a resident runner serves the spec an A/B side is timing only (F285: accuracy tests, ladder and the
+determinism check left to the accept gate), but orchestrator.ab_on_reuse (F105) accepted that side as the gate: the
+gate's units never ran and results/<task>.json was written from the side's metrics alone -> MISSING on every accuracy
+metric. Now ab_on_reuse returns None unless the side covered every gate unit (ab_items(task, trim=False) == the trimmed
+list); the accept gate then runs and keeps its passed units by their own records (F169). Selftest added to
+test_perf_ab.py (test_the_accept_runs_the_gate_when_the_ab_side_was_timing_only).
+OPEN: selftest/test_perf_ab.py has 15 failures in this checkout before F299 too (the fake runner's call dirs land under
+results/, not run_dir/ab: test_the_ab_report_runs_off_and_on_then_waits_for_the_owner's relative_to) - a harness
+regression from an earlier change, to bisect; F299 was verified end to end on PB.KR's accept instead.

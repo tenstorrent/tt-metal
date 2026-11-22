@@ -890,3 +890,20 @@ def test_ab_table_shows_gated_test_metrics(tmp_path):
     rows = o.ab_gated_rows(task, {"tests": {"t": {}}}, [("new", "on"), ("old", "off")], str)
     assert any("steady_wall_ms_p1 (t) | 93.4 | 108.1 | -14.7" in r for r in rows)
     assert not any("err_layer" in r for r in rows)
+
+
+def test_the_accept_runs_the_gate_when_the_ab_side_was_timing_only(mk, sandbox):
+    """F299 (DeepSeek-V4.1 PB.BM / PB.KR): with a resident runner serving the spec an A/B side measures timing only
+    (F285), so it never ran the gate's accuracy units; reusing it as the accept gate (F105) wrote results without their
+    metrics and the gate failed MISSING. Such a side is not reused: the accept gate runs."""
+    gate = (
+        f"BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all {LADDER} && TT_METAL_DEVICE_PROFILER=1 "
+        f"scripts/run_safe_pytest.sh --run-all --no-precompile {PROFILE}"
+    )
+    o = mk([pick(gate={"cmd": gate, "metrics": {"device_ms_experts": "< 10"}})], CHANGE)
+    assert o.run() == HUMAN, mk.lines
+    assert decide(o, "P.1", "accept") == 0
+    rec = o.led.state()["P.1"]["ab"]
+    assert o.ab_on_reuse(o.led.task("P.1"), rec) is not None  # a full side (no resident runner): reused, as F105
+    o.resident_serves = lambda: True  # the side now counts as timing only (the ladder is an accuracy item)
+    assert o.ab_on_reuse(o.led.task("P.1"), rec) is None
