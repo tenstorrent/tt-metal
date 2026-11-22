@@ -40,8 +40,17 @@ MAXS = 8  # slots per expert (256 rows); the down's A_g block (an expert with mo
 
 def max_slots(rows):
     """The slots of a rows-row pass: rows x 5 / 32 + 31 at most routed (each expert's last slot partly full) + the bias
-    slot, a multiple of 8 (X_g's 8 core rows); 72 up to 256 rows, 112 at 512, 192 at 1024."""
-    return max(MAX_SLOTS, -(-(rows * 5 // TILE + 32) // 8) * 8)
+    slot, a multiple of X_g's core rows (8; more than 256 rows: 10, xg_rows); 72 up to 256 rows, 120 at 512, 200 at
+    1024."""
+    m = 8 if rows <= 256 else 40
+    return max(MAX_SLOTS, -(-(rows * 5 // TILE + 32) // m) * m)
+
+
+def xg_rows(slots):
+    """X_g's (the gather's output) core rows: 10 (a 10 x 10 gather, 100 cores) when the slots divide by 10 (512 /
+    1024-row passes: batched DFlash 29.03 -> 28.91 ms per round at 128 users, 31.00 -> 30.89 at 256), else 8 (72 slots
+    up to 256 rows: the route op's one slot per core)."""
+    return 10 if slots % 10 == 0 else 8
 
 
 GROUP = 4  # gate|up in0 block (slots)
@@ -84,6 +93,7 @@ class GroupedMoE:
         assert rows % TILE == 0 and TILE <= rows <= 1024
         self.mesh, self.hidden, self.rows = mesh, hidden, rows
         self.S = max_slots(rows)
+        self.xr = xg_rows(self.S)
         self.gu_split = GU_SPLIT
         grid = mesh.compute_with_storage_grid_size()
         self.gx = grid.x
@@ -174,24 +184,24 @@ class GroupedMoE:
         # layer's down bias rows (copied by the route op) and Pw's columns of it the routing weights: the down bias
         # through the combine, no bias matmul and add per layer
         self.yg = zeros([1, 1, S, self.hidden], ttnn.bfloat8_b, ttnn.L1_MEMORY_CONFIG)
-        # X_g block sharded as the gather's 10 x 8 output blocks: a slot's row is 10 contiguous 9-tile runs, the gate|up
-        # reader loads it in 10 reads instead of 90 single-tile ones
+        # X_g block sharded as the gather's 10 x xr output blocks: a slot's row is 10 contiguous 9-tile runs, the
+        # gate|up reader loads it in 10 reads instead of 90 single-tile ones
         self.xg_mc = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1,
-            ttnn.ShardSpec(ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 7))]),
-                           [self.S // 8 * TILE, self.kt // 10 * TILE], ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, self.xr - 1))]),
+                           [self.S // self.xr * TILE, self.kt // 10 * TILE], ttnn.ShardOrientation.ROW_MAJOR),
         )  # fmt: skip
         self.xg_noc = [mesh.worker_core_from_logical_core(ttnn.CoreCoord(j, 0)).x for j in range(10)]
-        self.xg_noc += [mesh.worker_core_from_logical_core(ttnn.CoreCoord(0, i)).y for i in range(8)]
+        self.xg_noc += [mesh.worker_core_from_logical_core(ttnn.CoreCoord(0, i)).y for i in range(self.xr)]
 
     def _pass_configs(self, rows):
-        """The row-count-dependent matmul configs: gather [S x 32, rows] x [rows, hidden]: 10 x 8 cores, S / 8 x 9 output
-        tiles each; combine [rows, S x 32] x [S x 32, hidden]: 10 x gy cores (gy = rows / 32 up to 8), rows / 32 / gy x
+        """The row-count-dependent matmul configs: gather [S x 32, rows] x [rows, hidden]: 10 x xr cores, S / xr x 9
+        output tiles each; combine [rows, S x 32] x [S x 32, hidden]: 10 x gy cores (gy = rows / 32 up to 8), rows / 32 / gy x
         9 output tiles each, 8-tile K blocks."""
-        kt_r, pm = rows // TILE, self.S // 8
+        kt_r, pm = rows // TILE, self.S // self.xr
         # the gather's K blocks: all the rows up to 256; more rows: blocks small enough for the double-buffered in0
         bw = kt_r if kt_r <= 8 else max(d for d in range(1, 9) if kt_r % d == 0 and pm * d <= 56)
-        self.gather_pc = _pc2d(10, 8, bw, pm, self.kt // 10, 3)
+        self.gather_pc = _pc2d(10, self.xr, bw, pm, self.kt // 10, 3)
         gy = min(kt_r, 8)
         self.combine_pc = _pc2d(10, gy, 8, kt_r // gy, self.kt // 10, 3)
 
@@ -256,7 +266,8 @@ class GroupedMoE:
             kernel_source=str(KERNEL_DIR / "gmoe_route.cpp"), core_ranges=cores, compile_time_args=ct,
             runtime_args=[], common_runtime_args=addr[:4] + [a_.x, a_.y, a_.x, a_.y, b_.x, b_.y] + addr[4:],
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
-            defines=[("GMOE_KTH", str(self.kt)), ("GMOE_ROWS", str(self.rows)), ("GMOE_RPC", str(rpc))]
+            defines=[("GMOE_KTH", str(self.kt)), ("GMOE_ROWS", str(self.rows)), ("GMOE_RPC", str(rpc)),
+                     ("GMOE_XG_R", str(self.xr))]
             + ([("GMOE_CNT16", "1")] if self.rows >= 1024 else []),
         )  # fmt: skip
         scr = (self.rows * 32 + 64 + rpc * 32 + 2048 + rpc * 64 + 2 * (self.rows // TILE) * 2048 + 8 * E + 12 * 1088
@@ -306,7 +317,8 @@ class GroupedMoE:
                 kernel_source=str(KERNEL_DIR / "gmoe_gu_reader.cpp"), core_ranges=cores, compile_time_args=rct,
                 runtime_args=[], common_runtime_args=rca,
                 defines=[("GMOE_DEPTH", str(GU_DEPTH)), ("GMOE_INFLIGHT", str(GU_INFLIGHT)), ("GMOE_SPLIT", str(GU_SPLIT)), ("GMOE_XG_ARG", str(xg_arg)),
-                         ("GMOE_XG_SX", "10"), ("GMOE_XG_RS", str(self.S // 8))] + gmajor + mcast,
+                         ("GMOE_XG_SX", "10"), ("GMOE_XG_RS", str(self.S // self.xr)), ("GMOE_XG_R", str(self.xr))]
+                + gmajor + mcast,
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
             ),
             ttnn.KernelDescriptor(

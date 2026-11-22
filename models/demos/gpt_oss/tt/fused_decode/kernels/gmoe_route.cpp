@@ -307,7 +307,7 @@ void kernel_main() {
             }
         }
         for (uint32_t t = 0; t < RT; ++t) {
-            noc_async_write(p1t_l1 + t * tile, s_p1t.get_noc_addr(gmoe::xg_row(sl, MAX_SLOTS) * RT + t), tile);
+            noc_async_write(p1t_l1 + t * tile, s_p1t.get_noc_addr(gmoe::xg_row(sl, MAX_SLOTS, GMOE_XG_R) * RT + t), tile);
             if (sl == BIAS_SLOT) {
                 continue;  // (phase 1 wrote the W rows there)
             }

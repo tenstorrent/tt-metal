@@ -8,9 +8,9 @@
 // banks, alternating NOCs), and the two column tiles of the 32-row gate / up bias; GMOE_DEPTH units buffered, their
 // reads in flight together (dynamic NOC mode).
 //
-// GMOE_GU_MCAST: a core's first in0 block (a slot group's; expert units: a small expert's) multicast by the first core
-// of the run of cores starting with it (gmoe_mcast.hpp) instead of every core reading it from X_g; later blocks are read
-// as before.
+// GMOE_GU_MCAST: a core's first in0 block (a slot group's; expert units: a small expert's) multicast by the first
+// core of the run of cores starting with it (gmoe_mcast.hpp) instead of every core reading it from X_g; later blocks
+// are read as before.
 //
 // common runtime args: [plan table, xg, gate_up (relaid), gate_bias, up_bias, (GMOE_XG_ARG:) X_g's grid NOC x per
 // column, NOC y per row, (GMOE_PHYS_ARG, GMOE_GU_MCAST:) the core grid's NOC x per column (GX), NOC y per row]
@@ -144,7 +144,7 @@ void kernel_main() {
         // half on each NOC
         constexpr uint32_t SX = GMOE_XG_SX, CS = KT / SX, RS = GMOE_XG_RS;
         for (uint32_t i = 0; i < n; ++i) {
-            const uint32_t s = gmoe::xg_row(s0 + i, 8 * RS);  // (X_g's row tile of slot s0 + i)
+            const uint32_t s = gmoe::xg_row(s0 + i, GMOE_XG_R * RS, GMOE_XG_R);  // (X_g's row tile of slot s0 + i)
             const uint32_t ny = get_common_arg_val<uint32_t>(GMOE_XG_ARG + SX + s / RS);
             for (uint32_t j = 0; j < SX; ++j) {
                 const uint32_t nx = get_common_arg_val<uint32_t>(GMOE_XG_ARG + j);

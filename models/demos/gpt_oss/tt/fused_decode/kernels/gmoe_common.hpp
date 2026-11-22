@@ -139,10 +139,10 @@ inline void fine_unit(const Plan& p, uint32_t NU, uint32_t u, uint32_t& e, uint3
 }
 
 // X_g's row tile of slot s of S (the route op's P1T row tiles, so the gather's output): the slots dealt round robin
-// over X_g's 8 core rows (slot s in core row s % 8), so a slot group's GROUP slots are in GROUP different core rows and
+// over X_g's R core rows (slot s in core row s % R), so a slot group's GROUP slots are in GROUP different core rows and
 // the gate|up readers loading a group read from 4 x 10 cores, not one core row's 10 (its NOC links the hot spot: X_g
-// gate|up 202 -> 183 us at 256 rows, 237 -> 233 at 512). S is a multiple of 8.
-inline uint32_t xg_row(uint32_t s, uint32_t S) { return (s % 8) * (S / 8) + s / 8; }
+// gate|up 202 -> 183 us at 256 rows, 237 -> 233 at 512). S is a multiple of R (8, or 10: grouped_moe.py xg_rows).
+inline uint32_t xg_row(uint32_t s, uint32_t S, uint32_t R = 8) { return (s % R) * (S / R) + s / R; }
 
 // the meta page a reader passes to its compute / writer: [u0, u1, tiles[E], base[E]]
 constexpr uint32_t META_WORDS = 2 + 2 * E;
