@@ -159,7 +159,8 @@ to its repeated prompt.
 - `0193ea2fcca` review fixes (independent review found no confirmed bug): the planner falls back to all-gathered tables
   when an inbox slot exceeds one packet (large caches on small meshes); the plan's scratch holds at least a slot.
 - `33430bd1b3f`: a full layer whose cutoff is past its buffer (K3.1 layer 11) takes the plain gather path.
-- Determinism soak on the final tree: `test_sparse_mla_determinism` 3 x 6/6; sparse-MLA gate 6/6 (twice).
+- Determinism soak on the final tree: `test_sparse_mla_determinism` 14 x 6/6; sparse-MLA gate 6/6 (5 runs, incl. its
+  traced-vs-untraced check). The 2026-11-21 K3.1-warm traced-vs-untraced failure did not reproduce.
 - GLM serial REST pushes (shared layers): ~80 us each at 300-500k, ~4.5 ms/chunk total (~1%). Removing them needs the
   KV write path to deliver the current chunk's needed rows (or a dense gather of the chunk), not a faster push.
 
