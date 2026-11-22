@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/sparse_ring_sdpa.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 
 #include <utility>
 
@@ -34,7 +35,9 @@ ttnn::Tensor sparse_ring_sdpa(
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     uint32_t block_size,
     std::optional<uint32_t> q_blocks_per_pass,
-    const std::optional<ttnn::Tensor>& block_counts) {
+    const std::optional<ttnn::Tensor>& block_counts,
+    std::optional<SDPAPrecision> precision) {
+    detail::warn_ignored_compute_kernel_config(compute_kernel_config);
     auto output_tensors = ttnn::prim::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,  // AllGather input
@@ -55,7 +58,7 @@ ttnn::Tensor sparse_ring_sdpa(
         ccl_core_grid_offset,
         subdevice_id,
         scale,
-        compute_kernel_config,
+        precision.value_or(SDPAPrecision::STANDARD),
         core_allocation_strategy,
         block_size,
         q_blocks_per_pass,

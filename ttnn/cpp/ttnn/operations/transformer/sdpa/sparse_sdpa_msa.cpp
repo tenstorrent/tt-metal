@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/sparse_sdpa_msa.hpp"
+#include "ttnn/operations/transformer/sdpa/sparse_sdpa.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_msa_device_operation.hpp"
 #include <cmath>
 
@@ -21,7 +23,9 @@ ttnn::Tensor sparse_sdpa_msa(
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
-    bool enable_kv_block_cache) {
+    bool enable_kv_block_cache,
+    std::optional<SDPAPrecision> precision) {
+    detail::warn_ignored_compute_kernel_config(compute_kernel_config);
     const uint32_t d = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(d)));
 
@@ -59,15 +63,10 @@ ttnn::Tensor sparse_sdpa_msa(
             sp_axis);
     }
 
-    // fp8 Q needs 32-bit DEST for tilize; bf16 Q uses the default DEST width.
+    // fp8 Q tilizes through the 32-bit DEST, so it defaults to an FP32-state recipe.
     const bool q_is_fp8 = (q.dtype() == ttnn::DataType::FP8_E4M3);
-    auto kernel_config = init_device_compute_kernel_config(
-        q.device()->arch(),
-        compute_kernel_config,
-        /*default_fidelity=*/tt::tt_metal::MathFidelity::HiFi2,
-        /*default_approx_mode=*/true,
-        /*default_fp32_acc=*/q_is_fp8,
-        /*default_l1_acc=*/false);
+    const SDPAPrecision resolved_precision =
+        precision.value_or(q_is_fp8 ? kSparseFp8Precision : SDPAPrecision::STANDARD);
 
     return ttnn::prim::sparse_sdpa_msa(
         q,
@@ -76,7 +75,7 @@ ttnn::Tensor sparse_sdpa_msa(
         indices,
         resolved_scale,
         block_size,
-        kernel_config,
+        resolved_precision,
         cache_batch_idx,
         chunk_start_idx,
         cluster_axis,

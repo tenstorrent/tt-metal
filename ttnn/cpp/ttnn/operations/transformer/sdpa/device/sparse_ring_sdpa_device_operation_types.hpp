@@ -26,7 +26,8 @@ struct SparseRingSDPAParams {
     std::size_t ring_size = 0;
     tt::tt_metal::MemoryConfig output_memory_config;
     ttnn::operations::transformer::SDPAProgramConfig program_config;
-    DeviceComputeKernelConfig compute_kernel_config;
+    // The numerics recipe (sdpa_config.hpp); the API defaults it to STANDARD.
+    transformer::SDPAPrecision precision = transformer::SDPAPrecision::STANDARD;
     experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes;
     experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args;
     CoreCoord ccl_core_grid_offset;
@@ -42,7 +43,7 @@ struct SparseRingSDPAParams {
         std::size_t ring_size,
         tt::tt_metal::MemoryConfig output_memory_config,
         ttnn::operations::transformer::SDPAProgramConfig program_config,
-        DeviceComputeKernelConfig compute_kernel_config,
+        transformer::SDPAPrecision precision,
         experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes,
         experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args,
         CoreCoord ccl_core_grid_offset,
@@ -53,7 +54,7 @@ struct SparseRingSDPAParams {
         ring_size(ring_size),
         output_memory_config(std::move(output_memory_config)),
         program_config(std::move(program_config)),
-        compute_kernel_config(compute_kernel_config),
+        precision(precision),
         all_gather_operation_attributes(std::move(all_gather_operation_attributes)),
         all_gather_tensor_args(std::move(all_gather_tensor_args)),
         ccl_core_grid_offset(ccl_core_grid_offset),
@@ -70,7 +71,7 @@ struct SparseRingSDPAParams {
         "scale",
         "logical_n",
         "ring_size",
-        "compute_kernel_config",
+        "precision",
         "program_config",
         "ccl_core_grid_offset",
         "all_gather_operation_attributes",
@@ -82,7 +83,7 @@ struct SparseRingSDPAParams {
             std::cref(scale),
             std::cref(logical_n),
             std::cref(ring_size),
-            std::cref(compute_kernel_config),
+            std::cref(precision),
             std::cref(program_config),
             std::cref(ccl_core_grid_offset),
             std::cref(all_gather_operation_attributes),

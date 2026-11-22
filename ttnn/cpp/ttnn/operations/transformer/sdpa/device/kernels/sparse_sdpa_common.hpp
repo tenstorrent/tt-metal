@@ -28,7 +28,7 @@ constexpr uint32_t CB_DOUBLE_BUFFER_DEPTH = 2;
 // the scale reaches srcB as FP16. The FPU flushes FP16 subnormals, and the smallest scale the FP8 cast makes is
 // clamp(amax, 1e-4) / 448 ~= 2^-22.1, so every scale is sent as scale * 2^FUSED_DEQUANT_EXP_OFFSET to keep it a
 // normal FP16 (>= 2^-14) and the factor is removed exactly: Q's latent columns are multiplied by 2^-OFFSET (so
-// Q.K is unchanged) and the row-sum identity tile holds 2^OFFSET (so out/sum is unchanged). All are power-of-two
+// Q.K is unchanged) and the normalized output by 2^-OFFSET (V, the latent, carries 2^OFFSET). All are power-of-two
 // rescales: bit-exact.
 // The FPU's FP16 has no inf/NaN (exponent 31 is an ordinary binade, max 2^17 - 2^6), so the scale range is
 // [2^(-14-OFFSET), 2^(17-OFFSET)) = [2^-23, 2^8): block amax from the 1e-4 clamp up to 448 * 2^8 = 114688.
@@ -115,6 +115,31 @@ enum : uint32_t { TOK_START = 0, TOK_COUNT, HEAD_C0, TAIL_C1, PREV_NOC_X, PREV_N
 constexpr uint32_t SPLIT_PARTIAL_EMPTY = 1;  // the HEAD had no active chunk (sentinel tail): nothing to merge
 constexpr uint32_t SPLIT_PARTIAL_VALID = 2;
 
+// Circular buffers beside the recipe compute layout (CBs 0-16 and 29-31, recipe_compute_program; compute and the writer
+// use recipe_ring_cb's names for those and for the checkpoint pair). Compute packs only into CBs below 32.
+namespace recipe_cb {
+// Split-K HEAD: compute's state checkpoint request / ack (recipe_checkpoint.hpp; the writer sends the state to core
+// i-1).
+constexpr uint32_t checkpoint_request = 17, checkpoint_ack = 18;
+// Per-row sinks: one column tile per Q tile row (recipe::sink_rows), built once by the writer.
+constexpr uint32_t sink = 19;
+constexpr uint32_t q_rm = 20;          // Q rows (row-major, reader -> compute tilize), one tile row of heads per push
+constexpr uint32_t k_rm = 21;          // gathered K rows of a chunk (row-major), or a packed scaled-FP8 slab
+constexpr uint32_t k_rope_rm = 22;     // scaled FP8: format-only BF16 view of the packed slab (RoPE field)
+constexpr uint32_t k_scale = 23;       // scaled FP8: per-row broadcast scale tiles (FP32, or FP16 with fused dequant)
+constexpr uint32_t k_latent = 24;      // scaled FP8 without fused dequant: one slab's BF16 latent tiles
+constexpr uint32_t out_rm = 25;        // untilized output rows (compute -> writer)
+constexpr uint32_t ctrl = 26;          // reader -> compute: per-segment control_message
+constexpr uint32_t kreq = 27;          // reader -> writer K-gather handoff (dual-NoC split)
+constexpr uint32_t kack = 28;          // writer -> reader: its half of the chunk landed
+constexpr uint32_t merge_corr = 15;    // split-K TAIL: exp(m_b - m) per Q row (the recipe's mask CB, unused here)
+constexpr uint32_t idx = 33;           // reader-internal: one token's index row (uint32); the writer reads it too
+constexpr uint32_t sink_scratch = 34;  // writer scratch for gathering sink scalars
+// Split-K TAIL: core i+1's HEAD state, NoC-written straight into these CBs' bases (the same L1 on every core): O rows
+// (vd FP32 tiles each), maxima (the recipe's max format), l (FP32); then the writer's merge control page.
+constexpr uint32_t recv_out = 35, recv_max = 36, recv_sum = 37, merge_ctrl = 38;
+}  // namespace recipe_cb
+
 // Compile-time argument positions. The factory checks the vector size against each END value before appending
 // TensorAccessorArgs, while the kernels use the same names to decode the stream.
 namespace reader_ct_arg {
@@ -124,11 +149,6 @@ enum : uint32_t {
     TOPK,
     K_CHUNK,
     K_DIM,
-    CB_Q_RM,
-    CB_K_RM,
-    CB_MASK_PART,
-    CB_IDX,
-    CB_CTRL,
     Q_ELEM_BYTES,
     KV_ELEM_BYTES,
     IDX_ELEM_BYTES,
@@ -139,12 +159,11 @@ enum : uint32_t {
     BC_SLAB_STRIDE_GAP,
     SCALED_KV,
     LATENT_WIDTH,
-    CB_K_SCALE_BCAST,
     PACKED_ROW_BYTES,
-    CB_KREQ,
-    CB_KACK,
     SPLIT_K,
     FUSED_DEQUANT,  // scaled KV without sink: compute fuses tilize x scale (FP16 scale tiles)
+    Q_TILES,        // Q tile rows per head pass (with padding rows)
+    PASSES,         // head passes per token
     END,
 };
 }  // namespace reader_ct_arg
@@ -154,10 +173,6 @@ enum : uint32_t {
     H = 0,
     S,
     V_DHT,
-    CB_OUT_RM,
-    CB_SCALE,
-    CB_COL_IDENTITY,
-    CB_NEGINF,
     OUT_ELEM_BYTES,
     BLOCK_CYCLIC,
     BC_CHUNK_LOCAL,
@@ -167,76 +182,15 @@ enum : uint32_t {
     SCALED_KV,
     K_DIM,
     KV_ELEM_BYTES,
-    CB_IDX,
-    CB_KREQ,
-    CB_KACK,
     PACKED_ROW_BYTES,
     USE_ATTENTION_SINK,
-    CB_ATTENTION_SINK,
-    CB_SINK_SCRATCH,
     SPLIT_K,
-    CB_HEAD_OUT,
-    CB_HEAD_MAX,
-    CB_HEAD_SUM,
-    CB_HEAD_READY,
-    CB_HEAD_ACK,
-    CB_RECV_OUT,
-    CB_RECV_MAX,
-    CB_RECV_SUM,
-    CB_MERGE_CTRL,
     FUSED_DEQUANT,
+    Q_TILES,
+    PASSES,
+    FP32_STATE,  // the recipe's state maxima are FP32 tiles (BALANCED, ACCURATE), else BF16
     END,
 };
 }  // namespace writer_ct_arg
-
-namespace compute_ct_arg {
-enum : uint32_t {
-    H = 0,
-    DHT,
-    V_DHT,
-    SKT,
-    SCALE,
-    CB_Q_RM,
-    CB_Q_IN,
-    CB_K_RM,
-    CB_K_IN,
-    CB_NEGINF,
-    CB_MASK_PART,
-    CB_SCALE,
-    CB_QK_IM,
-    CB_MAX_A,
-    CB_MAX_B,
-    CB_SUM_A,
-    CB_SUM_B,
-    CB_OUT_A,
-    CB_OUT_B,
-    CB_CORR,
-    CB_OUT_IM,
-    CB_OUT_RM,
-    CB_CTRL,
-    CB_COL_IDENTITY,
-    CB_RECIP_SCRATCH,
-    SCALED_KV,
-    CB_K_ROPE_RM,
-    CB_K_SCALE_BCAST,
-    CB_K_LATENT_TILE,
-    CB_K_ROPE_TILE,
-    MATH_APPROX_MODE,
-    QUERY_SUBBLOCK,
-    PACKED_ROW_BYTES,
-    USE_ATTENTION_SINK,
-    CB_ATTENTION_SINK,
-    SPLIT_K,
-    CB_HEAD_READY,
-    CB_HEAD_ACK,
-    CB_RECV_OUT,
-    CB_RECV_MAX,
-    CB_RECV_SUM,
-    CB_MERGE_CTRL,
-    CB_CORR2,
-    FUSED_DEQUANT,
-    END,
-};
-}  // namespace compute_ct_arg
 
 }  // namespace sparse_sdpa

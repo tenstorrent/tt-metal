@@ -441,6 +441,8 @@ class Case:
             use_column_major_ccl=True,
             block_size=BLOCK,
         )
+        if self.lofi:
+            kwargs["precision"] = ttnn.SDPAPrecision.FAST  # LoFi matmuls
         return ttnn.transformer.sparse_ring_sdpa(q, k, v, mask, pooled_k, pooled_v, **{**kwargs, **overrides})
 
     def run(
@@ -1073,6 +1075,7 @@ INVALID = {  # id: (the one invalid argument, the TT_FATAL text it must raise)
     "q_blocks_per_pass_0": (dict(q_blocks_per_pass=0), "q_blocks_per_pass must be in"),
     "q_blocks_per_pass_33": (dict(q_blocks_per_pass=33), "q_blocks_per_pass must be in"),
     "batch_2": (dict(batch=2), "batch 1 only"),
+    "precision_balanced": (dict(precision=ttnn.SDPAPrecision.BALANCED), "STANDARD and FAST precision recipes only"),
 }
 
 

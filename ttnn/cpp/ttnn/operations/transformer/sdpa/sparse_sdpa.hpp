@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/sdpa_config.hpp"
 #include <cstdint>
 #include <optional>
 
@@ -16,6 +17,14 @@ enum class SparseKVFormat : uint8_t {
     FP8_E4M3,
     SCALED_FP8,
 };
+
+// The sparse family's default recipe for fp8 inputs (sparse_sdpa: an fp8 q or kv; sparse_sdpa_msa: an fp8 q), which
+// tilize through the FP32 dest and so need FP32 state (BALANCED or ACCURATE). Relative L2 error against an FP64
+// reference (BH; sparse_sdpa, 32 / 64 / 96 heads, top-2048 of 8192 keys, FP8_E4M3 and SCALED_FP8 KV, q std 1 and 4):
+// the previous default (FP32 dest, HiFi2, approximate exp) 0.015-0.025, BALANCED 0.0020-0.0089, ACCURATE 0.0010-0.0086.
+// BALANCED is 3-7x below the previous default; ACCURATE halves the scaled-FP8 error at most and took 4-19% longer
+// (GLM-5.3 / Kimi K3.1 / DeepSeek per-chip shapes).
+inline constexpr SDPAPrecision kSparseFp8Precision = SDPAPrecision::BALANCED;
 
 // Sparse MLA prefill (DeepSeek DSA), Blackhole single-chip.
 //   q       [1, H, S, K_DIM] bf16 or fp8_e4m3 ROW_MAJOR  (H = head count, any multiple of 32; K_DIM = head
@@ -51,6 +60,10 @@ enum class SparseKVFormat : uint8_t {
 // DeepSeek-V4 stores sinks in the already-scaled logit domain: pass model_sink / scale (scale != 0),
 // reshaped to [1,1,1,H], so the denominator receives exp(model_sink), not exp(scale * model_sink).
 //
+// precision: the numerics recipe (sdpa_config.hpp). Default: STANDARD for BF16 q and kv; with an fp8 q or kv (FP8_E4M3
+// or SCALED_FP8), which tilizes through the FP32 dest, the FP32-state default kSparseFp8Precision (sparse_sdpa.cpp),
+// and only BALANCED or ACCURATE are accepted. compute_kernel_config is accepted and ignored (one deprecation warning).
+//
 // Producer preconditions (NOT validated per-element): sentinels are a contiguous tail, every row has >= 1
 // valid key, and all non-sentinel indices are < T.
 //
@@ -72,6 +85,7 @@ ttnn::Tensor sparse_sdpa(
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
     bool block_cyclic_cache_tp_sharded = false,
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
+    std::optional<SDPAPrecision> precision = std::nullopt);
 
 }  // namespace ttnn::transformer

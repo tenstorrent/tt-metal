@@ -121,40 +121,8 @@ struct SparseSDPAMsaOperation {
         const tensor_args_t& t,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 
-    // Circular-buffer ids, shared with the kernels as compile-time args. Fixed ids (not allocation order), so a
-    // conditional buffer -- the causal mask tiles, the block cache -- is skipped without renumbering the rest.
-    enum Cb : uint32_t {
-        cb_q_rm = 0,  // Q rows (row-major, reader -> compute tilize)
-        cb_q_in,      // Q tiled [Sqt, DHt]
-        cb_k_in,      // streamed path only: one K block [Skt, DHt] (reader upper half, writer lower half)
-        cb_v_in,      // streamed path only: one V block [Skt, vDHt]
-        cb_scale,     // reduce identity scaler (1 tile)
-        cb_qk_im,     // scores [Sqt, Skt]
-        cb_max_a,     // running max ping-pong [Sqt, 1]
-        cb_max_b,
-        cb_sum_a,  // running sum ping-pong [Sqt, 1]
-        cb_sum_b,
-        cb_out_a,  // running out ping-pong [Sqt, vDHt] (single-buffered for L1 accumulation)
-        cb_out_b,
-        cb_corr,           // exp(prev_max - cur_max) correction [Sqt, 1]
-        cb_out_im,         // fixed pre-untilize copy of the final out [Sqt, vDHt]
-        cb_out_rm,         // untilized row-major out (compute -> writer)
-        cb_idx,            // reader-internal: one token's block-id row (uint32)
-        cb_ctrl,           // reader -> compute per token: active block count + causal geometry (ctrl:: words)
-        cb_col_identity,   // ones-in-col0 (writer-built): finalizes the partial row-sum via matmul_reduce
-        cb_recip_scratch,  // 1-tile reciprocal scratch for normalize_row_streaming
-        cb_kreq,           // reader -> writer gather request (kernels/sparse_sdpa_msa_common.hpp kreq)
-        cb_kack,           // writer -> reader: its lower tile halves landed
-        cb_neginf,         // causal only: persistent all -inf tile (writer-built) for fully-future key tiles
-        cb_vmask,          // causal only: per-token partial-column tile (reader-built) for the boundary key tile
-        cb_k_cache,        // block cache only: K blocks by slot, reader-owned, compute reads in place
-        cb_v_cache,        // block cache only: V blocks by slot
-        cb_slot,           // block cache only: per-block slot id reader -> compute (depth = reader run-ahead)
-        cb_count
-    };
-
     // Kernel geometry every circular-buffer size and compile-time argument derives from; computed once per call
-    // and passed to base_cbs / resolve_kv_cache_slots so the hash and the factory see the same values.
+    // and passed to recipe_layout / resolve_kv_cache_slots so the hash and the factory see the same values.
     struct Geometry {
         uint32_t H_logical = 0, H = 0, S = 0, topk = 0, n_kv = 0, d = 0, v_dim = 0;
         uint32_t DHt = 0, vDHt = 0, Skt = 0, Sqt = 0, k_tiles_per_block = 0, v_tiles_per_block = 0;
@@ -166,15 +134,14 @@ struct SparseSDPAMsaOperation {
     };
     static Geometry derive_kernel_geometry(const operation_attributes_t& attrs, const tensor_args_t& t);
 
-    struct CbSpec {
-        uint32_t id;
-        uint32_t page_size;
-        uint32_t num_pages;
-        tt::DataFormat df;
-    };
-    // Every circular buffer except the block cache. The streamed K/V block buffers exist only when the block
-    // cache does not serve K/V. The cache sizing budgets against this list.
-    static std::vector<CbSpec> base_cbs(const Geometry& g, bool causal, bool block_cache_serves_kv);
+    // The recipe layout of a call (sparse_sdpa_msa_program_factory.cpp): the recipe compute CBs
+    // (recipe_compute_program) with the K / V CBs holding one block each, or the block cache's slots, the dataflow CBs
+    // (sparse_sdpa_msa_common.hpp recipe_cb), and the recipe compute kernel (named arguments, defines, config). The
+    // cache sizing budgets against it.
+    static tt::tt_metal::ProgramDescriptor recipe_layout(
+        const operation_attributes_t& attrs, const tensor_args_t& t, const Geometry& g, uint32_t kv_cache_slots);
+    // Q tile rows compute processes per token: the head tiles, padded where the recipe needs an even count.
+    static uint32_t compute_q_tiles(const operation_attributes_t& attrs, const Geometry& g);
     // Bytes of a message-CB page holding `words` u32: CB FIFO pointers count 16-byte words and the NoC lands the
     // records on L1-aligned addresses, so a page is rounded up to the larger of the two.
     static uint32_t message_page_bytes(uint32_t words);
@@ -191,7 +158,7 @@ Tensor sparse_sdpa_msa(
     const Tensor& indices,
     float scale,
     uint32_t block_size,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    transformer::SDPAPrecision precision,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,

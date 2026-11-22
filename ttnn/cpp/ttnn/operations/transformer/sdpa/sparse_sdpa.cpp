@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/sparse_sdpa.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_device_operation.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <cmath>
@@ -23,7 +24,9 @@ ttnn::Tensor sparse_sdpa(
     std::optional<uint32_t> block_cyclic_chunk_local,
     bool block_cyclic_cache_tp_sharded,
     const std::optional<ttnn::Tensor>& attention_sink,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    std::optional<SDPAPrecision> precision) {
+    detail::warn_ignored_compute_kernel_config(compute_kernel_config);
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
 
@@ -73,15 +76,10 @@ ttnn::Tensor sparse_sdpa(
         block_cyclic = ttnn::prim::BlockCyclicLayout{stripes, stripe_chunk};
     }
 
-    // fp8 q/kv must be tilized through a 32-bit dest accumulator, so default fp32_dest_acc_en on for fp8.
+    // fp8 q/kv tilizes through the 32-bit dest, so FP8 inputs default to an FP32-state recipe.
     const bool any_fp8 = (kv.dtype() == ttnn::DataType::FP8_E4M3) || (q.dtype() == ttnn::DataType::FP8_E4M3);
-    auto kernel_config = init_device_compute_kernel_config(
-        q.device()->arch(),
-        compute_kernel_config,
-        /*default_fidelity=*/tt::tt_metal::MathFidelity::HiFi2,
-        /*default_approx_mode=*/true,
-        /*default_fp32_acc=*/any_fp8,
-        /*default_l1_acc=*/false);
+    const SDPAPrecision resolved_precision =
+        precision.value_or(any_fp8 ? kSparseFp8Precision : SDPAPrecision::STANDARD);
 
     return ttnn::prim::sparse_sdpa(
         q,
@@ -91,7 +89,7 @@ ttnn::Tensor sparse_sdpa(
         v_dim,
         kv_format,
         k_chunk_size,
-        kernel_config,
+        resolved_precision,
         cache_batch_idx,
         block_cyclic,
         attention_sink,

@@ -19,6 +19,12 @@ namespace ttnn::transformer {
 // the value can change between replays of one captured trace.
 using LogicalLength = std::variant<std::size_t, ttnn::Tensor>;
 
+namespace detail {
+// Prefill SDPA (the dense, ring and sparse families) ignores a compute_kernel_config: the numerics come from
+// precision=. Logs one deprecation warning per process when one is passed.
+void warn_ignored_compute_kernel_config(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+}  // namespace detail
+
 ttnn::Tensor scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
