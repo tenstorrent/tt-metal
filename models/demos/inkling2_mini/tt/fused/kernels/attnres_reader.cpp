@@ -77,4 +77,18 @@ void kernel_main() {
         rowio::scatter_row<dram>(out_addr, out_tile, out_es, ntc, 0, get_read_ptr(16), 0, ntc / 2);
         noc_async_write_barrier();
     }
+
+    if constexpr (get_named_compile_time_arg_val("has_norm")) {
+        // MoE input norm (args 9..12): its weight (dense fp32), then the first half of the bf16 L1 output row
+        const uint32_t nw_addr = get_arg_val<uint32_t>(9), n_addr = get_arg_val<uint32_t>(10);
+        const uint32_t n_tile = get_arg_val<uint32_t>(11), n_es = get_arg_val<uint32_t>(12);
+        constexpr uint32_t cb_nw = 5, cb_nn = 19;
+        cb_reserve_back(cb_nw, T);
+        rowio::read_pages(nw_addr, 4096, 0, T, get_write_ptr(cb_nw));
+        noc_async_read_barrier();
+        cb_push_back(cb_nw, T);
+        cb_wait_front(cb_nn, T);
+        rowio::scatter_row<false>(n_addr, n_tile, n_es, ntc, 0, get_read_ptr(cb_nn), 0, ntc / 2);
+        noc_async_write_barrier();
+    }
 }

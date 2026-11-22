@@ -23,6 +23,7 @@ from models.demos.inkling2_mini.convert import cache as wcache
 from models.demos.inkling2_mini.tt.attention_fast import DecodePositionsFast as DecodePositions
 from models.demos.inkling2_mini.tt.attention_fast import Inkling2AttentionFast as Inkling2Attention
 from models.demos.inkling2_mini.tt.dram_sharded import DramShardedLinear
+from models.demos.inkling2_mini.tt.fused import common as F
 from models.demos.inkling2_mini.tt.fused.attnres import FusedAttnRes, FusedRowOps
 from models.demos.inkling2_mini.tt.fused.bank_linear import BankLinear
 from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv
@@ -77,7 +78,7 @@ def golden_app_inputs(hiddens, embed):
 class _Layer:
     """Weights of one decoder layer (shared by its loop passes)."""
 
-    def __init__(self, device, rows, frows, L, w, prefetcher=None, expert_layout=None):
+    def __init__(self, device, rows, frows, L, w, prefetcher=None, expert_layout=None, moe_norm_out=None):
         self.L = L
         self.is_global = L in GLOBAL_LAYERS
         self.is_loop = LOOP_START <= L < LOOP_END
@@ -95,6 +96,10 @@ class _Layer:
         self.norm = FusedRowNorm(device, [ttnn.to_device(w[n], device, memory_config=dram) for n in names])
         self.qkv_gate = FusedQKVGate(rows, w) if self.is_loop else None
         self.mlp_gate = FusedMessageGate(rows, w, "mlp") if self.is_loop else None
+        # MoE input norm (fp32 rms, weight, bf16 L1 row): folded into mlp_res when there is no message gate
+        self.moe_norm = FusedRowNorm(device, [w["mlp_norm"]], out_l1=True)
+        if moe_norm_out is not None:
+            self.moe_norm.out = moe_norm_out  # one L1 row for all layers (x lives only until the experts ran)
 
 
 class Inkling2Model:
@@ -185,12 +190,13 @@ class Inkling2Model:
         del g, emb
 
         self.overlap = None  # decode weight staging (tt/mk/overlap.py), set by Generator.capture .. release
+        self.moe_norm_out = F.OutCache(device)  # the MoE input row, shared by all layers
         self.layers = []
         for L in range(N_LAYERS):
             lroot = (layer_roots or {}).get(L, root)
             w = wcache.load_layer(lroot, L, None)  # host tensors; modules move them
             lay = wcache.layouts(lroot, L).get("experts.w_gate_up")
-            self.layers.append(_Layer(device, self.rows, self.frows, L, w, self.prefetcher, lay))
+            self.layers.append(_Layer(device, self.rows, self.frows, L, w, self.prefetcher, lay, self.moe_norm_out))
             del w
             log(f"layer {L} on device")
 
@@ -274,11 +280,14 @@ class Inkling2Model:
             stack = self.frows.seal(stack, h, n_sealed)  # free: the attn-res above left rms(h) in that row
             n_sealed += 1
 
-        # with messages m feeds only FusedMessageGate (no row form); otherwise the MoE reads its rows
-        m = lay.mlp_res(stack, resid, n_sealed + 1, row_out=msgs is None)[0]
-        if msgs is not None:
-            m = lay.mlp_gate(m, msgs[1])
-        y, _ = lay.moe(m)  # bf16 row (L1); conv_mlp reads it from L1
+        # x = MoE input norm(m), a bf16 L1 row. Without messages the mlp attn-res program computes it from m (m is
+        # not written); with messages m feeds only FusedMessageGate (dense twin, no row form).
+        if msgs is None:
+            x = lay.mlp_res(stack, resid, n_sealed + 1, norm=lay.moe_norm)
+        else:
+            m = lay.mlp_res(stack, resid, n_sealed + 1, row_out=False)[0]
+            x = lay.moe_norm(lay.mlp_gate(m, msgs[1]))[0]
+        y, _ = lay.moe(x, normed=True)  # bf16 row (L1); conv_mlp reads it from L1
         # fp32 add, bf16 out. Every decode consumer of out is a fused kernel reading its dense twin, so the row form
         # is written only when the caller reads it (collect)
         out = lay.conv_mlp.conv_add(y, conv_m, self.phase, resid, ttnn.bfloat16, row_out=row_out)

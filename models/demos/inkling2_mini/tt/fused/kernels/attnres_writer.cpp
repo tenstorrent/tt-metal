@@ -47,5 +47,13 @@ void kernel_main() {
             }
         }
     }
+    if constexpr (get_named_compile_time_arg_val("has_norm")) {
+        // MoE input norm (args 3..5): second half of the bf16 L1 output row (the reader writes the first)
+        constexpr uint32_t cb_nn = 19;
+        const uint32_t n_addr = get_arg_val<uint32_t>(3), n_tile = get_arg_val<uint32_t>(4);
+        const uint32_t n_es = get_arg_val<uint32_t>(5);
+        cb_wait_front(cb_nn, T);
+        rowio::scatter_row<false>(n_addr, n_tile, n_es, ntc, 0, get_read_ptr(cb_nn), ntc / 2, ntc);
+    }
     noc_async_write_barrier();
 }

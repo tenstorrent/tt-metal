@@ -260,13 +260,15 @@ class Inkling2MoE:
         ttnn.deallocate(weighted)
         return out
 
-    def __call__(self, h):
-        """h [1,1,1,H] layer state (bf16 or fp32) -> (MoE(norm(h)) [1,1,1,H] bf16, top-k ids [1,1,1,8])."""
-        x = self.norm(h)
+    def __call__(self, h, normed=False):
+        """h [1,1,1,H] layer state (bf16 or fp32) -> (MoE(norm(h)) [1,1,1,H] bf16, top-k ids [1,1,1,8]).
+        normed: h is already norm(h) as a bf16 L1 row (the model's fused norm; owned by the caller)."""
+        x = h if normed else self.norm(h)
         weights, indices = self.route(x)
         out = self.experts(x, weights, indices)
         ttnn.deallocate(weights)
-        ttnn.deallocate(x)
+        if not normed:
+            ttnn.deallocate(x)
         return out, indices
 
 

@@ -90,7 +90,7 @@ class _FusedGate:
                 args = [src.buffer_address(), F.tile_bytes(src.dtype), F.ES[src.dtype], r, 0]
             rd[core] = [*args, 0, 0, self.scaler.buffer_address(), 0]
             wr[core] = [0, 0, 0]
-        named = dict(ntc=self.ntc, pages=T, nq=0, k=0, has_weight=0, split_out=0)
+        named = dict(ntc=self.ntc, pages=T, nq=0, k=0, has_weight=0, has_norm=0, split_out=0)
         assert h.dtype == m.dtype
         f32 = ttnn.float32
         cbs = [
@@ -108,7 +108,9 @@ class _FusedGate:
         ]
         tws = [t[0] for t in (F.twin(h), F.twin(m)) if t is not None]
         io = [h, m, *tws, self.scaler]
-        cnamed = dict(pages=T, nq=0, k=0, has_weight=0, inv_c=f32_bits(1.0 / self.c), eps=f32_bits(self.eps))
+        cnamed = dict(
+            pages=T, nq=0, k=0, has_weight=0, has_norm=0, inv_c=f32_bits(1.0 / self.c), eps=f32_bits(self.eps)
+        )
         return dict(rd=[rd[c] for c in cores], wr=[wr[c] for c in cores], named=named, cnamed=cnamed, cbs=cbs, io=io)
 
     def _prep_z(self, h, m):

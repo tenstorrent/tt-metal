@@ -73,7 +73,7 @@ class FusedMessages:
         F.check_row_input(h17_out)
         T, ntc, nq, k = r.T, self.c // 32, 4, 1
         cores, crs = F.core_list(self.device, self.n_layers)
-        named = dict(ntc=ntc, pages=T, nq=nq, k=k, has_weight=0, out_rows=3, split3=1, split_out=0)
+        named = dict(ntc=ntc, pages=T, nq=nq, k=k, has_weight=0, has_norm=0, out_rows=3, split3=1, split_out=0)
         rd, wr = {}, {}
         for l, core in enumerate(cores):
             (qr, qd), (mr, md) = self.bufs[l]
@@ -81,7 +81,7 @@ class FusedMessages:
                         r.scaler.buffer_address(), 0]  # fmt: skip
             wr[core] = [r.stack.buffer_address(), qr.buffer_address(), qd.buffer_address(), mr.buffer_address(),
                         md.buffer_address()]  # fmt: skip
-        cnamed = dict(pages=T, nq=nq, k=k, has_weight=0, inv_c=f32_bits(1.0 / self.c), eps=f32_bits(r.eps))
+        cnamed = dict(pages=T, nq=nq, k=k, has_weight=0, has_norm=0, inv_c=f32_bits(1.0 / self.c), eps=f32_bits(r.eps))
         kernels = [
             F.kernel("attnres_reader.cpp", ttnn.ReaderConfigDescriptor(), named, rd, crs),
             F.kernel("attnres_writer.cpp", ttnn.WriterConfigDescriptor(), named, wr, crs),

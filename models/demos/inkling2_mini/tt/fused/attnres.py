@@ -47,7 +47,8 @@ class FusedRowOps:
             self.run(h, k)
         return self.stack
 
-    def run(self, partial, k, q=None, nq=0, out=None, out_rows=None, out_dense=None):
+    def run(self, partial, k, q=None, nq=0, out=None, out_rows=None, out_dense=None, norm=None):
+        """norm: (dense fp32 weight, bf16 L1 row) -> also the weighted rms of output 0 into that row (MoE input)."""
         F.check_row_input(partial)
         T, ntc, d = self.T, self.c // 32, k + 1
         assert 0 <= k < MAX_DEPTH and self.c % 32 == 0
@@ -60,6 +61,7 @@ class FusedRowOps:
             out_rows=nq if out_rows is None else out_rows,
             split3=0,
             split_out=0,
+            has_norm=int(norm is not None),
         )
         reader = F.kernel(
             "attnres_reader.cpp",
@@ -71,6 +73,7 @@ class FusedRowOps:
                 self.stack.buffer_address(),
                 self.scaler.buffer_address(),
                 0,  # no rms weight
+                *self._norm_args(norm, True),
             ],
         )
         writer = F.kernel(
@@ -81,12 +84,21 @@ class FusedRowOps:
                 self.stack.buffer_address(),
                 out.buffer_address() if out is not None else 0,
                 out_dense.buffer_address() if out_dense is not None else 0,
+                *self._norm_args(norm, False),
             ],
         )
         compute = F.kernel(
             "attnres_compute.cpp",
-            F.compute_config([], full_sync=True),
-            dict(pages=T, nq=nq, k=k, has_weight=0, inv_c=f32_bits(1.0 / self.c), eps=f32_bits(self.eps)),
+            F.compute_config([5] if norm is not None else [], full_sync=True),
+            dict(
+                pages=T,
+                nq=nq,
+                k=k,
+                has_weight=0,
+                has_norm=int(norm is not None),
+                inv_c=f32_bits(1.0 / self.c),
+                eps=f32_bits(self.eps),
+            ),
         )
         f32 = ttnn.float32
         cbs = [
@@ -102,12 +114,23 @@ class FusedRowOps:
             F.cb(27, f32, max(1, nq * d)),
             F.cb(28, f32, max(1, nq * d)),
         ]
+        if norm is not None:
+            assert nq >= 1
+            cbs += [F.cb(5, f32, T), F.cb(19, norm[1].dtype, T)]
         tw = F.twin(partial)
         io = [partial] + ([tw[0]] if tw else []) + [self.scaler] + ([q] if q is not None else []) + [self.stack]
         io += ([out_dense] if out_dense is not None else []) + ([out] if out is not None else [])
+        io = list(norm) + io if norm is not None else io
         F.run(io, [reader, writer, compute], cbs)
         self.fresh[k] = partial
         return out
+
+    @staticmethod
+    def _norm_args(norm, reader):
+        if norm is None:
+            return []
+        w, o = norm
+        return ([w.buffer_address()] if reader else []) + [o.buffer_address(), F.tile_bytes(o.dtype), F.ES[o.dtype]]
 
 
 class FusedAttnRes:
@@ -122,15 +145,21 @@ class FusedAttnRes:
         self.q = F.dense_tensor(rows.device, q * q.shape[-1] ** -0.5)  # 1/sqrt(C) folded into q
         self.out = F.OutCache(rows.device)
 
-    def __call__(self, stack, partial, depth: int, split=True, repeat_rows=None, row_out=True):
+    def __call__(self, stack, partial, depth: int, split=True, repeat_rows=None, row_out=True, norm=None):
         """stack: ignored (rows.stack is used; rows 0..depth-2 sealed). partial: row. Returns a list of
         num_queries fp32 rows (split=False: one [1,1,num_queries,C] tensor). repeat_rows=3 with 1 query: the
-        output in rows 0..2 (replaces the model's ttnn.repeat before the q/k/v message gates)."""
+        output in rows 0..2 (replaces the model's ttnn.repeat before the q/k/v message gates).
+        norm: a FusedRowNorm with an L1 output (the MoE input norm): returns its output row (weighted rms of the
+        attn-res output, in this program) instead; the attn-res output itself is then not written at all."""
         r = self.rows
         n_out = repeat_rows or self.nq
         out, out_dense = self.out.get_twin(("out", n_out), n_out, r.c, ttnn.float32, nvec=self.nq)
         # row_out=False: only the dense twin is written ; the returned tensor is then valid only as the input
         # of another fused kernel (which reads the twin), never for a ttnn op.
+        if norm is not None:
+            nrow = norm.l1_rows(1)[0]
+            r.run(partial, depth - 1, self.q, self.nq, None, 0, None, norm=(norm.w[0], nrow))
+            return nrow
         out = r.run(partial, depth - 1, self.q, self.nq, out, n_out if row_out else 0, out_dense)
         if not split:
             return out

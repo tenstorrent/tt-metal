@@ -67,6 +67,7 @@ void kernel_main() {
     constexpr uint32_t inv_c = get_named_compile_time_arg_val("inv_c");  // fp32 bits of 1/C
     constexpr uint32_t eps = get_named_compile_time_arg_val("eps");      // fp32 bits
     constexpr uint32_t has_weight = get_named_compile_time_arg_val("has_weight");
+    constexpr uint32_t has_norm = get_named_compile_time_arg_val("has_norm");  // + weighted rms of out_0 (MoE input)
     constexpr uint32_t d = k + 1;
 
     compute_kernel_hw_startup(cb_p, cb_p, cb_sq);
@@ -245,5 +246,66 @@ void kernel_main() {
             }
         }
         cb_push_back(cb_out, nq * T);
+    }
+    if constexpr (has_norm) {
+        // weighted rms of out_0 -> bf16 cb_nn: FusedRowNorm's op sequence (C_inv, C_n with weight) on cb_out, so
+        // the result equals a separate FusedRowNorm program reading out_0's dense twin
+        DeviceZoneScopedN("C_norm");
+        constexpr uint32_t cb_nw = 5, cb_nn = 19;
+        cb_wait_front(cb_out, T);  // also read by the writer, which never pops it
+        tile_regs_acquire();
+        reconfig_data_format(cb_out, cb_out);
+        mul_init(cb_out, cb_out);
+        for (uint32_t t = 0; t < T; ++t) {
+            mul_tiles(cb_out, cb_out, t, t, t);
+        }
+        sum_dst(T);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_sq);
+        put(0, cb_sq);
+        tile_regs_release();
+
+        cb_wait_front(cb_sq, 1);
+        tile_regs_acquire();
+        reduce_scalars(cb_sq, 0, 1, cb_inv);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, inv_c, SCALAR);
+        add_unary_tile(0, eps, SCALAR);
+        rsqrt_tile_init();
+        rsqrt_tile(0, SCALAR);
+        tile_regs_commit();
+        tile_regs_wait();
+        put(0, cb_inv);
+        tile_regs_release();
+        cb_pop_front(cb_sq, 1);
+
+        cb_wait_front(cb_inv, 1);
+        tile_regs_acquire();
+        reconfig_data_format(cb_out, cb_inv);
+        mul_bcast_scalar_init(cb_out, cb_inv);
+        for (uint32_t t = 0; t < T; ++t) {
+            mul_tiles_bcast_scalar(cb_out, cb_inv, t, 0, t);
+        }
+        cb_wait_front(cb_nw, T);
+        reconfig_data_format_srca(cb_nw);
+        copy_init(cb_nw);
+        for (uint32_t t = 0; t < T; ++t) {
+            copy_tile(cb_nw, t, T + t);
+        }
+        mul_binary_tile_init();
+        for (uint32_t t = 0; t < T; ++t) {
+            mul_binary_tile(t, T + t, t);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        cb_reserve_back(cb_nn, T);
+        pack_reconfig_data_format(cb_nn);
+        for (uint32_t t = 0; t < T; ++t) {
+            pack_tile(t, cb_nn);
+        }
+        cb_push_back(cb_nn, T);
+        tile_regs_release();
+        cb_pop_front(cb_inv, 1);
     }
 }

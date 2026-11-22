@@ -28,6 +28,22 @@ class FusedRowNorm:
         self.out = F.OutCache(device)
         self.out_l1 = out_l1  # L1-interleaved output rows (e.g. the MoE input), not DRAM
 
+    def l1_rows(self, n):
+        """The n cached L1-interleaved output rows (out_l1)."""
+        key = ("row_l1", n)
+        if key not in self.out.bufs:
+            self.out.bufs[key] = [
+                ttnn.from_torch(
+                    torch.zeros(1, 1, 1, self.c),
+                    dtype=self.out_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )  # fmt: skip
+                for _ in range(n)
+            ]
+        return self.out.bufs[key]
+
     def __call__(self, x, num_rows=None):
         """x: [1,1,R,C] row-form (fp32 or bf16). Returns a list of num_rows (default R) rows."""
         F.check_row_input(x)
@@ -35,19 +51,7 @@ class FusedRowNorm:
         T, ntc = F.pages(self.c), self.c // 32
         cores, crs = F.core_list(self.device, n)
         if self.out_l1:
-            key = ("row_l1", n)
-            if key not in self.out.bufs:
-                self.out.bufs[key] = [
-                    ttnn.from_torch(
-                        torch.zeros(1, 1, 1, self.c),
-                        dtype=self.out_dtype,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=self.device,
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
-                    )  # fmt: skip
-                    for _ in range(n)
-                ]
-            outs = self.out.bufs[key]
+            outs = self.l1_rows(n)
         else:
             outs = [self.out.get(("row", i), 1, self.c, self.out_dtype) for i in range(n)]
         rd, wr = {}, {}
@@ -56,14 +60,16 @@ class FusedRowNorm:
             rd[core] = [*F.input_args(x, i), 0, 0, self.scaler.buffer_address(), w.buffer_address()]
             rd[core] += [outs[i].buffer_address(), F.tile_bytes(self.out_dtype), F.ES[self.out_dtype]]
             wr[core] = [outs[i].buffer_address(), F.tile_bytes(self.out_dtype), F.ES[self.out_dtype]]
-        named = dict(ntc=ntc, pages=T, nq=0, k=0, has_weight=1, split_out=2 if self.out_l1 else 1)
+        named = dict(ntc=ntc, pages=T, nq=0, k=0, has_weight=1, has_norm=0, split_out=2 if self.out_l1 else 1)
         kernels = [
             F.kernel("attnres_reader.cpp", ttnn.ReaderConfigDescriptor(), named, rd, crs),
             F.kernel("rownorm_writer.cpp", ttnn.WriterConfigDescriptor(), named, wr, crs),
             F.kernel(
                 "attnres_compute.cpp",
                 F.compute_config([4], full_sync=True),
-                dict(pages=T, nq=0, k=0, has_weight=1, inv_c=f32_bits(1.0 / self.c), eps=f32_bits(self.eps)),
+                dict(
+                    pages=T, nq=0, k=0, has_weight=1, has_norm=0, inv_c=f32_bits(1.0 / self.c), eps=f32_bits(self.eps)
+                ),
                 None,
                 crs,
             ),
