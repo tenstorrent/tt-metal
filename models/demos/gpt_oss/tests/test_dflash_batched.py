@@ -11,7 +11,9 @@ next token; the first and last 32-user groups), and the mean accepted tokens per
     pytest models/demos/gpt_oss/tests/test_dflash_batched.py
 """
 
+import hashlib
 import json
+import os
 import time
 
 import pytest
@@ -35,6 +37,7 @@ N_CHECK = 32  # teacher-forced positions per user
 # tok/s/user)
 MIN_AGREEMENT = 0.9
 MIN_ACCEPT = {32: 3.5, 128: 2.5}
+RESULT_ENV = "DFLASH_BATCHED_RESULT"  # a JSON file to write the run's result to (tests/test_dflash_galaxy_dp.py)
 
 
 def book_prompts(tokenizer, n, isl):
@@ -159,5 +162,19 @@ def test_dflash_batched(mesh_device, device_params, users):
             n += sum(j < len(dec[u]) for u in us)
         agree.append(a / n)
     logger.info(f"batched DFlash vs the batch-32 decode, teacher-forced over {N_CHECK - 1} positions: {agree}")
+    if os.getenv(RESULT_ENV):  # (the Galaxy data-parallel test reads every replica's result)
+        with open(os.environ[RESULT_ENV], "w") as f:
+            json.dump(
+                {
+                    "users": U,
+                    "rounds": rounds,
+                    "round_ms": round_ms,
+                    "tokens_per_round": mean_accept,
+                    "tok_s_user": mean_accept * 1000 / round_ms,
+                    "agreement": agree,
+                    "tokens_sha256": hashlib.sha256(json.dumps(toks).encode()).hexdigest(),
+                },
+                f,
+            )
     assert min(agree) >= MIN_AGREEMENT, f"teacher-forced agreement {agree} < {MIN_AGREEMENT}"
     assert mean_accept >= MIN_ACCEPT[U], f"mean accepted tokens per round {mean_accept:.2f} < {MIN_ACCEPT[U]}"
