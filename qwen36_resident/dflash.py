@@ -664,3 +664,86 @@ class ResidentDFlashRows:
             self._commit([0] * U)
             p = [x + 1 for x in p]
         return gen
+
+
+class SpecRowsSession:
+    """The runner-model spec contract's per-step API over a ResidentDFlashRows (DB3: the vLLM class maps the runner's
+    calls onto these). Per user u (its rows u R .. of the verify launch, drafter slot u): start(u, ids) prefills a
+    prompt (PP prefill + handoff + its drafter context, then its last token through a verify step with the others
+    held) and returns that row's logits (the runner samples the first token from them); verify(tokens, positions,
+    accepted, active) applies each active user's previous commit (accepted = tokens it committed: 1 after a start or
+    a step that accepted no draft, up to R) and runs one verify step of [token, drafts] per user, returning the
+    device greedy [U][R]; propose(anchors, positions) extends each user's drafter context by what its last verify
+    committed (nothing right after a start) and drafts R - 1 tokens from its anchor at its position."""
+
+    def __init__(self, eng):
+        assert eng.pp is not None, "SpecRowsSession: the engine's PP prefill (ResidentDFlashRows(prefill=True))"
+        self.e = eng
+        U = eng.U
+        self.pos = [0] * U  # the next position (row 0 of the user's next verify)
+        self.started = [False] * U  # (a start pending its first propose: no verify taps to extend by)
+        self.last = [None] * U  # (the last verify's row-0 position, for the propose's context extension)
+        self.committed = [1] * U
+
+    def start(self, u, ids, table=None):
+        e, R, U = self.e, self.e.R, self.e.U
+        ids = [int(t) for t in ids]
+        P = len(ids)
+        if table is not None:
+            tbl = [list(t) for t in e.m.block_tables]
+            for r in range(u * R, (u + 1) * R):
+                tbl[r] = list(table)
+            e.m.set_page_table(tbl)
+        if P > 1:
+            e.pp.reset()
+            e.pp.run(torch.as_tensor(ids[: P - 1]))
+            e.pp.handoff(e.m, P - 1, slot=u * R, block_table=e.m.block_tables[u * R])
+            e._fill_context(P - 1, phys=u)
+        e.ring[u], e.slot[u], e.prev[u] = 0, 0, None
+        toks = [[0] * R for _ in range(U)]
+        toks[u] = [ids[-1]] * R
+        pos = list(self.pos)
+        pos[u] = P - 1
+        x0 = torch.stack([e.emb[list(t)] for t in toks])
+        e.m.step(e.m.token_state_vrows(x0, pos, e.ring, e.slot, e.prev, active=[k == u for k in range(U)]))
+        lg = e.m.logits()[u * R, :, : e.d.vocab_chip].reshape(-1)[: e.vocab].float().clone()
+        n_valid = [0] * U
+        n_valid[u] = 1
+        e.drafter.extend_context([max(p, 0) for p in pos], n_valid)
+        e.ring[u], e.slot[u], e.prev[u] = 1, 0, 0  # (the last prompt token committed as row 0)
+        self.pos[u], self.started[u], self.committed[u] = P, True, 1
+        return lg
+
+    def verify(self, tokens, positions, active):
+        """one verify step: per active user its committed token and R - 1 drafts (tokens[u]) at positions[u] (row 0);
+        the commit its previous step left (recorded by propose) is applied first. Returns the device greedy [U][R]"""
+        e, R, U = self.e, self.e.R, self.e.U
+        for u in range(U):
+            if not active[u]:
+                continue
+            if not self.started[u]:  # (the previous verify's commit: accepted drafts committed[u] - 1)
+                a = self.committed[u] - 1
+                e.ring[u], e.slot[u], e.prev[u] = e.ring[u] + 1 + a, (e.slot[u] + a) % R, a
+            assert int(positions[u]) == self.pos[u], (u, int(positions[u]), self.pos[u])
+        x0 = torch.stack([e.emb[[int(t) for t in tokens[u]]] for u in range(U)])
+        e.m.step(e.m.token_state_vrows(x0, [int(p) for p in positions], e.ring, e.slot, e.prev, active=list(active)))
+        g = e.greedy_rows()
+        for u in range(U):
+            if active[u]:
+                self.last[u], self.started[u] = int(positions[u]), False
+        return g
+
+    def propose(self, anchors, positions, accepted, active):
+        """after a commit (a start or a verify): a user that just verified records what it committed (accepted: 1 + the
+        drafts accepted) and extends its drafter context by those rows' taps; then every user drafts R - 1 tokens from
+        its anchor (its last committed token) at its position. Returns [U][R - 1]"""
+        e, U = self.e, self.e.U
+        n_valid = [0] * U
+        for u in range(U):
+            if active[u] and not self.started[u] and self.last[u] is not None:
+                self.committed[u] = int(accepted[u])
+                self.pos[u] = self.last[u] + self.committed[u]
+                n_valid[u] = self.committed[u]
+        slot0 = [max(self.last[u] if self.last[u] is not None else 0, 0) for u in range(U)]
+        e.drafter.extend_context(slot0, n_valid)
+        return e.drafter.draft([int(a) for a in anchors], [int(p) for p in positions])
