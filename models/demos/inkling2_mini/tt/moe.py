@@ -42,6 +42,8 @@ ROUTER_SPLIT = 9  # K chunks of the router GEMM (256 each)
 BANK_LOCAL = os.environ.get("INKLING_MOE_BANK", "1") != "0"
 # Fused expert step for BFP4 layers (tt/fused/moe_expert.py); INKLING_MOE_FUSED=0 falls back to the path above.
 FUSED_EXPERTS = os.environ.get("INKLING_MOE_FUSED", "1") != "0"
+# Workers on rows 3..9 and collector (10, 9): clear of the tensor prefetcher's receiver ring (cores 0..6, 0..2).
+FUSED_PLACEMENT = dict(origin=(0, 3), shape=(11, 7), collector=(10, 9))
 
 WEIGHT_NAMES = ("mlp_norm", "router.w", "router.bias", "experts.w_gate_up", "experts.w_down")
 
@@ -107,11 +109,9 @@ class Inkling2MoE:
         # The whole expert step (gate_up + SwiGLU + down + weighted sum) is one fused program.
         self.fused = None
         self.bank_local = False
-        # FusedMoeExperts needs one dtype for gate_up and down (BFP4/BFP4 or BFP8/BFP8 layers); BFP4 gate_up with
-        # BFP8 down stays bank-local.
-        if gu.dtype == self.w_down.dtype and FUSED_EXPERTS:
+        if FUSED_EXPERTS:  # any of BFP4 / BFP8 / BFP4 gate_up + BFP8 down
             self.w_gate_up = ttnn.to_device(gu, device, dram)
-            self.fused = FusedMoeExperts(device, self.w_gate_up, self.w_down)
+            self.fused = FusedMoeExperts(device, self.w_gate_up, self.w_down, **FUSED_PLACEMENT)
         elif BANK_LOCAL and gu.dtype == ttnn.bfloat4_b:  # re-layout on load; the cache files are unchanged
             self.bank_local = True
             self.bank_gate_up = BankLocalExperts(device, gu, dtype=gu.dtype, slots=TOP_K)
