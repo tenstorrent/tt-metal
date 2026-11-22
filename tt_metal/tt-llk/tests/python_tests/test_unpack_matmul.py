@@ -4,6 +4,7 @@
 import pytest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
+    FACE_DIM,
     MatmulGolden,
     TransposeGolden,
     get_golden_generator,
@@ -115,15 +116,15 @@ def test_unpack_matmul(
         num_faces=num_faces_in0,
         stimuli_format=formats.input_format,
         input_dimensions=in0_dimensions,  # This will generate the right number of tiles
-        wide_tile=in0_tile_c_dim > 16,
-        face_r_dim=(in0_tile_r_dim if in0_tile_r_dim < 16 else 16),
+        wide_tile=in0_tile_c_dim > FACE_DIM,
+        face_r_dim=(in0_tile_r_dim if in0_tile_r_dim < 16 else FACE_DIM),
     )
 
     in1 = generate_face_matmul_data(
         num_faces=num_faces_in1,
         stimuli_format=formats.input_format,
         input_dimensions=in1_dimensions,  # This will generate the right number of tiles
-        wide_tile=in1_tile_c_dim > 16,
+        wide_tile=in1_tile_c_dim > FACE_DIM,
     )
 
     in1_golden = in1

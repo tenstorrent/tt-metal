@@ -8,6 +8,7 @@ import torch
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
+    FACE_DIM,
     TILE_DIM,
     MatmulGolden,
     TransposeGolden,
@@ -254,11 +255,11 @@ def test_math_matmul(
         num_faces=num_faces_in0,
         stimuli_format=formats.input_format,
         input_dimensions=in0_dimensions,  # This will generate the right number of tiles
-        wide_tile=in0_tile_c_dim > 16,
+        wide_tile=in0_tile_c_dim > FACE_DIM,
         face_r_dim=(
             matmul_config.tile_dimensions.in0_tile_r_dim
             if matmul_config.tile_dimensions.in0_tile_r_dim < 16
-            else 16
+            else FACE_DIM
         ),
     )
 
@@ -266,7 +267,7 @@ def test_math_matmul(
         num_faces=num_faces_in1,
         stimuli_format=formats.input_format,
         input_dimensions=in1_dimensions,  # This will generate the right number of tiles
-        wide_tile=in1_tile_c_dim > 16,
+        wide_tile=in1_tile_c_dim > FACE_DIM,
     )
 
     in1_golden = in1
