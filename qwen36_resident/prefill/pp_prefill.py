@@ -1660,6 +1660,12 @@ class PPPrefill:
             )
         if self._ho.get("model") is model:
             return
+        # (per target model: two decode geometries in one process, DB3 phase 2, alternate without rebuilding)
+        per_model = self._ho.setdefault("per_model", {})
+        hit = per_model.get(id(model))
+        if hit is not None and hit["model"] is model:
+            self._ho.update(hit)
+            return
         banks = d.banks
         kv_row = (HD // TILE) * 1088
         rows, tile_of, pk = [[] for _ in range(n)], [[] for _ in range(n)], [[] for _ in range(n)]
@@ -1725,9 +1731,9 @@ class PPPrefill:
                     segs[p].append((first, len(tt), kv))
                 first += len(tt)
         cat = lambda xs: [torch.cat(x) for x in xs]
-        self._ho.update(
-            model=model, rows=cat(rows), tile_of=cat(tile_of), pk=cat(pk), kv_of=cat(kv_of), segs=segs, sel={}
-        )
+        entry = dict(model=model, rows=cat(rows), tile_of=cat(tile_of), pk=cat(pk), kv_of=cat(kv_of), segs=segs, sel={})
+        per_model[id(model)] = entry
+        self._ho.update(entry)
 
     def _ho_sel(self, p, tiles):
         """the indices of chip p's job rows of a prompt of `tiles` position tiles (in row order: every GDN row, each KV

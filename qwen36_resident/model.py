@@ -572,6 +572,8 @@ class ResidentModel:
         kv_block_size=64,
         rows=False,
         groups=1,
+        share=None,
+        l1_union=None,
     ):
         """st: the decode state (State), or one State per user for a batch of len(st) users. More than 8 users
         run as sub-batches of 8, one launch each (the launches share the weights and buffers, each has its
@@ -605,8 +607,16 @@ class ResidentModel:
         verify rows (DB1, verify = 8 with rows and groups > 1): row group g is user g's verify of 8 rows (st: one State
         per group, block_tables one per group); per user its own positions, ring step, GDN slot and prev
         (token_state_vrows); the GDN head core g of each value head runs group g's rows (the verify chain stays on one
-        core); taps allowed (group g's rows land in rows 8 g .. of the tap tiles)."""
+        core); taps allowed (group g's rows land in rows 8 g .. of the tap tiles).
+        share (DB3 phase 2: two geometries in one process): another ResidentModel whose weights, KV pool and persistent
+        L1 scratch this one adopts instead of allocating its own (the weight rings are L1-starved: a second set of L1
+        buffers would not fit); same mesh, checkpoint, core layout and pool geometry, asserted. Its own: GDN state, conv
+        history, token state, semaphores, programs, trace. Only one of the two may run at a time (sync between).
+        l1_union (the model built first): sizes its shared L1 scratch for the other geometry too, a dict of
+        slot_words (attention row-max slots), cand_words (hub candidates, per chip) and attn_tails."""
         self.mesh, self.d, self.layers, self.interval, self.lm_head = mesh, d, layers, interval, lm_head
+        self._share, self._l1_union = share, dict(l1_union or {})
+        assert share is None or (share.mesh is mesh and share.layers == layers and share.lm_head == lm_head)
         R = 0 if not verify else (2 if verify is True else int(verify))
         assert R in (0, 2, 4, 8), "verify runs 2, 4 or 8 rows"
         self.verify, self.R = bool(verify), R
@@ -734,10 +744,21 @@ class ResidentModel:
             return t
 
         self.l1_addrs = []  # persistent L1 buffers (see l1_layout)
+        self._l1_by_key = {}  # key -> (tensor, grid, shard): what a model built with share=self may adopt
 
-        def l1(t, grid_, shard, dtype=ttnn.bfloat16, tile=tiny, mapper=rep, layout=ttnn.TILE_LAYOUT):
+        def l1(t, grid_, shard, dtype=ttnn.bfloat16, tile=tiny, mapper=rep, layout=ttnn.TILE_LAYOUT, key=None):
+            if key is not None and share is not None:  # (adopt the shared model's: its grid covers ours, shards fit)
+                assert key in share._l1_by_key, f"share: the shared model has no L1 tensor {key!r}"
+                st_, sgrid, sshard = share._l1_by_key[key]
+                assert sgrid.contains(grid_) and all(
+                    a >= b for a, b in zip(sshard, shard)
+                ), f"share: L1 tensor {key!r} {sshard} on {sgrid} does not cover {shard} on {grid_} (l1_union)"
+                self._l1_by_key[key] = (st_, sgrid, sshard)
+                return st_
             out = settled(_l1(t, grid_, shard, dtype, tile, mapper, layout))
             self.l1_addrs.append(out.buffer_address())
+            if key is not None:
+                self._l1_by_key[key] = (out, grid_, list(shard))
             return out
 
         def _l1(t, grid_, shard, dtype=ttnn.bfloat16, tile=tiny, mapper=rep, layout=ttnn.TILE_LAYOUT):
@@ -812,7 +833,14 @@ class ResidentModel:
         # one DRAM tensor per copy, allocated back to back so the copies sit at a fixed per-bank stride
         self._keep = []
         self.w_entries = []  # (first copy's tensor or None, stride, copies)
+        self._w_geo = [(e, g, c) for e, g, c in zip(entries, geo, cols_of)]
+        if share is not None:  # (the weight layout depends on the matrix sizes only, not on rows / groups / verify)
+            assert share._w_geo == self._w_geo, "share: another weight layout"
+            self._keep, self.w_entries = share._keep, share.w_entries
+            per_entry_mats = [[] for _ in per_entry_mats]
         for (Kt, dt, _), (sb, _, _, _), cc, mats in zip(entries, geo, cols_of, per_entry_mats):
+            if share is not None:
+                continue
             if not mats:
                 self.w_entries.append((None, 0, 1))
                 continue
@@ -871,7 +899,9 @@ class ResidentModel:
         # (row groups: o shares the streamers' activation CB instead, streamer_common.hpp kOinInAct)
         self.o_in_t = l1(torch.zeros(S * LR, d.gv), grid, [LR, d.gv]) if groups == 1 else None
         o_in_addr = self.o_in_t.buffer_address() if self.o_in_t is not None else 0
-        self.logits_t = l1(torch.zeros(S * LR, nv_max * TILE), grid, [LR, nv_max * TILE]) if lm_head else None
+        self.logits_t = (
+            l1(torch.zeros(S * LR, nv_max * TILE), grid, [LR, nv_max * TILE], key="logits") if lm_head else None
+        )
         blk = blk_tiles * TILE * B
         # conv taps per (streamer, GDN copy): [tap][32 x 1x32 tiles], only the core's q|k|v columns
         self._S, self._gdn_copies, self._attn_copies = S, gdn_copies, attn_copies
@@ -924,8 +954,8 @@ class ResidentModel:
 
         # ---- attention: q / M buffers, norm weights, KV caches (position tile t -> bank t % banks)
         Dt, heads_a = d.Dt, d.h
-        q_t = l1(torch.zeros(WORKERS * TILE, Dt * TILE), work_grid, [TILE, Dt * TILE], tile=full)
-        M_t = l1(torch.zeros((WORKERS + 1) * TILE, TILE), attn_grid, [TILE, TILE], tile=full)
+        q_t = l1(torch.zeros(WORKERS * TILE, Dt * TILE), work_grid, [TILE, Dt * TILE], tile=full, key="q")
+        M_t = l1(torch.zeros((WORKERS + 1) * TILE, TILE), attn_grid, [TILE, TILE], tile=full, key="M")
         # attention of a verify of R > 2 rows: passes of P rows (P * heads <= 32, P dividing R; attn_common.hpp)
         self.attn_group = (
             max(p for p in range(1, R + 1) if R % p == 0 and p * d.h <= TILE) if R > 2 and ATTN_PACKED else 1
@@ -933,12 +963,20 @@ class ResidentModel:
         packed = self.attn_group > 1
         attn_users = B // self.attn_group
         slot_words = 512 if packed and self.attn_group * d.h > 16 else 128  # a worker's row-max slot (bf16)
+        # (l1_union: the shared scratch sized for the other geometry too; the kernels index their own slot_words)
+        sw_alloc = max(slot_words, int(self._l1_union.get("slot_words", 0)))
         m_slots_t = l1(
-            torch.zeros(1, WORKERS * slot_words), lead_grid, [1, WORKERS * slot_words], layout=ttnn.ROW_MAJOR_LAYOUT
+            torch.zeros(1, WORKERS * sw_alloc),
+            lead_grid,
+            [1, WORKERS * sw_alloc],
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            key="m_slots",
         )
-        one_t = l1(torch.ones(WORKERS * TILE, TILE), work_grid, [TILE, TILE], tile=full)
-        # (one tile per core of prep_grid: the leader and the tail core(s))
-        mean_t = l1(torch.full(((1 + self.attn_tails) * TILE, TILE), 1.0 / HD), prep_grid, [TILE, TILE], tile=full)
+        one_t = l1(torch.ones(WORKERS * TILE, TILE), work_grid, [TILE, TILE], tile=full, key="one")
+        # (one tile per core of prep_grid: the leader and the tail core(s); l1_union: the other geometry's tails too)
+        u_tails = max(self.attn_tails, int(self._l1_union.get("attn_tails", 0)))
+        mean_grid = lead_grid.merge(C(workers[len(workers) - u_tails :])) if u_tails > self.attn_tails else prep_grid
+        mean_t = l1(torch.full(((1 + u_tails) * TILE, TILE), 1.0 / HD), mean_grid, [TILE, TILE], tile=full, key="mean")
         rows32 = lambda v: v[None].expand(TILE, -1)
         qw = torch.cat([rows32(wa["wq"] / math.sqrt(HD)) for wa in w["attn"]] or [torch.zeros(TILE, HD)], dim=1)
         kw = torch.cat([rows32(wa["wk"]) for wa in w["attn"]] or [torch.zeros(TILE, HD)], dim=1)
@@ -1062,13 +1100,14 @@ class ResidentModel:
             self.embed, self.feed_peer = embed, feed_peer
             fed_rows = LR if rows else 2 if verify else 1  # tokens per launch (mlp_hub.cpp kCandWords)
             self._cand_words = 2 * TOP_K * fed_rows if self.sample else max(4, 2 * fed_rows)  # per chip
-            cand_words = n * self._cand_words
+            cand_words = max(n * self._cand_words, int(self._l1_union.get("cand_words", 0)))
             self.cand_t = l1(
                 torch.zeros(1, cand_words, dtype=torch.int32),
                 hub_grid,
                 [1, cand_words],
                 ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
+                key="cand",
             )
             # candidates, launches (row groups: then each parity's CCL count at the last launch's end, mlp_hub.cpp)
             # (and each parity's slot-free count of the pipelined sub-rounds)
@@ -2506,6 +2545,16 @@ class ResidentModel:
             ttnn.BufferType.DRAM,
             ttnn.ShardSpec(dram_grid, [self._kv_pool_rows * TILE, HD], ttnn.ShardOrientation.ROW_MAJOR),
         )
+        if self._share is not None:  # (share: the other geometry's pools; the same page geometry)
+            sh = self._share
+            assert sh.kv_paged and (sh.kv_blocks, sh.kv_block_size, sh._kv_pool_rows) == (
+                blocks,
+                block_size,
+                self._kv_pool_rows,
+            ), "share: another KV pool geometry"
+            assert sts[0].K is None, "share: no host KV images (the pool is the shared model's)"
+            self.K_t, self.V_t = sh.K_t, sh.V_t
+            return
         pools = []
         for which in ("K", "V"):
             if sts[0].K is None:  # no host images (State kv=False): zero-filled on device

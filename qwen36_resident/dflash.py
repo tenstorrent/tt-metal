@@ -465,6 +465,7 @@ class ResidentDFlashRows:
         prefill=False,
         window=2048,
         kv_pool_blocks=None,
+        l1_union=None,
     ):
         from qwen36_resident.model import Dims, ResidentModel, State, is_attn
 
@@ -550,6 +551,7 @@ class ResidentDFlashRows:
             groups=users * R // 8,  # (8 rows per group: a user per group at R = 8, two at R = 4)
             verify=R,
             taps=list(zip(tap_layers, self.taps)),
+            l1_union=l1_union,  # (DB3 phase 2: a plain rows build adopting this one's L1 scratch, model.py share=)
         )
         self.drafter = build_drafter(mesh, ck, weights_dir, embed=emb, block=R)
         widest = max(self.drafter.windows) if all(self.drafter.windows) else 0
