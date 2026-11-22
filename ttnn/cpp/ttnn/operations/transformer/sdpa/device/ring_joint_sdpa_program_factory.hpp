@@ -15,6 +15,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
+#include "ttnn/per_device_program_merge.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -35,7 +36,13 @@ struct RingJointSDPADescriptorAdapterOperation {
 
 }  // namespace detail
 
+// The per-chip descriptors (ring rank, write counts, ring masks and the fused all-gather's rank, route and fabric
+// connections, all runtime args) merge into one program per range.
 struct RingJointSDPAProgramFactory {
+    static constexpr bool merge_per_device_programs = true;
+    // A Linear end has no fabric connection towards the missing neighbour, so its all-gather writer args are shorter.
+    // The writer parses them in order behind a has-neighbour flag, so the zero padding is never read.
+    static constexpr bool pad_per_device_runtime_args = true;
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const RingJointSDPAParams& args,
         const RingJointSDPAInputs& tensor_args,

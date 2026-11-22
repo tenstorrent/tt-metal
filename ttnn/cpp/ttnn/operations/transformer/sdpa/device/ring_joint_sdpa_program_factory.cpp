@@ -4099,10 +4099,12 @@ void apply_dynamic_local_n_runtime_args(
 
 // Ring-joint SDPA returns a WorkloadDescriptor with one ProgramDescriptor per coord:
 // transport rank / forward_coord / backward_coord (used by the all-gather portion) all
-// depend on the mesh coordinate, so descriptors cannot be shared across coords. Returning
-// a WorkloadDescriptor (rather than a per-coord ProgramDescriptor) keeps the framework on
-// its no-rebuild cache-hit fast path; the dynamic scalar runtime args (indexed kv-cache /
-// kv-pad rotation) are still re-applied every dispatch by override_runtime_arguments below.
+// depend on the mesh coordinate. They are runtime args, so the adapter merges each range's
+// descriptors into one program with per-device args when the cache hit re-derives nothing per
+// coordinate (see merges_per_device_programs). Returning a WorkloadDescriptor (rather than a
+// per-coord ProgramDescriptor) keeps the framework on its no-rebuild cache-hit fast path; the
+// dynamic scalar runtime args (indexed kv-cache / kv-pad rotation) are still re-applied every
+// dispatch by override_runtime_arguments below.
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
@@ -4184,6 +4186,13 @@ std::optional<FullMeshRoute> prove_full_mesh_route(const RingJointSDPAParams& ar
     return FullMeshRoute{route->topology, route->plan.orientation, *route->plan.route_plan_hash};
 }
 
+// The cache hit re-derives per-coordinate runtime args for an indexed kv-cache, kv-pad rotation, a sliding halo and
+// dynamic_local_n, so those keep one program per coordinate; every other hit writes the same values on every chip.
+bool merges_per_device_programs(const RingJointSDPAParams& args) {
+    return !args.has_indexed_kv_cache() && !args.has_kv_pad_rotation() && !args.has_sliding_window() &&
+           !args.dynamic_local_n;
+}
+
 RingJointSDPAParams with_full_mesh_route(const RingJointSDPAParams& args, const Tensor& q) {
     auto resolved = args;
     if (const auto route = prove_full_mesh_route(args, q)) {
@@ -4223,7 +4232,10 @@ RingJointSDPAMeshWorkloadFactory::cached_mesh_workload_t RingJointSDPAMeshWorklo
         CMAKE_UNIQUE_NAMESPACE::apply_full_mesh_route(args, *route);
     }
     auto descriptor_cached =
-        descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output_tensors);
+        CMAKE_UNIQUE_NAMESPACE::merges_per_device_programs(args)
+            ? descriptor_adapter_t::create_mesh_workload(
+                  args, tensor_coords, tensor_args, output_tensors, ttnn::MergePerDevicePrograms{})
+            : descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output_tensors);
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (auto& [range, program] : descriptor_cached.workload.get_programs()) {
         auto& shared = shared_variables[range];
@@ -4259,14 +4271,17 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
             CMAKE_UNIQUE_NAMESPACE::apply_changed_bindings(
                 program, shared.descriptor.resolved_bindings, shared.bindings, collected.buffers);
         }
+        ag_dyn::apply_semaphore_arg_patch(
+            shared.semaphore_patch, program, hit_args.all_gather_operation_attributes.semaphore);
+        if (CMAKE_UNIQUE_NAMESPACE::merges_per_device_programs(hit_args)) {
+            continue;
+        }
         const ttnn::MeshCoordinate coord = coordinate_range.start_coord();
         TT_FATAL(
             coord == coordinate_range.end_coord(),
             "Expected RingJointSDPA cached programs to cover a single coordinate, got range {} to {}",
             coord,
             coordinate_range.end_coord());
-        ag_dyn::apply_semaphore_arg_patch(
-            shared.semaphore_patch, program, hit_args.all_gather_operation_attributes.semaphore);
         apply_ring_joint_scalar_runtime_args(program, hit_args, tensor_args, coord);
         if (hit_args.dynamic_local_n) {
             apply_dynamic_local_n_runtime_args(program, hit_args, tensor_args);
