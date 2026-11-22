@@ -1167,6 +1167,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // through the provided-mask path with the reader's K-range narrowing.
     const bool use_rel_bias = tensor_args.rel_logits.has_value();
     const bool use_causal_kernel = operation_attributes.is_causal && !is_windowed && !use_rel_bias;
+    // rel_logits without a window is causal too (the reader's K range ends at the diagonal), so its Q chunks get the
+    // same zigzag light/heavy pairing across cores. Each Q chunk's math is unchanged; only its core changes.
+    const bool rel_zigzag = use_rel_bias && operation_attributes.is_causal && !is_windowed &&
+                            operation_attributes.sliding_window_size.value_or(0) == 0;
     const auto& chunk_start_idx = operation_attributes.chunk_start_idx;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     const auto& program_config = operation_attributes.program_config;
@@ -1371,7 +1375,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Q-chunk space evenly across cores. Pair-distribute when causal + even q_num_chunks so every
     // core gets balanced light/heavy work after the shared zigzag remap (reader/writer/compute CT 32/20/29).
     const uint32_t total_q_chunks = B * NQH * q_num_chunks;
-    const bool global_q_pair_distribute = use_causal_kernel && (q_num_chunks % 2 == 0);
+    const bool global_q_pair_distribute = (use_causal_kernel || rel_zigzag) && (q_num_chunks % 2 == 0);
     uint32_t global_q_base_chunks_per_core = 0;
     uint32_t global_q_cores_doing_extra = 0;
     uint32_t global_q_extra_chunks_per_core = 0;
@@ -1553,7 +1557,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     const uint32_t scale_packed = std::bit_cast<uint32_t>(scale.value_or(1.0f));
 
-    const bool use_zigzag_balancing = use_causal_kernel;
+    const bool use_zigzag_balancing = use_causal_kernel || (rel_zigzag && global_q_pair_distribute);
 
     const WriterGqaPackArgs writer_gqa_pack =
         writer_gqa_pack_args(operation_attributes.output_concat_heads, gqa_pack, q_shape[2] / TILE_HEIGHT);
