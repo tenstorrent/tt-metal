@@ -1,0 +1,46 @@
+{
+ "used": [
+  {
+   "id": "DS41-22",
+   "how": "added layer 0's row-scaling check (row_slope >= 0.35 vs the CPU step) to the layer-1 test; it catches noise1e-2 (slope ~0) that the size limits let through",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-28",
+   "how": "device_component is per step, so the device gate for layer 1 runs the existing tt/experts.py module; ran the gate on the device before finishing",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "DS41-22's fix is needed by every layer's experts test; the entry named only the layer-0 test, and the previous layer-1 attempt copied only the golden-limit half of it (entry now says every layer's test)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "n/a",
+   "evidence": "known_issues.md DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x the step's own component error, no cap'; only DS41-22 was edited here"
+  }
+ ],
+ "cited_only": [
+  "DS41-20"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa_engram.experts",
+  "role": "test",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T04:29:33",
+  "head": "a5ff51707bf",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa_engram.experts.test.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_experts.py"
+  ]
+ }
+}

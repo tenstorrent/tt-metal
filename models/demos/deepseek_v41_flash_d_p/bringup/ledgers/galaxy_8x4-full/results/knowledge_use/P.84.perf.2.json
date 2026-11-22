@@ -1,0 +1,64 @@
+{
+ "used": [
+  {
+   "id": "DS41-235",
+   "how": "expected off and on bit-identical on the ladder (order-free combine): checked the off run's 105 err/top5 metrics against P.78 and attempt 1's on side, all equal",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-303",
+   "how": "read the 0.0 ms agentic gain as the ~820 us per-layer floor of routed_experts_combine (experts section -0.55 ms), so stopped instead of tuning the split",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "an A/B side keeps one item per test file stem: two commands of one test (agentic / prose test_skip_positions) collapse and one never runs (now DS41-304)",
+  "with replica slots off, `if constexpr` in a non-template kernel function does not stop a called template from being instantiated: a compile-time divisor of 0 breaks the JIT build (-Werror=div-by-zero)",
+  "one resident submit with two runs of the same switches (off agentic && off prose) still loaded the model twice (F269: 'run1 needs another model'): 2 opens, 2 loads"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work added; the fix is a nonzero divisor in code the off path never runs"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; the change is in the C++ moe_head kernel header routing_planner.hpp"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression / unit suite run; only model-level runs through the resident runner"
+  },
+  {
+   "id": "OV-50",
+   "answer": "done",
+   "evidence": "(1) routing_planner.hpp candidates_divisor: MOE_REPLICAS=off JIT-compiles; resident request 20261119-101006-169a6f ladder rung last rc 0, all 105 err/top5 metrics equal to P.78's (bit-identical). (2) on side ran through the resident after F287: measure --task P.84 --part test rc 0 (prose), agentic on via resident 20261119-102358-77cf87, off walls 20261119-103109-ee4332; one open per configuration (the off submit took two, see missing)"
+  }
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.84",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-19T10:40:03",
+  "head": "f232d384471",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.84.perf.2.json",
+   "ttnn/ttnn/bringup/moe_block_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/kernels/routing_planner.hpp"
+  ]
+ },
+ "cited_only": [
+  "DS41-304"
+ ]
+}

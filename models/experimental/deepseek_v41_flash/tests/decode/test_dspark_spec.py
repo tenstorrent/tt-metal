@@ -84,7 +84,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
 from models.experimental.deepseek_v41_flash.tt.spec import DSparkSpeculator
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import encode_messages, eos_token
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
+from tt_py_test_utils_common.tensor_prefetcher import tensor_prefetcher_session
 
 DRAFTS = 4
 # The pipelined DSpark runs' drafts per round: "all" or a comma list (see _draft_counts).

@@ -1,0 +1,264 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// sparse_sdpa writer: per token, drain the untilized [H, V_DIM] row-major block from compute (Sqt*vDHt
+// tile-sized pages, row-major bytes inside) and write each head-row to the ROW-MAJOR [1,H,S,V_DIM] output.
+// Also builds the three persistent compute-input tiles once at startup (the reader is busier): the reduce
+// identity scaler, the col-identity (row-sum finalize), and the all-(-inf) mask tile. Optional per-head
+// attention sinks are gathered once here too, while the reader loads Q and indices.
+// Uses the object-based NoC + circular-buffer APIs.
+
+#include <stdint.h>
+#include "api/tile_constants.h"  // tt::constants::TILE_WIDTH
+#include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"  // generate_bcast_col_scalar
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "sparse_sdpa_gather.hpp"  // dual-NoC trid-ring gather helper (shared with the reader)
+
+constexpr uint32_t one_bf16_packed = 0x3F803F80u;  // bf16(1.0) double-packed; generate_bcast_col_scalar uses >>16
+constexpr uint16_t neg_inf_bf16 = 0xFF80u;
+
+#ifdef SPARSE_SDPA_KV_ROWS
+// Bring-up fork option kv_lane_rows (deepseek_v41_flash_d_p PB.7B): per-core runtime args 2.. are [n, (token end,
+// kv address) x 8]: token tok reads the kv of the first range whose end is past it (the device's kv past the last).
+static inline uint32_t kv_row_address(uint32_t tok, uint32_t fallback) {
+    const uint32_t n = get_arg_val<uint32_t>(2);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (tok < get_arg_val<uint32_t>(3 + 2 * i)) {
+            return get_arg_val<uint32_t>(4 + 2 * i);
+        }
+    }
+    return fallback;
+}
+#endif
+
+void kernel_main() {
+    constexpr uint32_t H = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::H);
+    constexpr uint32_t S = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::S);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::V_DHT);
+    // CB ids — passed by the factory (the SparseCB enum is the single source); order must match the
+    // factory's writer CB-arg block (compile args 3..6).
+    constexpr uint32_t cb_out_rm = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_OUT_RM);
+    constexpr uint32_t cb_scale = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SCALE);
+    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_COL_IDENTITY);
+    constexpr uint32_t cb_neginf = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_NEGINF);
+    constexpr uint32_t out_elem_bytes =
+        get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::OUT_ELEM_BYTES);  // output tensor dtype
+    constexpr bool block_cyclic = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::BLOCK_CYCLIC) != 0;
+    constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::BC_CHUNK_LOCAL);
+    constexpr uint32_t bc_sp = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::BC_SP);
+    constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::BC_SHARD_STRIDE_GAP);
+    constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::BC_SLAB_STRIDE_GAP);
+    constexpr bool scaled_kv = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::SCALED_KV) != 0;
+    constexpr uint32_t k_dim = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::K_DIM);
+    constexpr uint32_t kv_elem_bytes = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::KV_ELEM_BYTES);
+    constexpr uint32_t cb_idx = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_IDX);
+    constexpr uint32_t cb_kreq = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_KREQ);
+    constexpr uint32_t cb_kack = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_KACK);
+    constexpr uint32_t packed_row_bytes = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::PACKED_ROW_BYTES);
+    constexpr bool use_attention_sink = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::USE_ATTENTION_SINK) != 0;
+    constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_ATTENTION_SINK);
+    constexpr uint32_t cb_sink_scratch = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SINK_SCRATCH);
+    constexpr auto out_args = TensorAccessorArgs<
+        sparse_sdpa::writer_ct_arg::END + sparse_sdpa::ROW_BFP4_CT_COUNT,
+        sparse_sdpa::writer_common_arg::END + sparse_sdpa::ROW_BFP4_COMMON_COUNT>();
+    // kv carries a RUNTIME tensor shape (T dim in common runtime args), so its accessor spans both arg streams.
+    constexpr auto kv_args =
+        TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
+
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::OUTPUT_ADDRESS);
+    const uint32_t tok_start = get_arg_val<uint32_t>(0);
+    const uint32_t tok_count = get_arg_val<uint32_t>(1);
+    const uint32_t kv_addr =
+        get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::KV_ADDRESS);  // dual-NoC K-half gather
+    // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
+    const uint32_t kv_batch_page_offset =
+        get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::KV_BATCH_PAGE_OFFSET);
+
+    constexpr uint32_t row_bytes = vDHt * tt::constants::TILE_WIDTH * out_elem_bytes;  // V_DIM bytes per head-row
+    constexpr uint32_t block_tiles = (H / tt::constants::TILE_HEIGHT) * vDHt;          // Sqt*vDHt: the [H,V_DIM] block
+
+    Noc noc;
+    experimental::CB out_cb(cb_out_rm);
+    const auto out = TensorAccessor(out_args, out_addr);
+    // Dual-NoC K gather: the writer co-gathers half of each K chunk on ITS NoC into the shared cb_k_rm L1
+    // (the reader owns the reserve/push; we fill rows [0,half) at the same write ptr). This spreads the
+    // K response-data load over both NoC links. Indices live in the reader's shared cb_idx
+    // scratch; the kv accessor + row size mirror the reader.
+    constexpr uint32_t k_row_bytes = k_dim * kv_elem_bytes;
+    constexpr uint32_t latent_row_bytes = vDHt * tt::constants::TILE_WIDTH;
+    constexpr uint32_t scale_blocks = sparse_sdpa::scale_block_count(latent_row_bytes);
+#ifndef SPARSE_SDPA_KV_ROWS
+    const auto kv = TensorAccessor(kv_args, kv_addr);
+#endif
+    experimental::CB idx_cb(cb_idx), kreq_cb(cb_kreq), kack_cb(cb_kack);
+    volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_cb.get_write_ptr());
+#ifdef SPARSE_SDPA_ROW_BFP4
+    // ROW_BFP4 (fork option): kv = bfloat4_b row records (chunks >= 1), kv_window = the bf16 rows of chunk 0
+    constexpr uint32_t ct_rb = sparse_sdpa::writer_ct_arg::END;
+    constexpr uint32_t k4_chunk = get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::K_CHUNK);
+    constexpr uint32_t cb_k4_rec = get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::CB_K4_REC);
+    const uint32_t k4_rec_l1 =
+        (get_write_ptr(cb_k4_rec) + sparse_sdpa::ROW_BFP4_ALIGN - 1) & ~(sparse_sdpa::ROW_BFP4_ALIGN - 1);
+    constexpr auto sink_args_rb =
+        TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
+    constexpr auto kvw_args = TensorAccessorArgs<
+        sink_args_rb.next_compile_time_args_offset(),
+        sink_args_rb.next_common_runtime_args_offset()>();
+    const auto kvw = TensorAccessor(kvw_args, get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::END));
+#elif defined(SPARSE_SDPA_KV_WINDOW)
+    // KV_WINDOW (fork option): kv = bf16 rows (chunks >= 1), kv_window = the bf16 rows of chunk 0
+    constexpr auto sink_args_kw =
+        TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
+    constexpr auto kvw_args = TensorAccessorArgs<
+        sink_args_kw.next_compile_time_args_offset(),
+        sink_args_kw.next_common_runtime_args_offset()>();
+    const auto kvw = TensorAccessor(kvw_args, get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::END));
+#endif
+
+    // --- persistent compute-input tiles (built once; the reader is busier with the K gather) ---
+    // Reduce identity scaler (value 1.0; the softmax scale is applied in compute's exp).
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_scale,
+        ckernel::PoolType::MAX,
+        ckernel::ReduceDim::REDUCE_ROW,
+        /*reduce_factor=*/1>();
+
+    // Col-identity (column 0 = 1.0): compute matmul-reduces the partial row-sum against it to finalize the
+    // within-tile reduction in normalize_row_streaming.
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), one_bf16_packed);
+
+    // All-(-inf) tile (row 0; compute bcast-adds it to fully-masked key tiles). Only row 0 matters for the
+    // row-broadcast add: the left and right half-rows live in face 0 and face 1 respectively.
+    {
+        experimental::CB neginf_cb(cb_neginf);
+        neginf_cb.reserve_back(1);
+        volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(neginf_cb.get_write_ptr());
+        for (uint32_t c = 0; c < tt::constants::FACE_WIDTH; ++c) {
+            p[c] = neg_inf_bf16;
+            p[tt::constants::FACE_HW + c] = neg_inf_bf16;
+        }
+        neginf_cb.push_back(1);
+    }
+
+    if constexpr (use_attention_sink) {
+        if (tok_count > 0) {
+            constexpr auto sink_args = TensorAccessorArgs<
+                kv_args.next_compile_time_args_offset(),
+                kv_args.next_common_runtime_args_offset()>();
+            const auto sink = TensorAccessor(
+                sink_args, get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::ATTENTION_SINK_ADDRESS));
+            experimental::CB sink_cb(cb_attention_sink), scratch(cb_sink_scratch);
+            constexpr uint32_t sink_bytes = H * sizeof(uint16_t);
+            constexpr uint32_t tile_bytes = tt::constants::TILE_HW * sizeof(uint16_t);
+            constexpr uint32_t faces_per_row = tt::constants::TILE_WIDTH / tt::constants::FACE_WIDTH;
+            static_assert(H % tt::constants::TILE_HEIGHT == 0);
+            static_assert(sink_bytes % NOC_DRAM_READ_ALIGNMENT_BYTES == 0);
+            constexpr uint32_t sink_tiles = H / tt::constants::TILE_HEIGHT;
+            sink_cb.reserve_back(sink_tiles);
+            scratch.reserve_back(1);
+            noc.async_write_zeros(sink_cb, sink_tiles * tile_bytes);
+            // [1,1,1,H] BF16 stores all heads in one row. Read once, then pack the scalars
+            // into the first column of the compute tiles (one head per row).
+            noc.async_read(sink, scratch, sink_bytes, {.page_id = 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            noc.write_zeros_l1_barrier();
+            auto* dst = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sink_cb.get_write_ptr());
+            auto* src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch.get_write_ptr());
+            for (uint32_t h = 0; h < H; ++h) {
+                const uint32_t row = h % tt::constants::TILE_HEIGHT;
+                const uint32_t offset = (h / tt::constants::TILE_HEIGHT) * tt::constants::TILE_HW +
+                                        (row / tt::constants::FACE_HEIGHT) * faces_per_row * tt::constants::FACE_HW +
+                                        (row % tt::constants::FACE_HEIGHT) * tt::constants::FACE_WIDTH;
+                dst[offset] = src[h];
+            }
+            sink_cb.push_back(sink_tiles);  // reused by every token on this core
+        }
+    }
+
+    for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {
+#ifdef SPARSE_SDPA_KV_ROWS
+        const auto kv = TensorAccessor(kv_args, kv_row_address(tok, kv_addr));
+#endif
+        // K-gather phase: process this token's active chunks (reader signals per chunk; is_last ends the token).
+        // Gather rows [0,split) on the writer's NoC into the reader-reserved destination, then ack.
+        bool last = false;
+        while (!last) {
+            kreq_cb.wait_front(1);
+            uint32_t base, split, dst_l1, scale_dst_l1 = 0, kind = 0;
+            {
+                volatile tt_l1_ptr uint32_t* request =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
+                base = request[sparse_sdpa::gather_request::BASE];
+                split = request[sparse_sdpa::gather_request::SPLIT];
+                last = request[sparse_sdpa::gather_request::IS_LAST] != 0;
+                dst_l1 = request[sparse_sdpa::gather_request::DST_L1];
+                if constexpr (scaled_kv) {
+                    scale_dst_l1 = request[sparse_sdpa::gather_request::SCALE_DST_L1];
+                }
+#ifdef SPARSE_SDPA_SPLIT_WINDOW
+                kind = request[sparse_sdpa::gather_request::KIND];
+#endif
+            }
+            kreq_cb.pop_front(1);
+            (void)kind;
+#ifdef SPARSE_SDPA_ROW_BFP4
+            if (kind == sparse_sdpa::gather_request::KIND_BFP4) {
+                sparse_sdpa::gather_bfp4_rows_staged<k_dim, k4_chunk, sparse_sdpa::SCALED_K_TRID_RING>(
+                    noc, kv, dst_l1, k4_rec_l1, idx_ptr, base, 0, split, kv_batch_page_offset);
+            } else {
+#if defined(SPARSE_SDPA_WINDOW_BLOCKS)
+                sparse_sdpa::gather_bfp8_window_blocks<k_dim, k4_chunk>(noc, kvw, dst_l1, idx_ptr[base], 0, split);
+#elif defined(SPARSE_SDPA_WINDOW_BFP8)
+                sparse_sdpa::gather_bfp4_rows<k_dim, k4_chunk, sparse_sdpa::SCALED_K_TRID_RING, k_dim>(
+                    noc, kvw, dst_l1, idx_ptr, base, 0, split, 0);
+#else
+                sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::K_TRID_RING>(
+                    noc, kvw, dst_l1, idx_ptr, base, 0, split, k_row_bytes, 0);
+#endif
+            }
+#elif defined(SPARSE_SDPA_KV_WINDOW)
+            if (kind == sparse_sdpa::gather_request::KIND_WINDOW) {
+                sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::K_TRID_RING>(
+                    noc, kvw, dst_l1, idx_ptr, base, 0, split, k_row_bytes, 0);
+            } else {
+                sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::K_TRID_RING>(
+                    noc, kv, dst_l1, idx_ptr, base, 0, split, k_row_bytes, kv_batch_page_offset);
+            }
+#else
+            if constexpr (scaled_kv) {
+                sparse_sdpa::trid_ring_gather<
+                    block_cyclic,
+                    bc_chunk_local,
+                    bc_sp,
+                    bc_shard_stride_gap,
+                    bc_slab_stride_gap,
+                    sparse_sdpa::SCALED_K_TRID_RING>(
+                    noc, kv, dst_l1, idx_ptr, base, 0, split, packed_row_bytes, kv_batch_page_offset);
+                sparse_sdpa::scatter_packed_scales<scale_blocks>(
+                    dst_l1, scale_dst_l1, 0, split, packed_row_bytes, latent_row_bytes);
+            } else {
+                sparse_sdpa::trid_ring_gather<
+                    block_cyclic,
+                    bc_chunk_local,
+                    bc_sp,
+                    bc_shard_stride_gap,
+                    bc_slab_stride_gap,
+                    sparse_sdpa::K_TRID_RING>(
+                    noc, kv, dst_l1, idx_ptr, base, 0, split, k_row_bytes, kv_batch_page_offset);
+            }
+#endif
+            kack_cb.reserve_back(1);
+            kack_cb.push_back(1);
+        }
+        out_cb.wait_front(block_tiles);  // one untilized [H, V_DIM] block
+        for (uint32_t h = 0; h < H; ++h) {
+            // row h (head h) at CB read-ptr byte offset h*row_bytes; DRAM page = h*S + tok.
+            noc.async_write(out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = h * S + tok});
+        }
+        noc.async_write_barrier();
+        out_cb.pop_front(block_tiles);
+    }
+}

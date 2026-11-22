@@ -10,6 +10,7 @@
 #include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
@@ -36,6 +37,7 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/up_front_compile.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/prefetcher_pipe.hpp"
@@ -1324,7 +1326,15 @@ public:
 
             // Cache miss is the cold path: always validate here, so every cached program was
             // built from a checked spec. validate_program_args only gates the hit-path re-checks.
-            tt::tt_metal::distributed::MeshWorkload mesh_workload(*mesh_device, program_specs);
+            //
+            // Up-front parallel precompile: while the collect pass is active the workload is
+            // stashed and discarded (device_operation.hpp), never dispatched — so ask the spec
+            // factory NOT to compile it here. Leaving the compile eager would JIT every kernel
+            // inline and serially, and the later parallel_compile would find nothing to do. See
+            // ttnn/up_front_compile.hpp.
+            const bool defer_compile = ttnn::up_front_compile::should_defer_compile();
+            auto mesh_workload =
+                tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(*mesh_device, program_specs, defer_compile);
             for (auto& [range, program] : mesh_workload.get_programs()) {
                 program.set_program_run_args(run_params.at(range));
             }

@@ -9,7 +9,7 @@ docstring), on the V4.1 decode model and :class:`DeepSeekV41PrefillModel` instea
 
 * the engine (:class:`V41ChatEngine`) builds :class:`DeepSeekV41Model` and its ``lm_head``; its layers are split
   evenly over the stages in contiguous runs (five per stage at the default eight), a placement the prefill model
-  shares, as in ``tests/prefill/test_prefill_decode_demo.py``. The full mesh stays open;
+  shares, as in ``tests/pipeline_parallel_prefill/test_prefill_decode_demo.py``. The full mesh stays open;
   ``DEEPSEEK_V4_NUM_STAGES`` (default 8) is how many ``1 x 4`` submeshes are carved from it;
 * the prefill (:class:`_V41Prefiller`) is :meth:`DeepSeekV41Model.build_prefill` (sharing the routed experts,
   embedding, ``lm_head``, sockets and the Engram host lookup) with no CSA position bias to commit. By default it
@@ -212,7 +212,7 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_full_model_decode_
     _build_rope,
     _traced_max_seq,
 )
-from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefill_demo import (
+from models.experimental.deepseek_v41_flash.tests.pipeline_parallel_prefill.test_full_model_prefill_demo import (
     _ATTENTION_WEIGHT_DTYPE,
     _TP_SIZE,
 )
@@ -282,7 +282,7 @@ from models.experimental.deepseek_v4_flash.tt.prefill.attention import ALIGNMENT
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
+from tt_py_test_utils_common.tensor_prefetcher import tensor_prefetcher_session
 
 _NUM_USERS = 256  # default --num-users
 # Default --num-users with --prefill-all-stages. Its expert copies take ~5.7 GB more on each chip of stages 2-4

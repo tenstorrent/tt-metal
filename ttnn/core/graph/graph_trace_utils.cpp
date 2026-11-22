@@ -6,7 +6,11 @@
 
 #include <cstdint>
 #include <cstdlib>  // std::strtoul
+#include <map>
+#include <regex>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -301,6 +305,24 @@ static uint32_t calculate_buffer_allocation_size(const nlohmann::json& node) {
     return json_to_int(node.at(kParams).at(kMaxSizePerBank));
 }
 
+// Parse a CoreRangeSet::str() -- e.g. "{[0-0 - 0-0], [3-1 - 6-2]}" -- into the
+// individual (x, y) cores it covers. Each CoreRange renders as "[startX-startY -
+// endX-endY]" (CoreRange::str() with CoreCoord::str() == "x-y").
+static std::vector<std::pair<int, int>> parse_core_range_set_str(const std::string& s) {
+    std::vector<std::pair<int, int>> cores;
+    static const std::regex re(R"(\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\])");
+    for (std::sregex_iterator it(s.begin(), s.end(), re), end; it != end; ++it) {
+        const std::smatch& m = *it;
+        int x0 = std::stoi(m[1]), y0 = std::stoi(m[2]), x1 = std::stoi(m[3]), y1 = std::stoi(m[4]);
+        for (int x = x0; x <= x1; ++x) {
+            for (int y = y0; y <= y1; ++y) {
+                cores.emplace_back(x, y);
+            }
+        }
+    }
+    return cores;
+}
+
 uint32_t extract_peak_memory_usage(const nlohmann::json& trace) {
     return extract_resource_usage_per_core(trace).peak_total;
 }
@@ -311,7 +333,29 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
     // Program-scope L1 of a Metal 2.0 program, tracked per kind. Released together with the CBs.
     size_t current_dfb = 0, peak_dfb = 0;
     size_t current_scratchpad = 0, peak_scratchpad = 0;
-    size_t current_total = 0, peak_total = 0;
+    size_t peak_total = 0;
+
+    // Per-core accounting for peak_total. CBs / dataflow buffers / scratchpad each name the
+    // exact cores they occupy (core_range_set). Summing their sizes GLOBALLY (the previous
+    // behaviour) double-counts buffers that live on DISJOINT core sets -- e.g. a work-split op
+    // placing one class of CBs on columns {0,3,6} and another on {1,2,4,5} at the SAME L1
+    // address -- and can report a per-core peak that exceeds physical L1 on a passing op. Track
+    // usage per core and take the max. L1 tensor buffers report a per-bank size but not which
+    // cores, so they are added to a base resident on every participating core.
+    std::map<std::pair<int, int>, size_t> per_core_program_l1;  // CB + dfb + scratchpad per core
+    size_t l1_buffer_base = 0;                                  // resident L1 tensor buffers
+    auto add_program_l1 = [&](const nlohmann::json& node, size_t alloc_size) {
+        for (const auto& c : parse_core_range_set_str(node.at(kParams).at(kCoreRangeSet).get<std::string>())) {
+            per_core_program_l1[c] += alloc_size;
+        }
+    };
+    auto update_peak_total = [&]() {
+        size_t max_core = 0;
+        for (const auto& [core, bytes] : per_core_program_l1) {
+            max_core = std::max(max_core, bytes);
+        }
+        peak_total = std::max(peak_total, l1_buffer_base + max_core);
+    };
 
     size_t counter_expected = 0;
     for (const auto& node : trace) {
@@ -328,8 +372,8 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
                 uint32_t alloc_size = json_to_int(node.at(kParams).at(kSize));
                 current_cb += alloc_size;
                 peak_cb = std::max(peak_cb, current_cb);
-                current_total += alloc_size;
-                peak_total = std::max(peak_total, current_total);
+                add_program_l1(node, alloc_size);
+                update_peak_total();
             }
         } else if (node.at(kNodeType) == kNodeDataflowBufferAllocate) {
             // A borrowed buffer is a view onto a tensor's L1, which the tensor already reports.
@@ -338,20 +382,20 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
                 uint32_t alloc_size = json_to_int(node.at(kParams).at(kSize));
                 current_dfb += alloc_size;
                 peak_dfb = std::max(peak_dfb, current_dfb);
-                current_total += alloc_size;
-                peak_total = std::max(peak_total, current_total);
+                add_program_l1(node, alloc_size);
+                update_peak_total();
             }
         } else if (node.at(kNodeType) == kNodeScratchpadAllocate) {
             uint32_t alloc_size = json_to_int(node.at(kParams).at(kSize));
             current_scratchpad += alloc_size;
             peak_scratchpad = std::max(peak_scratchpad, current_scratchpad);
-            current_total += alloc_size;
-            peak_total = std::max(peak_total, current_total);
+            add_program_l1(node, alloc_size);
+            update_peak_total();
         } else if (node.at(kNodeType) == kNodeCBDeallocateAll) {
-            current_total -= current_cb + current_dfb + current_scratchpad;
             current_cb = 0;
             current_dfb = 0;
             current_scratchpad = 0;
+            per_core_program_l1.clear();
         } else if (node.at(kNodeType) == kNodeBufferAllocate || node.at(kNodeType) == kNodeBufferDeallocate) {
             if (node.at(kParams).at(kType) == "DRAM") {
                 continue;
@@ -360,11 +404,11 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
             if (node.at(kNodeType) == kNodeBufferAllocate) {
                 current_l1 += alloc_size;
                 peak_l1 = std::max(peak_l1, current_l1);
-                current_total += alloc_size;
-                peak_total = std::max(peak_total, current_total);
+                l1_buffer_base += alloc_size;
+                update_peak_total();
             } else {  // kNodeBufferDeallocate
                 current_l1 -= alloc_size;
-                current_total -= alloc_size;
+                l1_buffer_base -= alloc_size;
             }
         }
     }

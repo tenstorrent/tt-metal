@@ -1,0 +1,11 @@
+{
+  "used": [
+    {"id": "DS41-238", "how": "reused FIX.26's handoff pipeline (reference/handoff.py golden + drift) for a golden at decode's stop P = 10048"},
+    {"id": "DS41-240", "how": "the contract / acks decode requests judge layers 0-19's windows only; layers 20-39's snapshot and ring are not read under decode"}
+  ],
+  "contradicted": [
+    {"id": "DS41-240", "evidence": "out of date by owner decision FIX.28 (2026-11-13): test_contract and test_adapter_acks now also run a DECODER_SKIP=decode request (testing/contract.py variants, hooks.contract_variants; test_adapter_acks.decoder_skip_requests); only layers 20-39's windows are left out, not the tests"}
+  ],
+  "missing": [],
+  "overseer": []
+}

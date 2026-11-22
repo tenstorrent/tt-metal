@@ -40,7 +40,7 @@ from models.experimental.deepseek_v4_flash.tt.decode.attention import (
 )
 from models.experimental.deepseek_v4_flash.tt.layers import LinearDecode
 from models.experimental.deepseek_v4_flash.tt.weight_cache import _load_weight
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
+from tt_py_test_utils_common.tensor_prefetcher import tensor_prefetcher_session
 
 K = 5120
 Q_LORA = 1280

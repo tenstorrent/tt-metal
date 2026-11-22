@@ -102,6 +102,9 @@ public:
     // notify_receiver without its store fence; publish_staged fences a batch of sockets once.
     void notify_receiver_unfenced();
     void barrier(std::optional<uint32_t> timeout_ms);
+    // The receiver kernel is gone (or wedged) and will never ack what is in flight; the
+    // destructor then skips its drain barrier instead of timing out on it.
+    void abandon_receiver() { receiver_abandoned_ = true; }
     // True when pages go through the socket's own receiver window rather than the cluster.write_core fallback.
     bool writes_through_window() const { return receiver_core_window_ != nullptr; }
     // The receiver kernel is gone (or wedged) and will never ack what is in flight; the

@@ -1,0 +1,77 @@
+{
+ "used": [
+  {
+   "id": "DS41-3",
+   "how": "the norm is applied to the y POST_COLLAPSE collapses with the residual's own pre; only attn_norm / ffn_norm read attn_in / ffn_in, so the pass writes the norm instead of y (attempt 1 code, kept)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-174",
+   "how": "the normalized y goes into the existing load-time y sites through y_output; no new allocation",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-210",
+   "how": "per-root owner lists appended after the variable-length per-core args (never change on a cache hit)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-80",
+   "how": "y tiles kept in L1 between the collapse and the norm phase instead of a DRAM round trip",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-222",
+   "how": "attempt 1's lesson: fold 32 -> 8 columns on the SFPU before the BRISC transpose of the norm statistic",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-223",
+   "how": "attempt 1's lesson: reconfig srcA / packer before the root phase on spare (unit-less) cores",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "attempt 1 was failed by the command-log check for a pure-arithmetic python3 heredoc (no device code) run from a fork directory: any python3 heredoc counts as device code; do host arithmetic by hand or in the brief's tools",
+  "tt-probe.sh writes probes under tests/ttnn/unit_tests/operations/<name>/probes, outside a perf step's allowed paths"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated: the norm reuses the collapse's y tiles in L1; scratch shape unchanged; roots on spare cores only when the grid has them"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "mhc_post is a C++ device operation (program cache, runtime-arg overrides), not a Python-built program; no Python op added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "only the new tests/unit/test_mhc_post_norm.py ran on the 8x4 (attempt 1, 6 passed); no fork regression suite; attempt 2 ran no device job beyond the reused measure"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.35",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-07T23:04:39",
+  "head": "632ffc6d406",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.35.perf.2.json"
+  ]
+ }
+}

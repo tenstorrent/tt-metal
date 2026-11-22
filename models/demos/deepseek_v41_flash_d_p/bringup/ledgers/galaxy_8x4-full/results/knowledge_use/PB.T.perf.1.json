@@ -1,0 +1,79 @@
+{
+ "used": [
+  {
+   "id": "DS41-366",
+   "how": "alone is the same request through the packed serving entry (one segment), not today's prefill_chunk: decoder-layer records differ there by design",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-359",
+   "how": "every comparison reads its own slot's state (runtime.state(kv, slot)), never model.state after a run",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-356",
+   "how": "the tiers' load length is declared once (BATCH_MAX_SEQ 114688) so the determinism check and both tiers share one load",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "runtime.compile's packed warm-up (warm_glued_chunks) raises on slots below ~112k positions; the accuracy load reached 64512 (now DS41-372)",
+  "a one-segment packed chunk at a continuing, non-chunk-aligned start is not warmed: 6 builds (now DS41-373); test_no_rebuild has no 1-segment packed path",
+  "replay segments must replay written rows (start P - 128, write_start P); write_start = start + 128 replays never-written rows, which read slot leftovers"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel or fork changed; nothing padded (tests only)"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "two DECIDED lines in BREADCRUMBS PB.T (replay construction, 6 capture layers); the builds gap is reported as DS41-373, not worked around"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "both tiers BATCH_SHARED on the accuracy load with the determinism check; one max_seq raised the same way for both (BATCH_MAX_SEQ 114688, core/batch.hints); BRINGUP_CHUNK=8192; no load-time env in a test"
+  },
+  {
+   "id": "OV-67",
+   "answer": "n/a",
+   "evidence": "no per-chunk host table added; the tests send only the ids + chunk header (make_packed_input) outside the build count"
+  }
+ ],
+ "cited_only": [
+  "DS41-372",
+  "DS41-373"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.T",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T14:25:29",
+  "head": "5d1a45d1970",
+  "touched": [
+   "models/demos/common/bringup/core/batch.py",
+   "models/demos/common/bringup/dev/BREADCRUMBS.md",
+   "models/demos/common/bringup/selftest/test_resident_gate.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.T.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.T_deep_sweep.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.T_fast_tier.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.T.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/isolation_common.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_deep_sweep.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_fast_tier.py"
+  ]
+ }
+}

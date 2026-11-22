@@ -1,0 +1,83 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "flat_routed_expert_plan.hpp"
+#include "flat_routed_expert_types.hpp"
+#include "ttnn/device_operation.hpp"
+
+namespace ttnn::operations::bringup::flat_routed_expert {
+
+// Buffers whose addresses the runtime args carry (re-applied on every program-cache hit).
+enum class AddrSrc : uint8_t {
+    X,
+    Y,
+    Counts,
+    Regions,
+    Ids,
+    GateUp,
+    Down,
+    ReaderDown,
+    Done,
+    Arena,
+    Words,
+    TokenIndex,
+    Count
+};
+
+struct AddrPatch {
+    tt::tt_metal::KernelHandle kernel;
+    tt::tt_metal::CoreCoord core;
+    uint32_t index;
+    AddrSrc src;
+    uint32_t offset;  // byte offset added to the buffer address
+};
+
+// flat_with_program's L1 hand-off (y_l1): the y writers' extra args after the 4 report args (se_yrm.hpp)
+constexpr uint32_t FLAT_Y_L1_ARGS = 8 + 5 * 32;
+
+struct FlatRoutedExpertSharedVariables {
+    std::vector<AddrPatch> patches;
+    std::vector<std::pair<tt::tt_metal::CBHandle, uint32_t>> arena_cbs;  // (CB, arena byte offset)
+    // cfg.cmb_rt: the y writer kernels / cores whose report args (cmb_rt .. cmb_rt + 3) flat_with_program fills
+    std::vector<std::pair<tt::tt_metal::KernelHandle, tt::tt_metal::CoreCoord>> cmb_writers;
+};
+
+// The defines that decide this program's dynamic schedule (se_dyn.hpp: sub-block rows, expert capacity, gate/up ring
+// regions, pinning): a kernel of another op built with them rebuilds the same schedule from the counts
+// (se_dyn_from_counts).
+std::vector<std::pair<std::string, std::string>> flat_schedule_defines(
+    const FlatRoutedExpertConfig& cfg, const FlatRoutedExpertPlan& p);
+
+struct FlatRoutedExpertProgramFactory {
+    using shared_variables_t = FlatRoutedExpertSharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const FlatRoutedExpertParams& operation_attributes,
+        const FlatRoutedExpertInputs& tensor_args,
+        Tensor& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const FlatRoutedExpertParams& operation_attributes,
+        const FlatRoutedExpertInputs& tensor_args,
+        Tensor& tensor_return_value);
+
+    // Every buffer address of this call into `program` (what override_runtime_arguments does; flat_with_program's
+    // patch_addresses re-applies it on the program it appended to).
+    static void apply_addresses(
+        tt::tt_metal::Program& program,
+        const FlatRoutedExpertSharedVariables& shared_variables,
+        const FlatRoutedExpertInputs& tensor_args,
+        const Tensor& tensor_return_value);
+};
+
+}  // namespace ttnn::operations::bringup::flat_routed_expert

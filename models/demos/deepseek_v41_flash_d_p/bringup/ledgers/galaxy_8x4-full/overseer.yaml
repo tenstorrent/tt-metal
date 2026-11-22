@@ -1,0 +1,1538 @@
+# Overseer notes (models/demos/common/bringup/overseer.py): written by the overseer, read by every agent.
+notes:
+- id: OV-1
+  tasks:
+  - W.1
+  - M.1
+  status: open
+  t: '2026-10-26T10:41:59'
+  text: 'Chunk 5120 on 8x4 gives 640 tokens per mesh row and 160 query rows per chip after the head->seq reshard (5120/8/4),
+    not the 512 the plan gate checked at chunk 16384 (plan.md ## Boxes). 160 is a whole number of 32-row tiles and of 32-token
+    records, but no gate has exercised it: derive every per-chip row count from the mesh and the chunk, and check sparse_sdpa,
+    the ring indexer and the served-record sub-blocks at 160 rows. This is also the first run of the 4-column TP paths (hidden
+    share 1280, all_to_all over 4 columns); loudbox_2x4 never ran.'
+- id: OV-2
+  tasks:
+  - W.1
+  status: open
+  t: '2026-10-26T13:42:11'
+  text: 'The overseer stopped attempt 2 (port): W.1 had already passed and committed (9582c9d); attempt 2 was started only
+    because the overseer file supervision.md was flagged as outside the allowed paths (framework bug: the seeded ledger
+    dir is not exempt). The attempt deleted results/W.1.json and edited state.json, which an agent must never touch. Nothing
+    to do for W.1.'
+- id: OV-3
+  tasks:
+  - '*'
+  status: open
+  t: '2026-10-26T14:06:33'
+  text: 'Owner rule (2026-10-26): never pad, duplicate or otherwise inflate work to get around a kernel or fork limit (e.g.
+    zero-padding a weight to a size an op accepts). That is a performance penalty in a model meant to be realistic. Extend
+    or fix the kernel / fork instead (forks first), with its own tests; if that is impossible in the step, stop and say
+    so.'
+- id: OV-4
+  tasks:
+  - FIX.1
+  status: open
+  t: '2026-10-26T14:35:55'
+  text: 'The overseer stopped attempt 1 (overseer): Time: the before/after timing is not the goal of FIX.1. Do the kernel
+    change first: extend the flat_routed_expert gate/up split to 18 / 36 tile columns and a non-block-multiple down K, remove
+    every shared-expert pad, fork unit tests, then the W.1 gate. Timing: at most one plain profile (test_profile.py) section
+    time for the shared expert after the change, no device profiler per-op mode (it syncs per op; minutes per layer). X.1
+    measures performance properly.'
+- id: OV-5
+  tasks:
+  - FIX.1
+  status: open
+  t: '2026-10-26T14:41:12'
+  text: 'No timing in FIX.1 at all (supersedes OV-4 and the fix job text): kernel change, fork unit tests, W.1 gate. Performance
+    is measured at X.1 as usual.'
+- id: OV-6
+  tasks:
+  - FIX.1
+  status: open
+  t: '2026-10-26T14:49:57'
+  text: 'Owner (supersedes OV-5): measure the change with the device profiler (TT_METAL_DEVICE_PROFILER=1; the real-time
+    profiler fails on devices 7/10 here): the shared-expert flat_routed_expert call alone at the real per-chip shape (640
+    rows, 8x4 TP 4: 576 columns), padded (1280) vs unpadded, a few warm calls each, device kernel time per call. One op,
+    not the model and not every layer. Report both numbers in the commit message.'
+- id: OV-7
+  tasks:
+  - O.1
+  - Z.1
+  status: open
+  t: '2026-10-26T15:29:53'
+  text: 'FIX.1 (c9217573868) left two review items in ttnn.bringup.flat_routed_expert: flat_routed_expert_plan.cpp:275-276
+    read MIMO_FL_GU_SPLIT / MIMO_FL_GU_BF16 from the environment (settings lint): mark each a pure diagnostic knob or remove
+    it. The fork''s model cases still hold the old padded shared-expert call (tests/cases.py deepseek_v41_flash_d_p-2x2-shared-expert-s1024-i1280):
+    append the unpadded calls the model now makes (I 1152 on 2x2, I 576 on 8x4 / 4x4), keep the old case.'
+- id: OV-8
+  tasks:
+  - FIX.3
+  status: open
+  t: '2026-10-26T17:30:28'
+  text: 'The overseer stopped attempt 2 (overseer): Overseer routing error, not yours: the RT-profiler check is a host/box
+    check and moves into the framework (launch preflight), so no model code changes for FIX.3. The overseer reverts tt/rt_profiler_check.py,
+    the hooks.py and settings.py edits. Keep your root-cause knowledge (known_issues DS41-120, known_issues_detail, BREADCRUMBS,
+    repo_map) but make it point at the framework check instead of tt/rt_profiler_check.py / RT_PROFILER_CHECK. Change no
+    code; the gate then reuses its units.'
+- id: OV-9
+  tasks:
+  - FIX.3
+  status: open
+  t: '2026-10-26T17:32:09'
+  text: 'The RT-profiler host check now lives in the framework (F194): models/demos/common/bringup/orchestrator.py iommu_mismatch()
+    / iommu_problem(): a PREFLIGHT warning at every launch, and a profiling task (step perf or test_profile.py) does not
+    start on a box with mixed IOMMU domains. The overseer reverted tt/rt_profiler_check.py and the hooks.py / settings.py
+    edits (your copy: /scratch/dnijemcevic/rt_profiler_check.agent.py). Point DS41-120 (known_issues.md, its detail section,
+    BREADCRUMBS, repo_map) at F194 instead, and fix the two knowledge-format problems the check reported (DS41-120 lacks
+    ''Found:''; its detail section heading missing). Change no code.'
+- id: OV-10
+  tasks:
+  - L.smoke
+  status: open
+  t: '2026-10-27T08:42:18'
+  text: 'The overseer stopped attempt 1 (fix): L.smoke failed on a framework limit, not model code: testing/smoke.py run_smoke
+    decodes a fixed max_new=8 tokens; DeepSeek-V4.1 thinks first (device: ''We need answer one word. Capital of'', coherent;
+    the CPU smoke at R.1 needed 24 tokens: ''...Capital of France = Paris...</think>Paris''). The overseer fixes the framework;
+    no model change.'
+- id: OV-11
+  tasks:
+  - K.1
+  status: closed
+  t: '2026-10-27T18:56:22'
+  text: 'The overseer stopped attempt 1 (contract): K.1 test_contract failed on a missing golden file (golden_full/galaxy_8x4/s10240_c5120/chunk_00/layer_04.safetensors):
+    data / framework, not model code. The overseer fixes it; no model change.'
+  closed: '2026-10-27T18:57:26'
+  why_closed: 'wrong classification: the missing golden is a model-code assumption (kv_contract.golden_rows), see OV-12'
+- id: OV-12
+  tasks:
+  - K.1
+  status: open
+  t: '2026-10-27T18:57:05'
+  text: 'K.1 test_contract failed with FileNotFoundError chunk_00/layer_04.safetensors: this run''s goldens (golden_full/galaxy_8x4,
+    manifest step_dump_layers [0,1,2,3,14,20,21,24]) keep per-chunk dumps (with the per-position ''kv'') only for the step
+    layers; kv_cache/layer_{i}.safetensors has the final state of ALL 40 layers (window_kv_cache_layer_i is the 128-row
+    sliding-window ring, position p at row p % 128). tt/runners/kv_contract.golden_rows assumed every served layer has per-chunk
+    dumps (true on the 2x2 seed, layers 0-3). Fix it there, honestly and for both boxes: step layers keep the full [0, length)
+    window-KV comparison; other layers compare the window KV of the last min(window, length) positions against golden.state(layer)''s
+    ring, unrolled by position (compressed KV / index keys already come from the final state). Never skip a layer, never
+    loosen a limit, never read a golden inside the model path. Record per layer which comparison ran (full / last-window)
+    in the test output so the overseer can report it. The same golden_rows is used by test_runner_contract / test_runner_smoke''s
+    read-back: check them too.'
+- id: OV-13
+  tasks:
+  - K.1
+  status: closed
+  t: '2026-10-27T18:57:18'
+  text: 'The overseer stopped attempt 2 (contract): Attempt started before the overseer''s diagnosis note OV-12 reached
+    the brief; follow OV-12 (OV-11 withdrawn).'
+  closed: '2026-10-27T18:57:26'
+  why_closed: 'administrative: the brief lacked OV-12'
+- id: OV-14
+  tasks:
+  - K.1
+  status: closed
+  t: '2026-10-27T19:19:27'
+  text: 'The overseer stopped attempt 4 (contract): test_adapter_acks fails on the frozen contract tests'' seed geometry
+    (server_rules.py CHUNK 2048 / MAX_SEQ 4096 / GOLDEN_RUNG s4096 from the 2x2 seed; this run has 5120 and s10240 / s56320).
+    Frozen tests: the overseer fixes the framework cause; do not edit or work around them.'
+  closed: '2026-10-27T19:20:07'
+  why_closed: 'superseded by OV-15: the contract tests are not frozen in this ledger; the geometry fix is the honest change'
+- id: OV-15
+  tasks:
+  - K.1
+  status: open
+  t: '2026-10-27T19:20:08'
+  text: 'tests/bringup/contract/server_rules.py hard-codes the 2x2 seed''s geometry (CHUNK 2048, MAX_SEQ 4096, GOLDEN_RUNG
+    ''s4096''); this galaxy_8x4 run has chunk 5120 and rungs s10240 / s56320, so test_adapter_acks dies with ''no ladder
+    rung s4096''. These files are NOT hash-frozen in this ledger (K.1 runs them; the seed''s FIX.8 edited them before):
+    fix the cause in server_rules.py, the same rule as tt/: derive the geometry from the running spec, never one box''s
+    literals. GOLDEN_RUNG = the spec''s shortest ladder rung (by seq) whose golden has full dumps; CHUNK = that rung''s
+    chunk; MAX_SEQ = its seq. On the 2x2 seed spec this must still give exactly s4096 / 2048 / 4096 (check it with Spec.load
+    on models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml, no device); on 8x4 s10240 / 5120 / 10240. Do not change any
+    rule, threshold or check of the contract; only where the sizes come from. Then run every contract test K.1 runs (and
+    the seed''s test_cache_starts / producer_case users) through the same golden gap you fixed in kv_contract.golden_rows:
+    this golden has per-chunk dumps only for its step_dump_layers; any test that reads a non-step layer''s per-chunk dump
+    or block input must use what the golden has for that layer (final state, kv_cache), never skip a layer. Report in your
+    commit message: the derived values on both specs, and per test which layers are compared fully vs on the final state.'
+- id: OV-16
+  tasks:
+  - K.1
+  status: open
+  t: '2026-10-27T23:40:06'
+  text: 'OWNER DECISION B (2026-10-27): test_adapter_acks'' window_kv check compares every layer''s window KV on the positions
+    the reference drift measures (drift-s10240.json contract_state_window_kv_L*: the final ring = the LAST 128 positions),
+    with that drift''s limit; today it compares all positions against a limit derived from the last 128 only (L20 0.981
+    vs 0.990; L21, L24 similar). Accuracy over all positions stays covered by the ladder''s per-layer err. Change only the
+    compared positions, never a limit or a golden. K.1''s paths now include tests/bringup/contract. Status: test_runner_smoke
+    PASSED 23:18 on this tree (Paris through tt-d-gen; the stand-in decode hang was the test''s mesh opened without the
+    fabric router config, fixed by harness.open_mesh F202): do not touch test_runner_smoke.py; test_contract / test_kv_layout
+    passed before (19:20).'
+- id: OV-17
+  tasks:
+  - P.4
+  status: open
+  t: '2026-10-28T13:47:22'
+  text: 'The overseer stopped attempt 1 (perf): Held by the owner: P.4/P.5 wait until the precision fixes (KV caches and
+    GEMM activations at the reference''s width) land, then they are re-measured on that model. The overseer''s resume dropped
+    its pause (resume clears PAUSE); not a fault of this attempt.'
+- id: OV-18
+  tasks:
+  - FIX.8
+  status: open
+  t: '2026-10-28T22:11:04'
+  text: 'The 2x2''s work is ALREADY MERGED (bf6c8b497a6 = origin/dnijemcevic/model_bringup_bfp4kv @ 9697878dfb0) and ttnn
+    is rebuilt with it (ttnn.bringup.ckv_bfp4, sparse_sdpa ROW_BFP4 + kv_window, F223); CKV_FORMAT defaults to bfp4_rows.
+    Your job: make it run on the 8x4 at full size and pass this gate; do not redo the 2x2''s work. Facts from the 2x2 (commit
+    messages bf9a0798730, be134102377, 2c866762cc0, 9697878dfb0; ckv_derisk/CKV_4BIT_DERISK.md sections 8-9): the device
+    packer truncates bfp4 (the op rounds on the SFPU first), row record 320 B, sparse_sdpa ROW_BFP4 +3.5-5 % kernel time.
+    Report what the 2x2 could not measure: DRAM per chip of the attention tables at the deploy context, sparse_sdpa kernel
+    time bf16 vs bfp4_rows at chunk 5120 / 8x4 query counts, warm wall and device time per chunk (with DS41_ENGRAM_TABLE=resident
+    for the wall).'
+- id: OV-19
+  tasks:
+  - FIX.9
+  status: open
+  t: '2026-10-29T02:24:27'
+  text: 'The overseer stopped attempt 1 (overseer): Placed before P.6, which is accepted but not yet committed (the overseer''s
+    ordering mistake / framework F213). Restarts after P.6''s gate commit; nothing to do differently.'
+- id: OV-20
+  tasks:
+  - FIX.11
+  status: open
+  t: '2026-10-29T12:27:57'
+  text: The 2x2 session is changing the sparse_sdpa fork's read path (ROW_BFP4 one-read records, bfloat8_b window blocks
+    / ROW_BFP8) on branch dnijemcevic/model_bringup_lowbit and rebases onto this branch after you land. If attention precision
+    needs a sparse_sdpa change, prefer the fork's existing precision options (math fidelity, fp32 dest / accumulation) set
+    from the model, or add one small option; do not restructure the reader / compute kernels. Same for ckv_bfp4.
+- id: OV-21
+  tasks:
+  - FIX.12
+  status: closed
+  t: '2026-10-29T14:54:26'
+  text: 'P.9 (DS41_ATTN_SP32_PROJ, wq_b/wo_a/wo_b on 160 rows) moves test_adapter_acks below its reference-derived limit:
+    ack slot 0 [0, 2536) last-window 128 rows, 0_window_kv layer 20 nope 0.98855 < 0.98957; passes with DS41_ATTN_SP32_PROJ=off
+    (your /scratch/dnijemcevic/fix12/acks_projoff.log). Your gate needs this unit, so finding the cause is in FIX.12''s
+    scope. Suspect the padded partial chunk (2536 tokens < 5120): rows past the valid length or the pad rows'' handling
+    in P.9''s per-chip 160-row projections. Compare layer 20''s input / window KV on and off for that prompt, find the first
+    layer that differs, fix the cause in P.9''s path. Never loosen the limit or change the test. If it is honest rounding
+    of the new layout (no bug), stop and report the numbers per layer for the owner.'
+  closed: '2026-10-29T15:09:09'
+  why_closed: 'owner 2026-10-29: waived for now; the cause check is parked as FIX.13 (held, CPU only)'
+- id: OV-22
+  tasks:
+  - FIX.13
+  status: closed
+  t: '2026-10-29T16:48:53'
+  text: 'The overseer stopped attempt 1 (overseer): owner 16:55: FIX.14 is ready; FIX.13''s finding is recorded (DS41-141
+    rounding, accepted) and no code changed; the rest of its gate re-runs K.1''s contract units on unchanged code. Closed
+    by hand.'
+  closed: '2026-10-29T16:49:14'
+  why_closed: FIX.13 closed by hand (records)
+- id: OV-23
+  tasks:
+  - P.*
+  - FIX.*
+  - X.*
+  status: open
+  t: '2026-10-29T20:22:07'
+  text: 'OWNER 2026-10-29: no Python-built op stays non-prepared. Any op whose program is built in Python (ttnn.generic_op
+    / a ProgramDescriptor, the ttnn.bringup Python forks) that you add or touch must dispatch through the prepared path
+    (ttnn.bringup.prepare_program / run_prepared, as ckv_bfp4 / bfp_round prepared=True and P.7): built once per shape and
+    memory config, addresses patched per call, outputs reused where possible; measure its host time per call. Report any
+    such op you call that is not prepared.'
+- id: OV-24
+  tasks:
+  - P.16
+  status: open
+  t: '2026-10-30T09:19:29'
+  text: 'The overseer stopped attempt 1 (perf): OWNER 09:20: stop the fork regression suites now; the 8x4''s time is too
+    expensive for them (task F.1 runs every fork''s full suite once at the end). Your code and the on/off census are done
+    (host -13.5 ms in the four forks, wall ~333 -> ~306 ms). Next attempt: do NOT run any fork regression or unit suite;
+    only finish the records (BREADCRUMBS, known_issues incl. the ''eval'' package import errors in the rms_norm / mhc golden
+    tests, knowledge-use report) and stop, so the orchestrator runs the A/B.'
+- id: OV-25
+  tasks:
+  - P.*
+  - FIX.*
+  status: open
+  t: '2026-10-30T09:19:30'
+  text: 'OWNER 2026-10-30: do not run fork regression / unit suites on the 8x4 in a perf or fix step (the machine is too
+    expensive for it); run only the new tests you add for your change and the model-level checks. Task F.1 runs every fork''s
+    full suite once at the end.'
+- id: OV-26
+  tasks:
+  - P.17
+  status: open
+  t: '2026-10-30T13:28:47'
+  text: 'The overseer stopped attempt 2 (perf): F231 (framework): the settings check charged the drop''s own new environment
+    knobs (combine_rf: SPC_*, persist_l1, sparse_all_gather_2d) to you; the overseer fixes the check to count lines that
+    come verbatim from the source branch as the import''s. Do NOT convert or mark them: take the drop as is, rebuild, sanity-check,
+    and stop.'
+- id: OV-27
+  tasks:
+  - P.19
+  - P.20
+  status: open
+  t: '2026-10-30T14:58:14'
+  text: 'OWNER 2026-10-30 15:00, how to sweep: (1) CAPTURE on the 8x4 (the model run gives every call''s shape, dtypes,
+    compute config and free L1), at BOTH 51200 and 512000 (BRINGUP_POS), and diff the two call lists: dense matmul shapes
+    should not depend on the context; report any that do. Keep the capture you already have on disk (generated/ds41_p23,
+    /scratch/dnijemcevic/p19), do not redo it. (2) SWEEP on single cards, NOT on the 8x4 mesh: a matmul is per chip (same
+    shard shape on every chip, no traffic between chips), so one card gives its kernel time; give test_matmul_sweep a shard
+    option (e.g. P23_SHARD=i/N) and run N processes in parallel with scripts/run_safe_pytest.sh --device auto (one card
+    each, per-card locks), then merge the jsons. Hold every candidate to the grid and L1 view the capture recorded (a single
+    card may expose a different grid than in the mesh). (3) Tune the full 5120-token chunk''s calls; other chunk lengths
+    (the last partial chunk, resumed chunks) keep today''s rule (fallback). P.20 the same with the SP=8 capture.'
+- id: OV-28
+  tasks:
+  - P.19
+  status: open
+  t: '2026-10-30T14:58:52'
+  text: 'The overseer stopped attempt 1 (perf): OWNER 15:00: sweep on single cards in parallel, not on the 8x4 mesh; see
+    the open note OV-27. Your capture is on disk: reuse it.'
+- id: OV-29
+  tasks:
+  - P.20
+  status: open
+  t: '2026-10-30T15:12:13'
+  text: 'Sweep on ALL 32 cards (P23_SHARD=i/32, run_safe_pytest --device auto each): P.19 used 12 shards (under 3 min);
+    the host has room (12 processes: load ~20-25 of 64 cores).'
+- id: OV-30
+  tasks:
+  - P.19
+  - P.20
+  status: closed
+  t: '2026-10-30T15:26:06'
+  text: 'OWNER 2026-10-30 15:40, Galaxy power limit (agent rule 18): no op may run on more than 110 Tensix cores of a chip
+    (the PSU trips on di/dt). Add the setting MAX_WORKER_CORES (default 110 on this box; one place, tt/settings.py), cap
+    every matmul config of tt/mm_configs (today''s rule AND the galaxy table) to a grid of at most that many cores (e.g.
+    11 x 10), and re-sweep within the cap on single cards (minutes). Today''s capture shows engram_kv on 120 cores and attn.wq_b
+    on 114: both must come down. Report each call''s cores before / after.'
+  closed: '2026-10-30T15:26:13'
+  why_closed: 'OWNER 15:42: P.19 / P.20 A/Bs run at 120 cores (consistent comparison); the 110-core cap and the re-tune
+    are a separate fix job after P.20'
+- id: OV-31
+  tasks:
+  - P.20
+  status: open
+  t: '2026-10-30T15:26:27'
+  text: 'OWNER 15:42: for THIS pick keep today''s core grids (up to 120 cores, as P.19 measured) so SP=8 and SP=32 compare
+    like for like; do not apply agent rule 18''s 110-core cap here. The cap and the re-tune are a held fix job after P.20
+    (GALAXY_CORE_CAP).'
+- id: OV-32
+  tasks:
+  - FIX.15
+  status: open
+  t: '2026-10-31T00:58:46'
+  text: 'The overseer stopped attempt 1 (overseer): overseer: P.20''s rejected changes were still in the tree; the reject
+    is applied first, then FIX.15 restarts on a clean tree'
+- id: OV-33
+  tasks:
+  - FIX.15
+  status: open
+  t: '2026-10-31T02:09:32'
+  text: 'The overseer stopped attempt 2 (overseer): overseer: box problem (card 0 reset alone, mesh discovery fails); a
+    board reset is the owner''s call, never triggered through the runner''s dirty flag. Stopped for a box check.'
+- id: OV-34
+  tasks:
+  - FIX.15
+  status: open
+  t: '2026-10-31T05:06:23'
+  text: 'Box reset by the owner 2026-10-31 ~05:05 after attempt 2''s single-card probe hung and the safe runner reset card
+    0 alone (the 8x4 mesh then failed to open). Agent rule 19 now holds: NO single-card device job (no --device N|auto,
+    no tt-probe --device): run every probe, the per-op core audit and the capped matmul re-sweep inside 8x4 mesh runs (scripts/run_safe_pytest.sh
+    / tt-probe.sh without --device). Never trigger a reset (no tt-smi -r, no /tmp/tt-device-*.dirty, no provoked run): a
+    box that does not open is a stop. Your edits from attempt 2 are in the tree: check them first.'
+- id: OV-35
+  tasks:
+  - P.*
+  - FIX.*
+  - X.*
+  status: closed
+  t: '2026-10-31T07:43:25'
+  text: 'Update known_issues DS41-175 (FIX.15 found it out of date): a single-card sweep on a Galaxy is only allowed with
+    the owner''s yes or on another box (agent rule 19: a hung single-card job gets a single-card reset that breaks the 8x4
+    mesh; 2026-10-31 FIX.15 attempt 2). Keep the fabric detail, change the recommendation.'
+  closed: '2026-10-31T09:20:50'
+  why_closed: P.18 updated DS41-175 (single-card sweeps only with the owner's yes or on another box)
+- id: OV-36
+  tasks:
+  - P.21
+  status: closed
+  t: '2026-10-31T10:30:53'
+  text: 'The overseer stopped attempt 1 (perf): overseer: FIX.16 (the profile measures the consecutive-chunk path) must
+    run before P.21 (owner: fix the profile measurement first); P.21 restarts after it'
+  closed: '2026-10-31T10:31:12'
+  why_closed: P.21 now depends on FIX.16 (tasks.yaml)
+- id: OV-37
+  tasks:
+  - K.1R
+  status: open
+  t: '2026-11-01T00:49:42'
+  text: 'The overseer stopped attempt 1 (fix): overseer: test_adapter_acks misses by rounding (layer 20 window_kv last-window
+    PCC 0.98947 vs 0.98957; layers 35 / 38 last block vs a FIXED 0.99) - the DS41-141 class, not a model bug; no precision
+    chase. The overseer runs the remaining units and brings the acks to the owner.'
+- id: OV-38
+  tasks:
+  - FIX.27
+  status: open
+  t: '2026-11-12T21:03:11'
+  text: 'OWNER 2026-11-12: (1) The earlier gate failures were the overseer''s error (the gate called pytest directly); tasks.yaml
+    now runs it through scripts/run_safe_pytest.sh. (2) The REAL remaining failure, from ''gate FIX.27'' at 21:02: the gate
+    passed its units, then git_commit (core/gate.py:589 -> _git_retry:549) ran ''git add -A -- ... ledgers/galaxy_8x4-full/history_state.json
+    ...'' and git said: fatal: pathspec ''models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/history_state.json''
+    did not match any files. The split removed that file from disk and index (WIP commit 33d0dd745ad), but the commit''s
+    file list still names the old single files. Fix it at the framework cause: the list of ledger files to commit comes
+    from the chunk layout (one place), never names a file that no longer exists; add a selftest that commits a ledger after
+    the migration. Then run the gate yourself (gate FIX.27 --check) until it passes.'
+- id: OV-39
+  tasks:
+  - FIX.32
+  status: closed
+  t: '2026-11-14T21:29:46'
+  text: 'OWNER 2026-11-14: leaving CHEAP_CCL/ATTN_FUSE at legacy is NOT an acceptable end state. Find the root cause of
+    the race: which program, which read/write pair, why only at chunk-boundary stops, with device evidence (bisect each
+    switch alone, then instrument: dump the snapshot buffer and the cached program key per call). Fix it in the program
+    and prove 20/20 with both on, bit-identical to legacy. If the pattern-only program cache in snapshot_send.py is not
+    the cause, show the evidence and keep digging. Reporting ''not found, left legacy'' will be rejected.'
+  closed: '2026-11-14T21:30:14'
+  why_closed: reworded as the next note (owner adds the proof-of-unworkable outcome)
+- id: OV-40
+  tasks:
+  - FIX.32
+  status: open
+  t: '2026-11-14T21:30:15'
+  text: 'OWNER 2026-11-14: ''I don''t know what went wrong, better to turn it off'' is NOT an acceptable answer. Two outcomes
+    only. (A) Root cause found with device evidence (which program, which read/write pair, why only at chunk-boundary stops;
+    bisect each switch alone, instrument: dump the snapshot buffer and the cached program key per call), fixed in the program,
+    20/20 consecutive passes with BOTH CHEAP_CCL and ATTN_FUSE on, bit-identical to legacy. (B) Proof that the design as
+    implemented cannot work: name the ordering/synchronization assumption it relies on, show on device that it is violated,
+    and why no in-program fix (barrier, semaphore wait) can restore it without losing its gain. Only (B) justifies leaving
+    legacy defaults. If the pattern-only program cache in snapshot_send.py is not the cause, show that and keep digging.'
+- id: OV-41
+  tasks:
+  - FIX.33
+  status: closed
+  t: '2026-11-15T06:12:35'
+  text: 'The overseer stopped attempt 1 (overseer): owner 2026-11-15: hold; P.67 scope under review, change no code'
+  closed: '2026-11-15T06:16:11'
+  why_closed: 'owner decided: FIX.33 rewritten (model_bringup without expert replication)'
+- id: OV-42
+  tasks:
+  - P.72
+  status: open
+  t: '2026-11-17T22:49:11'
+  text: 'Attempt 1 was cut off by a node loss (2026-11-17 14:30 UTC), not by anything of yours. Its off-path fix (DS41-282,
+    tt/sparse_attention.py, in the tree) stands and both checks PASSED on it: generated/devjobs/p72_off_skip2 (test_decoder_skip_decode,
+    off, rc 0) and p72_off_det (test_determinism, off, rc 0). Do NOT rerun them and do NOT run orchestrator measure (the
+    orchestrator measures both sides itself). Its on-side measure hung at p256000 in test_skip_positions (dispatch timeout,
+    cores 15-2/15-3, on path untouched by your diff): not yours to debug in this task. Only: finish the BREADCRUMBS P.72
+    entry (what was broken, the fix, the two passing checks) and the known_issues entry, then stop.'
+- id: OV-43
+  tasks:
+  - FIX.36
+  status: open
+  t: '2026-11-18T04:43:35'
+  text: 'Attempt 1 was cut off by the node going down at 04:36 (not yours): the safe runner''s recover-hosts reached sys-triage''s
+    tt-fw-terminal step on the hung box, which has taken the host down twice. Recovery now skips sys-triage (node_env.sh
+    TTPOOL_RECOVER_CMD), so a hang costs a ~2 min glx reset, not the node. Your attempt-1 work is in the tree and stands
+    (test fix DS41-284, test_skip_hang_loop.py, BREADCRUMBS/known_issues entries). Continue with your leads in order. Make
+    each reproduction as cheap as possible: the loop hung in round 13 right after a profiled run''s finish_rt (sync, 1 s
+    idle, unregister), and the 23:18 P.72 hang was also ~3 s after a profiled run: test HANGLOOP_PROFILE=0 (no rt profiler)
+    first; if it never hangs in ~3x the rounds that hung before, the trigger is the profiled run / its teardown, and the
+    fix belongs there (the framework''s profile path, models/demos/common/bringup/testing/profile.py, and its fork), not
+    in the model. Also record which chip''s dispatch core dies each time (chip 15 / M0D14 last time, one of the 4 chips
+    with ''only 2 routing planes'' at open): the same chip every time points at that chip''s links, which is a box report
+    for the owner, not a code fix. After a hang: stop, let the safe runner reset (~2 min), check the box test, continue;
+    at most 3 hangs in this attempt, then report.'
+- id: OV-44
+  tasks:
+  - P.73
+  status: closed
+  t: '2026-11-18T06:40:59'
+  text: 'OWNER 2026-11-18: hide the history gather by INJECTING its data movement into an existing kernel that runs before
+    sparse attention (first candidate: the indexer''s ring score ttnn.bringup.ring_indexer_score_dsa, which already rings
+    the index keys over SP into a persistent buffer); no sub-device split and no separate concurrent op (one in-order CQ).
+    Bit-identical to the plain off path, determinism 0, 110-core cap, switch in settings.py.'
+  closed: '2026-11-18T06:41:46'
+  why_closed: 'owner: injection is an idea, not a rule; replaced'
+- id: OV-45
+  tasks:
+  - P.73
+  status: closed
+  t: '2026-11-18T06:41:46'
+  text: 'OWNER 2026-11-18: injecting the gather into an existing kernel is an idea, not a rule. A separate op is fine if
+    it really hides (e.g. placed in a device idle gap such as the wait for the engram host rows, or a measured sub-device
+    overlap); the owner doubts a separate op overlaps. Measure the device idle gaps (where, how long, 256k and 1M) and what
+    each route hides before building; injection (the indexer ring score first) is the fallback.'
+  closed: '2026-11-18T06:45:30'
+  why_closed: 'owner: hardly any idle gaps; inject'
+- id: OV-46
+  tasks:
+  - P.73
+  status: open
+  t: '2026-11-18T06:45:30'
+  text: 'OWNER 2026-11-18: the device has hardly any idle gaps; the history gather most likely has to be injected into another
+    kernel, moving rows when the links are less busy. Candidates: overlap with the engram wait (layers 1 / 14) or with the
+    token-id readback at the next chunk''s start. No sub-device split (2 ms at 1M, 116 cores busy: above the 110 cap).'
+- id: OV-47
+  tasks:
+  - P.73
+  status: closed
+  t: '2026-11-18T09:21:08'
+  text: 'FIRST, before anything else: your A/B hung the 8x4 at 2026-11-18 07:06 (STATIC_TABLES=off + HISTORY_GATHER_OVERLAP=on,
+    test_skip_positions after p256000, dispatch cores 15-2/15-3 on every chip) and the reset then lost chip 7 until a host
+    reboot. FIX.36''s proof loop ran STATIC_TABLES=on only. Reproduce with tests/test_skip_hang_loop.py under DS41_STATIC_TABLES=off
+    DS41_DECODER_SKIP=decode, with your switch on AND off (its watch mode prints every program over 110 cores; the row gather
+    and the off path''s ops are the suspects: high_bw_all_gather''s core grid, untilize/tilize, the remap); cap whatever
+    runs outside the 110-core grid (agent rule 18, as FIX.36 did); prove with >= 20 clean loop rounds for both switch values
+    (and one for STATIC_TABLES=on), determinism 0. Stop at a hang (the safe runner resets without sys-triage, ~5 min). Then:
+    rename HISTORY_GATHER_OVERLAP to what it is (e.g. HISTORY_GATHER_ROWS: the history gathered as row-major rows; it overlaps
+    nothing) everywhere incl. tasks.yaml''s ab is the overseer''s: say the new name in BREADCRUMBS and I update tasks.yaml.
+    The engram-window injection stays the next step (OV-46), not this attempt.'
+  closed: '2026-11-18T09:21:17'
+  why_closed: 'reworded: no rename this attempt (tasks.yaml ab names the switch)'
+- id: OV-48
+  tasks:
+  - P.73
+  status: open
+  t: '2026-11-18T09:21:17'
+  text: 'FIRST, before anything else: your A/B hung the 8x4 at 2026-11-18 07:06 (STATIC_TABLES=off + HISTORY_GATHER_OVERLAP=on,
+    test_skip_positions after p256000, dispatch cores 15-2/15-3 on every chip); the reset then lost chip 7 until a host
+    reboot. FIX.36''s proof loop ran STATIC_TABLES=on only. Reproduce with tests/test_skip_hang_loop.py under DS41_STATIC_TABLES=off
+    DS41_DECODER_SKIP=decode, your switch on AND off (its watch mode prints every program over 110 cores; suspects: the
+    row gather''s high_bw_all_gather core grid, untilize/tilize, the off path''s remap); cap whatever runs outside the 110-core
+    grid (agent rule 18, as FIX.36 did); prove with >= 20 clean loop rounds for each switch value plus one run with STATIC_TABLES=on,
+    determinism 0. Stop at a hang (the safe runner resets without sys-triage, ~5 min). Keep the switch name HISTORY_GATHER_OVERLAP
+    for now (tasks.yaml''s A/B names it; the overseer renames it after the A/B). The engram-window injection stays the next
+    step, not this attempt.'
+- id: OV-49
+  tasks:
+  - X.6
+  status: open
+  t: '2026-11-18T21:54:10'
+  text: 'The overseer stopped attempt 1 (fix): overseer: X.6''s units all passed; the gate failed on metric names the overseer
+    wrote wrong in tasks.yaml (framework/ledger), nothing to fix in code'
+- id: OV-50
+  tasks:
+  - P.84
+  status: open
+  t: '2026-11-19T09:56:49'
+  text: 'Overseer 2026-11-19 10:00: your previous attempt''s tree is kept. Its A/B failed on BOTH sides: (1) MOE_REPLICAS=off
+    (the old path!) no longer compiles: ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/kernels/routing_planner.hpp:483/498/519
+    ''division by zero [-Werror=div-by-zero]'' (a compile-time replica count 0 when replicas are off; JIT kernel build of
+    router_output_writer.cpp); off must be exactly today''s kernels (bit-identical). (2) the on side needs the runner to
+    restart with MOE_REPLICAS=on (a load-time switch): being fixed in the framework now. Run model-level checks ONLY through
+    the resident runner (resident submit), both values of MOE_REPLICAS, before you finish; op-level kernel tests through
+    the safe runner. One open per configuration.'
+- id: OV-51
+  tasks:
+  - P.84
+  status: open
+  t: '2026-11-19T10:53:53'
+  text: 'Overseer 10:53: attempt 3 (tree kept). Make MOE_REPLICAS a CALL-time switch: when a replica table is set (MOE_REPLICA_TABLE),
+    the 13th slot is ALWAYS filled at load; MOE_REPLICAS=on|off only selects the routing / planner / combine path per chunk
+    (hooks.batch_call_settings), so the A/B''s two sides and your own on/off checks share ONE runner load (the iteration-time
+    priority: every load-time flip cost a reload and a device open; attempt 2 had 8). Off must stay bit-identical to the
+    pre-P.84 path (outputs and the served caches): prove it in one runner load (off vs the committed tree''s numbers / the
+    determinism records). Report the replica DRAM per chip measured. All model-level checks through the resident runner;
+    at most 2 device opens this attempt.'
+- id: OV-52
+  tasks:
+  - P.84
+  status: open
+  t: '2026-11-19T10:56:56'
+  text: 'Overseer 10:56, attempt 3, second item (as important as the call-time switch): MOE_REPLICA_SPLIT=best today splits
+    from each chip''s LOCAL picks x 32 (routing_planner.hpp remap_replicas): an estimate from 160 of 5120 tokens, not the
+    chunk''s routing. The offline -4.5 ms assumed the split from the chunk''s GLOBAL per-expert counts. Exchange the counts:
+    an all-gather of each chip''s per-expert pick counts (384 x int32 = 1.5 KB a chip; or the head''s own global routing
+    metadata if it already has it) before the planner, so every chip computes the same best split from the true counts (a
+    pure function of the chunk''s routing: deterministic, identical on every chip). Measure the split''s quality: the busiest
+    chip''s tiles a layer with replicas vs the offline best split on the same chunk (census numbers), and the walls. Also:
+    set MOE_REPLICAS default back to off until the owner''s accept (keep_default).'
+- id: OV-53
+  tasks:
+  - P.84
+  status: open
+  t: '2026-11-19T11:09:13'
+  text: 'Overseer 11:09, attempt 3, third item: the default replica table becomes tt/replicas/agentic_traces.json (P.85:
+    picked on the real-history session census of public agentic traces, held-out -2 ms vs agentic.json by the fit; results/P.85_offline.txt).
+    Keep agentic.json selectable (MOE_REPLICA_TABLE).'
+- id: OV-54
+  tasks:
+  - P.84
+  status: open
+  t: '2026-11-19T11:18:56'
+  text: 'Overseer 11:18, attempt 3, FIRST: attempt 2''s code measured on the runner (both units, both sides, /scratch/dnijemcevic/bringup/p84_direct):
+    steady agentic 145408 79.2 off / 79.3 on, 770048 87.6 / 87.5, prose 145408 86.5 / 85.8 ms; device 65.46 / 65.37 ms,
+    experts section 29.45 / 29.26 ms: replicas loaded (32 a layer, 13 slots) but NO gain. Before anything else find out
+    why with one runner request: the census (tests/perf/test_session_census.py on a few agentic_cc sessions, or test_expert_load_census)
+    with MOE_REPLICAS=on, per chip rows / tiles incl. the 13th slot, vs off and vs the offline best split on the same chunks:
+    are rows reaching the replicas at all, and is the busiest chip''s tile count falling? Then fix (global counts for the
+    split, OV-52), call-time switch (OV-51), table agentic_traces (OV-53). Target: experts section falls by >= 3 ms at agentic
+    145408.'
+- id: OV-55
+  tasks:
+  - P.87
+  status: open
+  t: '2026-11-19T13:34:25'
+  text: 'Overseer: op-level tests ALSO go through the resident runner (resident submit; the runner has the mesh open: a
+    mesh-only test there costs 0 device opens and 0 loads, e.g. tests/perf/test_ids_readback.py ran in 5 s). A direct scripts/run_safe_pytest.sh
+    is a device open that leaks 10-27 GiB of host RAM: avoid it. A C++ / .so rebuild restarts the runner once (expected).'
+- id: OV-56
+  tasks:
+  - P.83
+  - P.81
+  status: open
+  t: '2026-11-19T16:26:18'
+  text: 'OWNER 16:26 2026-11-19: optimize mhc (P.83) and then attention (P.81): whatever can be fused or modified, do it;
+    fork stock ttnn ops as needed (bringup-fork-op skill) and change them. Do NOT introduce shortcuts that break tt-d-gen
+    compatibility (the served caches, their formats and addresses, the acks, the chunk header, the engine''s device input)
+    or that are infeasible in practice (no precomputing per prompt, no assuming the next chunk, no extra host round trips,
+    no per-request state the engine cannot provide). Measure through the resident runner (layers 0-20, one load); judge
+    by the device profile; keep a change at >= 1 ms device a chunk. If host RAM runs low, run with DS41_ENGRAM_DEVICE=on
+    and DS41_ENGRAM_DEVICE_TABLES=on and DS41_ENGRAM_TABLE=mmap (the tables on the mesh, the host copy not resident) for
+    the measurement; the owner may reset the device in about an hour: keep work committed / recoverable.'
+- id: OV-57
+  tasks:
+  - PB.1
+  status: open
+  t: '2026-11-19T20:43:00'
+  text: 'The overseer stopped attempt 1 (perf): OWNER 20:45 clarifications (perf targets, no shortcuts: per-chunk history
+    from each slot''s served cache, all segments'' buffers in the 1M DRAM budget, tt-d-gen-like inputs, real texts/positions,
+    padded/empty lanes). The task brief and the notes now carry them; start from them. Your edits so far stay in the tree.'
+- id: OV-58
+  tasks:
+  - PB.*
+  status: open
+  t: '2026-11-19T20:51:03'
+  text: 'OWNER 2026-11-19 21:05 (overrides every ''STOP / OWNER DECISION'' in the PB briefs): work fully autonomously; the
+    owner is asleep and nobody answers. This is a throwaway experimental branch: try things, fix and optimize later. Wherever
+    a brief says stop and ask / owner decision (a shortcut, a check that cannot be bit-identical, gather hiding proven impossible,
+    a geometry change): pick the most promising option yourself, write one line why in BREADCRUMBS (marked DECIDED), and
+    keep going. Never idle: if blocked, take the next best path. Keep measuring the correctness oracle (lane equivalence,
+    determinism, slot digests) and report it; a failing check is a thing to fix or work around, not a reason to stop. Still
+    binding: no push, no tt-smi -r, all device work through the resident runner.'
+- id: OV-59
+  tasks:
+  - PB.1
+  status: open
+  t: '2026-11-19T21:33:10'
+  text: 'The overseer stopped attempt 3 (perf): Framework false violation: the settings lint charged the pre-existing env
+    read at bringup/hooks.py:1397 (batch_call_settings, not yours) to attempt 2. Fixed in the framework (F288). Your PB.1
+    work in the tree stands: check it against the brief, finish what is missing, run the gate''s CPU test, and exit.'
+- id: OV-60
+  tasks:
+  - PB.2
+  status: open
+  t: '2026-11-19T22:48:36'
+  text: 'The overseer stopped attempt 1 (perf): Overseer: your gate''s test_profile and test_chunk8192_reference units were
+    refused by the one-load rule (F283: they need other models than test_skip_positions / test_determinism: ENGRAM_TABLE
+    switch, longer max_seq). That is a gate design error of mine, not yours. PB.2''s gate is now test_chunk8192_reference
+    + test_skip_positions only (determinism 0.0 and walls 101.0 / 109.2 ms already recorded by your runs). Do not re-run
+    units that passed. Make test_chunk8192_reference pass (both cases), then exit.'
+- id: OV-61
+  tasks:
+  - PB.*
+  status: open
+  t: '2026-11-19T22:49:32'
+  text: 'One load per gate (F283, framework-enforced): every device test of one gate must run on ONE model configuration
+    of each class (accuracy: 40 layers; performance: layers 0-20): same max_seq (raise it the same way in every packed test:
+    to the largest any of them needs), same load-time switches (no ENGRAM_TABLE or other load-time env in a single test),
+    BRINGUP_CHUNK=8192. A unit refused with ''needs another model ... refused (owner rule 2026-11-19, spec tests.one_load)''
+    is a configuration mismatch to fix in the test, not a model bug. Repeat determinism is measured inside test_packed_oracle
+    (packed_determinism_max_abs_diff); test_determinism.py is not in the PB gates.'
+- id: OV-62
+  tasks:
+  - PB.3*
+  - PB.4
+  - PB.5
+  status: open
+  t: '2026-11-20T01:51:21'
+  text: 'Walls must mimic serving (owner rule 3): tt-d-gen''s slots all have ONE capacity (the served cache sized for the
+    deployment context), so test_packed_walls allocates every lane''s slot at that one capacity (not sized by the segment''s
+    position), and the one-ring indexer path is the one measured in every case incl. mixed. Keep the per-segment-ring fallback
+    for unequal capacities (correct, tested), but it is not the serving path. If one capacity at 1M for 4 slots does not
+    fit next to the model, record the DRAM numbers and use the largest capacity that fits for all 4 (say which).'
+- id: OV-63
+  tasks:
+  - PB.5C
+  status: open
+  t: '2026-11-20T08:00:20'
+  text: 'The overseer stopped attempt 2 (perf): Overseer: attempt 1 failed only on the path check for results/PB.5C_packed_walls.md,
+    which my brief told the walls test to write: my error. That file is now an allowed path. Your work in the tree stands;
+    do not redo passed runs: finish (fix DS41-335 test_dram AttributeError if not yet), run the gate''s walls once, exit.'
+- id: OV-64
+  tasks:
+  - PB.6L
+  status: open
+  t: '2026-11-20T11:01:42'
+  text: 'The overseer stopped attempt 2 (perf): Overseer: attempt 1 failed only on the path check for results/PB.6L_packed_walls.md,
+    which the walls test writes by design: a framework gap, fixed (F292: a task may write its own results/<task>_* files).
+    Your attempt-1 work and its gate run stand (every metric ok: 1M exposed 0.163, 4x2k 75.0k, mixed 65.7k). Do not redo
+    anything; exit.'
+- id: OV-65
+  tasks:
+  - PB.7
+  status: open
+  t: '2026-11-20T12:04:07'
+  text: 'OVERSEER 12:05 (DECIDED): DS41-339 is a real bit-exactness bug, not v2 work: a segment''s MoE-head shared-expert
+    reduce-scatter adds in an order that depends on its rows'' destination TP chip, so a glued segment off row 0 differs
+    from alone by 1 bf16 ulp at layer 0 and grows. Fix it in THIS task at the cause: an order-free shared-expert reduce
+    in the moe_head fork (as DS41-128 fixed tp_sum: column blocks / fp32 or int32-snap partials, behind the fork''s option
+    pattern), with an op-level regression test that reproduces it first (rows moved across TP chips give bit-identical rows).
+    It also changes the lane and single-request paths'' numerics: keep them deterministic and bit-identical between packed
+    and alone, the 8192 reference within limits (test_chunk8192_reference); the 5120 accept units run in PB.8''s gate. The
+    glued attention loop''s speed is NOT this task''s: v2 (per-row segment args, one call) is queued as PB.7B; correctness
+    of path (b) is enough here. Never loosen the oracle.'
+- id: OV-66
+  tasks:
+  - PB.7C
+  status: open
+  t: '2026-11-20T16:59:47'
+  text: 'The overseer stopped attempt 1 (perf): Overseer: started before PB.8''s reject was applied (PB.8''s uncommitted
+    mhc_post change was still in the tree). Stopped at once; PB.8 is reverted first. Start clean on the next attempt.'
+- id: OV-67
+  tasks:
+  - PB.7C
+  - PB.9*
+  - PB.T
+  status: open
+  t: '2026-11-20T19:34:05'
+  text: 'OWNER 2026-11-20 19:50 (binding, no shortcuts): NOTHING is built on the host per chunk beyond what tt-d-gen sends:
+    the token ids + the chunk descriptor (per segment: slot, start, length, write_start: a few ints), written in ONE upload.
+    Every other per-chunk table (window index lists, row positions, valid lengths, top-k lengths, MoE pad words, piece tables,
+    lane maps, served-write indices) is derived ON THE DEVICE from the descriptor by prepared programs. No per-descriptor
+    host caches standing in for this. Measure it: glued_new_layout_ms (host ms a new layout costs over a repeated one) <=
+    ~1 ms, reported per path; fresh-layout walls only.'
+- id: OV-68
+  tasks:
+  - PB.9F*
+  - PB.9X*
+  status: open
+  t: '2026-11-20T19:49:49'
+  text: 'Overseer audit 2026-11-20 (single-request 5120 path, HEAD code, read-only): programs BUILT in serving: adapter.compile()
+    warms only a full chunk at start 0 (runners/adapter.py:347-356). ttnn.slice hashes slice_start/end: (1) rope.py:439
+    RoPE cos/sin slice begin=start (via attention.py:1541, kv.py:80, indexer.py:344); (2) compressor.py:169 compressed-row
+    RoPE begin=start//r; (3) served.py:210/215 DeviceScalars.at slices k=start//32 and ceil(end/32) of a last chunk (ARBITRARY)
+    and slot (via compressor.py:718-720); (4) history_gather.py:323 -> served.py:155 slab.slice_rows begin [slot x layers
+    + row, start-derived] (slots x source layers x starts) and history_gather.py:355 ttnn.slice(rec,[0,0,h,0]); (5) compressor.py:1278-1280
+    replay offsets (write_start-start)/r (arbitrary); bounded: SnapshotSend owner patterns at last-chunk caps (snapshot_send.py:399-412,
+    ~160), unpack_fp8_rows ncores (fp8_rows.py, ~22), partial-chunk masks (attention.py:401-411, compressor.py:1170-1190:
+    first partial chunk), srv_row (attention.py:477-490), ring carry / pin slices. Already runtime (no build): update_padded_kv_cache,
+    ring_indexer_score_dsa start / kv_len, topk_large_indices valid_length, high_bw_all_gather. PB.9F / F5: measure these
+    (fresh starts AND fresh slots AND real partial last chunks AND a replay). PB.9X: make every one of them a runtime value
+    (prepared-program values / page copies / runtime-arg slices), and warm-up must be a finite enumerable set (no build
+    in serving).'
+- id: OV-69
+  tasks:
+  - PB.9X*
+  status: open
+  t: '2026-11-20T19:55:06'
+  text: 'OWNER 2026-11-20 20:20: no second upload of the token ids. Today the host reads the engine''s ids back (needed:
+    the engram hash, engrams stay on the host by owner decision) and then re-uploads them in natural order for the embedding
+    (model.py:2151 from_torch; adapter.py:247-260 server_rows reorder). Do the reorder ON THE DEVICE from the engine''s
+    input tensor (one prepared gather / page copy into natural order, positions from the descriptor), the embedding reads
+    that; the host keeps only the readback for the engram job. Applies to the single-request, lane and glued paths. Record
+    ids_uploads_per_chunk (== 0) next to the builds count; bit-identical.'
+- id: OV-70
+  tasks:
+  - PB.8RP
+  status: closed
+  t: '2026-11-21T05:04:09'
+  text: 'The overseer stopped attempt 1 (fix): gate failure was the one-load rule (F283) refusing test_packed_walls in a
+    shared process: a gate configuration issue (overseer), not the model; no agent work needed'
+  closed: '2026-11-21T05:04:56'
+  why_closed: abort reason only; no agent work needed
+- id: OV-71
+  tasks:
+  - PB.8RP
+  status: closed
+  t: '2026-11-21T05:05:03'
+  text: 'The overseer stopped attempt 2 (fix): duplicate: classified framework, resume runs the remaining units'
+  closed: '2026-11-21T05:05:13'
+  why_closed: abort reason only
+- id: OV-72
+  tasks:
+  - PB.9C
+  status: open
+  t: '2026-11-21T06:47:16'
+  text: 'tests/test_no_rebuild.py: the single-request check always asserts (0 builds). The packed paths (glued4x2k, glued5x1600,
+    lanes4x2k) RECORD no_rebuild_pass_<path> + program_builds_after_warmup_<path> and assert only when NO_REBUILD_PACKED_STRICT=1
+    (declare it in BATCH_ITEM_VARS; the glued fix task PB.9G, PB.T and PB.9H set it). The gate''s re-run showed glued5x1600
+    FAIL too (16 builds on glued4x2k incl. resumed rows) - report both glued paths as FAIL in packed_ladder_20261121.md
+    (only the single-request ladder counts today) and name each op that built. Change nothing else.'
+fixes:
+- id: FIX.1
+  title: 'Owner order: no padding to get around a kernel limit'
+  gate:
+  - W.1
+  status: placed
+  t: '2026-10-26T14:06:33'
+  text: 'Owner order: no padding to get around a kernel limit. Remove the shared-expert zero-padding in tt/shared_expert.py
+    (ipad = max(ipart, 33 tiles) rounded to DOWN_K: TP 4 576 -> 1280 = 2.2x, TP 2 1152 -> 1280) and extend the ttnn.bringup
+    flat_routed_expert fork instead: its gate/up split plan (flat_routed_expert_plan.cpp:433, no gate/up split for N tile
+    columns) must handle the real per-chip widths (18 tile columns at TP 4, 36 at TP 2) and a down-projection K that is
+    not a multiple of its block, with no padded lanes. Add fork unit tests at 18 and 36 tile columns (and the routed experts
+    widths), keep both boxes working (derive from shapes), update the fork README/CHANGELOG and DS41-115/DS41-76. Measure
+    the shared expert section time before and after (plain profile, chunk 5120, layers of W.1).'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-26T14:14:35'
+- id: FIX.2
+  title: Root-cause the flat_routed_expert first-call hangs on a Galaxy (Blackhole p150b, 12x10 grid) found b
+  gate:
+  - W.1
+  status: placed
+  t: '2026-10-26T15:14:14'
+  text: 'Root-cause the flat_routed_expert first-call hangs on a Galaxy (Blackhole p150b, 12x10 grid) found by FIX.1 regression:
+    11 tests hang on first call, e.g. test_flat_expert_indexed_shapes[mimo], the six test_flat_uneven_split cases, glm_e12
+    (DS41-119: hangs on the code before FIX.1 too). Reproduce each on one Galaxy chip with a short dispatch timeout, find
+    the actual cause (tt-triage / the stuck core and kernel, not a guess), and fix it in the fork so every case runs on
+    the Galaxy and still on the 2x2 QuietBox; no case skipped or special-cased for the box. Also make the 4 test-builder
+    asserts that hard-code the p150 11x10 grid derive the grid from the device. Done when tests/unit/ passes on a Galaxy
+    chip except failures shown to be identical on the QuietBox baseline (list them with evidence), plus the W.1 gate. Record
+    the cause in the fork CHANGELOG and known_issues (DS41-119).'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-26T15:25:41'
+- id: FIX.3
+  title: 'Root-cause the real-time profiler failure on this Galaxy: every 8x4 mesh open logs "Real-time profil'
+  gate:
+  - B.1
+  - W.1
+  status: placed
+  t: '2026-10-26T15:21:23'
+  text: 'Root-cause the real-time profiler failure on this Galaxy: every 8x4 mesh open logs "Real-time profiler disabled
+    on device 7 / 10: D2H socket construction failed (Failed to pin pages for DMA buffer ... size 0x201000 ... flags 0x4:
+    Invalid argument)", always devices 7 and 10 (B.1, W.1, M.1 logs). Host facts: KMD 2.11.0, iommu=pt (passthrough), 1412
+    x 2 MB hugepages, HugePages_Free 0 while a mesh is open; the buffer is 2 MB + 4 KB. Hypothesis to test, not assume:
+    under iommu=pt the pin needs physically contiguous memory and a 2 MB + 4 KB buffer only pins when it happens to be contiguous
+    (or the hugepages run out by device 7 / 10). Find the actual cause with evidence (pin a buffer of that size per device,
+    hugepage use per device during open, the D2H socket allocation code), fix it at its cause in tt_metal (or the framework
+    if the cause is ours), so the real-time profiler runs on all 32 chips; add a check that reports a profiler that failed
+    to start before a perf task relies on it. Record the cause and fix in known_issues.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-26T15:25:41'
+- id: FIX.4
+  title: 'Routed-expert weights: use the flat-expert fork''s laid-out weight cache and a fast miss path'
+  gate:
+  - W.1
+  status: placed
+  t: '2026-10-26T22:17:50'
+  text: 'Every test process spends ~113 s PER LAYER in TtExperts._load_block/_load_flat (M.1 precheck log 2026-10-26 22:07-22:15:
+    between create_global_expert_idx_table and EXPERTS_FLAT, 113 s each of L00..L03; everything else of a layer ~5 s). 40
+    layers = ~75 min of host work before every M.1 / ladder / K.1 / X.* run. Cause: tt/experts.py builds every expert with
+    fp4_dequant + per-tensor torch.equal asserts + _bfp8_exact in Python, then FlatRoutedExpert packs and uploads the layout,
+    with no cache. The fork already supports it (ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py: cache_prefix=
+    and weights as a CALLABLE only called on a cache miss; plan-hashed file names; GLM-5.3 models/demos/glm53_flash_d_p/tt/experts_ag.py:325
+    uses it). Do: (1) pass cache_prefix (under the run''s weight-cache dir, keyed by the checkpoint actually loaded: revision
+    + scaled/real + layer + EXPERTS_IMPL) and a callable that does the current dequant + checks, so a hit skips all host
+    dequant/packing; on a bfp4 hit keep bfp4_stats correct (cache them next to the weights) or document why not needed;
+    (2) profile the miss path (one layer, CPU, nice 19) and cut its cost honestly (vectorised dequant over all experts of
+    a chip, one exactness check per stacked tensor instead of per matrix, no repeated .float() copies); no change to values
+    or layout (bit-identical tensors; the exactness asserts stay on the miss path). Same check for dense weights (DENSE_BFP8,
+    ~5 s/layer) only if cheap. Report: per-layer load time miss before/after and hit, W.1 load wall time miss vs hit. Gate:
+    W.1 must still pass; run it twice (second run must hit the cache).'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  placed: '2026-10-27T05:38:57'
+- id: FIX.5
+  title: 'Owner order (2026-10-27): ttnn.bringup.flat_routed_expert_with_program misses the program cache on e'
+  gate:
+  - W.1
+  status: placed
+  t: '2026-10-27T10:12:24'
+  text: 'Owner order (2026-10-27): ttnn.bringup.flat_routed_expert_with_program misses the program cache on every run, fix
+    it IN THE OP. Evidence (overseer census, /scratch/dnijemcevic/posprof/census.json + census0.log; F196/F197 in testing/profile.py):
+    one 40-layer 5120 chunk at position 0 on 8x4, 6 consecutive runs after compile: program-cache entries +40, +40, +20,
+    +40, +38, +20 a run, ALL charged to flat_routed_expert_with_program (every other op hits); 30 runs never converge (249
+    -> 831 entries). Host wall tracks the misses (+20 runs 15-19 s, +40 runs 26-32 s: ~0.5 s of host work per miss). Cause:
+    device/flat_with_program_device_operation.hpp:33 FlatWithProgramParams.addrs = ''every buffer address the program bakes
+    in: the cache key ... so a cache hit never needs a patch''; compute_program_hash hashes p.addrs and counts_addr, so
+    a call whose activation buffers (x / y / arena / counts) land at a new allocator address builds a new program. Do: make
+    every per-call buffer address (input, output, arena, counts, the extra program''s buffers) a runtime argument patched
+    on a hit (override_runtime_arguments / the cached workload''s runtime args), and remove addresses from the program hash;
+    weights'' addresses may stay baked only if they are fixed for the model''s lifetime (state why). No shortcut: do not
+    disable the program cache, do not pin the model''s activations at fixed addresses to dodge the key, do not change values
+    (bit-identical outputs vs the current op on the same inputs: check it). Measure and report: (1) BRINGUP_PROFILE_WALL=1
+    test_profile.py on the seed rung (F196: warm = a run adds no program-cache entry, then 10 timed runs with misses refused)
+    converges, with the number of warm-up runs and the entry counts; (2) the fork''s tests/unit on a Galaxy chip all pass
+    (as FIX.2); (3) the op''s per-call host time before / after on a hit. Gate: W.1 (accuracy unchanged).'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-27T16:49:34'
+- id: FIX.6
+  title: 'OWNER DECISION 2026-10-28: the one configuration is the block MoE with its fused head on the torus'
+  gate:
+  - W.1
+  - M.1
+  - L.s10240
+  - L.last
+  - L.s56320
+  - L.smoke
+  - K.1
+  status: placed
+  t: '2026-10-28T07:36:14'
+  text: 'OWNER DECISION 2026-10-28: the one configuration is the block MoE with its fused head on the torus. (1) tt/settings.py
+    MOE_IMPL default ''flat'' -> ''block'' (MOE_HEAD / MOE_TAIL stay ''fused''); record the owner decision and the evidence
+    in the setting''s text: 8x4 FABRIC_2D_TORUS_XY, one 5120-token chunk, 40 layers, device 219.5 / 233.9 / 237.5 / 249.1
+    / 284.4 ms at context 0 / 50k / 100k / 200k / 500k vs flat on FABRIC_2D 308.1 / 314.6 / 323.3 / 338.0 / 375.7; warm
+    host wall 615-646 ms vs 672-1005; L.s10240 PASS (top5 1.0, final hidden rel 0.192) and L.smoke Paris with DS41_MOE_IMPL=block
+    on the torus (supervision.md 06:20). The spec''s galaxy_8x4 box now opens FABRIC_2D_TORUS_XY (overseer, intake re-approved).
+    Flat on the torus hangs (first MoE call) and block''s fused head does not build on FABRIC_2D lines (DS41-129): FABRIC_2D
+    is no longer a target on this box (owner: ''I don''t care about fabric2d if torus works''). (2) Make sure every path
+    the gates run uses the spec''s fabric: the K.1 runner (tt-d-gen''s prefill runner process, the runner env / device setup:
+    it must open the torus with the 10880 B payload, harness.open_mesh semantics) and the stand-in decode (harness.open_mesh).
+    (3) Do not change precision, MOE_HEAD/MOE_TAIL, or any limit. Report the gates'' numbers vs the flat ones.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-28T07:43:45'
+- id: FIX.7
+  title: 'OWNER DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses): every GEMM inpu'
+  gate:
+  - W.1
+  - M.1
+  - L.s10240
+  - L.last
+  - L.s56320
+  - L.smoke
+  - K.1
+  status: placed
+  t: '2026-10-28T13:59:43'
+  text: 'OWNER DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses): every GEMM input the reference
+    quantizes to fp8 (reference/ds41_ref.py ''official'' numerics, lines ~89-91: the fp8 act q-dq of every fp8 linear''s
+    input) is fed to the device matmul as bfloat8_b, the device''s own 8-bit format (stored and computed in it: never a
+    parity-only rounding, agents'' rule 17). Inputs: attention q_a, wkv (tt/q_a.py), wq_b, wo_a (its input = the attention
+    output, which the reference rounds to fp8 before wo_a), wo_b (tt/attention.py), the indexer''s wq_b (tt/indexer.py),
+    the engram wkv (tt/engram_kv.py: the engram rows), and the shared expert''s x and h - check them on the BLOCK MoE path
+    (the default since FIX.6: models/demos/moe_block, MOE_HEAD/MOE_TAIL fused; the routed experts'' x/h are already bfp8
+    there?) and fix any that are wider. The producing op writes bfloat8_b TILE where it can (output dtype), else one typecast;
+    the weights stay as they are (bfp8 / bfp4); keep the matmul fidelity settings unchanged (HiFi2; LoFi is a separate later
+    pick). One setting in tt/settings.py, e.g. GEMM_INPUTS ''bfp8'' (default) | ''bf16'' (the old path), with this decision
+    and the reference lines in its text. Out of scope: the KV caches and the index query/keys (step 2, needs the owner''s
+    cache decisions), any limit, golden or frozen test. Report per matmul: the input dtype before/after, the ladder''s err
+    per layer / err_final_hidden / top5 before/after, and the device time per chunk before/after (one plain profile).'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-28T13:59:50'
+- id: FIX.8
+  title: 'CKV_FORMAT=bfp4_rows: the compressed KV attention table in 4 bits (bfloat4_b rows, 288 B)'
+  gate:
+  - W.1
+  - M.1
+  - L.s10240
+  - L.last
+  - L.s56320
+  - L.smoke
+  - K.1
+  status: placed
+  t: '2026-10-28T18:17:08'
+  text: 'OWNER 2026-10-28: the 4-bit compressed KV is DEVELOPED ON THE 2x2 (packer test, forks, single-card tests, the 2x2
+    ladder) and pushed; this job INTEGRATES and gates it at full size on the Galaxy: pull the 2x2''s CKV_FORMAT work, make
+    it run on the 8x4 (sizes / link counts / payloads derived from the mesh, never the 2x2''s literals), set CKV_FORMAT=bfp4_rows
+    as the default once this gate passes, and report what the 2x2 could not measure (DRAM per chip of the replicated attention
+    tables at the deploy context, sparse_sdpa kernel time bf16 vs bfp4 rows at chunk 5120, warm wall and device time per
+    chunk). The original brief follows. OWNER DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses):
+    the compressed KV (reference: fp4 e2m1 + e4m3 scale per 16, RoPE before quantization; ds41_ref.py:797-799) is stored
+    in 4 bits instead of bf16. Design and evidence: bringup/CKV_4BIT_DERISK.md (option B: row-packed bfloat4_b, 288 B a
+    row, attention output 1-11 % above the reference''s own fp4; truncation would be 4-5x worse, so the write rounds to
+    nearest even: on the SFPU before the pack if the packer truncates - the overseer''s packer test result is in the note).
+    Scope, owner 2026-10-28: (1) ONLY the attention table (AttnTable, tt/compressor.py:153, read by sparse_sdpa) goes to
+    bfp4 rows; the SERVED records (TtServedRows, tt/compressor.py:264, shipped by tt-d-gen) stay bf16 rows holding the bfp4-rounded
+    values (exact), so the serving contract and tt-d-gen are unchanged; load_served / load_host repack the bf16 records
+    into the bfp4 table (exact: they are on the bfp4 grid). (2) Write: a fork op (ttnn.bringup, INDEX.md first) packing
+    ckv bf16 TILE -> bfloat4_b -> 288 B row records. (3) Read: a sparse_sdpa fork option kv_format=ROW_BFP4 that gathers
+    288 B rows and shuffles 32 rows into 16 bfloat4_b tiles for the matmuls (no tilize, no scale multiply); the window rows
+    stay a separate bf16 tensor (two KV tensors; keep SparseIndexTables'' window chunk and top-k chunks apart for starts
+    < 128). (4) Behind the setting CKV_FORMAT=bf16|bfp4_rows in tt/settings.py, default bfp4_rows once the gates pass; bf16
+    = today''s stock path, kept. Start from the CPU codec in tests/tools (tt/ckv_codec.py, tests/test_ckv_codec.py) and
+    the L1 single-card tests 0-5 of the report before any full-model run; work in small loops (single card, the 3-layer
+    repro behind CKV_FORMAT) and run the ladder / K.1 only as the gate. Report: per-step accuracy vs the bf16 path, sparse_sdpa
+    kernel time bf16 vs bfp4 rows, the warm wall and device time per chunk, DRAM per chip of the attention tables.'
+  hold: the 2x2 session's CKV_FORMAT work pushed (packer test, forks, single-card tests, 2x2 ladder pass) and P.6 done
+  paths:
+  - models/demos/deepseek_v41_flash_d_p
+  - ttnn/ttnn/bringup
+  released: '2026-10-28T22:11:04'
+  placed: '2026-10-28T22:11:05'
+- id: FIX.9
+  title: 'DS41-132: the shared expert''s x / h as bfp8 inside the block MoE''s fused head (GEMM_INPUTS reaches MOE_HEAD=fused)'
+  gate:
+  - W.1
+  - M.1
+  - L.s10240
+  - L.last
+  - L.s56320
+  - L.smoke
+  - K.1
+  status: placed
+  t: '2026-10-28T18:47:47'
+  text: 'OWNER DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses; FIX.7 GEMM_INPUTS=bfp8): the
+    reference fp8-quantizes the shared expert''s x and h; on MOE_HEAD=fused (the default) they stay bf16, i.e. ABOVE the
+    reference (known_issues DS41-132). Cause: models/demos/moe_block/tt/se_engine3.py hard-codes 2048-byte bf16 tiles (xown,
+    xin, hown, hall); MoEDtypes.shared_activations (moe_block.py:118, :1406) only reaches the ops head. Fix: a bfp8 option
+    for x and h in se_engine3 (tile sizes from the dtype, not literals), set by MoEDtypes.shared_activations, which GEMM_INPUTS
+    sets for DS41. x is shared with the router, which takes bf16 in the reference: the router keeps bf16 x, only the shared
+    expert''s matmul input is bfp8 (round where the SE reads it, or a second bfp8 copy: pick the cheaper, measure). h (SwiGLU
+    output) is written bfp8 for the down matmul. Keep MOE_HEAD=ops, the 2x2 seed box and other moe_block users working (the
+    option defaults to bf16 for them). Do not touch tt/compressor.py, tt/attention.py, tt/sparse_attention.py (the 2x2''s
+    4-bit KV work) or tt/engram*.py. Report: per-step accuracy before/after (shared expert, block out), the head''s device
+    time and the warm wall per chunk.'
+  hold: P.6 done (one Galaxy, one task at a time); then this before P.4 / P.5 (owner 2026-10-28)
+  paths:
+  - models/demos/moe_block
+  - models/demos/deepseek_v41_flash_d_p
+  - ttnn/ttnn/bringup
+  released: '2026-10-29T02:23:35'
+  placed: '2026-10-29T02:23:39'
+- id: FIX.10
+  title: 'ENGRAM_TABLE=resident must coexist with the full model on the Galaxy host (runner thrashes: ~2 min a layer, SIGBUS)'
+  gate:
+  - L.s56320
+  - K.1
+  status: placed
+  t: '2026-10-28T19:29:49'
+  text: 'OWNER 2026-10-28 (the engram tables in host RAM are the owner''s choice for the Galaxy; the engram code is the
+    Galaxy''s for this and P.6). Evidence: K.1 runner smoke with the default ENGRAM_TABLE=resident (the runner, runner_case.py,
+    is not under pytest, so it builds both tables, 209 GB anonymous, MADV_HUGEPAGE) ran ~2 min a layer in the first forward
+    and died SIGBUS once (17:00 run) / was stopped at layer ~15 (18:39 run). py-spy: main thread in torch.cat inside moe_block/tt/se_engine3.py:1604-1607
+    upload -> flat_expert.py:316 _bank_sharded (the fused head''s per-layer weight upload, lazy at first use), ~59 cores
+    of user time; the process read 496 GB from disk in 30 min; RSS 218 GB; swap 7.8 of 8 GB full; /proc/vmstat compact_stall
+    611k, compact_fail 549k, thp_fault_fallback 147k. Host: 566 GB RAM, tt_cache 285 GB, checkpoint 476 GB. The same smoke
+    with DS41_ENGRAM_TABLE=random PASSES in 968 s (19:12 run), FIX.7''s in ~6 min of runner time. Find the cause (page-cache
+    eviction of the weight cache while it streams, THP compaction from MADV_HUGEPAGE on 209 GB, thread oversubscription
+    between numba''s pool, torch''s OpenMP and the gather pools, or swap) with measurements, and fix it at the cause so
+    that resident mode costs no load or serving time on this host: e.g. build the tables after the weights are on the device,
+    release host copies the model no longer needs, no MADV_HUGEPAGE if compaction is the cost, cap or release numba / gather
+    threads after the build. Rows stay bit-identical (tests/test_engram_bfp8.py, tests/test_engram_table_modes.py). Report:
+    model load time and K.1 runner smoke time, resident vs random; peak RSS, disk read, swap. Note: the Galaxy spec''s owner
+    rules still say ''never hold the 203 GB of tables in host RAM'' and ''Host RAM is shared (503 GB)'': the overseer raises
+    the spec wording with the owner; do not edit the spec.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-28T19:29:59'
+- id: FIX.11
+  title: 'Attention precision vs the reference: layer 0 attention 10x its noise floor; layer 2 over with 4-bit KV'
+  gate:
+  - W.1
+  - M.1
+  - L.s10240
+  - L.last
+  - L.s56320
+  - L.smoke
+  - K.1
+  status: placed
+  t: '2026-10-29T12:18:46'
+  text: 'OWNER DECISION 2026-10-29 (FIX.11 before P.10). Evidence (overseer diagnostic, /scratch/dnijemcevic/ctdiag/*.log;
+    supervision.md 12:15-12:20): the seed''s component tests run on the 8x4 (BRINGUP_SPEC = the galaxy_8x4-full spec): test_c_swa_attention
+    L00 vs golden rel 0.0171 (GEMM_INPUTS=bf16: 0.0204) vs limit 0.0033 = 2 x the reference''s own noise floor 0.0017 ->
+    ~10x the reference''s arithmetic, independent of FIX.7; test_c_enc_source_attention L02 0.0604 with CKV_FORMAT=bfp4_rows
+    vs limit 0.0499 (bf16 KV: 0.0182 pass; both bf16: 0.0237 pass) -> the 4-bit KV plus the device''s other attention error
+    cross the line. These component tests are in no Galaxy gate; run them yourself (scripts/run_safe_pytest.sh --run-all
+    --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py and test_c_enc_source_attention.py
+    with BRINGUP_SPEC set) before and after. STEP 1 (CPU first, agents'' rule 14): attribute L00''s 0.017 to its causes
+    by running the attention step''s CPU reference at the device''s formats one item at a time: sparse_sdpa QK / PV at HiFi2
+    (operand truncation, DS41-68) vs the reference''s fp32 scores; RoPE cos / sin tables in bf16 (rope.py) vs fp32; the
+    attention sink uploaded bf16 (attention.py:444) vs fp32; dense weights re-rounded to bfp8 (DENSE_WEIGHTS) vs exact fp8;
+    bfp8 activations packed without bfp8_pack_precise (double rounding, DS41-137); anything else you find narrower than
+    the reference (precision table https://claude.ai/artifact/QP9f8tn3xDrojyyk8fMLUs). Report the table. STEP 2: raise the
+    dominant items to the reference''s precision - never above it (owner rule: realistic precision = whatever the reference
+    uses; HiFi4 / fp32 where the reference computes in fp32 is matching, not exceeding) - each behind a setting in tt/settings.py
+    (default on once the gates pass, ''off'' = today), forks before stock ops (ttnn/ttnn/bringup/INDEX.md: the sparse_sdpa
+    fork already has precision options). Do not touch the attention layout (P.9 / P.10''s work: keep ATTN_SP32_PROJ as is)
+    or tt/engram*.py. Report: per item the error contribution and the device / host cost; both component tests and the end-to-end
+    metrics before / after; device time and warm wall per chunk (DS41_ENGRAM_TABLE=resident).'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p
+  - ttnn/ttnn/bringup
+  placed: '2026-10-29T12:18:47'
+- id: FIX.12
+  title: Verify the 2x2's bit-identical 4-bit speedups at full size (merged 7f55821f579)
+  gate:
+  - P.10
+  status: placed
+  t: '2026-10-29T13:44:29'
+  text: 'OWNER 2026-10-29 (was ''P.12''). The 2x2''s lowbit phase 1 is merged (7f55821f579, branch dnijemcevic/model_bringup_lowbit
+    @ 2bf71707602) and ttnn rebuilt. Default-on and bit-identical: sparse_sdpa ROW_BFP4 reads each 320 B record in ONE DRAM
+    read into a scratch, then two local copies (2x2 single card: compressed-layer attention -17..-21 %); the SFPU round
+    to nearest even as |x| + 2^23 LSB - 2^23 LSB (~-30 % 4-bit write). Opt-in only (defaults off, NOT to be switched on
+    here): ckv_bfp4 dtype=bfloat8_b / blocks, ROW_BFP8, bfp_round, indexer_score bfp4 q / k. Job: confirm on the 8x4 that
+    outputs are unchanged (the gate) and measure sparse_sdpa kernel time and the attention section / device total / warm
+    wall per chunk vs P.10''s numbers (device 206.0, wall ~371-385, DS41_ENGRAM_TABLE=resident). No model change expected;
+    if something breaks at 8x4 sizes, fix it in the forks behind the same behaviour. Do not touch tt/engram*.py.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-29T13:45:15'
+- id: FIX.13
+  title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
+  gate:
+  - K.1
+  - P.10
+  status: placed
+  t: '2026-10-29T15:08:46'
+  text: 'OWNER: check whether P.9 (DS41_ATTN_SP32_PROJ) raises layer 20''s window KV error by rounding or by a bug. Evidence
+    (FIX.12): test_adapter_acks ack slot 0 [0, 2536) last-window 128 rows, 0_window_kv L20 nope 0.98855 < 0.98957 with P.9,
+    passes with ATTN_SP32_PROJ=off; ladder window_kv L20 0.090 -> 0.106. Suspicious: P.9 replaces bf16 TP partial sums of
+    wo_b by one fp32 sum, which should move closer to native, not further; the failing prompt is a padded partial chunk.
+    OWNER 15:40: the device may be used. Do: find the first layer / op where P.9 on vs off differs beyond its rounding for
+    that prompt (device dumps of the 2536-token prompt, layer by layer, on vs off; the CPU at the device''s formats, agents''
+    rule 14, to tell rounding from a bug). Check the padded partial chunk first: rows past the valid length, pad rows entering
+    the per-chip 160-row projections, the last chip''s share, any reduction or norm over padded rows. Bug -> fix it and
+    remove the waiver; honest rounding -> record the evidence and keep the waiver for the owner. Both failing checks are
+    the same one: test_adapter_acks and test_runner_contract (slot 0 turn 1), last-window 128 rows of 0_window_kv L20, waived
+    in tests.unit_waivers until this is settled.'
+  hold: 'owner 2026-10-29: parked, waived for now; CPU only, no Galaxy time'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  released: '2026-10-29T15:36:21'
+  placed: '2026-10-29T16:02:40'
+- id: FIX.14
+  title: 'Integrate the 2x2''s lowbit phase 2 at full size: window KV bfloat8_b blocks, index K / Q bfloat4_b (merged 1f45dcccf1c)'
+  gate:
+  - P.10
+  status: placed
+  t: '2026-10-29T16:49:50'
+  text: 'OWNER DECISION 2026-10-29 13:00; the 2x2 marked READY FOR GALAXY (df92663a019, merged in 1f45dcccf1c, no host C++
+    change so no ttnn rebuild). Defaults now on: WINDOW_KV_FORMAT=bfp8_blocks, INDEX_K_FORMAT=bfp4, INDEX_Q_FORMAT=bfp4
+    (bf16 = the path before); the served caches stay bf16 (contract unchanged; they must hold the rounded values attention
+    reads). Do: run the gate (P.10''s units) on the 8x4; anything that breaks at 8x4 sizes (SP=32 / 160 rows a chip, 40
+    layers, the window carry, the per-chip index slabs) is fixed in the forks / tt behind the same behaviour, keeping the
+    2x2 working (derive from shapes, no box literals). Measure on vs off (env WINDOW_KV_FORMAT=bf16 INDEX_K_FORMAT=bf16
+    INDEX_Q_FORMAT=bf16 = off): per-chip DRAM of the window and index tables at 1,044,480 tokens (plan numbers), window
+    / index ring or gather bytes, sparse_sdpa and indexer score per call, the new writes (ckv_bfp4 blocks, bfp_round) per
+    call, attention / indexer / device / wall per chunk from the plain profile (rung last). Accuracy: every ladder metric
+    against its limit. KNOWN, OWNER-ACCEPTED on the 2x2 at 16:50 (2x2 spec tests.waivers indexer and state.topk_idx, F226):
+    the reference''s own fp4 selection error moves the top-k state (2x2: L14 0.185 vs 0.165) and the indexer step; if the
+    8x4 misses exactly those (err_state_topk_idx_* or the indexer step) and nothing else, STOP and report the numbers per
+    layer - the overseer adds the owner''s waivers to this spec; never loosen a limit, never raise precision above the reference.
+    Any other miss is a bug to find. DS41-141''s unit waiver (L20 window_kv last-window PCC >= 0.985) may stop matching
+    once the window is bfloat8_b: report the new value, do not touch the waiver.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  placed: '2026-10-29T16:50:05'
+- id: FIX.15
+  title: 'GALAXY_CORE_CAP: no op on more than 110 Tensix cores of a chip (PSU di/dt), then re-tune'
+  gate:
+  - P.17
+  - K.1
+  status: placed
+  t: '2026-10-30T15:26:27'
+  text: 'OWNER 2026-10-30 15:40 (agent rule 18): the Galaxy''s power supply trips when a chip''s current rises too fast
+    (di/dt); no op may run on more than 110 of a chip''s 120 Tensix cores. Do: (1) add the setting MAX_WORKER_CORES (default
+    110 on Galaxy boxes, the full grid elsewhere; one place, tt/settings.py) and pass it to every op that picks a core grid;
+    (2) audit EVERY op the model runs on the 8x4 for its core count (the device profiler''s per-op core counts, or each
+    op''s program config / grid): matmul configs (tt/mm_configs: today''s rule and the galaxy table; today engram_kv uses
+    120 cores, attn.wq_b 114), the bring-up forks (ckv_bfp4 / bfp_round compact, rms_norm, mhc_pre / mhc_post, rotary_embedding_indexed,
+    sparse_sdpa, indexer_score, topk_large_indices, fabric_all_gather, combine_rf), the MoE block (fused head, se_engine3,
+    flat_routed_expert, tail, routing exchange), attention, CCL workers; (3) cap each over-limit op to at most MAX_WORKER_CORES
+    via its own option (fork ops: an option, default today''s grid), and re-sweep the capped matmul calls on single cards
+    (run_safe_pytest --device auto, P23_SHARD over all 32 cards); (4) report per op: cores before / after and its device
+    time before / after, and the chunk''s device time and warm wall at 51200 and 512000. No fork regression suites (task
+    F.1).'
+  hold: 'after P.20''s decision (owner 15:42: the P.19 / P.20 A/Bs run at 120 cores first)'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/perf
+  - ttnn/ttnn/bringup
+  - models/demos/moe_block
+  released: '2026-10-31T00:58:34'
+  placed: '2026-10-31T00:58:35'
+- id: FIX.16
+  title: 'STEADY_STATE_PROFILE: the profile''s timed runs take the consecutive-chunk path (model hook steady_state)'
+  gate:
+  - P.17
+  status: placed
+  t: '2026-10-31T10:10:07'
+  text: 'OWNER 2026-10-31: every profile and wall run repeats the same chunk, so the window carry is rebuilt each time (attention.py
+    ~1011: slice 1760x512 + to_layout 128x512 + ckv_bfp4 when the tail''s next start != start; 120 calls, 1.21 ms device
+    / 16.3 ms host a chunk) although consecutive serving chunks skip it: the measured wall overstates serving by ~11 ms.
+    The framework now calls model.steady_state(start) (if the device model has it) right before each TIMED run (warm wall,
+    cProfile, the profiled run; never before an accuracy run). Implement steady_state(start) on the DS41 device model: make
+    the next run at start take exactly the path a chunk following a whole previous chunk takes (e.g. mark every layer''s
+    window tail / tail blocks as ending at start, keeping the buffers it would hold). Values may differ from a real previous
+    chunk (timing only), nothing else may change. Check with the profile that the carry rebuild ops are gone from the timed
+    run and nothing else changed (op counts per section). No fork regression suites.'
+  hold: the framework hook F236 (testing/profile.py calls model.steady_state(start) before every timed run), installed by
+    the overseer after P.18 commits
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  released: '2026-10-31T10:30:17'
+  placed: '2026-10-31T10:30:28'
+- id: FIX.18
+  title: 'OWN_ROWS_KV_MARGIN: find what in P.23 moves the window KV of layers 20 / 35 / 38, fix it without raising precision'
+  gate:
+  - K.1
+  status: placed
+  t: '2026-11-01T02:09:37'
+  text: 'Since P.23 (OWN_ROWS, e3e75423c18) K.1''s test_adapter_acks and test_runner_contract fail on three window-KV read-back
+    checks: 0_window_kv layer 20 last-window nope PCC 0.98947 < 0.98957 (calibrated limit), layers 35 / 38 last block [2496,
+    2536) 0.98910 / 0.98994 < 0.99 (tt-d-gen''s validation threshold, server_rules LAST_BLOCK_PCC). With DS41_OWN_ROWS=off
+    the same acks test passes (overseer diagnosis, /scratch/dnijemcevic/diag_acks). P.23 was meant to change only summation
+    orders (mHC and norm statistics as full-length fp32 sums on one chip), which should not be less accurate, so look for
+    what else moves: the engram projection''s rearranged columns, the head''s all-to-all into the fused head''s x buffer,
+    the fused tail''s local mode, the norms. Locate it op by op: OWN_ROWS on vs off on the same input (device dumps of the
+    window KV / layer inputs for layers 19-21 and 34-38), and the CPU reference at the device''s formats (agent rule 14).
+    Fix the cause in the OWN_ROWS path; do not raise any precision above the reference''s, do not touch the contract tests
+    or their limits, keep OWN_ROWS''s speed (report device / wall a chunk at 51200 before / after). If the cause is a genuine
+    one-rounding difference with no lower-precision choice behind it, stop and report the evidence (it becomes the owner''s
+    waiver). Agent rules 18 / 19; no fork regression suites.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/moe_block
+  - models/demos/deepseek_v41_flash_d_p/tests
+  placed: '2026-11-01T02:09:47'
+- id: FIX.19
+  title: 'CONTRACT_WINDOW_DRIFT: the layer-20 window-KV contract check judged over every position, not one 128-row window'
+  gate:
+  - K.1
+  status: placed
+  t: '2026-11-01T07:37:45'
+  text: 'OWNER 2026-11-01 (approves changing the frozen contract tests for this): test_adapter_acks and test_runner_contract
+    judge layer 20''s window KV on ONE 128-row window (the last 128 rows of the 2536-token prompt) against a limit from
+    the reference''s drift on a different window (the golden''s final ring, DS41-125 decision B). FIX.18 (DS41-192) measured
+    the device''s PCC over all 286 windows: it varies by +-0.004 from window to window, ten times the margin the check decides
+    on, so the result depends on which window is checked. Change the check to compare like with like over many samples:
+    the window KV error over every position of the range (or the median over all 128-row windows) against calib x the reference''s
+    drift over the SAME positions (official numerics vs the native golden; e2e.calib). First look for the drift data in
+    the existing golden dumps (window KV per layer / ring snapshots, DS41-124); if layer 20''s window KV at those positions
+    is not dumped, produce it with the CPU reference (official numerics at the reference''s shipped dtype) and say how long
+    it took. Keep every other check as it is (the layers 35 / 38 last-block check against tt-d-gen''s fixed 0.99 is the
+    server''s own rule: leave it, it stays waived). Then the layer-20 part of tests.unit_waivers in the spec can go: say
+    so in your report (the overseer removes it). No limit may become a fixed number (F138); no fork regression suites.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
+  - models/demos/deepseek_v41_flash_d_p/tt/runners
+  placed: '2026-11-01T07:38:16'
+- id: FIX.20
+  title: 'LOGIT_KL: token-level accuracy, device vs DeepSeek''s reference, both against the full-precision truth'
+  gate:
+  - K.1
+  status: placed
+  placed: '2026-11-01T14:50:00'
+  t: '2026-11-01T11:31:26'
+  text: 'FIRST (owner 2026-11-01): set WINDOW_KV_FORMAT''s default back to bfp8_tiles in tt/settings.py (P.26 made bf16_tiles
+    the default by the perf-pick convention; the owner wanted a switch only, the shipped window KV stays 8-bit; say so in
+    the setting''s text); that is the only model change. THEN: OWNER 2026-11-01: does the device''s ~1.4-1.8x of DeepSeek''s
+    hidden-state error (err_* shares 0.70 median, 0.91 worst) matter for the tokens? Measure it at the output, no other
+    model change. The goldens (golden_full/galaxy_8x4, native fp32) keep final_norm [5120, 5120] and tokens [5120] for every
+    chunk (model.safetensors); logits = final_norm @ the lm head (129280 vocab; CPU in row blocks, fp32). Write models/demos/deepseek_v41_flash_d_p/tests/bringup/test_logit_kl.py:
+    for (a) rung s10240 chunk 1 (positions 5120-10239, from 0) and (b) rung last (s56320''s last chunk, 51200-56319, prefix
+    from the golden as the ladder runs it): (1) the device''s final_norm for all 5120 positions at the shipped settings
+    (one device run per rung, as test_ladder runs it); (2) DeepSeek''s reference at numerics official (bf16, its fp8 / fp4
+    quantizers) on the same chunk with the same golden prefix (CPU; cache it next to the golden as <rung>-official/final_norm.safetensors
+    with a content hash, so it is made once; say how long it took). Against the native golden, for x in {device, official},
+    per position: KL(p_golden || p_x), top-1 agreement, top-5 overlap, and the next-token NLL on the real text (tokens shifted
+    by one) for golden, device and official. Record metrics kl_mean_<rung>, kl_p99_<rung>, top1_agree_<rung>, nll_<rung>
+    for device, and the same with suffix _official; the limit kl_mean_<rung>_limit = e2e.calib^2 x the official''s kl_mean
+    (KL ~ rel^2, as F135''s PCC convention; no fixed number, F138); gate metrics kl_mean_* <= limit. The rest recorded,
+    not gated. Long CPU or device jobs through devjob (start / wait), never killed; agent rules 18 / 19; one device process
+    at a time; no fork regression suites. Run the device side twice per rung: the shipped default and DS41_WINDOW_KV_FORMAT=bf16_tiles
+    (P.26''s switch; metrics with suffix _wkv16, recorded, not gated), so the window-KV format is also judged at the tokens.
+    Report a table: device (both formats) vs official for both rungs, and the 20 worst positions (token, KL, golden top-1
+    vs device top-1).'
+  hold: P.26 decided; overseer sets the gate to test_logit_kl.py
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/reference
+- id: FIX.21
+  title: 'FORMAT_ATTRIBUTION: CPU attribution of the device''s accuracy gap to DeepSeek''s reference, one format at a time'
+  gate: []
+  status: placed
+  placed: '2026-11-01T17:30:00'
+  t: '2026-11-01T17:30:00'
+  text: 'OWNER 2026-11-01: CPU attribution of the device''s accuracy gap, NO DEVICE (device false; the box needs a reboot
+    before any device job). FIX.20 measured the device''s logit KL vs the native golden at 2.1-2.2x DeepSeek''s reference
+    (numerics official: bf16 + its fp8 / fp4 quantizers), and the per-layer err_* shares say the same (median 0.70, device
+    / official error ~1.4-1.8x). Find WHICH of the device''s format and precision choices cause it. No change to tt/ (the
+    shipped model); work only in reference/ and tests/bringup/. (1) Add to the CPU reference (reference/ds41_ref.py, next
+    to numerics native / official) a device-format emulation with one switch per site, each either ''official'' (the reference''s
+    own quantizer and dtype) or ''device'' (what tt/settings.py ships): read tt/settings.py and the tt/ code for the sites;
+    at least EXPERTS (bfloat4_b weights, shared exponent per 16 of a tile row, EXPERTS_PRECISION / EXPERTS_IMPL, vs the
+    reference''s fp4 e2m1 per 32), the shared expert''s format, INDEX_K_FORMAT / INDEX_Q_FORMAT (bfp4 vs fp4 e2m1 per 32;
+    DS41-150), CKV_FORMAT (compressed KV bfp4_rows), WINDOW_KV_FORMAT (bfp8_tiles vs e4m3), ENGRAM table (bfp8), the matmul
+    fidelity (MATMUL_FIDELITY / ATTN_FIDELITY HiFi2: emulate its mantissa truncation of the operands as the ttnn docs and
+    the repo''s existing fidelity notes say; say exactly how), the bf16 accumulations (COMBINE_ACC, FP32_ACC off where off,
+    bf16 cross-chip sums), BF16_ACTIVATIONS, NORM dtypes. Reuse the repo''s existing bfp packers (tt/ckv_codec.py, tt/engram_bfp8.py,
+    tests/test_bfp_packer_rounding.py) for the exact device rounding; do not invent a format. (2) VALIDATE the emulation
+    before any attribution: all sites ''device'' must reproduce the device''s own errors on layers 0-9 (results/P.26.json
+    side ''old'' and results/FIX.20.json: err_layer_L00..L09 and the err_state_* of those layers, rung s10240 or last as
+    you run it) within +-25 % per metric, median within +-15 %. If it does not, find what the emulation misses before going
+    on and say what it is; a CPU model that does not match the device attributes nothing. (3) Attribution on layers 0-9
+    (chained, as the ladder runs them, on a golden chunk with its golden prefix; pick the rung and say why; CPU cost matters,
+    say how long each run took): (a) all-device; (b) leave-one-out: all-device with ONE site set back to official, for every
+    site; (c) add-one: official with ONE site set to device, for every site; (d) official. Against the native golden, per
+    run: err_layer_L00..L09, the err_state_* of those layers, and gap_closed_<site> = (err_all_device - err_leave_one_out)
+    / (err_all_device - err_official) at L09 (and the median over L00..L09). Interactions: if the leave-one-out shares sum
+    far from 1, say which sites interact. (4) If one or two sites close most of the gap: run (a) and all-device-minus-those-sites
+    over all 40 layers at rung last''s chunk and the FIX.20 KL (tests/bringup/test_logit_kl.py''s metric, reusing its cached
+    official final_norm) to show what it buys at the tokens; only if it fits in about 3 CPU hours, otherwise say what it
+    would cost. Write the test as models/demos/deepseek_v41_flash_d_p/reference/test_format_attribution.py; record metrics
+    emu_match_median (median over layers 0-9 of err_emu / err_device), emu_match_worst, sites, gap_closed_<site>, addone_<site>,
+    and err_*_L09 per run. Long CPU jobs through devjob (start / wait), never killed; cap CPU to half the cores, nice 19
+    (BRINGUP_CPU_THREADS); no device, no fork suites. Report: a table per site (what the device does vs the reference, gap
+    closed at L09 leave-one-out and add-one, the device-time cost of switching it if known from tt/settings.py''s notes)
+    and a recommendation: which site to A/B on the device first. NO fixed accuracy numbers as limits (F138); the +-25 %
+    match is a check of the emulation, not of the model.'
+- id: FIX.31
+  title: 'Framework: count every device run once, fix gates prove only their claim, bookkeeping out of the code key, API
+    crashes are infra, back-to-back gates in one process, watch follows a gate'
+  gate:
+  - FIX.30
+  status: placed
+  t: '2026-11-13T17:34:49'
+  text: 'OWNER 2026-11-13: bookkeeping eats the Galaxy. Evidence (Nov 6-13): device busy 24.6 h of ~168 h; FIX.30 ran X.3
+    one-process units via a raw devjob (7m40s PASS) that its own gate could not count, so the gate had to run them again
+    (~8 min); FIX.30 also got a generic determinism unit (442 s) unrelated to its claim; three Cloudflare 403 agent crashes
+    used the free retries and then a gate ran on an unchanged tree. Four changes, each with a selftest, CPU only: (1) every
+    device run through scripts/run_safe_pytest.sh files its result in the stamp store by command + env key + code key (core/stamps.py),
+    so a gate reuses a matching unit however it was launched (devjob, gate --check, by hand); a unit is reused only on an
+    exact stamp match and a PASS, never a FAIL/HANG. (2) overseer fix builds the fix tasks gate from the fixs claim: its
+    selftests plus only the device units named with the fix (a new option), not every unit of the --gate tasks chained;
+    keep the current behaviour only when the fix names no units. (3) split gate.py / batch.py / scripts/run_safe_pytest.sh
+    / scripts/lib/tt_safe_run.sh into what changes a measurement and what is bookkeeping (pass lists, reporting, memory
+    precheck, logging); only the measuring part is in code_key (F162); a selftest shows a bookkeeping-only edit keeps every
+    stamp and a measuring edit invalidates them. (4) an agent exit with an API/auth error (e.g. 403, 529, overloaded) is
+    INFRA: back off and retry, never counted as an attempt, never followed by a gate on an unchanged tree. (5) OWNER 2026-11-13
+    (added): gates that run back to back are ONE run: orchestrator.pending_full_gates (the quick-accepted picks full gates)
+    and the milestone gate after them (X.3) collect every pending unit of every task, drop the units whose stamp already
+    passed, and run the rest in ONE process on ONE loaded model (FIX.29s one-process mechanism), each unit once even when
+    several tasks name it (same command + env key); each task then gets its own verdict and metrics from its own units,
+    and a failing unit fails only the tasks that name it. Today each pick is its own gate with its own model load (~210
+    GB, minutes each): P.49/P.50/P.51 shared the ladder and profile by stamp but still loaded the model three times. Also
+    (seen 2026-11-13 on FIX.30 --continue): core/batch.parse refuses any run without --no-precompile, so X.3s units (ladder
+    s56320, profile = wall run && clean-wall full prefill, positions) all ran as separate pytest processes, ~4 model loads
+    where tests.one_process promises one; the batcher must precompile once and then batch, never silently fall back, and
+    the gate log must say why a unit did not batch. Also (P.51 full gate, 2026-11-13): its 5 units ran as 5 processes because
+    the profile unit sets DS41_ENGRAM_TABLE=resident, the shipped default, and batch.model_key treats any switch variable
+    as a different model; model_key must normalize a switch at its settings.py default to unset. Also (P.51, 2026-11-13):
+    adding a test_determinism unit to a gate changed the ladder unit command hash (gate_units rewrites another unit when
+    a determinism unit is present), so a passed ladder re-ran; a unit stamp must depend only on its own command and environment.
+    And `gate --status` from a shell differs from the orchestrator env_key (it reported every passed unit "stale"); status
+    must compute the key the gate will use. Selftest: three tasks with overlapping units -> one process, one load, each
+    shared unit run once, per-task verdicts correct. (6) watch follows a live gate too: python -m ...watch exits 3 ORCHESTRATOR
+    NOT RUNNING while a gate --continue or a chain script holds the device; it must treat a running gate (its pid, unit
+    progress) as live and wake on its result. Selftest for both. Proof: the selftests; then this tasks gate with every device
+    unit reused from FIX.30s run (0 device minutes when the code key is unchanged) - report how many units were reused vs
+    run. Never loosen a check; never reset the board.'
+  hold: after the full gate (P.49/P.50/P.51/X.3) and the push of model_bringup (owner 2026-11-13)
+  paths:
+  - models/demos/common/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  - scripts/run_safe_pytest.sh
+  - scripts/lib/tt_safe_run.sh
+  released: '2026-11-13T19:42:20'
+  placed: '2026-11-13T19:42:45'
+- id: FIX.32
+  title: 'Intermittent served-snapshot race after the P.67 merge (DS41-276): safe defaults first, then find and fix it'
+  gate:
+  - P.67
+  status: placed
+  t: '2026-11-14T20:19:22'
+  text: 'OVERSEER 2026-11-14 (owner away-ish, decide autonomously): after P.67 merged the replica branch, test_decoder_skip_decode
+    failed 1 of 4 runs (served_bytes_differ=16: layer 0''s served window snapshot differs between the off and decode runs,
+    4 records a case, only where the stop falls on a chunk boundary, 5120 and 10240). Suspects: P.64''s fused window write
+    (ATTN_FUSE, tt/window_send.py) and P.65''s one-program snapshot broadcast (CHEAP_CCL, tt/snapshot_send.py): new chip-to-chip
+    programs with no all-chip barrier between them (DS41-276). STEP 1 (first, before anything else): make the shipped defaults
+    safe: CHEAP_CCL and ATTN_FUSE default ''legacy'' in tt/settings.py (keep the code and the ''on'' values), and prove
+    the race is gone at those defaults: test_decoder_skip_decode passes 20 runs in a row (a loop in one process is fine;
+    report every run). STEP 2: find the race: which program (bisect with each switch alone, 20 runs each), where (the snapshot
+    read vs the window write / broadcast ordering, semaphores, the chunk-boundary stop path); fix it in the program (a barrier
+    or a semaphore wait, not a host sync per call); prove with 20 consecutive passes with BOTH switches on, outputs bit-identical
+    to legacy. STEP 3: only if step 2 proves out, set both defaults back to ''on''; else leave legacy and report. Measure
+    the host/wall cost of the legacy defaults vs on (real chunks 1..10, test_moe_prev_replicas). SAFETY: a hang or reset
+    need: STOP and report, never reset. Report plainly, short.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  placed: '2026-11-14T20:20:55'
+- id: FIX.33
+  title: 'OWNER 2026-11-15: model_bringup without expert replication: keep the orthogonal wins (P.59, P.63-P.66, FIX.32),
+    remove every replica piece P.67 brought'
+  gate:
+  - P.67
+  status: placed
+  t: '2026-11-15T06:09:50'
+  text: 'OWNER 2026-11-15 (supersedes this task''s earlier text): P.67 merged the WHOLE moe_replication branch; the owner
+    asked only for the wins orthogonal to expert replication. model_bringup must hold the latest and greatest WITHOUT expert
+    replication; the replica branch will be rebuilt on top of it afterwards (not this task). KEEP (and keep on by default
+    where they are now): P.59 expert x pieces (EXPERT_X_PIECES), P.63 cached argument slots, P.64 ATTN_FUSE, P.65 CHEAP_CCL
+    with FIX.32''s geometry-keyed program cache, P.66 LEAN_PY, FIX.31/FIX.32 framework and test work, the race tests (test_snapshot_race_loop,
+    test_snapshot_send_geometry). REMOVE everything that exists only for expert replication: MOE_REPLICAS and all its modes
+    (off/runtime/exact/prev; the code behaves as off does today), MOE_PREV_HOST, MOE_PREV_HOST2, MOE_PLANNER, MOE_PREV_FIXED
+    and every other replica setting, tt/expert_prev.py and the replica parts of the adapter / moe_trace (P.61 MoE-half trace
+    is replica-branch work: remove it too), the replica tests (test_moe_prev_replicas, test_moe_prev_host_probe, test_prev_host_account
+    and the replica parts of any other), and the replica options in the forks (ttnn/ttnn/bringup/moe_block_main_ttnn: prev_counts,
+    the fused head''s planner tail / prev_planner.hpp, the replica fill ports, the expert schedule''s replica paths) with
+    their CHANGELOG entry. Reference for what is replica vs not: git diff ce1b9047afd b57de503eed (P.67) and the replica
+    branch''s commits P.45-P.62b vs P.59/P.63-P.66 (bringup/deepseek_v41_flash_d_p/moe_replication). FIRST, before editing:
+    list each P.67 file/hunk as KEEP or REMOVE, and name every place an orthogonal win depends on replica code (if one does,
+    keep the orthogonal behaviour with replicas off and say how). Rebuild (./build_metal.sh) after the fork change. PROOF:
+    outputs bit-identical to today''s MOE_REPLICAS=off path (test_determinism, test_decoder_skip_decode, ladder rung last
+    within limits); chunk_wall_ms of the gate''s profile vs P.67''s A/B (off, pre-P.67: 182.8 ms; on, with replicas: 157.9
+    ms; replicas-off share of it expected ~10 ms slower than on); host / device ms a chunk reported. No new switches; no
+    dead modes; grep proves no MOE_REPLICAS / expert_prev / prev_ name is left on model_bringup. Report plainly, short.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-11-15T06:10:26'
+- id: FIX.34
+  title: 'OWNER 2026-11-15: the realistic prefill perf measurement (no model change)'
+  gate:
+  - X.3
+  status: placed
+  t: '2026-11-15T09:12:52'
+  text: 'OWNER 2026-11-15: the realistic prefill perf measurement (no model change). Write models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    and run it. Setting: DECODER_SKIP=decode (P.51, Kartik''s cut: layers 0-19 in full, layer 20 only its KV / index head,
+    layers 21-39 never), the shipped defaults otherwise. Points: 51200, 128000, 256000, 512000, 768000, 1024000 (each a
+    chunk start, chunk 5120). At each point measure TWO chunks: (1) STEADY: a chunk not the request''s last (begin_chunk(..,
+    last=False), no replay, write_start = chunk start), its windows carried from the chunk before; (2) RESUMED: the first
+    chunk of a request that resumes from a cached prefix: begin_chunk(.., last=False, write_start=g) with g = p + 128, so
+    its first 128 rows are encoder replay (layers 0-19, windows truncated at the chunk start, no history row below g written)
+    and 4992 rows are new. For each: device ms per chunk (the slowest chip; per-section split as test_profile gives), warm
+    clean wall ms (first host call to the sync, >= 10 warm runs, median and spread, as test_profile''s chunk_wall), tok/s
+    = tokens / wall (5120 for steady, 4992 new for resumed). The chunk timed must be preceded by a DIFFERENT chunk (the
+    real previous chunk''s tokens, p - 5120) on every timed iteration, never the same chunk again, so that state learned
+    from the previous chunk (the replica branch''s MoE replicas) is realistic; say how. Long-range caches at the point:
+    as test_profile fills them for BRINGUP_POS (reuse its mechanism; no 1M-token prefill). FIRST check that 768000 and 1024000
+    fit in device memory with the shipped allocation (test_dram / the plan''s memory check); a point that does not fit is
+    reported with the reason, not skipped silently. Metrics per point: steady_device_ms_p<p>, steady_wall_ms_p<p>, steady_tok_s_p<p>,
+    resumed_device_ms_p<p>, resumed_wall_ms_p<p>, resumed_tok_s_p<p>, and the per-section device split. Output also a markdown
+    table. Change no model code; if the model lacks a hook the test needs, stop and report. The same test must later run
+    unchanged on the replica branch. One process for all points (load the model once). Report plainly, short.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-11-15T09:13:35'
+- id: FIX.35
+  title: 'OWNER 2026-11-15: measured end-to-end prefill 0 -> 1M (DECODER_SKIP=decode), cumulative wall at 51k..1M, host
+    vs device per chunk'
+  gate:
+  - FIX.34
+  status: placed
+  t: '2026-11-15T17:39:21'
+  text: 'OWNER 2026-11-15: MEASURE (not estimate) a whole prefill from position 0 to 1,024,000 in the realistic setting,
+    to prove host time does not interfere. Write models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py; change
+    no model code. Setting: DS41_DECODER_SKIP=decode, shipped defaults otherwise; ONE request of 200 chunks of 5120 real
+    tokens (no repeated chunk: build ~1M tokens of real text, e.g. the canonical prompt plus further distinct real documents,
+    tokenized; say what), every chunk begin_chunk(.., last=False), driven exactly as the serving runtime drives it: chunks
+    enqueued back to back, NO host readback or sync between chunks except what the runtime itself does (if the runtime syncs
+    per chunk, do the same and say so). Warm: the programs compiled first (a short warm-up request), then the timed request.
+    Record: (a) cumulative wall from the first host call to the final sync, read at the chunk boundaries 51200, 128000,
+    256000, 512000, 768000, 1024000 (a sync at those 6 boundaries only is allowed if needed to read the clock; report its
+    cost, or measure separate runs ending at each point instead); tok/s = tokens / cumulative wall; (b) per chunk: host
+    ms (first host call of the chunk to its last enqueue returning), device ms (the device''s own busy time for the chunk:
+    device profiler or the timeline, whichever does not perturb the unprofiled run; a separate profiled pass is fine), and
+    the device idle gap between consecutive chunks; (c) a verdict: is the run device-bound (host ahead of the device on
+    every chunk, gaps ~0) or does host time show up in the wall; compare cumulative wall with the sum of device ms. Also
+    compare with FIX.34''s per-chunk numbers (results/FIX.34.json). Output a markdown table and metrics: e2e_wall_s_p<point>,
+    e2e_tok_s_p<point>, host_ms_mean/max, device_ms_mean, gap_ms_mean/max, host_bound_chunks. The same test must run unchanged
+    on the replica branch. One process, load once. Report plainly, short.'
+  placed: '2026-11-15T17:39:21'
+- id: FIX.36
+  title: Intermittent device hang of the shipped tree under DECODER_SKIP=decode (test_skip_positions), and the test misreporting
+    it
+  gate:
+  - FIX.34
+  status: placed
+  t: '2026-11-18T01:42:20'
+  text: 'Shipped tree (STATIC_TABLES=on, DECODER_SKIP=decode) hung 2 of 4 runs of tests/test_skip_positions.py on the 8x4:
+    2026-11-17 14:26 at p256000 and 23:18 at p1024000 (TT_THROW ''TIMEOUT: device timeout, potential hang detected'', system_memory_manager.cpp:806;
+    teardown then times out on physical cores 15-2 and 15-3 of EVERY chip); FIX.34 (11-15) and 00:48 (11-18) passed all
+    6 points on the same code. Logs: runs/galaxy_8x4-full/run1/ab/P.72/new/batch1.hang2.log and the P.72 new/ dir of 14:26.
+    Off side (STATIC_TABLES=off, 1 run) did not hang. (1) Find which program hangs: cores 15-2/15-3 (which op places work
+    there: the window/snapshot/tail send programs, fabric, a CCL?), the op in flight at the timeout (the dispatcher''s last
+    program per chip), whether it is the steady or the resumed (replay) chunk, and what differs between a hanging and a
+    passing run (position, preceding point, memory). Use the cheapest reproduction that hangs reliably (a loop of the point
+    that hung), never single-card jobs. (2) Fix the cause; prove it with 20 consecutive clean runs of the reproduction,
+    bit-identical outputs (determinism) unchanged. (3) Fix the test: test_skip_positions records a device hang as fits_p<p>=0
+    ''DOES NOT FIT'' and exits 0; a hang (TIMEOUT / dispatch timeout) must fail the test, only an allocation failure is
+    ''does not fit''. Note: each hang has been followed by the node going down within ~5-10 min (cluster health handling);
+    stop device work at the first hang, report, and let the overseer handle the box.'
+  hold: 'owner: go for the hang hunt (each hang so far cost the node)'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - ttnn/ttnn/bringup
+  released: '2026-11-18T04:07:08'
+  placed: '2026-11-18T04:08:51'
+- id: FIX.37
+  title: Two test files import the tests package (pre-commit hook blocks gate commits)
+  gate:
+  - X.4
+  status: held
+  t: '2026-11-18T16:42:44'
+  text: 'Fix the imports that the pre-commit hook check-models-do-not-import-tests rejects: models/demos/deepseek_v41_flash_d_p/tests/test_expert_x_pieces.py:66
+    (from tests.ttnn.profiling.realtime_profiler_utils) and models/demos/moe_block_main/tests/test_moe_block_models.py:43
+    (from tests.ttnn.utils_for_testing): move or copy the helpers they need into models (or a models-side util), no behaviour
+    change. CPU only; no device runs (the gate reuses X.4''s passed units).'
+  hold: after P.75
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/moe_block_main/tests
+- id: FIX.38
+  title: 'STATIC_TABLES=off by default (owner 2026-11-18): no per-user, per-chip KV history'
+  gate:
+  - X.4
+  status: placed
+  t: '2026-11-18T17:23:32'
+  text: 'OWNER 2026-11-18: make STATIC_TABLES=off the shipped default in tt/settings.py (the reason text: owner decision
+    2026-11-18, P.74''s A/B: off at 1M +11.8 ms wall / +10 %, accuracy and determinism identical; the per-user replicated
+    table removed; item 4 of the slot-state page solved), with HISTORY_GATHER=rows and the persistent buffers (P.74); HISTORY_GATHER_HIDE''s
+    default as P.75 was decided (on if accepted). Keep STATIC_TABLES=on working as the alternative. No other change. Update
+    serving_contract.md / known_issues where they say the table is the default. The gate (X.4''s: ladder last, both determinism,
+    decoder skip, contract, adapter acks, positions) runs on the new default.'
+  hold: after P.75's decision (HISTORY_GATHER_HIDE default follows it)
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  released: '2026-11-18T17:33:12'
+  placed: '2026-11-18T17:34:33'
+- id: FIX.39
+  title: 'Outside-written history: clear the prefetch marker at chunk start, and a test that proves the served-state path'
+  gate:
+  - X.4
+  status: placed
+  t: '2026-11-18T18:33:11'
+  text: 'Review feedback (owner 2026-11-18). (A) Latent bug: tt/history_gather.py gather() (:170-177) reuses a prefetched
+    history (buf.pre) when (cache id, start) match and ckv_cache.version moved by <= 1; version is a host counter that writes
+    from OUTSIDE the process (the KV Manager filling the served cache after a store load / d2p pull) never bump. The full
+    model is safe (layer 1''s engram wait re-prefetches every chunk), but a pipeline stage that starts mid-model (no prefetch
+    before its sources) could reuse rows gathered before an outside write. Fix: clear every history buffer''s pre at chunk
+    start (begin_chunk), one line; bit-identical on the normal path. (B) nothing to do (FIX.38''s units did run on the new
+    default in its gate --check at 17:37-17:53, FIX.38.check.log; the final gate line ''reused'' refers to those runs).
+    (C) Add the missing test: tests/test_outside_history.py: run a request''s chunks k and k+1 in slot A (self-written);
+    in slot B write the served caches of chunk k from OUTSIDE the model (copy slot A''s served records into slot B with
+    a raw DRAM copy, as the KV Manager would; nothing through the model''s write path, no load_host), then run chunk k+1
+    in slot B with the same ids, and compare every layer''s output and every served record written by chunk k+1 between
+    A and B. Expected: bit-identical with STATIC_TABLES=off (today''s default); record what differs with STATIC_TABLES=on
+    (the replicated table) and with INDEX_K_SOURCE=private (k8) to document items 3 and 4; the engram tail (item 1) and
+    window ring (item 2) need the replay / host ids, so run the comparison from a chunk start where the window carry and
+    the engram tail are the same for both (or replay 128 rows with global_write_start) and say how. Metrics: outside_history_max_abs_diff
+    (== 0 for the shipped defaults). DECODER_SKIP=decode. One model load.'
+  hold: after P.76
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests
+  released: '2026-11-18T20:12:17'
+  placed: '2026-11-18T20:27:18'
+classified:
+  L.smoke:
+    kind: framework
+    why: ''
+    t: '2026-10-27T08:49:15'
+  X.6:
+    kind: framework
+    why: ''
+    t: '2026-11-18T21:54:34'
+  PB.8RP:
+    kind: framework
+    why: ''
+    t: '2026-11-21T05:05:14'

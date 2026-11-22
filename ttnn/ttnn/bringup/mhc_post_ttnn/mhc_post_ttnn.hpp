@@ -1,0 +1,129 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+#include <tuple>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/program_descriptors.hpp>
+
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::operations::bringup::mhc_post_ttnn {
+
+// HiFi4, fp32 DEST, approx off (mhc_post.py default_compute_kernel_config()).
+tt::tt_metal::ComputeConfigDescriptor default_compute_kernel_config();
+
+// ttnn.bringup.mhc_post: X'[t, j*C:(j+1)*C] = post[t, j] * F[t, :] + sum_i comb[t, i*n + j] * X[t, i*C:(i+1)*C].
+// The host-side checks of mhc_post.py (SUPPORTED axes, then the shape contract), in the same order and
+// with the same exception types, then one device program. comb_transposed=false applies comb as stored:
+// X'[t, j*C:(j+1)*C] = post[t, j] * F[t, :] + sum_i comb[t, j*n + i] * X[t, i*C:(i+1)*C].
+Tensor mhc_post(
+    const Tensor& input_tensor,
+    const Tensor& residual,
+    const Tensor& post,
+    const Tensor& comb,
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
+    bool comb_transposed = true,
+    int64_t post_col = 0,
+    int64_t comb_col = 0,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
+
+}  // namespace ttnn::operations::bringup::mhc_post_ttnn
+
+namespace ttnn::operations::bringup::mhc_post_ttnn {
+
+// ttnn.bringup.mhc_post(..., stats_weight=W) (deepseek_v41_flash_d_p P.14): the mix above AND, from the same pass,
+// the next hc step's partial row stats (..., T, 32) fp32 = [X' @ W | ...] with column n (n + 2) = sum_c X'^2
+// (= mhc_pre_xing_pack(X' @ W, X')). W (..., n*C, 32) fp32 TILE (leading dims 1). Needs fp32 F / X, n <= 4.
+std::tuple<Tensor, Tensor> mhc_post_with_stats(
+    const Tensor& input_tensor,
+    const Tensor& residual,
+    const Tensor& post,
+    const Tensor& comb,
+    const Tensor& stats_weight,
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
+    bool comb_transposed = true,
+    int64_t post_col = 0,
+    int64_t comb_col = 0,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    const std::optional<Tensor>& stats_output = std::nullopt,
+    const std::optional<Tensor>& stats_scratch = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
+
+// collapse_pre (deepseek_v41_flash_d_p P.34): mhc_post_with_stats AND, from the same pass, the next mHC step's inputs
+// y = sum_i collapse_pre[:, i] X'_i (..., T, C) in X's dtype and that step's hc (..., T, n (n + 2)) fp32 from the
+// stats row (DeepSeek's coefficients + Sinkhorn) = ttnn.bringup.mhc_pre_xing(stats, X', deepseek=True,
+// collapse_pre=collapse_pre, scale=, base=, ...). Needs bf16 X (and F), n <= 4. Returns (X', stats, hc, y).
+std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
+    const Tensor& input_tensor,
+    const Tensor& residual,
+    const Tensor& post,
+    const Tensor& comb,
+    const Tensor& stats_weight,
+    const Tensor& collapse_pre,
+    const std::vector<double>& hc_scale,
+    const std::vector<double>& hc_base,
+    double hc_norm_width,
+    double hc_norm_eps,
+    double hc_eps,
+    int64_t hc_sinkhorn_iters,
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
+    bool comb_transposed = true,
+    int64_t post_col = 0,
+    int64_t comb_col = 0,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    const std::optional<Tensor>& stats_output = std::nullopt,
+    const std::optional<Tensor>& stats_scratch = std::nullopt,
+    const std::optional<Tensor>& hc_output = std::nullopt,
+    const std::optional<Tensor>& y_output = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt,
+    const std::optional<Tensor>& norm_weight = std::nullopt,
+    double norm_eps = 1e-6,
+    const std::optional<Tensor>& feed_output = std::nullopt,
+    const std::optional<std::vector<uint32_t>>& feed_semaphores = std::nullopt,
+    int64_t feed_num_links = 1,
+    int64_t feed_cluster_axis = 1,
+    bool fast = false,
+    bool v2 = false);
+
+// The Python entry: X' without stats_weight (the op as it was), (X', stats) with it, (X', stats, hc, y) with
+// collapse_pre.
+std::variant<Tensor, std::tuple<Tensor, Tensor>, std::tuple<Tensor, Tensor, Tensor, Tensor>> mhc_post_py(
+    const Tensor& input_tensor,
+    const Tensor& residual,
+    const Tensor& post,
+    const Tensor& comb,
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
+    bool comb_transposed,
+    const std::optional<Tensor>& stats_weight,
+    int64_t post_col = 0,
+    int64_t comb_col = 0,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    const std::optional<Tensor>& stats_output = std::nullopt,
+    const std::optional<Tensor>& stats_scratch = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt,
+    const std::optional<Tensor>& collapse_pre = std::nullopt,
+    const std::optional<std::vector<double>>& hc_scale = std::nullopt,
+    const std::optional<std::vector<double>>& hc_base = std::nullopt,
+    double hc_norm_width = 0.0,
+    double hc_norm_eps = 1e-6,
+    double hc_eps = 1e-6,
+    int64_t hc_sinkhorn_iters = 20,
+    const std::optional<Tensor>& hc_output = std::nullopt,
+    const std::optional<Tensor>& y_output = std::nullopt,
+    const std::optional<Tensor>& norm_weight = std::nullopt,
+    double norm_eps = 1e-6,
+    const std::optional<Tensor>& feed_output = std::nullopt,
+    const std::optional<std::vector<uint32_t>>& feed_semaphores = std::nullopt,
+    int64_t feed_num_links = 1,
+    int64_t feed_cluster_axis = 1,
+    bool fast = false,
+    bool v2 = false);
+
+}  // namespace ttnn::operations::bringup::mhc_post_ttnn

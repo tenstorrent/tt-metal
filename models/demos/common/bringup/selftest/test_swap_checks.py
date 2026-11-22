@@ -1,0 +1,418 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""F49: per-step swap checks, the mistake-injection impl mode, and swap tests frozen without a review. CPU only,
+against the synthetic fixture model (its fake device is the CPU reference plus deterministic noise)."""
+
+import json
+
+import pytest
+import torch
+
+from models.demos.common.bringup.core import metrics as M
+from models.demos.common.bringup.core.runs import IMPL_ENV
+from models.demos.common.bringup.reference.golden import reference_at
+from models.demos.common.bringup.selftest import fixture_model
+from models.demos.common.bringup.selftest.conftest import got
+from models.demos.common.bringup.selftest.test_device_side import _load, gspec, noise  # noqa: F401 (fixtures)
+from models.demos.common.bringup.testing import mutate as MU
+from models.demos.common.bringup.testing.component import (
+    _isolated,
+    component_error,
+    component_test_limits,
+    run_swap_test,
+    step_errors,
+)
+from models.demos.common.bringup.testing.templates import render_component_test, render_swap_test
+
+SWAPPED = ["attn_norm", "attention", "attn_residual"]
+
+
+def _results(s, task, metrics):
+    p = s.bringup_dir / "results" / f"{task}.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"task": task, "metrics": {k: {"value": v} for k, v in metrics.items()}}))
+
+
+def test_checks_none_is_unchanged_and_steps_does_not_change_the_block(gspec, noise):
+    s = gspec()
+    noise(1e-3)
+    assert run_swap_test(s, "blk", SWAPPED)
+    old = {k: v for k, v in got().items() if k.startswith(("pcc_swap_", "swap_"))}
+    assert not [k for k in old if k.startswith("swap_")], "checks=None records no per-step metrics"
+    M.reset("T")
+    assert run_swap_test(s, "blk", SWAPPED, checks="steps")
+    new = got()
+    # the CPU runs on the same inputs (the stateful attention's on a copied state) leave the block itself unchanged
+    assert {k: v for k, v in new.items() if k.startswith("pcc_swap_")} == old
+    assert (
+        new["swap_attention_rel"] < 0.01 and new["swap_attention_finite"] == 1 and "swap_attention_out_rel" not in new
+    )
+    assert new["swap_attn_residual_out_rel"] < 0.01  # the last swapped step's effect on the block out
+    noise(0.5)
+    assert not run_swap_test(s, "blk", SWAPPED)
+
+
+def test_steps_pass_with_the_reference_and_fail_with_the_stub(gspec, monkeypatch):
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "reference")
+    assert run_swap_test(s, "blk", SWAPPED, checks="steps")
+    m = got()
+    assert m["swap_attention_rel"] == 0 and m["swap_attention_vs_cpu"] > 0.999999 and m["swap_attention_bias"] == 0
+    monkeypatch.setenv(IMPL_ENV, "stub")
+    assert not run_swap_test(s, "blk", SWAPPED, checks="steps")
+
+
+@pytest.mark.parametrize("step", ["attention", "attn_residual"])
+@pytest.mark.parametrize("kind", MU.FLOAT_KINDS)
+def test_steps_catch_every_mutation_of_a_swapped_step(gspec, monkeypatch, kind, step):
+    s = gspec()
+    layer = s.representative_layer("blk")
+    for n in SWAPPED:  # the device component gates as they would have recorded (fixture noise 1e-3: pcc ~1 - 1e-7)
+        _results(s, f"C.blk.{n}", {f"pcc_{n}_L{layer:02d}": 0.9999999})
+    monkeypatch.setenv(IMPL_ENV, f"mutate:{kind}")
+    monkeypatch.setenv(MU.MUTATE_STEP_ENV, step)
+    assert not run_swap_test(s, "blk", SWAPPED, checks="steps")
+    m = got()
+    assert m["swap_attn_norm_rel"] == 0, "only the named step is mutated"
+    # F76: 2 x the step's noise floor (its precision model on the same inputs, at least its component error and its
+    # output's bf16 resolution); every other limit from the same model, none fixed
+    lim, err = m[f"swap_{step}_rel_limit"], m[f"swap_{step}_component_err"]
+    assert 2.0 * err <= lim + 1e-12 and lim < 0.03
+    assert f"swap_{step}_bias_limit" in m and f"swap_{step}_vs_golden_err_limit" in m
+
+
+def test_every_swap_limit_comes_from_the_noise_floor(gspec, monkeypatch):
+    """F76: pcc_swap_out and every swapped step's vs-golden PCC are gated against the same block run with its swapped
+    steps as their precision models (the reference's dtypes), not a fixed 0.98 / 0.99."""
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "reference")
+    assert run_swap_test(s, "blk", SWAPPED, checks="steps")
+    m = got()
+    # F81: gated as the rel error; PCC stays a diagnostic
+    assert 0 < m["err_swap_out_limit"] < 0.05 and m["err_swap_out"] <= m["err_swap_out_limit"] and "pcc_swap_out" in m
+    for n in SWAPPED:
+        assert 0 < m[f"swap_{n}_vs_golden_err_limit"] < 0.05, n
+
+
+def test_the_bf16_control_passes_and_limits_fall_back_without_a_component_result(gspec, monkeypatch):
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "mutate:bf16")  # every swapped step on bf16-rounded inputs, bf16 output
+    assert run_swap_test(s, "blk", SWAPPED, checks="steps")
+    m = got()
+    assert 0 < m["swap_attention_rel"] < m["swap_attention_rel_limit"] < 0.03  # F76: the model, not a fixed 0.02
+    assert "swap_attention_component_err" not in m
+
+
+def test_steps_catch_a_cpu_bridge(gspec, noise, monkeypatch):
+    s = gspec()
+    noise(1e-3)
+    real = fixture_model.device_component
+
+    def bridged(mesh, spec, layer, name):
+        fn = real(mesh, spec, layer, name)
+        fn.cpu_bridge = name == "attention"
+        return fn
+
+    monkeypatch.setattr(fixture_model, "device_component", bridged)
+    assert run_swap_test(s, "blk", SWAPPED), "checks=None never looked at the bridge"
+    assert not run_swap_test(s, "blk", SWAPPED, checks="steps")
+    assert got()["swap_attention_cpu_bridge"] == 1
+
+
+def test_component_limits_are_read_from_the_frozen_component_test(gspec, monkeypatch):
+    s = gspec()
+    assert component_test_limits(s, "blk", "mlp") == (None, None)
+    path = render_component_test(s, "blk", "mlp", mode="pcc")
+    assert component_test_limits(s, "blk", "mlp") == ("pcc", None)
+    monkeypatch.setenv(IMPL_ENV, "reference")
+    # F138: an older frozen test's literal THRESHOLD (here one no output can meet) never gates the swap check
+    p = render_component_test(s, "blk", "attn_norm")
+    p.write_text(p.read_text().replace("THRESHOLD = None", "THRESHOLD = 1.01"))
+    assert component_test_limits(s, "blk", "attn_norm") == (None, 1.01)
+    assert run_swap_test(s, "blk", ["attn_norm"], checks="steps")
+    assert got()["swap_attn_norm_vs_cpu"] > 0.999999 and path.exists()
+    _results(s, "C.blk.mlp", {"pcc_mlp_L00": 0.99995})
+    assert abs(component_error(s, "blk", "mlp", 0) - 0.01) < 1e-6 and component_error(s, "blk", "attention", 0) is None
+
+
+def test_mutations():
+    x = torch.randn(64, 16)
+    ids = torch.randint(0, 100, (64, 8))
+    for kind in MU.FLOAT_KINDS:
+        y = MU.mutate(x, kind)
+        assert y.shape == x.shape and not torch.equal(y, x), kind
+        assert MU.mutate(ids, kind) is ids, f"{kind} leaves integer outputs alone"
+    assert torch.equal(x, x.clone()) and MU.mutate(x, "idxshift") is x
+    s = MU.mutate(ids, "idxshift")
+    assert s.max() == ids.max() and ((s == ids + 1) | (ids == ids.max())).all()
+    assert (MU.mutate(x, "quarterzero")[:16] == 0).all() and torch.equal(MU.mutate(x, "quarterzero")[16:], x[16:])
+    assert torch.equal(MU.mutate(x, "halfswap"), torch.cat([x[:, 8:], x[:, :8]], 1))
+    with pytest.raises(ValueError):
+        MU.kind_of("mutate:bogus")
+    assert MU.kind_of("stub") is None and MU.kind_of("mutate:sign") == "sign"
+
+
+def test_selection_rows_that_move_support_are_counted_not_scored():
+    w = torch.zeros(100, 32)
+    w[torch.arange(100)[:, None], torch.arange(4)[None] + torch.arange(100)[:, None] % 8] = 0.25
+    g = w.clone()
+    g[3] = torch.roll(w[3], 1)  # a near-tie flip in one row
+    e = step_errors(g, w)
+    assert e["reselected"] == pytest.approx(0.01) and e["rel"] == 0 and e["row"] == 0
+    e = step_errors(MU.mutate(w, "rowshift"), w)
+    assert e["reselected"] > 0.5
+    assert "reselected" not in step_errors(torch.randn(10, 8), torch.randn(10, 8))
+
+
+def test_isolated_context_owns_its_state(gspec):
+    s = gspec()
+    ref = reference_at(s, "native", layers=[0])
+    from models.demos.common.bringup.reference.interface import Ctx
+
+    ctx = Ctx(0, 0, 4, ref.new_state(8), {"a": 1})
+    c = _isolated(ctx)
+    c.state.k[0][0] = 5.0
+    c.extra["b"] = 2
+    assert ctx.state.k[0][0].abs().sum() == 0 and "b" not in ctx.extra
+
+
+def test_rendered_swap_template_gates_the_steps(gspec, monkeypatch):
+    s = gspec()
+    path = render_swap_test(s, "blk", ["attn_norm", "attention"])
+    assert 'CHECKS = "steps"' in path.read_text()
+    monkeypatch.setenv(IMPL_ENV, "mutate:scale1.02")
+    monkeypatch.setenv(MU.MUTATE_STEP_ENV, "attention")
+    with pytest.raises(AssertionError):
+        _load(path).test_swap(None)
+
+
+# ---- orchestrator: swap tests are frozen without the test-role review unless the spec opts back in
+from models.demos.common.bringup.orchestrator import DONE  # noqa: E402
+from models.demos.common.bringup.selftest.test_orchestrator import CHECK, impl_task, orch  # noqa: E402,F401
+
+
+def _swap_task():
+    return impl_task(id="S.blk.01", title="swap", brief={"block_type": "blk", "swapped": ["a"], "layer": 0})
+
+
+IMPLEMENT = {"write": {"src/impl.txt": "0.999"}, "bash": ["scripts/run_safe_pytest.sh tests/check.py"]}
+
+
+@pytest.mark.parametrize(
+    "review,reviewed",
+    [(None, False), ("none", False), (["other"], False), (["blk"], True), ("all", True)],
+)
+def test_swap_tasks_skip_the_review_unless_the_spec_names_them(orch, sandbox, review, reviewed):
+    extra = {"agents": {"swap_review": review}} if review is not None else {}
+    sandbox.write_spec(block_types={"blk": {"layers": [0], "representative": 0}}, **extra)
+    o = orch([_swap_task(), impl_task()], {"S.blk.01.implement.1.md": IMPLEMENT, "C.1.implement.1.md": IMPLEMENT})
+    assert o.run() == DONE
+    calls = orch.calls()
+    assert ("S.blk.01.test.1.md bringup-engineer" in calls) is reviewed
+    assert "C.1.test.1.md bringup-engineer" in calls, "component tasks keep their test agent"
+    assert any("swap test frozen without review (F49)" in line for line in orch.lines) is not reviewed
+    assert o.led.task("S.blk.01")["frozen"]["reference"] == "PASS"
+    assert sandbox.git("log", "--format=%s").count("[toy][S.blk.01][freeze] swap") == 1
+
+
+def test_a_swap_test_that_cannot_freeze_unreviewed_goes_to_the_test_role(orch, sandbox):
+    sandbox.write_spec(block_types={"blk": {"layers": [0], "representative": 0}})
+    bad = CHECK.replace('"reference": 1.0', '"reference": 0.5')
+    (sandbox.repo / "tests/check.py").write_text(bad)
+    o = orch(
+        [_swap_task()],
+        {"S.blk.01.test.1.md": {"write": {"tests/check.py": CHECK}}, "S.blk.01.implement.1.md": IMPLEMENT},
+    )
+    assert o.run() == DONE
+    assert orch.calls()[0] == "S.blk.01.test.1.md bringup-engineer"
+    assert any("freeze without review failed, starting the test role" in line for line in orch.lines)
+    assert "test fails with the CPU reference" in (o.run_dir / "briefs" / "S.blk.01.test.1.md").read_text()
+
+
+def test_the_tail_limit_follows_the_noise_floor(gspec, noise, monkeypatch):
+    """F72 / F80: the block-out check after the last swapped step takes its limit from what the step's noise floor
+    (its fp32 run on nudged inputs) does to the block out (x the calibration margin, at least the bf16 resolution; no
+    fixed floor or cap)."""
+    from models.demos.common.bringup.testing import noise_floor as NF
+
+    s = gspec()
+    noise(1e-3)
+    assert run_swap_test(s, "blk", SWAPPED, checks="steps")
+    m = got()
+    assert "swap_attn_residual_out_model_rel" in m
+    assert m["swap_attn_residual_out_rel_limit"] == pytest.approx(
+        2.0 * max(m["swap_attn_residual_out_model_rel"], 1e-9), rel=0.5
+    )
+    real = NF.nudge
+    monkeypatch.setattr(  # a floor of 5 %: every nudged input scaled by 1.05
+        NF,
+        "nudge",
+        lambda t, seed, dtype="bf16": t * 1.05 if isinstance(t, torch.Tensor) and t.is_floating_point() else t,
+    )
+    M.reset("T")
+    assert run_swap_test(s, "blk", SWAPPED, checks="steps")
+    m2 = got()
+    em = m2["swap_attn_residual_out_model_rel"]  # the residual dilutes the step's 5 %
+    assert em > 0.015 and m2["swap_attn_residual_out_rel_limit"] == pytest.approx(2.0 * em)  # no cap
+    monkeypatch.setattr(NF, "nudge", real)
+    noise(0.5)  # a broken step still fails: its own checks and the block-out gate
+    M.reset("T")
+    assert not run_swap_test(s, "blk", SWAPPED, checks="steps")
+
+
+def test_the_tail_limit_after_an_index_step_follows_its_noise_floor(gspec):
+    """DS41-50: after a top-k step (int output) the block-out check takes the nudged step's own selection flips as its
+    floor, not the fixed swap_out_rel (DeepSeek-V4.1 indexer: device 0.023, the CPU's own nudged run 0.026)."""
+    from types import SimpleNamespace as NS
+
+    from models.demos.common.bringup.testing import component as C
+
+    s = gspec()
+    x = torch.randn(64, 32, generator=torch.Generator().manual_seed(0))
+    cpu = x.topk(4, dim=-1).indices
+
+    def flip(rows):  # a near-tie flip: the 4th pick becomes the 5th on these rows
+        t = cpu.clone()
+        t[rows, 3] = x.topk(5, dim=-1).indices[rows, 4]
+        return t
+
+    steps = [NS(name="idx", inputs=["x"], output="sel"), NS(name="pick", inputs=["x", "sel"], output="out")]
+    ref = NS(component=lambda layer, name: lambda ctx, x, sel: x.gather(1, sel))
+    ctx = NS(state={}, extra={})
+
+    def tail(dev_sel, model_sel):
+        M.reset("T")
+        seen = {"x": x, "sel": dev_sel, "out": x.gather(1, dev_sel)}
+        return C._check_tail(s, ref, 0, steps, steps[0], seen, cpu, {"ctx": ctx, "model": [model_sel]})
+
+    assert tail(flip(list(range(30))), flip(list(range(40)))), "fewer flips than the nudged CPU step's own"
+    assert got()["swap_idx_out_rel"] > 0.01  # failed the old fixed limit
+    assert not tail(flip(list(range(64))), flip([4, 5, 6, 7])), "far more flips than the floor still fail"
+
+
+def test_the_tail_floor_includes_the_bf16_rounding_of_a_float_step(gspec):
+    """F98: a float step feeding a top-k: a nudge that moves nothing gives a zero floor, but a correct bf16 device
+    output flips near-ties downstream (DeepSeek-V4.1 engram_kv -> indexer: 0.041 vs a 0.0033 limit)."""
+    from types import SimpleNamespace as NS
+
+    from models.demos.common.bringup.testing import component as C
+
+    s = gspec()
+    g = torch.Generator().manual_seed(0)
+    v = torch.randn(64, 32, generator=g)
+    cpu = torch.randn(64, 32, generator=g)  # scores: bf16 rounding reorders a few near-ties
+
+    def pick(ctx, v, y):
+        return v.gather(1, y.topk(4, dim=-1).indices)
+
+    steps = [NS(name="score", inputs=["v"], output="y"), NS(name="pick", inputs=["v", "y"], output="out")]
+    ref = NS(component=lambda layer, name: pick)
+    ctx = NS(state={}, extra={})
+
+    def tail(dev):
+        M.reset("T")
+        seen = {"v": v, "y": dev, "out": pick(None, v, dev)}
+        return C._check_tail(s, ref, 0, steps, steps[0], seen, cpu, {"ctx": ctx, "model": [cpu.clone()]})
+
+    assert tail(cpu.to(torch.bfloat16).float()), "a correct bf16 device step"
+    assert got()["swap_score_out_rel"] > 0.01
+    assert not tail(cpu.flip(-1)), "a wrong step still fails"
+
+
+def test_a_frozen_test_that_wraps_the_step_check_with_the_old_signature_still_works(gspec, monkeypatch):
+    """F79: swap tests frozen before F76 patch component._check_step with an eight-argument wrapper."""
+    from unittest import mock
+
+    from models.demos.common.bringup.testing import component
+
+    real, seen = component._check_step, []
+
+    def wrapper(s, block_type, layer, st, got, cpu, golden, bridged):
+        seen.append(st.name)
+        return real(s, block_type, layer, st, got, cpu, golden, bridged)
+
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "reference")
+    with mock.patch.object(component, "_check_step", wrapper):
+        assert run_swap_test(s, "blk", SWAPPED, checks="steps")
+    assert seen == list(SWAPPED) and 0 < got()["swap_attention_vs_golden_err_limit"] < 0.05
+
+
+def test_a_waived_step_covers_the_block_out_of_its_swap_test(gspec, noise, monkeypatch):
+    """F158: DeepSeek-V4.1 swap_swa_12_experts: the owner waived the bfp4 experts step, but the swap test's block out
+    (err_swap_out) carried the same gap and read no waiver. A waiver of a swapped step now covers the block out
+    (recorded err_swap_out_waived); a waiver of a step outside the block does not, and a zero stub still fails."""
+    s = gspec()
+    noise(0.03)  # a precision-sized gap in the device steps: the block out misses its noise floor, not structural
+    assert not run_swap_test(s, "blk", SWAPPED)
+    s.data.setdefault("tests", {})["waivers"] = {"mlp": "not in this block's swapped steps"}
+    M.reset("T")
+    assert not run_swap_test(s, "blk", SWAPPED)
+    s.data["tests"]["waivers"] = {"attention": "device format gap; judged end to end (owner)"}
+    M.reset("T")
+    assert run_swap_test(s, "blk", SWAPPED)
+    assert got()["err_swap_out_waived"] == 1
+    monkeypatch.setenv(IMPL_ENV, "stub")
+    M.reset("T")
+    assert not run_swap_test(s, "blk", SWAPPED)
+
+
+def test_a_waived_step_covers_the_golden_check_of_the_steps_it_feeds(gspec, noise, monkeypatch):
+    """F221: DeepSeek-V4.1 swap_swa_engram_02..18: the owner waived the bfp8 engram rows (rel 3.5e-3 vs exact), and
+    the next swapped step, engram_kv, failed only its vs-golden check (0.00350 > 0.00335) on the rows' gap while it
+    matched the CPU on the same inputs. A waiver of an earlier swapped step now covers a later step's vs-golden check
+    (recorded <tag>_vs_golden_err_waived); its vs-CPU checks still gate, and a later step's waiver covers nothing
+    before it."""
+    s = gspec()
+    noise(0.0)
+    monkeypatch.setitem(fixture_model.NOISE, "steps", {"attn_norm": 0.03})  # only the first swapped step is off
+    s.data.setdefault("tests", {})["waivers"] = {"attn_residual": "a step after attention (owner)"}
+    assert not run_swap_test(s, "blk", SWAPPED, checks="steps")
+    m = got()
+    assert m["swap_attention_vs_golden_err"] > m["swap_attention_vs_golden_err_limit"]
+    assert "swap_attention_vs_golden_err_waived" not in m
+    s.data["tests"]["waivers"] = {"attn_norm": "device format gap; judged end to end (owner)"}
+    M.reset("T")
+    assert run_swap_test(s, "blk", SWAPPED, checks="steps")
+    m = got()
+    assert m["swap_attn_norm_waived"] == 1 and m["swap_attention_vs_golden_err_waived"] == 1
+    monkeypatch.setitem(fixture_model.NOISE, "steps", {"attn_norm": 0.03, "attention": 0.5})  # attention itself off
+    M.reset("T")
+    assert not run_swap_test(s, "blk", SWAPPED, checks="steps")
+
+
+def test_a_topk_step_is_compared_as_a_set_not_by_position():
+    """F160: DeepSeek-V4.1 swap indexer: the reference returns ascending ids, the device's top-k returns them by score;
+    a positional match gave 0.0015 for the same set. Index steps compare per-row overlap."""
+    from types import SimpleNamespace
+
+    from models.demos.common.bringup.testing import noise_floor as NF
+    from models.demos.common.bringup.testing.component import step_mode
+
+    ids = torch.arange(64).reshape(4, 16)  # a top-k's ids: integer rows without repeats (the DS41 step's kind is "op")
+    dev = ids.flip(-1)  # the same sets, another order
+    op = SimpleNamespace(kind="op")
+    assert step_mode(None, op, ids) == step_mode("match", op, ids) == "topk_overlap"
+    assert NF.value(step_mode(None, op, ids), dev, ids) == 1.0 and NF.value("match", dev, ids) < 0.1
+    assert step_mode(None, op, ids.float()) == "pcc"
+    assert step_mode(None, op, torch.zeros(4, 16, dtype=torch.long)) == "match"  # repeats: not a top-k
+
+
+def test_a_waiver_reaches_an_index_step_but_not_a_wrong_one(gspec):
+    """F161: DeepSeek-V4.1 swap enc_source_14: the owner-delegated indexer waiver (bf16 top-k scores) never reached
+    the integer-output path of the per-step check. A waived top-k passes when it overlaps the CPU's structurally;
+    a reversed / unrelated id set still fails."""
+    from models.demos.common.bringup.testing.component import _waive_index
+
+    s = gspec()
+    cpu = torch.stack([torch.randperm(512)[:64] for _ in range(8)])
+    near = cpu.clone()
+    near[:, -1] = (cpu[:, -1] + 1) % 512  # one flip per row: a precision gap
+    other = torch.stack([torch.randperm(512)[:64] for _ in range(8)])  # a wrong module
+    assert not _waive_index(s, "blk", "indexer", False, near, cpu, "swap_indexer")
+    s.data.setdefault("tests", {})["waivers"] = {"indexer": "bf16 top-k scores (owner)"}
+    assert _waive_index(s, "blk", "indexer", False, near, cpu, "swap_indexer")
+    assert got()["swap_indexer_waived"] == 1
+    assert not _waive_index(s, "blk", "indexer", False, other, cpu, "swap_indexer")
+    assert _waive_index(s, "blk", "indexer", True, other, cpu, "swap_indexer")  # passing checks are untouched

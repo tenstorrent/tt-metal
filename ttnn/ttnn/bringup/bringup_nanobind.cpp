@@ -1,0 +1,116 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Python bindings of the derived bring-up ops (INDEX.md): ttnn._ttnn.operations.bringup, re-exported as
+// ttnn.bringup. fork_op.py adds one declaration and one call per fork between the markers.
+
+#include <nanobind/nanobind.h>
+
+namespace nb = nanobind;
+
+// BEGIN FORKED OPS (fork_op.py)
+namespace ttnn::operations::bringup::high_bw_all_gather::detail {
+void bind_experimental_high_bw_all_gather_operation(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::moe_block {
+void bind_moe_block(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::slice_write {
+void bind_slice_write(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::detail {
+void bind_nlp_create_qkv_heads(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::topk_large_indices::detail {
+void bind_topk_large_indices(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::detail {
+void bind_rotary_embedding_indexed(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::detail {
+void bind_update_padded_kv_cache(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::prepare_chunk_recurrence::detail {
+void bind_prepare_chunk_recurrence(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::moe_ag::detail {
+void bind_moe_ag(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::detail {
+void bind_flat_routed_expert(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::indexer_score::detail {
+void bind_indexer_score(nb::module_& mod);
+}
+namespace ttnn::operations::bringup {
+void bind_sdpa(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::offset_cumsum::detail {
+void bind_experimental_offset_cumsum_operation(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::detail {
+void bind_combine(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::detail {
+void bind_dispatch(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::detail {
+void bind_unified_routed_expert_ffn(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::rms_norm_ttnn::detail {
+void bind_rms_norm_ttnn(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::mhc_post_ttnn::detail {
+void bind_mhc_post_ttnn(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::mhc_pre_ttnn::detail {
+void bind_mhc_pre_ttnn(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::nlp_concat_heads::detail {
+void bind_nlp_concat_heads(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::embedding {
+void bind_embedding(nb::module_& mod);
+}
+// END FORKED OPS (fork_op.py)
+// New ops (not made by fork_op.py)
+namespace ttnn::operations::bringup::prepared_program::detail {
+void bind_prepared_program(nb::module_& mod);
+}
+namespace ttnn::operations::bringup::moe_block_main {
+void bind_moe_block(nb::module_& bringup);
+}
+
+namespace ttnn::bringup {
+
+void py_module(nb::module_& mod) {
+    // BEGIN FORKED OPS (fork_op.py)
+    ::ttnn::operations::bringup::high_bw_all_gather::detail::bind_experimental_high_bw_all_gather_operation(mod);
+    ::ttnn::operations::bringup::moe_block::bind_moe_block(mod);
+    ::ttnn::operations::bringup::slice_write::bind_slice_write(mod);
+    ::ttnn::operations::bringup::detail::bind_nlp_create_qkv_heads(mod);
+    ::ttnn::operations::bringup::detail::bind_rotary_embedding_indexed(mod);
+    ::ttnn::operations::bringup::topk_large_indices::detail::bind_topk_large_indices(mod);
+    ::ttnn::operations::bringup::detail::bind_update_padded_kv_cache(mod);
+    ::ttnn::operations::bringup::prepare_chunk_recurrence::detail::bind_prepare_chunk_recurrence(mod);
+    ::ttnn::operations::bringup::moe_ag::detail::bind_moe_ag(mod);
+    ::ttnn::operations::bringup::detail::bind_flat_routed_expert(mod);
+    ::ttnn::operations::bringup::indexer_score::detail::bind_indexer_score(mod);
+    ::ttnn::operations::bringup::bind_sdpa(mod);
+    ::ttnn::operations::bringup::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);
+    ::ttnn::operations::bringup::detail::bind_combine(mod);
+    ::ttnn::operations::bringup::detail::bind_dispatch(mod);
+    ::ttnn::operations::bringup::detail::bind_unified_routed_expert_ffn(mod);
+    ::ttnn::operations::bringup::rms_norm_ttnn::detail::bind_rms_norm_ttnn(mod);
+    ::ttnn::operations::bringup::mhc_post_ttnn::detail::bind_mhc_post_ttnn(mod);
+    ::ttnn::operations::bringup::mhc_pre_ttnn::detail::bind_mhc_pre_ttnn(mod);
+    ::ttnn::operations::bringup::nlp_concat_heads::detail::bind_nlp_concat_heads(mod);
+    ::ttnn::operations::bringup::embedding::bind_embedding(mod);
+    // END FORKED OPS (fork_op.py)
+    ::ttnn::operations::bringup::prepared_program::detail::bind_prepared_program(mod);
+    // ttnn.bringup.moe_block_main: Marko Staletovic's C++ MoE block ops (moe_block_main_ttnn/, a submodule)
+    ::ttnn::operations::bringup::moe_block_main::bind_moe_block(mod);
+}
+
+}  // namespace ttnn::bringup

@@ -1,0 +1,77 @@
+{
+ "errors": [],
+ "rows": [
+  {
+   "group": "activations (planner estimate)",
+   "gb": 4.0
+  },
+  {
+   "group": "extra: routed experts, second mxfp4 value per byte (bfp8)",
+   "gb": 3.99
+  },
+  {
+   "group": "routed experts",
+   "gb": 3.984375
+  },
+  {
+   "group": "embedding",
+   "gb": 1.1640625
+  },
+  {
+   "group": "lm_head (vocab-sharded)",
+   "gb": 0.291015625
+  },
+  {
+   "group": "attention",
+   "gb": 0.2587890625
+  },
+  {
+   "group": "extra: rope tables, dispatch tables, misc",
+   "gb": 0.25
+  },
+  {
+   "group": "extra: contract KV copy (bfp8)",
+   "gb": 0.2
+  },
+  {
+   "group": "state: K sliding layers 1-4",
+   "gb": 0.1611328125
+  },
+  {
+   "group": "state: V sliding layers 1-4",
+   "gb": 0.107421875
+  },
+  {
+   "group": "dense mlp",
+   "gb": 0.09375
+  },
+  {
+   "group": "state: K full attention layers [0, 5]",
+   "gb": 0.040283203125
+  },
+  {
+   "group": "state: V full attention layers [0, 5]",
+   "gb": 0.02685546875
+  },
+  {
+   "group": "router",
+   "gb": 0.01953601837158203
+  },
+  {
+   "group": "norms and scalars",
+   "gb": 9.930133819580078e-05
+  }
+ ],
+ "total_gb": 14.587320866584777,
+ "capacity_gb": 32.0,
+ "budget_gb": 27.2,
+ "headroom_frac": 0.15,
+ "fits": true,
+ "tensors": 73033,
+ "mesh": [
+  2,
+  2
+ ],
+ "seq": 56320,
+ "users": 1
+}

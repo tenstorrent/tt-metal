@@ -1,0 +1,352 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""F56: built-in component checks (run_component_test(..., checks="auto")), the freeze sweep, and component tests
+frozen without a review. CPU only, against the synthetic fixture model (its fake device is the CPU reference plus
+deterministic noise)."""
+
+import pytest
+import torch
+
+from models.demos.common.bringup.core.runs import IMPL_ENV, FreezeError, freeze_task
+from models.demos.common.bringup.reference.golden import reference_at
+from models.demos.common.bringup.selftest.conftest import got
+from models.demos.common.bringup.selftest.test_device_side import _load, gspec, noise  # noqa: F401 (fixtures)
+from models.demos.common.bringup.testing import component_checks as CC
+from models.demos.common.bringup.testing import mutate as MU
+from models.demos.common.bringup.testing.component import run_component_test
+from models.demos.common.bringup.testing.templates import render_component_test
+
+STEPS = ["attn_norm", "attention", "attn_residual", "ffn_norm", "mlp", "mlp_residual"]
+
+
+def test_no_fixed_number_judges_a_component(gspec, noise):
+    """F138: the golden-only path with a fixed threshold is gone; a literal THRESHOLD is recorded, never gated."""
+    s = gspec()
+    noise(1e-3)
+    with pytest.raises(ValueError, match="F138"):
+        run_component_test(s, "mlp", 0, checks=None)
+    assert run_component_test(s, "mlp", 0, thr=1.01)  # PCC 1.01 is unreachable: it would fail if it gated
+    assert got()["mlp_threshold_literal"] == 1.01
+    noise(0.5)
+    assert not run_component_test(s, "mlp", 0)
+
+
+@pytest.mark.parametrize("step", STEPS)
+def test_auto_passes_with_the_reference_and_fails_with_the_stub(gspec, monkeypatch, step):
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "reference")
+    assert run_component_test(s, step, 0, checks="auto")
+    assert got()[f"auto_{step}_L00_vs_cpu_rel"] == 0
+    monkeypatch.setenv(IMPL_ENV, "stub")
+    assert not run_component_test(s, step, 0, checks="auto")
+
+
+@pytest.mark.parametrize("kind", MU.FLOAT_KINDS)
+@pytest.mark.parametrize("step", ["attention", "mlp", "mlp_residual"])
+def test_auto_catches_every_standard_mistake(gspec, monkeypatch, kind, step):
+    if (step, kind) == ("attention", "noise1e-2"):
+        pytest.skip("below the fixture attention's bf16 precision: its sweep sends it to a review (test below)")
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, f"mutate:{kind}")
+    assert not run_component_test(s, step, 0, checks="auto")
+
+
+def test_auto_passes_a_near_exact_device_and_fails_a_noisy_one(gspec, noise):
+    s = gspec()
+    noise(1e-4)
+    assert run_component_test(s, "attention", 0, checks="auto")
+    assert got()["auto_attention_L00_vs_cpu_rel"] > 0
+    noise(3e-2)
+    assert not run_component_test(s, "attention", 0, checks="auto")
+
+
+def test_second_inputs(gspec):
+    s = gspec()
+    from models.demos.common.bringup.testing.harness import component_golden
+
+    g, c = component_golden(s)
+    ref = reference_at(s, "native", layers=[0])
+    names = {st.name: st for st in ref.block_graph(0)}
+    att = [x.name for x in CC.cases(s, ref, 0, names["attention"], g, c, "float")]
+    assert att[0] == "golden" and "mixed" in att and "big" in att
+    assert ("chunk0" in att) is (c != 0), "a stateful step also runs on chunk 0"
+    assert any(n.startswith("layer") for n in att), "the fixture golden has another layer"
+    assert "chunk0" not in [x.name for x in CC.cases(s, ref, 0, names["mlp"], g, c, "float")]
+
+
+def test_the_input_nudge_floor_catches_what_the_bf16_model_let_through(gspec, monkeypatch, capsys):
+    # F80: the fixture attention's bf16-everywhere model had an error of ~0.6 %, so 1 % noise slipped through its
+    # whole-output limits; its input-nudge floor (the fp32 step on inputs moved inside their bf16 cells) is far
+    # lower, and the same sweep catches the noise while a correct step (a fresh nudge, a bf16 output) passes
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "mutations")
+    monkeypatch.setattr(CC, "col_errors", lambda got, want: None)  # the whole-output limits only
+    assert run_component_test(s, "attention", 0, checks="auto")
+    out = capsys.readouterr().out
+    assert "noise1e-2" not in out and "input nudge (new seed)       pass" in out  # F90: not a mistake kind
+
+
+@pytest.mark.parametrize("step", [s for s in STEPS if s != "attention"])
+def test_the_sweep_passes_for_the_fixture_steps(gspec, monkeypatch, capsys, step):
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "mutations")
+    assert run_component_test(s, step, 0, checks="auto")
+    out = capsys.readouterr().out
+    assert "SLIPPED" not in out and f"ok   sweep {step}" in out
+    assert got()[f"sweep_{step}_L00_slipped"] == 0 and got()[f"sweep_{step}_L00_caught"] == len(MU.FLOAT_KINDS)
+
+
+def test_the_sweep_fails_when_a_mistake_slips_through(gspec, monkeypatch, capsys):
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "mutations")
+    monkeypatch.setattr(CC.Expect, "evaluate", lambda self, outs, quiet=False, stop_early=False: [])  # checks blind
+    monkeypatch.setattr(CC, "error_gate", lambda *a, **k: True)
+    assert not run_component_test(s, "mlp", 0, checks="auto")
+    assert "scale1.02                    SLIPPED" in capsys.readouterr().out
+
+
+def test_a_mistake_within_the_steps_own_limit_does_not_slip(gspec, monkeypatch, capsys):
+    # F91 (owner): DeepSeek-V4.1 compressor, rel limit 0.031-0.042: a 2 % scale is a size a correct step may reach
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "mutations")
+    loose = dict(CC.COMPONENT_DEFAULTS, component_calib=1000.0, component_bias_share=1.0)  # F76: limits = calib x model
+    monkeypatch.setattr(CC, "COMPONENT_DEFAULTS", loose)
+    assert run_component_test(s, "mlp", 0, checks="auto")
+    out = capsys.readouterr().out
+    assert "scale1.02                    within limit" in out and "SLIPPED" not in out
+    assert got()["sweep_mlp_L00_slipped"] == 0
+
+
+def test_output_kinds():
+    assert CC.output_kind(torch.randn(8, 16)) == "float"
+    w = torch.zeros(8, 32)
+    w[:, :2] = 0.5
+    assert CC.output_kind(w) == "selection"
+    idx = torch.stack([torch.randperm(64)[:16] for _ in range(8)])
+    assert CC.output_kind(idx) == "index"
+    assert CC.output_kind(torch.randint(0, 4, (8, 16))) == "int"  # repeats within rows: not a set
+    padded = idx.clone()
+    padded[:, 10:] = -1
+    assert CC.output_kind(padded) == "index"
+    assert (CC.normalize_index(torch.tensor([[3, 0xFFFFFFFF, -1]])) == torch.tensor([[3, -1, -1]])).all()
+
+
+def _causal_topk(rows=64, start=64, k=16):
+    g = torch.Generator().manual_seed(0)
+    out = []
+    for r in range(rows):
+        p = start + r
+        others = torch.randperm(p, generator=g)[: k - 1]
+        out.append(torch.cat([torch.tensor([p]), others]).sort().values)
+    return torch.stack(out)
+
+
+def test_index_checks():
+    want, lim = _causal_topk(), CC.limits(_Spec())
+    shuffled = torch.gather(want, 1, torch.argsort(torch.rand(want.shape), 1))
+    assert not CC.index_fails(shuffled, want, 64, lim, 0.99)[1], "order does not matter"
+    sentinel = want.clone().to(torch.int64)
+    assert not CC.index_fails(sentinel, want, 64, lim, 0.99)[1]
+    assert CC.index_fails(MU.mutate(want, "idxshift"), want, 64, lim, 0.99)[1]
+    future = want.clone()
+    future[:, -1] = 64 + torch.arange(64) + 1  # the own position (the largest) moved one past the row
+    bad = " ".join(CC.index_fails(future, want, 64, lim, 0.99)[1])
+    assert "non-causal" in bad and "own position" in bad
+    dup = want.clone()
+    dup[:, 1] = dup[:, 2]
+    assert "repeated" in " ".join(CC.index_fails(dup, want, 64, lim, 0.99)[1])
+    padded = want.clone()
+    padded[:, -4:] = -1  # a reference with its pads at the end of every row
+    valid_shuffled = padded.clone()
+    valid_shuffled[:, :-4] = valid_shuffled[:, :-4].flip(1)
+    assert not CC.index_fails(valid_shuffled, padded, 64, lim, 0.99)[1], "order within the valid part is free"
+    mid = padded.clone()
+    mid[:, [0, -1]] = mid[:, [-1, 0]]  # the same set, one pad moved to the front
+    assert CC.index_fails(mid, padded, 64, lim, 0.99)[1] == ["64 rows have a pad before a valid position"]
+    fewer = want.clone()
+    fewer[:, -1] = -1
+    assert "number of valid" in " ".join(CC.index_fails(fewer, want, 64, lim, 0.99)[1])
+
+
+def test_selection_checks():
+    lim = CC.limits(_Spec())
+    w = torch.zeros(400, 32)
+    for r in range(400):
+        w[r, torch.randperm(32, generator=torch.Generator().manual_seed(r))[:4]] = torch.tensor([0.4, 0.3, 0.2, 0.1])
+    # the noise floor flips one row of 400 and moves the matched rows by 1e-3 (F138: limits only from a floor)
+    L = CC.selection_limits(lim, 2.0, 1.0, {"overlap": 1 - 1 / 400, "rel": 1e-3, "rowsum": 1e-3}, {}, 1600)
+    assert not CC.selection_fails(w, w, lim, L=L)[1]
+    flip = w.clone()
+    flip[3] = torch.roll(w[3], 1)  # one near-tie row: counted in the overlap, not failed by itself
+    assert not CC.selection_fails(flip, w, lim, L=L)[1]
+    for kind in MU.FLOAT_KINDS:
+        assert CC.selection_fails(MU.mutate(w, kind), w, lim, L=L)[1], kind
+    assert CC.selection_fails(-w, w, lim, L=L)[1]
+    assert not CC.selection_fails(MU.mutate(w, "scale1.02"), w, lim)[1]  # no floor: statistics only, no fixed limit
+
+
+class _Spec:
+    def threshold(self, k, v):
+        return v
+
+    def get(self, k, d=None):
+        return d
+
+
+def test_rendered_component_template_uses_the_checks(gspec, monkeypatch):
+    s = gspec()
+    path = render_component_test(s, "blk", "mlp", overwrite=True)
+    assert 'CHECKS = "auto"' in path.read_text()
+    mod = _load(path)
+    for impl, passes in (("reference", True), ("stub", False), ("mutate:scale1.02", False), ("mutations", True)):
+        monkeypatch.setenv(IMPL_ENV, impl)
+        if passes:
+            mod.test_component(None)
+        else:
+            with pytest.raises(AssertionError):
+                mod.test_component(None)
+
+
+# ---- freeze and orchestrator
+from models.demos.common.bringup.orchestrator import DONE  # noqa: E402
+from models.demos.common.bringup.selftest.test_orchestrator import CHECK, impl_task, orch  # noqa: E402,F401
+
+# the toy check: the sweep passes unless src/sweep.txt says it slips
+SWEEP_CHECK = CHECK.replace(
+    'impl = os.environ.get("BRINGUP_IMPL", "device")',
+    'impl = os.environ.get("BRINGUP_IMPL", "device")\n'
+    'if impl == "mutations":\n'
+    '    raise SystemExit(1 if Path("src/sweep.txt").exists() else 0)',
+)
+IMPLEMENT = {"write": {"src/impl.txt": "0.999"}, "bash": ["scripts/run_safe_pytest.sh tests/check.py"]}
+
+
+def _comp_task():
+    return impl_task(id="C.blk.a", title="component", brief={"block_type": "blk", "step": "a", "layer": 0})
+
+
+@pytest.mark.parametrize(
+    "review,reviewed", [(None, False), ("all", True), (["blk"], True), (["other"], False), ("none", False)]
+)
+def test_component_tasks_skip_the_review_only_when_the_spec_says_so(orch, sandbox, review, reviewed):
+    extra = {"agents": {"component_review": review}} if review is not None else {}
+    sandbox.write_spec(block_types={"blk": {"layers": [0], "representative": 0}}, **extra)
+    (sandbox.repo / "tests/check.py").write_text(SWEEP_CHECK)
+    o = orch([_comp_task()], {"C.blk.a.implement.1.md": IMPLEMENT})
+    assert o.run() == DONE
+    assert ("C.blk.a.test.1.md bringup-engineer" in orch.calls()) is reviewed
+    assert any("component test frozen without review (F56)" in line for line in orch.lines) is not reviewed
+    frozen = o.led.task("C.blk.a")["frozen"]
+    assert frozen["reference"] == "PASS" and (frozen.get("mutations") == "PASS") is not reviewed
+
+
+def test_a_component_test_whose_sweep_fails_goes_to_the_test_role(orch, sandbox):
+    sandbox.write_spec(block_types={"blk": {"layers": [0], "representative": 0}}, agents={"component_review": "none"})
+    (sandbox.repo / "tests/check.py").write_text(SWEEP_CHECK)
+    (sandbox.repo / "src/sweep.txt").write_text("slips")
+    o = orch(
+        [_comp_task()],
+        {"C.blk.a.test.1.md": {"bash": ["rm src/sweep.txt"]}, "C.blk.a.implement.1.md": IMPLEMENT},
+    )
+    assert o.run() == DONE
+    assert orch.calls()[0] == "C.blk.a.test.1.md bringup-engineer"
+    assert any("freeze without review failed, starting the test role" in line for line in orch.lines)
+    assert "mistake sweep failed" in (o.run_dir / "briefs" / "C.blk.a.test.1.md").read_text()
+
+
+def test_an_aborted_test_agent_retries_the_freeze_without_review(orch, sandbox):
+    # F94: the overseer fixes the check that sent the test to an agent (the sweep no longer slips) and aborts it: the
+    # freeze without review runs again before any other test agent
+    import json
+
+    from models.demos.common.bringup import overseer as OV
+
+    sandbox.write_spec(block_types={"blk": {"layers": [0], "representative": 0}}, agents={"component_review": "none"})
+    (sandbox.repo / "tests/check.py").write_text(SWEEP_CHECK)
+    (sandbox.repo / "src/sweep.txt").write_text("slips")
+    o = orch([_comp_task()], {"C.blk.a.implement.1.md": IMPLEMENT})
+    real = o.run_agent
+
+    def overseer_fixes_and_aborts(task, role, attempt, brief, **kw):
+        if role == "test":
+            from models.demos.common.bringup.testing.templates import component_test_path
+
+            component_test_path(o.spec, "blk", "a").write_text("# the aborted agent's half edit\n")  # F95: replaced
+            (sandbox.repo / "src/sweep.txt").unlink(missing_ok=True)  # the framework fix
+            abort = {"task": task["id"], "role": role, "attempt": attempt, "reason": "the sweep is fixed"}
+            (o.run_dir / OV.ABORT_FILE).write_text(json.dumps(abort))
+        return real(task, role, attempt, brief, **kw)
+
+    o.run_agent = overseer_fixes_and_aborts
+    assert o.run() == DONE
+    assert [c for c in orch.calls() if ".test." in c] == ["C.blk.a.test.1.md bringup-engineer"]
+    assert any("frozen without review after the abort (F94)" in line for line in orch.lines)
+    from models.demos.common.bringup.testing.templates import component_test_path
+
+    assert "half edit" not in component_test_path(o.spec, "blk", "a").read_text()
+
+
+def test_freeze_with_mutations_requires_the_sweep(sandbox):
+    (sandbox.repo / "tests").mkdir(exist_ok=True)
+    (sandbox.repo / "src").mkdir(exist_ok=True)
+    (sandbox.repo / "tests/check.py").write_text(SWEEP_CHECK)
+    led = sandbox.tasks(impl_task())
+    assert freeze_task(sandbox.spec, led, "C.1", commit=False, mutations=True)["mutations"] == "PASS"
+    (sandbox.repo / "src/sweep.txt").write_text("slips")
+    with pytest.raises(FreezeError, match="mistake sweep failed"):
+        freeze_task(sandbox.spec, led, "C.1", commit=False, mutations=True)
+    assert "mutations" not in freeze_task(sandbox.spec, led, "C.1", commit=False)
+
+
+def test_every_column_is_checked_against_its_own_limit():
+    # iHC gates: one column near 0 among columns near 1; its sign flipped moves the whole-matrix error by ~1e-5
+    want = torch.ones(256, 8)
+    want[:, 0] = 1e-5 * torch.rand(256)
+    lim = CC.limits(_Spec())
+    res = torch.full((8,), 2.0**-9)  # one bf16 rounding of each column
+    col_lim = CC.rel_limit(lim, torch.zeros(8), res)  # an exact model: every column at its bf16 resolution
+    floor = {"rel": 2.0**-9, "row": 2.0**-9, "ratio_min": 1 - 2.0**-9, "ratio_max": 1 + 2.0**-9, "bias": 0.0}
+    L = CC.float_limits(lim, 1.0, 0.004, floor, col_lim=col_lim, res=floor, k=2.0)  # a floor of one bf16 rounding
+    flipped = want.clone()
+    flipped[:, 0] *= -1
+    e, bad = CC.float_fails(flipped, want, L)
+    assert e["rel"] < 1e-4 and len(bad) == 1 and bad[0].startswith("column 0 rel")
+    assert not CC.float_fails(want * (1 + 1e-4), want, L)[1]
+    # a column the precision model finds noisy gets a looser limit on its own terms
+    noisy = CC.rel_limit(lim, torch.tensor([0.0, 0.01]), res[:2])
+    assert noisy[0] == pytest.approx(2 * 2.0**-9) and noisy[1] == pytest.approx(0.02), "per column: 2 x e, no cap"
+
+
+def test_a_scale_error_fails_the_rel_gate_that_pcc_would_pass(gspec, monkeypatch):
+    """F81: a 2 % scale keeps PCC at 1 but fails the gated rel error (err_<step>, its limit from the noise floor)."""
+    s = gspec()
+    monkeypatch.setenv(IMPL_ENV, "mutate:scale1.02")
+    monkeypatch.setenv(MU.MUTATE_STEP_ENV, "attn_norm")
+    assert not run_component_test(s, "attn_norm", 0, checks="auto")
+    m = got()
+    assert m["pcc_attn_norm_L00"] > 0.9999 and m["err_attn_norm_L00"] > m["err_attn_norm_L00_limit"]
+
+
+def test_frozen_tests_keep_the_structural_column_factor_under_its_old_name():
+    """F146: DeepSeek-V4.1's frozen experts tests read lim["component_col_factor"] (renamed struct_col_factor by F138);
+    only that structural factor keeps its old name, never the removed fixed accuracy numbers."""
+    from models.demos.common.bringup.testing import component_checks as CC
+
+    lim = CC.limits(None)
+    assert lim["component_col_factor"] == lim["struct_col_factor"]
+    assert "component_rel" not in lim and "component_floor" not in lim and "component_row" not in lim
+
+
+def test_freeze_validation_runs_leave_the_task_results_alone(sandbox):
+    """F172: freeze's reference and zero-stub runs wrote their metrics over the task's results (DeepSeek-V4.1
+    C.swa.shared_expert: rel 1.0 everywhere, read as an all-zero shared expert). They write to a scratch dir now."""
+    (sandbox.repo / "tests").mkdir(exist_ok=True)
+    (sandbox.repo / "src").mkdir(exist_ok=True)
+    (sandbox.repo / "tests/check.py").write_text(SWEEP_CHECK)
+    led = sandbox.tasks(impl_task())
+    res = led.results_dir / "C.1.json"
+    res.parent.mkdir(parents=True, exist_ok=True)
+    res.write_text('{"task": "C.1", "metrics": {"device_rel": {"value": 0.002}}}\n')
+    freeze_task(sandbox.spec, led, "C.1", commit=False)
+    assert res.read_text() == '{"task": "C.1", "metrics": {"device_rel": {"value": 0.002}}}\n'

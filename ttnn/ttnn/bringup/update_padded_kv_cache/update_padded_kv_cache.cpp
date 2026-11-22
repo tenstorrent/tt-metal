@@ -1,0 +1,84 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "update_padded_kv_cache.hpp"
+
+#include <optional>
+
+#include "device/update_padded_kv_cache_device_operation.hpp"
+
+namespace ttnn::operations::bringup::update_padded_kv_cache {
+
+// Scalar form: no metadata tensors; slot_idx/kv_actual_global are host scalars.
+ttnn::Tensor update_padded_kv_cache(
+    const ttnn::Tensor& cache,
+    const ttnn::Tensor& input,
+    uint32_t slot_idx,
+    uint32_t layer_idx,
+    uint32_t num_layers,
+    uint32_t kv_actual_global,
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> valid_global,
+    std::optional<uint32_t> tp_axis,
+    const std::optional<ttnn::Tensor>& rope,
+    const std::optional<ttnn::Tensor>& scales,
+    std::optional<CoreCoord> max_grid) {
+    return ttnn::prim::bringup::update_padded_kv_cache(
+        cache,
+        input,
+        /*slot_idx_tensor=*/std::nullopt,
+        /*kv_actual_global_tensor=*/std::nullopt,
+        slot_idx,
+        kv_actual_global,
+        layer_idx,
+        num_layers,
+        cluster_axis,
+        /*valid_global_tensor=*/std::nullopt,
+        valid_global,
+        tp_axis,
+        rope,
+        scales,
+        /*input_row_offset=*/0,
+        /*input_rows=*/std::nullopt,
+        max_grid);
+}
+
+// Per-element-tensor form: slot_idx/kv_actual_global read on-device from the two 1-element tensors
+// (the scalar attrs are unused).
+ttnn::Tensor update_padded_kv_cache(
+    const ttnn::Tensor& cache,
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& slot_idx,
+    const ttnn::Tensor& kv_actual_global,
+    uint32_t layer_idx,
+    uint32_t num_layers,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<ttnn::Tensor>& valid_global,
+    std::optional<uint32_t> tp_axis,
+    const std::optional<ttnn::Tensor>& rope,
+    const std::optional<ttnn::Tensor>& scales,
+    uint32_t input_row_offset,
+    std::optional<uint32_t> input_rows,
+    std::optional<CoreCoord> max_grid) {
+    return ttnn::prim::bringup::update_padded_kv_cache(
+        cache,
+        input,
+        slot_idx,
+        kv_actual_global,
+        /*slot_idx=*/0,
+        /*kv_actual_global=*/0,
+        layer_idx,
+        num_layers,
+        cluster_axis,
+        valid_global,
+        /*valid_global=*/std::nullopt,
+        tp_axis,
+        rope,
+        scales,
+        input_row_offset,
+        input_rows,
+        max_grid);
+}
+
+}  // namespace ttnn::operations::bringup::update_padded_kv_cache

@@ -1,0 +1,107 @@
+{
+ "used": [
+  {
+   "id": "DS41-137",
+   "how": "the chain's bfloat8_b output differed from ttnn.typecast by one step until the compute set bfp8_pack_precise (plus a define, the kernel cache key omits the flag)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-145",
+   "how": "chain kernels take their block split from 2 common args and the core's (x, y) (ckv_share pattern), no per-core runtime args",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-147",
+   "how": "chain op builds one program per mesh range (no per-coordinate programs)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-96",
+   "how": "kept bf16 cos / sin tables at the op's default HiFi4 fp32 DEST; the chain compute repeats that arithmetic",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-185",
+   "how": "the in-process on/off identity test patches settings.get rather than the environment (settings frozen at load)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-103",
+   "how": "kept the bf16 intermediate packs of the stock rope arithmetic (packer ties-away) so the fused result is bit-identical rather than re-deriving with an SFPU round",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-30",
+   "how": "bf16 operands through the trans-mat matmul at HiFi4 are exact; no precision change needed in the fused rope",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "sparse_sdpa's q / output tile is 32 heads of one token, RoPE's and wo_a's is 32 tokens of one head: a TILE in / out option on sparse_sdpa cannot remove the to_layout / untilize; the ROW_MAJOR tensor is the transposition, so the fused rope tilizes / untilizes in its compute",
+  "descriptor-adapter ops: a factory-level override_runtime_arguments(Program&, ...) avoids the binding fast path's bail on an output_tensor carried in tensor_args (now DS41-187); the detect-smuggled-rta hook then needs '// smuggled-rta-ok' on the address args"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding / duplication: the chain op reads each head in place (input_heads), tilizes / untilizes in compute; fork extended with new options and its own tests (tests/unit/test_chain.py)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "the new code is a C++ device op (ProgramDescriptor factory, program cached by the framework, addresses patched per hit), not a Python-built program; host 61.4 us a call on 8x4 (test_chain_host_time). No non-prepared Python-built op is called by the change"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "only the new tests ran on the 8x4 (test_chain.py -k 8x4, 8 passed) plus the model-level checks (perf_rope_chains.py identity, measure --task P.22); no fork regression suite"
+  }
+ ],
+ "cited_only": [
+  "DS41-187"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.22",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-31T15:41:02",
+  "head": "666406f61bd",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.22.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/host_alloc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_rope_chains.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/CHANGELOG.md",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/CMakeLists.txt",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/README.md",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/device/kernels/chain/chain_share.hpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/device/kernels/chain/compute_rope_chain.cpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/device/kernels/chain/reader_rope_chain.cpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/device/kernels/chain/writer_rope_chain.cpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/device/rope_chain_device_operation.cpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/device/rope_chain_device_operation.hpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/rotary_embedding_indexed.cpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/rotary_embedding_indexed.hpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.cpp",
+   "ttnn/ttnn/bringup/rotary_embedding_indexed/tests/unit/test_chain.py"
+  ]
+ }
+}

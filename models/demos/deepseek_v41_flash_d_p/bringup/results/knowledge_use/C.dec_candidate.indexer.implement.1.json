@@ -1,0 +1,85 @@
+{
+ "used": [
+  {
+   "id": "K-1",
+   "how": "guarded every free of a slice / to_layout result against sharing its input's buffer (scores, load-time block iota)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-13",
+   "how": "kept ttnn.bringup.ring_indexer_score_dsa with fp32 DEST (TtIndexer.scores) for layer 20's ratio-1 scores",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-14",
+   "how": "kept k_chunk 32 for the fp32-DEST score op",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-17",
+   "how": "kept the 2048-wide uint32 candidate pool per chip, not all_gathered over TP",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-42",
+   "how": "checked the pool as index sets (exact up to ties on the device's own scores) plus structure (own block, causal, no repeats)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "read only the real pass's lines of the gate log (first FAIL lines are the precompile pass)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-28",
+   "how": "added DEVICE_STEPS['dec_candidate'] with every step that passed for the block type plus the indexer",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-2",
+   "how": "wrote the candidates state by position (rows [start, start + S)) in the reference's ascending format",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-49",
+   "how": "reused the fork's natural_query_blocks ring geometry at key_compression_ratio 1 (no fork change)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "K-1 should say ttnn.slice with full begins / ends also returns its input's buffer, as a new Python object (so `is` checks miss it): added as DS41-52"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-52"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.dec_candidate.indexer",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-17T08:58:33",
+  "head": "18cb1fac4e2",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.dec_candidate.indexer.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "ttnn/ttnn/bringup/INDEX.md"
+  ]
+ }
+}

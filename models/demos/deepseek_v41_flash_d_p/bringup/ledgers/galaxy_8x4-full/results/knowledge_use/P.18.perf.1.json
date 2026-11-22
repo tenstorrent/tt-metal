@@ -1,0 +1,130 @@
+{
+ "used": [
+  {
+   "id": "DS41-142",
+   "how": "the cost model of the change: each chip rounded and read the replicated 5248-row window; the region holds only the chip's 288 rows",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-17",
+   "how": "kept the served 0_window_kv write as is (TP gather + local write at aligned starts, server-order write elsewhere)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-148",
+   "how": "the local served write only at start % S == 0; other starts take the mesh-gather write path",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-144",
+   "how": "the send copies whole block pages, gap bytes included; sparse_sdpa never reads them, the byte test compares whole pages it wrote itself",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-145",
+   "how": "own-row and carry ckv_bfp4 calls use compact=True (common args only)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-135",
+   "how": "ckv_bfp4 prepared=True (CKV_BFP4_PREPARED) for both region writes",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "regions, kept tails, index lists, iotas and the send's semaphore allocated at load time, not mid-forward",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-118",
+   "how": "the send opens exactly one fabric connection per chip (its route's first hop), never two to one channel",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-130",
+   "how": "routes read the open fabric's torus wraps (FABRIC_2D_TORUS_XY on the Galaxy) instead of assuming lines",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-81",
+   "how": "region window index lists keep valid ids first and a sentinel tail (chip 0 at starts < 128)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-149",
+   "how": "the HOST_ALLOC carry_rows site output reused for the last chip's served carry slice",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-175",
+   "evidence": "OV-35 / agent rule 19 (FIX.15 attempt 2): a single-card job on the Galaxy risks a single-card reset that breaks the 8x4 mesh; recommendation updated in known_issues.md",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "how to write a multi-chip point-to-point (neighbour) send on a 2D / torus fabric from Python: per-chip programs, first-hop connection from route(), fused write + atomic increment (now tt/window_send.py, repo_map row)",
+  "that test_profile / the ladder re-run the same chunk, so a 'kept from the previous chunk' fast path never runs there (DS41-181)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated: the region holds exactly 128 + q_rows rows, the send exactly 4 pages; the sdpa window chunk keeps its 128 keys"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the one Python-built program added (tt/window_send.py WindowSend) dispatches via ttnn.bringup.prepare_program / run_prepared (patch count asserted = 2 slots a chip); host a warm call 220-300 us isolated, 3.8 ms / 40 calls a chunk under cProfile; ckv_bfp4 calls prepared"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; no fork changed; only the new byte test tt/perf_window_tiles.py and model-level checks (measure quick, runner contract, core audit)"
+  },
+  {
+   "id": "OV-35",
+   "answer": "done",
+   "evidence": "DS41-175 rewritten: fabric detail kept, a single-card sweep on a Galaxy only with the owner's yes or on another box (agent rule 19)"
+  }
+ ],
+ "cited_only": [
+  "DS41-181",
+  "DS41-182",
+  "DS41-183"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.18",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-31T09:20:28",
+  "head": "2f8ea8a815f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.18.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/host_alloc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_window_tiles.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/window_send.py"
+  ]
+ }
+}

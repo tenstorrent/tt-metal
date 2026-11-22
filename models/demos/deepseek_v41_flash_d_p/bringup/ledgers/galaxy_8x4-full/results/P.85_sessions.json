@@ -1,0 +1,2107 @@
+[
+{
+"text": "agentic_cc",
+"start": 0,
+"n": 7676,
+"id": "sbrunner_jsonschema2md_pr331",
+"repo": "sbrunner/jsonschema2md",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 7676,
+"n": 23727,
+"id": "auth0_auth0-python_pr258",
+"repo": "auth0/auth0-python",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 31403,
+"n": 21180,
+"id": "evidentlyai_evidently_pr563",
+"repo": "evidentlyai/evidently",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 52583,
+"n": 68241,
+"id": "cocotb_cocotb_pr1644",
+"repo": "cocotb/cocotb",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 120824,
+"n": 22436,
+"id": "iterative_dvc-render_pr45",
+"repo": "iterative/dvc-render",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 143260,
+"n": 6454,
+"id": "bluesky_event-model_pr59",
+"repo": "bluesky/event-model",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 149714,
+"n": 8938,
+"id": "ipython_traitlets_pr39",
+"repo": "ipython/traitlets",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 158652,
+"n": 30949,
+"id": "oauthlib_oauthlib_pr458",
+"repo": "oauthlib/oauthlib",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 189601,
+"n": 8537,
+"id": "durandtibo_feu_pr191",
+"repo": "durandtibo/feu",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 198138,
+"n": 32880,
+"id": "podhmo_python-node-semver_pr19",
+"repo": "podhmo/python-node-semver",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 231018,
+"n": 50986,
+"id": "arviz-devs_preliz_pr240",
+"repo": "arviz-devs/preliz",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 282004,
+"n": 15545,
+"id": "zabuldon_teslajsonpy_pr393",
+"repo": "zabuldon/teslajsonpy",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 297549,
+"n": 21812,
+"id": "app-sre_qontract-reconcile_pr1008",
+"repo": "app-sre/qontract-reconcile",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 319361,
+"n": 16703,
+"id": "pydicom_pylibjpeg_pr76",
+"repo": "pydicom/pylibjpeg",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 336064,
+"n": 16940,
+"id": "fonttools_fonttools_pr2921",
+"repo": "fonttools/fonttools",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 353004,
+"n": 27982,
+"id": "kjd_idna_pr24",
+"repo": "kjd/idna",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 380986,
+"n": 13838,
+"id": "pytransitions_transitions_pr378",
+"repo": "pytransitions/transitions",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 394824,
+"n": 22179,
+"id": "infobloxopen_infoblox-client_pr102",
+"repo": "infobloxopen/infoblox-client",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 417003,
+"n": 41992,
+"id": "google_flatbuffers_pr6716",
+"repo": "google/flatbuffers",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 458995,
+"n": 25787,
+"id": "lepture_mistune_pr384",
+"repo": "lepture/mistune",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 484782,
+"n": 9004,
+"id": "google_flatbuffers_pr4452",
+"repo": "google/flatbuffers",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 493786,
+"n": 95050,
+"id": "facelessuser_coloraide_pr348",
+"repo": "facelessuser/coloraide",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 588836,
+"n": 35216,
+"id": "globus_globus-sdk-python_pr1199",
+"repo": "globus/globus-sdk-python",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 624052,
+"n": 16824,
+"id": "fonttools_fonttools_pr1902",
+"repo": "fonttools/fonttools",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 640876,
+"n": 14981,
+"id": "globus_globus-sdk-python_pr1075",
+"repo": "globus/globus-sdk-python",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 655857,
+"n": 38304,
+"id": "beetbox_beets_pr4399",
+"repo": "beetbox/beets",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 694161,
+"n": 12437,
+"id": "prompt-toolkit_python-prompt-toolkit_pr1217",
+"repo": "prompt-toolkit/python-prompt-toolkit",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 706598,
+"n": 12901,
+"id": "canonical_operator_pr108",
+"repo": "canonical/operator",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 719499,
+"n": 27959,
+"id": "pinterest_pymemcache_pr250",
+"repo": "pinterest/pymemcache",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 747458,
+"n": 117831,
+"id": "python-control_python-control_pr1018",
+"repo": "python-control/python-control",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 865289,
+"n": 9208,
+"id": "pallets_jinja_pr1008",
+"repo": "pallets/jinja",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 874497,
+"n": 39016,
+"id": "sbdchd_django-types_pr353",
+"repo": "sbdchd/django-types",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 913513,
+"n": 18446,
+"id": "cookiecutter_cookiecutter_pr1692",
+"repo": "cookiecutter/cookiecutter",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 931959,
+"n": 16181,
+"id": "russhousley_pyasn1-alt-modules_pr69",
+"repo": "russhousley/pyasn1-alt-modules",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 948140,
+"n": 23153,
+"id": "twitterdev_twitter-python-ads-sdk_pr281",
+"repo": "twitterdev/twitter-python-ads-sdk",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc",
+"start": 971293,
+"n": 58800,
+"id": "scikit-hep_particle_pr144",
+"repo": "scikit-hep/particle",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 1030093,
+"n": 12817,
+"id": "mapbox_mapbox-sdk-py_pr101",
+"repo": "mapbox/mapbox-sdk-py",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc",
+"start": 1042910,
+"n": 33283,
+"id": "meerk40t_svgelements_pr187",
+"repo": "meerk40t/svgelements",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 0,
+"n": 12662,
+"id": "evidentlyai_evidently_pr444",
+"repo": "evidentlyai/evidently",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 12662,
+"n": 13716,
+"id": "ipython_traitlets_pr875",
+"repo": "ipython/traitlets",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 26378,
+"n": 19209,
+"id": "globus_globus-sdk-python_pr1022",
+"repo": "globus/globus-sdk-python",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 45587,
+"n": 30225,
+"id": "populationgenomics_production-pipelines_pr459",
+"repo": "populationgenomics/production-pipelines",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 75812,
+"n": 4245,
+"id": "fonttools_fonttools_pr1567",
+"repo": "fonttools/fonttools",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 80057,
+"n": 47063,
+"id": "python-openapi_openapi-core_pr709",
+"repo": "python-openapi/openapi-core",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 127120,
+"n": 98091,
+"id": "python-trio_flake8-async_pr154",
+"repo": "python-trio/flake8-async",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 225211,
+"n": 18196,
+"id": "karpetrosyan_hishel_pr138",
+"repo": "karpetrosyan/hishel",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 243407,
+"n": 7946,
+"id": "app-sre_qontract-reconcile_pr224",
+"repo": "app-sre/qontract-reconcile",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 251353,
+"n": 63083,
+"id": "iterative_gto_pr160",
+"repo": "iterative/gto",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 314436,
+"n": 17522,
+"id": "google_importlab_pr7",
+"repo": "google/importlab",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 331958,
+"n": 23513,
+"id": "bdraco_bluetooth-data-tools_pr119",
+"repo": "bdraco/bluetooth-data-tools",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 355471,
+"n": 22876,
+"id": "turner-townsend_flask-pydantic-spec_pr28",
+"repo": "turner-townsend/flask-pydantic-spec",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 378347,
+"n": 21087,
+"id": "treasure-data_td-client-python_pr123",
+"repo": "treasure-data/td-client-python",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 399434,
+"n": 20500,
+"id": "pallets_click_pr1990",
+"repo": "pallets/click",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 419934,
+"n": 32178,
+"id": "bids-standard_pybids_pr458",
+"repo": "bids-standard/pybids",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 452112,
+"n": 7394,
+"id": "mido_mido_pr255",
+"repo": "mido/mido",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 459506,
+"n": 7915,
+"id": "jupyter-widgets_ipywidgets_pr3173",
+"repo": "jupyter-widgets/ipywidgets",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 467421,
+"n": 17804,
+"id": "durandtibo_feu_pr471",
+"repo": "durandtibo/feu",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 485225,
+"n": 26539,
+"id": "karpetrosyan_hishel_pr269",
+"repo": "karpetrosyan/hishel",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 511764,
+"n": 15280,
+"id": "jschneier_django-storages_pr375",
+"repo": "jschneier/django-storages",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 527044,
+"n": 15546,
+"id": "facelessuser_soupsieve_pr73",
+"repo": "facelessuser/soupsieve",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 542590,
+"n": 12493,
+"id": "onnx_tensorflow-onnx_pr1363",
+"repo": "onnx/tensorflow-onnx",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 555083,
+"n": 25967,
+"id": "pytransitions_transitions_pr217",
+"repo": "pytransitions/transitions",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 581050,
+"n": 11614,
+"id": "mongodb_mongo-python-driver_pr1579",
+"repo": "mongodb/mongo-python-driver",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 592664,
+"n": 45195,
+"id": "jackdewinter_pymarkdown_pr433",
+"repo": "jackdewinter/pymarkdown",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 637859,
+"n": 39612,
+"id": "mcu-tools_mcuboot_pr901",
+"repo": "mcu-tools/mcuboot",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 677471,
+"n": 9195,
+"id": "optimizely_python-sdk_pr80",
+"repo": "optimizely/python-sdk",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 686666,
+"n": 32015,
+"id": "google_flatbuffers_pr6318",
+"repo": "google/flatbuffers",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 718681,
+"n": 70206,
+"id": "vedro-universe_vedro_pr120",
+"repo": "vedro-universe/vedro",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 788887,
+"n": 35035,
+"id": "audreyr_cookiecutter_pr839",
+"repo": "audreyr/cookiecutter",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 823922,
+"n": 22384,
+"id": "evergreen-ci_shrub.py_pr27",
+"repo": "evergreen-ci/shrub.py",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 846306,
+"n": 12103,
+"id": "pyca_pyopenssl_pr1310",
+"repo": "pyca/pyopenssl",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 858409,
+"n": 16804,
+"id": "matthew-brett_delocate_pr187",
+"repo": "matthew-brett/delocate",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 875213,
+"n": 22724,
+"id": "durandtibo_grizz_pr423",
+"repo": "durandtibo/grizz",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 897937,
+"n": 3837,
+"id": "kjd_idna_pr154",
+"repo": "kjd/idna",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 901774,
+"n": 9712,
+"id": "sethmlarson_truststore_pr100",
+"repo": "sethmlarson/truststore",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 911486,
+"n": 17296,
+"id": "barrust_pyprobables_pr69",
+"repo": "barrust/pyprobables",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 928782,
+"n": 31168,
+"id": "omni-us_jsonargparse_pr697",
+"repo": "omni-us/jsonargparse",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 959950,
+"n": 45868,
+"id": "astropy_astroplan_pr568",
+"repo": "astropy/astroplan",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 1005818,
+"n": 35463,
+"id": "microsoft_lsprotocol_pr88",
+"repo": "microsoft/lsprotocol",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s1",
+"start": 1041281,
+"n": 10133,
+"id": "scrapy_itemadapter_pr31",
+"repo": "scrapy/itemadapter",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 1051414,
+"n": 10138,
+"id": "hetznercloud_hcloud-python_pr240",
+"repo": "hetznercloud/hcloud-python",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s1",
+"start": 1061552,
+"n": 33138,
+"id": "stac-utils_stac-pydantic_pr131",
+"repo": "stac-utils/stac-pydantic",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 0,
+"n": 10828,
+"id": "loadsmart_django-jaiminho_pr82",
+"repo": "loadsmart/django-jaiminho",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 10828,
+"n": 13028,
+"id": "pyinfra-dev_pyinfra_pr194",
+"repo": "pyinfra-dev/pyinfra",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 23856,
+"n": 35874,
+"id": "omni-us_jsonargparse_pr239",
+"repo": "omni-us/jsonargparse",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 59730,
+"n": 45903,
+"id": "wwrechard_pydlm_pr78",
+"repo": "wwrechard/pydlm",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 105633,
+"n": 10677,
+"id": "matplotlib_cycler_pr100",
+"repo": "matplotlib/cycler",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 116310,
+"n": 13752,
+"id": "mercedes-benz_odxtools_pr28",
+"repo": "mercedes-benz/odxtools",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 130062,
+"n": 28554,
+"id": "facelessuser_coloraide_pr340",
+"repo": "facelessuser/coloraide",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 158616,
+"n": 10222,
+"id": "oasis-open_cti-python-stix2_pr470",
+"repo": "oasis-open/cti-python-stix2",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 168838,
+"n": 25288,
+"id": "jackdewinter_pymarkdown_pr987",
+"repo": "jackdewinter/pymarkdown",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 194126,
+"n": 15220,
+"id": "sphinx-contrib_confluencebuilder_pr900",
+"repo": "sphinx-contrib/confluencebuilder",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 209346,
+"n": 23557,
+"id": "python-semver_python-semver_pr320",
+"repo": "python-semver/python-semver",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 232903,
+"n": 22292,
+"id": "telefonica_toolium_pr106",
+"repo": "telefonica/toolium",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 255195,
+"n": 19212,
+"id": "asyncgui_asyncgui_pr33",
+"repo": "asyncgui/asyncgui",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 274407,
+"n": 37204,
+"id": "sifive_pydevicetree_pr20",
+"repo": "sifive/pydevicetree",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 311611,
+"n": 23752,
+"id": "xarray-contrib_pint-xarray_pr31",
+"repo": "xarray-contrib/pint-xarray",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 335363,
+"n": 14315,
+"id": "matrix-org_matrix-python-sdk_pr53",
+"repo": "matrix-org/matrix-python-sdk",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 349678,
+"n": 10594,
+"id": "pytransitions_transitions_pr266",
+"repo": "pytransitions/transitions",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 360272,
+"n": 81665,
+"id": "jackdewinter_pymarkdown_pr890",
+"repo": "jackdewinter/pymarkdown",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 441937,
+"n": 40275,
+"id": "django-json-api_django-rest-framework-json-api_pr1283",
+"repo": "django-json-api/django-rest-framework-json-api",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 482212,
+"n": 19298,
+"id": "pallets_click_pr1805",
+"repo": "pallets/click",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 501510,
+"n": 23424,
+"id": "scikit-rf_scikit-rf_pr658",
+"repo": "scikit-rf/scikit-rf",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 524934,
+"n": 14064,
+"id": "app-sre_qontract-reconcile_pr2151",
+"repo": "app-sre/qontract-reconcile",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 538998,
+"n": 12913,
+"id": "canonical_operator_pr203",
+"repo": "canonical/operator",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 551911,
+"n": 163864,
+"id": "bqplot_bqplot_pr811",
+"repo": "bqplot/bqplot",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 715775,
+"n": 16797,
+"id": "maxpmaxp_pdfreader_pr24",
+"repo": "maxpmaxp/pdfreader",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 732572,
+"n": 14612,
+"id": "getsentry_responses_pr581",
+"repo": "getsentry/responses",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 747184,
+"n": 47756,
+"id": "sktime_skbase_pr229",
+"repo": "sktime/skbase",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 794940,
+"n": 27808,
+"id": "ipython_ipython_pr13535",
+"repo": "ipython/ipython",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 822748,
+"n": 10528,
+"id": "app-sre_qontract-reconcile_pr327",
+"repo": "app-sre/qontract-reconcile",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 833276,
+"n": 92776,
+"id": "meerk40t_svgelements_pr151",
+"repo": "meerk40t/svgelements",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 926052,
+"n": 20626,
+"id": "pytransitions_transitions_pr179",
+"repo": "pytransitions/transitions",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 946678,
+"n": 17222,
+"id": "jborean93_smbprotocol_pr245",
+"repo": "jborean93/smbprotocol",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 963900,
+"n": 31523,
+"id": "yu-iskw_dbt-artifacts-parser_pr16",
+"repo": "yu-iskw/dbt-artifacts-parser",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 995423,
+"n": 34777,
+"id": "facelessuser_coloraide_pr37",
+"repo": "facelessuser/coloraide",
+"group": "agentic_cc",
+"role": "held"
+},
+{
+"text": "agentic_cc_s2",
+"start": 1030200,
+"n": 16871,
+"id": "python-hyper_hpack_pr28",
+"repo": "python-hyper/hpack",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_cc_s2",
+"start": 1047071,
+"n": 38243,
+"id": "localstack_plux_pr33",
+"repo": "localstack/plux",
+"group": "agentic_cc",
+"role": "pick"
+},
+{
+"text": "agentic_ds",
+"start": 0,
+"n": 184607,
+"id": "ipython_ipython_pr13603",
+"repo": "ipython/ipython",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds",
+"start": 184607,
+"n": 33850,
+"id": "mcu-tools_mcuboot_pr617",
+"repo": "mcu-tools/mcuboot",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds",
+"start": 218457,
+"n": 80388,
+"id": "roniemartinez_latex2mathml_pr204",
+"repo": "roniemartinez/latex2mathml",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds",
+"start": 298845,
+"n": 54002,
+"id": "hadialqattan_pycln_pr250",
+"repo": "hadialqattan/pycln",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds",
+"start": 352847,
+"n": 36351,
+"id": "fonttools_fonttools_pr1970",
+"repo": "fonttools/fonttools",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds",
+"start": 389198,
+"n": 31903,
+"id": "googleapis_proto-plus-python_pr140",
+"repo": "googleapis/proto-plus-python",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds",
+"start": 421101,
+"n": 99007,
+"id": "populationgenomics_production-pipelines_pr577",
+"repo": "populationgenomics/production-pipelines",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds",
+"start": 520108,
+"n": 106894,
+"id": "frictionlessdata_frictionless-py_pr569",
+"repo": "frictionlessdata/frictionless-py",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds",
+"start": 627002,
+"n": 21654,
+"id": "treasure-data_pytd_pr128",
+"repo": "treasure-data/pytd",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds",
+"start": 648656,
+"n": 196315,
+"id": "populationgenomics_production-pipelines_pr481",
+"repo": "populationgenomics/production-pipelines",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds",
+"start": 844971,
+"n": 33699,
+"id": "zheller_flake8-quotes_pr99",
+"repo": "zheller/flake8-quotes",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds",
+"start": 878670,
+"n": 25736,
+"id": "python-scim_scim2-models_pr79",
+"repo": "python-scim/scim2-models",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds",
+"start": 904406,
+"n": 89611,
+"id": "demisto_demisto-sdk_pr62",
+"repo": "demisto/demisto-sdk",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds",
+"start": 994017,
+"n": 98555,
+"id": "ethereum_py-trie_pr60",
+"repo": "ethereum/py-trie",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s1",
+"start": 0,
+"n": 22227,
+"id": "fonttools_fonttools_pr2577",
+"repo": "fonttools/fonttools",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s1",
+"start": 22227,
+"n": 18463,
+"id": "app-sre_qontract-reconcile_pr308",
+"repo": "app-sre/qontract-reconcile",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s1",
+"start": 40690,
+"n": 76021,
+"id": "facelessuser_coloraide_pr300",
+"repo": "facelessuser/coloraide",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s1",
+"start": 116711,
+"n": 34222,
+"id": "jonathf_chaospy_pr344",
+"repo": "jonathf/chaospy",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s1",
+"start": 150933,
+"n": 21392,
+"id": "ethereum_eth-utils_pr84",
+"repo": "ethereum/eth-utils",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s1",
+"start": 172325,
+"n": 23414,
+"id": "audreyr_cookiecutter_pr1692",
+"repo": "audreyr/cookiecutter",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s1",
+"start": 195739,
+"n": 154948,
+"id": "tconbeer_sqlfmt_pr25",
+"repo": "tconbeer/sqlfmt",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s1",
+"start": 350687,
+"n": 22012,
+"id": "jazzband_dj-database-url_pr231",
+"repo": "jazzband/dj-database-url",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s1",
+"start": 372699,
+"n": 78989,
+"id": "espressif_idf-build-apps_pr88",
+"repo": "espressif/idf-build-apps",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s1",
+"start": 451688,
+"n": 56610,
+"id": "telefonica_toolium_pr276",
+"repo": "telefonica/toolium",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s1",
+"start": 508298,
+"n": 22531,
+"id": "scikit-rf_scikit-rf_pr1340",
+"repo": "scikit-rf/scikit-rf",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s1",
+"start": 530829,
+"n": 14664,
+"id": "jxtech_wechatpy_pr373",
+"repo": "jxtech/wechatpy",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s1",
+"start": 545493,
+"n": 32345,
+"id": "globus_globus-sdk-python_pr948",
+"repo": "globus/globus-sdk-python",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s1",
+"start": 577838,
+"n": 81677,
+"id": "mongodb_mongo-python-driver_pr742",
+"repo": "mongodb/mongo-python-driver",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s1",
+"start": 659515,
+"n": 39222,
+"id": "lmmentel_mendeleev_pr76",
+"repo": "lmmentel/mendeleev",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s1",
+"start": 698737,
+"n": 123843,
+"id": "optimizely_python-sdk_pr393",
+"repo": "optimizely/python-sdk",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s1",
+"start": 822580,
+"n": 67823,
+"id": "ncclient_ncclient_pr605",
+"repo": "ncclient/ncclient",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s1",
+"start": 890403,
+"n": 49159,
+"id": "app-sre_qontract-reconcile_pr29",
+"repo": "app-sre/qontract-reconcile",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s1",
+"start": 939562,
+"n": 88348,
+"id": "jschneier_django-storages_pr1063",
+"repo": "jschneier/django-storages",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s1",
+"start": 1027910,
+"n": 10133,
+"id": "containerbuildsystem_dockerfile-parse_pr65",
+"repo": "containerbuildsystem/dockerfile-parse",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s2",
+"start": 0,
+"n": 10133,
+"id": "containerbuildsystem_dockerfile-parse_pr65",
+"repo": "containerbuildsystem/dockerfile-parse",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s2",
+"start": 10133,
+"n": 92160,
+"id": "bufbuild_protovalidate-python_pr358",
+"repo": "bufbuild/protovalidate-python",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s2",
+"start": 102293,
+"n": 106779,
+"id": "evidentlyai_evidently_pr455",
+"repo": "evidentlyai/evidently",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s2",
+"start": 209072,
+"n": 74967,
+"id": "frictionlessdata_tabulator-py_pr107",
+"repo": "frictionlessdata/tabulator-py",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s2",
+"start": 284039,
+"n": 23079,
+"id": "mcu-tools_mcuboot_pr414",
+"repo": "mcu-tools/mcuboot",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s2",
+"start": 307118,
+"n": 20154,
+"id": "pycontribs_subprocess-tee_pr40",
+"repo": "pycontribs/subprocess-tee",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s2",
+"start": 327272,
+"n": 20032,
+"id": "cdgriffith_puremagic_pr113",
+"repo": "cdgriffith/puremagic",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s2",
+"start": 347304,
+"n": 36193,
+"id": "esphome_aioesphomeapi_pr396",
+"repo": "esphome/aioesphomeapi",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s2",
+"start": 383497,
+"n": 44002,
+"id": "mido_mido_pr624",
+"repo": "mido/mido",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s2",
+"start": 427499,
+"n": 17923,
+"id": "python-poetry_cleo_pr21",
+"repo": "python-poetry/cleo",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s2",
+"start": 445422,
+"n": 48895,
+"id": "globus_globus-sdk-python_pr1167",
+"repo": "globus/globus-sdk-python",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s2",
+"start": 494317,
+"n": 35819,
+"id": "joblib_joblib_pr1669",
+"repo": "joblib/joblib",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s2",
+"start": 530136,
+"n": 27169,
+"id": "holoviz_param_pr1067",
+"repo": "holoviz/param",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s2",
+"start": 557305,
+"n": 42152,
+"id": "python-trio_flake8-async_pr67",
+"repo": "python-trio/flake8-async",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s2",
+"start": 599457,
+"n": 37787,
+"id": "duplocloud_duploctl_pr15",
+"repo": "duplocloud/duploctl",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s2",
+"start": 637244,
+"n": 52030,
+"id": "frankie567_httpx-oauth_pr328",
+"repo": "frankie567/httpx-oauth",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s2",
+"start": 689274,
+"n": 93287,
+"id": "open-feature_python-sdk_pr504",
+"repo": "open-feature/python-sdk",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s2",
+"start": 782561,
+"n": 76253,
+"id": "ipython_ipython_pr14254",
+"repo": "ipython/ipython",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_s2",
+"start": 858814,
+"n": 33718,
+"id": "audreyr_cookiecutter_pr1626",
+"repo": "audreyr/cookiecutter",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s2",
+"start": 892532,
+"n": 16900,
+"id": "scikit-rf_scikit-rf_pr1073",
+"repo": "scikit-rf/scikit-rf",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s2",
+"start": 909432,
+"n": 90559,
+"id": "scikit-rf_scikit-rf_pr561",
+"repo": "scikit-rf/scikit-rf",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s2",
+"start": 999991,
+"n": 28938,
+"id": "google_flatbuffers_pr4923",
+"repo": "google/flatbuffers",
+"group": "agentic_ds",
+"role": "pick"
+},
+{
+"text": "agentic_ds_s2",
+"start": 1028929,
+"n": 54383,
+"id": "regionmask_regionmask_pr371",
+"repo": "regionmask/regionmask",
+"group": "agentic_ds",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 0,
+"n": 36825,
+"id": "eslint__eslint-10655",
+"repo": "eslint/eslint",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 36825,
+"n": 36159,
+"id": "schemahero__schemahero-865",
+"repo": "schemahero/schemahero",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 72984,
+"n": 24100,
+"id": "misskey-dev__mfm.js-77",
+"repo": "misskey-dev/mfm.js",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 97084,
+"n": 45150,
+"id": "stylelint-scss__stylelint-scss-767",
+"repo": "stylelint-scss/stylelint-scss",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 142234,
+"n": 78966,
+"id": "mirumee__ariadne-codegen-221",
+"repo": "mirumee/ariadne-codegen",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 221200,
+"n": 52352,
+"id": "microsoft__griffel-292",
+"repo": "microsoft/griffel",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 273552,
+"n": 62426,
+"id": "crossplane-contrib__provider-sql-171",
+"repo": "crossplane-contrib/provider-sql",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 335978,
+"n": 21339,
+"id": "obsidian-tasks-group__obsidian-tasks-772",
+"repo": "obsidian-tasks-group/obsidian-tasks",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 357317,
+"n": 45479,
+"id": "michalkvasnicak__aws-lambda-graphql-92",
+"repo": "michalkvasnicak/aws-lambda-graphql",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 402796,
+"n": 61143,
+"id": "crossplane__provider-aws-781",
+"repo": "crossplane/provider-aws",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 463939,
+"n": 34750,
+"id": "sharkdp__fd-1115",
+"repo": "sharkdp/fd",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 498689,
+"n": 18144,
+"id": "humbug__php-scoper-629",
+"repo": "humbug/php-scoper",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 516833,
+"n": 73066,
+"id": "railwayapp__nixpacks-782",
+"repo": "railwayapp/nixpacks",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 589899,
+"n": 37537,
+"id": "vaskoz__dailycodingproblem-go-755",
+"repo": "vaskoz/dailycodingproblem-go",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 627436,
+"n": 36778,
+"id": "ipython__traitlets-773",
+"repo": "ipython/traitlets",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 664214,
+"n": 47734,
+"id": "platers__obsidian-linter-962",
+"repo": "platers/obsidian-linter",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 711948,
+"n": 161261,
+"id": "pyjanitor-devs__pyjanitor-1444",
+"repo": "pyjanitor-devs/pyjanitor",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 873209,
+"n": 50179,
+"id": "humbug__php-scoper-753",
+"repo": "humbug/php-scoper",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 923388,
+"n": 29473,
+"id": "fxamacker__cbor-342",
+"repo": "fxamacker/cbor",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 952861,
+"n": 11086,
+"id": "more-itertools__more-itertools-903",
+"repo": "more-itertools/more-itertools",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 963947,
+"n": 51056,
+"id": "swc-project__swc-4235",
+"repo": "swc-project/swc",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 1015003,
+"n": 38331,
+"id": "ota-meshi__eslint-plugin-regexp-249",
+"repo": "ota-meshi/eslint-plugin-regexp",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 1053334,
+"n": 27262,
+"id": "vuejs__composition-api-551",
+"repo": "vuejs/composition-api",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml",
+"start": 1080596,
+"n": 17765,
+"id": "theacodes__nox-522",
+"repo": "theacodes/nox",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 0,
+"n": 43115,
+"id": "primefaces__primefaces-12376",
+"repo": "primefaces/primefaces",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 43115,
+"n": 32069,
+"id": "nacos-group__nacos-sdk-go-699",
+"repo": "nacos-group/nacos-sdk-go",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 75184,
+"n": 24481,
+"id": "clap-rs__clap-4328",
+"repo": "clap-rs/clap",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 99665,
+"n": 50143,
+"id": "crossplane__provider-aws-793",
+"repo": "crossplane/provider-aws",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 149808,
+"n": 22359,
+"id": "typescript-eslint__tslint-to-eslint-config-199",
+"repo": "typescript-eslint/tslint-to-eslint-config",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 172167,
+"n": 31848,
+"id": "yannickcr__eslint-plugin-react-72",
+"repo": "yannickcr/eslint-plugin-react",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 204015,
+"n": 26082,
+"id": "serverless__serverless-azure-functions-468",
+"repo": "serverless/serverless-azure-functions",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 230097,
+"n": 146430,
+"id": "devexpress__devextreme-react-59",
+"repo": "DevExpress/devextreme-react",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 376527,
+"n": 166550,
+"id": "switchbacktech__compass-386",
+"repo": "SwitchbackTech/compass",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 543077,
+"n": 25621,
+"id": "mgechev__revive-745",
+"repo": "mgechev/revive",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 568698,
+"n": 35642,
+"id": "steveukx__git-js-550",
+"repo": "steveukx/git-js",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 604340,
+"n": 16773,
+"id": "pandas-dev__pandas-55927",
+"repo": "pandas-dev/pandas",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 621113,
+"n": 54980,
+"id": "briannesbitt__carbon-2762",
+"repo": "briannesbitt/Carbon",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 676093,
+"n": 57479,
+"id": "lukeautry__tsoa-611",
+"repo": "lukeautry/tsoa",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 733572,
+"n": 21093,
+"id": "symfony__monolog-bundle-387",
+"repo": "symfony/monolog-bundle",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 754665,
+"n": 41086,
+"id": "qiskit__qiskit-terra-8877",
+"repo": "Qiskit/qiskit-terra",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 795751,
+"n": 30553,
+"id": "googleapis__java-datastore-1055",
+"repo": "googleapis/java-datastore",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 826304,
+"n": 32710,
+"id": "kennethreitz__pipenv-976",
+"repo": "kennethreitz/pipenv",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 859014,
+"n": 20017,
+"id": "phpoffice__phpspreadsheet-4224",
+"repo": "PHPOffice/PhpSpreadsheet",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 879031,
+"n": 23618,
+"id": "academysoftwarefoundation__opentimelineio-1862",
+"repo": "AcademySoftwareFoundation/OpenTimelineIO",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 902649,
+"n": 41552,
+"id": "geoffrich__svelte-adapter-azure-swa-74",
+"repo": "geoffrich/svelte-adapter-azure-swa",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 944201,
+"n": 27042,
+"id": "fraserxu__electron-pdf-284",
+"repo": "fraserxu/electron-pdf",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 971243,
+"n": 39858,
+"id": "sveltejs__kit-6232",
+"repo": "sveltejs/kit",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic_ds_ml_s1",
+"start": 1011101,
+"n": 75319,
+"id": "sveltejs__kit-5051",
+"repo": "sveltejs/kit",
+"group": "agentic_ds_ml",
+"role": "held"
+},
+{
+"text": "agentic",
+"start": 0,
+"n": 65218,
+"id": "P.52.perf.2.jsonl",
+"repo": "bringup",
+"group": "bringup_sessions",
+"role84": "pick",
+"role": "held"
+},
+{
+"text": "agentic",
+"start": 65218,
+"n": 206288,
+"id": "P.53.perf.1.jsonl",
+"repo": "bringup",
+"group": "bringup_sessions",
+"role84": "held",
+"role": "held"
+},
+{
+"text": "agentic",
+"start": 271506,
+"n": 115019,
+"id": "P.54.perf.1.jsonl",
+"repo": "bringup",
+"group": "bringup_sessions",
+"role84": "pick",
+"role": "held"
+},
+{
+"text": "agentic",
+"start": 386525,
+"n": 135805,
+"id": "P.55a.perf.1.jsonl",
+"repo": "bringup",
+"group": "bringup_sessions",
+"role84": "held",
+"role": "held"
+},
+{
+"text": "agentic",
+"start": 522330,
+"n": 175972,
+"id": "P.55b.perf.1.jsonl",
+"repo": "bringup",
+"group": "bringup_sessions",
+"role84": "pick",
+"role": "held"
+},
+{
+"text": "agentic",
+"start": 698302,
+"n": 217743,
+"id": "P.55c.perf.1.jsonl",
+"repo": "bringup",
+"group": "bringup_sessions",
+"role84": "held",
+"role": "held"
+},
+{
+"text": "agentic",
+"start": 916045,
+"n": 196802,
+"id": "P.56.perf.1.jsonl",
+"repo": "bringup",
+"group": "bringup_sessions",
+"role84": "pick",
+"role": "held"
+},
+{
+"text": "code",
+"start": 0,
+"n": 147456,
+"id": "code_prefix",
+"repo": "code",
+"group": "code",
+"role84": "pick",
+"role": "other"
+},
+{
+"text": "prose",
+"start": 0,
+"n": 147456,
+"id": "prose_prefix",
+"repo": "prose",
+"group": "prose",
+"role": "other"
+},
+{
+"text": "multilingual",
+"start": 0,
+"n": 147456,
+"id": "multilingual_prefix",
+"repo": "multilingual",
+"group": "multilingual",
+"role": "other"
+}
+]

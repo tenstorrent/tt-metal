@@ -53,6 +53,10 @@ public:
     // Transitional: goes away together with the ProgramDescriptor path.
     Program(distributed::MeshDevice& mesh_device, const ProgramDescriptor& descriptor);
 
+    // Adds a descriptor's circular buffers, semaphores (at their descriptor ids) and kernels to this program, as the
+    // descriptor constructor does; its cores must not overlap what the program already uses.
+    void append(const ProgramDescriptor& descriptor);
+
     // Internal: construct from an already-built ProgramImpl.
     explicit Program(std::shared_ptr<detail::ProgramImpl> impl);
 
@@ -141,6 +145,12 @@ public:
 
     // Used in ops.
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers() const;
+
+    // True once this Program's kernels have been JIT-compiled for at least one build
+    // key. Exposed because ProgramImpl is not visible outside tt_metal, and callers
+    // that compile programs in bulk (e.g. ttnn's up-front precompile) need to tell
+    // "I compiled this" from "it arrived already compiled".
+    bool is_compiled() const;
 
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }

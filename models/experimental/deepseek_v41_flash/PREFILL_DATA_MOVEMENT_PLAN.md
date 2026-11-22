@@ -4,7 +4,7 @@
 `slice` + `concat`, typecasts. Do it the way decode did: pick layouts so that ops chain without conversion, and fuse
 where an op boundary forces a copy.
 
-**Scope:** `models/experimental/deepseek_v41_flash/tt/prefill/*`, the V4 prefill base classes they inherit
+**Scope:** `models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/*`, the V4 prefill base classes they inherit
 (`models/experimental/deepseek_v4_flash/tt/prefill/*`), and these ops:
 - `mix_streams`
 - `fused_hyperconnection`
@@ -70,7 +70,7 @@ allocated. **Phase 0 measures them; reorder the later phases if the profile disa
 ### Task 0: per-op profile of one prefill layer at chunk 1024
 
 **Files:**
-- Create: `models/experimental/deepseek_v41_flash/tests/prefill/test_decoder_layer_profile.py`
+- Create: `models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_decoder_layer_profile.py`
 
 **What:**
 - Build one decoder layer and run its device half only (no torch reference) at `T = 1024`.
@@ -83,7 +83,7 @@ allocated. **Phase 0 measures them; reorder the later phases if the profile disa
 **Run (user):**
 
 ```bash
-python -m tracy -p -r -v -m pytest 'models/experimental/deepseek_v41_flash/tests/prefill/test_decoder_layer_profile.py' -x
+python -m tracy -p -r -v -m pytest 'models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_decoder_layer_profile.py' -x
 ```
 
 **Acceptance:**
@@ -104,7 +104,7 @@ python -m tracy -p -r -v -m pytest 'models/experimental/deepseek_v41_flash/tests
 - Replace `wide_rms_norm(rows) * gamma` with `ttnn.rms_norm(rows, weight=gamma, epsilon=self.eps)`. The width is
   `D = 5120`, not `hc*D`.
 - **Done.** The prefill head already runs `ttnn.rms_norm` on the same `[1,1,T,D]` input with the same
-  `load_norm_gamma` weight (`tt/prefill/model.py:334`), so it fits at this width.
+  `load_norm_gamma` weight (`tt/pipeline_parallel_prefill/model.py:334`), so it fits at this width.
 - The `wide_rms_norm` docstring says `rms_norm` overflows L1 at wide rows. The current layernorm program
   (`layernorm_op_multi_core.cpp`) falls back to a streaming `large_tensor` kernel sized to the available L1 span, so
   that note may be outdated. If it still fails, use the fallback below.
@@ -117,7 +117,7 @@ python -m tracy -p -r -v -m pytest 'models/experimental/deepseek_v41_flash/tests
 **Run (user):**
 
 ```bash
-pytest models/experimental/deepseek_v41_flash/tests/prefill/test_decoder_layer.py -x
+pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_decoder_layer.py -x
 ```
 
 **Acceptance:**
@@ -143,8 +143,8 @@ pytest models/experimental/deepseek_v41_flash/tests/prefill/test_decoder_layer.p
 **Run (user):**
 
 ```bash
-pytest models/experimental/deepseek_v41_flash/tests/prefill/test_hyperconnection.py -x
-pytest models/experimental/deepseek_v41_flash/tests/prefill/test_decoder_layer.py -x
+pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_hyperconnection.py -x
+pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_decoder_layer.py -x
 ```
 
 **Acceptance:**
@@ -155,11 +155,11 @@ pytest models/experimental/deepseek_v41_flash/tests/prefill/test_decoder_layer.p
 ### Task 3: traced window buffer without the per-chunk concat
 
 **Files:**
-- Modify: `models/experimental/deepseek_v41_flash/tt/prefill/attention.py`:
+- Modify: `models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/attention.py`:
   - traced `_window` (461-466)
   - `reset_static`
   - the seeding path that writes `bufs.tail`
-- Modify: `models/experimental/deepseek_v41_flash/tt/prefill/model.py` (export, line 1351)
+- Modify: `models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/model.py` (export, line 1351)
 
 **Interface:**
 - `bufs.window` `[1,1,sw+C,K]` ROW_MAJOR stays exactly what `deepseek_v4_prefill_sdpa` reads. The op takes one
@@ -181,8 +181,8 @@ pytest models/experimental/deepseek_v41_flash/tests/prefill/test_decoder_layer.p
 **Run (user):**
 
 ```bash
-pytest models/experimental/deepseek_v41_flash/tests/prefill/test_attention.py -x
-pytest models/experimental/deepseek_v41_flash/tests/prefill/test_full_model_prefill_verify.py -x   # galaxy, traced, multi-chunk
+pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_attention.py -x
+pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_full_model_prefill_verify.py -x   # galaxy, traced, multi-chunk
 ```
 
 **Acceptance:**
@@ -195,8 +195,8 @@ pytest models/experimental/deepseek_v41_flash/tests/prefill/test_full_model_pref
 ### Task 4: drop the `sel_in` clone
 
 **Files:**
-- Modify: `models/experimental/deepseek_v41_flash/tt/prefill/model.py` (1054-1056)
-- Modify: `models/experimental/deepseek_v41_flash/tt/prefill/attention.py` (`_select`)
+- Modify: `models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/model.py` (1054-1056)
+- Modify: `models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/attention.py` (`_select`)
 
 **What:**
 - Three places free the selection:
@@ -219,11 +219,11 @@ pytest models/experimental/deepseek_v41_flash/tests/prefill/test_full_model_pref
 >   rather than a `stream_major=` flag on `mix_streams`. It takes `comb` / `post` / `pre` in the per-token tile
 >   layout `fused_hyperconnection` already returns, so there is no host reshape. The reader turns each row block's
 >   32 token weights into diagonal tiles, and the compute accumulates `diag(w) @ s_j` matmuls in fp32 dest.
->   Kernels live under `mix_streams/device/kernels/*/…stream_mix.cpp`. The test is `tests/prefill/test_stream_mix_op.py`.
+>   Kernels live under `mix_streams/device/kernels/*/…stream_mix.cpp`. The test is `tests/pipeline_parallel_prefill/test_stream_mix_op.py`.
 > - **Task 6:** `ttnn.experimental.deepseek.fused_hyperconnection_weights(...)` returns `[post, comb, pre]`. In the
 >   pre/post device op, `hidden_streams` is now optional, and without it the op skips the collapse.
 >   `fused_hyperconnection` itself is unchanged.
-> - **Task 7:** `tt/prefill/hyperconnection.py` (`DeepSeekV41PrefillHyperConnection`):
+> - **Task 7:** `tt/pipeline_parallel_prefill/hyperconnection.py` (`DeepSeekV41PrefillHyperConnection`):
 >   - `fn` is a batched per-stream matmul, summed in fp32, under the cache name `fn.prefill_sm`.
 >   - The norm feeding the sublayers is a plain `ttnn.rms_norm` on `[1, 1, T, D]`.
 >   - The Engram now works on dense `[1, hc, T, D]`: the key is a concat of `kv` column slices, and the gate weight
@@ -326,22 +326,22 @@ pre, post, comb = ttnn.experimental.deepseek.fused_hyperconnection(
 ### Task 7: V4.1 prefill hyper-connection and decoder layer on stream-major streams
 
 **Files:**
-- Create: `models/experimental/deepseek_v41_flash/tt/prefill/hyperconnection.py`. Its class subclasses
+- Create: `models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/hyperconnection.py`. Its class subclasses
   `DeepSeekV4PrefillHyperConnection`, loads `fn` as `[1,hc,D,24]` (one block per stream) under a new cache name, and
   has `forward(streams [1,hc,T,D], pre_mix [1,hc,T,1]) -> (post, comb, collapsed [1,1,T,D], pre)`.
-- Modify: `models/experimental/deepseek_v41_flash/tt/prefill/decoder_layer.py` (`_v41_block`, construction of
+- Modify: `models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/decoder_layer.py` (`_v41_block`, construction of
   `attn_hc` / `ffn_hc`):
   - `_norm(collapsed)` is `ttnn.rms_norm` directly on the dense `[1,1,T,D]`. Both `rows_from_tokens` and
     `tokens_from_rows` are gone.
   - `mix_streams(..., stream_major=True)`.
-- Modify: `models/experimental/deepseek_v41_flash/tt/prefill/engram.py`:
+- Modify: `models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/engram.py`:
   - `forward(streams [1,hc,T,D], rows) -> [1,hc,T,D]`.
   - `_split_copies` is gone. `key_j` is the tile-aligned column slice `kv[..., j*D:(j+1)*D]` and `value` the last
     one.
   - The gate math runs per stream on `[1,1,T,D]` operands (`gate_weight` reshaped to `[1,hc,1,D]`), or as one pass
     on `[1,hc,T,D]` with `key` assembled by `ttnn.concat(dim=1)`. Pick whichever profiles faster; Task 10 replaces
     both.
-- Modify: `models/experimental/deepseek_v41_flash/tt/prefill/model.py`:
+- Modify: `models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/model.py`:
   - `embed`: `repeat` the `[1,1,T,D]` TILE embedding along dim 1. This drops the ROW_MAJOR round trip.
   - `head` / `hc_head`: collapse with `pre` through the same `mix_streams` call.
   - `_select_row` / `_collapse`: a one-hot matmul per stream, `[1,1,1,T] @ [1,hc,T,D]`, then the collapse.
@@ -354,9 +354,9 @@ pre, post, comb = ttnn.experimental.deepseek.fused_hyperconnection(
 **Run (user):**
 
 ```bash
-pytest models/experimental/deepseek_v41_flash/tests/prefill/test_hyperconnection.py -x
-pytest models/experimental/deepseek_v41_flash/tests/prefill/test_engram.py -x
-pytest models/experimental/deepseek_v41_flash/tests/prefill/test_decoder_layer.py -x
+pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_hyperconnection.py -x
+pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_engram.py -x
+pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_decoder_layer.py -x
 ```
 
 **Acceptance:**
@@ -367,7 +367,7 @@ pytest models/experimental/deepseek_v41_flash/tests/prefill/test_decoder_layer.p
 ### Task 8: traced stage hand-off in stream-major TILE
 
 **Files:**
-- Modify: `models/experimental/deepseek_v41_flash/tt/prefill/model.py`:
+- Modify: `models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/model.py`:
   - `io.streams_in` / `io.pre_in` allocation
   - receive (1046-1050)
   - send (1092-1095)
@@ -384,7 +384,7 @@ pytest models/experimental/deepseek_v41_flash/tests/prefill/test_decoder_layer.p
 **Run (user):**
 
 ```bash
-pytest models/experimental/deepseek_v41_flash/tests/prefill/test_full_model_prefill_verify.py -x
+pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_full_model_prefill_verify.py -x
 ```
 
 **Acceptance:** full-model verify passes. The hand-off copies are gone from the stage profile.
@@ -430,8 +430,8 @@ ttnn.experimental.fused_partial_rope(x, cos, sin, trans_mat, rope_dim=64, output
 **Files:**
 - Create: `ttnn/cpp/ttnn/operations/experimental/deepseek/engram_gate_prefill/` (or a DRAM-interleaved program in
   `engram_gate`)
-- Modify: `models/experimental/deepseek_v41_flash/tt/prefill/engram.py`
-- Create: `models/experimental/deepseek_v41_flash/tests/prefill/test_engram_gate_prefill_op.py`
+- Modify: `models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/engram.py`
+- Create: `models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_engram_gate_prefill_op.py`
 
 **Interface:**
 
@@ -460,7 +460,7 @@ elementwise dispatches and all fp32 typecasts.
 - Modify: `ttnn/cpp/ttnn/operations/transformer/sdpa/deepseek_v4_prefill_sdpa*` (reader for TILE q; writer for a
   group-major TILE output)
 - Modify: `tests/ttnn/unit_tests/operations/sdpa/test_deepseek_v4_prefill_sdpa.py`
-- Modify: `models/experimental/deepseek_v41_flash/tt/prefill/attention.py` (497, 512), V4 `_q_stem` (508-528),
+- Modify: `models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/attention.py` (497, 512), V4 `_q_stem` (508-528),
   `_o_proj` (957-985)
 
 **Interface:**

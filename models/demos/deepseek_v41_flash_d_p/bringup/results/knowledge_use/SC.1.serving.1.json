@@ -1,0 +1,104 @@
+{
+ "used": [
+  {
+   "id": "K-72",
+   "how": "Input section: PAD_ID 0xFFFFFFFF past actual_end, mask and clamp before ttnn.embedding; the part test feeds PAD_ID ids to embed",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-71",
+   "how": "Acks section rule (records final in DRAM before each ack) and test_adapter_acks re-reads every acked record after the chunk syncs",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-78",
+   "how": "producer fallback replaced with the server's plan, PAD_ID payload and ring_sdpa_reshuffle (producer_case.py), not the producer's own schedule",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-79",
+   "how": "runner_case checks model_config.FABRIC_PAYLOAD_SIZE in [4352, 15232] before the mesh opens; Adapter section names it",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-80",
+   "how": "runner subprocess gets TT_METAL_OPERATION_TIMEOUT_SECONDS=600 so the safe runner's dispatch timeout does not kill a waiting runner",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-76",
+   "how": "decided no kv_slot_layer_ids / acks_in_kv_slot_space: every DS41 layer owns a window cache and acks",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-73",
+   "how": "the runner test reads the KV back through the table itself (caches.TableReader per config) instead of the producer's built-in MLA/GQA readers",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-77",
+   "how": "pad-row zeroing and the record-size geometry rule carried over (DeepSeek kv_ack zero_pad_and_ack); dtype chosen bf16 row-major here instead of bfp8 TILE because ratio-2 records are 16 rows",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-75",
+   "how": "Deployment/KV cache: the block-cyclic period is the served chunk, not DeepSeek's hard-coded 5120",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-68",
+   "how": "tests open the whole 2x2 mesh with the spec's FABRIC_2D device params (no submesh)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "KvChunkAddressTable's name->config constructor assigns config ids in sorted name order (disaggregation.cpp:117-122): config 0 must be the all-layer cache, so names must sort (added DS41-6)",
+  "testing/dgen_engine.server_repo does not expand $USER in spec serving.server_repo (this spec's value), so find_build reports 'no checkout' (added DS41-7)",
+  "a cache whose record is not one row per token (compressed KV, ratio r: 32/r rows per 32-token record): tables.py and kv_dump_compare assume 32-row records and 576/128 widths",
+  "the runner smoke and the K.1 smoke_runner_ok requirement in a partial run that cannot load every layer (added DS41-8)",
+  "part tests run at every C.<block type>.<step> gate: a test must pick the layers of the gate's block type (BRINGUP_TASK), else it fails at the first block type"
+ ],
+ "cited_only": [
+  "DS41-5"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "SC.1",
+  "role": "serving",
+  "attempt": 1,
+  "agent": "serving-contract",
+  "t": "2026-10-14T23:36:46",
+  "head": "01bc89a9715",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/contract_tests.yaml",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/SC.1.serving.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/__init__.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/caches.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/parts.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/producer_case.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/runner_case.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/server_rules.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py"
+  ]
+ }
+}

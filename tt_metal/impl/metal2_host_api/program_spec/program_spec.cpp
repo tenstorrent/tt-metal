@@ -7,6 +7,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt_stl/fmt.hpp>
@@ -39,6 +40,26 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 // Public Entry Points
 // ============================================================================
 
+namespace {
+
+void AddProgramsFromSpecs(
+    distributed::MeshWorkload& workload,
+    distributed::MeshDevice& mesh_device,
+    const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs) {
+    const distributed::MeshCoordinateRange mesh_extent(mesh_device.shape());
+    TT_FATAL(!program_specs.empty(), "At least one ProgramSpec is required to create a MeshWorkload.");
+    for (const auto& [device_range, program_spec] : program_specs) {
+        TT_FATAL(
+            mesh_extent.contains(device_range),
+            "Device range {} is outside MeshDevice shape {}",
+            device_range,
+            mesh_device.shape());
+        workload.impl().add_program(device_range, BuildProgramFromSpec(mesh_device, program_spec));
+    }
+}
+
+}  // namespace
+
 Program::Program(distributed::MeshDevice& mesh_device, const ProgramSpec& spec) :
     Program(BuildProgramFromSpec(mesh_device, spec)) {
     impl().compile_and_allocate(&mesh_device, false);
@@ -48,16 +69,7 @@ distributed::MeshWorkload::MeshWorkload(
     distributed::MeshDevice& mesh_device,
     const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs) :
     MeshWorkload() {
-    const distributed::MeshCoordinateRange mesh_extent(mesh_device.shape());
-    TT_FATAL(!program_specs.empty(), "At least one ProgramSpec is required to create a MeshWorkload.");
-    for (const auto& [device_range, program_spec] : program_specs) {
-        TT_FATAL(
-            mesh_extent.contains(device_range),
-            "Device range {} is outside MeshDevice shape {}",
-            device_range,
-            mesh_device.shape());
-        impl().add_program(device_range, BuildProgramFromSpec(mesh_device, program_spec));
-    }
+    AddProgramsFromSpecs(*this, mesh_device, program_specs);
     impl().compile(&mesh_device);
 }
 
@@ -66,6 +78,26 @@ distributed::MeshWorkload::MeshWorkload(distributed::MeshDevice& mesh_device, co
     impl().add_program(
         distributed::MeshCoordinateRange(mesh_device.shape()), BuildProgramFromSpec(mesh_device, program_spec));
     impl().compile(&mesh_device);
+}
+
+Program experimental::MakeProgramFromSpec(
+    distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool defer_compile) {
+    if (!defer_compile) {
+        return Program(mesh_device, spec);
+    }
+    return BuildProgramFromSpec(mesh_device, spec);
+}
+
+distributed::MeshWorkload experimental::MakeMeshWorkloadFromSpecs(
+    distributed::MeshDevice& mesh_device,
+    const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs,
+    bool defer_compile) {
+    if (!defer_compile) {
+        return distributed::MeshWorkload(mesh_device, program_specs);
+    }
+    distributed::MeshWorkload workload;
+    AddProgramsFromSpecs(workload, mesh_device, program_specs);
+    return workload;
 }
 
 }  // namespace tt::tt_metal

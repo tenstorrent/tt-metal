@@ -52,6 +52,9 @@ void kernel_main() {
     constexpr uint32_t log_width_tiles = get_named_compile_time_arg_val("log_width_tiles");
     constexpr bool stable_sort = get_named_compile_time_arg_val("stable_sort") != 0;
     constexpr uint32_t score_func = get_named_compile_time_arg_val("score_func");
+    // fp32_selection: the weights are normalized and scaled in fp32 on the SFPU. (Its selection half, full-fp32
+    // activation, bias add and sort keys, is what every path does now.)
+    constexpr bool precise = get_named_compile_time_arg_val("precise") != 0;
     // The sort keys are full fp32 (the factory unpacks the score CBs straight to DEST); the rank-tag sorts
     // compare them at 23 - GATE_TAG_BITS = 17 mantissa bits (exact ties keep the index order).
     constexpr bool rank_tag = stable_sort;
@@ -106,13 +109,19 @@ void kernel_main() {
                 log_topk_groups,
                 n_activated_experts);
         }
-        blocks::normalize_scores(
-            cb_gathered_sigmoid,
-            cb_reduce_ones_scalar,
-            cb_reduce_intermediate,
-            cb_reciprocal_sums,
-            cb_epsilon_scalar,
-            cb_normalized_scores);
-        blocks::scale(cb_normalized_scores, cb_route_scale_scalar, cb_out_weights);
+        if constexpr (precise) {
+            blocks::normalize_and_scale_fp32<
+                get_named_compile_time_arg_val("packed_epsilon"),
+                get_named_compile_time_arg_val("packed_route_scale")>(cb_gathered_sigmoid, cb_out_weights);
+        } else {
+            blocks::normalize_scores(
+                cb_gathered_sigmoid,
+                cb_reduce_ones_scalar,
+                cb_reduce_intermediate,
+                cb_reciprocal_sums,
+                cb_epsilon_scalar,
+                cb_normalized_scores);
+            blocks::scale(cb_normalized_scores, cb_route_scale_scalar, cb_out_weights);
+        }
     }
 }

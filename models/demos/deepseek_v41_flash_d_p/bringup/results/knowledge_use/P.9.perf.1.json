@@ -1,0 +1,69 @@
+{
+ "overseer": [],
+ "used": [
+  {
+   "id": "DS41-69",
+   "how": "sized the bf16 option from its 20 KB-a-token fp32 limit: accumulator_bytes / the refusal take the sum tile size (fp32 4096, bf16 2048), so 1024 home tokens fit 9 accumulators in one pass",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-70",
+   "how": "kept the arena's 8-slot local ring and ring depth 4 at one pass (1312 KB of 1356): no < 4-slot ring, no CCL barrier near the arena",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "every model-sized run (frozen tests, perf_experts, fork tests) with --no-precompile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD on every run",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-65",
+   "how": "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 for the per-op profile of one layer's experts (test_combine_acc ops)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "whether the packer's L1 accumulation onto a bf16 CB from fp32 DEST rounds to nearest or truncates (measured: nearest, unbiased; DS41-73)",
+  "the orchestrator measure part 'test_c_${t}_experts' runs all 8 files as one command (~19 min), longer than an agent's 10-minute foreground limit: the frozen files were run one by one with the change-on switch instead",
+  "the per-pass one-core planner's cost scales with its pass's tokens: going from 2 passes to 1 moves the work from two parallel cores onto one (807 -> 1573 us)"
+ ],
+ "cited_only": [
+  "DS41-73"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.9",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-20T07:24:06",
+  "head": "3198a3a72fd",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.9.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/weighted_combine.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/combine_rf/CHANGELOG.md",
+   "ttnn/ttnn/bringup/combine_rf/README.md",
+   "ttnn/ttnn/bringup/combine_rf/sparse_combine_rf.py",
+   "ttnn/ttnn/bringup/combine_rf/tests/unit/test_acc_dtype.py"
+  ]
+ }
+}

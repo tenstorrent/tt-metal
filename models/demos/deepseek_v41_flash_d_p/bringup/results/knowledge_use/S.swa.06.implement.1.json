@@ -1,0 +1,84 @@
+{
+ "used": [
+  {
+   "id": "DS41-18",
+   "how": "named the bf16 sparse_sdpa output as the largest error piece: added fp32_output to the fork instead of another change",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-20",
+   "how": "F73 rel limit already scales with the component error, so only the fixed worst-row limit failed; targeted the overall error",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-19",
+   "how": "kept WINDOW_SDPA=exact as comparison only (owner OV-3), did not switch to it",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "deleted the tt-probe directories after probing",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "read the pcc-0 FAIL lines of the precompile collect pass as noise, judged the real pass",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-18",
+   "evidence": "said 'an fp32 output alone is not enough (tail 0.013 in S.swa.06)'; after F73 the tail limit is 0.042 and the fp32 output passes S.swa.06 (rel 0.0189, row 0.0458, tail 0.0168). Updated in the file.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "swap step checks: the worst-row limit (swap_step_row 0.05) stays fixed while F73 scales the rel limit; a step near its component error fails only on the row",
+  "sdpa fork kernels: sdpa_maybe_pack_reconfig_data_format compares compile-time formats and assumes the previous pack state; a new fp32 CB can silently skip a needed reconfig"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "known_issues.md DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x (swap_step_calib) the step's own component error, no cap'; unchanged this step"
+  }
+ ],
+ "cited_only": [
+  "DS41-29"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.swa.06",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T23:41:25",
+  "head": "cacb4c66b87",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.swa.06.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/sdpa/CHANGELOG.md",
+   "ttnn/ttnn/bringup/sdpa/device/kernels/compute/compute_streaming.hpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation.hpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_program_factory.cpp",
+   "ttnn/ttnn/bringup/sdpa/sdpa_nanobind.cpp",
+   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.cpp",
+   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.hpp",
+   "ttnn/ttnn/bringup/sdpa/tests/unit/test_sparse_sdpa_high_precision.py"
+  ]
+ }
+}

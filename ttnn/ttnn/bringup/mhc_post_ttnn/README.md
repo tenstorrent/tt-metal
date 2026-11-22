@@ -1,0 +1,107 @@
+# ttnn.bringup.mhc_post  (C++ op; Python builder `ttnn.bringup.mhc_post_ttnn.mhc_post` kept as the parity reference)
+
+## What it does
+New op (AI-generated, codegen run 1046; no TTNN source). The mHC post-sublayer residual mix in one program:
+`X'[t, j*C:(j+1)*C] = post[t, j] * F[t, :] + sum_i comb[t, i*n + j] * X[t, i*C:(i+1)*C]` (comb applied transposed;
+`comb_transposed=False` applies it as stored, `comb[t, j*n + i]`).
+Inputs: F the sublayer output (..., T, C), X the n residual streams (..., T, n*C) fp32 or bf16, post (..., T, n) and
+comb (..., T, n*n) fp32. Output X' (..., T, n*C) in X's dtype, TILE, DRAM interleaved. The weighted sum runs in fp32
+on the SFPU. Cores: full compute grid, row-weighted work split. Single device, per row, no collective.
+With `stats_weight=W` (a separate program, CHANGELOG 7) it also returns the next mHC hc step's partial row from the
+same pass: stats (..., T, 32) = X' @ W (FPU, fp32 DEST) with column n (n + 2) = sum_c X'^2 (exact fp32 SFPU), i.e.
+`mhc_pre_xing_pack(X' @ W, X')` without reading X' again; the per-core partials are summed on one root core per row.
+
+## Consider it instead of
+- A per-stream `ttnn.mul` + `ttnn.addcmul` chain (xing40: 20 ops; codegen composite: 81 ops) for the mHC residual; one program, fp32 accumulation, faster (see Measured).
+- With `stats_weight`: instead of mhc_post + `ttnn.matmul` (the hc_fn projection of the new streams) + `ttnn.bringup.mhc_pre_xing_pack` (their sum of squares).
+- With an identity comb: instead of per-stream `ttnn.addcmul` + `ttnn.concat` for X'_k = post_k F + X_k (an exact replacement: the zero terms add exact zeros).
+
+## Options
+- `max_grid` (ttnn.CoreCoord, default None) on `ttnn.bringup.mhc_post` (plain and stats_weight programs): the op's cores inside that rectangle of the grid (FIX.15, a Galaxy's 110-core cap: 11 x 10); default the whole grid.
+(from `mhc_post_ttnn_nanobind.cpp`)
+
+Realistic (use by default): every option below.
+- `input_tensor`: F (..., T, C), TILE, DRAM interleaved, C % 32 == 0, fp32 or bf16.
+- `residual`: X (..., T, n*C), fp32 or bf16, TILE, DRAM interleaved.
+- `post`: (..., T, n), fp32 TILE, 1 <= n <= 5.
+- `comb`: (..., T, n*n), fp32 TILE, `comb[..., i*n + j] = comb[i][j]`.
+- `compute_kernel_config=None`: default HiFi4, fp32 DEST, approx off; `fp32_dest_acc_en` must be True.
+- `comb_transposed=True` (opt-in `False` is a fork addition, CHANGELOG 5): False computes `X'_j = post_j F + sum_i comb[j*n + i] X_i` (Xing4.0 order). C++ op only; the Python builder has no such option.
+- `stats_weight=None` (opt-in, CHANGELOG 7): W (..., n*C, 32) fp32 TILE DRAM, leading dims 1; then the op returns `(X', stats)`. Needs fp32 X with fp32 or (CHANGELOG 8) bf16 F, or (CHANGELOG 9) bf16 X with bf16 F (X' bf16, the projection of the bf16 X', the sum of squares of the fp32 mix), n <= 4; X' is bit-identical to the op without it; the projection runs at `compute_kernel_config`'s fidelity (pass the model's matmul fidelity). Realistic.
+- `post_col=0`, `comb_col=0` (opt-in, CHANGELOG 8): post_k at post's column post_col + k, comb[i*n + j] at comb's column comb_col + i*n + j; nonzero: n = the residual's stream count, post / comb may be one packed tensor (the mixes [pre | post | comb]: post=comb=mixes, post_col=n, comb_col=2n), both within one tile row. Both programs. Realistic (data move: bit-identical to the sliced call).
+
+- `output_tensor=`, `stats_output=`, `stats_scratch=` (default None = the op allocates them, unchanged): the caller's buffers for X', the stats row and (with `stats_weight`) the partials scratch ([1, 1, R, 32 blocks] float32 TILE DRAM). Each must have exactly the spec the op would allocate (checked on every call) and must not be an input. Shared helper `device/mhc_post_given_output.hpp`. (CHANGELOG: output_tensor / stats_output / stats_scratch, deepseek_v41_flash_d_p P.16.)
+- `collapse_pre=None` (opt-in, deepseek_v41_flash_d_p P.34) with `hc_scale`, `hc_base`, `hc_norm_width`, `hc_norm_eps`, `hc_eps`, `hc_sinkhorn_iters` (the next step's mhc_pre_xing scalars) and optional `hc_output` / `y_output`: with `stats_weight`, bf16 F and X, n <= 4, the same pass also returns the next mHC step's hc (..., T, n (n + 2)) fp32 (DeepSeek's coefficients + Sinkhorn of the stats row, on each row's root) and y = sum_i collapse_pre[:, i] X'_i (..., T, C) bf16: `(X', stats, hc, y)`, bit-identical to `mhc_pre_xing(stats, X', deepseek=True, collapse_pre=..., ...)`. Realistic.
+- `norm_weight=None` (opt-in, deepseek_v41_flash_d_p P.35) with `norm_eps` (default 1e-6): needs `collapse_pre`; (..., 1, C) float32 TILE DRAM. y (and `y_output`) is the RMS norm of the bf16 collapse: bf16((y * rsqrt(sum_c y^2 / C + norm_eps)) * norm_weight), the statistic an exact fp32 sum of the bf16 y; stats column n (n + 2) + 1 then holds sum y^2. Realistic.
+- `feed_output=None` (opt-in, deepseek_v41_flash_d_p P.36) with `feed_semaphores` ([ready, arrival] global-semaphore L1 addresses), `feed_num_links` (default 1), `feed_cluster_axis` (default 1): needs `norm_weight`; (..., G T, C / G) in the residual's dtype, TILE DRAM interleaved, the same address on every chip. The normalized y also lands where an all-to-all over the axis (in_dim -2, out_dim -1) of y would put it: the own column block written by the units, the others over the fabric from port cores (one per first-hop direction and link: the grid's last 2 L cores, inside `max_grid`; DRAM staging in `y_output`), behind a ready fence; the op returns when the chip's feed_output is complete. One program for every chip (a chip-independent table in the common args; each kernel finds its chip in the fabric routing table). Realistic (moves bytes, no arithmetic).
+- `v2=False` (opt-in `True`, deepseek_v41_flash_d_p PB.8): needs `fast`. The same bits from three changes: (1) the
+  feed's other-chip y tiles land straight in the port cores' L1 (cb_feed as the landing, one slot a packet in the
+  sender's order; the workers learn its address from port 0's landing word and set a flag word a unit after their
+  tiles land; the port pushes each packet as its units publish: no y_output staging, no port DRAM re-read); (2) with
+  one unit a core a W block's RT cores sit on one grid column segment and each core's W share goes to the others in
+  one NoC multicast; (3) a root's hc row transposes (row-major <-> coefficient-major) run on its SFPU (lane mask +
+  subvector rotation, exact) instead of BRISC word copies; the compute's bottom-half mix reuses the top half's code
+  (kernel-config room). Bit-identical to `fast`. Realistic.
+- `fast=False` (opt-in `True`, deepseek_v41_flash_d_p P.83): needs `collapse_pre`. The same outputs from a pipelined program: columns streamed in (a NoC transaction id each, 2 in flight a core; the compute starts on the first), X' out a column at a time, each W block read from DRAM once and shared through L1 when every core has one unit, the coefficient / pre-block tiles built on the SFPU, the sum-of-squares tile folded before its transpose, the feed's port reads 12 packets deep. X', y and feed_output bit-identical; stats column n (n + 2) (sum x'^2) summed in another fp32 order (rel <= 1e-5), so the hc within ~2e-7. Realistic.
+Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp32 DEST is required, not an option).
+
+## Measured
+
+- Output buffers (P.16, 8x4): mhc_post 137.4 -> 101.4 us of host a call (8x4, 82 calls a chunk).
+- C++ host side, GLM-5.3 shape (T 5120, C 4096, n 4, bf16): host 0.676 -> 0.019 ms per call, device-bound wall 1.195 -> 1.161 ms per call (CHANGELOG.md change 2).
+- Device kernel time, Blackhole p150, 110 cores, after perf round 2: bf16 T640 C7168 205.5 us, T640 C1792 62.3 us, T1280 C4096 230.4 us; fp32 445.4 / 115.4 / 509.7 us (changelog.md, Perf 2).
+- vs composite, fp32 T640 C7168: 537 us vs 3781 us for the 81-op composite (changelog.md, Phase 0).
+- Precision: fp32 relative RMS about 5.3e-08 (changelog.md, Phase 0); glm53 case (2x2, s1280 per chip, C 4096, n 4, bf16) rel L2 0.00166, pcc 0.9999986 (tests/cases.py).
+- xing40 (4x2, fp32 streams, `comb_transposed=False`), 40-layer warm chunk [51200, 56320): attn_residual 90.0 -> 10.9 ms, ffn_residual 90.5 -> 10.9 ms vs the addcmul chain (models/demos/xing40_a4b_d_p/bringup/BREADCRUMBS.md, P.2).
+- Unit suite on the C++ op: 110 passed (CHANGELOG.md change 2); option off after change 5: unit 164 passed, golden 208 passed (models/demos/xing40_a4b_d_p/bringup/BREADCRUMBS.md, P.2).
+- `post_col` / `comb_col` + bf16 F (CHANGELOG 8), same shape: stats 0.328 (fp32 F) -> 0.314 ms (bf16 F + offsets), without the 0.046 ms typecast and 2 slices; plain 0.269 / 0.268 ms; bit-identical (tests/unit/test_mhc_post_mixes.py). deepseek_v41_flash_d_p P.19: attn_residual 3.31 -> 2.52, ffn_residual 3.29 -> 2.88, moe_add 1.58 -> 1.22 ms a chunk.
+- `stats_weight`, 2x2 p150, [1024, 4 x 2560] fp32 a chip, HiFi2 (wall, 30 synced calls): 0.327 ms vs 0.270 ms without and 0.638 ms for mhc_post + ttnn.matmul + mhc_pre_xing_pack; stats vs that unfused path: projection <= 2.3e-6 rel, sum of squares <= 1.2e-7 (6 cases, tests/unit/test_mhc_post_stats.py). deepseek_v41_flash_d_p (MHC_FUSED=on, chunk 53248-55296): ffn_hc 3.2 -> 1.44 ms a chunk (CHANGELOG.md change 7).
+- Regression after change 7, option off: unit + golden + model cases 382 passed (164 + 208 + 2 recorded + 8 new).
+- bf16 X with `stats_weight` (CHANGELOG 9), deepseek_v41_flash_d_p P.20 (2x2, chunk 53248-55296, plain profile, BF16_ACTIVATIONS on vs off): attn_residual 2.50 -> 1.80 ms, ffn_residual 2.87 -> 2.44 ms a chunk; X' = one nearest rounding (ties away) of the fp32-X call's X', the projection of bf16(X') vs float64 4.7e-3 at HiFi2 (the fp32-X call's own 7.3e-3; tests/unit/test_mhc_post_bf16_streams.py).
+
+- `collapse_pre` (P.34, 8x4 Galaxy, [160, 5120] bf16 a chip, 110 cores): bit-identical to mhc_post(stats_weight=) + mhc_pre_xing (tests/unit/test_mhc_post_collapse.py, 8 passed); the model's A/B (POST_COLLAPSE off / on) is in deepseek_v41_flash_d_p's results/P.34.json.
+- `norm_weight` (P.35, 8x4 Galaxy, 110 cores): y_n within one bf16 step of float64 of the formula on the op's own bf16 y, 1.0-1.3e-5 of the elements one step off; X' / hc bit-identical to the call without it (tests/unit/test_mhc_post_norm.py, 6 passed); traced device time a call 134.4 -> 139.4 us with the norm (the rms_norm it replaces: 18.7 us); the model's A/B (NORM_IN_MHC off / on) in deepseek_v41_flash_d_p's results/P.35.json.
+- `feed_output` (P.36, 8x4 Galaxy, 110 cores incl. 2 or 4 ports, FABRIC_2D): feed_output bit-identical to the column blocks of the op's own y (and to stock all_to_all_async_generic of y), X' / stats / hc bit-identical to the call without it, at [160, 5120], [32, 5120], [1280, 5120], [640, 1280] (blocks straddle the chips' blocks), [64, 640], links 1 and 2, 5 repeated calls on two buffers, FABRIC_2D and FABRIC_2D_TORUS_XY (tests/unit/test_mhc_post_feed.py, 24 passed); [160, 5120] torus, 2 links: host enqueue 109.6 us a call (101.8 without the feed; the all-to-all it replaces 98.4), synced loop 192.1 us (146.7 + 98.0); the model's A/B (FFN_FEED off / on) in deepseek_v41_flash_d_p's results/P.36.json.
+- `fast` (P.83, 8x4 Galaxy, FABRIC_2D_TORUS_XY, [160, 5120] bf16 a chip, 110-core cap, device profiler, slowest chip): 137.6 -> 110.8 us a call without the feed, 179.7 -> 141.0 us with it (2 links); bit-identical X' / y / feed, stats and hc within the bounds above (tests/unit/test_mhc_post_fast.py, 7 cases); the model's A/B (MHC_POST_FAST False / True) in deepseek_v41_flash_d_p's results/P.83.json. What bounds it now: DRAM (~385 GB/s over reads + X' writes), the slowest cores' DRAM service, the root's two BRISC transposes of the hc row and the feed after the norm.
+
+- `v2` (PB.8, 8x4 Galaxy, FABRIC_2D_TORUS_XY, 110-core cap, device profiler, slowest chip, median of 4-6 calls, op probe
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_mhc_post_probe.py MHCP_FAST=v2both): [160, 5120] a chip 111.1 ->
+  102.6 us without the feed, 143-150 -> 138.4 us with it (2 links); [256, 5120] (the packed 8192 chunk) 161.8 -> 158.2 /
+  249.6 -> 240.6 us. Every output bit-identical to `fast` and deterministic over 3 repeats (tests/unit/test_mhc_post_v2.py,
+  8 cases). What bounds it now: no feed, the units' column reads + mix (slowest partial ~87 us); with the feed, the
+  ports' fabric sends (P = 2 bf16 tiles a 4352 B packet; the busy side carries the neighbour's and the far chip's
+  blocks: ~200 tiles a port, ~30-35 us after the units finish).
+
+## Limits
+- `v2`: with `fast` only. Its parts apply where they can: the landing when the feed is on and (packets of the busiest
+  port + one flag page) x P tiles fit min(1 MB, the workers' own CB bytes) (else the y_output staging as without v2);
+  the W segments with one unit a core and RT <= grid rows with enough port-free column segments (else the row-major
+  split), multicast when every segment is one NoC column; the SFPU hc transposes with `norm_weight`. With the feed the
+  ports sit in the grid's last column (bottom up) instead of the last row; y_output is not written for the other chips'
+  blocks (as with the feed before, it is not the feed's result). <= P x 1024 units (one flag word each).
+- `fast`: with `collapse_pre` only (bf16 streams, n <= 4); the W share needs one unit a core and 2 <= RT <= 32 (else each core reads its blocks' W as before); B <= 8 (one transaction id a column); the feed CB takes 16 packet slots a port (16 x P tiles).
+- `collapse_pre`: DeepSeek's coefficient math only (no Xing clamp), bf16 X / F only (the collapse reads the bf16 X' the matmul reads; an fp32 X' would reach the DEST through srcA at TF32), n <= 4, whole rows on the chip (the hc needs the row's complete sums: one row's partials are all on this chip).
+- `norm_weight`: with `collapse_pre` only; B <= 8 column tiles a unit (the plan's maximum); a core keeps all its units' y tiles in L1 until the rstd arrive (max units a core x B bf16 tiles: 16 KB at [160, 5120] on 110 cores, 128 KB at [1280, 5120]); one semaphore increment per unit from its row's root (NB reader args per rooted row); the roots sit on spare cores when the grid has one per row.
+- `feed_output`: with `norm_weight` only; 2D fabric, a group of >= 2 chips along the axis, C % (32 G) == 0, the chip's column block at least one unit wide (C / G >= 32 B); the ports take 2 L cores of the grid (the units split over the rest); the semaphores are the caller's (two global semaphores at 0 over cores that include the ports, used by this op only); a 2D mesh, fabric chip ids < 64, <= 64 chips, groups of <= 8, <= 4 links, the same route pattern in every group; tiles go one per scatter chunk, up to min(4, fabric payload / tile) a packet.
+- TILE only; every tensor DRAM interleaved; rank 2..4 with equal leading dims; C % 32 == 0; n in 1..5 (n*n must fit one tile row); post / comb fp32; fp32 DEST required.
+- The row-weighted split is tuned on Blackhole p150; untested on Wormhole and other harvesting patterns (changelog.md, Perf 2 findings).
+- `stats_weight`: fp32 X (F fp32 or bf16) or bf16 X with bf16 F, n <= 4; one row's partials <= 64; DRAM-bound, its W blocks add ~13 % reads at the 2x2 shape (follow-up: multicast W to the cores of a block); block widths under 8 tiles lose to the per-unit work.
+- Known test failures: none recorded.
+
+## How to call
+```python
+out = ttnn.bringup.mhc_post(y, x, post, comb)                         # glm53 / deepseek_v41 (comb^T)
+out = ttnn.bringup.mhc_post(y, x, post, comb, comb_transposed=False)  # xing40_a4b_d_p/tt/residual.py
+cfg = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, math_approx_mode=False)
+out, row = ttnn.bringup.mhc_post(y, x, post, comb, stats_weight=fn_t, compute_kernel_config=cfg)
+# deepseek_v41_flash_d_p/tt/residual.py:TtHcResidual.fused (row: the next hc step's partial row)
+```
+Tests: `tests/test_mhc_post_ttnn.py` + `tests/cases.py` (model cases), `tests/unit/` (unit suite, C++ parity; `test_mhc_post_stats.py` for stats_weight), `tests/golden/` (eval golden suite).
+
+## Used by
+- glm53_flash_d_p: `tt/mhc_fused.py` (default; `GLM_MHC_IMPL=composite` keeps the op chains); O.1 case.
+- xing40_a4b_d_p: `tt/residual.py`, `comb_transposed=False`, fp32 streams (`XING_RESIDUAL_MIX=addcmul` keeps the op chain); task P.2, case in tests/cases.py.
+- deepseek_v41_flash_d_p: `tt/residual.py` (default `comb_transposed=True`; setting RESIDUAL_MIX=addcmul for the chain); P.14 (setting MHC_FUSED=on): `stats_weight` in `tt/residual.py:TtHcResidual.fused` and `tt/engram_add.py` (the engram add as an identity-comb mhc_post, with stats_weight in the all-device model). P.19 (setting GLUE_FOLD=on): `post_col=4, comb_col=8` on the packed mixes and the bf16 attention / MoE sums as F in `tt/residual.py`. P.20 (setting BF16_ACTIVATIONS=on): bf16 streams with `stats_weight` (tt/residual.py, tt/engram_add.py). P.34 (setting POST_COLLAPSE=on): `collapse_pre` in `tt/residual.py:TtHcResidual._collapse` and `tt/engram_add.py` (the next hc step's hc and y; `tt/mhc.py:TtHcMixes.collapse_kwargs`). P.35 (setting NORM_IN_MHC=on): `norm_weight` / `norm_eps` there (attn_norm / ffn_norm's weight, `tt/mhc.py:TtHcMixes.norm_kwargs`). Model cases for these calls: tests/cases.py (O.1, test_mhc_post_ds41). P.36 (setting FFN_FEED=on): `feed_output` / `feed_semaphores` / `feed_num_links` on ffn_hc's pass (`tt/mhc.py:TtHcMixes.feed_kwargs`, `tt/model.py:_ffn_feed_kwargs`, semaphores `tt/ffn_feed.py`, buffer `tt/moe_block_main_adapter.py:feed_buffer`). P.83 (setting MHC_POST_FAST=True): `fast=True` on every collapse_pre call (`tt/mhc.py:TtHcMixes.collapse_kwargs`: residual.py and engram_add.py). PB.8 (setting MHC_POST_V2=True): `v2=True` there (with fast).
+
+## History
+CHANGELOG.md; codegen worklogs: changelog.md, op_design.md, op_requirements.md, verification_report.md, verifier_report.json, l1_ledger.md, self_reflection.md.

@@ -1,0 +1,488 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""DeepSeek-V4.1 attention of a compressed (ratio 1 / 2) layer (reference/ds41_ref.py:_attention with r > 0;
+inference Attention + sparse_attn) on the SP x TP mesh: the window of tt/attention.py plus the layer's top-k
+compressed rows of its KV source, in ONE sparse_sdpa per chunk.
+
+    keys of position p = window rows [p - 127, p] (as tt/attention.TtWindowAttention) + compressed rows topk[p]
+                         (natural group ids t < (p + 1) // r, -1 = none); MQA: keys = values, 512 wide
+    attn_out = fp8_linear(grouped_wo_a(fp8_qdq(unrope(softmax_sink(q . keys) keys))), wo_b)
+
+Everything but the table and the index list is TtWindowAttention's chain (q: bf16 cast -> wq_b (heads over TP) ->
+RoPE -> x 512^-0.5 -> bf16 -> head -> seq all_to_all; stock ttnn.transformer.sparse_sdpa(attention_sink); back,
+unrope, bf16, grouped wo_a, bf16, wo_b, TP sum; the released code's fp8 quant-dequant steps are not emulated, FIX.8). Difference: q and the table keep the rope tail in the reference's interleaved order (``INTERLEAVED``):
+the compressed rows are stored that way, so no per-chunk transform of the (up to 1 GiB) compressed table is needed;
+q is re-interleaved after its fp32 RoPE and the output de-interleaved before the inverse RoPE (data movement only,
+exact). The scores are the same dot products (summed in another order).
+
+The table (one per chunk, ROW_MAJOR bf16, replicated):
+    [window region (128 carry + S chunk rows, tt/attention._table: writes the chunk's window KV into the served
+     0_window_kv cache first) | compressed rows]
+    (WINDOW_KV_FORMAT=bfp8_blocks, DS41-150, the default: the window region is tt/attention.WindowTables'
+    bfloat8_b blocks, passed as the sdpa fork's kv_window next to the CKV_FORMAT=bfp4_rows history)
+    compressed rows = the KV source's served compressed cache (tt/compressor.TtServedRows, compressed rows, TP-dedup:
+    token g on owner chip q = (g / stripe) % N, local row (g / (N stripe)) stripe + g mod stripe), the local rows of
+    the first nb = ceil((start + S) / S) chunk periods (every group a query of this chunk can pick; the compressor
+    wrote this chunk's groups before), viewed as compressed rows [nb stripe / r, 512], tiled, all_gather over axis 1
+    then axis 0 (chip-linear order q = r TP + c) -> [N nb stripe / r, 512] ROW_MAJOR: the gather's mesh order.
+    Group j -> table row 128 + S + q (nb hs) + b hs + (j mod hs), hs = stripe / r, s = j div hs, q = s mod N,
+    b = s div N: computed on the device from the uint32 top-k with fp32 integer arithmetic (exact below 2^24;
+    floor((x + 1/2) / d) is exact for any divisor d), -1 kept as the sentinel (K-18: fp32 -> int32 -> bitcast).
+The index list per query [window 128 | top-k 512] (640 = 5 k-chunks of 128) uint32 ROW_MAJOR: sparse_sdpa stops at
+the first sentinel (a contiguous tail, sparse_sdpa_reader.cpp), so for starts < 128 (a window with < 128 real rows)
+the list is compacted by ttnn.gather through a load-time permutation per start class (TtCSA.index_tables' idea):
+the real window ids, then the top-k (its own sentinel tail), the rest the window's sentinel. The window part is
+TtWindowAttention's load-time list; the top-k's sentinels are already a tail (indexer: descending score, -inf ->
+0xFFFFFFFF; the reference: ascending ids, -1 past the visible ones).
+
+No host work per chunk: the per-chunk inputs are integers (start, end) picking load-time tables and scalars.
+
+STATIC_TABLES=on (P.21; the alternative since FIX.38, default off): the table above is not rebuilt per chunk. Each KV source keeps ONE persistent
+table per slot (tt/compressor.AttnTable, made with its served compressed cache): [the history in natural order, group
+j at row j, max_seq / r rows | window region 128 + S at base = max_seq / r]. The compressor appends the chunk's
+groups with one slice_write (the replicated natural-order rows it writes into the served cache), a host load of the
+served cache writes the same rows; each compressed layer slice_writes its [carry | chunk] into the window region (the
+source's layers run in order on one queue and reuse it). The index list is [window ids + base (load-time) | the top-k
+ids as they are]: mesh_partition + concat, + the same compaction gather for starts < 128 (INDEXER_TOPK_LOCAL=on, P.8:
+the indexer's top-k is already the chip's own rows, so no mesh_partition). No history gather, no
+[window | history] concat, no fp32 id remap, and the table has one shape in every chunk.
+"""
+
+from __future__ import annotations
+
+import importlib as _importlib
+
+import torch
+
+import ttnn
+
+# DS41-311 (PB.HG): the package attribute fresh after a runner reload
+_importlib.import_module(__package__ + ".history_gather")
+from . import ccl, history_gather
+from .attention import WINDOW, TtWindowAttention, TtWindowCache, WindowTables, _upload, attention_weights
+from .ccl import dealloc
+from .common import DRAM, SP_AXIS, TP_AXIS
+from .compressor import AttnTable, static_tables
+from .cores import sub_cores, sub_cores_tiled, to_rm, to_tile
+from .rope import RopeTable
+from .settings import settings
+
+TOPK_LIMIT = 1 << 24  # ids (and table rows) are exact in fp32 below this
+
+
+class ChunkMemo:
+    """INDEXER_GLUE=on (P.16, glue report item 7): device tensors several layers of a chunk read from one source,
+    computed by the first and reused by the rest, one entry per slot:
+
+        ("comp", kv source)    the KV source's compressed history gathered over the mesh (``_compressed``) and nb:
+                               the source layer's own attention and every reader of it (L3 of L2; L21, L24 of L20)
+        ("index", idx source)  the index list of a shared top-k ([window | top-k rows], ``_index``): L3 = L2's, L21 =
+                               L20's (same top-k, same KV source, same start)
+        ("keys", kv source)    the tiled index keys of a served index-key cache (tt/indexer.py ``_keys``): L24 =
+                               L20's
+
+    Each entry carries the key it was made for (the chunk start, the source cache's write version, its identity);
+    a lookup with another key misses, and a new entry frees the slot's old one. tt/model.py drops a slot after its
+    last reader layer of the chunk (``TtDS41Model.memo_last``) and the top-k store drops the "index" slot of a layer
+    whose top-k is replaced; ``TtDS41Model.begin_chunk`` empties it at every chunk start (FIX.5), so nothing is
+    reused across chunks or across re-runs of one chunk. Per slot (per DS41DeviceState)."""
+
+    def __init__(self):
+        self._d: dict = {}
+
+    def get(self, slot, key):
+        hit = self._d.get(slot)
+        if hit is None or hit[0] != key:
+            return None
+        return hit[1]
+
+    def put(self, slot, key, value) -> None:
+        self.drop(slot)
+        self._d[slot] = (key, value)
+
+    def drop(self, slot) -> None:
+        hit = self._d.pop(slot, None)
+        if hit is None:
+            return
+        v = hit[1]
+        for t in v if isinstance(v, tuple) else (v,):
+            if isinstance(t, ttnn.Tensor) and t.is_allocated():
+                dealloc(t)
+
+    def clear(self) -> None:
+        for slot in list(self._d):
+            self.drop(slot)
+
+
+class SparseIndexTables:
+    """Load-time compaction permutations of the [window 128 | top-k K] index list, per start class < 128 (the class
+    of start >= 128 is the identity): [SP, TP, q_rows, 128 + K] uint32, chip (r, c) its own query rows."""
+
+    def __init__(self, mesh, tables: WindowTables, topk: int):
+        g = tables.geo
+        self.topk, self.width = topk, WINDOW + topk
+        d = g.query_offsets().unsqueeze(-1)  # [SP, TP, q, 1] natural chunk offsets of the chip's queries
+        i = torch.arange(self.width)
+        self.perm = {}
+        for cls in range(0, WINDOW, 32):
+            w = torch.clamp(cls + d + 1, max=WINDOW)  # real window rows of position start + d (start = cls)
+            dump = WINDOW - 1  # a sentinel of the window part (it has one whenever w < 128)
+            perm = torch.where(i < w, i, torch.where(i < w + topk, WINDOW + i - w, torch.full_like(i, dump)))
+            self.perm[cls] = _upload(mesh, perm.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (0, 1))
+
+
+class TtSparseAttention(TtWindowAttention):
+    """attention of a compressed layer. ``__call__(q_resid, kv, start, end, cache, ckv_cache, topk)``: q_resid
+    [1, 1, S/SP, 1280] fp32 and kv [1, 1, S/SP, 512] bf16 (row-split, TP-replicated, natural blocks of
+    positions [start, start + S)), end = actual_end, ``cache`` the layer's TtWindowCache (written), ``ckv_cache``
+    the KV source's served compressed cache (tt/compressor.TtServedRows, read; already holding this chunk's groups
+    when the layer is its own source), topk [1, 1, S/SP, K] uint32 ROW_MAJOR (row-split, TP-replicated; group ids,
+    0xFFFFFFFF = none) or the chip's own rows [1, 1, q_rows, K] (INDEXER_TOPK_LOCAL=on, P.8) -> attn_out [1, 1, S/SP, H/TP] fp32. Does not consume its inputs.
+    """
+
+    INTERLEAVED = True
+
+    def __init__(self, mesh, cfg, w: dict, rope: RopeTable, tables: WindowTables, sparse: SparseIndexTables):
+        super().__init__(mesh, cfg, w, rope, tables)
+        self.sparse = sparse
+        self.static = static_tables()  # STATIC_TABLES=on (P.21): the KV source's persistent table (``_static``)
+        # HISTORY_GATHER (STATIC_TABLES=off): how ``_compressed`` gathers the history. rows (P.74): one whole-mesh
+        # high_bw_all_gather from the served slab into the persistent buffer (tt/history_gather.py); rows_axes (P.73):
+        # the sliced rows gathered as ROW_MAJOR rows over TP then SP (no tilize / untilize); tiles: P.19 / P.72
+        self.gather = settings.get("HISTORY_GATHER")
+
+    # ------------------------------------------------------------------ parts
+    def _gather_mesh(self, t: ttnn.Tensor, dedup: bool) -> ttnn.Tensor:
+        """[1, 1, n, w] TILE per chip -> its copies gathered in chip-linear order (TP then SP when ``dedup``, else
+        over SP only)."""
+        g = self.geo
+        out = t
+        if dedup and g.tp > 1:
+            out = ccl.all_gather(out, 2, TP_AXIS)
+        if g.sp > 1:
+            nxt = ccl.all_gather(out, 2, SP_AXIS)
+            if out is not t:
+                dealloc(out)
+            out = nxt
+        return out
+
+    @property
+    def gather_rows(self) -> bool:
+        """(P.73 tests: True = a row gather, False = tiles)"""
+        return self.gather != "tiles"
+
+    @gather_rows.setter
+    def gather_rows(self, on: bool) -> None:
+        loaded = settings.get("HISTORY_GATHER")  # (rows needs the buffer its caches acquired at build: else rows_axes)
+        self.gather = "tiles" if not on else (loaded if loaded != "tiles" else "rows_axes")
+
+    def _compressed(self, ckv_cache, start: int) -> tuple:
+        """The KV source's compressed rows of the first nb chunk periods: [1, 1, owners x stride, 512] bf16
+        ROW_MAJOR, replicated, owner q's rows at q x stride (the gather's mesh order); returns (rows, nb, stride).
+        HISTORY_GATHER=rows: rows is a history_gather.Held (the persistent buffer, never freed by the caller) and
+        stride the slab's rows; else a tensor of the chunk's own (stride nb hs, the rows exactly)."""
+        g = self.geo
+        r, stripe = ckv_cache.ratio, ckv_cache.stripe
+        assert ckv_cache.width == self.d and ckv_cache.tok_width * r == self.d, (ckv_cache.width, self.d)
+        nb = -(-(start + g.chunk) // g.chunk)
+        loc = nb * stripe
+        assert loc <= ckv_cache.rows, f"chunk [{start}, {start + g.chunk}) past the compressed cache ({ckv_cache.rows})"
+        if self.gather == "rows":  # P.74: from the served slab into the persistent buffer, owner q at q R
+            if ckv_cache.history_rows is None:  # (never expected: the state holds it for every source gathered in
+                # its mode, TtDS41Model.hold_history; e.g. a state not the active one at a mode switch)
+                history_gather.LATE.append((id(ckv_cache), start))
+                ckv_cache.hold_history(True)
+            buf, stride = history_gather.gather(ckv_cache, loc // r, start)
+            return history_gather.Held(buf), nb, stride
+        hs = stripe // r
+        sl = ckv_cache.slab.slice_rows(0, loc // r)  # [1, 1, loc / r, 512] compressed rows
+        if self.gather == "rows_axes":  # P.73: the rows gathered as stored, the table as it lands
+            gat = self._gather_mesh(sl, ckv_cache.tp_axis is not None)
+            if gat is not sl:
+                dealloc(sl)
+            return gat, nb, nb * hs
+        tl = to_tile(sl, memory_config=DRAM)  # (P.73: capped also where nb x 80 rows pad, DS41-289)
+        dealloc(sl)
+        gat = self._gather_mesh(tl, ckv_cache.tp_axis is not None)
+        if gat is not tl:
+            dealloc(tl)
+        rm = to_rm(gat, memory_config=DRAM)
+        dealloc(gat)
+        return rm, nb, nb * hs
+
+    def _topk_rows(self, topk: ttnn.Tensor, ckv_cache, stride: int, offset: int) -> ttnn.Tensor:
+        """The chip's queries' top-k group ids [1, 1, q_rows, K] uint32 ROW_MAJOR -> table rows (same shape and
+        dtype; 0xFFFFFFFF kept): offset + q stride + b hs + j mod hs, s = j div hs, q = s mod N, b = s div N
+        (stride: an owner's rows in the table, nb hs for a gather of exactly nb chunk periods)."""
+        hs = ckv_cache.stripe // ckv_cache.ratio  # compressed rows per owner stripe
+        n_own = ckv_cache.owners
+        assert offset + n_own * stride < TOPK_LIMIT
+
+        f32 = dict(dtype=ttnn.float32, memory_config=DRAM)
+
+        def op(fn, *args):  # fn(*args) fp32, consuming the tensor arguments made here
+            out = fn(*args, **f32, sub_core_grids=sub_cores(x))  # (FIX.36: capped, rule 18)
+            for t in args:
+                if isinstance(t, ttnn.Tensor) and t is not x:
+                    dealloc(t)
+            return out
+
+        def floor_div(v, d):  # floor((v + 1/2) / d): exact for integers v >= 0 and any divisor d
+            y = op(ttnn.multiply, ttnn.add(v, 0.5, **f32, sub_core_grids=sub_cores(v)), 1.0 / d)
+            out = ttnn.floor(y, memory_config=DRAM, sub_core_grids=sub_cores(y))
+            dealloc(y)
+            return out
+
+        tiled = topk.layout != ttnn.TILE_LAYOUT  # K-1: to_layout to the same layout returns its input (not ours)
+        tl = (
+            ttnn.to_layout(topk, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(topk))
+            if tiled
+            else topk
+        )
+        x = ttnn.typecast(  # (P.73: the bitcasts capped too, rule 18; they ran on 120 cores)
+            ttnn.bitcast(tl, ttnn.int32, sub_core_grids=sub_cores(tl)),
+            ttnn.float32,
+            memory_config=DRAM,
+            sub_core_grids=sub_cores(),
+        )  # none -> -1.0
+        if tiled:
+            dealloc(tl)
+        s = floor_div(x, hs)
+        u = op(ttnn.subtract, x, op(ttnn.multiply, ttnn.clone(s, memory_config=DRAM), float(hs)))  # j mod hs
+        b = floor_div(s, n_own)
+        q = op(ttnn.subtract, s, op(ttnn.multiply, ttnn.clone(b, memory_config=DRAM), float(n_own)))  # s mod N
+        row = op(ttnn.add, op(ttnn.add, u, float(offset)), op(ttnn.multiply, b, float(hs)))
+        row = op(ttnn.add, row, op(ttnn.multiply, q, float(stride)))
+        valid = ttnn.ge(x, 0.0, dtype=ttnn.float32, sub_core_grids=sub_cores(x))
+        out = ttnn.where(valid, row, -1.0, sub_core_grids=sub_cores(valid))
+        for t in (x, row, valid):
+            dealloc(t)
+        i32 = ttnn.typecast(
+            out, ttnn.int32, memory_config=DRAM, sub_core_grids=sub_cores_tiled(out)
+        )  # -1 stays -1 (K-18)
+        dealloc(out)
+        u32 = ttnn.bitcast(i32, ttnn.uint32, sub_core_grids=sub_cores(i32))
+        rm = to_rm(u32, memory_config=DRAM)
+        if u32 is not i32:
+            dealloc(u32)
+        dealloc(i32)
+        return rm
+
+    def _mine(self, topk: ttnn.Tensor) -> ttnn.Tensor:
+        """The chip's own query rows [1, 1, q_rows, K] of a top-k: as given when it is already per chip
+        (INDEXER_TOPK_LOCAL=on, P.8: the indexer did not gather it; or TP == 1), else mesh_partition of the
+        row-split, TP-replicated [1, 1, S/SP, K] (the gathered layout; component harnesses)."""
+        g = self.geo
+        rows = topk.shape[-2]
+        if g.tp == 1 or rows == g.q_rows:
+            return topk
+        assert rows == g.w, (rows, g.w, g.q_rows)
+        return ttnn.mesh_partition(topk, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
+
+    def _index(self, topk: ttnn.Tensor, ckv_cache, stride: int, start: int, cls: int | None = None) -> ttnn.Tensor:
+        """The chip's index list [1, 1, q_rows, 128 + K] uint32 ROW_MAJOR: [window | top-k rows], sentinels last.
+        ``cls``: the window's start class (default the start's; DECODER_SKIP=exact, P.30: the cache's carry_class)."""
+        g = self.geo
+        assert topk.shape[-1] == self.sparse.topk, (topk.shape, self.sparse.topk)
+        mine = self._mine(topk)
+        rows = self._topk_rows(mine, ckv_cache, stride, WINDOW + g.chunk)
+        if mine is not topk:
+            dealloc(mine)
+        cls = g.start_class(start) if cls is None else cls
+        src = ttnn.concat([self.tables.index[cls], rows], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
+        dealloc(rows)
+        if cls == WINDOW:  # every window full: the top-k's own sentinel tail ends the list
+            return src
+        out = ttnn.gather(src, -1, self.sparse.perm[cls])
+        dealloc(src)
+        return out
+
+    def _index_region(self, topk: ttnn.Tensor, ckv_cache, stride: int, cls: int, win=None) -> ttnn.Tensor:
+        """STATIC_TABLES=off with the per-chip bf16 window region (WINDOW_KV_FORMAT=bf16_tiles, P.72): the chip's
+        index list [1, 1, q_rows, 128 + K] uint32 ROW_MAJOR = [region window ids | top-k rows of the gathered history
+        (offset 0)], not compacted (the fork's BF16 kv_window takes the two sentinel tails apart). ``win`` (P.77,
+        HISTORY_FORMAT=bfp4 without a region): other window ids (the [carry | chunk] table's, as kv_window)."""
+        assert topk.shape[-1] == self.sparse.topk, (topk.shape, self.sparse.topk)
+        mine = self._mine(topk)
+        rows = self._topk_rows(mine, ckv_cache, stride, 0)
+        if mine is not topk:
+            dealloc(mine)
+        win = self.tables.region_index[cls] if win is None else win
+        out = ttnn.concat([win, rows], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
+        dealloc(rows)
+        return out
+
+    def _index_static(self, topk: ttnn.Tensor, table: AttnTable, start: int, cls: int | None = None) -> ttnn.Tensor:
+        """STATIC_TABLES=on: the chip's index list [1, 1, q_rows, 128 + K] uint32 ROW_MAJOR = [window ids + base |
+        the top-k group ids as they are] (group j is table row j; 0xFFFFFFFF stays the sentinel), compacted for
+        starts < 128 as ``_index``."""
+        g = self.geo
+        assert topk.shape[-1] == self.sparse.topk, (topk.shape, self.sparse.topk)
+        mine = self._mine(topk)
+        cls = g.start_class(start) if cls is None else cls
+        # WINDOW_KV_FORMAT=bfp8_tiles (P.18): the window ids in the chip's own region
+        # (a history-only table, base 0, CKV_FORMAT=bfp4_rows: this layer's own window lists, the geometry of its chunk:
+        # the decoder tail's (P.31) reads its KV source's table, made by the main chunk)
+        if self.region is not None:
+            win = self.tables.region_index[cls]
+        else:
+            win = self.tables.index[cls] if table.base == 0 else table.index[cls]
+            assert table.base == 0 or self.tables is table.tables, "a bf16 table's window lists are its own chunk's"
+        src = ttnn.concat([win, mine], dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
+        if mine is not topk:
+            dealloc(mine)
+        # every window full: the top-k's own sentinel tail ends the list; CKV_FORMAT=bfp4_rows: ROW_BFP4 takes the
+        # window's and the top-k's sentinel tails apart (no compaction), as the fork's BF16 kv_window (P.38: a
+        # history-only bf16 table, the window a tensor of its own)
+        if cls == WINDOW or table.bfp4 or table.base == 0:
+            return src
+        out = ttnn.gather(src, -1, self.sparse.perm[cls])
+        dealloc(src)
+        return out
+
+    def _static(self, q_resid, kv, start, end, cache, ckv_cache, topk, memo, sources) -> ttnn.Tensor:
+        """STATIC_TABLES=on (P.21): the attention over the KV source's persistent table (tt/compressor.AttnTable):
+        this layer's [carry | chunk] window rows slice_written into its window region, the history already there
+        (the compressor appended this chunk's groups, a host load the prefix)."""
+        g = self.geo
+        table = ckv_cache.table
+        assert self.INTERLEAVED, "the table holds the rows as stored (interleaved rope tail)"
+        assert table is not None, "STATIC_TABLES=on: the KV source's compressed cache was built without its table"
+        cos, sin = self._rope_rows(start, g.chunk)
+        # WINDOW_KV_FORMAT=bfp8_tiles (P.18): this layer's per-chip region [carry | own rows] (tt/attention)
+        if self.region is not None:
+            # (bfp8_tiles: CKV_FORMAT=bfp4_rows; bf16_tiles: either, P.38: a bf16 region beside a bf16 history)
+            assert table.bfp4 or self.region.dtype == ttnn.bfloat16, "WINDOW_KV_FORMAT=bfp8_tiles: CKV_FORMAT=bfp4_rows"
+            assert table.base == 0, "the window region beside a history-only table (tt/compressor.history_only)"
+            self._window_region(kv, start, end, cache)
+            window = self.region
+        # WINDOW_KV_FORMAT=bfp8_blocks: [carry | chunk] into the shared window blocks (tt/attention.WindowTables)
+        elif self.win8 and self._packs(start):  # CKV_PACK_BEFORE_GATHER=on (P.11): each SP row packs its own rows
+            assert table.bfp4, "WINDOW_KV_FORMAT=bfp8_blocks reads the window as kv_window: CKV_FORMAT=bfp4_rows"
+            self._window_packed(kv, start, end, cache)
+            window = self.tables.window_blocks()
+        else:
+            carry, kv_rm = self._window_rows(kv, start, end, cache, blocks=self.win8)
+            if self.win8:
+                assert table.bfp4, "WINDOW_KV_FORMAT=bfp8_blocks reads the window as kv_window: CKV_FORMAT=bfp4_rows"
+                window = self.tables.window_blocks()
+            elif self.tables.window_rows is not None:  # bf16_tiles where a chip owns < 128 rows (P.38): the rows as
+                # the fork's kv_window (bf16 rows; with a bf16 or a bfp4_rows history)
+                window = self.tables.put_window_rows(carry, kv_rm)
+            else:
+                table.put_window(carry, kv_rm)
+                window = table.win
+            self._release_window(carry, kv_rm, cache, start, end)
+        shared = memo is not None and sources is not None
+        cls = cache.carry_class(start)  # (DECODER_SKIP=exact, P.30: 0 when the carry rows were skipped)
+        ikey = (start, id(ckv_cache), ckv_cache.version, cls)
+        index = memo.get(("index", sources[1]), ikey) if shared else None
+        if index is None:
+            index = self._index_static(topk, table, start, cls)
+            if shared:
+                memo.put(("index", sources[1]), ikey, index)
+        q_rm = self._q(q_resid, cos, sin)
+        o = self._sdpa(q_rm, table.buf, index, window=window)
+        dealloc(q_rm)
+        if not shared:
+            dealloc(index)
+        out = self._out(o, cos, sin)
+        dealloc(o)
+        self.rope.free(cos, sin)
+        return out
+
+    def __call__(
+        self,
+        q_resid,
+        kv,
+        start: int,
+        end: int | None,
+        cache: TtWindowCache,
+        ckv_cache,
+        topk,
+        memo: ChunkMemo | None = None,
+        sources: tuple[int, int] | None = None,
+    ) -> ttnn.Tensor:
+        """``memo`` / ``sources`` (INDEXER_GLUE=on, P.16): the chunk's ChunkMemo and this layer's (KV source, index
+        source) layers: the gathered compressed history and the index list are taken from it when an earlier layer
+        of the chunk made them for the same source, start and cache version."""
+        g = self.geo
+        s = self.chunk_of(q_resid.shape[-2])
+        assert s == g.chunk, f"chunk of {s} rows; the window tables were built for {g.chunk}"
+        end = start + s if end is None else int(end)
+        if self.static:
+            return self._static(q_resid, kv, start, end, cache, ckv_cache, topk, memo, sources)
+        assert not self.win8, "WINDOW_KV_FORMAT=bfp8_blocks needs STATIC_TABLES=on"
+        # WINDOW_KV_FORMAT=bf16_tiles (P.72: the P.38 default): the layer's per-chip bf16 region is the window, the
+        # gathered history the table, read by the sdpa fork's BF16 kv_window (as _static with a history-only table)
+        region = self.region is not None
+        assert not region or self.region.dtype == ttnn.bfloat16, "WINDOW_KV_FORMAT=bfp8_tiles needs STATIC_TABLES=on"
+        cos, sin = self._rope_rows(start, s)
+        if region:
+            self._window_region(kv, start, end, cache)
+            window = self.region
+        else:
+            window = self._table(kv, start, end, cache)  # [1, 1, 128 + S, 512], interleaved tail (INTERLEAVED)
+        shared = memo is not None and sources is not None
+        ckey = (start, id(ckv_cache), ckv_cache.version)
+        hit = memo.get(("comp", sources[0]), ckey) if shared else None
+        if hit is not None and isinstance(hit[0], history_gather.Held) and not history_gather.holds(ckv_cache, start):
+            hit = None  # (HISTORY_GATHER=rows: another source of this size gathered into the buffer since; never
+            # expected, the readers of a source run before the next source: tt/history_gather.py)
+        if hit is None:
+            comp, nb, stride = self._compressed(ckv_cache, start)
+            if shared:
+                memo.put(("comp", sources[0]), ckey, (comp, nb, stride))
+        else:
+            comp, nb, stride = hit
+        held = isinstance(comp, history_gather.Held)  # (the persistent buffer: never freed here)
+        comp_t = comp.tensor if held else comp
+        # HISTORY_FORMAT=bfp4 (P.77): the history as 320 B bfloat4_b records, read by the sdpa fork's ROW_BFP4 with the
+        # window a bf16 kv_window (the region, or without one the [carry | chunk] rows): never concatenated
+        rec = comp_t.dtype == ttnn.uint8
+        if region or rec:
+            table = comp_t
+        else:
+            table = ttnn.concat([window, comp_t], dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
+            dealloc(window)
+            if not shared and not held:
+                dealloc(comp_t)
+            if held:  # the [window | history] concat: the history's rows move by the window's 128 + S
+                held = False
+        cls = cache.carry_class(start)  # (DECODER_SKIP=exact, P.30)
+        index = memo.get(("index", sources[1]), ckey + (cls, region, rec)) if shared else None
+        if index is None:
+            if region:
+                index = self._index_region(topk, ckv_cache, stride, cls)
+            elif rec:  # (P.77: [window ids of the [carry | chunk] rows | top-k rows of the records, offset 0])
+                index = self._index_region(topk, ckv_cache, stride, cls, win=self.tables.index[cls])
+            else:
+                index = self._index(topk, ckv_cache, stride, start, cls)
+            if shared:
+                memo.put(("index", sources[1]), ckey + (cls, region, rec), index)
+        q_rm = self._q(q_resid, cos, sin)
+        o = self._sdpa(q_rm, table, index, window=window if (region or rec) else None)
+        dealloc(q_rm)
+        if rec and not region:
+            dealloc(window)
+        if not (region and shared) and not held:
+            dealloc(table)
+        if not shared:
+            dealloc(index)
+        out = self._out(o, cos, sin)
+        dealloc(o)
+        self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
+        return out
+
+
+def build_sparse_attention(mesh, ck, cfg, layer: int, max_seq: int, chunk: int, rope=None, tables=None, sparse=None):
+    """The attention of a compressed layer (its own rope table / window tables / index permutations unless shared
+    ones are given)."""
+    from .kv import rope_freqs
+
+    assert cfg.ratio(layer), f"layer {layer} is window-only: tt/attention.build_attention"
+    rope = rope or RopeTable(mesh, rope_freqs(cfg, layer), max_seq)
+    tables = tables or WindowTables(mesh, chunk)
+    sparse = sparse or SparseIndexTables(mesh, tables, cfg.index_topk)
+    return TtSparseAttention(mesh, cfg, attention_weights(ck, layer), rope, tables, sparse)

@@ -1,0 +1,45 @@
+{
+ "used": [
+  {
+   "id": "DS41-14",
+   "how": "kept attempt 1's fp8 structural checks (grid + mismatch <= 0.15); the mutation sweep shows noise1e-2 caught only by them",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "K-36",
+   "how": "structural checks of the quantized output kept instead of tightening the calibrated rel limits",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "read the mutation run's first 'reference FAIL pcc' block as the precompile collect pass and judged the real pass",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a detail section in known_issues_detail.md must be titled exactly like the bullet's bold title without the id (knowledge/check.py:134-136), including any status prefix such as '(RESOLVED ...)'"
+ ],
+ "cited_only": [
+  "DS41-12"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.kv",
+  "role": "test",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T13:16:27",
+  "head": "6a5e1945567",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.kv.test.2.json"
+  ]
+ }
+}

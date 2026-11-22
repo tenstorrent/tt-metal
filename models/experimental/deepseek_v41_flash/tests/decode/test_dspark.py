@@ -37,7 +37,7 @@ from models.experimental.deepseek_v4_flash.tt.common import _trace_capture_guard
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
+from tt_py_test_utils_common.tensor_prefetcher import tensor_prefetcher_session
 
 # Stage 0 attention sees only the reference's own inputs and caches, so it is held tight at every frontier.
 ATTENTION_PCC = 0.999

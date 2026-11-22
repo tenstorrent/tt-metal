@@ -1,0 +1,75 @@
+{
+ "used": [
+  {
+   "id": "DS41-183",
+   "how": "every device run (two ladder measures, the cache warmer, the final measure) started with devjob start / wait, never under a tool timeout, never killed",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-194",
+   "how": "BREADCRUMBS.md had 1 byte left under the 512000-byte hook limit: P.27's stub heading merged into '## FIX.20/P.27/28: known_issues_detail.md' (same size); P.28's section went to known_issues_detail.md",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-198",
+   "how": "the value under test: confirmed on all 40 layers (6.81-7.75 % changed, worst ||dW||/||W|| 0.065-0.107 vs bfp4 16.36-17.73 % / 0.118-0.178) and on rung last (err_final_hidden 0.140 vs bfp4 0.190)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-55",
+   "how": "pre-commit run on every changed file before the final measure, so no formatter rewrote a file after it",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "bringup/hooks.py:1074 devfmt_component emulates the routed-expert weights as bfp4 RNE only when EXPERTS_IMPL == 'bfp4' and as exact otherwise: under bfp4_mse (and bfp8_down4's w2) the F137 CPU diagnosis models exact weights. Fix outside P.28's paths: tt/experts.py:expert_weight_round() per matrix (now DS41-200)",
+  "a cold expert cache for a new EXPERTS_IMPL value takes ~1.7 h over 40 layers, past pytest's 3600 s at rung last: warm it first (now DS41-199, tests/perf/test_experts_cache_warm.py); P.29 (bfp8_down4, 1 of 40 layers cached) needs the same",
+  "P.27 committed EXPERTS_IMPL's default as bfp8 although its brief and the overseer said 'default stays bfp4' (F241): the perf brief template's 'make the change the default' contradicts the task details; P.28 set it back",
+  "whether a knowledge-file edit (known_issues*.md, repo_map.md) after a measure makes the A/B 'on' run stale: it does not (P.28's measure after those edits printed 'reused (same code and switch)'); worth one line, it cost a precautionary re-run"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: no op or weight shape changed; bfp4_mse has the same bytes and layout as bfp4 (same .lay hash and file sizes)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; only settings.py's default and a test"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression or unit suite run; only the new cache warmer (load-only) and the orchestrator's measure of the ladder rung last"
+  }
+ ],
+ "cited_only": [
+  "DS41-199",
+  "DS41-200"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.28",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-03T15:24:32",
+  "head": "2853205d022",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.28.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_experts_cache_warm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

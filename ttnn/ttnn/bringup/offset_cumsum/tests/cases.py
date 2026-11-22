@@ -1,0 +1,158 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""One case per distinct ttnn.bringup.offset_cumsum call a model makes (bringup-fork-tests skill). Append only; never
+edit or loosen another model's case. Shapes are per device, exactly as captured (fork_calls.json)."""
+
+CASES = [
+    {
+        # MiMo-V2.6 routed experts on a 1x4 mesh: cluster_axis 0 has one device, so each device is its own group.
+        "id": "mimo_v2_6_d_p-1x4-axis0-e256-epc64",
+        "model": "mimo_v2_6_d_p",
+        "task": "O.1",
+        "sig": "70b8c49b0a",
+        "mesh": [1, 4],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "hist_shape": [256],  # per device, UINT32 ROW_MAJOR DRAM interleaved (masked_bincount output)
+        "hist": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        # Histogram values: a device's 5120 tokens x top-8 over its 64 local experts (the others 0), drawn at
+        # random below; the op is exact for any count, so the range only has to stay realistic.
+        "max_count": 5120,
+        "local_experts_only": True,
+        "cluster_axis": 0,
+        "num_links": 1,
+        "experts_per_chip": 64,
+        "memory_config": "DRAM",
+        "seed": 0,
+        "exact": True,
+    },
+    {
+        # Gemma-4 A4B routed experts on a 1x4 mesh: cluster_axis 0 has one device, so each device is its own group.
+        "id": "gemma4_a4b_d_p-1x4-axis0-e128-epc32",
+        "model": "gemma4_a4b_d_p",
+        "task": "O.1",
+        "sig": "e9fc860f6a",
+        "mesh": [1, 4],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "hist_shape": [128],  # per device, UINT32 ROW_MAJOR DRAM interleaved (masked_bincount output)
+        "hist": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        # A device's 5120 tokens x top-8 over its 32 local experts (the others 0); any count is exact.
+        "max_count": 5120,
+        "local_experts_only": True,
+        "cluster_axis": 0,
+        "num_links": 1,
+        "experts_per_chip": 32,
+        "memory_config": "DRAM",
+        "seed": 0,
+        "exact": True,
+    },
+    {
+        # ERNIE-4.5 (21B-A3B) routed experts on a 1x4 mesh: cluster_axis 0 has one device, so each device is its own
+        # group. The model opens its mesh with FABRIC_1D_RING (models/demos/ernie45_d_p/tt/common.py DEVICE_PARAMS).
+        "id": "ernie45_d_p-1x4-axis0-e64-epc16",
+        "model": "ernie45_d_p",
+        "task": "O.1",
+        "sig": "3dc366d176",
+        "mesh": [1, 4],
+        "device_params": {"fabric_config": "FABRIC_1D_RING", "l1_small_size": 24576},
+        "hist_shape": [64],  # per device, UINT32 ROW_MAJOR DRAM interleaved (masked_bincount output)
+        "hist": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        # A device's 5120 tokens x top-6 over its 16 local experts (the others 0); any count is exact.
+        "max_count": 5120,
+        "local_experts_only": True,
+        "cluster_axis": 0,
+        "num_links": 1,
+        "experts_per_chip": 16,
+        "memory_config": "DRAM",
+        "seed": 0,
+        "exact": True,
+    },
+    {
+        # MiMo-V2.6 routed experts on a 2x2 mesh: cluster_axis 0 has 2 devices, so each mesh column is a dispatch group
+        # of 2 chips (histograms all_gathered over the rows, fabric on); column c holds experts 128c .. 128c + 127.
+        "id": "mimo_v2_6_d_p_2x2-2x2-axis0-e256-epc64",
+        "model": "mimo_v2_6_d_p_2x2",
+        "task": "O.1",
+        "sig": "5ac677f17a",
+        "mesh": [2, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "hist_shape": [256],  # per device, UINT32 ROW_MAJOR DRAM interleaved (masked_bincount output)
+        "hist": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        # A device's 2560 tokens x top-8 over its group's 128 experts (the others 0); any count is exact.
+        "max_count": 2560,
+        "local_experts_only": True,
+        "cluster_axis": 0,
+        "num_links": 1,
+        "experts_per_chip": 64,
+        "memory_config": "DRAM",
+        "seed": 0,
+        "exact": True,
+    },
+    {
+        # GLM-5.3-Flash routed experts on a 2x2 mesh: cluster_axis 0 has 2 devices, so each mesh column is a dispatch
+        # group of 2 chips (histograms all_gathered over the rows, fabric on); column c holds experts 144c .. + 143.
+        "id": "glm53_flash_d_p-2x2-axis0-e288-epc72",
+        "model": "glm53_flash_d_p",
+        "task": "O.1",
+        "sig": "97cbac374b",
+        "mesh": [2, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "hist_shape": [288],  # per device, UINT32 ROW_MAJOR DRAM interleaved (masked_bincount output)
+        "hist": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        # A device's 2560 tokens x top-8 over its group's 144 experts (the others 0); any count is exact.
+        "max_count": 2560,
+        "local_experts_only": True,
+        "cluster_axis": 0,
+        "num_links": 1,
+        "experts_per_chip": 72,
+        "memory_config": "DRAM",
+        "seed": 0,
+        "exact": True,
+    },
+    {
+        # Hy4 (preview) routed experts on a 2x2 mesh: cluster_axis 0 has 2 devices, so each mesh column is a dispatch
+        # group of 2 chips (histograms all_gathered over the rows, fabric on); column c holds experts 128c .. + 127.
+        # Same op arguments as the mimo_v2_6_d_p_2x2 case (same captured sig), recorded for this model.
+        "id": "hy4_preview_d_p-2x2-axis0-e256-epc64",
+        "model": "hy4_preview_d_p",
+        "task": "O.1",
+        "sig": "5ac677f17a",
+        "mesh": [2, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "hist_shape": [256],  # per device, UINT32 ROW_MAJOR DRAM interleaved (masked_bincount output)
+        "hist": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        # A device's 2560 tokens x top-8 over its group's 128 experts (the others 0); any count is exact.
+        "max_count": 2560,
+        "local_experts_only": True,
+        "cluster_axis": 0,
+        "num_links": 1,
+        "experts_per_chip": 64,
+        "memory_config": "DRAM",
+        "seed": 1,
+        "exact": True,
+    },
+    {
+        # Xing4.0: offsets over each mesh column's dispatch group (cluster_axis 0, 4 chips) of the 4x2 mesh; hist [64]
+        # uint32 RM DRAM per device, counting only the column's 32 experts; a chip's 1280 tokens pick an expert at
+        # most once (max count 1280).
+        "id": "xing40_a4b_d_p-4x2-axis0-e64-epc8",
+        "model": "xing40_a4b_d_p",
+        "task": "O.1",
+        "sig": "803a41809b",
+        "mesh": [4, 2],
+        "submesh_ok": True,  # F256: passed on a Galaxy 8x4 subset (fork suite, 2026-11-06)
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "hist_shape": [64],
+        "hist": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        "max_count": 1280,
+        "local_experts_only": True,
+        "cluster_axis": 0,
+        "num_links": 1,
+        "experts_per_chip": 8,
+        "memory_config": "DRAM",
+        "seed": 0,
+        "exact": True,
+    },
+]

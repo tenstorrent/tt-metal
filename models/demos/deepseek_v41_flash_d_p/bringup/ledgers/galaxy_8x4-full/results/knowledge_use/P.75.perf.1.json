@@ -1,0 +1,72 @@
+{
+ "used": [
+  {
+   "id": "DS41-216",
+   "how": "the tail gather reuses ccl._sems(mesh, axis): one pair per ring geometry, made at load with the buffers",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-149",
+   "how": "gather returns the kept persistent tensor, never the op's new wrapper; the 4-D slice_write views are made once at acquire",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-289",
+   "how": "checked slice.cpp needs_rm_composite_input: it keys on the whole slab's H (engine slab 16320 rows, own slabs lcm-rounded), so the tail slice at a 16-row offset stays on the capped native path",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-230",
+   "how": "the engram worker's host write is ordered after the prefetch gathers enqueued before it on CQ0: layer 1 still sees its rows; the gathers fill the idle wait",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "high_bw_all_gather's full-mesh mode validates the input's TensorTopology: a ttnn.slice of the ND-sharded slab loses the dim-2 sharding; update_tensor_topology(slab topology) fixes it (DS41-291)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated: the tail gather moves exactly the chunk's own 1 or 2 periods an owner"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "no Python-built op added: stock high_bw_all_gather, ttnn.slice, ttnn.bringup.slice_write (C++ fork, max_grid)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only the new model test tests/test_history_gather_hide_model.py and the gate's model-level units"
+  }
+ ],
+ "cited_only": [
+  "DS41-291"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.75",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-18T17:20:27",
+  "head": "83929f1e10f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.75.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_history_gather_hide_model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/history_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

@@ -35,7 +35,7 @@ from models.experimental.deepseek_v4_flash.tt.decode.attention import (
 )
 from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
+from tt_py_test_utils_common.tensor_prefetcher import tensor_prefetcher_session
 
 TP_SIZE = 4
 SUBMESH_SHAPE = (1, TP_SIZE)

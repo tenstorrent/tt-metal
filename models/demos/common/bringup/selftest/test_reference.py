@@ -1,0 +1,278 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""F3: reference interface, HF parity, chunked + graph-replay check, golden generator and reader. CPU only.
+
+Runs the generic scripts on the synthetic fixture (selftest/fixture_model.py), and reads ERNIE's existing 2k
+golden (read-only) to check the reader against a real golden when it is present on this machine.
+"""
+
+import json
+
+import pytest
+
+from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
+from models.demos.common.bringup.reference import check_hf, check_reference, generate_golden, prompt
+from models.demos.common.bringup.reference.golden import Golden, content_hash
+from models.demos.common.bringup.reference.interface import Step, validate_graph
+from models.demos.common.bringup.selftest.conftest import got
+
+ERNIE_2K = CODE_ROOT / "generated/ernie45_d_p/golden/s4096_c2048"
+
+
+def test_fixture_spec_is_valid(fx):
+    assert Spec.load(fx()).validate() == []
+
+
+def test_hf_parity(fx):
+    check_hf.main(["--spec", fx(), "--seq", "128"])
+    m = got()
+    assert [k for k in m if k.startswith("pcc_hidden_L")] == ["pcc_hidden_L00", "pcc_hidden_L01", "pcc_hidden_L02"]
+    assert min(v for k, v in m.items() if k.startswith("pcc_")) > 0.99999
+    assert m["top1_match_frac"] == 1.0
+
+
+def test_hf_parity_on_truncated_layers(fx):
+    check_hf.main(["--spec", fx(), "--seq", "64", "--num-layers", "2"])
+    assert got()["parity_layers"] == 2 and "pcc_hidden_L02" not in got()
+
+
+def test_chunked_and_graph_replay(fx):
+    check_reference.main(["--spec", fx(), "--seq", "256", "--chunk", "64"])
+    m = got()
+    assert m["pcc_hidden"] > 0.999999 and m["pcc_state_min"] > 0.999999
+    assert m["graph_errors"] == 0 and m["boundaries_missing"] == 0 and m["graph_replay_maxabs"] == 0.0
+
+
+def test_graph_replay_catches_a_graph_that_is_not_the_code(fx):
+    check_reference.main(["--spec", fx(fixture={"broken_graph": True}), "--seq", "256", "--chunk", "64"])
+    assert got()["graph_replay_maxabs"] > 0
+
+
+def test_validate_graph():
+    ok = [Step("a", ("in",), "x"), Step("b", ("in", "x"), "out")]
+    assert validate_graph(ok) == []
+    errs = validate_graph([Step("a", ("y",), "x"), Step("a", ("x",), "x")])
+    assert any("before any step" in e for e in errs) and any("duplicate" in e for e in errs)
+    assert any("overwrites" in e for e in errs) and any("'out'" in e for e in errs)
+
+
+def test_golden_needs_the_canonical_prompt(fx):
+    with pytest.raises(SystemExit, match="canonical prompt"):
+        generate_golden.main(["--spec", fx(), "--rung", "s256"])
+
+
+def test_golden_full_layers(fx):
+    spec_path = fx()
+    prompt.build(Spec.load(spec_path))
+    generate_golden.main(["--spec", spec_path, "--rung", "s256"])
+    assert got()["golden_hash_ok"] == 1 and got()["golden_chunks"] == 4
+    g = Golden.for_rung(Spec.load(spec_path), "s256")
+    assert g.verify() and g.dumped_chunks == [0, 1, 2, 3] and g.layers == [0, 1, 2]
+    assert g.manifest["prompt_sha256"] == prompt.load(Spec.load(spec_path))["sha256"]
+    assert g.tokens().tolist() == prompt.load(Spec.load(spec_path))["token_ids"][:256]
+    assert set(g.layer(2, 1)) == {"in", "attn_norm", "attn_out", "h_mid", "ffn_norm", "mlp_out", "out"}
+    assert g.state(0)["key"].shape == (256, 64) and g.tokens().shape == (256,)
+    assert set(g.model(3)) >= {"embed", "final_norm", "top32_ids", "top32_values", "logits_tail", "tokens"}
+    generate_golden.main(["--spec", spec_path, "--rung", "s256"])  # F75: an existing matching golden is reused
+    assert got()["golden_reused"] == 1 and got()["golden_hash_ok"] == 1
+    (g.dir / "chunk_00/model.safetensors").write_bytes(b"tampered")
+    assert not Golden(g.dir).verify()
+
+
+def test_golden_step_dumps_only_for_the_named_layers(fx):
+    """F159: a full model's goldens store every layer's in / out and state, but the per-step boundaries (the step
+    tests' inputs) only for the representative layers: DeepSeek-V4.1 on galaxy_8x4, 40 layers, ~330 -> ~180 GB."""
+    spec_path = fx()
+    import yaml
+
+    raw = yaml.safe_load(open(spec_path))
+    next(r for r in raw["ladder"] if r["name"] == "s256")["step_dump_layers"] = [1]
+    yaml.safe_dump(raw, open(spec_path, "w"))
+    s = Spec.load(spec_path)
+    assert s.validate() == []
+    prompt.build(s)
+    generate_golden.main(["--spec", spec_path, "--rung", "s256"])
+    g = Golden.for_rung(s, "s256")
+    assert g.verify() and g.manifest["step_dump_layers"] == [1]
+    assert set(g.layer(2, 1)) == {"in", "attn_norm", "attn_out", "h_mid", "ffn_norm", "mlp_out", "out"}
+    assert set(g.layer(2, 0)) == {"in", "out"} and set(g.layer(2, 2)) == {"out"}  # F161: 0 is the run start
+    assert sorted(p.name for p in (g.dir / "kv_cache").iterdir()) == [f"layer_{i}.safetensors" for i in range(3)]
+    next(r for r in raw["ladder"] if r["name"] == "s256")["step_dump_layers"] = [7]
+    yaml.safe_dump(raw, open(spec_path, "w"))
+    assert any("step_dump_layers [7] not run" in e for e in Spec.load(spec_path).validate())
+
+
+def test_golden_layer_subset_stores_run_starts_on_every_chunk(fx):
+    spec_path = fx(layers=[0, 2])
+    prompt.build(Spec.load(spec_path))
+    generate_golden.main(["--spec", spec_path, "--rung", "s512"])
+    g = Golden.for_rung(Spec.load(spec_path), "s512")
+    assert g.manifest["subset"] and g.manifest["run_starts"] == [0, 2] and g.dumped_chunks == [3]
+    assert set(g.layer(0, 0)) == {"in"} and set(g.layer(0, 2)) == {"in"} and not g.has_layer(0, 1)
+    assert "out" in g.layer(3, 2) and not g.has_layer(3, 1)
+    assert sorted(p.name for p in (g.dir / "kv_cache").iterdir()) == ["layer_0.safetensors", "layer_2.safetensors"]
+    # the "last" rung reads the s512 golden
+    assert Golden.for_rung(Spec.load(spec_path), "last").dir == g.dir
+    generate_golden.main(["--spec", spec_path, "--rung", "last"])  # no-op
+
+
+def test_golden_subset_stops_at_the_last_selected_layer(fx, monkeypatch):
+    """F40: layers after the last selected one are never run (MiMo 0-5 of 48 ran all 48 on CPU, 8x the work); the
+    model-level outputs, which only a stack ending at the last layer compares, are not stored."""
+    from models.demos.common.bringup.selftest import fixture_model
+
+    built = []
+    real = fixture_model.reference
+    monkeypatch.setattr(
+        fixture_model,
+        "reference",
+        lambda spec, layers=None, dtype=None, numerics="native": built.append(layers) or real(spec, layers),
+    )
+    spec_path = fx(layers=[0, 1])
+    prompt.build(Spec.load(spec_path))
+    generate_golden.main(["--spec", spec_path, "--rung", "s512"])
+    assert built == [[0, 1]]
+    g = Golden.for_rung(Spec.load(spec_path), "s512")
+    from safetensors import safe_open
+
+    with safe_open(str(g.dir / "chunk_03" / "model.safetensors"), "pt") as f:
+        keys = set(f.keys())
+    assert "tokens" in keys and not keys & {"top32_ids", "top32_values", "logits_tail", "final_norm"}
+    assert "out" in g.layer(3, 1)
+    # a stack that ends at the model's last layer still runs every layer and stores the model outputs
+    import shutil
+
+    shutil.rmtree(g.dir)
+    built.clear()
+    spec_path = fx(layers=[0, 2])
+    prompt.build(Spec.load(spec_path))
+    generate_golden.main(["--spec", spec_path, "--rung", "s512"])
+    assert built == [None]
+
+
+def test_hf_parity_of_a_subset_stops_at_its_last_layer(fx):
+    """F40: parity for layers 0-5 of 48 compares a 6-layer stack, not all 48."""
+    assert check_hf.subset_prefix(Spec.load(fx(layers=[0, 1]))) == 2
+    assert check_hf.subset_prefix(Spec.load(fx(layers=[0, 2]))) is None
+
+
+def test_content_hash_ignores_the_manifest(tmp_path):
+    (tmp_path / "a").write_text("1")
+    h = content_hash(tmp_path)
+    (tmp_path / "manifest.json").write_text("{}")
+    assert content_hash(tmp_path) == h
+
+
+@pytest.mark.skipif(not ERNIE_2K.exists(), reason="ERNIE 2k golden not on this machine")
+def test_reader_reads_the_existing_ernie_golden():
+    g = Golden(ERNIE_2K)
+    assert g.seq == 4096 and g.n_chunks == 2 and len(g.layers) == 28
+    assert {"in", "out", "attn_out", "mlp_out"} <= set(g.layer(1, 1))
+    st = g.state(0)
+    assert set(st) == {"key", "value"} and st["key"].shape[-2:] == (4096, 128)
+    assert len(g.pinned_hash()) == 64 and not g.verify()  # made before content hashes existed
+
+
+class ChatTok:
+    """Chat template "<T[G]>content"; one token per character (3), <T> = 7, G (generation prompt) = 8."""
+
+    bos_token_id = 1
+
+    def apply_chat_template(self, msgs, tokenize=False, add_generation_prompt=False, enable_thinking=True):
+        gen = ("G" if enable_thinking else "GE") if add_generation_prompt else ""
+        return "<T" + gen + ">" + msgs[0]["content"]
+
+    def __call__(self, text, add_special_tokens=False):
+        ids = []
+        if text.startswith("<T"):
+            ids = [7] + ([8] if text[2] == "G" else []) + ([9] if text.startswith("<TGE>") else [])
+            text = text[text.index(">") + 1 :]
+        return {"input_ids": ids + [3] * len(text)}
+
+
+@pytest.mark.parametrize("wrap,head", [("raw", [1, 3, 3]), ("user_turn", [7, 3, 3]), ("model_turn", [7, 8, 3])])
+def test_prompt_wraps(fx, wrap, head):
+    s = Spec.load(fx(text={"wrap": wrap, "request": "Rec"}))
+    ids, info = prompt.build_ids(s, ChatTok(), 16)
+    assert ids[:3] == head and len(ids) == 16 and info["wrap"] == wrap
+
+
+def test_prompt_template_kwargs_reach_the_chat_template(fx):
+    """F38: a thinking model's book follows an empty think block (text.template_kwargs: {enable_thinking: false})."""
+    s = Spec.load(fx(text={"wrap": "model_turn", "request": "Rec", "template_kwargs": {"enable_thinking": False}}))
+    ids, info = prompt.build_ids(s, ChatTok(), 16)
+    assert ids[:4] == [7, 8, 9, 3] and info["template_kwargs"] == {"enable_thinking": False}
+    ids, info = prompt.build_ids(Spec.load(fx(text={"wrap": "model_turn", "request": "Rec"})), ChatTok(), 16)
+    assert ids[:3] == [7, 8, 3] and "template_kwargs" not in info
+
+
+def test_prompt_file_is_built_once_and_pinned(fx):
+    s = Spec.load(fx(text={"wrap": "model_turn"}))
+    rec = prompt.build(s, ChatTok())
+    assert rec["n"] == 512 and prompt.load(s)["sha256"] == rec["sha256"]
+    assert prompt.tokens(s, 8).tolist() == rec["token_ids"][:8]
+    assert prompt.build(s, ChatTok())["sha256"] == rec["sha256"]  # rebuilding the same prompt is a no-op
+    s2 = Spec.load(fx(text={"wrap": "raw"}))
+    with pytest.raises(SystemExit, match="different prompt"):
+        prompt.build(s2, ChatTok())
+    p = prompt.prompt_path(s)
+    d = json.loads(p.read_text())
+    d["token_ids"][0] = 99
+    p.write_text(json.dumps(d))
+    with pytest.raises(ValueError, match="recorded hash"):
+        prompt.load(s)
+
+
+def test_rehash_goldens_updates_only_verified_golden_files(fx, tmp_path):
+    """F144: a regenerated golden is re-hashed in every frozen block; the test files keep their hashes."""
+    import json
+
+    import yaml
+
+    from models.demos.common.bringup.core.freeze import sha256_file
+    from models.demos.common.bringup.core.ledger import Ledger
+    from models.demos.common.bringup.core.runs import FreezeError, rehash_goldens
+    from models.demos.common.bringup.reference.golden import Golden
+
+    spec_path = fx()
+    s = Spec.load(spec_path)
+    prompt.build(s)
+    generate_golden.main(["--spec", spec_path, "--rung", "s256"])
+    g = Golden.for_rung(s, "s256")
+    man = g.dir / "manifest.json"
+    test = s.repo / "t.py"
+    test.write_text("x = 1\n")
+    led = Ledger(s.bringup_dir)
+    led.tasks_path.parent.mkdir(parents=True, exist_ok=True)
+    led.tasks_path.write_text(
+        yaml.safe_dump({"tasks": [{"id": "C.1", "frozen": {"at": "x", "files": {"t.py": "old", str(man): "old"}}}]})
+    )
+    done = rehash_goldens(s, led)
+    frozen = yaml.safe_load(led.tasks_path.read_text())["tasks"][0]["frozen"]["files"]
+    assert done == {"C.1": [str(man)]} and frozen[str(man)] == sha256_file(man) and frozen["t.py"] == "old"
+    m = json.loads(man.read_text())
+    m["content_hash"] = "tampered"
+    man.write_text(json.dumps(m))
+    with pytest.raises(FreezeError, match="does not verify"):
+        rehash_goldens(s, led)
+
+
+def test_golden_outs_every_chunk_without_dumps(fx):
+    """F160: a long rung dumps only its last chunk; outs_every_chunk also stores every layer's out on every chunk
+    (DeepSeek-V4.1 full model: the per-layer errors of every chunk, owner)."""
+    import yaml
+
+    spec_path = fx()
+    raw = yaml.safe_load(open(spec_path))
+    r = next(r for r in raw["ladder"] if r["name"] == "s512")
+    r["outs_every_chunk"] = True
+    r.pop("full_dumps", None)
+    yaml.safe_dump(raw, open(spec_path, "w"))
+    s = Spec.load(spec_path)
+    prompt.build(s)
+    generate_golden.main(["--spec", spec_path, "--rung", "s512"])
+    g = Golden.for_rung(s, "s512")
+    assert g.verify() and g.dumped_chunks == [g.n_chunks - 1] and g.manifest["outs_every_chunk"]
+    assert set(g.layer(0, 1)) == {"out"} and set(g.layer(0, 0)) == {"in", "out"}  # layer 0: the run's start
+    assert "attn_norm" in g.layer(g.n_chunks - 1, 1)

@@ -47,7 +47,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
 )
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
+from tt_py_test_utils_common.tensor_prefetcher import tensor_prefetcher_session
 
 ENGRAM_LAYERS = (1, 14)  # inference/config.json engram_layer_ids; layer j of the tuple runs on device j
 STEPS = 16

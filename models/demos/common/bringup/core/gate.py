@@ -1,0 +1,1671 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Run one task's gate and record the verdict. The runner owns the verdict; tests only record numbers.
+
+A gate passes only if, in this order:
+  1. every dep is PASS or DEFERRED (else BLOCKED, nothing runs)
+  2. every frozen file matches its hash (else FAIL, nothing runs)
+  3. a device task's command goes through scripts/run_safe_pytest.sh or scripts/tt-probe.sh (else FAIL)
+  4. the command exits 0 (exit 2 from the safe runner = HANG; the triage report is copied next to the log)
+  5. every metric glob matches >= 1 recorded metric and every match meets its threshold
+  6. every declared artifact exists
+A gate that passes but whose commit git refuses is COMMIT_PENDING (F149): `commit_only` commits it later, nothing re-runs.
+"""
+
+from __future__ import annotations
+
+import fnmatch
+import hashlib
+import json
+import operator
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from models.demos.common.bringup.core import batch, freeze, hangdump, hostmem
+from models.demos.common.bringup.core import metrics as M
+from models.demos.common.bringup.core import stamps
+from models.demos.common.bringup.core.chunked import log_chunks, roll_log
+from models.demos.common.bringup.core.ledger import (
+    Ledger,
+    fixed_accuracy,
+    position_role_metrics,
+    satisfied,
+    wall_only_device_metrics,
+)
+from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
+
+OPS = {">=": operator.ge, "<=": operator.le, ">": operator.gt, "<": operator.lt, "==": operator.eq}
+SAFE_RUNNERS = ("scripts/run_safe_pytest.sh", "scripts/tt-probe.sh")
+SAFE_HANG_RC = 2
+TRIAGE = "generated/tt-triage/triage.txt"
+DEFAULT_TRAILER = "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+
+
+@dataclass
+class GateResult:
+    tid: str
+    verdict: str  # PASS FAIL HANG BLOCKED COMMIT_PENDING
+    rc: int | None = None
+    lines: list[str] = field(default_factory=list)
+    log: Path | None = None
+    commit: str | None = None
+    duration_s: float = 0.0
+    reused: list[str] = field(default_factory=list)  # F150: units restored from a PASS on the same stamp
+
+    @property
+    def exit_code(self) -> int:
+        return {"PASS": 0, "BLOCKED": 2, "COMMIT_PENDING": 3}.get(self.verdict, 1)
+
+    def summary(self) -> str:
+        return "\n".join([f"{self.verdict} {self.tid}"] + self.lines)
+
+
+# F129: state.json keeps only the gated metrics (and their limits); results/<task>.json keeps them all. The repo's
+# 500 KB large-file hook refused DeepSeek-V4.1's state.json (502 KB) at FIX.6's commit.
+
+
+def state_metrics(spec: dict[str, str], got: dict) -> dict:
+    """The metrics state.json records for a gate run: the gated ones and their limits (F129)."""
+    vals = {k: (v["value"] if isinstance(v, dict) else v) for k, v in got.items()}
+    if not spec:  # a task without gated metrics keeps what it recorded
+        return vals
+    globs = list(spec or {})
+    globs += [f"{g}_limit" for g in globs]  # F76: a '>= limit' gate's limit, for the dashboard
+    return {k: v for k, v in vals.items() if any(fnmatch.fnmatchcase(k, g) for g in globs)}
+
+
+def measured_only(spec: dict[str, str], got: dict) -> dict[str, str]:
+    """F122: the thresholds whose metric a partial (quick) measurement recorded; the rest wait for the full gate."""
+    return {g: c for g, c in (spec or {}).items() if any(fnmatch.fnmatchcase(k, g) for k in got)}
+
+
+def check_metrics(spec: dict[str, str], got: dict) -> tuple[bool, list[str]]:
+    ok, lines = True, []
+    for glob, cond in (spec or {}).items():
+        op_s, val_s = str(cond).split()
+        # F76: "limit" = the <metric>_limit the test recorded (its noise floor; testing/noise_floor.py)
+        from_test = val_s == "limit"
+        matched = {
+            k: v["value"]
+            for k, v in got.items()
+            if fnmatch.fnmatchcase(k, glob) and not (from_test and k.endswith("_limit"))
+        }
+        if not matched:
+            ok = False
+            lines.append(f"  MISSING  {glob} (need {cond})")
+            continue
+        for k, v in sorted(matched.items()):
+            if (got.get(f"{k}_waived") or {}).get("value"):  # F85: the owner waived this step's noise-floor checks
+                lines.append(f"  WAIVED   {k} = {v} (need {cond}; owner waiver, see the log)")
+                continue
+            want = (got.get(f"{k}_limit") or {}).get("value") if from_test else float(val_s)
+            try:
+                good = v is not None and want is not None and OPS[op_s](float(v), float(want))
+            except (TypeError, ValueError):
+                good = False
+            ok &= good
+            need = f"{op_s} {want} (its noise floor)" if from_test else cond
+            if from_test and want is None:
+                need = f"{cond}: no {k}_limit recorded"
+            lines.append(f"  {'ok  ' if good else 'FAIL'}     {k} = {v} (need {need})")
+    return ok, lines
+
+
+def _segments(cmd: str) -> list[list[str]]:
+    """Split a shell command into simple commands (quote-aware), each as its word list."""
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|<>()")
+    lex.whitespace_split = True
+    segs, cur = [], []
+    for tok in lex:
+        if tok and set(tok) <= set(";&|()"):
+            segs.append(cur)
+            cur = []
+        else:
+            cur.append(tok)
+    segs.append(cur)
+    return [s for s in segs if s]
+
+
+def _program(words: list[str]) -> list[str]:
+    """Words of a simple command after leading VAR=value assignments."""
+    i = 0
+    while i < len(words) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[i]):
+        i += 1
+    return words[i:]
+
+
+COLLECT_ONLY = ("--collect-only", "--co")  # F115: lists the tests, runs none (no fixture, no device)
+
+
+def _is_direct_pytest(words: list[str]) -> bool:
+    if not words or any(w in COLLECT_ONLY for w in words):
+        return False
+    if Path(words[0]).name == "pytest":
+        return True
+    return Path(words[0]).name.startswith("python") and words[1:3] == ["-m", "pytest"]
+
+
+def device_policy_errors(task: dict) -> list[str]:
+    """A device gate must enter through a safe runner, and no command may call pytest directly."""
+    progs = [_program(w) for w in _segments(task["gate"]["cmd"])]
+    progs = [p for p in progs if p]
+    errs = [f"gate calls pytest directly: {' '.join(p)!r}" for p in progs if _is_direct_pytest(p)]
+    if task.get("device"):
+        for p in progs:
+            if Path(p[0]).name.startswith("python") and not _is_direct_pytest(p) and _python_touches_device(p):
+                errs.append(
+                    f"device gate runs '{' '.join(p[:3])}' on device code directly; use {' or '.join(SAFE_RUNNERS)}"
+                )
+        if not any(p[0] in SAFE_RUNNERS for p in progs):
+            errs.append(f"device gate does not use {' or '.join(SAFE_RUNNERS)}")
+    return errs
+
+
+def _python_touches_device(words: list[str]) -> bool:
+    """True if a python command runs code that imports ttnn (or cannot be resolved, to stay safe)."""
+    if "-c" in words:
+        return "ttnn" in " ".join(words)
+    if "-m" in words:
+        mod = words[words.index("-m") + 1] if words.index("-m") + 1 < len(words) else ""
+        base = CODE_ROOT / Path(*mod.split("."))
+        f = base.with_suffix(".py") if base.with_suffix(".py").exists() else base / "__main__.py"
+    else:
+        f = next((CODE_ROOT / w for w in words[1:] if w.endswith(".py")), None)
+    if f is None or not f.exists():
+        return True
+    return bool(re.search(r"^\s*(import ttnn|from ttnn)", f.read_text(errors="replace"), re.M))
+
+
+def _uses_safe_runner(cmd: str) -> bool:
+    return any(_program(w)[:1] and _program(w)[0] in SAFE_RUNNERS for w in _segments(cmd))
+
+
+def run_name(ledger: Ledger) -> str:
+    return ledger.state().get("_run", {}).get("name", "default")
+
+
+def log_dir(spec: Spec, ledger: Ledger) -> Path:
+    d = spec.run_dir(run_name(ledger)) / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def gate_env(spec: Spec, ledger: Ledger, tid: str) -> dict:
+    # Pin imports to this checkout: an inherited PYTHONPATH pointing at another tt-metal tree once mixed
+    # modules from two checkouts. The model spec rides along so generic tests know what they test.
+    env = dict(os.environ, PYTHONPATH=str(CODE_ROOT))
+    env[M.TASK_ENV] = tid
+    env[M.RECORD_ENV] = tid  # F79: a fix job's segments override BRINGUP_TASK only
+    env[M.RESULTS_ENV] = str(ledger.results_dir)
+    if spec.path:
+        env["BRINGUP_SPEC"] = str(spec.path)
+    return env
+
+
+def task_accounting_line(spec: Spec, logs: Path, tid: str) -> str:
+    """F286 (owner): the task's device opens and model loads so far (safe-runner processes: logs/hostmem.jsonl; the
+    resident runner's new processes and loads: its requests.jsonl)."""
+    from models.demos.common.bringup import resident
+
+    try:
+        a = resident.task_accounting(resident.state_dir(spec), hostmem_file(logs / "x.log"), tid)
+    except Exception as e:  # noqa: BLE001 -- bookkeeping never fails a gate
+        return f"  device opens / loads of {tid}: unknown ({e})"
+    return (
+        f"  device opens of {tid} so far: {a['opens']} ({a['process_opens']} safe-runner processes, "
+        f"{a['runner_opens']} resident-runner restarts); runner model loads {a['runner_loads']}"
+    )
+
+
+def resident_route(env: dict, cmd: str) -> bool:
+    """F286: a resident runner is meant to serve ``env``'s spec and ``cmd``'s runs may share its process."""
+    from models.demos.common.bringup import resident
+
+    return bool(batch.parse_all(cmd)) and resident.wanted_dir(dict(os.environ, **env)) is not None
+
+
+def one_load(spec: Spec) -> bool:
+    """F283 (OWNER 2026-11-19): one model load per gate, when the gate's units share processes (tests.one_process)."""
+    return bool(spec.get("tests.one_process")) and bool(spec.get("tests.one_load"))
+
+
+def one_load_errors(spec: Spec, task: dict, tasks: dict | None = None) -> list[str]:
+    """F283: why the gate would load the model more than once (core/batch.one_load_errors over its units, the
+    determinism check included), or []. Checked before any device work (run_gate) and by ``validate``."""
+    if not one_load(spec) or "gate" not in task:
+        return []
+    try:
+        units = with_determinism(task, gate_units(task, tasks))
+    except Exception:  # noqa: BLE001 -- a malformed gate is reported by the other checks
+        return []
+    return batch.one_load_errors(units, {})
+
+
+FULL_MODEL_STEPS = ("integrate", "assemble", "contract", "perf")
+
+
+def step_command(step: str | None, cmd: str) -> str:
+    """A gate command as run. Full-model steps skip run_safe_pytest's precompile pass: it runs the whole test once
+    more with stubbed checks, which doubles a model-sized gate for kernels that are almost all cached."""
+    if step in FULL_MODEL_STEPS and "precompile" not in cmd:
+        cmd = re.sub(r"(run_safe_pytest\.sh)(?=\s)", r"\1 --no-precompile", cmd)
+    return with_clean_wall(cmd)
+
+
+UNIT_TASK = re.compile(r"^BRINGUP_TASK=(\S+)\s+(.*)$", re.S)
+# F166: `for t in a b c; do <one command with $t / ${t}> [|| exit 1]; done`, a literal list over one template
+FOR_LOOP = re.compile(r"^for\s+(\w+)\s+in\s+([\w.\- ]+?)\s*;\s*do\s+(.+?)\s*(?:\|\|\s*exit\s+1\s*)?;\s*done$", re.S)
+SAFE_RUN = re.compile(r"^((?:\w+=\S*\s+)*)(scripts/run_safe_pytest\.sh)\s+(.+)$", re.S)
+NO_VALUE_FLAGS = {"--run-all", "--no-precompile", "--dev", "-s", "-x", "-q", "-v"}  # flags that take no value
+
+
+def unit_base(unit: str) -> str:
+    """F166: the task a unit belongs to (a split unit is <task>#<label>)."""
+    return unit.split("#", 1)[0]
+
+
+def split_segment(seg: str) -> list[tuple[str, str]]:
+    """F166: one gate segment as its separately stamped parts [(label, command)]: a for loop over a literal list of one
+    command template, one part per value; a run_safe_pytest call over several test files (flags without values only),
+    one part per file; else [("", seg)]. Each part fails or passes alone, so a resumed gate reuses the parts that
+    passed (DeepSeek-V4.1 FIX.10: a stop at the 7th of 8 looped tests re-ran all 8, ~25 min)."""
+    m = FOR_LOOP.match(seg.strip())
+    if m:
+        var, values, body = m.group(1), m.group(2).split(), m.group(3).strip()
+        if values and any(t in body for t in (f"${var}", f"${{{var}}}")) and not re.search(r"[;&|]", body):
+            return [(v, body.replace(f"${{{var}}}", v).replace(f"${var}", v)) for v in values]
+        return [("", seg)]
+    m = SAFE_RUN.match(seg.strip())
+    if m:
+        words = m.group(3).split()
+        flags = [w for w in words if w.startswith("-")]
+        files = [w for w in words if not w.startswith("-")]
+        if len(files) > 1 and set(flags) <= NO_VALUE_FLAGS and all(".py" in f for f in files):
+            pre = f"{m.group(1)}{m.group(2)}" + "".join(f" {x}" for x in flags)
+            return [(Path(f.split("::")[0]).stem, f"{pre} {f}") for f in files]
+    return [("", seg)]
+
+
+def segment_label(seg: str, n: int) -> str:
+    """F170: a readable, stable unit label for one gate segment: its test file's stem, else its python module, else
+    its position among its task's segments (the same in the task's own gate and in a fix job that runs it)."""
+    m = re.search(r"([\w./-]+)\.py\b", seg)
+    if m:
+        return Path(m.group(1)).name
+    m = re.search(r"-m\s+([\w.]+)", seg)
+    return m.group(1).rsplit(".", 1)[-1] if m else f"seg{n}"
+
+
+TEST_RUN = re.compile(r"run_safe_pytest\.sh|\bpytest\b|tt-probe\.sh")
+
+
+def gate_units(task: dict, tasks: dict | None = None) -> list[tuple[str, str]]:
+    """F150: the gate as units (unit, command): a fix job's segments of one source task each (F79's BRINGUP_TASK=<id>
+    prefix, which the runner sets as the unit's BRINGUP_TASK instead), else the whole command.
+    F151: a unit runs as its source task's gate does (that task's step: --no-precompile for a full-model step).
+    F166: a segment that is a loop over test files, or one call over several, is split into one unit per test.
+    F170: every test-running `&&` segment is its own unit (<task>#<label>), so a resumed gate never re-runs a segment
+    that passed (audit item 5: X.3 stopping in test_positions re-ran the full-target ladder and both profile runs). A
+    segment that runs no test (a setup or a capture step) travels with the test segment after it (a trailing one with
+    the last), so a kept unit never skips a step its test needs. A gate of one unit keeps the name <task>."""
+    tid, cmd, tasks = task.get("id"), task["gate"]["cmd"], tasks or {}
+    groups: list[tuple[str, list[str]]] = []  # (source task, segments): one test segment with its setup steps
+    pending: list[str] = []
+    pending_src = tid
+
+    def flush():
+        if not pending:
+            return
+        if groups and groups[-1][0] == pending_src:
+            groups[-1][1].extend(pending)  # steps after a source's last test (e.g. writing its profile file)
+        else:
+            groups.append((pending_src, list(pending)))
+        pending.clear()
+
+    for seg in (x.strip() for x in cmd.split("&&")):
+        m = UNIT_TASK.match(seg)
+        src, body = (m.group(1), m.group(2).strip()) if m else (tid, seg)
+        if pending and src != pending_src:
+            flush()
+        if TEST_RUN.search(body) or FOR_LOOP.match(body):
+            groups.append((src, pending + [body]))
+            pending.clear()
+        else:
+            pending.append(body)
+            pending_src = src
+    flush()
+    per_src: dict[str, int] = {}
+    for src, _ in groups:
+        per_src[src] = per_src.get(src, 0) + 1
+    units: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    counter: dict[str, int] = {}
+    for src, bodies in groups:
+        counter[src] = counter.get(src, 0) + 1
+        body = " && ".join(bodies)
+        parts = split_segment(bodies[-1]) if len(bodies) == 1 else [("", body)]
+        if len(parts) > 1:
+            names = [(f"{src}#{label}", c) for label, c in parts]
+        elif per_src[src] == 1:
+            names = [(src, body)]
+        else:
+            names = [(f"{src}#{segment_label(bodies[-1], counter[src])}", body)]
+        for i, (key, c) in enumerate(names):
+            if key in seen:
+                key = f"{key}.{counter[src]}.{i}"
+            seen.add(key)
+            units.append((key, c))
+    if [u for u, _ in units] == [tid]:
+        return with_determinism(task, [(tid, step_command(task.get("step"), cmd))])
+    return with_determinism(
+        task, [(u, step_command((tasks.get(unit_base(u)) or task).get("step"), c)) for u, c in units]
+    )
+
+
+# FIX.25 (owner 2026-11-12: "determinism is the highest of all priorities"): the framework's model-level tests; a gate
+# that runs one of them (or is a full-model step) runs the model determinism check too
+MODEL_LEVEL_TEST = re.compile(
+    r"models/demos/common/bringup/tests/test_(ladder|profile|positions|contract|contract_acks|smoke|batch)\.py"
+)
+DETERMINISM_TEST = re.compile(r"\btest_determinism\.py\b")
+DETERMINISM_METRIC = "determinism_max_abs_diff"
+
+
+MODEL_LEVEL_STEPS = FULL_MODEL_STEPS + ("overseer_fix", "fix")
+
+
+def needs_determinism(task: dict, units: list[tuple[str, str]]) -> bool:
+    """FIX.25: a device gate (tasks.yaml ``device: true``, which device_policy_errors holds to the safe runner) that
+    runs the model: a framework model-level test (ladder, profile, positions, contract, smoke), or any device test of
+    a full-model or fix step; and runs no determinism test of its own (the framework's or the model's, by name).
+    Component, swap, fork and box gates keep their own per-op checks (testing/determinism.py)."""
+    cmd = " && ".join(c for _, c in units)
+    if not task.get("device") or DETERMINISM_TEST.search(cmd) or "run_safe_pytest.sh" not in cmd:
+        return False
+    return bool(MODEL_LEVEL_TEST.search(cmd)) or task.get("step") in MODEL_LEVEL_STEPS
+
+
+def with_determinism(task: dict, units: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """FIX.25: every model-level gate runs the model determinism check (testing/model_determinism.py), without its
+    tasks.yaml entry naming it; no switch turns it off (owner: no exemption for the model). It is the gate's first unit
+    <task>#test_determinism; the gate runs it in one process with the units after it that may share the model
+    (core/batch.gate_groups, tests.one_process), first in that process (its first sequence is the cold one after the
+    load), so it costs no model load of its own. FIX.31 (P.51, 2026-11-13): never inside another unit's command (it
+    once joined the first shareable unit, which changed that unit's command and so its stamp: a passed ladder re-ran);
+    a unit's stamp depends only on its own command and environment.
+    A non-deterministic model fails the unit (the test asserts; DETERMINISM_METRIC == 0 is also a gate limit, see
+    gate_limits), its message naming the prompt, run, first differing chunk and first differing layer state."""
+    if not needs_determinism(task, units):
+        return units
+    return [(f"{task.get('id')}#test_determinism", batch.DETERMINISM_CMD)] + units
+
+
+def gate_limits(task: dict, tasks: dict | None = None) -> dict[str, str]:
+    """The gate's thresholds: tasks.yaml's, plus (FIX.25) determinism_max_abs_diff == 0 whenever the gate runs a
+    determinism test (injected or named). Never loosens a tasks.yaml limit: one it sets stays as it is."""
+    out = dict(task["gate"].get("metrics") or {})
+    if DETERMINISM_METRIC not in out and any(DETERMINISM_TEST.search(c) for _, c in gate_units(task, tasks)):
+        out[DETERMINISM_METRIC] = "== 0"
+    return out
+
+
+def gate_command(task: dict, tasks: dict | None = None) -> str:
+    """The gate's shell command as run (a fix job's units with their BRINGUP_TASK prefix on every segment)."""
+    tid = task.get("id")
+    units = gate_units(task, tasks)
+    if [u for u, _ in units] == [tid]:
+        return units[0][1]
+    if all(unit_base(u) == tid for u, _ in units):  # F166: one task's split units: the same command, unrolled
+        return " && ".join(c for _, c in units)
+    return " && ".join(f"BRINGUP_TASK={unit_base(u)} {seg.strip()}" for u, c in units for seg in c.split("&&"))
+
+
+PROFILER_VARS = re.compile(
+    r"\b(TT_METAL_(DEVICE_PROFILER|PROFILER_\w+)|BRINGUP_PROFILE_OPS|BRINGUP_FULL_PREFILL|BRINGUP_PROFILER)=\S+\s*"
+)
+
+
+DEVICE_PROFILER_VARS = re.compile(r"\bTT_METAL_(DEVICE_PROFILER|PROFILER_\w+)=\S+\s*")
+
+
+def with_clean_wall(cmd: str) -> str:
+    """F114: a profiled test_profile.py run is preceded by the same run with the device profiler off
+    (BRINGUP_PROFILE_WALL=1: warm wall time only), so chunk_wall_ms never includes the profiler's instrumentation or
+    buffer dumps; the profiled run then reports its own wall as chunk_wall_ms_profiled (BRINGUP_WALL_CLEAN=1).
+    F155: the profiled run measures with the real-time profiler, so the device profiler's variables are dropped from
+    it too (ledgers written before F155 carry them), unless the segment asks for the device profiler
+    (BRINGUP_PROFILER=device, perf.profiler: device in ledger_gen)."""
+    out = []
+    for seg in cmd.split("&&"):
+        s = seg.strip()
+        if "test_profile.py" in s and "BRINGUP_WALL_CLEAN" not in s and "BRINGUP_PROFILE_WALL" not in s:
+            prof = s if "BRINGUP_PROFILER=device" in s else DEVICE_PROFILER_VARS.sub("", s)
+            out += [f"BRINGUP_PROFILE_WALL=1 {PROFILER_VARS.sub('', s)}", f"BRINGUP_WALL_CLEAN=1 {prof}"]
+        else:
+            out.append(s)
+    return " && ".join(out) if len(out) != len(cmd.split("&&")) else cmd
+
+
+def gate_outputs(ledger: Ledger, task: dict) -> list[Path]:
+    """F55: the files a task's gate writes itself: results/<task>.json, results/<task>_*.json and, for the derived-op
+    test task, results/fork_calls.json. One list, used three ways: the gate deletes them before it runs (so nothing an
+    agent left there survives), the gate commits them, and the agent may change them (orchestrator.allowed_paths), since
+    an agent that runs its own gate command rewrites them."""
+    return outputs_in(ledger.results_dir, task)
+
+
+def outputs_in(results: Path, task: dict) -> list[Path]:
+    tid = task["id"]
+    out = [results / f"{tid}.json", *sorted(results.glob(f"{tid}_*.json"))]
+    out += sorted(results.glob(f"{tid}_*.json.gz"))  # F148: a profile's gzipped per-op rows
+    # F292 (DeepSeek-V4.1 PB.5C / PB.6L, 2026-11-20): a test's report table (results/<task>_<name>.md, e.g. the packed
+    # walls table) is the gate's output too: two attempts failed only because the walls test wrote it
+    out += sorted(results.glob(f"{tid}_*.md"))
+    if task.get("step") == "optests":
+        out.append(results / "fork_calls.json")
+        # F64 / F201: every other capture file the gate writes (the scaled run's, a settings variant's)
+        import re
+
+        for name in sorted(set(re.findall(r"\b(fork_calls_[\w-]+\.json)", (task.get("gate") or {}).get("cmd", "")))):
+            out.append(results / name)
+    return out
+
+
+def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
+    repo = spec.repo
+    rel = lambda p: str(Path(p).resolve().relative_to(repo)) if Path(p).is_absolute() else p  # noqa: E731
+    paths = [rel(ledger.results_dir / f"{task['id']}.json"), rel(ledger.tasks_path)]
+    paths += [rel(p) for p in ledger.record_paths()]  # F253 / F265: state and metrics chunks (and the old files)
+    paths.append(rel(ledger.dir / ".gitignore"))
+    # F183: the run's own files are in its ledger; the model's shared files in bringup_dir (the same dir unless seeded)
+    for d, extras in (
+        (ledger.dir, ("approvals.yaml", "results/block_graphs.json", "spec.yaml", "supervision.md")),
+        (ledger.dir, ("results/knowledge_use",)),  # the agents' knowledge-use reports (knowledge/usage.py)
+        (
+            spec.bringup_dir,
+            (
+                "findings.yaml",
+                "known_issues.md",  # the model's own lessons and repo pointers (agents write these, not the shared files)
+                "known_issues_detail.md",
+                "repo_map.md",
+                "__init__.py",
+                "BREADCRUMBS.md",
+                "serving_contract.md",  # F58: the serving contract (SC.1) and its test list
+                "contract_tests.yaml",
+                "official_taps.yaml",  # F80: the official code mapped onto the steps (testing/noise_floor.py)
+            ),
+        ),
+    ):
+        for extra in extras:
+            if (d / extra).exists() and rel(d / extra) not in paths:
+                paths.append(rel(d / extra))
+    # F265 (owner, FIX.27): an append-only log past the chunk bound moves its older sections, unchanged, to numbered
+    # chunk files beside it (core/chunked.roll_log) before the commit; every chunk is staged with it
+    for log in (spec.bringup_dir / "BREADCRUMBS.md", ledger.dir / "supervision.md"):
+        roll_log(log)
+        paths += [rel(p) for p in log_chunks(log) if rel(p) not in paths]
+    # The files the task's own gate writes (gate_outputs): <task>_profile.json, <task>_ops_profile.json, ... and the
+    # record of the model's ttnn.bringup calls the derived-op test task writes.
+    paths += [rel(p) for p in gate_outputs(ledger, task) if p.exists() and p.name != f"{task['id']}.json"]
+    paths += [p for p in task.get("paths", []) if _files_under(repo, [p])]  # an empty folder is no pathspec for git
+    if (
+        task.get("step") == "settings"
+    ):  # Z.1 moves switches in the model's code and the forks (agents/settings-audit.md)
+        md = Path(spec.model_dir)
+        paths += [rel(p) for p in (md / "tt", md / "bringup" / "hooks.py") if p.exists()]
+        paths.append("ttnn/ttnn/bringup")
+    if task.get("step") == "serving":  # SC.1's frozen contract tests (agents/serving-contract.md)
+        tests = Path(spec.model_dir) / "tests" / "bringup" / "contract"
+        if tests.is_dir():
+            paths.append(rel(tests))
+    if task.get("step") == "contract":
+        paths.append("models/demos/common/prefill")  # orchestrator.CONTRACT_SHARED: the contract agent may change it
+        paths.append(rel(spec.bringup_dir / "hooks.py"))  # and the model's hooks (contract_state_pcc)
+    # F48: every agent may write ttnn/ttnn/bringup (a fork, or a change to one behind an option); one agent runs at a
+    # time, so what changed there is this task's. Only changed files, so the gate's formatting pass does not touch the
+    # other forks. The shared knowledge files are no longer agent-writable (the overseer curates them at run end).
+    paths += _dirty_under(repo, [BRINGUP_OPS])
+    return list(dict.fromkeys(p for p in paths if (repo / p).exists() or _tracked(repo, p)))
+
+
+BRINGUP_OPS = "ttnn/ttnn/bringup"
+
+
+def _dirty_under(repo: Path, prefixes: list[str]) -> list[str]:
+    """Modified or untracked files (not deleted, no __pycache__) at or under any prefix."""
+    out = subprocess.run(
+        ["git", "status", "--porcelain", "-uall", "-z", "--", *prefixes], cwd=repo, capture_output=True, text=True
+    ).stdout
+    files = []
+    for entry in out.split("\0"):
+        if len(entry) < 4:
+            continue
+        p = entry[3:]
+        if "__pycache__" not in p and (repo / p).is_file():
+            files.append(p)
+    return sorted(files)
+
+
+def _tracked(repo: Path, p: str) -> bool:
+    return subprocess.run(["git", "ls-files", "--error-unmatch", p], cwd=repo, capture_output=True).returncode == 0
+
+
+def _files_under(repo: Path, paths: list[str]) -> list[str]:
+    out = []
+    for p in paths:
+        full = repo / p
+        if full.is_dir():
+            out += [
+                str(f.relative_to(repo))
+                for f in sorted(full.rglob("*"))
+                if f.is_file() and "__pycache__" not in f.parts
+            ]
+        elif full.is_file():
+            out.append(p)
+    return out
+
+
+def format_paths(repo: Path, paths: list[str]) -> None:
+    """Run the repo's pre-commit hooks (black, EOF fixer, ...) on the files now, so that what a gate tests and
+    what freeze hashes is byte-identical to what the commit stores. No-op without a pre-commit config."""
+    files = _files_under(repo, paths)
+    if not files or not (repo / ".pre-commit-config.yaml").exists() or not shutil.which("pre-commit"):
+        return
+    for _ in range(2):  # hooks that modify files exit 1; the second pass settles
+        if subprocess.run(["pre-commit", "run", "--files", *files], cwd=repo, capture_output=True).returncode == 0:
+            return
+
+
+def _git_retry(cmd: list[str], repo, check: bool = True, tries: int = 20, wait: float = 3.0):
+    """Run a git command, waiting out another process's index.lock (a person's or the overseer's git command) instead
+    of crashing the run (F74). Other failures are returned (check=False) or raised (check=True) as before."""
+    for i in range(tries):
+        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+        if r.returncode == 0 or "index.lock" not in (r.stderr + r.stdout) or i == tries - 1:
+            break
+        time.sleep(wait)
+    if check and r.returncode != 0:
+        raise subprocess.CalledProcessError(r.returncode, cmd, r.stdout, r.stderr)
+    return r
+
+
+# F210: the generated dashboard pages (re-exported after every gate, published as artifacts; ~0.9 MB each by
+# DeepSeek-V4.1 FIX.8) never go into a gate commit: the repo's 500 KB hook refused FIX.8's passed gate over them.
+GENERATED = ("*/dashboard/*.html",)
+
+
+def _commit_files(repo: Path, paths: list[str]) -> list[str]:
+    """The changed files under ``paths`` (modified, new, deleted, or already staged), without the generated pages.
+    An explicit list, not an exclude pathspec: git add skips an untracked file named outright next to an exclude
+    pathspec (F210 first try: P.6's results/P.6.json was never staged and the commit failed on it)."""
+    out = subprocess.run(
+        ["git", "ls-files", "--modified", "--others", "--deleted", "--exclude-standard", "--", *paths],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    out += subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--", *paths], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.split()
+    return sorted({f for f in out if not any(fnmatch.fnmatch(f, g) for g in GENERATED)})
+
+
+def _stage(repo: Path, files: list[str]) -> None:
+    """git add the files that are on disk or in the index. A deletion already staged (the file gone from disk and
+    index, still in HEAD) is left as staged: `git add -A -- <it>` fails with "pathspec did not match any files"
+    (OV-38: FIX.27's gate commit after the chunk migration had staged history_state.json's deletion), while
+    `git commit -- <it>` commits the deletion."""
+    in_index = set()
+    if files:
+        in_index = set(
+            subprocess.run(
+                ["git", "ls-files", "-z", "--", *files], cwd=repo, capture_output=True, text=True, check=True
+            ).stdout.split("\0")
+        )
+    add = [f for f in files if (repo / f).exists() or f in in_index]
+    if add:
+        _git_retry(["git", "add", "-A", "--", *add], repo)
+
+
+def git_commit(spec: Spec, paths: list[str], subject: str, body: str) -> str | None:
+    """Commit only the given paths, so work in progress elsewhere in the tree never leaks into a gate commit."""
+    repo = spec.repo
+    files = _commit_files(repo, paths)
+    if not files:
+        return None
+    _stage(repo, files)
+    if subprocess.run(["git", "diff", "--cached", "--quiet", "--", *files], cwd=repo).returncode == 0:
+        return None
+    trailer = spec.get("commit_trailer", DEFAULT_TRAILER)
+    msg = f"{subject}\n\n{body}\n" + (f"\n{trailer}\n" if trailer else "")
+    commit = ["git", "commit", "-q", "-m", msg, "--", *files]
+    # pre-commit hooks may still rewrite files (black, EOF fixer): re-stage and retry once.
+    if _git_retry(commit, repo, check=False).returncode != 0:
+        _stage(repo, files)
+        r = _git_retry(commit, repo, check=False)
+        if r.returncode != 0:
+            raise RuntimeError(f"git commit failed:\n{r.stdout}\n{r.stderr}")
+    return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=repo, text=True).strip()
+
+
+def commit_subject(spec: Spec, task: dict) -> str:
+    return f"[{spec.tag}][{task['id']}] {task['title']}"
+
+
+def task_commit(spec: Spec, tid: str) -> str:
+    return subprocess.run(
+        ["git", "log", "-1", "--format=%h", "--fixed-strings", f"--grep=[{spec.tag}][{tid}] "],
+        cwd=spec.repo,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _merge_metrics(results: Path, tid: str, metrics: dict) -> None:
+    p = M._path(tid, results)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    data = json.loads(p.read_text()) if p.exists() else {"task": tid, "metrics": {}}
+    data["metrics"].update(metrics)
+    p.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+
+
+def unit_stamps(spec: Spec, task: dict, env: dict, tasks: dict | None = None, keys: tuple | None = None) -> list:
+    """F150: (unit, command, stamp, stamp id) for every unit of the gate, on the tree as it is now (keys: the
+    (code_key, goldens_key) pair when the caller already has it)."""
+    tasks = tasks or {}
+    code, goldens = keys or (stamps.code_key(spec.repo, spec), stamps.goldens_key(spec))
+    out = []
+    for u, cmd in gate_units(task, tasks):
+        frozen, uenv = (tasks.get(unit_base(u)) or task).get("frozen"), dict(env, **{M.TASK_ENV: unit_base(u)})
+        st = stamps.stamp(cmd, frozen, uenv, code, goldens, stamps.waiver_key(spec, cmd), spec.repo)  # F162, F270
+        out.append((u, cmd, st, stamps.stamp_id(st)))
+    return out
+
+
+def unit_ok(limits: dict, got: dict, whole: bool) -> bool:
+    """A unit's metrics within the gate's limits: all of them for a one-unit gate, else the ones it recorded."""
+    return check_metrics(limits if whole else measured_only(limits, got), got)[0]
+
+
+def reusable(rec: dict | None, limits: dict, whole: bool) -> bool:
+    """F150: a kept unit run counts as this gate's only when it passed and its metrics are within today's limits."""
+    return bool(rec) and rec.get("verdict") == "PASS" and unit_ok(limits, rec["metrics"], whole)
+
+
+INFRA_STOP = re.compile(  # F169: a unit that did not finish for the box's or the clock's sake: STOPPED, not FAILED
+    r"Timeout \(>[\d.]+s\) from pytest-timeout|Timed out while waiting for active ethernet core|"
+    r"Try resetting the board|No Tenstorrent devices|Failed to open device|fabric router .* timed out|"
+    + re.escape(hostmem.INFRA_TAG),  # FIX.30: not started for lack of host memory
+    re.I,
+)
+NOT_RUN = "NOT RUN"  # FIX.30: a unit of a shared process the process never reached (never PASS, never reused)
+
+
+def hostmem_file(log: Path) -> Path:
+    """FIX.30: the run's host-memory records (core/hostmem.report: one line per device process)."""
+    return log.parent / "hostmem.jsonl"
+
+
+def hostmem_key(cmds: list[str]) -> str:
+    """FIX.30: the configuration a process's host memory is recorded under: its unit's command, or a shared
+    process's units' commands (one model load for all of them)."""
+    return ("group:" if len(cmds) > 1 else "unit:") + stamps.sha16(" && ".join(cmds))
+
+
+def hostmem_env(log: Path, cmds: list[str], f=None) -> dict:
+    """FIX.30: the safe runner's host-memory variables for a process running ``cmds`` (a unit, or a shared group of
+    units): where to record, under which key, and the need measured before (a group never measured: the largest of
+    its units' needs, the shared model being one of theirs). The gate log gets the node's memory now."""
+    path = hostmem_file(log)
+    key = hostmem_key(cmds)
+    need = hostmem.recorded_need(path, [key])
+    src = "measured for it"
+    if need is None and len(cmds) > 1:
+        each = [n for n in (hostmem.recorded_need(path, [hostmem_key([c])]) for c in cmds) if n is not None]
+        need, src = (max(each), "the largest of its units' needs") if each else (None, "")
+    env = {hostmem.FILE_ENV: str(path), hostmem.KEY_ENV: key}
+    if need is not None:
+        env[hostmem.NEED_ENV] = str(need)
+    if f is not None:
+        snap = hostmem.snapshot()
+        what = f"needs {need:.1f} GB ({src}, {key})" if need is not None else f"no measured need yet ({key})"
+        f.write(f"# host memory (FIX.30): {hostmem.describe(snap)}; this process {what}\n")
+        f.flush()
+    return env
+
+
+def under_test_paths(task: dict, tasks: dict | None = None) -> list[str]:
+    """F169: the paths the task may change, and for a fix job those of the gate tasks its units run (their code)."""
+    tasks = tasks or {}
+    out = list(task.get("paths") or [])
+    for u, _ in gate_units(task, tasks):
+        out += list((tasks.get(unit_base(u)) or {}).get("paths") or [])
+    return sorted(set(out))
+
+
+def _kept(d: dict | None, under: str, cmd: str, uenv: dict, limits: dict, whole: bool, aliases=None, repo=None) -> bool:
+    """F169: a unit that passed in this task's gate on the same code under test, command and environment (FIX.31: an
+    environment key from before measuring_env counts when it is this environment's, or aliases to it; F270: the
+    environment with the knobs the unit's tests read, so a legacy key only when none is set)."""
+    if not d:
+        return False
+    env = stamps.unit_env_key(cmd, uenv, repo)
+    envs = {env}
+    if env == stamps.env_key(uenv):
+        envs |= {stamps.legacy_env_key(uenv)} | {k for k, v in ((aliases or {}).get("env") or {}).items() if v == env}
+    return (
+        d.get("verdict") == "PASS"
+        and d.get("under_test") in ((under,) if isinstance(under, str) else tuple(under))  # F175: (semantic, bytes)
+        and d.get("cmd") == stamps.sha16(cmd)
+        and d.get("env") in envs
+        and unit_ok(limits, d.get("metrics") or {}, whole)
+    )
+
+
+_E_LINE = re.compile(r"^E\s+(.*)$")
+
+
+def waived_failures(text: str, waivers: list[dict]) -> str | None:
+    """F225: the waiver's reason when EVERY failure in a unit's pytest output is an AssertionError whose every message
+    line matches one of the waivers' patterns, else None. Any other error, an unparsed failure, a hang or a box
+    error is never waived; nor is a run with no failure lines (a crash before pytest reported)."""
+    if not waivers:
+        return None
+    pats = [re.compile(m) for w in waivers for m in (w.get("match") or [])]
+    failed = len(re.findall(r"^FAILED ", text, re.M))
+    errors = len(re.findall(r"^ERROR ", text, re.M))
+    blocks, cur = [], None
+    for line in text.splitlines():
+        m = _E_LINE.match(line)
+        if not m:
+            cur = None
+            continue
+        body = m.group(1).strip()
+        if body.startswith("AssertionError:"):
+            cur = [body[len("AssertionError:") :].strip()]
+            blocks.append(cur)
+        elif cur is not None and not body.startswith("assert "):
+            cur.append(body)
+        else:
+            cur = None
+    if not pats or errors or not failed or len(blocks) != failed:
+        return None
+    for b in blocks:
+        if not all(any(p.search(x) for p in pats) for x in b if x):
+            return None
+    return "; ".join(str(w.get("why", "")) for w in waivers)
+
+
+OWN_STAMP = "same code key"  # F270: a unit reused from its own stamp (the log line names the keys and the source)
+PRE_RUN = "pre-run"  # FIX.31: a unit run in a multi-task shared process just before this gate (core/multigate.py)
+
+
+def _lookup(spec, store, u: str, cmd: str, st: dict, sid: str, uenv: dict, tasks: dict, limits: dict, whole: bool):
+    """FIX.31: a PASS of this unit the gate may reuse instead of running it: (record, how, restore) or None. In order:
+    its own stamp (F150; F177: the same test filed by another task); the same stamp made before FIX.31 (a legacy code /
+    env key that aliases to today's: the same tree and environment, stamps.ensure_aliases); every one of its runs'
+    newest safe-runner record (core/runrec.py: a devjob, gate --check, --one-process or a hand run of the same tests,
+    measuring environment and code), all PASS; a gate record of another task's unit whose runs are the same (its
+    command differs only in launch flags, e.g. --no-precompile). Never a FAIL, HANG or NOT RUN, never an older pass
+    behind a newer failure of the same run, and only when its metrics meet today's limits. ``restore(results, tid)``
+    puts its result files in place and returns them."""
+    from models.demos.common.bringup.core import runrec
+
+    if store is None:
+        return None
+    rec = store.get(u, sid)
+    if reusable(rec, limits, whole):
+        return (
+            rec,
+            f"{OWN_STAMP} {st['code'][:8]} and env {st['env'][:8]}, same command (stamp {sid[:8]}): PASS at "
+            f"{rec.get('t')} in the {rec.get('by')} gate",
+            (lambda results, tid: _restore_found(store, rec.get("_from", u), sid, rec, results, tid)),
+        )
+    aliases = store.aliases() if hasattr(store, "aliases") else {}
+    for alt in stamps.alias_sids(st, aliases):
+        rec = store.get(u, alt)
+        if reusable(rec, limits, whole):
+            return (
+                rec,
+                f"same code and environment, stamped before FIX.31 (PASS at {rec.get('t')} in the {rec.get('by')} "
+                f"gate; today's code key {st['code'][:8]} and env {st['env'][:8]} alias to its keys)",
+                (lambda results, tid, a=alt, r=rec: _restore_found(store, r.get("_from", u), a, r, results, tid)),
+            )
+    keys = runrec.unit_keys(cmd, uenv, (st["code"], st["goldens"]), spec)
+    if not keys or st.get("waivers"):
+        return None
+    rs = runrec.RunStore(store.dir.parent)
+    found = runrec.find_unit(rs, keys)
+    if found:
+        got = {}
+        for r in found:
+            got.update(r.get("metrics") or {})
+        if unit_ok(limits, got, whole):
+            src = ", ".join(  # F270: what it is reused from, so a reader can check it
+                f"{r.get('launched')} run of {r.get('cmd', '')[:60]} at {r.get('t')} in task {r.get('task') or '-'}"
+                for r in found
+            )
+            env8 = stamps.sha16(json.dumps(found[0].get("env"), sort_keys=True))[:8]
+            src += f"; same code key {st['code'][:8]}, env {env8} and command-line prefix"
+            rec = {"verdict": "PASS", "rc": 0, "metrics": got, "t": found[-1].get("t"), "by": "runner"}
+
+            def restore(results, tid, found=found):
+                out = []
+                for r in found:
+                    out += rs.restore(r["key"], r, results, tid)
+                return [results / n for n in out]
+
+            return rec, f"the same runs, filed by the safe runner ({src})", restore
+    if any((rs.latest(k) or {}).get("verdict") not in (None, "PASS") for k in keys):
+        return None  # a newer run of the same tests on the same code failed: never an older pass
+    label = u.split("#", 1)[1] if "#" in u else segment_label(cmd.split("&&")[-1], 1)
+    if not label or not store.dir.is_dir():
+        return None
+    codes = {st["code"]} | {k for k, v in (aliases.get("code") or {}).items() if v == st["code"]}
+    envs = {st["env"]} | {k for k, v in (aliases.get("env") or {}).items() if v == st["env"]}
+    for idx in sorted(store.dir.glob(f"*#{label}.json")):
+        other = idx.stem
+        for osid, r in sorted(store.records(other).items(), key=lambda x: x[1].get("t", ""), reverse=True):
+            ost = r.get("stamp") or {}
+            if (
+                ost.get("code") not in codes
+                or ost.get("env") not in envs
+                or ost.get("goldens") != st["goldens"]
+                or ost.get("waivers")
+                or not reusable(r, limits, whole)
+            ):
+                continue
+            ocmd = r.get("cmd_text")
+            if ocmd is None:  # a record made before FIX.31: its command from its task's gate, by its hash
+                otask = tasks.get(r.get("by") or unit_base(other))
+                ocmd = next(
+                    (c for x, c in (gate_units(otask, tasks) if otask else []) if stamps.sha16(c) == ost.get("cmd")),
+                    None,
+                )
+            if ocmd is None or runrec.unit_keys(ocmd, uenv, (st["code"], st["goldens"]), spec) != keys:
+                continue
+            return (
+                r,
+                f"the same runs as {other} (PASS at {r.get('t')} in the {r.get('by')} gate: the same tests, "
+                f"command-line prefix, measuring environment and code key {st['code'][:8]})",
+                (lambda results, tid, o=other, a=osid, rr=r: _restore_found(store, o, a, rr, results, tid)),
+            )
+    return None
+
+
+def _restore_found(store, unit: str, sid: str, rec: dict, results: Path, tid: str) -> list[Path]:
+    names = []
+    for name in rec.get("outputs") or []:
+        src = store.dir / unit / sid / name
+        if src.exists():
+            dst = results / (f"{tid}{name}" if name.startswith("_") else name)
+            shutil.copy2(src, dst)
+            names.append(dst)
+    return names
+
+
+def _pre_rec(pre: dict | None, u: str):
+    """FIX.31: this unit's result from the multi-task shared process run just before this gate, or None."""
+    return (pre or {}).get(u)
+
+
+def run_units(
+    spec: Spec,
+    task: dict,
+    env: dict,
+    log: Path,
+    results: Path,
+    store: stamps.Store | None,
+    fresh: bool = False,
+    tasks: dict | None = None,
+    delta: stamps.Delta | None = None,
+    only: set | None = None,
+    rerun: set | frozenset = frozenset(),
+    on_unit=None,
+    pre: dict | None = None,
+) -> tuple[int, list[str], dict[str, str]]:
+    """F150: the gate's units in order (&&: the first failure stops), each with its own BRINGUP_TASK. With a store,
+    every run unit is kept under its stamp, and a unit whose stamp has a PASS (its metrics still within the gate's
+    limits) is restored instead of run. Returns (rc, reused units, {unit: stamp id}).
+    F169: with ``delta`` (the task's own record of its units), a unit that passed in this task's gate on the same code
+    under test is kept, whatever the overseer edited since (the spec, waivers, the framework): a gate never restarts,
+    it runs the delta. ``only``: run just these units (gate --unit); ``rerun``: run these even if kept (gate --rerun).
+    FIX.31: a unit is also reused from a safe-runner record of the same runs (``_lookup``); ``pre``: {unit: result} of
+    the units a multi-task shared process ran just before this gate (core/multigate.py), taken as run here.
+    """
+    tid, tasks = task["id"], tasks or {}
+    limits = gate_limits(task, tasks)  # FIX.25: with the determinism limit
+    plan = (
+        unit_stamps(spec, task, env, tasks)
+        if store is not None
+        else [(u, c, None, None) for u, c in gate_units(task, tasks)]
+    )
+    unders = (  # F175: (semantic, bytes): a record written before F173 carries the byte key of an identical tree
+        stamps.under_test_key(spec.repo, spec, under_test_paths(task, tasks), with_bytes=True)
+        if delta is not None
+        else ("", "")
+    )
+    under = unders[0]
+    aliases = store.aliases() if store is not None else {}  # FIX.31
+    rc, reused, stop = 0, [], False
+    sids = {u: sid for u, _, _, sid in plan if sid}
+    n = len(plan)
+    note = on_unit or (lambda *a: None)
+
+    def would_run(u, cmd, sid) -> bool:
+        """FIX.29: the unit runs in this gate (not filtered out, not kept, not reused): the loop's own tests."""
+        if only is not None and u not in only:
+            return False
+        uenv = dict(env, **{M.TASK_ENV: unit_base(u)})
+        d = delta.get(u) if delta is not None and not fresh and u not in rerun else None
+        if only is None and _kept(d, unders, cmd, uenv, limits, len(plan) == 1, aliases, spec.repo):
+            return False
+        if u in (pre or {}):
+            return False
+        if store is None or fresh or u in rerun or only is not None:
+            return True
+        st = next(x[2] for x in plan if x[0] == u)
+        return _lookup(spec, store, u, cmd, st, sid, uenv, tasks, limits, len(plan) == 1) is None
+
+    # FIX.29: the units that run, grouped into processes (core/batch.gate_groups): {unit: its group}
+    groups, early = {}, []
+    if spec.get("tests.one_process"):
+        todo = [(u, c) for u, c, _, sid in plan if would_run(u, c, sid)]
+        gg = batch.gate_groups(todo, env)
+        has_full = any(batch.group_class(g) == "full" for g in gg)
+        for g in gg:
+            # F285: the performance units' group runs first (on the resident runner's executed-layers model, no load
+            # when it holds it), then the accuracy units' group (one fresh full-model process with the determinism
+            # check): the other order would evict the runner's model for a second load
+            if has_full and batch.group_class(g) == "executed":
+                g = [(u, batch.launch_form(c)[0]) for u, c in g]
+                early.append(g)
+            if len(g) > 1 or g in early:
+                for u, _ in g:
+                    groups[u] = g
+    shared: dict[str, dict] = dict(pre or {})  # unit -> its result in a group's batch process (rc, metrics, files, ...)
+    loads = {"n": 0, "seen": False}  # FIX.29: model loads of this gate's processes (gate_model_loads)
+    with open(log, "a" if only else "w") as f:
+        f.write(f"$ {gate_command(task, tasks)}\n")
+        for g in early:  # F285
+            f.write(f"# F285: the performance units {', '.join(u for u, _ in g)} first (executed layers)\n")
+            shared.update(_run_group(spec, g, env, log, results, tid, f, lambda x: {M.TASK_ENV: unit_base(x)}))
+        for k, (u, cmd, st, sid) in enumerate(plan, 1):
+            if only is not None and u not in only:
+                continue
+            uenv = dict(env, **{M.TASK_ENV: unit_base(u)})  # F166: a split unit runs as its task
+            d = delta.get(u) if delta is not None and not fresh and u not in rerun else None
+            if only is None and _kept(d, unders, cmd, uenv, limits, len(plan) == 1, aliases, spec.repo):
+                _merge_metrics(results, tid, d["metrics"])
+                srec = store.get(u, d.get("sid")) if store is not None and d.get("sid") else None
+                if srec:
+                    store.restore(u, d["sid"], srec, results, tid)
+                f.write(  # F270: the keys it matched
+                    f"# {u}: reused: same code under test, passed in this gate at {d.get('t')} (F169; under-test key "
+                    f"{str(d.get('under_test'))[:8]}, env {str(d.get('env'))[:8]}, same command), not run\n"
+                )
+                reused.append(u)
+                note(k, n, u, "KEPT", 0.0)
+                continue
+            found = (
+                None
+                if store is None or fresh or u in rerun or only is not None or u in shared
+                else _lookup(spec, store, u, cmd, st, sid, uenv, tasks, limits, len(plan) == 1)
+            )
+            if found:
+                rec, how, restore = found
+                _merge_metrics(results, tid, rec["metrics"])
+                outs = restore(results, tid)
+                f.write(f"# {u}: reused: {how}, not run\n")
+                if not how.startswith(OWN_STAMP):  # FIX.31: filed under this unit's own stamp too
+                    keep = {k2: v for k2, v in rec.items() if k2 not in ("outputs", "_from", "stamp")}
+                    store.put(u, sid, dict(keep, stamp=st, cmd_text=cmd, via=how), outs, tid)
+                if delta is not None:
+                    delta.put(u, _delta_rec("PASS", under, cmd, uenv, sid, rec["metrics"], 0.0, spec.repo))
+                reused.append(u)
+                note(k, n, u, "KEPT", 0.0)
+                continue
+            if k > 1 and (store is not None or delta is not None):
+                # F170 (audit item 15): the unit's stamp as the tree is when it starts, not as it was at the gate's start
+                # (an edit mid-gate filed later units under the old key: re-runs, or a reuse that was never measured)
+                if store is not None:
+                    st, sid = next((x[2], x[3]) for x in unit_stamps(spec, task, env, tasks) if x[0] == u)
+                if delta is not None:
+                    unders = stamps.under_test_key(spec.repo, spec, under_test_paths(task, tasks), with_bytes=True)
+                    under = unders[0]
+            if len(plan) > 1:
+                f.write(f"# {u}\n$ {cmd}\n")
+            f.flush()
+            start = f.tell()
+            before = M.load(tid, results)
+            seen = {p: p.stat().st_mtime_ns for p in outputs_in(results, task) if p.exists()}
+            t0 = time.time()
+            if u in groups and u not in shared:  # FIX.29: the unit's group in one process, the model loaded once
+                cmds = {x[0]: x[1] for x in plan}
+                for gu, _ in groups[u]:  # FIX.31: a unit that asked for the precompile pass joins on demand
+                    for note_line in batch.launch_form(cmds[gu])[1]:
+                        f.write(f"# {gu}: {note_line}\n")
+                shared.update(
+                    _run_group(spec, groups[u], env, log, results, tid, f, lambda x: {M.TASK_ENV: unit_base(x)})
+                )
+            if u in shared:
+                r = shared[u]
+                where = (
+                    "a multi-task shared process (FIX.31)" if r.get(PRE_RUN) else "the gate's shared process (FIX.29)"
+                )
+                f.write(f"# {u}: run in {where}, {r['s']:.0f} s there\n")
+                f.write(r["text"])
+                f.flush()
+                rc = r["rc"]
+                if r.get("first"):
+                    loads["n"] += r["loads"]
+                    loads["seen"] = True
+            else:
+                run = batch.unit_command(cmd, spec) if spec.get("tests.one_process") else None
+                # F286: while a resident runner is meant to serve the spec, a unit of one shared-model run goes to it
+                # too (as a plan), never a process of its own
+                if run is None and resident_route(dict(uenv), batch.launch_form(cmd)[0]):
+                    run = batch.launch_form(cmd)[0]
+                if spec.get("tests.one_process") and run is None:  # FIX.31: why this unit has a process of its own
+                    why = batch.why_not(cmd) or "no other unit of this gate left to run at its model configuration"
+                    f.write(f"# {u}: a process of its own: {why}\n")
+                plan_f = None
+                if run:  # F259: the unit's runs (a clean wall and its profiled run) in one process, the model once
+                    # F269: as a plan file, so a run needing another model can go to a fresh process (batch.drive)
+                    plan_f = log.parent / f"{log.stem}.{re.sub(r'[^A-Za-z0-9_.-]', '_', u)}.plan.json"
+                    batch.unit_plan(batch.launch_form(cmd)[0], plan_f, spec, one_load=one_load(spec))  # F283
+                    f.write(f"# {u}: its runs in one process (F259, tests.one_process)\n$ {batch.command(plan_f)}\n")
+                    f.flush()
+                # FIX.30; F270: the unit's command, so the safe runner files its runs under their command-line prefix
+                penv = dict(uenv, **hostmem_env(log, [cmd], f), **{stamps.UNIT_CMD_ENV: cmd})
+
+                def proc(c, k=0):
+                    if k:  # F269: the unit's runs needing another model, in a fresh process
+                        f.write(f"\n# {u}: F269: a fresh process for the runs needing another model\n$ {c}\n")
+                    f.flush()
+                    return subprocess.run(
+                        c, shell=True, cwd=spec.repo, env=penv, stdout=f, stderr=subprocess.STDOUT
+                    ).returncode
+
+                def say(text):
+                    f.write(text)
+                    f.flush()
+
+                if plan_f is not None:  # F281: on the resident runner when one serves the spec
+                    rc = batch.drive(plan_f, proc, env=penv, echo=say)
+                    rest = batch.load_results(plan_f).get("deferred") or []
+                    if rest:
+                        f.write(f"\n# {u}: F269: runs never run (a fresh process ran none of them): {rest}\n")
+                        rc = rc or 1
+                else:
+                    rc = proc(cmd)
+            if rc == SAFE_HANG_RC and _uses_safe_runner(cmd):  # F204: before the next unit's mesh open wipes it
+                kept = hangdump.keep(spec.repo, hangdump.dest_for(log, u))
+                f.write(f"\n# {u}: HANG; triage + inspector kept in {kept}\n")
+                f.flush()
+            waived = None
+            if rc != 0 and not (rc == SAFE_HANG_RC and _uses_safe_runner(cmd)):
+                f.flush()
+                with open(log, errors="replace") as lf:
+                    lf.seek(start)
+                    seg = lf.read()
+                if not INFRA_STOP.search(seg):
+                    waived = waived_failures(seg, stamps.unit_waivers(spec, cmd))
+                if waived is not None:  # F225: the owner waived exactly these failures; reported, never silent
+                    f.write(
+                        f"\n# {u}: WAIVED (owner, tests.unit_waivers): every failure matches the waiver: {waived}\n"
+                    )
+                    rc = 0
+            if u in shared:
+                got = dict(shared[u]["metrics"])
+                if shared[u].get(PRE_RUN):  # FIX.31: run before this gate (which reset its results): put them back
+                    _merge_metrics(results, tid, got)
+                    for src, name in shared[u].get("restore") or []:
+                        if Path(src).exists():
+                            shutil.copy2(src, results / name)
+            else:
+                got = {k: v for k, v in M.load(tid, results).items() if before.get(k) != v}
+                if batch.LOADS_METRIC in got:  # FIX.29: the model loads of the unit's processes (a running total)
+                    t0_loads = int((before.get(batch.LOADS_METRIC) or {}).get("total") or 0)
+                    loads["n"] += int(got[batch.LOADS_METRIC].get("total") or 0) - t0_loads
+                    loads["seen"] = True
+            if loads["seen"]:  # FIX.29: the model loads of this gate's processes so far
+                gl = {"value": loads["n"], "t": time.strftime("%Y-%m-%dT%H:%M:%S")}
+                got[batch.GATE_LOADS_METRIC] = gl
+                _merge_metrics(results, tid, {batch.GATE_LOADS_METRIC: gl})
+            if store is not None:
+                ok = unit_ok(limits, got, len(plan) == 1)
+                hang = rc == SAFE_HANG_RC and _uses_safe_runner(cmd)
+                outs = [
+                    p
+                    for p in outputs_in(results, task)
+                    if p.exists()
+                    and p.name != f"{tid}.json"
+                    and (p.name in shared[u]["files"] if u in shared else seen.get(p) != p.stat().st_mtime_ns)
+                ]
+                verdict = "PASS" if rc == 0 and ok else ("HANG" if hang else "FAIL")
+                rec = {"stamp": st, "verdict": verdict, "rc": rc, "s": round(time.time() - t0, 1), "metrics": got}
+                rec["cmd_text"] = cmd  # FIX.31: another task's gate finds the same runs by it (_lookup)
+                if waived is not None:
+                    rec["waived"] = waived
+                store.put(u, sid, dict(rec, by=tid, t=time.strftime("%Y-%m-%dT%H:%M:%S")), outs, tid)
+                sids[u] = sid
+                if delta is not None:
+                    f.flush()
+                    with open(log, errors="replace") as lf:
+                        lf.seek(start)
+                        infra = rc != 0 and bool(INFRA_STOP.search(lf.read()))
+                    dv = "STOPPED" if infra else ("PASS" if verdict == "PASS" else "FAIL")
+                    delta.put(u, _delta_rec(dv, under, cmd, uenv, sid, got, round(time.time() - t0, 1), spec.repo))
+                    stop = verdict != "PASS"  # F169: a unit whose metrics missed stops the gate here too
+                    note(k, n, u, dv, round(time.time() - t0, 1))
+            if rc != 0 or stop:
+                # FIX.30: the units of this unit's shared process that the process never reached are NOT RUN in this
+                # gate (the delta, the stamp store, the summary), never left with an older PASS
+                for k2, (u2, cmd2, st2, sid2) in enumerate(plan, 1):
+                    if k2 <= k or u2 not in shared or shared[u2]["rc"] == 0:
+                        continue
+                    why = f"not run: the shared process stopped at {u} (rc {rc}) before reaching it"
+                    f.write(f"# {u2}: {NOT_RUN} ({why}, FIX.30)\n")
+                    u2env = dict(env, **{M.TASK_ENV: unit_base(u2)})
+                    if store is not None:
+                        rec = {"stamp": st2, "verdict": NOT_RUN, "rc": shared[u2]["rc"], "s": 0.0, "metrics": {}}
+                        store.put(u2, sid2, dict(rec, by=tid, t=time.strftime("%Y-%m-%dT%H:%M:%S"), why=why), [], tid)
+                    if delta is not None:
+                        delta.put(u2, dict(_delta_rec(NOT_RUN, under, cmd2, u2env, sid2, {}, 0.0, spec.repo), why=why))
+                    note(k2, n, u2, NOT_RUN, 0.0)
+                f.flush()
+                break
+    return rc, reused, sids
+
+
+def _run_group(spec: Spec, group: list, env: dict, log: Path, results: Path, tid: str, f, unit_env) -> dict:
+    """FIX.29: the gate units of ``group`` [(unit, command)] in ONE batch process (core/batch.gate_entries,
+    testing/batch.run_plan): the mesh opened and the model loaded once. Each unit's output goes to its own log, then
+    into the gate log at the unit's turn. {unit: {"rc", "metrics", "files", "text", "s", "loads", "first"}}: rc as the
+    unit's own process would give it (a hang: SAFE_HANG_RC for the run it hung in; a unit the process never reached:
+    1, the reason in its text); ``loads`` the process's model loads, on the group's first unit (``first``)."""
+    d = log.parent / f"{log.stem}.shared"
+    d.mkdir(parents=True, exist_ok=True)
+    names = [u for u, _ in group]
+    logs = {u: d / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', u)}.log" for u in names}
+    for u, c in group:
+        logs[u].write_text(f"$ {c}\n# FIX.29: in one process with {', '.join(x for x in names if x != u)}\n")
+    entries = batch.gate_entries(group, env, {u: unit_env(u) for u in names}, logs)
+    plan = batch.write_plan(d / "plan.json", entries, stop_on_fail=True, one_load=one_load(spec))  # F283
+    hint = batch.hints([r for _, c in group for r in batch.parse_all(c)], spec)
+    cmd = batch.command(plan)
+    blog = d / "process.log"
+    f.write(
+        f"# FIX.29: units {', '.join(names)} in one process (tests.one_process)\n$ {cmd}\n# its own output: {blog}\n"
+    )
+    f.flush()
+    t0 = time.time()
+    mem = hostmem_env(log, [c for _, c in group], f)  # FIX.30
+    penv = dict(env, **unit_env(names[0]), **hint, **mem)
+
+    def proc(c, k):  # F269: a run needing another model goes to a fresh process (k > 0), its output appended
+        with open(blog, "w" if k == 0 else "a") as bf:
+            if k:
+                bf.write(f"\n# F269: a fresh process for the runs needing another model\n$ {c}\n")
+                bf.flush()
+            return subprocess.run(
+                c, shell=True, cwd=spec.repo, env=penv, stdout=bf, stderr=subprocess.STDOUT
+            ).returncode
+
+    def say(text):  # F281: the resident runner's output for this group, where the process's would have gone
+        with open(blog, "a") as bf:
+            bf.write(text)
+
+    prc = batch.drive(plan, proc, env=penv, echo=say)
+    got = batch.load_results(plan)
+    runs, running = got.get("runs") or {}, got.get("running")
+    btext = blog.read_text(errors="replace")
+    out = {}
+    for k, u in enumerate(names):
+        mine = [e for e in entries if e["unit"] == u]
+        rs = [runs.get(e["name"]) for e in mine]
+        text = logs[u].read_text(errors="replace")
+        metrics, files, secs = {}, [], 0.0
+        for r in rs:
+            if r and r.get("rc") is not None:
+                metrics.update(r.get("metrics") or {})
+                files += r.get("files") or []
+                secs += float(r.get("s") or 0)
+        if all(r and r.get("rc") is not None for r in rs):
+            rc = next((r["rc"] for r in rs if r["rc"]), 0)
+        elif prc == SAFE_HANG_RC and any(e["name"] == running for e in mine):
+            rc = SAFE_HANG_RC
+            text += f"\n# FIX.29: the shared process hung in this unit; its output:\n{btext}"
+        elif prc == SAFE_HANG_RC and running is None and not runs:
+            rc = SAFE_HANG_RC  # (hung before any run: the mesh open or the first load)
+            text += f"\n# FIX.29: the shared process hung before its first run; its output:\n{btext}"
+        elif any(e["name"] == running for e in mine):  # FIX.30: died in this unit (a SIGKILL: exit 137, OOM)
+            rc = 1
+            text += f"\n# FIX.30: the shared process ended (rc {prc}) while running {running}; its output:\n{btext}"
+        else:
+            failed = [n for n, r in runs.items() if r and r.get("rc")]
+            why = f"run {failed[0]} failed first in the shared process" if failed else f"the process ended (rc {prc})"
+            rc = 1
+            text += f"\n# FIX.29: {u} not run: {why}; the process's output:\n{btext}"
+        out[u] = {
+            "rc": rc, "metrics": metrics, "files": files, "text": text, "s": secs,
+            "loads": sum(int((r or {}).get("loads") or 0) for r in runs.values()), "first": k == 0,
+        }  # fmt: skip
+    f.write(f"# FIX.29: the shared process of {', '.join(names)}: rc {prc}, {time.time() - t0:.0f} s\n")
+    f.flush()
+    return out
+
+
+def _delta_rec(verdict: str, under: str, cmd: str, uenv: dict, sid, metrics: dict, secs: float, repo=None) -> dict:
+    return {
+        "verdict": verdict,
+        "under_test": under,
+        "cmd": stamps.sha16(cmd),
+        "env": stamps.unit_env_key(cmd, uenv, repo),  # F270
+        "sid": sid,
+        "metrics": metrics,
+        "s": secs,
+    }
+
+
+def unit_states(spec: Spec, ledger: Ledger, tid: str) -> dict[str, str]:
+    """F169: {unit: its last verdict in this task's gate (PASS, FAIL, STOPPED, NOT RUN) or 'not run'}, in gate order.
+    FIX.30: PASS only for a pass on the current code under test, command and environment (a pass the gate would keep);
+    an older pass is 'stale' (it runs again), never reported passed."""
+    return dict(_verdicts(spec, ledger, tid))
+
+
+def progress_lines(spec: Spec, ledger: Ledger, tid: str) -> list[str]:
+    st = unit_states(spec, ledger, tid)
+    done = [u for u, v in st.items() if v == "PASS"]
+    left = [u for u, v in st.items() if v != "PASS"]
+    return [
+        f"  units passed: {', '.join(done) or '-'}",
+        f"  units remaining: {', '.join(left) or '-'} (gate {tid} --continue runs only these)",
+    ]
+
+
+def _verdicts(spec: Spec, ledger: Ledger, tid: str) -> list[tuple[str, str]]:
+    """FIX.30: (unit, PASS | stale | <verdict> | not run) from the task's delta, PASS only when kept (``_kept``)."""
+    out = []
+    for u, st in delta_status(spec, ledger, tid):
+        if st.startswith("kept"):
+            out.append((u, "PASS"))
+        elif st.startswith("stale"):
+            out.append((u, "stale"))
+        elif st == "not run":
+            out.append((u, st))
+        else:
+            out.append((u, st.rsplit(" at ", 1)[0]))
+    return out
+
+
+def delta_status(spec: Spec, ledger: Ledger, tid: str) -> list[tuple[str, str]]:
+    """F169: (unit, state) for every unit of the task's gate: kept (passed on the current code under test), failed,
+    stopped, not run in its shared process (FIX.30), stale (passed on other code under test: runs again) or not run."""
+    tasks = ledger.tasks()
+    task = tasks[tid]
+    delta = stamps.Delta(spec.run_dir(run_name(ledger)), tid)
+    under = stamps.under_test_key(spec.repo, spec, under_test_paths(task, tasks), with_bytes=True)  # F175
+    limits = gate_limits(task, tasks)  # FIX.25
+    env = gate_env(spec, ledger, tid)
+    units = gate_units(task, tasks)
+    aliases = stamps.Store(spec.run_dir(run_name(ledger))).aliases()  # FIX.31: the key the gate will use
+    out = []
+    for u, cmd in units:
+        d = delta.get(u)
+        uenv = dict(env, **{M.TASK_ENV: unit_base(u)})
+        if _kept(d, under, cmd, uenv, limits, len(units) == 1, aliases, spec.repo):
+            out.append((u, f"kept (PASS at {d.get('t')})"))
+        elif not d:
+            out.append((u, "not run"))
+        elif d.get("verdict") == "PASS":
+            out.append((u, "stale (passed on other code under test or command: runs again)"))
+        else:
+            out.append((u, f"{d.get('verdict')} at {d.get('t')}"))
+    return out
+
+
+def run_gate(
+    spec: Spec,
+    ledger: Ledger,
+    tid: str,
+    commit: bool = False,
+    force: bool = False,
+    extra_env: dict | None = None,
+    record: bool = True,
+    reuse: dict | None = None,
+    fresh: bool = False,
+    units: list[str] | None = None,
+    rerun: list[str] | None = None,
+    on_unit=None,
+    check: bool = False,
+    pre: dict | None = None,
+) -> GateResult:
+    """Run the gate. record=False runs it without touching state.json (used by freeze's stub check).
+    check (F170, `gate <task> --check`, the agent's way to run its gate): like record=False (no state, no commit), but
+    every unit is kept in the stamp store and the task's delta, so the orchestrator's gate after the agent runs only
+    what the agent did not pass on the same code (audit item 2: every attempt cost one extra full gate).
+    reuse (F105): {"metrics": {...}, "source": text} measured by the same commands on the same code (a perf pick's A/B
+    'on' side): recorded, checked and committed like a run of the command, without running it again.
+    F150: a unit whose stamp has a recorded PASS is restored, not run (fresh=True runs every unit).
+    F169: a gate never restarts: a unit that passed in this task's gate on the same code under test is kept (the
+    delta runs); units (gate --unit) runs only those units and records them, without a gate verdict; rerun (gate
+    --rerun) runs the named units again even if kept. fresh (owner only) runs every unit."""
+    pre_run = pre  # FIX.31 (``pre`` below is the pre-run checks' list)
+    if units:
+        return run_units_only(spec, ledger, tid, units)
+    if check:
+        record, commit = False, False
+    tasks = ledger.tasks()
+    if tid not in tasks:
+        ledger.task(tid)  # raises
+    task = tasks[tid]
+    state = ledger.state()
+    if record and reuse is None and (state.get(tid) or {}).get("status") == "COMMIT_PENDING":  # F149: never re-run
+        if commit:
+            return commit_only(spec, ledger, tid)
+        return GateResult(tid, "COMMIT_PENDING", lines=[f"  passed, commit pending: `gate {tid} --commit-only`"])
+    blocked = [d for d in task.get("deps", []) if not satisfied(state.get(d, {}).get("status"))]
+    if blocked and not force:
+        return GateResult(tid, "BLOCKED", lines=[f"  deps not PASS or DEFERRED: {blocked}"])
+
+    now = lambda: time.strftime("%Y-%m-%dT%H:%M:%S")  # noqa: E731
+    unfrozen = []
+    if record and task.get("tests") and not task.get("frozen"):  # freeze's own validation runs use record=False
+        unfrozen = ["tests declared but not frozen (run: freeze <id>)"]
+    pre = [
+        f"  {e}"
+        for e in unfrozen
+        + freeze.verify(spec.repo, task)
+        + device_policy_errors(task)
+        + fixed_accuracy(task)
+        + wall_only_device_metrics(task)
+        + position_role_metrics(task)
+        + one_load_errors(spec, task, tasks)  # F283
+    ]
+    if pre:
+        res = GateResult(tid, "FAIL", lines=pre)
+        if record:
+            ledger.update(tid, status="FAIL", last_run=now(), reason=pre, history_add={"t": now(), "status": "FAIL"})
+        return res
+
+    if commit:  # F170 (audit item 22): only the task's changed files; none changed (a reused gate): no pre-commit run
+        changed = _dirty_under(spec.repo, list(task.get("paths") or [])) if task.get("paths") else []
+        if changed:
+            format_paths(spec.repo, changed)
+    # F172: a validation run (freeze's reference / stub / mutation checks: record=False, not --check) writes its metrics
+    # to a scratch dir: the zero stub's rel 1.0 overwrote the task's real results (DeepSeek-V4.1 C.swa.shared_expert)
+    results_dir = ledger.results_dir if (record or check) else spec.run_dir(run_name(ledger)) / "validation" / tid
+    M.reset(tid, results_dir)
+    for out in (
+        gate_outputs(ledger, task) if results_dir == ledger.results_dir else ()
+    ):  # F55: only what this gate writes now counts
+        if out.name != f"{tid}.json":
+            out.unlink(missing_ok=True)
+    if record:
+        ledger.update(tid, status="RUNNING", started=now())
+    log = log_dir(spec, ledger) / (f"{tid}.log" if record else f"{tid}.check.log")
+    env = gate_env(spec, ledger, tid)
+    env.update(extra_env or {})
+    env[M.RESULTS_ENV] = str(results_dir)  # F172
+    cmd = gate_command(task, tasks)
+    t0 = time.time()
+    reused, sids = [], {}
+    if reuse is not None:
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        out = M._path(tid, results_dir)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        data = {"task": tid, "metrics": {k: {"value": v, "t": stamp} for k, v in (reuse.get("metrics") or {}).items()}}
+        out.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+        log.write_text(f"$ {cmd}\nnot run again (F105): {reuse.get('source', '')}\n")
+        rc = 0
+    else:
+        store = stamps.Store(spec.run_dir(run_name(ledger))) if record or check else None
+        fresh = fresh or any(not (spec.repo / a).exists() for a in task.get("artifacts", []))  # made only by a run
+        delta = stamps.Delta(spec.run_dir(run_name(ledger)), tid) if record or check else None
+        if store is not None:  # FIX.31: records stamped before the code-key split are found under today's keys
+            try:
+                stamps.ensure_aliases(spec.run_dir(run_name(ledger)), spec.repo, spec, env)
+            except stamps.GitError as e:
+                log.parent.mkdir(parents=True, exist_ok=True)
+                print(f"  key aliases not updated: {e}")
+        live = (
+            _live_gate(spec, ledger, tid, log, on_unit, "gate check" if check else "gate") if record or check else None
+        )
+        try:
+            rc, reused, sids = run_units(
+                spec, task, env, log, results_dir, store, fresh, tasks, delta, None, frozenset(rerun or ()),
+                live.note if live else on_unit, pre_run,
+            )  # fmt: skip
+        finally:
+            if live:
+                live.close()
+    dur = time.time() - t0
+
+    got = M.load(tid, results_dir)
+    thresholds = gate_limits(task, tasks)  # FIX.25: with the determinism limit
+    if reuse is not None and reuse.get("partial"):  # F122: a quick A/B; the full gate runs before the final task
+        thresholds = measured_only(thresholds, got)
+    m_ok, lines = check_metrics(thresholds, got)
+    missing = [a for a in task.get("artifacts", []) if not (spec.repo / a).exists()]
+    hang = rc == SAFE_HANG_RC and _uses_safe_runner(task["gate"]["cmd"])
+    verdict = "PASS" if (rc == 0 and m_ok and not missing) else ("HANG" if hang else "FAIL")
+    head = [f"  cmd rc={rc} ({dur:.0f}s), log: {log}"]
+    if reused:
+        head.append(f"  reused: same code, not run (F150): {', '.join(reused)}")
+    if hang and (spec.repo / TRIAGE).exists():
+        shutil.copy(spec.repo / TRIAGE, log.with_suffix(".triage.txt"))
+        head.append(f"  triage: {log.with_suffix('.triage.txt')}")
+    kept = sorted(log.parent.glob(f"{log.stem}.hang-*"), key=lambda p: p.stat().st_mtime) if hang else []
+    if hang and not kept:  # F204: a single-command gate (no unit loop) keeps its dump here
+        kept = [hangdump.keep(spec.repo, hangdump.dest_for(log, tid))]
+    if kept and kept[-1]:
+        head.append(f"  hang dump (triage + inspector, F204): {kept[-1]}")
+    if record and reuse is None and verdict != "PASS":  # F169: where the gate stopped, for --continue and the overseer
+        head += progress_lines(spec, ledger, tid)
+    head = head + [task_accounting_line(spec, log.parent, tid)]  # F286
+    res = GateResult(tid, verdict, rc, head + lines + [f"  MISSING artifact {a}" for a in missing], log, None, dur)
+    res.reused = reused
+    if record or check:  # FIX.31: the supervisor's watch wakes on a gate's result, whoever ran it
+        _gates_log(spec, ledger, f"[{tid}] {'gate check' if check else 'gate'} {verdict} ({dur:.0f} s, log {log})")
+    if not record:
+        return res
+
+    entry = ledger.state().get(tid, {})
+    ledger.update(
+        tid,
+        status=verdict,
+        last_run=now(),
+        duration_s=round(dur, 1),
+        rc=rc,
+        attempts=entry.get("attempts", 0) + (0 if verdict == "PASS" else 1),
+        metrics=state_metrics(gate_limits(task, tasks), got),
+        log=str(log),
+        reason=[] if verdict == "PASS" else res.lines,
+        stamp={"units": sids, "reused": reused} if sids else None,  # F150
+        units=unit_states(spec, ledger, tid) if reuse is None else None,  # F169: {unit: PASS|FAIL|STOPPED|not run}
+        history_add={"t": now(), "status": verdict, "s": round(dur, 1), **({"reused": reused} if reused else {})},
+    )
+    if verdict == "PASS" and task.get("step") == "goldens":  # F134: a drift changes only through its G task
+        from models.demos.common.bringup.reference.drift import pin
+
+        pinned = pin(spec, ledger)
+        res.lines.append(f"  drift files pinned in {len(pinned)} end-to-end gates: {', '.join(pinned) or '-'}")
+    if commit and verdict == "PASS":
+        try:
+            with ledger.locked():
+                res.commit = git_commit(
+                    spec,
+                    stage_paths(spec, ledger, task),
+                    commit_subject(spec, task),
+                    f"Gate: PASS\n" + "\n".join(res.lines),
+                )
+        except RuntimeError as e:  # F149: the checks passed; only the commit waits (F110 made it a FAIL and a re-run)
+            return _refused(spec, ledger, task, res, e)
+    return res
+
+
+class _live_gate:
+    """FIX.31: runs/<run>/live/gate-<pid>.json while a gate runs (whoever runs it: the orchestrator, gate --continue,
+    gate --check, a chain script): its task, log and unit progress. The supervisor's watch counts it as a live run
+    and wakes on the gate's result line in runs/<run>/gates.log (``_gates_log``)."""
+
+    def __init__(self, spec, ledger, tid: str, log: Path, on_unit, kind: str = "gate"):
+        self.kind = kind  # "gate", or "gate check" (an agent's --check: its lines never wake the watch)
+        self.dir = spec.run_dir(run_name(ledger)) / "live"
+        self.path = self.dir / f"gate-{os.getpid()}-{re.sub(r'[^A-Za-z0-9_.-]', '_', tid)}.json"
+        self.tid, self.log, self.on_unit = tid, str(log), on_unit
+        self.info = {"pid": os.getpid(), "what": f"{kind} {tid}", "task": tid, "log": self.log, "t": time.time()}
+        self._write()
+
+    def _write(self):
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.info))
+            tmp.replace(self.path)
+        except OSError:
+            pass
+
+    def note(self, k, n, unit, verdict, secs):
+        self.info.update(unit=f"{k}/{n} {unit} {verdict}", t_unit=time.time())
+        self._write()
+        what = "gate unit" if self.kind == "gate" else "check unit"
+        _gates_log_dir(self.dir.parent, f"[{self.tid}] {what} {k}/{n} {unit} {verdict} ({secs:.0f} s)")
+        if self.on_unit:
+            self.on_unit(k, n, unit, verdict, secs)
+
+    def close(self):
+        self.path.unlink(missing_ok=True)
+
+
+def _gates_log_dir(run_dir: Path, line: str) -> None:
+    try:
+        with open(Path(run_dir) / "gates.log", "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} pid={os.getpid()} {line}\n")
+    except OSError:
+        pass
+
+
+def _gates_log(spec, ledger, line: str) -> None:
+    _gates_log_dir(spec.run_dir(run_name(ledger)), line)
+
+
+def run_units_only(spec: Spec, ledger: Ledger, tid: str, names: list[str]) -> GateResult:
+    """F169 (gate --unit): run only the named units of the task's gate (after a fix, to see the failed one pass), record
+    them in the task's delta; the task's status is not changed (gate --continue then runs the rest and commits)."""
+    tasks = ledger.tasks()
+    task = tasks[tid]
+    known = [u for u, _ in gate_units(task, tasks)]
+    bad = [n for n in names if n not in known]
+    if bad:
+        return GateResult(tid, "FAIL", lines=[f"  no unit {bad} in {tid}'s gate; units: {', '.join(known)}"])
+    log = log_dir(spec, ledger) / f"{tid}.units.log"
+    env = gate_env(spec, ledger, tid)
+    store = stamps.Store(spec.run_dir(run_name(ledger)))
+    delta = stamps.Delta(spec.run_dir(run_name(ledger)), tid)
+    t0 = time.time()
+    rc, _, _ = run_units(spec, task, env, log, ledger.results_dir, store, True, tasks, delta, set(names))
+    states = {u: (delta.get(u) or {}).get("verdict", "not run") for u in names}
+    verdict = "PASS" if rc == 0 and all(v == "PASS" for v in states.values()) else "FAIL"
+    lines = [f"  units only (F169), rc={rc} ({time.time() - t0:.0f}s), log: {log}"]
+    lines += [f"  {u}: {v}" for u, v in states.items()]
+    lines.append(f"  next: `gate {tid} --continue` runs the units not yet passed and commits when all pass")
+    return GateResult(tid, verdict, rc, lines, log, None, time.time() - t0)
+
+
+TOO_LARGE = re.compile(r"(\S+) \((\d+) KB\) exceeds")  # scripts/check_file_size.py, the repo's large-file hook
+
+
+def task_files_map(repo: Path, task: dict) -> dict:
+    """{file: sha256} of the task's own files (its paths), without the records the framework itself writes
+    (stamps.SKIP: state.json, results/, dashboards, overseer.yaml, ...). F211: FIX.8's paths held its ledger, so the
+    refusal's own state.json write made commit-only see "the task's files changed" and refuse for good."""
+    files = sorted(f for f in set(_files_under(repo, list(task.get("paths") or []))) if not stamps._SKIP.match(f))
+    return {f: freeze.sha256_file(repo / f) for f in files}
+
+
+def task_files_key(repo: Path, task: dict) -> str:
+    """The content of the task's own files (its paths and frozen files): what a pending commit must still match."""
+    text = "\n".join(f"{f}\0{h}" for f, h in task_files_map(repo, task).items())
+    return hashlib.sha256((text + json.dumps(task.get("frozen"), sort_keys=True)).encode()).hexdigest()[:16]
+
+
+def _hook_fixed(pend: dict, now: dict) -> tuple[list, list]:
+    """F154: the files changed since the gate passed, split into those the refusing hook named (a hook fix: commit
+    without a re-run) and the rest (need the gate)."""
+    was = {f: h for f, h in (pend.get("files") or {}).items() if not stamps._SKIP.match(f)}  # F211: records never count
+    changed = sorted(f for f in set(was) | set(now) if was.get(f) != now.get(f))
+    named = [f for f in changed if any(f in ln for ln in pend.get("hook") or [])]
+    return named, [f for f in changed if f not in named]
+
+
+def _refused(spec: Spec, ledger: Ledger, task: dict, res: GateResult, err: Exception, pend: dict | None = None):
+    """F149: a passed gate whose commit git refused stays COMMIT_PENDING with the hook's output; its outputs stay."""
+    tid = task["id"]
+    hook = [ln for ln in str(err).splitlines() if ln.strip() and "Skipped" not in ln and "Passed" not in ln][-25:]
+    big = [m.group(1) for ln in hook for m in [TOO_LARGE.search(ln)] if m]
+    why = [
+        "  the gate passed; git refused its commit. Nothing re-runs: fix what the hook names, then "
+        f"`python -m models.demos.common.bringup gate {tid} --commit-only --spec <spec>` (or `resume`)"
+    ]
+    if big:
+        why.append(f"  too large for the repo: {', '.join(big)} (a framework fix keeps it out of the commit)")
+    why += [f"    {ln}" for ln in hook]
+    pend = dict(pend or {"lines": res.lines, "task_files": task_files_key(spec.repo, task)})
+    pend.setdefault("files", task_files_map(spec.repo, task))  # F154: per file, so a hook fix can be told apart
+    pend.update(t=time.strftime("%Y-%m-%dT%H:%M:%S"), hook=hook, too_large=big)
+    ledger.update(
+        tid,
+        status="COMMIT_PENDING",
+        commit_pending=pend,
+        reason=why,
+        history_add={"t": pend["t"], "status": "COMMIT_PENDING"},
+    )
+    res.verdict, res.commit, res.lines = "COMMIT_PENDING", None, res.lines + why
+    return res
+
+
+def commit_only(spec: Spec, ledger: Ledger, tid: str) -> GateResult:
+    """F149: commit a passed gate whose commit was refused, from the outputs it left; nothing runs. Refused again: it
+    stays pending and names the files too large."""
+    task, entry = ledger.task(tid), ledger.state().get(tid, {})
+    pend = entry.get("commit_pending")
+    if entry.get("status") != "COMMIT_PENDING" or not pend:
+        return GateResult(tid, "FAIL", lines=[f"  no pending commit (status {entry.get('status', 'TODO')})"])
+    res = GateResult(tid, "PASS", 0, list(pend.get("lines") or []))
+    fixed = []
+    if pend.get("task_files") and pend["task_files"] != task_files_key(spec.repo, task):
+        fixed, other = _hook_fixed(pend, task_files_map(spec.repo, task)) if pend.get("files") else ([], ["?"])
+        if other:  # F154: only the files the hook named may change after the gate (the fix it asked for)
+            res.verdict = "COMMIT_PENDING"
+            res.lines.append(
+                f"  the task's files changed since its gate passed: not committed (`rerun --from {tid}`)"
+                + (f": {', '.join(other)} (not named by the hook)" if other != ["?"] else "")
+            )
+            return res
+        res.lines.append(f"  changed after the gate, as the hook asked (F154): {', '.join(fixed)}")
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    ledger.update(tid, status="PASS", commit_pending=None, reason=[], history_add={"t": now, "status": "COMMITTED"})
+    try:
+        with ledger.locked():
+            res.commit = git_commit(
+                spec,
+                stage_paths(spec, ledger, task),
+                commit_subject(spec, task),
+                "Gate: PASS (committed without a re-run, F149)\n" + "\n".join(res.lines),
+            )
+    except RuntimeError as e:
+        return _refused(spec, ledger, task, res, e, pend)
+    res.lines.append(f"  committed without a re-run (the gate passed at {pend.get('t')})")
+    return res

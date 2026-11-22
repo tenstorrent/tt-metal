@@ -322,6 +322,10 @@ KernelCompileDescriptor build_kernel_descriptor(
     desc.request.build_key = build_env.build_key();
     desc.request.kernel_name = kernel->name() + "/" + std::to_string(kernel_hash);
     desc.request.gpp = build_env.build_env.get_gpp();
+    // Ship our build root so the server can re-root the sfpi toolchain / linker script / hw link
+    // objects to its own tree — lets a client whose tree is at a different path compile remotely
+    // without the server needing the client's filesystem layout.
+    desc.request.client_root = build_env.build_env.get_root_path();
     static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
     // Non-preprocess mode ships the generated source tree for the server to compile. In
     // preprocess-and-ship mode the shipped .ii units are self-contained (headers/defines inlined), so
@@ -346,6 +350,9 @@ KernelCompileDescriptor build_kernel_descriptor(
     // the per-kernel cache dir on the server, and is referenced as a sibling of the target output
     // dir ("../<name>").
     if (preprocess_and_ship) {
+        // When the device profiler is on, the remotely-compiled kernels' zone-source locations are
+        // never harvested locally (the compiler ran on the server), so recover them from each .ii below.
+        const bool profiler_enabled = MetalContext::instance().rtoptions().get_profiler_enabled();
         for (std::size_t t = 0; t < desc.request.targets.size(); ++t) {
             auto& target = desc.request.targets[t];
             const std::string client_out_dir = std::filesystem::path(desc.expected_elf_paths[t]).parent_path().string();
@@ -400,6 +407,9 @@ KernelCompileDescriptor build_kernel_descriptor(
                 } catch (...) {
                     remove_temps();
                     throw;
+                }
+                if (profiler_enabled) {
+                    tt::jit_build::utils::harvest_zone_src_locations_from_ii(bytes);
                 }
                 tt::jit_build::GeneratedFile gf;
                 gf.name = ii_name;
@@ -528,7 +538,10 @@ Program::Program(distributed::MeshDevice& mesh_device, const ProgramDescriptor& 
 
 void Program::populate_from_descriptor(const ProgramDescriptor& descriptor) {
     ScopedBusyClock build_busy(kProgramBuildBusy);
+    append(descriptor);
+}
 
+void Program::append(const ProgramDescriptor& descriptor) {
     if (descriptor.reload_table.has_value()) {
         internal_->set_reload_table(descriptor.reload_table->address, descriptor.reload_table->cores);
     }
@@ -3521,17 +3534,63 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         }
 
         // Throws on any compile failure; only past this point are all ELFs guaranteed on disk.
-        coordinator.finish();
-
-        // Now that the compile succeeded, write the reuse cache. A failure above would have thrown,
-        // so no sidecar is ever written for a missing or stale ELF.
-        for (const auto& kernel : preprocessed_kernels) {
-            finalize_preprocess_reuse_cache(device, kernel);
+        bool remote_ok = true;
+        try {
+            coordinator.finish();
+        } catch (const jit_server::RemoteCompileTransportError& e) {
+            // The compile server became unavailable mid-batch (a response wedged / the connection
+            // went half-open under load). This is infrastructure failure, NOT a real compile error,
+            // so fall back to a LOCAL compile of this program instead of failing it. The kernels are
+            // already prepped (submitted_kernels), so we reuse them directly — re-running prep_kernel
+            // would re-add reserved defines and assert. ensure_kernel_binaries is cache-aware:
+            // kernels the server did finish are read from disk; only the undelivered ones recompile.
+            log_warning(
+                tt::LogBuildKernels,
+                "Remote JIT compile unavailable ({}); falling back to local compile for program {}.",
+                e.what(),
+                this->get_id());
+            remote_ok = false;
         }
 
-        const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
-        for (const auto& [kernel, build_options] : submitted_kernels) {
-            load_kernel_binaries(kernel, build_options, binary_root);
+        if (remote_ok) {
+            // Now that the compile succeeded, write the reuse cache. A failure above would have
+            // thrown, so no sidecar is ever written for a missing or stale ELF. Skipped on the
+            // fallback path: the local compile writes its own cache state.
+            for (const auto& kernel : preprocessed_kernels) {
+                finalize_preprocess_reuse_cache(device, kernel);
+            }
+
+            const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
+            for (const auto& [kernel, build_options] : submitted_kernels) {
+                load_kernel_binaries(kernel, build_options, binary_root);
+            }
+        } else {
+            // Same no_wait + deferred join as the local path below: a duplicate that waited inside a
+            // build step would hold a compile worker.
+            std::mutex deferred_mutex;
+            std::vector<std::tuple<std::shared_ptr<Kernel>, JitBuildOptions*, size_t>> deferred;
+            for (auto& [kernel, build_options] : submitted_kernels) {
+                launch_build_step(
+                    [&, kernel] {
+                        auto kernel_hash = detail::KernelCompileHash(kernel, build_options, build_env.build_key());
+                        const auto binary_root = ensure_kernel_binaries(
+                            kernel, device, build_options, build_env, kernel_hash, /*no_wait=*/true);
+                        if (!binary_root) {
+                            std::lock_guard<std::mutex> lock(deferred_mutex);
+                            deferred.emplace_back(kernel, &build_options, kernel_hash);
+                            return;
+                        }
+                        load_kernel_binaries(kernel, build_options, *binary_root);
+                    },
+                    events);
+            }
+            sync_build_steps(events);
+            for (auto& [kernel, build_options, kernel_hash] : deferred) {
+                load_kernel_binaries(
+                    kernel,
+                    *build_options,
+                    *ensure_kernel_binaries(kernel, device, *build_options, build_env, kernel_hash));
+            }
         }
     } else {
         // Local path: parallel build via thread pool.
@@ -3630,6 +3689,8 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     this->compile_and_allocate_needed_ = false;
     this->compile_and_allocate_device_ = device;
 }
+
+bool Program::is_compiled() const { return internal_->is_compiled(); }
 
 void detail::ProgramImpl::set_runtime_id(ProgramId id) { this->runtime_id = id; }
 

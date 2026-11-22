@@ -46,14 +46,14 @@ Facts that shape the design:
 
 ## Phase 0: validation baseline (host only)
 
-1. `tests/prefill/full_model_reference.py` runs the checkpoint's model, which already includes the pre-filter, so
+1. `tests/pipeline_parallel_prefill/full_model_reference.py` runs the checkpoint's model, which already includes the pre-filter, so
    it is exact at any length. Its indexer einsum materializes `[T, heads, E]` (~275 GB at 32K tokens): run the
    reference indexer in query slices (exact, since every query is independent).
 2. Generate references at 20480 tokens (just past the threshold) and 32768.
 
 ## Phase 1: eager prefill (`forward`)
 
-In `tt/prefill/attention.py`, `DeepSeekV41PrefillAttention`:
+In `tt/pipeline_parallel_prefill/attention.py`, `DeepSeekV41PrefillAttention`:
 
 1. `PrefillShared.candidates`: additive TILE mask `[1, 1, T, E]` (0 kept, `-inf` dropped), or `None` while
    `E <= 16384` (keep everything).
@@ -64,7 +64,7 @@ In `tt/prefill/attention.py`, `DeepSeekV41PrefillAttention`:
      blocks scoring `-inf`;
    * `repeat_interleave` by 8 back to entries; `log` of the 0/1 mask gives the additive form.
 3. Index sources with `uses_candidates` add `shared.candidates` to their scores before the top-512 threshold.
-4. Drop the `max_entries` check in `_check_chunk`. In `tt/prefill/model.py`, carry `candidates` across stage
+4. Drop the `max_entries` check in `_check_chunk`. In `tt/pipeline_parallel_prefill/model.py`, carry `candidates` across stage
    edges in `_move_shared`, as `entry_sel` is, and free it with the other shared state.
 5. Validate: `test_full_model_prefill_verify.py` at `DEEPSEEK_V4_VERIFY_LEN=20480`, then 32768 (remove its
    `total <= max_entries` assert).
@@ -78,8 +78,8 @@ In `tt/prefill/attention.py`, `DeepSeekV41PrefillAttention`:
 3. Cross-stage hand-off: send the compact block mask `[T, cap / 8]` over the existing D2D sockets and expand it
    on the receiving stage (8 MB per 1024-token chunk at 32K, 128 MB at 512K). Past ~128K, send the per-query
    block indices instead (`[T, 2048]` int32, a fixed 8 MB) and scatter them on arrival.
-4. Server: remove the cap in `_V41Prefiller` (`demo/server.py`); update the 16384 notes in `tt/prefill/model.py`
-   and `tt/prefill/attention.py`.
+4. Server: remove the cap in `_V41Prefiller` (`demo/server.py`); update the 16384 notes in `tt/pipeline_parallel_prefill/model.py`
+   and `tt/pipeline_parallel_prefill/attention.py`.
 5. Validate: `test_prefill_decode_demo.py` on a prompt longer than 16384 tokens. It already compares the logits
    after prefill with replaying the prompt through decode.
 

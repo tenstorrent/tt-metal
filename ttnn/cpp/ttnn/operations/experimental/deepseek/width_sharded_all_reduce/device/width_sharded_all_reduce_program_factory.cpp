@@ -763,8 +763,13 @@ WidthShardedAllReduceMeshWorkloadFactory::cached_program_t WidthShardedAllReduce
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_1,
-            // fuse_residual = 0, residual_cb_id and num_residual_tiles unused.
-            .compile_args = {reduction_cb_index, reduction_CB_tiles, 0, 0, 0}});
+            .compile_args = {
+                reduction_cb_index,
+                reduction_CB_tiles,
+                0u,  // fuse_residual
+                0u,  // residual_cb_id
+                0u,  // num_residual_tiles
+            }});
     constexpr bool has_work = true;
     if (!output_cores_unused.empty()) {
         tt::tt_metal::SetRuntimeArgs(program, reduction_reader_kernel_id, output_cores_unused, {!has_work, 0, 0});

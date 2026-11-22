@@ -1,0 +1,167 @@
+# Model components -> reference op -> TTNN implementation, with the task that gates each one.
+# tag:  NATIVE    a TTNN op does it directly
+#       COMPOSED  built from several TTNN ops (no single matching op)
+#       CPU       stays on host (no TTNN path yet)
+# The dashboard derives each component's live state from its gating task in state.json:
+#   task PASS -> "on device, gated"; otherwise -> "CPU reference".
+
+components:
+  - id: embed
+    name: Token embedding
+    block: model
+    ref: F.embedding(tokens, W[103424, 2560])
+    ttnn: ttnn.embedding (replicated table)
+    tag: NATIVE
+    task: P2.4
+  - id: attn_norm
+    name: Input RMSNorm
+    block: attention
+    ref: rms_norm(eps=1e-5)
+    ttnn: ttnn.rms_norm
+    tag: NATIVE
+    task: P2.3
+  - id: qkv
+    name: Q/K/V projections
+    block: attention
+    ref: "x @ Wq[2560,2560], Wk/Wv[512,2560]"
+    ttnn: ttnn.linear (column-parallel, 5 Q + 1 KV head per chip)
+    tag: NATIVE
+    task: P2.6
+  - id: rope
+    name: Interleaved RoPE (theta 5e5) with chunk offset
+    block: attention
+    ref: apply_rope (pairs 2j, 2j+1)
+    ttnn: ttnn.experimental.rotary_embedding_llama + cos/sin for [start, start+S)
+    tag: NATIVE
+    task: P2.5
+  - id: kv_write
+    name: KV cache write at chunk offset
+    block: attention
+    ref: cache[:, start:end] = k, v
+    ttnn: paged_fill_cache (bf16 attention cache) + deepseek_prefill.update_padded_kv_cache (bf8 contract cache)
+    tag: NATIVE
+    task: P2.15
+  - id: sdpa
+    name: Chunked causal GQA attention
+    block: attention
+    ref: softmax(q k^T / sqrt(128) + causal(start)) v
+    ttnn: ttnn.transformer.scaled_dot_product_attention (chunk 0) / chunked_scaled_dot_product_attention
+    tag: NATIVE
+    task: P2.6
+  - id: o_proj
+    name: O projection + all_reduce
+    block: attention
+    ref: a @ Wo[2560,2560]
+    ttnn: ttnn.linear (row-parallel) + ttnn.all_reduce
+    tag: NATIVE
+    task: P2.6
+  - id: ffn_norm
+    name: Post-attention RMSNorm
+    block: mlp
+    ref: rms_norm(eps=1e-5)
+    ttnn: ttnn.rms_norm
+    tag: NATIVE
+    task: P2.3
+  - id: dense_mlp
+    name: Dense SwiGLU MLP (layer 0, 12288)
+    block: mlp
+    ref: down(silu(gate x) * up x)
+    ttnn: ttnn.linear x3 + ttnn.silu/mul, TP4 + all_reduce
+    tag: COMPOSED
+    task: P2.7
+  - id: router
+    name: MoE router (softmax, bias-corrected top-6, renorm)
+    block: moe
+    ref: topk(softmax(x Wr^T) + bias) ; gather ; w / sum(w)
+    ttnn: ttnn.linear(fp32) + softmax + add + ttnn.topk + ttnn.gather + sum/div
+    tag: COMPOSED
+    task: P2.8
+  - id: experts
+    name: Routed experts (64, top-6, FFN 1536), EP4
+    block: moe
+    ref: sum_k w_k SwiGLU_e(x)
+    ttnn: deepseek_prefill dispatch -> unified_routed_expert_moe -> combine -> post_combine_reduce (1-chip dispatch groups)
+    tag: NATIVE
+    task: P3.2
+  - id: shared
+    name: Shared experts (2 x 1536 fused), TP4
+    block: moe
+    ref: SwiGLU(x) with I=3072
+    ttnn: ttnn.linear x3 + silu/mul
+    tag: COMPOSED
+    task: P2.7
+  - id: moe_reduce
+    name: MoE combine (routed + shared) + all_reduce
+    block: moe
+    ref: routed + shared
+    ttnn: ttnn.add + ttnn.all_reduce
+    tag: NATIVE
+    task: P2.9
+  - id: final_norm
+    name: Final RMSNorm
+    block: model
+    ref: rms_norm
+    ttnn: ttnn.rms_norm
+    tag: NATIVE
+    task: P2.3
+  - id: lm_head
+    name: LM head (tied, vocab-sharded)
+    block: model
+    ref: out @ embed^T
+    ttnn: ttnn.linear (vocab-sharded), gather on host
+    tag: NATIVE
+    task: P2.11
+  - id: engine
+    name: Prefill-server adapter + runtime (ernie45_d_p)
+    block: model
+    ref: common/prefill PrefillModelAdapter contract
+    ttnn: KV chunk address table (disaggregation) + producer read-back
+    tag: NATIVE
+    task: P2.16
+  - id: mtp
+    name: Multi-token-prediction block (mtp_block.0)
+    block: model
+    ref: not used for prefill
+    ttnn: out of scope
+    tag: CPU
+    task: null
+
+# Things a reader of the dashboard should know: missing/limited TTNN ops (tagged), harness pitfalls.
+findings:
+  - tag: TTNN-GAP
+    title: DeepSeek EP pipeline assumed >1 chip per dispatch group (patched)
+    text: >-
+      unified_routed_expert_moe is now the MoE (TTFT 55k@5k 35.9 s -> 10.9 s). On a 1x4 mesh each dispatch group is one chip:
+      offset_cumsum's all_gather and dispatch/combine's fabric-neighbour setup assumed more than one. Patched in ttnn host code
+      (skip them on a 1-device axis; the kernels' existing no-fabric build is used). Cost: the kernel packs expert
+      activations to bf8, so final-hidden PCC goes 0.9984 -> 0.9965 and top-1 97.7% -> 95.7% (top-5 stays 100%).
+  - tag: PERF
+    title: SDPA config A (HiFi2, fp32 acc off, approx exp, q256/k512) - 55k TTFT 10.9 s -> 4.4 s
+    text: >-
+      fp32_dest_acc_en=True disables SDPA's streaming kernel on Blackhole. With it off and HiFi2, the 50k->55k chunk's
+      SDPA drops 1328 -> 203 ms and the chunk 1570 -> 445 ms. Accuracy is unchanged (final 0.9963, KV 0.9918, top-5 100%).
+      Enabled with ERNIE_SDPA_CFG=A (P3.4). A cold first run compiles one SDPA program per chunk offset (about 1.5 s each).
+  - tag: TTNN-GAP
+    title: ttnn.scatter has no fp32 TILE path
+    text: The dense routing matrix is scattered in bf16. Selection and renormalization stay fp32 (99.9% expert agreement).
+  - tag: TTNN-GAP
+    title: slice / mesh_partition need 32-aligned widths
+    text: >-
+      A 16-expert column split of the [S, 64] routing matrix is not tile-aligned. Workaround: routing @ M_j selector
+      matmul, which yields the per-expert weight already broadcast to [S, 2560].
+  - tag: HARNESS
+    title: Precompile stub of comp_pcc leaks into the real pass
+    text: >-
+      tests/plugins/up_front_collect.py rebinds comp_pcc -> (True, 0.999999) for the collect pass. Lazily-imported
+      call sites (e.g. the prefill producer's KV check) still see the stub in the real pass, so every KV PCC reads
+      0.999999. P2.16 runs with --no-precompile and cross-checks against an independent PCC.
+  - tag: HARNESS
+    title: Ambient PYTHONPATH pointed at another checkout
+    text: >-
+      PYTHONPATH=/localdev/dnijemcevic/tt-metal made plain pytest import models.demos.common from the other tree.
+      gate.py now pins PYTHONPATH to this repo for every gate command.
+  - tag: CONTRACT
+    title: ERNIE K is natively in Meta (interleaved) RoPE order
+    text: >-
+      The producer's GQA reader normally permutes golden K from HF to Meta order. The ERNIE adapter declares
+      golden_k_rope_layout = interleaved, and the producer skips the permutation (2-line change in prefill_producer.py).

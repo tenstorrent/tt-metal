@@ -1,0 +1,39 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [
+  "that a full-run golden dumps per-chunk boundaries only for step_dump_layers (all other layers: final kv_cache state + snapshots), so any read-back of per-position window KV must fall back to the ring snapshot at the length (now DS41-124)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-12",
+   "answer": "done",
+   "evidence": "tt/runners/kv_contract.golden_rows: step layers full [0, length) window KV; other layers last min(128, length) positions from golden.state(layer, at=length) ring unrolled by p % 128 (CPU check: layer 0 ring at 10208 and 10240 == per-chunk 'kv' dumps, max diff 0); compress/index from final state unchanged; no layer skipped, no limit changed, no golden in the model path. Gate K.1#test_contract PASS (logs/K.1.units.log: '0_window_kv:full' [0,1,2,3,14,20,21,24], '0_window_kv:last-window' 32 other layers; window_kv 0.9762 >= 0.9434). test_runner_contract / test_runner_smoke do not call golden_rows: they read goldens through the frozen tests' caches.GoldenKV, which fails on this spec with SpecError no rung 's4096' (see contradicted)."
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel or padding change in this step; only the test-side golden read-back changed"
+  }
+ ],
+ "cited_only": [
+  "DS41-124"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "K.1",
+  "role": "contract",
+  "attempt": 3,
+  "agent": "bringup-engineer",
+  "t": "2026-10-27T19:18:29",
+  "head": "5161e706d64",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/K.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/K.1.contract.3.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/kv_contract.py"
+  ]
+ }
+}

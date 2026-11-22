@@ -1,0 +1,255 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <algorithm>
+#include <cstddef>
+#include <optional>
+#include <vector>
+
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/sdpa/device/block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
+#include "ttnn/operations/ccl/ccl_host_types.hpp"                           // ttnn::ccl::Topology
+#include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+
+namespace ttnn::operations::bringup::indexer_score {
+
+// Work-unit knobs (elements, tile-aligned; SDPAProgramConfig analogue).
+// One unit = q_chunk rows x k_chunk keys; heads stream in head_group blocks.
+struct IndexerScoreProgramConfig {
+    std::size_t q_chunk_size = 32;
+    std::size_t k_chunk_size = 32;
+    std::size_t head_group_size = 1;  // heads resident at once; 1 always fits L1, raise for perf (0 = all)
+    // Bring-up option (deepseek_v41_flash_d_p FIX.15, agent rule 18: at most 110 Tensix cores an op on a Galaxy):
+    // the op (compute and, fused, its all-gather workers) runs on the rectangle (0, 0) .. (max_grid_x - 1,
+    // max_grid_y - 1) of the device's compute grid. 0 = the whole grid (default, the program it always was).
+    std::size_t max_grid_x = 0;
+    std::size_t max_grid_y = 0;
+};
+
+// The device's compute grid cut to the config's max_grid (FIX.15)
+inline tt::tt_metal::CoreCoord op_grid(tt::tt_metal::CoreCoord g, const IndexerScoreProgramConfig& cfg) {
+    if (cfg.max_grid_x > 0) {
+        g.x = std::min<std::size_t>(g.x, cfg.max_grid_x);
+    }
+    if (cfg.max_grid_y > 0) {
+        g.y = std::min<std::size_t>(g.y, cfg.max_grid_y);
+    }
+    return g;
+}
+
+// Resolve head_group_size to a concrete head count (0 = all Hi). Single-sourced so validate and the
+// factory can't drift on the "0 = all" contract.
+inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_t Hi) {
+    return cfg.head_group_size == 0 ? Hi : static_cast<uint32_t>(cfg.head_group_size);
+}
+
+// Shared type (sp, chunk_local) with sparse_sdpa / sparse_sdpa_msa — see block_cyclic_layout.hpp; the
+// indexer reader reads K in logical order via this invP (reader_indexer_score.cpp).
+using ttnn::prim::BlockCyclicLayout;
+
+// Ring-fused indexer: the op subsumes the SP all-gather. Instead of the caller pre-gathering K, it hands the
+// per-chip LOCAL K shard (tensor_args.k_local) as the all-gather INPUT and the full persistent buffer
+// (tensor_args.k) as the all-gather OUTPUT. In indexed mode k_local may be a multi-slot ND-sharded cache and k
+// is batch-1 scratch; only cache_batch_idx is gathered. The fused program factory co-schedules the all-gather
+// (the only Linear+fuse-capable AG) into the SAME program as the indexer compute, wiring a producer->consumer
+// semaphore handshake so the reader starts scoring once the gather lands. Scalar AG config only (tensors live in
+// tensor_args). Routing fields are hashed because they shape AG worker allocation and topology. Semaphore
+// addresses and other dispatch-time values are deliberately hash-excluded; the cache-hit override re-patches
+// the four AG worker kernels and the consumer kernels. ring_size / ring_index are DERIVED from the mesh +
+// coordinate (cluster_axis), not stored.
+struct FusedRingConfig {
+    uint32_t num_links{1};  // fabric links for the gather
+    ttnn::ccl::Topology topology{ttnn::ccl::Topology::Linear};
+    std::vector<tt::tt_metal::GlobalSemaphore> ag_semaphore;  // the all-gather's own out-ready semaphores
+    std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id{std::nullopt};
+    bool full_mesh{false};
+    ttnn::ccl::snake_ring::Orientation snake_orientation{ttnn::ccl::snake_ring::Orientation::Row};
+    uint32_t mesh_rows{0};
+    uint32_t mesh_cols{0};
+    std::optional<uint64_t> route_plan_hash;
+    // NOTE: the all-gather concat dim is structurally fixed to seq (dim 2) -- the reader's block-cyclic
+    // permutation assumes it -- so it is a named constant at the AG call site, not a configurable field. The AG
+    // workers' grid offset is likewise computed by the factory (reserved-column math), not carried here.
+};
+
+struct operation_attributes_t {
+    // Absolute chunk_start of rank 0. Rank r uses chunk_start_idx + r*Sq; the per-device value is derived
+    // host-side and passed to compute as a RUNTIME arg (hash-excluded), so distinct values reuse one program.
+    uint32_t chunk_start_idx{0};  // elements, tile-aligned
+    // Query tokens represented by one K-cache row. DSA supports 1 (legacy) and 4 (compressed keys). Query
+    // placement remains in token units; K shape, kv_len, and block_cyclic.chunk_local are compressed-row units.
+    // Compile-time + hashed because it changes causal mask generation and geometry.
+    uint32_t key_compression_ratio{1};
+    // Mesh axes the query sequence is sharded over, outermost (SP ring) first: {} = linear device order,
+    // {sp} = 1D SP ring, {sp, tp} = 2D SP ring + TP sub-shard. The SP axis sets each device's causal offset;
+    // the optional TP axis (only alongside an SP axis + block_cyclic) adds a Sq-row sub-offset so each device
+    // owns [tp_rank*Sq, (tp_rank+1)*Sq) of its SP chip's chunk_local slab. Read via sp_axis()/tp_axis().
+    // Hashed via those accessors (it shapes the causal geometry, so distinct shardings get distinct programs).
+    std::vector<uint32_t> seq_shard_axes;
+    std::optional<uint32_t> sp_axis() const {
+        return seq_shard_axes.empty() ? std::nullopt : std::optional<uint32_t>(seq_shard_axes.front());
+    }
+    std::optional<uint32_t> tp_axis() const {
+        return seq_shard_axes.size() >= 2 ? std::optional<uint32_t>(seq_shard_axes[1]) : std::nullopt;
+    }
+    // ReLU on each per-head q.kT before the gate-mul. true = DSA/GLM (relu(q.k)*w); false = raw dot (M3 MSA).
+    // Compile-time, so the true path is byte-identical to before.
+    bool apply_relu{true};
+    // Output groups. 1 = sum ALL Hi heads -> [B,1,Sq,T] (DSA/GLM). G>1 = partition into G groups of Hi/G,
+    // sum within each -> [B,G,Sq,T] (M3 per-GQA-group). Compile-time (G==1 byte-identical). G>1 needs all
+    // heads resident (head_group_size 0 or Hi) and the full-strip path (k_chunk_size>=64).
+    uint32_t num_groups{1};
+    // Block-max-pool width in keys. 0 = no pooling -> [B,G,Sq,T]. >0 = max over each block -> [B,G,Sq,T/bs]
+    // (M3 block selection). Compile-time (block_tiles = block_size/TILE_WIDTH; bs==0 byte-identical). >0 needs
+    // bs % TILE_WIDTH == 0, T % bs == 0, k_chunk_size % bs == 0, and blocks-per-unit <= TILE_HEIGHT.
+    uint32_t block_size{0};
+    // MSA has no learned gates, only a constant 1/sqrt(d) scale: when true the reader fills cb_w with
+    // gate_scale in L1 (no weights tensor, no extra fill op) instead of reading DRAM. The weights handle in
+    // tensor_args is then an unused placeholder (the caller passes q). Compile-time + hashed (changes the
+    // reader binary); gate_scale is hashed too so distinct scales get distinct programs. DSA: false (reads
+    // its learned weights), byte-identical to before.
+    bool synthesize_gate{false};
+    float gate_scale{1.0f};
+    IndexerScoreProgramConfig program_config{};
+    // Resolved (not optional) so it is part of the program-cache key; the callable fills it from the user's
+    // optional config, defaulting math_fidelity to the dtype-derived choice.
+    DeviceComputeKernelConfig compute_kernel_config{};
+    // Indexed KV cache: selects the batch slot of a shared [B,1,T,D] k (page ids offset by
+    // cache_batch_idx * Tt * Dt). NOT hashed, re-applied each dispatch, so switching slots does NOT recompile.
+    std::optional<uint32_t> cache_batch_idx{std::nullopt};
+    bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
+    // Recomposition terms for the trace-safe slot select (see tensor_args::cache_batch_idx_tensor).
+    // RUNTIME args, deliberately NOT hashed: cache_batch_idx is already hash-excluded so ONE cached
+    // program serves every slot AND every layer, and hashing the layer index would fork it 78 ways.
+    // Freezing them in a capture is still correct -- they are layer-constant, and each layer is its own
+    // captured op instance. Only the per-REQUEST user id needs a tensor.
+    uint32_t index_cache_num_layers{1};
+    uint32_t index_cache_layer_idx{0};
+    // Runtime KV length: the valid prefix this dispatch (rest masked). NOT hashed, so growing kv_len <= T
+    // reuses ONE program. grid/work-split/output width stay keyed on the hashed T. nullopt == T.
+    std::optional<uint32_t> kv_len{std::nullopt};
+    bool has_runtime_kv_len() const { return kv_len.has_value(); }
+    // Resolved block-cyclic (per-SP-shard) K layout. When set, the reader remaps each logical k-tile to its
+    // physical (permuted) tile, presenting K in natural key-row order. chunk_local is stored in compressed K
+    // rows (the public block_cyclic_chunk_local argument remains query-token rows). HASHED (sp/chunk_local
+    // shape the reader binary via compile-time arguments). nullopt == contiguous K.
+    std::optional<BlockCyclicLayout> block_cyclic{std::nullopt};
+    bool has_block_cyclic() const { return block_cyclic.has_value(); }
+    // Ring-fused all-gather config (see FusedRingConfig). nullopt = the classic unfused path (caller pre-gathers
+    // K), which selects the classic program factory and stays byte-identical.
+    std::optional<FusedRingConfig> fused_ring{std::nullopt};
+    bool has_fused_ring() const { return fused_ring.has_value(); }
+    // KV dedup: KEYS striped this many times finer than the queries are sharded. Deliberately NOT folded into
+    // block_cyclic -- device_causal_geometry indexes by SP-ring rank, so that would shift the causal diagonal.
+    uint32_t key_stripe_split{1};  // 1 = pre-dedup. HASHED: it bakes the reader's invP divisors.
+    // Bring-up fork option (default false = the source's rotation-exact query geometry). true: the queries are
+    // NATURAL contiguous blocks of the chunk, whatever the start -- device (SP rank d, TP rank c) holds query
+    // positions chunk_start_idx + d*chunk_local + c*Sq + [0, Sq) (chunk_local in query tokens) -- while the KEYS
+    // keep the block-cyclic cache layout (the invP remap is position-based, independent of the start). Linear
+    // causal diagonal, no straddle. Host-scalar chunk_start_idx only (the metadata path derives the rotated
+    // geometry on device). HASHED (it selects the causal geometry; cheap insurance against a stale override).
+    bool natural_query_blocks{false};
+    // Bring-up fork option (DeepSeek-V4.1 P.31; default 0 = block_cyclic_chunk_local): with natural_query_blocks, the
+    // query tokens per SP rank, when the queries' chunk differs from the key cache's (a small chunk scoring keys a
+    // larger chunk wrote): device (d, c) holds positions chunk_start_idx + d*natural_query_rows + c*Sq + [0, Sq).
+    // The keys keep the cache's block-cyclic layout (block_cyclic_chunk_local). HASHED.
+    uint32_t natural_query_rows{0};
+    // Bring-up fork option (DeepSeek-V4.1 PB.3A, packed prefill; default hi 0 = off): with natural_query_blocks, the
+    // chunk tokens [natural_query_lane_lo, natural_query_lane_hi) are one lane of a packed chunk whose queries start
+    // at chunk_start_idx: a device whose natural chunk offset off = d*rows + c*Sq lies in the lane holds positions
+    // chunk_start_idx + (off - lo) + [0, Sq); every other device keeps chunk_start_idx + off (its rows are another
+    // lane's and are not read). A runtime value like chunk_start_idx: NOT hashed.
+    uint32_t natural_query_lane_lo{0};
+    uint32_t natural_query_lane_hi{0};
+    // Bring-up fork option (DeepSeek-V4.1 PB.3A, packed prefill: ONE ring call over every lane; default lane_rows 0 =
+    // off; fused ring + natural_query_blocks only): lane l = chunk tokens [l lane_rows, (l + 1) lane_rows). A device
+    // takes its lane l (from its natural chunk offset) and scores its queries as one natural_query_lane call of that
+    // lane would: chunk start lane_starts[l], kv_len lane_kv_lens[l], keys gathered from buffer lane_buffer[l] (0: k /
+    // k_local, i >= 1: tensor_args.k_extra[i - 1] / k_local_extra[i - 1]). The ring gathers EVERY buffer's k_local
+    // (one all-gather of up to 8 inputs, no partial readiness); kv_len (the attribute) is the largest lane's, the
+    // gather's extent. lane_starts / lane_kv_lens are runtime values; lane_buffer is HASHED (a device's program binds
+    // its lane's buffers by position: one program a lane -> buffer map).
+    uint32_t lane_rows{0};
+    std::vector<uint32_t> lane_starts{};
+    std::vector<uint32_t> lane_kv_lens{};
+    std::vector<uint32_t> lane_buffer{};
+    // Bring-up fork option (DeepSeek-V4.1 PB.3M, PACKED_LANE_BALANCE; default false = the PB.3A gather): with
+    // lane_rows > 0, each gathered buffer moves only the extent its own lanes read (the largest kv_len of the lanes
+    // whose lane_buffer is that buffer), not the largest lane's: a mixed packed chunk's short lanes stop carrying the
+    // longest lane's key extent around the ring. Runtime extents (re-patched every call); HASHED (one program a value).
+    bool lane_own_extent{false};
+    // Bring-up fork option (DeepSeek-V4.1 PB.7C, glued packed prefill: ONE ring call when a device holds query rows of
+    // several segments; default empty = off; fused ring + natural_query_blocks only, exclusive with lane_rows): per
+    // device (natural chunk offset / Sq, i.e. chip-linear r TP + c) kRangeStride words [n, (row_lo, row_hi, buffer,
+    // start, kv_len) x kRangesMax]: the device's query rows [row_lo, row_hi) (multiples of 32 and of q_chunk_size)
+    // score at positions start + (row - row_lo) against the keys of buffer `buffer` (0: k / k_local, i: k_extra[i - 1]
+    // / k_local_extra[i - 1]) up to kv_len (compressed rows); rows no range covers score nothing (their output is
+    // left untouched). Every value is a RUNTIME value (re-patched every call; the buffer map too): only the presence
+    // is hashed. The ring gathers every buffer's k_local, each to the largest kv_len of the ranges reading it; the key
+    // multicast down a core column is off (a column's groups may read different buffers).
+    std::vector<uint32_t> lane_ranges{};
+    static constexpr uint32_t kRangesMax = 8;
+    static constexpr uint32_t kRangeWords = 5;
+    static constexpr uint32_t kRangeStride = 1 + kRangesMax * kRangeWords;
+    bool has_lane_ranges() const { return !lane_ranges.empty(); }
+    // Bring-up fork block epilogue (opt-in, fused ring only; default 0 / false = no epilogue, the program unchanged):
+    // block_keys > 0 when tensor_args.block_bias or block_max_out is given -- blocks of block_keys adjacent logical
+    // keys (block b = keys [b block_keys, (b + 1) block_keys)), applied by the writer to the untilized scores.
+    // block_max_pin: block_max_out gets +inf at each query's own block (its newest visible key). HASHED.
+    uint32_t block_keys{0};
+    bool block_max_pin{false};
+    // The (stripes, per-stripe chunk) pair the invP remap decodes with; the product is the global chunk either way.
+    uint32_t key_stripes() const { return block_cyclic.has_value() ? block_cyclic->sp * key_stripe_split : 1; }
+    uint32_t key_stripe_chunk() const {
+        return block_cyclic.has_value() ? block_cyclic->chunk_local / key_stripe_split : 0;
+    }
+};
+
+struct tensor_args_t {
+    const Tensor& q;
+    const Tensor& k;  // fused: persistent all-gather OUTPUT; batch 1 in indexed mode
+    const Tensor& weights;
+    // Fused only: per-chip LOCAL K [B,1,sll,D], interleaved or ND-sharded. nullopt unfused.
+    std::optional<Tensor> k_local{std::nullopt};
+    // Optional 1-element UINT32 row-major DRAM tensor used for trace-safe chunk positions. The kernel also
+    // derives kv_len from this value so the causal position and valid prefix remain consistent.
+    std::optional<Tensor> chunk_start_idx_tensor{std::nullopt};
+    bool has_chunk_start_metadata() const { return chunk_start_idx_tensor.has_value(); }
+    std::optional<Tensor> valid_end_tensor{std::nullopt};
+    bool has_valid_end_metadata() const { return valid_end_tensor.has_value(); }
+    // TRACE-SAFE cache-slot select (fused indexed mode). `cache_batch_idx` is a host runtime arg that
+    // selects which (user, layer) slot of the persistent index-K cache this dispatch reads. A trace REPLAY
+    // never re-runs that patch, so a captured program keeps reading the slot that was live at capture time
+    // -- and capture warms user 0. The KV write is metadata-driven and lands in the right slot, so a
+    // multi-user traced request scores user N's queries against user 0's index-K cache: wrong top-k, no
+    // error. Hand over the 1-element uint32 USER id instead and the reader recomposes
+    //     cache_batch_idx = user_id * index_cache_num_layers + index_cache_layer_idx
+    // mirroring TtIndexer's own host formula. Mutually exclusive with the scalar cache_batch_idx.
+    std::optional<Tensor> cache_batch_idx_tensor{std::nullopt};
+    bool has_cache_slot_metadata() const { return cache_batch_idx_tensor.has_value(); }
+    // Bring-up fork block epilogue (opt-in; see operation_attributes_t::block_keys). block_bias [1, 1, Sq, NB] bf16
+    // TILE (NB block_keys >= T, NB a multiple of 32): a block whose bias is nonzero (-inf) has its scores written -inf,
+    // 0 keeps them. block_max_out [1, 1, Sq, NBm] fp32 ROW_MAJOR (NBm block_keys >= T, NBm a multiple of 4): written
+    // with the max of each block's written (biased) scores, columns past kv_len / block_keys untouched. Both read /
+    // written in place (not outputs of the op).
+    std::optional<Tensor> block_bias{std::nullopt};
+    std::optional<Tensor> block_max_out{std::nullopt};
+    bool has_block_epilogue() const { return block_bias.has_value() || block_max_out.has_value(); }
+    // Bring-up fork (PB.3A, operation_attributes_t::lane_rows; PB.7C lane_ranges): the other lanes' gathered-key
+    // buffers (k's shape) and their local key shards (k_local's), one pair a lane buffer after the first (k / k_local).
+    std::vector<Tensor> k_extra{};
+    std::vector<Tensor> k_local_extra{};
+};
+
+using tensor_return_value_t = Tensor;
+
+using spec_return_value_t = tt::tt_metal::TensorSpec;
+
+}  // namespace ttnn::operations::bringup::indexer_score

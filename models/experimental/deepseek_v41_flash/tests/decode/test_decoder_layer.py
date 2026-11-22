@@ -71,7 +71,7 @@ from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_con
 from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import _HC_COLLAPSE_CORES
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
+from tt_py_test_utils_common.tensor_prefetcher import tensor_prefetcher_session
 
 PCC = 0.95
 # The carried pre is ~sigmoid(bias), moving a few hundredths between tokens; bf16 alone costs ~1e-3.

@@ -1,0 +1,64 @@
+{
+ "used": [
+  {
+   "id": "DS41-22",
+   "how": "kept the vs-golden row / ratio allowance; its noted noise1e-2 slip is what this review fixed; entry updated with the row-scaling check",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-25",
+   "how": "checked whether the w2 span check carries over: six experts span 6 x 2304 > 5120, so a different structural check was needed",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-36",
+   "how": "1 % noise below the device floor: added a structural check (row error scales with row norm) instead of tightening limits",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "deleted the tt-probe directory tests/ttnn/unit_tests/operations/ds41_experts_test after dumping the CPU expect tensors",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-44",
+   "how": "the slope check uses float64, asserts finite values and writes `not b >= limit` so NaN fails",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a structural check for a 1 % noise mutation on outputs with no grid and no subspace (sum of several GEMMs): row-error vs row-norm scaling"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x the step's own component error, no cap'; touched known_issues.md (DS41-22) and left DS41-20 as is"
+  }
+ ],
+ "cited_only": [
+  "DS41-20"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.experts",
+  "role": "test",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T01:42:53",
+  "head": "2c7fefed7c1",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.experts.test.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py"
+  ]
+ }
+}

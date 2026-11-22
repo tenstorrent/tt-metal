@@ -279,6 +279,7 @@ target_link_libraries(
         TTNN::Ops::Experimental
         TTNN::Ops::Experimental::DeepSeekPrefill
         TTNN::Ops::Experimental::Transformer
+        TTNN::Ops::Bringup # derived ops of model bring-ups (ttnn/ttnn/bringup/INDEX.md)
         TTNN::Ops::Moreh
         TTNN::Ops::Transformer
 )
@@ -340,6 +341,15 @@ if(WITH_PYTHON_BINDINGS)
     # batches as they were.
     set_source_files_properties(
         cpp/ttnn-nanobind/program_spec.cpp
+        PROPERTIES
+            SKIP_UNITY_BUILD_INCLUSION
+                ON
+    )
+    # moe_block_main_ttnn is a copy of moe_block_ttnn whose headers define the same namespaces (moe_block_plan_words,
+    # ...); a unity batch holding files of both redefines them.
+    file(GLOB_RECURSE MOE_BLOCK_MAIN_NANOBIND CONFIGURE_DEPENDS ttnn/bringup/moe_block_main_ttnn/*_nanobind.cpp)
+    set_source_files_properties(
+        ${MOE_BLOCK_MAIN_NANOBIND}
         PROPERTIES
             SKIP_UNITY_BUILD_INCLUSION
                 ON
@@ -473,6 +483,7 @@ add_subdirectory(cpp/ttnn/operations/eltwise/quantization)
 add_subdirectory(cpp/ttnn/operations/experimental)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
+add_subdirectory(ttnn/bringup)
 add_subdirectory(cpp/ttnn/kernel_lib)
 add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
 add_subdirectory(cpp/ttnn/operations/moreh)

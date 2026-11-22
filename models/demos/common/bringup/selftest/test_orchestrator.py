@@ -1,0 +1,545 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""F6: the orchestrator with a scripted mock agent in a throwaway git repo. CPU only, no model, no device."""
+
+import json
+import sys
+
+import pytest
+
+from models.demos.common.bringup import orchestrator as O
+from models.demos.common.bringup.orchestrator import DONE, HUMAN, STOPPED, Orchestrator, command_violations
+from models.demos.common.bringup.plan import approvals
+from models.demos.common.bringup.selftest.conftest import PY, record_cmd
+
+MOCK = f"{sys.executable} -m models.demos.common.bringup.selftest.mock_agent"
+
+# the module under test reports pcc from impl.txt (written by the implement agent); reference 1.0, stub 0.0
+CHECK = """
+import os
+from pathlib import Path
+from models.demos.common.bringup.core import metrics as M
+impl = os.environ.get("BRINGUP_IMPL", "device")
+dev = float(Path("src/impl.txt").read_text()) if Path("src/impl.txt").exists() else 0.1
+M.record("pcc_out", {"reference": 1.0, "stub": 0.0, "device": dev}[impl])
+"""
+
+
+@pytest.fixture
+def orch(sandbox, monkeypatch, tmp_path):
+    script = tmp_path / "script.json"
+    monkeypatch.setenv("BRINGUP_AGENT_CMD", MOCK)
+    monkeypatch.setenv("MOCK_AGENT_SCRIPT", str(script))
+    (sandbox.repo / "tests").mkdir()
+    (sandbox.repo / "tests/check.py").write_text(CHECK)
+    (sandbox.repo / "src").mkdir()
+    lines = []
+
+    def make(tasks, actions):
+        script.write_text(json.dumps(actions))
+        sandbox.tasks(*tasks)
+        return Orchestrator(sandbox.spec, echo=lines.append)
+
+    make.lines = lines
+    make.calls = (
+        lambda: script.with_suffix(".calls").read_text().split("\n")[:-1]
+        if script.with_suffix(".calls").exists()
+        else []
+    )
+    return make
+
+
+def impl_task(**kw):
+    t = {
+        "id": "C.1",
+        "title": "component",
+        "step": "implement",
+        "deps": [],
+        "tests": ["tests/check.py"],
+        "paths": ["src"],
+        "gate": {"cmd": f"{PY} tests/check.py", "metrics": {"pcc_out": ">= 0.99"}},
+    }
+    t.update(kw)
+    return t
+
+
+def test_scripted_step_passes_without_an_agent(orch, sandbox):
+    o = orch(
+        [
+            {
+                "id": "G.1",
+                "title": "golden",
+                "step": "goldens",
+                "gate": {"cmd": record_cmd(n=1), "metrics": {"n": "== 1"}},
+            }
+        ],
+        {},
+    )
+    assert o.run() == DONE
+    assert orch.calls() == [] and sandbox.git("log", "-1", "--format=%s") == "[toy][G.1] golden"
+
+
+def test_implement_freezes_first_then_retries_until_the_gate_passes(orch, sandbox):
+    o = orch(
+        [impl_task()],
+        {
+            "C.1.implement.1.md": {"write": {"src/impl.txt": "0.5"}},
+            "C.1.implement.2.md": {
+                "write": {"src/impl.txt": "0.995"},
+                "bash": ["scripts/run_safe_pytest.sh tests/check.py"],
+            },
+        },
+    )
+    assert o.run() == DONE
+    assert orch.calls() == [
+        "C.1.test.1.md bringup-engineer",
+        "C.1.implement.1.md bringup-engineer",
+        "C.1.implement.2.md bringup-engineer",
+    ]
+    st = o.led.state()["C.1"]
+    assert st["status"] == "PASS" and st["attempts"] == 2  # the pre-agent gate check + implement attempt 1
+    assert [r["role"] for r in st["agent_runs"]] == ["test", "implement", "implement"]
+    assert st["agent"]["session_id"] == "sess-C.1.implement.2" and st["agent"]["model"] == "mock-model"
+    assert st["agent"]["defs"]["models/demos/common/bringup/agents/bringup-engineer.md"]["blob"]
+    assert sandbox.git("log", "-1", "--format=%s") == "[toy][C.1] component"
+    assert sandbox.git("log", "-2", "--format=%s").splitlines()[1] == "[toy][C.1][freeze] component"
+    brief2 = (o.run_dir / "briefs" / "C.1.implement.2.md").read_text()
+    assert "Previous attempt failed" in brief2 and "pcc_out = 0.5" in brief2
+
+
+def test_three_failures_hand_over_to_the_debugger_then_stop(orch, sandbox):
+    o = orch([impl_task()], {f"C.1.implement.{n}.md": {"write": {"src/impl.txt": "0.5"}} for n in (1, 2, 3)})
+    assert o.run() == STOPPED
+    calls = orch.calls()
+    assert calls[-3:] == [
+        "C.1.implement.101.md ttnn-expert-debugger",
+        "C.1.implement.102.md ttnn-expert-debugger",
+        "C.1.implement.103.md ttnn-expert-debugger",
+    ]
+    st = o.led.state()["C.1"]
+    assert st["status"] == "STOPPED" and st["debugger_attempts"] == 3
+    assert "[toy][C.1][wip] component" in sandbox.git("log", "--format=%s")
+    assert "WIP commit:" in (o.run_dir / "briefs" / "C.1.implement.101.md").read_text()
+
+
+def test_debugger_can_rescue(orch):
+    acts = {f"C.1.implement.{n}.md": {} for n in (1, 2, 3)}
+    acts["C.1.implement.102.md"] = {"write": {"src/impl.txt": "0.999"}}
+    o = orch([impl_task()], acts)
+    assert o.run() == DONE and o.led.status("C.1") == "PASS"
+
+
+def test_changes_outside_the_allowed_paths_fail_the_attempt(orch):
+    o = orch(
+        [impl_task()],
+        {
+            "C.1.implement.1.md": {"write": {"src/impl.txt": "0.5", "elsewhere.py": "x"}},
+            "C.1.implement.2.md": {"write": {"src/impl.txt": "0.999"}},
+        },
+    )
+    assert o.run() == DONE
+    runs = o.led.state()["C.1"]["agent_runs"]
+    assert any("outside the allowed paths" in p and "elsewhere.py" in p for p in runs[1]["problems"])
+    assert len([r for r in runs if r["role"] == "implement"]) == 2
+
+
+def test_a_pass_with_changes_outside_the_paths_stops_for_the_overseer_not_a_new_attempt(orch, sandbox):
+    """F190 (W.1, DeepSeek-V4.1 8x4): every unit passed and committed, the only problem an out-of-scope file; a second
+    attempt started, found nothing to do and edited state.json / results/. Now: stop, the overseer decides, resume
+    reuses the pass and starts no agent."""
+    o = orch(
+        [impl_task()],
+        {
+            "C.1.implement.1.md": {"write": {"src/impl.txt": "0.999", "elsewhere.py": "x"}},
+            "C.1.implement.2.md": {"write": {"src/impl.txt": "0.999"}},
+        },
+    )
+    assert o.run() == STOPPED
+    calls = orch.calls()
+    assert [c for c in calls if ".implement." in c] == ["C.1.implement.1.md bringup-engineer"]
+    entry = o.led.state()["C.1"]
+    assert entry["status"] == "STOPPED" and "gate passed and committed" in entry["reason"][0]
+    assert any("elsewhere.py" in p for p in entry["review"])
+    assert "src/impl.txt" not in O.dirty(sandbox.repo)  # the pass was committed
+    (sandbox.repo / "elsewhere.py").unlink()  # the overseer reverts it
+    o2 = O.Orchestrator(sandbox.spec, echo=orch.lines.append)
+    o2.led.update("C.1", status="TODO")  # as `resume` does
+    assert o2.run() == DONE and o2.led.status("C.1") == "PASS"
+    assert orch.calls() == calls  # no agent on resume
+
+
+def test_a_test_role_that_edits_the_implementation_is_caught(orch):
+    o = orch(
+        [impl_task()],
+        {
+            "C.1.test.1.md": {"write": {"src/impl.txt": "0.999"}},
+            "C.1.implement.1.md": {"write": {"src/impl.txt": "0.999"}},
+        },
+    )
+    o.run()
+    assert "outside the allowed paths" in " ".join(o.led.state()["C.1"]["agent_runs"][0]["problems"])
+
+
+def test_direct_device_commands_fail_the_attempt(orch):
+    o = orch(
+        [impl_task()],
+        {
+            "C.1.implement.1.md": {"write": {"src/impl.txt": "0.999"}, "bash": ["pytest tests/check.py"]},
+            "C.1.implement.2.md": {"write": {"src/impl.txt": "0.999"}},
+        },
+    )
+    assert o.run() == DONE
+    assert "direct pytest" in " ".join(o.led.state()["C.1"]["agent_runs"][1]["problems"])
+
+
+def test_command_violations(sandbox):
+    (sandbox.repo / "dev.py").write_text("import ttnn\nd = ttnn.open_mesh_device()\n")
+    (sandbox.repo / "cpu.py").write_text("import torch\n")
+    bad = command_violations(
+        [
+            "python -m pytest x",
+            "PYTHONPATH=. python dev.py",
+            "python - <<EOF\nimport ttnn\nttnn.open_device(0)\nEOF",
+            "pytest t.py",
+        ],
+        sandbox.repo,
+    )
+    assert len(bad) == 4
+    assert (
+        command_violations(
+            [
+                "scripts/run_safe_pytest.sh t.py",
+                "python cpu.py",
+                "scripts/tt-probe.sh x <<EOF\nimport ttnn\nEOF",
+                "git status && ls",
+                "cd x; source python_env/bin/activate; pytest --collect-only -q t.py",  # F115: lists, runs nothing
+                "python -m pytest --co t.py",
+            ],
+            sandbox.repo,
+        )
+        == []
+    )
+
+
+def test_plan_waits_for_approval_then_gates(orch, sandbox):
+    plan_cmd = (
+        f'{PY} -c "from models.demos.common.bringup.core import metrics as M; '
+        "from models.demos.common.bringup.core.spec import Spec; from models.demos.common.bringup.plan import approvals; "
+        f"M.record('plan_approved', int(approvals.is_approved(Spec.load('{sandbox.spec_path}'), 'plan')))\""
+    )
+    o = orch(
+        [
+            {"id": "PL.0", "title": "ledger", "step": "ledger", "gate": {"cmd": "true"}},
+            {
+                "id": "PL.1",
+                "title": "plan",
+                "step": "plan",
+                "approval": "plan",
+                "deps": ["PL.0"],
+                "gate": {"cmd": plan_cmd, "metrics": {"plan_approved": "== 1"}},
+            },
+            {"id": "N.1", "title": "next", "deps": ["PL.1"], "gate": {"cmd": "true"}},
+        ],
+        {
+            "PL.1.plan.1.md": {
+                "write": {
+                    "bringup/plan.yaml": "placements: []\n",
+                    "bringup/plan.md": "# plan\n",
+                    "bringup/components.yaml": "components: []\n",
+                }
+            }
+        },
+    )
+    rc = o.run()
+    assert rc == HUMAN, orch.lines
+    assert o.led.status("PL.0") == "PASS"  # a plan-phase task without an approval point does not wait
+    assert o.led.status("PL.1") != "PASS" and "approve plan" in o.led.state()["PL.1"]["waiting"]
+    assert o.run() == HUMAN and orch.calls() == ["PL.1.plan.1.md bringup-engineer"]  # no re-planning while waiting
+    approvals.approve(sandbox.spec, "plan", by="reviewer")
+    assert o.run() == DONE and o.led.status("PL.1") == "PASS" and o.led.status("N.1") == "PASS"
+
+
+def test_opportunity_list_stops_for_picks(orch):
+    o = orch(
+        [
+            {"id": "X.2", "title": "opportunities", "step": "perf", "gate": {"cmd": "true"}},
+            {"id": "K.9", "title": "after", "step": "contract", "deps": ["X.2"], "gate": {"cmd": "true"}},
+        ],
+        {},
+    )
+    assert o.run() == HUMAN and o.led.status("K.9") == "TODO"
+
+
+def test_opportunity_list_does_not_stop_when_the_picks_are_in(orch):
+    """F35: the overseer added the picks (perf tasks after X.2) before X.2 ran; nothing to wait for."""
+    o = orch(
+        [
+            {"id": "X.2", "title": "opportunities", "step": "perf", "gate": {"cmd": "true"}},
+            {"id": "P.1", "title": "picked", "step": "perf", "role": "perf", "deps": ["X.2"], "gate": {"cmd": "true"}},
+        ],
+        {},
+    )
+    # X.2 does not stop for picks; the pick itself (F57) runs its agent and then waits for the owner's decision
+    assert o.run() == HUMAN and o.led.status("X.2") == "PASS"
+    assert orch.calls() == ["P.1.perf.1.md bringup-engineer"]
+    assert "apply P.1 or not" in o.led.state()["P.1"]["waiting"]
+
+
+def test_full_model_gates_skip_the_precompile_pass():
+    """F35: the precompile pass runs a model-sized test twice; full-model steps skip it, component tests keep it."""
+    from models.demos.common.bringup.core.gate import gate_command
+
+    t = lambda step, cmd: {"step": step, "gate": {"cmd": cmd}}  # noqa: E731
+    assert (
+        gate_command(t("integrate", "X=1 scripts/run_safe_pytest.sh a.py"))
+        == "X=1 scripts/run_safe_pytest.sh --no-precompile a.py"
+    )
+    assert gate_command(t("implement", "scripts/run_safe_pytest.sh a.py")) == "scripts/run_safe_pytest.sh a.py"
+    assert gate_command(t("perf", "scripts/run_safe_pytest.sh --no-precompile a.py")).count("precompile") == 1
+
+
+def test_a_task_shows_running_while_its_agent_works(orch):
+    """F35: the dashboard showed the pre-agent check's FAIL while the agent was working."""
+    seen = []
+    o = orch([impl_task()], {"C.1.implement.1.md": {"write": {"src/impl.txt": "1.0"}}})
+    real = o.run_agent
+
+    def spy(task, role, attempt, brief, **kw):
+        if role == "implement":
+            seen.append(o.led.state().get(task["id"], {}).get("status"))
+        return real(task, role, attempt, brief, **kw)
+
+    o.run_agent = spy
+    assert o.run() == DONE and seen[-1] == "RUNNING"
+
+
+def test_resume_after_a_fix(orch):
+    o = orch([impl_task()], {})
+    assert o.run() == STOPPED
+    (o.spec.repo / "src/impl.txt").write_text("0.999")  # a person fixes it
+    from models.demos.common.bringup.orchestrator import main
+
+    assert main(["resume", "--spec", str(o.spec.path)]) == DONE
+
+
+@pytest.mark.parametrize("command", ["resume", "run"])
+def test_a_power_loss_mid_agent_resumes_at_the_interrupted_task(orch, command):
+    """F95: the orchestrator dies while an agent works (power loss): the task stays RUNNING, the agent's half edit
+    and its AGENT.json stay behind. A restart gates the task first, then continues it; stale files are not trusted."""
+    import json
+
+    from models.demos.common.bringup import overseer as OV
+    from models.demos.common.bringup.orchestrator import main
+
+    o = orch([impl_task()], {"C.1.implement.2.md": {"write": {"src/impl.txt": "0.999"}}})
+    real = o.run_agent
+
+    def power_loss(task, role, attempt, brief, **kw):
+        if role != "implement":
+            return real(task, role, attempt, brief, **kw)
+        o.led.update(task["id"], status="RUNNING", attempt=attempt, role=role)
+        (o.spec.repo / "src/impl.txt").write_text("0.5")  # half done
+        (o.run_dir / OV.AGENT_FILE).write_text(json.dumps({"pid": 1, "pgid": 1, "task": task["id"], "role": role}))
+        raise KeyboardInterrupt  # the process is gone
+
+    o.run_agent = power_loss
+    with pytest.raises(KeyboardInterrupt):
+        o.run()
+    assert o.led.status("C.1") == "RUNNING"
+    o.run_agent = real
+    assert main([command, "--spec", str(o.spec.path)]) == DONE
+    assert not (o.run_dir / OV.AGENT_FILE).exists()
+    if command == "resume":  # the numbering continues after the interrupted attempt 1; the brief says so
+        assert orch.calls()[-1] == "C.1.implement.2.md bringup-engineer"  # implement.1 was cut off
+        assert "interrupted during implement attempt 1" in (o.run_dir / "briefs" / "C.1.implement.2.md").read_text()
+
+
+def test_files_committed_by_someone_else_during_a_step_are_not_the_agents(orch, sandbox):
+    (sandbox.repo / "mine.py").write_text("a person's work in progress\n")
+    o = orch([impl_task()], {"C.1.implement.1.md": {"write": {"src/impl.txt": "0.999"}}})
+    real = o.run_agent
+
+    def run_agent_while_someone_commits(task, role, attempt, brief, agent="bringup-engineer"):
+        if role == "implement":
+            sandbox.git("add", "mine.py")
+            sandbox.git("commit", "-q", "-m", "someone else's commit")
+        return real(task, role, attempt, brief, agent)
+
+    o.run_agent = run_agent_while_someone_commits
+    assert o.run() == DONE
+    assert all(not r["problems"] for r in o.led.state()["C.1"]["agent_runs"])
+
+
+def test_a_failing_reference_stops_for_a_person_and_never_reaches_the_ttnn_debugger(orch):
+    task = {
+        "id": "R.2",
+        "title": "reference",
+        "step": "reference",
+        "paths": ["src"],
+        "gate": {"cmd": f"{PY} tests/check.py", "metrics": {"pcc_out": ">= 0.99"}},
+    }
+    o = orch([task], {})
+    assert o.run() == STOPPED
+    calls = orch.calls()
+    assert calls == [f"R.2.reference.{n}.md bringup-engineer" for n in (1, 2, 3)]
+    assert "waiting for a person" in o.led.state()["R.2"]["reason"][0]
+
+
+def test_policy_from_the_spec(orch, sandbox):
+    sandbox.write_spec(agents={"policy": {"reference": {"attempts": 1}, "implement": {"escalate": "stop"}}})
+    o = orch([impl_task()], {})
+    assert o.policy({}, "reference")["attempts"] == 1
+    assert o.policy({}, "implement")["escalate"] == "stop"
+    assert o.policy({"device": True}, "fix")["escalate"] == "debugger"
+    assert o.policy({}, "fix")["escalate"] == "stop"  # a CPU gate's failure never goes to the TTNN debugger
+
+
+def test_only_code_that_opens_a_device_needs_the_safe_runner(sandbox):
+    edit = "cd /r; python - <<'EOF'\np='hooks.py'\ns=open(p).read()\ns+='import ttnn\\n'\nopen(p,'w').write(s)\nEOF"
+    analysis = (
+        "python - <<'EOF'\nimport ttnn\nfrom models.demos.common.bringup.testing.harness import spec\nprint(1)\nEOF"
+    )
+    opens = "python - <<'EOF'\nimport ttnn\nd = ttnn.open_mesh_device(ttnn.MeshShape(1, 4))\nEOF"
+    (sandbox.repo / "dev.py").write_text("import ttnn\nmesh = ttnn.open_mesh_device()\n")
+    assert command_violations([edit, analysis], sandbox.repo) == []
+    assert len(command_violations([opens], sandbox.repo)) == 1
+    assert len(command_violations(["PYTHONPATH=. python dev.py"], sandbox.repo)) == 1
+    assert len(command_violations(["python -c 'import ttnn; ttnn.open_device(0)'"], sandbox.repo)) == 1
+
+
+def test_pause_stops_before_the_next_task(orch):
+    from models.demos.common.bringup.orchestrator import PAUSED
+
+    o = orch(
+        [
+            {"id": "A", "title": "a", "gate": {"cmd": "true"}},
+            {"id": "B", "title": "b", "deps": ["A"], "gate": {"cmd": "true"}},
+        ],
+        {},
+    )
+    o.pause_file.write_text("x")
+    assert o.run() == PAUSED and o.led.status("A") == "TODO"
+    o.pause_file.unlink()
+    assert o.run() == DONE
+
+
+def test_a_box_that_fails_at_device_open_stops_the_run_without_burning_attempts(orch):
+    cmd = f"{PY} -c \"print('TT_THROW: Device 1: Timed out while waiting for active ethernet core 31-25'); raise SystemExit(1)\""
+    o = orch([impl_task(tests=[], gate={"cmd": cmd, "metrics": {}})], {})
+    assert o.run() == STOPPED
+    st = o.led.state()["C.1"]
+    assert st["status"] == "STOPPED" and "reset the board" in st["reason"][0]
+    assert orch.calls() == []  # no agent was started
+
+
+def test_a_test_killed_by_its_timeout_stops_for_a_person(orch):
+    """F25: a pytest-timeout kill is not a failed check; no fix agent starts."""
+    cmd = f"{PY} -c \"print('E   Failed: Timeout (>300.0s) from pytest-timeout.'); raise SystemExit(1)\""
+    o = orch([impl_task(tests=[], gate={"cmd": cmd, "metrics": {}})], {})
+    assert o.run() == STOPPED
+    st = o.led.state()["C.1"]
+    assert st["status"] == "STOPPED" and "test_timeout_s" in st["reason"][0]
+    assert orch.calls() == []
+
+
+def test_the_contract_step_may_change_the_prefill_engine(orch):
+    """F29 (owner): the contract agent may change models/demos/common/prefill without an approval; other roles may not."""
+    from models.demos.common.bringup.orchestrator import CONTRACT_SHARED
+
+    o = orch([impl_task()], {})
+    assert CONTRACT_SHARED in o.allowed_paths(dict(o.led.task("C.1"), step="contract"), "contract")
+    assert CONTRACT_SHARED not in o.allowed_paths(o.led.task("C.1"), "implement")
+
+
+def test_the_contract_step_may_change_the_hooks(orch):
+    """F53: K.1 needs hooks.contract_state_pcc for fixed-size state; the contract agent may add it and the gate commits it."""
+    from models.demos.common.bringup.core.gate import stage_paths
+
+    o = orch([impl_task()], {})
+    contract = dict(o.led.task("C.1"), step="contract")
+    assert any(p.endswith("bringup/hooks.py") for p in o.allowed_paths(contract, "contract"))
+    (o.led.dir / "hooks.py").write_text("def contract_state_pcc(*a):\n    return {}\n")
+    assert any(p.endswith("hooks.py") for p in stage_paths(o.spec, o.led, dict(contract, id="C.1")))
+
+
+def test_a_stale_waiting_note_is_cleared_when_the_task_runs_again(orch):
+    """F29: the dashboard showed "waiting for a person" on a running task after the person had answered."""
+    o = orch([impl_task()], {"C.1.implement.1.md": {"write": {"src/impl.txt": "1.0"}}})
+    o.led.update("C.1", waiting="approve something")
+    assert o.run() == DONE and not o.led.state()["C.1"].get("waiting")
+
+
+def test_a_perf_task_brief_carries_its_details(orch):
+    """F31: picked performance items run as role perf; the brief carries the exact change and the policy escalates."""
+    t = impl_task(step="perf", role="perf", brief={"details": "SDPA config A: HiFi2, approx exp"})
+    o = orch([t], {})
+    text = o.brief(o.led.task("C.1"), "perf", 1).read_text()
+    assert "Role: perf" in text and "SDPA config A: HiFi2, approx exp" in text
+    assert o.policy(o.led.task("C.1"), "perf")["escalate"] == "debugger"
+
+
+def test_a_source_edit_that_mentions_device_calls_is_not_device_access(tmp_path):
+    """F34: an agent's heredoc that rewrote hooks.py carried synchronize_device in a string and was flagged."""
+    from models.demos.common.bringup.orchestrator import code_opens_device
+
+    edit = "p='hooks.py'\ns=open(p).read()\nnew='''def sync(self):\n    ttnn.synchronize_device(self.mesh)'''\nopen(p,'w').write(s+new)\n"
+    assert not code_opens_device(edit, tmp_path)
+    assert code_opens_device("import ttnn\nd = ttnn.open_mesh_device(ttnn.MeshShape(1, 4))\n", tmp_path)
+    assert code_opens_device("import ttnn\nttnn.synchronize_device(d)\n", tmp_path)
+
+
+def test_a_passing_gate_is_not_redone_for_a_command_problem(orch):
+    """F34: P.1 passed its gate, a command problem was reported, and the orchestrator started attempt 2 anyway."""
+    acts = {"C.1.implement.1.md": {"write": {"src/impl.txt": "1.0"}, "bash": ["pytest tests/check.py"]}}
+    o = orch([impl_task()], acts)
+    assert o.run() == DONE and o.led.status("C.1") == "PASS"
+    assert [c for c in orch.calls() if ".implement." in c] == ["C.1.implement.1.md bringup-engineer"]
+    assert o.led.state()["C.1"]["review"]
+
+
+def test_a_refused_commit_stops_the_run_and_resume_commits_without_a_rerun(orch, sandbox):
+    """F149: a gate that passed but whose commit git refused stops the run with no further agent attempt; the next run
+    commits it without running the gate or an agent (DeepSeek-V4.1 FIX.5: a 70 min gate re-run for a commit)."""
+    from models.demos.common.bringup.selftest.test_core import refusing_hook
+
+    refusing_hook(sandbox, "bringup/results/C.1_profile.json (613 KB) exceeds the 500 KB limit.")
+    runs = sandbox.repo / "runs.txt"
+    gate = {"cmd": f"echo run >> {runs} && {PY} tests/check.py", "metrics": {"pcc_out": ">= 0.99"}}
+    o = orch([impl_task(tests=None, gate=gate)], {"C.1.implement.1.md": {"write": {"src/impl.txt": "0.999"}}})
+    assert o.run() == STOPPED
+    assert o.led.status("C.1") == "COMMIT_PENDING" and orch.calls() == ["C.1.implement.1.md bringup-engineer"]
+    assert runs.read_text().count("run") == 2  # the pre-agent check and the gate after the agent
+    from models.demos.common.bringup import watch as W
+
+    assert W.events([ln for ln in orch.lines if "COMMIT PENDING" in ln])  # the supervisor's watch wakes on it
+    (sandbox.repo / "bringup/REFUSE").unlink()
+    assert o.run() == DONE
+    assert runs.read_text().count("run") == 2 and orch.calls() == ["C.1.implement.1.md bringup-engineer"]
+    assert o.led.status("C.1") == "PASS" and sandbox.git("log", "-1", "--format=%s") == "[toy][C.1] component"
+
+
+def test_a_fix_job_cut_off_mid_agent_restarts_its_agent_not_a_passing_gate(orch):
+    """F193 (DeepSeek-V4.1 8x4 FIX.3): the overseer killed the run as a fix job's agent started; on resume the job's
+    gate (tests that passed before the change it asks for) passed at once and committed the job with no agent."""
+    import json
+
+    from models.demos.common.bringup import overseer as OV
+    from models.demos.common.bringup.orchestrator import main
+
+    fix = impl_task(id="FIX.1", step=OV.FIX_STEP, role=OV.FIX_ROLE, precheck=False)
+    o = orch([fix], {f"FIX.1.{OV.FIX_ROLE}.2.md": {"write": {"src/impl.txt": "0.999"}}})
+    (o.spec.repo / "src/impl.txt").write_text("0.999")  # the gate already passes before the job
+    real = o.run_agent
+
+    def killed(task, role, attempt, brief, **kw):
+        o.led.update(task["id"], status="RUNNING", attempt=attempt, role=role)
+        (o.run_dir / OV.AGENT_FILE).write_text(json.dumps({"pid": 1, "pgid": 1, "task": task["id"], "role": role}))
+        raise KeyboardInterrupt
+
+    o.run_agent = killed
+    with pytest.raises(KeyboardInterrupt):
+        o.run()
+    o.run_agent = real
+    assert main(["resume", "--spec", str(o.spec.path)]) == DONE
+    assert [c for c in orch.calls() if f".{OV.FIX_ROLE}." in c]  # the job's agent ran; no passing gate stood in

@@ -1,0 +1,147 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "sparse_sdpa.hpp"
+#include "device/sparse_sdpa_device_operation.hpp"
+#include "device/sparse_sdpa_lanes_device_operation.hpp"
+#include <tt-metalium/mesh_device.hpp>
+#include <cmath>
+
+namespace ttnn::transformer::bringup {
+
+ttnn::Tensor sparse_sdpa(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& kv,
+    const ttnn::Tensor& indices,
+    uint32_t v_dim,
+    SparseKVFormat kv_format,
+    std::optional<float> scale,
+    uint32_t k_chunk_size,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<uint32_t> cache_batch_idx,
+    std::optional<uint32_t> block_cyclic_sp_axis,
+    std::optional<uint32_t> block_cyclic_chunk_local,
+    bool block_cyclic_cache_tp_sharded,
+    const std::optional<ttnn::Tensor>& attention_sink,
+    bool high_precision,
+    bool fp32_output,
+    bool fp32_scores,
+    bool bf16_probs,
+    const std::optional<ttnn::Tensor>& kv_window,
+    std::optional<tt::tt_metal::CoreCoord> max_grid,
+    const std::optional<std::vector<ttnn::Tensor>>& kv_lanes,
+    const std::optional<std::vector<uint32_t>>& kv_lane_of_chip,
+    const std::optional<std::vector<uint32_t>>& kv_lane_rows,
+    bool kv_lane_map_runtime) {
+    TT_FATAL(
+        kv_lanes.has_value() == kv_lane_of_chip.has_value(),
+        "sparse_sdpa: kv_lanes and kv_lane_of_chip must both be set or both unset");
+    TT_FATAL(!kv_lane_rows.has_value() || kv_lanes.has_value(), "sparse_sdpa: kv_lane_rows needs kv_lanes");
+    TT_FATAL(!kv_lane_map_runtime || kv_lanes.has_value(), "sparse_sdpa: kv_lane_map_runtime needs kv_lanes");
+    const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
+    const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
+
+    // Block-cyclic remap: sp_axis and chunk_local must be provided together (or neither). `sp` is DERIVED from
+    // the mesh (the cache's stripe count == the size of the SP mesh axis), so a caller cannot pass an sp that
+    // disagrees with the device; `chunk_local` is then cross-checked against q's per-chip seq length.
+    TT_FATAL(
+        block_cyclic_sp_axis.has_value() == block_cyclic_chunk_local.has_value(),
+        "sparse_sdpa: block_cyclic_sp_axis and block_cyclic_chunk_local must both be set or both unset");
+    TT_FATAL(
+        !block_cyclic_cache_tp_sharded || block_cyclic_sp_axis.has_value(),
+        "sparse_sdpa: block_cyclic_cache_tp_sharded requires block_cyclic_sp_axis / block_cyclic_chunk_local");
+    std::optional<ttnn::prim::bringup::BlockCyclicLayout> block_cyclic = std::nullopt;
+    if (block_cyclic_sp_axis.has_value()) {
+        const auto mesh_shape = q.device()->get_view().shape();
+        const uint32_t sp_axis = block_cyclic_sp_axis.value();
+        TT_FATAL(
+            sp_axis < mesh_shape.dims(),
+            "sparse_sdpa: block_cyclic_sp_axis ({}) out of range for mesh rank {}",
+            sp_axis,
+            mesh_shape.dims());
+        const uint32_t sp = mesh_shape[sp_axis];
+        const uint32_t tp = static_cast<uint32_t>(mesh_shape.mesh_size()) / sp;  // remaining (TP) device count
+        const uint32_t chunk_local = block_cyclic_chunk_local.value();
+        // chunk_local is one of exactly two values: q's per-chip seq length (no head->seq reshard) or tp*q_isl
+        // (reshard slices q's seq across TP, leaving the cache's chunk_local unchanged). Anything else is a bug.
+        const uint32_t q_isl = q.logical_shape()[2];
+        TT_FATAL(
+            chunk_local == q_isl || chunk_local == q_isl * tp,
+            "sparse_sdpa: block_cyclic_chunk_local ({}) must be q_isl ({}) or tp*q_isl ({})",
+            chunk_local,
+            q_isl,
+            q_isl * tp);
+        // KV dedup: cache striped over all sp*tp devices (linear chip = sp_coord*tp + tp_coord), so stripe it
+        // sp*tp x chunk_local/tp. stripes*chunk is unchanged, so only the invP key remap sees the finer split.
+        uint32_t stripes = sp;
+        uint32_t stripe_chunk = chunk_local;
+        if (block_cyclic_cache_tp_sharded) {
+            TT_FATAL(
+                chunk_local % tp == 0,
+                "sparse_sdpa: block_cyclic_cache_tp_sharded needs block_cyclic_chunk_local ({}) divisible by tp ({})",
+                chunk_local,
+                tp);
+            stripes = sp * tp;
+            stripe_chunk = chunk_local / tp;
+        }
+        block_cyclic = ttnn::prim::bringup::BlockCyclicLayout{stripes, stripe_chunk};
+    }
+
+    // fp8 q/kv must be tilized through a 32-bit dest accumulator, so default fp32_dest_acc_en on for fp8.
+    const bool any_fp8 = (kv.dtype() == ttnn::DataType::FP8_E4M3) || (q.dtype() == ttnn::DataType::FP8_E4M3);
+    auto kernel_config = init_device_compute_kernel_config(
+        q.device()->arch(),
+        compute_kernel_config,
+        /*default_fidelity=*/tt::tt_metal::MathFidelity::HiFi2,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/any_fp8,
+        /*default_l1_acc=*/false);
+
+    if (kv_lanes.has_value()) {  // PB.3A: one kv a device (sparse_sdpa_lanes_device_operation.hpp)
+        TT_FATAL(!cache_batch_idx.has_value(), "sparse_sdpa: kv_lanes takes no cache_batch_idx");
+        return ttnn::prim::bringup::sparse_sdpa_lanes(
+            q,
+            *kv_lanes,
+            *kv_lane_of_chip,
+            kv_lane_rows.value_or(std::vector<uint32_t>{}),
+            kv_lane_map_runtime,
+            indices,
+            ttnn::prim::bringup::SparseSDPAParams{
+                .scale = resolved_scale,
+                .v_dim = v_dim,
+                .kv_format = kv_format,
+                .k_chunk_size = k_chunk_size,
+                .compute_kernel_config = kernel_config,
+                .cache_batch_idx = std::nullopt,
+                .block_cyclic = block_cyclic,
+                .high_precision = high_precision,
+                .fp32_output = fp32_output,
+                .fp32_scores = fp32_scores,
+                .bf16_probs = bf16_probs,
+                .max_grid = max_grid,
+            },
+            attention_sink,
+            kv_window);
+    }
+    return ttnn::prim::bringup::sparse_sdpa(
+        q,
+        kv,
+        indices,
+        resolved_scale,
+        v_dim,
+        kv_format,
+        k_chunk_size,
+        kernel_config,
+        cache_batch_idx,
+        block_cyclic,
+        attention_sink,
+        high_precision,
+        fp32_output,
+        fp32_scores,
+        bf16_probs,
+        kv_window,
+        max_grid);
+}
+
+}  // namespace ttnn::transformer::bringup

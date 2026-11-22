@@ -15,7 +15,10 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve()
 TTNN_DIR = SCRIPT.parent.parent / "ttnn" / "ttnn"
 # Allowed to import torch at module scope, relative to TTNN_DIR.
-EXCEPTION_DIRS = ("examples",)
+EXCEPTION_DIRS = (
+    "bringup",  # forked ops of model bring-ups: their tests/ build torch references; ttnn never imports them
+    "examples",
+)
 EXCEPTION_FILES = (
     "model_preprocessing.py",
     "torch_tracer.py",

@@ -1,0 +1,215 @@
+# Framework build ledger. Drive with:
+#   python -m models.demos.common.bringup gate F1 --spec models/demos/common/bringup/dev/spec.yaml --commit
+tasks:
+  - id: F1
+    title: Core - spec, ledger, gate runner, metrics, CLI
+    step: framework
+    deps: []
+    paths: [models/demos/common/bringup/__init__.py, models/demos/common/bringup/__main__.py,
+            models/demos/common/bringup/core, models/demos/common/bringup/selftest/__init__.py,
+            models/demos/common/bringup/selftest/conftest.py, models/demos/common/bringup/selftest/test_core.py,
+            models/demos/common/bringup/dev/spec.yaml]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/test_core.py
+      metrics: {selftest_passed: ">= 20", selftest_failed: "== 0"}
+  - id: F2
+    title: Freeze with zero-stub check, resume, rerun, fork, compare, agent-definition hashes
+    step: framework
+    deps: [F1]
+    paths: [models/demos/common/bringup/__main__.py, models/demos/common/bringup/core,
+            models/demos/common/bringup/selftest/test_runs.py]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 39", selftest_failed: "== 0"}
+  - id: F3
+    title: Reference interface + block graph, HF parity, chunked + graph replay, golden generator and reader
+    step: framework
+    deps: [F2]
+    paths: [models/demos/common/bringup/reference, models/demos/common/bringup/selftest/fixture_model.py,
+            models/demos/common/bringup/selftest/test_reference.py]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 49", selftest_failed: "== 0"}
+  - id: F4
+    title: Device-side test helpers - component, swap, ladder, contract, profiler, templates
+    step: framework
+    deps: [F3]
+    paths: [models/demos/common/bringup/testing, models/demos/common/bringup/tests,
+            models/demos/common/bringup/selftest]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 60", selftest_failed: "== 0"}
+  - id: F5
+    title: Plan memory check from the checkpoint, components map, approvals, ledger generator, intake, knowledge, opportunities
+    step: framework
+    deps: [F4]
+    paths: [models/demos/common/bringup/plan, models/demos/common/bringup/intake, models/demos/common/bringup/knowledge,
+            models/demos/common/bringup/tests/test_box.py, models/demos/common/bringup/tests/test_ladder.py,
+            models/demos/common/bringup/__main__.py, models/demos/common/bringup/core,
+            models/demos/common/bringup/selftest/test_plan.py]
+    gate:
+      cmd: >-
+        scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/ &&
+        python -m models.demos.common.bringup.knowledge.check
+      metrics: {selftest_passed: ">= 77", selftest_failed: "== 0", known_issue_errors: "== 0", repo_map_errors: "== 0"}
+  - id: F6
+    title: Orchestrator, agent definition, briefs, intake skill, model scaffold
+    step: framework
+    deps: [F5]
+    paths: [models/demos/common/bringup/orchestrator.py, models/demos/common/bringup/agents, models/demos/common/bringup/briefs,
+            models/demos/common/bringup/skill, models/demos/common/bringup/templates, models/demos/common/bringup/__main__.py,
+            models/demos/common/bringup/plan, models/demos/common/bringup/selftest]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 88", selftest_failed: "== 0"}
+  - id: F7
+    title: Generic dashboard (ERNIE look and sections) from any model's records
+    step: framework
+    deps: [F6]
+    paths: [models/demos/common/bringup/dashboard, models/demos/common/bringup/reference/check_reference.py,
+            models/demos/common/bringup/selftest]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 96", selftest_failed: "== 0"}
+  - id: F8
+    title: Framework README, known issues from the build
+    step: framework
+    deps: [F7]
+    paths: [models/demos/common/bringup/README.md, models/demos/common/bringup/knowledge]
+    gate:
+      cmd: python -m models.demos.common.bringup.knowledge.check
+      metrics: {known_issue_errors: "== 0", repo_map_errors: "== 0"}
+  - id: F9
+    title: Fixes from the first model's intake (ladder order, scripted R.1, gate before agent, per-role reads)
+    step: framework
+    deps: [F8]
+    paths: [models/demos/common/bringup/core, models/demos/common/bringup/plan, models/demos/common/bringup/intake,
+            models/demos/common/bringup/orchestrator.py, models/demos/common/bringup/selftest]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 97", selftest_failed: "== 0"}
+  - id: F10
+    title: Reference-role brief names the gates that follow; gate commits stage approvals and findings
+    step: framework
+    deps: [F9]
+    paths: [models/demos/common/bringup/core/gate.py, models/demos/common/bringup/briefs/roles.yaml]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 97", selftest_failed: "== 0"}
+  - id: F11
+    title: Path check ignores files others committed during a step; resume resets interrupted tasks
+    step: framework
+    deps: [F10]
+    paths: [models/demos/common/bringup/orchestrator.py, models/demos/common/bringup/selftest/test_orchestrator.py,
+            models/demos/common/bringup/knowledge]
+    gate:
+      cmd: >-
+        scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/ &&
+        python -m models.demos.common.bringup.knowledge.check
+      metrics: {selftest_passed: ">= 98", selftest_failed: "== 0", known_issue_errors: "== 0"}
+  - id: F12
+    title: Per-role retry policy; only TTNN roles escalate to ttnn-expert-debugger
+    step: framework
+    deps: [F11]
+    paths: [models/demos/common/bringup/orchestrator.py, models/demos/common/bringup/selftest/test_orchestrator.py]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 100", selftest_failed: "== 0"}
+  - id: F13
+    title: Chat-template option for the golden text (instruction-tuned checkpoints)
+    step: framework
+    deps: [F12]
+    paths: [models/demos/common/bringup/reference/golden.py, models/demos/common/bringup/selftest/test_reference.py]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 101", selftest_failed: "== 0"}
+  - id: F14
+    title: Canonical prefill prompt - one fixed, hashed token sequence per model, built at intake, used by every step
+    step: framework
+    deps: [F13]
+    paths: [models/demos/common/bringup/reference, models/demos/common/bringup/plan/ledger_gen.py,
+            models/demos/common/bringup/selftest]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 105", selftest_failed: "== 0"}
+  - id: F15
+    title: Spec validation - HF parity must be longer than the sliding window
+    step: framework
+    deps: [F14]
+    paths: [models/demos/common/bringup/core/spec.py, models/demos/common/bringup/selftest/test_core.py]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/test_core.py
+      metrics: {selftest_passed: ">= 33", selftest_failed: "== 0"}
+  - id: F16
+    title: Box test uses the MeshDevice API that exists (first device run)
+    step: framework
+    deps: [F15]
+    device: true
+    paths: [models/demos/common/bringup/tests/test_box.py, models/demos/common/bringup/knowledge,
+            models/demos/common/bringup/core/gate.py, models/demos/common/bringup/selftest/test_core.py]
+    gate:
+      cmd: >-
+        BRINGUP_SPEC=models/demos/gemma4_a4b_d_p/bringup/spec.yaml scripts/run_safe_pytest.sh --run-all
+        models/demos/common/bringup/tests/test_box.py && python -m models.demos.common.bringup.knowledge.check
+      metrics: {chips: "== 4", all_gather_maxabs: "== 0", known_issue_errors: "== 0"}
+  - id: F17
+    title: Approval waits only on tasks that declare an approval point (PL.0 is scripted)
+    step: framework
+    deps: [F16]
+    paths: [models/demos/common/bringup/orchestrator.py, models/demos/common/bringup/plan/ledger_gen.py,
+            models/demos/common/bringup/selftest/test_orchestrator.py]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 108", selftest_failed: "== 0"}
+  - id: F18
+    title: Device-command check parses Python (file edits mentioning ttnn are fine); commits carry package files
+    step: framework
+    deps: [F17]
+    paths: [models/demos/common/bringup/orchestrator.py, models/demos/common/bringup/core,
+            models/demos/common/bringup/selftest/test_orchestrator.py]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 109", selftest_failed: "== 0"}
+  - id: F19
+    title: An agent command needs the safe runner only if its own code opens a device
+    step: framework
+    deps: [F18]
+    paths: [models/demos/common/bringup/orchestrator.py, models/demos/common/bringup/selftest/test_orchestrator.py]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 109", selftest_failed: "== 0"}
+  - id: F20
+    title: Owner rules from the spec (agents.rules) appear in every brief
+    step: framework
+    deps: [F19]
+    paths: [models/demos/common/bringup/orchestrator.py, models/demos/common/bringup/briefs/brief.md]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 109", selftest_failed: "== 0"}
+  - id: F21
+    title: Intake sanity gate, pause, infrastructure stop, teletext dashboard style, /bringup skill with supervision
+    step: framework
+    deps: [F20]
+    paths: [models/demos/common/bringup/intake, models/demos/common/bringup/orchestrator.py,
+            models/demos/common/bringup/dashboard, models/demos/common/bringup/skill, models/demos/common/bringup/templates,
+            models/demos/common/bringup/plan/ledger_gen.py, models/demos/common/bringup/core/gate.py,
+            models/demos/common/bringup/selftest]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 114", selftest_failed: "== 0"}
+  - id: F22
+    title: /bringup skill - context discipline and hand-off for long supervised runs
+    step: framework
+    deps: [F21]
+    paths: [models/demos/common/bringup/skill]
+    gate:
+      cmd: python -m models.demos.common.bringup.knowledge.check
+      metrics: {known_issue_errors: "== 0"}
+  - id: F23
+    title: FABRIC_2D is a standing rule in the agent definition; spec template defaults to it
+    step: framework
+    deps: [F22]
+    paths: [models/demos/common/bringup/agents, models/demos/common/bringup/templates, models/demos/common/bringup/skill]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/test_orchestrator.py
+      metrics: {selftest_failed: "== 0", selftest_passed: ">= 17"}

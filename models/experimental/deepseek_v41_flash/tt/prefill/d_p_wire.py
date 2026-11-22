@@ -102,7 +102,12 @@ def _bf16_bytes(t: torch.Tensor) -> memoryview:
 
 
 def send_states(
-    sock: socket.socket, host: dict, seconds: float, queued: float = 0.0, base: int = 0, cached: int = 0
+    sock: socket.socket,
+    host: dict,
+    seconds: float,
+    queued: float = 0.0,
+    base: Optional[int] = None,
+    cached: int = 0,
 ) -> None:
     fields, blobs = [], []
     for i in sorted(host["layers"]):
@@ -111,7 +116,7 @@ def send_states(
             blobs.append(_bf16_bytes(t))
     header = {
         "seq_len": int(host["seq_len"]),
-        "base": int(base),
+        "base": int(host.get("base", 0) if base is None else base),
         "cached": int(cached),
         "seconds": float(seconds),
         "queued": float(queued),

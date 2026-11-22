@@ -1,0 +1,79 @@
+{
+ "overseer": [],
+ "used": [
+  {
+   "id": "K-30",
+   "how": "kept the partial sums exact under fabric: added fabric_reduce_scatter exact_fp32_add (UnpackToDestFp32 + SFPU add) instead of its FPU add_tiles; bit-identical to all_gather + ttnn.add at TP 2",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "every device test and profile ran with --no-precompile",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD on every run",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-56",
+   "how": "deleted tests/ttnn/unit_tests/operations/ds41_ccl/ (tt-probe scripts) before finishing",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-27",
+   "how": "the stock exact path (all_gather + SFPU ttnn.add) is the reference the fabric sums are checked bit-for-bit against (fork test _stock_exact, model probe)",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "fabric_reduce_scatter's default add on FLOAT32 partials is bf16-level (rel 3.3e-3 vs float64), not TF32 as K-30 / the brief assumed: its ComputeConfigDescriptor() leaves fp32 DEST off (now DS41-65; tests/unit/test_fabric_rs_exact_fp32.py control)",
+  "fabric_all_gather / fabric_reduce_scatter link count: a 2x2 BH neighbour pair has 4 usable links; at the documented num_links=2 the fabric gather is slower than ttnn.all_gather on large tensors; None / 4 links is faster (DS41-66)",
+  "fabric_reduce_scatter rebuilds its mesh program descriptor in Python on every call (0.655 ms host on 2x2): a host cost the device profile does not show (DS41-66, cache_descriptors)",
+  "the 8-layer BRINGUP_PROFILE_OPS=1 profile of this model takes more than 20 minutes on 2x2 (flat expert load ~48 s a layer + op mode): beyond the tool limit; 2 layers take 15.5 min"
+ ],
+ "cited_only": [
+  "DS41-65",
+  "DS41-66"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.5",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-18T19:05:54",
+  "head": "bd9026d2c0a",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.5.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/ccl.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/common.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/shared_expert.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/fabric_all_gather_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/__init__.py",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/fabric_reduce_scatter.py",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/unit/test_fabric_rs_exact_fp32.py"
+  ]
+ }
+}

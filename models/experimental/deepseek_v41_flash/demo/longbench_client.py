@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """LongBench-v2 against a running ``demo/server.py``, or against the official DeepSeek API, over HTTP only.
 
-The serving twin of ``tests/prefill/test_prefill_decode_demo.py``: it asks the same questions of the same model,
+The serving twin of ``tests/pipeline_parallel_prefill/test_prefill_decode_demo.py``: it asks the same questions of the same model,
 in the same thinking template and effort, and grades the answers the same way -- but every question is one
 streamed ``POST /v1/chat/completions``, so this script never touches tt-metal or the card. Run the server (see
 ``demo/server.py``), then::
@@ -112,7 +112,8 @@ _CHARS_PER_TOKEN = 3.5  # only for prompts sent without a tokenizer at hand
 def _longbench_prompt(entry: dict) -> str:
     """The LongBench-v2 zero-shot user turn: the passage, then the question and four choices.
 
-    As ``tests/prefill/test_prefill_decode_demo.py`` renders it, so the questions are the ones the demo asks."""
+    As ``tests/pipeline_parallel_prefill/test_prefill_decode_demo.py`` renders it, so the questions are the ones the demo asks.
+    """
     return (
         "Please read the following text and answer the question below.\n\n"
         "<text>\n"

@@ -1,0 +1,67 @@
+intake:
+  by: dnijemcevic
+  at: '2026-11-06T13:29:47'
+  files:
+    models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml: 8a8b451f7a3130069ccdd52eb3a038e24ebeed167d35c83be677430dd3660564
+  note: 'owner 2026-11-06: paths.tt_cache_shared = /data/dnijemcevic/... (the weight
+    cache''s shared master, readable by others; F261); re-approved'
+shared:
+  P.34:
+    by: dnijemcevic
+    at: '2026-11-06T10:59:55'
+    paths:
+    - ttnn/ttnn/bringup
+    note: 'owner 2026-11-06: write P.34-P.36 into tasks.yaml, let''s run them (P.36
+      held)'
+  P.35:
+    by: dnijemcevic
+    at: '2026-11-06T10:59:55'
+    paths:
+    - ttnn/ttnn/bringup
+    note: 'owner 2026-11-06: write P.34-P.36 into tasks.yaml, let''s run them (P.36
+      held)'
+  P.37:
+    by: dnijemcevic
+    at: '2026-11-06T17:35:22'
+    paths:
+    - ttnn/ttnn/bringup
+    - models/demos/moe_block_main
+    note: 'owner 2026-11-06: one task for SE_PACK_PRECISE, NORM_INTO_MOE, replay128 on the main MoE block; run right away; P.35 / P.36 later'
+  P.38:
+    by: dnijemcevic
+    at: '2026-11-06T20:10:00'
+    paths:
+    - ttnn/ttnn/bringup
+    note: 'owner 2026-11-06: bf16 compressed KV and bf16 window KV (compute, not only serve) for now; back to 4-bit later'
+  P.39:
+    by: dnijemcevic
+    at: '2026-11-06T20:45:00'
+    paths:
+    - ttnn/ttnn/bringup
+    note: 'owner 2026-11-06: served index keys in Blaze decode format (scaled fp8, 192 B rows) for PD compatibility; contract change authorized; run after P.38 without waiting for the owner'
+  P.40:
+    by: dnijemcevic
+    at: '2026-11-07T00:05:00'
+    paths:
+    - ttnn/ttnn/bringup
+    note: 'owner 2026-11-07: index-key format A/B bf16 vs bfp8 vs bfp4 (adds a bfp8 option to INDEX_K_FORMAT; default unchanged)'
+  P.41:
+    by: dnijemcevic
+    at: '2026-11-07T07:00:00'
+    paths:
+    - ttnn/ttnn/bringup
+    note: 'owner 2026-11-07: drop the bf16 index-key copy, serve the Blaze 8-bit rows from the bfp8 keys; byte-exact served-row check re-referenced to the bfp8 keys (authorized), every option kept'
+  P.42:
+    by: dnijemcevic
+    at: '2026-11-07T08:00:00'
+    paths:
+    - ttnn/ttnn/bringup
+    note: 'owner 2026-11-07: PD table per decode review: re-index aliases, 128-row window snapshot clamped at cap; contract change authorized, old paths kept behind switches'
+  P.43:
+    by: dnijemcevic
+    at: '2026-11-07T10:30:00'
+    paths:
+    - models/demos/deepseek_v41_flash_d_p/tt
+    - models/demos/common/bringup/testing/contract.py
+    - models/demos/common/bringup/tests/
+    note: 'owner 2026-11-07: queue the skip last-chunk-start fix (derived from cap, exact and replay128) so the snapshot hand-off works with the decoder skip; bundled: framework contract check for snapshot configs (owner-authorized framework edit) and the 128-row snapshot declaration'

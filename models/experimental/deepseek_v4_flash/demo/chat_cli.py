@@ -169,7 +169,7 @@ def open_mesh_device(
     ``mesh_shape`` (``(rows, cols)``) wins over the profile's, and ``l1_small_size``
     reserves L1_SMALL (both as ``tests/prefill/test_prefill_decode_demo.py`` opens it).
     """
-    from tests.scripts.common import get_updated_device_params
+    from tt_py_test_utils_common.device_params import get_updated_device_params
 
     sys_cfg = system_config or load_system_config()
     device_params = sys_cfg.device.device_params()

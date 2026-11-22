@@ -1,0 +1,104 @@
+{
+ "used": [
+  {
+   "id": "DS41-299",
+   "how": "the target (routed_experts_combine = the busiest chip's tiles) and the split's objective; its fit then proved wrong below ~100 tiles (DS41-303)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-235",
+   "how": "the combine's int32 snap is order-free: a row computed on the replica sums to the same bytes, so on vs off is expected bit-identical (and was: 104 ladder errs equal)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-228",
+   "how": "measured the replica split on real text (census at p145408 agentic, test_skip_positions' texts), never on a random-id position profile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-227",
+   "how": "built the 13-slot weights from whole contiguous slot runs of the 12-slot file (never tile-id regroups), checked against flat_weight_regions on tagged tensors on the host",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-278",
+   "evidence": "out of date after P.84: model_bringup now carries static expert replication (MOE_REPLICAS on|off, tt/expert_replicas.py, fork RouterSpec.candidates); the entry's 'not on model_bringup' holds only for the dynamic replica machinery (prev / exact / fill / trace)",
+   "cited": false
+  },
+  {
+   "id": "DS41-299",
+   "evidence": "its fit (205 us + 6.77 us a tile, fitted on random ids at 101-321 tiles) does not extrapolate to real-text loads: P.84 census agentic p145408, layers with 46-62 busiest-chip tiles take ~820 us (fit 516-625); off 50-70 tiles 839 us. P.84's offline -4.5 ms estimate used it; measured -1.8 ms (DS41-303)",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the per-layer floor of routed_experts_combine at real-text loads (now DS41-303): the offline replica estimate needed it",
+  "P.84's gate commands lack DS41_DECODER_SKIP=decode for test_skip_positions (DS41-304); measure's side stamp records only the ab env, not a DS41_ variable exported in the shell"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated to fit a kernel: the 13th slot is the replica the owner asked for; a layer without a table entry carries an empty (zero) slot because every layer shares the one 13-slot block (no work: the flat expert skips slots with no rows)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched: the changes are in the C++ moe_head of ttnn.bringup.moe_block (its own program cache) and host-side weight preparation at load"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression / unit suite run on the 8x4; only the model-level gate units, the census and the orchestrator's measure"
+  }
+ ],
+ "cited_only": [
+  "DS41-303",
+  "DS41-304"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.84",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-19T09:41:15",
+  "head": "7cbdc362c47",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.84.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.84.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/expert_replicas.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_v2_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/replicas/agentic.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/moe_block_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_ttnn/README.md",
+   "ttnn/ttnn/bringup/moe_block_ttnn/common/common_nanobind.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/common/moe_block_config.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/common/moe_block_config.hpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/head_plan.hpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/head_program.hpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/head_router_program.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/head_weights.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/kernels/dataflow/router_output_writer.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/kernels/head_named_args.hpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/kernels/routing_planner.hpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/moe_head_device_operation.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/moe_head.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/moe_head.hpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/moe_head_nanobind.cpp"
+  ]
+ }
+}

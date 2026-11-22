@@ -1,0 +1,111 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""ttnn.bringup.mhc_pre in torch (float64), from the op's docstring and op_design.md (DeepSeek-V4 mHC order)."""
+
+import torch
+
+
+def mhc_pre(x, w, b, scale, sinkhorn_iters, eps, norm_eps):
+    """x (..., T, n*C), w (n*C, n (n + 2)), b (1, n (n + 2)) -> (y (..., T, C), post (..., T, n), comb (..., T, n*n))."""
+    x, w, b = x.double(), w.double(), b.double().reshape(-1)
+    mix_w = w.shape[-1]
+    n = next(k for k in range(1, 64) if k * (k + 2) == mix_w)
+    a_pre, a_post, a_res = scale
+    r = torch.rsqrt(x.square().mean(-1, keepdim=True) + norm_eps)
+    mix = (x @ w) * r
+    pre = torch.sigmoid(a_pre * mix[..., :n] + b[:n]) + eps
+    post = 2 * torch.sigmoid(a_post * mix[..., n : 2 * n] + b[n : 2 * n])
+    logits = (a_res * mix[..., 2 * n :] + b[2 * n :]).reshape(*mix.shape[:-1], n, n)
+    m = torch.softmax(logits, dim=-1) + eps
+    m = m / (m.sum(dim=-2, keepdim=True) + eps)
+    for _ in range(sinkhorn_iters - 1):
+        m = m / (m.sum(dim=-1, keepdim=True) + eps)
+        m = m / (m.sum(dim=-2, keepdim=True) + eps)
+    C = x.shape[-1] // n
+    y = (pre.unsqueeze(-1) * x.reshape(*x.shape[:-1], n, C)).sum(dim=-2)
+    return y, post, m.reshape(*m.shape[:-2], n * n)
+
+
+def mhc_pre_xing_coefficients(
+    row,
+    scale,
+    base,
+    norm_width,
+    n,
+    norm_eps,
+    hc_eps,
+    sinkhorn_iters,
+    clamp,
+    deepseek: bool = False,
+    dtype=torch.float64,
+):
+    """ttnn.bringup.mhc_pre_xing, coefficients_given=False (float64): the all-reduced row (..., T, 32) =
+    [mix 0..n(n+2)-1 | sum x^2 | 0..] -> hc (..., T, n(n+2)) = [pre | post | comb row-major]. The Xing4.0 math of
+    models/demos/xing40_a4b_d_p/reference/xing_ref.py:hc_weights after its projection: sigmoid pre with no + eps,
+    clamped comb logits, exp(L - rowmax), then sinkhorn_iters x (rows / (sum + eps), columns / (sum + eps)).
+    deepseek=True: DeepSeek-V4's hc_split_sinkhorn_kernel (inference/kernel.py; deepseek_v41_flash_d_p
+    reference/kernels.py:sinkhorn_split): pre + hc_eps, no clamp, row softmax + eps, column norm, then
+    (sinkhorn_iters - 1) x (rows, columns). ``dtype`` (deepseek only): the arithmetic's dtype, float64 (the
+    reference) or float32 (noise_limit's formats run, deepseek_v41_flash_d_p O.1)."""
+    if deepseek:
+        row = row.to(dtype)
+        ng = n * (n + 2)
+        mix, ss = row[..., :ng], row[..., ng : ng + 1]
+        b = torch.as_tensor(base, dtype=dtype)
+        a_pre, a_post, a_res = scale
+        z = mix * torch.rsqrt(ss / norm_width + norm_eps)
+        pre = torch.sigmoid(z[..., :n] * a_pre + b[:n]) + hc_eps
+        post = 2 * torch.sigmoid(z[..., n : 2 * n] * a_post + b[n : 2 * n])
+        logits = (z[..., 2 * n :] * a_res + b[2 * n :]).reshape(*z.shape[:-1], n, n)
+        m = torch.softmax(logits, dim=-1) + hc_eps
+        m = m / (m.sum(dim=-2, keepdim=True) + hc_eps)
+        for _ in range(sinkhorn_iters - 1):
+            m = m / (m.sum(dim=-1, keepdim=True) + hc_eps)
+            m = m / (m.sum(dim=-2, keepdim=True) + hc_eps)
+        return torch.cat([pre, post, m.reshape(*m.shape[:-2], n * n)], dim=-1)
+    row = row.double()
+    ng = n * (n + 2)
+    mix, ss = row[..., :ng], row[..., ng : ng + 1]
+    b = torch.as_tensor(base, dtype=torch.float64)
+    a_pre, a_post, a_res = scale
+    z = mix * torch.rsqrt(ss / norm_width + norm_eps)
+    pre = torch.sigmoid(z[..., :n] * a_pre + b[:n])
+    post = 2 * torch.sigmoid(z[..., n : 2 * n] * a_post + b[n : 2 * n])
+    logits = (z[..., 2 * n :] * a_res + b[2 * n :]).reshape(*z.shape[:-1], n, n).clamp(clamp[0], clamp[1])
+    m = torch.exp(logits - logits.amax(dim=-1, keepdim=True))
+    for _ in range(sinkhorn_iters):
+        m = m / (m.sum(dim=-1, keepdim=True) + hc_eps)
+        m = m / (m.sum(dim=-2, keepdim=True) + hc_eps)
+    return torch.cat([pre, post, m.reshape(*m.shape[:-2], n * n)], dim=-1)
+
+
+def mhc_pre_xing_collapse(hc, streams, n):
+    """y = sum_i pre_i * streams[..., i*C:(i+1)*C] (float64), pre = hc[..., :n]."""
+    x = streams.double()
+    C = x.shape[-1] // n
+    return (hc.double()[..., :n].unsqueeze(-1) * x.reshape(*x.shape[:-1], n, C)).sum(dim=-2)
+
+
+def running_sum(t):
+    """sum over the last dim as ONE running accumulator per row in t's dtype, left to right: a sum op's fp32
+    accumulator (torch's own fp32 sum is pairwise, far closer to float64 than a device accumulator)."""
+    acc = torch.zeros(t.shape[:-1], dtype=t.dtype)
+    for j in range(t.shape[-1]):
+        acc = acc + t[..., j]
+    return acc
+
+
+def engram_pack(h, k, w, n, running=False):
+    """mhc_pre_xing_pack engram mode, h (..., T, n*C), keys k (..., T, >= n*C; columns 0..n*C-1 read), w (n*C,) ->
+    (..., T, 32) in h's dtype = [sum_c h_i w_i k_i | sum_c h_i^2 | sum_c k_i^2 | 0 ...] per stream i. ``running``:
+    each sum as one running accumulator (running_sum) instead of torch's."""
+    C = h.shape[-1] // n
+    hs = h.reshape(*h.shape[:-1], n, C)
+    ks = k[..., : n * C].reshape(*k.shape[:-1], n, C)
+    ws = w.reshape(n, C)
+    red = running_sum if running else (lambda t: t.sum(-1))
+    cols = [red(hs * ws * ks), red(hs * hs), red(ks * ks)]
+    out = torch.zeros(*h.shape[:-1], 32, dtype=h.dtype)
+    out[..., : 3 * n] = torch.cat(cols, dim=-1)
+    return out

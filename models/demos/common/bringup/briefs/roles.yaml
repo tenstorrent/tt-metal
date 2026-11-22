@@ -1,0 +1,148 @@
+# Role text inserted into briefs/brief.md. $-placeholders come from the task and the spec.
+reference: |
+  Role: reference. Write the standalone CPU reference for $model in `$model_dir/reference/` against the interface in
+  `models/demos/common/bringup/reference/interface.py`, and the `reference` hook (plus `tokenizer` / `hf_layers` if
+  the defaults do not fit) in `$model_dir/bringup/hooks.py`. The HF implementation is the oracle; the checkpoint is at
+  `$hf_dir`. Block types and layers are in the spec. Every block's forward goes through `run_block`, and every step
+  output is recorded as `L{i}.<output>`. The following gates hold the same code: R.3 requires chunked prefill to equal
+  one-shot prefill and each block type's graph to replay exactly from recorded boundaries, and the goldens step runs
+  the reference over the longest ladder rung on CPU, so make it fast (group tokens per expert for MoE, attend each chunk
+  against the state instead of recomputing the prefix). Split the block into steps at the boundaries a device
+  implementation would swap one at a time (norms, attention, residual adds, MLP / router / experts), and keep
+  `state_tensors` / `load_state` exact inverses (names per layer from `spec.state_names(layer)`; a fixed-size tensor in
+  `state.fixed`, e.g. a recurrent state, is the current one and `load_state` sets it as of `length`). A layer that reads
+  another layer's state (shared KV cache, reused top-k indices) keeps none of its own: write `state_sources(spec,
+  layer)` in hooks.py (reference/interface.py, F65) and make the per-chunk results it reuses state tensors of the source. If the stock HF loader cannot run this checkpoint on this host (custom
+  quantized storage, or too big for host RAM in bf16), write `hf_model(spec, num_layers)` in hooks.py: the HF modeling
+  code with the checkpoint's weights dequantized exactly as the checkpoint defines them; `num_layers=None` means the
+  full model (the HF sanity gate: smoke and next-token accuracy), so keep what does not fit packed and dequantize it
+  when it runs. For a layer subset, task R.4 trims the checkpoint once R.2 passes (only layers up to the last subset
+  layer stay; mixed shards become `subset-<shard>`): read every tensor through `model.safetensors.index.json`, never
+  by a shard file name. Every accuracy limit of the device steps derives from a noise floor
+  (testing/noise_floor.py; the owner's rule: match the reference precision, never more). For it, task R.5 needs from
+  you (a) `$bringup_dir/official_taps.yaml`: the dtype the official implementation holds each block step's inputs and
+  output in, `steps: {<step>: {inputs: [bf16 | fp32 | fixed], out: bf16 | fp32}}` (`fixed` for a quantizer's output,
+  e.g. an fp8-valued kv; `<block type>.<step>` where block types differ), and (b) the hook `official_taps(spec,
+  layers, tokens, chunk, chunk_size)` in hooks.py: the official modeling code at its shipped dtypes (hf_model) run
+  over the first chunk + 1 chunks, tapped with forward hooks or wrapped methods, returning for that chunk `{layer:
+  {step: {"inputs": [...in the step's input order, as the official code held them], "output": ...}, "_state":
+  {"start": ..., "end": ...}}}` for every step of every layer, `_state` being the layer's state as the official run
+  had it at the chunk's start and end in the reference's own state format (what `state_tensors` returns): stateful
+  steps read their prefix from it (testing/official_floor.py checks the map: the fp32 step on the tapped inputs and
+  state must give the official output within its input-nudge floor; a step whose official code rounds more inside
+  than that passes only with `explained: "<why, and the evidence: e.g. the fp32 step with those roundings emulated
+  reproduces the official output>"` in official_taps.yaml, which the overseer reviews).
+  The `reference` hook takes `numerics` ("native": fp32, every quantize-dequantize of the shipped code off;
+  "official": the shipped code's arithmetic at `reference.shipped_dtype` with its fp32 islands) and `dtype`, from the
+  first version. R.5 checks that "official" reproduces the tapped official code step by step. A reference that cannot
+  run at the shipped precision stops the goldens.
+plan: |
+  Role: plan. Map every component to an op (the bring-up forks of ttnn/ttnn/bringup/INDEX.md first, then TTNN) and shard the model over the $mesh mesh ($chips chips, $dram GB each). Write
+  `$bringup_dir/plan.yaml` (schema in `models/demos/common/bringup/plan/memory.py`), `$bringup_dir/plan.md`, and
+  `$bringup_dir/components.yaml` (schema in `models/demos/common/bringup/plan/components.py`). The gate computes
+  per-chip memory from the real checkpoint shapes under your placements, so every checkpoint tensor needs a placement.
+  Adjust `$bringup_dir/tasks.yaml` only if the plan needs different tasks (keep the id scheme). A person approves the
+  plan afterwards; the gate passes only then. A block step TTNN has no proper op for (no op, no composition, no fork
+  of an existing op fits) is tagged OPGEN, with `searched` like CPU and COMPOSED and optionally the op name as `op`:
+  its component task then requests the op from the op code generator and the step stays on the CPU bridge.
+test: |
+  Role: test. Review the rendered test $tests for $component_desc against the golden and the component, and adjust it
+  if needed (comparison mode, extra structural checks). Never set a numeric THRESHOLD: every limit comes from the
+  noise floor the test computes; a test that cannot compute one fails. It will be frozen next: it must pass with the CPU reference as
+  the module (BRINGUP_IMPL=reference) and fail with a zero stub (BRINGUP_IMPL=stub). You can check both with
+  `BRINGUP_IMPL=reference $gate_cmd` and `BRINGUP_IMPL=stub $gate_cmd`.
+implement: |
+  Role: implement. Implement $component_desc on the device. The frozen test is $tests. Components entry:
+  $component_entry
+  Register the module in `$model_dir/bringup/hooks.py` (`device_component`, and `device_model` for the ladder).
+  Everything not swapped stays on the CPU reference.
+  $defer
+  $details
+contract: |
+  Role: contract. Make $model servable by the prefill engine: adapter, runtime, KV layout and address table (see
+  `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md` and the repo map). You may change the prefill engine
+  (`models/demos/common/prefill`) where the model's layout needs it; prefer a generic adapter hook to a name branch.
+fix: |
+  Role: fix. The scripted gate below failed. Find the first layer (or state) whose metric is over its recorded limit (or the contract
+  check that failed), fix it in its module, and re-run the gate. The log is quoted below. $details
+overseer: |
+  Role: overseer fix. The steps this gate reruns pass today; the overseer asks for a change to the code they run, now,
+  not when some later test fails. Make exactly the change below, in the model's code (and a fork behind an option, if
+  it needs one), and record it in BREADCRUMBS.md (what changed, why, the numbers you measured). The gate reruns the
+  frozen tests of the passed steps the change touches ($gate_tasks); all of them must still pass. If the request is
+  wrong (the evidence of a test, a probe or the reference says so), answer `disagree` on it in your knowledge-use
+  report under `"overseer"` with id $task_id and that evidence, and change nothing. The request:
+  $details
+perf: |
+  Role: perf. Make one performance change to $model and keep it correct:
+  $details
+  Before you change code, read `models/demos/common/bringup/knowledge/perf_guide.md` (what usually pays, what moves
+  time instead of removing it, how the A/B is judged) and write your expected saving per chunk (device and host) in
+  `$breadcrumbs`.
+  Keep the previous behaviour selectable with the switch the task names ($ab_switch), a `Setting` in the model's
+  `tt/settings.py`: the orchestrator sets it explicitly for both sides, change on and off, so its default does not matter.
+  Make the change the default and never revert it when a test fails: the owner decides from the measurements. Do not
+  change thresholds, goldens or frozen tests.
+  Your final check (F122, the quick A/B the owner decides on): `python -m models.demos.common.bringup.orchestrator
+  measure --task $task_id`: one process with your switch on (the last chunk after the golden prefix, every layer
+  against the golden, the clean wall time); the report reuses it while your code is unchanged, and the gate's full set
+  (frozen tests, every rung, the per-section profile) runs once before the final task. While iterating, run only what
+  your change needs. With a full A/B (tasks.yaml ab_mode: full):
+  Accuracy first. Before any profile, run the frozen tests of the step the change touches: the accuracy commands of
+  the gate below, in gate order, each once, through
+  `python -m models.demos.common.bringup.orchestrator measure --task $task_id --part <the command's test file stem>`
+  (`--part test`: all of them; `--part <rung>` / `--part profile`: the A/B report's ladder rungs and profile). It runs
+  them exactly as the A/B report's change-on side (your switch on, its environment) and the report reuses every run
+  whose code is still the same (F116), so run them after your last code edit; a later edit makes it measure again. If one fails and the details above give no way around it, stop at once:
+  do not profile, do not try settings the details do not name; append the failing metric(s) with their limits (the
+  test's `FAIL <metric>: ...` lines) to `$breadcrumbs` and your final summary, and exit. Never profile a change that
+  fails accuracy (testing/profile.py refuses while this task's frozen test has failed). Only when they all pass may
+  you profile, to tune: only the e2e chunk time and the changed section's time, with the plain profile
+  (test_profile.py without BRINGUP_PROFILE_OPS; a few minutes). Never profile per op over the whole model: per-op mode
+  runs on the representative layers only (BRINGUP_PROFILE_LAYERS picks others) and only when the section time cannot
+  explain a result. Do not run the whole gate: when you exit, the orchestrator runs the frozen tests, the ladder and
+  one plain profile with the change on and off, and the owner decides from that table whether it is applied.
+serving: |
+  Role: serving contract, for $model, before anything is planned or built. Follow your agent instructions
+  (agents/serving-contract.md): write `$bringup_dir/serving_contract.md`, `$bringup_dir/contract_tests.yaml` and the
+  tests under `$model_dir/tests/bringup/contract/`. Never write or change model code.
+settings: |
+  Role: settings audit, for $model. Follow your agent instructions (agents/settings-audit.md): every switch of the
+  model's code and of the bring-up forks it calls in one place, `$model_dir/tt/settings.py`, with behaviour unchanged.
+scale: |
+  Role: scale. Make the scaled model of $model work: on this box (smaller than the deployment box) the whole bring-up
+  runs on the reduced model whose chips hold what the deployment box's chips hold
+  (`models/demos/common/bringup/plan/scale.py`); the goldens and every later step use it. The gate cuts the checkpoint
+  by `$bringup_dir/scaling.yaml` (which config counts to scale, and which tensors to cut along which dimension, or to
+  keep by index) into `$scaled_hf`; the goldens then come from it. Fix what stops either: a cutting rule
+  that misses a tensor whose size follows a scaled count (every such tensor must be cut, or the reference fails on
+  shapes), or a reference that assumes the real dimensions instead of reading them from the checkpoint's config.
+optests: |
+  Role: optests. $model calls derived bring-up ops (`ttnn.bringup.*`, see `ttnn/ttnn/bringup/INDEX.md`). Every
+  distinct call it makes needs a test case in that fork's `tests/`, with random inputs (never the model's real
+  activations, goldens or weights). Follow `models/demos/common/bringup/skill/bringup-fork-tests/SKILL.md`. The gate
+  records the calls in `$bringup_dir/results/fork_calls.json` and its log lists the ones with no case (sig, op). Add
+  cases for those; never remove or loosen another model's case. The gate then runs every test of every fork used.
+  Task F.1 (F199) runs every fork's every test (unit suites, every model's cases, the original op's tests) and lists
+  each failure: fix the cause (the fork, or a test that checks the wrong thing, with the reason in the fork's
+  CHANGELOG). Never skip, delete, filter out or loosen a test to make it pass, and never call a failure acceptable
+  because it failed before; a failure you cannot fix is the owner's (stop with the evidence; only the owner adds a
+  `tests.fork_waivers` entry).
+assemble: |
+  Role: assemble. Every step of every block type has passed on the device, but through the hybrid harness
+  (`$model_dir/bringup/hooks.py`: the CPU reference with host in / host out around each device step). Build the model
+  the ladder, the contract and the profile use: one device model whose hidden state stays on the device from the
+  embedding to the final norm, made from the validated modules (reuse them, do not rewrite them). Each block's forward
+  goes through `run_block` with the block graph, so the profiler sees one section per step. Everything that depends
+  only on shapes or positions is built once at load and sliced on the device (agent rule 5). Register it as the
+  `device_model` hook; keep the hybrid selectable (e.g. `BRINGUP_HYBRID=1`) for debugging. Steps deferred to
+  op-gen (listed below, if any) stay on the CPU: the device model calls each through `CpuBridge`
+  (`models/demos/common/bringup/testing/cpu_bridge.py`) with the mesh placements of its inputs and output; nothing
+  else in the forward path may touch the host. $details
+port: |
+  Role: port (F185). This run is grown from a finished bring-up of the same model, the seed (`$seed_spec`, mesh
+  $seed_mesh): the same `$model_dir/tt`, hooks, CPU reference, plan and forks, now on $mesh ($chips chips) at this run's
+  size. Extend the seed's modules in place; never copy them. The seed box must keep working: every size, share, group
+  size, topology, link count and payload constant comes from the mesh and the checkpoint config, never from a box
+  name or a literal of this box. Settings stay in `$model_dir/tt/settings.py` with the seed's shipped defaults (the
+  owner's picks); a change of a default for this box is an owner decision, so leave it and say so. $details

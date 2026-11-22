@@ -1,0 +1,76 @@
+{
+ "used": [
+  {
+   "id": "DS41-360",
+   "how": "the expected glued4x2k cold FAIL is the carry-source-mix build; the packed paths are recorded, not asserted (NO_REBUILD_PACKED_STRICT=1 restores the assert)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-346",
+   "how": "lanes4x2k's slice-keyed builds expected; recorded FAIL, not asserted",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-356",
+   "how": "kept the test's ENGRAM_TABLE pin and BRINGUP_CHUNK item var so the cold unit loads the gate's one model configuration",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-357",
+   "how": "named the cold glued builds' cause: a resumed (replay) chunk leaves the one-call path for path (b), which compile never warms (DS41-361)",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-360",
+   "evidence": "its '(5 x 1.6k: 0)' came from a held process: cold PB.NR run (resident done/20261121-070432-01eb1f.json) glued5x1600 13 builds, glued4x2k 16 (14 on the resumed draw, not only the carry-mix build); see DS41-361",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "a gate whose units need two chunk geometries (8192 and 5120 test_no_rebuild) cannot share one cold process: tests.one_load refuses the second unit; run it with --unit"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "tests only: no padding or inflated work added"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; no owner stop taken"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "test_no_rebuild keeps one load configuration (BRINGUP_CHUNK an item var, ENGRAM_TABLE pinned to the shipped default); BATCH_COLD only makes the process fresh"
+  }
+ ],
+ "cited_only": [
+  "DS41-361"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.NR",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T07:20:02",
+  "head": "286f4654ec5",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.NR.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.NR.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/packed_ladder_20261121.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py"
+  ]
+ }
+}

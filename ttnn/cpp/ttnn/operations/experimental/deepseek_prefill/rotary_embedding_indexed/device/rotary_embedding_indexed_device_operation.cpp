@@ -14,6 +14,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
@@ -25,6 +26,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/chip_position/chip_position_table.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/device/rotary_embedding_llama_metal2_common.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/up_front_compile.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed {
 
@@ -839,7 +841,11 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     }
     run_args.tensor_args.emplace(CONCAT_PREFIX_PARAM, TensorArgument{prefix});
 
-    tt::tt_metal::Program program(*mesh_device, spec);
+    // Defer the compile while the up-front precompile collect pass is active: the
+    // workload is stashed and discarded, never dispatched, and its kernels are
+    // JIT-compiled in bulk later. See ttnn/up_front_compile.hpp.
+    const bool defer_compile = ttnn::up_front_compile::should_defer_compile();
+    auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec, defer_compile);
     program.set_program_run_args(run_args);
     return {std::move(program), SharedVariables{}};
 }

@@ -1,0 +1,29 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [
+  "FIX.5 in tasks.yaml has paths: [] (tasks.yaml:9751), so the brief allows no model code (tt/, hooks.py) while the requested fix is in tt/model.py; an overseer_fix task that changes model code needs paths: [models/demos/deepseek_v41_flash_d_p/tt] (as FIX.4, tasks.yaml:2540)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.5",
+   "answer": "n/a",
+   "evidence": "Not done: blocked by the brief's scope, not by disagreement. The brief's 'You may change only' list omits models/demos/deepseek_v41_flash_d_p/tt and hooks.py (tasks.yaml FIX.5 'paths: []'); the memo lives in tt/sparse_attention.py (ChunkMemo, has clear() at :93) and is owned by DS41DeviceState (tt/model.py:169); begin_chunk is tt/model.py:682. Any edit there fails the step on the diff (agent rule 2). Proposed patch (one place, tt/model.py TtDS41Model.begin_chunk, first lines, before 'if not self.engram: return'): 'st = self.state; if st is not None and st.memo is not None: st.memo.clear()'. harness.begin_chunk (testing/harness.py:90) calls it before every chunk, so the profile and timeline runs each start with an empty memo. Correction to the diagnosis: the keys do carry the chunk start and the source cache's write version (sparse_attention.py:251 ckey=(start, id(ckv_cache), ckv_cache.version); indexer.py:265 kkey likewise), so a later chunk (another start) or a rewritten cache misses; the leak is a hit on a re-run of the SAME start with an unchanged source version (the X.3 profile -> timeline case), plus device memory held by the unread slot. Not measured on device (no code change was allowed)."
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.5",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-21T06:25:43",
+  "head": "2ffa179d379",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.5.overseer.1.json"
+  ]
+ }
+}

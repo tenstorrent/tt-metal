@@ -1,0 +1,112 @@
+{
+ "used": [
+  {
+   "id": "DS41-297",
+   "how": "lanes are whole chips (8192 % (32 x chips) == 0): LaneMover moves whole SP rows (8x4) or chip blocks",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-311",
+   "how": "the packed tests reload their helper module (importlib.reload) since the resident runner keeps an earlier request's module",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-314",
+   "how": "packed_common.packed() sets only PACKED in a frozen settings snapshot, never refresh()",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-316",
+   "how": "every rung ran on the held 40-layer model (DS41_PACKED_LAYERS picks the layers computed) instead of a mesh-only or smaller load",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-279",
+   "how": "test_packed_reference raises target.seq only when the 8192 tables do not reach 59392 (none at 8192)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-277",
+   "how": "the per-segment SnapshotSend instances are keyed like the original (pattern + io geometry); each its own semaphores",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-321",
+   "how": "the device oracle compares packed vs alone bit for bit; the device MoE was row-local on the oracle's compositions (no fixed-tile workaround needed)",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-299",
+   "how": "explains the 1 x 2k wall's experts 71 ms: 6144 pad rows of one id on the busiest chip",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-1",
+   "how": "lane moves never free the attention output site or the attn_norm site (dealloc skips pinned / kept tensors)",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "every per-layer load-time buffer a fabric program writes on another chip (window region, snapshot arrival semaphores) assumes one call a layer; back-to-back calls of the same layer race (now DS41-324)",
+  "a test that sets a load-time switch (DS41_ENGRAM_TABLE, as test_skip_positions does) before batch.device_model sends the run to a fresh process (F269): the skip_positions pattern must not be copied into a shared-load test (OV-61)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated to fit an op: the lane moves are stock data moves of the rows as they are; the 4x attention is the v1 structure (each call over the full geometry), recorded with its cost in BREADCRUMBS"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "DECIDED lines in BREADCRUMBS PPB.3: v1 attention = rotate the lane to lane 0 and reuse today's steps; lane-natural engine input order; continued past the snapshot race by fixing it (DS41-324)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "the three packed tests use one configuration a class: oracle and reference the 40-layer accuracy load (layers chosen per run by DS41_PACKED_LAYERS, an item var; the reference raises target.seq only past the 8192 tables), walls the 0-20 perf load; the walls test's ENGRAM_TABLE set (a load-time switch) removed after it sent a run to a fresh process; repeat determinism measured inside the oracle (packed_determinism_max_abs_diff)"
+  }
+ ],
+ "cited_only": [
+  "DS41-324",
+  "DS41-325"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.3",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T00:07:53",
+  "head": "8ef46676e6e",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/drafts/tt_d_gen_packed_ask.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.3.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.3.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/packed_common.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_reference.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

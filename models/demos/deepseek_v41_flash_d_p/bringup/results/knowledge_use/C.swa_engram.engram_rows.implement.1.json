@@ -1,0 +1,61 @@
+{
+ "used": [
+  {
+   "id": "K-52",
+   "how": "read the pcc-0 FAIL block of the gate log as the precompile collect pass, not a failure of the module",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-72",
+   "how": "the engine pads with 0xFFFFFFFF past actual_end: the host hash stops at actual_end (or the first out-of-vocabulary id) and zero-fills the pad rows (DS41-26)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "ran the gate and the host check with PYTHONPATH=$PWD",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-9",
+   "how": "tables stay memory-mapped on the host (EngramTable), only the chunk's rows are read and sent; nothing engram-sized on the device",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how a CPU-tagged host-input step is registered as a device step (host fn returning the uploaded rows) and where its per-slot host state lives in the hybrid vs the component test"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "known_issues.md DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x the step's own component error, no cap'; touched known_issues.md only to add DS41-26"
+  }
+ ],
+ "cited_only": [
+  "DS41-20",
+  "DS41-26"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa_engram.engram_rows",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T19:19:33",
+  "head": "2a6cede6a28",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa_engram.engram_rows.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram.py"
+  ]
+ }
+}

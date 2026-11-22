@@ -1,0 +1,99 @@
+{
+ "used": [
+  {
+   "id": "DS41-339",
+   "how": "took its cause (moe_head's rows RS adds a row in its destination chip's ring order) as the target; fixed it in the fork by reducing by columns (MOE_HEAD_ORDER=free) and reproduced it first at op level (rows scatter: 1024 of 2048 moved rows differ, 0.015625)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-128",
+   "how": "applied its fix pattern (sum order by column / chip index, never by the row's owner chip) to the moe_head's shared expert (columns RS) and to its router's TP logits sum (chip order, DS41-341) instead of a new transport",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-332",
+   "how": "none of the new per-layer work moves data host <-> device: se goes to owner rows with a device all_to_all (no host round trip)",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-339",
+   "evidence": "its cause was incomplete: after the shared-expert RS fix the 40-layer glued oracle still differed (glued2 P from layer 20, 1 of 1600 rows): the fused head's router also sums the TP logits partials in an owner-dependent order (router_compute.cpp, head_model.cpp arrival_order); new DS41-341, both fixed under MOE_HEAD_ORDER=free",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the moe_head's columns-scatter path (scatter -1) splits its ring halves by core index (= by core row) and its padding skip (x_gather_block_real) reads a block as a row block: both silently assume a latent model without padding; an entry would have saved one oracle run (now in the fork CHANGELOG and BREADCRUMBS PPB.7 att. 2)",
+  "set_max_grid is process-wide and frozen at the first plan: a mesh-only moe_block op test in the resident runner must set the model's cap first (now DS41-340)",
+  "which cross-TP sums of the fused moe_head depend on the token's owner chip (the shared-expert RS and the router's logits sum): attempt 1 probed layer 0 only, where the RS hides the router's rarer flips"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated: the fix reduces the same partials by columns (same RS bytes) and adds one all_to_all of the real output; no input inflated to fit a kernel"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "DECIDED in BREADCRUMBS PPB.7 att. 2: columns scatter over a butterfly / int32-snap transport (built path, same bytes); worked through two blockers (DS41-340 core cap, the padding-skip bug) without stopping; oracle measured and reported; no push, no tt-smi -r, device work through the resident runner"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "MOE_HEAD_ORDER is a load-time Setting with default free, so every test of the gate runs on the same model configuration; no load-time env in any test; the op test is mesh-only (BATCH_SHARED, BATCH_LAYERS executed)"
+  },
+  {
+   "id": "OV-65",
+   "answer": "done",
+   "evidence": "op-level regression first (ttnn/ttnn/bringup/moe_block_ttnn/tests/test_shared_scatter_columns.py via tests/test_moe_head_scatter_columns.py: off 1024 rows differ, on 0 at 2048 and 8192, routing rows 0, determinism 0, padded real rows 0, pcc 0.99956); fork options shared_scatter_columns + router_canonical_sum (default off); glued oracle layers 0-3 all 0; probe layer 20 0 rows after the router fix; full gate results in BREADCRUMBS PPB.7 att. 2"
+  }
+ ],
+ "cited_only": [
+  "DS41-340",
+  "DS41-341"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.7",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T13:48:26",
+  "head": "90807ce9797",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.7.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.7_glued_walls.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.7.perf.2.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_probe_layer.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_moe_head_scatter_columns.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_v2_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/moe_block_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_ttnn/common/common_nanobind.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/common/moe_block_config.hpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/README.md",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/head_gather_program.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/head_model.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/head_plan.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/head_plan.hpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/head_router_program.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/head_sizing.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/head_sizing.hpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/kernels/compute/router_compute.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/kernels/head_named_args.hpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/device/kernels/x_gather.hpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/moe_head/moe_head.cpp",
+   "ttnn/ttnn/bringup/moe_block_ttnn/tests/test_shared_scatter_columns.py"
+  ]
+ }
+}

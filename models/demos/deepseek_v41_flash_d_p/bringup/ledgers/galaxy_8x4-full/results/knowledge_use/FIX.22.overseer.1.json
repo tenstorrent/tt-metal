@@ -1,0 +1,77 @@
+{
+ "used": [
+  {
+   "id": "DS41-199",
+   "how": "checked the 40 bfp4_mse cache markers before the gate and grepped the ladder log for cache=miss (0 misses, 40 hits)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-194",
+   "how": "BREADCRUMBS.md is at 511999 of 512000 B: detail went to known_issues_detail.md, pointer heading edited at net-zero size",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-198",
+   "how": "the measured reason for the new default, cited in the setting's description",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "ran the 26-min gate as a detached devjob and waited in short calls",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "BREADCRUMBS.md has 1 byte of headroom (511999 / 512000 B): any append fails the large-file hook; it needs archiving"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.22",
+   "answer": "done",
+   "evidence": "tt/settings.py EXPERTS_IMPL default bfp4_mse; gate FIX.22 --check PASS: err_final_hidden 0.1399 <= 0.2422, top5 1.0, all layers/states ok, profile wall median 194.6 ms; 40/40 cache=hit"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding; settings default only"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression or unit suite run; only the gate's model-level ladder and profile"
+  }
+ ],
+ "cited_only": [
+  "DS41-200"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.22",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-04T18:40:01",
+  "head": "2cd4119bc3e",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.22.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.22_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.22_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.22.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/tasks.yaml",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

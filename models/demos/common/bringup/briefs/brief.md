@@ -1,0 +1,48 @@
+# Brief: $tid, role $role (attempt $attempt)
+
+Model: $model (`$spec_path`). Run: $run. Written by the orchestrator at $now.
+
+## Task
+$title
+
+$role_text
+
+$rules
+$overseer$prior$boxes
+$deferred
+$serving
+## Read first
+- `models/demos/common/bringup/knowledge/repo_map.md`
+- `models/demos/common/bringup/knowledge/known_issues.md`
+- `$bringup_dir/repo_map.md` and `$bringup_dir/known_issues.md` (this model's own; absent until a step adds to them)
+- `$spec_path` (the model spec)
+$read_list
+
+## You may change only
+$allowed
+
+Everything else is read-only for this step. The orchestrator diffs the tree when you finish.
+
+## Gate you must pass
+Run it with (F170; never by running the test commands below by hand):
+```
+$gate_check
+```
+It runs these units, one test each; a unit that passed on the same code is not run again, and the orchestrator's gate
+after you finishes runs only the units you did not pass. While iterating, run one unit with `--check --unit <name>`.
+$gate_units
+Thresholds (the runner compares the recorded metrics; you cannot change them):
+$thresholds
+
+Run it from the repo root with `PYTHONPATH=$repo`. Model-level device runs through the resident runner (`python -m
+models.demos.common.bringup.resident submit --spec $$BRINGUP_SPEC --cmd "<command>"`: one device open and one model
+load per task, owner rule 2026-11-19); op-level device code through `scripts/run_safe_pytest.sh` or
+`scripts/tt-probe.sh`, in the foreground.
+
+$previous
+## When you finish
+If you learned something new, add it to `$bringup_dir/known_issues.md` with the file's next id (or a pointer to
+`$bringup_dir/repo_map.md`); append to `$breadcrumbs`. Complete the knowledge-use report `$knowledge_report` (agent
+rule 11): the entries that changed what you did (name their ids where you used them), the ones you found wrong (write
+those into the report as soon as you find them), and what was missing. End with a short summary.
+Do not commit.

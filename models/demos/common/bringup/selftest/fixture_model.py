@@ -1,0 +1,396 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Synthetic test fixture for the reference-side scripts: random weights, one attention head, a KV state.
+
+Not a model bring-up. It implements the reference interface (reference/interface.py) in as few lines as possible,
+plus an "HF" twin that computes the same thing through a different code path, so check_hf, check_reference and
+generate_golden can be exercised without a checkpoint. Used as the ``hooks`` module of the selftest spec.
+
+Spec ``fixture.recurrent_layers: [i, ...]`` turns those layers' attention into a linear recurrence with a fixed-size
+state (``recurrent`` [H, H], decayed and updated per token), for mixed per-layer state (spec state.by_block_type,
+state.fixed).
+
+Spec ``fixture.shared: {consumer: source}`` makes a layer read another layer's state instead of keeping its own
+(F65, hooks ``state_sources``): from a KV source, causal attention of its own queries over the source's keys and values
+(which the source wrote for this chunk); from a recurrent source, its queries times the source's state after the chunk.
+Spec ``fixture.token_layers: [i, ...]`` adds a term keyed on the chunk's token ids to those layers' attention residual
+(like an n-gram lookup): it reads ``ctx.extra["tokens"]``, which the harness and the device model's begin_chunk give.
+"""
+
+from __future__ import annotations
+
+import torch
+import torch.nn.functional as F
+
+from models.demos.common.bringup.reference.interface import Ctx, Step, noop, run_block
+
+H, V, LAYERS, SEED = 64, 97, 3, 0
+DECAY = 0.9
+
+
+def weights():
+    g = torch.Generator().manual_seed(SEED)
+    r = lambda *s: torch.randn(*s, generator=g) * 0.2  # noqa: E731
+    return {
+        "embed": r(V, H),
+        "layers": [
+            {"wq": r(H, H), "wk": r(H, H), "wv": r(H, H), "w1": r(2 * H, H), "w2": r(H, 2 * H)} for _ in range(LAYERS)
+        ],
+        "head": r(V, H),
+    }
+
+
+def norm(x):
+    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-6)
+
+
+def recurrent_layers(spec) -> set[int]:
+    return set(spec.get("fixture.recurrent_layers") or []) if spec is not None else set()
+
+
+def token_layers(spec) -> set[int]:
+    return set(spec.get("fixture.token_layers") or []) if spec is not None else set()
+
+
+def token_term(w, tokens):
+    return 0.1 * w["embed"][tokens].flip(-1)
+
+
+def shared_layers(spec) -> dict[int, int]:
+    return {int(k): int(v) for k, v in (spec.get("fixture.shared") or {}).items()} if spec is not None else {}
+
+
+def recurrence(x, w, s):
+    """Linear attention with decay: per token, s = DECAY * s + k^T v, out = q s. Updates s in place."""
+    q, k, v = x @ w["wq"].T, x @ w["wk"].T, x @ w["wv"].T
+    out = torch.empty_like(q)
+    for t in range(x.shape[0]):
+        s.mul_(DECAY).add_(k[t, :, None] * v[t, None, :])
+        out[t] = q[t] @ s / H
+    return out
+
+
+class State:
+    def __init__(self, layers, max_seq, recurrent=(), shared=()):
+        kv = [i for i in layers if i not in recurrent and i not in shared]
+        self.k = {i: torch.zeros(max_seq, H) for i in kv}
+        self.v = {i: torch.zeros(max_seq, H) for i in kv}
+        self.r = {i: torch.zeros(H, H) for i in layers if i in recurrent}
+
+
+class Reference:
+    def __init__(self, spec=None, layers=None, dtype=torch.float32, broken_graph=False):
+        self.w = weights()
+        self.layer_ids = list(range(LAYERS)) if layers is None else list(layers)
+        self.broken_graph = broken_graph
+        self.recurrent = recurrent_layers(spec)
+        self.shared = shared_layers(spec)
+        self.token_layers = token_layers(spec)
+
+    def new_state(self, max_seq):
+        return State(self.layer_ids, max_seq, self.recurrent, self.shared)
+
+    def state_tensors(self, state, layer, length):
+        if layer in self.shared:
+            return {}
+        if layer in self.recurrent:
+            return {"recurrent": state.r[layer].clone()}
+        return {"key": state.k[layer][:length].clone(), "value": state.v[layer][:length].clone()}
+
+    def load_state(self, state, layer, tensors, length):
+        if layer in self.shared:
+            return
+        if layer in self.recurrent:
+            state.r[layer].copy_(tensors["recurrent"])
+            return
+        state.k[layer][:length] = tensors["key"][:length]
+        state.v[layer][:length] = tensors["value"][:length]
+
+    def block_graph(self, layer):
+        return [
+            Step("attn_norm", ("in",), "attn_norm", "norm"),
+            Step("attention", ("attn_norm",), "attn_out", "attention", stateful=True),
+            Step("attn_residual", ("in", "attn_out"), "h_mid", "residual"),
+            Step("ffn_norm", ("h_mid",), "ffn_norm", "norm"),
+            Step("mlp", ("ffn_norm",), "mlp_out", "mlp"),
+            Step("mlp_residual", ("h_mid", "mlp_out"), "out", "residual"),
+        ]
+
+    def chunk_context(self, layer, start, length, state):
+        return Ctx(layer, start, length, state)
+
+    round_to = None  # F136: the official arithmetic's output dtype (reference())
+
+    def component(self, layer, name):
+        fn = self._component(layer, name)
+        if self.round_to is None:
+            return fn
+        return lambda ctx, *x: fn(ctx, *x).to(self.round_to).float()
+
+    def _component(self, layer, name):
+        w = self.w["layers"][layer]
+
+        def attention(ctx, x):
+            if layer in self.shared:
+                src, end = self.shared[layer], ctx.start + x.shape[0]
+                q = x @ w["wq"].T
+                if src in self.recurrent:
+                    return q @ ctx.state.r[src] / H
+                k, v = ctx.state.k[src][:end], ctx.state.v[src][:end]
+                mask = torch.arange(end)[None] > torch.arange(ctx.start, end)[:, None]
+                return torch.softmax((q @ k.T / H**0.5).masked_fill(mask, float("-inf")), -1) @ v
+            if layer in self.recurrent:
+                if ctx.start == 0:
+                    ctx.state.r[layer].zero_()
+                return recurrence(x, w, ctx.state.r[layer])
+            end = ctx.start + x.shape[0]
+            ctx.state.k[layer][ctx.start : end] = x @ w["wk"].T
+            ctx.state.v[layer][ctx.start : end] = x @ w["wv"].T
+            k, v = ctx.state.k[layer][:end], ctx.state.v[layer][:end]
+            s = (x @ w["wq"].T) @ k.T / H**0.5
+            mask = torch.arange(end)[None] > torch.arange(ctx.start, end)[:, None]
+            return torch.softmax(s.masked_fill(mask, float("-inf")), -1) @ v
+
+        table = {
+            "attn_norm": lambda ctx, x: norm(x),
+            "attention": attention,
+            "attn_residual": lambda ctx, a, b: a
+            + b
+            + (token_term(self.w, ctx.extra["tokens"]) if layer in self.token_layers else 0.0),
+            "ffn_norm": lambda ctx, x: norm(x),
+            "mlp": lambda ctx, x: F.silu(x @ w["w1"].T) @ w["w2"].T,
+            "mlp_residual": lambda ctx, a, b: a + b + (1e-3 if self.broken_graph else 0.0),
+        }
+        return table[name]
+
+    @torch.no_grad()
+    def forward_chunk(self, tokens, start, state, rec=noop, logits_last_n=0):
+        h = self.w["embed"][tokens]
+        rec("embed", h)
+        for i in self.layer_ids:
+            ctx = self.chunk_context(i, start, tokens.shape[0], state)
+            ctx.extra["tokens"] = tokens
+            comp = (lambda i: lambda name: self.component(i, name))(i)
+            steps = self.block_graph(i)
+            if self.broken_graph:  # the forward differs from what the graph claims (mlp_residual adds 1e-3)
+                h = self._forward_raw(i, h, ctx, rec)
+            else:
+                h = run_block(steps, comp, ctx, h, rec, prefix=f"L{i}.")
+        out = norm(h)
+        rec("final_norm", out)
+        logits = out[-logits_last_n:] @ self.w["head"].T if logits_last_n else None
+        return out, logits
+
+    def _forward_raw(self, i, h, ctx, rec):
+        rec(f"L{i}.in", h)
+        c = lambda n: self.component(i, n)  # noqa: E731
+        x = c("attn_norm")(ctx, h)
+        rec(f"L{i}.attn_norm", x)
+        a = c("attention")(ctx, x)
+        rec(f"L{i}.attn_out", a)
+        m = h + a
+        rec(f"L{i}.h_mid", m)
+        f = c("ffn_norm")(ctx, m)
+        rec(f"L{i}.ffn_norm", f)
+        o = c("mlp")(ctx, f)
+        rec(f"L{i}.mlp_out", o)
+        out = m + o
+        rec(f"L{i}.out", out)
+        return out
+
+
+class _HFLayer(torch.nn.Module):
+    """Independent one-shot implementation (causal attention over the whole sequence, no state). A shared layer reads
+    the keys and values its source layer left in ``kv``."""
+
+    def __init__(self, w, recurrent=False, idx=0, source=None, kv=None, tok=None):
+        super().__init__()
+        self.w, self.tok = w, tok
+        self.recurrent = recurrent
+        self.idx, self.source, self.kv = idx, source, kv
+
+    def forward(self, h):
+        w = self.w
+        x = norm(h)
+        if self.recurrent:
+            h = h + recurrence(x, w, torch.zeros(H, H))
+            return (h + F.silu(norm(h) @ w["w1"].T) @ w["w2"].T,)
+        if self.source is None:
+            k, v = x @ w["wk"].T, x @ w["wv"].T
+            self.kv[self.idx] = (k, v)
+        else:
+            k, v = self.kv[self.source]
+        s = (x @ w["wq"].T) @ k.T / H**0.5
+        s = s.masked_fill(torch.triu(torch.ones(s.shape, dtype=torch.bool), 1), float("-inf"))
+        h = h + torch.softmax(s, -1) @ v + (self.tok() if self.tok else 0.0)
+        return (h + F.silu(norm(h) @ w["w1"].T) @ w["w2"].T,)
+
+
+class _HFOut:
+    def __init__(self, logits):
+        self.logits = logits
+
+
+class HFTwin(torch.nn.Module):
+    def __init__(self, num_layers=None, recurrent=(), shared=None, tok_layers=()):
+        super().__init__()
+        self.w = weights()
+        n = num_layers or LAYERS
+        self.model = torch.nn.Module()
+        kv, shared, self.tokens = {}, shared or {}, None
+        tok = lambda: token_term(self.w, self.tokens)  # noqa: E731
+        self.model.layers = torch.nn.ModuleList(
+            _HFLayer(self.w["layers"][i], i in recurrent, i, shared.get(i), kv, tok if i in tok_layers else None)
+            for i in range(n)
+        )
+
+    def forward(self, tokens, use_cache=False):
+        self.tokens = tokens[0]
+        h = self.w["embed"][tokens[0]]
+        for layer in self.model.layers:
+            h = layer(h)[0]
+        return _HFOut((norm(h) @ self.w["head"].T)[None])
+
+
+class Tokenizer:
+    """Byte-level: one token per UTF-8 byte mod V; BOS = 1."""
+
+    bos_token_id = 1
+
+    def __call__(self, text, add_special_tokens=False):
+        return {"input_ids": [2 + b % (V - 2) for b in text.encode()[:200000]]}
+
+
+# ---- hooks module interface (the selftest spec points "hooks" at this module)
+def reference(spec, layers=None, dtype=torch.float32, numerics="native"):
+    """F136: 'official' at a 16-bit dtype rounds every step's output to it (the shipped code's arithmetic, the margin's
+    source); native, or official at fp32, rounds nothing."""
+    ref = Reference(spec, layers, dtype, broken_graph=bool(spec.get("fixture.broken_graph")))
+    if numerics == "official" and dtype != torch.float32:
+        ref.round_to = dtype
+    return ref
+
+
+def hf_model(spec, num_layers):
+    return HFTwin(num_layers, recurrent_layers(spec), shared_layers(spec), token_layers(spec))
+
+
+def state_sources(spec, layer):
+    """F65: the layers whose state this layer reads (as of the end of the current chunk)."""
+    src = shared_layers(spec).get(layer)
+    return [] if src is None else [src]
+
+
+def tokenizer(spec):
+    return Tokenizer()
+
+
+# ---- fake device hooks: the reference plus small deterministic noise, for testing the device-side test helpers
+NOISE = {"value": 1e-3}  # optional "steps": {step: value} overrides it per step (F221)
+
+
+def _noisy(t: torch.Tensor, seed: int, step: str | None = None) -> torch.Tensor:
+    v = NOISE.get("steps", {}).get(step, NOISE["value"])
+    if not t.is_floating_point() or v == 0:
+        return t
+    g = torch.Generator().manual_seed(seed)
+    return t + v * t.abs().mean() * torch.randn(t.shape, generator=g)
+
+
+def device_component(mesh, spec, layer, name):
+    ref = Reference(spec, [layer, *state_sources(spec, layer)])
+    cpu = ref.component(layer, name)
+
+    def fn(ctx, *x):
+        state = ref.new_state(ctx.extra["max_seq"])
+        if ctx.extra["prefix_len"]:
+            ref.load_state(state, layer, ctx.extra["state_prefix"], ctx.extra["prefix_len"])
+        for j, t in ctx.extra.get("source_state", {}).items():  # F65: the source layers' state after this chunk
+            ref.load_state(state, j, t, ctx.extra["source_len"])
+        return _noisy(
+            cpu(Ctx(layer, ctx.start, ctx.length, state, {"tokens": ctx.extra.get("tokens")}), *x), layer, name
+        )
+
+    return fn
+
+
+class _FakeState:
+    def __init__(self, ref, max_seq):
+        self.ref, self.s = ref, ref.new_state(max_seq)
+
+    def load_prefix(self, layer, tensors, length):
+        self.ref.load_state(self.s, layer, tensors, length)
+
+    def to_torch(self, layer, length):
+        return self.ref.state_tensors(self.s, layer, length)
+
+
+class FakeDeviceModel:
+    load_seconds = 0.0
+
+    def __init__(self, spec, layers):
+        self.ref = Reference(spec, layers)
+
+    def new_state(self, max_seq):
+        return _FakeState(self.ref, max_seq)
+
+    def begin_chunk(self, tokens, start):
+        self.tokens = tokens
+
+    def embed(self, tokens):
+        return self.ref.w["embed"][tokens]
+
+    def from_host(self, h):
+        return h.float()
+
+    def to_host(self, h):
+        return h
+
+    def layer(self, i, h, start, state):
+        ctx = self.ref.chunk_context(i, start, h.shape[0], state.s)
+        ctx.extra["tokens"] = self.tokens
+        out = run_block(self.ref.block_graph(i), lambda n: self.ref.component(i, n), ctx, h)
+        return _noisy(out, 100 + i)
+
+    def final_norm(self, h):
+        return norm(h)
+
+    def logits(self, hidden, rows):
+        return hidden[rows] @ self.ref.w["head"].T
+
+    def free(self, h):
+        pass
+
+    def sync(self):
+        pass
+
+
+class NondeterministicFakeModel(FakeDeviceModel):
+    """FIX.25's selftest: a deliberately non-deterministic device model. Layer ``layer``'s output gets a tiny term
+    that depends on how many chunks the model ran before (a stand-in for an arrival-order sum, DS41-235): identical
+    inputs give different outputs from the second sequence on, the first chunk included. ``bits_only``: the term is
+    a signed zero instead (equal values, different bits)."""
+
+    def __init__(self, spec, layers, layer=1, bits_only=False):
+        super().__init__(spec, layers)
+        self.calls, self.at, self.bits_only = 0, layer, bits_only
+
+    def layer(self, i, h, start, state):
+        out = super().layer(i, h, start, state)
+        if i != self.at:
+            return out
+        self.calls += 1
+        if self.bits_only:  # every run: one element zero; +0 in the first sequence (4 chunks), -0 after
+            out = out.clone()
+            out[0, 1] = 0.0 if self.calls <= 4 else -0.0
+            return out
+        return out + 1e-4 * ((self.calls * 7919) % 13) * out.abs().mean()
+
+
+def device_model(mesh, spec, layers, lm_head=True):
+    import os
+
+    if os.environ.get("FIXTURE_NONDETERMINISTIC") == "1":  # FIX.25's selftest: the gate must fail
+        return NondeterministicFakeModel(spec, layers)
+    return FakeDeviceModel(spec, layers)

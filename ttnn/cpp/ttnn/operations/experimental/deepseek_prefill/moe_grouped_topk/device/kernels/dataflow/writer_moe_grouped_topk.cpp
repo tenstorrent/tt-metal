@@ -411,7 +411,8 @@ void kernel_main() {
             cb_gathered_sigmoid,
             width_tiles,
             n_activated_experts,
-            n_activated_expert_tiles>(tokens_per_tile);
+            n_activated_expert_tiles,
+            get_named_compile_time_arg_val("precise") != 0>(tokens_per_tile);
 
         // Overwrite indices for padded token rows with SENTINEL = experts (num_routed_experts).
         // Topk compute ran normally for all rows; we only patch the output indices here.

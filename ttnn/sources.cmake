@@ -33,6 +33,7 @@ set(TTNN_CORE_SRCS
     core/graph/graph_trace_utils.cpp
     core/graph/levelized_graph.cpp
     core/prefetcher_pipe.cpp
+    core/up_front_compile.cpp
     core/reports.cpp
     core/tensor/flatbuffer/tensor_file_layout.cpp
     core/tensor/flatbuffer/tensor_flatbuffer.cpp
@@ -103,6 +104,10 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/typecast.cpp
+    # Keep this at the end: TTNNCPP_SRCS order drives the unity-build batching,
+    # and inserting higher up reshuffles the blobs, which collides same-named
+    # anonymous-namespace helpers in unrelated files (e.g. the dit_fused factories).
+    cpp/ttnn/operations/generic/device/generic_op_spec_factory.cpp
 )
 
 ####################################################################################################
@@ -116,6 +121,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/experimental_nanobind.cpp
     cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
     cpp/ttnn/operations/generic/generic_op_nanobind.cpp
+    cpp/ttnn/operations/generic/freeze_program_hashes_nanobind.cpp
     # ttnn-nanobind core files (appended in original CMakeLists.txt)
     cpp/ttnn-nanobind/__init__.cpp
     cpp/ttnn-nanobind/activation.cpp
@@ -150,6 +156,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/operations/trace.cpp
     cpp/ttnn-nanobind/operations/command_list.cpp
     cpp/ttnn-nanobind/tensor_accessor_args.cpp
+    cpp/ttnn-nanobind/ccl_host.cpp
     cpp/ttnn-nanobind/mcast_host.cpp
     cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
 )
@@ -265,6 +272,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/tensor/xtensor/partition.hpp
     api/ttnn/tensor/xtensor/xtensor_all_includes.hpp
     api/ttnn/types.hpp
+    api/ttnn/up_front_compile.hpp
     api/ttnn/tensor/py_to_tt_tensor.hpp
     cpp/ttnn/operations/copy/typecast/typecast.hpp
     cpp/ttnn/operations/creation/creation.hpp

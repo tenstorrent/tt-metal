@@ -1,0 +1,77 @@
+{
+ "used": [
+  {
+   "id": "DS41-279",
+   "how": "raised target.seq in memory to deploy.seq (1,044,480) before the load, so the position tables cover the 1M request",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-245",
+   "how": "set DS41_ENGRAM_TABLE to its shipped default (resident) when unset, as FIX.34, so pytest does not read F222's mmap test value",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-243",
+   "how": "built the runtime through the adapter (load_model, the one load path; BATCH_SHARED), one load for every request",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-240",
+   "how": "under DECODER_SKIP=decode the runtime forces last=False and only layers 0-19 + layer 20's head run; drove prefill_chunk as is",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the spec's text.source path no longer exists (models/tt_transformers moved): added DS41-280",
+  "a short warm-up does not warm a long request: 4 programs per new chunk position (DS41-281)",
+  "the runtime's _host_ids read-back is a per-chunk sync (the only one); nowhere stated as a perf fact"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel or fork touched; a measurement test only"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only the new test and the gate's determinism unit"
+  },
+  {
+   "id": "FIX.35",
+   "answer": "done",
+   "evidence": "tests/test_full_prefill.py; warm 0 -> 1,024,000 in 21.87 s (46,823 tok/s), host_bound_chunks 0/200; BREADCRUMBS FIX.35"
+  }
+ ],
+ "cited_only": [
+  "DS41-280",
+  "DS41-281"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.35",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-15T18:09:20",
+  "head": "b0554bb5738",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.35.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.35.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py"
+  ]
+ }
+}

@@ -1,0 +1,954 @@
+{
+ "metrics": {
+  "determinism_chunk_max_abs_diff_code": {
+   "t": "2026-11-21T14:48:14",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunk_max_abs_diff_novel": {
+   "t": "2026-11-21T14:48:13",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunks": {
+   "t": "2026-11-21T14:48:14",
+   "value": 4
+  },
+  "determinism_elements_differ": {
+   "t": "2026-11-21T14:48:14",
+   "value": 0
+  },
+  "determinism_max_abs_diff": {
+   "t": "2026-11-21T14:48:14",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_code": {
+   "t": "2026-11-21T14:48:14",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_novel": {
+   "t": "2026-11-21T14:48:13",
+   "value": 0.0
+  },
+  "determinism_rows_code": {
+   "t": "2026-11-21T14:48:14",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_rows_novel": {
+   "t": "2026-11-21T14:48:14",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_runs": {
+   "t": "2026-11-21T14:48:14",
+   "value": 3
+  },
+  "determinism_s": {
+   "t": "2026-11-21T14:48:14",
+   "value": 98.9
+  },
+  "determinism_state_max_abs_diff": {
+   "t": "2026-11-21T14:48:14",
+   "value": 0.0
+  },
+  "gate_model_loads": {
+   "t": "2026-11-21T14:56:02",
+   "value": 2
+  },
+  "ids_uploads_per_chunk": {
+   "t": "2026-11-21T14:42:57",
+   "value": 0.0
+  },
+  "ids_uploads_per_chunk_tagentic_cc": {
+   "t": "2026-11-21T14:42:57",
+   "value": 0.0
+  },
+  "model_loads": {
+   "by": "PB.FX#test_determinism.0",
+   "ns": 1795272393927786637,
+   "pid": 2350019,
+   "t": "2026-11-21T14:46:34",
+   "total": 1,
+   "value": 1
+  },
+  "model_loads_tagentic_cc": {
+   "by": "PB.FX#test_no_rebuild.0",
+   "ns": 1795272126967927116,
+   "pid": 2341456,
+   "t": "2026-11-21T14:42:06",
+   "total": 1,
+   "value": 1
+  },
+  "model_shared": {
+   "t": "2026-11-21T14:54:08",
+   "value": 1
+  },
+  "model_shared_tagentic_cc": {
+   "t": "2026-11-21T14:42:06",
+   "value": 0
+  },
+  "no_rebuild_cache_entries_tagentic_cc": {
+   "t": "2026-11-21T14:42:57",
+   "value": 0
+  },
+  "no_rebuild_chunks_tagentic_cc": {
+   "t": "2026-11-21T14:42:57",
+   "value": 16
+  },
+  "no_rebuild_on_off_max_abs_diff_tagentic_cc": {
+   "t": "2026-11-21T14:43:05",
+   "value": 0.0
+  },
+  "no_rebuild_pass_lanes2x3k": {
+   "t": "2026-11-21T14:43:03",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-21T14:43:03",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x1600s": {
+   "t": "2026-11-21T14:43:00",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T14:43:00",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x2k": {
+   "t": "2026-11-21T14:42:59",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T14:42:59",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes6mix": {
+   "t": "2026-11-21T14:43:01",
+   "value": 1
+  },
+  "no_rebuild_pass_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T14:43:01",
+   "value": 1
+  },
+  "no_rebuild_pass_one1600": {
+   "t": "2026-11-21T14:43:02",
+   "value": 1
+  },
+  "no_rebuild_pass_one1600_tagentic_cc": {
+   "t": "2026-11-21T14:43:02",
+   "value": 1
+  },
+  "no_rebuild_pass_one4k": {
+   "t": "2026-11-21T14:43:02",
+   "value": 1
+  },
+  "no_rebuild_pass_one4k_tagentic_cc": {
+   "t": "2026-11-21T14:43:02",
+   "value": 1
+  },
+  "no_rebuild_pass_single8192": {
+   "t": "2026-11-21T14:42:57",
+   "value": 1
+  },
+  "no_rebuild_pass_single8192_tagentic_cc": {
+   "t": "2026-11-21T14:42:57",
+   "value": 1
+  },
+  "no_rebuild_prepares_tagentic_cc": {
+   "t": "2026-11-21T14:42:57",
+   "value": 0
+  },
+  "no_rebuild_probe_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-21T14:43:03",
+   "value": []
+  },
+  "no_rebuild_probe_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T14:43:00",
+   "value": []
+  },
+  "no_rebuild_probe_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T14:42:59",
+   "value": []
+  },
+  "no_rebuild_probe_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T14:43:01",
+   "value": []
+  },
+  "no_rebuild_probe_one1600_tagentic_cc": {
+   "t": "2026-11-21T14:43:02",
+   "value": []
+  },
+  "no_rebuild_probe_one4k_tagentic_cc": {
+   "t": "2026-11-21T14:43:02",
+   "value": []
+  },
+  "no_rebuild_probe_tagentic_cc": {
+   "t": "2026-11-21T14:42:57",
+   "value": []
+  },
+  "no_rebuild_rows_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-21T14:43:03",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      239104,
+      393024
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      15,
+      13
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      781440,
+      12800
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      15,
+      11
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      20096,
+      360832
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12,
+      18
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T14:43:00",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      31680,
+      85760,
+      104576,
+      327552,
+      304704
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12,
+      16,
+      11,
+      14,
+      13
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      157056,
+      61440,
+      13504,
+      137472,
+      42304
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      19,
+      15,
+      17,
+      11,
+      14
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      12544,
+      272768,
+      329728,
+      46912,
+      212224
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      11,
+      14,
+      16,
+      17,
+      12
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T14:42:59",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      6912,
+      69888,
+      34304,
+      191744
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      11,
+      15,
+      12,
+      17
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      82688,
+      184512,
+      506560,
+      110336
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      16,
+      17,
+      11,
+      13
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      124672,
+      229824,
+      132224,
+      930496
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      18,
+      11,
+      16,
+      14
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T14:43:01",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      27584,
+      101376,
+      255552,
+      582784,
+      177856,
+      117568
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12,
+      17,
+      15,
+      16,
+      11,
+      19
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      134848,
+      494336,
+      217216,
+      133952,
+      7488,
+      150080
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      18,
+      12,
+      15,
+      17,
+      14,
+      11
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      6720,
+      192704,
+      244736,
+      100416,
+      171840,
+      92480
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      11,
+      17,
+      16,
+      14,
+      18,
+      13
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_one1600_tagentic_cc": {
+   "t": "2026-11-21T14:43:02",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      122816
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      18
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      251328
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      12
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      21632
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_one4k_tagentic_cc": {
+   "t": "2026-11-21T14:43:02",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      24000
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      12
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      50240
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      14
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      804224
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      16
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_tagentic_cc": {
+   "t": "2026-11-21T14:42:57",
+   "value": [
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       90112,
+       98304,
+       null
+      ],
+      [
+       98304,
+       106496,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "aligned",
+     "prepared": 0,
+     "slot": 1
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       20160,
+       28352,
+       null
+      ],
+      [
+       28352,
+       36544,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slot": 2
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       525696,
+       533888,
+       null
+      ],
+      [
+       533888,
+       542080,
+       534016
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slot": 3
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       261312,
+       269504,
+       null
+      ],
+      [
+       269504,
+       269604,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "partial",
+     "prepared": 0,
+     "slot": 4
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       111360,
+       119552,
+       null
+      ],
+      [
+       113664,
+       121843,
+       119552
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "pulled",
+     "prepared": 0,
+     "slot": 5
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       79488,
+       87680,
+       null
+      ],
+      [
+       87680,
+       87700,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "acks_only",
+     "prepared": 0,
+     "slot": 6
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       220480,
+       228672,
+       null
+      ],
+      [
+       228672,
+       236864,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slot": 7
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       6336,
+       14528,
+       null
+      ],
+      [
+       14528,
+       19276,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "partial",
+     "prepared": 0,
+     "slot": 8
+    }
+   ]
+  },
+  "packed_alone_vs_today_digest_mismatches": {
+   "t": "2026-11-21T14:54:06",
+   "value": 200
+  },
+  "packed_alone_vs_today_max_abs_diff": {
+   "t": "2026-11-21T14:54:06",
+   "value": 0.0
+  },
+  "packed_determinism_max_abs_diff": {
+   "t": "2026-11-21T14:54:06",
+   "value": 0.0
+  },
+  "packed_fallback_chunks": {
+   "t": "2026-11-21T14:54:06",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes2x3k": {
+   "t": "2026-11-21T14:43:03",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-21T14:43:03",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x1600s": {
+   "t": "2026-11-21T14:43:00",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T14:43:00",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x2k": {
+   "t": "2026-11-21T14:42:59",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T14:42:59",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes6mix": {
+   "t": "2026-11-21T14:43:01",
+   "value": 0
+  },
+  "packed_fallback_chunks_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T14:43:01",
+   "value": 0
+  },
+  "packed_fallback_chunks_one1600": {
+   "t": "2026-11-21T14:43:02",
+   "value": 0
+  },
+  "packed_fallback_chunks_one1600_tagentic_cc": {
+   "t": "2026-11-21T14:43:02",
+   "value": 0
+  },
+  "packed_fallback_chunks_one4k": {
+   "t": "2026-11-21T14:43:02",
+   "value": 0
+  },
+  "packed_fallback_chunks_one4k_tagentic_cc": {
+   "t": "2026-11-21T14:43:02",
+   "value": 0
+  },
+  "packed_fast_ack_mismatches": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0
+  },
+  "packed_fast_bystander_mismatches": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0
+  },
+  "packed_fast_compile_s": {
+   "t": "2026-11-21T14:55:50",
+   "value": 9.0
+  },
+  "packed_fast_fallback_mismatches": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0
+  },
+  "packed_fast_grouped_ring_layers": {
+   "t": "2026-11-21T14:55:50",
+   "value": 3
+  },
+  "packed_fast_hide_regions": {
+   "t": "2026-11-21T14:55:50",
+   "value": 12
+  },
+  "packed_fast_long_pool_layers": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0
+  },
+  "packed_fast_one_ring_layers": {
+   "t": "2026-11-21T14:55:50",
+   "value": 3
+  },
+  "packed_fast_output_max_abs_diff": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0.0
+  },
+  "packed_fast_output_mismatches": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0
+  },
+  "packed_fast_program_builds_after_warmup": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0
+  },
+  "packed_fast_segments": {
+   "t": "2026-11-21T14:55:50",
+   "value": 18
+  },
+  "packed_fast_served_mismatches": {
+   "t": "2026-11-21T14:55:50",
+   "value": 0
+  },
+  "packed_fast_serving_calls": {
+   "t": "2026-11-21T14:55:50",
+   "value": 22
+  },
+  "packed_fast_tier_s": {
+   "t": "2026-11-21T14:55:50",
+   "value": 102.6
+  },
+  "packed_gather_hide_regions": {
+   "t": "2026-11-21T14:54:06",
+   "value": 42
+  },
+  "packed_ids_uploads_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-21T14:43:03",
+   "value": 0.0
+  },
+  "packed_ids_uploads_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T14:43:00",
+   "value": 0.0
+  },
+  "packed_ids_uploads_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T14:42:59",
+   "value": 0.0
+  },
+  "packed_ids_uploads_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T14:43:01",
+   "value": 0.0
+  },
+  "packed_ids_uploads_one1600_tagentic_cc": {
+   "t": "2026-11-21T14:43:02",
+   "value": 0.0
+  },
+  "packed_ids_uploads_one4k_tagentic_cc": {
+   "t": "2026-11-21T14:43:02",
+   "value": 0.0
+  },
+  "packed_lane_equiv_max_abs_diff": {
+   "t": "2026-11-21T14:54:06",
+   "value": 0.0
+  },
+  "packed_onecall_chunks": {
+   "t": "2026-11-21T14:54:06",
+   "value": 8
+  },
+  "packed_oracle_layers": {
+   "t": "2026-11-21T14:54:06",
+   "value": 40
+  },
+  "packed_slot_digest_mismatches": {
+   "t": "2026-11-21T14:54:06",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes2x3k": {
+   "t": "2026-11-21T14:43:03",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes2x3k_tagentic_cc": {
+   "t": "2026-11-21T14:43:03",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x1600s": {
+   "t": "2026-11-21T14:43:00",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x1600s_tagentic_cc": {
+   "t": "2026-11-21T14:43:00",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x2k": {
+   "t": "2026-11-21T14:42:59",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T14:42:59",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes6mix": {
+   "t": "2026-11-21T14:43:01",
+   "value": 0
+  },
+  "program_builds_after_warmup_lanes6mix_tagentic_cc": {
+   "t": "2026-11-21T14:43:01",
+   "value": 0
+  },
+  "program_builds_after_warmup_one1600": {
+   "t": "2026-11-21T14:43:02",
+   "value": 0
+  },
+  "program_builds_after_warmup_one1600_tagentic_cc": {
+   "t": "2026-11-21T14:43:02",
+   "value": 0
+  },
+  "program_builds_after_warmup_one4k": {
+   "t": "2026-11-21T14:43:02",
+   "value": 0
+  },
+  "program_builds_after_warmup_one4k_tagentic_cc": {
+   "t": "2026-11-21T14:43:02",
+   "value": 0
+  },
+  "program_builds_after_warmup_serving": {
+   "t": "2026-11-21T14:42:57",
+   "value": 0
+  },
+  "program_builds_after_warmup_serving_tagentic_cc": {
+   "t": "2026-11-21T14:42:57",
+   "value": 0
+  },
+  "program_builds_after_warmup_single8192": {
+   "t": "2026-11-21T14:42:57",
+   "value": 0
+  },
+  "program_builds_after_warmup_single8192_tagentic_cc": {
+   "t": "2026-11-21T14:42:57",
+   "value": 0
+  },
+  "resident_first_chunk_s": {
+   "t": "2026-11-21T14:55:52",
+   "value": 1.49
+  },
+  "resident_first_chunk_s_tagentic_cc": {
+   "t": "2026-11-21T14:43:07",
+   "value": 114.48
+  },
+  "resident_model_loaded": {
+   "t": "2026-11-21T14:55:52",
+   "value": 0
+  },
+  "resident_model_loaded_tagentic_cc": {
+   "t": "2026-11-21T14:43:07",
+   "value": 1
+  },
+  "resident_model_s": {
+   "t": "2026-11-21T14:55:52",
+   "value": 1.03
+  },
+  "resident_model_s_tagentic_cc": {
+   "t": "2026-11-21T14:43:07",
+   "value": 113.26
+  },
+  "resident_request_first_chunk_s": {
+   "t": "2026-11-21T14:55:52",
+   "value": 626.49
+  },
+  "resident_request_first_chunk_s_tagentic_cc": {
+   "t": "2026-11-21T14:43:07",
+   "value": 114.63
+  }
+ },
+ "task": "PB.FX"
+}

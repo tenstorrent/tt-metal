@@ -1,0 +1,91 @@
+{
+ "used": [
+  {
+   "id": "DS41-143",
+   "how": "window_kv / index_k 'device' keep bf16 in the state (the served caches hold unrounded bf16) and round only where attention / the score op read them; ckv 'device' stores the rounded rows: err_state_* then compare like the device's (ratios 0.89-0.99)",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-194",
+   "how": "BREADCRUMBS.md has 9 bytes left under the 500 KB hook: FIX.21's section went to known_issues_detail.md ('FIX.21 FORMAT_ATTRIBUTION'); not even a pointer fits",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-30",
+   "how": "fidelity 'device' = FPU_BITS operand truncation (in0 6 explicit bits at HiFi2, in1 9), applied only where in0 is bf16; bfp8 / e4m3 / bfp4 operands already fit",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-137",
+   "how": "packer-written bfp8 (typecast, pack_precise, flat-op tiles, shared expert h) modelled as one half-away rounding (test_bfp_packer_rounding 'device' rule); SFPU / host packs RNE",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-10",
+   "how": "recommendation: EXPERTS_IMPL=bfp8 is exact for the checkpoint's e2m1 x ue8m0 values, so the A/B removes experts_w's whole rounding",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-188",
+   "how": "attribution judged on L00-L09 only (no deep-layer swings); L09 and the L00-L09 medians agree",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "pytest.ini sets a 300 s timeout: a long CPU test needs pytestmark = pytest.mark.timeout(...), or the gate kills it (two fill jobs lost their first run)",
+  "run_safe_pytest.sh takes every card's lock even for a CPU-only test, so two CPU tests through it serialize; CPU fill jobs run as plain python under devjob",
+  "the official numerics=official/bf16 reference reproduces drift-<rung>.json to 5 digits through drift.replay: a cheap check that a CPU feed is the ladder's"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.21",
+   "answer": "done",
+   "evidence": "emulation validated (all-device vs FIX.20 device, 26 metrics, ratio 0.893-1.007, median 0.986); 13 sites, leave-one-out + add-one; experts_w (bfloat4_b routed weights) closes 0.96 / opens 0.95 of the L09 gap; ckv second 0.18 / 0.28; known_issues DS41-196, detail 'FIX.21 FORMAT_ATTRIBUTION'; tokens (40 layers, rung last): emulation KL 0.00464 vs device 0.00508, without experts_w 0.00143 vs official 0.00242"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "CPU reference only; no kernel or fork touched, nothing padded"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched (no device code)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "n/a",
+   "evidence": "no device, no fork suite run"
+  }
+ ],
+ "cited_only": [
+  "DS41-196",
+  "K-13"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.21",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-01T20:24:52",
+  "head": "45d9f5d4ac4",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.21.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.21.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/reference/ds41_ref.py",
+   "models/demos/deepseek_v41_flash_d_p/reference/test_format_attribution.py"
+  ]
+ }
+}

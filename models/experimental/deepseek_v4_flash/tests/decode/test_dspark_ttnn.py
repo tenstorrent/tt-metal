@@ -19,8 +19,8 @@ import torch
 import ttnn
 from models.experimental.deepseek_v4_flash.dspark import DSparkConfig, DSparkModel
 from models.experimental.deepseek_v4_flash.tt.decode.dspark import DSparkModel as TtDSparkModel
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.tensor_prefetcher import tensor_prefetcher_session
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.fixture(autouse=True)

@@ -49,7 +49,7 @@ from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     make_rope_table,
 )
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
+from tt_py_test_utils_common.tensor_prefetcher import tensor_prefetcher_session
 
 from models.experimental.deepseek_v4_flash.tests.decode.test_attention_real_weights import (
     _DEFAULT_MODEL_DIR,

@@ -1,0 +1,257 @@
+# Gated model bring-up
+
+Brings up chunked prefill of a Hugging Face transformer on Tenstorrent hardware in fixed, gated steps, built from the
+start for the way the inference server (tt-d-gen) drives it. Agents do the creative work, one fresh `claude -p` per
+step; tests that were frozen before any implementation existed decide whether a step passed.
+
+**What it is and how it works** (roles, the step loop, the serving contract, perf, runs so far):
+https://claude.ai/artifact/L5rXDnJoEpjsEL33s3wmSC. This file is the how-to.
+
+## Before you start
+
+- Run from the repo root with `export PYTHONPATH=$PWD` (the shell's default points at another checkout) and
+  `source python_env/bin/activate`.
+- A clone of tt-d-gen at `/localdev/$USER/tt-d-gen` (the serving-contract step reads it at its latest commit) and
+  its engine build (the runner tests drive the model with it); the `dgen-build` agent makes both.
+  Optional: `github.com/AleksKnezevic/disagg_lb` next to it, for the settings proven on LoudBoxes.
+- Running someone else's bring-up whose spec names their paths: `BRINGUP_HF=<checkpoint dir>` and
+  `BRINGUP_SERVER_REPO=<tt-d-gen checkout>` override `paths.hf` and `serving.server_repo` without editing the
+  approved spec.
+- Large files go under `/localdev/$USER/bringup/<model>/` (checkpoint, goldens, weight cache, runs). If your home
+  quota is small, run the orchestrator with `TT_METAL_CACHE=/localdev/$USER` so JIT builds land there too.
+- To use the skill as `/bringup`, link `skill/bringup` into `~/.claude/skills/`; link the files in `agents/` into
+  `~/.claude/agents/` to start them by name from a session.
+
+## Start
+
+In Claude Code type `/bringup` and name the model: the skill interviews you, writes the spec, launches the run and
+supervises it. By hand:
+
+```bash
+B="python -m models.demos.common.bringup"
+O="python -m models.demos.common.bringup.orchestrator"
+$B new --model <slug> --hf-id <org/name>       # or: $B new --prior <slug> --mesh R,C (same checkpoint, new mesh)
+# fill models/demos/<slug>/bringup/spec.yaml (the template's comments say what each field is)
+$B approve intake --spec <spec>
+python -m models.demos.common.bringup.plan.ledger_gen --spec <spec> --early --write
+$B init-run run1 --spec <spec>
+$O run --spec <spec> >> /localdev/$USER/bringup/<slug>/runs/run1/orchestrator.log 2>&1 &
+python -m models.demos.common.bringup.dashboard.export --spec <spec>   # dashboard/index.html (+ teletext.html)
+```
+
+Exit codes: 0 done (or "complete with N deferred"), 3 waiting for a person, 1 a task STOPPED after its retries.
+`$O resume --spec <spec>` continues after any of them; `$O pause --spec <spec>` stops before the next task.
+
+## When the run waits for you
+
+| Point | What you decide | Command |
+|---|---|---|
+| intake | the spec | `$B approve intake --spec <spec>` (any spec edit voids it) |
+| after SC.1 | the serving contract's questions (KV dtype for the decode side, slots, prefix reuse) | answer in the spec's `serving:` section, re-approve the intake |
+| PL.1 | the sharding plan | `$B approve plan --spec <spec>` |
+| X.2 | which perf opportunities to try | add `P.*` tasks (one per pick, with `ab.env` / `ab.change`), `$B approve perf` |
+| each P.* | apply or not, from its A/B table (`runs/<run>/ab/<task>/table.md`) | `$O decide --task P.1 --accept\|--reject\|--rerun --spec <spec>` |
+| a DEFERRED step | launch op-gen for it | below |
+| a board hang | reset the board | then `$O resume` |
+
+Other commands: `$B status`, `$B rerun --from <task>` (resets it and everything after it), `$B fork --from <task>
+--name <run>`, `$B compare --spec <a> --other <b>`.
+
+## Steps and task ids
+
+| Step | Tasks | Who | Gate |
+|---|---|---|---|
+| intake | spec.yaml | person + `/bringup` | `approve intake` |
+| reference | R.1 checkpoint, R.2 HF parity, R.3 chunked + graph replay | agent | PCC vs HF >= 0.9999, chunked == one-shot, graph replays exactly |
+| trim | R.4 (layer subsets only) | script | only layers 0..last subset layer kept, tensors byte-identical (F47) |
+| goldens | G.<rung> | script | the full-precision golden (the target), the official one and their drift (the margin, F128) |
+| box | B.1 | script | mesh opens, collectives exact |
+| serving | SC.1 | `serving-contract` agent | `serving_contract.md` has every section and the tt-d-gen sha; every listed contract test exists; a runner test is listed (F58) |
+| plan | PL.0 ledger, PL.1 plan | agent + person | memory fits per-chip DRAM, every step mapped, a `## Serving contract` section, approved |
+| implement | C.<block>.<step>, S.<block>.<nn> | agent | frozen component test plus the step's contract tests, then the swap order; a C task may end DEFERRED |
+| assemble | M.1 | agent | the all-device model, hidden state on the device |
+| integrate | L.<rung> | script (fix agent on failure) | per-layer trail, state, final hidden, top-5, and the served KV format (`state_bits_*`) |
+| contract | K.1 | agent | engine API (layout, table, acks, input, read-back) plus the runner contract tests |
+| perf | X.1, X.2, P.*, X.3 | script + person + agent | profile; each pick decided by the owner on its A/B report; final 56k check |
+| fork tests | O.1 | agent | a test case for every `ttnn.bringup` call the model makes |
+| settings | Z.1 | `settings-audit` agent (smaller model) | settings lint over the whole model, an accuracy rung, all contract tests |
+| all fork tests | F.1 | agent | every fork's every test (unit, every model's cases, original-op tests), strictly; a failure is fixed or owner-waived (F199) |
+
+## Switches: one place each
+
+- **Framework**: `defaults.yaml` holds every framework switch with its default (component and swap review, retry
+  policy, thresholds, timeouts, contract and profile options). A model overrides a key in its `spec.yaml` under the same
+  name, e.g. `agents.component_review: all`. Change a default only in that file; `selftest/test_defaults.py` fails on a
+  module that keeps its own.
+- **Model**: `models/demos/<model>/tt/settings.py`, a `Settings` table (`core/model_settings.py`): every fidelity,
+  chunk size, dtype and implementation choice with its default, allowed values and the owner decision behind it.
+  `<PREFIX><NAME>` environment variables override it for experiments and A/B reports. The orchestrator fails an agent
+  step that reads the environment anywhere else in the model's code (`testing/settings_lint.py`); Z.1 moves anything
+  left over. A value a gate checks (`serving.kv_dtype`) lives in the spec.
+- **Precision rule** (owner): the model ships realistic precision from its first step and every device test runs it;
+  there is no device run at max precision, ever (F137). Limits are calib x the reference's own distance from full
+  precision (F80 per step, F128 / F134 end to end). A failing per-step test is diagnosed on the CPU at the device's
+  formats (`testing/devfmt.py`), never by a higher-precision device run. Owner rules (skill/bringup/SKILL.md,
+  accuracy): no max-precision device path (debt); the margin is the real reference's precision; bit-identity with
+  an older device path is never a criterion; bring-up ops before stock TTNN; packer L1 accumulation is not fp32
+  accumulation unless the packer writes fp32; a deferred part of an owner rule is queued at once, never left in a
+  hand-off.
+- **Forks** (`ttnn/ttnn/bringup`): behaviour comes in as op arguments set from the model's settings; an environment
+  knob only for diagnostics, marked `diagnostic` on its line.
+
+## Serving contract (F58)
+
+SC.1's agent (`agents/serving-contract.md`) writes, per model: `bringup/serving_contract.md` (a how-to per part of the
+model, every rule cited to the tt-d-gen file it comes from), `bringup/contract_tests.yaml` (each test and the step whose
+gate runs it: a component step name, or `adapter` for K.1) and the frozen tests in `tests/bringup/contract/`.
+`ledger_gen` adds each test to its step's gate, and each step's brief carries its how-to section. To run them by hand:
+`python -m models.demos.common.bringup.testing.serving --run <step|adapter|all>`.
+
+The runner tests are fed by tt-d-gen's real engine (`testing/dgen_prefill_driver.py`, its own Python 3.12 process,
+found by `testing/dgen_engine.py` under `serving.server_repo` or `/localdev/$USER/tt-d-gen`). Without a build they
+fail (`serving.require_engine: true`, asked at intake); `false`, for boxes tt-d-gen does not run on (QuietBox), lets
+tt-metal's `prefill_producer` stand in, and `BRINGUP_DGEN=0|1`
+forces either for a diagnostic. The build comes from the `dgen-build` agent (`agents/dgen-build.md`), which `/bringup`
+starts in the background during the spec review; by hand: start it from a session with `REPO=<path>`.
+
+## Perf picks (F57)
+
+Rules of thumb for choosing and judging a pick (host- vs device-bound, fusion, formats, collectives, noise):
+`knowledge/perf_guide.md`; the perf agent and the opportunity list point to it.
+
+A pick has no gate before or after its agent. The agent makes the change behind a `tt/settings.py` switch and runs the
+gate's frozen tests once; at the first failure it stops (nothing is profiled while a frozen test fails). The
+orchestrator then measures the change off (`ab.env`) and on (`ab.change`), both set explicitly: every frozen test, the
+ladder at `ab_rungs` (default: the gate's rung and the last rung) and one plain profile. It writes `table.md` and waits.
+`decide --accept` runs the gate and commits; `--reject` reverts the task's files (REJECTED counts as done).
+
+Device time (F155, owner 2026-10-22): the framework measures it with the program real-time profiler everywhere (the
+profile, its per-op mode, the op report, the A/B profile). The dispatcher streams each program's start and end to the
+host; sections and op calls are device-operation id ranges charged after the run, so nothing syncs and nothing is
+built with the device profiler. One profiled run gives the sections, the per-op rows of every layer
+(`BRINGUP_PROFILE_LAYERS` narrows them) and the pipelined timeline. A program's time is its start to end at dispatch,
+so a program that waits inside (a CCL waiting for its neighbour) is charged the wait. The device profiler (kernel time
+only; a sync per section, per-op mode on the representative layers) stays for cross-checks: spec `perf.profiler:
+device`, or `BRINGUP_PROFILER=device` with `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
+TT_METAL_PROFILER_CPP_POST_PROCESS=1` for one run. If the real-time profiler is not active, the profile fails; it never
+falls back.
+
+```yaml
+- id: P.3
+  step: perf
+  role: perf
+  ab: {env: {XING_EXPERTS_FIDELITY: hifi4}, change: {XING_EXPERTS_FIDELITY: hifi2}}
+  ab_rungs: [last, s56320]   # optional
+```
+
+On accept, ab.change becomes the setting's shipped default (F104). For a switch-only pick, an ablation whose value
+the owner picks later from several tables, set `ab.keep_default: true`: the accept commits the switch value and the
+defaults stay (F241).
+
+## Resident runner (F281, owner 2026-11-19: iteration time)
+
+One long-lived device process keeps the mesh open and the model loaded and runs measurement requests as they come
+(`resident.py`, `testing/resident.py`, `tests/test_resident.py`, under the safe runner's locks and hang triage):
+
+    python -m models.demos.common.bringup.resident start --spec <spec.yaml>
+    python -m models.demos.common.bringup.resident submit --spec <spec.yaml> --cmd "<safe-runner command>" --task T
+    python -m models.demos.common.bringup.resident status|stop --spec <spec.yaml>
+
+While it is up, gate units and A/B sides that may share a process (core/batch.drive) go to it instead of a new
+process. A model python change rebuilds the model in place with the file-backed device weights kept
+(`testing/weights.py`); a C++ build, a kernel source, ttnn python or the runner's own code starts a new process. The
+model determinism check runs in a process that ran nothing before it, once per gate that has it. Any other device run
+makes the runner step aside first. A measurement loads only the layers it runs (`testing/batch.run_layers`, model
+hook `run_layers`; F282).
+
+## Steps TTNN has no op for (F46)
+
+An implement agent that finds no TTNN op, composition or fork for a component step may defer it to op-gen
+(`tt_metal/third_party/tt_ops_code_gen`): it writes `<bringup_dir>/op_requests/<op>/`, the task becomes DEFERRED, and
+the step runs on the CPU through `testing/cpu_bridge.py`. Launching op-gen is always the owner's call:
+
+```bash
+$B op-requests --spec <spec>                          # requests and their status
+$B approve op-request <op> --spec <spec>              # an edit voids it
+$B op-export <op> --spec <spec>                       # prompt + golden suite into the op-gen tree; prints next steps
+$B op-ready <op> --from <clone>/ttnn/ttnn/operations --spec <spec>   # ttnn.bringup.<op>, tasks reset
+$O resume --spec <spec>
+```
+
+## Full bring-up from a seed (F183-F186)
+
+A finished bring-up (the seed, e.g. a partial run on a small box) grows into the whole model on a bigger box in the same
+model dir: one `tt/`, one CPU reference, one plan. The new run's spec is
+`bringup/ledgers/<box>-<mode>/spec.yaml` with `run: {box: <box>, mode: full, seed: <the seed's spec>}` and a ladder rung
+`seed` over the seed's layers; its tasks, state, results and approvals live in that folder (the seed's stay as they
+are). `plan.ledger_gen --spec <it> --write` writes the seeded graph: CK.1 checkpoint, G.<rung> imported goldens, B.1,
+W.1 (the seed's layers at real size on the new mesh), M.1 (every layer), then the ladder, smoke, contract, perf,
+O.1, Z.1, F.1. The seed's reference, contract and plan are carried (tasks.yaml `seed:`); its component and swap tests are
+for diagnosis only. Goldens are made where the checkpoint fits in RAM, indexed there
+(`reference.golden_import --rung <r> --index`), and copied, in part if the run's tests do not read everything; spec
+paths may be relative to the artifact root, so only `paths.art` changes per host.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `defaults.yaml` | every framework switch and its default |
+| `orchestrator.py` | the run loop |
+| `agents/` | `bringup-engineer.md` (every step), `serving-contract.md` (SC.1), `settings-audit.md` (Z.1), `dgen-build.md` (tt-d-gen build) |
+| `briefs/` | the brief template and the per-role text |
+| `core/` | spec, defaults, ledger, gate runner, metrics, freeze, runs, model settings helper |
+| `reference/` | reference interface, block-graph runner, HF parity, golden generator and reader |
+| `testing/` | component and swap tests, ladder, contract, serving contract, settings lint, profiler, templates |
+| `tests/` | generic pytest entry points (box, ladder, contract, profile, positions); they read `BRINGUP_SPEC` |
+| `plan/` | memory check, per-box check for a deployment box (`boxes.py`), the scaled model's checkpoint (`scale.py`; on a smaller box the run is the scaled model, F75), components map, approvals, ledger generator, opportunity list, op requests |
+| `intake/`, `knowledge/` | checkpoint check; the shared repo map and known issues every agent reads first (each model adds its own in `bringup/`), `knowledge/stale.py` (entries whose code changed), `knowledge/usage.py` (which entries the agents' steps used, contradicted or missed: their per-step reports in `bringup/results/knowledge_use/`), `knowledge/references/` |
+| `dashboard/` | the dashboard exporter and pages |
+| `skill/bringup/SKILL.md` | the `/bringup` skill (intake and supervision) |
+| `skill/rebase-bringup/` | the `/rebase-bringup` skill (rebase, fork syncs, re-verification) and `staleness.md` |
+| `selftest/` | the framework's own tests, CPU only: `python -m pytest -q models/demos/common/bringup/selftest/` |
+| `dev/BREADCRUMBS.md` | how the framework was built (F1 onwards) |
+
+## Rules the runner enforces
+
+- A gate passes only if deps passed, frozen files are unchanged, the device was used only through
+  `scripts/run_safe_pytest.sh` or `scripts/tt-probe.sh`, the command exits 0, every metric meets its threshold and
+  every artifact exists.
+- A gate never restarts (F169). Every test is its own unit; a unit that passed in its task's gate stays passed until the
+  code under test changes (the model's code and tests, the task's paths, the forks, ttnn / tt_metal, the goldens),
+  whatever else was edited (spec, waivers, framework, records). A failed or stopped gate records which units passed and
+  which remain (state `units`, runs/<run>/delta/<task>.json); `gate <task> --unit <u>` runs one unit, `gate <task>
+  --continue` the rest (and commits), `--rerun <u>` a passed unit again, `--status` lists them; `--fresh` runs every
+  unit (owner only). A failure the overseer classified as framework, waiver or infrastructure (`overseer classify`)
+  resumes into the delta and starts no agent. The orchestrator logs `gate unit k/n <unit> PASS|FAIL|STOPPED`; the
+  watch wakes on a failed or stopped unit.
+- F170: every test-running `&&` segment of a gate is its own unit (a setup step travels with its test). Agents run
+  their gate with `gate <task> --check` (kept per unit, no state, no commit), so the orchestrator's gate after an
+  attempt runs only what the agent did not pass; after an attempt that changed nothing the last failure stands (no
+  re-run), and an agent that crashed without changes is retried, not charged. A timeout or a box error retries the
+  stopped unit once (a box error after a quick box check) before the run stops; every device test takes the spec's
+  `box.test_timeout_s`. A programming error in the framework's code on a task that passed before stops for the
+  overseer (no agent). A pause stops every agent loop before its next attempt; the debugger keeps a pass with
+  problems for review.
+- F171: a unit's stamp is taken as it starts (an edit mid-gate is not filed under the old key); pre-commit runs only
+  on the task's changed files (a reused gate runs none); the stamp's environment ignores BRINGUP_CPU_THREADS and the
+  JIT-server variables; a batched `core.verify` keeps each task's result for its gate and pins the checkout env; the
+  A/B report's "same code" is the gate's code key (untracked files included); an agent is charged only for knowledge
+  errors it introduced; a CPU job outside a gate next to device work takes a quarter of the cores at nice 19; the
+  watch reports a DASHBOARD STALE / RED line once per change (stale after 30 min, not 2).
+- A test freezes only after it passes with the CPU reference and fails on its mistake sweep. Component and swap tests
+  freeze without a review agent when their sweep passes (`agents.component_review`, `agents.swap_review`).
+- An agent step fails if the tree changed outside the brief's paths, a command reached the device without a safe
+  runner, the known-issues file lost its format, or a changed file reads the environment outside `tt/settings.py`.
+- Component tests and fork tests check bitwise determinism: A, B, A, then A until 5 runs, every A byte-identical
+  (`testing/determinism.py`; `tests.determinism_repeats`, `tests.nondeterministic` for a step exempt with its reason).
+- Every model-level device gate (tasks.yaml `device: true` with a framework ladder / profile / positions / contract /
+  smoke test, or a full-model or fix step) also runs the model determinism check, without its tasks.yaml entry naming
+  it (FIX.25, `core/gate.py` `with_determinism`, `testing/model_determinism.py`, `tests/test_determinism.py`): the
+  spec's prompt and a code prompt, 4 chunks each, 3 runs each interleaved (the first after the load cold), every
+  chunk's final hidden and every layer's served state bit for bit; `determinism_max_abs_diff == 0` is added to the
+  gate's limits. It runs first in the gate's first shared-model process (no load of its own); the perf A/B runs it on
+  both sides and an accept needs it on the 'on' side. No switch exempts the model.
+- With `serving.kv_dtype` set, every ladder rung must run on that KV format: one cache format for the ladder, the
+  contract and serving.
+- Commits stage only the task's paths; formatting runs before testing and hashing, so the tested bytes are committed.
+- Approvals are voided by any edit to what was approved.

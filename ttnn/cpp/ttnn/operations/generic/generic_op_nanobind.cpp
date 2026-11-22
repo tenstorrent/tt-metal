@@ -16,6 +16,9 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/reflection.hpp>
 
+#include "device/generic_op_device_operation.hpp"
+#include "ttnn-nanobind/metal2_casters.hpp"
+
 namespace ttnn::operations::generic {
 
 // Defined in generic_op_device_operation.cpp
@@ -60,11 +63,18 @@ void bind_generic_operation(nb::module_& mod) {
 
         Args:
             io_tensors (List[ttnn.Tensor]): List of input tensors and output tensor(s). Output tensor(s) must be
-                pre-allocated and included as the last element(s) in the list.
+                pre-allocated and included as the last element(s) in the list. A single-element list is legal:
+                a program that reads no tensor (a generator) or reads and writes the same tensor (in-place)
+                passes just that tensor, and the last element is still the returned output.
             program_descriptor (ttnn.ProgramDescriptor or ttnn.MeshProgramDescriptor): Descriptor containing
                 kernel specifications, computational buffer configurations, semaphores, and other execution
                 parameters. Use ProgramDescriptor for SPMD mode (same program on all devices) or
                 MeshProgramDescriptor for explicit per-device control.
+
+            Alternatively, the Metal 2.0 form takes:
+            spec (ttnn.ProgramSpec): kernels, dataflow buffers, tensor parameters, work units.
+            run_args (ttnn.ProgramRunArgs): per-dispatch runtime argument values.
+            tensor_args (dict[str, int]): TensorParameter name -> index into io_tensors.
 
         Returns:
             ttnn.Tensor: Handle to the output tensor, the last entry of io_tensors. When the tensors are not all on
@@ -98,7 +108,20 @@ void bind_generic_operation(nb::module_& mod) {
         nb::arg("io_tensors"),
         nb::arg("program_descriptor"));
 
-    ttnn::bind_function<"generic_op">(mod, doc.c_str(), mesh_program_overload, program_overload);
+    // Metal 2.0 overload: ProgramSpec + ProgramRunArgs
+    auto spec_overload = ttnn::overload_t(
+        static_cast<Tensor (*)(
+            const std::vector<Tensor>&,
+            const tt::tt_metal::ProgramSpec&,
+            const tt::tt_metal::ProgramRunArgs&,
+            const tt::tt_metal::Table<tt::tt_metal::TensorParamName, uint32_t>&)>(
+            &ttnn::generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("spec"),
+        nb::arg("run_args"),
+        nb::arg("tensor_args"));
+
+    ttnn::bind_function<"generic_op">(mod, doc.c_str(), mesh_program_overload, program_overload, spec_overload);
 
     mod.def(
         "compute_program_descriptor_hash",
@@ -112,6 +135,15 @@ void bind_generic_operation(nb::module_& mod) {
             making it suitable as a cache key for structural equivalence. The
             one exception is a global CB's addresses, which are hashed because a
             cache hit does not re-point them.
+        )pbdoc");
+
+    mod.def(
+        "compute_program_spec_hash",
+        &compute_program_spec_hash,
+        nb::arg("spec"),
+        R"pbdoc(
+            Structural hash of a ProgramSpec: the program cache key the spec path uses.
+            Excludes runtime argument values and tensor addresses.
         )pbdoc");
 }
 

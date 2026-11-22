@@ -27,14 +27,40 @@ void verify_no_duplicate_mesh_coord_ranges(
     }
 }
 
-void GenericOpDeviceOperation::validate_on_program_cache_miss(
+GenericOpDeviceOperation::program_factory_t GenericOpDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& /*tensor_args*/) {
-    verify_no_duplicate_mesh_coord_ranges(attributes.mesh_programs);
+    if (attributes.is_spec()) {
+        return program::GenericSpecFactory{};
+    }
+    return program::GenericMeshDescriptorFactory{};
+}
+
+void GenericOpDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    if (!attributes.is_spec()) {
+        verify_no_duplicate_mesh_coord_ranges(attributes.mesh_program_descriptor().mesh_programs);
+        return;
+    }
+    const auto& spec_program = attributes.spec_program();
+    for (const auto& param : spec_program.spec.tensor_parameters) {
+        TT_FATAL(
+            spec_program.tensor_arg_indices.contains(param.unique_id),
+            "TensorParameter '{}' has no entry in tensor_args",
+            param.unique_id);
+    }
+    for (const auto& [name, io_index] : spec_program.tensor_arg_indices) {
+        TT_FATAL(
+            io_index < tensor_args.io_tensors.size(),
+            "tensor argument '{}' maps to io_tensors index {}, but only {} io tensors were supplied",
+            name,
+            io_index,
+            tensor_args.io_tensors.size());
+    }
 }
 
 void GenericOpDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& /*tensor_args*/) {
-    verify_no_duplicate_mesh_coord_ranges(attributes.mesh_programs);
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(attributes, tensor_args);
 }
 
 spec_return_value_t GenericOpDeviceOperation::compute_output_specs(
@@ -147,7 +173,16 @@ ttsl::hash::hash_t compute_io_tensors_hash(const std::vector<Tensor>& io_tensors
 ttsl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     size_t hash = 0;
-    for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
+    if (operation_attributes.is_spec()) {
+        const auto& spec_program = operation_attributes.spec_program();
+        hash = compute_program_spec_hash(spec_program.spec);
+        for (const auto& [name, io_index] : spec_program.tensor_arg_indices) {
+            ttsl::hash::hash_combine(hash, ttsl::hash::hash_objects_with_default_seed(*name, io_index));
+        }
+        return hash;
+    }
+    for (const auto& [mesh_coord_range, program_descriptor] :
+         operation_attributes.mesh_program_descriptor().mesh_programs) {
         ttsl::hash::hash_combine(hash, mesh_coord_range);
         ttsl::hash::hash_combine(hash, compute_program_descriptor_hash(program_descriptor));
     }
@@ -162,9 +197,14 @@ namespace {
 
 ttnn::operations::generic::GenericOpDeviceOperation::tensor_args_t make_tensor_args(
     const std::vector<Tensor>& io_tensors) {
+    // Structural, not semantic: the only thing this op needs from io_tensors is that back() names
+    // the output tensor, since tensor_return_value_t is a Tensor. A program that reads no tensor
+    // (a generator: fill/iota/random) or reads and writes one (in-place) legitimately passes a
+    // single tensor. A caller who forgot to pre-allocate an output still gets a precise error
+    // downstream: their tensor_args entry for the output names an out-of-range io_tensors index.
     TT_FATAL(
-        io_tensors.size() >= 2,
-        "io_tensors must contain at least one input tensor and one output tensor, got {} tensors.",
+        !io_tensors.empty(),
+        "io_tensors must contain at least the output tensor as its last element, got {} tensors.",
         io_tensors.size());
     return {.io_tensors = io_tensors, .output_tensor = io_tensors.back()};
 }

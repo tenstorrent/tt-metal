@@ -1,0 +1,41 @@
+{
+ "bytes": 290493,
+ "chunks": {
+  "0001.json": 255251,
+  "0002.json": 35243
+ },
+ "git_blob": "f7c750145f55d0127f61c0a9d8551f087863f47f",
+ "keys": {
+  "FIX.1": "1886b9d595bc62f8",
+  "FIX.10": "6527d224b62e6389",
+  "FIX.12": "5a543bb4c27bd47d",
+  "FIX.13": "62640325aa462739",
+  "FIX.2": "e170d69c4b4b62b5",
+  "FIX.25": "7323f6412d4a7705",
+  "FIX.26": "d514da29491925a8",
+  "FIX.3": "d1203efa8beec2bc",
+  "FIX.4": "7ae65cdb966334c5",
+  "FIX.5": "ec596b415b45ada6",
+  "FIX.6": "f0977c6c4d43f955",
+  "FIX.7": "c754167b89d3e04e",
+  "FIX.8": "56bf9206a7fff99c",
+  "FIX.9": "f7c2dce6f3bcadd6",
+  "K.1": "e7240dd60651ca37",
+  "L.smoke": "7a05eab5daf3c3be",
+  "P.1": "5dc0ac5f667823f6",
+  "P.10": "9b8677e3a75bbe6e",
+  "P.2": "b8e6cf53cd95c69b",
+  "P.3": "89635c24e8928296",
+  "P.4": "74b039a9323d15f3",
+  "P.49": "5f36c273fed8239d",
+  "P.50": "4bc139e2e1a97080",
+  "P.6": "1a8ab07aa6f24f39",
+  "P.7": "0d7fc302f3ab6e70",
+  "P.8": "8f8e5c808b6e80e8",
+  "P.9": "2eaf9ec346e0e909",
+  "W.1": "350966f1062aad3b"
+ },
+ "sha256": "d94edbdc5ec4c8d5e655d86e297b9a8d2bd72594da0fc9bff7677ab4c8386978",
+ "source": "history_state.json",
+ "t": "2026-11-12T20:41:42"
+}

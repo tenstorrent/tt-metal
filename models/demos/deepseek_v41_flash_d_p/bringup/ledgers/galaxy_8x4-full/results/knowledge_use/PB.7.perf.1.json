@@ -1,0 +1,87 @@
+{
+ "used": [
+  {
+   "id": "DS41-128",
+   "how": "recognized the glued oracle's 1-ulp diffs (only rows whose TP chip changed) as a row-position-dependent TP reduction order; located it in the fused moe_head's shared-expert RS (new DS41-339) instead of chasing the row mover",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-321",
+   "how": "the glued CPU rung runs every side under packed_ref.fixed_expert_tiles (row-by-row routed SwiGLU) so glued == alone is bit-exact on the CPU",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-324",
+   "how": "kept each glued segment's own window region / snapshot_send instance (segment index j) for back-to-back segments",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-72",
+   "how": "PAD_ID (0xFFFFFFFF) in the glued engine input's tail rows and past every segment's model rows",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "which token-wise reductions on 8x4 are row-position dependent (moe_head's shared-expert RS is: bf16 bidirectional ring; tp_sum cols is not): an entry listing them would have saved the probe (now DS41-339)",
+  "the cost of a whole-chunk all_gather of the attention input on 8x4 (64 MB a chip): the v1 move pattern costs ~77 ms device a segment at 21 layers"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding between glued segments: model rows are each segment's [start, cap) back to back (tt/packed.GluedChunk.lane_off), only the chunk tail is pad; no op input padded to fit a kernel. The non-lane glued attention (v1) runs today's steps per segment over the chunk geometry, as PB.3's accepted v1 loop; measured (496 ms 5x1600) and v2 named in BREADCRUMBS PPB.7"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "DECIDED lines in BREADCRUMBS PPB.7 (two device paths; requests.json absent -> AgentX quantiles; DS41-339's fused-kernel fix left for the next task); kept measuring the oracle and reported its failing checks"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "test_glued_oracle / test_glued_reference load the gate's 40-layer model with no load-time env; the reference raises max_seq exactly as test_packed_reference (_raise_max_seq(g0 + 8192)); test_glued_walls loads through batch.device_model with the slot capacity raise of test_packed_walls (BATCH_LAYERS executed); determinism measured in the oracle (glued_determinism_max_abs_diff)"
+  }
+ ],
+ "cited_only": [
+  "DS41-279",
+  "DS41-339"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.7",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T12:09:12",
+  "head": "ecd3a562c49",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/drafts/tt_d_gen_packed_ask.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.7.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.7_glued_walls.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.7.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/packed_common.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_cpu.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_oracle.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_reference.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_walls.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

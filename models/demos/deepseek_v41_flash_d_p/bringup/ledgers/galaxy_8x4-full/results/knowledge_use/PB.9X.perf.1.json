@@ -1,0 +1,128 @@
+{
+ "used": [
+  {
+   "id": "DS41-314",
+   "how": "PACKED_ROUTE and COMMON_VALUE_SLOTS refreshed in the held model's settings snapshot (hooks.batch_call_apply) and switched in tests through packed_common.switch, never settings.refresh",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-185",
+   "how": "tests set the call-time switches (PACKED, PACKED_GLUED, PACKED_ROUTE, COMMON_VALUE_SLOTS) through packed_common.switch (env + snapshot)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-346",
+   "how": "the fixed-lane path's fresh builds are why every lane header now runs glued (PACKED_ROUTE=glued); its slice sites are left behind the lanes switch",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-350",
+   "how": "kept the whole-grid index-key decode (no history-keyed grid) and removed its host cost instead (common value slots, unpack_fp8_rows common_values)",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-328",
+   "how": "warm-up chunks use one slot capacity (the engine's KV cache / the walls' contract caches), so the glued ring stays one call",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "which glued layout kinds still key programs (writing-segment count of TtServedRows.write_lanes, fresh-request snapshot geometry, tail rows, PB.6L range-start presence at ~1M): now DS41-351",
+  "prepare_program value slots are per core per chip: a whole-grid program pays ~0.3 ms of host a call on 32 chips (now DS41-352)",
+  "the resident runner's in-place reload does not reach objects built at model load (now DS41-353)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded: lane headers become back-to-back glued chunks (their pad rows dropped); write_lanes keeps one program a segment count instead of a 6-segment padded gather; warm-up is a finite enumeration, not padded work"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "BREADCRUMBS PB.9X DECIDED lines (lane path kept behind PACKED_ROUTE=lanes; finite warm-up); oracles measured (packed oracle through glued: alone vs today 0, lane equivalence 0, digests 0, determinism 0)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "new tests (test_glued_ids_ops, test_common_values_ops, test_glued_build_probe) BATCH_SHARED, BATCH_LAYERS executed, the walls' max_seq (deployment context in whole chunks), no load-time env"
+  },
+  {
+   "id": "OV-67",
+   "answer": "done",
+   "evidence": "a lane header is sent as its glued chunk with the header in the same upload (make_input); every per-chunk table derived on the device (PB.7C Derive) and now the embedding ids too (GluedIdsReorder); no per-descriptor host cache added"
+  },
+  {
+   "id": "OV-68",
+   "answer": "done",
+   "evidence": "packed / glued path: 0 program builds after warm-up in a fresh process for every probe layout (histories 0..1,032,192, 1-6 segments, padded / empty lanes) and every fresh walls case; warm-up = adapter.compile's finite set (packed_device.warm_glued_chunks)"
+  },
+  {
+   "id": "OV-69",
+   "answer": "done",
+   "evidence": "packed / glued chunks: embedding ids reordered on the device from the engine input (tt/page_copy.GluedIdsReorder, packed_device.glued_dev_ids) in adapter.prefill_packed and run_chunk; 25 layouts bit-equal to the host ids (test_glued_ids_ops); the single-request path keeps MB.2's IdsReorder (test_no_rebuild ids_uploads_per_chunk)"
+  }
+ ],
+ "cited_only": [
+  "DS41-351",
+  "DS41-352",
+  "DS41-353"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.9X",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T03:03:14",
+  "head": "3223fb6cb51",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9X.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9X_fresh_walls.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.9X.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/packed_common.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_common_values_ops.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_build_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_ids_ops.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_walls.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/history_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/index_keys.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/lane_rows.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_glued.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/page_copy.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/README.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/ckv_bfp4.py",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/tests/unit/test_ckv_bfp4.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/README.md",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/fp8_rows.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/kernels/unpack_fp8_rows_compute.cpp",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/kernels/unpack_fp8_rows_reader.cpp",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/kernels/unpack_fp8_rows_writer.cpp",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/tests/unit/test_unpack_fp8_rows.py",
+   "ttnn/ttnn/bringup/prepared_program/CHANGELOG.md",
+   "ttnn/ttnn/bringup/prepared_program/README.md",
+   "ttnn/ttnn/bringup/prepared_program/device/prepared_program_device_operation.cpp",
+   "ttnn/ttnn/bringup/prepared_program/prepared_program.cpp",
+   "ttnn/ttnn/bringup/prepared_program/prepared_program.hpp",
+   "ttnn/ttnn/bringup/prepared_program/prepared_program_nanobind.cpp"
+  ]
+ }
+}

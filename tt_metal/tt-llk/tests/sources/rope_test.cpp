@@ -168,8 +168,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 else
                 {
-                    sfpu::sfpu_rope_all_rows<ROPE_HT, ROPE_WT, ROPE_X_BASE, ROPE_X_STRIDE, ROPE_COS_BASE, ROPE_SIN_BASE, ROPE_CS_STRIDE, ROPE_HAS_SCALE, is_fp32_dest_acc_en>(
-                        ROPE_SCALE_FP32);
+                    sfpu::sfpu_rope_all_rows<
+                        ROPE_HT,
+                        ROPE_WT,
+                        ROPE_X_BASE,
+                        ROPE_X_STRIDE,
+                        ROPE_COS_BASE,
+                        ROPE_SIN_BASE,
+                        ROPE_CS_STRIDE,
+                        ROPE_HAS_SCALE,
+                        is_fp32_dest_acc_en>(ROPE_SCALE_FP32);
                 }
 
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)

@@ -1,0 +1,9 @@
+{
+ "metrics": {
+  "smoke_runner_ok": {
+   "t": "2026-10-02T00:01:40",
+   "value": 1
+  }
+ },
+ "task": "K.4"
+}

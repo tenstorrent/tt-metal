@@ -45,7 +45,7 @@ from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_con
 from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import _HC_COLLAPSE_CORES
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
+from tt_py_test_utils_common.tensor_prefetcher import tensor_prefetcher_session
 
 PARENT_MESH = (8, 4)
 MOE_SUBMESH = (3, 4)

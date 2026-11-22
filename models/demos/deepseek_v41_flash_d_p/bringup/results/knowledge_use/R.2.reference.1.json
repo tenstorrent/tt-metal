@@ -1,0 +1,78 @@
+{
+ "used": [
+  {
+   "id": "K-24",
+   "how": "routed-expert token groups padded to 32-row multiples in one GEMM call (kernels.expert_linear), in reference and oracle alike",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "K-61",
+   "how": "block boundary kept in HF element order ([S, 4H] streams token-major) plus the pending pre, and hooks.hf_layers returns oracle taps in the same packed layout",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-62",
+   "how": "oracle routed experts are parameter-less LazyExperts reading each expert's packed fp4 bytes from the memory-mapped shard per use; engram tables memory-mapped",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-7",
+   "how": "hooks.hf_layers defined (oracle has no model.model.layers)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "every hand run with PYTHONPATH=$PWD",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-58",
+   "how": "read the hand-run gate's metrics from generated/bringup_adhoc",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "fp8/fp4 activation quantizers amplify last-bit GEMM summation differences into whole quantization steps: an oracle and a reference must share GEMM tiling to agree beyond ~1e-4",
+  "per-chunk results a reader needs (top-k, candidate pool) cannot be 'current chunk' tensors: check_reference compares one-shot vs chunked state by pcc, which needs equal shapes",
+  "single-pass mHC (pre computed one sublayer early) needs the pending pre packed into the block boundary",
+  "a layer with several stateful steps (engram tail + compressor partial) must reset per step at chunk start 0, never per layer",
+  "hand-run gates: BRINGUP_TASK in the agent env decides the adhoc file name (generated/bringup_adhoc/<task>.json); tag side checks with another task id"
+ ],
+ "cited_only": [
+  "DS41-1",
+  "DS41-2",
+  "DS41-3",
+  "DS41-4",
+  "K-55"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "R.2",
+  "role": "reference",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-14T19:52:23",
+  "head": "2245c0f5191",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/R.2.reference.1.json",
+   "models/demos/deepseek_v41_flash_d_p/reference/__init__.py",
+   "models/demos/deepseek_v41_flash_d_p/reference/ds41_ref.py",
+   "models/demos/deepseek_v41_flash_d_p/reference/hf_oracle.py",
+   "models/demos/deepseek_v41_flash_d_p/reference/kernels.py",
+   "models/demos/deepseek_v41_flash_d_p/reference/ngram.py",
+   "models/demos/deepseek_v41_flash_d_p/reference/weights.py"
+  ]
+ }
+}

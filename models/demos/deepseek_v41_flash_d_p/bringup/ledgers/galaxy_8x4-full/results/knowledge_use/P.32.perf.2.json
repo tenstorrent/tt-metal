@@ -1,0 +1,107 @@
+{
+ "used": [
+  {
+   "id": "K-1",
+   "how": "WindowRing.put passes src itself when the piece is the whole tensor (a full-range ttnn.slice returns src's own buffer, which the dealloc after it would free)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-5",
+   "how": "full keeps the served 0_window_kv of every position as before; ring / none drop it from DS41ContractKV and the runner refuses them (tt-d-gen reads every position)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-143",
+   "how": "the ring keeps the bf16 rows the served cache keeps (the attention re-rounds the carry to bfp8 as from the slab), so ring and full read the same carry bytes",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-181",
+   "how": "the region path's chip-0 carry stays the kept tail (rtail) for whole consecutive chunks; the ring is read only where full read the served slab (carry_ready / _kept mirror rtail_end)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-201",
+   "how": "a carry the ring does not keep is masked by truncation (start class 0, TtWindowCache.truncate), not by a zero carry; replay128's decoder-tail windows are truncated by design; their window KV is recorded ungated (ring_diag_*), as P.31's owner note",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "the rings are allocated with the state (load time) and written in place; the none working rings once per model (WindowTables.shared_ring)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-69",
+   "how": "test_window_ring's states take max_seq = a multiple of the chunk >= the follow-up's start + chunk (attempt 1 hit the compressor's history assert at 4000 + 2560 > 5120 with max_seq = the rung's 10240)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-145",
+   "how": "the ring's small copies (slice / slice_write / the own rows' untilize, <= 192 rows) run on one row of WINDOW_RING_CORES = 8 cores: plain profile wall 210.6 -> 206.4 ms (ring on)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-206",
+   "how": "kept the fresh-slot exemption and extended it with TtWindowCache.origin (DS41-208): a chunk at or before the fresh slot's first start restarts its window instead of being refused",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-206",
+   "evidence": "incomplete: ab/P.32/new/p51200/p51200.log (measure, 2026-11-05 15:06): the F230 position profile's counting run (testing/profile.py:592) re-runs the chunk at 51200 on its fresh state after the timed runs; the slot then has history and was refused (model.py _window_policy). Fixed by DS41-208",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the frozen test_dram and the F230 position profiles run a chunk at start > 0 on a fresh state (the full path reads the never-written zeros): a keep mode that refuses missing carries has to treat a slot that never held a window row as starting there",
+  "the profile harness re-runs the same chunk on the same state many times (timed runs, counting run, profiled run); for F230 position profiles the state is fresh and never reloaded, so a model with bounded per-slot state must accept a re-run at the slot's first start"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded: the ring writes the chunk's own last <=192 rows in 32-row blocks (the record size); no op limit worked around"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "no Python-built op added or touched: WindowRing uses ttnn.slice / ttnn.to_layout / ttnn.bringup.slice_write (C++ fork) and the existing all_gather"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run in either attempt; only test_window_ring, test_dram, the ladder rung and the profiles via measure"
+  }
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.32",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-05T16:06:24",
+  "head": "7b016ef767b",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.32.perf.2.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py"
+  ]
+ },
+ "cited_only": [
+  "DS41-194",
+  "DS41-208"
+ ]
+}

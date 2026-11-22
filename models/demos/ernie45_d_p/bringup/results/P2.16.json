@@ -1,0 +1,25 @@
+{
+ "metrics": {
+  "engine_checks_failed": {
+   "t": "2026-09-25T00:36:42",
+   "value": 0
+  },
+  "pcc_kv_independent_min": {
+   "t": "2026-09-25T00:36:42",
+   "value": 0.9939007765429472
+  },
+  "pcc_producer_kv_k": {
+   "t": "2026-09-25T00:36:42",
+   "value": 0.9989357520341297
+  },
+  "pcc_producer_kv_v": {
+   "t": "2026-09-25T00:36:42",
+   "value": 0.9939007766781858
+  },
+  "producer_vs_independent_pcc_gap": {
+   "t": "2026-09-25T00:36:42",
+   "value": 4.934851416393826e-10
+  }
+ },
+ "task": "P2.16"
+}

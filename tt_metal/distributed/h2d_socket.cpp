@@ -1220,6 +1220,8 @@ void H2DSocketTryWriteAccess::publish_staged(ttsl::Span<distributed::H2DSocket* 
     tt_driver_atomics::sfence();
 }
 
+void H2DSocketDramRecvAccess::abandon_receiver(distributed::H2DSocket& socket) { socket.abandon_receiver(); }
+
 bool H2DSocketTryWriteAccess::writes_through_window(const distributed::H2DSocket& socket) {
     return socket.pimpl_->writes_through_window();
 }

@@ -1,0 +1,880 @@
+{
+ "metrics": {
+  "determinism_chunk_max_abs_diff_code": {
+   "t": "2026-11-21T04:26:11",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunk_max_abs_diff_novel": {
+   "t": "2026-11-21T04:26:11",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunks": {
+   "t": "2026-11-21T04:26:11",
+   "value": 4
+  },
+  "determinism_elements_differ": {
+   "t": "2026-11-21T04:26:11",
+   "value": 0
+  },
+  "determinism_max_abs_diff": {
+   "t": "2026-11-21T04:26:11",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_code": {
+   "t": "2026-11-21T04:26:11",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_novel": {
+   "t": "2026-11-21T04:26:11",
+   "value": 0.0
+  },
+  "determinism_rows_code": {
+   "t": "2026-11-21T04:26:11",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_rows_novel": {
+   "t": "2026-11-21T04:26:11",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_runs": {
+   "t": "2026-11-21T04:26:11",
+   "value": 3
+  },
+  "determinism_s": {
+   "t": "2026-11-21T04:26:11",
+   "value": 90.8
+  },
+  "determinism_state_max_abs_diff": {
+   "t": "2026-11-21T04:26:11",
+   "value": 0.0
+  },
+  "gate_model_loads": {
+   "t": "2026-11-21T05:12:08",
+   "value": 0
+  },
+  "glued_alone_vs_today_digest_mismatches": {
+   "t": "2026-11-21T05:03:40",
+   "value": 0
+  },
+  "glued_alone_vs_today_max_abs_diff": {
+   "t": "2026-11-21T05:03:40",
+   "value": 0.0
+  },
+  "glued_determinism_max_abs_diff": {
+   "t": "2026-11-21T05:03:40",
+   "value": 0.0
+  },
+  "glued_oracle_layers": {
+   "t": "2026-11-21T05:03:40",
+   "value": 40
+  },
+  "glued_segment_equiv_max_abs_diff": {
+   "t": "2026-11-21T05:03:40",
+   "value": 0.0
+  },
+  "glued_slot_digest_mismatches": {
+   "t": "2026-11-21T05:03:40",
+   "value": 0
+  },
+  "glued_split_vs_alone_max_abs_diff": {
+   "t": "2026-11-21T05:03:40",
+   "value": 0.0
+  },
+  "ids_uploads_per_chunk": {
+   "t": "2026-11-21T05:12:02",
+   "value": 0.0
+  },
+  "ids_uploads_per_chunk_tagentic_cc": {
+   "t": "2026-11-21T05:12:02",
+   "value": 0.0
+  },
+  "model_loads": {
+   "by": "PB.8RP#test_packed_oracle.0",
+   "ns": 1795236528893699475,
+   "pid": 829869,
+   "t": "2026-11-21T04:48:49",
+   "total": 3,
+   "value": 1
+  },
+  "model_shared": {
+   "t": "2026-11-21T04:55:40",
+   "value": 1
+  },
+  "model_shared_tagentic_cc": {
+   "t": "2026-11-21T05:11:55",
+   "value": 1
+  },
+  "no_rebuild_cache_entries_tagentic_cc": {
+   "t": "2026-11-21T05:12:02",
+   "value": 0
+  },
+  "no_rebuild_chunks_tagentic_cc": {
+   "t": "2026-11-21T05:12:02",
+   "value": 16
+  },
+  "no_rebuild_on_off_max_abs_diff_tagentic_cc": {
+   "t": "2026-11-21T05:12:03",
+   "value": 0.0
+  },
+  "no_rebuild_prepares_tagentic_cc": {
+   "t": "2026-11-21T05:12:02",
+   "value": 0
+  },
+  "no_rebuild_probe_tagentic_cc": {
+   "t": "2026-11-21T05:12:02",
+   "value": []
+  },
+  "no_rebuild_rows_tagentic_cc": {
+   "t": "2026-11-21T05:12:02",
+   "value": [
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       90112,
+       98304,
+       null
+      ],
+      [
+       98304,
+       106496,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "aligned",
+     "prepared": 0,
+     "slot": 1
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       20160,
+       28352,
+       null
+      ],
+      [
+       28352,
+       36544,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slot": 2
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       525696,
+       533888,
+       null
+      ],
+      [
+       533888,
+       542080,
+       534016
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slot": 3
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       261312,
+       269504,
+       null
+      ],
+      [
+       269504,
+       269604,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "partial",
+     "prepared": 0,
+     "slot": 4
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       111360,
+       119552,
+       null
+      ],
+      [
+       113664,
+       121843,
+       119552
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "pulled",
+     "prepared": 0,
+     "slot": 5
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       79488,
+       87680,
+       null
+      ],
+      [
+       87680,
+       87700,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "acks_only",
+     "prepared": 0,
+     "slot": 6
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       220480,
+       228672,
+       null
+      ],
+      [
+       228672,
+       236864,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slot": 7
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       6336,
+       14528,
+       null
+      ],
+      [
+       14528,
+       19276,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "partial",
+     "prepared": 0,
+     "slot": 8
+    }
+   ]
+  },
+  "packed_alone_vs_today_digest_mismatches": {
+   "t": "2026-11-21T04:55:37",
+   "value": 0
+  },
+  "packed_alone_vs_today_max_abs_diff": {
+   "t": "2026-11-21T04:55:37",
+   "value": 0.0
+  },
+  "packed_determinism_max_abs_diff": {
+   "t": "2026-11-21T04:55:37",
+   "value": 0.0
+  },
+  "packed_device_ms_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 103.96
+  },
+  "packed_device_ms_attention_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 31.44
+  },
+  "packed_device_ms_attention_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 36.39
+  },
+  "packed_device_ms_attn_collapse_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0.0
+  },
+  "packed_device_ms_attn_collapse_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.0
+  },
+  "packed_device_ms_attn_hc_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0.27
+  },
+  "packed_device_ms_attn_hc_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.27
+  },
+  "packed_device_ms_attn_index_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0.43
+  },
+  "packed_device_ms_attn_index_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.43
+  },
+  "packed_device_ms_attn_norm_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0.02
+  },
+  "packed_device_ms_attn_norm_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.02
+  },
+  "packed_device_ms_attn_region_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 3.19
+  },
+  "packed_device_ms_attn_region_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 14.7
+  },
+  "packed_device_ms_attn_residual_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 5.73
+  },
+  "packed_device_ms_attn_residual_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 11.3
+  },
+  "packed_device_ms_attn_table_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0.0
+  },
+  "packed_device_ms_attn_table_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.0
+  },
+  "packed_device_ms_compressor_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 3.94
+  },
+  "packed_device_ms_compressor_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 3.93
+  },
+  "packed_device_ms_engram_add_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0.79
+  },
+  "packed_device_ms_engram_add_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.79
+  },
+  "packed_device_ms_engram_kv_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 1.18
+  },
+  "packed_device_ms_engram_kv_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 1.19
+  },
+  "packed_device_ms_engram_rows_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0.89
+  },
+  "packed_device_ms_engram_rows_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.33
+  },
+  "packed_device_ms_experts_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 38.39
+  },
+  "packed_device_ms_experts_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 42.61
+  },
+  "packed_device_ms_ffn_collapse_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0.0
+  },
+  "packed_device_ms_ffn_collapse_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.0
+  },
+  "packed_device_ms_ffn_hc_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0.0
+  },
+  "packed_device_ms_ffn_hc_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.0
+  },
+  "packed_device_ms_ffn_norm_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0.0
+  },
+  "packed_device_ms_ffn_norm_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.0
+  },
+  "packed_device_ms_ffn_residual_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 5.81
+  },
+  "packed_device_ms_ffn_residual_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 5.73
+  },
+  "packed_device_ms_history_gather_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 2.41
+  },
+  "packed_device_ms_history_gather_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 1.86
+  },
+  "packed_device_ms_indexer_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 11.42
+  },
+  "packed_device_ms_indexer_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 23.29
+  },
+  "packed_device_ms_kv_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0.32
+  },
+  "packed_device_ms_kv_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.32
+  },
+  "packed_device_ms_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 116.83
+  },
+  "packed_device_ms_moe_add_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0.0
+  },
+  "packed_device_ms_moe_add_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.0
+  },
+  "packed_device_ms_q_a_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 2.06
+  },
+  "packed_device_ms_q_a_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 2.06
+  },
+  "packed_device_ms_router_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0.0
+  },
+  "packed_device_ms_router_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.0
+  },
+  "packed_device_ms_shared_expert_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0.0
+  },
+  "packed_device_ms_shared_expert_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.0
+  },
+  "packed_dram_capacity_gib_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 31.831
+  },
+  "packed_dram_capacity_gib_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 31.831
+  },
+  "packed_dram_gib_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 24.325
+  },
+  "packed_dram_gib_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 24.325
+  },
+  "packed_dram_measured_gib_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 14.578
+  },
+  "packed_dram_measured_gib_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 14.578
+  },
+  "packed_dram_unloaded_gib_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 9.747
+  },
+  "packed_dram_unloaded_gib_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 9.747
+  },
+  "packed_gather_exposed_frac_4x2k_p139264": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.1021
+  },
+  "packed_gather_exposed_frac_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.1021
+  },
+  "packed_gather_exposed_frac_mixed": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.1563
+  },
+  "packed_gather_exposed_frac_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.1563
+  },
+  "packed_gather_exposed_ms_4x2k_p139264_seg0_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.001
+  },
+  "packed_gather_exposed_ms_4x2k_p139264_seg1_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.0
+  },
+  "packed_gather_exposed_ms_4x2k_p139264_seg2_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.0
+  },
+  "packed_gather_exposed_ms_4x2k_p139264_seg3_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.001
+  },
+  "packed_gather_exposed_ms_4x2k_p139264_segtails_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.236
+  },
+  "packed_gather_exposed_ms_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.239
+  },
+  "packed_gather_exposed_ms_mixed_seg0_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 0.0
+  },
+  "packed_gather_exposed_ms_mixed_seg1_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 0.037
+  },
+  "packed_gather_exposed_ms_mixed_seg2_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 0.13
+  },
+  "packed_gather_exposed_ms_mixed_seg3_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 0.154
+  },
+  "packed_gather_exposed_ms_mixed_segtails_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 0.247
+  },
+  "packed_gather_exposed_ms_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0.568
+  },
+  "packed_gather_exposed_worst_chip_ms_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.265
+  },
+  "packed_gather_exposed_worst_chip_ms_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 1.903
+  },
+  "packed_gather_hidden_ms_4x2k_p139264_seg0_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.599
+  },
+  "packed_gather_hidden_ms_4x2k_p139264_seg1_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.599
+  },
+  "packed_gather_hidden_ms_4x2k_p139264_seg2_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.6
+  },
+  "packed_gather_hidden_ms_4x2k_p139264_seg3_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.537
+  },
+  "packed_gather_hidden_ms_4x2k_p139264_segtails_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": -0.236
+  },
+  "packed_gather_hidden_ms_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 2.098
+  },
+  "packed_gather_hidden_ms_mixed_seg0_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 0.389
+  },
+  "packed_gather_hidden_ms_mixed_seg1_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 0.569
+  },
+  "packed_gather_hidden_ms_mixed_seg2_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 0.835
+  },
+  "packed_gather_hidden_ms_mixed_seg3_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 1.523
+  },
+  "packed_gather_hidden_ms_mixed_segtails_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": -0.247
+  },
+  "packed_gather_hidden_ms_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 3.068
+  },
+  "packed_gather_hide_regions": {
+   "t": "2026-11-21T04:55:37",
+   "value": 24
+  },
+  "packed_gather_ms_4x2k_p139264_seg0_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.6
+  },
+  "packed_gather_ms_4x2k_p139264_seg1_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.6
+  },
+  "packed_gather_ms_4x2k_p139264_seg2_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.6
+  },
+  "packed_gather_ms_4x2k_p139264_seg3_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.538
+  },
+  "packed_gather_ms_4x2k_p139264_segtails_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 0.0
+  },
+  "packed_gather_ms_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 2.337
+  },
+  "packed_gather_ms_mixed_seg0_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 0.389
+  },
+  "packed_gather_ms_mixed_seg1_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 0.606
+  },
+  "packed_gather_ms_mixed_seg2_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 0.964
+  },
+  "packed_gather_ms_mixed_seg3_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 1.677
+  },
+  "packed_gather_ms_mixed_segtails_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 0.0
+  },
+  "packed_gather_ms_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 3.637
+  },
+  "packed_gather_prep_ms_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 7.198
+  },
+  "packed_gather_prep_ms_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 8.299
+  },
+  "packed_gather_regions_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:37",
+   "value": 13
+  },
+  "packed_gather_regions_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": 14
+  },
+  "packed_host_exposed_ms_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 20.2
+  },
+  "packed_host_exposed_ms_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 19.9
+  },
+  "packed_lane_equiv_max_abs_diff": {
+   "t": "2026-11-21T04:55:37",
+   "value": 0.0
+  },
+  "packed_oracle_layers": {
+   "t": "2026-11-21T04:55:37",
+   "value": 40
+  },
+  "packed_profiled_new_programs_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 0
+  },
+  "packed_profiled_new_programs_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 0
+  },
+  "packed_runs_ms_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": [
+    122.3,
+    127.8,
+    122.5,
+    138.3,
+    123.6,
+    124.2,
+    127.5,
+    130.1,
+    122.8,
+    122.8
+   ]
+  },
+  "packed_runs_ms_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": [
+    134.1,
+    136.7,
+    133.2,
+    134.9,
+    138.8,
+    138.1,
+    135.1,
+    135.2,
+    137.0,
+    137.0
+   ]
+  },
+  "packed_serving_tok_s_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 65958.1
+  },
+  "packed_serving_tok_s_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 59926.8
+  },
+  "packed_slot_digest_mismatches": {
+   "t": "2026-11-21T04:55:37",
+   "value": 0
+  },
+  "packed_spread_ms_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 16.0
+  },
+  "packed_spread_ms_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 5.6
+  },
+  "packed_wall_ms_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 124.2
+  },
+  "packed_wall_ms_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 136.7
+  },
+  "packed_wall_settled_4x2k_p139264_tagentic_cc": {
+   "t": "2026-11-21T05:11:30",
+   "value": 1
+  },
+  "packed_wall_settled_mixed_tagentic_cc": {
+   "t": "2026-11-21T05:11:52",
+   "value": 1
+  },
+  "packed_walls_table_tagentic_cc": {
+   "t": "2026-11-21T05:11:53",
+   "value": "# Packed prefill walls (test_packed_walls.py)\n\n8192-row chunk, 4 lanes of 2048; slots at one capacity 1048576; layers 0-20 run (DECODER_SKIP=decode). Wall = engine device input -> ids readback -> sync after the last layer (median of the warm runs). Gathers: each at its least chip (the reference = the same chunk's gathers serial). DRAM: the allocator's peak on the worst chip while the chunk runs, every live slot's state and history buffers held; the 40-layer column adds the layers the performance load does not hold (weights + each live slot's state, per layer kind, from a loaded layer of the same kind).\n\n| case | positions | new tokens | wall ms (spread) | device ms | host exposed ms | serving new tok/s | gather ms: reference / exposed / hidden | per segment: exposed / hidden ms | DRAM GiB a chip: loaded layers peak / 40-layer model |\n|---|---|---|---|---|---|---|---|---|---|\n| 4x2k_p139264 | 139264/139264/139264/139264 | 8192 | 124.2 (16.0) | 104.0 | 20.2 | 65958 | 2.34 / 0.24 / 2.10 | segtails 0.24 / -0.24; seg3 0.00 / 0.54; seg0 0.00 / 0.60; seg1 0.00 / 0.60; seg2 0.00 / 0.60 | 14.58 / 24.32 |\n| mixed | 61440/139264/307200/546816 | 8192 | 136.7 (5.6) | 116.8 | 19.9 | 59927 | 3.64 / 0.57 / 3.07 | segtails 0.25 / -0.25; seg2 0.13 / 0.83; seg3 0.15 / 1.52; seg0 0.00 / 0.39; seg1 0.04 / 0.57 | 14.58 / 24.32 |\n\nDRAM capacity a chip (allocator): 31.83 GiB.\n- 4x2k_p139264: peak 14.58 GiB measured (layer 13 embed, 564 samples), 40-layer 24.32 GiB, headroom 7.51 GiB (of the allocator's 31.83), 7.68 GiB of 32\n- mixed: peak 14.58 GiB measured (layer 13 embed, 586 samples), 40-layer 24.32 GiB, headroom 7.51 GiB (of the allocator's 31.83), 7.68 GiB of 32\n- not loaded here (projected per layer kind): held layers' own weights 8.319 GiB; layers 21-39 (15) as L3: weights 0.356 GiB, slot state 0.001 GiB a layer and slot; layers 24-36 (4) as L20: weights 0.873 GiB, slot state 0.055 GiB a layer and slot"
+  },
+  "pos_text_tagentic_cc": {
+   "n": 1076193,
+   "repeats": 1,
+   "sha256": "bffdee742ae2d1dffe91f6fde8388d87fc2d47c0cbbbff48a9e4d82d90340eaa",
+   "source": "38 sessions of claudecode_sample.parquet (nvidia/Open-SWE-Traces, CC-BY-4.0), slice 0, chat template",
+   "t": "2026-11-21T05:11:14",
+   "value": "agentic_cc"
+  },
+  "program_builds_after_warmup_serving": {
+   "t": "2026-11-21T05:12:02",
+   "value": 0
+  },
+  "program_builds_after_warmup_serving_tagentic_cc": {
+   "t": "2026-11-21T05:12:02",
+   "value": 0
+  },
+  "resident_first_chunk_s": {
+   "t": "2026-11-21T05:03:41",
+   "value": 1.02
+  },
+  "resident_first_chunk_s_tagentic_cc": {
+   "t": "2026-11-21T05:12:05",
+   "value": 0.86
+  },
+  "resident_model_loaded": {
+   "t": "2026-11-21T05:03:41",
+   "value": 0
+  },
+  "resident_model_loaded_tagentic_cc": {
+   "t": "2026-11-21T05:12:05",
+   "value": 0
+  },
+  "resident_model_s": {
+   "t": "2026-11-21T05:03:41",
+   "value": 0.7
+  },
+  "resident_model_s_tagentic_cc": {
+   "t": "2026-11-21T05:12:05",
+   "value": 0.8
+  },
+  "resident_request_first_chunk_s": {
+   "t": "2026-11-21T05:03:41",
+   "value": 560.56
+  },
+  "resident_request_first_chunk_s_tagentic_cc": {
+   "t": "2026-11-21T05:12:05",
+   "value": 42.74
+  }
+ },
+ "task": "PB.8RP"
+}

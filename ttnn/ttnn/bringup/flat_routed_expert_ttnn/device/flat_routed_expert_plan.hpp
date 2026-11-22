@@ -1,0 +1,255 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <map>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+
+namespace tt::tt_metal {
+class IDevice;
+}
+
+#include "flat_routed_expert_options.hpp"
+
+namespace ttnn::operations::bringup::flat_routed_expert {
+
+// Layout constants shared by the planner and the program factory.
+inline constexpr uint32_t kKBlk = 8;        // K tiles per gate/up weight / x block
+inline constexpr uint32_t kBf8Tile = 1088;  // bfp8 tile bytes
+inline constexpr uint32_t kRmChunks = 4;    // x relay: row-major chunks (32 rows x SBT tiles) buffered
+inline constexpr uint32_t kSbSlots = 3;     // x relay: tilized super-blocks buffered
+
+// What the flat routed expert is built for. Every field is part of the program-cache key.
+struct FlatRoutedExpertConfig {
+    uint32_t hidden = 0;              // H (x / y width)
+    uint32_t intermediate = 0;        // I (per device: I / TP)
+    uint32_t experts_per_chip = 0;    // E
+    uint32_t num_global_experts = 0;  // NG: the counts / regions rows' length
+    uint32_t max_tokens = 0;          // m: tokens per expert the program is built for (dispatch capacity)
+    bool weights_bf8 = false;         // weight tiles bfp8 (else bfp4)
+    uint32_t activation = 0;          // se3_compute.cpp SE_ACT
+    uint32_t pin = 1;                 // SE_PIN_MIN (0: no pinning)
+    bool y_row_major = false;         // y as row-major bf16 [rows, H] (else bfp8 tiles); no effect on the plan
+    // down projection accumulated in fp32 DEST in a full-sync DST (SE_DN_FP32 + SE_DN_FULL_SYNC; else bf16 DEST, whose
+    // ties-away rounding over K = I inflates y by ~3-4% with bfp4 weights); no effect on the plan
+    bool down_fp32 = false;
+    // stochastic rounding in the packer of every compute kernel (x tilize, h, y): the default rounds bf16 -> bfp8 ties
+    // away from zero (+0.28% per pack on bf16-valued data, +1.25% on the expert output); no effect on the plan
+    bool pack_stochastic_rounding = false;
+    // x / h as bf16 tiles (else bfp8): the relays tilize x to bf16, gate/up packs h as bf16 and the down cores read it
+    // (twice the x / h bytes and L1; at LoFi about half the expert's error vs fp32 math on the same weights)
+    bool x_bf16 = false;
+    bool h_bf16 = false;
+    // y as bf16 tiles (else bfp8; tiled y only): the out CB single-buffered in the bfp8 double buffer's region; no
+    // effect on the plan
+    bool y_bf16 = false;
+    // the expert matmuls' fidelity (ckernel MathFidelity: 0 LoFi, 2 HiFi2, 3 HiFi3, 4 HiFi4): LoFi takes 5 bits of
+    // the weights, exact for bfp4; bfp8 weights need HiFi2 (LoFi truncates them: a ~2% gain loss); no effect on the
+    // plan
+    uint32_t math_fidelity = 0;
+    // flat_with_program: the y writers (down cores, reader tails) report each local expert to the other op's
+    // collector once its rows have landed; the 4 report args sit at this runtime-arg index (0: off)
+    uint32_t cmb_rt = 0;
+    // the y writers' L1 hand-off args after the report args (flat_with_program with l1_args: SE_Y_L1)
+    bool y_l1 = false;
+    // combine overlap report protocol (flat_with_program): cumulative counts, no go handshake; steps in slot order
+    bool cmb_no_go = false;
+    bool cmb_slot_order = false;
+    // the caller's layout / program choices (typed; part of the plan key and the program hashes)
+    FlatLayoutOptions layout;
+    // DeepSeek-V4.1 option (off: the program above, unchanged). weights_nk: the weight tiles hold the nn.Linear
+    // [N, K] blocks (each tile the transpose of the x @ W tile) and every weight matmul transposes its in1 tile back
+    // (a bfp8 tile then shares its exponents along K: exact for e2m1 x ue8m0 weights); no plan change. (FIX.9 removed
+    // P.3's DeepSeek-only h options routed_weight / fp8_act_quant: no model used them.)
+    bool weights_nk = false;
+    // DeepSeek-V4.1 option (0: off, the plan unchanged). At most this many y writers (down cores + reader tails): the
+    // L1 hand-off of a combine appended with flat_with_program has one landed counter per writer (combine_rf
+    // sparse_combine_rf.py L1_MAX_WRITERS, 32). The down cores are cut to fit before their column split is chosen (in
+    // the plan's own order, nearest first); the cells left over stay idle (free for the appended op). A Galaxy chip
+    // with its east DRAM readers in column 7 has 40 down cores at V4.1-Flash (4 columns each), column 6 has 32 (5
+    // each): capped at 32, both get the same down split and weight layout.
+    uint32_t max_y_writers = 0;
+    // DeepSeek-V4.1 option (false: the program above, unchanged). down_weights_bf4: with weights_bf8 (gate/up bfp8
+    // tiles), the down weights (and the reader tails' down weights) are bfp4 tiles: the down rings, regions and
+    // readers take the bfp4 tile size and data format (EXPERTS_IMPL=bfp8_down4, P.27). Taken from the down weight
+    // tensor's dtype by the op; the plan's own argument for flat_routed_expert_plan.
+    bool down_weights_bf4 = false;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "hidden",
+        "intermediate",
+        "experts_per_chip",
+        "num_global_experts",
+        "max_tokens",
+        "weights_bf8",
+        "activation",
+        "pin",
+        "y_row_major",
+        "down_fp32",
+        "pack_stochastic_rounding",
+        "x_bf16",
+        "h_bf16",
+        "y_bf16",
+        "math_fidelity",
+        "cmb_rt",
+        "y_l1",
+        "cmb_no_go",
+        "cmb_slot_order",
+        "layout",
+        "weights_nk",
+        "max_y_writers",
+        "down_weights_bf4");
+    auto attribute_values() const {
+        return std::make_tuple(
+            hidden,
+            intermediate,
+            experts_per_chip,
+            num_global_experts,
+            max_tokens,
+            weights_bf8,
+            activation,
+            pin,
+            y_row_major,
+            down_fp32,
+            pack_stochastic_rounding,
+            x_bf16,
+            h_bf16,
+            y_bf16,
+            math_fidelity,
+            cmb_rt,
+            y_l1,
+            cmb_no_go,
+            cmb_slot_order,
+            layout.key(),
+            weights_nk,
+            max_y_writers,
+            down_weights_bf4);
+    }
+};
+
+// The spatial pipeline's layout: role cores, the work split and the per-core L1 arena. A pure function of the
+// device grid and the config (the program factory, the host wrapper's scratch tensors and the weight layout all use
+// the same plan). Mirrors the model path (dynamic counts, row-major x, helper relays) of the research builder
+// models/demos/mimo_v2_d_p/tt/flat_expert.py; see tests/perf/FLAT_EXPERT_WORKLOG.md there.
+struct FlatRoutedExpertPlan {
+    using Core = tt::tt_metal::CoreCoord;
+    // shapes
+    uint32_t H = 0, I = 0, E = 0, NG = 0, m = 0, Ht = 0, It = 0;
+    uint32_t w_tile = 0;   // weight tile bytes (gate/up; and down unless down_weights_bf4)
+    uint32_t wd_tile = 0;  // down weight tile bytes (= w_tile, or bfp4 with down_weights_bf4)
+    uint32_t banks = 0;
+    // subgrids, gate/up split, sub-blocks
+    uint32_t nsg = 1, n_rd_sg = 16;
+    uint32_t np = 1, g = 1, mt = 1, mtg = 1, x_slots = 24, dst_tiles = 8;
+    bool gu_rp = false, gu_fp32 = true, gu_l1acc = false;
+    uint32_t s = 1, v = 1, nk_gu = 1, slot = 1, rg = 1, r_ = 1, ring_g = 1;
+    // uneven split (It / np pair-sets a multiple of the banks, not of the readers: e.g. DeepSeek V4.1 I 2304, 72
+    // columns = 24 pair-sets of 3 pairs over 16 readers): reader r forwards rgs[r] pair-sets (rg = their max, r_ = rg *
+    // g), pair-sets ps0[r] .., to gate/up cores gu[gu_off[r] ..]; each bank's readers together hold the bank's even
+    // share. Even plans: rgs = rg, ps0 = (r % n_rd_sg) * rg, gu_off = r * r_
+    bool uneven = false;
+    // half-width gate / up tiles (layout.half_width): a pair's two weight tiles hold [gate | up] of its h tile's left /
+    // right 16 columns (the activation runs face-wise, se_glu_faces.hpp); the split granularity of 16 columns builds on
+    // it
+    bool hg = false;
+    // 16-column units (layout.hg_units = units per core, HG only; np is then 0): a core's gate/up block is nu weight
+    // tiles a row ([gate | up] of units cg nu ..), its h a run of hpc h tiles from K tile cg nu / 2, the first / last
+    // one half its own when cg nu / (cg + 1) nu is odd. Generic widths: gwt weight tiles a row (2 np / nu), hpc h tiles
+    // a row (np / (nu + 1) / 2), ngrp column groups (It / np / 2 It / nu)
+    uint32_t nu = 0, gwt = 2, hpc = 1, ngrp = 0;
+    std::vector<uint32_t> rgs, ps0, gu_off;
+    uint32_t r_of(uint32_t r) const { return rgs.empty() ? r_ : rgs[r] * g; }
+    uint32_t gu_at(uint32_t r, uint32_t j) const { return gu_off.empty() ? r * r_ + j : gu_off[r] + j; }
+    // relays
+    uint32_t nh = 1, land_slots = 3, vstride = 2, sbt = 32, seg = 2048, nsb = 1;
+    // x / h tile bytes and formats (bfp8 1088; config x_bf16 / h_bf16: bf16 2048), and the
+    // relay's tilized super-block slots (fewer with bf16 x, so the relay arena fits)
+    uint32_t x_tile = kBf8Tile, h_tile = kBf8Tile, sb_slots = kSbSlots;
+    // x relay row-major chunks (32 rows x SBT tiles) buffered (perf probe MIMO_FL_RM_CHUNKS)
+    uint32_t rm_chunks = kRmChunks;
+    // gate/up fp32 in a full-sync DST (the whole sub-block in one K loop, x freed block by block: with bf16 x the x
+    // ring holds one sub-block's blocks, row passes would keep them until the last pass and stall the relays)
+    bool gu_full_sync = false;
+    // gate/up K blocks per CB handshake in the row-pass K loop (layout.gu_kgroup; 1 without row passes)
+    uint32_t gu_kg = 1;
+    bool hl_in_arena = false;  // gate/up h_local (CB 3) in the arena (bf16 x / h), else a static CB
+    // the program's static (non-arena) CBs, bytes a core at most: meta (6), counts / regions / ids (7), the schedule
+    // inputs (9), gate/up CB 16 and h_local (3) when not in the arena. A caller sizing the arena leaves this much L1
+    // below it (the program factory checks its CBs against it)
+    uint32_t static_l1_bytes = 0;
+    // even split (layout.even_split): whether the gate/up split is the even one; false: the older searches picked it
+    // (no even split for this I, or the even split did not apply - see flat_routed_expert_plan.cpp)
+    bool even_gu = false;
+    bool group_rect = false;
+    // DRISC mode (layout.drisc, flat_drisc.hpp): the DRAM cores send the gate/up weights, the readers only post jobs
+    bool drisc = false;
+    // DRISC mode: the one Tensix core that posts every slot's job (the readers' cells are free: the down cores take
+    // them; MIMO_FL_DRISC_RD_DOWN=0 leaves them idle)
+    Core launcher{0, 0};
+    // DRISC mode: reader slots 0 .. drisc_n - 1 stream from the DRAM cores, the rest keep their Tensix reader +
+    // forwarder (MIMO_FL_DRISC_SLOTS; a DRISC tile sends one slot per bank at full rate)
+    uint32_t drisc_n = 0;
+    // dual (layout.drisc_dual, default): the DRISC slots keep their Tensix reader too; per call (every kernel the same
+    // rule) counts <= SE_DRISC_MAXCNT stream from the DRAM cores, larger ones from the Tensix readers
+    bool dual = false;
+    // x read once with forwarding (MIMO_FL_XFWD): the relays' forward ring (FW_SLOTS super-blocks at fw_off)
+    bool xfwd = false;
+    uint32_t fw_off = 0, fw_slots = 2;
+    // x read once by the helpers (probe MIMO_FL_XDUAL): each rectangle's helper reads / tilizes half of x and writes
+    // every super-block into both primaries' landing rings (two rings a primary); the primaries read nothing
+    bool xdual = false;
+    // the relays' copy of the call's token index (indexed x): 4 B per capacity row at ti_off, read once per call
+    uint32_t ti_off = 0;
+    bool drisc_slot(uint32_t r) const { return drisc && r < drisc_n; }
+    bool tensix_reader(uint32_t r) const { return !drisc_slot(r) || dual; }
+    // down
+    bool rdown = false;
+    uint32_t d_ch = 7, n_rdn = 0, pcd_r = 0, rem_cols = 0, kd_r = 0, nblk_r = 0, slot_dr = 0, ring_dr = 0;
+    uint32_t out_tiles_r = 0, h_tiles = 0, hbuf = 3, nd_sg = 1;
+    // h units: the down cores take h in units of HU row tiles (0: whole sub-blocks), HBUF unit buffers deep, so the
+    // sub-block (x delivery, gate/up) keeps MT row tiles while the down cores' h buffers stay small; the gate/up
+    // h_local holds HL_SLOTS sub-blocks
+    uint32_t hu = 0, hl_slots = 3;
+    float dring = 2.0f;
+    std::vector<uint32_t> pcds, col0s;
+    // arena (per core, 2 KB aligned offsets)
+    uint32_t x_off = 0, p_off = 0, hl_off = 0, rd_off = 0, h_off = 0, o_off = 0, sb_off = 0, land_off = 0,
+             arena_tiles = 0;
+    uint32_t rd_slots = 2;
+    // arena bytes each role uses (the arena is max of them: the rest of a role core's arena is free)
+    uint32_t gu_bytes = 0, dn_bytes = 0, relay_bytes = 0;
+    // weight regions (bytes per core region)
+    uint32_t region_bytes = 0, wd_region = 0, wr_region = 0;
+    // the down cores' weight blocks rotate over the banks (default; MIMO_FL_DW_ROT=0: one bank per core): block k of
+    // down core d in bank (d + k) % banks, at d * wd_rot_region + (k / banks) blocks, like unified_routed_expert_ffn's
+    // one-tile-row ND shards
+    bool dw_rot = false;
+    uint32_t wd_rot_region = 0;
+    // role cores (logical)
+    std::vector<Core> readers, gu, gu_idle, relays, down, coords;
+    std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> rects;  // x0, x1, y0, y1
+    std::vector<std::pair<uint32_t, uint32_t>> rdn;                         // (reader, chain tail down core)
+    std::map<uint32_t, uint32_t> d_pred, d_succ;
+    std::vector<uint32_t> d_heads;
+
+    std::vector<Core> arena_cores() const;  // gu + down + relays + readers + gu_idle
+    uint32_t sg_rd(uint32_t r) const { return r / n_rd_sg; }
+    uint32_t sg_dn(uint32_t d) const { return d / nd_sg; }
+    uint32_t dl(uint32_t d) const { return d % nd_sg; }
+    uint32_t rect_of(const Core& c) const;
+    static uint32_t kd_of(uint32_t pcd, uint32_t it);
+};
+
+FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device, const FlatRoutedExpertConfig& cfg);
+
+// Greedy maximal rectangles over a core list (one range per core makes every dispatch write a unicast).
+tt::tt_metal::CoreRangeSet rect_ranges(const std::vector<tt::tt_metal::CoreCoord>& cores);
+
+}  // namespace ttnn::operations::bringup::flat_routed_expert
