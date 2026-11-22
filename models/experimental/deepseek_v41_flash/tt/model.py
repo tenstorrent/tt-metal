@@ -779,6 +779,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
         # Per session, the furthest position known to have its blocks (ensure_session_capacity); a session
         # only loses blocks to close / reset / truncate, which drop it.
         self._covered_to: dict[int, int] = {}
+        # Sessions whose pages a remote prefill server is writing over TT-Fabric (remote_commit_targets until
+        # finish_remote_commit): session -> (start, total, layers whose rings it writes).
+        self._remote_commits: dict[int, tuple[int, int, frozenset]] = {}
+        # Per stage submesh, its chips' fabric nodes and DRAM bank tables (remote_commit_targets).
+        self._fabric_chips: dict[int, list[dict]] = {}
         self._decode_batch = 1
         self._cache_handoff: dict[tuple[int, int], tuple[list, list]] = {}
         # Depth of the ratio > 1 compressor windows under speculative decode (None before prepare_spec_decode).
@@ -3124,6 +3129,194 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 piece = id_list[offset : offset + engram_chunk]
                 self._engram_lookup.hash_session(slot, torch.tensor([piece], dtype=torch.long), offset)
         note("host prefill state committed")
+        return total
+
+    def remote_commit_targets(self, session_id: int, total: int, ring_layers: Sequence[int], start: int = 0) -> dict:
+        """Reserve session ``session_id``'s pages for a ``total``-token prefill that a remote prefill server writes
+        straight into this model's DRAM over TT-Fabric, and return where they live (``PREFILL_D_P_FABRIC_PUSH.md``).
+
+        The writer fills the sliding-window rings of ``ring_layers`` (the slot's ``sliding_window`` rows of each,
+        TILE pages ``slot * window * head_dim / 1024 + j``), and for every kv source entries ``[start // ratio,
+        total // ratio)`` of ``comp_kv`` (ROW_MAJOR, entry ``e`` at page ``page_row[e // 64] * 64 + e % 64``) and
+        the whole 64-entry blocks of ``idx_key_cache`` holding them (TILE, block ``b``'s eight tiles at pages
+        ``page_row[b] * 8 ..``), on every chip of every stage that holds them. The DRAM buffers are interleaved:
+        page ``p`` is in bank ``p % len(banks)`` at ``banks[bank][2] + addr + (p // len(banks)) * page_bytes``.
+
+        ``start`` as in :meth:`commit_host_prefill_state`. The session must not decode, close or reset until
+        :meth:`finish_remote_commit`: its blocks and the buffers' addresses must stay put while writes may land.
+        Returns a JSON-ready dict: ``mesh_id``, ``slot``, ``seq_len``, ``start``, ``window``, ``block``,
+        ``page_bytes`` (``kv`` / ``keys`` / ``ring``), ``sources`` (``layer``, ``ratio``, ``first_entry``),
+        ``page_rows`` (``ratio``, ``blocks``: the physical block of each logical block up to ``total``) and
+        ``stages`` (``stage``, ``chips`` with ``coord`` / ``chip_id`` / ``banks``, ``rings`` with ``layer`` /
+        ``addr``, ``pools`` with ``source`` / ``kv`` / ``keys``).
+        """
+        paged = self._require_paged()
+        if session_id not in self._slot_of:
+            raise KeyError(f"no such session {session_id}")
+        if session_id in self._remote_commits:
+            raise RuntimeError(f"session {session_id} already has a remote commit in flight")
+        if total <= 0 or total % ALIGNMENT or total % self.sliding_window:
+            raise ValueError(
+                f"prefilled length {total} must be a positive multiple of {ALIGNMENT} and of the "
+                f"{self.sliding_window}-token sliding window"
+            )
+        if total >= self._decode_max_seq:
+            raise PagedCacheFull(f"a {total}-token prefill state is past max_seq {self._decode_max_seq}")
+        if start and (start != self._session_pos[session_id] or start > total):
+            raise ValueError(
+                f"a prefill continued from {start} up to {total} does not continue session {session_id} "
+                f"at position {self._session_pos[session_id]}"
+            )
+        ring_layers = frozenset(int(li) for li in ring_layers)
+        if not ring_layers <= set(range(self.num_layers)):
+            raise ValueError(f"ring layers {sorted(ring_layers - set(range(self.num_layers)))} are not decode layers")
+        kv_sources = [i for i in self.config.kv_source_layer_ids if i < self.num_layers]
+        block = CSA_INDEX_BLOCK_SIZE
+        for src in kv_sources:
+            ratio = int(self.config.compress_ratios[src])
+            if start % ratio or (start // ratio) % block:
+                raise ValueError(
+                    f"kv source {src} (ratio {ratio}): a commit from {start} does not start a {block}-entry pool block"
+                )
+
+        self._wait_replays_dispatched()
+        self.ensure_session_capacity(total - 1, session_id)
+        page_rows = []
+        for ratio in sorted({int(self.config.compress_ratios[src]) for src in kv_sources}):
+            group = self._paged_ratios[ratio].layer_type
+            blocks = -(-(total // ratio) // block)
+            lo = (start // ratio) // block
+            row = paged.page_row(session_id, group)[0].tolist()[:blocks]
+            if ZERO_BLOCK in row[lo:]:
+                raise RuntimeError(f"{group}: {total} tokens reach an unmapped block; capacity was not ensured")
+            if any(refs > 1 for refs in paged.block_refs(session_id, group)[lo:blocks]):
+                raise RuntimeError(
+                    f"{group}: session {session_id}'s entries from {start // ratio} reach a shared block"
+                )
+            page_rows.append({"ratio": ratio, "blocks": row})
+
+        stages = []
+        mesh_ids = set()
+        for sm in self.submeshes_io:
+            rings = [
+                {"layer": li, "addr": int(sm["scaches"][li].kv.buffer_address())}
+                for li in sm["layers"]
+                if li in ring_layers
+            ]
+            pools = {}
+            for li in sm["layers"]:
+                scache, src = sm["scaches"][li], self._kv_source_of.get(li)
+                if src in kv_sources and src not in pools and scache.comp_kv is not None:
+                    pools[src] = {
+                        "source": src,
+                        "kv": int(scache.comp_kv.buffer_address()),
+                        "keys": int(scache.idx_key_cache.buffer_address()),
+                    }
+            if not rings and not pools:
+                continue
+            chips = self._stage_fabric_chips(sm)
+            mesh_ids.update(chip["mesh_id"] for chip in chips)
+            stages.append({"stage": sm["index"], "chips": chips, "rings": rings, "pools": list(pools.values())})
+        if len(mesh_ids) != 1:
+            raise RuntimeError(f"the decode stages span fabric meshes {sorted(mesh_ids)}")
+
+        tile_bytes = ttnn.TILE_SIZE * ttnn.TILE_SIZE * 2
+        self._remote_commits[session_id] = (start, total, ring_layers)
+        return {
+            "mesh_id": mesh_ids.pop(),
+            "slot": self._slot_of[session_id],
+            "seq_len": total,
+            "start": start,
+            "window": self.sliding_window,
+            "block": block,
+            "page_bytes": {"kv": self.config.head_dim * 2, "keys": tile_bytes, "ring": tile_bytes},
+            "sources": [
+                {
+                    "layer": src,
+                    "ratio": int(self.config.compress_ratios[src]),
+                    "first_entry": start // int(self.config.compress_ratios[src]),
+                }
+                for src in kv_sources
+            ],
+            "page_rows": page_rows,
+            "stages": stages,
+        }
+
+    def _stage_fabric_chips(self, sm: dict) -> list[dict]:
+        """Every chip of stage ``sm``'s submesh: its submesh ``coord``, fabric ``mesh_id`` / ``chip_id`` and DRAM
+        bank table (``[noc_x, noc_y, offset]`` a bank, translated NOC coordinates). Read once a stage."""
+        chips = self._fabric_chips.get(sm["index"])
+        if chips is None:
+            device = sm["device"]
+            rows, cols = tuple(device.shape)
+            chips = []
+            for r in range(rows):
+                for c in range(cols):
+                    coord = ttnn.MeshCoordinate(r, c)
+                    node = device.get_fabric_node_id(coord)
+                    table = ttnn.cluster.get_dram_bank_table(device.get_device_id(coord))
+                    chips.append(
+                        {
+                            "coord": [r, c],
+                            "mesh_id": int(node.mesh_id),
+                            "chip_id": int(node.chip_id),
+                            "banks": [[int(e["noc_x"]), int(e["noc_y"]), int(e["base_addr"])] for e in table],
+                        }
+                    )
+            self._fabric_chips[sm["index"]] = chips
+        return chips
+
+    def finish_remote_commit(
+        self,
+        session_id: int,
+        ids: Optional[Sequence[int]] = None,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> int:
+        """Complete a commit whose pages a remote prefill server wrote (:meth:`remote_commit_targets`), once its
+        writes have landed: zero the rings it did not write, move the session to the prefilled length, fill its
+        slot of ``dense_kv`` and (``ids``: the prompt's ids) extend the Engram history, leaving the session as
+        :meth:`commit_host_prefill_state` would. Returns the prefilled length."""
+        note = progress or (lambda message: None)
+        if session_id not in self._remote_commits:
+            raise KeyError(f"session {session_id} has no remote commit in flight")
+        start, total, ring_layers = self._remote_commits.pop(session_id)
+        if ids is not None and len(ids) != total:
+            raise ValueError(f"got {len(ids)} prompt ids for a {total}-token prefill state")
+        slot, w = self._slot_of[session_id], self.sliding_window
+        for sm in self.submeshes_io:
+            device = sm["device"]
+            unwritten = [li for li in sm["layers"] if li not in ring_layers]
+            if not unwritten:
+                continue
+            note(f"zero {len(unwritten)} ring(s) on decode submesh {sm['index']}")
+            zero_rings = {}
+            for li in unwritten:
+                kv = sm["scaches"][li].kv
+                dh = kv.shape[3]
+                if dh not in zero_rings:
+                    zero_rings[dh] = ttnn.from_torch(
+                        torch.zeros(1, 1, w, dh, dtype=torch.bfloat16),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None,
+                    )
+                ttnn.fill_cache(kv, zero_rings[dh], 0, update_idx=slot * w)
+            for zeros in zero_rings.values():
+                ttnn.deallocate(zeros)
+
+        self._session_pos[session_id] = total
+        self._sync_dense_entries(session_id)
+        for sm in self.submeshes_io:
+            ttnn.synchronize_device(sm["device"])
+        if ids is not None and self._engram_lookup is not None:
+            id_list = list(ids)
+            engram_chunk = 16384
+            for offset in range(start, total, engram_chunk):
+                piece = id_list[offset : offset + engram_chunk]
+                self._engram_lookup.hash_session(slot, torch.tensor([piece], dtype=torch.long), offset)
+        note("remote prefill state committed")
         return total
 
     def _commit_paged_entries(

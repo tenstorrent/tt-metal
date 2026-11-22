@@ -38,9 +38,8 @@ from models.experimental.deepseek_v41_flash.tests.xhost_kv.common import (
     init_rank,
     log,
     open_mesh,
-    recv_msg,
-    send_msg,
 )
+from models.experimental.deepseek_v41_flash.tt.prefill.d_p_wire import recv_msg, send_msg
 
 ROLE = "receiver"
 

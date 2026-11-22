@@ -169,12 +169,15 @@ Each phase ends with a run the user launches (device commands are not run by the
 
 ### Phase 1: decode-side API, tested with a synthetic sender
 
-1. `remote_commit_targets` / `finish_remote_commit` (section 5.2).
-2. Test `tests/xhost_kv/decode_commit.py` (two ranks): rank 1 builds the decode model's caches (no weights needed if
-   `prepare_static_decode` can run without them; else the real model), makes a session, publishes targets; rank 0
-   runs `sender_write.py`'s kernel generalised to the targets with random entries; rank 1 compares, per stage and
-   chip, `_gather_paged_entries` and the ring rows against the same random states committed through
-   `commit_prefill_state` into a second session. Gate: byte-exact.
+1. `remote_commit_targets(session_id, total, ring_layers, start=0)` / `finish_remote_commit(session_id, ids=None)`
+   (section 5.2; written). `targets` is JSON-ready: per stage its chips (fabric node, bank table), ring addresses of
+   `ring_layers` and pool addresses of the sources it selects from, plus `page_rows` per ratio and the page sizes.
+2. Test `tests/xhost_kv/decode_commit.py` (two ranks; written): rank 1 builds the real decode model (layers 0-20),
+   commits seeded random states into session B with `commit_host_prefill_state`, publishes session A's targets;
+   rank 0 regenerates the states and writes them with a work-list kernel (per page: destination buffer and page id,
+   streamed from a DRAM table; decode chip `chip_id` served by mesh 0's chip of the same index); rank 1 runs
+   `finish_remote_commit` and compares A, per stage and chip, with the states and with B: rings (written and
+   zeroed), `_gather_paged_entries` (entries and keys) and `dense_kv`. Gate: byte-exact.
 
 ### Phase 2: prefill-side push from metal_2's caches
 
