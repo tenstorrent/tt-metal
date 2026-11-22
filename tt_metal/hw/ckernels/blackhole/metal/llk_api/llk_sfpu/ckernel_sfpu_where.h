@@ -180,8 +180,8 @@ inline void _init_where_() {
         TTI_SFPCONFIG(0, 4 + 3, 0);
     }
 
-    // Misc: {UsesLoadMod0ForStore=1 for all 4 macros, WaitForElapsedInstructions=1 for Simple/MAD/Round sub-units}.
-    TTI_SFPCONFIG(0xF70, 8, 1);
+    // Misc: {UnitDelayKind[11:8]=0x7 (Simple/MAD/Round WaitForElapsedInstructions), UsesLoadMod0ForStore[7:4]=0xF (all 4 macros), StoreMod0[3:0]=0}.
+    TTI_SFPCONFIG(0x7F0, 8, 1);
 #endif
 }
 
