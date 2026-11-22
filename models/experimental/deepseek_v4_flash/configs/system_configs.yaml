@@ -51,6 +51,11 @@ profiles:
       mesh_shape: null
       # 0 leaves the ttnn default. env: DEEPSEEK_V4_WORKER_L1_SIZE
       worker_l1_size: 0
+      # Fabric router packet payload in bytes; 0 = the router default (4352 B).
+      # A two-mesh fabric shared with the disaggregated prefill server needs the
+      # prefill's value on both ranks (6208 B with MOE_BLOCK_SPLIT_ROWS=on).
+      # env: DEEPSEEK_V4_FABRIC_PAYLOAD
+      fabric_payload_bytes: 0
 
     pipeline:
       # Devices per pipeline group (see model.plan_layer_placement). 1 gives each

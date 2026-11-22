@@ -179,6 +179,9 @@ def open_mesh_device(
         device_params["l1_small_size"] = l1_small_size
     params = get_updated_device_params(device_params)
     fabric_config = params.pop("fabric_config")
+    router_config = ttnn.FabricRouterConfig()
+    if sys_cfg.device.fabric_payload_bytes:
+        router_config.max_packet_payload_size_bytes = sys_cfg.device.fabric_payload_bytes
     ttnn.set_fabric_config(
         fabric_config,
         ttnn.FabricReliabilityMode.STRICT_INIT,
@@ -186,6 +189,7 @@ def open_mesh_device(
         ttnn.FabricTensixConfig.DISABLED,
         ttnn.FabricUDMMode.DISABLED,
         ttnn.FabricManagerMode.DEFAULT,
+        router_config,
     )
     # Default to the whole system flattened to a line, which is the shape the model's
     # submesh pipeline is built against; a profile may pin an explicit shape instead.

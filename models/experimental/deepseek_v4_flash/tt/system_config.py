@@ -70,6 +70,9 @@ class DeviceSettings:
     # pipeline is built against); ``[rows, cols]`` opens exactly that shape.
     mesh_shape: Optional[list[int]] = None
     worker_l1_size: int = 0
+    # Fabric router packet payload; 0 = the router default (4352 B). Every rank of a
+    # multi-mesh fabric must open with the same value.
+    fabric_payload_bytes: int = 0
 
     @property
     def ttnn_fabric_config(self) -> Any:
@@ -458,6 +461,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, Callable[[str], Any]], ...] = (
     ("device", "trace_region_size", "DEEPSEEK_V4_TRACE_REGION_SIZE", int),
     ("device", "mesh_shape", "DEEPSEEK_V4_MESH_SHAPE", _env_mesh_shape),
     ("device", "worker_l1_size", "DEEPSEEK_V4_WORKER_L1_SIZE", int),
+    ("device", "fabric_payload_bytes", "DEEPSEEK_V4_FABRIC_PAYLOAD", int),
     ("pipeline", "group_size", "DEEPSEEK_V4_PIPELINE_GROUP_SIZE", int),
     ("pipeline", "tp_size", "DEEPSEEK_V4_TP_SIZE", int),
     ("pipeline", "max_devices", "DEEPSEEK_V4_PIPELINE_MAX_DEVICES", int),

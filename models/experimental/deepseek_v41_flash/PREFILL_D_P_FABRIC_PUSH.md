@@ -1,0 +1,226 @@
+# Disaggregated prefill -> decode over TT-Fabric: plan
+
+Status (2026-11-22): the transport is proven by a unit test; nothing in the servers changed yet. This document is the
+work plan for moving the prefill server's KV hand-off from "read back to host + TCP blobs" to "prefill writes decode's
+DRAM directly over TT-Fabric, TCP carries only control".
+
+## 1. The plan being implemented
+
+1. The decode server (host 41) allocates the new session's KV cache pages itself (`ensure_session_capacity`).
+2. Its prefill request to the prefill server (host 40) carries, besides the ids, where every page lives: per decode
+   chip the fabric node and DRAM bank table, per cache buffer its address, per paged block its physical block id.
+3. The prefill server prefills, then writes the KV entries straight into those pages over TT-Fabric. No device-side
+   synchronization with decode.
+4. It replies "done" over TCP after its write program has finished. By the time decode has that reply and schedules
+   the user, the pages have landed (measured below), so decode finishes the commit's host bookkeeping and replays the
+   prompt's tail as it does today.
+
+What this removes, per request at 1M tokens (`PREFILL_D_P_INTEGRATION.md` 6.2): the 5.5-11.8 s device-to-host
+readback inside the prefill device lock, the 2 s / 3.35 GB TCP send, and on decode the host-to-device upload plus
+the cross-stage migration of `commit_prefill_state`.
+
+## 2. What is proven (`tests/xhost_kv/`)
+
+Three-part unit test, run under one `tt-run` job (rank 0 = host 40, mesh 0; rank 1 = host 41, mesh 1; two-mesh MGD
+`dual_bh_galaxy_8x4_hosts_40_41_two_mesh.textproto`):
+
+* `receiver_init.py` (decode side): opens mesh 1, allocates decode-shaped pools (`comp_kv`: bf16 ROW_MAJOR
+  `[blocks, 1, 64, 512]`; `idx_key_cache`: bf16 TILE `[blocks, 1, 64, 128]`) filled with a sentinel, sends addresses
+  and bank tables, requests writes into random blocks, reads them back the moment "done" arrives.
+* `sender_write.py` (prefill side): one core per chip, chip (r, c) of mesh 0 writes chip (r, c) of mesh 1, one fabric
+  unicast write a page, the destination NoC address from the receiver's bank table.
+* `receiver_verify.py`: device-less UMD read of every page, byte-exact, untouched blocks still the sentinel.
+
+Results: 32 chip pairs x 10 rounds x 32 blocks, both pools, all byte-exact at "done" and after the job; sentinel
+blocks intact. One debugging run hung (28 of 32 senders stuck in `wait_for_empty_write_slot`) and dropped a chip
+off PCIe on host 40 (`tt-smi -glx_reset` brought it back); the identical run passed afterwards. Not reproduced
+since: treat as an open risk (section 8).
+
+Route map of mesh 0 -> mesh 1 (sender log): rows 0-1 (fabric chips D0-D7) leave over Z directly, rows 2-4 go N,
+rows 5-7 go S (torus wrap) to an exit chip first.
+
+## 3. Constraints found
+
+| Constraint | Consequence |
+| --- | --- |
+| A two-mesh fabric's control plane all-gathers over every rank at init (`ControlPlane::init_control_plane`) | prefill and decode servers are the two ranks of ONE `tt-run`/MPI job: they start together, and one dying ends the job |
+| Router settings must be identical on all ranks (payload, routing planes, tensix config, manager mode) | decode must open with the prefill's packet payload: 6208 B (`MOE_BLOCK_SPLIT_ROWS=on`, default) or 10880 B (`off`); decode today uses the 4352 B default |
+| The sender kernel needs a 2D fabric (a remote mesh is reached through its exit chip); a 2D packet header has to be routed by mesh 1's routers | decode must run a 2D fabric (`FABRIC_2D_TORUS_XY`, as the prefill); it already does: the `base` profile of `deepseek_v4_flash/configs/system_configs.yaml` sets it (`FABRIC_1D_RING_X` is only the dataclass fallback in `tt/system_config.py`) |
+| `STRICT_INIT` reliability (both servers' default) wants every link of the MGD up | the xhost test used `RELAXED_INIT`; check `STRICT_INIT` against the two-mesh MGD or switch both servers |
+| `/big_home` is per host; tt-run hands every rank the launch host's paths | host 41 runs a checkout of this branch at the same path, built (copying single files only worked for the test) |
+| Remote-mesh traffic leaves through exit chips | link balance is decided by routing, not by us; measure (phase 4) |
+
+Correctness, independent of transport: the metal_2 prefill states do not yet match metal_1's own prefill states
+(`PREFILL_D_P_INTEGRATION.md` 6.1: layer 0 matches, layers 1-20 diverge, PCC 0.5-0.8). The fabric path moves the
+same values, so decode output will be wrong until that is found. Tracked separately (section 7); the push path is
+validated byte-for-byte against the existing host-path commit of the same states, which does not depend on it.
+
+## 4. What moves, from where to where
+
+Decode targets (`tt/model.py`, `prepare_static_decode`, `commit_prefill_state`). Decode stage `s` is mesh-1 row `s`,
+a `1 x 4` submesh created at `(s, 0)`; a stage's caches are replicated over its 4 chips, at one address per stage (each
+submesh has its own allocator, so addresses differ between stages).
+
+| Data | Decode buffer (per stage, every chip of it) | Pages written | Prefill source (metal_2, mesh 0) | Transform |
+| --- | --- | --- | --- | --- |
+| window ring, layers 0-19 | `scaches[li].kv`, bf16 TILE `[1, 1, slots*128, 512]` | 64 tiles at page `slot*64` (rows `slot*128 ..+128`) | `st.window[li]` ring blocks (`_window_rows`) | tilize 128 x 512 |
+| layer 20 ring, layers 21-39 rings | same | zeros | none (`DECODER_SKIP=decode` never writes layer 20's) | decode zeroes locally |
+| compressed KV, sources 2, 8, 14 (ratio 2), 20 (ratio 1) | `comp_kv`, bf16 ROW_MAJOR `[pool_blocks, 1, 64, 512]` on every stage that selects from the source | entry `e` -> page `page_row[e // 64] * 64 + e % 64` (1 KiB) | `st.compress[src].ckv`, TP-dedup slab: 32 owners, 160 tokens a chip a 640-token row block | none (bf16 rows), page by page |
+| index keys, same sources | `idx_key_cache`, bf16 TILE `[pool_blocks, 1, 64, 128]` | block `b` -> 8 tiles at page `page_row[b] * 8` (2 KiB each) | `st.compress[src].index_k` (`INDEX_K_SERVED=bf16`), SP-sharded TP-replicated: 8 owners (any of a row's 4 chips) | tilize 64 x 128 a block |
+| `dense_kv` | decode's own copy of the first `index_topk` entries | — | — | decode runs `_sync_dense_entries` after "done" |
+
+Volumes for one copy at 1,044,480 tokens: ratio-2 source 522,240 entries = 510 MiB KV + 127.5 MiB keys; source 20:
+1020 MiB + 255 MiB; rings 20 x 128 KiB. About 3.2 GB a copy (the TCP path's 3.35 GB). The push writes one copy per
+chip of every consuming stage (x4 replicas x consuming stages), so the fabric carries several times that; at the
+xhost test's link count this is the number to measure first (phase 2).
+
+metal_2 slab facts the push kernel relies on (`deepseek_v41_flash_d_p/tt/compressor.py` `TtServedRows`,
+`tt/served.py` `CacheSlab`):
+
+* a slab is the pages `batch * rows + local_row` of the serving engine's cache tensor `[slots x layers, 1, rows,
+  width]`, bf16 ROW_MAJOR, ND-sharded one 32-token record a shard: read pages through a `TensorAccessor` of that
+  tensor (as `tt/page_copy.py` does), not by computing addresses;
+* natural entry `e` of a source: `hs = stripe / ratio` rows per owner per block, `period = owners * hs`; block
+  `e // period`, owner `(e % period) // hs`, local row `(e // period) * hs + e % hs` (the inverse of
+  `d_p_bridge._compressed_rows`);
+* compressed KV (dedup): `hs` = 80 (ratio 2) / 160 (ratio 1): a 64-entry decode block spans two owners, fine for 1 KiB
+  row pages; index keys (replicated): `hs` = 320 / 640, so a decode key block (64 entries) always lies on one owner
+  row, which can tilize it alone.
+
+## 5. Design
+
+### 5.1 Protocol (`tt/prefill/d_p_wire.py`, version 3)
+
+New op `prefill_push`: `{"op": "prefill_push", "have": H, "cache": bool, "targets": {...}}` + the ids blob. Reply:
+zero or more `{"progress"}`, then `{"seq_len", "base", "cached", "seconds", "push_seconds", "queued", "pushed":
+{"bytes", "pages"}}` and no blobs. The existing `prefill` op stays (fallback, and the reference for byte checks).
+
+`targets` (built by decode, section 5.2):
+
+```
+{"mesh_id": 1,
+ "slot": <decode slot of the session>, "seq_len": T, "first_entry": {src: e0},
+ "stages": [{"stage": s, "chips": [{"coord": [s, c], "chip_id": ..., "banks": [[x, y, off], ...]}, ...],
+             "rings": {li: addr, ...},                       # layers 0-19 on this stage
+             "pools": {src: {"kv": addr, "keys": addr}}}],   # sources this stage selects from
+ "page_rows": {ratio: [physical block of logical block 0, 1, ...]}}
+```
+
+### 5.2 Decode side (`tt/model.py`, `demo/server.py`)
+
+* `DeepSeekV41Model.remote_commit_targets(session_id, total, start=0) -> dict`: validates like
+  `commit_prefill_state` (lengths, alignment, `start == _session_pos`), `ensure_session_capacity(total - 1)`, checks
+  no target block is shared (`block_refs`) or unmapped, and returns `targets`. Fabric node ids and bank tables come
+  from `mesh.get_fabric_node_id` / `ttnn.cluster.get_dram_bank_table` (computed once at startup).
+* `DeepSeekV41Model.finish_remote_commit(session_id, total)`: zero the rings the push does not write (layer 20,
+  layers 21-39), `_session_pos = total`, `_sync_dense_entries`. Same end state as `commit_prefill_state`.
+* `demo/server.py`: `_RemotePrefiller(_V41Prefiller)` for `--prefill-backend remote --prefill-server HOST:PORT`:
+  `aligned()` keeps the "leave the last 128 tokens to decode" rule; `run()` does `user.activate()`, then
+  `remote_commit_targets`, `PrefillClient.prefill_push`, `finish_remote_commit`, seeds the Engram history
+  (`hash_session(slot, ids, 0)`), sets `user.pos`; no local prefill model, no resident-state snapshot/reload. On an
+  error reply or a dead connection the session is reset and its blocks are NOT handed to another session until the
+  prefill server has replied (a late write must not land in reused pages).
+* Phase 3 runs it on the scheduler thread (other users wait, as with the local prefill); phase 4 makes it async.
+
+### 5.3 Prefill side (`demo/prefill_server.py`, `tt/prefill/d_p_bridge.py`, new `tt/prefill/d_p_push.py`)
+
+* `DPPrefill.push_targets(slot, T, base, targets)`: builds and runs one mesh program over mesh 0, then
+  `synchronize_device`; returns bytes and seconds.
+* Sender assignment: each (decode stage, decode chip) target is served by a fixed prefill chip so every prefill chip
+  sends about the same volume; KV pages are sent by their owner chip (dedup slab: each chip owns 1/32 of every
+  source), key blocks by one of their owner row's 4 chips (round-robin over columns), ring tiles from a staging tensor.
+* One kernel (generalising `sender_write.py`'s): per destination chip a route (`fabric_set_unicast_route` per packet,
+  one connection: every mesh-1 chip is behind the same exit), work lists as runtime args:
+  * KV: runs of source pages (slab page ids via `TensorAccessor`) -> destination page ids, 1 KiB packets;
+  * keys: per block, 64 source rows read as 32-byte face rows straight into tile order in L1 (8 tiles), then 8 x
+    2 KiB packets;
+  * rings: 64 tile pages from a staging tensor -> page `slot*64`.
+  Work lists too long for runtime args (1M tokens: hundreds of thousands of pages) go in a DRAM table the kernel
+  streams (block ids only: destination pages follow from `page_rows`, so the table is `page_rows` itself plus ranges).
+* Rings: read on the host (`_window_rows`, ~2.5 MiB for 20 layers), tilized on the host, uploaded as one TILE staging
+  tensor on the sending chips. Cheap; a device path only if it shows in the profile.
+* `PrefillService.prefill_push`: same lock / prefix-cache flow as `prefill`, then the push instead of
+  `host_states` + `send_states`.
+
+### 5.4 Synchronization
+
+Phase 2-3: the TCP reply goes after `synchronize_device` on mesh 0 (all sender programs finished), as tested.
+Phase 4 option: fused write + atomic increment on the last packet of each (sender, destination chip) stream into a
+per-session counter in decode L1/DRAM; decode waits for the expected count before `finish_remote_commit`. Cheap, and it
+turns the timing assumption into a check.
+
+## 6. Work plan
+
+Each phase ends with a run the user launches (device commands are not run by the agent).
+
+### Phase 0: prerequisites (no new feature code)
+
+1. Host 41: check out this branch at `/big_home/ttuser/smanoj/metal_1_prefill`, `./build_metal.sh`, copy the venv
+   setup. Both ranks then run the same commit; the xhost test's per-rank path overrides go away.
+2. Decode on the prefill's fabric settings, single host: a payload option on decode's mesh open (done: device setting
+   `fabric_payload_bytes`, env `DEEPSEEK_V4_FABRIC_PAYLOAD`, applied in `chat_cli.py:open_mesh_device`); decode already
+   opens `FABRIC_2D_TORUS_XY` with `STRICT_INIT`, as the prefill does. Run the decode server's own tests with
+   `DEEPSEEK_V4_FABRIC_PAYLOAD=6208`: functional
+   (`demo/test_two_users_chat.py`, `test_server_users.py`) and perf (`test_server_perf.py`) against the current
+   defaults. Gate: same outputs, perf within noise. If decode cannot run 2D, stop and revisit (section 8).
+3. Both servers in one job: a launch script (done: `demo/run_d_p_servers.sh`, a bash case on `OMPI_COMM_WORLD_RANK`) that starts
+   `prefill_server.py` on rank 0 and the decode server on rank 1 with the two-mesh MGD; settle `STRICT_INIT` vs
+   `RELAXED_INIT`. Gate: both come up, the existing TCP `prefill` path works between them (prefill_client from 41).
+
+### Phase 1: decode-side API, tested with a synthetic sender
+
+1. `remote_commit_targets` / `finish_remote_commit` (section 5.2).
+2. Test `tests/xhost_kv/decode_commit.py` (two ranks): rank 1 builds the decode model's caches (no weights needed if
+   `prepare_static_decode` can run without them; else the real model), makes a session, publishes targets; rank 0
+   runs `sender_write.py`'s kernel generalised to the targets with random entries; rank 1 compares, per stage and
+   chip, `_gather_paged_entries` and the ring rows against the same random states committed through
+   `commit_prefill_state` into a second session. Gate: byte-exact.
+
+### Phase 2: prefill-side push from metal_2's caches
+
+1. `d_p_push.py` kernel + `DPPrefill.push_targets` (section 5.3).
+2. Test `tests/xhost_kv/d_p_push.py` (two ranks, real models): rank 0 prefills a 16k prompt with `DPPrefill`, then
+   both pushes it into session A and replies with `host_states`; rank 1 commits the host states into session B with
+   `to_prefill_states` + `commit_prefill_state` and compares A with B (rings of 0-19, every consuming stage's
+   paged entries and keys). Gate: byte-exact at 16k and 128k; push time and GB/s logged.
+3. Scale: 1M tokens; measure push time vs the host path (readback + send + decode commit). Gate: faster than the host
+   path, or a profile saying where the time goes (exit chips, small packets, work-list streaming).
+
+### Phase 3: servers
+
+1. Protocol v3 `prefill_push` (5.1), `PrefillService.prefill_push`, `_RemotePrefiller` (5.2, synchronous).
+2. `demo/prefill_client.py --push` stays a host-only client for the error paths; the end-to-end check is a decode
+   server request: same first tokens as the TCP `prefill` backend for the same prompt (and, once 6.1 is fixed, as
+   decode's own local prefill).
+3. Failure handling: prefill error reply, prefill crash (ends the job: document), decode request cancelled mid-push
+   (blocks stay reserved until the reply).
+
+### Phase 4: production
+
+1. Async remote prefill on decode (other users keep decoding; a turn waits in a "remote prefill" state).
+2. Prefix cache: `have > 0` pushes entries from `have` on (key blocks rewritten whole from the block holding `have /
+   ratio`); `start > 0` sessions (`commit_prefill_state(start=...)` semantics).
+3. Arrival counters (5.4).
+4. Bandwidth: per-link accounting from the route map, spreading destinations over exit chips, larger packets for KV
+   (several 1 KiB rows a packet when destination pages are contiguous within a block).
+
+## 7. Separate track: prefill state correctness
+
+`PREFILL_D_P_INTEGRATION.md` 6.1: metal_2 vs metal_1 prefill states diverge from layer 1 on. Suspects in order:
+Engram (layers 1, 14; tokenizer normalisation of the n-gram hash), layer 0's MoE routing (hash vs score), the mHC
+residual mix. Needs a CPU reference at 16k for both. Until it is fixed, end-to-end checks compare against the TCP
+`prefill` path (same states), not against decode's local prefill.
+
+## 8. Risks and open questions
+
+* Decode on `FABRIC_2D_TORUS_XY` + 6208 B payload (phase 0.2): decode's CCLs, D2D sockets and migration sockets were
+  built and tuned on `FABRIC_1D_RING_X`. If they fail or slow down, alternatives: a 2D fabric on decode with 1D-style
+  CCLs, or ask whether the two-mesh setup can carry a 1D mesh 1 (unlikely: the packet header format differs).
+* The one unexplained hang + PCIe drop (section 2). If it recurs under the push: triage on both hosts before killing,
+  and suspect contention through the exit chips (rows 0-1) first.
+* Coupled lifecycle: a crash of either server ends both (one MPI job). Decoupling needs a tt-metal change (a
+  `DistributedContext` that replays the control plane's recorded init exchanges from a file) and is out of scope here.
+* DRAM contention: the push writes decode's DRAM while decode serves other users; measure decode step time during a
+  1M push.
+* Address stability: targets are valid only while decode keeps the session's blocks and its cache buffers; decode
+  must not reallocate caches (e.g. re-run `prepare_static_decode`) with a push in flight.
