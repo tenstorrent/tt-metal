@@ -243,6 +243,10 @@ Per 8192-token request on the server: prefill 0.32 s, readback of layers 0-20 to
 lock), TCP send 0.04 s (~7 Gb/s). The readback, not the network, is the next cost to cut (fewer, larger
 device-to-host reads, or overlap it with the next request's prefill).
 
+Prefix cache (protocol version 2): the server keeps every prompt's state in one of `--cache-slots` device slots and
+continues a prompt that extends a kept one instead of starting from 0; a decode server sends `have` and gets only
+the entries past it. See `PREFILL_D_P_PREFIX_CACHE.md`, which also lists the decode-side changes.
+
 Not done yet (decode side, on 41): a `--prefill-backend d_p` prefiller in the v4.1 server that sends ids,
 commits the entries with `to_prefill_states` + `commit_prefill_state`, and seeds the session's Engram history with
 `hash_session(slot, ids, 0)`. Ideally asynchronous, so other users keep decoding during a remote prefill.

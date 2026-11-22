@@ -63,7 +63,7 @@ def test_expert_x_pieces(mesh_device):
     from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
     from models.demos.moe_block_main.tt.flat_gather import flat_weights_module
     from models.demos.moe_block_main.tt.moe_block import MoEBlock
-    from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
+    from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged
 
     t_start = time.time()
     mb, fw = ad._mb(), flat_weights_module()

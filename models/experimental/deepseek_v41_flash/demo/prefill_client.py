@@ -12,6 +12,9 @@ Examples::
     python .../prefill_client.py --server 10.82.97.40:9041 --ids-file d_p_states_16k.pt --compare d_p_states_16k.pt
     # four decode servers at once (their prefills queue on the server), plus the error paths
     python .../prefill_client.py --server 10.82.97.40:9041 --random 8192 --clients 4 --check-errors
+    # the prefix cache: a prompt's first half, then the whole prompt continued from it (only the new entries sent),
+    # then the same prompt again; the continued entries compared with a cold prefill's
+    python .../prefill_client.py --server 10.82.97.40:9041 --random 16384 --prefix-check
 """
 
 from __future__ import annotations
@@ -53,18 +56,26 @@ def _prompt(args, info: dict) -> list[int]:
     return ids[:n]
 
 
-def _check(states: dict, info: dict, n: int) -> list[str]:
+def _rate(tokens: int, seconds: float) -> str:
+    return f"{tokens / seconds:.0f} tok/s" if seconds > 0 else "nothing computed"
+
+
+def _check(states: dict, info: dict, n: int, have: int = 0) -> list[str]:
     """Shapes and finiteness of one reply against the server's contract (``d_p_wire`` docstring)."""
     bad = []
     if states["seq_len"] != n:
         bad.append(f"seq_len {states['seq_len']} for a {n}-token prompt")
+    if states["base"] != have:
+        bad.append(f"entries from {states['base']}, asked from {have}")
+    if not 0 <= states["cached"] <= n:
+        bad.append(f"{states['cached']} cached tokens of {n}")
     if sorted(states["layers"]) != sorted(info["layers"]):
         bad.append(f"layers {sorted(states['layers'])}, the server announced {info['layers']}")
     for i, layer in states["layers"].items():
         want = {"kv_tail": info["window"]}
         ratio = info["kv_sources"].get(str(i))
         if ratio:
-            want.update(compressed_kv=n // ratio, idx_keys=n // ratio)
+            want.update(compressed_kv=(n - have) // ratio, idx_keys=(n - have) // ratio)
         if set(layer) != set(want):
             bad.append(f"layer {i}: fields {sorted(layer)}, want {sorted(want)}")
             continue
@@ -100,11 +111,11 @@ def _run_client(k: int, args, ids: list[int], results: list) -> None:
             states = client.prefill(ids, on_progress=chunks.append)
             wall = time.perf_counter() - t0
             results.append((k, r, wall, states, len(chunks)))
-            n, mb = states["seq_len"], states["bytes"] / 1e6
+            n, mb, cached = states["seq_len"], states["bytes"] / 1e6, states["cached"]
             print(
-                f"client {k} request {r}: {n} tokens, server prefill {states['seconds']:.2f} s "
-                f"({n / states['seconds']:.0f} tok/s), queued {states['queued']:.2f} s, round trip {wall:.2f} s "
-                f"({n / wall:.0f} tok/s), {mb:.1f} MB back, {len(chunks)} progress messages",
+                f"client {k} request {r}: {n} tokens ({cached} from the prefix cache), server prefill "
+                f"{states['seconds']:.2f} s ({_rate(n - cached, states['seconds'])}), queued {states['queued']:.2f} s, "
+                f"round trip {wall:.2f} s ({n / wall:.0f} tok/s), {mb:.1f} MB back, {len(chunks)} progress messages",
                 flush=True,
             )
 
@@ -123,8 +134,63 @@ def _check_errors(server: str, info: dict) -> list[str]:
                 bad.append(f"{what}: accepted")
             except PrefillServerError as e:
                 print(f"error path ({what}): {e}")
+        for what, have in (("unaligned have", info["align"] // 2), ("have past the prompt", 2 * info["align"])):
+            try:
+                client.prefill([1] * info["align"], have=have)
+                bad.append(f"{what}: accepted")
+            except PrefillServerError as e:
+                print(f"error path ({what}): {e}")
         if not client.ping():
             bad.append("no pong after the errors")
+    return bad
+
+
+def _prefix_check(server: str, info: dict, ids: list[int], prefix: int, min_pcc: float) -> list[str]:
+    """The prefix cache, as a decode server continuing a conversation uses it: the prompt's first ``prefix`` tokens
+    computed cold; the whole prompt continued from them, sent with have=prefix (a hit: ``cached`` = prefix, only the
+    entries of [prefix, n) back); the whole prompt cold (no lookup), whose entries the continued ones must match; the
+    same prompt again with have=n (a hit with nothing to compute: the windows only)."""
+    bad = []
+    n, align = len(ids), info["align"]
+    if not 0 < prefix < n or prefix % align:
+        return [f"--prefix-len {prefix}: a multiple of {align} inside the {n}-token prompt"]
+    with PrefillClient(server) as client:
+
+        def ask(what, part, have=0, cache=True):
+            t0 = time.perf_counter()
+            got = client.prefill(part, have=have, cache=cache)
+            print(
+                f"{what}: {len(part)} tokens, {got['cached']} cached, prefill {got['seconds']:.2f} s "
+                f"({_rate(len(part) - got['cached'], got['seconds'])}), round trip {time.perf_counter() - t0:.2f} s, "
+                f"{got['bytes'] / 1e6:.1f} MB back",
+                flush=True,
+            )
+            bad.extend(f"{what}: {b}" for b in _check(got, info, len(part), have))
+            return got
+
+        ask("prefix, cold", ids[:prefix], cache=False)
+        hit = ask("continued", ids, have=prefix)
+        cold = ask("whole prompt, cold", ids, cache=False)
+        again = ask("same prompt again", ids, have=n)
+    # (a slot an earlier run left holding more of the same prompt continues further: only a miss fails)
+    if hit["cached"] < prefix:
+        bad.append(f"continued: {hit['cached']} tokens from the cache, want at least {prefix}")
+    if again["cached"] != n:
+        bad.append(f"same prompt again: {again['cached']} tokens from the cache, want {n}")
+    pairs = []  # (what, reply's tensor, the cold prefill's rows it must match)
+    for i, layer in cold["layers"].items():
+        ratio = info["kv_sources"].get(str(i))
+        pairs.append((f"same prompt again layer {i} kv_tail", again["layers"][i]["kv_tail"], layer["kv_tail"]))
+        for name, want in layer.items():
+            rows = want[prefix // ratio :] if name != "kv_tail" else want
+            pairs.append((f"continued layer {i} {name}", hit["layers"][i][name], rows))
+    for what, got, want in pairs:
+        p = _pcc(got, want) if got.shape == want.shape else float("nan")
+        if not p >= min_pcc:
+            bad.append(
+                f"{what}: PCC {p:.6f} against the cold prefill (< {min_pcc}), shapes {tuple(got.shape)} / "
+                f"{tuple(want.shape)}"
+            )
     return bad
 
 
@@ -143,6 +209,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--min-pcc", type=float, default=0.99)
     p.add_argument("--save", help="save the first reply's entries here (d_p_bridge host format)")
     p.add_argument("--check-errors", action="store_true", help="also check the server's error replies")
+    p.add_argument("--prefix-check", action="store_true", help="check the prefix cache (and only it) with the prompt")
+    p.add_argument(
+        "--prefix-len", type=int, default=None, help="--prefix-check's cached prefix (default: half the prompt)"
+    )
     args = p.parse_args(argv)
 
     with PrefillClient(args.server) as client:
@@ -152,6 +222,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"server {args.server}: {info}, ping {1e3 * (time.perf_counter() - t0):.1f} ms")
     ids = _prompt(args, info)
     print(f"prompt: {len(ids)} tokens")
+    if args.prefix_check:
+        prefix = args.prefix_len if args.prefix_len is not None else len(ids) // 2 // info["align"] * info["align"]
+        bad = _prefix_check(args.server, info, ids, prefix, args.min_pcc)
+        print(("FAIL\n  " + "\n  ".join(bad)) if bad else "PASS")
+        return 1 if bad else 0
 
     results: list = []
     errors: list = []

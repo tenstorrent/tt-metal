@@ -34,13 +34,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import comp_pcc, is_blackhole
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.moe import glm_moe_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params, torus_y_device_params
 from models.demos.moe_block_main.tt.moe_impl import model_l1_small_with_block, moe_block_fabric_payload
-from tests.ttnn.utils_for_testing import comp_pcc
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "ttnn/ttnn/bringup/moe_block_main_ttnn/tests"))
 from op_checks import (  # noqa: E402

@@ -9,15 +9,22 @@ A message is an 8-byte big-endian header length, a JSON header, then the raw blo
 
 * ``{"op": "ping"}`` -> ``{"pong": true}``.
 * ``{"op": "info"}`` -> ``{"version", "max_seq", "chunk", "align", "layers", "kv_sources", "window", "vocab",
-  "mesh"}`` (``kv_sources``: layer -> compression ratio).
-* ``{"op": "prefill"}`` + one blob, the prompt's ids (int32, a multiple of ``align`` tokens, at most ``max_seq``)
-  -> zero or more ``{"progress": end}`` (each chunk enqueued), then the KV entries: ``{"seq_len", "seconds",
-  "queued", "fields": [[layer, name, rows, cols], ...]}`` with one bf16 ``[rows, cols]`` blob per field:
+  "mesh", "cache_slots"}`` (``kv_sources``: layer -> compression ratio; ``cache_slots``: prompts kept on the device).
+* ``{"op": "prefill", "have": H, "cache": true}`` + one blob, the prompt's ids (int32, a multiple of ``align`` tokens,
+  at most ``max_seq``) -> zero or more ``{"progress": end}`` (each chunk enqueued), then the KV entries:
+  ``{"seq_len", "base", "cached", "seconds", "queued", "fields": [[layer, name, rows, cols], ...]}`` with one bf16
+  ``[rows, cols]`` blob per field:
 
   * ``kv_tail`` of every layer: the window's K=V rows of positions ``[seq_len - window, seq_len)``, in order,
-  * ``compressed_kv`` and ``idx_keys`` of each KV source layer: ``seq_len / ratio`` rows.
+  * ``compressed_kv`` and ``idx_keys`` of each KV source layer: the ``(seq_len - base) / ratio`` entries of positions
+    ``[base, seq_len)``.
 
-  ``seconds`` is the prefill's device time, ``queued`` how long the request waited for another one to finish.
+  ``have`` (optional, default 0): the client already holds the entries of the prompt's first ``have`` tokens (a
+  multiple of ``align``, at most the prompt), so only later ones are sent: ``base`` = ``have``. ``cached``: the
+  prompt's first ``cached`` tokens were a prefix cache hit, continued from a prompt the server kept on the device
+  rather than computed (0: a miss, computed from position 0; ``seq_len``: nothing computed). ``cache`` false: no
+  lookup (computed from 0; the result is still kept). ``seconds`` is the prefill's device time, ``queued`` how long the
+  request waited for another one to finish.
 
 Any reply may instead be ``{"error": message}``; the connection stays usable after it.
 """
@@ -31,7 +38,7 @@ from typing import Callable, Optional, Sequence
 
 import torch
 
-VERSION = 1
+VERSION = 2
 _LEN = struct.Struct(">Q")
 _MAX_HEADER = 1 << 24
 
@@ -52,7 +59,8 @@ def _recv_exact(sock: socket.socket, n: int) -> bytearray:
 
 
 def send_msg(sock: socket.socket, header: dict, blobs: Sequence = ()) -> None:
-    views = [memoryview(b).cast("B") for b in blobs]
+    # (cast refuses a view with a zero in its shape: a field with no rows past ``base``)
+    views = [memoryview(b).cast("B") if memoryview(b).nbytes else memoryview(b"") for b in blobs]
     head = json.dumps({**header, "blobs": [v.nbytes for v in views]}).encode()
     sock.sendall(_LEN.pack(len(head)) + head)
     for v in views:
@@ -71,23 +79,35 @@ def _bf16_bytes(t: torch.Tensor) -> memoryview:
     return memoryview(t.to(torch.bfloat16).contiguous().view(torch.int16).numpy())
 
 
-def send_states(sock: socket.socket, host: dict, seconds: float, queued: float = 0.0) -> None:
+def send_states(sock: socket.socket, host: dict, seconds: float, queued: float = 0.0, cached: int = 0) -> None:
     fields, blobs = [], []
     for i in sorted(host["layers"]):
         for name, t in host["layers"][i].items():
             fields.append([int(i), name, int(t.shape[0]), int(t.shape[1])])
             blobs.append(_bf16_bytes(t))
-    header = {"seq_len": int(host["seq_len"]), "seconds": float(seconds), "queued": float(queued), "fields": fields}
+    header = {
+        "seq_len": int(host["seq_len"]),
+        "base": int(host.get("base", 0)),
+        "cached": int(cached),
+        "seconds": float(seconds),
+        "queued": float(queued),
+        "fields": fields,
+    }
     send_msg(sock, header, blobs)
 
 
 def _states(header: dict, blobs: list[bytearray]) -> dict:
     layers: dict = {}
     for (i, name, rows, cols), blob in zip(header["fields"], blobs):
-        t = torch.frombuffer(blob, dtype=torch.int16).view(torch.bfloat16).reshape(rows, cols)
+        if rows * cols:
+            t = torch.frombuffer(blob, dtype=torch.int16).view(torch.bfloat16).reshape(rows, cols)
+        else:  # (no entries past ``base``: frombuffer refuses an empty buffer)
+            t = torch.zeros(rows, cols, dtype=torch.bfloat16)
         layers.setdefault(int(i), {})[name] = t
     return {
         "seq_len": int(header["seq_len"]),
+        "base": int(header.get("base", 0)),
+        "cached": int(header.get("cached", 0)),
         "seconds": float(header["seconds"]),
         "queued": float(header.get("queued", 0.0)),
         "bytes": sum(len(b) for b in blobs),
@@ -98,8 +118,9 @@ def _states(header: dict, blobs: list[bytearray]) -> dict:
 class PrefillClient:
     """A decode server's connection to the prefill server at ``address`` (``host:port``), one request at a time.
 
-    :meth:`prefill` returns the KV entries in :mod:`.d_p_bridge`'s host format (``{"seq_len", "layers": {i: {...}}}``,
-    plus ``seconds``, ``queued`` and ``bytes``), ready for :func:`~.d_p_bridge.to_prefill_states`."""
+    :meth:`prefill` returns the KV entries in :mod:`.d_p_bridge`'s host format (``{"seq_len", "base", "layers":
+    {i: {...}}}``, plus ``cached``, ``seconds``, ``queued`` and ``bytes``), ready for
+    :func:`~.d_p_bridge.to_prefill_states` (``base`` 0) or a commit that continues the session from ``base``."""
 
     def __init__(self, address: str, timeout: float = 3600.0):
         host, _, port = address.rpartition(":")
@@ -130,9 +151,21 @@ class PrefillClient:
     def ping(self) -> bool:
         return bool(self._call({"op": "ping"})[0].get("pong"))
 
-    def prefill(self, ids: Sequence[int], on_progress: Optional[Callable[[int], None]] = None) -> dict:
-        """KV entries of ``ids`` prefilled from position 0. ``on_progress(end)`` as the server enqueues each chunk."""
-        send_msg(self.sock, {"op": "prefill"}, [torch.tensor(list(ids), dtype=torch.int32).numpy()])
+    def prefill(
+        self,
+        ids: Sequence[int],
+        on_progress: Optional[Callable[[int], None]] = None,
+        have: int = 0,
+        cache: bool = True,
+    ) -> dict:
+        """KV entries of ``ids``, those of positions ``[have, len(ids))`` (this client holds the first ``have``
+        tokens' already). ``cached`` in the reply: the tokens the server continued from its prefix cache instead of
+        computing; ``cache`` False skips the lookup. ``on_progress(end)`` as the server enqueues each chunk."""
+        send_msg(
+            self.sock,
+            {"op": "prefill", "have": int(have), "cache": bool(cache)},
+            [torch.tensor(list(ids), dtype=torch.int32).numpy()],
+        )
         while True:
             header, blobs = self._reply()
             if "progress" not in header:

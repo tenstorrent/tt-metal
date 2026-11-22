@@ -242,7 +242,7 @@ from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import make
 from models.experimental.deepseek_v4_flash.tt.decode.decoder_layer import DeepSeekV4DecoderLayer  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.decode.moe import DeepSeekV4PreloadedExperts  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache  # noqa: E402
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session  # noqa: E402
+from tt_py_test_utils_common.tensor_prefetcher import tensor_prefetcher_session  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.weight_loader import (  # noqa: E402
     DeepseekV4WeightLoader,

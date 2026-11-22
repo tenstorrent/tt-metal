@@ -64,7 +64,7 @@ from models.experimental.deepseek_v4_flash.tt.decode.attention import (  # noqa:
 )
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader  # noqa: E402
-from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session  # noqa: E402
+from tt_py_test_utils_common.tensor_prefetcher import tensor_prefetcher_session  # noqa: E402
 
 pytestmark = pytest.mark.skipif(not ttnn.device.is_blackhole(), reason="indexer_score_dsa is Blackhole-only")
 
