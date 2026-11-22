@@ -11,6 +11,7 @@ import ttnn
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.flux2.prompt_encoder import PromptEncoder
+from ....utils import cache
 from ....utils.check import assert_quality
 from .device_params import prompt_encoder_params_flux2
 
@@ -47,7 +48,7 @@ def test_encode(mesh_device: ttnn.MeshDevice, checkpoint_name: str) -> None:
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
     )
-    tt_encoder.load_weights()
+    cache.load_model(tt_encoder.encoder, **tt_encoder.spec)
 
     torch_encoder = PromptEncoder(
         checkpoint_name=checkpoint_name,
@@ -101,7 +102,7 @@ def test_upsample(mesh_device: ttnn.MeshDevice) -> None:
         ccl_manager=ccl_manager,
     )
 
-    tt_encoder.load_weights()
+    cache.load_model(tt_encoder.encoder, **tt_encoder.spec)
 
     logger.info("running TT model...")
     tt_output = tt_encoder.upsample(prompts, max_length=224, temperature=temperature)

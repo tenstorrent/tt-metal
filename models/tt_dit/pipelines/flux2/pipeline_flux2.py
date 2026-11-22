@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import itertools
 import math
 import os
 from typing import TYPE_CHECKING, TypeVar
@@ -30,6 +29,7 @@ from ...utils import cache
 from ...utils.padding import PaddingConfig
 from ...utils.tensor import fast_device_to_host, float_to_uint8, from_torch, to_torch
 from ...utils.tracing import StateTensor, Tracer
+from ..pipeline_api import PipelineAPIMixin
 from .prompt_encoder import PromptEncoder
 
 if TYPE_CHECKING:
@@ -98,17 +98,6 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 }
 
 
-def _release_module_trace(module: object | None) -> None:
-    """Release the trace captured on ``module.forward``, if it has one."""
-    forward = getattr(type(module), "forward", None)
-    tracers = getattr(forward, "_tracers", None)
-    if tracers is None:
-        return
-    tracer = tracers.get(module)
-    if tracer is not None:
-        tracer.release_trace()
-
-
 class Flux2TransformerState:
     def __init__(self) -> None:
         self._tt_embedded_prompt = StateTensor()
@@ -136,7 +125,7 @@ class _DenoiseState:
         self.combined_rope_sin = StateTensor()
 
 
-class Flux2Pipeline:
+class Flux2Pipeline(PipelineAPIMixin):
     def __init__(
         self,
         *,
@@ -298,10 +287,34 @@ class Flux2Pipeline:
             self._torch_vae.bn.running_var.float() + self._torch_vae.config.batch_norm_eps
         )
 
-        if self.dynamic_load:
-            self.transformer.register_coresident_exclusions(self._prompt_encoder._encoder, self._vae_decoder)
-            self._prompt_encoder._encoder.register_coresident_exclusions(self.transformer)
-            self._vae_decoder.register_coresident_exclusions(self.transformer)
+        encoder = self._prompt_encoder.encoder
+        dynamic = self.dynamic_load
+        self.residency.register(
+            self.transformer,
+            {
+                "get_torch_state_dict": self._torch_transformer.state_dict,
+                "model_name": os.path.basename(self.checkpoint_name),
+                "subfolder": "transformer",
+                "parallel_config": self._parallel_config,
+                "mesh_shape": tuple(self._mesh_device.shape),
+                "mesh_device": self._mesh_device,
+                "is_fsdp": self.is_fsdp,
+            },
+            evicts=[encoder, self._vae_decoder] if dynamic else [],
+        )
+        self.residency.register(encoder, self._prompt_encoder.spec, evicts=[self.transformer] if dynamic else [])
+        self.residency.register(
+            self._vae_decoder,
+            {
+                "get_torch_state_dict": self._torch_vae.state_dict,
+                "model_name": os.path.basename(self.checkpoint_name),
+                "subfolder": "vae",
+                "parallel_config": self._vae_parallel,
+                "mesh_shape": tuple(self._mesh_device.shape),
+                "mesh_device": self._mesh_device,
+            },
+            evicts=[self.transformer] if dynamic else [],
+        )
 
         # Load in reverse order of use so the first-used model (encoder) stays loaded before __call__.
         self._prepare_vae()
@@ -367,58 +380,16 @@ class Flux2Pipeline:
             traced=traced,
         )
 
-    def _release_denoise_trace(self) -> None:
-        """Release the captured denoise traces, if any."""
-        for state in self._denoise_states.values():
-            state.step_tracer.release_trace()
-
-    def _release_vae_traces(self) -> None:
-        for tracer in itertools.chain(self._vae_decoder_tracers.values(), self._vae_encoder_tracers.values()):
-            tracer.release_trace()
-
-    def release_traces(self) -> None:
-        """Release every trace captured by this pipeline or its submodules."""
-        self._release_denoise_trace()
-        self._release_vae_traces()
-        _release_module_trace(getattr(self._prompt_encoder, "_encoder", None))
-
     def _prepare_transformer(self) -> None:
-        # A trace bakes its weights' addresses, so drop the traces this load will evict.
-        if self.dynamic_load and not self.transformer.is_loaded():
-            self._release_vae_traces()
-            _release_module_trace(getattr(self._prompt_encoder, "_encoder", None))
-        cache.load_model(
-            tt_model=self.transformer,
-            get_torch_state_dict=self._torch_transformer.state_dict,
-            model_name=os.path.basename(self.checkpoint_name),
-            subfolder="transformer",
-            parallel_config=self._parallel_config,
-            mesh_shape=tuple(self._mesh_device.shape),
-            mesh_device=self._mesh_device,
-            is_fsdp=self.is_fsdp,
-        )
+        self.residency.load(self.transformer)
         ttnn.synchronize_device(self._mesh_device)
 
     def _prepare_prompt_encoder(self) -> None:
-        encoder = getattr(self._prompt_encoder, "_encoder", None)
-        encoder_is_loaded = getattr(encoder, "is_loaded", None)
-        if self.dynamic_load and encoder_is_loaded is not None and not encoder_is_loaded():
-            self._release_denoise_trace()
-        self._prompt_encoder.load_weights()
+        self.residency.load(self._prompt_encoder.encoder)
         ttnn.synchronize_device(self._mesh_device)
 
     def _prepare_vae(self) -> None:
-        if self.dynamic_load and not self._vae_decoder.is_loaded():
-            self._release_denoise_trace()
-        cache.load_model(
-            tt_model=self._vae_decoder,
-            get_torch_state_dict=self._torch_vae.state_dict,
-            model_name=os.path.basename(self.checkpoint_name),
-            subfolder="vae",
-            parallel_config=self._vae_parallel,
-            mesh_shape=tuple(self._mesh_device.shape),
-            mesh_device=self._mesh_device,
-        )
+        self.residency.load(self._vae_decoder)
         ttnn.synchronize_device(self._mesh_device)
 
     @staticmethod
