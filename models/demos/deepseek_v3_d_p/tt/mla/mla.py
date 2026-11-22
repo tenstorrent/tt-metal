@@ -831,12 +831,14 @@ class ttMLA:
                     f"dense mode below {self._push_dense_below} gathers up to {largest_extent} rows, more than the "
                     f"{buffer_rows}-row push buffer"
                 )
-            # EXPERIMENT: a full layer's own cutoff (SPARSE_MLA_FULL_PUSH_DENSE_BELOW, default ~300k tokens, whole
-            # slabs). Below it the full layer gathers its prefix beside top-k as before; at or above it, it pushes.
-            # Its push has no prefetch, so its crossover sits far above the shared layers'.
+            # EXPERIMENT: a full layer's own cutoff (SPARSE_MLA_FULL_PUSH_DENSE_BELOW, whole slabs). Below it the full
+            # layer gathers its prefix beside top-k as before; at or above it, it pushes. Its push has no prefetch, so
+            # its crossover sits far above the shared layers'. Measured crossovers (8x4, real weights, 1M request):
+            # GLM-5.3 ~200k (whose full layers also serve their shared successors' plan), Kimi K3.1 ~300k.
             full_rows = dense.shape[2] if self._push_buffer_parity[layer_idx] is None else self._push_rows
             env_full_below = os.environ.get("SPARSE_MLA_FULL_PUSH_DENSE_BELOW")
-            full_below = int(env_full_below) if env_full_below is not None else 300_000
+            default_full_below = 204_800 if getattr(config, "indexer_types", None) else 300_000
+            full_below = int(env_full_below) if env_full_below is not None else default_full_below
             full_slabs = min(divup(full_below, slab), max(0, full_rows // slab - 1))
             self._full_push_dense_below = full_slabs * slab
         # GLM-5.3 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
