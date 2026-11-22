@@ -151,7 +151,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("chunk_start") = nb::none(),
         nb::arg("chunk_start_tensor") = nb::none(),
         nb::arg("dense_below") = 0,
-        nb::arg("dense_below_2") = 0);
+        nb::arg("dense_below_2") = 0,
+        nb::arg("owner_major") = false);
 
     ttnn::bind_function<"sparse_kv_push", "ttnn.experimental.">(
         mod,
@@ -219,7 +220,18 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("batch_slot_num_layers") = 1,
         nb::arg("batch_slot_layer_idx") = 0,
         nb::arg("core_grid") = nb::none(),
-        nb::arg("second_dense") = false);
+        nb::arg("second_dense") = false,
+        nb::arg("inbox") = nb::none(),
+        nb::arg("reuse_inbox") = false);
+
+    mod.def(
+        "sparse_kv_push_inbox_slot_bytes",
+        [](uint32_t max_rows, uint32_t stripe_chunk, uint32_t num_devices) {
+            return inbox_slot_bytes(max_rows, stripe_chunk, num_devices);
+        },
+        nb::arg("max_rows"),
+        nb::arg("stripe_chunk"),
+        nb::arg("num_devices"));
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push::detail

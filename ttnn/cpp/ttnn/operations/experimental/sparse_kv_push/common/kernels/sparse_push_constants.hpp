@@ -101,6 +101,12 @@ struct PacketMeta {
     uint32_t rows;
 };
 constexpr uint32_t kMetaEntryBytes = 16;  // a PacketMeta, padded to the 16 B L1 alignment
+// Inbox mode, PacketMeta::rows of the reader's non-row packets: a table slice for owner `requester` (first_page holds
+// its bytes), and the end of this sender's slices.
+constexpr uint32_t kSliceRows = 0x80000001u;
+constexpr uint32_t kSlicesDoneRows = 0x80000002u;
+// A packet to skip: pads phase 0 to whole kBatch, so both kernels' batches stay aligned to the kData/kMeta ring.
+constexpr uint32_t kSkipRows = 0x80000003u;
 static_assert(sizeof(PacketMeta) <= kMetaEntryBytes);
 
 constexpr uint32_t kBatch = 4;                 // packets per reader barrier, and in flight per writer flush
@@ -113,6 +119,9 @@ constexpr uint32_t kWindowBytes = 2 * kDramReadAlign;
 constexpr uint32_t kMaxStripeChunk = (kWindowBytes - kDramReadAlign) * 8;  // rows whose bitmap is at most 64 B
 constexpr uint32_t kBlocksPerBatch = 16;  // blocks whose bitmaps are fetched behind one read barrier
 constexpr uint32_t kTableCbBytes = plan_table::kBitmapOff * sizeof(uint32_t) + kBlocksPerBatch * kWindowBytes;
+// Inbox mode: a table slice gathers an owner's block bitmaps from this chip's table this many windows per barrier.
+constexpr uint32_t kSliceBlocksPerBatch = 64;
+constexpr uint32_t kSliceTableCbBytes = plan_table::kBitmapOff * sizeof(uint32_t) + kSliceBlocksPerBatch * kWindowBytes;
 
 }  // namespace sparse_push
 

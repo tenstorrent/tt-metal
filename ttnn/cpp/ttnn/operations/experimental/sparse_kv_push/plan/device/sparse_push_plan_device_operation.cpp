@@ -137,6 +137,7 @@ ttsl::hash::hash_t SparsePushPlanDeviceOperation::compute_program_hash(
         attrs.chunk_start.has_value(),
         attrs.dense_below,
         attrs.dense_below_2,
+        attrs.owner_major,
         args);
 }
 
@@ -145,9 +146,13 @@ SparsePushPlanDeviceOperation::spec_return_value_t SparsePushPlanDeviceOperation
     const auto layout = PlanTableLayout::make(attrs.max_rows, attrs.stripe_chunk);
     const tt::tt_metal::TensorLayout rm(
         DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{BufferType::DRAM});
+    const uint32_t num_devices = args.indices.device()->shape().mesh_size();
+    const auto table_shape =
+        attrs.owner_major
+            ? Shape({1, 1, num_devices, inbox_slot_bytes(attrs.max_rows, attrs.stripe_chunk, num_devices) / 4})
+            : Shape({1, 1, layout.pages, PlanTableLayout::kPageWords});
     spec_return_value_t specs = {
-        tt::tt_metal::TensorSpec(Shape({1, 1, layout.pages, PlanTableLayout::kPageWords}), rm),
-        tt::tt_metal::TensorSpec(args.indices.logical_shape(), rm)};
+        tt::tt_metal::TensorSpec(table_shape, rm), tt::tt_metal::TensorSpec(args.indices.logical_shape(), rm)};
     if (attrs.dense_below_2 > 0) {
         specs.push_back(tt::tt_metal::TensorSpec(args.indices.logical_shape(), rm));
     }
@@ -189,7 +194,8 @@ std::vector<Tensor> sparse_push_plan(
     std::optional<uint32_t> chunk_start,
     const std::optional<Tensor>& chunk_start_tensor,
     uint32_t dense_below,
-    uint32_t dense_below_2) {
+    uint32_t dense_below_2,
+    bool owner_major) {
     using Op = ttnn::operations::experimental::sparse_kv_push::SparsePushPlanDeviceOperation;
     return ttnn::device_operation::launch<Op>(
         Op::operation_attributes_t{
@@ -198,7 +204,8 @@ std::vector<Tensor> sparse_push_plan(
             .page_bytes = page_bytes,
             .chunk_start = chunk_start,
             .dense_below = dense_below,
-            .dense_below_2 = dense_below_2},
+            .dense_below_2 = dense_below_2,
+            .owner_major = owner_major},
         Op::tensor_args_t{.indices = indices, .chunk_start_tensor = chunk_start_tensor});
 }
 

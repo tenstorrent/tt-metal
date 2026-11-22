@@ -8,6 +8,7 @@ owner chip pushes only the rows a requester's indices reference into that reques
 reads the buffer through indices rewritten to compact slots. The plan is built on device, so it is trace-safe.
 """
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -35,6 +36,8 @@ class SparseKvPushPlan:
     # (dense layout below dense_below_2, compact_indices above). A push with second_dense=True skips below it.
     compact_indices_2: ttnn.Tensor | None = None
     dense_below_2: int = 0
+    # Inbox mode: `table` is this chip's own plan table and the push exchanges the tables through this inbox.
+    inbox: ttnn.Tensor | None = None
 
 
 def sparse_kv_push_supported(mesh_device, stripe_chunk: int, max_rows: int, links: int) -> bool:
@@ -76,6 +79,10 @@ class SparseKvPushPlanner:
         self._plan: SparseKvPushPlan | None = None
         self._plan_key = None
         self._tables = None
+        # Inbox mode (SPARSE_KV_PUSH_INBOX, default on): the push exchanges the plan tables itself, so a plan is not
+        # followed by an all-gather of every chip's table.
+        self.inbox_mode = os.environ.get("SPARSE_KV_PUSH_INBOX", "1") == "1"
+        self._inbox = None
         self._buffers = {}
         self._managers = {}  # query rows -> sub-device manager of grids(query rows)
         # layer index -> plan whose prefix rows the previous layer already pushed into its buffer, beside its attention
@@ -202,8 +209,30 @@ class SparseKvPushPlanner:
             chunk_start_tensor=chunk_start_tensor,
             dense_below=dense_below,
             dense_below_2=dense_below_2,
+            owner_major=self.inbox_mode,
         )
         table, compact_indices = outputs[0], outputs[1]
+        if self.inbox_mode:
+            slot_words = (
+                ttnn._ttnn.operations.experimental.sparse_kv_push_inbox_slot_bytes(max_rows, stripe_chunk, n) // 4
+            )
+            if self._inbox is None or self._inbox.shape[3] != slot_words:
+                self._inbox = _replicated(
+                    self.mesh_device,
+                    torch.zeros(1, 1, n, slot_words, dtype=torch.int32),
+                    ttnn.uint32,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                )
+            return SparseKvPushPlan(
+                table=table,
+                compact_indices=compact_indices,
+                stripe_chunk=stripe_chunk,
+                max_rows=max_rows,
+                dense_below=dense_below,
+                compact_indices_2=outputs[2] if dense_below_2 else None,
+                dense_below_2=dense_below_2,
+                inbox=self._inbox,
+            )
         gathered_rows = table.shape[2] * n
         if self._tables is None or self._tables.shape[2] != gathered_rows:
             self._tables = _replicated(

@@ -198,6 +198,11 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanProgramFactory::create_descriptor(
         kernel.emplace_runtime_args(core_list[i], rt);
     }
     kernel.common_runtime_args = {common.begin(), common.end()};
+    kernel.defines = {
+        {"PLAN_OWNER_MAJOR", attrs.owner_major ? "1" : "0"},
+        {"PLAN_SLOT_BYTES",
+         std::to_string(attrs.owner_major ? inbox_slot_bytes(attrs.max_rows, attrs.stripe_chunk, num_devices) : 0u)},
+    };
     // Same kernel on NCRISC as worker 1.
     tt::tt_metal::KernelDescriptor helper = kernel;
     helper.compile_time_args[kCtRole] = 1;

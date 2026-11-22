@@ -25,6 +25,9 @@ struct SparsePushPlanParams {
     // a third output gets the indices rewritten to that dense layout for chunk starts below dense_below_2, and the same
     // indices as the second output otherwise. Lets a layer with a higher cutoff share the plan of the layers below it.
     uint32_t dense_below_2 = 0;
+    // The table as one slot per owner (sparse_kv_push's inbox layout: the header, then that owner's block bitmaps,
+    // contiguous), for a push that exchanges the tables itself, instead of one bitmap in block order. Hashed.
+    bool owner_major = false;
 };
 
 struct SparsePushPlanInputs {

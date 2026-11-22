@@ -106,7 +106,7 @@ tt::tt_fabric::FabricMuxConfig mux_config(
 
 // Both kernels look up every destination's first hop, indexed by row-major rank.
 tt::tt_metal::KernelDescriptor::Defines kernel_defines(
-    tt::tt_metal::distributed::MeshDevice* mesh_device, bool second_dense) {
+    tt::tt_metal::distributed::MeshDevice* mesh_device, bool second_dense, uint32_t inbox_slot, bool reuse_inbox) {
     const auto mesh_shape = mesh_device->get_view().shape();
     std::vector<uint32_t> chip_ids, mesh_ids;
     for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
@@ -120,6 +120,10 @@ tt::tt_metal::KernelDescriptor::Defines kernel_defines(
         {"FABRIC_2D", "1"},
         // The plan header word that says this push sends nothing.
         {"PUSH_DENSE_WORD", second_dense ? "9" : "8"},
+        // Inbox mode (0: all-gathered tables) and its slot bytes.
+        {"PUSH_INBOX", inbox_slot != 0 ? "1" : "0"},
+        {"PUSH_SLOT_BYTES", std::to_string(std::max<uint32_t>(inbox_slot, 64))},
+        {"PUSH_REUSE_INBOX", reuse_inbox ? "1" : "0"},
     };
 }
 
@@ -149,6 +153,9 @@ std::vector<uint32_t> reader_compile_args(
     if (tensor_args.batch_index_tensor.has_value()) {
         tt::tt_metal::TensorAccessorArgs(tensor_args.batch_index_tensor->buffer()).append_to(ct);
     }
+    if (tensor_args.inbox.has_value()) {
+        tt::tt_metal::TensorAccessorArgs(tensor_args.inbox->buffer()).append_to(ct);
+    }
     return ct;
 }
 
@@ -171,10 +178,14 @@ std::vector<uint32_t> writer_compile_args(
     tt::tt_metal::TensorAccessorArgs(tensor_args.table.buffer()).append_to(ct);
     ttnn::ccl::fabric_mux_connection_ct_args(
         kSendersPerChannel, tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, mux, ct);
+    if (tensor_args.inbox.has_value()) {
+        tt::tt_metal::TensorAccessorArgs(tensor_args.inbox->buffer()).append_to(ct);
+    }
     return ct;
 }
 
-std::vector<uint32_t> reader_runtime_args(const CoreLayout& layout, uint32_t sender, uint32_t my_rank) {
+std::vector<uint32_t> reader_runtime_args(
+    const CoreLayout& layout, uint32_t sender, uint32_t my_rank, uint32_t inbox_ready_sem) {
     const uint32_t channel = sender / kSendersPerChannel;
     return {
         channel / layout.num_directions(),  // link
@@ -183,7 +194,8 @@ std::vector<uint32_t> reader_runtime_args(const CoreLayout& layout, uint32_t sen
         sender % kSendersPerChannel,
         kSendersPerChannel,
         layout.links,
-        layout.directions.front().eth_direction};  // the channels of the first direction also carry this chip's rows
+        layout.directions.front().eth_direction,  // the channels of the first direction also carry this chip's rows
+        inbox_ready_sem};
 }
 
 std::vector<uint32_t> writer_runtime_args(
@@ -192,7 +204,8 @@ std::vector<uint32_t> writer_runtime_args(
     uint32_t sender,
     uint32_t my_rank,
     const tt::tt_fabric::FabricMuxConfig& mux,
-    tt::tt_metal::ProgramDescriptor& desc) {
+    tt::tt_metal::ProgramDescriptor& desc,
+    uint32_t inbox_ready_sem) {
     const uint32_t channel = sender / kSendersPerChannel, sub = sender % kSendersPerChannel;
     const auto sync_core = mesh_device->worker_core_from_logical_core(layout.senders[0]);
     std::vector<uint32_t> rt = {
@@ -208,6 +221,7 @@ std::vector<uint32_t> writer_runtime_args(
         rt.push_back(static_cast<uint32_t>(phys.x));
         rt.push_back(static_cast<uint32_t>(phys.y));
     }
+    rt.push_back(inbox_ready_sem);
     ttnn::ccl::fabric_mux_connection_rt_args(
         /*mux_connection_valid=*/true,
         /*is_termination_master=*/sub == 0,
@@ -257,8 +271,19 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     const uint32_t my_rank = ttnn::operations::ccl::common::get_linearized_index(coord, mesh_view);
     const auto layout =
         core_layout(params.core_grid, params.num_links, fabric_directions(mesh_device, coord, params.num_links));
+    // Inbox mode: every sender core's reader waits on this semaphore for the tables (one id on all of them, taken
+    // before the mux connections take theirs).
+    const auto inbox_ready_sem = desc.find_available_semaphore_id(layout.senders.front(), tt::CoreType::WORKER);
+    TT_FATAL(inbox_ready_sem.has_value(), "the sparse KV push found no free semaphore");
+    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+        .id = *inbox_ready_sem,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = layout.sender_range,
+        .initial_value = 0});
     const auto mux = mux_config(mesh_device, desc, layout);
-    const auto defines = kernel_defines(mesh_device, params.second_dense);
+    const uint32_t inbox_slot =
+        tensor_args.inbox.has_value() ? inbox_slot_bytes(params.max_rows, params.stripe_chunk, num_devices) : 0u;
+    const auto defines = kernel_defines(mesh_device, params.second_dense, inbox_slot, params.reuse_inbox);
     const uint32_t page_bytes = tensor_args.input_tensor.buffer()->aligned_page_size();
     const auto shape = packet_shape(mesh_device, page_bytes);
     const uint32_t packet_bytes = shape.pages_per_packet * page_bytes;
@@ -270,7 +295,10 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     } cbs[] = {
         {kData, packet_bytes, kPacketSlots, tt::DataFormat::RawUInt8},
         {kMeta, kMetaEntryBytes, kPacketSlots, tt::DataFormat::RawUInt32},
-        {kTable, kTableCbBytes, 1, tt::DataFormat::RawUInt32},
+        {kTable,
+         inbox_slot != 0 ? std::max(kSliceTableCbBytes, inbox_slot) : kTableCbBytes,
+         1,
+         tt::DataFormat::RawUInt32},
         {kUserId, kUserIdCbBytes, 1, tt::DataFormat::RawUInt32},
         {kHeaders,
          static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()),
@@ -304,6 +332,11 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     reader_common.push_back(params.batch_slot_num_layers);
     reader_common.push_back(params.batch_slot_layer_idx);
     reader_common.push_back(params.batch_index);
+    if (tensor_args.inbox.has_value()) {
+        reader_common.push_back(tensor_args.inbox->buffer());
+    } else {
+        reader_common.push_back(0u);
+    }
     reader.emplace_common_runtime_args(reader_common);
 
     auto writer = data_movement_kernel(
@@ -317,6 +350,11 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     writer_common.push_back(static_cast<uint32_t>(params.ready_semaphore->address()));  // smuggled-rta-ok: semaphore
     writer_common.push_back(static_cast<uint32_t>(params.done_semaphore->address()));   // smuggled-rta-ok: same
     writer_common.push_back(tensor_args.table.buffer());
+    if (tensor_args.inbox.has_value()) {
+        writer_common.push_back(tensor_args.inbox->buffer());
+    } else {
+        writer_common.push_back(0u);
+    }
     writer.emplace_common_runtime_args(writer_common);
 
     auto mux_kernel = data_movement_kernel(
@@ -341,10 +379,10 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     }
     for (uint32_t w = 0; w < layout.num_senders(); ++w) {
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt;
-        reader_rt.append(reader_runtime_args(layout, w, my_rank));
+        reader_rt.append(reader_runtime_args(layout, w, my_rank, *inbox_ready_sem));
         reader.emplace_runtime_args(layout.senders[w], reader_rt);
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt;
-        writer_rt.append(writer_runtime_args(mesh_device, layout, w, my_rank, mux, desc));
+        writer_rt.append(writer_runtime_args(mesh_device, layout, w, my_rank, mux, desc, *inbox_ready_sem));
         writer.emplace_runtime_args(layout.senders[w], writer_rt);
     }
 
@@ -368,6 +406,7 @@ void SparseKvPushProgramFactory::override_runtime_arguments(
     reader[3] = params.batch_slot_num_layers;
     reader[4] = params.batch_slot_layer_idx;
     reader[5] = params.batch_index;
+    reader[6] = tensor_args.inbox.has_value() ? tensor_args.inbox->buffer()->address() : 0u;
     auto& writer = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernel);
     writer[0] = tensor_args.output_tensor.buffer()->address();
     // The semaphores are not in the program hash: check new ones before the program uses them.
@@ -377,6 +416,7 @@ void SparseKvPushProgramFactory::override_runtime_arguments(
     writer[1] = params.ready_semaphore->address();
     writer[2] = params.done_semaphore->address();
     writer[3] = tensor_args.table.buffer()->address();
+    writer[4] = tensor_args.inbox.has_value() ? tensor_args.inbox->buffer()->address() : 0u;
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push

@@ -34,7 +34,11 @@ Tensor sparse_kv_push(
     uint32_t batch_slot_layer_idx = 0,
     const std::optional<CoreRangeSet>& core_grid = std::nullopt,
     // Skip when the plan's second dense threshold (sparse_push_plan dense_below_2) is met instead of its first.
-    bool second_dense = false);
+    bool second_dense = false,
+    // The push exchanges the plan tables itself (table = this chip's own plan table): see SparseKvPushInputs::inbox.
+    const std::optional<Tensor>& inbox = std::nullopt,
+    // REST right after a PREFIX push of the same plan, with an inbox: skip the table exchange (see SparseKvPushParams).
+    bool reuse_inbox = false);
 
 // Whether the push and its plan can serve a cache of max_rows rows in blocks of stripe_chunk rows on this mesh with
 // num_links links: a 2D fabric (FABRIC_2D or a torus on either or both axes) on a 2D mesh of 2 to 32 chips that every

@@ -26,6 +26,9 @@ struct SparseKvPushParams {
     // Skip (push nothing) when the plan's second dense threshold (sparse_push_plan dense_below_2) is met, not its
     // first.
     bool second_dense = false;
+    // Inbox mode, REST right after a PREFIX push of the same plan: the inbox already holds every requester's slice and
+    // every chip has started (the PREFIX's exchange), so skip the exchange.
+    bool reuse_inbox = false;
 
     // Not hashed: runtime args, patched and validated on every dispatch.
     // Required; optional only because GlobalSemaphore is not default constructible and the params are reflected.
@@ -40,8 +43,11 @@ struct SparseKvPushParams {
 struct SparseKvPushInputs {
     Tensor input_tensor;   // KVPE cache, sharded over rows (dim 2) across the whole mesh
     Tensor output_tensor;  // the requester's compact buffer: one per chip, holding the rows its own top-k needs
-    Tensor table;          // all-gathered sparse_push_plan tables
+    Tensor table;          // all-gathered sparse_push_plan tables, or with an inbox this chip's own
     std::optional<Tensor> batch_index_tensor;
+    // Inbox mode: the push exchanges the tables itself, one slot per requester (inbox_slot_bytes pages, [1, 1, chips,
+    // slot words] per chip, interleaved DRAM), instead of reading all-gathered ones.
+    std::optional<Tensor> inbox;
 };
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push

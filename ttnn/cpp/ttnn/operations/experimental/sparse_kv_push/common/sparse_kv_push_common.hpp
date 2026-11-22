@@ -21,6 +21,10 @@ namespace ttnn::operations::experimental::sparse_kv_push {
 constexpr uint32_t kMaxDirections = 4;  // E, W, N, S
 constexpr uint32_t kSendersPerChannel = 2;
 
+// Inbox mode: bytes of one requester's slot in an owner's inbox, the header (plan_table::kBitmapOff words) and the
+// bitmap of the owner's blocks, in whole 64 B.
+uint32_t inbox_slot_bytes(uint32_t max_rows, uint32_t stripe_chunk, uint32_t num_devices);
+
 constexpr uint32_t cores_needed(uint32_t links, uint32_t directions = kMaxDirections) {
     return links * directions * (kSendersPerChannel + 1);
 }

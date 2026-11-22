@@ -106,7 +106,9 @@ void kernel_main() {
     };
 
     const auto indices = TensorAccessor(indices_args, indices_addr, topk * sizeof(uint32_t));
-    const auto table = TensorAccessor(table_args, table_addr, table_page_bytes);
+    // Owner-major tables (PLAN_OWNER_MAJOR): one slot page per owner, the header then that owner's block bitmaps.
+    constexpr bool owner_major = PLAN_OWNER_MAJOR != 0;
+    const auto table = TensorAccessor(table_args, table_addr, owner_major ? PLAN_SLOT_BYTES : table_page_bytes);
     const auto compact = TensorAccessor(compact_args, compact_addr, topk * sizeof(uint32_t));
     const auto compact2 = TensorAccessor(compact2_args, compact2_addr, topk * sizeof(uint32_t));
 
@@ -401,7 +403,7 @@ void kernel_main() {
 
         // Core 0: the header and per-owner counts (filled in table_image), written to the table. In dense mode the
         // dense gather fills the buffer and the push finds no rows: every owner count is 0.
-        auto write_header = [&](bool dense, uint32_t active_blocks, uint32_t split_block) {
+        auto fill_header = [&](bool dense, uint32_t active_blocks, uint32_t split_block) {
             using namespace sparse_push::plan_table;
             if (dense) {
                 for (uint32_t owner = 0; owner < num_devices; ++owner) {
@@ -419,7 +421,10 @@ void kernel_main() {
             table_image[kWordHasSplit] = has_split ? 1 : 0;
             table_image[kWordDense] = dense ? 1 : 0;
             table_image[kWordDense2] = (dense || dense2()) ? 1 : 0;
-            write_span(0, bitmap_off * word_bytes);  // header and per-owner counts
+        };
+        auto write_header = [&](bool dense, uint32_t active_blocks, uint32_t split_block) {
+            fill_header(dense, active_blocks, split_block);
+            write_span(0, bitmap_off * word_bytes);  // header and per-owner counts (slot 0 when owner-major)
         };
 
         // 0. Load.
@@ -514,11 +519,13 @@ void kernel_main() {
             send(word_ranks_l1, active_words * rank_bytes);
             send(partials_l1, ranges * range_words * word_bytes);
         });
-        for_my_ranges([&](uint32_t range, uint32_t first_block, uint32_t end_block) {
-            write_span(
-                (bitmap_off + first_block * words_per_block) * word_bytes,
-                (end_block - first_block) * words_per_block * word_bytes);
-        });
+        if constexpr (!owner_major) {
+            for_my_ranges([&](uint32_t range, uint32_t first_block, uint32_t end_block) {
+                write_span(
+                    (bitmap_off + first_block * words_per_block) * word_bytes,
+                    (end_block - first_block) * words_per_block * word_bytes);
+            });
+        }
 
         // 4. Owner bases and 5. rewrite, all workers.
         post(sem_step, kStepBases);
@@ -532,7 +539,7 @@ void kernel_main() {
             dense_below,
             dense_slot_rows>(idx, index_count, bitmap, word_ranks, partials, misc, worker, sem_done);
         wait_workers(kRewritten);
-        if (core_idx == 0) {
+        if (owner_major ? core_idx < num_devices : core_idx == 0) {
             const uint32_t* totals = misc + kMiscTotals;
             const uint32_t split_block = has_split ? misc[kMiscSplit] / stripe_chunk : active_blocks;
             using namespace sparse_push::plan_table;
@@ -547,7 +554,30 @@ void kernel_main() {
                               word_ranks[first_from_split * words_per_block]
                         : totals[owner];
             }
-            write_header(/*dense=*/false, active_blocks, split_block);
+            if constexpr (owner_major) {
+                // This core's owners' slots: the header (every core has every owner's counts), then the owner's
+                // blocks' bitmap words, gathered from the full bitmap every core holds since exchange 2.
+                fill_header(/*dense=*/false, active_blocks, split_block);
+                auto* slot = scratch;
+                for (uint32_t w = 0; w < bitmap_off; ++w) {
+                    slot[w] = table_image[w];
+                }
+                for (uint32_t owner = core_idx; owner < num_devices; owner += cores) {
+                    const uint32_t owner_blocks =
+                        active_blocks > owner ? (active_blocks - owner + num_devices - 1) / num_devices : 0;
+                    for (uint32_t block = 0; block < owner_blocks; ++block) {
+                        const uint32_t* src = bitmap + (owner + block * num_devices) * words_per_block;
+                        for (uint32_t w = 0; w < words_per_block; ++w) {
+                            slot[bitmap_off + block * words_per_block + w] = src[w];
+                        }
+                    }
+                    const uint32_t bytes = (bitmap_off + owner_blocks * words_per_block) * word_bytes;
+                    noc_async_write(scratch_l1, table.get_noc_addr(owner), (bytes + 63) & ~63u);
+                    noc_async_write_barrier();
+                }
+            } else {
+                write_header(/*dense=*/false, active_blocks, split_block);
+            }
         }
         write_back(0, brisc_indices);
     };

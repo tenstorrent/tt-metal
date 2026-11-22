@@ -205,14 +205,43 @@ void validate_config(const SparseKvPushParams& params, const SparseKvPushInputs&
             table.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
             table.memory_config().buffer_type() == BufferType::DRAM,
         "sparse KV push table must be a UINT32 ROW_MAJOR interleaved DRAM tensor");
+    const uint32_t tables = num_devices;
     TT_FATAL(
-        table_shape.rank() == 4 && table_shape[0] == 1 && table_shape[1] == 1 &&
-            table_shape[2] == layout.pages * num_devices && table_shape[3] == PlanTableLayout::kPageWords,
-        "sparse KV push table must be [1, 1, {}, {}] ({} pages per device), got {}",
-        layout.pages * num_devices,
-        PlanTableLayout::kPageWords,
-        layout.pages,
-        table_shape);
+        !params.reuse_inbox || (tensor_args.inbox.has_value() && params.part == SparseKvPushPart::kRest),
+        "sparse KV push reuse_inbox needs an inbox and part REST");
+    if (tensor_args.inbox.has_value()) {
+        const auto& inbox = *tensor_args.inbox;
+        const uint32_t slot_bytes = inbox_slot_bytes(params.max_rows, params.stripe_chunk, num_devices);
+        TT_FATAL(
+            inbox.storage_type() == StorageType::DEVICE && inbox.buffer() != nullptr && inbox.device() == mesh_device &&
+                inbox.buffer()->buffer_type() == BufferType::DRAM && inbox.buffer()->num_pages() == num_devices &&
+                inbox.buffer()->aligned_page_size() == slot_bytes,
+            "sparse KV push inbox must be {} DRAM pages of {} B per chip",
+            num_devices,
+            slot_bytes);
+        TT_FATAL(
+            slot_bytes <= packet_shape(mesh_device, page_bytes).pages_per_packet * page_bytes,
+            "sparse KV push inbox slot of {} B does not fit one packet",
+            slot_bytes);
+    }
+    if (tensor_args.inbox.has_value()) {
+        // This chip's own owner-major table (sparse_push_plan owner_major): one slot page per owner.
+        TT_FATAL(
+            table.buffer()->num_pages() == num_devices &&
+                table.buffer()->aligned_page_size() ==
+                    inbox_slot_bytes(params.max_rows, params.stripe_chunk, num_devices),
+            "sparse KV push with an inbox takes this chip's owner-major plan table ({} slot pages)",
+            num_devices);
+    } else {
+        TT_FATAL(
+            table_shape.rank() == 4 && table_shape[0] == 1 && table_shape[1] == 1 &&
+                table_shape[2] == layout.pages * tables && table_shape[3] == PlanTableLayout::kPageWords,
+            "sparse KV push table must be [1, 1, {}, {}] ({} pages per device), got {}",
+            layout.pages * tables,
+            PlanTableLayout::kPageWords,
+            layout.pages,
+            table_shape);
+    }
 
     validate_runtime(params, tensor_args);
 }
@@ -233,6 +262,8 @@ ttsl::hash::hash_t program_hash(const SparseKvPushParams& params, const SparseKv
         params.core_grid,
         params.fabric_config,
         params.second_dense,
+        tensor_args.inbox.has_value(),
+        params.reuse_inbox,
         mesh_device->shape(),
         tensor_args.input_tensor.tensor_spec(),
         tensor_args.output_tensor.tensor_spec(),
@@ -317,7 +348,9 @@ Tensor sparse_kv_push(
     uint32_t batch_slot_num_layers,
     uint32_t batch_slot_layer_idx,
     const std::optional<CoreRangeSet>& core_grid,
-    bool second_dense) {
+    bool second_dense,
+    const std::optional<Tensor>& inbox,
+    bool reuse_inbox) {
     using namespace ttnn::operations::experimental::sparse_kv_push;
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "sparse_kv_push input must be on device");
@@ -332,6 +365,7 @@ Tensor sparse_kv_push(
             .core_grid = grid,
             .fabric_config = tt::tt_fabric::GetFabricConfig(),
             .second_dense = second_dense,
+            .reuse_inbox = reuse_inbox,
             .ready_semaphore = ready_semaphore,
             .done_semaphore = done_semaphore,
             .batch_index = batch_index,
@@ -341,7 +375,8 @@ Tensor sparse_kv_push(
             .input_tensor = input_tensor,
             .output_tensor = output_tensor,
             .table = table,
-            .batch_index_tensor = batch_index_tensor});
+            .batch_index_tensor = batch_index_tensor,
+            .inbox = inbox});
 }
 
 }  // namespace ttnn::prim

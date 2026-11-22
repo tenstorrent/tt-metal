@@ -6,6 +6,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/common/kernels/sparse_push_constants.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
 #include <cstdint>
@@ -17,6 +18,9 @@ using sparse_push::kData;
 using sparse_push::kHeaders;
 using sparse_push::kMeta;
 using sparse_push::kMetaEntryBytes;
+using sparse_push::kSkipRows;
+using sparse_push::kSliceRows;
+using sparse_push::kSlicesDoneRows;
 using sparse_push::PacketMeta;
 
 // The writer of one sender core, paired with sparse_push_table_reader.cpp: sends each packet the reader hands it as one
@@ -62,6 +66,8 @@ void kernel_main() {
     constexpr uint32_t mux_l1_base_semaphore_id = get_compile_time_arg_val(mux_ct + 2);
     constexpr size_t mux_termination_offset = get_compile_time_arg_val(mux_ct + 3);
     constexpr uint32_t per_channel = get_compile_time_arg_val(mux_ct + 4);  // senders per (link, direction)
+    constexpr bool inbox_mode = PUSH_INBOX != 0;
+    constexpr auto inbox_args = TensorAccessorArgs<inbox_mode ? mux_ct + 5 : 0>();
 
     constexpr uint32_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint32_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
@@ -70,6 +76,7 @@ void kernel_main() {
     const uint32_t ready_sem = get_common_arg_val<uint32_t>(1);
     const uint32_t done_sem = get_common_arg_val<uint32_t>(2);
     const uint32_t table_addr = get_common_arg_val<uint32_t>(3);
+    const uint32_t inbox_addr = get_common_arg_val<uint32_t>(4);
 
     size_t arg = 0;
     const uint32_t worker = get_arg_val<uint32_t>(arg++);
@@ -83,6 +90,7 @@ void kernel_main() {
     const uint32_t sync_core_y = get_arg_val<uint32_t>(arg++);
     const size_t cores_arg = arg;  // workers x (noc x, noc y)
     arg += 2 * workers;
+    const uint32_t inbox_ready_sem = get_semaphore(get_arg_val<uint32_t>(arg++));  // inbox mode: releases the readers
 
     // The fabric's next hop, as in the reader, so increments follow the data.
     auto next_hop = [&](uint32_t requester) {
@@ -100,13 +108,15 @@ void kernel_main() {
     // packet header slots, which no packet uses yet (one aligned DRAM read).
     const auto table = TensorAccessor(table_args, table_addr, sparse_push::plan_table::kPageBytes);
     static_assert(PUSH_DENSE_WORD * sizeof(uint32_t) < sparse_push::kDramReadAlign);
-    noc_async_read(table.get_noc_addr(my_rank * table_pages), headers_l1, sparse_push::kDramReadAlign);
+    // (Inbox mode: the table is this chip's own, not all of them gathered.)
+    noc_async_read(table.get_noc_addr(inbox_mode ? 0 : my_rank * table_pages), headers_l1, sparse_push::kDramReadAlign);
     noc_async_read_barrier();
     invalidate_l1_cache();
     const bool dense = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(headers_l1)[PUSH_DENSE_WORD] != 0;
 
-    auto run = [&](auto& mux_conn) {
-        // Start fence.
+    // The start fence of all-gathered tables: every chip increments every other chip's start count; worker 0 waits
+    // for all of them, then releases its other senders.
+    auto fence = [&](auto& mux_conn) {
         if (link == 0 && sender_index == 0) {
             const uint64_t remote_ready = get_noc_addr(sync_core_x, sync_core_y, ready_sem);
             for (uint32_t requester = 0; requester < num_devices; ++requester) {
@@ -130,7 +140,14 @@ void kernel_main() {
             noc_semaphore_inc(get_noc_addr(ready_sem), uint32_t{0} - 1u);  // reset to zero
             noc_async_atomic_barrier();
         }
+    };
 
+    auto run = [&](auto& mux_conn) {
+        // Start fence, with all-gathered tables only: with an inbox, every chip's table slice landing here is the
+        // fence (the readers hand on rows only after it).
+        if constexpr (!inbox_mode) {
+            fence(mux_conn);
+        }
         // Packets: up to kBatch sends in flight, each with its own header slot; one flush retires the batch.
         uint32_t in_flight = 0;
         // Once the batch's writes have left L1, frees its kData/kMeta slots for the reader.
@@ -149,6 +166,55 @@ void kernel_main() {
             const auto* meta =
                 reinterpret_cast<volatile tt_l1_ptr PacketMeta*>(get_read_ptr(kMeta) + in_flight * kMetaEntryBytes);
             const uint32_t requester = meta->requester, first_page = meta->first_page, packet_rows = meta->rows;
+            if constexpr (inbox_mode) {
+                if (packet_rows == kSlicesDoneRows || packet_rows == kSkipRows) {
+                    // kSlicesDoneRows: this sender's slices are out. The sync core waits until every chip's slice (its
+                    // own included) has landed in this chip's inbox, then releases every sender's reader. Both kinds
+                    // take a slot of the batch, like a packet, so the batches stay aligned to the ring.
+                    if (worker == 0 && packet_rows == kSlicesDoneRows) {
+                        noc_async_write_barrier();
+                        noc_semaphore_wait_min(ready_ptr, num_devices);
+                        noc_semaphore_inc(get_noc_addr(ready_sem), uint32_t{0} - num_devices);  // reset to zero
+                        for (uint32_t w = 0; w < workers; ++w) {
+                            const uint32_t x = get_arg_val<uint32_t>(cores_arg + 2 * w);
+                            const uint32_t y = get_arg_val<uint32_t>(cores_arg + 2 * w + 1);
+                            noc_semaphore_inc(get_noc_addr(x, y, inbox_ready_sem), 1);
+                        }
+                        noc_async_atomic_barrier();
+                    }
+                    if (++in_flight == kBatch) {
+                        retire();
+                    }
+                    continue;
+                }
+                if (packet_rows == kSliceRows) {
+                    // A slice of this chip's table for owner `requester`: into its inbox slot my_rank, counted at its
+                    // sync core (fused, so the count lands after the slice).
+                    const uint32_t slice_l1 = get_read_ptr(kData) + in_flight * packet_bytes;
+                    const auto inbox = TensorAccessor(inbox_args, inbox_addr, PUSH_SLOT_BYTES);
+                    if (requester == my_rank) {
+                        noc_async_write(slice_l1, inbox.get_noc_addr(my_rank), first_page);
+                        noc_async_write_barrier();
+                        noc_semaphore_inc(get_noc_addr(sync_core_x, sync_core_y, ready_sem), 1);
+                        noc_async_atomic_barrier();
+                    } else {
+                        auto* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
+                            headers_l1 + (1 + in_flight) * sizeof(PACKET_HEADER_TYPE));
+                        fabric_set_unicast_route(
+                            (HybridMeshPacketHeader*)hdr, dest_chip_ids[requester], dest_mesh_ids[requester]);
+                        const uint64_t dst = tt::tt_fabric::linear::addrgen_detail::get_noc_address(inbox, my_rank);
+                        hdr->to_noc_fused_unicast_write_atomic_inc(
+                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                                dst, get_noc_addr(sync_core_x, sync_core_y, ready_sem), 1, true},
+                            first_page);
+                        perform_payload_send<false, false>(mux_conn, slice_l1, first_page, hdr);
+                    }
+                    if (++in_flight == kBatch) {
+                        retire();
+                    }
+                    continue;
+                }
+            }
             if (packet_rows == 0) {  // the reader's end marker (PacketBuilder::finish)
                 retire();
                 cb_pop_front(kMeta, 1);

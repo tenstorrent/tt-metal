@@ -50,6 +50,33 @@ struct PacketBuilder {
         }
     }
 
+    // Inbox mode, phase 0: the next kData slot (for a table slice built in place) and its handover, with
+    // PacketMeta::rows = marker and PacketMeta::first_page = the slice's bytes; and a data-less marker packet.
+    uint32_t reserve_slot() {
+        cb_reserve_back(kData, batched + 1);
+        cb_reserve_back(kMeta, batched + 1);
+        return get_write_ptr(kData) + batched * pages_per_packet * page_bytes;
+    }
+    void push_slot(uint32_t dest, uint32_t bytes, uint32_t marker) {
+        auto* meta = reinterpret_cast<volatile tt_l1_ptr PacketMeta*>(get_write_ptr(kMeta) + batched * kMetaEntryBytes);
+        meta->requester = dest;
+        meta->first_page = bytes;
+        meta->rows = marker;
+        if (++batched == kBatch) {
+            flush();
+        }
+    }
+    // A marker, then skip packets up to the batch's end: batches (and the writer's in-flight windows) only ever start
+    // on a multiple of kBatch slots, which is what lets both index a batch's slots from the ring pointer.
+    void push_marker_and_align(uint32_t marker) {
+        reserve_slot();
+        push_slot(0, 0, marker);
+        while (batched != 0) {
+            reserve_slot();
+            push_slot(0, 0, kSkipRows);
+        }
+    }
+
     // Hands the remaining packets to the writer, then an empty one (0 rows), which ends it.
     void finish() {
         flush();

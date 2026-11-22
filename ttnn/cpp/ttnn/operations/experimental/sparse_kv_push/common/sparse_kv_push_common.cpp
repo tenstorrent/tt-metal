@@ -32,6 +32,13 @@ void validate_stripe_chunk(uint32_t stripe_chunk, uint32_t max_rows) {
         stripe_chunk);
 }
 
+uint32_t inbox_slot_bytes(uint32_t max_rows, uint32_t stripe_chunk, uint32_t num_devices) {
+    const uint32_t owner_blocks = tt::div_up(max_rows / stripe_chunk, num_devices);
+    const uint32_t words =
+        ::sparse_push::plan_table::kBitmapOff + owner_blocks * (stripe_chunk / ::sparse_push::plan_table::kRowsPerWord);
+    return tt::round_up(words * sizeof(uint32_t), 64);
+}
+
 PacketShape packet_shape(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t page_bytes) {
     const auto max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
     TT_FATAL(

@@ -58,6 +58,8 @@ Tensor sparse_kv_push(
     uint32_t batch_slot_num_layers = 1,
     uint32_t batch_slot_layer_idx = 0,
     const std::optional<CoreRangeSet>& core_grid = std::nullopt,
-    bool second_dense = false);
+    bool second_dense = false,
+    const std::optional<Tensor>& inbox = std::nullopt,
+    bool reuse_inbox = false);
 
 }  // namespace ttnn::prim
