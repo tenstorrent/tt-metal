@@ -6215,3 +6215,67 @@ tasks:
       steady_tok_s_p*: '> 0'
       program_builds_after_warmup_serving*: == 0
       ids_uploads_per_chunk*: == 0
+- id: MB.8
+  title: 'OWNER 2026-11-22: bring PB.FBM (indexer block maxima in the score''s compute kernel, exact) to the shipped single-request
+    path; re-measure the 5120 block-select threshold'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - MB.7
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - ttnn/ttnn/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.2_fresh_walls.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.4_slowdown.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.6_ladder.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.8_ladder.md
+  ab:
+    env:
+      INDEXER_BMAX_COMPUTE: 'off'
+    change:
+      INDEXER_BMAX_COMPUTE: 'on'
+  ab_mode: full
+  ab_rungs:
+  - last
+  brief:
+    prior_work: 'Batching branch PB.FBM = 9fc4c58e110: block maxima computed in indexer_score''s compute kernel (fork option;
+      tests/unit/test_block_max_compute.py), block_select_ttnn block_max_strip kernel, INDEXER_BMAX_COMPUTE switch, thresholds
+      re-measured; single 8192 1M 66.8k -> 68.6k, 4x2k 1M 57.9k -> 60.9k new tok/s; selection sets identical. This branch:
+      MB.6 / MB.7 block-select with the writer-core block max, INDEXER_BLOCK_SELECT_MIN = 262144 keys at 5120 (MB.7: the block
+      path''s host +12 launches made 262k / 393k slower).'
+    details: 'Take PB.FBM''s single-request parts (path-limited `git show 9fc4c58e110 -- <files>` / git apply --3way: tt/indexer.py,
+      tt/settings.py, the indexer_score fork''s compute block max, block_select_ttnn''s block_max_strip, INDEX.md, the fork
+      unit tests, tests/perf/test_fbm_probe.py; leave out packed_glued.py). Re-measure the crossover at the 5120 chunk with
+      the compute-side block max (block vs plain forced at 131072 / 196608 / 262144 / 393216 / 524288 positions, two runs)
+      and set INDEXER_BLOCK_SELECT_MIN to the smallest key count at which no measured rung is slower in wall. Exact: the selection-set
+      test (0 mismatches), outputs identical where sets are equal. Gate: the 5120 accept units, the set test, the 5120 ladder,
+      cold no-rebuild. Report on vs off in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.8_ladder.md.
+      Read rule 20 of models/demos/common/bringup/agents/bringup-engineer.md.'
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_indexer_block_select.py && BRINGUP_CHUNK=5120
+      DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode SKIP_POS=51200,131072,139264,262144,524288,786432,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      contract_checks_failed_decoder_skip: == 0
+      outside_history_max_abs_diff: == 0
+      program_builds_after_warmup_serving*: == 0
+      ids_uploads_per_chunk*: == 0
+      steady_tok_s_p*: '> 0'
+      idx_block_select_set_mismatches*: == 0

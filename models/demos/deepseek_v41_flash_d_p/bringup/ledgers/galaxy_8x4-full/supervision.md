@@ -690,3 +690,4 @@
   rung regresses; gate 5120 ladder + cold no-rebuild.
 - 03:08 heartbeat: MB.7 agent active; watch armed.
 - 03:15 MB.7 ACCEPTED: the 262k dip was real (block path device -0.4..-1.0 ms but host +12 launches: wall +1.8..+2.7 ms at 262144 / 393216 positions; -0.5 at 524288). INDEXER_BLOCK_SELECT_MIN 131072 -> 262144 keys (~524k context). Ladder: no rung slower than off (262k 66.7k vs 67.3k; 1M 61.8k vs 59.2k). model_bringup ready to push.
+- 06:15 on model_bringup: F300 parity (b062e153e73); QUEUED MB.8 (PB.FBM's compute-side block max, single path; 5120 threshold re-measured). Launched --until MB.8.
