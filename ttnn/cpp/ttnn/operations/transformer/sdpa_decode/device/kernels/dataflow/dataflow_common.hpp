@@ -898,25 +898,49 @@ void read_kv_mask_chunks(
     const uint32_t my_noc_y = my_y[noc_id];
 
     uint32_t barrier_count = 0;
+    // SDPA_DECODE_TWO_NOC (non-paged, no K multicast; the reader runs in dynamic NOC mode): K tiles alternate between
+    // the two NOCs (even K rows on this kernel's NOC, odd rows on the other), each NOC with up to barrier_threshold
+    // reads in flight, so the far-KV stream is not limited by one NOC's DRAM read bandwidth.
+#ifdef SDPA_DECODE_TWO_NOC
+    Noc noc_alt(1 - noc_id);
+    constexpr uint32_t row_noc_mask = 1;
+#else
+    Noc& noc_alt = noc;
+    constexpr uint32_t row_noc_mask = 0;
+#endif
     for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
         // Read K chunk transposed
         cb_k.reserve_back(k_chunk_tiles);
         uint32_t k_write_ptr = cb_k.get_write_ptr();
         uint32_t k_base_read_ptr = k_write_ptr;
         barrier_count = 0;
+        uint32_t barrier_count_alt = 0;
         for (uint32_t col = 0; col < DHt; ++col) {
             uint32_t k_tile_id = k_start_tile_id + col;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                noc.async_read(k_reader, CoreLocalMem<uint32_t>(k_write_ptr), k_tile_bytes, {.page_id = k_tile_id}, {});
-                if (++barrier_count == barrier_threshold) {
-                    noc.async_read_barrier();
-                    barrier_count = 0;
+                if (row & row_noc_mask) {
+                    noc_alt.async_read(
+                        k_reader, CoreLocalMem<uint32_t>(k_write_ptr), k_tile_bytes, {.page_id = k_tile_id}, {});
+                    if (++barrier_count_alt == barrier_threshold) {
+                        noc_alt.async_read_barrier();
+                        barrier_count_alt = 0;
+                    }
+                } else {
+                    noc.async_read(
+                        k_reader, CoreLocalMem<uint32_t>(k_write_ptr), k_tile_bytes, {.page_id = k_tile_id}, {});
+                    if (++barrier_count == barrier_threshold) {
+                        noc.async_read_barrier();
+                        barrier_count = 0;
+                    }
                 }
                 k_tile_id += DHt;
                 k_write_ptr += k_tile_bytes;
             }
         }
         noc.async_read_barrier();
+        if constexpr (row_noc_mask != 0) {
+            noc_alt.async_read_barrier();
+        }
         cb_k.push_back(k_chunk_tiles);
 
         if constexpr (use_attention_mask) {

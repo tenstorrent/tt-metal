@@ -943,14 +943,28 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = core_grid;
     reader_desc.compile_time_args = std::move(reader_compile_time_args_common);
-    reader_desc.config = ReaderConfigDescriptor{};
+    // Non-paged K without multicast between cores: the reader streams K over both NOCs (read_kv_mask_chunks), which
+    // needs dynamic NOC mode on both data movement kernels. The paged and K-multicast paths keep dedicated NOCs.
+    const bool two_noc_k = !is_paged_attention && !(use_col_major_group_indexing && q_heads_parallel_factor > 1);
+    const auto dm_noc_mode =
+        two_noc_k ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
+    if (two_noc_k) {
+        reader_desc.defines.emplace_back("SDPA_DECODE_TWO_NOC", "1");
+    }
+    reader_desc.config = DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = tt::tt_metal::NOC::NOC_0,  // ReaderConfigDescriptor's NOC (the paged K multicast relies on it)
+        .noc_mode = dm_noc_mode};
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kernel_path + "dataflow/writer_decode_all.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = std::move(writer_compile_time_args_common);
-    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.config = DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = tt::tt_metal::NOC::NOC_1,  // WriterConfigDescriptor's NOC
+        .noc_mode = dm_noc_mode};
 
     if (spec_packed) {
         // Defines (not compile-time args) so the unpacked kernels build exactly as before.
