@@ -133,3 +133,52 @@ def test_ring_distributed_sdpa_host_dispatch(device):
         )
 
     _record("ring_distributed_s2048_r4", *_time_calls(device, call))
+
+
+def _rm(x, device, dtype):
+    return ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+
+# Sparse SDPA (Blackhole only). name, heads, tokens, cache tokens, top-k, kv dtype
+SPARSE_CASES = [
+    ("sparse_mla_bf16_h64_s32", 64, 32, 4096, 2048, ttnn.bfloat16),
+    ("sparse_mla_fp8_h64_s128", 64, 128, 4096, 512, ttnn.fp8_e4m3),
+]
+
+
+@pytest.mark.parametrize("name, h, s, t, topk, kv_dtype", SPARSE_CASES, ids=[c[0] for c in SPARSE_CASES])
+def test_sparse_sdpa_host_dispatch(device, name, h, s, t, topk, kv_dtype):
+    if device.arch() != ttnn.device.Arch.BLACKHOLE:
+        pytest.skip("sparse_sdpa is Blackhole-only")
+    torch.manual_seed(0)
+    k_dim, v_dim = 576, 512
+    q = _rm(torch.randn(1, h, s, k_dim), device, ttnn.bfloat16)
+    kv = _rm(torch.randn(1, 1, t, k_dim), device, kv_dtype)
+    rows = torch.stack([torch.randperm(t)[:topk] for _ in range(s)])
+    idx = _rm(rows.reshape(1, 1, s, topk).int(), device, ttnn.uint32)
+    formats = ttnn.transformer.SparseKVFormat
+    kv_format = formats.BF16 if kv_dtype == ttnn.bfloat16 else formats.FP8_E4M3
+
+    def call():
+        return ttnn.transformer.sparse_sdpa(q, kv, idx, v_dim, kv_format=kv_format, scale=k_dim**-0.5, k_chunk_size=128)
+
+    _record(name, *_time_calls(device, call))
+
+
+@pytest.mark.parametrize("cache", [False, True], ids=["stream", "block_cache"])
+def test_sparse_sdpa_msa_host_dispatch(device, cache):
+    if device.arch() != ttnn.device.Arch.BLACKHOLE:
+        pytest.skip("sparse_sdpa_msa is Blackhole-only")
+    torch.manual_seed(0)
+    h, n_kv, s, t, topk, d, block = 16, 1, 128, 4096, 16, 128, 64
+    q = _rm(torch.randn(1, h, s, d), device, ttnn.bfloat16)
+    k, v = (_tt(torch.randn(1, n_kv, t, d), device) for _ in range(2))
+    blocks = torch.stack([torch.randperm(t // block)[:topk].sort().values for _ in range(n_kv * s)])
+    idx = _rm(blocks.reshape(1, n_kv, s, topk).int(), device, ttnn.uint32)
+
+    def call():
+        return ttnn.transformer.sparse_sdpa_msa(
+            q, k, v, idx, scale=d**-0.5, block_size=block, enable_kv_block_cache=cache
+        )
+
+    _record(f"sparse_msa_h16_s128_{'block_cache' if cache else 'stream'}", *_time_calls(device, call))
