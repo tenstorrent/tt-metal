@@ -26,7 +26,7 @@ class FusedRowNorm:
         m[..., 16, :] = 1.0
         self.scaler = ttnn.from_torch(m, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
         self.out = F.OutCache(device)
-        self.out_l1 = out_l1  # E10d: L1-interleaved output rows (e.g. the MoE input), not DRAM
+        self.out_l1 = out_l1  # L1-interleaved output rows (e.g. the MoE input), not DRAM
 
     def __call__(self, x, num_rows=None):
         """x: [1,1,R,C] row-form (fp32 or bf16). Returns a list of num_rows (default R) rows."""

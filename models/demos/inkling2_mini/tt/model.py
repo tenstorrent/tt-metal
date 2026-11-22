@@ -5,18 +5,16 @@
 Mirrors transformers `Inkling2LoopTextModel` + `Inkling2LoopForCausalLM` (modular_inkling2_loop.py) one token at a time.
 48 layer applications per token: layers 0-5, layers 6-17 three times, layers 18-23.
 
-Pieces owned here (review-r4 #7): token embedding + embed_norm, per-layer input norms (`attn_norm`, `q/k/v_input_norm`),
+Pieces owned here: token embedding + embed_norm, per-layer input norms (`attn_norm`, `q/k/v_input_norm`),
 the layer wiring (block boundaries, residual add in fp32, bf16 layer exit), loop restart + cross-pass messages,
 final attn-res, final norm, unembed, softcap 30, vocab mask (cols >= 200058), on-device argmax, state reset.
-Attention = tt/attention.py (T3), MoE = tt/moe.py (T4), attn-res / message / gate / short conv = tt/residual.py (T5).
+Attention = tt/attention_fast.py, MoE = tt/moe.py, attn-res / message gate / short conv = tt/fused/.
 
 Tensor form: "row" [1,1,1,C] TILE everywhere on the token path (r vectors: [1,1,r,C]); block-state stacks are
-residual.py split stacks (review-r5 #8b).
+the in-place stack of tt/fused/attnres.py (FusedRowOps).
 """
 
 from __future__ import annotations
-
-import os
 
 import torch
 
@@ -87,7 +85,7 @@ class _Layer:
         attn_w = {k[len("attn.") :]: v for k, v in w.items() if k.startswith("attn.")}
         self.attn = Inkling2Attention(device, attn_w, self.is_global, prefetcher)
         self.moe = Inkling2MoE(device, w, layout=expert_layout)
-        # residual path: E10 fused kernels (one program each); frows holds the in-place block-state stack
+        # residual path: fused kernels (one program each); frows holds the in-place block-state stack
         self.attn_res = FusedAttnRes(frows, w, "attn_res_q", 3 if self.is_global else 1) if L > 0 else None
         self.mlp_res = FusedAttnRes(frows, w, "mlp_res_q", 1)
         self.conv_attn = FusedShortConv(rows, w, "post_attn_conv")
@@ -109,11 +107,17 @@ class Inkling2Model:
         log=print,
         layer_roots=None,
         prefetch=False,
+        head="bank",
+        head_fused=True,
     ):
-        """layer_roots: optional {layer: cache root} override (e.g. BFP8-expert cache for kernel-vs-quant checks)."""
+        """layer_roots: optional {layer: cache root} override (e.g. BFP8-expert cache for kernel-vs-quant checks).
+        head: unembed as one bank-streamed program ("bank"), DRAM-sharded column chunks ("ds") or the interleaved
+        ttnn.linear ("linear"); "bank" and "ds" give the same logits. head_fused: softcap + argmax per unembed
+        chunk (tt/fused/head.py) instead of the ttnn op chain. The other values are for A/B runs."""
+        assert head in ("bank", "ds", "linear"), head
         self.device = device
         self.max_ctx = max_ctx
-        # E8 tensor prefetcher: its L1 pipes must be carved before any program runs on the ring cores
+        # tensor prefetcher: its L1 pipes must be carved before any program runs on the ring cores
         self.prefetcher = PrefetchedLinear(device, recv_rows=3, ring_kb=768) if prefetch else None
         self.rows = RowOps(device)
         self.frows = FusedRowOps(device)
@@ -138,11 +142,10 @@ class Inkling2Model:
         self.embed = ttnn.to_device(ttnn.reshape(emb, [emb.shape[-2], emb.shape[-1]]), device, memory_config=dram)
         self.embed_norm = ttnn.to_device(g["embed_norm"], device, memory_config=dram)
         self.final_norm = ttnn.to_device(g["final_norm"], device, memory_config=dram)
-        # Unembed: DRAM WIDTH_SHARDED column chunks, bank-local readers (tt/dram_sharded.py); 3.9 -> 2.5 ms head (E7).
-        # INKLING_HEAD_DS=0: the v1 interleaved linear (A/B runs).
-        if os.environ.get("INKLING_HEAD_BANK", "1") != "0":
+        # Unembed: DRAM WIDTH_SHARDED column chunks, bank-local readers (tt/dram_sharded.py); 3.9 -> 2.5 ms head.
+        if head == "bank":
             # one bank-streamed program for all chunks, bit-equal to the DRAM-sharded chunks below (same in0_block_w,
-            # 3 readers per bank); writes the head's raw logits row itself. INKLING_HEAD_BANK=0: the chunked matmuls.
+            # 3 readers per bank); writes the head's raw logits row itself.
             uw = ttnn.to_torch(g["unembed"])
             uw = uw.reshape(uw.shape[-2], uw.shape[-1])
             kt = uw.shape[0] // (32 * 8)  # DramShardedLinear's act_cores = 8
@@ -157,7 +160,7 @@ class Inkling2Model:
                 split=UNEMBED_SPLIT,
             )
             del uw
-        elif os.environ.get("INKLING_HEAD_DS", "1") != "0":
+        elif head == "ds":
             self.unembed = DramShardedLinear(
                 device,
                 g["unembed"],
@@ -171,12 +174,8 @@ class Inkling2Model:
             w = ttnn.to_device(g["unembed"], device, memory_config=dram)
             self.unembed = lambda x: ttnn.linear(x, w, dtype=ttnn.float32, compute_kernel_config=self.mm_cfg)
         # Decode logits tail (tt/fused/head.py): softcap + argmax per unembed chunk, no full-vocab tile ops.
-        # INKLING_HEAD_FUSED=0: the ttnn op chain below (A/B runs).
         self.head_tail = None
-        if (
-            isinstance(self.unembed, (DramShardedLinear, BankLinear))
-            and os.environ.get("INKLING_HEAD_FUSED", "1") != "0"
-        ):
+        if head_fused and isinstance(self.unembed, (DramShardedLinear, BankLinear)):
             self.head_tail = FusedLogitsTail(device, self.unembed, VOCAB_PAD, VOCAB_REAL, SOFTCAP)
         self.final_res = FusedAttnRes(self.frows, g, "final_res_q", 1)
         self.msg = FusedMessages(device, g, "msg_q")  # loop messages + per-layer split, 2 programs per pass
@@ -189,13 +188,13 @@ class Inkling2Model:
         self.layers = []
         for L in range(N_LAYERS):
             lroot = (layer_roots or {}).get(L, root)
-            w = wcache.load_layer(lroot, L, None)  # host tensors; modules move them (review-r4 #8)
+            w = wcache.load_layer(lroot, L, None)  # host tensors; modules move them
             lay = wcache.layouts(lroot, L).get("experts.w_gate_up")
             self.layers.append(_Layer(device, self.rows, self.frows, L, w, self.prefetcher, lay))
             del w
             log(f"layer {L} on device")
 
-        # per-application state, indexed by HF cache index (review-r4 #6)
+        # per-application state, indexed by HF cache index
         self.states = {}
         for L, p in APPS:
             lay = self.layers[L]
@@ -260,7 +259,7 @@ class Inkling2Model:
             x = h
         else:
             rep = 3 if (msgs is not None and not lay.is_global) else None  # same input in rows 0..2
-            # row_out=False (E10c): x feeds only fused ops (FusedQKVGate or FusedRowNorm), which read its dense twin
+            # row_out=False: x feeds only fused ops (FusedQKVGate or FusedRowNorm), which read its dense twin
             x = lay.attn_res(stack, h, n_sealed + 1, split=False, repeat_rows=rep, row_out=False)
         if msgs is not None:
             x = lay.qkv_gate(x, msgs[0])

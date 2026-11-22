@@ -10,7 +10,7 @@ local dense page and reads the ring slot, taps and residual chunks of those colu
 compute runs the conv kernel's op sequence on that page. Output: the conv module's own cached output tensor (its
 dense twin written, no row form; a itself is not written anywhere), bit-equal to
 conv_add(a, ring, phase, resid, fp32, row_out=False). (This replaces a dense twin of a for the conv to read,
-perf/E10d-interface.md: the conv no longer reads a from DRAM at all.)
+the conv no longer reads a from DRAM at all.)
 """
 
 import ttnn

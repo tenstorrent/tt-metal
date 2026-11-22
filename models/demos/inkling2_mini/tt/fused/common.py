@@ -120,7 +120,7 @@ def run(io_tensors, kernels, cbs):
     return ttnn.generic_op(io_tensors, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
 
 
-# Dense twins (E10c): every row-form output of a fused kernel also gets a dense copy (a few page writes). A fused
+# Dense twins: every row-form output of a fused kernel also gets a dense copy (a few page writes). A fused
 # kernel given that same tensor object as input reads the twin's pages instead of gathering the row (2 x 72 small
 # NOC reads, ~6 us). Keyed by object identity, so a tensor that passed through any other op has no twin.
 _TWIN = {}

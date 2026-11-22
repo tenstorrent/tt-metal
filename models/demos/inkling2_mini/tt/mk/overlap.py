@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cross-op overlap for decode (M2): while the DRAM-light programs between two uses of a projection run (residual,
+"""Cross-op overlap for decode: while the DRAM-light programs between two uses of a projection run (residual,
 message gates, attention prep / out, window), the next app's weights of that projection stream from DRAM into L1
 (tt/mk/stage.py), so the next app's projection program reads them from L1.
 

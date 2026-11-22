@@ -5,12 +5,12 @@ stacks, depth attention), the cross-pass messages (MessageAttnRes) and HF cache 
 reads, static shapes: trace-safe. The per-layer block attention residual, message gates and short convs run as
 the fused kernels in tt/fused/.
 
-Row form (review-r5 #8b): a per-token vector is a [1, 1, 1, C] TILE tensor ("row"); r vectors = [1, 1, r, C].
+Row form: a per-token vector is a [1, 1, 1, C] TILE tensor ("row"); r vectors = [1, 1, r, C].
 RMS norms run width-sharded over 18 cores (~10 us incl. reshards vs 25 us on one core).
 
 Block-state stacks are kept already RMS-normalised and split along C into SPLIT chunks: [1, SPLIT, 32, C/SPLIT],
 row k of every chunk = state k (rows >= depth zero). The C-long dot products of attention over depth then run as
-SPLIT small batched matmuls + one sum (review-r5 #5: no fp32 0/1 row-move matmuls, no single-core K=C matmul).
+SPLIT small batched matmuls + one sum (no fp32 0/1 row-move matmuls, no single-core K=C matmul).
 
 MessageAttnRes takes a weights dict keyed by cache names (torch or host ttnn tensors):
     msg_q                                 [1,12,32,C] fp32, rows 0-3 of loop layer l = q, k, v, mlp

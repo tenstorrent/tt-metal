@@ -3,27 +3,24 @@
 """Batch-1 greedy generation for Inkling2Model: eager or traced whole 48-application decode steps (one trace per
 short-conv ring phase, pos % 4).
 
-v1 prefill = decode token by token (design.md §6)."""
+v1 prefill = decode token by token."""
 
 from __future__ import annotations
 
-import os
 import time
 
 import ttnn
 from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv as ShortConv
 
-# Weight staging (tt/mk/overlap.py) from capture() to release(); INKLING_OVERLAP=0 turns it off (A/B runs).
+
+# Weight staging (tt/mk/overlap.py) from capture() to release(); Generator(model, overlap=False) turns it off.
 # Decode only: its staging tensor holds ~535 KB of L1 on every core, which prefill programs need, so a session that
 # runs Inkling2Prefill between capture() and release() builds Generator(model, overlap=False).
 # shortcut: such sessions decode without the staging (~0.47 ms/token); upgrade: free and re-capture around prefill.
-OVERLAP = os.environ.get("INKLING_OVERLAP", "1") != "0"
-
-
 class Generator:
-    def __init__(self, model, overlap=None):
+    def __init__(self, model, overlap=True):
         self.model = model
-        self.use_overlap = OVERLAP if overlap is None else overlap
+        self.use_overlap = overlap
         self.device = model.device
         self.trace = None  # [phase] -> trace id
         self.out = None  # [phase] -> output dict

@@ -12,7 +12,7 @@ rows (positions >= len(prompt)) keep the old ring slots, but kv_full gets all T 
 any read of it, so those rows are never read. Per application, everything is a [1,1,T,C] sequence tensor:
 - block / message attn-res: per-token softmax over depth (no cross-token mixing);
 - k=4 short convs: exact unaligned row slices of [3 history rows ++ chunk];
-- attention, R3 path (r3=True; the SDPA needs `rel_logits`): one causal SDPA per layer, banded rel bias
+- attention, in-kernel rel-bias path (r3=True; the SDPA needs `rel_logits`): one causal SDPA per layer, banded rel bias
   rel_states @ rel_proj added in the kernel, per-query sink logit; local: ring (position order) ++ chunk, window 1024;
   global: kv_full rows [0, s+T);
 - attention, blocked path (older builds): banded rel bias in 128-query blocks (block b, row u, key col c <-> distance
@@ -21,8 +21,8 @@ any read of it, so those rows are never read. Per application, everything is a [
   [s-1024, s+T)) per block by matmul with its log-sum-exp, far part (positions < s-1024, no bias) by SDPA at head
   dim 160 with anchor keys whose logit is the near LSE, so the far output carries the exact near weight in column 128;
 - MoE: router + top-8 on device, token -> expert sort on host, 64-row slots each bound to one expert, indexed
-  sparse_matmul (<= 128 slots per call; one call with R2), gathered back and weighted. Needs TILE expert weights:
-  the stick-layout layers of a stick cache (v1-stick4) are refused, so prefill sessions load the TILE cache v1.
+  sparse_matmul (<= 128 slots per call; one call where sparse_matmul takes repeated ids), gathered back and weighted. Needs TILE expert weights:
+  the stick-layout layers of a stick cache are refused, so prefill sessions load a TILE cache ($INKLING_TILE_CACHE).
 
 Trace rule: every constant device tensor (and every weight copy) is made in __init__, sized for `chunk`; a prefill
 call allocates only per-call tensors. So make the Inkling2Prefill before `Generator.capture()` (a buffer first
@@ -147,7 +147,7 @@ def _is_sticks(t):
 
 
 def _has_r2(dev):
-    """Does this build's indexed sparse_matmul take more (sorted, repeated) ids than groups (B2 fd5b414d4d8)? Older
+    """Does this build's indexed sparse_matmul take more (sorted, repeated) ids than groups ? Older
     builds reject that in validation."""
     put = lambda t, dt, lay: ttnn.from_torch(t, dtype=dt, layout=lay, device=dev)  # noqa: E731
     a = put(torch.ones(1, 3, 32, 32), ttnn.bfloat16, ttnn.TILE_LAYOUT)
@@ -322,7 +322,7 @@ class _LayerPF:
             if _is_sticks(t) or len(t.shape) != 4 or t.shape[1] != NUM_EXPERTS or t.layout != ttnn.TILE_LAYOUT:
                 raise ValueError(
                     f"layer {L}: prefill needs TILE expert weights [1, {NUM_EXPERTS}, K, N], got {tuple(t.shape)} "
-                    f"{t.layout} (stick layout from a stick cache, e.g. v1-stick4). Load the model from a TILE cache "
+                    f"{t.layout} (stick layout from a stick cache). Load the model from a TILE cache "
                     "(e.g. INKLING_CACHE=/work/inkling-bringup/cache/v1): sparse_matmul cannot read sticks."
                 )
         del w
@@ -392,7 +392,7 @@ class Inkling2Prefill:
             packer_l1_acc=True,
         )
         self._sdpa_pc = {}
-        self.group_grid = tuple(group_grid)  # 9x4: T4 decode tuning (N = 72 tiles over 36 cores)
+        self.group_grid = tuple(group_grid)  # 9x4: the decode MoE tuning (N = 72 tiles over 36 cores)
         group_ibw = group_ibw or ((HIDDEN // 32, INTER // 32) if r2 else (12, 18))
         self.group_ibw = {HIDDEN: group_ibw[0], INTER: group_ibw[1]}
         self.logits_cb = None
@@ -620,7 +620,7 @@ class Inkling2Prefill:
         return self._linear(ttnn.typecast(gated, ttnn.bfloat16), lp.w_o)
 
     def _attention_r3(self, lp, qs, rel, sink, st, k_c, v_c, s, t):
-        """Attention by one SDPA with an in-kernel banded rel bias (R3): rel_logits[q, d] = rel_states[q] . proj[:, d]
+        """Attention by one SDPA with an in-kernel banded rel bias: rel_logits[q, d] = rel_states[q] . proj[:, d]
         for key distance d < 1024, per-query sink logit; local layers also mask d >= 1024. The queries are the
         last t keys: local keys = [ring rotated to position order ++ chunk] (only the s valid slots while s < 1024),
         global keys =
@@ -910,7 +910,7 @@ class Inkling2Prefill:
                 torch.from_numpy(eid[g0 : g0 + self.r2_step]).view(1, 1, 1, -1), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT
             )
             for g0 in range(0, nslot, self.r2_step)
-        ]  # sparse_matmul takes at most 128 (= experts) indices per call; R2 lifts that (one call)
+        ]  # sparse_matmul takes at most 128 (= experts) indices per call; builds with repeated sorted ids lift that (one call)
         gu = self._grouped_mm(xs, lp.w_gate_up, moe, ei, 2 * INTER, HIDDEN)
         hid = softcapped_swiglu(_cols(gu, 0, INTER), _cols(gu, INTER, 2 * INTER))
         self._tick("moe.gate_up")

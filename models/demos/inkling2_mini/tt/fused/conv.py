@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-"""Fused static short conv (k=4): one program per call instead of 6-7 ttnn ops (E2 residual.ShortConv).
+"""Fused static short conv (k=4): one program per call instead of 6-7 ttnn ops.
 
 Drop-in for residual.ShortConv: same ctor, alloc_state(c), __call__(x, ring, phase). The ring slots are dense
 fp32 pages (see common.py) instead of rows; reset by copying zeros into them works as before.
@@ -44,7 +44,7 @@ class FusedShortConv:
     def conv_add(self, x, ring, phase, resid=None, out_dtype=None, row_out=True):
         """out = conv(x) rounded to x's dtype, plus resid (fp32 add) if given, in out_dtype (default: x's dtype;
         with resid: resid's dtype)."""
-        F.check_row_input(x, l1_ok=True)  # E10d: the MoE output y straight from L1
+        F.check_row_input(x, l1_ok=True)  # the MoE output y straight from L1
         if resid is not None:
             F.check_row_input(resid)
         out_dtype = out_dtype or (resid.dtype if resid is not None else x.dtype)

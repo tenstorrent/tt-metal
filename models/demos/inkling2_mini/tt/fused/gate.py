@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 """Fused message gate (1 - tanh(F z)) * h + tanh(M z) * m, z = down(cat(rms h, rms m)): 4 device programs
-instead of ~17 (E2 residual.MessageGate) or ~19 (model._QKVGate):
+instead of ~17 (unfused message gate) or ~19 (three unfused gates in one call):
     prep     (generic op, one core per vector): rms of each h / m row, bf16, written straight into the split-K
              layout of the down_proj input (no concat / reshape / permute / typecast)
-    matmul + sum  (E2's split-K down_proj, unchanged)
+    matmul + sum  (residual.split_k_matmul, unchanged)
     combine  (generic op, one core per output column tile, no cross-core sync): bf16 z [* block mask], both
              rank-64 up projections, tanh, and the fp32 mix, rows 0..R-1 written to a zeroed output.
 
@@ -167,7 +167,7 @@ class _FusedGate:
         out, out_dense = self.out.get_twin("out", self.rows, self.c, ttnn.float32)
         block = int(self.block)
 
-        def src(t):  # [addr, dense, nvec]: fp32 dense twins are read row by row (E10c)
+        def src(t):  # [addr, dense, nvec]: fp32 dense twins are read row by row
             tw = F.twin(t)
             if tw is not None and t.dtype == ttnn.float32:
                 return tw[0].buffer_address(), 1, tw[1]
@@ -186,7 +186,7 @@ class _FusedGate:
             nt=self.nt,
             nct=self.ntc,
             has_mask=0,
-            # F rows the writer reads (with G): F + G are DRAM-bound, split them evenly over both RISCs (E10d)
+            # F rows the writer reads (with G): F + G are DRAM-bound, split them evenly over both RISCs
             f_w=self.kz // 2 if self.kz > 2 else 0,
             block=block,
             h_tile=F.tile_bytes(h.dtype),
@@ -228,7 +228,7 @@ class _FusedGate:
 
 class FusedMessageGate(_FusedGate):
     """Drop-in for residual.MessageGate(rows, weights, which). rows: [1,1,r,C] count (default 1, the model's mlp
-    gate); the T5 test gates 4 rows at once."""
+    gate); the tests gate 4 rows at once."""
 
     def __init__(self, rows, weights, which, eps=1e-6, num_rows=1):
         p = f"msg_gate.{which}."

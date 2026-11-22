@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-"""Loop-pass message split (E10d): residual.MessageAttnRes.all_messages output [1, 1, 48, C] fp32 (row 4 l + i =
+"""Loop-pass message split: residual.MessageAttnRes.all_messages output [1, 1, 48, C] fp32 (row 4 l + i =
 message i of loop layer l: q, k, v, mlp) -> per layer (qkv [1, 1, 3, C], mlp [1, 1, 1, C]) fp32 row tensors with
 dense twins, in ONE program (72 cores, one output tile column each; data movement only, exact copies).
 

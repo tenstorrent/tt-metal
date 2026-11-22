@@ -7,7 +7,7 @@
 
 Same ctor `(device, weights, is_global)`, `new_state(max_ctx, cache_dtype)`, frozen
 `decode(xq, state, positions, xk=None, xv=None)` and output as `Inkling2Attention`. The
-projections / k-v conv / qgrs slicing are `Inkling2Attention`'s (E3), collected in `_project`.
+projections / k-v conv / qgrs slicing are `Inkling2Attention`'s, collected in `_project`.
 
 Local layers: `scaled_dot_product_attention_decode` on the 1024-slot ring, non-causal. The
 per-head `attn_mask [1,1,24,1024]` carries rel bias + ring validity, `attention_sink` the sinks.
@@ -28,7 +28,6 @@ Global layers: logits `near ++ far ++ sink`, one softmax (HF), as two exact part
 `DecodePositionsFast` = `DecodePositions` without the O(max_ctx) far mask, plus `far`.
 """
 
-import os
 
 import torch
 
@@ -60,13 +59,11 @@ from models.demos.inkling2_mini.tt.fused.attn_wo import AttnWo
 V_WIDTH = 160  # v(128) + mass column block
 KV_WIDTH = V_WIDTH + HEAD_DIM  # 288
 SCALE = HEAD_DIM**-0.5
-FAR_CHUNK = 128  # sdpa K chunk of the far cache (P1 sweep: 128 < 256 < 512 ms at 120K)
+FAR_CHUNK = 128  # sdpa K chunk of the far cache (measured at 120K: 128 beats 256 and 512)
 # local ring (1024 slots): 4 cores per kv head x 256-key chunks, 37.4 -> 31.7 us per call vs the default 13 cores x 128
 # (each of 13 cores got < 1 chunk; the tree reduction dominated)
 LOCAL_CHUNK = 256
 LOCAL_CORES_PER_HEAD = 4
-# k and v ring writes as one paged_fused_update_cache program; INKLING_KV_FUSED=0: two paged_update_cache calls
-FUSED_KV_WRITE = os.environ.get("INKLING_KV_FUSED", "1") != "0"
 
 
 class DecodePositionsFast(DecodePositions):
@@ -140,7 +137,10 @@ class Inkling2AttentionFast(Inkling2Attention):
 
     FUSED = True
 
-    def __init__(self, device, weights, is_global, prefetcher=None):
+    def __init__(self, device, weights, is_global, prefetcher=None, kv_fused=True):
+        """kv_fused: k and v ring writes as one paged_fused_update_cache program; False: two paged_update_cache
+        calls (A/B runs)."""
+        self.kv_fused = kv_fused
         super().__init__(device, weights, is_global, prefetcher)
         dram = ttnn.DRAM_MEMORY_CONFIG
         self._init_fused(weights)
@@ -357,8 +357,8 @@ class Inkling2AttentionFast(Inkling2Attention):
         return self._post(self.w_o(gated, ttnn.bfloat16, self.mm_cfg), post)
 
     def _decode_ops(self, xq, state, positions, xk, xv):
-        q, rel, gate, sink, k, v = self._project(state, positions, xq, xk, xv)  # E3 seam
-        if FUSED_KV_WRITE:
+        q, rel, gate, sink, k, v = self._project(state, positions, xq, xk, xv)
+        if self.kv_fused:
             ttnn.experimental.paged_fused_update_cache(
                 state.k_ring,
                 ttnn.to_memory_config(k, self.kv_shard),

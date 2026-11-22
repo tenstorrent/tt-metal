@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cross-op weight staging for bank-streamed linears (M2): fill the DRAM-idle time of DRAM-light programs.
+"""Cross-op weight staging for bank-streamed linears: fill the DRAM-idle time of DRAM-light programs.
 
 A ``BankLinear`` (tt/fused/bank_linear.py) core streams one contiguous byte range of its own DRAM bank. Staging
 copies the first ``staged`` bytes of every core's range into a persistent L1 shard on that same core, using an extra
@@ -27,10 +27,10 @@ from models.demos.inkling2_mini.tt.fused import common as F
 from models.demos.inkling2_mini.tt.fused.bank_linear import DST_TILES, TILE
 from models.demos.inkling2_mini.tt.fused.moe_bank import row_placement
 
-MKDIR = "models/demos/inkling2_mini/tt/mk/kernels"
-# fill read size / reads in flight per RISC (M2_FILL="piece:in_flight" for A/B runs). Measured in the model
-# (M2-report): 2 KB / 1 best (-1.51 ms @4K); 16 KB / 4 gained nothing (the hosts wait on small DRAM reads of their own)
-FILL = tuple(int(v) for v in os.environ.get("M2_FILL", "2048:1").split(":"))
+MKDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels")  # not cwd-relative
+# fill read size / reads in flight per RISC (StagedBankLinear(fill=...) for A/B runs). Measured in the model:
+# 2 KB / 1 best (-1.51 ms @4K); 16 KB / 4 gained nothing (the hosts wait on small DRAM reads of their own)
+FILL = (2048, 1)
 
 
 def cores_of(crs):
@@ -112,10 +112,12 @@ def program_cores(prog):
 
 
 class StagedBankLinear:
-    def __init__(self, bl, staged_bytes=None, stage=None):
+    def __init__(self, bl, staged_bytes=None, stage=None, fill=FILL):
         """bl: a BankLinear. staged_bytes: bytes staged per core (default: each core's whole range). stage: an existing
-        staging tensor to share (linears with the same cores that never hold staged data at the same time)."""
+        staging tensor to share (linears with the same cores that never hold staged data at the same time).
+        fill: (read size in bytes, reads in flight) of the fill kernel."""
         self.bl, dev = bl, bl.device
+        self.fill = fill
         self.tb = ttnn.Tile([TILE, TILE]).get_tile_size(bl.dtype)
         # per core: (core, bank, first slot, range bytes)
         self.ranges = []
@@ -159,7 +161,7 @@ class StagedBankLinear:
                                                 self.stage.buffer_address(), a, n_core]))  # fmt: skip
             kernels.append(ttnn.KernelDescriptor(
                 kernel_source=f"{MKDIR}/stage_fill.cpp", core_ranges=self.bl.grid, compile_time_args=acc,
-                named_compile_time_args=[("n_banks", self.bl.nb), ("piece", FILL[0]), ("in_flight", FILL[1])], runtime_args=rt,
+                named_compile_time_args=[("n_banks", self.bl.nb), ("piece", self.fill[0]), ("in_flight", self.fill[1])], runtime_args=rt,
                 config=ttnn.DataMovementConfigDescriptor(processor=proc, noc=noc),
             ))  # fmt: skip
         return kernels

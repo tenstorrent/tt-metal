@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-"""Fused block attention residual: rms(partial) + seal + depth attention in ONE program per call (E2's
+"""Fused block attention residual: rms(partial) + seal + depth attention in ONE program per call (the unfused
 residual.AttnRes: seal 4 ops + attend 5-9 ops; FusedRowOps.seal: 4 ops -> 0 or 1).
 
 Drop-in for residual.RowOps.seal / residual.AttnRes (same signatures). Differences the integrator must know:
@@ -129,7 +129,7 @@ class FusedAttnRes:
         r = self.rows
         n_out = repeat_rows or self.nq
         out, out_dense = self.out.get_twin(("out", n_out), n_out, r.c, ttnn.float32, nvec=self.nq)
-        # row_out=False: only the dense twin is written (E10c); the returned tensor is then valid only as the input
+        # row_out=False: only the dense twin is written ; the returned tensor is then valid only as the input
         # of another fused kernel (which reads the twin), never for a ttnn op.
         out = r.run(partial, depth - 1, self.q, self.nq, out, n_out if row_out else 0, out_dense)
         if not split:

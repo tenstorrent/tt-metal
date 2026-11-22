@@ -14,7 +14,7 @@ Device path (all on device, no host sync, trace-safe):
   rms_norm -> linear (fp32 out) -> moe_grouped_topk (single group: sigmoid, +bias, top-k, unbiased gather, norm, *scale,
   fp32 inside) -> sparse_matmul gate_up -> softcapped SwiGLU ->
   sparse_matmul down (both indexed by the top-8 ids: only those experts are read, outputs compact [8, N])
-  -> routing multiply + sum over the 8 slots. Weight names/shapes follow design.md section 4.
+  -> routing multiply + sum over the 8 slots. Weight names/shapes follow the weight cache (convert/convert.py).
 """
 
 import os
@@ -39,25 +39,22 @@ RMS_EPS = 1e-6
 ROUTER_SPLIT = 9  # K chunks of the router GEMM (256 each)
 
 # Bank-local gate_up (tt/dram_sharded.py): each worker reads its columns of a selected expert from its own DRAM bank
-# in one run; 101 -> 77 us for BFP4 (E7). down stays on sparse_matmul (bank-local was no faster: 54 vs 55 us).
-# INKLING_MOE_BANK=0 turns it off (A/B runs).
-BANK_LOCAL = os.environ.get("INKLING_MOE_BANK", "1") != "0"
+# in one run; 101 -> 77 us for BFP4. down stays on sparse_matmul (bank-local was no faster: 54 vs 55 us).
+# Inkling2MoE(..., bank_local=False) turns it off (A/B runs).
 # Bank expert step (tt/fused/moe_bank.py): x multicast by the collector + bank 0's workers on NOC1 (same output);
-# INKLING_MOE_BANK_TUNE=0 gives the earlier setup (A/B runs).
-BANK_TUNE = {} if os.environ.get("INKLING_MOE_BANK_TUNE", "1") != "0" else dict(x_mcast=False, noc1_banks=())
+# Inkling2MoE(..., bank_tune=False) gives the earlier setup (A/B runs).
 # The fused expert step (tt/fused/moe_expert.py) serves every layer: BFP4, BFP8 and BFP4 gate_up + BFP8 down.
 # Inkling2MoE(..., fused=False) falls back to the sparse_matmul / bank-local path above (A/B runs, TILE caches only).
 # Workers on rows 3..9 and collector (10, 9): clear of the tensor prefetcher's receiver ring (cores 0..6, 0..2).
 FUSED_PLACEMENT = dict(origin=(0, 3), shape=(11, 7), collector=(10, 9))
 # Whole router (K-split GEMM, split sum, top-k) as one program (tt/fused/router.py), bit-equal to the op chain
-# in route(); INKLING_ROUTER_FUSED=0 runs the op chain (A/B runs).
-FUSED_ROUTER = os.environ.get("INKLING_ROUTER_FUSED", "1") != "0"
+# in route(); Inkling2MoE(..., fused_router=False) runs the op chain (A/B runs).
 
 WEIGHT_NAMES = ("mlp_norm", "router.w", "router.bias", "experts.w_gate_up", "experts.w_down")
 
 
 def prepare_moe_weights(norm_w, router_w, router_bias, gate_up_proj, down_proj, expert_dtype=ttnn.bfloat4_b):
-    """HF tensors -> host ttnn tensors in the section-4 cache form (what the converter dumps).
+    """HF tensors -> host ttnn tensors in the cache form (what the converter dumps).
 
     norm_w [H] (post_attention_layernorm), router_w [E, H] fp32, router_bias [E] fp32, gate_up_proj [E, 2I, H] (gate rows first, already
     de-interleaved), down_proj [E, H, I]."""
@@ -80,13 +77,23 @@ def load_moe_weights(layer_dir):
 
 class Inkling2MoE:
     def __init__(
-        self, device, weights, gate_up_grid=(9, 4), down_grid=(9, 4), in0_block_w=(12, 18), fused=True, layout=None
+        self,
+        device,
+        weights,
+        gate_up_grid=(9, 4),
+        down_grid=(9, 4),
+        in0_block_w=(12, 18),
+        fused=True,
+        layout=None,
+        fused_router=True,
+        bank_local=True,
+        bank_tune=True,
     ):
-        """``weights``: dict keyed by section-4 names (host tensors from prepare_moe_weights / load_moe_weights).
+        """``weights``: dict keyed by cache names (host tensors from prepare_moe_weights / load_moe_weights).
 
         Both projections have N = 2304 = 72 output tiles, so at most 72 of the 110 cores (11x10) get an
         output column; ``*_grid`` and ``in0_block_w`` (gate_up K-block, down K-block, in tiles) are the
-        knobs tuned on p100a (see tests/test_moe.py and T4-report.md). ``fused=False`` uses those sparse_matmul /
+        knobs tuned on p100a (see tests/test_moe.py). ``fused=False`` uses those sparse_matmul /
         bank-local paths instead of the fused expert step (TILE caches only)."""
         dram = ttnn.DRAM_MEMORY_CONFIG
         self.device = device
@@ -115,7 +122,7 @@ class Inkling2MoE:
         self.router_bias = ttnn.from_torch(
             bias, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
         )
-        self.router = FusedRouter(device, self.router_w, bias, TOP_K, ROUTE_SCALE, 1e-20) if FUSED_ROUTER else None
+        self.router = FusedRouter(device, self.router_w, bias, TOP_K, ROUTE_SCALE, 1e-20) if fused_router else None
         gu = weights["experts.w_gate_up"]
         self.w_down = ttnn.to_device(weights["experts.w_down"], device, dram)
         # The whole expert step (gate_up + SwiGLU + down + weighted sum) is one fused program.
@@ -127,11 +134,13 @@ class Inkling2MoE:
         assert fused or not sticks, "stick-layout expert weights need the fused expert step"
         if layout == "BANK":  # bank-layout cache (convert/bank_layout.py): every read from the reader's own bank
             self.w_gate_up = ttnn.to_device(gu, device, dram)
-            self.fused = BankMoeExperts(device, self.w_gate_up, self.w_down, **BANK_TUNE)
+            self.fused = BankMoeExperts(
+                device, self.w_gate_up, self.w_down, **({} if bank_tune else dict(x_mcast=False, noc1_banks=()))
+            )
         elif fused:  # any of BFP4 / BFP8 / BFP4 gate_up + BFP8 down
             self.w_gate_up = ttnn.to_device(gu, device, dram)
             self.fused = FusedMoeExperts(device, self.w_gate_up, self.w_down, sticks=sticks, **FUSED_PLACEMENT)
-        elif BANK_LOCAL and gu.dtype == ttnn.bfloat4_b:  # re-layout on load; the cache files are unchanged
+        elif bank_local and gu.dtype == ttnn.bfloat4_b:  # re-layout on load; the cache files are unchanged
             self.bank_local = True
             self.bank_gate_up = BankLocalExperts(device, gu, dtype=gu.dtype, slots=TOP_K)
         else:

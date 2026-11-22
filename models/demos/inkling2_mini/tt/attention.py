@@ -18,11 +18,10 @@ Every position-dependent value lives in `DecodePositions` (device tensors that
 the host rewrites before each step), so one trace serves every step and every
 layer of the model.
 
-Weights come as host tensors in the weight-cache contract (design.md §4).
+Weights come as host tensors in the weight-cache contract (written by convert/convert.py).
 """
 
 import math
-import os
 
 import torch
 
@@ -113,11 +112,6 @@ class DecodePositions:
         self.ring = inp["ring"]
 
 
-# Projections (w_all, w_o) as one bank-streamed program each, bit-equal to the DRAM-sharded matmul;
-# INKLING_PROJ_BANK=0: the ttnn.linear path (A/B runs).
-PROJ_BANK = os.environ.get("INKLING_PROJ_BANK", "1") != "0"
-
-
 class _DramShardedLinear:
     """Decode linear [32, K] x [K, N] with the weight width-sharded over the DRAM banks (one row tile of
     activations). Two pipelined readers per bank: 2304x6560 70 -> 45 us, 3072x2304 70 -> 24 us (traced)."""
@@ -125,8 +119,10 @@ class _DramShardedLinear:
     CORES = 8  # activation shard grid; K must split into whole tiles over it
     READERS = 2
 
-    def __init__(self, device, w, dtype, trim=False):
-        """trim: slice the output back to N when N is padded to whole bank shards (callers that use all of N)."""
+    def __init__(self, device, w, dtype, trim=False, bank=True):
+        """trim: slice the output back to N when N is padded to whole bank shards (callers that use all of N).
+        bank: one bank-streamed program (tt/fused/bank_linear.py), bit-equal to the DRAM-sharded matmul; False runs
+        the ttnn.linear path (A/B runs)."""
         k, n = w.shape
         banks = device.dram_grid_size().x
         bank_w = math.ceil(n / (32 * banks)) * 32
@@ -138,7 +134,7 @@ class _DramShardedLinear:
         )
         self.n = n if trim and bank_w * banks != n else None
         self.bank = None
-        if PROJ_BANK:  # same output bit for bit, one bank-streamed program (tt/fused/bank_linear.py), DRAM out
+        if bank:  # same output bit for bit, one bank-streamed program (tt/fused/bank_linear.py), DRAM out
             ckc = ttnn.init_device_compute_kernel_config(
                 device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False,
                 fp32_dest_acc_en=True, packer_l1_acc=True,
@@ -215,7 +211,7 @@ class AttentionState:
 
 
 class Inkling2Attention:
-    """One attention layer. `weights` maps §4 names (without `attn.`) to host tensors."""
+    """One attention layer. `weights` maps cache names (without `attn.`) to host tensors."""
 
     def __init__(self, device, weights, is_global, prefetcher=None):
         """prefetcher: optional tt.prefetch.PrefetchedLinear; the fused q/k/v projection then streams through it."""
@@ -254,7 +250,7 @@ class Inkling2Attention:
             pieces += [w_k[:, width:], w_v[:, width:]]
         w_all = torch.cat(pieces, dim=-1)
         self.n_kv = w_all.shape[-1] - KV0
-        if prefetcher is not None:  # E8: -0.11 ms @4K for w_all; w_o through it was slower (+0.27), so not used
+        if prefetcher is not None:  # -0.11 ms @4K for w_all; w_o through it was slower (+0.27), so not used
             self.w_all = prefetcher.linear(w_all)
         else:
             self.w_all = _DramShardedLinear(device, w_all, weights["w_qgrs"].dtype)
@@ -461,7 +457,7 @@ class Inkling2Attention:
 
 # -------------------------------------------------------------------- weights
 def host_weights_from_hf(sd, is_global, dtype=ttnn.bfloat8_b):
-    """§4 host tensors from an HF `Inkling2*Attention` state dict (torch). Used by tests."""
+    """Cache-form host tensors from an HF `Inkling2*Attention` state dict (torch). Used by tests."""
 
     def mm(t):  # [out, in] -> [1,1,in,out]
         return t.float().T.contiguous().view(1, 1, t.shape[1], t.shape[0])
