@@ -7,7 +7,7 @@ continues at pos = len(prompt):
 - attention (per HF cache index c): 1024-slot ring (slot = pos % 1024), global full cache, k/v conv inputs at lag 0-2;
 - post-attn / post-mlp ShortConv state rows 0-3 = inputs at lag 0-3 (fp32).
 
-A chunk is T tokens (default 12288: one chunk up to 12K tokens, each chunk has a large fixed cost; T divides 1024 or is a multiple of it; the last chunk is rounded up to 128). Pad
+A chunk is T tokens (default 8192, 12288 with the unified experts: each chunk has a large fixed cost; T divides 1024 or is a multiple of it; the last chunk is rounded up to 128). Pad
 rows (positions >= len(prompt)) keep the old ring slots, but kv_full gets all T rows: decode writes position P before
 any read of it, so those rows are never read. Per application, everything is a [1,1,T,C] sequence tensor:
 - block / message attn-res: per-token softmax over depth (no cross-token mixing);
@@ -385,7 +385,7 @@ class Inkling2Prefill:
         self,
         model,
         root=wcache.DEFAULT_ROOT,
-        chunk=12288,
+        chunk=None,
         r3=None,
         r2=None,
         slot_rows=64,
@@ -395,7 +395,7 @@ class Inkling2Prefill:
         weighted_reduce=False,
         fused_glue=True,
         trace=True,
-        experts="auto",
+        experts="sparse",
         fused_heads=True,
         profile=False,
         debug=False,
@@ -412,10 +412,12 @@ class Inkling2Prefill:
         chunks (see "traced chunks" below; the outputs are bit-equal to the eager run).
         fused_heads: q / k / v head split + scale + L2 clip / RMS in one program each (tt/fused/pf_heads.py; same
         rounding points as the op chain, sums in another order: not bit-equal).
-        experts: "unified" (all experts in one deepseek_prefill.unified_routed_expert_moe program, LoFi, BFP8
-        activations: needs a build that takes stacked expert weights), "sparse" (grouped sparse_matmul), "auto":
-        unified when the build has it.
+        experts: "sparse" (default: grouped sparse_matmul, HiFi2), "unified" (all experts in one
+        deepseek_prefill.unified_routed_expert_moe program; that op only runs LoFi, so it is opt-in: lower precision
+        is never the default; needs a build that takes stacked expert weights), "auto": unified when the build has it.
         profile: synchronized per-section times in self.times. debug: print each application."""
+        if chunk is None:  # one chunk up to 12K tokens; the sparse expert path's slot buffers only fit 8192 at 32K
+            chunk = 12288 if experts == "unified" else 8192
         assert self._chunk_ok(chunk), chunk
         self.m = model
         self.device = dev = model.device
