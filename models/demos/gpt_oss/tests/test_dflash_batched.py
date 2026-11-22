@@ -35,7 +35,7 @@ PROMPTS = 32  # distinct prompts (user u reads prompt u % 32)
 N_CHECK = 32  # teacher-forced positions per user
 # (measured on QuietBox 2, 2026-10-23: agreement 0.96-0.98 over 16 positions; 4.47 / 3.13 tokens per round, 234 / 106
 # tok/s/user; on a Galaxy ring, 2026-11-22: 32 / 64 / 128 / 256 users 4.77 / 3.23 / 3.23 / 1.85 tokens per round,
-# 242.8 / 167.6 / 105.8 / 57.0 tok/s/user)
+# 19.3 / 18.9 / 29.0 / 31.0 ms per round, 247.3 / 171.1 / 111.3 / 59.8 tok/s/user)
 MIN_AGREEMENT = 0.9
 MIN_ACCEPT = {32: 3.5, 64: 3.0, 128: 2.5, 256: 1.7}
 RESULT_ENV = "DFLASH_BATCHED_RESULT"  # a JSON file to write the run's result to (tests/test_dflash_galaxy_dp.py)
