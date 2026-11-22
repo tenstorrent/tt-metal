@@ -355,7 +355,11 @@ def test_relay_chunk_scan_matches_reference(mesh_device, interval):
 
 # Core layouts besides K3's four cores per head: one core per head, whose share of the terms is over the L1 budget and
 # streams from DRAM (and whose hop core corrects every chunk), and two, with the terms in place.
-_LAYOUTS = {"one-core-per-head": (_HEADS, ttnn.BufferType.DRAM), "two-cores-per-head": (2 * _HEADS, ttnn.BufferType.L1)}
+# max_cores also counts the relay cores: _HEADS // 2 of them, two heads each.
+_LAYOUTS = {
+    "one-core-per-head": (_HEADS + _HEADS // 2, ttnn.BufferType.DRAM),
+    "two-cores-per-head": (2 * _HEADS + _HEADS // 2, ttnn.BufferType.L1),
+}
 
 
 @_MESH
@@ -555,7 +559,7 @@ def test_relay_chunk_scan_after_counter_reset(mesh_device):
 # The model's layout (terms in each core's L1), terms streamed from DRAM (one core per head) and FP32 output.
 _DETERMINISM_CASES = {
     "in-place": {},
-    "streamed": {"max_cores": _HEADS},
+    "streamed": {"max_cores": _HEADS + _HEADS // 2},
     "float32-output": {"output_dtype": ttnn.float32},
 }
 
