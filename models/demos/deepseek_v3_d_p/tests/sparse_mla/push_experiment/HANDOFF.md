@@ -33,6 +33,22 @@ working DSA layers, not 6) and GLM layers 0-7 (full 0, 1, 2, 6; shared 3-5). Run
   gather), plan 0.28, push 2.23, sparse SDPA 0.82. GLM full layer at 1M: indexer 3.87, stems 0.42, top-k 0.59,
   plan 0.21, push 0.65, SDPA 0.88; the shared layer after it: REST push 49 us + SDPA.
 
+### 0.2b Full-depth A/B (local, real weights, full 1M request; host times)
+
+| Run | GLM-5.3 78 layers, SC1 8x4 | K3.1 L24 (5 working DSA layers) |
+|---|---|---|
+| Baseline (full-layer push off; shared layers already on push v2) | TTFT 92,216 ms, 9,384 tok/s @1020k | 46,043 ms |
+| Full push, one cutoff (GLM 204,800 / K3.1 300,000) | **87,295 ms (-5.3%), 10,730 tok/s (+14.3%)** | 46,035 ms (loses ~3 ms/chunk at 300-600k, -4.2 at 1M) |
+| Full push, per-layer cutoffs | 87,253 ms (no gain over one cutoff; not adopted) | **45,679 ms (-0.8%; never loses, -1.3..-5.1 ms/chunk from 300k)** |
+| Full push everywhere (cutoff 1 slab) | - | 46,416 ms (+0.8%) |
+
+GLM per-chunk at 900k-1M: 528.5 -> 467.5 ms (-11.5%); 300-400k -1.9%; below 300k within noise. KV PCC is identical
+between baseline and push runs (same per-layer nope/pe values), PCC gates pass everywhere. The GLM perf gate on this
+host reports the baseline slower than CI's configured one (9,384 vs 9,906 tok/s) and the push run faster (10,730).
+K3.1 per-layer table (committed in run_multirank_pcc.sh's kimi_k3_1 case): `3:307200,7:870400,11:4194304,15:409600,
+19:972800` (layer 11 never pushes). GLM per-layer crossovers (from RT, linear gather model) range 205k-717k
+(layers 38-62 ~300-512k, 42 at 717k), but applying them changed nothing measurable.
+
 ### 0.3 Answers to the open questions
 
 - **Why the push is slow at long context / low eth utilization.** It is fabric-bound, not kernel-bound. With
