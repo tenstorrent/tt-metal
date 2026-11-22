@@ -20,7 +20,8 @@ import torch
 
 import ttnn
 from models.demos.inkling2_mini.convert import cache as wcache
-from models.demos.inkling2_mini.tt.attention import DecodePositions, Inkling2Attention
+from models.demos.inkling2_mini.tt.attention_fast import DecodePositionsFast as DecodePositions
+from models.demos.inkling2_mini.tt.attention_fast import Inkling2AttentionFast as Inkling2Attention
 from models.demos.inkling2_mini.tt.moe import Inkling2MoE
 from models.demos.inkling2_mini.tt.residual import (
     AttnRes,
