@@ -23,7 +23,7 @@ ttnn::Tensor update_padded_kv_cache(
     std::optional<uint32_t> tp_axis,
     const std::optional<ttnn::Tensor>& rope,
     const std::optional<ttnn::Tensor>& scales,
-    std::optional<CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     return ttnn::prim::bringup::update_padded_kv_cache(
         cache,
         input,
@@ -60,7 +60,7 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& scales,
     uint32_t input_row_offset,
     std::optional<uint32_t> input_rows,
-    std::optional<CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     return ttnn::prim::bringup::update_padded_kv_cache(
         cache,
         input,

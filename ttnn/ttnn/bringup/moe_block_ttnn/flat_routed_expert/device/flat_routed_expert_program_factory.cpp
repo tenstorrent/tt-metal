@@ -36,8 +36,8 @@ using Options = std::map<std::string, uint32_t>;
 
 constexpr uint32_t XRD_BATCH = 2, DW_BATCH = 2;
 // semaphore ids (16 created in order on every role core)
-constexpr uint32_t DATA = 4, HARR = 5, GO = 6, DONE = 7, GATH = 8, XARR = 9, SFREE = 10, HFREE = 11, HSFREE = 12,
-                   GATH1 = 14, GATH2 = 15;
+constexpr uint32_t DATA = 4, HARR = 5, GO = 6, DONE = 7, GATH = 8, XARR = 9, SFREE = 10, HSFREE = 12, GATH1 = 14,
+                   GATH2 = 15;
 // the gate/up cores' grant counter: the receiver counts the landing slots it frees, the weight reads
 // (gate_up_weight_read.hpp) fill granted slots only (id 1 is otherwise unused on them)
 constexpr uint32_t GRANT = 1;

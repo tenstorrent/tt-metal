@@ -922,7 +922,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     }
     uint32_t num_blocks_written = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
-        const CoreCoord& core = cores.at(i);
+        const tt::tt_metal::CoreCoord& core = cores.at(i);
         const uint32_t num_blocks_per_core = (i < g1_numcores) ? num_blocks_per_core_g1 : num_blocks_per_core_g2;
 
         // Reader: (num_pages, core_blocks_written) -- it derives its source rows from the common
@@ -1027,7 +1027,7 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& scales,
     uint32_t input_row_offset,
     std::optional<uint32_t> input_rows,
-    std::optional<CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     using OperationType = ttnn::operations::bringup::update_padded_kv_cache::UpdatePaddedKvCacheDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
         .slot_idx = slot_idx,

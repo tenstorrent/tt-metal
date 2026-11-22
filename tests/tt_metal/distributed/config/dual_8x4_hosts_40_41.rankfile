@@ -1,0 +1,7 @@
+# OpenMPI rankfile for the two-host fabric (hosts 40 and 41 only).
+# The two Galaxies form ONE 16x4 mesh split 8 rows per host:
+#   rank 0 / mesh_host_rank 0 -> DC16-2-BG-0202-u20-40
+#   rank 1 / mesh_host_rank 1 -> DC16-2-BG-0202-u13-41
+# Must stay consistent with dual_8x4_hosts_40_41_rank_bindings.yaml.
+rank 0=DC16-2-BG-0202-u20-40 slot=0
+rank 1=DC16-2-BG-0202-u13-41 slot=0

@@ -1,0 +1,26 @@
+# --- Mesh Descriptors ------------------------------------------------------
+# ONE logical 16x4 Blackhole mesh spanning both hosts, split 8 rows per host:
+#   rows 0-7  -> DC16-2-BG-0202-u20-40
+#   rows 8-15 -> DC16-2-BG-0202-u13-41
+#
+# This is the shape the repo's multi-galaxy CCL tests use for DUAL_BH
+# (tt_metal/fabric/mesh_graph_descriptors/16x4_dual_bh_galaxy_2d_mesh_graph_descriptor.textproto),
+# which is the only cross-host configuration exercised end-to-end in this tree.
+# A single mesh matters: ttnn.all_reduce shards along a mesh axis, so the two
+# hosts must be rows of ONE mesh, not two separate meshes.
+#
+# Only hosts 40 and 41 are ranks. Each Galaxy's other half (trays 3-4 on host 40,
+# trays 1-2 on host 41) has QSFP channels 8/9 cabled to hosts 42/43; those hosts
+# are not part of the job, so discovery drops those links as one-sided and the
+# ring is left physically connected but unroutable (software isolation).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 16, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 2, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

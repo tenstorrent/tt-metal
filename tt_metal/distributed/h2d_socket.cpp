@@ -1226,8 +1226,6 @@ bool H2DSocketTryWriteAccess::writes_through_window(const distributed::H2DSocket
     return socket.pimpl_->writes_through_window();
 }
 
-void H2DSocketDramRecvAccess::abandon_receiver(distributed::H2DSocket& socket) { socket.abandon_receiver(); }
-
 std::unique_ptr<distributed::H2DSocket> H2DSocketDramRecvAccess::create(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const distributed::MeshCoreCoord& recv_core,
