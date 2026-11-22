@@ -1,0 +1,55 @@
+---
+# PR Gate code-analysis, Include cleaner (tt_metal API headers): every
+# tt_metal public header must include exactly what it uses (clang-tidy
+# misc-include-cleaner). Each header is analyzed as its own main file with
+# the flags of its CMake header-verification TU; only configure and the
+# generated API headers are needed, no build. Any finding, or any header that
+# cannot be analyzed, fails the job.
+jobs:
+  - id: include-cleaner
+    name: Include cleaner (tt_metal API headers)
+    description: Check that every tt_metal public header includes exactly what it uses (misc-include-cleaner)
+    timeout: 30m
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '8', memory: 16Gi, ephemeral-storage: 30Gi}
+          limits: {memory: 24Gi, ephemeral-storage: 50Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '8'}
+      - {name: CCACHE_COMPILERCHECK, value: content}
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+    # asan-build's CPM source cache: the same dependencies.
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: unit-tests
+        kind: shell
+        shell:
+          run:
+            - python3 .github/scripts/utils/test_run_api_header_include_cleaner.py
+      - id: configure
+        kind: shell
+        shell:
+          run:
+            - cmake --preset iwyu
+            - cmake --build .build/iwyu --target metalium_GeneratedHeaders
+      - id: include-cleaner
+        kind: shell
+        shell:
+          run:
+            - .github/scripts/utils/run_api_header_include_cleaner.py .build/iwyu --all --fail-on-findings -j 8
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            # asan-build and clang-tidy publish the normalised tree.
+            - rm -rf .cpmcache

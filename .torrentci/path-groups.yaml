@@ -23,10 +23,6 @@
 # - Any .gitmodules change is a submodule change.
 #
 # Conditions for PR Gate jobs that are not members yet:
-#   verify-time-budgets: unconditional
-#   clang-tidy:        {changed: [clang-tidy-source, cmake-raw, clang-tidy-config, llk-wormhole, llk-blackhole,
-#                                 llk-common, llk-sfpi, submodule, clang-tidy-key-workflow, image]}
-#   include-cleaner:   {changed: [{all: [tt-metalium-api-headers, <each clang-tidy group>]}..., image]}
 #   runtime-examples:  {changed: [cmake, tt-metalium, image]}
 #   ttnn-examples:     {changed: [cmake, tt-metalium, tt-nn, image]}
 #   llk-smoke-p150b-*: {changed: [llk-common, llk-sfpi, llk-tests, llk-ci, llk-blackhole, image]}
