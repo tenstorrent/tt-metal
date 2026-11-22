@@ -27,6 +27,7 @@ import argparse
 import json
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -70,13 +71,45 @@ INPUTS = {
     "moe-l2": (2, GOLDEN / "k31-1m-moe-l2-input"),
     "dsa-l3": (3, GOLDEN / "k31-1m-dsa-l3-input"),
 }
-TAPS = ("kda-l0", *INPUTS, "stream")
-STREAM_KEYS = ("kda_input_1", "kda_input_2", "moe_input_1", "moe_input_2", "dsa_input_3", "live_0", "live_1", "live_2")
 
 
-def tap_dirs(out: Path) -> dict[str, Path]:
-    """The run directory of each tap of a device-chain run in ``out``."""
-    return {name: out / name for name in TAPS}
+@dataclass(frozen=True)
+class Taps:
+    """What a device-chain run of layers ``0..num_layers-1`` taps, by the reference chain's products: the KDA layers
+    (carry; output from layer 1), the MoE layers (output, routing) and the DSA layers (output, top-k, caches) the chain
+    holds, and the ``stream``: each tapped layer's input and the live residual after every layer but the last."""
+
+    num_layers: int
+    kda: tuple[int, ...]
+    moe: tuple[int, ...]
+    dsa: tuple[int, ...]
+
+    @property
+    def stream_keys(self) -> tuple[str, ...]:
+        keys = [f"kda_input_{l}" for l in self.kda if l] + [f"moe_input_{l}" for l in self.moe]
+        return (*keys, *(f"dsa_input_{l}" for l in self.dsa), *(f"live_{l}" for l in range(self.num_layers - 1)))
+
+    def dirs(self, out: Path) -> dict[str, Path]:
+        """The run directory of each tap in ``out``."""
+        names = [f"kda-l{l}" for l in self.kda] + [f"moe-l{l}" for l in self.moe] + [f"dsa-l{l}" for l in self.dsa]
+        return {name: out / name for name in (*names, "stream")}
+
+
+LAYERS_0_3 = Taps(num_layers=4, kda=(0, 1, 2), moe=(1, 2), dsa=(3,))  # ``fp64_chain``: layer 3's MoE is not stored
+STREAM_KEYS = LAYERS_0_3.stream_keys
+
+
+def chain_taps(chain: Path) -> Taps:
+    """The taps a run scored against ``chain`` takes: ``fp64_chain`` (layers 0-3) or ``fp64_deep_chain`` (every layer
+    of its ``kinds``)."""
+    m = json.loads((chain / MANIFEST).read_text())
+    if m["producer"] == "fp64_chain":
+        return LAYERS_0_3
+    if m["producer"] != "fp64_deep_chain":
+        raise ValueError(f"{chain}: no device-chain taps for producer {m['producer']}")
+    kinds = {int(l): k for l, k in m["kinds"].items()}
+    pick = lambda site, kind: tuple(l for l in sorted(kinds) if kinds[l][site] == kind)  # noqa: E731
+    return Taps(num_layers=len(kinds), kda=pick(0, "kda"), moe=pick(1, "moe"), dsa=pick(0, "dsa"))
 
 
 def load_token_ids(trace: Path, count: int) -> torch.Tensor:
