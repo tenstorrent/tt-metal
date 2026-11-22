@@ -374,7 +374,11 @@ finally:
 - **Reading the run.** `trainer.loss_to_float(loss)`, `trainer.current_learning_rate()` (a list, one LR per
   optimizer in `optimizer` order), `trainer.parameter_counts()` (total, trainable), `trainer.global_step`,
   `trainer.epoch`, `trainer.total_steps()` (the last step is `global_step == total_steps()`) and
-  `trainer.validation_enabled`.
+  `trainer.validation_enabled`. A loss that a hook gets, such as `window_loss` in `on_optimizer_step_end` or
+  `val_loss` in `on_validation_end`, may be a device tensor. Convert it with `trainer.loss_to_float` inside the hook
+  and keep the float, never the tensor: once `cleanup` has closed the device, reading the tensor fails, and freeing
+  it can crash the process
+  ([tt-metal#57798](https://github.com/tenstorrent/tt-metal/issues/57798)).
 - **Saving on your own schedule.** `trainer.save_checkpoint(path, metadata)` writes a checkpoint as the run saves
   them.
 - **The trained model.** With `CheckpointCallback`, it is the last entry of

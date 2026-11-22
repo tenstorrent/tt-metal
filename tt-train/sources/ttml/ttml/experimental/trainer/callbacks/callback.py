@@ -16,6 +16,11 @@ class Callback:
 
     A hook may raise to end training: the exception goes to every callback's ``on_train_error`` and then out
     of ``train()``.
+
+    A loss a hook gets (``loss``, ``window_loss``, ``val_loss``) may be a device tensor, which must not outlive
+    the device that ``trainer.cleanup`` closes. Read it with ``trainer.loss_to_float`` in the hook and keep the
+    float, not the loss. A callback that sums losses across hooks drops the sum by the end of the run and in
+    ``on_train_error``.
     """
 
     def on_train_start(self, trainer: Any) -> None:
@@ -43,7 +48,7 @@ class Callback:
         pass
 
     def on_optimizer_step_end(self, trainer: Any, window_loss: Any) -> None:
-        """``window_loss`` is the mean loss of the step's micro-batches; read it with ``trainer.loss_to_float``."""
+        """``window_loss`` is the mean loss of the step's micro-batches, a loss to read and not keep (see above)."""
 
     def on_step_end(self, trainer: Any, global_step: int) -> None:
         pass
@@ -71,7 +76,7 @@ class Callback:
         pass
 
     def on_validation_end(self, trainer: Any, val_loss: Any) -> None:
-        pass
+        """``val_loss`` is the mean loss of the validation batches, a loss to read and not keep (see above)."""
 
     def on_setup_error(self, trainer: Any, exception: BaseException) -> None:
         """``setup`` failed and will re-raise ``exception``; ``trainer.logger`` is ``None`` if it failed first."""

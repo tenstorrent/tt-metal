@@ -24,6 +24,8 @@ class ValidationMetricsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # The trainer validates before training and every this many optimizer steps; 0 disables validation.
+    # TODO: each validation runs the whole validation split, which for 8B on Alpaca can take minutes and runs dozens
+    # of times a run. Figure out if running the whole validation split poses problems in terms of performance.
     frequency: int = Field(default=0, ge=0)
     # Available: "loss".
     metric_names: list[str] = Field(default_factory=lambda: ["loss"])
