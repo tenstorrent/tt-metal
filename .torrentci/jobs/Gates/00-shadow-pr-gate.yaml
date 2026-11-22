@@ -8,3 +8,9 @@ dashboards:
     report: {check: true}
     members:
       - job: asan-build
+      - job: smoke-cpu-asan
+      - job: smoke-n150-asan
+      - job: ttnn-smoke-n150-asan
+      - job: llk-hardware-free
+      - job: llk-smoke-n150-g1
+      - job: llk-smoke-n150-g2

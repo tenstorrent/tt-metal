@@ -1,0 +1,98 @@
+---
+# PR Gate llk-smoke-tests on one n150, as its two pytest-split groups.
+# 32 GiB: at 24 GiB the suite peaked at 23.5 GB and xdist workers were killed.
+jobs:
+  - id: llk-smoke-n150-g1
+    name: LLK smoke n150 (1/2)
+    description: Run PR Gate LLK smoke tests group 1/2 on one n150 (VM path, vfio-vm)
+    timeout: 90m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        accelerator: {type: n150, count: 1}
+        resources:
+          requests: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+          limits: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+    env:
+      - {name: HOME, value: /tmp/home}
+      - {name: CHIP_ARCH, value: wormhole}
+      - {name: PYTEST_MARKERS, value: not perf and not nightly and not quasar and not accuracy}
+    steps:
+      - id: setup
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$HOME"
+            - ls -l /dev/tenstorrent/
+            - "nproc; grep -m1 'model name' /proc/cpuinfo; grep -m1 -o -w -E 'avx512f|avx2' /proc/cpuinfo | sort -u | tr '\\n' ' '; echo"
+            - "free -g; df -hT . /tmp; grep -E ' (/|/tmp|/workspace[^ ]*) ' /proc/mounts || true"
+            - python3 -c 'import os; print("cpu_count", os.cpu_count(), "affinity", len(os.sched_getaffinity(0)))'
+            - python3 -m venv /tmp/uv && /tmp/uv/bin/pip install -q uv
+            - /tmp/uv/bin/uv venv -q --python 3.10 /tmp/venv
+            - >-
+              /tmp/uv/bin/uv pip install -q --python /tmp/venv/bin/python --index-strategy unsafe-best-match
+              -r tt_metal/tt-llk/tests/requirements.txt
+            # The guest /workspace is a 9p share, about 3x slower for kernel builds (torrentci#2327).
+            - >-
+              mkdir -p /tmp/ws && t0=$(date +%s) && tar -C "$PWD" --exclude=./.git -cf - . | tar -C /tmp/ws -xf -
+              && echo "copy-in seconds: $(( $(date +%s) - t0 ))"
+            - du -sh /tmp/ws
+            - . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests && ./setup_testing_env.sh
+      - id: group-1
+        kind: shell
+        shell:
+          run:
+            - >-
+              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests && rc=0;
+              timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal -m "$PYTEST_MARKERS"
+              --splits 2 --group 1 --timeout=60 --durations=25 --junitxml=pytest-report-wormhole-1.xml .
+              >/tmp/pytest-1.log 2>&1 || rc=$?; tail -c 12000 /tmp/pytest-1.log; exit $rc
+  - id: llk-smoke-n150-g2
+    name: LLK smoke n150 (2/2)
+    description: Run PR Gate LLK smoke tests group 2/2 on one n150 (VM path, vfio-vm)
+    timeout: 90m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        accelerator: {type: n150, count: 1}
+        resources:
+          requests: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+          limits: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+    env:
+      - {name: HOME, value: /tmp/home}
+      - {name: CHIP_ARCH, value: wormhole}
+      - {name: PYTEST_MARKERS, value: not perf and not nightly and not quasar and not accuracy}
+    steps:
+      - id: setup
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$HOME"
+            - ls -l /dev/tenstorrent/
+            - "nproc; grep -m1 'model name' /proc/cpuinfo; grep -m1 -o -w -E 'avx512f|avx2' /proc/cpuinfo | sort -u | tr '\\n' ' '; echo"
+            - "free -g; df -hT . /tmp; grep -E ' (/|/tmp|/workspace[^ ]*) ' /proc/mounts || true"
+            - python3 -c 'import os; print("cpu_count", os.cpu_count(), "affinity", len(os.sched_getaffinity(0)))'
+            - python3 -m venv /tmp/uv && /tmp/uv/bin/pip install -q uv
+            - /tmp/uv/bin/uv venv -q --python 3.10 /tmp/venv
+            - >-
+              /tmp/uv/bin/uv pip install -q --python /tmp/venv/bin/python --index-strategy unsafe-best-match
+              -r tt_metal/tt-llk/tests/requirements.txt
+            # The guest /workspace is a 9p share, about 3x slower for kernel builds (torrentci#2327).
+            - >-
+              mkdir -p /tmp/ws && t0=$(date +%s) && tar -C "$PWD" --exclude=./.git -cf - . | tar -C /tmp/ws -xf -
+              && echo "copy-in seconds: $(( $(date +%s) - t0 ))"
+            - du -sh /tmp/ws
+            - . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests && ./setup_testing_env.sh
+      - id: group-2
+        kind: shell
+        shell:
+          run:
+            - >-
+              ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests && rc=0;
+              timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal -m "$PYTEST_MARKERS"
+              --splits 2 --group 2 --timeout=60 --durations=25 --junitxml=pytest-report-wormhole-2.xml .
+              >/tmp/pytest-2.log 2>&1 || rc=$?; tail -c 12000 /tmp/pytest-2.log; exit $rc
