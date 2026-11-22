@@ -17,7 +17,10 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <internal/mesh_device.hpp>
+#include <fmt/format.h>
 #include <tt_stl/assert.hpp>
+
+#include "ttnn/operations/ccl/common/host/mesh_chip_exchange.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
@@ -203,6 +206,38 @@ StreamPlacements decide_device_placement(
     return placements;
 }
 
+// Words per stream: id, logical core (2), virtual core (2), downstream coordinate (mesh rank), link index.
+constexpr uint32_t stream_words(std::size_t mesh_rank) { return 1 + 2 + 2 + static_cast<uint32_t>(mesh_rank) + 1; }
+
+std::vector<uint32_t> encode_placement(const StreamPlacements& streams, uint32_t num_streams, std::size_t mesh_rank) {
+    ttnn::operations::ccl::common::RecordWriter writer(num_streams * stream_words(mesh_rank));
+    for (const auto& [stream, placement] : streams) {
+        writer.put(stream);
+        writer.put_core(placement.worker_logical);
+        writer.put_core(placement.worker_virtual);
+        writer.put_coord(placement.downstream_coord);
+        writer.put(placement.link_idx);
+    }
+    return writer.finish();
+}
+
+StreamPlacements decode_placement(ttnn::MeshDevice* mesh, const std::vector<uint32_t>& words, uint32_t num_streams) {
+    ttnn::operations::ccl::common::RecordReader reader(words);
+    StreamPlacements streams;
+    for (uint32_t i = 0; i < num_streams; i++) {
+        const StreamId stream = reader.get();
+        const auto worker_logical = reader.get_core();
+        const auto worker_virtual = reader.get_core();
+        const auto downstream = reader.get_coord(mesh->shape().dims());
+        const uint32_t link_idx = reader.get();
+        streams.emplace(
+            stream,
+            StreamPlacement{
+                worker_logical, worker_virtual, downstream, mesh->get_fabric_node_id(downstream), link_idx});
+    }
+    return streams;
+}
+
 }  // namespace
 
 MeshPlacement decide_placement(
@@ -218,9 +253,22 @@ MeshPlacement decide_placement(
     for (const auto& core : cores) {
         rows[core.y].push_back(core);
     }
+    // A rank can only read the layout of its own chips, so each decides its own and the ranks swap results.
+    const uint32_t num_streams = stream_count(num_links);
+    const std::size_t mesh_rank = mesh->shape().dims();
+    const auto records = ttnn::operations::ccl::common::exchange_chip_records(
+        *mesh,
+        ttnn::operations::ccl::common::mesh_distributed_context(*mesh),
+        num_streams * stream_words(mesh_rank),
+        [mesh, axis, num_links, &rows, num_cores = cores.size(), num_streams, mesh_rank](
+            const ttnn::MeshCoordinate& coord) {
+            return encode_placement(
+                decide_device_placement(mesh, coord, axis, num_links, rows, num_cores), num_streams, mesh_rank);
+        },
+        fmt::format("dispatch_fabric2d axis={} links={} cores={}", axis, num_links, allowed_cores));
     MeshPlacement placement;
     for (const auto& coord : ttnn::MeshCoordinateRange(mesh->shape())) {
-        placement.emplace(coord, decide_device_placement(mesh, coord, axis, num_links, rows, cores.size()));
+        placement.emplace(coord, decode_placement(mesh, records.at(coord.to_linear_index(mesh->shape())), num_streams));
     }
     return placement;
 }

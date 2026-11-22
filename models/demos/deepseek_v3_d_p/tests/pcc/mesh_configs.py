@@ -201,6 +201,8 @@ ALL_MESH_CONFIGS = [
         "fabric2d-torus-x-4x4-2link",
         reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
+    # One 4x4 [RING, RING] prefill stage: one Galaxy tray half pair, or a seam stage that two hosts share (rows 0-1
+    # on one host, rows 2-3 on the other). Needs a 4x4 [RING, RING] descriptor in TT_MESH_GRAPH_DESC_PATH.
     _mesh_param(
         (4, 4),
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
