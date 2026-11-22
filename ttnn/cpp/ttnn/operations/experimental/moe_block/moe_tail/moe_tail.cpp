@@ -145,7 +145,7 @@ Tensor moe_tail(
                 tt::tt_metal::TensorLayout(
                     DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::TILE), ttnn::DRAM_MEMORY_CONFIG)));
     }
-    return ttnn::prim::moe_block_tail(params, std::move(inputs));
+    return ttnn::prim::moe_block_tail(params, inputs);
 }
 
 void plan_moe_tail(MoEBlockResources& resources, uint32_t row_blocks, DataType dtype) {

@@ -20,14 +20,14 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include <impl/debug/watcher_server.hpp>
 #include <internal/l1_ecc_halt.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "internal/tt-1xx/blackhole/eth_fw_api.h"
 #include "llrt.hpp"
 #include "binary_metadata.hpp"

@@ -73,7 +73,8 @@ struct MoETailInputs {
     std::optional<Tensor> shared_expert;  // engine: [1, 1, S/SP, H/TP]; all-to-all: [1, 1, S/N, H] or none; TILE, DRAM
     std::optional<Tensor> w_up;           // engine: prepare_moe_tail_weights' W' (DRAM, bank-sharded regions)
     // The resources' persistent words (tensor args, so a cache hit rebinds their addresses)
-    Tensor ready{};  // the fence's ready word on every port core (the per-row-tile words are per-call CBs)
+    Tensor ready{};  // NOLINT(readability-redundant-member-init): an explicit default constructor; the fence's ready
+                     // word on every port core (the per-row-tile words are per-call CBs)
     std::optional<Tensor> arrival;  // all-to-all: the ports' arrival counters
     std::optional<Tensor> staging;  // all-to-all: z [1, 1, S/N, H] TILE, DRAM (the blocks for other chips)
     std::optional<Tensor> output;   // preallocated output

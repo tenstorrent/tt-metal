@@ -47,7 +47,7 @@ void def_kwargs_init(nb::class_<T>& cls) {
             new (self) T(value);
         },
         "Default values; any field can be given as a keyword.");
-    cls.def(nb::self == nb::self);
+    cls.def(nb::self == nb::self);  // NOLINT(misc-redundant-expression): binds operator==, not a comparison
 }
 
 nb::tuple chip_tuple(ChipCoord c) { return nb::make_tuple(c.r, c.c); }

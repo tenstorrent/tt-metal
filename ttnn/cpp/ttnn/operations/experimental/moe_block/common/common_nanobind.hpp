@@ -9,7 +9,8 @@
 namespace ttnn::operations::experimental::moe_block {
 
 namespace nb = nanobind;
-// Config structs, shared host math and MoEBlockResources into ttnn.experimental.moe_block.
+// Config structs, shared host math and MoEBlockResources into the moe_block submodule
+// (ttnn._ttnn.operations.experimental.moe_block; the ops are also registered as ttnn.experimental.moe_block.<op>).
 void bind_common(nb::module_& mod);
 
 }  // namespace ttnn::operations::experimental::moe_block

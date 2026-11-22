@@ -106,7 +106,8 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
             format_descriptor.buffer_index,
             format_descriptor.data_format,
             format_descriptor.page_size,
-            format_descriptor.tile);
+            format_descriptor.tile,
+            format_descriptor.face_geometry);
     };
 
     auto hash_circular_buffer = [&](const CBDescriptor& cb) -> size_t {
@@ -123,7 +124,17 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
             ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
         }
         ttsl::hash::hash_combine(hash, cb.buffer != nullptr);
+        // A global CB's buffer and config addresses and its sender/receiver layout are baked into the
+        // program, and a cache hit does not re-point them (only tensor-backed CBs are), so key which
+        // global CB this is, not just whether there is one.
         ttsl::hash::hash_combine(hash, cb.global_circular_buffer != nullptr);
+        if (cb.global_circular_buffer != nullptr) {
+            const auto& global_cb = *cb.global_circular_buffer;
+            ttsl::hash::hash_combine(
+                hash,
+                ttsl::hash::hash_objects_with_default_seed(
+                    global_cb.buffer_address(), global_cb.config_address(), global_cb.attribute_values()));
+        }
         return hash;
     };
 
@@ -146,166 +157,21 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
     return hash;
 }
 
-namespace {
-
-namespace m2 = tt::tt_metal::experimental;
-
-// Every field below is structural: it changes the compiled program or its resource layout.
-// Anything that varies per dispatch (runtime arg VALUES, tensor addresses) must stay out.
-
-size_t hash_nodes(const tt::tt_metal::Nodes& nodes) {
-    return std::visit([](const auto& n) { return ttsl::hash::hash_objects_with_default_seed(n); }, nodes);
-}
-
-size_t hash_source(const std::variant<std::filesystem::path, tt::tt_metal::KernelSpec::SourceCode>& source) {
-    return std::visit(
-        ttsl::overloaded{
-            [](const std::filesystem::path& p) { return ttsl::hash::hash_objects_with_default_seed(p.string()); },
-            [](const tt::tt_metal::KernelSpec::SourceCode& c) { return ttsl::hash::hash_objects_with_default_seed(c.code); }},
-        source);
-}
-
-size_t hash_hw_config(const std::variant<tt::tt_metal::DataMovementHardwareConfig, tt::tt_metal::ComputeHardwareConfig>& hw_config) {
-    return std::visit(
-        ttsl::overloaded{
-            [](const tt::tt_metal::DataMovementHardwareConfig& dm) {
-                size_t hash = ttsl::hash::hash_objects_with_default_seed(0);
-                if (const auto& c = dm.config_1xx) {
-                    ttsl::hash::hash_combine(
-                        hash, ttsl::hash::hash_objects_with_default_seed(1, c->processor, c->noc, c->noc_mode));
-                }
-                if (const auto& c = dm.config_2xx) {
-                    ttsl::hash::hash_combine(
-                        hash,
-                        ttsl::hash::hash_objects_with_default_seed(
-                            2, c->disable_dfb_implicit_sync_for, c->disable_dfb_implicit_sync_for_all));
-                }
-                return hash;
-            },
-            [](const tt::tt_metal::ComputeHardwareConfig& c) {
-                size_t hash = ttsl::hash::hash_objects_with_default_seed(
-                    3,
-                    c.fpu_math_fidelity,
-                    c.sfpu_precision_mode,
-                    c.enable_32_bit_dest,
-                    c.double_buffer_dest,
-                    c.unpack_modes);
-                if (c.config_1xx) {
-                    ttsl::hash::hash_combine(
-                        hash, ttsl::hash::hash_objects_with_default_seed(4, c.config_1xx->bfp_pack_precision_mode));
-                }
-                if (c.config_2xx) {
-                    ttsl::hash::hash_combine(hash, ttsl::hash::hash_objects_with_default_seed(5));
-                }
-                return hash;
-            }},
-        hw_config);
-}
-
-size_t hash_kernel_spec(const tt::tt_metal::KernelSpec& kernel) {
-    size_t hash = ttsl::hash::hash_objects_with_default_seed(*kernel.unique_id, kernel.num_threads);
-    ttsl::hash::hash_combine(hash, hash_source(kernel.source));
-
-    for (const auto& include_path : kernel.compiler_options.include_paths) {
-        ttsl::hash::hash_combine(hash, include_path.string());
-    }
-    ttsl::hash::hash_combine(hash, kernel.compiler_options.defines);
-    ttsl::hash::hash_combine(hash, kernel.compiler_options.opt_level);
-
-    for (const auto& b : kernel.dfb_bindings) {
+ttsl::hash::hash_t compute_io_tensors_hash(const std::vector<Tensor>& io_tensors) {
+    // Each io tensor's TensorLayout (dtype, page config, memory config, Alignment) and the io count.
+    // Metal 2.0 requires an exact layout match on every cache hit, so the key must cover each layout
+    // (#59915). Shapes stay out, so one program can serve tensors of different sizes (e.g. sequence
+    // lengths) when the descriptor itself does not change.
+    size_t hash = io_tensors.size();
+    for (const auto& tensor : io_tensors) {
         ttsl::hash::hash_combine(
-            hash,
-            ttsl::hash::hash_objects_with_default_seed(
-                *b.dfb_spec_name, b.accessor_name, b.endpoint_type, b.access_pattern));
-    }
-    for (const auto& b : kernel.semaphore_bindings) {
-        ttsl::hash::hash_combine(
-            hash, ttsl::hash::hash_objects_with_default_seed(*b.semaphore_spec_name, b.accessor_name));
-    }
-    for (const auto& b : kernel.scratchpad_bindings) {
-        ttsl::hash::hash_combine(
-            hash, ttsl::hash::hash_objects_with_default_seed(*b.scratchpad_spec_name, b.accessor_name));
-    }
-    for (const auto& b : kernel.tensor_bindings) {
-        ttsl::hash::hash_combine(
-            hash, ttsl::hash::hash_objects_with_default_seed(*b.tensor_parameter_name, b.accessor_name));
-    }
-
-    // Arg NAMES are structural (they become generated accessors); arg VALUES are not.
-    ttsl::hash::hash_combine(hash, kernel.compile_time_args);
-    for (const auto& name : kernel.runtime_arg_schema.runtime_arg_names) {
-        ttsl::hash::hash_combine(hash, name);
-    }
-    for (const auto& name : kernel.runtime_arg_schema.common_runtime_arg_names) {
-        ttsl::hash::hash_combine(hash, name);
-    }
-
-    ttsl::hash::hash_combine(hash, hash_hw_config(kernel.hw_config));
-    ttsl::hash::hash_combine(
-        hash,
-        ttsl::hash::hash_objects_with_default_seed(
-            kernel.advanced_options.num_runtime_varargs, kernel.advanced_options.num_common_runtime_varargs));
-    return hash;
-}
-
-size_t hash_dataflow_buffer(const tt::tt_metal::DataflowBufferSpec& dfb) {
-    size_t hash = ttsl::hash::hash_objects_with_default_seed(
-        *dfb.unique_id,
-        dfb.entry_size,
-        dfb.num_entries,
-        dfb.data_format_metadata,
-        dfb.tile_format_metadata,
-        dfb.advanced_options.allow_instance_multi_binding);
-    ttsl::hash::hash_combine(hash, dfb.borrowed_from.has_value());
-    if (dfb.borrowed_from.has_value()) {
-        ttsl::hash::hash_combine(hash, **dfb.borrowed_from);
-    }
-    for (const auto& alias : dfb.advanced_options.alias_with) {
-        ttsl::hash::hash_combine(hash, *alias);
-    }
-    return hash;
-}
-
-}  // namespace
-
-ttsl::hash::hash_t compute_program_spec_hash(const tt::tt_metal::ProgramSpec& spec) {
-    size_t hash = ttsl::hash::hash_objects_with_default_seed(spec.name);
-
-    for (const auto& kernel : spec.kernels) {
-        ttsl::hash::hash_combine(hash, hash_kernel_spec(kernel));
-    }
-    for (const auto& dfb : spec.dataflow_buffers) {
-        ttsl::hash::hash_combine(hash, hash_dataflow_buffer(dfb));
-    }
-    for (const auto& semaphore : spec.semaphores) {
-        ttsl::hash::hash_combine(hash, ttsl::hash::hash_objects_with_default_seed(*semaphore.unique_id));
-        ttsl::hash::hash_combine(hash, hash_nodes(semaphore.target_nodes));
-    }
-    for (const auto& scratchpad : spec.scratchpads) {
-        ttsl::hash::hash_combine(
-            hash, ttsl::hash::hash_objects_with_default_seed(*scratchpad.unique_id, scratchpad.size_per_node));
-    }
-    for (const auto& param : spec.tensor_parameters) {
-        ttsl::hash::hash_combine(
-            hash,
-            ttsl::hash::hash_objects_with_default_seed(
-                *param.unique_id,
-                param.spec,
-                param.relaxations.match_padded_shape_only,
-                param.relaxations.dynamic_tensor_shape));
-    }
-    for (const auto& work_unit : spec.work_units) {
-        ttsl::hash::hash_combine(hash, ttsl::hash::hash_objects_with_default_seed(work_unit.name));
-        for (const auto& kernel_name : work_unit.kernels) {
-            ttsl::hash::hash_combine(hash, *kernel_name);
-        }
-        ttsl::hash::hash_combine(hash, hash_nodes(work_unit.target_nodes));
+            hash, ttsl::hash::hash_objects_with_default_seed(tensor.tensor_spec().tensor_layout()));
     }
     return hash;
 }
 
 ttsl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     size_t hash = 0;
     if (operation_attributes.is_spec()) {
         const auto& spec_program = operation_attributes.spec_program();
@@ -320,6 +186,7 @@ ttsl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
         ttsl::hash::hash_combine(hash, mesh_coord_range);
         ttsl::hash::hash_combine(hash, compute_program_descriptor_hash(program_descriptor));
     }
+    ttsl::hash::hash_combine(hash, compute_io_tensors_hash(tensor_args.io_tensors));
     return hash;
 }
 

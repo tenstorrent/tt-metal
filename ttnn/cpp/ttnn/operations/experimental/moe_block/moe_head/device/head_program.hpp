@@ -81,6 +81,7 @@ struct HeadWordsSpec {
     std::string name;
     CoreRangeSet cores;
     uint32_t words;
+    uint32_t align = 0;  // (bytes the words' address must be a multiple of; 0: 16 - MoEBlockResources::persistent_words)
 };
 
 // The buffers the programs address. Every address argument is one of these plus an offset.

@@ -139,6 +139,7 @@ using head_math::ceil_div;
 
 inline CoreRangeSet cells(const std::vector<CoreCoord>& cores) {
     std::vector<CoreRange> ranges;
+    ranges.reserve(cores.size());
     for (const auto& core : cores) {
         ranges.emplace_back(core, core);
     }

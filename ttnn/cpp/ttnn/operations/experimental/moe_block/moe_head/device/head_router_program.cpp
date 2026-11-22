@@ -8,8 +8,6 @@
 
 namespace ttnn::operations::experimental::moe_block::moe_head {
 
-namespace port_words = moe_head_port_words;  // (the port / router words' fields, shared with the kernels)
-
 // ---- the routing exchange ----
 
 void ChipProgram::routing_args(KernelDescriptor& kernel_descriptor) const {
@@ -164,7 +162,15 @@ std::function<Args(uint32_t)> ChipProgram::planner_args() const {
     }
     const Args tail = {routing_words.at("ready")};
     auto routing_words_copy = routing_words;
-    return [=, this](uint32_t instance) {
+    return [this,
+            on_risc0,
+            head,
+            routing_words_copy,
+            planner_core_coordinates,
+            instance_args,
+            destination_args,
+            port_args,
+            tail](uint32_t instance) {
         Args args = head;
         args[4] = on_risc0(instance) ? routing_words_copy.at("calls_p") : routing_words_copy.at("calls_p2");
         add(args, Args{instance});
@@ -459,7 +465,9 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         define(router_compute, "ROUTE_WORDS_X_RING_INIT", join(spans.xring));
         define(router_compute, "ROUTE_WORDS_Y_RING_INIT", join(spans.yring));
         std::vector<uint32_t> expert_chips;
-        for (uint32_t expert = 0; expert < model.expert_tiles * 32 / model.config.shape.fold; ++expert) {
+        const uint32_t num_route_experts = model.expert_tiles * 32 / model.config.shape.fold;
+        expert_chips.reserve(num_route_experts);
+        for (uint32_t expert = 0; expert < num_route_experts; ++expert) {
             expert_chips.push_back(expert / model.experts_per_chip);
         }
         define(router_compute, "ROUTE_WORDS_EXPERT_CHIPS_INIT", join(expert_chips));

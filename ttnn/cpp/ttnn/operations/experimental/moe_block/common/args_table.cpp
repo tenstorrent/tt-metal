@@ -178,6 +178,7 @@ ArgsTable convert_runtime_args_to_dram(
             }
         }
         std::vector<tt::tt_metal::distributed::ShardDataTransfer> writes;
+        writes.reserve(N);
         for (size_t c = 0; c < N; ++c) {
             writes.push_back(tt::tt_metal::distributed::ShardDataTransfer{chips[c].first}.host_data(data[c].data()));
         }

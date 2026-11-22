@@ -9,6 +9,10 @@ from pathlib import Path
 import pytest
 import torch
 
+import ttnn
+
+moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
+
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[6]
 
@@ -86,13 +90,11 @@ def test_flat_weight_regions_places_every_tile(units):
 
 
 def test_flat_layout_options():
-    ttnn = pytest.importorskip("ttnn")
-    mb = ttnn._ttnn.operations.experimental.moe_block
-    a = mb.FlatLayoutOptions(arena_bytes=40960)
+    a = moe_block_utils.FlatLayoutOptions(arena_bytes=40960)
     assert a.arena_bytes == 40960
     assert a == weights_py.flat_layout(dict(arena_bytes=40960))
     # (arena_bytes, x_bf16, h_bf16)
     assert list(a.key()) == [40960, 0, 0]
-    b = mb.FlatLayoutOptions(arena_bytes=40960, x_bf16=True, h_bf16=True)
+    b = moe_block_utils.FlatLayoutOptions(arena_bytes=40960, x_bf16=True, h_bf16=True)
     assert (b.x_bf16, b.h_bf16) == (True, True) and list(b.key()) == [40960, 1, 1]
     assert b != a and b == weights_py.flat_layout(a, x_bf16=True, h_bf16=True)

@@ -7,9 +7,9 @@ wrapper that owns what a set of local experts needs across calls.
     y = op(dispatch_buffer_rm_bf16, counts, regions)   # y: [rows, H] bfp8 TILE, expert e's rows at its region
     op.close()                                         # (nothing to release: kept for callers)
 
-The plan comes from C++ (ttnn.experimental.moe_block.flat_routed_expert_plan); flat_weight_regions packs each
-device's experts into the plan's per-core regions and bank_sharded puts them in DRAM, one region list per bank. The
-packing is torch work on the host, done once per weight set, so it stays in Python.
+The plan comes from C++ (ttnn._ttnn.operations.experimental.moe_block.flat_routed_expert_plan); flat_weight_regions
+packs each device's experts into the plan's per-core regions and bank_sharded puts them in DRAM, one region list per
+bank. The packing is torch work on the host, done once per weight set, so it stays in Python.
 """
 
 from __future__ import annotations
@@ -20,13 +20,11 @@ import torch
 
 import ttnn
 
+moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
+
 W_DTYPES = {"bf8": ttnn.bfloat8_b, "bf4": ttnn.bfloat4_b}
 ACTS = {"silu": 0, "swigluoai": 1, "situ": 2, "clamped_silu": 3}
 KBLK = 8  # K tiles per gate/up weight block (the plan's kblk)
-
-
-def _moe_block():
-    return ttnn._ttnn.operations.experimental.moe_block
 
 
 def act_ref(g, u, act="silu"):
@@ -209,7 +207,7 @@ FLAT_LAYOUT_FIELDS = ("arena_bytes", "x_bf16", "h_bf16")
 
 def flat_layout(layout=None, **kw):
     """A FlatLayoutOptions from a dict of fields / an existing FlatLayoutOptions / None, plus field overrides."""
-    opts = _moe_block().FlatLayoutOptions
+    opts = moe_block_utils.FlatLayoutOptions
     if isinstance(layout, opts):
         layout = {f: getattr(layout, f) for f in FLAT_LAYOUT_FIELDS}
     return opts(**{**(layout or {}), **kw})
@@ -243,12 +241,11 @@ class FlatRoutedExpert:
         done_buffer_type=None,
         keep_packed=False,
     ):
-        mb = _moe_block()
         E, n_dev = len(gids[0]), len(gids)
         self.mesh_device, self.H, self.I, self.m, self.pin = mesh_device, H, I, m, pin
         self.act = ACTS[act]
         self.layout = flat_layout(layout)
-        self.plan = mb.flat_routed_expert_plan(
+        self.plan = moe_block_utils.flat_routed_expert_plan(
             mesh_device, H, I, E, n_global, m, weights_bf8=wdtype == "bf8", pin=pin, layout=self.layout
         )
         lay = self.plan.as_dict()
@@ -287,7 +284,7 @@ class FlatRoutedExpert:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0) if n_dev > 1 else None,
         )
-        self.done = mb.create_flat_routed_expert_done_words(mesh_device, self.plan, done_buffer_type)
+        self.done = moe_block_utils.create_flat_routed_expert_done_words(mesh_device, self.plan, done_buffer_type)
 
     def __call__(
         self,

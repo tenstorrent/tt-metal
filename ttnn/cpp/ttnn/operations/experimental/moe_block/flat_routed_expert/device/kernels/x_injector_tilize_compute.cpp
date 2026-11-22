@@ -12,31 +12,31 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "flat_options.hpp"
 
-constexpr uint32_t super_block_tiles = flat_options::super_block_tiles;  // K tiles per super-block
+constexpr uint32_t sbt = flat_options::super_block_tiles;  // K tiles per super-block
 
 void kernel_main() {
     constexpr uint32_t rm_cb = get_named_compile_time_arg_val("x_row_major_cb");
     constexpr uint32_t sb_cb = get_named_compile_time_arg_val("x_super_block_cb");
-    constexpr uint32_t row_tiles = flat_options::row_tiles_per_sub_block;
+    constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
     cb_wait_front(tt::CBIndex::c_6, 1);  // this relay's super-block count (from x_injector_reader.cpp)
     const uint32_t num_sb = read_tile_value(tt::CBIndex::c_6, 0, 0);
     cb_pop_front(tt::CBIndex::c_6, 1);
     compute_kernel_hw_startup(rm_cb, sb_cb);
-    fast_tilize_init(rm_cb, super_block_tiles, sb_cb);
+    fast_tilize_init(rm_cb, sbt, sb_cb);
     for (uint32_t b = 0; b < num_sb; ++b) {
         {
-            cb_reserve_back(sb_cb, row_tiles * super_block_tiles);
+            cb_reserve_back(sb_cb, mt * sbt);
         }
-        for (uint32_t m = 0; m < row_tiles; ++m) {
+        for (uint32_t m = 0; m < mt; ++m) {
             {
                 cb_wait_front(rm_cb, 32);
             }
             {
-                fast_tilize_block(rm_cb, super_block_tiles, sb_cb, 0, m * super_block_tiles);
+                fast_tilize_block(rm_cb, sbt, sb_cb, 0, m * sbt);
             }
             cb_pop_front(rm_cb, 32);
         }
-        cb_push_back(sb_cb, row_tiles * super_block_tiles);
+        cb_push_back(sb_cb, mt * sbt);
     }
-    fast_tilize_uninit(rm_cb, sb_cb, super_block_tiles);
+    fast_tilize_uninit(rm_cb, sb_cb, sbt);
 }

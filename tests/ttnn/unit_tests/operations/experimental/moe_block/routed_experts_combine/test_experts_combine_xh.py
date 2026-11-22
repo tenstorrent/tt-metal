@@ -32,6 +32,8 @@ from block_stages import (  # noqa: E402
 )
 from op_checks import BLOCK_OPS, MeshBarrier, median_us, traced_op_device_times  # noqa: E402
 
+moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
+
 OPS = {"routed_experts_combine": BLOCK_OPS["routed_experts_combine"]}
 WARMUP = 25  # (at least 20 warm-up replays before any measured one)
 RUNS = 10
@@ -60,7 +62,7 @@ PARAMS = pytest.mark.parametrize(
 
 
 def _stages(mesh_device, case, xh, host_weights):
-    layout = ttnn.experimental.moe_block.FlatLayoutOptions(x_bf16=xh[0], h_bf16=xh[1])
+    layout = moe_block_utils.FlatLayoutOptions(x_bf16=xh[0], h_bf16=xh[1])
     op = BlockStages(mesh_device, case, host_weights, layout=layout)
     op.route("uniform")
     return op

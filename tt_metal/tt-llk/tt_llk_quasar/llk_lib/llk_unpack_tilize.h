@@ -76,8 +76,9 @@ inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id, cons
     {
         // FP32 datacopy uses ELWADD, which requires dvalid from both SrcA and SrcB
         // Set dvalid for the opposite unpacker (if using UNP_A, set dvalid for UNP_B and vice versa)
-        constexpr std::uint32_t OPPOSITE_UNP                      = (UNP_SEL == p_unpacr::UNP_A) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
-        constexpr static std::uint32_t set_opposite_dvalid_instrn = TT_OP_UNPACR_NOP(OPPOSITE_UNP, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*UNP_CLR_SRC*/);
+        constexpr std::uint32_t OPPOSITE_UNP = (UNP_SEL == p_unpacr::UNP_A) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
+        constexpr static std::uint32_t set_opposite_dvalid_instrn =
+            TT_OP_UNPACR_NOP(OPPOSITE_UNP, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
 
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, set_opposite_dvalid_instrn, unpack_tile_instrn);
         temp.set_last_outer_loop_instr(reset_src_reg_instrn);
@@ -188,7 +189,7 @@ inline void _llk_unpack_tilize_strided_mop_config_(
     {
         constexpr std::uint32_t OPPOSITE_UNP = (UNP_SEL == p_unpacr::UNP_B) ? p_unpacr::UNP_A : p_unpacr::UNP_B;
         constexpr static std::uint32_t set_opposite_dvalid_instrn =
-            TT_OP_UNPACR_NOP(OPPOSITE_UNP, 1 /*Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, 0 /*clear to 0*/, 0 /*UNP_CLR_SRC*/);
+            TT_OP_UNPACR_NOP(OPPOSITE_UNP, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn, set_opposite_dvalid_instrn);
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
@@ -270,6 +271,7 @@ inline void _llk_unpack_tilize_init_(
 
     if (!_llk_unpack_tilize_is_strided_(tensor_shape))
     {
+        LLK_ASSERT(tensor_shape.face_r_dim == FACE_R_DIM && tensor_shape.face_c_dim == FACE_C_DIM, "UNPACR_TILIZE requires a 16x16x4 Buffer Descriptor");
         _llk_unpack_tilize_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, run_tiles);
         return;
     }

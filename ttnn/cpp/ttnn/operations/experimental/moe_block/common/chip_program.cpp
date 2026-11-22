@@ -13,7 +13,11 @@
 
 namespace ttnn::operations::experimental::moe_block {
 
-ChipWorkload merge_chip_workload(tt::tt_metal::WorkloadDescriptor w, const char* op, std::string* why_out) {
+ChipWorkload merge_chip_workload(
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    tt::tt_metal::WorkloadDescriptor w,
+    const char* op,
+    std::string* why_out) {
     ZoneScopedN("moe_block: merge chip workload");
     using tt::tt_metal::distributed::MeshCoordinate;
     auto refuse = [&](std::string reason) {
@@ -50,6 +54,9 @@ ChipWorkload merge_chip_workload(tt::tt_metal::WorkloadDescriptor w, const char*
     const tt::tt_metal::distributed::MeshCoordinateRange range{MeshCoordinate(lo), MeshCoordinate(hi)};
     if (range.shape().mesh_size() != w.programs.size() || index_of.size() != w.programs.size()) {
         return refuse("the chips are not one rectangle");
+    }
+    if (!tt::tt_metal::distributed::ArePerDeviceRuntimeArgsSupported(mesh_device, range)) {
+        return refuse("per-device runtime args are unsupported here");
     }
     // (the merge takes the chips in the range's iteration order; a sender core of some chips only has runtime args on
     // those: the others' are padded, the kernel reads them only where its block says it sends)

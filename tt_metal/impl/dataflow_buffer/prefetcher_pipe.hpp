@@ -26,6 +26,7 @@ class IDevice;
 
 namespace distributed {
 class MeshBuffer;
+class MeshCommandQueue;
 class MeshDevice;
 }  // namespace distributed
 
@@ -45,7 +46,7 @@ public:
     // (a lockstep buffer no Program's circular buffers reach). `overlap_program_l1` lets an arena
     // allocation land on cores a cached Program already placed program-local L1 on.
     PrefetcherPipeSpaceL1(
-        distributed::MeshDevice& device,
+        distributed::MeshCommandQueue& mesh_cq,
         PrefetcherPipeL1Source source,
         const CoreRangeSet& cores,
         uint32_t ring_size,
@@ -62,7 +63,11 @@ public:
     uint32_t data_address() const { return data_address_; }
     uint32_t config_address() const { return config_address_; }
 
-    // Allocator source: write config pages at config_address() through the command queue, as one
+    // The queue the spaces were created on. Allocator-source config writes and the DRAM-sender fence
+    // go through it.
+    distributed::MeshCommandQueue& command_queue() const;
+
+    // Allocator source: write config pages at config_address() through command_queue(), as one
     // write of the config buffer limited to `cores`. `pages_on(coord)` holds the page of every core
     // in `cores` for the device at `coord`; devices handed the same pages share one host image.
     void enqueue_config_pages(
@@ -75,6 +80,7 @@ private:
     void release() noexcept;
 
     distributed::MeshDevice* device_ = nullptr;
+    uint8_t cq_id_ = 0;
     // PersistentArena source.
     uint64_t data_allocation_id_ = 0;
     uint64_t config_allocation_id_ = 0;
@@ -140,6 +146,8 @@ public:
     CoreRangeSet unclaimed_cores() const;
     bool is_claimed(const CoreCoord& core) const { return claimed_.contains(core); }
     const distributed::MeshDevice* get_device() const { return device_; }
+    // The queue the space was created on (see PrefetcherPipeSpaceL1::command_queue()).
+    distributed::MeshCommandQueue& command_queue() const { return l1().command_queue(); }
 
     PrefetcherPipe create_pipe(CoreCoord sender, const CoreRangeSet& receivers, uint32_t num_credit_lanes);
     std::vector<PrefetcherPipe> create_pipes(

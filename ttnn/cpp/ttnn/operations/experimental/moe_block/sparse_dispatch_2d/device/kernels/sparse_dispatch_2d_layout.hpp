@@ -35,10 +35,10 @@ inline constexpr Field kSlot{0, 16}, kHops{kSlot.end(), 4}, kGeneration{kHops.en
 // An END entry (no row) has word 0 = END | generation << kGeneration.shift; a metadata page of SKIP is filler.
 inline constexpr uint32_t kEndBit = 1u << 31, kSkipBit = 1u << 30;
 
-inline constexpr uint32_t entry_word0(uint32_t slot, uint32_t hops, uint32_t generation, uint32_t order) {
+constexpr uint32_t entry_word0(uint32_t slot, uint32_t hops, uint32_t generation, uint32_t order) {
     return kSlot.pack(slot) | kHops.pack(hops) | kGeneration.pack(generation) | kOrder.pack(order);
 }
-inline constexpr uint32_t end_word0(uint32_t generation) { return kEndBit | kGeneration.pack(generation); }
+constexpr uint32_t end_word0(uint32_t generation) { return kEndBit | kGeneration.pack(generation); }
 
 // What the entry fields can hold: the host checks a mesh against these.
 inline constexpr uint32_t kMaxSlots = kSlot.limit();            // N * S slots
@@ -47,16 +47,16 @@ inline constexpr uint32_t kMaxAxisHops = kHops.mask();          // hops along on
 
 // ---- ring_offs: ring 1's first entry in a port core's manifest | ring 2's << 16 (ring 0 starts at 0) ----
 inline constexpr uint32_t kRingOffsetBits = 16;
-inline constexpr uint32_t pack_ring_offsets(uint32_t ring1, uint32_t ring2) {
+constexpr uint32_t pack_ring_offsets(uint32_t ring1, uint32_t ring2) {
     return Field{0, kRingOffsetBits}.pack(ring1) | Field{kRingOffsetBits, kRingOffsetBits}.pack(ring2);
 }
-inline constexpr uint32_t ring_offset(uint32_t ring_offs, uint32_t ring) {
+constexpr uint32_t ring_offset(uint32_t ring_offs, uint32_t ring) {
     return ring == 0 ? 0 : Field{kRingOffsetBits * (ring - 1), kRingOffsetBits}.get(ring_offs);
 }
 
 // ---- A span byte: the hops forward and backward on an axis from a position (mesh_routing.hpp span_entry) ----
 inline constexpr Field kSpanForward{0, 4}, kSpanBackward{kSpanForward.end(), 4};
-inline constexpr uint32_t span_byte(uint32_t forward, uint32_t backward) {
+constexpr uint32_t span_byte(uint32_t forward, uint32_t backward) {
     return kSpanForward.pack(forward) | kSpanBackward.pack(backward);
 }
 

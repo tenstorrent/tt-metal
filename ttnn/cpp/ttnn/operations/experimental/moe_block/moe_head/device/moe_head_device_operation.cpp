@@ -268,9 +268,9 @@ namespace ttnn::prim {
 
 Tensor moe_block_head(
     const ttnn::operations::experimental::moe_block::moe_head::MoEHeadParams& params,
-    ttnn::operations::experimental::moe_block::moe_head::MoEHeadInputs inputs) {
+    const ttnn::operations::experimental::moe_block::moe_head::MoEHeadInputs& inputs) {
     using OperationType = ttnn::operations::experimental::moe_block::moe_head::MoEHeadDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(params, std::move(inputs));
+    return ttnn::device_operation::launch<OperationType>(params, inputs);
 }
 
 }  // namespace ttnn::prim

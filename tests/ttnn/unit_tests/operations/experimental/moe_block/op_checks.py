@@ -10,18 +10,18 @@ program profiler (no Tracy build, no CSVs).
   the end (tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py test_sparse_sdpa_determinism's pattern).
 * op_device_times: the device time of each op of a run, the op found by a path in its kernels' sources (the programs a
   run dispatches, merged over the chips: the slowest chip's time).
-* assert_not_slower: a perf gate that fails on a slowdown past the margin and only reports a speedup.
-* PERF_RUNS / PerfBaselines: every perf number is the median of PERF_RUNS (5) measurements, checked against its
-  baseline in a JSON file beside the test, keyed by the machine (ttnn.cluster.get_cluster_type()) and a label;
-  MOE_PERF_RECORD=1 writes the measured medians as the baselines instead of checking them."""
+* PERF_RUNS / check_perf: every perf number is the median of PERF_RUNS (5) measurements, logged on every run (a
+  passing CI run's log shows it too) and checked against its baseline - a number in the test's own Python table (one
+  machine's: each test runs on one machine type). A slowdown past the margin fails with the baseline, the limit and
+  the measurement; a missing baseline only logs a reminder to add it, a speedup past the margin one to lower it."""
 
-import json
 import os
 import statistics
 import sys
 from pathlib import Path
 
 import pytest
+import torch
 
 from loguru import logger
 
@@ -40,35 +40,40 @@ BLOCK_OPS = {
 
 
 class DeterminismMarker:
-    """Bit-identity of named outputs across calls, kept on the device."""
+    """Bit-identity of named outputs across calls: each chip's shard compared as raw bits on the host (a float compare
+    would take -0 for +0 and fail an unchanged NaN)."""
+
+    _BITS = {torch.bfloat16: torch.int16, torch.float16: torch.int16, torch.float32: torch.int32}
 
     def __init__(self, mesh_device):
         self.mesh_device = mesh_device
         self.ref = None
-        self.marker = None
+        self.differ = []
         self.calls = 0
 
+    def _bits(self, t):
+        # (each chip's shard: a mesh composer cannot concat every layout)
+        multi = hasattr(self.mesh_device, "get_num_devices") and self.mesh_device.get_num_devices() > 1
+        shards = ttnn.get_device_tensors(t) if multi else [t]
+        host = [ttnn.to_torch(s) for s in shards]
+        return [h.view(self._BITS[h.dtype]) if h.dtype in self._BITS else h for h in host]
+
     def add(self, outputs: dict):
-        """One call's outputs (name -> device tensor); the first call's are cloned as the reference."""
-        if self.ref is None:
-            self.ref = {name: ttnn.clone(t) for name, t in outputs.items()}
-            self.calls = 1
-            return
-        for name, t in outputs.items():
-            m = ttnn.max(ttnn.ne(self.ref[name], t, dtype=ttnn.bfloat16))  # (0 iff bit-identical)
-            self.marker = m if self.marker is None else ttnn.maximum(self.marker, m)
+        """One call's outputs (name -> device tensor); the first call's are the reference."""
+        bits = {name: self._bits(t) for name, t in outputs.items()}
         self.calls += 1
+        if self.ref is None:
+            self.ref = bits
+            return
+        for name, shards in bits.items():
+            if not all(torch.equal(a, b) for a, b in zip(self.ref[name], shards)):
+                self.differ.append(f"{name} (call {self.calls})")
 
     def assert_identical(self, what: str):
-        assert self.marker is not None, f"{what}: determinism needs at least two calls"
-        # (max returns a 0-d tensor a chip: read each chip's scalar - a mesh composer cannot concat 0-d tensors)
-        multi = hasattr(self.mesh_device, "get_num_devices") and self.mesh_device.get_num_devices() > 1
-        shards = ttnn.get_device_tensors(self.marker) if multi else [self.marker]
-        mismatch = max(float(ttnn.to_torch(t).float().max()) for t in shards)
-        assert mismatch == 0.0, f"{what}: outputs differ between calls (over {self.calls} calls)"
+        assert self.calls > 1, f"{what}: determinism needs at least two calls"
+        assert not self.differ, f"{what}: outputs differ between calls (over {self.calls} calls): {self.differ[:8]}"
         logger.info(f"{what}: bit-identical over {self.calls} calls")
-        for t in self.ref.values():
-            ttnn.deallocate(t)
+        self.ref = None
 
 
 class MeshBarrier:
@@ -140,60 +145,58 @@ def median_us(ns_list):
 SLACK_US = 10.0
 
 
-def assert_not_slower(label: str, measured_us: float, expected_us: float, margin: float, slack_us: float = SLACK_US):
-    """Fails past expected * (1 + margin) + slack_us; a run faster than expected * (1 - margin) - slack_us passes with
-    a note to re-baseline."""
-    upper, lower = expected_us * (1 + margin) + slack_us, expected_us * (1 - margin) - slack_us
-    logger.info(f"PERF {label}: {measured_us:.1f} us (expected {expected_us:.1f} +{margin:.0%} +{slack_us:.0f} us)")
-    assert measured_us <= upper, f"{label}: {measured_us:.1f} us is slower than {upper:.1f} us"
+def perf_failure(
+    label: str, measured_us: float, baseline_us, margin: float = 0.05, slack_us: float = SLACK_US, where: str = ""
+):
+    """Logs one perf number against its baseline and returns the failure message if it is slower than the limit
+    (baseline * (1 + margin) + slack_us), else None. baseline_us None: no baseline yet - logged with a reminder to add
+    it (where: the table entry to add), not a failure. A run faster than baseline * (1 - margin) - slack_us passes
+    with a reminder to lower the baseline."""
+    on = f"on {machine()}"
+    if baseline_us is None:
+        logger.warning(
+            f"PERF {label}: {measured_us:.1f} us {on} - NO BASELINE, not gated; add it: {where} = {measured_us:.1f}"
+        )
+        return None
+    upper, lower = baseline_us * (1 + margin) + slack_us, baseline_us * (1 - margin) - slack_us
+    delta = measured_us / baseline_us - 1
+    numbers = (
+        f"measured {measured_us:.1f} us, baseline {baseline_us:.1f} us ({delta:+.1%}), "
+        f"limit {upper:.1f} us (baseline +{margin:.0%} +{slack_us:.0f} us) {on}"
+    )
+    if measured_us > upper:
+        logger.error(f"PERF {label}: SLOWER THAN THE LIMIT - {numbers}")
+        return f"PERF {label}: slower than its limit - {numbers} ({where})"
+    logger.info(f"PERF {label}: ok - {numbers}")
     if measured_us < lower:
-        logger.warning(f"PERF {label}: {measured_us:.1f} us is faster than {lower:.1f} us - lower the baseline")
+        logger.warning(f"PERF {label}: faster than baseline -{margin:.0%} -{slack_us:.0f} us - lower it: {where}")
+    return None
+
+
+def check_perf(label: str, measured_us: float, baseline_us, margin: float = 0.05, slack_us: float = SLACK_US, where=""):
+    """perf_failure's check of one number: fails the test on a slowdown past the limit."""
+    failure = perf_failure(label, measured_us, baseline_us, margin, slack_us, where)
+    assert failure is None, failure
+
+
+def assert_no_perf_failures(failures):
+    """A test with several numbers: each logged and checked first (perf_failure), then every failure in one message."""
+    failures = [f for f in failures if f]
+    assert not failures, f"{len(failures)} perf number(s) slower than their limit:\n" + "\n".join(failures)
 
 
 # Every perf measurement: the median of this many runs (traced replays, eager calls or host-timed repetitions).
 PERF_RUNS = int(os.environ.get("MOE_PERF_RUNS", "5"))
 # (traced perf: this many untimed replays first - MOE_PERF_WARMUP, default none)
 PERF_WARMUP = int(os.environ.get("MOE_PERF_WARMUP", "0"))
-RECORD = os.environ.get("MOE_PERF_RECORD", "0") == "1"
 
 
 def machine() -> str:
-    """The baselines' machine key: the cluster type (BLACKHOLE_GALAXY, P150_X8 (LoudBox), ...)."""
+    """The machine a perf number was measured on (logged with it): the cluster type (BLACKHOLE_GALAXY, P150_X8, ...)."""
     try:
         return str(ttnn.cluster.get_cluster_type()).split(".")[-1]
     except Exception:  # noqa: BLE001
         return "unknown"
-
-
-class PerfBaselines:
-    """Perf baselines in a JSON file: {machine: {label: us}}. check() gates a measured median against its baseline
-    (assert_not_slower); with MOE_PERF_RECORD=1 it stores the measurement instead. A label without a baseline on this
-    machine fails - every perf case carries one (record it on the machine the test runs on)."""
-
-    def __init__(self, path):
-        self.path = Path(path)
-
-    def _load(self) -> dict:
-        return json.loads(self.path.read_text()) if self.path.exists() else {}
-
-    def expected(self, label: str):
-        return self._load().get(machine(), {}).get(label)
-
-    def check(self, label: str, measured_us: float, margin: float = 0.05, slack_us: float = SLACK_US):
-        if RECORD:
-            data = self._load()
-            data.setdefault(machine(), {})[label] = round(float(measured_us), 1)
-            data = {m: dict(sorted(v.items())) for m, v in sorted(data.items())}
-            self.path.write_text(json.dumps(data, indent=1) + "\n")
-            logger.info(f"PERF {label}: {measured_us:.1f} us recorded as the {machine()} baseline in {self.path.name}")
-            return
-        expected = self.expected(label)
-        if expected is None:
-            pytest.fail(
-                f"no {machine()} baseline for {label} in {self.path.name}: measured {measured_us:.1f} us "
-                "(MOE_PERF_RECORD=1 records it)"
-            )
-        assert_not_slower(label, measured_us, expected, margin, slack_us)
 
 
 def median_of_runs(measure, runs: int = PERF_RUNS):

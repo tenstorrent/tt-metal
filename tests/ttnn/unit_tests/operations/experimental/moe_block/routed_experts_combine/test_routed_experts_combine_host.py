@@ -12,7 +12,7 @@ import itertools
 
 import ttnn
 
-mb = ttnn.experimental.moe_block
+moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
 
 # (N, S, W): the matrix models' exchange shapes (GLM-5.3, K3 latent, DSv4.1 H) on LoudBox / Galaxy meshes + edges
 SHAPES = [
@@ -32,23 +32,23 @@ def test_credit_policy():
     """With >= 16 sources (the Galaxy) credits go back every 8 consumed rows, idle snapshots batched (8 rows or 8100
     cycles old); with fewer, a batch is at most half a source's slots (D), the shared landing's grants at once; a
     config's credit_batch wins."""
-    assert mb.combine_credit_policy() == (8, 8, 8100)
-    assert mb.combine_credit_policy(N=32, landing_slots_per_source=2) == (8, 8, 8100)
+    assert moe_block_utils.combine_credit_policy() == (8, 8, 8100)
+    assert moe_block_utils.combine_credit_policy(N=32, landing_slots_per_source=2) == (8, 8, 8100)
     # (a Galaxy 4x4 sub-torus: 15 sources)
-    assert mb.combine_credit_policy(N=16, landing_slots_per_source=2) == (8, 8, 8100)
-    assert mb.combine_credit_policy(N=16, landing_slots_per_source=2, shared_landing=True) == (1, 1, 8100)
-    assert mb.combine_credit_policy(N=8, landing_slots_per_source=8) == (4, 4, 8100)
-    assert mb.combine_credit_policy(N=8, landing_slots_per_source=2) == (1, 1, 8100)
-    assert mb.combine_credit_policy(N=8, landing_slots_per_source=24) == (8, 8, 8100)
-    assert mb.combine_credit_policy(N=8, landing_slots_per_source=8, shared_landing=True) == (1, 1, 8100)
-    assert mb.combine_credit_policy(N=32, landing_slots_per_source=2, batch=1) == (1, 1, 8100)
+    assert moe_block_utils.combine_credit_policy(N=16, landing_slots_per_source=2) == (8, 8, 8100)
+    assert moe_block_utils.combine_credit_policy(N=16, landing_slots_per_source=2, shared_landing=True) == (1, 1, 8100)
+    assert moe_block_utils.combine_credit_policy(N=8, landing_slots_per_source=8) == (4, 4, 8100)
+    assert moe_block_utils.combine_credit_policy(N=8, landing_slots_per_source=2) == (1, 1, 8100)
+    assert moe_block_utils.combine_credit_policy(N=8, landing_slots_per_source=24) == (8, 8, 8100)
+    assert moe_block_utils.combine_credit_policy(N=8, landing_slots_per_source=8, shared_landing=True) == (1, 1, 8100)
+    assert moe_block_utils.combine_credit_policy(N=32, landing_slots_per_source=2, batch=1) == (1, 1, 8100)
 
 
 def test_auto_invariants():
     """Self-contained (no reference): what combine_auto picks fits the arena and holds a slot per source chip."""
     for (N, S, W), arena in itertools.product(SHAPES, ARENAS):
         for free_cores, ports in ((19, 8), (30, 8), (40, 8)):
-            got = mb.combine_auto(N, S, W, free_cores, ports, arena_bytes=arena)
+            got = moe_block_utils.combine_auto(N, S, W, free_cores, ports, arena_bytes=arena)
             if not got["fits"]:
                 assert got["why"]
                 continue
@@ -62,7 +62,7 @@ def test_auto_invariants():
             assert 1 <= got["accumulator_count"] <= 32  # (kAccMax)
             # (the y writers' hand-off destinations: ports, then accumulators)
             assert got["accumulator_count"] + ports <= 32
-    counts = collections.Counter(len(mb.combine_state_layout(N, A)) for N in (8, 32) for A in (1, 16))
+    counts = collections.Counter(len(moe_block_utils.combine_state_layout(N, A)) for N in (8, 32) for A in (1, 16))
     assert counts == {10: 4}
 
 
@@ -73,10 +73,10 @@ def test_auto_shared_landing():
     for (N, S, W), arena in itertools.product(SHAPES, ARENAS):
         for free_cores, ports in ((19, 8), (30, 8)):
             for landing, pool, cap in (
-                (mb.CombineLanding.Shared, 0, 254),
-                (mb.CombineLanding.SharedFlatCores, 20000, 1024),
+                (moe_block_utils.CombineLanding.Shared, 0, 254),
+                (moe_block_utils.CombineLanding.SharedFlatCores, 20000, 1024),
             ):
-                got = mb.combine_auto(
+                got = moe_block_utils.combine_auto(
                     N, S, W, free_cores, ports, arena_bytes=arena, landing=landing, pool_slots=pool, depth=64
                 )
                 if not got["fits"]:

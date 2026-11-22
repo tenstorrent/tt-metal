@@ -30,7 +30,7 @@ void bind_head_plan(nb::module_& mod) {
         .def_ro("row_chunks", &HeadLayout::row_chunks)
         .def_ro("k_step_tiles", &HeadLayout::k_step_tiles)
         .def_ro("engine_columns", &HeadLayout::engine_columns)
-        .def(nb::self == nb::self)
+        .def(nb::self == nb::self)  // NOLINT(misc-redundant-expression): binds operator==
         .def("__repr__", [](const HeadLayout& layout) { return describe_layout(layout); });
 
     nb::class_<HeadPlanned> planned(mod, "HeadPlanned", "A sized layout and its predicted time (us).");

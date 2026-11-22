@@ -225,6 +225,11 @@ struct RowMajorYWriter {
     // Retire the oldest issued row tile once its writes are flushed (frees its pages); returns the number of
     // sub-blocks completed by it (0 or 1).
     uint32_t retire(const ExpertSchedule& schedule) {
+        // (the write command buffer drained first: a transaction id's outstanding count only covers requests the NIU
+        // has taken - the last row's writes can still sit in the command buffer and the id read "done" before they
+        // land, publishing a landed count (or freeing pages) for a row the combine would then read partly written)
+        while (!noc_cmd_buf_ready(y_noc, write_cmd_buf)) {
+        }
         if constexpr (hands_off) {
             const uint32_t unit = handoff.units_retired % in_flight;
             if (handoff.units_retired == handoff.units_issued ||
@@ -268,7 +273,7 @@ private:
 
     // The L1 hand-off of the current row tile's next unit: its next rows while their destinations have granted slots.
     UnitIssued issue_handoff_unit(uint32_t source, uint32_t first_row, uint32_t rows) {
-        namespace formats = combine_formats;
+        namespace fmt = combine_formats;
         using namespace combine_handoff;
         auto& state = handoff;
         const uint32_t unit = state.units_issued % in_flight;
@@ -308,18 +313,18 @@ private:
             return UnitIssued::None;
         }
         // the trailers in flight (column-0 writer): 32 rows of a unit each
-        const uint32_t stage = state.words + kWordsTrailerStageBytes + unit * 32 * formats::kTrailerBytes;
+        const uint32_t stage = state.words + kWordsTrailerStageBytes + unit * 32 * fmt::kTrailerBytes;
         if (column_offset == 0) {
             for (uint32_t row = state.tile_rows_issued; row < unit_end; ++row) {
                 volatile tt_l1_ptr uint32_t* trailer =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + row * formats::kTrailerBytes);
-                for (uint32_t word = 0; word < formats::kTrailerBytes / 4; ++word) {
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + row * fmt::kTrailerBytes);
+                for (uint32_t word = 0; word < fmt::kTrailerBytes / 4; ++word) {
                     trailer[word] = 0;
                 }
-                trailer[formats::kTrailerHeader] = table_rows[2 * row + 1];
-                trailer[formats::kTrailerWeight] = table_weight_bits(table_rows[2 * row]);
-                trailer[formats::kTrailerFlagLow] = 1;
-                trailer[formats::kTrailerFlagHigh] = 1;
+                trailer[fmt::kTrailerHeader] = table_rows[2 * row + 1];
+                trailer[fmt::kTrailerWeight] = table_weight_bits(table_rows[2 * row]);
+                trailer[fmt::kTrailerFlagLow] = 1;
+                trailer[fmt::kTrailerFlagHigh] = 1;
             }
             // (the NoC reads the stage straight from L1: these stores must land first, or a trailer write can carry
             // the stage's previous words - e.g. a zeroed flag (the stage is zeroed every call), and the row is never
@@ -341,9 +346,9 @@ private:
                 y_vc);
             if (column_offset == 0) {  // its trailer, staged above, after the row's H bf16
                 noc_async_write_one_packet_with_trid(
-                    stage + row * formats::kTrailerBytes,
+                    stage + row * fmt::kTrailerBytes,
                     get_noc_addr(state.dest_x[d], state.dest_y[d], slot + hidden_tiles * 64, y_noc),
-                    formats::kTrailerBytes,
+                    fmt::kTrailerBytes,
                     trid,
                     write_cmd_buf,
                     y_noc,

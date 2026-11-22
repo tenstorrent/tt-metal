@@ -49,6 +49,5 @@ inline constexpr const char* kPlanBytes = "plan_bytes";
 inline constexpr const char* kStageCb = "stage_cb";
 inline constexpr const char* kManifestBatch = "manifest_batch";
 inline constexpr const char* kRowsPerPacket = "rows_per_packet";
-inline constexpr const char* kRowPieces = "row_pieces";
 
 }  // namespace sparse_dispatch_2d_names

@@ -206,7 +206,7 @@ struct SharedExpertArgs {
     uint32_t shards = 1;
     const ReduceScatterPlan* reduce_scatter = nullptr;  // the down + reduce-scatter's plan (required)
     std::optional<uint32_t> latent;                     // tiles a chip
-    std::pair<uint32_t, uint32_t> router{};  // (expert tiles, router K tiles): the router logits, on the engine
+    std::pair<uint32_t, uint32_t> router;  // (expert tiles, router K tiles): the router logits, on the engine
     uint32_t router_iterations = 1;  // the router stage over row_chunks / router_iterations row chunks at a time
     int64_t arena_max = kArenaMax;
     WeightDtype w_dtype = WeightDtype::Bf8;

@@ -76,6 +76,22 @@ static float pad_value_as_float(const PadValue& pad_value, DataType dtype) {
         pad_value);
 }
 
+// fill_implicit_tile_padding for an interleaved rank-3 tensor. fill_pad has no UINT8 kernel, so UINT8 is filled
+// in BFLOAT16 (every value 0..255 is exact there) and cast back, which leaves the logical data untouched.
+static ttnn::Tensor fill_tile_padding_interleaved(const ttnn::Tensor& tensor, float fill_value) {
+    // typecast needs interleaved tensors, so callers with a sharded tensor convert it first.
+    TT_FATAL(!tensor.memory_config().is_sharded(), "fill_tile_padding_interleaved requires an interleaved tensor");
+    if (tensor.dtype() != DataType::UINT8) {
+        return ttnn::fill_implicit_tile_padding(tensor, fill_value, std::nullopt);
+    }
+    // Normalize first so a fractional or out-of-range pad_value ends up as the same uint8 every other
+    // data-movement op writes (truncated, saturated), not whatever BFLOAT16 rounds it to.
+    const float uint8_fill_value = static_cast<float>(pack_scalar_into_uint32(DataType::UINT8, fill_value) & 0xFFu);
+    auto as_bf16 = ttnn::typecast(tensor, DataType::BFLOAT16);
+    as_bf16 = ttnn::fill_implicit_tile_padding(as_bf16, uint8_fill_value, std::nullopt);
+    return ttnn::typecast(as_bf16, DataType::UINT8);
+}
+
 // True if the inner-2D of `shape` is not tile-aligned, i.e. the tiled output has implicit padding lanes.
 static bool has_inner_2d_tile_padding(const ttnn::Shape& shape) {
     TT_ASSERT(shape.rank() >= 2, "has_inner_2d_tile_padding requires rank >= 2");
@@ -490,10 +506,10 @@ ttnn::Tensor reshape_tiled(
                 const auto sharded_mem_config = output_tensor_3d.memory_config();
                 MemoryConfig interleaved_mem{TensorMemoryLayout::INTERLEAVED, sharded_mem_config.buffer_type()};
                 auto interleaved = ttnn::sharded_to_interleaved(output_tensor_3d, interleaved_mem, std::nullopt);
-                interleaved = ttnn::fill_implicit_tile_padding(interleaved, fill_value, std::nullopt);
+                interleaved = detail::fill_tile_padding_interleaved(interleaved, fill_value);
                 output_tensor_3d = ttnn::interleaved_to_sharded(interleaved, sharded_mem_config, std::nullopt);
             } else {
-                output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
+                output_tensor_3d = detail::fill_tile_padding_interleaved(output_tensor_3d, fill_value);
             }
         }
 
@@ -551,7 +567,7 @@ ttnn::Tensor reshape_tiled(
     const bool is_block_float_output = is_block_float(tensor.dtype());
     const bool should_fill = is_block_float_output || (pad_value_explicit && !skip_padding_fill);
     if (should_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
-        output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
+        output_tensor_3d = detail::fill_tile_padding_interleaved(output_tensor_3d, fill_value);
     }
 
     if (is_block_float(tensor.dtype())) {

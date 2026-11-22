@@ -66,6 +66,14 @@ install(
         COMPONENT tar
 )
 
+# moe_block_config.hpp (api) includes the activation's arg names, a file of the kernels set: the dev headers get it too
+install(
+    FILES
+        common/kernels/expert_activation_names.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ttnn/operations/experimental/moe_block/common/kernels
+    COMPONENT ttnn-dev
+)
+
 if(TARGET ttnn)
     target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_MOE_BLOCK_NANOBIND_SRCS})
 endif()

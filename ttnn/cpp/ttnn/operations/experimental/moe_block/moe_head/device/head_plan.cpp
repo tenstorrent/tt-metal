@@ -246,7 +246,7 @@ std::string cores_check(
 }
 
 bool is_l1(const HeadPlanned& planned) {
-    return planned.note.rfind("arena", 0) == 0 || planned.note.rfind("router cores' arena", 0) == 0 ||
+    return planned.note.starts_with("arena") || planned.note.starts_with("router cores' arena") ||
            planned.note.find("of L1") != std::string::npos;
 }
 
@@ -531,9 +531,11 @@ std::pair<double, Parts> head_cost(
         }
     } else {
         const int64_t hops = tp_size - 1;
-        x_us = double(hops * shape.rows * shape.hidden_dim / tp_size * 2) / rate;
+        const int64_t x_bytes = hops * shape.rows * shape.hidden_dim / tp_size * 2;
+        x_us = double(x_bytes) / rate;
         if (shape.latent) {
-            latent_us = double(hops * shape.rows * int64_t(*shape.latent) / tp_size / tp_size * 2) / rate;
+            const int64_t latent_bytes = hops * shape.rows * int64_t(*shape.latent) / tp_size / tp_size * 2;
+            latent_us = double(latent_bytes) / rate;
         }
     }
     const double reduce_scatter_us = x_us;
@@ -557,8 +559,9 @@ std::pair<double, Parts> head_cost(
     const double router_chain_us =
         cost.chain_us + cost.chain_us_per_expert_tile_k * double(expert_tiles) * double(shape.top_k);
     const int64_t expert_tiles_per_column = ceil_div(expert_tiles, layout.engine_columns);
+    const int64_t hidden_tiles_per_chip = hidden_tiles / tp_size;
     const double engine_logits_us = kEngineLogitsOverhead * double(row_chunks) * double(row_tiles_per_core) *
-                                    double(expert_tiles_per_column) * double(hidden_tiles / tp_size) *
+                                    double(expert_tiles_per_column) * double(hidden_tiles_per_chip) *
                                     cost.router_tile_cycles / cost.clock_mhz;
     shared_expert_us += engine_logits_us;  // (the logits on the matmul cores)
     // (router iterations: the router cores' chain once an iteration, a barrier across the TP ring between them)

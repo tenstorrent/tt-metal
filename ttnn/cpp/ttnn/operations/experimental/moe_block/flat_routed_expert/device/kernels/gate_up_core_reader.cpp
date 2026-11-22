@@ -44,32 +44,30 @@ constexpr uint8_t h_vc = 0;
 void kernel_main() {
     moe_block_args::load();  // (this core's args from the DRAM table, or the runtime args: moe_block_args.hpp)
     constexpr uint32_t x_cb = get_named_compile_time_arg_val("x_cb");
-    constexpr uint32_t row_tiles = flat_options::row_tiles_per_sub_block;
-    constexpr uint32_t x_blk = row_tiles * flat_options::x_block_k_tiles;
+    constexpr uint32_t mt = flat_options::row_tiles_per_sub_block;
+    constexpr uint32_t x_blk = mt * flat_options::x_block_k_tiles;
     constexpr uint32_t in1_cb = get_named_compile_time_arg_val("weight_cb");
     constexpr uint32_t slot = flat_options::gate_up_block_tiles;
     constexpr uint32_t nk_gu = flat_options::gate_up_blocks_per_expert;
     constexpr uint32_t w_slots = flat_options::gate_up_weight_ring_blocks;
     constexpr uint32_t h_local_cb = get_named_compile_time_arg_val("h_local_cb");
     constexpr uint32_t h_tile_bytes = flat_options::h_tile_bytes;
-    constexpr uint32_t gate_up_core_count = flat_options::gate_up_core_count;
+    constexpr uint32_t ncc = flat_options::gate_up_core_count;
     constexpr uint32_t data_sem_id = flat_options::gate_up_data_sem;
     constexpr uint32_t go_sem_id = flat_options::go_sem;
     constexpr uint32_t hbuf = flat_options::h_buffers;
     constexpr uint32_t xarr_sem_id = flat_options::x_arrived_sem;
     constexpr uint32_t x_slots = flat_options::x_ring_blocks;
-    constexpr uint32_t pairs_per_core = flat_options::gate_up_tile_pairs;
-    constexpr uint32_t x_pieces = flat_options::x_chain_pieces;
+    constexpr uint32_t np = flat_options::gate_up_tile_pairs;
+    constexpr uint32_t xp = flat_options::x_chain_pieces;
     constexpr uint32_t num_e = flat_options::local_experts;
     // with 16-column units (NCC cores x units = the K tiles x 2), else NP whole tile pairs a core
     constexpr bool units = flat_options::gate_up_units != 0;
     constexpr uint32_t units_per_core = flat_options::gate_up_units;
-    constexpr uint32_t h_tiles_per_core =
-        units ? flat_options::gate_up_units_h_tiles : pairs_per_core;  // h tiles a row
+    constexpr uint32_t hpc = units ? flat_options::gate_up_units_h_tiles : np;  // h tiles a row
     // h: NCC cores x NP K-tiles (or x units / 2), MT rows
-    constexpr uint32_t h_all_tiles =
-        units ? gate_up_core_count * units_per_core * row_tiles / 2 : gate_up_core_count * pairs_per_core * row_tiles;
-    static_assert(!units || (gate_up_core_count * units_per_core) % 2 == 0);
+    constexpr uint32_t h_all_tiles = units ? ncc * units_per_core * mt / 2 : ncc * np * mt;
+    static_assert(!units || (ncc * units_per_core) % 2 == 0);
     static_assert(!units || h_tile_bytes == 2048 || h_tile_bytes == 1088, "16-column units: bf16 or bfp8 h tiles");
     auto write_h = [](uint32_t src, uint64_t dst, uint32_t bytes) {
         noc_async_write(src, dst, bytes, noc_index, h_vc);
@@ -78,8 +76,8 @@ void kernel_main() {
     static_assert(hbuf >= 1 && hbuf <= 3);
 
     const uint32_t credit_sem_id = moe_block_args::arg(0);
-    const uint32_t column_group = moe_block_args::arg(1);
-    const uint32_t chain_head_count = moe_block_args::arg(2);
+    const uint32_t cg = moe_block_args::arg(1);
+    const uint32_t nh = moe_block_args::arg(2);
     const uint32_t gath_sem_id = moe_block_args::arg(3);
     const uint32_t h_all_addr = moe_block_args::arg(4);
     constexpr uint32_t heads0 = 5;
@@ -102,17 +100,17 @@ void kernel_main() {
     // the gate/up weights read by this core's NCRISC (gate_up_weight_read.hpp): the loads list handed to it in its half
     // of CB 7, then its mailbox word set
     {
-        volatile tt_l1_ptr uint32_t* mailbox =
+        volatile tt_l1_ptr uint32_t* mb =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(schedule_scratch(ScratchOwner::Ncrisc));
-        mailbox[0] = schedule.loads;
+        mb[0] = schedule.loads;
         for (uint32_t l = 0; l < schedule.loads; ++l) {
-            mailbox[1 + l] = schedule.load_expert[l] | (uint32_t(schedule.load_region[l]) << 8);
+            mb[1 + l] = schedule.load_expert[l] | (uint32_t(schedule.load_region[l]) << 8);
         }
         // then the x forwarder's: the entries' sub-blocks and their last one's row tiles holding tokens
-        volatile tt_l1_ptr uint32_t* x_entries = mailbox + 1 + schedule.loads;
-        x_entries[0] = schedule.entries;
+        volatile tt_l1_ptr uint32_t* xe = mb + 1 + schedule.loads;
+        xe[0] = schedule.entries;
         for (uint32_t a = 0; a < schedule.entries; ++a) {
-            x_entries[1 + a] = schedule.sub_blocks[a] | (last_sub_block_row_tiles(schedule, a) << 16);
+            xe[1 + a] = schedule.sub_blocks[a] | (last_sub_block_row_tiles(schedule, a) << 16);
         }
         *sem(flat_options::gate_up_mailbox_sem) = 1;
     }
@@ -131,8 +129,8 @@ void kernel_main() {
             cb_push_back(in1_cb, slot);
             ++pushed;
         }
-        const uint32_t arrived_p = *xarr_sem;           // pieces
-        const uint32_t arrived = arrived_p / x_pieces;  // whole blocks
+        const uint32_t arrived_p = *xarr_sem;     // pieces
+        const uint32_t arrived = arrived_p / xp;  // whole blocks
         while (arrived > x_pub) {
             cb_push_back(x_cb, x_blk);
             ++x_pub;
@@ -142,31 +140,29 @@ void kernel_main() {
         }
         *sem(flat_options::x_consumed_sem) = x_cons;
         if (!h_pending && h_sent < num_v && *go_sem + hbuf >= h_sent + 1 &&
-            cb_pages_available_at_front(h_local_cb, row_tiles * h_tiles_per_core)) {
+            cb_pages_available_at_front(h_local_cb, mt * hpc)) {
             const uint32_t src = get_read_ptr(h_local_cb);
             const uint32_t dst = (h_sent % hbuf) * half_bytes;  // down h_all: [HBUF]
-            for (uint32_t head = 0; head < chain_head_count; ++head) {
-                const uint32_t head_xy = get_common_arg_val<uint32_t>(head);
-                const uint64_t bc_h = get_noc_addr(head_xy >> 16, head_xy & 0xFFFF, h_all_addr);
+            for (uint32_t hd = 0; hd < nh; ++hd) {
+                const uint32_t hxy = get_common_arg_val<uint32_t>(hd);
+                const uint64_t bc_h = get_noc_addr(hxy >> 16, hxy & 0xFFFF, h_all_addr);
                 if constexpr (units) {
-                    // 16-column units column_group NU..: h tiles from K-tile column_group NU / 2, the first one's right
-                    // half only when column_group NU is odd (lead), the last one's left half only when (column_group +
-                    // 1) NU is odd (tail); the full ones are one run, the halves go face by face (bf16: faces 512 B;
-                    // bfp8: 16 B exponents of each face, then 256 B data)
-                    const uint32_t first_unit = column_group * units_per_core, first_k_tile = first_unit / 2,
-                                   lead = first_unit & 1, tail = (first_unit + units_per_core) & 1;
-                    const uint32_t full_begin = lead, full_end = h_tiles_per_core - tail;
-                    const uint64_t base = bc_h + dst + first_k_tile * row_tiles * h_tile_bytes;
-                    if (full_end > full_begin) {
+                    // 16-column units cg NU..: h tiles from K-tile cg NU / 2, the first one's right half only when cg
+                    // NU is odd (lead), the last one's left half only when (cg + 1) NU is odd (tail); the full ones are
+                    // one run, the halves go face by face (bf16: faces 512 B; bfp8: 16 B exponents of each face, then
+                    // 256 B data)
+                    const uint32_t u0 = cg * units_per_core, k0 = u0 / 2, lead = u0 & 1,
+                                   tail = (u0 + units_per_core) & 1;
+                    const uint32_t j0 = lead, j1 = hpc - tail;
+                    const uint64_t base = bc_h + dst + k0 * mt * h_tile_bytes;
+                    if (j1 > j0) {
                         write_h(
-                            src + full_begin * row_tiles * h_tile_bytes,
-                            base + full_begin * row_tiles * h_tile_bytes,
-                            (full_end - full_begin) * row_tiles * h_tile_bytes);
+                            src + j0 * mt * h_tile_bytes, base + j0 * mt * h_tile_bytes, (j1 - j0) * mt * h_tile_bytes);
                     }
                     auto half = [&](uint32_t j, uint32_t right) {  // tile j's left (faces 0 / 2) or right (1 / 3) half
-                        for (uint32_t m = 0; m < row_tiles; ++m) {
-                            const uint32_t s = src + (j * row_tiles + m) * h_tile_bytes;
-                            const uint64_t d = base + (j * row_tiles + m) * h_tile_bytes;
+                        for (uint32_t m = 0; m < mt; ++m) {
+                            const uint32_t s = src + (j * mt + m) * h_tile_bytes;
+                            const uint64_t d = base + (j * mt + m) * h_tile_bytes;
                             for (uint32_t f = right; f < 4; f += 2) {
                                 if constexpr (h_tile_bytes == 2048) {
                                     write_h(s + f * 512, d + f * 512, 512);
@@ -181,35 +177,32 @@ void kernel_main() {
                         half(0, 1);
                     }
                     if (tail) {
-                        half(h_tiles_per_core - 1, 0);
+                        half(hpc - 1, 0);
                     }
                 } else {
                     // Down cores keep h K-tile-major ([K][rows]): this core's NP K-tiles are one run.
-                    write_h(
-                        src,
-                        bc_h + dst + column_group * pairs_per_core * row_tiles * h_tile_bytes,
-                        pairs_per_core * row_tiles * h_tile_bytes);
+                    write_h(src, bc_h + dst + cg * np * mt * h_tile_bytes, np * mt * h_tile_bytes);
                 }
             }
             h_pending = 1;
         }
         if (h_pending && ncrisc_noc_nonposted_writes_flushed(noc_index)) {
             // Slices of h(v) are counted per down-core buffer v % HBUF (h_gather_sem_1 / _2 give buffers 1, 2).
-            const uint32_t gather_sem_id = h_sent % hbuf == 0   ? gath_sem_id
-                                           : h_sent % hbuf == 1 ? flat_options::h_gather_sem_1
-                                                                : flat_options::h_gather_sem_2;
-            for (uint32_t head = 0; head < chain_head_count; ++head) {
-                const uint32_t head_xy = get_common_arg_val<uint32_t>(head);
-                noc_semaphore_inc(get_noc_addr(head_xy >> 16, head_xy & 0xFFFF, get_semaphore(gather_sem_id)), 1);
+            const uint32_t gid = h_sent % hbuf == 0   ? gath_sem_id
+                                 : h_sent % hbuf == 1 ? flat_options::h_gather_sem_1
+                                                      : flat_options::h_gather_sem_2;
+            for (uint32_t hd = 0; hd < nh; ++hd) {
+                const uint32_t hxy = get_common_arg_val<uint32_t>(hd);
+                noc_semaphore_inc(get_noc_addr(hxy >> 16, hxy & 0xFFFF, get_semaphore(gid)), 1);
             }
-            cb_pop_front(h_local_cb, row_tiles * h_tiles_per_core);
+            cb_pop_front(h_local_cb, mt * hpc);
             ++h_sent;
             h_pending = 0;
         }
     }
     // x_cons follows compute at most a block a loop pass, so the loop can end (all h sent) with it short of the call's
-    // blocks; the end count must be the total (the forwarder ends at forwarded == (end - 1) x pieces: a short count
-    // left it spinning past it - a 1-in-13k whole-model hang - or would end it before the successor has every block)
+    // blocks; the end count must be the total (the forwarder ends at fwd == (end - 1) x pieces: a short count left it
+    // spinning past it - a 1-in-13k whole-model hang - or would end it before the successor has every block)
     for (const uint32_t x_total = num_v * nk_gu; x_cons < x_total;) {
         invalidate_l1_cache();
         if (cb_pages_reservable_at_back(x_cb, (x_slots - (x_pub - x_cons) + 1) * x_blk)) {

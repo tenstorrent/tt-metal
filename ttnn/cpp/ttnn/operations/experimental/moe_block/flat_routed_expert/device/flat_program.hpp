@@ -80,21 +80,21 @@ constexpr uint32_t kFlatReportArgs = 4;
 constexpr uint32_t kFlatYL1Args = 8 + 5 * 32;
 
 // Adds the flat routed expert's kernels, circular buffers and semaphores to `program`, the program descriptor of one
-// chip of `mesh_device` (every chip gets the same fragment: buffers are at lockstep addresses). `tensors.output` is
-// y. Its arena CBs are backed by `tensors.arena` (common/args_table.hpp arena_backed_cbs finds them).
+// chip of `mesh_device` (every chip gets the same fragment: buffers are at lockstep addresses) for config `cfg` and
+// plan `p`. `t.output` is y. Its arena CBs are backed by `t.arena` (common/args_table.hpp arena_backed_cbs finds them).
 FlatProgramHandles add_flat_routed_expert_program(
     tt::tt_metal::ProgramDescriptor& program,
     tt::tt_metal::distributed::MeshDevice& mesh_device,
-    const FlatRoutedExpertConfig& config,
-    const FlatRoutedExpertPlan& plan,
-    const FlatRoutedExpertInputs& tensors);
+    const FlatRoutedExpertConfig& cfg,
+    const FlatRoutedExpertPlan& p,
+    const FlatRoutedExpertInputs& t);
 
-// `config` for a combine overlap: row-major bf16 y, the report args after the writers' own (cmb_rt), cumulative
+// `cfg` for a combine overlap: row-major bf16 y, the report args after the writers' own (cmb_rt), cumulative
 // counts in slot order without a go handshake; `y_l1`: the writers hand rows to the combine's L1 instead of DRAM.
-FlatRoutedExpertConfig with_combine_overlap(FlatRoutedExpertConfig config, const FlatRoutedExpertPlan& plan, bool y_l1);
+FlatRoutedExpertConfig with_combine_overlap(FlatRoutedExpertConfig cfg, const FlatRoutedExpertPlan& plan, bool y_l1);
 
 // Where the y writers report (the combine overlap): the collector core's NoC coordinates (virtual), the counts
-// array's L1 address there, and with config.y_l1 the L1 hand-off args (at most kFlatYL1Args; the writer index, arg 4,
+// array's L1 address there, and with cfg.y_l1 the L1 hand-off args (at most kFlatYL1Args; the writer index, arg 4,
 // is filled per writer). Written into every writer's per-core args (y_report_arg on) of a chip's descriptor, before its
 // programs merge: the caller's args table then holds them, their addresses as fixups.
 struct FlatCombineReport {
@@ -105,19 +105,22 @@ struct FlatCombineReport {
 void set_flat_combine_report(
     tt::tt_metal::ProgramDescriptor& program,
     const FlatProgramHandles& handles,
-    const FlatRoutedExpertConfig& config,
+    const FlatRoutedExpertConfig& cfg,
     const FlatCombineReport& report);
 
 // The schedule's local expert capacity (expert_schedule.hpp sizes its arrays by it): 16, 32 or 64.
 inline uint32_t flat_max_experts(const FlatRoutedExpertPlan& plan) {
-    return plan.experts_per_chip <= 16 ? 16 : (plan.experts_per_chip <= 32 ? 32 : 64);
+    if (plan.experts_per_chip <= 16) {
+        return 16;
+    }
+    return plan.experts_per_chip <= 32 ? 32 : 64;
 }
 
 // The compile-time options that decide the schedule (kernels/flat_options.hpp, expert_schedule.hpp: expert capacity,
 // sub-block rows, gate/up ring regions, pinning), as named compile-time args: every kernel of the program is built
 // with them, so every core builds the same schedule.
 std::vector<std::pair<std::string, uint32_t>> flat_schedule_options(
-    const FlatRoutedExpertConfig& config, const FlatRoutedExpertPlan& plan);
+    const FlatRoutedExpertConfig& cfg, const FlatRoutedExpertPlan& p);
 
 // The y writers (logical cores) in program order: the down cores grouped by column width.
 std::vector<tt::tt_metal::CoreCoord> flat_y_writers(const FlatRoutedExpertPlan& plan);

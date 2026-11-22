@@ -19,10 +19,10 @@ struct FlatRoutedExpertProgramFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const FlatRoutedExpertParams& operation_attributes,
+        const FlatRoutedExpertParams& cfg,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const FlatRoutedExpertInputs& tensor_args,
-        Tensor& tensor_return_value);
+        const FlatRoutedExpertInputs& t,
+        Tensor& output);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached,

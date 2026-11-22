@@ -112,6 +112,7 @@ std::vector<uint32_t> column_split(uint32_t num_tiles, uint32_t columns, uint32_
     TT_FATAL(num_tiles % unit == 0, "moe_tail: {} tiles in units of {}", num_tiles, unit);
     const uint32_t base = num_tiles / unit / columns, remainder = num_tiles / unit % columns;
     std::vector<uint32_t> out;
+    out.reserve(columns);
     for (uint32_t i = 0; i < columns; ++i) {
         out.push_back((base + (i < remainder ? 1 : 0)) * unit);
     }

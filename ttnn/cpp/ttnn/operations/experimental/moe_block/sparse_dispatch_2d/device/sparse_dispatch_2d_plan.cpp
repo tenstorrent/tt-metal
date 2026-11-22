@@ -61,9 +61,9 @@ PortWiring wiring(const MeshPlan& plan, ChipCoord chip, Dir d) {
     return w;
 }
 
-std::vector<CoreRange> port_cell_ranges(const PortCores& cores) {
+std::vector<tt::tt_metal::CoreRange> port_cell_ranges(const PortCores& cores) {
     std::set<std::pair<size_t, size_t>> seen;
-    std::vector<CoreRange> ranges;
+    std::vector<tt::tt_metal::CoreRange> ranges;
     for (const auto& [key, core] : cores) {
         if (seen.emplace(core.x, core.y).second) {
             ranges.emplace_back(core, core);

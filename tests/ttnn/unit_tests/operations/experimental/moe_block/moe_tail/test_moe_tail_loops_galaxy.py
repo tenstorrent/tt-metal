@@ -19,7 +19,9 @@ from loguru import logger
 import ttnn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from head_tail_lb_cases import MODELS, Weights, _payload, mb  # noqa: E402
+from head_tail_lb_cases import MODELS, Weights, _payload  # noqa: E402
+
+moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
 
 R, C = 8, 4
 ROW_TOKENS = 512  # (a block's tokens a mesh row: a multiple of 32 x TP)
@@ -76,11 +78,11 @@ def test_moe_tail_engine_row_blocks_one_call(mesh, k):
     f32 = lambda t: ttnn.from_torch(t, dtype=ttnn.float32)  # noqa: E731
 
     def resources(tokens):
-        cfg = mb.MoEBlockConfig(chunk_tokens=tokens, num_links=2, persist_l1_small=True)
-        return mb.MoEBlockResources(mesh, model.dims(), cfg, mb.MoEDtypes())
+        cfg = moe_block_utils.MoEBlockConfig(chunk_tokens=tokens, num_links=2, persist_l1_small=True)
+        return moe_block_utils.MoEBlockResources(mesh, model.dims(), cfg, moe_block_utils.MoEDtypes())
 
     def w_up_of(res, row_blocks):
-        return mb.prepare_moe_tail_weights(
+        return ttnn.experimental.moe_block.prepare_moe_tail_weights(
             f32(w.latent_up), f32(w.latent_norm), resources=res, dtype=ttnn.bfloat8_b, row_blocks=row_blocks
         )
 
@@ -92,7 +94,11 @@ def test_moe_tail_engine_row_blocks_one_call(mesh, k):
     try:
         w_up1 = w_up_of(res1, 1)
         ref = ttnn.concat(
-            [mb.moe_tail(rows(y, i), rows(se, i), resources=res1, w_up=w_up1, row_blocks=1) for i in range(k)], dim=2
+            [
+                ttnn.experimental.moe_block.moe_tail(rows(y, i), rows(se, i), resources=res1, w_up=w_up1, row_blocks=1)
+                for i in range(k)
+            ],
+            dim=2,
         )
         ref_host = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(ref)]
     finally:
@@ -101,7 +107,7 @@ def test_moe_tail_engine_row_blocks_one_call(mesh, k):
     try:
         w_up = w_up_of(res, k)
         for call in range(3):  # (repeated: the ready words and the cumulative counts carried from call to call)
-            got = mb.moe_tail(y, se, resources=res, w_up=w_up, row_blocks=k)
+            got = ttnn.experimental.moe_block.moe_tail(y, se, resources=res, w_up=w_up, row_blocks=k)
             diff = sum(int((ttnn.to_torch(a) != b).sum()) for a, b in zip(ttnn.get_device_tensors(got), ref_host))
             logger.info(
                 f"MOE_TAIL engine one call x {k} row blocks (call {call}): {diff} elements differ from a call a block"

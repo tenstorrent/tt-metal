@@ -265,7 +265,7 @@ ProgramAddresses head_args_to_dram(
 void attach_engine_mcasts(const HeadModel& model, ProgramDescriptor& program_descriptor) {
     namespace kernel_lib_host = ttnn::kernel_lib::host;
     const SharedExpertSizing& sizing = *model.sizing;
-    auto engine_kernel = std::find_if(
+    auto* engine_kernel = std::find_if(
         program_descriptor.kernels.begin(),
         program_descriptor.kernels.end(),
         [](const KernelDescriptor& kernel_descriptor) {
@@ -380,7 +380,7 @@ HeadWorkload build_head_workload(
     // one program for the mesh (common/chip_program.hpp: the union of the chips' semaphores - the fabric connections'
     // differ by core - and their eth channels per-device runtime args)
     std::string why;
-    auto one = merge_chip_workload(std::move(workload), "moe_head", &why);
+    auto one = merge_chip_workload(*model.mesh, std::move(workload), "moe_head", &why);
     workload = std::move(one.workload);
     if (workload.programs.size() > 1) {
         log_warning(tt::LogOp, "moe_head: one program per chip: {}", why);

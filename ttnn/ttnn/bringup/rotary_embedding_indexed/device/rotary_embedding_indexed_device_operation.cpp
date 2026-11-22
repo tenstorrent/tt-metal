@@ -871,8 +871,8 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     // workload is stashed and discarded, never dispatched, and its kernels are
     // JIT-compiled in bulk later. See ttnn/up_front_compile.hpp.
     const bool defer_compile = ttnn::up_front_compile::should_defer_compile();
-    auto program = MakeProgramFromSpec(*mesh_device, spec, /*skip_validation=*/false, defer_compile);
-    SetProgramRunArgs(program, run_args);
+    auto program = MakeProgramFromSpec(*mesh_device, spec, defer_compile);
+    program.set_program_run_args(run_args);
     return {std::move(program), SharedVariables{}};
 }
 
@@ -938,7 +938,7 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
     // the same spec/name checks. Validation still runs on every invocation, including fresh metadata.
     bool validated = false;
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        UpdateProgramRunArgs(program, run_args, /*skip_validation=*/validated);
+        program.update_program_run_args(run_args, validated ? ValidationMode::SKIP : ValidationMode::FULL);
         validated = true;
     }
 }

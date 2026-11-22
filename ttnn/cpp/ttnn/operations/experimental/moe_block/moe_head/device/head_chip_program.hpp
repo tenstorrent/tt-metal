@@ -20,9 +20,13 @@ namespace ttnn::operations::experimental::moe_block::moe_head {
 class ChipProgram {
 public:
     ChipProgram(const HeadModel& model, const HeadBuffers& buffers, Coord coord) :
-        model(model), sizing(*model.sizing), reduce_scatter(*model.reduce_scatter), buffers(buffers), coord(coord) {
-        position = model.position(coord);
-        my_chip = coord.first * model.mesh_columns + coord.second;
+        model(model),
+        sizing(*model.sizing),
+        reduce_scatter(*model.reduce_scatter),
+        buffers(buffers),
+        coord(coord),
+        position(model.position(coord)),
+        my_chip(coord.first * model.mesh_columns + coord.second) {
         arena_base = source_arg(SOURCE_ARENA);
         mailbox = word("mbox");
         for (uint32_t i = 0; i < (sizing.row_chunks > 1 ? 4u : 3u); ++i) {
@@ -132,7 +136,7 @@ private:
     ProgramDescriptor program_descriptor;
 
     Arg word(const std::string& name) const {
-        const uint32_t index = model.word_index(name);
+        const uint32_t index = HeadModel::word_index(name);
         return Arg(buffers.addresses[SOURCE_FIRST_WORD + index], int32_t(SOURCE_FIRST_WORD + index), 0);
     }
     Arg arena_arg(const std::string& region) const { return arena_base + u32(sizing.at(region)); }

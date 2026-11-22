@@ -106,6 +106,7 @@ HeadModel::shard_order(const Coord& coord) const {
         }
     }
     std::vector<uint32_t> rest;
+    rest.reserve(carry.size());
     for (const auto& [shard, _] : carry) {
         rest.push_back(shard);
     }
@@ -184,6 +185,7 @@ std::vector<uint32_t> HeadModel::arrival_order(uint32_t receiver) const {
     std::stable_sort(
         sources.begin(), sources.end(), [&](uint32_t left, uint32_t right) { return key(left) < key(right); });
     std::vector<uint32_t> out;
+    out.reserve(sources.size());
     for (uint32_t source : sources) {
         out.push_back(source < receiver ? source : source - 1);
     }
@@ -427,7 +429,7 @@ std::shared_ptr<const HeadModel> make_head_model(
             auto below = [&]() {  // (at NoC column 0: the free cell of the lowest virtual y)
                 std::optional<CoreCoord> best;
                 for (const auto& [x, y] : allowed) {
-                    if (taken.count({x, y})) {
+                    if (taken.contains({x, y})) {
                         continue;
                     }
                     const CoreCoord cell(x, y);
@@ -445,6 +447,7 @@ std::shared_ptr<const HeadModel> make_head_model(
                 }
             }
             std::vector<uint32_t> column_rows;
+            column_rows.reserve(model.grid.y);
             for (uint32_t y = 0; y < model.grid.y; ++y) {
                 column_rows.push_back(y);
             }
@@ -462,7 +465,7 @@ std::shared_ptr<const HeadModel> make_head_model(
             }
             for (uint32_t link = 0; link < model.gather_links; ++link) {
                 for (uint32_t y : walk) {
-                    if (!taken.count({model.mover_column, y})) {
+                    if (!taken.contains({model.mover_column, y})) {
                         gather_chip.copy.emplace_back(model.mover_column, y);
                         taken.insert({model.mover_column, y});
                         break;
@@ -510,7 +513,9 @@ std::shared_ptr<const HeadModel> make_head_model(
     // (the logits words: past both hand-off arrays and the latent's gap, kFlagWords aligned - head_program_common.hpp)
     const uint32_t handoff_words = 2 * engine_columns * engine_rows * model.handoff_bytes / 4 + kLatentHandoffsGap / 4;
     model.logits_words_offset = (handoff_words + kFlagWords - 1) / kFlagWords * kFlagWords;
-    model.port_words = std::max<uint32_t>(16, (tp_size - 1) * u32(ceil_div(router_cores_needed, model.gather_links)));
+    // (a port's logits sub-block words: a destination a direction x the link's router cores - head_gather_program.cpp
+    // checks the bound; every flag is a persistent word on the port cores, so no more than that)
+    model.port_words = std::max<uint32_t>(1, (tp_size - 1) * u32(ceil_div(router_cores_needed, model.gather_links)));
     model.zone_words_offset = model.logits_words_offset + kFlagWords * model.port_words;
     model.mailbox_words = model.zone_words_offset + kZoneWordsBytes / 4;
 
@@ -712,9 +717,9 @@ std::vector<HeadWordsSpec> head_words(const HeadModel& model) {
     // (the matmul cores' phase words: kRouterXReadyFlag .. kLiveChunksFlag, head_program_common.hpp)
     out.push_back({"ewords", model.engine_cores(), kEngineWordsBytes / 4});
     // a padded forward's metadata, read by the kernels that skip its row chunks past the last real one
-    // (the named arg skip_padding_chunks: padded_rows.hpp padded_live_chunks): a 128 B slot from its first 64 B aligned
-    // address (padded_metadata_slot), so 48 words (192 B) a core - the slot and up to 64 B of alignment
-    out.push_back({"valid", head_arena_cores(model), 48});
+    // (the named arg skip_padding_chunks: padded_rows.hpp padded_live_chunks): a 128 B slot at a 64 B aligned address
+    // (padded_metadata_slot rounds the words' address up to 64 B: placed aligned, it is the words' own address)
+    out.push_back({"valid", head_arena_cores(model), 128 / 4, moe_head_alignment::kAlignBytes});
     // router iterations: [0] router core 0's count of the chip's router cores / ports done with an iteration, [16] a
     // port's count of the chip's router cores done
     if (model.router_iterations > 1) {

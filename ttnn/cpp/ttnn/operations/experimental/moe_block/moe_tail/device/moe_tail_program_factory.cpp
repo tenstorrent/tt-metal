@@ -164,6 +164,7 @@ std::vector<CoreCoord> cores_of_set(const CoreRangeSet& core_ranges) {
 
 CoreRangeSet core_ranges_of(const std::vector<CoreCoord>& cores) {
     std::vector<CoreRange> ranges;
+    ranges.reserve(cores.size());
     for (const auto& core : cores) {
         ranges.emplace_back(core, core);
     }
@@ -335,7 +336,7 @@ std::pair<ChipWorkload, ProgramAddresses> one_program(
         workload.programs[i].descriptor = std::move(chips[i].second);
     }
     std::string merge_why;
-    auto one = merge_chip_workload(std::move(workload), "moe_tail", &merge_why);
+    auto one = merge_chip_workload(mesh, std::move(workload), "moe_tail", &merge_why);
     TT_FATAL(
         one.workload.programs.size() == 1,
         "moe_tail ({}): the chips' programs still differ with their args in DRAM: {}",
@@ -375,7 +376,7 @@ TailEngineFactory::cached_mesh_workload_t TailEngineFactory::create_mesh_workloa
         {{0, 1, plan.engine_cores}, {3, 4, plan.port_cores}},
         sources_of(tensor_args, output),
         "engine");
-    return to_cached(std::move(workload), std::move(addresses));
+    return to_cached(workload, std::move(addresses));
 }
 
 void TailEngineFactory::override_runtime_arguments(
@@ -402,7 +403,7 @@ TailAllToAllFactory::cached_mesh_workload_t TailAllToAllFactory::create_mesh_wor
         {{0, 2, core_ranges_of(plan.workers)}, {3, 4, plan.port_union}},
         sources_of(tensor_args, output),
         "all-to-all");
-    return to_cached(std::move(workload), std::move(addresses));
+    return to_cached(workload, std::move(addresses));
 }
 
 void TailAllToAllFactory::override_runtime_arguments(
@@ -472,7 +473,7 @@ tt::tt_metal::WorkloadDescriptor moe_tail_factory_detail::engine_workload(
                              uint32_t size,
                              tt::DataFormat format,
                              uint32_t page,
-                             std::vector<uint32_t> blocks) {
+                             const std::vector<uint32_t>& blocks) {
         check_blocks(name, size, page, blocks);
         cbs.push_back(cb(index, index == CB_LANDING ? engine_and_ports : engine, size, format, page));
     };
@@ -575,6 +576,7 @@ tt::tt_metal::WorkloadDescriptor moe_tail_factory_detail::engine_workload(
         {names::kMaxSteps, geometry.max_steps},
         {names::kRowBlocks, row_blocks}};
     std::vector<uint32_t> w_k_bounds;
+    w_k_bounds.reserve(geometry.w_k_ranges.size());
     for (const auto& [k_first, k_end] : geometry.w_k_ranges) {
         w_k_bounds.push_back(k_first);
     }
@@ -585,6 +587,7 @@ tt::tt_metal::WorkloadDescriptor moe_tail_factory_detail::engine_workload(
         share_k_ranges.push_back(k_end);
     }
     std::vector<uint32_t> column_xs;  // (the engine's NoC x by column)
+    column_xs.reserve(engine_columns);
     for (uint32_t column = 0; column < engine_columns; ++column) {
         column_xs.push_back(as_uint32(virtual_core(column, 0).x));
     }
@@ -794,6 +797,7 @@ tt::tt_metal::WorkloadDescriptor moe_tail_factory_detail::engine_workload(
             const auto peer = row_neighbor(position, tp_size, plan.ring, direction);
             const auto sends = schedule(position, direction);
             std::vector<uint32_t> pair_ys;
+            pair_ys.reserve(num_pairs);
             for (uint32_t pair = 0; pair < num_pairs; ++pair) {
                 pair_ys.push_back(as_uint32(virtual_core(0, pair + num_pairs * link).y));
             }
@@ -891,6 +895,7 @@ tt::tt_metal::WorkloadDescriptor moe_tail_factory_detail::all_to_all_workload(
     };
     const CoreRangeSet workers = core_ranges_of(plan.workers);
     std::vector<uint32_t> worker_xys;  // (x | y << 16 each: the carrying ports release them once a call)
+    worker_xys.reserve(plan.workers.size());
     for (const auto& worker : plan.workers) {
         worker_xys.push_back(packed_xy(virtual_core(worker)));
     }

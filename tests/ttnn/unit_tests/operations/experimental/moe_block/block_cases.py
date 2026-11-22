@@ -2,9 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The MoE block's test models and meshes, shared by the block tests (models/demos/moe_block/tests) and the op-level
-checks that run the block's stages (block_stages.py): a model config (BlockModel, MODELS) is what a model brings - its
-block dims, seeded random weights, the host reference on them; MESHES the stages it runs on."""
+"""The MoE block's test models and meshes, shared by the block tests (models/demos/deepseek_v3_d_p/tests/moe_block) and
+the op-level checks that run the block's stages (block_stages.py): a model config (BlockModel, MODELS) is what a model
+brings - its block dims, seeded random weights, the host reference on them; MESHES the stages it runs on."""
 
 from dataclasses import dataclass
 from typing import Callable
@@ -22,7 +22,9 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
     torus_y_device_params,
 )
-from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload, model_l1_small_with_block
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload, moe_block_words_slab
+
+moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
 
 
 # ---------------------------------------------------------------------------------------------------- model configs
@@ -38,24 +40,8 @@ class DeepSeekV41FlashConfig:
     SHARED_EXPERT_INTERMEDIATE_SIZE = 2304
     ROUTE_SCALE = 1.5
     SWIGLU_LIMIT = 10.0
-
-    @staticmethod
-    def moe_block_dims():
-        mb = ttnn.experimental.moe_block
-        act = mb.ExpertActivation(kind=mb.ExpertActivationKind.ClampedSilu, limit=DeepSeekV41FlashConfig.SWIGLU_LIMIT)
-        dims = mb.MoEModelDims(
-            num_experts=DeepSeekV41FlashConfig.NUM_ROUTED_EXPERTS,
-            top_k=DeepSeekV41FlashConfig.NUM_EXPERTS_PER_TOKEN,
-            emb_dim=DeepSeekV41FlashConfig.EMB_SIZE,
-            routed_expert_hidden_dim=DeepSeekV41FlashConfig.MOE_INTERMEDIATE_SIZE,
-            routed_expert_activation=act,
-            router=mb.RouterSpec(
-                score_func=mb.RouterScoreFunc.SqrtSoftplus, route_scale=DeepSeekV41FlashConfig.ROUTE_SCALE
-            ),
-            shared_expert_hidden_dim=DeepSeekV41FlashConfig.SHARED_EXPERT_INTERMEDIATE_SIZE,
-            shared_expert_activation=act,
-        )
-        return dims, "clamped_silu"
+    SCORE_FUNC = "sqrtsoftplus"
+    ROUTED_EXPERT_ACTIVATION = "clamped_silu"
 
 
 class MiniMaxM3BlockConfig(MiniMaxM3Config):
@@ -65,23 +51,8 @@ class MiniMaxM3BlockConfig(MiniMaxM3Config):
 
     SWIGLU_ALPHA = 1.702
     SWIGLU_LIMIT = 7.0
-
-    @staticmethod
-    def moe_block_dims():
-        mb = ttnn.experimental.moe_block
-        K = MiniMaxM3BlockConfig
-        act = mb.ExpertActivation(kind=mb.ExpertActivationKind.SwigluOai, limit=K.SWIGLU_LIMIT, alpha=K.SWIGLU_ALPHA)
-        dims = mb.MoEModelDims(
-            num_experts=K.NUM_ROUTED_EXPERTS,
-            top_k=K.NUM_EXPERTS_PER_TOKEN,
-            emb_dim=K.EMB_SIZE,
-            routed_expert_hidden_dim=K.MOE_INTERMEDIATE_SIZE,
-            routed_expert_activation=act,
-            router=mb.RouterSpec(score_func=mb.RouterScoreFunc.Sigmoid, route_scale=K.ROUTE_SCALE),
-            shared_expert_hidden_dim=K.SHARED_INTERMEDIATE_SIZE,
-            shared_expert_activation=act,
-        )
-        return dims, "swigluoai"
+    SHARED_EXPERT_INTERMEDIATE_SIZE = MiniMaxM3Config.SHARED_INTERMEDIATE_SIZE
+    ROUTED_EXPERT_ACTIVATION = "swigluoai"
 
 
 def _bf16_experts(n, hidden, inter, g):
@@ -133,8 +104,8 @@ def _glm_reference(x, sd):
 
 
 def _k3_weights(chips):
-    """test_kimi_k3_moe's creators and seeds; the routed experts one chip's worth repeated on every chip (896 distinct
-    experts would take the host ~120 GB)."""
+    """K3's weights from init_helpers' creators and seeds (as TtMoe's K3 test made them); the routed experts one chip's
+    worth repeated on every chip (896 distinct experts would take the host ~120 GB)."""
     from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
         create_gate_weights,
         create_latent_weights,
@@ -259,7 +230,7 @@ class BlockModel:
     """What a model brings to the block tests."""
 
     name: str
-    cfg: type  # (the model config TtK3MoEBlockFfn takes)
+    cfg: type  # (the model config TtMoEBlockFfn takes)
     weights: Callable[[int], dict]  # chips -> the state dict (seeded)
     reference: Callable[[torch.Tensor, dict], torch.Tensor]  # x [S, H], state dict -> y [S, H] fp32
     pcc: float  # the accuracy floor on random weights
@@ -272,9 +243,11 @@ class BlockModel:
         return dict(
             fabric_payload_size=moe_block_fabric_payload(width),
             worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
-            # (+ the perf test's barrier: its all-gathers' semaphores go in L1_SMALL - DSv4.1's mesh opened with exactly
-            # the block's 2368 B had none left)
-            l1_small_size=model_l1_small_with_block(self.cfg, 0) + BARRIER_L1_SMALL,
+            # (the model's L1_SMALL_SIZE, else the block's words' slab and the allocator's 64 B alignment; + the perf
+            # test's barrier: its all-gathers' semaphores go in L1_SMALL - DSv4.1's mesh opened with exactly the block's
+            # 2368 B had none left)
+            l1_small_size=max(getattr(self.cfg, "L1_SMALL_SIZE", 0), moe_block_words_slab(self.cfg) + 64)
+            + BARRIER_L1_SMALL,
             trace_region_size=trace_region,
         )
 

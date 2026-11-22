@@ -26,13 +26,13 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, is_blackhole
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import block_dims
-from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_words_slab
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_dims, moe_block_words_slab
 from block_cases import MESHES, MODELS
-from models.demos.moe_block.tt.flat_gather import flat_weights_module
-from models.demos.moe_block.tt.moe_block import MoEBlock
+from models.demos.deepseek_v3_d_p.tt.moe_block.flat_gather import flat_weights_module
+from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block import MoEBlock
 
-mb = ttnn.experimental.moe_block
+moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
+
 fw = flat_weights_module()
 
 SNAP = 2.0**-14
@@ -48,7 +48,7 @@ class Case:
     model: str  # test_moe_block_models.MODELS key
     mesh: str = "8x4"  # test_moe_block_models.MESHES key
     chunk: int = 5120
-    perf_margin: float = 0.05  # (the baselines: experts_combine_perf_baselines.json)
+    perf_margin: float = 0.05  # (over the baseline in test_experts_combine_checks.COMBINE_US)
     seed: int = 5
 
     @property
@@ -74,7 +74,11 @@ def _params(routings):
     out = []
     for c in CASES:
         shape, make_params, topology = MESHES[c.mesh]
-        dp = make_params(**MODELS[c.model].mesh_params())
+        # exactly the machine's chip count (conftest's mesh_device skips any other before the mesh opens): an 8x4 case
+        # on a Galaxy, a 4x4 / 2x4 one on the tray (half) TT_VISIBLE_DEVICES narrows it to, with its
+        # TT_MESH_GRAPH_DESC_PATH (block_cases.MESHES) - a sub-mesh of a whole Galaxy does not open (its fabric routers
+        # time out in their first handshake). (requires_mesh_topology is the model tests' conftest's: not run here.)
+        dp = {**make_params(**MODELS[c.model].mesh_params()), "require_exact_physical_num_devices": True}
         mark = pytest.mark.requires_mesh_topology(mesh_shape=shape, topology=topology)
         for r in routings:
             out.append(pytest.param(c, r, shape, dp, marks=mark, id=f"{c.id}-{r}" if r else c.id))
@@ -161,16 +165,18 @@ class BlockStages:
         """layout: the flat expert's FlatLayoutOptions (e.g. x_bf16 / h_bf16), None: the block's default."""
         self.mesh, self.case = mesh, case
         model = MODELS[case.model]
-        self.dims, self.act = block_dims(model.cfg)
+        self.dims, self.act = moe_block_dims(model.cfg)
         d = self.dims
         R, C = tuple(mesh.shape)
         self.N = R * C
         self.E, self.K, self.H, self.Hr = d.num_experts, d.top_k, d.emb_dim, d.routed_width
         self.I, self.EPC, self.S = d.routed_expert_hidden_dim, d.num_experts // self.N, case.chunk // self.N
-        cfg = mb.MoEBlockConfig(chunk_tokens=case.chunk, num_links=2, combine_snap=SNAP, persist_l1_small=True)
+        cfg = moe_block_utils.MoEBlockConfig(
+            chunk_tokens=case.chunk, num_links=2, combine_snap=SNAP, persist_l1_small=True
+        )
         cfg.words_slab_bytes = moe_block_words_slab(model.cfg)
-        self.dtypes = mb.MoEDtypes()
-        self.res = mb.MoEBlockResources(mesh, d, cfg, self.dtypes)
+        self.dtypes = moe_block_utils.MoEDtypes()
+        self.res = moe_block_utils.MoEBlockResources(mesh, d, cfg, self.dtypes)
         self.block = MoEBlock(mesh, self.res, dtypes=self.dtypes, layout=layout)
         kw = self.block.expert_kw
 
@@ -207,16 +213,18 @@ class BlockStages:
         blk = self.block
         if routing not in self.head_w:
             bias = _bias(self.E, routing, self.case.seed + ROUTINGS.index(routing), self.N)
-            self.head_w[routing] = mb.prepare_moe_head_weights(
+            self.head_w[routing] = ttnn.experimental.moe_block.prepare_moe_head_weights(
                 *self.hw.head, ttnn.from_torch(bias, dtype=ttnn.float32), resources=self.res, dtypes=self.dtypes,
                 accumulators=blk.accumulators,
             )  # fmt: skip
         arena = ttnn.allocate_tensor_on_device(blk.arena_spec, self.mesh)
-        self.head = mb.moe_head(
+        self.head = ttnn.experimental.moe_block.moe_head(
             self.x, self.head_w[routing], resources=self.res, dtypes=self.dtypes, accumulators=blk.accumulators,
             arena=arena,
         )  # fmt: skip
-        self.xg = mb.sparse_dispatch_2d(self.head.dispatch_buffer, self.head.route_words, self.res, arena=arena)
+        self.xg = ttnn.experimental.moe_block.sparse_dispatch_2d(
+            self.head.dispatch_buffer, self.head.route_words, self.res, arena=arena
+        )
         ttnn.deallocate(arena)
         ttnn.synchronize_device(self.mesh)
         self.routing = routing
@@ -227,7 +235,9 @@ class BlockStages:
     def dispatch(self):
         """sparse_dispatch_2d again on the kept head's xbuf + route (in a call's own arena): xbuf filled in place."""
         arena = self._arena()
-        xg = mb.sparse_dispatch_2d(self.head.dispatch_buffer, self.head.route_words, self.res, arena=arena)
+        xg = ttnn.experimental.moe_block.sparse_dispatch_2d(
+            self.head.dispatch_buffer, self.head.route_words, self.res, arena=arena
+        )
         ttnn.deallocate(arena)
         return xg
 
@@ -235,8 +245,10 @@ class BlockStages:
         """moe_tail on y_own and the kept head's shared expert output (no arena: MoEBlock runs it after the arena is
         freed); a latent model's W_up prepared on the first call. Returns [1, 1, S/SP, H/TP] (a new tensor a call)."""
         if self.w_up is None and self.hw.tail is not None:
-            self.w_up = mb.prepare_moe_tail_weights(*self.hw.tail, resources=self.res, row_blocks=self.head.row_blocks)
-        return mb.moe_tail(
+            self.w_up = ttnn.experimental.moe_block.prepare_moe_tail_weights(
+                *self.hw.tail, resources=self.res, row_blocks=self.head.row_blocks
+            )
+        return ttnn.experimental.moe_block.moe_tail(
             y_own, self.head.shared_expert_output, resources=self.res, w_up=self.w_up, row_blocks=self.head.row_blocks
         )
 
@@ -244,7 +256,7 @@ class BlockStages:
         """The op in a call's own arena (allocated, run, freed - MoEBlock's forward), y_own returned."""
         h, ex = self.head, self.experts
         arena = self._arena()
-        y = mb.routed_experts_combine(
+        y = ttnn.experimental.moe_block.routed_experts_combine(
             self.xg, h.counts, h.regions, h.token_index, h.table, h.plan, ex.gidx, ex.w_gu, ex.w_d, self.res,
             arena=arena, **self.block.expert_kw,
         )  # fmt: skip

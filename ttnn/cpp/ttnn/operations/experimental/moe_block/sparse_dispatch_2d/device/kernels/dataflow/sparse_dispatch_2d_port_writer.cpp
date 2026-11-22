@@ -6,9 +6,8 @@
 // Runs on: dispatch port cores (one per direction with a neighbour and per link), RISCV_0 (BRISC), NoC 1
 // Responsibilities:
 //  - reads no DRAM: takes rows (CB_ROWS) and entries (CB_META) from sparse_dispatch_2d_port_reader
-//  - fabric-writes each row (1 or 2 a packet; row_pieces packets a row above the payload) into the same slot of the
-//    neighbour's xbuf (the public fabric API, DRAM address resolved for the fabric router's NoC 1, SYS-1419); stages
-//    entries per stream in CB_STAGE
+//  - fabric-writes each row (1 or 2 a packet) into the same slot of the neighbour's xbuf (the public fabric API, DRAM
+//    address resolved for the fabric router's NoC 1, SYS-1419); stages entries per stream in CB_STAGE
 //  - fabric fused write + atomic inc: entry batches into the neighbour ports' manifest rings and ring counters
 //  - start fence: atomic inc on the neighbour's opposite port's READY word, waits for its own READY from it
 //
@@ -202,9 +201,6 @@ void send(const SenderArgs& args, CONN& conn) {
     constexpr uint32_t group = get_named_compile_time_arg_val(sparse_dispatch_2d_names::kGroup);
     constexpr uint32_t manifest_batch = get_named_compile_time_arg_val(sparse_dispatch_2d_names::kManifestBatch);
     constexpr uint32_t ROWS_PER_PKT = get_named_compile_time_arg_val(sparse_dispatch_2d_names::kRowsPerPacket);
-    constexpr uint32_t row_pieces = get_named_compile_time_arg_val(sparse_dispatch_2d_names::kRowPieces);
-    constexpr uint32_t piece_bytes = row_bytes / row_pieces;
-    static_assert(row_pieces == 1 || ROWS_PER_PKT == 1, "a row in pieces is one row a packet");
     constexpr auto out_args = TensorAccessorArgs<0>();
 
     const uint32_t ready_addr = args.ready_addr;
@@ -245,7 +241,6 @@ void send(const SenderArgs& args, CONN& conn) {
         invalidate_l1_cache();
         volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_meta));
         const uint32_t rows_l1 = get_read_ptr(cb_rows);
-        uint32_t used = 0;  // (headers of this group's packets, a row in pieces)
         for (uint32_t i = 0; i < group; ++i) {
             const uint32_t w0 = meta[i * META_WORDS], m = meta[i * META_WORDS + 1];
             if (w0 & END) {
@@ -278,23 +273,8 @@ void send(const SenderArgs& args, CONN& conn) {
                     continue;
                 }
             }
-            if constexpr (row_pieces > 1) {
-                // (a row in pieces: headers in turn, the group's flushed before one is refilled - group packets in
-                // flight, as one packet a row has)
-                for (uint32_t p = 0; p < row_pieces; ++p) {
-                    if (used == group) {
-                        noc_async_writes_flushed();
-                        used = 0;
-                    }
-                    hdr = hdrs[used++];
-                    linear::to_noc_unicast_write(piece_bytes, hdr, lay::kSlot.get(w0), out, p * piece_bytes);
-                    fabric_mesh::fabric_unicast_noc_unicast_write_with_state(
-                        &conn, hdr, rows_l1 + i * row_bytes + p * piece_bytes);
-                }
-            } else {
-                linear::to_noc_unicast_write(row_bytes, hdr, lay::kSlot.get(w0), out);
-                fabric_mesh::fabric_unicast_noc_unicast_write_with_state(&conn, hdr, rows_l1 + i * row_bytes);
-            }
+            linear::to_noc_unicast_write(row_bytes, hdr, lay::kSlot.get(w0), out);
+            fabric_mesh::fabric_unicast_noc_unicast_write_with_state(&conn, hdr, rows_l1 + i * row_bytes);
             follow(stager, neighbour, w0, m);
         }
         noc_async_writes_flushed();

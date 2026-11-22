@@ -8,8 +8,6 @@
 
 namespace ttnn::operations::experimental::moe_block::moe_head {
 
-namespace port_words = moe_head_port_words;  // (the port / router words' fields, shared with the kernels)
-
 std::vector<uint32_t> ChipProgram::shard_order_args() const {
     std::vector<uint32_t> shard_order = model.shard_order(coord).first;
     std::vector<uint32_t> out = {sizing.num_k_steps / u32(shard_order.size()), u32(shard_order.size())};

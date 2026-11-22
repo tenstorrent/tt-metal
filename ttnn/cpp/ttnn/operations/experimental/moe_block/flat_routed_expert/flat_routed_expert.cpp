@@ -25,21 +25,21 @@ using tt::tt_metal::CoreCoord;
 // [cores x rows, 32] bf16 TILE, height-sharded `rows` a core over the cores' rectangles
 tt::tt_metal::TensorSpec l1_sharded_spec(const std::vector<CoreCoord>& cores, uint32_t rows) {
     using namespace tt::tt_metal;
-    const MemoryConfig memory_config(
+    const MemoryConfig mc(
         TensorMemoryLayout::HEIGHT_SHARDED,
         BufferType::L1,
         ShardSpec(rect_ranges(cores), {rows, 32}, ShardOrientation::ROW_MAJOR));
     return TensorSpec(
         ttnn::Shape({static_cast<uint32_t>(cores.size()) * rows, 32}),
-        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), memory_config));
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mc));
 }
 
 // The per-launch scratch specs (arena, relay words) of a plan, built once: rect_ranges + the sharded spec cost tens
 // of us per call otherwise. Plans live in the never-freed plan cache, so their address is a stable key.
 const std::pair<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>& scratch_specs(const FlatRoutedExpertPlan& plan) {
-    static std::mutex cache_mutex;
+    static std::mutex mu;
     static std::map<const FlatRoutedExpertPlan*, std::pair<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>> cache;
-    std::lock_guard<std::mutex> lock(cache_mutex);
+    std::lock_guard<std::mutex> lock(mu);
     auto it = cache.find(&plan);
     if (it == cache.end()) {
         it = cache
@@ -84,23 +84,23 @@ ttnn::Tensor create_flat_routed_expert_done_words(
     const FlatRoutedExpertPlan& plan,
     tt::tt_metal::BufferType buffer_type) {
     using namespace tt::tt_metal;
-    const uint32_t words_per_core = host_detail::done_words_per_core(plan);
-    const MemoryConfig memory_config(
+    const uint32_t nw = host_detail::done_words_per_core(plan);
+    const MemoryConfig mc(
         TensorMemoryLayout::HEIGHT_SHARDED,
         buffer_type,
-        ShardSpec(rect_ranges(plan.coordinator_cores), {1, words_per_core}, ShardOrientation::ROW_MAJOR));
+        ShardSpec(rect_ranges(plan.coordinator_cores), {1, nw}, ShardOrientation::ROW_MAJOR));
     return ttnn::zeros(
-        ttnn::Shape({static_cast<uint32_t>(plan.coordinator_cores.size()), words_per_core}),
+        ttnn::Shape({static_cast<uint32_t>(plan.coordinator_cores.size()), nw}),
         DataType::UINT32,
         Layout::ROW_MAJOR,
         std::ref(mesh_device),
-        memory_config);
+        mc);
 }
 
 ttnn::Tensor flat_routed_expert(
-    const ttnn::Tensor& x,
-    const ttnn::Tensor& counts,
-    const ttnn::Tensor& regions,
+    const ttnn::Tensor& dispatched_buffer,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& expert_region_offsets,
     const ttnn::Tensor& global_expert_ids,
     const ttnn::Tensor& gate_up_weights,
     const ttnn::Tensor& down_weights,
@@ -115,55 +115,53 @@ ttnn::Tensor flat_routed_expert(
     bool down_fp32,
     uint32_t math_fidelity,
     const FlatLayoutOptions& layout,
-    const std::optional<ttnn::Tensor>& output_tensor) {
+    const std::optional<ttnn::Tensor>& output) {
     using namespace tt::tt_metal;
     TT_FATAL(
         activation <= 3, "flat_routed_expert: activation {}: 0 SiLU, 1 SwiGLU-OAI, 2 SiTU, 3 clamped SiLU", activation);
-    auto* device = x.device();
-    FlatRoutedExpertConfig config = make_flat_routed_expert_config(
-        x.logical_shape()[-1] * x_pages_per_row,
+    auto* device = dispatched_buffer.device();
+    FlatRoutedExpertConfig cfg = make_flat_routed_expert_config(
+        dispatched_buffer.logical_shape()[-1] * x_pages_per_row,
         intermediate,
         static_cast<uint32_t>(global_expert_ids.logical_volume()),
-        counts.logical_shape()[-1],
+        expert_token_counts.logical_shape()[-1],
         max_tokens_per_expert,
         gate_up_weights.dtype() == DataType::BFLOAT8_B,
         pin,
         layout);
-    config.activation = activation;
-    config.y_row_major = y_row_major;
-    config.down_fp32 = down_fp32;
-    config.math_fidelity = math_fidelity;
-    const auto plan = flat_routed_expert_plan(*device, config);
-    // (output: a caller's tensor, e.g. a persistent buffer another program reads at a fixed address; validated)
-    const ttnn::Tensor output =
-        output_tensor
-            ? *output_tensor
-            : ttnn::empty(
-                  ttnn::Shape(
-                      {token_index ? token_index->logical_shape()[-1] : x.logical_shape()[-2] / x_pages_per_row,
-                       config.hidden}),
-                  y_row_major ? DataType::BFLOAT16 : DataType::BFLOAT8_B,
-                  y_row_major ? Layout::ROW_MAJOR : Layout::TILE,
-                  device,
-                  MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
+    cfg.activation = activation;
+    cfg.y_row_major = y_row_major;
+    cfg.down_fp32 = down_fp32;
+    cfg.math_fidelity = math_fidelity;
+    const auto plan = flat_routed_expert_plan(*device, cfg);
+    // (the output: a caller's tensor, e.g. a persistent buffer another program reads at a fixed address; validated)
+    const uint32_t y_rows =
+        token_index ? token_index->logical_shape()[-1] : dispatched_buffer.logical_shape()[-2] / x_pages_per_row;
+    const ttnn::Tensor y_output = output ? *output
+                                         : ttnn::empty(
+                                               ttnn::Shape({y_rows, cfg.hidden}),
+                                               y_row_major ? DataType::BFLOAT16 : DataType::BFLOAT8_B,
+                                               y_row_major ? Layout::ROW_MAJOR : Layout::TILE,
+                                               device,
+                                               MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
     // per-launch scratch: the arena (every role's buffers) and the relays' freed words; freed right after the launch
     // (the device reads them in order), so they never pin L1 against the next op's circular buffers
     const auto& [arena_spec, words_spec] = host_detail::scratch_specs(*plan);
     ttnn::Tensor arena = create_device_tensor(arena_spec, device);
     ttnn::Tensor words = create_device_tensor(words_spec, device);
     auto y = ttnn::prim::moe_block_flat_routed_expert(
-        config,
+        cfg,
         FlatRoutedExpertInputs{
-            .x = x,
-            .counts = counts,
-            .regions = regions,
+            .x = dispatched_buffer,
+            .counts = expert_token_counts,
+            .regions = expert_region_offsets,
             .global_expert_ids = global_expert_ids,
             .gate_up_weights = gate_up_weights,
             .down_weights = down_weights,
             .done_words = done_words,
             .arena = arena,
             .words = words,
-            .output = output,
+            .output = y_output,
             .token_index = token_index});
     arena.deallocate(true);
     words.deallocate(true);
@@ -177,14 +175,9 @@ FlatRoutedExpertResources ensure_flat_routed_expert_resources(
     r.plan = flat_routed_expert_plan(mesh_device, config);
     r.done_words = resources.persistent_words(
         "flat_routed_expert/done", rect_ranges(r.plan->coordinator_cores), host_detail::done_words_per_core(*r.plan));
-    // (the relays' words hold the gate/up cores' freed words)
+    // (a relay's words: its snake's freed word)
     r.relay_words = resources.persistent_words(
         "flat_routed_expert/relay_words", rect_ranges(r.plan->relay_cores), kRelayWordsBytes / 4);
-    TT_FATAL(
-        4 * r.plan->gate_up_cores.size() <= kRelayWordsBytes,
-        "flat_routed_expert: {} gate/up cores' freed words overrun the relays' {} B of words",
-        r.plan->gate_up_cores.size(),
-        kRelayWordsBytes);
     return r;
 }
 

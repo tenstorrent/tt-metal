@@ -30,8 +30,13 @@ struct ChipWorkload {
 
 // A workload of one program per chip (each a one-coordinate range, together one rectangle of the mesh) as one program
 // over the rectangle, the runtime-arg words that differ by chip per-device runtime args. When the programs differ in
-// anything else it comes back unchanged and `why` (if given) says why.
-ChipWorkload merge_chip_workload(tt::tt_metal::WorkloadDescriptor w, const char* op, std::string* why = nullptr);
+// anything else, or the mesh can't take per-device runtime args there (distributed::ArePerDeviceRuntimeArgsSupported),
+// it comes back unchanged and `why` (if given) says why.
+ChipWorkload merge_chip_workload(
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    tt::tt_metal::WorkloadDescriptor w,
+    const char* op,
+    std::string* why = nullptr);
 
 // Adds program `index` of `chips` to `workload` (built from its descriptor, or `program` when given) with its
 // per-device runtime args.

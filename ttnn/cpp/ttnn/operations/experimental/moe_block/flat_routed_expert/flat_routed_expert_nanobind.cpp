@@ -36,9 +36,9 @@ struct PlanHandle {
     std::shared_ptr<const FlatRoutedExpertPlan> plan;
 };
 
-nb::list cores(const std::vector<CoreCoord>& core_list) {
+nb::list cores(const std::vector<CoreCoord>& cs) {
     nb::list l;
-    for (const auto& c : core_list) {
+    for (const auto& c : cs) {
         l.append(nb::make_tuple(c.x, c.y));
     }
     return l;

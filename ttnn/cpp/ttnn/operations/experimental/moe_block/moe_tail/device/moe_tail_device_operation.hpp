@@ -37,6 +37,6 @@ namespace ttnn::prim {
 
 Tensor moe_block_tail(
     const ttnn::operations::experimental::moe_block::moe_tail::MoETailParams& params,
-    ttnn::operations::experimental::moe_block::moe_tail::MoETailInputs inputs);
+    const ttnn::operations::experimental::moe_block::moe_tail::MoETailInputs& inputs);
 
 }  // namespace ttnn::prim

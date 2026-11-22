@@ -20,7 +20,8 @@ import ttnn
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sparse_dispatch_2d_inputs as inputs  # noqa: E402
 
-mb = ttnn.experimental.moe_block
+moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
+
 CHUNK = 5120  # tokens of the mesh a call (S = CHUNK / N a chip)
 TOP_K = 8
 
@@ -44,8 +45,10 @@ def _device_params(mesh_shape, payload):
 def _resources(mesh_device, width):
     R, C = tuple(mesh_device.shape)
     # (only the experts a chip matters to the dispatch)
-    dims = mb.MoEModelDims(num_experts=8 * R * C, top_k=TOP_K, emb_dim=width, routed_expert_hidden_dim=2048)
-    return mb.MoEBlockResources(mesh_device, dims, mb.MoEBlockConfig(chunk_tokens=CHUNK))
+    dims = moe_block_utils.MoEModelDims(
+        num_experts=8 * R * C, top_k=TOP_K, emb_dim=width, routed_expert_hidden_dim=2048
+    )
+    return moe_block_utils.MoEBlockResources(mesh_device, dims, moe_block_utils.MoEBlockConfig(chunk_tokens=CHUNK))
 
 
 def _inputs(mesh_device, resources, width, seed):
@@ -54,7 +57,16 @@ def _inputs(mesh_device, resources, width, seed):
     topo = resources.topology
     gen = torch.Generator().manual_seed(seed)
     route = inputs.route_words(
-        R, C, S, 8 * R * C, TOP_K, resources.config.num_links, topo["wrap_x"], topo["wrap_y"], mb.span_entry, gen
+        R,
+        C,
+        S,
+        8 * R * C,
+        TOP_K,
+        resources.config.num_links,
+        topo["wrap_x"],
+        topo["wrap_y"],
+        moe_block_utils.span_entry,
+        gen,
     )
     xbuf_in = inputs.xbuf_inputs(R, C, S, width, gen)
     per_chip = {ch: {"xbuf_in": xbuf_in[ch], "route": route[ch]} for ch in route}
@@ -110,7 +122,7 @@ def test_dispatch(mesh_device, width):
     resources = _resources(mesh_device, width)
     S, per_chip, model = _inputs(mesh_device, resources, width, seed=1234)
     xbuf, route = _to_device(per_chip, mesh_device)
-    out = mb.sparse_dispatch_2d(xbuf, route, resources)
+    out = ttnn.experimental.moe_block.sparse_dispatch_2d(xbuf, route, resources)
     ttnn.synchronize_device(mesh_device)
     _check(mesh_device, out, model)
     entries = mesh_device.num_program_cache_entries()
@@ -118,7 +130,7 @@ def test_dispatch(mesh_device, width):
     # (new buffers at other addresses (the first ones stay alive), other contents: a cache hit patching every address)
     S, per_chip, model = _inputs(mesh_device, resources, width, seed=99)
     xbuf2, route2 = _to_device(per_chip, mesh_device)
-    out = mb.sparse_dispatch_2d(xbuf2, route2, resources)
+    out = ttnn.experimental.moe_block.sparse_dispatch_2d(xbuf2, route2, resources)
     ttnn.synchronize_device(mesh_device)
     _check(mesh_device, out, model)
     assert mesh_device.num_program_cache_entries() == entries, "the second call missed the program cache"

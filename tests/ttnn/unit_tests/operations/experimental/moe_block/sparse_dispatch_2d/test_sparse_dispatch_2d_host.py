@@ -11,7 +11,7 @@ import itertools
 
 import ttnn
 
-mb = ttnn.experimental.moe_block
+moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
 
 MESHES = [(1, 2), (1, 4), (2, 2), (2, 4), (4, 2), (3, 5), (4, 4), (8, 4), (4, 8)]
 WRAPS = list(itertools.product((False, True), repeat=2))
@@ -27,8 +27,8 @@ def test_streams_land_in_inputs():
     """Every stream a port sends ends in an input ring of the port it names at the neighbour, and every input ring is
     fed by exactly one stream: the END protocol needs each ring's sender to exist and be unique."""
     for R, C, tx, ty, L in _cases():
-        plan = mb.mesh_plan_uniform(R, C, tx, ty, L)
-        w = mb.sparse_dispatch_2d_wiring(R, C, tx, ty, L)
+        plan = moe_block_utils.mesh_plan_uniform(R, C, tx, ty, L)
+        w = moe_block_utils.sparse_dispatch_2d_wiring(R, C, tx, ty, L)
         fed = {}
         for chip, ports in w.items():
             assert set(ports) == set(plan[chip]), (R, C, chip)
@@ -55,6 +55,6 @@ def test_streams_land_in_inputs():
 
 def test_defaults():
     # (on its own: 8 rows a group - in the MoE block its L1 plan picks the group; pack 2 when two rows fit a packet)
-    assert mb.sparse_dispatch_2d_defaults(7168, 7232) == (8, 1)
-    assert mb.sparse_dispatch_2d_defaults(12288, 12352) == (8, 1)
-    assert mb.sparse_dispatch_2d_defaults(4096, 8192) == (8, 2)
+    assert moe_block_utils.sparse_dispatch_2d_defaults(7168, 7232) == (8, 1)
+    assert moe_block_utils.sparse_dispatch_2d_defaults(12288, 12352) == (8, 1)
+    assert moe_block_utils.sparse_dispatch_2d_defaults(4096, 8192) == (8, 2)

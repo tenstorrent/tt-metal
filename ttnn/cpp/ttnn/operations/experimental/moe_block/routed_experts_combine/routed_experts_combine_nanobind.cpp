@@ -63,7 +63,7 @@ void bind_routed_experts_combine(nb::module_& mod) {
     export_enum<CombineMode>(mod, "CombineMode");
     export_enum<CombineLanding>(mod, "CombineLanding");
 
-    nb::class_<CombineConfig> config_class(mod, "CombineConfig", R"doc(
+    nb::class_<CombineConfig> cfg(mod, "CombineConfig", R"doc(
         The combine's op-specific configuration (combine_snap comes from MoEBlockConfig). accumulator_count / mode pin the
         accumulator count and mode the MoE head planned; arena_bytes is the combine's L1 budget a core (0: the
         exchange's sizing from the largest free L1 block at the first call, less the flat program's static CBs and the
@@ -72,14 +72,14 @@ void bind_routed_experts_combine(nb::module_& mod) {
         SharedFlatCores: Shared's grants on FlatCores' slots), None the planner's (rings in the accumulators' L1 or on
         the flat expert cores, ranked by combine_choice_key). A row travels as one fabric packet with its 32 B trailer.
     )doc");
-    config_class.def(nb::init<>())
+    cfg.def(nb::init<>())
         .def_rw("accumulator_count", &CombineConfig::accumulator_count)
         .def_rw("mode", &CombineConfig::mode)
         .def_rw("arena_bytes", &CombineConfig::arena_bytes)
         .def_rw("depth", &CombineConfig::depth)
         .def_rw("landing", &CombineConfig::landing)
         .def_rw("credit_batch", &CombineConfig::credit_batch)
-        .def(nb::self == nb::self);
+        .def(nb::self == nb::self);  // NOLINT(misc-redundant-expression): binds operator==
 
     ttnn::bind_function<"routed_experts_combine", "ttnn.experimental.moe_block.">(
         mod,

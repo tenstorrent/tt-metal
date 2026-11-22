@@ -106,7 +106,10 @@ public:
     // core), zeroed on its own cores at creation, and never moves or is reused until release(). `cores` must be every
     // core that touches the words on any chip (the union over the chips). A set the slab cannot hold gets its own
     // tensor.
-    const Tensor& persistent_words(const std::string& name, const CoreRangeSet& cores, uint32_t words);
+    // `align` (bytes, a power of two multiple of 16; 0: 16): in the slab the words' address is a multiple of it; a set
+    // the slab cannot hold gets its own tensor at the allocator's alignment, grown by align - 16 B so that a kernel
+    // rounding its address up to `align` still finds `words` there.
+    const Tensor& persistent_words(const std::string& name, const CoreRangeSet& cores, uint32_t words, uint32_t align = 0);
 
     // ---- host-side plans and owned objects
     // Get-or-create a host plan of type T (computed by `make` on first use).
@@ -156,7 +159,7 @@ private:
     // L1, or L1_SMALL with config.persist_l1_small.
     tt::tt_metal::BufferType persistent_buffer_type() const;
     // A free offset in the slab for `bytes` on every core of `cores` (creating the slab at first use), nullopt if none.
-    std::optional<uint32_t> place_words(const std::vector<tt::tt_metal::CoreCoord>& cores, uint32_t bytes);
+    std::optional<uint32_t> place_words(const std::vector<tt::tt_metal::CoreCoord>& cores, uint32_t bytes, uint32_t align);
 
     tt::tt_metal::distributed::MeshDevice* mesh_device_;
     MoEModelDims dims_;

@@ -23,7 +23,7 @@ void RoutedExpertsCombineDeviceOperation::validate_on_program_cache_miss(
             t.out.logical_shape()[-1] == p.W && t.out.logical_shape()[-2] == p.S,
         "routed_experts_combine: out [.., S, Hr] bf16 row-major");
     TT_FATAL(
-        t.accumulator_lut.has_value() == p.plan->per_chip_accumulator_table,
+        t.lut.has_value() == p.plan->per_chip_accumulator_table,
         "routed_experts_combine: the accumulator LUT iff per-chip roles");
     TT_FATAL(
         t.flat.arena.buffer()->aligned_size_per_bank() >= args_offset(p.plan->arena_bytes) + kArgsRows * 64,
@@ -48,9 +48,9 @@ ttsl::hash::hash_t RoutedExpertsCombineDeviceOperation::compute_program_hash(
         t.plan.tensor_spec(),
         t.table.tensor_spec(),
         t.out.tensor_spec(),
-        t.barrier.tensor_spec(),
+        t.bar.tensor_spec(),
         t.hcache.tensor_spec(),
-        t.accumulator_lut.has_value(),
+        t.lut.has_value(),
         t.flat.x.tensor_spec(),
         t.flat.counts.tensor_spec(),
         t.flat.regions.tensor_spec(),
@@ -70,8 +70,7 @@ namespace ttnn::prim {
 ttnn::Tensor moe_block_routed_experts_combine(
     const ttnn::operations::experimental::moe_block::routed_experts_combine::RoutedExpertsCombineParams& params,
     const ttnn::operations::experimental::moe_block::routed_experts_combine::RoutedExpertsCombineInputs& inputs) {
-    using DeviceOperation =
-        ttnn::operations::experimental::moe_block::routed_experts_combine::RoutedExpertsCombineDeviceOperation;
-    return ttnn::device_operation::launch<DeviceOperation>(params, inputs);
+    using Op = ttnn::operations::experimental::moe_block::routed_experts_combine::RoutedExpertsCombineDeviceOperation;
+    return ttnn::device_operation::launch<Op>(params, inputs);
 }
 }  // namespace ttnn::prim

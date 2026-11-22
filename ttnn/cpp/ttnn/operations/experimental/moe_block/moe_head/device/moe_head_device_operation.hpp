@@ -54,6 +54,6 @@ namespace ttnn::prim {
 
 Tensor moe_block_head(
     const ttnn::operations::experimental::moe_block::moe_head::MoEHeadParams& params,
-    ttnn::operations::experimental::moe_block::moe_head::MoEHeadInputs inputs);
+    const ttnn::operations::experimental::moe_block::moe_head::MoEHeadInputs& inputs);
 
 }  // namespace ttnn::prim

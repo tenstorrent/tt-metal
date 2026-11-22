@@ -46,7 +46,7 @@ PortWiring wiring(const MeshPlan& plan, ChipCoord chip, Dir d);
 
 // One single-core range per distinct port cell of every chip, in port-map order. The port kernels, CBs and semaphore
 // words sit on the union: a cell is one address on every chip, so a port addresses its peer's.
-std::vector<CoreRange> port_cell_ranges(const PortCores& cores);
+std::vector<tt::tt_metal::CoreRange> port_cell_ranges(const PortCores& cores);
 
 // GMAX: the last END generation, (C - 1) + (R - 1) - 1.
 inline uint32_t gmax(const MeshTopology& topo) { return (topo.C - 1) + (topo.R - 1) - 1; }
@@ -67,11 +67,6 @@ inline constexpr uint32_t kManifestBatch = 16;
 // Rows a fabric packet: 2 when two rows fit the payload.
 inline uint32_t default_pack(uint32_t row_bytes, size_t max_payload_bytes) {
     return 2 * static_cast<size_t>(row_bytes) <= max_payload_bytes ? 2 : 1;
-}
-// Fabric packets a row: 1 when a row fits the payload, else the fewest equal pieces that do (a mesh opened with a payload
-// below a row, e.g. half a GLM-5.3 token: the routers' 12 KB NOC1 DRAM writes hang the DRAM endpoint, tt-metal#64573).
-inline uint32_t row_pieces(uint32_t row_bytes, size_t max_payload_bytes) {
-    return static_cast<uint32_t>((row_bytes + max_payload_bytes - 1) / max_payload_bytes);
 }
 
 // CB sizes in bytes on every port core.

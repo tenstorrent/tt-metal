@@ -9,7 +9,11 @@ config (the tokens a mesh row, 640 or 384: chunk = SP x that - a multiple of 32 
 Determinism: CALLS calls on the same inputs, float outputs folded on the device (op_checks.DeterminismMarker), the
 small integer outputs (routing rows, route words, plan tensors) compared on the host.
 Perf: op_checks.PERF_RUNS (5) traced replays on the real-time program profiler, the op's slowest chip, median, against
-its baseline (per machine: the LoudBox's, or a Galaxy's 2x4 tray; MOE_PERF_RECORD=1 records it)."""
+its baseline in the op test's own table (op_checks.check_perf).
+LoudBox only: the cases ask for exactly the machine's chip count (require_exact_physical_num_devices), so on a Galaxy
+they skip before the mesh opens - a 2x4 corner of a Galaxy does not open (its fabric routers time out in their first
+handshake; tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py skips its LoudBox cases the same
+way)."""
 
 import sys
 from dataclasses import dataclass
@@ -21,12 +25,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload
+
+moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-
-mb = ttnn.experimental.moe_block
 
 SP, TP = 2, 4
 CALLS = 10  # (determinism calls; perf: op_checks.PERF_RUNS)
@@ -59,19 +62,23 @@ class Model:
 
     def dims(self):
         if self.act == "situ":
-            act = mb.ExpertActivation(kind=mb.ExpertActivationKind.Situ, beta=4.0, linear_beta=25.0)
+            act = moe_block_utils.ExpertActivation(
+                kind=moe_block_utils.ExpertActivationKind.Situ, beta=4.0, linear_beta=25.0
+            )
         elif self.act == "clamped_silu":
-            act = mb.ExpertActivation(kind=mb.ExpertActivationKind.ClampedSilu, limit=10.0)
+            act = moe_block_utils.ExpertActivation(kind=moe_block_utils.ExpertActivationKind.ClampedSilu, limit=10.0)
         else:
-            act = mb.ExpertActivation(kind=mb.ExpertActivationKind.Silu)
+            act = moe_block_utils.ExpertActivation(kind=moe_block_utils.ExpertActivationKind.Silu)
         kw = dict(latent_dim=self.latent, latent_norm=True) if self.latent else {}
-        return mb.MoEModelDims(
+        return moe_block_utils.MoEModelDims(
             num_experts=self.E,
             top_k=self.K,
             emb_dim=self.H,
             routed_expert_hidden_dim=self.I,
             routed_expert_activation=act,
-            router=mb.RouterSpec(score_func=getattr(mb.RouterScoreFunc, self.score), route_scale=self.route_scale),
+            router=moe_block_utils.RouterSpec(
+                score_func=getattr(moe_block_utils.RouterScoreFunc, self.score), route_scale=self.route_scale
+            ),
             shared_expert_hidden_dim=self.Is,
             shared_expert_activation=act,
             **kw,
@@ -93,7 +100,7 @@ MODELS = {
 class Case:
     model: str
     row_tokens: int  # tokens a mesh row (chunk = SP x row_tokens)
-    margin: float = 0.05  # (the baselines: each op test's perf baselines file)
+    margin: float = 0.05  # (the perf margin over the baseline in each op test's table)
     seed: int = 3
 
     @property
@@ -111,7 +118,7 @@ CASES = [Case("glm53", 640), Case("glm53", 384)]
 
 
 def _payload(model):
-    return moe_block_fabric_payload(model.routed_width)
+    return (2 * model.routed_width + 32 + 63) // 64 * 64  # (moe_impl.moe_block_fabric_payload)
 
 
 def _device_params(model):
@@ -123,6 +130,7 @@ def _device_params(model):
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         "l1_small_size": 16384,
         "trace_region_size": 64 << 20,
+        "require_exact_physical_num_devices": True,  # (LoudBox only: skips on a Galaxy before the mesh opens)
     }
 
 

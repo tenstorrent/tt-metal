@@ -6,6 +6,7 @@
 
 #include <concepts>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -205,6 +206,50 @@ inline void log_operation(
 
 #endif
 
+// Records `workload` into the calling thread's TTNN CommandListBuilder, with the op-owned tensors of a spec-adapter
+// workload. With binds pushed and a spec-adapter workload, first collects each program's stored CmdListBindings and
+// the tensors this call binds.
+template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
+[[gnu::noinline]] void record_mesh_workload(
+    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    const typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
+    distributed::MeshDevice* mesh_device,
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    const typename mesh_device_operation_t::SpecSharedVariablesMap* spec_shared_variables) {
+    const auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
+    std::vector<std::shared_ptr<const std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors;
+    if (spec_shared_variables != nullptr) {
+        for (const auto& [_, sv] : *spec_shared_variables) {
+            if (sv.op_owned_tensors && !sv.op_owned_tensors->empty()) {
+                op_owned_tensors.push_back(sv.op_owned_tensors);
+            }
+        }
+    }
+    if (spec_shared_variables == nullptr || !has_active_cmd_list_binds()) {
+        record_to_command_list(operation_name, mesh_device, workload, {}, op_owned_tensors);
+        return;
+    }
+    const auto io_mesh_tensors =
+        mesh_device_operation_t::SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
+    std::vector<CmdListProgramBindings> programs;
+    for (const auto& [range, program] : workload.get_programs()) {
+        const auto& sv = spec_shared_variables->at(range);
+        if (!sv.cmd_list_bindings) {
+            continue;
+        }
+        CmdListProgramBindings& entry = programs.emplace_back(
+            CmdListProgramBindings{.program = &program, .bindings = sv.cmd_list_bindings.get(), .bound_tensors = {}});
+        for (const auto& binding : sv.bindings) {
+            entry.bound_tensors.emplace_back(
+                binding.tensor_parameter_name,
+                &mesh_device_operation_t::SpecBindingSupport::bound_mesh_tensor(
+                    sv, io_mesh_tensors, binding.tensor_idx));
+        }
+    }
+    record_to_command_list(operation_name, mesh_device, workload, programs, op_owned_tensors);
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -212,12 +257,15 @@ void enqueue_mesh_workload(
     [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
+    const typename mesh_device_operation_t::SpecSharedVariablesMap* spec_shared_variables,
     [[maybe_unused]] bool program_cache_hit = false) {
     // Generate and set runtime_id for all programs (always, for dispatcher)
     auto runtime_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
     for (auto& [_, program] : workload.get_programs()) {
         program.set_runtime_id(runtime_id);
     }
+
+    const auto cq_id = ttnn::core::get_current_command_queue_id_for_thread();
 
     // Inspector: emit debug entry with tensor parameters
     if (tt::tt_metal::experimental::inspector::IsEnabled()) {
@@ -232,9 +280,13 @@ void enqueue_mesh_workload(
                 [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
         }
 
-        // Metal has no implicit queue selection; pass the thread's current TTNN queue explicitly.
-        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(
-            mesh_device->mesh_command_queue(ttnn::core::get_current_command_queue_id_for_thread().get()));
+        // A NO_DISPATCH graph capture enqueues nothing, so there is no trace to report. Skipping the lookup also
+        // keeps such a capture working when the selected queue does not exist on this device.
+        std::optional<tt::tt_metal::distributed::MeshTraceId> trace_id;
+        if (!graph_capture_blocks_dispatch()) {
+            trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(
+                ttnn::core::current_mesh_command_queue(*mesh_device, cq_id));
+        }
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
             workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
     }
@@ -244,10 +296,11 @@ void enqueue_mesh_workload(
     }
 
     if (is_recording_command_list()) [[unlikely]] {
-        record_to_command_list(
-            get_operation_name<mesh_device_operation_t>(operation_attributes), mesh_device, workload);
+        record_mesh_workload<mesh_device_operation_t>(
+            operation_attributes, tensor_args, tensor_return_value, mesh_device, workload, spec_shared_variables);
     } else {
-        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(
+            ttnn::core::current_mesh_command_queue(*mesh_device, cq_id), workload, false);
     }
 
     ttnn::graph::track_mesh_workload_execution(workload, mesh_device, runtime_id);
@@ -298,6 +351,19 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
         program_factory);
 }
 
+// The cached workload's shared variables if a spec adapter built it, else nullptr.
+template <typename mesh_device_operation_t, typename CachedMeshWorkload>
+const typename mesh_device_operation_t::SpecSharedVariablesMap* spec_shared_variables_of(
+    const CachedMeshWorkload& cached_mesh_workload) {
+    if constexpr (std::is_same_v<
+                      decltype(cached_mesh_workload.shared_variables),
+                      typename mesh_device_operation_t::SpecSharedVariablesMap>) {
+        return &cached_mesh_workload.shared_variables;
+    } else {
+        return nullptr;
+    }
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename UseWorkload>
 void handle_mesh_adapter_cache_hit(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -333,7 +399,8 @@ void handle_mesh_adapter_cache_hit(
             }
         }
 
-        use_workload(cached_mesh_workload.workload);
+        use_workload(
+            cached_mesh_workload.workload, spec_shared_variables_of<mesh_device_operation_t>(cached_mesh_workload));
     });
 }
 
@@ -386,7 +453,7 @@ void create_and_cache_mesh_workload(
         }
 
         // Cached only after this use returns, so a use that throws leaves the cache unchanged.
-        use_workload(cached_workload.workload);
+        use_workload(cached_workload.workload, spec_shared_variables_of<mesh_device_operation_t>(cached_workload));
 
         // Don't cache programs during NO_DISPATCH graph capture mode because
         // buffer addresses are invalid (address=0). Caching such programs would
@@ -440,9 +507,7 @@ ProgramCacheLookup look_up_program_cache(
     }
     // The cache key is the 64-bit hash plus an exact canonical encoding; a hash collision is
     // resolved by std::unordered_map's own operator== on the canonical part (issue #45821).
-    lookup.key.hash =
-        mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
-    lookup.key.canonical = mesh_device_operation_t::compute_mesh_workload_canonical_key(
+    lookup.key = mesh_device_operation_t::compute_mesh_workload_cache_key(
         mesh_device,
         ttsl::get_type_name<typename mesh_device_operation_t::device_operation_t>(),
         operation_attributes,
@@ -456,7 +521,8 @@ ProgramCacheLookup look_up_program_cache(
 }
 
 // Passes the operation's mesh workload to `use_workload`: on a hit, the cached workload with this invocation's runtime
-// arguments applied; on a miss, a newly created workload, which is cached once `use_workload` returns.
+// arguments applied; on a miss, a newly created workload, which is cached once `use_workload` returns. The second
+// argument is the workload's shared variables when a spec adapter built it, else nullptr.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename UseWorkload>
 void use_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -515,9 +581,16 @@ void launch_operation_with_adapter(
         tensor_return_value,
         mesh_device,
         lookup,
-        [&](tt::tt_metal::distributed::MeshWorkload& workload) {
+        [&](tt::tt_metal::distributed::MeshWorkload& workload,
+            const typename mesh_device_operation_t::SpecSharedVariablesMap* spec_shared_variables) {
             enqueue_mesh_workload<mesh_device_operation_t>(
-                operation_attributes, tensor_args, tensor_return_value, mesh_device, workload, lookup.hit);
+                operation_attributes,
+                tensor_args,
+                tensor_return_value,
+                mesh_device,
+                workload,
+                spec_shared_variables,
+                lookup.hit);
         });
 
     // Stash factory identity after adapter work so nested function_end events cannot consume it.
@@ -557,31 +630,10 @@ void prepare_operation_with_adapter(
         tensor_return_value,
         mesh_device,
         lookup,
-        [&](tt::tt_metal::distributed::MeshWorkload& workload) {
+        [&](tt::tt_metal::distributed::MeshWorkload& workload,
+            const typename mesh_device_operation_t::SpecSharedVariablesMap* /*spec_shared_variables*/) {
             tt::tt_metal::experimental::program_preparation::prepare(*mesh_device, workload);
         });
-}
-
-template <DeviceOperationConcept device_operation_t>
-ttnn::MeshDevice* get_mesh_device(
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
-    ttnn::MeshDevice* mesh_device;
-    auto first_tensor = ttsl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    // Try to get the mesh device from the first tensor
-    if (first_tensor.has_value()) [[likely]] {
-        mesh_device = first_tensor.value().device();
-    } else {
-        // If no tensor is found, try to get the mesh device from the operation attributes
-        auto mesh_device_opt = ttsl::reflection::get_first_object_of_type<ttnn::MeshDevice*>(operation_attributes);
-        if (mesh_device_opt.has_value()) [[likely]] {
-            mesh_device = mesh_device_opt.value();
-        } else {
-            TT_THROW("No mesh device found in operation attributes or tensor args");
-        }
-    }
-
-    return mesh_device;
 }
 
 template <DeviceOperationConcept device_operation_t>
@@ -658,7 +710,7 @@ typename device_operation_t::tensor_return_value_t launch(
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
 
-    ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
+    ttnn::MeshDevice* mesh_device = mesh_device_operation_utils::get_mesh_device(operation_attributes, tensor_args);
 
     // TODO: #37267 - Remove this short-circuit once we have a better way to handle inactive MeshDevices.
     // Short-circuit for inactive MeshDevices (no-op). It is important this happens before any validation an op may
@@ -695,7 +747,7 @@ void prepare(
     detail::validate_input_tensors<device_operation_t>(operation_attributes, input_tensors);
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
-    auto* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
+    auto* mesh_device = mesh_device_operation_utils::get_mesh_device(operation_attributes, tensor_args);
     TT_FATAL(!mesh_device->get_device_ids().empty(), "Cannot prepare an operation for an inactive MeshDevice");
     detail::place_output_tensors<device_operation_t>(
         operation_attributes, tensor_args, input_tensors, mesh_device, tensor_return_value);

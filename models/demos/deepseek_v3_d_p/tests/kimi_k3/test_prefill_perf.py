@@ -48,7 +48,7 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weigh
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
-from models.demos.deepseek_v3_d_p.tt.moe_impl import k3_moe_block_device_params
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_device_params
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program
@@ -68,7 +68,7 @@ ITERATIONS = 5
 PLACEMENTS = DEPTH_PLACEMENTS + [
     pytest.param(
         (8, 4),
-        k3_moe_block_device_params(torus_xy_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE)),
+        moe_block_device_params(KimiK3Config, torus_xy_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE)),
         0,
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),

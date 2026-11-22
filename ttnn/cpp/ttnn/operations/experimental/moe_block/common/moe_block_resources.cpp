@@ -91,19 +91,23 @@ Tensor view_at(tt::tt_metal::distributed::MeshDevice& mesh, const tt::tt_metal::
 }
 
 // The lowest offset in [0, capacity) where `bytes` are free on every core of `cores` (`taken`: each core's occupied
-// [offset, end) ranges), or nullopt. The lowest feasible offset is 0 or the end of a range on one of these cores (any
-// other feasible offset can slide down to one), so only those are tried. Overlap is checked per core: sets that share
-// no core may share bytes, and three pairwise-intersecting sets never get one offset.
+// [offset, end) ranges) and base + offset is a multiple of `align`, or nullopt. The lowest feasible offset is 0 or the
+// end of a range on one of these cores (any other feasible offset can slide down to one), each rounded up to `align`,
+// so only those are tried. Overlap is checked per core: sets that share no core may share bytes, and three
+// pairwise-intersecting sets never get one offset.
 std::optional<uint32_t> first_fit(
     const std::map<tt::tt_metal::CoreCoord, std::vector<std::pair<uint32_t, uint32_t>>>& taken,
     const std::vector<tt::tt_metal::CoreCoord>& cores,
     uint32_t bytes,
-    uint32_t capacity) {
-    std::vector<uint32_t> candidates = {0};
+    uint32_t capacity,
+    uint32_t base,
+    uint32_t align) {
+    const auto aligned = [&](uint32_t off) { return (base + off + align - 1) / align * align - base; };
+    std::vector<uint32_t> candidates = {aligned(0)};
     for (const auto& c : cores) {
         if (auto it = taken.find(c); it != taken.end()) {
             for (const auto& [b, e] : it->second) {
-                candidates.push_back(e);
+                candidates.push_back(aligned(e));
             }
         }
     }
@@ -141,11 +145,14 @@ MoEBlockResources::MoEBlockResources(
     const MoEModelDims& dims,
     const MoEBlockConfig& config,
     const MoEDtypes& dtypes) :
-    mesh_device_(&mesh_device), dims_(dims), config_(config), dtypes_(dtypes) {
+    mesh_device_(&mesh_device),
+    dims_(dims),
+    config_(config),
+    dtypes_(dtypes),
+    fabric_config_(tt::tt_fabric::GetFabricConfig(mesh_device)),
+    max_payload_bytes_(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes()) {
     dims_.check();
     config_.check();
-    fabric_config_ = tt::tt_fabric::GetFabricConfig();
-    max_payload_bytes_ = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     plan_ = moe_block::mesh_plan(
         mesh_device,
         config_.num_links,
@@ -167,6 +174,7 @@ MoEBlockResources::MoEBlockResources(
         // (padding rows: each SP row's rows padded up to a whole 32 x TP rows - the head's rows rule; none when whole)
         const uint32_t rows = config_.chunk_tokens / plan_.topo.R, unit = 32 * plan_.topo.C;
         config_.pad_tokens = (unit - rows % unit) % unit * plan_.topo.R;
+        config_.check();  // (again: the padding changes plan_tokens, which chunk_splits must divide)
     }
     first_hops_ = fabric_first_hops(mesh_device, plan_.topo);
     luts_ = moe_block::port_luts(plan_);
@@ -234,7 +242,7 @@ const Tensor& MoEBlockResources::persistent_tensor(const std::string& name, cons
 bool MoEBlockResources::packs_words() const { return config_.persist_l1_small && config_.words_slab_bytes > 0; }
 
 std::optional<uint32_t> MoEBlockResources::place_words(
-    const std::vector<tt::tt_metal::CoreCoord>& cores, uint32_t bytes) {
+    const std::vector<tt::tt_metal::CoreCoord>& cores, uint32_t bytes, uint32_t align) {
     if (!words_slab_) {
         // (one shard a worker core, of the configured bytes - at most the largest free L1_SMALL block a bank now)
         const auto grid = mesh_device_->compute_with_storage_grid_size();
@@ -269,7 +277,13 @@ std::optional<uint32_t> MoEBlockResources::place_words(
     if (std::any_of(cores.begin(), cores.end(), [&](const auto& c) { return c.x >= grid.x || c.y >= grid.y; })) {
         return std::nullopt;  // (a core the slab does not cover)
     }
-    const auto off = resources_detail::first_fit(words_slab_taken_, cores, bytes, words_slab_capacity_);
+    const auto off = resources_detail::first_fit(
+        words_slab_taken_,
+        cores,
+        bytes,
+        words_slab_capacity_,
+        static_cast<uint32_t>(words_slab_->buffer()->address()),
+        std::max(align, resources_detail::WORDS_ALIGN));
     if (off) {
         for (const auto& c : cores) {
             words_slab_taken_[c].emplace_back(*off, *off + bytes);
@@ -279,17 +293,31 @@ std::optional<uint32_t> MoEBlockResources::place_words(
     return off;
 }
 
-const Tensor& MoEBlockResources::persistent_words(const std::string& name, const CoreRangeSet& cores, uint32_t words) {
+const Tensor& MoEBlockResources::persistent_words(
+    const std::string& name, const CoreRangeSet& cores, uint32_t words, uint32_t align) {
     check_alive();
+    TT_FATAL(
+        align == 0 || (align % resources_detail::WORDS_ALIGN == 0 && (align & (align - 1)) == 0),
+        "moe_block: persistent words '{}': alignment {} B is not a power of two multiple of {} B",
+        name,
+        align,
+        resources_detail::WORDS_ALIGN);
     const auto spec = resources_detail::words_spec(cores, words, persistent_buffer_type());
     const uint32_t bytes = spec.logical_shape()[-1] * 4;
+    // (outside the slab: its own tensor, at the allocator's alignment - grown by the padding an aligned use needs)
+    const uint32_t pad_words = align > resources_detail::WORDS_ALIGN ? (align - resources_detail::WORDS_ALIGN) / 4 : 0;
+    const auto own_spec =
+        pad_words ? resources_detail::words_spec(cores, words + pad_words, persistent_buffer_type()) : spec;
     if (auto it = tensors_.find(name); it != tensors_.end()) {
-        TT_FATAL(tensor_specs_.at(name) == spec, "moe_block: persistent words '{}' requested with another spec", name);
+        TT_FATAL(
+            tensor_specs_.at(name) == spec || tensor_specs_.at(name) == own_spec,
+            "moe_block: persistent words '{}' requested with another spec",
+            name);
         return it->second;
     }
     std::optional<uint32_t> off;
     if (packs_words()) {
-        off = place_words(corerange_to_cores(cores), bytes);
+        off = place_words(corerange_to_cores(cores), bytes, align);
         if (!off) {
             log_warning(
                 tt::LogOp,
@@ -304,7 +332,7 @@ const Tensor& MoEBlockResources::persistent_words(const std::string& name, const
         }
     }
     if (!off) {
-        return persistent_tensor(name, spec);
+        return persistent_tensor(name, own_spec);
     }
     // (a view at the slot; zeroed on its own cores only - the slab's other slots are live)
     const uint32_t address = static_cast<uint32_t>(words_slab_->buffer()->address()) + *off;

@@ -85,7 +85,6 @@ struct CombinePlan {
     uint32_t home_tokens = 0;     // home tokens a chip (S)
     uint32_t row_elements = 0;    // row width, bf16 elements (W)
     RowSlot row_slot;
-    uint32_t row_pieces = 1;  // fabric packets a row (2: the payload holds half a row + the trailer)
     StateLayout state;
     uint32_t accumulator_count = 0;              // accumulators a chip (A)
     uint32_t max_tokens_per_accumulator = 0;     // home tokens an accumulator sums at most (ceil(S / A))
@@ -138,7 +137,7 @@ struct CombinePlan {
 };
 
 std::shared_ptr<const CombinePlan> make_combine_plan(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, MoEBlockResources& resources, const CombinePlanInputs& inputs);
+    tt::tt_metal::distributed::MeshDevice& mesh_device, MoEBlockResources& resources, const CombinePlanInputs& in);
 
 // The flat expert's side of the L1 hand-off (from its plan).
 struct FlatHandoff {
@@ -195,18 +194,18 @@ struct CombineHandles {
     std::vector<CombineArg> l1_args;
 };
 
-// The combine's kernels, CBs and runtime args on chip `chip` of `program`, a program descriptor (the flat expert's go
+// The combine's kernels, CBs and runtime args on chip `ch` of `program`, a program descriptor (the flat expert's go
 // on its own cores). Its CBs are backed by the arena buffer (common/args_table.hpp arena_backed_cbs finds them).
 CombineHandles add_combine_program(
     tt::tt_metal::ProgramDescriptor& program,
     const CombinePlan& plan,
-    ChipCoord chip,
+    ChipCoord ch,
     tt::tt_metal::distributed::MeshDevice& mesh_device,
-    const CombineBuffers& buffers,
+    const CombineBuffers& bufs,
     const FlatHandoff& flat);
 
-// The writers' l1_args with the buffers' current addresses.
-std::vector<uint32_t> resolve_l1_args(const CombineHandles& h, const CombineBuffers& buffers);
+// The writers' l1_args with the buffers' (`bufs`) current addresses.
+std::vector<uint32_t> resolve_l1_args(const CombineHandles& h, const CombineBuffers& bufs);
 
 // The sender's DRAM header cache page bytes (N x NH routed headers + a 64 B key).
 inline uint32_t hcache_page_bytes(uint32_t N) { return N * kNumHeaders * kHeaderStride + 64; }

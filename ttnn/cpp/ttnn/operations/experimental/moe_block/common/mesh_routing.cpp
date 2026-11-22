@@ -99,7 +99,8 @@ std::vector<uint32_t> FirstHops::packed_row(uint32_t src) const {
 FirstHops fabric_first_hops(const tt::tt_metal::distributed::MeshDevice& mesh_device, const MeshTopology& topo) {
     const uint32_t N = topo.num_chips();
     auto node = [&](ChipCoord ch) { return mesh_device.get_fabric_node_id(mesh_coord(ch, topo)); };
-    using FabricDir = decltype(tt::tt_fabric::get_eth_forwarding_direction(node(ChipCoord{}), node(ChipCoord{})))::value_type;
+    using FabricDir = decltype(tt::tt_fabric::get_eth_forwarding_direction(
+        mesh_device, node(ChipCoord{}), node(ChipCoord{})))::value_type;
     FirstHops fh{.N = N, .dirs = std::vector<uint8_t>(static_cast<size_t>(N) * N, 0)};
     for (uint32_t s = 0; s < N; ++s) {
         const ChipCoord src = topo.coord(s);
@@ -110,7 +111,7 @@ FirstHops fabric_first_hops(const tt::tt_metal::distributed::MeshDevice& mesh_de
             if (!peer) {
                 continue;
             }
-            const auto rd = tt::tt_fabric::get_eth_forwarding_direction(node(src), node(*peer));
+            const auto rd = tt::tt_fabric::get_eth_forwarding_direction(mesh_device, node(src), node(*peer));
             TT_FATAL(
                 rd.has_value(),
                 "moe_block: the fabric has no route from chip ({}, {}) to its {} neighbour",
@@ -124,7 +125,7 @@ FirstHops fabric_first_hops(const tt::tt_metal::distributed::MeshDevice& mesh_de
                 continue;
             }
             const ChipCoord dst = topo.coord(t);
-            const auto rd = tt::tt_fabric::get_eth_forwarding_direction(node(src), node(dst));
+            const auto rd = tt::tt_fabric::get_eth_forwarding_direction(mesh_device, node(src), node(dst));
             TT_FATAL(
                 rd.has_value(), "moe_block: the fabric has no route from chip ({}, {}) to ({}, {})", src.r, src.c, dst.r, dst.c);
             const auto it = std::find_if(toward.begin(), toward.end(), [&](const auto& w) { return w.first == *rd; });
@@ -332,7 +333,7 @@ MeshPlan mesh_plan(
     bool torus_x,
     bool torus_y,
     uint32_t sp_axis) {
-    const auto shape = mesh_device.shape();
+    const auto& shape = mesh_device.shape();
     TT_FATAL(shape.dims() == 2, "moe_block: a 2D mesh, got {} dims", shape.dims());
     const auto topo = MeshTopology::of_mesh(shape[0], shape[1], torus_x, torus_y, sp_axis);
     auto node = [&](ChipCoord ch) { return mesh_device.get_fabric_node_id(mesh_coord(ch, topo)); };

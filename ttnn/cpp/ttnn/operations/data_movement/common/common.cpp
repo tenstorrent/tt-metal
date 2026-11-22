@@ -5,6 +5,11 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <algorithm>
+#include <array>
+#include <optional>
+#include <tuple>
+#include <utility>
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
@@ -253,9 +258,61 @@ const std::map<uint32_t, std::array<float, 2>> noc_l1_local_bw = {
     {32768, {27.805, 50.123}},
     {65536, {27.84, 50.21}}};
 
-float get_transaction_noc_bw(uint32_t transaction_size, bool is_dram, bool is_local, bool is_read, tt::ARCH arch) {
+// Busy AICLK that OpPerformanceModelGeneral divides by:
+// tt::umd::wormhole::AICLK_BUSY_VAL (1000 MHz), tt::umd::blackhole::AICLK_BUSY_VAL (1350 MHz).
+struct NocBwArchParams {
+    int table_index;
+    float clock_hz;
+    float l1_peak_gbps;
+    uint32_t dram_latency;
+    uint32_t local_latency;
+    uint32_t write_latency;
+    uint32_t read_latency;
+};
+
+constexpr NocBwArchParams kWormholeNocBw{
+    .table_index = WormholeIndex,
+    .clock_hz = 1.0e9f,
+    .l1_peak_gbps = 32.0f,
+    .dram_latency = 358,
+    .local_latency = 56,
+    .write_latency = 256,
+    .read_latency = 259,
+};
+
+constexpr NocBwArchParams kBlackholeNocBw{
+    .table_index = BlackholeIndex,
+    .clock_hz = 1.35e9f,
+    .l1_peak_gbps = 50.0f,
+    .dram_latency = 529,
+    .local_latency = 88,
+    .write_latency = 404,
+    .read_latency = 403,
+};
+
+NocBwArchParams noc_bw_arch_params(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: return kWormholeNocBw;
+        case tt::ARCH::BLACKHOLE: return kBlackholeNocBw;
+        default: TT_THROW("Unsupported architecture for NOC bandwidth model: {}", arch);
+    }
+}
+
+uint32_t noc_latency_cycles(const NocBwArchParams& params, bool is_dram, bool is_local, bool is_write) {
+    if (is_dram) {
+        return params.dram_latency;
+    }
+    if (is_local) {
+        return params.local_latency;
+    }
+    if (is_write) {
+        return params.write_latency;
+    }
+    return params.read_latency;
+}
+
+float get_transaction_noc_bw(uint32_t transaction_size, bool is_dram, bool is_local, bool is_read, int table_index) {
     const auto& dict = is_dram ? noc_dram_bw : is_local ? noc_l1_local_bw : is_read ? noc_l1_read_bw : noc_l1_write_bw;
-    const int index = (arch == tt::ARCH::WORMHOLE_B0) ? WormholeIndex : BlackholeIndex;
 
     uint32_t lower_pow2 = std::pow(2, std::floor(std::log2(transaction_size)));
 
@@ -273,8 +330,8 @@ float get_transaction_noc_bw(uint32_t transaction_size, bool is_dram, bool is_lo
     if (upper_it == dict.end()) {
         upper_it = std::prev(dict.end());
     }
-    float lower_bw = lower_it->second[index];
-    float upper_bw = upper_it->second[index];
+    float lower_bw = lower_it->second[table_index];
+    float upper_bw = upper_it->second[table_index];
 
     if (transaction_size - lower_pow2 < upper_pow2 - transaction_size) {
         return lower_bw;
@@ -284,19 +341,20 @@ float get_transaction_noc_bw(uint32_t transaction_size, bool is_dram, bool is_lo
 
 uint32_t get_effective_l1_cores(
     uint32_t transaction_size, tt::ARCH arch, bool is_write, uint32_t num_nocs, uint32_t num_cores) {
-    float max_bw = (arch == tt::ARCH::WORMHOLE_B0) ? 32.0f : 50.0f;
-    auto aggregate_bw = max_bw * num_nocs;
-    float achieved_l1_bw =
-        get_transaction_noc_bw(transaction_size, /*is_dram=*/false, /*is_local=*/false, /*is_read=*/!is_write, arch);
+    const auto params = noc_bw_arch_params(arch);
+    auto aggregate_bw = params.l1_peak_gbps * num_nocs;
+    float achieved_l1_bw = get_transaction_noc_bw(
+        transaction_size, /*is_dram=*/false, /*is_local=*/false, /*is_read=*/!is_write, params.table_index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_l1_bw);
     effective_cores = std::min(effective_cores, num_cores);  // Limit to available cores
     return effective_cores;
 }
 
 uint32_t get_effective_dram_cores(uint32_t transaction_size, tt::ARCH arch, bool single_noc, uint32_t num_cores) {
+    const auto params = noc_bw_arch_params(arch);
     auto aggregate_bw = single_noc == 1 ? 190 : 265;
-    float achieved_dram_bw =
-        get_transaction_noc_bw(transaction_size, /*is_dram=*/true, /*is_local=*/false, /*is_read=*/true, arch);
+    float achieved_dram_bw = get_transaction_noc_bw(
+        transaction_size, /*is_dram=*/true, /*is_local=*/false, /*is_read=*/true, params.table_index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_dram_bw);
     effective_cores = std::min(effective_cores, num_cores);  // Limit to available cores
     return effective_cores;
@@ -306,25 +364,18 @@ uint32_t get_effective_dram_cores(uint32_t transaction_size, tt::ARCH arch, bool
 
 std::pair<uint32_t, uint32_t> get_cycles_for_transaction_size(
     uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions, tt::ARCH arch, bool is_read) {
-    bool is_write = !is_read;
-    // measured initial latency based on the transaction and device types
-    uint32_t latency_cyles = 1;
-    if (is_dram) {
-        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 358 : 529;
-    } else if (is_local) {
-        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 56 : 88;
-    } else if (is_write) {
-        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 256 : 404;
-    } else {
-        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 259 : 403;
-    }
+    const bool is_write = !is_read;
+    const auto params = noc_bw_arch_params(arch);
+    const uint32_t latency_cycles = noc_latency_cycles(params, is_dram, is_local, is_write);
 
     transaction_size = std::max(transaction_size, 16u);
-    auto transaction_bw = get_transaction_noc_bw(transaction_size, is_dram, is_local, is_read, arch);
-    float device_frequency_hz = (arch == tt::ARCH::WORMHOLE_B0) ? 1e9 : 1.2e9;
-    uint32_t cycles =
-        std::ceil((float)(num_transactions * transaction_size * device_frequency_hz) / (float)(transaction_bw * 1e9));
-    return {cycles, latency_cyles};
+    const auto transaction_bw =
+        get_transaction_noc_bw(transaction_size, is_dram, is_local, is_read, params.table_index);
+    const float device_frequency_hz = params.clock_hz;
+    const uint32_t cycles = static_cast<uint32_t>(std::ceil(
+        static_cast<float>(num_transactions * transaction_size * device_frequency_hz) /
+        static_cast<float>(transaction_bw * 1e9)));
+    return {cycles, latency_cycles};
 }
 
 int common_tm_bw_model(
@@ -349,9 +400,7 @@ int common_tm_bw_model(
     uint32_t num_nocs = device_rows + device_cols;
 
     auto arch = input_tensor.device()->arch();
-    if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
-        TT_THROW("Unsupported architecture for common_bw_model: {}", arch);
-    }
+    noc_bw_arch_params(arch);  // Throw for an unsupported arch before the roofline math.
     uint32_t num_cores = device_rows * device_cols;
 
     uint32_t total_num_cores = num_cores;
@@ -956,6 +1005,71 @@ bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, u
     return (memory_config.shard_spec()->shape[1] * element_size) % alignment != 0;
 }
 
+namespace detail {
+
+bool may_split_rows(const tt::tt_metal::MemoryConfig& memory_config) {
+    return memory_config.is_sharded() &&
+           (memory_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
+            memory_config.created_with_nd_shard_spec());
+}
+
+}  // namespace detail
+
+bool has_subaligned_split_row(const tt::tt_metal::TensorSpec& spec) {
+    const auto& memory_config = spec.memory_config();
+    if (spec.layout() != tt::tt_metal::Layout::ROW_MAJOR || !detail::may_split_rows(memory_config)) {
+        return false;
+    }
+    // The row-major page is one shard row; the same precedence as the page shape (page_config.cpp).
+    uint32_t shard_width = 0;
+    if (memory_config.shard_spec().has_value()) {
+        shard_width = memory_config.shard_spec()->shape[1];
+    } else if (memory_config.nd_shard_spec().has_value()) {
+        shard_width = memory_config.nd_shard_spec()->shard_shape[-1];
+    } else {
+        return false;
+    }
+    if (shard_width >= spec.padded_shape()[-1]) {
+        return false;
+    }
+    const uint32_t alignment = (memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM)
+                                   ? tt::tt_metal::hal::get_dram_alignment()
+                                   : tt::tt_metal::hal::get_l1_alignment();
+    return spec.compute_page_size_bytes() % alignment != 0;
+}
+
+namespace detail {
+
+Tensor launch_through_interleaved(
+    const Tensor& input,
+    const tt::tt_metal::TensorSpec& output_spec,
+    const std::optional<Tensor>& preallocated_output,
+    const ShardRowLaunch& launch) {
+    const auto interleaved = [](const tt::tt_metal::MemoryConfig& memory_config) {
+        return tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type());
+    };
+    const Tensor moved_input = has_subaligned_split_row(input.tensor_spec())
+                                   ? ttnn::to_memory_config(input, interleaved(input.memory_config()))
+                                   : input;
+    const auto& output_memory_config = output_spec.memory_config();
+    if (!has_subaligned_split_row(output_spec) && preallocated_output.has_value()) {
+        // Only the input was sub-aligned: write straight into the preallocated output.
+        return launch(moved_input, std::nullopt);
+    }
+    if (!has_subaligned_split_row(output_spec)) {
+        // The output config was derived from the input before it moved; the moved input would derive another.
+        Tensor output = launch(moved_input, output_memory_config);
+        if (is_functionally_same_memory_config(output.memory_config(), output_memory_config)) {
+            return output;
+        }
+        return ttnn::to_memory_config(output, output_memory_config);
+    }
+    const Tensor staged = launch(moved_input, interleaved(output_memory_config));
+    return ttnn::to_memory_config(staged, output_memory_config, std::nullopt, preallocated_output);
+}
+
+}  // namespace detail
+
 void push_buffer_set(
     tt::tt_metal::ProgramDescriptor& desc,
     const BlockBufferSet& set,
@@ -1013,11 +1127,25 @@ void push_buffer_set(
     });
 }
 
-BlockPlan make_block_plan(
+namespace {
+
+// What make_block_plan splits: the grid, the tiled shape, and the block-size limit (what the L1 free
+// right now allows, capped by max_block_tiles). block_l1_fit reads the same inputs, so the plan and
+// its cache key cannot disagree.
+struct BlockSplitInputs {
+    tt::tt_metal::CoreCoord grid_size;
+    tt::tt_metal::CoreRangeSet available_grid;
+    uint32_t num_tiles_per_col = 0;
+    uint32_t num_tiles_per_row = 0;
+    uint32_t num_blocks = 0;
+    uint32_t cb_block_size_limit = 0;
+};
+
+BlockSplitInputs block_split_inputs(
     BlockDirection direction,
     BlockCoreOrder core_order,
     const Tensor& input_tensor,
-    const Tensor& output_tensor,
+    const ttnn::Shape& output_padded_shape,
     uint32_t input_single_tile_size,
     uint32_t output_single_tile_size,
     uint32_t tile_height,
@@ -1030,17 +1158,19 @@ BlockPlan make_block_plan(
         core_order == BlockCoreOrder::ColumnMajor || !sub_core_grids.has_value(),
         "RowMajor core order splits over the whole grid and cannot honour sub_core_grids");
 
-    const tt::tt_metal::CoreCoord grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    const tt::tt_metal::CoreRangeSet default_grid(tt::tt_metal::CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
-    tt::tt_metal::CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
+    BlockSplitInputs in;
+    in.grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    in.available_grid =
+        sub_core_grids.has_value()
+            ? sub_core_grids.value()
+            : tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {in.grid_size.x - 1, in.grid_size.y - 1}));
 
     // Tilize splits over the output (tiled) shape; untilize over the input (tiled) shape. They only
     // coincide when nothing is padded away -- see BlockDirection.
-    const auto& padded =
-        (direction == BlockDirection::Tilize) ? output_tensor.padded_shape() : input_tensor.padded_shape();
-    const uint32_t num_tiles_per_col = padded[-2] / tile_height;
-    const uint32_t num_tiles_per_row = padded[-1] / tile_width;
-    const uint32_t num_blocks = (padded[-1] * padded[-2]) / (tile_height * tile_width);
+    const auto& padded = (direction == BlockDirection::Tilize) ? output_padded_shape : input_tensor.padded_shape();
+    in.num_tiles_per_col = padded[-2] / tile_height;
+    in.num_tiles_per_row = padded[-1] / tile_width;
+    in.num_blocks = (padded[-1] * padded[-2]) / (tile_height * tile_width);
 
     // Fold the staging buffer (bytes/tile + fixed) into the limit or the region overruns L1. Only
     // the tilize direction has one, so untilize budgets the input/output pair alone.
@@ -1051,15 +1181,101 @@ BlockPlan make_block_plan(
     const uint32_t budget_for_tiles = (max_l1_size > fixed_staging_bytes) ? (max_l1_size - fixed_staging_bytes) : 0;
     const uint32_t bytes_per_tile_pair = input_single_tile_size + output_single_tile_size + staging_bytes_per_tile;
     const uint32_t l1_block_size_limit = (bytes_per_tile_pair == 0) ? 0 : budget_for_tiles / bytes_per_tile_pair;
-    const uint32_t cb_block_size_limit =
+    in.cb_block_size_limit =
         max_block_tiles.has_value() ? std::min(l1_block_size_limit, *max_block_tiles) : l1_block_size_limit;
+    return in;
+}
+
+}  // namespace
+
+BlockL1Fit block_l1_fit(
+    BlockDirection direction,
+    BlockCoreOrder core_order,
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_padded_shape,
+    uint32_t input_single_tile_size,
+    uint32_t output_single_tile_size,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> max_block_tiles) {
+    const BlockSplitInputs in = block_split_inputs(
+        direction,
+        core_order,
+        input_tensor,
+        output_padded_shape,
+        input_single_tile_size,
+        output_single_tile_size,
+        tile_height,
+        tile_width,
+        sub_core_grids,
+        max_block_tiles);
+    const size_t grid_area = (core_order == BlockCoreOrder::RowMajor)
+                                 ? static_cast<size_t>(in.grid_size.x) * in.grid_size.y
+                                 : in.available_grid.num_cores();
+
+    // The fit is a pure function of these five values, but the fallback search behind it costs about
+    // 30 us for a wide row on a few cores, too much for every dispatch. Cache hits repeat the same
+    // shape at the same free L1, so a few recent answers per thread cover them.
+    using FitKey = std::tuple<size_t, uint32_t, uint32_t, uint32_t, uint32_t>;
+    const FitKey key{grid_area, in.num_blocks, in.num_tiles_per_row, in.num_tiles_per_col, in.cb_block_size_limit};
+    constexpr size_t kRecentFits = 8;
+    thread_local std::array<std::optional<std::pair<FitKey, BlockL1Fit>>, kRecentFits> recent_fits;
+    thread_local size_t next_slot = 0;
+    for (const auto& recent : recent_fits) {
+        if (recent.has_value() && recent->first == key) {
+            return recent->second;
+        }
+    }
+
+    // split_blocks_for_tilize_wh only falls back to smaller blocks when the unconstrained block is
+    // larger than the limit (free L1, capped by max_block_tiles); otherwise neither enters the split.
+    BlockL1Fit fit;
+    const auto unconstrained =
+        ttnn::compute_ncores_wh(grid_area, in.num_blocks, in.num_tiles_per_row, in.num_tiles_per_col);
+    if (unconstrained.single_block_size > in.cb_block_size_limit) {
+        fit = BlockL1Fit{
+            .limited = true,
+            .sizes = ttnn::try_compute_ncores_wh_sb(
+                grid_area, in.num_blocks, in.num_tiles_per_row, in.num_tiles_per_col, in.cb_block_size_limit),
+        };
+    }
+    recent_fits[next_slot] = std::make_pair(key, fit);
+    next_slot = (next_slot + 1) % kRecentFits;
+    return fit;
+}
+
+BlockPlan make_block_plan(
+    BlockDirection direction,
+    BlockCoreOrder core_order,
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    uint32_t input_single_tile_size,
+    uint32_t output_single_tile_size,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> max_block_tiles) {
+    const bool has_staging = (direction == BlockDirection::Tilize);
+    BlockSplitInputs in = block_split_inputs(
+        direction,
+        core_order,
+        input_tensor,
+        output_tensor.padded_shape(),
+        input_single_tile_size,
+        output_single_tile_size,
+        tile_height,
+        tile_width,
+        sub_core_grids,
+        max_block_tiles);
 
     BlockPlan plan;
-    plan.split = (core_order == BlockCoreOrder::RowMajor)
-                     ? ttnn::split_blocks_for_tilize_wh(
-                           grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit)
-                     : ttnn::split_blocks_for_tilize_wh(
-                           available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
+    plan.split =
+        (core_order == BlockCoreOrder::RowMajor)
+            ? ttnn::split_blocks_for_tilize_wh(
+                  in.grid_size, in.num_blocks, in.num_tiles_per_row, in.num_tiles_per_col, in.cb_block_size_limit)
+            : ttnn::split_blocks_for_tilize_wh(
+                  in.available_grid, in.num_blocks, in.num_tiles_per_row, in.num_tiles_per_col, in.cb_block_size_limit);
 
     // The work split hands out exactly two block widths, so there are exactly two buffer sets:
     //

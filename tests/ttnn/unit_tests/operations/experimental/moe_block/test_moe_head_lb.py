@@ -10,7 +10,7 @@ Against torch on the same weights (the shared expert's on the bf8 grid, the rout
     matches, in bf16 ulps against the reference rounded to bf16 (see _check_gate_weights_ulp);
   * the planner's counts: each chip's experts' counts = the routing rows' picks (a histogram);
   * the dispatch buffer's own slots: GLM x itself (bit-exact), K3 the latent rows x @ latent_down^T.
-Perf baselines: moe_head_lb_perf_baselines.json."""
+Perf baselines: HEAD_US below."""
 
 import sys
 from pathlib import Path
@@ -27,11 +27,11 @@ from op_checks import (  # noqa: E402
     BLOCK_OPS,
     PERF_RUNS,
     DeterminismMarker,
-    PerfBaselines,
+    check_perf,
     median_us,
     traced_op_device_times,
 )
-from head_tail_lb_cases import (  # noqa: E402
+from head_tail_lb_cases import (
     CALLS,
     MODELS,
     PARAMS,
@@ -48,10 +48,16 @@ from head_tail_lb_cases import (  # noqa: E402
     _skip_unless_lb,
     _to_residual,
     _x_host,
-    mb,
 )
 
-BASELINES = PerfBaselines(HERE / "moe_head_lb_perf_baselines.json")
+moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
+
+# The head's traced device time (us; the slowest chip, median of PERF_RUNS replays) by case id. Recorded on a
+# Galaxy's 2x4 tray (bh-glx, 2026-11); a LoudBox run logs its own - re-baseline from a LoudBox's log.
+HEAD_US = {
+    "glm53-row640": 321.6,
+    "glm53-row384": 212.9,
+}
 HEAD_OPS = {"moe_head": BLOCK_OPS["moe_head"]}
 
 
@@ -60,11 +66,11 @@ class Head:
     def __init__(self, mesh, case):
         self.mesh, self.case = mesh, case
         self.model = model = MODELS[case.model]
-        self.dtypes = mb.MoEDtypes()
-        cfg = mb.MoEBlockConfig(chunk_tokens=case.chunk, num_links=2, persist_l1_small=True)
-        self.res = mb.MoEBlockResources(mesh, model.dims(), cfg, self.dtypes)
+        self.dtypes = moe_block_utils.MoEDtypes()
+        cfg = moe_block_utils.MoEBlockConfig(chunk_tokens=case.chunk, num_links=2, persist_l1_small=True)
+        self.res = moe_block_utils.MoEBlockResources(mesh, model.dims(), cfg, self.dtypes)
         self.A = self._accumulators()
-        fit = mb.plan_moe_head(self.res, self.dtypes, self.A, None)
+        fit = moe_block_utils.plan_moe_head(self.res, self.dtypes, self.A, None)
         assert fit.ok, fit.reason
         lay = fit.planned[0].layout
         logger.info(
@@ -73,7 +79,7 @@ class Head:
         self.w = Weights(model, case.seed)
         f32 = lambda t: None if t is None else ttnn.from_torch(t, dtype=ttnn.float32)  # noqa: E731
         w = self.w
-        self.tw = mb.prepare_moe_head_weights(
+        self.tw = ttnn.experimental.moe_block.prepare_moe_head_weights(
             f32(w.gate),
             f32(w.up),
             f32(w.down),
@@ -91,13 +97,13 @@ class Head:
         """The block planner's accumulator count (the head plans the combine's routing for it); a model whose experts
         a chip exceed the flat op's 64 on this mesh (K3 on 8 chips) takes the Galaxy's 11."""
         try:
-            plan = mb.moe_block_plan(
+            plan = moe_block_utils.moe_block_plan(
                 self.res,
                 dtypes=self.dtypes,
                 accumulators=None,
                 max_tokens_per_expert=max(self.case.chunk, 256),
-                layout=mb.FlatLayoutOptions(),
-                combine=mb.CombineConfig(),
+                layout=moe_block_utils.FlatLayoutOptions(),
+                combine=moe_block_utils.CombineConfig(),
             )
             return plan.accumulators
         except Exception as e:  # noqa: BLE001
@@ -105,7 +111,9 @@ class Head:
             return 11
 
     def __call__(self):
-        return mb.moe_head(self.x, self.tw, resources=self.res, dtypes=self.dtypes, accumulators=self.A)
+        return ttnn.experimental.moe_block.moe_head(
+            self.x, self.tw, resources=self.res, dtypes=self.dtypes, accumulators=self.A
+        )
 
     def close(self):
         self.res.release()
@@ -232,5 +240,5 @@ def test_moe_head_perf(mesh_device, device_params, case):
     finally:
         head.close()
     us = median_us(t)
-    logger.info(f"PERF moe_head {case.id}: median {us:.1f} us over {len(t)} replays")
-    BASELINES.check(f"moe_head {case.id}", us, case.margin)
+    logger.info(f"PERF moe_head {case.id}: median {us:.1f} us (min {min(t) / 1e3:.1f}, max {max(t) / 1e3:.1f})")
+    check_perf(f"moe_head {case.id}", us, HEAD_US.get(case.id), case.margin, where=f'HEAD_US["{case.id}"]')

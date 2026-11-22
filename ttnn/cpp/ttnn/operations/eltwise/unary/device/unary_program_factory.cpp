@@ -32,6 +32,12 @@ bool pack_first_op_scalars(
         case UnaryOpType::MAC_TSS:
             packed_scalar1 = pack_scalar_runtime_arg(op, 0, input_dtype);
             packed_scalar2 = pack_scalar_runtime_arg(op, 1, input_dtype);
+            if (input_dtype == DataType::BFLOAT16) {
+                packed_scalar1 =
+                    std::bit_cast<uint32_t>(static_cast<float>(bfloat16(std::bit_cast<float>(packed_scalar1))));
+                packed_scalar2 =
+                    std::bit_cast<uint32_t>(static_cast<float>(bfloat16(std::bit_cast<float>(packed_scalar2))));
+            }
             break;
         case UnaryOpType::LOGIT: {
             const auto eps = *op.get_param_if<float>(0);
@@ -535,13 +541,20 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
                     : std::nullopt;
 
     const auto& all_device_cores = operation_attributes.worker_grid;
-    const bool needs_tmp0 = needs_tmp0_dfb(ops_chain[0].type());
+    // A generated kernel computes the op in one SFPU pass of the plain SFPU program, reading only the input: the
+    // op's own temporary buffer is not allocated.
+    const auto bf16_kernel_defines = get_bf16_kernel_defines(
+        ops_chain, input.dtype(), output.dtype(), operation_attributes.fp32_dest_acc_en, input.device()->arch());
+    const bool needs_tmp0 = !bf16_kernel_defines && needs_tmp0_dfb(ops_chain[0].type());
     const auto plan = get_dram_read_plan(ops_chain, input, output.tensor_spec(), all_device_cores);
     const bool dram_flow = plan.flow != DramReadFlow::None;
     const bool work_queue = plan.flow == DramReadFlow::WorkQueue;
 
     const bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
+    if (bf16_kernel_defines) {
+        unary_defines = *bf16_kernel_defines;
+    }
     add_input_dtype_defines(input.dtype(), unary_defines);
     if (const auto relu_config = get_pack_relu_config(
             ops_chain,
@@ -557,7 +570,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
 
     const std::string compute_path = fmt::format(
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}",
-        get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
+        bf16_kernel_defines ? std::string_view{"eltwise_sfpu_metal2.cpp"}
+                            : get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     DataFormat dfb_data_format_for_input =
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? dfb_data_format_output : dfb_data_format;
@@ -756,16 +770,20 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         });
     }
 
-    // Legacy set UnpackToDestFp32 on the input and temporary buffers under preserve_fp32_precision and
-    // left them at Default otherwise. Metal 2.0 additionally requires an explicit entry for a consumed
-    // Float32 buffer under a 32-bit Dest, where legacy silently defaulted; Default is UnpackToSrc.
+    // Preserve Float32 input precision and every buffer a bitcast interprets as Float32. Bitcast formats
+    // its input buffer as the output dtype, so for the supported pairs UINT32 -> FLOAT32 and INT32 -> FLOAT32
+    // that buffer must carry all 32 bits of each word. ttnn::bitcast does not check widths, so unsupported
+    // pairs such as BFLOAT16 -> FLOAT32 also reach this branch; they remain unsupported.
+    // Any other Float32 buffer under a 32-bit Dest keeps the explicit UnpackToSrc mode Metal 2.0 requires.
     //
     // UnpackToDest also requires fp32_dest_acc_en since the validator rejects UnpackToDest into a
     // 16-bit Dest. ttnn::unary already implies one from the other. A caller that breaks that gets
     // legacy's silent UnpackToSrc instead of a TT_FATAL.
     ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     auto set_unpack_mode = [&](const DFBSpecName& dfb, DataFormat df) {
-        if (operation_attributes.preserve_fp32_precision && operation_attributes.fp32_dest_acc_en) {
+        const bool bitcast_to_float32 = ops_chain[0].type() == unary::UnaryOpType::BITCAST && df == DataFormat::Float32;
+        if (operation_attributes.fp32_dest_acc_en &&
+            (operation_attributes.preserve_fp32_precision || bitcast_to_float32)) {
             unpack_modes.emplace(dfb, UnpackMode::UnpackToDest);
         } else if (operation_attributes.fp32_dest_acc_en && df == DataFormat::Float32) {
             unpack_modes.emplace(dfb, UnpackMode::UnpackToSrc);

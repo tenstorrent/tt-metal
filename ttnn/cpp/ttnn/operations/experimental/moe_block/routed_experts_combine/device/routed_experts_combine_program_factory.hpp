@@ -26,15 +26,15 @@ struct RoutedExpertsCombineFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const RoutedExpertsCombineParams& params,
+        const RoutedExpertsCombineParams& p,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const RoutedExpertsCombineInputs& inputs,
+        const RoutedExpertsCombineInputs& t,
         ttnn::Tensor& output);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached,
         const RoutedExpertsCombineParams& params,
-        const RoutedExpertsCombineInputs& inputs,
+        const RoutedExpertsCombineInputs& t,
         ttnn::Tensor& output);
 };
 

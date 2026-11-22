@@ -7,7 +7,7 @@ test.
 From random owner rows and shared-expert output:
   * GLM (all-to-all): out = y_own + se in the residual's layout [rows, H / TP];
   * K3 (engine): out = rmsnorm(y_own) * norm @ latent_up^T + se.
-Perf baselines: moe_tail_lb_perf_baselines.json."""
+Perf baselines: TAIL_US below."""
 
 import sys
 from pathlib import Path
@@ -24,11 +24,11 @@ from op_checks import (  # noqa: E402
     BLOCK_OPS,
     PERF_RUNS,
     DeterminismMarker,
-    PerfBaselines,
+    check_perf,
     median_us,
     traced_op_device_times,
 )
-from head_tail_lb_cases import (  # noqa: E402
+from head_tail_lb_cases import (
     CALLS,
     MODELS,
     PARAMS,
@@ -41,10 +41,16 @@ from head_tail_lb_cases import (  # noqa: E402
     _skip_unless_lb,
     _to_owner,
     _to_residual,
-    mb,
 )
 
-BASELINES = PerfBaselines(HERE / "moe_tail_lb_perf_baselines.json")
+moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
+
+# The tail's traced device time (us; the slowest chip, median of PERF_RUNS replays) by case id. Recorded on a
+# Galaxy's 2x4 tray (bh-glx, 2026-11); a LoudBox run logs its own - re-baseline from a LoudBox's log.
+TAIL_US = {
+    "glm53-row640": 64.0,
+    "glm53-row384": 47.3,
+}
 TAIL_OPS = {"moe_tail": BLOCK_OPS["moe_tail"]}
 
 
@@ -53,8 +59,8 @@ class Tail:
     def __init__(self, mesh, case):
         self.mesh, self.case = mesh, case
         self.model = model = MODELS[case.model]
-        cfg = mb.MoEBlockConfig(chunk_tokens=case.chunk, num_links=2, persist_l1_small=True)
-        self.res = mb.MoEBlockResources(mesh, model.dims(), cfg, mb.MoEDtypes())
+        cfg = moe_block_utils.MoEBlockConfig(chunk_tokens=case.chunk, num_links=2, persist_l1_small=True)
+        self.res = moe_block_utils.MoEBlockResources(mesh, model.dims(), cfg, moe_block_utils.MoEDtypes())
         self.w = Weights(model, case.seed)
         g = torch.Generator().manual_seed(2000 + case.seed)
         chunk = case.chunk
@@ -66,7 +72,7 @@ class Tail:
             # (K3: the shared expert's output in the residual's layout)
             self.se = _to_residual(mesh, self.se_host)
             f32 = lambda t: ttnn.from_torch(t, dtype=ttnn.float32)  # noqa: E731
-            self.w_up = mb.prepare_moe_tail_weights(
+            self.w_up = ttnn.experimental.moe_block.prepare_moe_tail_weights(
                 f32(self.w.latent_up), f32(self.w.latent_norm), resources=self.res, row_blocks=1, dtype=ttnn.bfloat8_b
             )
         else:
@@ -83,7 +89,7 @@ class Tail:
         return _rmsnorm(y, 1.0, eps) @ up.T + se
 
     def __call__(self):
-        return mb.moe_tail(self.y, self.se, resources=self.res, row_blocks=1, w_up=self.w_up)
+        return ttnn.experimental.moe_block.moe_tail(self.y, self.se, resources=self.res, row_blocks=1, w_up=self.w_up)
 
     def close(self):
         self.res.release()
@@ -141,8 +147,8 @@ def test_moe_tail_perf(mesh_device, device_params, case):
     finally:
         tail.close()
     us = median_us(t)
-    logger.info(f"PERF moe_tail {case.id}: median {us:.1f} us over {len(t)} replays")
-    BASELINES.check(f"moe_tail {case.id}", us, case.margin)
+    logger.info(f"PERF moe_tail {case.id}: median {us:.1f} us (min {min(t) / 1e3:.1f}, max {max(t) / 1e3:.1f})")
+    check_perf(f"moe_tail {case.id}", us, TAIL_US.get(case.id), case.margin, where=f'TAIL_US["{case.id}"]')
 
 
 # ---------------------------------------------------------------------------------------------------- row blocks
@@ -168,14 +174,14 @@ def test_moe_tail_row_blocks_one_call(mesh_device, device_params, case):
         se = _to_owner(mesh_device, se_host, layout=ttnn.TILE_LAYOUT)
 
     def resources(tokens):
-        cfg = mb.MoEBlockConfig(chunk_tokens=tokens, num_links=2, persist_l1_small=True)
-        return mb.MoEBlockResources(mesh_device, model.dims(), cfg, mb.MoEDtypes())
+        cfg = moe_block_utils.MoEBlockConfig(chunk_tokens=tokens, num_links=2, persist_l1_small=True)
+        return moe_block_utils.MoEBlockResources(mesh_device, model.dims(), cfg, moe_block_utils.MoEDtypes())
 
     def w_up_of(res, row_blocks):
         if not model.latent:
             return None
         f32 = lambda t: ttnn.from_torch(t, dtype=ttnn.float32)  # noqa: E731
-        return mb.prepare_moe_tail_weights(
+        return ttnn.experimental.moe_block.prepare_moe_tail_weights(
             f32(w.latent_up), f32(w.latent_norm), resources=res, dtype=ttnn.bfloat8_b, row_blocks=row_blocks
         )
 
@@ -187,7 +193,11 @@ def test_moe_tail_row_blocks_one_call(mesh_device, device_params, case):
     try:
         w_up1 = w_up_of(res1, 1)
         ref = ttnn.concat(
-            [mb.moe_tail(rows(y, i), rows(se, i), resources=res1, w_up=w_up1, row_blocks=1) for i in range(k)], dim=2
+            [
+                ttnn.experimental.moe_block.moe_tail(rows(y, i), rows(se, i), resources=res1, w_up=w_up1, row_blocks=1)
+                for i in range(k)
+            ],
+            dim=2,
         )
         ref_host = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(ref)]
     finally:
@@ -196,7 +206,7 @@ def test_moe_tail_row_blocks_one_call(mesh_device, device_params, case):
     try:
         w_up = w_up_of(res, k)
         for _ in range(3):  # (repeated: the block words re-armed between calls)
-            got = mb.moe_tail(y, se, resources=res, w_up=w_up, row_blocks=k)
+            got = ttnn.experimental.moe_block.moe_tail(y, se, resources=res, w_up=w_up, row_blocks=k)
             diff = sum(int((ttnn.to_torch(a) != b).sum()) for a, b in zip(ttnn.get_device_tensors(got), ref_host))
             logger.info(f"MOE_TAIL one call {case.id} x {k} row blocks: {diff} elements differ from a call a block")
             assert diff == 0

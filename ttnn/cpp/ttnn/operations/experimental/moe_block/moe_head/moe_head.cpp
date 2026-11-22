@@ -324,7 +324,7 @@ const MoEHeadSetup& setup_moe_head(
         setup.model = make_head_model(mesh, program_config, resources.port_luts());
         for (const auto& spec : head_words(*setup.model)) {
             const auto& words_tensor =
-                resources.persistent_words("moe_head/" + key + "/" + spec.name, spec.cores, spec.words);
+                resources.persistent_words("moe_head/" + key + "/" + spec.name, spec.cores, spec.words, spec.align);
             setup.words.push_back(static_cast<uint32_t>(words_tensor.buffer()->address()));
         }
         setup.inputs = persistent_inputs(resources, *setup.model, fit.row_blocks);
@@ -401,7 +401,7 @@ MoEHeadOutputs moe_head(
         .table = inputs.table,
         .plan = inputs.plan,
         .row_blocks = setup.config.shape.row_blocks};
-    ttnn::prim::moe_block_head(params, std::move(inputs));
+    ttnn::prim::moe_block_head(params, inputs);
     return out;
 }
 

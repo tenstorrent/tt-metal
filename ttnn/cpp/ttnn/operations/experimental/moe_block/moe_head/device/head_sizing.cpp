@@ -270,11 +270,12 @@ ReduceScatterTransport plan_transport(uint32_t tp_size, ReduceScatterKind kind) 
                 std::vector<uint32_t> arrival_blocks;
                 for (uint32_t block : chip.entries[half_index]) {
                     const auto& block_role = chip.roles.at({block, half_index});
-                    if (block_role.direction == direction && !block_role.start) {
-                        arrival_blocks.push_back(block);
-                    } else if (
-                        block_role.direction == ReduceScatterDirection::Final && upstream_position &&
-                        out.chips[*upstream_position].roles.at({block, half_index}).direction == direction) {
+                    // (a block of this direction past its start, or a final block whose upstream sent it this way)
+                    const bool arrives =
+                        (block_role.direction == direction && !block_role.start) ||
+                        (block_role.direction == ReduceScatterDirection::Final && upstream_position &&
+                         out.chips[*upstream_position].roles.at({block, half_index}).direction == direction);
+                    if (arrives) {
                         arrival_blocks.push_back(block);
                     }
                 }
@@ -947,15 +948,16 @@ std::vector<uint32_t> ReduceScatterPlan::compute_args(uint32_t position, uint32_
 // ---------------------------------------------------------------------------------------------------------------------
 // SharedExpertSizing
 
-SharedExpertSizing::SharedExpertSizing(const SharedExpertArgs& sizing_args) : args(sizing_args) {
-    engine_columns = sizing_args.engine_columns;
-    engine_rows = sizing_args.engine_rows;
-    row_tiles_per_core = sizing_args.row_tiles_per_core;
-    chunk_row_tiles = engine_rows * row_tiles_per_core;
-    rows = sizing_args.rows;
-    hidden_dim = sizing_args.hidden_dim;
-    shared_expert_dim = sizing_args.shared_expert_dim;
-    shards = sizing_args.shards;
+SharedExpertSizing::SharedExpertSizing(const SharedExpertArgs& sizing_args) :
+    args(sizing_args),
+    engine_columns(sizing_args.engine_columns),
+    engine_rows(sizing_args.engine_rows),
+    row_tiles_per_core(sizing_args.row_tiles_per_core),
+    chunk_row_tiles(sizing_args.engine_rows * sizing_args.row_tiles_per_core),
+    rows(sizing_args.rows),
+    hidden_dim(sizing_args.hidden_dim),
+    shared_expert_dim(sizing_args.shared_expert_dim),
+    shards(sizing_args.shards) {
     if (sizing_args.rows % (32 * chunk_row_tiles) != 0) {
         fail(
             "moe_head shared expert: " + std::to_string(sizing_args.rows) +
@@ -1680,7 +1682,7 @@ std::variant<RoutingPaths, std::string> routing_paths(
         }
         const int row = source / int(mesh_columns), column = source % int(mesh_columns);
         auto directions = x_directions(row, column);
-        if (!directions.count(first_hop)) {
+        if (!directions.contains(first_hop)) {
             throw SizingError(
                 "chip " + coord_string(row, column) + ": no X port toward " + std::to_string(destination));
         }

@@ -27,7 +27,7 @@ struct MoEHeadParams {
     // order) and the arena (an L1 tensor - not a tensor arg: the op rebinds its CBs and args on every call).
     std::shared_ptr<const HeadModel> model;
     std::vector<uint32_t> words;
-    Tensor arena{};
+    Tensor arena{};  // NOLINT(readability-redundant-member-init): Tensor's default constructor is explicit
     // This call's split (MoEBlockConfig.chunk_splits: a padded chunk's real rows depend on it - one cached program
     // each). The head's row blocks are config.shape.row_blocks (x and y hold every block's rows).
     uint32_t split = 0;
@@ -37,6 +37,8 @@ struct MoEHeadParams {
 };
 
 struct MoEHeadInputs {
+    // ({}: Tensor() is explicit; a designated initializer copy-initializes the members it leaves out)
+    // NOLINTBEGIN(readability-redundant-member-init)
     Tensor x{};             // [1, 1, rows, H / TP] bf16 TILE, DRAM: this chip's shard of the residual
     Tensor w{};             // the shared expert's weights (prepare_moe_head_weights)
     Tensor w_router{};      // W_r^T [E, H / TP] bf16 TILE
@@ -49,6 +51,7 @@ struct MoEHeadInputs {
     Tensor route{};                                              // the owned tokens' route words
     Tensor slots{};                                              // the routing exchange's slots
     Tensor counts{}, regions{}, token_index{}, table{}, plan{};  // the combine plan the routing planner writes
+    // NOLINTEND(readability-redundant-member-init)
     // A padded chunk: main's chunked-prefill metadata scalars actual_start / actual_end (one uint32 each in DRAM,
     // replicated), read on device each call; the chunk in main's rotated layout over the SP rows. Padding tokens are
     // not routed (no route words, not planned). Absent: every row is real.

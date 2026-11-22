@@ -158,8 +158,7 @@ tt::tt_metal::WorkloadDescriptor build_workload(const SparseDispatch2dParams& ar
          {names::kRowBytes, row_bytes},
          {names::kGroup, args.group},
          {names::kManifestBatch, args.manifest_batch},
-         {names::kRowsPerPacket, args.pack},
-         {names::kRowPieces, row_pieces(row_bytes, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes())}});
+         {names::kRowsPerPacket, args.pack}});
     KernelDescriptor::CompileTimeArgs sender_ct;
     tt::tt_metal::TensorAccessorArgs(out_buf).append_to(sender_ct);
 
@@ -353,7 +352,7 @@ SparseDispatch2dProgramFactory::cached_mesh_workload_t SparseDispatch2dProgramFa
         w.programs[i].descriptor = std::move(chips[i].second);
     }
     std::string merge_why;
-    const auto one = merge_chip_workload(std::move(w), "sparse_dispatch_2d", &merge_why);
+    const auto one = merge_chip_workload(mesh, std::move(w), "sparse_dispatch_2d", &merge_why);
     TT_FATAL(
         one.workload.programs.size() == 1,
         "sparse_dispatch_2d: the chips' programs still differ with their args in DRAM: {}",
