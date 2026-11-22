@@ -187,10 +187,11 @@ def rebuild(
     return written
 
 
-def rebuilt_manifest(rebuilt: Path) -> dict:
-    """The rebuild's manifest; every segment must be present."""
+def rebuilt_manifest(rebuilt: Path, count: int | None = None) -> dict:
+    """The rebuild's manifest; every segment holding a row below ``count`` (default: all) must be present."""
     manifest = json.loads((rebuilt / MANIFEST).read_text())
-    missing = [i for i in range(manifest["segments"]) if not rebuilt_path(rebuilt, i).is_file()]
+    needed = [i for i, (lo, _) in enumerate(manifest["segment_rows"]) if count is None or lo < count]
+    missing = [i for i in needed if not rebuilt_path(rebuilt, i).is_file()]
     if missing:
         raise ValueError(f"{rebuilt} lacks {len(missing)} rebuilt segments (first {missing[:5]})")
     return manifest
@@ -200,7 +201,7 @@ def build_kda_input(*, rebuilt: Path, layer: int, out: Path, count: int | None =
     """Layer ``layer``'s device input from a complete rebuild, as a ``teacher_feed`` input directory."""
     if layer not in FED_LAYERS:
         raise ValueError(f"layer {layer} is not a fed KDA layer {FED_LAYERS}")
-    manifest = rebuilt_manifest(rebuilt)
+    manifest = rebuilt_manifest(rebuilt, count)
     rows = manifest["segment_rows"]
     count = count or rows[-1][1]
     segment = rows[0][1] - rows[0][0]
@@ -240,7 +241,7 @@ def score(*, rebuilt: Path, run: Path, trace: Trace | None, model: ChainModel, w
     ``metrics.json`` into the run directory."""
     run_manifest = complete_run(run)
     layer, count = run_manifest["layer"], run_manifest["count"]
-    rb = rebuilt_manifest(rebuilt)
+    rb = rebuilt_manifest(rebuilt, count)
     seg_rows = rb["segment_rows"]
     segment = seg_rows[0][1] - seg_rows[0][0]
     chain = Path(rb["chain"]["chain"])
@@ -383,7 +384,7 @@ def main() -> None:
         m = build_kda_input(rebuilt=args.rebuilt, layer=args.layer, out=args.out, count=args.count)
         log(f"input layer {args.layer}: {m['segments'][-1]['end']} rows -> {args.out}")
     elif args.command == "score":
-        chain = Path(rebuilt_manifest(args.rebuilt)["chain"]["chain"])
+        chain = Path(json.loads((args.rebuilt / MANIFEST).read_text())["chain"]["chain"])
         result = score(
             rebuilt=args.rebuilt,
             run=args.run,

@@ -832,6 +832,8 @@ def _tiny_chain(hidden: int = 32, vocab: int = 50):
             block.routed_expert_norm.weight.normal_(1.0, 0.1)
         refs[l] = block
         layers[l]["moe"] = _moe64_of(block, 2)
+        layers[l]["gate"] = block.gate.weight.detach().double()
+        layers[l]["gate_bias"] = block.gate.e_score_correction_bias.detach().double()
     layers[3]["dsa"] = _weights(SMALL, hidden, 24)
     layers[3]["gate"] = torch.randn(6, hidden, generator=gen, dtype=torch.float64)
     layers[3]["gate_bias"] = 0.05 * torch.randn(6, generator=gen, dtype=torch.float64)
@@ -1354,3 +1356,66 @@ def test_quantile_by_hand_and_beyond_torch_quantile_size():
     assert quantile(torch.empty(0), 0.5) != quantile(torch.empty(0), 0.5)  # NaN
     big = torch.arange(2**24 + 1).flip(0)
     assert quantile(big, 0.5) == 2**23
+
+
+def test_kda_chain_feed_rebuilds_the_chain_and_scores_a_device_run(tmp_path: Path, expect_error):
+    """The KDA rebuild of a 10-row chain (segments of 4), split over two shards, reproduces the chain's stored KDA
+    states and products (layers 0-1 states exactly: the same FP64 walk); a tampered state file of the chain fails the
+    next segment's rebuild. The layer-1 input is the rebuild's FP64 KDA input rounded once to bf16. A device run whose
+    output is the FP64 output in bf16, and whose carry at row 8 is the chain's, scores at bf16 level (state relative
+    error 0); doubling one row's output gives that row an NRMSE of 1 (to bf16); the stored FP64 output routes like the
+    chain (recall 1) and the GPU's routing with one planted swap of a top-2 set recalls 1 - 1/2 / 10."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import fp64_chain, kda_chain_feed
+
+    model, chain, _ = _fed_chain(tmp_path)
+    p = fp64_chain.load_products(chain, ["routing_ids_1"])
+    ids = torch.randint(0, 50, (10,), generator=torch.Generator().manual_seed(4))  # _fed_chain's tokens
+    gpu = p["routing_ids_1"].clone()
+    gpu[5, 0] = next(e for e in range(6) if e not in gpu[5].tolist())
+    attn0 = torch.randn(10, 32, generator=torch.Generator().manual_seed(1)).to(torch.bfloat16)
+    _write_trace(tmp_path / "trace", {"expert_ids_layer_1": gpu, "attn_output_layer_0": attn0}, chunk_rows=4)
+    meta = tmp_path / "trace" / "metadata.json"
+    meta.write_text(json.dumps({"n_prompt_tokens": 10, "token_ids": ids.tolist()}))
+    trace, rebuilt = Trace(tmp_path / "trace"), tmp_path / "rebuilt"
+    for w in (1, 0):
+        kda_chain_feed.rebuild(model=model, chain=chain, out=rebuilt, token_ids=ids, trace=trace, shard=(w, 2))
+    payloads = [torch.load(kda_chain_feed.rebuilt_path(rebuilt, i), weights_only=True) for i in range(3)]
+    for q in payloads:
+        c = q["checks"]
+        assert c["state_0_rel"] == c["state_1_rel"] == c["conv_0_rel"] == c["conv_1_rel"] == 0.0
+        assert c["state_2_rel"] < 1e-6 and c["moe_input_1_rel"] < 1e-6 and c["dsa_input_3_rel"] < 1e-6
+    assert [q["start"] for q in payloads] == [0, 4, 8] and payloads[0]["gpu_attn_output_0_sums"].shape == (4, 7)
+
+    src = tmp_path / "kda_in"
+    m = kda_chain_feed.build_kda_input(rebuilt=rebuilt, layer=1, out=src)
+    assert m["layer"] == 1 and m["kind"] == "kda_chain_feed" and m["segments"][-1]["end"] == 10
+    want_in = torch.cat([q["kda_input_1"] for q in payloads])
+    assert want_in.dtype == torch.bfloat16 and torch.equal(load_input(src, 0, 10), want_in)
+
+    out = tmp_path / "dev"
+    run = {"layer": 1, "count": 10, "chunk": 4, "input": str(src)}
+    start_run(out, run)
+    want = torch.cat([q["kda_output_1"] for q in payloads])
+    got = want.to(torch.bfloat16).clone()
+    got[6] = 2 * got[6]
+    for c, lo in enumerate(range(0, 10, 4)):
+        torch.save({"start": lo, "end": min(lo + 4, 10), "attn_out": got[lo : lo + 4]}, chunk_path(out, c))
+    carry = torch.load(fp64_chain.state_path(chain, 1), weights_only=True)["kda"][1]
+    torch.save({k: v.float() for k, v in carry.items()}, out / "state_00000008.pt")
+    finish_run(out, {**run, "states": [{"row": 8, "file": "state_00000008.pt"}]}, 1.0)
+    r = kda_chain_feed.score(rebuilt=rebuilt, run=out, trace=trace, model=model, window=4)
+    w1 = r["windows"][1]
+    # p99 of 4 rows interpolates 0.97 of the way from the 3rd largest (bf16 level) to the doubled row's 1
+    assert w1["kda_row_nrmse_median"] < 1e-2 and w1["kda_row_nrmse_p99"] == pytest.approx(0.97, abs=1e-2)
+    assert r["windows"][0]["kda_row_nrmse_p99"] < 1e-2
+    assert r["overall"]["routing_recall_reference"] == 1.0
+    assert r["overall"]["routing_recall_gpu"] == pytest.approx(1 - 0.5 / 10)
+    assert r["states"][0]["row"] == 8 and r["states"][0]["recurrent_rel"] < 1e-6
+    assert json.loads((out / "metrics.json").read_text())["layer"] == 1
+
+    state = torch.load(fp64_chain.state_path(chain, 0), weights_only=True)
+    state["kda"][1]["recurrent"] = 2 * state["kda"][1]["recurrent"]
+    torch.save(state, fp64_chain.state_path(chain, 0))
+    kda_chain_feed.rebuilt_path(rebuilt, 1).unlink()
+    with expect_error(ValueError, "does not reproduce the chain"):
+        kda_chain_feed.rebuild(model=model, chain=chain, out=rebuilt, token_ids=ids, trace=trace)
