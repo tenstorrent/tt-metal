@@ -872,8 +872,9 @@ def test_sparse_sdpa_split_k_kv_formats(device, kv_dtype, H, S, T, TOPK, k_dim, 
 # ---- the split-K plan reads the free L1, so the program hash includes it: less free L1 must give a new program ----
 @run_for_blackhole()
 def test_sparse_sdpa_split_k_plan_follows_free_l1(device):
-    """An L1 tensor that leaves room for the whole-token CBs but not for the split-K CBs must give a new
-    whole-token program. A cache hit would reuse the split-K program, whose CB region overlaps the tensor."""
+    """An L1 tensor that leaves room for the whole-token CBs but not for the split-K CBs at full free L1 must give a
+    new program (split-K with shallower K staging, or the whole-token split) below the tensor. A cache hit would reuse
+    the first program, whose CB region overlaps the tensor."""
     H, S, T, TOPK, kc = 64, 160, 4096, 2048, 128
     grid = device.compute_with_storage_grid_size()
     cores = grid.x * grid.y
@@ -919,14 +920,13 @@ def test_sparse_sdpa_split_k_plan_follows_free_l1(device):
     low = blocker.buffer_address()
     assert whole_end <= low < split_end, f"L1 tensor at {low}, not in [{whole_end}, {split_end})"
 
-    assert not split_k_ran(device, tt_q, tt_packed, tt_idx, SCALED_FP8_KV, kc)
     entries = device.num_program_cache_entries()
     out_whole, whole_run_end = run(tt_q, tt_idx)
     assert device.num_program_cache_entries() == entries + 1, "less free L1 must give a new program"
     assert 0 < whole_run_end <= low, f"CB region ends at {whole_run_end}, L1 tensor starts at {low}"
     assert torch.equal(ttnn.to_torch(blocker), data), "the op wrote over the L1 tensor"
     ttnn.deallocate(blocker)
-    for name, out in (("split-K", out_split), ("whole-token", out_whole)):
+    for name, out in (("full L1", out_split), ("less L1", out_whole)):
         score = pcc(ttnn.to_torch(out), expected)
         assert score >= 0.999, f"{name} PCC {score:.5f}"
 

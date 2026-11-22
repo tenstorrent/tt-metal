@@ -55,6 +55,9 @@ void kernel_main() {
     namespace cb = sparse_sdpa::recipe_cb;
     constexpr uint32_t q_tiles = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::Q_TILES);
     constexpr uint32_t passes = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PASSES);
+    constexpr uint32_t k_stage = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::K_STAGE_ROWS);
+    constexpr bool q_via_k_rm = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::Q_VIA_K_RM) != 0;
+    static_assert(k_stage % tt::constants::TILE_HEIGHT == 0 && k_chunk % k_stage == 0);
 
     // Element sizes (from the tensors' dtypes).
     constexpr uint32_t q_elem_bytes = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::Q_ELEM_BYTES);  // bf16
@@ -98,7 +101,7 @@ void kernel_main() {
     constexpr uint32_t idx_row_bytes = topk * idx_elem_bytes;  // one index row
 
     Noc noc;
-    experimental::CB q_cb(cb::q_rm), k_cb(cb::k_rm), idx_cb(cb::idx), ctrl_cb(cb::ctrl);
+    experimental::CB q_cb(q_via_k_rm ? cb::k_rm : cb::q_rm), k_cb(cb::k_rm), idx_cb(cb::idx), ctrl_cb(cb::ctrl);
     experimental::CB kreq_cb(cb::kreq), kack_cb(cb::kack);  // dual-NoC K-gather handoff to the writer
     experimental::CB scale_bcast_cb(cb::k_scale);
     const auto q = TensorAccessor(q_args, q_addr);
@@ -246,44 +249,58 @@ void kernel_main() {
                         scale_bcast_cb.push_back(scale_blocks);
                     }
                 } else {
-                    // K chunk rows -> cb_k_rm: read the `valid` real keys, zero-fill the sentinel suffix.
-                    k_cb.reserve_back(k_chunk);
-                    const uint32_t k_write_ptr = k_cb.get_write_ptr();
-                    // Dual-NoC split gather: the K-row response data is the op's bottleneck (NoC-link bound, not
-                    // DRAM-controller bound), so we spread it across BOTH NoCs. The reader (this NoC) gathers
-                    // rows [half,valid); it hands the writer rows [0,half) via cb_kreq, and the writer gathers
-                    // them on ITS NoC into the same reserved cb_k_rm L1 (shared on-core), then acks via cb_kack -- each
-                    // link then carries half the gather traffic.
-                    const uint32_t half = valid >> 1;
-                    kreq_cb.reserve_back(1);
-                    {
-                        volatile tt_l1_ptr uint32_t* request =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
-                        request[sparse_sdpa::gather_request::BASE] = base;
-                        request[sparse_sdpa::gather_request::SPLIT] = half;
-                        request[sparse_sdpa::gather_request::IS_LAST] = last_of_pass;
-                        request[sparse_sdpa::gather_request::DST_L1] = k_write_ptr;
-                        request[sparse_sdpa::gather_request::EMPTY] = 0;
+                    // K chunk rows -> cb_k_rm, k_stage rows per push (compute tilizes 32 at a time): read the real
+                    // keys, zero-fill the sentinel suffix.
+                    for (uint32_t row_base = 0; row_base < k_chunk; row_base += k_stage) {
+                        const uint32_t rows =
+                            valid > row_base ? (valid - row_base < k_stage ? valid - row_base : k_stage) : 0u;
+                        k_cb.reserve_back(k_stage);
+                        const uint32_t k_write_ptr = k_cb.get_write_ptr();
+                        // Dual-NoC split gather: the K-row response data is the op's bottleneck (NoC-link bound, not
+                        // DRAM-controller bound), so we spread it across BOTH NoCs. The reader (this NoC) gathers rows
+                        // [half,rows); it hands the writer rows [0,half) via cb_kreq, and the writer gathers them on
+                        // ITS NoC into the same reserved cb_k_rm L1 (shared on-core), then acks via cb_kack -- each
+                        // link then carries half the gather traffic.
+                        const uint32_t half = rows >> 1;
+                        kreq_cb.reserve_back(1);
+                        {
+                            volatile tt_l1_ptr uint32_t* request =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+                            request[sparse_sdpa::gather_request::BASE] = base + row_base;
+                            request[sparse_sdpa::gather_request::SPLIT] = half;
+                            request[sparse_sdpa::gather_request::IS_LAST] =
+                                last_of_pass && row_base + k_stage == k_chunk;
+                            request[sparse_sdpa::gather_request::DST_L1] = k_write_ptr;
+                            request[sparse_sdpa::gather_request::EMPTY] = 0;
+                        }
+                        kreq_cb.push_back(1);
+                        // Reader gathers its half [half, rows) on its NoC (depth-4 trid ring, shared helper).
+                        sparse_sdpa::trid_ring_gather<
+                            block_cyclic,
+                            bc_chunk_local,
+                            bc_sp,
+                            bc_shard_stride_gap,
+                            bc_slab_stride_gap,
+                            sparse_sdpa::K_TRID_RING>(
+                            noc,
+                            kv,
+                            k_write_ptr,
+                            idx_ptr,
+                            base + row_base,
+                            half,
+                            rows,
+                            k_row_bytes,
+                            kv_batch_page_offset);
+                        kack_cb.wait_front(1);  // writer's half landed in cb_k_rm L1
+                        kack_cb.pop_front(1);
+                        // Zero-fill the sentinel suffix: masked-key scores are a defined 0 before compute masks them.
+                        if (rows < k_stage) {
+                            noc.async_write_zeros(
+                                k_cb, (k_stage - rows) * k_row_bytes, {.offset_bytes = rows * k_row_bytes});
+                            noc.write_zeros_l1_barrier();
+                        }
+                        k_cb.push_back(k_stage);
                     }
-                    kreq_cb.push_back(1);
-                    // Reader gathers its half [half, valid) on its NoC (depth-4 trid ring, shared helper).
-                    sparse_sdpa::trid_ring_gather<
-                        block_cyclic,
-                        bc_chunk_local,
-                        bc_sp,
-                        bc_shard_stride_gap,
-                        bc_slab_stride_gap,
-                        sparse_sdpa::K_TRID_RING>(
-                        noc, kv, k_write_ptr, idx_ptr, base, half, valid, k_row_bytes, kv_batch_page_offset);
-                    kack_cb.wait_front(1);  // writer's half landed in cb_k_rm L1
-                    kack_cb.pop_front(1);
-                    // Zero-fill the sentinel suffix: masked-key scores are a defined 0 before compute masks them.
-                    if (valid < k_chunk) {
-                        noc.async_write_zeros(
-                            k_cb, (k_chunk - valid) * k_row_bytes, {.offset_bytes = valid * k_row_bytes});
-                        noc.write_zeros_l1_barrier();
-                    }
-                    k_cb.push_back(k_chunk);
                 }
             }
         }

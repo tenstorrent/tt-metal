@@ -62,6 +62,8 @@ constexpr bool scaled_kv = get_named_compile_time_arg_val("scaled_kv") != 0;
 constexpr bool fused_dequant = get_named_compile_time_arg_val("fused_dequant") != 0;
 constexpr uint32_t packed_row_bytes = get_named_compile_time_arg_val("packed_row_bytes");
 constexpr bool split_k = get_named_compile_time_arg_val("split_k") != 0;
+// Q rows arrive through the K row CB (the L1 floor layout: same row format and width, no Q row CB).
+constexpr bool q_via_k_rm = get_named_compile_time_arg_val("q_via_k_rm") != 0;
 static_assert(recipe::ring && recipe::ring_mask == 0 && !recipe::ring_stream_state, "the host's sparse recipe");
 static_assert(!split_k || passes == 1, "split-K merges one pass per token");
 static_assert(!fused_dequant || (scaled_kv && !recipe::sink), "the fused dequant scales V (undone on the output)");
@@ -95,9 +97,12 @@ ALWI void tilize_slab_strided(uint32_t tiles, uint32_t first_in, uint32_t out0, 
 // The sparse wrapper's own steps (tilizes, dequant, merge, output) build for size: the kernel config buffer holds them
 // beside the recipe step (an FP32 recipe with scaled FP8 at 96 heads was 1.5 KB over at -O2).
 #define SPARSE_COLD __attribute__((noinline, optimize("Os")))
+// The per-chunk K tilize and the per-pass Q tilize stay at the kernel's level: at -Os they cost 5% of small-S calls
+// (Kimi K3.1 H96 S120 637 -> 608 us, GLM-5.3 S40 293 -> 278 us, QSA decode 148 -> 142 us).
+#define SPARSE_STAGE __attribute__((noinline))
 
-SPARSE_COLD void tilize_q() {
-    sparse_recipe::tilize_q<cb::q_rm, d_tiles, q_tiles>();
+SPARSE_STAGE void tilize_q() {
+    sparse_recipe::tilize_q<q_via_k_rm ? cb::k_rm : cb::q_rm, d_tiles, q_tiles>();
     if constexpr (fused_dequant) {
         sparse_sdpa::fused_dequant::prescale_q_latent<q, q_tiles, d_tiles, vd_tiles>();
         recipe_pack_to_unpack_barrier();
@@ -131,7 +136,7 @@ SPARSE_COLD void zero_k_rows(uint32_t rows) {
 
 // One step's gathered chunks (`rows` tile rows) into the K CB in the K^T layout (tile (d, kt) at d * k_tiles + kt), and
 // V in the V CB when it is not read in place; tile rows past `rows` are zero.
-SPARSE_COLD void produce_k_chunk(uint32_t rows) {
+SPARSE_STAGE void produce_k_chunk(uint32_t rows) {
     CircularBuffer(k).reserve_back(k_tiles * d_tiles);
     if constexpr (!v_in_k) {
         CircularBuffer(v).reserve_back(k_tiles * vd_tiles);
