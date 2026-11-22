@@ -347,7 +347,7 @@ def _scan_sp_chunks(
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        compute_kernel_config=compute_config.preparation,
+        compute_kernel_config=compute_config.affine_prefix,
         emit_outputs=True,
         emit_memory_config=affine_relay.terms_memory_config,
     )
