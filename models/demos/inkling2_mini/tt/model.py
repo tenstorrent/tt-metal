@@ -142,7 +142,7 @@ class Inkling2Model:
         kv_dtype=ttnn.bfloat8_b,
         log=print,
         layer_roots=None,
-        prefetch=True,
+        prefetch=False,
     ):
         """layer_roots: optional {layer: cache root} override (e.g. BFP8-expert cache for kernel-vs-quant checks)."""
         self.device = device
