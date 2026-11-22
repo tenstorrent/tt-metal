@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING
 
 import torch
@@ -538,7 +539,23 @@ class Conv2d(Module):
             )
         return self._weight_parts[(part, parts)]
 
-    def forward(self, x: ttnn.Tensor, /, *, use_persistent_buffer: bool = True) -> ttnn.Tensor:
+    def num_slices(self, h: int, w: int) -> int | None:
+        slice_params = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
+        return slice_params.get((h, w, self.in_channels, self.out_channels))
+
+    def blocking_for(self, h: int, w: int) -> Conv2dBlocking:
+        return self.shape_blocking.get((h, w, self.in_channels, self.out_channels), self.blocking)
+
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        /,
+        *,
+        use_persistent_buffer: bool = True,
+        halo_boundary: ttnn.Tensor | None = None,
+        slice_shape: tuple[int, int] | None = None,
+        epilogue_stats: ttnn.Tensor | list[ttnn.Tensor] | None = None,
+    ) -> ttnn.Tensor:
         """Forward pass of the Conv2d layer with support for tensor parallelism.
 
         Args:
@@ -578,16 +595,20 @@ class Conv2d(Module):
                 msg = f"expected input channel dimension to be {expected_c}, but got {c}"
                 raise ValueError(msg)
 
-        slice_params = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
-        num_slices = slice_params.get((h, w, self.in_channels, self.out_channels))
+        # slice_shape: the (h, w) the slice and blocking tables know this conv by (an external-halo conv gets the
+        # unpadded input of the neighbour-padded shape)
+        key = (*(slice_shape or (h, w)), self.in_channels, self.out_channels)
+        num_slices = self.num_slices(*key[:2])
         slice_config = (
             ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Conv2dDRAMSliceWidth)
             if num_slices is not None
             else None
         )
+        if halo_boundary is not None and num_slices in (None, 1):
+            slice_config = ttnn.Conv2dL1FullSliceConfig
 
         out_channels = self.weight.data.shape[0]
-        blocking = self.shape_blocking.get((h, w, self.in_channels, self.out_channels), self.blocking)
+        blocking = self.blocking_for(*key[:2])
         conv_config = ttnn.Conv2dConfig(
             act_block_h_override=blocking.act_block_h_override,
             weights_dtype=self.weight.dtype,
@@ -600,8 +621,16 @@ class Conv2d(Module):
 
         parts = blocking.out_channel_splits
         if parts == 1:
+            stats = epilogue_stats[0] if isinstance(epilogue_stats, list) else epilogue_stats
             x, out_height, out_width = self._conv(
-                x, self.weight.data, self.bias.data, out_channels, (b, h, w, num_slices), conv_config, slice_config
+                x,
+                self.weight.data,
+                self.bias.data,
+                out_channels,
+                (b, h, w, num_slices),
+                conv_config,
+                slice_config,
+                _fused_ops(halo_boundary, stats),
             )
         else:
             if self.in_mesh_axis is not None or self.out_mesh_axis is not None or out_channels % parts:
@@ -618,6 +647,7 @@ class Conv2d(Module):
                     (b, h, w, num_slices, part, parts),
                     conv_config,
                     slice_config,
+                    _fused_ops(halo_boundary, epilogue_stats[part] if isinstance(epilogue_stats, list) else None),
                 )
                 outputs.append(ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG) if out.is_sharded() else out)
             x = ttnn.concat(outputs, dim=-1)
@@ -642,6 +672,7 @@ class Conv2d(Module):
         prepared_key: tuple,
         conv_config: ttnn.Conv2dConfig,
         slice_config: ttnn.Conv2dSliceConfig | None,
+        fused_ops: ttnn.Conv2dFusedOps | None = None,
     ) -> tuple[ttnn.Tensor, int, int]:
         b, h, w, _ = x.shape
         in_channels = self.in_channels // self.in_mesh_axis_size
@@ -687,7 +718,8 @@ class Conv2d(Module):
                 prepared_bias = ttnn.to_device(prepared_bias, self.mesh_device)
 
         try:
-            x, (out_height, out_width), (prepared_weight, prepared_bias) = ttnn.conv2d(
+            conv = ttnn.conv2d if fused_ops is None else partial(ttnn.conv2d_fused, fused_ops=fused_ops)
+            x, (out_height, out_width), (prepared_weight, prepared_bias) = conv(
                 input_tensor=x,
                 weight_tensor=prepared_weight,
                 bias_tensor=prepared_bias,
@@ -719,6 +751,12 @@ class Conv2d(Module):
             raise RuntimeError(msg) from e
         self._prepared[prepared_key] = (prepared_weight, prepared_bias)
         return x, out_height, out_width
+
+
+def _fused_ops(halo_boundary: ttnn.Tensor | None, epilogue_stats: ttnn.Tensor | None) -> ttnn.Conv2dFusedOps | None:
+    if halo_boundary is None and epilogue_stats is None:
+        return None
+    return ttnn.Conv2dFusedOps(halo_boundary=halo_boundary, epilogue_stats=epilogue_stats)
 
 
 def configure_conv2d(
