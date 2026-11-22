@@ -59,8 +59,8 @@ class CombinedOptimizer:
     ``get_group_lrs`` lists every optimizer's groups in order, so its first is the first optimizer's. The state dict
     nests each optimizer's under its index, as ``ttml.checkpointing`` saves and loads composite optimizers.
 
-    TODO: checkpoints don't save or load the optimizer state in experimental trainer yet, so nothing calls the state dict methods. Saving it
-    is planned.
+    TODO(mmilosevicTT, #66793): checkpoints don't save or load the optimizer state in experimental trainer yet, so
+    nothing calls the state dict methods.
     """
 
     def __init__(self, optimizers: Sequence[Any]) -> None:

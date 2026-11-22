@@ -18,8 +18,9 @@ class MetricsCallback(Callback):
     so ``values`` leaves it out. A callback that reads ``values`` comes after this one in the callbacks, so a step's
     metrics are in it when its own hooks for that step run.
 
-    TODO: once more callbacks track metrics, move ``values`` to one tracker the trainer owns: every metrics callback
-    writes into it, ``CallbackHandler`` runs those callbacks before the others, and the others read from it.
+    TODO(mmilosevicTT, #66795): once more callbacks track metrics, move ``values`` to one tracker the trainer owns:
+    every metrics callback writes into it, ``CallbackHandler`` runs those callbacks before the others, and the others
+    read from it.
     """
 
     def __init__(self) -> None:
