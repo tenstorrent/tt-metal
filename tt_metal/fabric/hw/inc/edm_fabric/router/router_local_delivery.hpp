@@ -27,11 +27,11 @@ namespace fabric_router {
 constexpr uint8_t LOCAL_NOC = tt::tt_fabric::edm_to_local_chip_noc;
 constexpr uint8_t LOCAL_NOC_VC = tt::tt_fabric::forward_and_local_write_noc_vc;
 
-// Whether local writes go into the NoC's software write counters (noc_nonposted_writes_num_issued/acked). Blackhole:
-// yes, as its write API always counts (issue 28758), and a flushed atomic then checks the counters once
-// (flush_write_to_noc_pipeline's fast path). Wormhole: no. Nothing reads them while the router runs (the flush checks
-// transaction IDs there) and teardown reloads them from the NIU (ncrisc_noc_counters_init), so counting would only add
-// two L1 read-modify-writes per delivered packet.
+// Whether local writes go into the NoC's software acknowledgement counter (noc_nonposted_writes_acked). Blackhole:
+// yes, as its write API always counts (issue 28758), and a flushed atomic then checks that counter once
+// (flush_write_to_noc_pipeline's fast path). Wormhole: no. Nothing reads it while the router runs (the flush checks
+// transaction IDs there) and teardown reloads it from the NIU (ncrisc_noc_counters_init), so counting would only add
+// an L1 read-modify-write per delivered packet.
 constexpr bool counts_local_writes = is_blackhole_arch;
 
 FORCE_INLINE void local_write_init() {
@@ -94,12 +94,14 @@ FORCE_INLINE void local_write(
     WAYPOINT("NWPD");
 }
 
-// Adds `writes` local writes to the software write counters (noc_nonposted_writes_num_issued/acked), which the write
-// API updates itself for each write it counts (update_counter): a scatter packet's writes skip that and are counted
-// here once. The one place the router touches the API's counters.
+// Adds `writes` local writes to the software acknowledgement counter (noc_nonposted_writes_acked), the one count a
+// flushed atomic compares with the NIU's (ncrisc_noc_nonposted_writes_flushed); a scatter packet's writes are counted
+// here once. The issued count (noc_nonposted_writes_num_issued) is left alone: only the write barrier reads it, and
+// the router issues none while it runs (teardown reloads both counters from the NIU, ncrisc_noc_counters_init). One
+// counter is one L1 read-modify-write per delivered packet instead of two. The one place the router touches the API's
+// counters.
 FORCE_INLINE void count_local_writes(uint32_t writes) {
     if constexpr (counts_local_writes) {
-        noc_nonposted_writes_num_issued[LOCAL_NOC] += writes;
         noc_nonposted_writes_acked[LOCAL_NOC] += writes;
     }
 }
