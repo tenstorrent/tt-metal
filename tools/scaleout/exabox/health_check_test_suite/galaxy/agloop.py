@@ -5,7 +5,7 @@
 """The bug b op loop (run.sh's C6b earlier, now run.sh --repro abort-fabric's all-gather).
 The H3 soak hangs (4/4: a quad host Device 24/25, a second quad host, a third quad host) stall the to_out FSDP weight all-gather of a DiT attention block (AllGatherAsync [1,1,896,1344] ->
 [1,1,7168,1344], dim 2, the 8-chip SP axis, persistent ping-pong buffer, no barrier) on the end-of-line chip pair. This loops
-that op sequence as the h3-worker:0.3.9-cb9c6543 image calls it (attention_minimax_h3.py, layers/linear.py, CCLManager):
+that op sequence as the model calls it (its attention block, linear layers and CCL manager):
   h  = unsqueeze(concatenate_heads(spatial_BHNE [1,14,5856,128]), 0)          NLPConcatHeads -> [1,1,5856,1792]
   a1 = all_gather_async(h, dim 3, TP axis 0)                                  no persistent buffer, barrier semaphore
   w  = all_gather_async(W_l [1,1,896,1344], dim 2, SP axis 1)                persistent ping-pong buffer, NO barrier

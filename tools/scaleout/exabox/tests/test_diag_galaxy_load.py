@@ -193,6 +193,15 @@ class TestPlan(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("need --mode", r.stderr)
 
+    def test_cli_mode_on_a_tier_without_the_load_is_an_error(self):
+        r = subprocess.run(
+            [sys.executable, str(SUITE_DIR / "diag_runner.py"), "--tier", "weekly", "--mode", "plain", "--plan"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("use --tier galaxy", r.stderr)
+
     def test_plan_cli(self):
         out = subprocess.run(
             [sys.executable, str(SUITE_DIR / "diag_runner.py"), "--tier", "galaxy", "--mode", "smoke", "--plan"],

@@ -132,6 +132,49 @@ is no `post_test_reset` phase.
 `pre_bmc_reboot`; it has its own entry in `tiers.py` so the two can change
 independently.
 
+### The `galaxy` tier
+
+`galaxy` checks a unit's health for a caller that runs its own load. It runs the
+snapshot checks, one `tt-smi -glx_reset` (never `-r`; `tiers.py` rejects a `-r`
+in this tier), the `host_side` triage and the ETH status read. A
+`pcie_aer_delta` check counts the new PCIe AER errors per chip from after the
+reset to the end of the run. Pass `--skip-reset` to read the unit as found.
+
+`--mode` adds the galaxy load, after the (empty) tests phase:
+
+- the `busbar` phase (`diag/busbar.py`): the steps `qb`, `mix`, `step`, `heavy`
+  and `code`, in that order, each one program from `galaxy/`. A step fails on a
+  non-zero exit, a `<NAME> FAIL` line in its output, or no exit within its planned
+  length plus 300 s. A failed step does not stop the next ones.
+- the `links` phase (`diag/links.py`): a 2-chip all-gather on every linked chip
+  pair UMD finds (10 s per pair, in rounds). After a fault here or in `busbar`,
+  it runs `tt-smi -glx_reset` and the pair test again at 300 s per pair (the
+  sweep). Then one whole-box fabric open and close.
+
+| `--mode` | Bus-bar steps, planned | What changes |
+|---|---|---|
+| `smoke` | about 1 min | every length cut to 2 s (code readback 1 s): checks that the programs run |
+| `plain` | about 19 min | chunks of 1, 2, 3, 4 min; heavy 90 s |
+| `full` | about 56 min | last chunk 25 min, longer G3b/N1/N2/register-file checks, full L1 march, heavy 750 s, code readback 60 s |
+
+Mesh open, compile and the links phase come on top. Without `--mode` no load
+runs. `--mode` on any other tier is an error. `--steps` picks parts of the load,
+and the flags in [Flags](#flags) change single values of the plan. Each step
+writes its log to `galaxy/busbar/<step>/run.log` next to the report.
+
+`--plan` prints the bus-bar steps for `--mode` (plain when not given), with the
+`--steps` and override flags applied, and exits without touching the unit. One
+line per step: its name, its planned seconds and what it runs. For example,
+`./run_diag.sh galaxy --mode plain --plan`:
+
+```
+qb        180 s  2 x (60 s clock-checked quiet + 30 s lofi_all burst)
+mix       705 s  chunks of 1,2,3,4 min, 10 s quiet + numeric after each; G3, G3b 10 s, N1 12 s, N2 5 s, register files 3 s after chunk 1
+step      100 s  10 s quiet + 90 s lofi_all burst, numeric after it
+heavy     100 s  90 s of 16k_hifi2,16k_bf8_lofi (last 10 s also 16k_hifi4,...), each output checked
+code       30 s  code readback, 5 s budget, plain scope
+```
+
 The eth deployment tests are registered as `TensixDeploymentEthernet<NN><Name>`
 (e.g. `TensixDeploymentEthernet00LinkUp`, `TensixDeploymentEthernet01Bandwidth`,
 `TensixDeploymentEthernet02BandwidthBidir`), so the filters wildcard the
