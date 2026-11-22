@@ -29,6 +29,12 @@ void kernel_main() {
     constexpr uint32_t kz = get_named_compile_time_arg_val("kz");
     constexpr uint32_t nt = get_named_compile_time_arg_val("nt");
     constexpr uint32_t has_mask = get_named_compile_time_arg_val("has_mask");
+    // SFPU extent: faces 0 and 1, the 4-row groups holding rows 0..rows-1 (2 iterations per group: even / odd
+    // columns); the writer stores only those rows
+    constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
+    static_assert(rows <= 16);
+    constexpr VectorMode vm = VectorMode::R;
+    constexpr int IT = 2 * ((rows + 3) / 4);
     constexpr uint32_t cb_z = 0, cb_mask = 1, cb_f = 2, cb_g = 3, cb_h = 4, cb_m = 5, cb_zb = 16, cb_out = 17;
 
     compute_kernel_hw_startup(cb_z, cb_zb);
@@ -78,17 +84,17 @@ void kernel_main() {
             matmul_tiles(cb_zb, cb_g, kt, kt * nt + j, 2);
         }
         tanh_tile_init();
-        tanh_tile(1);
-        tanh_tile(2);
+        MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tanh, (false, DST_ACCUM_MODE, IT), 1, vm));
+        MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tanh, (false, DST_ACCUM_MODE, IT), 2, vm));
         load(cb_h, j, 0);
         load(cb_m, j, 3);
         mul_binary_tile_init();
-        mul_binary_tile(1, 0, 1);  // f * h
-        mul_binary_tile(2, 3, 2);  // g * m
+        mul_binary_tile<DST_ACCUM_MODE, IT>(1, 0, 1, vm);  // f * h
+        mul_binary_tile<DST_ACCUM_MODE, IT>(2, 3, 2, vm);  // g * m
         sub_binary_tile_init();
-        sub_binary_tile(0, 1, 0);  // h - f * h
+        sub_binary_tile<ckernel::DstRoundingMode::Default, DST_ACCUM_MODE, IT>(0, 1, 0, vm);  // h - f * h
         add_binary_tile_init();
-        add_binary_tile(0, 2, 0);
+        add_binary_tile<ckernel::DstRoundingMode::Default, DST_ACCUM_MODE, IT>(0, 2, 0, vm);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, cb_out);
