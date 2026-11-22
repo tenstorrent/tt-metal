@@ -28,6 +28,7 @@ from models.demos.inkling2_mini.tt.dram_sharded import DramShardedLinear
 from models.demos.inkling2_mini.tt.fused.attnres import FusedAttnRes, FusedRowOps
 from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv
 from models.demos.inkling2_mini.tt.fused.gate import FusedMessageGate, FusedQKVGate
+from models.demos.inkling2_mini.tt.fused.head import FusedLogitsTail
 from models.demos.inkling2_mini.tt.fused.norm import FusedRowNorm
 from models.demos.inkling2_mini.tt.moe import Inkling2MoE
 from models.demos.inkling2_mini.tt.prefetch import PrefetchedLinear
@@ -187,6 +188,11 @@ class Inkling2Model:
         else:
             w = ttnn.to_device(g["unembed"], device, memory_config=dram)
             self.unembed = lambda x: ttnn.linear(x, w, dtype=ttnn.float32, compute_kernel_config=self.mm_cfg)
+        # Decode logits tail (tt/fused/head.py): softcap + argmax per unembed chunk, no full-vocab tile ops.
+        # INKLING_HEAD_FUSED=0: the ttnn op chain below (A/B runs).
+        self.head_tail = None
+        if isinstance(self.unembed, DramShardedLinear) and os.environ.get("INKLING_HEAD_FUSED", "1") != "0":
+            self.head_tail = FusedLogitsTail(device, self.unembed, VOCAB_PAD, VOCAB_REAL, SOFTCAP)
         self.final_res = FusedAttnRes(self.frows, g, "final_res_q", 1)
         self.msg = MessageAttnRes(self.rows, g, "msg_q")
         mask = torch.zeros(1, 1, 1, VOCAB_PAD)
@@ -332,6 +338,9 @@ class Inkling2Model:
 
         x = self.final_res(stack, h, n + 1)[0]
         x = self._rms(x, self.final_norm)
+        if self.head_tail is not None:
+            res["logits"], res["token"] = self.head_tail(x)  # module buffers: the next step overwrites them
+            return res
         logits = self.unembed(x)
         logits = ttnn.multiply(ttnn.tanh(ttnn.multiply(logits, 1.0 / SOFTCAP)), SOFTCAP)
         logits = ttnn.add(logits, self.vocab_mask)
