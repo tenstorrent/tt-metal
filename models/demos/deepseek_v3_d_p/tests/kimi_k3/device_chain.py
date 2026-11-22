@@ -31,11 +31,32 @@ from pathlib import Path
 
 import torch
 
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, segment_path
+from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState, kda_forward_reference
+from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_state_dict, required_kda_weight_names
+from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
+    MANIFEST,
+    atomic_save,
+    segment_path,
+    token_ids_sha256,
+)
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.chain_vs_trace import key_sums, pcc_nrmse
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import F64, ChainModel, attn_res64, rms64, state_path
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import (
+    F64,
+    ChainModel,
+    attn_res64,
+    rms64,
+    state_path,
+    tensor_digest,
+)
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_chain_feed import rebuilt_manifest, rebuilt_path, rel
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import Trace, chunk_path, complete_run, quantile
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
+    Trace,
+    checkpoint_tensors,
+    chunk_path,
+    complete_run,
+    quantile,
+)
 
 GOLDEN = Path(os.environ.get("K31_GOLDEN_DIR", "/mnt/weka/model-cache/scratch/mvasilijevic/k31/golden"))
 CHAIN = GOLDEN / "k31-l0-3-fp64-1m"
@@ -140,12 +161,166 @@ def score(*, run: Path, rebuilt: Path, trace: Path, model: ChainModel, window: i
     return result
 
 
+# --- layers 0-7: the FP64 deep chain (``fp64_deep_chain``, layer-major) and its KDA rebuild ---------------------------
+
+DEEP = GOLDEN / "k31-l0-7-fp64-256k"
+DEEP_REBUILT = GOLDEN / "k31-kda-rebuild-256k-l4-6"
+DEEP_KDA = (4, 5, 6)  # the KDA layers after the first DSA layer: the deep chain stores neither their output nor state
+DEEP_REBUILD_VERSION = 1
+# The rebuild's live sum is assembled from fp32-stored products (the 1M rebuild's live and layer-2 KDA output, the deep
+# chain's FFN and DSA outputs) instead of the chain's FP64 sums: a ~1e-7 relative perturbation of every read.
+DEEP_PRODUCT_BAR = 1e-5
+
+
+def deep_products(chain: Path, layer: int, site: str, names: list[str], start: int, end: int) -> dict:
+    """Products ``names`` of the deep chain's pass (``layer``, ``site``) for rows ``[start, end)``; the pass's
+    segments are ``<chain>/L<layer>_<site>/segment_<i>.pt`` of ``manifest["segment"]`` rows each."""
+    seg = json.loads((chain / MANIFEST).read_text())["segment"]
+    parts: dict[str, list[torch.Tensor]] = {n: [] for n in names}
+    for index in range(start // seg, -(-end // seg)):
+        d = torch.load(chain / f"L{layer}_{site}" / f"segment_{index:06d}.pt", weights_only=True, mmap=True)
+        a, b = max(start, d["start"]) - d["start"], min(end, d["end"]) - d["start"]
+        for n in names:
+            parts[n].append(d[n][a:b])
+    return {n: torch.cat(v) for n, v in parts.items()}
+
+
+def deep_complete(chain: Path, layers: int | None = None) -> dict:
+    """The deep chain's manifest; refuses a chain whose passes (attention, then FFN) of layers ``0..layers-1``
+    (default: every layer) are not all done."""
+    m = json.loads((chain / MANIFEST).read_text())
+    need = 2 * (len(m["kinds"]) if layers is None else layers)
+    if len(m["segments"]) < need:
+        raise ValueError(f"{chain}: {len(m['segments'])} passes complete, {need} needed")
+    return m
+
+
+def block_weights(checkpoint: Path, layer: int, kda_config: KDAConfig | None) -> dict:
+    """Layer ``layer``'s AttnRes queries and norms, and its KDA weights when ``kda_config`` is given, in FP64
+    (``ChainModel``'s per-layer form)."""
+    names = ["input_layernorm.weight", "post_attention_layernorm.weight", "self_attention_res_norm.weight"]
+    names += ["self_attention_res_proj.weight", "mlp_res_norm.weight", "mlp_res_proj.weight"]
+    if kda_config is not None:
+        names += [f"self_attn.{n}" for n in required_kda_weight_names(kda_config)]
+    t = checkpoint_tensors(checkpoint, layer, names)
+    L = {
+        "input_layernorm": t["input_layernorm.weight"].to(F64),
+        "attn_res": (t["self_attention_res_norm.weight"].to(F64), t["self_attention_res_proj.weight"].to(F64)),
+        "mlp_res": (t["mlp_res_norm.weight"].to(F64), t["mlp_res_proj.weight"].to(F64)),
+        "post_attention_layernorm": t["post_attention_layernorm.weight"].to(F64),
+    }
+    if kda_config is not None:
+        kda = {n: t[f"self_attn.{n}"] for n in required_kda_weight_names(kda_config)}
+        L["kda"] = {n: v.to(F64) for n, v in normalize_kda_state_dict(kda, kda_config).items()}
+    return L
+
+
+def deep_state_path(out: Path, index: int) -> Path:
+    return out / f"state_{index:06d}.pt"
+
+
+def rebuild_deep(
+    *,
+    chain: Path,
+    rebuilt_1m: Path,
+    out: Path,
+    embedding: torch.Tensor,
+    weights: dict,
+    kda_config: KDAConfig,
+    eps: float,
+    token_ids: torch.Tensor,
+    log=print,
+) -> None:
+    """The FP64 KDA output and state of layers ``DEEP_KDA`` over every row of the deep chain, into ``out``.
+
+    Segment-major and serial (the KDA state carries): per deep-chain segment, the live AttnRes sum after layer 2 is
+    the 1M rebuild's ``live_2 + kda_output_2`` plus the deep chain's ``moe_output_2`` (layers 0-3 of the two chains
+    are the same computation); layer 3 adds the deep chain's DSA and MoE outputs; layers 4-6 run the FP64 KDA
+    reference on their AttnRes read and add the stored MoE output. Each segment checks itself against what the deep
+    chain stored: the recomputed read ``dsa_input_3`` and the MoE inputs of layers 3-6 (relative
+    L2 <= ``DEEP_PRODUCT_BAR``). Writes ``rebuilt_<i>.pt`` (``kda_output_{4,5,6}`` fp32, ``checks``) and
+    ``state_<i>.pt`` (the three FP64 states after segment i, the 1M chain's ``state_<i>.pt`` form); a rerun resumes
+    after the last segment written. Needs the deep chain's passes through layer 6 only."""
+    m = deep_complete(chain, layers=max(DEEP_KDA) + 1)
+    rb = rebuilt_manifest(rebuilt_1m, m["count"])
+    if rb["segment_rows"][0] != [0, m["segment"]]:
+        raise ValueError(f"the 1M rebuild's segments {rb['segment_rows'][0]} are not the deep chain's {m['segment']}")
+    identity = {
+        "producer": "device_chain.rebuild_deep",
+        "rebuild_version": DEEP_REBUILD_VERSION,
+        "chain": str(chain),
+        "chain_token_ids_sha256": m["token_ids_sha256"],
+        "chain_passes": [p["digests"] for p in m["segments"][: 2 * (max(DEEP_KDA) + 1)]],
+        "rebuilt_1m": str(rebuilt_1m),
+        "layers": list(DEEP_KDA),
+        "count": m["count"],
+        "segment": m["segment"],
+        "segment_rows": [[lo, min(lo + m["segment"], m["count"])] for lo in range(0, m["count"], m["segment"])],
+    }
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / MANIFEST
+    if path.is_file() and json.loads(path.read_text()) != identity:
+        raise ValueError(f"{out} holds a rebuild of something else")
+    path.write_text(json.dumps(identity, indent=1))
+    rows = identity["segment_rows"]
+    done = 0
+    while done < len(rows) and rebuilt_path(out, done).is_file() and deep_state_path(out, done).is_file():
+        done += 1
+    states: dict[int, KDAReferenceState | None] = {l: None for l in DEEP_KDA}
+    if done:
+        saved = torch.load(deep_state_path(out, done - 1), weights_only=True)["kda"]
+        states = {l: KDAReferenceState(**saved[l]) for l in DEEP_KDA}
+        log(f"resuming after segment {done}/{len(rows)}")
+    for index in range(done, len(rows)):
+        began = time.perf_counter()
+        lo, hi = rows[index]
+        sealed = embedding[token_ids[lo:hi]].to(F64).unsqueeze(1)
+        r1m = torch.load(rebuilt_path(rebuilt_1m, index), weights_only=True, mmap=True)
+        assert (r1m["start"], r1m["end"]) == (lo, hi), f"1M rebuild segment {index} is not rows [{lo}, {hi})"
+
+        def ffn(l: int) -> dict:
+            return deep_products(chain, l, "ffn", [f"moe_input_{l}", f"moe_output_{l}"], lo, hi)
+
+        live = r1m["live_2"].double() + r1m["kda_output_2"].double() + ffn(2)["moe_output_2"].double()
+        checks, payload = {}, {"start": lo, "end": hi}
+        for l in range(3, max(DEEP_KDA) + 1):
+            L = weights[l]
+            read = attn_res64(live, sealed, L["attn_res"], eps)
+            if l in DEEP_KDA:
+                hidden = rms64(read, L["input_layernorm"], eps)
+                attn, states[l] = kda_forward_reference(hidden.unsqueeze(0), L["kda"], kda_config, states[l], dtype=F64)
+                attn = attn[0]
+                payload[f"kda_output_{l}"] = attn.float()
+            else:
+                d = deep_products(chain, l, "attn", [f"dsa_input_{l}", f"attn_output_{l}"], lo, hi)
+                checks[f"dsa_input_{l}_rel"] = rel(read, d[f"dsa_input_{l}"])
+                attn = d[f"attn_output_{l}"].double()
+            live = live + attn
+            normed = rms64(attn_res64(live, sealed, L["mlp_res"], eps), L["post_attention_layernorm"], eps)
+            f = ffn(l)
+            checks[f"moe_input_{l}_rel"] = rel(normed, f[f"moe_input_{l}"])
+            live = live + f[f"moe_output_{l}"].double()
+        failed = {k: v for k, v in checks.items() if not v <= DEEP_PRODUCT_BAR}
+        if failed:
+            raise ValueError(f"segment {index}: the rebuild does not reproduce the deep chain: {failed}")
+        payload["checks"] = checks
+        state = {"start": lo, "end": hi, "kda": {l: vars(states[l]) for l in DEEP_KDA}}
+        atomic_save(state, deep_state_path(out, index))
+        atomic_save(payload, rebuilt_path(out, index))
+        log(
+            f"rebuilt segment {index + 1}/{len(rows)} rows [{lo}, {hi}) {time.perf_counter() - began:.1f} s "
+            + json.dumps({k: float(f"{v:.3g}") for k, v in checks.items()})
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["score"])
-    parser.add_argument("--run", type=Path, required=True)
+    parser.add_argument("command", choices=["score", "rebuild-deep"])
+    parser.add_argument("--run", type=Path)
     parser.add_argument("--rebuilt", type=Path, default=REBUILT)
     parser.add_argument("--trace", type=Path, default=TRACE)
+    parser.add_argument("--chain", type=Path, default=DEEP, help="rebuild-deep: the deep chain")
+    parser.add_argument("--out", type=Path, default=DEEP_REBUILT, help="rebuild-deep: the rebuild's directory")
     parser.add_argument("--window", type=int, default=65536)
     parser.add_argument("--threads", type=int, default=8)
     args = parser.parse_args()
@@ -153,6 +328,32 @@ def main() -> None:
 
     def log(msg: str) -> None:
         print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}", flush=True)
+
+    if args.command == "rebuild-deep":
+        m = json.loads((args.chain / MANIFEST).read_text())
+        checkpoint = Path(m["identity"]["checkpoint"])
+        config = json.loads((checkpoint / "config.json").read_text())
+        kda_config = KDAConfig.from_model_config(config)
+        embedding = checkpoint_tensors(checkpoint, None, ["embed_tokens.weight"])["embed_tokens.weight"]
+        if tensor_digest({"w": embedding}) != m["embedding_sha256"]:
+            raise ValueError("the checkpoint's embedding is not the deep chain's")
+        token_ids = load_token_ids(args.trace, m["count"])
+        if token_ids_sha256(token_ids.tolist()) != m["token_ids_sha256"]:
+            raise ValueError("the trace's tokens are not the deep chain's")
+        weights = {l: block_weights(checkpoint, l, kda_config if l in DEEP_KDA else None) for l in range(3, 7)}
+        log(f"loaded layers 3-6 from {checkpoint}")
+        rebuild_deep(
+            chain=args.chain,
+            rebuilt_1m=args.rebuilt,
+            out=args.out,
+            embedding=embedding,
+            weights=weights,
+            kda_config=kda_config,
+            eps=float(config.get("text_config", config)["rms_norm_eps"]),
+            token_ids=token_ids,
+            log=log,
+        )
+        return
 
     chain = Path(json.loads((args.rebuilt / MANIFEST).read_text())["chain"]["chain"])
     checkpoint = Path(json.loads((chain / MANIFEST).read_text())["identity"]["checkpoint"])
