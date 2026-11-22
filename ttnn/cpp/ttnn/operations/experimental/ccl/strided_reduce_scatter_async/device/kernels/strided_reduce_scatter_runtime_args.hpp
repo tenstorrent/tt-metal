@@ -8,6 +8,7 @@
 
 // Common runtime-argument slots of the strided reduce-scatter kernels, shared by host and kernels.
 // slice_Ht is the one per-call length word; the per-core split and page counts derive from it on device.
+// my_chip_id (the device's ring rank) is a runtime arg so that the devices of a mesh range can share one program.
 namespace ttnn::experimental::ccl::strided_reduce_scatter_common_args {
 
 struct Reader {
@@ -18,7 +19,8 @@ struct Reader {
     static constexpr uint32_t semaphore_1 = 4;  // out-ready semaphore, forward direction
     static constexpr uint32_t addcmul_a = 5;
     static constexpr uint32_t addcmul_b = 6;
-    static constexpr uint32_t count = 7;
+    static constexpr uint32_t my_chip_id = 7;
+    static constexpr uint32_t count = 8;
 };
 
 struct Writer {
@@ -29,13 +31,15 @@ struct Writer {
     static constexpr uint32_t semaphore_1 = 4;
     static constexpr uint32_t batch_ready = 5;
     static constexpr uint32_t barrier = 6;
-    static constexpr uint32_t count = 7;
+    static constexpr uint32_t my_chip_id = 7;
+    static constexpr uint32_t count = 8;
 };
 
 struct Reduce {
     static constexpr uint32_t slice_Ht = 0;
     static constexpr uint32_t addcmul_scalar = 1;  // float bits; 0 without the fused addcmul
-    static constexpr uint32_t count = 2;
+    static constexpr uint32_t my_chip_id = 2;
+    static constexpr uint32_t count = 3;
 };
 
 }  // namespace ttnn::experimental::ccl::strided_reduce_scatter_common_args
