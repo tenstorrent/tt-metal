@@ -34,7 +34,7 @@ Residency
 The three big components do not fit at once: the DiT is ~16.6 GB/device at TP=4 (its adaLN
 projections are resident --- this transformer computes modulation on device) and the video VAE
 replicates ~9.8 GB of fp32 weights per device for its data-parallel fan-out. They are
-registered as ``Module`` coresident exclusions: loading one stage evicts the others. The text
+registered with the pipeline's ``residency``: loading one stage evicts the others. The text
 encoder is the cheap one --- FSDP over the non-TP axis puts it at ~1.6 GB/device --- but its 50 GB
 disk read is not, which is why it is kept co-resident by default: every request pays the encode
 itself (~2.8 s), never the reload. `coresident=False` evicts each stage and disables tracing.
@@ -65,7 +65,8 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
     MINIMAX_H3_TEXT_ENCODER_LAYER,
     build_minimax_h3_text_encoder,
     build_minimax_h3_vision_tower,
-    load_minimax_h3_text_encoder_weights,
+    load_minimax_h3_vision_state_dict,
+    minimax_h3_text_encoder_spec,
 )
 from ...encoders.qwen3vl.model_qwen3vl import (
     create_rope_tensors,
@@ -89,11 +90,13 @@ from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Tr
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import cache, dram_probe
+from ...utils import dram_probe
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch, pad_single
 from ...utils.tracing import StateTensor
 from ..events import DenoiseStep, PipelineEventCallback, event_section, null_callback
+from ..pipeline_api import PipelineAPIMixin
+from ..residency import Shard
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
 from .conditioning import encode_keyframes, keyframe_condition_noise
@@ -656,7 +659,7 @@ def _tqdm_spacer() -> None:
     sys.stderr.flush()
 
 
-class MiniMaxH3Pipeline:
+class MiniMaxH3Pipeline(PipelineAPIMixin):
     """`t2va` and `fl2va` on a Blackhole mesh. Build with `create_pipeline`."""
 
     def __init__(
@@ -717,8 +720,8 @@ class MiniMaxH3Pipeline:
             # A ring collective on a 1D line fabric aborts, so the open fabric wins over the preset.
             fabric_is_line = ttnn.get_fabric_config(mesh_device) == ttnn.FabricConfig.FABRIC_1D
             topology = ttnn.Topology.Linear if fabric_is_line else preset["topology"]
-        residency = preset.get("residency", MiniMaxH3Residency())
-        coresident = task in residency.coresident_tasks if coresident is None else coresident
+        residency_preset = preset.get("residency", MiniMaxH3Residency())
+        coresident = task in residency_preset.coresident_tasks if coresident is None else coresident
         env_audio_t_shard = os.environ.get("MINIMAX_H3_AUDIO_T_SHARD")
         self.audio_t_shard = (
             env_audio_t_shard == "1" if env_audio_t_shard is not None else preset.get("audio_t_shard", False)
@@ -743,7 +746,7 @@ class MiniMaxH3Pipeline:
         source = f" (from {_DYNAMIC_LENGTH_ENV})" if path.dynamic_from_env else ""
         fsdp = "on" if self.dit_fsdp else "off"
         self._host_log(f"denoise path: {path.name}{source}; dit_fsdp: {fsdp} ({fsdp_source})")
-        vae_mode = residency.vae_residency_mode if vae_residency_mode is None else vae_residency_mode
+        vae_mode = residency_preset.vae_residency_mode if vae_residency_mode is None else vae_residency_mode
         _check_vae_residency_mode(vae_mode)
         self.vae_residency_mode = vae_mode if coresident else "keep"
         self.use_persistent_ccl_buffers = (
@@ -946,7 +949,7 @@ class MiniMaxH3Pipeline:
             self.vae_config,
             task=self.task,
             mesh_device=self.mesh_device,
-            weight_loader=self._cache_submodel,
+            weight_loader=self._load_vae_module,
             ccl_manager=self.vae_ccl_manager,
             dtype=ttnn.bfloat16,
             device_stitch=yuv,
@@ -956,17 +959,11 @@ class MiniMaxH3Pipeline:
             waves_per_device=self.vae_waves_per_device,
         )
         self._vae.load_state(self._read_safetensors("vae"))
-
-        if not self.coresident:
-            self._text_encoder.register_coresident_exclusions(self._transformer, *self._vae.modules)
-            self._transformer.register_coresident_exclusions(self._text_encoder, *self._vae.modules)
-            for module in self._vae.modules:
-                module.register_coresident_exclusions(self._text_encoder, self._transformer)
-            # The video VAE decoder needs most of DRAM, so the ref2va reference encoders yield to it and reload
-            # on demand via `MiniMaxH3Vae._ensure_loaded`.
-            self._vae.decoder.register_coresident_exclusions(
-                *(module for module in self._vae.modules if module is not self._vae.decoder)
-            )
+        self._build_vision_tower()
+        self._build_audio_decoder()
+        if self.task == "ref2va":
+            self._build_audio_encoder()
+        self._register_residency()
 
         if self.coresident:
             self._prepare_transformer()
@@ -1324,40 +1321,41 @@ class MiniMaxH3Pipeline:
         )
 
     def _prepare_text_encoder(self):
-        """Load the on-device Qwen3-VL conditioner. ``cache.load_model`` no-ops if already resident."""
-        load_minimax_h3_text_encoder_weights(
-            self._text_encoder,
-            self.weights_dir / "text_encoder",
-            parallel_config=self.encoder_parallel_config,
-            mesh_device=self.mesh_device,
-            is_fsdp=True,
-        )
+        """Make the on-device Qwen3-VL conditioner resident."""
+        self.residency.load(self._text_encoder)
         return self._text_encoder
 
+    def _build_vision_tower(self) -> None:
+        """Build the Qwen3-VL vision tower, weights not loaded; `_prepare_vision_tower` loads them."""
+        if self.sp_factor > 1:
+            self._host_log(f"building the Qwen3-VL vision tower (tp{self.tp_factor}_sp{self.sp_factor})")
+            self._vision_parallel_config = EncoderParallelConfig(
+                tensor_parallel=ParallelFactor(mesh_axis=self.tp_axis, factor=self.tp_factor),
+                sequence_parallel=ParallelFactor(mesh_axis=self.sp_axis, factor=self.sp_factor),
+            )
+            self._vision_tower, self._vision_config = build_minimax_h3_vision_tower(
+                self.weights_dir / "text_encoder",
+                mesh_device=self.mesh_device,
+                parallel_config=self._vision_parallel_config,
+                ccl_manager=self.vae_ccl_manager,
+                load_weights=False,
+                kv_gather_capacity=(
+                    self.vision_patch_ladder[-1]
+                    if self.vision_patch_ladder is not None
+                    else padded_sequence_length(MINIMAX_H3_MAX_DECODABLE_KEYFRAME_PATCHES, self.sp_factor)
+                ),
+                use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
+            )
+        else:
+            self._host_log("building the Qwen3-VL vision tower (replicated)")
+            # Replicated: only names the weight cache.
+            self._vision_parallel_config = self.vae_parallel_config
+            self._vision_tower, self._vision_config = build_minimax_h3_vision_tower(
+                self.weights_dir / "text_encoder", mesh_device=self.mesh_device, load_weights=False
+            )
+
     def _prepare_vision_tower(self):
-        if self._vision_tower is None:
-            if self.sp_factor > 1:
-                self._host_log(f"building the Qwen3-VL vision tower (tp{self.tp_factor}_sp{self.sp_factor})")
-                self._vision_tower, self._vision_config = build_minimax_h3_vision_tower(
-                    self.weights_dir / "text_encoder",
-                    mesh_device=self.mesh_device,
-                    parallel_config=EncoderParallelConfig(
-                        tensor_parallel=ParallelFactor(mesh_axis=self.tp_axis, factor=self.tp_factor),
-                        sequence_parallel=ParallelFactor(mesh_axis=self.sp_axis, factor=self.sp_factor),
-                    ),
-                    ccl_manager=self.vae_ccl_manager,
-                    kv_gather_capacity=(
-                        self.vision_patch_ladder[-1]
-                        if self.vision_patch_ladder is not None
-                        else padded_sequence_length(MINIMAX_H3_MAX_DECODABLE_KEYFRAME_PATCHES, self.sp_factor)
-                    ),
-                    use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
-                )
-            else:
-                self._host_log("building the Qwen3-VL vision tower (replicated)")
-                self._vision_tower, self._vision_config = build_minimax_h3_vision_tower(
-                    self.weights_dir / "text_encoder", mesh_device=self.mesh_device
-                )
+        self.residency.load(self._vision_tower)
         return self._vision_tower
 
     def encode_prompt(
@@ -1667,15 +1665,7 @@ class MiniMaxH3Pipeline:
             )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
-        cache.load_model(
-            self._transformer,
-            model_name=MODEL_NAME,
-            subfolder=f"{self.transformer_subfolder}_{self._dit_weight_mode()}",
-            parallel_config=self.dit_parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            mesh_device=self.mesh_device,
-            get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
-        )
+        self.residency.load(self._transformer)
         return self._transformer
 
     @property
@@ -1827,26 +1817,95 @@ class MiniMaxH3Pipeline:
 
     # ------------------------------------------------------------------ decode
 
-    def _cache_submodel(self, module, subfolder: str, state: dict[str, torch.Tensor]) -> None:
-        """Load one VAE sub-model through the cache, keyed by its shape and conv3d blocking.
+    def _register_residency(self) -> None:
+        """Coresident tasks keep the text encoder and the transformer loaded; unless `vae_residency_mode` is "keep",
+        the transformer evicts the video VAE, which reloads (or gathers its shards) on its next use. Untraced and with
+        its stitcher / blender caches freed by an eviction hook, an offloaded VAE module releases no trace. Other
+        tasks evict each stage before the next one loads; the VAE encoders and the audio VAE halves yield to the video
+        VAE decoder, and the audio halves to the DiT. The vision tower is permanent."""
+        transformer, text_encoder, decoder = self._transformer, self._text_encoder, self._vae.decoder
+        vae_modules = list(self._vae.modules)
+        audio = [m for m in (self._audio_encoder, self._audio_decoder) if m is not None]
+        register = self.residency.register
+        if self.coresident:
+            evict_vae = self.vae_residency_mode != "keep"
+            register(transformer, self._transformer_spec(), evicts=vae_modules if evict_vae else [])
+            register(text_encoder, self._text_encoder_spec())
+            for module in vae_modules:
+                if not evict_vae:
+                    register(module, self._vae_spec(module))
+                elif self.vae_residency_mode == "shard_decoder" and module is decoder:
+                    # Releases traces: its shards are allocated after the capture and live through the next replay.
+                    register(module, self._vae_spec(module), mode=Shard(self.sp_axis, self.vae_ccl_manager))
+                else:
+                    register(module, self._vae_spec(module), on_evict=())
+        else:
+            register(text_encoder, self._text_encoder_spec(), evicts=[transformer, *vae_modules])
+            register(transformer, self._transformer_spec(), evicts=[text_encoder, *vae_modules, *audio])
+            encoders = [m for m in vae_modules if m is not decoder]
+            for module in encoders:
+                register(module, self._vae_spec(module), evicts=[text_encoder, transformer])
+            # The video VAE decoder needs most of DRAM, so the VAE encoders and the audio halves yield to it.
+            register(decoder, self._vae_spec(decoder), evicts=[text_encoder, transformer, *encoders, *audio])
+        register(
+            self._vision_tower,
+            {
+                "model_name": MODEL_NAME,
+                "subfolder": "vision_tower",
+                "parallel_config": self._vision_parallel_config,
+                "mesh_shape": tuple(self.mesh_device.shape),
+                "mesh_device": self.mesh_device,
+                "get_torch_state_dict": lambda: load_minimax_h3_vision_state_dict(self.weights_dir / "text_encoder"),
+            },
+        )
+        if self._audio_encoder is not None:
+            register(self._audio_encoder, self._audio_encoder_spec())
+        register(self._audio_decoder, self._audio_decoder_spec())
+
+    def _transformer_spec(self) -> dict:
+        return {
+            "model_name": MODEL_NAME,
+            "subfolder": f"{self.transformer_subfolder}_{self._dit_weight_mode()}",
+            "parallel_config": self.dit_parallel_config,
+            "mesh_shape": tuple(self.mesh_device.shape),
+            "mesh_device": self.mesh_device,
+            "get_torch_state_dict": lambda: self._read_safetensors(self.transformer_subfolder),
+        }
+
+    def _text_encoder_spec(self) -> dict:
+        return minimax_h3_text_encoder_spec(
+            self.weights_dir / "text_encoder",
+            parallel_config=self.encoder_parallel_config,
+            mesh_device=self.mesh_device,
+            is_fsdp=True,
+        )
+
+    def _vae_spec(self, module: Module) -> dict:
+        """One VAE sub-model's cache keywords, keyed by its shape and conv3d blocking.
 
         Each `(T, H, W)` sub-model holds its own shape-specialised conv3d weight layout, so the shape
         is part of the key; `conv3d_blocking_hash` covers the `C_in_block` and depth-to-space stride
         that `prepare_conv3d_weights` bakes into the cached bytes, exactly as `vae_wan2_1` does. The
         VAE is data-parallel with replicated weights, so its parallel config is the DP one.
         """
+        subfolder = self._vae.subfolder_for(module)
         blocking = conv3d_blocking_hash(module)
-        cache.load_model(
-            module,
-            model_name=MODEL_NAME,
-            subfolder=f"{subfolder}_{blocking}" if blocking else subfolder,
-            parallel_config=self.vae_parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            mesh_device=self.mesh_device,
-            dtype="fp32",  # the whole VAE checkpoint is fp32 and the port keeps it there
-            get_torch_state_dict=lambda: state,
-        )
-        if self.vae_residency_mode == "shard_decoder" and module is self._vae.decoder:
+        return {
+            "model_name": MODEL_NAME,
+            "subfolder": f"{subfolder}_{blocking}" if blocking else subfolder,
+            "parallel_config": self.vae_parallel_config,
+            "mesh_shape": tuple(self.mesh_device.shape),
+            "mesh_device": self.mesh_device,
+            # The whole VAE checkpoint is fp32 and the port keeps it there.
+            "dtype": "fp32",
+            "get_torch_state_dict": lambda: dict(self._vae.state_for(module)),
+        }
+
+    def _load_vae_module(self, module: Module) -> None:
+        """`MiniMaxH3Vae.weight_loader`: make one VAE sub-model resident through `residency`."""
+        from_host = not module.is_loaded() and not module.is_transiently_sharded()
+        self.residency.load(module)
+        if from_host and self.vae_residency_mode == "shard_decoder" and module is self._vae.decoder:
             # Shard and gather once at each host load, so the shard and gather programs compile with the load (the
             # warmup) rather than at the first request's decode.
             module.shard(self.sp_axis)
@@ -1857,32 +1916,31 @@ class MiniMaxH3Pipeline:
         """The video VAE orchestrator, constructed at init; sub-models load on first use."""
         return self._vae
 
-    def _prepare_audio_encoder(self) -> MiniMaxH3AudioEncoder:
+    def _build_audio_encoder(self) -> None:
         """The audio VAE's encoder half, for `ref2va` reference soundtracks.
 
-        Only `ref2va` needs it -- `t2va` and `fl2va` never encode audio -- so it is built lazily and
-        loaded through the same cache path as the decoder. The state filter is the encoder's four
-        prefixes, which is what keeps the load *strict*: `convert_minimax_h3_audio_state_dict` returns
-        both halves, and a non-strict load would hide a renamed key.
+        Only `ref2va` needs it -- `t2va` and `fl2va` never encode audio. Its state filter is the encoder's four
+        prefixes, which is what keeps the load *strict*: `convert_minimax_h3_audio_state_dict` returns both halves,
+        and a non-strict load would hide a renamed key.
         """
-        if self._audio_encoder is None:
-            config = self.audio_config
-            t_factor = tuple(self.mesh_device.shape)[1] if self.audio_t_shard else 1
-            audio_parallel = ParallelFactor(factor=t_factor, mesh_axis=1) if t_factor > 1 else None
-            self._host_log(f"building the audio encoder (ref2va reference soundtracks, t_factor={t_factor})")
-            self._audio_encoder = MiniMaxH3AudioEncoder(
-                encoder_dim=config["encoder_dim"],
-                encoder_rates=tuple(config["encoder_rates"]),
-                latent_dim=config["latent_dim"],
-                latent_channels=config["latent_channels"],
-                num_attention_heads=config["num_attention_heads"],
-                mesh_device=self.mesh_device,
-                stereo_split_axis=0,
-                parallel_config=audio_parallel,
-                ccl_manager=self.audio_ccl_manager if audio_parallel is not None else None,
-                split_mode="weight",
-            )
-            self._register_audio_module_residency(self._audio_encoder)
+        config = self.audio_config
+        t_factor = tuple(self.mesh_device.shape)[1] if self.audio_t_shard else 1
+        audio_parallel = ParallelFactor(factor=t_factor, mesh_axis=1) if t_factor > 1 else None
+        self._host_log(f"building the audio encoder (ref2va reference soundtracks, t_factor={t_factor})")
+        self._audio_encoder = MiniMaxH3AudioEncoder(
+            encoder_dim=config["encoder_dim"],
+            encoder_rates=tuple(config["encoder_rates"]),
+            latent_dim=config["latent_dim"],
+            latent_channels=config["latent_channels"],
+            num_attention_heads=config["num_attention_heads"],
+            mesh_device=self.mesh_device,
+            stereo_split_axis=0,
+            parallel_config=audio_parallel,
+            ccl_manager=self.audio_ccl_manager if audio_parallel is not None else None,
+            split_mode="weight",
+        )
+
+    def _audio_encoder_spec(self) -> dict:
         encoder = self._audio_encoder
 
         def read_state() -> dict[str, torch.Tensor]:
@@ -1893,33 +1951,21 @@ class MiniMaxH3Pipeline:
                 if k.startswith(("encoder.", "pre_block.", "mean_proj.", "logs_proj."))
             }
 
-        # No-op while resident; reloads from the device-weight cache after the DiT or the video VAE
-        # decoder evicted it (non-coresident presets).
-        cache.load_model(
-            encoder,
-            model_name=MODEL_NAME,
+        return {
+            "model_name": MODEL_NAME,
             # The audio precision levers change the module's parameter set, so they are part of
             # the cache key -- read off the module so the key cannot drift from what was built.
-            subfolder="audio_encoder" + weights_variant(encoder.split_mode, encoder.max_c_in_block),
-            parallel_config=self.vae_parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            mesh_device=self.mesh_device,
-            dtype="fp32",
-            get_torch_state_dict=read_state,
-        )
-        return encoder
+            "subfolder": "audio_encoder" + weights_variant(encoder.split_mode, encoder.max_c_in_block),
+            "parallel_config": self.vae_parallel_config,
+            "mesh_shape": tuple(self.mesh_device.shape),
+            "mesh_device": self.mesh_device,
+            "dtype": "fp32",
+            "get_torch_state_dict": read_state,
+        }
 
-    def _register_audio_module_residency(self, module: Module) -> None:
-        """Non-coresident presets: the audio VAE halves yield to the DiT and the video VAE decoder.
-
-        Both are only needed outside the denoise and the video decode (the encoder before, the decoder
-        after), and the DRAM they hold is what the bucketed DiT's top rung is missing. They never evict
-        anything themselves: whatever is resident when they reload has room for them.
-        """
-        if self.coresident:
-            return
-        self._transformer.register_coresident_exclusions(module)
-        self._vae.decoder.register_coresident_exclusions(module)
+    def _prepare_audio_encoder(self) -> MiniMaxH3AudioEncoder:
+        self.residency.load(self._audio_encoder)
+        return self._audio_encoder
 
     def _encode_keyframes(self, vae: MiniMaxH3Vae, keyframes: Sequence[Image.Image]) -> torch.Tensor:
         """Prepared keyframes to packed conditioning rows, via the device VAE encoder.
@@ -1978,47 +2024,47 @@ class MiniMaxH3Pipeline:
                 self.patch_size,
             )
 
-    def _prepare_audio_decoder(self) -> MiniMaxH3AudioDecoder:
-        if self._audio_decoder is None:
-            config = self.audio_config
-            _shard_desc = (
-                f"factor {self.audio_t_factor} over mesh axis {self._audio_t_axis}"
-                if self.audio_t_factor > 1
-                else "unsharded (factor 1)"
-            )
-            _src = f" (from {_AUDIO_T_FACTOR_ENV})" if self._audio_t_factor_from_env else ""
-            self._host_log(f"building the audio decoder ({_shard_desc}{_src})")
-            audio_parallel_config = (
-                ParallelFactor(factor=self.audio_t_factor, mesh_axis=self._audio_t_axis)
-                if self.audio_t_factor > 1
-                else None
-            )
-            audio_ccl = self.audio_ccl_manager if audio_parallel_config is not None else None
-            batch_shard_axis = None
-            if audio_parallel_config is not None and not ttnn.using_distributed_env():
-                other = 1 - self._audio_t_axis
-                if tuple(self.mesh_device.shape)[other] >= 2:
-                    batch_shard_axis = other
-                else:
-                    logger.warning(f"audio batch shard skipped: mesh axis {other} has one device")
+    def _build_audio_decoder(self) -> None:
+        config = self.audio_config
+        _shard_desc = (
+            f"factor {self.audio_t_factor} over mesh axis {self._audio_t_axis}"
+            if self.audio_t_factor > 1
+            else "unsharded (factor 1)"
+        )
+        _src = f" (from {_AUDIO_T_FACTOR_ENV})" if self._audio_t_factor_from_env else ""
+        self._host_log(f"building the audio decoder ({_shard_desc}{_src})")
+        audio_parallel_config = (
+            ParallelFactor(factor=self.audio_t_factor, mesh_axis=self._audio_t_axis)
+            if self.audio_t_factor > 1
+            else None
+        )
+        audio_ccl = self.audio_ccl_manager if audio_parallel_config is not None else None
+        batch_shard_axis = None
+        if audio_parallel_config is not None and not ttnn.using_distributed_env():
+            other = 1 - self._audio_t_axis
+            if tuple(self.mesh_device.shape)[other] >= 2:
+                batch_shard_axis = other
+            else:
+                logger.warning(f"audio batch shard skipped: mesh axis {other} has one device")
 
-            self._audio_decoder = MiniMaxH3AudioDecoder(
-                latent_channels=config["latent_channels"],
-                latent_dim=config["latent_dim"],
-                decoder_dim=config["decoder_dim"],
-                decoder_rates=tuple(config["decoder_rates"]),
-                decoder_kernel_sizes=tuple(config["decoder_kernel_sizes"]),
-                resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
-                resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
-                mesh_device=self.mesh_device,
-                parallel_config=audio_parallel_config,
-                ccl_manager=audio_ccl,
-                split_mode=self.audio_split_mode,
-                pack_bands=_AUDIO_PACK_BANDS,
-                act_mode="fused",
-                batch_shard_axis=batch_shard_axis,
-            )
-            self._register_audio_module_residency(self._audio_decoder)
+        self._audio_decoder = MiniMaxH3AudioDecoder(
+            latent_channels=config["latent_channels"],
+            latent_dim=config["latent_dim"],
+            decoder_dim=config["decoder_dim"],
+            decoder_rates=tuple(config["decoder_rates"]),
+            decoder_kernel_sizes=tuple(config["decoder_kernel_sizes"]),
+            resblock_kernel_sizes=tuple(config["resblock_kernel_sizes"]),
+            resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
+            mesh_device=self.mesh_device,
+            parallel_config=audio_parallel_config,
+            ccl_manager=audio_ccl,
+            split_mode=self.audio_split_mode,
+            pack_bands=_AUDIO_PACK_BANDS,
+            act_mode="fused",
+            batch_shard_axis=batch_shard_axis,
+        )
+
+    def _audio_decoder_spec(self) -> dict:
         decoder = self._audio_decoder
 
         def read_state() -> dict[str, torch.Tensor]:
@@ -2033,14 +2079,11 @@ class MiniMaxH3Pipeline:
             converted = convert_minimax_h3_audio_state_dict(self._read_safetensors("audio_vae"))
             return {k: v for k, v in converted.items() if k.startswith(("dec_in_proj.", "decoder."))}
 
-        # No-op while resident; reloads after the DiT / video VAE decoder evicted it (see
-        # `_register_audio_module_residency`).
-        cache.load_model(
-            decoder,
-            model_name=MODEL_NAME,
+        return {
+            "model_name": MODEL_NAME,
             # The audio precision levers change the module's parameter set, so they are part of
             # the cache key -- read off the module so the key cannot drift from what was built.
-            subfolder="audio_decoder"
+            "subfolder": "audio_decoder"
             + weights_variant(
                 decoder.split_mode,
                 decoder.max_c_in_block,
@@ -2048,13 +2091,16 @@ class MiniMaxH3Pipeline:
                 act_mode=decoder.act_mode,
                 polyphase=decoder.polyphase_ups,
             ),
-            parallel_config=self.vae_parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            mesh_device=self.mesh_device,
-            dtype="fp32",
-            get_torch_state_dict=read_state,
-        )
-        return decoder
+            "parallel_config": self.vae_parallel_config,
+            "mesh_shape": tuple(self.mesh_device.shape),
+            "mesh_device": self.mesh_device,
+            "dtype": "fp32",
+            "get_torch_state_dict": read_state,
+        }
+
+    def _prepare_audio_decoder(self) -> MiniMaxH3AudioDecoder:
+        self.residency.load(self._audio_decoder)
+        return self._audio_decoder
 
     @property
     def audio_sampling_rate(self) -> int:
@@ -2431,14 +2477,6 @@ class MiniMaxH3Pipeline:
         transformer = self._prepare_transformer()
         if self.dynamic_length and self.resident_kv_gather_pair:
             self._bind_kv_gather_pair(transformer)
-        if self.vae_residency_mode != "keep":
-            for module in self._vae.modules:
-                if not module.is_loaded():
-                    continue
-                if self.vae_residency_mode == "shard_decoder" and module is self._vae.decoder:
-                    module.shard(self.sp_axis)
-                else:
-                    module.deallocate_weights()
         dram_probe.report("after transformer load, before denoise")
         with self._track_cache_misses(on_event, "denoising"):
             video_rows, audio_rows = self._denoise(
@@ -3062,15 +3100,6 @@ class MiniMaxH3Pipeline:
         run_blocks = type(transformer).run_blocks
         tracers = run_blocks._tracers_keyed.get(transformer, {})
         return any(key[0] == rung and tracer.trace_captured for key, tracer in tracers.items())
-
-    def release_traces(self) -> None:
-        decoder = self._audio_decoder
-        if decoder is not None:
-            decoder.release_trace()
-        transformer = self._transformer
-        if transformer is None:
-            return
-        transformer.release_traces()
 
     def _denoise(
         self,

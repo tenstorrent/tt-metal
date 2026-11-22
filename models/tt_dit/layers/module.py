@@ -91,8 +91,6 @@ class Module(ABC):
         self._children = {}
         self._parameters = {}
         self._is_loaded = False
-        self.coresident_exclusions = None  # modules that cannot be resident in memory at the same time as this module. They should be deallocated before this module is loaded.
-        self._coresident_peers: list[Module] = []
         self._eviction_hooks: list[Callable[[], None]] = []
 
     def named_children(self) -> Iterator[tuple[str, Module]]:
@@ -217,7 +215,6 @@ class Module(ABC):
         """
         missing_keys = []
         unexpected_keys = []
-        self.evict_coresident_exclusions()
         with _Watchdog(f"convert {type(self).__name__}"):
             self._load_torch_state_dict_inner(
                 state_dict,
@@ -263,8 +260,6 @@ class Module(ABC):
             logger.info(f"loading {self._num_parameters()} cached weight tensors from '{directory}'...")
             watchdog = _Watchdog(f"load-cache {type(self).__name__}").__enter__()
         try:
-            self.evict_coresident_exclusions()
-
             for name, child in self.named_children():
                 child.load(directory, prefix=f"{prefix}{name}.")
 
@@ -371,23 +366,6 @@ class Module(ABC):
 
     def is_loaded(self) -> bool:
         return self._is_loaded
-
-    def register_coresident_exclusions(self, *args: Module) -> None:
-        """
-        Register modules that cannot be resident in memory at the same time as this module.
-        They should be deallocated before this module is loaded. See `evict_coresident_exclusions` .
-        Args:
-            *args: Modules that cannot be co-resident in memory with this module.
-        """
-        if self.coresident_exclusions is None:
-            self.coresident_exclusions = set()
-        self.coresident_exclusions.update(args)
-
-    def evict_coresident_exclusions(self) -> None:
-        """Evict the modules that cannot be resident in memory at the same time as this module."""
-        if self.coresident_exclusions is not None:
-            for module in self.coresident_exclusions:
-                module.deallocate_weights()
 
     @abstractmethod
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401

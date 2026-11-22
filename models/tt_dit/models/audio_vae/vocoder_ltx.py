@@ -422,11 +422,6 @@ class Vocoder(Module):
         )
         return self._device_to_host(y_dev)
 
-    def release_trace(self) -> None:
-        """Free all captured decode traces (call on shutdown or before re-warming)."""
-        for tracer in type(self)._forward_device._tracers_keyed.get(self, {}).values():
-            tracer.release_trace()
-
     def _host_to_device(self, mel_spec: torch.Tensor) -> ttnn.Tensor:
         """Host preprocessing + upload to a ROW_MAJOR full-T device tensor. Split out from
         ``forward`` so the device graph is trace-capturable; sets ``self._t_pad``."""

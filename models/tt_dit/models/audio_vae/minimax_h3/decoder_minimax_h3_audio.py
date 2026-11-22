@@ -227,7 +227,3 @@ class MiniMaxH3AudioDecoder(Module):
             return 0
         align = TILE_HEIGHT * self.parallel_config.factor
         return (-num_frames) % align
-
-    def release_trace(self) -> None:
-        """Free the vocoder's captured traces; safe when none is active."""
-        self.decoder.release_trace()

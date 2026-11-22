@@ -336,7 +336,9 @@ def prepare_decoder_state(
 class MiniMaxH3Vae:
     """Orchestrator for the H3 visual VAE: tiling, waves, stitch; owns the leaf modules.
 
-    Builds the decoder, image encoder and (on ref2va) video encoder at tile shape; each loads on first use.
+    Builds the decoder, image encoder and (on ref2va) video encoder at tile shape. Each is made resident on first
+    use through ``weight_loader(module)``, which the owner injects (the pipeline's residency); without one, a module
+    is uploaded from the state given to ``load_state``, uncached.
     """
 
     def __init__(
@@ -372,7 +374,7 @@ class MiniMaxH3Vae:
         self.dtype = dtype
         self.tile_size = tile_size
         self.tile_overlap = tile_overlap
-        self._weight_loader = weight_loader
+        self.weight_loader = weight_loader if weight_loader is not None else self._load_from_state
         self._stitcher = None
         self._yuv_pool = None
         self._blender = None
@@ -476,12 +478,20 @@ class MiniMaxH3Vae:
         variant = "_pxdenorm" if self.pixel_denorm is not None else ""
         return f"vae_decoder_t{num_frames}_h{height}_w{width}{variant}"
 
-    def _state_for(self, module) -> dict[str, torch.Tensor]:
+    def subfolder_for(self, module) -> str:
+        """The weight-cache subfolder of ``module``, keyed by its shape."""
+        return self._decoder_subfolder() if module is self.decoder else self._encoder_subfolder(module)
+
+    def state_for(self, module) -> dict[str, torch.Tensor]:
         state = self._decoder_state if module is self.decoder else self._encoder_state
         if state is None:
             which = "decoder" if module is self.decoder else "encoder"
             raise RuntimeError(f"call load_state() before {which} use")
         return state
+
+    def _load_from_state(self, module) -> None:
+        if not module.is_loaded():
+            module.load_torch_state_dict(dict(self.state_for(module)))
 
     def _release_decode_caches(self) -> None:
         """Drop the stitcher's ramps and the blender's geometry weights; both rebuild on the next decode."""
@@ -493,18 +503,6 @@ class MiniMaxH3Vae:
         if self._blender is not None:
             release_device_cache(self._blender._weights)
             self._blender = None
-
-    def _ensure_loaded(self, module, subfolder: str) -> None:
-        if module.is_loaded():
-            return
-        if module.is_transiently_sharded():
-            module.gather(self.ccl_manager)
-            return
-        state = dict(self._state_for(module))
-        if self._weight_loader is not None:
-            self._weight_loader(module, subfolder, state)
-        else:
-            module.load_torch_state_dict(state)
 
     def load_state(self, state: dict[str, torch.Tensor]) -> None:
         """Prepare and retain both halves of the checkpoint for cache-miss reloads."""
@@ -742,7 +740,7 @@ class MiniMaxH3Vae:
         assert (
             x_BCTHW.shape[2] == 1
         ), f"encode_clip is the keyframe path (T=1); got T={x_BCTHW.shape[2]}, use encode() for video"
-        self._ensure_loaded(self.image_encoder, self._encoder_subfolder(self.image_encoder))
+        self.weight_loader(self.image_encoder)
 
         mark = time.perf_counter()
         units = self._clip_tiles(x_BCTHW)
@@ -793,7 +791,7 @@ class MiniMaxH3Vae:
         num_frames = x_BCTHW.shape[2]
         if self.video_encoder is None:
             raise RuntimeError("video encode reached a non-ref2va VAE; construct with task='ref2va'")
-        self._ensure_loaded(self.video_encoder, self._encoder_subfolder(self.video_encoder))
+        self.weight_loader(self.video_encoder)
         if num_frames % clip_length != 0:
             pad = x_BCTHW[:, :, -1:].repeat(1, 1, (-num_frames) % clip_length, 1, 1)
             x_BCTHW = torch.cat([x_BCTHW, pad], dim=2)
@@ -1581,7 +1579,7 @@ class MiniMaxH3Vae:
         Tiles are laid out in *pixel* space and mapped back onto the latent grid, so the
         blend extents are pixel-space too (unlike encode, where they are divided down).
         """
-        self._ensure_loaded(self.decoder, self._decoder_subfolder())
+        self.weight_loader(self.decoder)
         if self.device_stitch:
             return self._decode_clips_device_stitched([z_BCTHW])[0]
 
@@ -1668,7 +1666,7 @@ class MiniMaxH3Vae:
             torch.set_num_threads(previous_threads)
 
     def _decode(self, z_BCTHW: torch.Tensor, output_type: str = "float"):
-        self._ensure_loaded(self.decoder, self._decoder_subfolder())
+        self.weight_loader(self.decoder)
         self._profile = self._empty_profile()
         decode_started = time.perf_counter()
         config = self.config

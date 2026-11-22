@@ -225,14 +225,9 @@ def test_wan_i2v_dbcache_ab(
     vae_parallel_config = VaeHWParallelConfig.from_tuples(height=(h_factor, tp_axis), width=(w_factor, sp_axis))
     encoder_parallel_config = EncoderParallelConfig.from_tuple((h_factor, tp_axis))
 
-    # WAN_DBCACHE_EVICT_T5=1: on a mesh whose DRAM cannot hold the T5 encoder next to one
-    # transformer (BH 2x4: 14 GB/chip transformer + 11 GB T5, job 139804 OOM'd in warmup), add
-    # the text encoder to the dynamic-load swap chain; __call__ already re-prepares the encoder
-    # and the experts before use, so each call pays one extra T5 cache load.
-    evict_t5 = os.environ.get("WAN_DBCACHE_EVICT_T5") == "1"
     mem_probe = os.environ.get("WAN_DBCACHE_MEM_PROBE") == "1"
     pipeline = WanPipelineI2V(
-        run_warmup=not (evict_t5 or mem_probe),
+        run_warmup=not mem_probe,
         device=mesh_device,
         config=WanPipelineConfig.default(
             mesh_shape=mesh_device.shape,
@@ -271,24 +266,6 @@ def test_wan_i2v_dbcache_ab(
                 logger.info(f"mem probe: transformer[{idx}] evicted -> {_dram(mesh_device)}")
         pipeline._vae.decoder.deallocate_weights()  # noqa: SLF001
         logger.info(f"mem probe: VAE decoder evicted -> {_dram(mesh_device)}")
-    if evict_t5:
-        t5 = pipeline._text_encoder._tt_encoder  # noqa: SLF001
-        pipeline.transformer.register_coresident_exclusions(t5)
-        pipeline.transformer_2.register_coresident_exclusions(t5)
-        t5.register_coresident_exclusions(pipeline.transformer, pipeline.transformer_2)
-        # The chain only acts on a load, and init left T5 + transformer[0] resident: drop the
-        # experts now so the warmup's first expert load evicts T5 before the VAE encode runs.
-        for ts in pipeline.transformer_states:
-            ts.model.deallocate_weights()
-        logger.info(f"T5 text encoder added to the dynamic-load swap chain; experts dropped -> {_dram(mesh_device)}")
-    if os.environ.get("WAN_DBCACHE_EVICT_FOR_VAE") == "1":
-        # Also keep the experts out of DRAM during the VAE decode (the WH T3K chain); the decoder
-        # adapter reloads its own weights in decode(), and the next call reloads the experts anyway.
-        dec = pipeline._vae.decoder  # noqa: SLF001
-        pipeline.transformer.register_coresident_exclusions(dec)
-        pipeline.transformer_2.register_coresident_exclusions(dec)
-        dec.register_coresident_exclusions(pipeline.transformer, pipeline.transformer_2)
-        logger.info("VAE decoder added to the dynamic-load swap chain")
     # WAN_DBCACHE_FREE_CCL=1: release the DiT CCL manager's persistent gather buffers before the
     # VAE decode and before the T5 load (see _free_ccl_buffers). WAN_DBCACHE_DRAM_PROBE=1: per-owner
     # DRAM attribution at the same checkpoints.
@@ -334,7 +311,7 @@ def test_wan_i2v_dbcache_ab(
     pipeline.prepare_latents = _prepare_latents
     pipeline._decode_latents = _decode_latents  # noqa: SLF001
 
-    if evict_t5 or mem_probe:
+    if mem_probe:
         pipeline._warmup()  # noqa: SLF001 - skipped in the constructor above
         logger.info(f"after warmup: {_dram(mesh_device)}")
         dram_probe.report("after warmup")

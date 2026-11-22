@@ -687,11 +687,3 @@ class MiniMaxH3Transformer3DModel(Module):
         if tilerow is not None:
             ttnn.deallocate(tilerow[1])
         return hidden
-
-    def release_traces(self) -> None:
-        """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""
-        run_blocks = type(self).run_blocks
-        tracers = [run_blocks._tracers.get(self), *run_blocks._tracers_keyed.get(self, {}).values()]
-        for tracer in tracers:
-            if tracer is not None:
-                tracer.release_trace()

@@ -15,6 +15,7 @@ from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_min
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.test import line_params_8k
+from ....utils.tracing import Tracer
 from .common import build_audio_decoder, load_config, psnr, weights_subdir
 from .sqz_reference import reference_clip
 
@@ -154,7 +155,7 @@ def test_audio_decode_squeeze(mesh_device, num_latent_frames, batch):
         try:
             traced, out = _best(lambda: decoder(latents, traced=True), mesh_device)
         finally:
-            decoder.release_trace()
+            Tracer.release_all()
         assert out.shape == expected.shape, f"{name}: shape {tuple(out.shape)} != reference {tuple(expected.shape)}"
         db_ref = psnr(expected, out)
         mel = _log_mel_distance(expected, out)
