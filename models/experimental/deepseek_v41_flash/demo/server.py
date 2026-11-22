@@ -2342,7 +2342,11 @@ class V41GenerationServer(GenerationServer):
         if kwargs.get("prefiller") is None and args and getattr(args[0], "prefill_url", None):
             engine = args[0]
             kwargs["prefiller"] = _RemotePrefiller(
-                engine, engine.prefill_url, max_len=getattr(engine, "prefill_max_len", None)
+                engine,
+                engine.prefill_url,
+                max_len=getattr(engine, "prefill_max_len", None),
+                push=getattr(engine, "prefill_push", False),
+                connect_wait=getattr(engine, "prefill_wait", 0.0),
             )
         if (
             kwargs.get("prefix_cache") is None
@@ -2917,7 +2921,13 @@ def _serve_instances(args) -> int:
                 # (its row's stage, its requester of the prefill MoE): decode compile, then the prefill's build,
                 # compile (the decode server stopped meanwhile) and capture, then the decode capture and the snapshot.
                 if args.prefill_url:
-                    prefiller = _RemotePrefiller(engine, args.prefill_url, max_len=args.prefill_max_len)
+                    prefiller = _RemotePrefiller(
+                        engine,
+                        args.prefill_url,
+                        max_len=args.prefill_max_len,
+                        push=args.prefill_push,
+                        connect_wait=args.prefill_wait,
+                    )
                     stack.callback(prefiller.close)
                 else:
                     prefiller = _V41Prefiller(engine, args, locked) if args.prefill else None
@@ -2972,9 +2982,11 @@ def _serve_instances(args) -> int:
                 + (
                     f"disaggregated prefill via {args.prefill_url})"
                     if args.prefill_url
-                    else "traced prefill on each instance's row, MoE on the shared prefill MoE)"
-                    if args.prefill
-                    else "prompts replayed through decode)"
+                    else (
+                        "traced prefill on each instance's row, MoE on the shared prefill MoE)"
+                        if args.prefill
+                        else "prompts replayed through decode)"
+                    )
                 )
             )
             try:
@@ -3060,6 +3072,8 @@ class V41ChatEngine(ChatEngine):
         self.dspark = bool(getattr(args, "dspark", False))
         self.prefill_url = getattr(args, "prefill_url", None)
         self.prefill_max_len = getattr(args, "prefill_max_len", None)
+        self.prefill_push = bool(getattr(args, "prefill_push", False))
+        self.prefill_wait = float(getattr(args, "prefill_wait", 0.0))
         self.instance = instance
         self.instances = 1 if moe_server is None else len(moe_server.request_meshes)
         persistent = {}
@@ -3467,15 +3481,36 @@ class _RemotePrefiller:
     # Signals to _PrefillFirst._prefetch_engram that there is no local traced prefill model.
     model = None
 
-    def __init__(self, engine: V41ChatEngine, url: str, max_len: int | None = None, timeout: float = 3600.0):
+    def __init__(
+        self,
+        engine: V41ChatEngine,
+        url: str,
+        max_len: int | None = None,
+        timeout: float = 3600.0,
+        push: bool = False,
+        connect_wait: float = 0.0,
+    ):
+        """``push``: the server writes the KV cache into this server's device memory over TT-Fabric (protocol
+        ``prefill_push``) instead of sending it; both servers must be ranks of one fabric job. ``connect_wait``:
+        seconds to keep retrying a server that is not listening yet (one started with this one, still loading)."""
         self.engine = engine
         self.url = url
         self.timeout = timeout
+        self.push = push
         self._lock = threading.Lock()
         self._idle: list[PrefillClient] = []
         self._closed = False
         self._fetches: dict[int, _RemoteFetch] = {}  # user index -> its prompt in flight (start)
-        client = PrefillClient(self.url, timeout=self.timeout)
+        deadline = time.monotonic() + connect_wait
+        while True:
+            try:
+                client = PrefillClient(self.url, timeout=self.timeout)
+                break
+            except ConnectionRefusedError as exc:
+                if time.monotonic() >= deadline:
+                    raise
+                logger.info(f"prefill server {self.url} not listening yet ({exc}); retrying")
+                time.sleep(10.0)
         self._idle.append(client)
         self.address = client.address
         info = client.info
@@ -3514,6 +3549,8 @@ class _RemotePrefiller:
             )
         announced_layers = {int(i) for i in info["layers"]}
         self.kv_only = announced_layers != set(range(decode_model.num_layers))
+        # The rings a push writes: the server's layers (a layer it does not run gets zeros, as its host states do).
+        self.ring_layers = sorted(li for li in announced_layers if li < decode_model.num_layers)
         # Leave sliding_window tokens for decode when the prefill server is KV-only or DSpark drafter rings need them.
         self.decode_window = self.kv_only or bool(getattr(engine, "dspark", False))
         self.fill_seconds = 0.5
@@ -3524,7 +3561,8 @@ class _RemotePrefiller:
             f"disaggregated prefill connected to {self.address}: up to {self.max_len} tokens "
             f"(align {self.align}, chunk {self.chunk_size}, {len(announced_layers)}/{decode_model.num_layers} layers"
             f"{', kv-only' if self.kv_only else ''}, tail {self.window if self.decode_window else 1} via decode, "
-            f"{info.get('cache_slots', 0)} prefix-cache slot(s) on the server)"
+            f"{info.get('cache_slots', 0)} prefix-cache slot(s) on the server"
+            f"{', KV pushed over TT-Fabric' if self.push else ''})"
         )
 
     @property
@@ -3563,13 +3601,21 @@ class _RemotePrefiller:
             with contextlib.suppress(Exception):
                 client.close()
 
-    def _fetch(self, ids: list[int], have: int = 0, on_progress=None, job: _RemoteFetch | None = None) -> dict:
+    def _fetch(
+        self,
+        ids: list[int],
+        have: int = 0,
+        on_progress=None,
+        job: _RemoteFetch | None = None,
+        targets: dict | None = None,
+    ) -> dict:
         """The KV entries of ``ids`` (the whole prompt) from ``have`` on. A server that refuses ``have`` is
-        answered by asking again for every entry (``have`` 0, the reply's ``base`` says which it got)."""
+        answered by asking again for every entry (``have`` 0, the reply's ``base`` says which it got); not with
+        push ``targets``, which name the pages of the entries from ``have`` on."""
         try:
-            return self._request(ids, have, on_progress, job)
+            return self._request(ids, have, on_progress, job, targets)
         except PrefillServerError as exc:
-            if not have or "have" not in str(exc):
+            if not have or "have" not in str(exc) or targets is not None:
                 raise
             logger.error(
                 f"prefill server {self.address} refused have={have} for a {len(ids)}-token prompt ({exc}): "
@@ -3577,9 +3623,11 @@ class _RemotePrefiller:
             )
             return self._request(ids, 0, on_progress, job)
 
-    def _request(self, ids: list[int], have: int, on_progress, job: _RemoteFetch | None) -> dict:
-        """One prefill request on one pooled connection (retried once on a new one if the connection drops). No
-        device work: safe off the scheduler thread."""
+    def _request(
+        self, ids: list[int], have: int, on_progress, job: _RemoteFetch | None, targets: dict | None = None
+    ) -> dict:
+        """One prefill request on one pooled connection (retried once on a new one if the connection drops; a
+        push's writes are idempotent, so it may run twice). No device work: safe off the scheduler thread."""
         for attempt in range(2):
             client = None
             try:
@@ -3588,7 +3636,10 @@ class _RemotePrefiller:
                     job.client = client
                     if job.aborted:
                         raise _PromptStopped()
-                states = client.prefill(ids, on_progress=on_progress, have=have)
+                if targets is None:
+                    states = client.prefill(ids, on_progress=on_progress, have=have)
+                else:
+                    states = client.prefill_push(ids, targets, on_progress=on_progress, have=have)
             except PrefillServerError:
                 if client is not None and client.sock.fileno() >= 0:
                     self._give_client(client)  # an error reply leaves the connection usable
@@ -3626,7 +3677,10 @@ class _RemotePrefiller:
 
     def start(self, user: UserSession, ids: list[int], on_progress=None, wake: threading.Condition | None = None):
         """Send ``ids`` (``user``'s prompt from its position on) now, from a thread of its own; :meth:`run` for the
-        same user and ids loads the reply. Replaces (aborts) a prompt of ``user``'s still in flight."""
+        same user and ids loads the reply. Replaces (aborts) a prompt of ``user``'s still in flight. Nothing is sent
+        ahead in push mode (None): the push's pages are reserved on the device, on the scheduler thread."""
+        if self.push:
+            return None
         whole, have = self._whole(user, ids)
         job = _RemoteFetch(self, whole, have, on_progress, wake)
         with self._lock:
@@ -3641,6 +3695,35 @@ class _RemotePrefiller:
             if self._fetches.get(user.index) is job:
                 del self._fetches[user.index]
         job.abort()
+
+    def _push(self, user: UserSession, whole: list[int], have: int, on_progress) -> dict:
+        """Prefill ``whole`` on the server, which writes the entries from ``have`` on into ``user``'s pages over
+        TT-Fabric; returns its reply. Until the server has replied its writes may land, so the session's pages stay
+        reserved: a cancellation (``on_progress`` raising) is held until then, and an error reply rewinds the
+        session to 0."""
+        model = self.engine.model
+        if not have:
+            model.reset_session(user.sid)
+            model.reset_static_caches()
+        targets = model.remote_commit_targets(user.sid, len(whole), self.ring_layers, start=have)
+        stopped: list[BaseException] = []
+
+        def progress(end: int) -> None:
+            if on_progress is not None and not stopped:
+                try:
+                    on_progress(end)
+                except _PromptStopped as exc:
+                    stopped.append(exc)
+
+        try:
+            reply = self._fetch(whole, have, progress, targets=targets)
+        except BaseException:
+            model.abort_remote_commit(user.sid)
+            raise
+        if stopped:
+            model.abort_remote_commit(user.sid)
+            raise stopped[0]
+        return reply
 
     def aligned(self, n_tokens: int, start: int = 0, bounded: bool = False) -> int:
         if start % self.align or bounded:
@@ -3682,7 +3765,15 @@ class _RemotePrefiller:
         t_wait = time.perf_counter()
         if job is None:
             t0 = t_wait
-            states = self._fetch(whole, have, on_progress)
+            if self.push:
+                try:
+                    states = self._push(user, whole, have, on_progress)
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        user.reset()
+                    raise
+            else:
+                states = self._fetch(whole, have, on_progress)
         else:
             t0 = job.t0
             states = job.result()
@@ -3696,10 +3787,13 @@ class _RemotePrefiller:
         base = states["base"]
         t_commit = time.perf_counter()
         try:
-            if not base:
-                model.reset_session(user.sid)
-                model.reset_static_caches()
-            committed = model.commit_host_prefill_state(states, user.sid, ids=whole, start=base)
+            if self.push:
+                committed = model.finish_remote_commit(user.sid, ids=whole)
+            else:
+                if not base:
+                    model.reset_session(user.sid)
+                    model.reset_static_caches()
+                committed = model.commit_host_prefill_state(states, user.sid, ids=whole, start=base)
         except Exception:
             with contextlib.suppress(Exception):
                 user.reset()
@@ -3829,6 +3923,21 @@ def parse_args(argv: list[str] | None = None):
         help="TCP URL or host:port of a disaggregated prefill server (e.g. tcp://10.82.97.40:9041 or "
         "10.82.97.40:9041); sends prompts over TCP and loads the returned KV cache into the decode device "
         "instead of running a local prefill model (default: DEEPSEEK_V41_PREFILL_URL, else unset)",
+    )
+    p.add_argument(
+        "--prefill-push",
+        action=argparse.BooleanOptionalAction,
+        default=os.environ.get("DEEPSEEK_V41_PREFILL_PUSH") == "1",
+        help="with --prefill-url: the prefill server writes the KV cache straight into this server's device memory "
+        "over TT-Fabric (both servers ranks of one tt-run job, demo/run_d_p_servers.sh) instead of sending it over "
+        "TCP (default: DEEPSEEK_V41_PREFILL_PUSH=1, else off)",
+    )
+    p.add_argument(
+        "--prefill-wait",
+        type=float,
+        default=float(os.environ.get("DEEPSEEK_V41_PREFILL_WAIT", 0)),
+        help="with --prefill-url: seconds to keep retrying a prefill server that is not listening yet, as when both "
+        "servers start together (default: DEEPSEEK_V41_PREFILL_WAIT, else 0)",
     )
     p.add_argument(
         "--prefill-kv-only",

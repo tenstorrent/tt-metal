@@ -25,6 +25,13 @@ A message is an 8-byte big-endian header length, a JSON header, then the raw blo
   took from its prefix cache instead of computing (``cached == seq_len``: nothing computed, ``seconds`` is 0); it
   never changes which entries are sent. ``cache: false`` skips the lookup (the result is still kept).
   ``seconds`` is the prefill's device time, ``queued`` how long the request waited for another one to finish.
+* ``{"op": "prefill_push", "have": H, "cache": true, "targets": {...}}`` + the ids blob, as ``prefill``, but the
+  server writes the state straight into the client's device memory over TT-Fabric (``tt/prefill/d_p_push.py``;
+  both servers ranks of one fabric job, ``PREFILL_D_P_FABRIC_PUSH.md``): ``targets`` is what the decode model's
+  ``remote_commit_targets`` returned for the session (its ``seq_len`` the prompt's length, its ``start`` ``have``).
+  Reply: zero or more ``{"progress": end}``, then ``{"seq_len", "base", "cached", "seconds", "queued", "bytes",
+  "pages", "push_seconds"}`` and no blobs, once every write has left the server's mesh (``bytes`` / ``pages``:
+  what it wrote, ``push_seconds``: how long that took).
 
 Any reply may instead be ``{"error": message}``; the connection stays usable after it.
 """
@@ -39,7 +46,7 @@ from urllib.parse import urlparse
 
 import torch
 
-VERSION = 2
+VERSION = 3
 _LEN = struct.Struct(">Q")
 _MAX_HEADER = 1 << 24
 
@@ -203,6 +210,27 @@ class PrefillClient:
             header, blobs = self._reply()
             if "progress" not in header:
                 return _states(header, blobs)
+            if on_progress is not None:
+                on_progress(int(header["progress"]))
+
+    def prefill_push(
+        self,
+        ids: Sequence[int],
+        targets: dict,
+        on_progress: Optional[Callable[[int], None]] = None,
+        have: int = 0,
+        cache: bool = True,
+    ) -> dict:
+        """As :meth:`prefill`, but the server writes the entries into the device memory ``targets`` describes
+        (``remote_commit_targets`` of the session) and replies with what it wrote: ``{"seq_len", "base", "cached",
+        "seconds", "queued", "bytes", "pages", "push_seconds"}``."""
+        header = {"op": "prefill_push", "have": int(have), "cache": bool(cache), "targets": targets}
+        send_msg(self.sock, header, [torch.tensor(list(ids), dtype=torch.int32).numpy()])
+        while True:
+            header, _ = self._reply()
+            if "progress" not in header:
+                header.pop("blobs", None)
+                return header
             if on_progress is not None:
                 on_progress(int(header["progress"]))
 

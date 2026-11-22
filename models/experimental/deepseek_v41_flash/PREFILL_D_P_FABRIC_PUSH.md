@@ -1,6 +1,6 @@
 # Disaggregated prefill -> decode over TT-Fabric: plan
 
-Status (2026-11-22): the transport is proven by a unit test; nothing in the servers changed yet. This document is the
+Status (2026-11-22): phases 0-3 done; the servers run end-to-end with `--prefill-push` (section 6, phase 3). This document is the
 work plan for moving the prefill server's KV hand-off from "read back to host + TCP blobs" to "prefill writes decode's
 DRAM directly over TT-Fabric, TCP carries only control".
 
@@ -189,7 +189,11 @@ Each phase ends with a two-rank run on hosts 40 and 41.
    tilizing the sources). 128k: PASS, 1479680 pages / 1610 MiB, device 168 ms (10 GB/s over the 32 senders), 1.96 s
    in all (host: 1.40 s slicing / tilizing the sources, 0.35 s building the work tables).
 3. Scale: 1M tokens; measure push time vs the host path (readback + send + decode commit). Gate: faster than the host
-   path, or a profile saying where the time goes (exit chips, small packets, work-list streaming).
+   path, or a profile saying where the time goes (exit chips, small packets, work-list streaming). 1044480 tokens:
+   PASS, byte-exact; 11755520 pages / 12760 MiB, device 1.33 s (10 GB/s). Push path 6.6 s (push 6.52 s +
+   `finish_remote_commit` 0.08 s) vs host path 13.1 s (readback 3.53 s + TCP 5.48 s for 3190 MiB +
+   `commit_host_prefill_state` 4.09 s). The push is host-bound: building and uploading the work tables 3.24 s (11.8M
+   16-byte entries), slicing / tilizing the sources 1.77 s; next: tables of block runs instead of pages (phase 4).
 
 ### Phase 3: servers
 
@@ -199,6 +203,23 @@ Each phase ends with a two-rank run on hosts 40 and 41.
    decode's own local prefill).
 3. Failure handling: prefill error reply, prefill crash (ends the job: document), decode request cancelled mid-push
    (blocks stay reserved until the reply).
+
+Written: `PrefillClient.prefill_push`, `PrefillService.prefill(targets=...)`, `server.py --prefill-push` (and
+`--prefill-wait`, so rank 1 waits for rank 0's prefill server), `DeepseekV4Model.abort_remote_commit`;
+`reset_session` / `close_session` refuse a session with a commit in flight. A prefill error reply aborts the commit
+(the turn fails, the user is reset); a cancellation during the push is held until the reply, then aborts. A prefill
+crash ends the `tt-run` job (both servers). Mocked in `tests/test_remote_prefill.py`. Launch:
+`demo/run_d_p_servers.sh --hf <snapshot> -- ... --prefill-push`.
+
+End-to-end (DSpark, 5 instances, 8.6k-token prompt, 64 greedy tokens): PASS, identical replies in push and TCP modes
+for the first turn, a repeat (decode prefix-cache hit) and a follow-up turn (push continued from `have` 8832).
+
+| | push | TCP |
+|---|---|---|
+| first turn (8576 tokens) | 2.97 s, push 115 MiB in 0.78 s, KV load 1986 ms (first, incl. compile), 0.99 s blocking the scheduler | 1.58 s, 30 MB sent ahead (0 s blocking), KV load 1274 ms |
+| follow-up (2176 tokens from 8832) | 0.30 s, push 37 MiB in 0.03 s, KV load 26 ms | 1.08 s, 9.7 MB, KV load 799 ms |
+
+The push is synchronous, so it blocks the scheduler where TCP sends ahead; async is phase 4.1.
 
 ### Phase 4: production
 

@@ -1474,6 +1474,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         paged = self._require_paged()
         if sid not in self._slot_of:
             raise KeyError(f"no such session {sid}")
+        if sid in self._remote_commits:
+            raise RuntimeError(f"session {sid} has a remote commit in flight: finish or abort it first")
         self._wait_replays_dispatched()
         if sid in self._resident:
             self._resident[self._resident.index(sid)] = None
@@ -1597,6 +1599,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         paged = self._require_paged()
         if sid not in self._slot_of:
             raise KeyError(f"no such session {sid}")
+        if sid in self._remote_commits:
+            raise RuntimeError(f"session {sid} has a remote commit in flight: finish or abort it first")
         self._wait_replays_dispatched()
         paged.reset_session(sid)
         self._covered_to.pop(sid, None)
@@ -3318,6 +3322,14 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 self._engram_lookup.hash_session(slot, torch.tensor([piece], dtype=torch.long), offset)
         note("remote prefill state committed")
         return total
+
+    def abort_remote_commit(self, session_id: int) -> None:
+        """Give up a commit :meth:`remote_commit_targets` reserved, once no write of it can land any more (the
+        prefill server replied with an error, or is gone with its fabric): rewind the session to position 0, its
+        blocks back to the pools."""
+        if self._remote_commits.pop(session_id, None) is None:
+            raise KeyError(f"session {session_id} has no remote commit in flight")
+        self.reset_session(session_id)
 
     def _commit_paged_entries(
         self,

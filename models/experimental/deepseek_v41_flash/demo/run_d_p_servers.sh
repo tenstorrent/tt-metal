@@ -16,7 +16,8 @@
 #     [--prefill-port 9041] [-- decode server args...]
 #
 # Prefill logs are tagged [1,0]<stdout>, decode's [1,1]<stdout>. The decode server listens on host 41 (default
-# port 8000); the prefill server on host 40 at --prefill-port.
+# port 8000); the prefill server on host 40 at --prefill-port. Decode args for the disaggregated prefill with the KV
+# pushed over the fabric: -- --prefill-url 10.82.97.40:9041 --prefill-push (--no-prefill-push: the KV over TCP).
 set -euo pipefail
 
 SCRIPT=models/experimental/deepseek_v41_flash/demo/run_d_p_servers.sh
@@ -25,12 +26,12 @@ DECODE_HOST=DC16-2-BG-0202-u13-41
 MPI_IFACE=ens5f0np0.1
 
 hf="" prefill_port=9041
-args=("$@")
 while [ $# -gt 0 ]; do
   case "$1" in
     --hf) hf="$2"; shift 2 ;;
     --prefill-port) prefill_port="$2"; shift 2 ;;
-    --) shift; break ;;
+    # (--decode-args: the ranks' own separator, as tt-run drops a "--" from the command it runs)
+    --|--decode-args) shift; break ;;
     *) echo "unknown argument $1 (decode server args go after --)" >&2; exit 2 ;;
   esac
 done
@@ -45,7 +46,7 @@ if [ -z "${OMPI_COMM_WORLD_RANK:-}" ]; then
     --mpi-args "--host $PREFILL_HOST,$DECODE_HOST \
       --map-by rankfile:file=$PWD/tests/tt_metal/distributed/config/dual_8x4_hosts_40_41.rankfile \
       --mca btl self,tcp --mca btl_tcp_if_include $MPI_IFACE --bind-to none --tag-output" \
-    bash "$PWD/$SCRIPT" "${args[@]}"
+    bash "$PWD/$SCRIPT" --hf "$hf" --prefill-port "$prefill_port" --decode-args "${decode_args[@]}"
 fi
 
 cd "$TT_METAL_HOME"
@@ -58,6 +59,9 @@ case "$OMPI_COMM_WORLD_RANK" in
     exec "$python" models/experimental/deepseek_v41_flash/demo/prefill_server.py --port "$prefill_port"
     ;;
   1)
+    # (the prefill server listens only after its warm-up: a --prefill-url decode server keeps retrying until then)
+    export DEEPSEEK_V41_PREFILL_WAIT=${DEEPSEEK_V41_PREFILL_WAIT:-7200}
+    echo "decode server: server.py ${decode_args[*]}"
     exec "$python" models/experimental/deepseek_v41_flash/demo/server.py "${decode_args[@]}"
     ;;
   *)

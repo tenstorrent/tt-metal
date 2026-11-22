@@ -14,9 +14,10 @@ from types import SimpleNamespace
 
 import torch
 
-from models.experimental.deepseek_v41_flash.demo.server import _RemotePrefiller
+from models.experimental.deepseek_v41_flash.demo.server import _PromptStopped, _RemotePrefiller
 from models.experimental.deepseek_v41_flash.tt.prefill.d_p_wire import (
     VERSION,
+    PrefillServerError,
     recv_msg,
     send_msg,
     send_states,
@@ -38,6 +39,7 @@ class _MockPrefillServer:
         vocab: int = 1000,
         hold: threading.Event | None = None,
         refuse_have: bool = False,
+        push_error: str | None = None,
     ):
         self.info = {
             "version": VERSION,
@@ -53,6 +55,8 @@ class _MockPrefillServer:
         }
         self.hold = hold  # a prefill replies only once this is set
         self.refuse_have = refuse_have  # answer any have > 0 with the server's have error
+        self.push_error = push_error  # answer a prefill_push with this error, after its progress
+        self.pushes: list[dict] = []  # the targets of each prefill_push
         self.prefill_calls: list[list[int]] = []
         self.prefill_haves: list[int] = []
         self.kept: list[list[int]] = []  # the prompts its prefix cache holds
@@ -90,6 +94,22 @@ class _MockPrefillServer:
                         send_msg(conn, {"pong": True})
                     elif op == "info":
                         send_msg(conn, self.info)
+                    elif op == "prefill_push":
+                        ids = torch.frombuffer(blobs[0], dtype=torch.int32).tolist()
+                        self.prefill_calls.append(ids)
+                        have = int(header.get("have", 0))
+                        self.prefill_haves.append(have)
+                        self.pushes.append(header["targets"])
+                        if self.hold is not None:
+                            self.hold.wait()
+                        n = len(ids)
+                        for end in range(self.info["chunk"], n + 1, self.info["chunk"]):
+                            send_msg(conn, {"progress": end})
+                        if self.push_error:
+                            send_msg(conn, {"error": self.push_error})
+                            continue
+                        reply = {"seq_len": n, "base": have, "cached": 0, "seconds": 0.05, "queued": 0.01}
+                        send_msg(conn, {**reply, "bytes": 4096, "pages": 4, "push_seconds": 0.01})
                     elif op == "prefill":
                         ids = torch.frombuffer(blobs[0], dtype=torch.int32).tolist()
                         self.prefill_calls.append(ids)
@@ -176,6 +196,9 @@ def _fake_engine(num_layers: int = 4, dspark: bool = False, max_seq: int = 2048)
             self.resets = []
             self.starts = []
             self.static_resets = 0
+            self.in_flight = {}  # session -> (start, total, ring layers) of its remote commit
+            self.finished = []
+            self.aborted = []
 
         def reset_session(self, sid: int) -> None:
             self.resets.append(sid)
@@ -188,6 +211,21 @@ def _fake_engine(num_layers: int = 4, dspark: bool = False, max_seq: int = 2048)
             committed.append((session_id, host_states, list(ids) if ids is not None else None))
             self.starts.append(start)
             return int(host_states["seq_len"])
+
+        def remote_commit_targets(self, session_id: int, total: int, ring_layers, start: int = 0) -> dict:
+            assert session_id not in self.in_flight
+            self.in_flight[session_id] = (start, total, list(ring_layers))
+            return {"session": session_id, "seq_len": total, "start": start}
+
+        def finish_remote_commit(self, session_id: int, ids=None) -> int:
+            start, total, _ = self.in_flight.pop(session_id)
+            self.finished.append((session_id, start, list(ids) if ids is not None else None))
+            return total
+
+        def abort_remote_commit(self, session_id: int) -> None:
+            del self.in_flight[session_id]
+            self.aborted.append(session_id)
+            self.reset_session(session_id)
 
     engine = SimpleNamespace(
         model=_FakeModel(),
@@ -271,6 +309,93 @@ def test_remote_prefiller_refused_have_resends_from_zero():
             assert engine.model.resets == [2]
             assert engine.model.starts == [0]
             assert user.pos == 512
+        finally:
+            prefiller.close()
+
+
+def _push_user(sid: int, pos: int = 0):
+    user = SimpleNamespace(index=0, sid=sid, pos=pos, tokens=list(range(pos)), resets=0)
+    user.activate = lambda: None
+
+    def reset():
+        user.pos = 0
+        user.resets += 1
+
+    user.reset = reset
+    return user
+
+
+def test_remote_prefiller_push_reserves_pushes_and_finishes():
+    with _MockPrefillServer(layers=[0, 1, 2], chunk=128) as srv:
+        engine, committed = _fake_engine(num_layers=4)
+        prefiller = _RemotePrefiller(engine, srv.url, push=True)
+        try:
+            assert prefiller.ring_layers == [0, 1, 2]
+            user = _push_user(sid=5)
+            assert prefiller.start(user, list(range(256))) is None  # nothing sent ahead
+            seen = []
+            prefiller.run(user, list(range(256)), on_progress=seen.append)
+            assert seen == [128, 256]
+            assert srv.pushes == [{"session": 5, "seq_len": 256, "start": 0}]
+            assert engine.model.resets == [5] and engine.model.static_resets == 1  # rewound before the reservation
+            assert engine.model.finished == [(5, 0, list(range(256)))]
+            assert not committed and not engine.model.in_flight
+            assert user.pos == 256
+
+            # A continued session keeps its entries: the push starts at its position, no rewind.
+            user.tokens = list(range(256))
+            prefiller.run(user, list(range(256, 512)))
+            assert srv.pushes[-1] == {"session": 5, "seq_len": 512, "start": 256}
+            assert srv.prefill_haves[-1] == 256 and engine.model.resets == [5]
+            assert engine.model.finished[-1] == (5, 256, list(range(512)))
+            assert user.pos == 512
+        finally:
+            prefiller.close()
+
+
+def test_remote_prefiller_push_error_aborts_the_commit():
+    with _MockPrefillServer(push_error="RuntimeError: no fabric route") as srv:
+        engine, _ = _fake_engine(num_layers=4)
+        prefiller = _RemotePrefiller(engine, srv.url, push=True)
+        try:
+            user = _push_user(sid=3)
+            try:
+                prefiller.run(user, list(range(256)))
+            except PrefillServerError as exc:
+                assert "no fabric route" in str(exc)
+            else:
+                raise AssertionError("the error reply did not raise")
+            assert engine.model.aborted == [3] and not engine.model.in_flight and not engine.model.finished
+            assert user.resets == 1 and user.pos == 0
+        finally:
+            prefiller.close()
+
+
+def test_remote_prefiller_push_holds_a_cancellation_until_the_reply():
+    with _MockPrefillServer(chunk=128) as srv:
+        engine, _ = _fake_engine(num_layers=4)
+        prefiller = _RemotePrefiller(engine, srv.url, push=True)
+        try:
+            user = _push_user(sid=4)
+            seen = []
+
+            def progress(end: int) -> None:
+                seen.append(end)
+                raise _PromptStopped()
+
+            try:
+                prefiller.run(user, list(range(384)), on_progress=progress)
+            except _PromptStopped:
+                pass
+            else:
+                raise AssertionError("the cancellation was dropped")
+            # Asked once, then the reply was waited for (its writes may land until then) before giving the pages up.
+            assert seen == [128]
+            assert engine.model.aborted == [4] and not engine.model.finished
+            # The connection is still in sync: the next push on it works.
+            user = _push_user(sid=6)
+            prefiller.run(user, list(range(256)))
+            assert engine.model.finished == [(6, 0, list(range(256)))]
         finally:
             prefiller.close()
 

@@ -135,18 +135,27 @@ def run_decode(args) -> int:
         send_msg(sock, {"op": "push", "targets": targets})
         done, _ = recv_msg(sock)
         assert done.get("done"), done
+        t0 = time.perf_counter()
         model.finish_remote_commit(sid_a)
+        finish = time.perf_counter() - t0
+        t0 = time.perf_counter()
         host = _states(*recv_msg(sock))
+        t1 = time.perf_counter()
         model.commit_host_prefill_state(host, sid_b)
-        log("decode", f"session {sid_b}: the same {args.tokens} tokens committed through the host path")
+        t2 = time.perf_counter()
+        log(
+            "decode",
+            f"push path: push {done['total']:.2f} s + finish_remote_commit {finish:.2f} s; host path: readback "
+            f"{host['seconds']:.2f} s + send {t1 - t0:.2f} s + commit_host_prefill_state {t2 - t1:.2f} s "
+            f"(session {sid_b}, {host['bytes'] / 2**20:.1f} MiB)",
+        )
         bad = check(model, host, sid_a, sid_b, set(ring_layers))
         send_msg(sock, {"op": "bye"})
         sock.close()
         log(
             "decode",
             f"pushed {done['bytes'] / 2**20:.1f} MiB, device {done['seconds'] * 1e3:.1f} ms, "
-            f"total {done['total'] * 1e3:.1f} ms; host states {host['bytes'] / 2**20:.1f} MiB read in "
-            f"{host['seconds']:.1f} s; " + ("PASS: byte-exact" if not bad else f"FAIL: {bad} bad row(s)"),
+            f"total {done['total'] * 1e3:.1f} ms; " + ("PASS: byte-exact" if not bad else f"FAIL: {bad} bad row(s)"),
         )
         return 1 if bad else 0
 

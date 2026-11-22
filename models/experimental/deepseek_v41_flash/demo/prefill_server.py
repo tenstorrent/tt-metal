@@ -35,6 +35,7 @@ import time
 import torch
 from loguru import logger
 
+from models.experimental.deepseek_v41_flash.tt.prefill.d_p_push import push
 from models.experimental.deepseek_v41_flash.tt.prefill.d_p_wire import VERSION, recv_msg, send_msg, send_states
 
 # Decode commits whole 128-token units (its ALIGNMENT); the prompt's remainder is replayed by decode.
@@ -115,8 +116,17 @@ class PrefillService:
         if not 0 <= have <= n or have % ALIGN:
             raise ValueError(f"have {have}: a multiple of {ALIGN} up to the prompt's {n} tokens")
 
-    def prefill(self, conn: socket.socket, ids: torch.Tensor, have: int, use_cache: bool, peer: str) -> None:
+    def prefill(
+        self, conn: socket.socket, ids: torch.Tensor, have: int, use_cache: bool, peer: str, targets: dict | None = None
+    ) -> None:
+        """Prefill ``ids`` and reply with the entries from ``have`` on; with ``targets`` (``prefill_push``) write
+        them into the client's device memory over TT-Fabric instead and reply with what was written."""
         self.check(ids, have)
+        if targets is not None and (int(targets["seq_len"]) != ids.numel() or int(targets["start"]) != have):
+            raise ValueError(
+                f"push targets for [{targets['start']}, {targets['seq_len']}): the request is "
+                f"[{have}, {ids.numel()})"
+            )
         gone = []
 
         def progress(_start, end, _seconds):
@@ -141,18 +151,27 @@ class PrefillService:
                 self.cache.touch(slot)
             seconds = time.perf_counter() - t0
             parts: dict = {}
-            host = self.d_p.host_states(n, parts, slot=slot, base=have)
+            if targets is None:
+                host = self.d_p.host_states(n, parts, slot=slot, base=have)
+            else:
+                pushed = push(self.d_p, targets, slot=slot, times=parts)
             readback = time.perf_counter() - t0 - seconds
         if gone:
             raise ConnectionError(f"{peer} hung up during the prefill: {gone[0]}")
         t0 = time.perf_counter()
-        send_states(conn, host, seconds, queued, cached=start)
+        if targets is None:
+            send_states(conn, host, seconds, queued, cached=start)
+            moved = f"entries from {have} read back in {readback:.2f} s"
+        else:
+            reply = {"seq_len": n, "base": have, "cached": start, "seconds": seconds, "queued": queued}
+            send_msg(conn, {**reply, "bytes": pushed["bytes"], "pages": pushed["pages"], "push_seconds": readback})
+            moved = f"entries from {have} pushed ({pushed['bytes'] / 2**20:.1f} MiB) in {readback:.2f} s"
         rate = f"{(n - start) / seconds:.0f} tok/s" if seconds > 0 and start < n else "nothing to compute"
         logger.info(
             f"{peer}: {n} tokens, {'hit' if start else 'miss'} in slot {slot} ({start} cached), {n - start} prefilled "
-            f"in {seconds:.2f} s ({rate}), waited {queued:.2f} s, entries from {have} read back in {readback:.2f} s ("
+            f"in {seconds:.2f} s ({rate}), waited {queued:.2f} s, {moved} ("
             + ", ".join(f"{k} {v:.2f} s" for k, v in parts.items())
-            + f"), sent in {time.perf_counter() - t0:.2f} s"
+            + f"), replied in {time.perf_counter() - t0:.2f} s"
         )
 
 
@@ -169,15 +188,18 @@ def _serve_connection(conn: socket.socket, peer: str, service: PrefillService) -
                     send_msg(conn, {"pong": True})
                 elif op == "info":
                     send_msg(conn, service.info)
-                elif op == "prefill":
+                elif op in ("prefill", "prefill_push"):
                     if len(blobs) != 1 or len(blobs[0]) % 4:
-                        raise ValueError("prefill takes one blob of int32 token ids")
+                        raise ValueError(f"{op} takes one blob of int32 token ids")
+                    if op == "prefill_push" and not isinstance(header.get("targets"), dict):
+                        raise ValueError("prefill_push takes the session's targets")
                     service.prefill(
                         conn,
                         torch.frombuffer(blobs[0], dtype=torch.int32),
                         int(header.get("have", 0)),
                         bool(header.get("cache", True)),
                         peer,
+                        header.get("targets") if op == "prefill_push" else None,
                     )
                 else:
                     raise ValueError(f"unknown op {op!r}")
