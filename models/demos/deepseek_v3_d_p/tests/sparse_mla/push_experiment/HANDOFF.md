@@ -42,7 +42,10 @@ working DSA layers, not 6) and GLM layers 0-7 (full 0, 1, 2, 6; shared 3-5). Run
   (mux buffers 2->4, kBatch 4->8) change nothing (1.46-1.50 ms). Real GLM top-k: a needed row is needed by ~6 chips
   (L62: 46.5k distinct rows/chip, 239k union). Simulated on that top-k, a per-row multicast tree (Y trunk, X
   branches) cuts the busiest link 62.6k -> 32.8k rows (~1.9x); the fabric's rectangle multicast does NOT help (63%
-  of deliveries wasted, X links flood). A real tree needs MoE-style store-and-forward (`sparse_dispatch_2d`, on main
+  of deliveries wasted, X links flood). A stepping stone: a fabric line multicast of each row along its owner's column
+  (the Y trunk, into a relay slot at the same address on every chip of the column), then X unicast from the relay in
+  each target row: busiest link 39.9k rows at L62 (1.57x; X becomes the limit), 6.6k at L14 (1.96x); an X line
+  multicast from the relay reaches the full tree. A real tree needs MoE-style store-and-forward (`sparse_dispatch_2d`, on main
   since 2026-11-19, not on this branch), which also runs every link at 1-hop efficiency. Biggest remaining lever for
   GLM (shared layers' PREFIX push 1.45 ms vs 0.82 ms attention window at L62 -> ~0.6 ms exposed x 57 layers).
 - **Why the planner is slow.** Not the NoC exchanges (each 6-18 us) but per-index L1 work on two RISCs: bucket+scatter
@@ -52,7 +55,11 @@ working DSA layers, not 6) and GLM layers 0-7 (full 0, 1, 2, 6; shared 3-5). Run
 - **Top-k faster / smaller arrays.** Below the cutoff top-k hides behind the gather, so small-T support (8-key blocks
   pay below ~128k) would not show. Above it top-k is serial (0.6-0.8 ms at 1M). Proposal, exact: process stage-3
   candidate blocks in descending block-max order (stage 2 already sorts them) and stop merging once the running
-  2048th key >= the next chunk's best block max. Gain depends on how peaked the logits are; measure on real logits.
+  2048th key >= the next chunk's best block max. A block whose max is >= the true 2048th key necessarily holds a top
+  key, so this processes exactly the blocks that hold top keys. Real GLM 1M top-k (staged): those are 1,259 / 592 /
+  340 / 956 of the 2,048 selected blocks at L0 / L14 / L30 / L62, i.e. stage 3 shrinks 1.6-6x (about -30% of top-k at
+  1M). Needs the compute kernel to decide (running min vs stage-2 sorted maxima) and the writer to emit stage 2's
+  value order instead of the ascending block table; the reader can keep feeding and compute pop unneeded chunks.
 - **Fuse top-k into the indexer.** No: in the ring layout no core holds a full logit row, and the partial fusion that
   pays (indexer block maxima) is in.
 - **K3.1: plan + push as one op / better overlap.** The table exchange is now inside the push (v2). Fusing the plan
