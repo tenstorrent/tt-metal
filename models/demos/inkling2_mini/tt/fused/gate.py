@@ -30,9 +30,10 @@ Z_COPIES = 8  # compact z pages (one per DRAM bank): the combine cores spread th
 
 
 class _FusedGate:
-    def __init__(self, device, downs, forgets, gains, rows, eps=1e-6, combine_cores=None):
+    def __init__(self, device, downs, forgets, gains, rows, eps=1e-6, combine_cores=None, fused=True):
         """downs: [2C, 64] per gate; forgets / gains: [64, C] per gate; rows: number of gated vectors R.
-        With several gates, row i goes through gate i (block mask)."""
+        With several gates, row i goes through gate i (block mask). fused: z and combine in one program (else two
+        programs, z through DRAM); same outputs."""
         self.device = device
         self.eps = eps
         self.rows = rows
@@ -62,10 +63,32 @@ class _FusedGate:
         assert self.ntc % n == 0
         self.nt = self.ntc // n
         self.prep_cores = F.core_list(device, 2 * rows)
-        self.comb_cores = F.core_list(device, n)
         assert 2 * rows <= R.SPLIT
         self.z_parts = 2  # K parts per split: 18 cores of 8 K tiles (fewer matmul tiles per core)
-        self.z_cores = F.core_list(device, R.SPLIT * self.z_parts)
+        n_z = R.SPLIT * self.z_parts
+        # z and combine in ONE program (fused): combine on rectangles below row 0, z on the other cores (row 0 first).
+        # The z root multicasts z into each rectangle; combine reads F / G from the start. A multicast rectangle must
+        # stay inside one run of logical columns with consecutive virtual x (Blackhole has non-Tensix columns
+        # inside the grid).
+        g = device.compute_with_storage_grid_size()
+        self.rects = _rects(device, n) if fused else None
+        self.fused = self.rects is not None and g.x * g.y >= n + n_z + 2 * rows
+        if self.fused:
+            comb = [
+                ttnn.CoreCoord(x, y) for a, b in self.rects for y in range(a.y, b.y + 1) for x in range(a.x, b.x + 1)
+            ]
+            inside = {(c.x, c.y) for c in comb}
+            rest = [ttnn.CoreCoord(x, 0) for x in range(g.x)] + [
+                ttnn.CoreCoord(x, y) for y in range(1, g.y) for x in range(g.x) if (x, y) not in inside
+            ]
+            z = rest[: n_z + 2 * rows]  # K parts, then prep-only cores (their weight reads start at once)
+            ranges = [ttnn.CoreRange(a, b) for a, b in self.rects]
+            self.comb_cores = comb, ttnn.CoreRangeSet(ranges)
+            self.z_cores = z, ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in z])
+            self.all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in z] + ranges)
+        else:
+            self.comb_cores = F.core_list(device, n)
+            self.z_cores = F.core_list(device, n_z)
         # packed partial rows on the root: sender s row r -> packed row (s - 1) * rows + r; S_b[r, j] selects them
         n_rows = (R.SPLIT * self.z_parts - 1) * rows
         self.z_nb = -(-n_rows // 32)
@@ -113,41 +136,58 @@ class _FusedGate:
         )
         return dict(rd=[rd[c] for c in cores], wr=[wr[c] for c in cores], named=named, cnamed=cnamed, cbs=cbs, io=io)
 
-    def _prep_z(self, h, m):
+    def _prep_z(self, h, m, parts=False):
         """Gate prep + z = x @ down in one program: one core per K part; the first 2 R cores also run the prep
         (bf16 rms rows, kept in their L1) and signal every core, which then reads its x tiles from those rows;
         partial z rows are summed on core 0.
         Returns z in compact form: Z_COPIES pages, each rows 0..R-1 of the kz z tiles (128 B per tile row)."""
         prep = self._prep(h, m)
         cores, crs = self.z_cores
-        n_prep = len(prep["rd"])  # the prep cores are the first split cores
-        assert self.kz * self.rows * 128 <= 4096
+        n_prep = len(prep["rd"])
+        n_split = R.SPLIT * self.z_parts
+        # fused: prep-only cores after the K parts (role 2); else the first n_prep K-part cores also prep (role 1)
+        mm, pc = cores[:n_split], (cores[n_split:] if self.fused else cores[:n_prep])
+        assert self.kz * self.rows * 128 <= 4096 and len(pc) == n_prep
         z = self.out.get("zc", 32, 32 * Z_COPIES, ttnn.float32)  # Z_COPIES pages of compact z rows
-        virt = [self.device.worker_core_from_logical_core(c) for c in cores]
-        xy = [v for c in virt for v in (c.x, c.y)]
+        vxy = lambda cs: [
+            v for c in cs for v in (lambda w: (w.x, w.y))(self.device.worker_core_from_logical_core(c))
+        ]  # noqa: E731
+        mm_xy, pc_xy = vxy(mm), vxy(pc)
         kt = self.kt // self.z_parts
+        mc = []
+        if self.fused:
+            mc = [len(self.rects)]
+            for a, b in self.rects:
+                a0, a1 = (self.device.worker_core_from_logical_core(c) for c in (a, b))
+                mc += [a0.x, a0.y, a1.x, a1.y, (b.x - a.x + 1) * (b.y - a.y + 1)]
         rd, cp, wr = {}, {}, {}
-        for s, core in enumerate(cores):
-            is_prep = int(s < n_prep)
-            prd, pwr = (prep["rd"][s], prep["wr"][s]) if is_prep else ([0] * 9, [0] * 3)
+        roles = [(c, s, int(not self.fused and s < n_prep), s if not self.fused else None) for s, c in enumerate(mm)]
+        if self.fused:
+            roles += [(c, n_split + v, 2, v) for v, c in enumerate(pc)]
+        for core, s, role, v in roles:
+            prd, pwr = (prep["rd"][v], prep["wr"][v]) if role else ([0] * 9, [0] * 3)
             x = self.sel.buffer_address()  # reader arg A + 0: the root reads the selection tiles
-            first = s * kt  # K tile of the whole x: split s // parts, its part s % parts
-            rd[core] = [*prd, x, self.down.buffer_address(), first, first * self.kz, is_prep, *xy]
-            cp[core] = [s, is_prep]
-            wr[core] = [*pwr, z.buffer_address(), s, is_prep, *xy, *(prd[:5] if is_prep else [0] * 5)]
+            first = s * kt if role != 2 else 0  # K tile of the whole x: split s // parts, its part s % parts
+            rd[core] = [*prd, x, self.down.buffer_address(), first, first * self.kz, role, *pc_xy, *mc]
+            cp[core] = [s, role]
+            wr[core] = [*pwr, z.buffer_address(), s, role, *mm_xy, *(prd[:5] if role else [0] * 5), *mc]
         named = dict(
             prep["named"],
             kt=kt,
             kz=self.kz,
-            n_split=len(cores),
+            n_split=n_split,
             n_prep=n_prep,
             sem_x=0,
             sem_z=1,
             rows=self.rows,
             nb=self.z_nb,
             z_copies=Z_COPIES,
+            fused=int(self.fused),
+            sem_zl=2,
+            sem_go_r=3,
+            sem_go_w=4,
         )
-        cnamed = dict(prep["cnamed"], kt=kt, kz=self.kz, n_split=len(cores), nb=self.z_nb)
+        cnamed = dict(prep["cnamed"], kt=kt, kz=self.kz, n_split=n_split, nb=self.z_nb)
         kernels = [
             F.kernel("gatez_reader.cpp", ttnn.ReaderConfigDescriptor(), named, rd, crs),
             F.kernel("gatez_writer.cpp", ttnn.WriterConfigDescriptor(), named, wr, crs),
@@ -162,14 +202,17 @@ class _FusedGate:
             F.cb(9, f32, 1, cores=crs),
             F.cb(18, f32, self.kz, cores=crs),
             F.cb(29, ttnn.bfloat16, 1, 32, cores=crs),
-            F.cb(31, f32, 1, cores=crs),  # root: compact z rows  # prep writer -> reader: second half of the row landed
-            F.stage_cb(30, self.ntc, crs),
+            # root: compact z rows (fused: where the z tiles land on the combine cores; one address everywhere)
+            F.cb(31, f32, self.kz if self.fused else 1, cores=self.all_cores if self.fused else crs),
+            F.stage_cb(30, self.ntc, crs),  # prep writer -> reader: second half of the row landed
         ]
         sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=crs, initial_value=0) for i in (0, 1)]
         io = prep["io"] + [self.down, self.sel, z]
+        if parts:
+            return kernels, cbs, sems, io
         return ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=sems))
 
-    def _combine(self, z, h, m):
+    def _combine(self, z, h, m, parts=False):
         cores, crs = self.comb_cores
         out, out_dense = self.out.get_twin("out", self.rows, self.c, ttnn.float32)
         block = int(self.block)
@@ -200,6 +243,10 @@ class _FusedGate:
             fg_page=F.tile_bytes(self.fg_dtype),
             rows=self.rows,
             pages=F.pages(self.c),
+            fused=int(self.fused),
+            sem_zl=2,
+            sem_go_r=3,
+            sem_go_w=4,
         )
         fp32_cbs = [0, 1] + ([4, 5] if h.dtype == ttnn.float32 else [])
         kernels = [
@@ -221,8 +268,21 @@ class _FusedGate:
         ]
         tws = [t[0] for t in (F.twin(h), F.twin(m)) if t is not None]
         io = [z, h, m, *tws, self.f, self.g, out_dense, out]
+        if parts:
+            return kernels, cbs, io, out
         F.run(io, kernels, cbs)
         return out  # the cached object itself: its dense twin is keyed by identity
+
+    def _fused_call(self, h, m):
+        """z and combine as one program on disjoint cores (z multicast core to core, no DRAM round trip)."""
+        zk, zcb, zsem, zio = self._prep_z(h, m, parts=True)
+        z = zio[-1]  # the DRAM z buffer (unused here, kept for the arg layout)
+        ck, ccb, cio, out = self._combine(z, h, m, parts=True)
+        sems = zsem + [ttnn.SemaphoreDescriptor(id=i, core_ranges=self.all_cores, initial_value=0) for i in (2, 3, 4)]
+        io = zio + [t for t in cio if all(t is not u for u in zio)]
+        io = [t for t in io if t is not out] + [out]
+        ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=zk + ck, cbs=zcb + ccb, semaphores=sems))
+        return out
 
     def __call__(self, h, m):
         """h, m: [1,1,R,C] row-form DRAM tensors of one dtype (fp32 or bf16). Returns fp32 [1,1,R,C]."""
@@ -231,7 +291,36 @@ class _FusedGate:
         if h.dtype != m.dtype:
             h, m = R._f32(h), R._f32(m)
         assert h.shape[-2] == self.rows and m.shape[-2] == self.rows, (h.shape, m.shape, self.rows)
+        if self.fused:
+            return self._fused_call(h, m)
         return self._combine(self._prep_z(h, m), h, m)
+
+
+def _rects(device, n):
+    """<= 2 rectangles of logical cores (rows 1..) holding exactly n cores, each inside a run of logical columns with
+    consecutive virtual x; None if there is no such split."""
+    g = device.compute_with_storage_grid_size()
+    vx = [device.worker_core_from_logical_core(ttnn.CoreCoord(x, 1)).x for x in range(g.x)]
+    runs, a = [], 0
+    for x in range(1, g.x + 1):
+        if x == g.x or vx[x] != vx[x - 1] + 1:
+            runs.append((a, x - 1))
+            a = x
+    rows = g.y - 1
+    for ra in runs:
+        wa = ra[1] - ra[0] + 1
+        for ha in range(rows, 0, -1):
+            rem = n - wa * ha
+            if rem == 0:
+                return [(ttnn.CoreCoord(ra[0], 1), ttnn.CoreCoord(ra[1], ha))]
+            for rb in runs:
+                wb = rb[1] - rb[0] + 1
+                if rb != ra and rem > 0 and rem % wb == 0 and rem // wb <= rows:
+                    return [
+                        (ttnn.CoreCoord(ra[0], 1), ttnn.CoreCoord(ra[1], ha)),
+                        (ttnn.CoreCoord(rb[0], 1), ttnn.CoreCoord(rb[1], rem // wb)),
+                    ]
+    return None
 
 
 class FusedMessageGate(_FusedGate):

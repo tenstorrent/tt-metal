@@ -26,6 +26,12 @@ void kernel_main() {
         constexpr uint32_t fg = get_named_compile_time_arg_val("fg_page");  // page bytes of F and G
         const uint32_t g_addr = get_arg_val<uint32_t>(3);
         constexpr uint32_t f_w = get_named_compile_time_arg_val("f_w");
+        if constexpr (get_named_compile_time_arg_val("fused")) {  // F / G after z's weights (set by the z root)
+            noc_semaphore_wait(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_semaphore(get_named_compile_time_arg_val("sem_go_w"))),
+                1);
+        }
         if constexpr (f_w > 0) {  // F rows kt < f_w into the reader's (not yet pushed) cb_f pages
             const uint32_t f_addr = get_arg_val<uint32_t>(4);
             const uint32_t f = get_write_ptr(2);

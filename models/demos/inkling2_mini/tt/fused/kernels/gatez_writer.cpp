@@ -43,15 +43,17 @@ void kernel_main() {
                 get_noc_addr(get_arg_val<uint32_t>(A + 3 + 2 * c), get_arg_val<uint32_t>(A + 4 + 2 * c), sem_x), 1);
         }
         noc_async_atomic_barrier();
+        if (get_arg_val<uint32_t>(A + 2) == 2) {  // prep only (fused gate)
+            return;
+        }
     }
     const uint32_t root_x = get_arg_val<uint32_t>(A + 3), root_y = get_arg_val<uint32_t>(A + 4);
 
     if (s == 0) {
         DeviceZoneScopedN("W_root");
         volatile tt_l1_ptr uint32_t* sp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_z);
-        noc_semaphore_wait(sp, n_split - 1);
-        noc_semaphore_set(sp, 0);
-        // rows no sender owns get zeros (S is 0 there, but stale NaN * 0 would still be NaN)
+        // rows no sender owns get zeros (S is 0 there, but stale NaN * 0 would still be NaN); senders write other
+        // rows only, so this runs while they compute
         cb_wait_front(9, 1);  // cb_zero (reader)
         const uint64_t zero = get_noc_addr(get_read_ptr(9));
         const uint32_t recv = get_write_ptr(cb_recv);
@@ -63,9 +65,40 @@ void kernel_main() {
             }
         }
         noc_async_read_barrier();
+        noc_semaphore_wait(sp, n_split - 1);
+        noc_semaphore_set(sp, 0);
         cb_reserve_back(cb_recv, nb * kz);
         cb_push_back(cb_recv, nb * kz);
         cb_wait_front(cb_z, kz);
+        if constexpr (get_named_compile_time_arg_val("fused")) {
+            // z + combine in one program: the kz z tiles as they are into the combine cores' cb 31 (same L1
+            // address there; they take rows 0..rows-1), then set their sem_zl. Args after the prep input args:
+            // the number of combine rectangles, then per rectangle its virtual start x, y, end x, y, core count.
+            const uint32_t zl = get_read_ptr(cb_z), land = get_write_ptr(31);
+            const uint32_t b = A + 3 + 2 * n_split + 5;
+            const uint32_t n_rect = get_arg_val<uint32_t>(b);
+            const uint32_t sem_zl = get_semaphore(get_named_compile_time_arg_val("sem_zl"));
+            const bool far = noc_index != 0;  // NOC1 multicasts start at the bottom-right corner
+            auto mc = [far](uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t a) {
+                return far ? get_noc_multicast_addr(x1, y1, x0, y0, a) : get_noc_multicast_addr(x0, y0, x1, y1, a);
+            };
+            for (uint32_t r = 0; r < n_rect; ++r) {
+                const uint32_t q = b + 1 + 5 * r;
+                const uint32_t x0 = get_arg_val<uint32_t>(q), y0 = get_arg_val<uint32_t>(q + 1);
+                const uint32_t x1 = get_arg_val<uint32_t>(q + 2), y1 = get_arg_val<uint32_t>(q + 3);
+                noc_async_write_multicast(zl, mc(x0, y0, x1, y1, land), kz * 4096, get_arg_val<uint32_t>(q + 4));
+            }
+            noc_async_write_barrier();
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_zl) = 1;
+            for (uint32_t r = 0; r < n_rect; ++r) {
+                const uint32_t q = b + 1 + 5 * r;
+                const uint32_t x0 = get_arg_val<uint32_t>(q), y0 = get_arg_val<uint32_t>(q + 1);
+                const uint32_t x1 = get_arg_val<uint32_t>(q + 2), y1 = get_arg_val<uint32_t>(q + 3);
+                noc_semaphore_set_multicast(sem_zl, mc(x0, y0, x1, y1, sem_zl), get_arg_val<uint32_t>(q + 4));
+            }
+            noc_async_write_barrier();
+            return;
+        }
         // z out in compact form: rows 0..rows-1 only, block (t, r) = 128 B at (t * rows + r) * 128 of one page,
         // written as n_copies pages (on different DRAM banks: the 72 combine cores each read one copy)
         constexpr uint32_t n_copies = get_named_compile_time_arg_val("z_copies");

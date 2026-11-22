@@ -23,8 +23,11 @@ void kernel_main() {
     constexpr uint32_t G = 4;  // fp32 DST tiles per half-sync section (zeroed by the packer on release)
 
     const uint32_t s = get_arg_val<uint32_t>(0);
-    if (get_arg_val<uint32_t>(1)) {
+    if (get_arg_val<uint32_t>(1)) {  // 2: prep only (fused gate)
         prep_main();
+        if (get_arg_val<uint32_t>(1) == 2) {
+            return;
+        }
     } else {
         compute_kernel_hw_startup(cb_x, cb_w, cb_z);
     }
