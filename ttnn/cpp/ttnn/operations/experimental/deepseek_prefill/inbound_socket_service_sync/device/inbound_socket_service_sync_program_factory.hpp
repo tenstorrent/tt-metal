@@ -16,11 +16,13 @@
 namespace ttnn::experimental::prim {
 
 struct InboundSocketServiceSyncProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // One program per covered chip: each chip's receiver service core differs. A D2D receiver over a row block of
+    // the mesh covers only those rows, so the coordinates it does not cover get no program.
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const InboundSocketServiceSyncParams& args,
         const InboundSocketServiceSyncInputs& tensor_args,
         std::vector<Tensor>& outputs,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::experimental::prim

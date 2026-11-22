@@ -45,7 +45,10 @@ struct StreamSenderCoordTable {
     std::vector<CoreCoord> service_cores;     // logical
     std::vector<uint32_t> metadata_addrs;     // empty when the service has no metadata
     std::vector<uint32_t> termination_addrs;  // empty when the service has no control words
-    uint64_t hash = 0;                        // of all the above
+    // 1 per coordinate the service covers; empty means every coordinate. A D2D service whose mapper covers a row
+    // block of the mesh (a [RING,RING] seam boundary) leaves the other coordinates out, and the op skips them.
+    std::vector<uint8_t> participates;
+    uint64_t hash = 0;  // of all the above
 };
 
 // A service's StreamSenderCoordTable, built on first use, so every service lays it out and hashes it the same way.
@@ -68,7 +71,8 @@ public:
                 table->data_ready_addrs,
                 table->service_cores,
                 table->metadata_addrs,
-                table->termination_addrs);
+                table->termination_addrs,
+                table->participates);
             table_ = std::move(table);
         }
         return table_;

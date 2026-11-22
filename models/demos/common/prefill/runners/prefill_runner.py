@@ -131,6 +131,79 @@ D2D_MAPPER_CONFIG = axis_mapper_config(
 # Indexer indices: rows (dim 2) over SP, top-k (dim 3) over TP.
 INDEX_MAPPER_CONFIG = axis_mapper_config(ttnn.PlacementShard(2), ttnn.PlacementShard(3), SP_AXIS)
 
+# (sp placement, its sharded dim or None, tp placement, its sharded dim or None) of each segment mapper above, so a
+# D2D service can be rebuilt over a row block of the stage mesh ([RING,RING] seam boundaries). The bindings do not
+# expose a MeshMapperConfig's placements, hence the table.
+_SEGMENT_PLACEMENTS = {
+    id(H2D_MAPPER_CONFIG): (lambda: ttnn.PlacementShard(0), 0, lambda: ttnn.PlacementReplicate(), None),
+    id(D2D_MAPPER_CONFIG): (
+        lambda: ttnn.PlacementShard(2),
+        2,
+        (
+            (lambda: ttnn.PlacementShard(3))
+            if ADAPTER.pipeline_activation_emb_tp_sharded
+            else (lambda: ttnn.PlacementReplicate())
+        ),
+        3 if ADAPTER.pipeline_activation_emb_tp_sharded else None,
+    ),
+    id(INDEX_MAPPER_CONFIG): (lambda: ttnn.PlacementShard(2), 2, lambda: ttnn.PlacementShard(3), 3),
+}
+
+
+def row_block_segment(mesh_device, spec: ttnn.TensorSpec, cfg, rows: tuple):
+    """(global spec, mapper) of one D2D segment restricted to mesh rows [lo, hi) of the stage mesh: the mapper covers
+    only those coordinates (mesh_shape_override + mesh_offset_override, coordinates kept), and the global shape is
+    cut along whichever dim mesh axis 0 shards, so every covered chip holds the same shard as under ``cfg``."""
+    lo, hi = rows
+    mesh_rows, mesh_cols = GLOBAL_MESH_SHAPE
+    sp_make, sp_dim, tp_make, tp_dim = _SEGMENT_PLACEMENTS[id(cfg)]
+    placements = [tp_make(), tp_make()]
+    placements[SP_AXIS] = sp_make()
+    axis0_dim = sp_dim if SP_AXIS == 0 else tp_dim
+    shape = list(spec.shape)
+    if axis0_dim is not None:
+        assert shape[axis0_dim] % mesh_rows == 0, f"dim {axis0_dim} of {shape} does not split over {mesh_rows} rows"
+        shape[axis0_dim] = shape[axis0_dim] // mesh_rows * (hi - lo)
+    block_spec = ttnn.TensorSpec(
+        shape=ttnn.Shape(shape), dtype=spec.dtype, layout=spec.layout, buffer_type=spec.memory_config.buffer_type
+    )
+    mapper = ttnn.create_mesh_mapper(
+        mesh_device,
+        ttnn.MeshMapperConfig(placements, ttnn.MeshShape(hi - lo, mesh_cols), ttnn.MeshCoordinate([lo, 0])),
+    )
+    return block_spec, mapper
+
+
+class D2DServiceGroup:
+    """One boundary channel made of row-block D2D services, one per peer rank: a stage boundary joining a one-host
+    and a two-host [RING,RING] stage. Every member lives on this rank's whole stage mesh and covers its own rows, so
+    the activation, metadata and extras stay whole-mesh tensors; the send and drain run once per member on them.
+    Reads that are the same for every member (backing specs, the mesh) go to the first."""
+
+    def __init__(self, services: list):
+        assert services, "a service group needs at least one service"
+        self.services = list(services)
+
+    def __getattr__(self, name):
+        return getattr(self.services[0], name)
+
+    def release_fabric_links(self):
+        for service in self.services:
+            service.release_fabric_links()
+
+    def wait_for_fabric_links(self):
+        for service in self.services:
+            service.wait_for_fabric_links()
+
+
+def _members(service) -> list:
+    return service.services if isinstance(service, D2DServiceGroup) else [service]
+
+
+def _send_op(outbound, payload, metadata):
+    for service in _members(outbound):
+        ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(service, payload, metadata=metadata)
+
 
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
 # Capacity probes: shift every rank's layers by this many, so a 2-rank run on one Galaxy stands in for two
@@ -442,7 +515,7 @@ class D2DBoundary:
     activation: Optional[object] = None
 
     def channels(self) -> list:
-        return [getattr(self, f.name) for f in fields(self) if getattr(self, f.name) is not None]
+        return [m for f in fields(self) if getattr(self, f.name) is not None for m in _members(getattr(self, f.name))]
 
 
 def build_d2d_pipeline_endpoints(
@@ -466,9 +539,27 @@ def build_d2d_pipeline_endpoints(
     # outbound_planes must equal the next rank's inbound_planes or the rendezvous rejects the pair.
     # layout names the peer ranks: the stage before and after this rank's stage.
     mesh_rows = GLOBAL_MESH_SHAPE[0]
-    sender_rank = single_peer(layout.inbound_pairs(rank, mesh_rows), mesh_rows, "inbound", rank)
-    receiver_rank = single_peer(layout.outbound_pairs(rank, mesh_rows), mesh_rows, "outbound", rank)
+    in_pairs = layout.inbound_pairs(rank, mesh_rows)
+    out_pairs = layout.outbound_pairs(rank, mesh_rows)
     workers = d2d_worker_cores(mesh_device)
+    whole = lambda pairs: len(pairs) == 1 and tuple(pairs[0].rows) == (0, mesh_rows)  # noqa: E731
+    if (in_pairs and not whole(in_pairs)) or (out_pairs and not whole(out_pairs)):
+        return _build_row_block_endpoints(
+            mesh_device,
+            rank,
+            in_pairs,
+            out_pairs,
+            workers,
+            d2d_rows,
+            d2d_width,
+            inbound_planes,
+            outbound_planes,
+            extra_specs,
+            inbound_tail,
+            outbound_tail,
+        )
+    sender_rank = single_peer(in_pairs, mesh_rows, "inbound", rank)
+    receiver_rank = single_peer(out_pairs, mesh_rows, "outbound", rank)
 
     def _common(planes, tail):
         extras = [(spec, H2D_MAPPER_CONFIG) for spec in extra_specs] + list(tail)
@@ -514,6 +605,74 @@ def build_d2d_pipeline_endpoints(
     return inbound, outbound
 
 
+def _build_row_block_endpoints(
+    mesh_device,
+    rank,
+    in_pairs,
+    out_pairs,
+    workers,
+    d2d_rows,
+    d2d_width,
+    inbound_planes,
+    outbound_planes,
+    extra_specs,
+    inbound_tail,
+    outbound_tail,
+):
+    """A boundary between stages with different host counts: one D2D service per peer, each over the mesh rows this
+    rank shares with that peer (StageLayout.boundary_pairs), all on the whole stage mesh (row_block_segment)."""
+
+    def _kwargs(planes, tail, rows):
+        segments = [(activation_global_spec(d2d_rows, d2d_width, planes), D2D_MAPPER_CONFIG)]
+        segments += [(spec, H2D_MAPPER_CONFIG) for spec in extra_specs] + list(tail)
+        blocks = [row_block_segment(mesh_device, spec, cfg, rows) for spec, cfg in segments]
+        return dict(
+            global_spec=blocks[0][0],
+            mapper=blocks[0][1],
+            extra_tensors=blocks[1:],
+            fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
+            sender_worker_cores=workers,
+            receiver_worker_cores=workers,
+            metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
+            share_fabric_links=True,
+            socket_buffer_type=ttnn.BufferType.L1,
+        )
+
+    receivers = []
+    for pair in in_pairs:
+        logger.info(f"[pp rank {rank}] [d2d] inbound row block {pair.rows} from rank {pair.sender_rank}")
+        receivers.append(
+            ttnn.D2DStreamService.create_receiver(
+                receiver_mesh=mesh_device,
+                sender_rank=pair.sender_rank,
+                receiver_rank=rank,
+                fabric_link_group=D2D_INBOUND_LINK_GROUP,
+                reserve_links_for_later_service=bool(out_pairs),
+                **_kwargs(inbound_planes, inbound_tail, tuple(pair.rows)),
+            )
+        )
+    senders = []
+    for pair in out_pairs:
+        logger.info(f"[pp rank {rank}] [d2d] outbound row block {pair.rows} to rank {pair.receiver_rank}")
+        senders.append(
+            ttnn.D2DStreamService.create_sender(
+                sender_mesh=mesh_device,
+                sender_rank=rank,
+                receiver_rank=pair.receiver_rank,
+                fabric_link_group=D2D_OUTBOUND_LINK_GROUP,
+                **_kwargs(outbound_planes, outbound_tail, tuple(pair.rows)),
+            )
+        )
+    group = lambda services: (  # noqa: E731
+        None if not services else services[0] if len(services) == 1 else D2DServiceGroup(services)
+    )
+    logger.info(
+        f"[pp rank {rank}] [d2d] row-block endpoints up: inbound {[p.rows for p in in_pairs]} "
+        f"outbound {[p.rows for p in out_pairs]}"
+    )
+    return group(receivers), group(senders)
+
+
 def _stage_for(t: ttnn.Tensor, backing: ttnn.Tensor) -> ttnn.Tensor:
     cfg = backing.memory_config()
     return t if t.memory_config() == cfg else ttnn.to_memory_config(t, cfg)
@@ -524,13 +683,22 @@ def _send_payload(segments: list):
 
 
 def _d2d_drain_op(inbound, sockets):
-    return ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        inbound,
-        metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
-        metadata_out=sockets.persistent_metadata(),
-        tokens_out=sockets.tokens,
-        extras_out=sockets.extras or [],
-    )
+    members = _members(inbound)
+    if len(members) > 1:
+        # Row-block members fill disjoint coordinates of the same whole-mesh destinations, so those must exist.
+        assert (
+            sockets.tokens is not None and sockets.persistent_metadata() is not None
+        ), "a row-block D2D boundary drains into persistent whole-mesh buffers (traced runtime)"
+    out = None
+    for service in members:
+        out = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+            service,
+            metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
+            metadata_out=sockets.persistent_metadata(),
+            tokens_out=sockets.tokens,
+            extras_out=sockets.extras or [],
+        )
+    return out
 
 
 def _d2d_recv(inbound, sockets, stage_metadata=None) -> tuple:
@@ -608,9 +776,7 @@ def _d2d_send(
         trace.replay()
     else:
         md_tensor = metadata_msg if metadata_msg is not None else _send_metadata_record(outbound, meta)
-        ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(
-            outbound, _send_payload(segments), metadata=md_tensor
-        )
+        _send_op(outbound, _send_payload(segments), md_tensor)
     if deallocate:
         for t in segments:
             ttnn.deallocate(t)
@@ -659,9 +825,7 @@ def _forward_send_warmup(runtime, outbound: D2DBoundary, rank: int, send_indices
     idx_src = runtime.outbound_indexer_indices if send_indices else None
     idx_staged = _stage_for(idx_src, d2d_out.get_backing_tensors()[-1]) if send_indices else None
     send_segments = segments + ([idx_staged] if send_indices else [])
-    ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(
-        d2d_out, _send_payload(send_segments), metadata=md_tensor
-    )
+    _send_op(d2d_out, _send_payload(send_segments), md_tensor)
     d2d_out.release_fabric_links()
     d2d_out.wait_for_fabric_links()
     for t in segments:
@@ -766,11 +930,7 @@ def _capture_socket_ops(
     if send_skip is None:
         payload = _send_payload(segments + ([indices] if send_indices else []))
         call = CapturedCall(mesh_device)
-        call.capture(
-            lambda: ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(
-                d2d_out, payload, metadata=forward_md
-            )
-        )
+        call.capture(lambda: _send_op(d2d_out, payload, forward_md))
         sockets.send_trace = call
 
     def _how(trace, skip):

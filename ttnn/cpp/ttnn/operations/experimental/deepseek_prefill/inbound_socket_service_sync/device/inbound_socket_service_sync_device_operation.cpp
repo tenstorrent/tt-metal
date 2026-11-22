@@ -292,6 +292,18 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(
     for (uint32_t row = 0; row < num_rows; ++row) {
         for (uint32_t col = 0; col < num_cols; ++col) {
             const ttnn::MeshCoordinate coord(row, col);
+            // A D2D receiver over a row block of the mesh has no state elsewhere; the drain launches on its
+            // backing's coordinates only, so those slots are never read.
+            if constexpr (std::is_same_v<ServiceT, ttnn::D2DStreamServiceReceiver>) {
+                if (!service.has_coord(coord)) {
+                    attrs.consumed_addrs.push_back(0);
+                    attrs.service_core_x.push_back(0);
+                    attrs.service_core_y.push_back(0);
+                    attrs.participates.push_back(0);
+                    continue;
+                }
+            }
+            attrs.participates.push_back(1);
             attrs.consumed_addrs.push_back(static_cast<uint32_t>(service.get_consumed_counter_addr(coord)));
             const CoreCoord service_logical = service.get_service_core(coord);
             attrs.service_core_x.push_back(static_cast<uint32_t>(service_logical.x));

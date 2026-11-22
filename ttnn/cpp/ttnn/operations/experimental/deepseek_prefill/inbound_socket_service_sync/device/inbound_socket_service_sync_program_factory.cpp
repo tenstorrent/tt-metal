@@ -15,7 +15,9 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
+namespace {
+
+ProgramDescriptor create_descriptor(
     const InboundSocketServiceSyncParams& args,
     const InboundSocketServiceSyncInputs& tensor_args,
     std::vector<Tensor>& outputs,
@@ -163,6 +165,25 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
 
     desc.kernels.push_back(std::move(writer));
     return desc;
+}
+
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor InboundSocketServiceSyncProgramFactory::create_workload_descriptor(
+    const InboundSocketServiceSyncParams& args,
+    const InboundSocketServiceSyncInputs& tensor_args,
+    std::vector<Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload;
+    for (const auto& coord : tensor_coords.coords()) {
+        const uint32_t idx = coord[0] * args.mesh_num_cols + coord[1];
+        if (!args.participates.empty() && (idx >= args.participates.size() || args.participates[idx] == 0)) {
+            continue;
+        }
+        workload.programs.push_back(
+            {ttnn::MeshCoordinateRange(coord), create_descriptor(args, tensor_args, outputs, coord)});
+    }
+    return workload;
 }
 
 }  // namespace ttnn::experimental::prim
