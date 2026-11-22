@@ -4,7 +4,8 @@
 // Prefill causal conv, compute. Per output tile (R, j):
 //   lag r rows: L_r = A_r x[R] + B_r x[R - 1] (0/1 shift matrices, HiFi4 matmul: bf16 x 1 sums one term, exact)
 //   t_r = tap row r broadcast down the tile; acc = L_0 * t_0 + L_1 * t_1 + L_2 * t_2 + L_3 * t_3   (fp32 SFPU,
-//   prefill_model._conv's order) mode 0: bf16(acc); mode 1: fp32(bf16(acc)); mode 2: bf16(resid + fp32(bf16(acc)))
+//   prefill_model._conv's order) mode 0: bf16(acc); mode 1: fp32(bf16(acc)); mode 2: bf16(resid + fp32(bf16(acc)));
+//   mode 3: fp32(resid) + fp32(bf16(acc)), fp32 out (resid bf16 or fp32)
 #include <cstdint>
 
 #include "api/compute/bcast.h"
@@ -88,19 +89,21 @@ void kernel_main() {
                 cb_wait_front(cb_y, 1);
                 tile_regs_acquire();
                 load(cb_y, 0, 0);
-                if constexpr (mode == 2) {
+                if constexpr (mode >= 2) {
                     cb_wait_front(cb_res, 1);
                     load(cb_res, 0, 1);
                     add_binary_tile_init();
                     add_binary_tile(1, 0, 1);
-                    to_bf16(1);
+                    if constexpr (mode == 2) {
+                        to_bf16(1);
+                    }
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                put(mode == 2 ? 1 : 0, cb_out);
+                put(mode >= 2 ? 1 : 0, cb_out);
                 tile_regs_release();
                 cb_pop_front(cb_y, 1);
-                if constexpr (mode == 2) {
+                if constexpr (mode >= 2) {
                     cb_pop_front(cb_res, 1);
                 }
             }

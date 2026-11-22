@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 """Prefill fused causal conv (tt/fused/pf_conv.py) vs Inkling2Prefill._conv and its two call-site forms: outputs and
-the advanced tail bit-equal (modes bf16 / f32 / resid, T = 256 and 2048), plus the time of both at T = 2048."""
+the advanced tail bit-equal (modes bf16 / f32 / resid / hres, T = 256 and 2048), plus the time of both at T = 2048."""
 
 import math
 import time
@@ -29,6 +29,8 @@ def ref(mode, taps, x, tail, resid):
         return _f32(y)
     if mode == "resid":
         return ttnn.typecast(ttnn.add(resid, _f32(y)), ttnn.bfloat16)
+    if mode == "hres":
+        return ttnn.add(_f32(resid), _f32(y))
     return y
 
 
@@ -43,7 +45,7 @@ def timed(dev, fn, reps=3):
 
 
 @pytest.mark.parametrize("t", [256, 2048])
-@pytest.mark.parametrize("mode", ["bf16", "f32", "resid"])
+@pytest.mark.parametrize("mode", ["bf16", "f32", "resid", "hres"])
 def test_pf_conv(device, t, mode):
     dev = device
     g = torch.Generator().manual_seed(t)
@@ -54,7 +56,9 @@ def test_pf_conv(device, t, mode):
     taps = [put(w[r].view(1, 1, 1, -1), ttnn.float32) for r in range(4)]
     x = put(torch.randn(1, 1, t, 2304, generator=g), ttnn.float32)  # fp32 in: both round to bf16 first
     tail0 = torch.randn(1, 1, 32, 2304, generator=g)
-    resid = put(torch.randn(1, 1, t, 2304, generator=g) * 2, ttnn.float32) if mode == "resid" else None
+    resid = None
+    if mode in ("resid", "hres"):  # hres: the bf16 residual stream h
+        resid = put(torch.randn(1, 1, t, 2304, generator=g) * 2, ttnn.float32 if mode == "resid" else ttnn.bfloat16)
     ta, tb = _Tail(dev, 2304), _Tail(dev, 2304)
     ta.t = tb.t = put(tail0, ttnn.bfloat16)
     pc = PfConv(dev)
