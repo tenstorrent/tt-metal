@@ -94,7 +94,8 @@ void kernel_main() {
         mask = read_tile_value(cb_lead_active, 0, kTokActive);
         cb_pop_front(cb_lead_active, 1);
     }
-    const ActiveRows<kUsers> act(mask);  // (row groups: global rows; rope pages 3 u of the token state's)
+    // (row groups: global rows, rope pages 3 u of the token state's; verify rows: a bit per pass)
+    const ActiveRows<kUsers> act(pass_mask(mask));
     const uint32_t n_act = act.n;
     for (uint32_t l = 0; l < layers && n_act > 0; l++) {
         // the next user's q and gate are prepared before this user's output, while the workers run this user

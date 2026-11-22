@@ -27,6 +27,11 @@ constexpr uint32_t kTokHeadBytes = 48;  // token state words 0 .. 11, read at on
 // the rows' positions: with one row group words 1 .. batch of the head; with more (whose rows outnumber the head's
 // free words) one word per global row g * batch + u at byte tok_pos_off of the token state (past its x0 / rope)
 constexpr uint32_t tok_pos_off = get_named_compile_time_arg_val("tok_pos_off");
+// verify rows (DB1, rows mode + verify + row groups: row group g is user g's verify of `batch` rows): per global row
+// its user's conv ring step, GDN state slot and prev (accepted drafts of the previous step) as one word per row at byte
+// tok_ver_off + kTokVer* + 4 row of the token state (0: no verify rows)
+constexpr uint32_t tok_ver_off = get_named_compile_time_arg_val("tok_ver_off");
+constexpr uint32_t kTokVerRing = 0, kTokVerSlot = 128, kTokVerPrev = 256;
 // per row group: the mixers' row-buffer block (row_tiles batch x 32 tiles) and the streamers' o_in block (o_tiles)
 constexpr uint32_t row_tiles = get_named_compile_time_arg_val("row_tiles");
 constexpr uint32_t o_tiles = get_named_compile_time_arg_val("o_tiles");

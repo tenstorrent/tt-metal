@@ -99,12 +99,15 @@ void kernel_main() {
     const uint32_t scratch = get_write_ptr(cb_ntiles);
     noc_async_read(tok.get_noc_addr(0), scratch, rows_mode ? kTokHeadBytes : 4 * (1 + batch));
     // (row groups: the users' positions are the token state's positions region, staged past the -inf rows)
-    constexpr uint32_t kPosScratch = 512;
+    // (verify rows: past the -inf rows of a 24-row pass, kMRows0 = 512)
+    constexpr uint32_t kPosScratch = kVRows ? 768 : 512;
     if constexpr (groups > 1) {
-        noc_async_read(tok.get_noc_addr(0, tok_pos_off), scratch + kPosScratch, (4 * kUsers + 31) & ~31u);
+        noc_async_read(tok.get_noc_addr(0, tok_pos_off), scratch + kPosScratch, (4 * kRows + 31) & ~31u);
     }
     noc_async_read_barrier();
-    const uint32_t mask = rows_mode ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[kTokActive] : ~0u;
+    // (verify rows: a bit per pass, attn_common.hpp)
+    const uint32_t mask =
+        pass_mask(rows_mode ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[kTokActive] : ~0u);
     const ActiveRows<kUsers> act(mask);
     Chunk chs[kRows];
     uint32_t tail_rs[kRows], tps[kRows];
@@ -124,17 +127,21 @@ void kernel_main() {
         tail_rs[u] = pos % 32;
         chs[u] = role >= 2 ? (takes[u] ? Chunk{tp, 1, 1} : Chunk{0, 1, 0}) : chunk_of(w, tp);
     }
-    // packed: every pass takes the tiles below row 0's; the tail core row 0's tile and the next one if a row reaches it
-    const uint32_t n_tail = packed && tps[batch - 1] != tps[0] ? 2 : 1;
-    for (uint32_t u = 0; packed && u < users; u++) {
-        chs[u] = role == 2 ? Chunk{tps[0], 1, n_tail} : chunk_of(w, tps[0]);
+    // packed: every pass takes the tiles below its user's row 0's; the tail core that tile and the next one if a row
+    // of the user reaches it (verify rows: user gr's rows gr * batch ..; pass u is user u / users's)
+    auto n_tail_of = [&](uint32_t gr) -> uint32_t {
+        return packed && tps[gr * batch + batch - 1] != tps[gr * batch] ? 2 : 1;
+    };
+    for (uint32_t u = 0; packed && u < kUsers; u++) {
+        const uint32_t r0 = (u / users) * batch;
+        chs[u] = role == 2 ? Chunk{tps[r0], 1, n_tail_of(u / users)} : chunk_of(w, tps[r0]);
     }
     if constexpr (kv_paged) {
         // the pages of this core's tiles (the writer's tail pages too: it reads them after the cb_ntiles push)
         const uint32_t pt_addr = get_arg_val<uint32_t>(role >= 2 ? 11 : 9);
         for (uint32_t k = 0; k < act.n; k++) {
             const uint32_t u = act.row[k];
-            translate_chunk(pt_addr, verify ? 0 : u, u, chs[u], chs[u].n);
+            translate_chunk(pt_addr, kVRows ? (u / users) * batch : (verify ? 0 : u), u, chs[u], chs[u].n);
         }
     }
     for (uint32_t u = 0; u < kUsers; u++) {
@@ -185,34 +192,38 @@ void kernel_main() {
         if constexpr (packed) {
             // per pass and tail tile j: row (r, h) sees column c up to its row's position; per tail tile j: the
             // placement matrix of the new rows on it (row pos % 32 <- row r) and the rows it keeps
-            cb_reserve_back(cb_mask, 2 * users);
-            cb_reserve_back(cb_rowsel, 4);
+            // (verify rows: masks 2 ug + j per pass ug, placement / keep 4 gr + 2 j (+ 1) per user gr)
+            cb_reserve_back(cb_mask, 2 * kUsers);
+            cb_reserve_back(cb_rowsel, 4 * groups);
             volatile tt_l1_ptr uint16_t* m = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_mask));
             volatile tt_l1_ptr uint16_t* sel = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_rowsel));
             for (uint32_t row = 0; row < 32; row++) {
                 for (uint32_t col = 0; col < 32; col++) {
                     const uint32_t at = ((row / 16) * 2 + col / 16) * 256 + (row % 16) * 16 + col % 16;
                     for (uint32_t j = 0; j < 2; j++) {
-                        for (uint32_t g = 0; g < users; g++) {
-                            const uint32_t r = g * group_rows + row / heads;
-                            const bool seen = row >= qrows || (tps[0] + j) * 32 + col <= tps[r] * 32 + tail_rs[r];
-                            m[(2 * g + j) * 1024 + at] = seen ? 0 : 0xff80;
+                        for (uint32_t ug = 0; ug < kUsers; ug++) {
+                            const uint32_t r0 = (ug / users) * batch, r = r0 + (ug % users) * group_rows + row / heads;
+                            const bool seen = row >= qrows || (tps[r0] + j) * 32 + col <= tps[r] * 32 + tail_rs[r];
+                            m[(2 * ug + j) * 1024 + at] = seen ? 0 : 0xff80;
                         }
-                        bool placed = false, kept = true;
-                        for (uint32_t r = 0; r < batch; r++) {
-                            const bool here = tps[r] == tps[0] + j && tail_rs[r] == row;
-                            placed |= here && col == r;
-                            kept &= !here;
+                        for (uint32_t gr = 0; gr < groups; gr++) {
+                            const uint32_t r0 = gr * batch;
+                            bool placed = false, kept = true;
+                            for (uint32_t r = 0; r < batch; r++) {
+                                const bool here = tps[r0 + r] == tps[r0] + j && tail_rs[r0 + r] == row;
+                                placed |= here && col == r;
+                                kept &= !here;
+                            }
+                            sel[(4 * gr + 2 * j) * 1024 + at] = placed ? 0x3f80 : 0;
+                            sel[(4 * gr + 2 * j + 1) * 1024 + at] = kept ? 0x3f80 : 0;
                         }
-                        sel[2 * j * 1024 + at] = placed ? 0x3f80 : 0;
-                        sel[(2 * j + 1) * 1024 + at] = kept ? 0x3f80 : 0;
                     }
                 }
             }
-            cb_push_back(cb_mask, 2 * users);
-            cb_push_back(cb_rowsel, 4);
+            cb_push_back(cb_mask, 2 * kUsers);
+            cb_push_back(cb_rowsel, 4 * groups);
             cb_reserve_back(cb_rope, kRopePages);
-            noc_async_read(tok.get_noc_addr(0, rope_off), get_write_ptr(cb_rope), 3 * batch * kTile);
+            noc_async_read(tok.get_noc_addr(0, rope_off), get_write_ptr(cb_rope), 3 * batch * groups * kTile);
             noc_async_read_barrier();
             build_packed_rope(get_write_ptr(cb_rope));
             cb_push_back(cb_rope, kRopePages);
@@ -322,7 +333,9 @@ void kernel_main() {
             read_blocks(0, early);
         } else if (packed) {
             // once per layer: the tail tiles, the k norm weight and every row's k / v (rows 0 .. batch - 1)
-            if (u == 0) {
+            // (verify rows: per user, at its first pass; its rows in its group's block of the row buffer)
+            const uint32_t n_tail = n_tail_of(u / users);
+            if (u % users == 0) {
                 cb_reserve_back(cb_tail8, 2 * n_tail * Dt);
                 read_rows(ch, k_addr, 0, n_tail, get_write_ptr(cb_tail8), pages, copy_page);
                 read_rows(ch, v_addr, 0, n_tail, get_write_ptr(cb_tail8) + n_tail * kKvRow, pages, copy_page);
@@ -337,10 +350,11 @@ void kernel_main() {
                 cb_reserve_back(cb_kraw, Dt);
                 cb_reserve_back(cb_vraw, Dt);
                 const uint32_t k = get_write_ptr(cb_kraw), v = get_write_ptr(cb_vraw);
+                const uint32_t grows = rows + (u / users) * row_tiles * kRowTile;
                 for (uint32_t r = 0; r < batch; r++) {
                     for (uint32_t d = 0; d < Dt; d++) {
-                        place_row(rows + (k0 + d) * kRowTile + user_offset(r), k + d * kTile, r);
-                        place_row(rows + (v0 + d) * kRowTile + user_offset(r), v + d * kTile, r);
+                        place_row(grows + (k0 + d) * kRowTile + user_offset(r), k + d * kTile, r);
+                        place_row(grows + (v0 + d) * kRowTile + user_offset(r), v + d * kTile, r);
                     }
                 }
                 noc_async_read_barrier();

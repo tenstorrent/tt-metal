@@ -138,6 +138,12 @@ void kernel_main() {
     const uint32_t active_mask = groups == 1
                                      ? (*ring_sem & 0xffff)
                                      : reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base(cb_dout))[kTokActive];
+    // verify rows: each group's ring step, from the reader's copy (streamer_common.hpp kVRows)
+    uint32_t vring[groups];
+    for (uint32_t gr = 0; gr < groups; gr++) {
+        vring[gr] =
+            kVRows ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base(cb_dout) + kVRingCopy)[gr * batch] : ring;
+    }
     // (row groups: group gr's conv history rows follow the num_streamers x gdn_copies rows of the groups before it)
     const uint32_t hist_group_rows = num_streamers * gdn_copies;
     // row groups: only the groups with an active row run (active_rows.hpp): their sub-rounds, rows, histories,
@@ -275,25 +281,31 @@ void kernel_main() {
             send_runs(q_off_gdn);
             o_expected += o_heads;
             // verify: T(k + 2), T(k + 3), T(k + 4); rows mode: (h1, h2, y)
-            constexpr uint32_t outs = verify_pair || rows_mode ? 3 : 1;
+            constexpr uint32_t outs = verify_rows ? 1 : (verify_pair || rows_mode ? 3 : 1);
             // (row groups: group gr's outs slots at gr * outs * kBlkViews, its history rows hist_group_rows further)
             cb_wait_front(cb_hist_out, groups * outs * kBlkViews);
             if (verify_rows && n_conv > 0) {
                 // input row r -> ring slot ring + 3 + r: rows 0 .. n1 - 1 to block b from row o, the rest to block
-                // b + 1 from row 0, per tile and face (see streamer_common.hpp)
-                const uint32_t s0 = (ring + 3) % kRingSlots;
-                const uint32_t b = s0 / batch, o = s0 % batch, n1 = batch - o;
-                const uint32_t page = first_row + g % gdn_copies;
-                const uint32_t src = get_read_ptr(cb_hist_out);
-                for (uint32_t t = 0; t < views_of(n_conv) * 32 / batch; t++) {
-                    for (uint32_t f = 0; f < 2; f++) {
-                        const uint32_t at = t * kTileBytes + f * batch * 32;
-                        noc_async_write(src + at, hist.get_noc_addr(page, b * kBlkBytes + at + o * 32), n1 * 32);
-                        if (o > 0) {
-                            noc_async_write(
-                                src + at + n1 * 32,
-                                hist.get_noc_addr(page, ((b + 1) % kHistSlots) * kBlkBytes + at),
-                                o * 32);
+                // b + 1 from row 0, per tile and face (see streamer_common.hpp; verify rows: per active group, its
+                // ring step, its history rows and y block)
+                for (uint32_t gr = 0; gr < groups; gr++) {
+                    if (kVRows && !ag.has(gr)) {
+                        continue;
+                    }
+                    const uint32_t s0 = (vring[gr] + 3) % kRingSlots;
+                    const uint32_t b = s0 / batch, o = s0 % batch, n1 = batch - o;
+                    const uint32_t page = gr * hist_group_rows + first_row + g % gdn_copies;
+                    const uint32_t src = get_read_ptr(cb_hist_out) + gr * kBlkViews * 2048;
+                    for (uint32_t t = 0; t < views_of(n_conv) * 32 / batch; t++) {
+                        for (uint32_t f = 0; f < 2; f++) {
+                            const uint32_t at = t * kTileBytes + f * batch * 32;
+                            noc_async_write(src + at, hist.get_noc_addr(page, b * kBlkBytes + at + o * 32), n1 * 32);
+                            if (o > 0) {
+                                noc_async_write(
+                                    src + at + n1 * 32,
+                                    hist.get_noc_addr(page, ((b + 1) % kHistSlots) * kBlkBytes + at),
+                                    o * 32);
+                            }
                         }
                     }
                 }

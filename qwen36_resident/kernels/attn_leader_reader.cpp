@@ -106,7 +106,7 @@ void kernel_main() {
         mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_lead_active))[kTokActive];
         cb_push_back(cb_lead_active, 1);
     }
-    const ActiveRows<kUsers> act(mask);
+    const ActiveRows<kUsers> act(pass_mask(mask));  // (verify rows: a bit per pass)
     const uint32_t n_act = act.n;
     if constexpr (kLeadBatched) {
         // the passes' per-row rope tiles: row j * heads + h of pass p from active user p * kQPerPass + j's page

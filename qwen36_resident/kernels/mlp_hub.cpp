@@ -136,7 +136,9 @@ constexpr uint32_t tap_rounds[5] = {
     get_compile_time_arg_val(27)};
 constexpr uint32_t hidden_tiles = get_compile_time_arg_val(28);
 constexpr uint32_t kHubTs = 8;  // timeline words per round (sub-round with groups)
-static_assert(groups == 1 || n_taps == 0, "row groups: no drafter taps (verify runs one group)");
+// (row groups: the taps of verify rows, DB1 — group g's rows at rows g * kBatch .. of the tap tiles)
+static_assert(
+    groups == 1 || n_taps == 0 || (groups * kBatch <= 32 && 16 % kBatch == 0), "taps: a group's rows in a face");
 // fabric links to each neighbour: with 2, the odd packets of a vector go over the second link
 constexpr uint32_t links = get_compile_time_arg_val(29);
 static_assert(links == 1 || links == 2, "one or two fabric links");
@@ -146,14 +148,16 @@ constexpr uint32_t kTapTile = 2048;                          // a bf16 32x32 til
 constexpr uint32_t kRowsTile = vector_bytes / hidden_tiles;  // a batch x 32 bf16 tile of x
 constexpr uint32_t kTapTiles = hidden_tiles / num_chips;     // this chip's hidden tiles
 
-// this chip's columns of x (batch x 32 tiles at `x`) into the tap tensor at `addr` (rows of 32x32 tiles)
-void write_tap(uint32_t x, uint32_t addr) {
+// this chip's columns of x (batch x 32 tiles at `x`) into the tap tensor at `addr` (rows of 32x32 tiles; row group g
+// into rows g * batch ..)
+void write_tap(uint32_t x, uint32_t addr, uint32_t g) {
     const InterleavedAddrGen<true> tap{.bank_base_address = addr, .page_size = kTapTile};
     constexpr uint32_t face_rows = kRowsTile / 2;  // one face of a batch x 32 tile: batch rows of 32 B
+    const uint32_t r0 = g * (face_rows / 32), at = (r0 / 16) * 1024 + (r0 % 16) * 32;
     for (uint32_t t = 0; t < kTapTiles; t++) {
         const uint32_t src = x + (chip * kTapTiles + t) * kRowsTile;
-        noc_async_write(src, tap.get_noc_addr(t, 0), face_rows);
-        noc_async_write(src + face_rows, tap.get_noc_addr(t, 512), face_rows);
+        noc_async_write(src, tap.get_noc_addr(t, at), face_rows);
+        noc_async_write(src + face_rows, tap.get_noc_addr(t, at + 512), face_rows);
     }
 }
 constexpr uint32_t packets_per_vector = (vector_bytes + packet_bytes - 1) / packet_bytes;
@@ -604,8 +608,8 @@ void kernel_main() {
         mark(s, 4);
         if constexpr (published) {
             for (uint32_t i = 0; i < n_taps; i++) {
-                if (l == tap_rounds[i] && g == 0) {
-                    write_tap(src, tap_addr[i]);
+                if (l == tap_rounds[i]) {
+                    write_tap(src, tap_addr[i], g);
                 }
             }
             noc_async_write_barrier();

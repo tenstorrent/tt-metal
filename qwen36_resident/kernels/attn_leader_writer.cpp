@@ -126,7 +126,7 @@ void kernel_main() {
         }
     }
     // (row groups: global rows; the stage holds one heads x Dt block per group, written to o_in block g)
-    const ActiveRows<kUsers> act(mask);
+    const ActiveRows<kUsers> act(pass_mask(mask));  // (verify rows: a bit per pass)
     const uint32_t n_act = act.n;
     // (kLeadPipelined: per active user the workers with KV tiles — the chunk workers with a chunk, the tail taking it;
     // the others send -inf, which the row max leaves out)

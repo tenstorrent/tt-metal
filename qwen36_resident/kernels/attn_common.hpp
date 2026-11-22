@@ -97,9 +97,27 @@ static_assert(!packed || (verify && batch % group_rows == 0), "packed passes tak
 constexpr uint32_t users = batch / group_rows;  // passes per layer: users, or groups of verify rows
 // row groups (active_rows.hpp, rows mode): every group's users run through the layer (global row g * batch + u; the
 // streamers' rows / the leader's output are one block of row_tiles / o_tiles batch x 32 tiles per group)
-static_assert(groups == 1 || (!verify && group_rows == 1), "row groups are rows mode: one row per user");
+// verify rows (DB1, verify with row groups): group g is user g's verify of batch rows, run as its `users` packed passes
+// (pass ug = g * users + p: rows p * group_rows .. of user g); per pass its user's KV, tail tiles and masks
+constexpr bool kVRows = verify && groups > 1;
+static_assert(
+    groups == 1 || (!verify && group_rows == 1) || (kVRows && packed),
+    "row groups are rows mode: one row per user (verify rows: packed passes)");
 constexpr uint32_t kUsers = users * groups;
-constexpr uint32_t kRows = groups == 1 ? batch : kUsers;  // per-row arrays / lists (verify: the batch rows of one user)
+// per-row arrays / lists (verify: the batch rows of one user; verify rows: every row of every group)
+constexpr uint32_t kRows = kVRows ? batch * groups : (groups == 1 ? batch : kUsers);
+// the active mask the attention kernels iterate over: rows mode's bit per row, or (verify rows) bit ug per pass, set
+// when its group's row 0 is active (a user's rows run together)
+FORCE_INLINE uint32_t pass_mask(uint32_t row_mask) {
+    if constexpr (!kVRows) {
+        return row_mask;
+    }
+    uint32_t m = 0;
+    for (uint32_t ug = 0; ug < kUsers; ug++) {
+        m |= ((row_mask >> ((ug / users) * batch)) & 1u) << ug;
+    }
+    return m;
+}
 constexpr uint32_t qrows = heads * group_rows;  // q / output rows of a pass
 static_assert(qrows <= 32, "a pass's rows fit one tile");
 constexpr bool top_faces = qrows <= 16;  // a pass's rows live in the top faces only
@@ -152,8 +170,9 @@ constexpr uint32_t cb_kw = 16;      // this layer's (1 + w_k)
 constexpr uint32_t cb_rope = 17;    // per user: cos, sin, -sin of its position (rows replicated)
 // cb_rope pages: per token-state row cos, sin, -sin (rows replicated); packed: then per pass the q rope (row (r, h)
 // from the group's row r) and the tail's k rope (row r from row r)
-constexpr uint32_t kRopeQ = 3 * batch, kRopeK = 3 * batch + 3 * users;
-constexpr uint32_t kRopePages = packed ? kRopeK + 3 : 3 * batch * groups;
+// (verify rows: after every row's pages, per pass its q rope, then per user (group) its tail's k rope)
+constexpr uint32_t kRopeQ = 3 * batch * groups, kRopeK = kRopeQ + 3 * kUsers;
+constexpr uint32_t kRopePages = packed ? kRopeK + 3 * groups : 3 * batch * groups;
 // row groups (rows mode): the tail core normalizes and ropes every active user's new k row of a layer at once (user u
 // in row u of one tile set, per-row rope tiles at kRopeRows of cb_rope, built by the tail reader), then per user a 0/1
 // placement matmul puts its row into the tail tile (cb_rowsel per user: P_u = 1 at (r_u, u), then keep = rows != r_u)

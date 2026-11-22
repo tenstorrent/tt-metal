@@ -599,7 +599,11 @@ class ResidentModel:
         groups (rows mode, kernels/active_rows.hpp): row groups of `batch` rows that one launch carries, the weights
         streamed once for all of them (custom_mm takes at most 8 rows, so more users per launch come as groups).
         groups > 1: exactly 8 * groups users (st), one launch; rows mode, paged KV and the hub feed, no fc / verify /
-        taps; 1, 2 or 4. Anything else raises rather than running as more launches."""
+        taps; 1, 2 or 4. Anything else raises rather than running as more launches.
+        verify rows (DB1, verify = 8 with rows and groups > 1): row group g is user g's verify of 8 rows (st: one State
+        per group, block_tables one per group); per user its own positions, ring step, GDN slot and prev
+        (token_state_vrows); the GDN head core g of each value head runs group g's rows (the verify chain stays on one
+        core); taps allowed (group g's rows land in rows 8 g .. of the tap tiles)."""
         self.mesh, self.d, self.layers, self.interval, self.lm_head = mesh, d, layers, interval, lm_head
         R = 0 if not verify else (2 if verify is True else int(verify))
         assert R in (0, 2, 4, 8), "verify runs 2, 4 or 8 rows"
@@ -608,13 +612,25 @@ class ResidentModel:
         self.taps = list(taps or [])
         assert len(self.taps) <= 5
         self.rows = rows
-        assert not rows or not verify, "rows mode: independent users"
+        # verify rows (DB1): a row group per user, its 8 rows a verify of that user (see the docstring)
+        self.vrows = bool(verify) and rows and groups > 1
+        assert not rows or not verify or self.vrows, "rows mode: independent users (verify: row groups, vrows)"
         if groups not in (1, 2, 4):
             raise NotImplementedError(f"row groups per launch: groups={groups} (1, 2 or 4)")
         if groups > 1 and not (
-            rows and kv_pool_blocks is not None and embed is not None and fc is None and not verify and not taps
+            rows
+            and kv_pool_blocks is not None
+            and embed is not None
+            and fc is None
+            and ((not verify and not taps) or (self.vrows and R == 8))
         ):
-            raise ValueError("row groups: rows mode with paged KV and the hub feed (embed), no fc / verify / taps")
+            raise ValueError(
+                "row groups: rows mode with paged KV and the hub feed (embed), no fc; verify (8 rows per group, taps) "
+                "or neither verify nor taps"
+            )
+        if self.vrows and self.gdn_chunk:
+            logger.info("verify rows: the sequential GDN chain (gdn_chunk has no row groups yet)")
+            self.gdn_chunk = False
         self.groups = groups
         # (row groups: two attention tail cores, attn_common.hpp kTails; the chunk workers are the others)
         self.attn_tails = ATTN_TAILS if rows and groups > 1 and not verify else 1
@@ -624,7 +640,10 @@ class ResidentModel:
         self.tok_pos_off = 0
         self.fc = fc is not None
         self.sample = embed is not None and not verify  # the hub draws the fed token (sampling.hpp)
-        if verify:
+        if self.vrows:
+            assert len(st) == groups, "verify rows: one State per row group"
+            st = [s for s in st for _ in range(R)]  # (user g's R slots start as copies of its state)
+        elif verify:
             assert isinstance(st, State)
             st = [st] * R
         sts_all = list(st) if isinstance(st, (list, tuple)) else [st]
@@ -668,8 +687,11 @@ class ResidentModel:
         free = [ttnn.CoreCoord(x, y) for y in range(cgrid.y) for x in range(cgrid.x) if (x, y) not in used]
         # GDN head cores: G per value head (head-major: core hh * G + g), core g of a head takes users
         # g * B / G .. (g + 1) * B / G
+        # (verify rows: G = groups, core g of a head runs group g's rows, all of one user: gdn_head_reader.cpp)
         G = (
-            1
+            groups
+            if self.vrows
+            else 1
             if verify
             else int(os.environ.get("RESIDENT_HEAD_GROUPS", "0"))
             or max(g for g in range(1, B + 1) if B % g == 0 and 1 + d.nv * g <= len(free))
@@ -829,8 +851,10 @@ class ResidentModel:
 
         # (each further sub-batch has its own logits, an L1 tensor)
         extra = (n_sub - 1) * B * 2 * nv_max * TILE if lm_head else 0
-        # verify: two more conv history outputs and the row selections (R > 2 rows: 9 row selections)
-        extra += (2 * blk_tiles * 64 * B + 3 * 2048) if R == 2 else (9 * 2048 if verify else 0)
+        # verify: two more conv history outputs and the row selections (R > 2 rows: 9 row selections; verify rows: the
+        # 3 shared S_j and 6 H_j,b per group, streamer_common.hpp)
+        n_shift = 3 + 6 * groups if self.vrows else 9
+        extra += (2 * blk_tiles * 64 * B + 3 * 2048) if R == 2 else (n_shift * 2048 if verify else 0)
         ring_bytes = ((L1_WEIGHT_BUDGET - act_bytes(B, groups) + act_bytes(1) - extra) // lcm) * lcm
         # (row groups: the one-group ring, the most the L1 measurement below may grow the ring to)
         ring_one = ((L1_WEIGHT_BUDGET - act_bytes(B) + act_bytes(1) - extra) // lcm) * lcm
@@ -947,7 +971,13 @@ class ResidentModel:
         self.kv_paged = kv_pool_blocks is not None
         if self.kv_paged:  # the pools stand in for the caches, addressed through the page lists (no stride)
             kv_stride = 0
-            self._kv_pool_setup(sts_all[:1] if verify else sts_all, kv_pool_blocks, kv_block_size, block_tables)
+            if self.vrows:  # (a table per user; every row of the user reads and writes through it)
+                bpu = -(-sts_all[0].max_pos // kv_block_size)
+                ut = block_tables or [range(g * bpu, (g + 1) * bpu) for g in range(groups)]
+                assert len(ut) == groups, "verify rows: one block table per user (row group)"
+                self._kv_pool_setup(sts_all, kv_pool_blocks, kv_block_size, [ut[r // R] for r in range(LR)])
+            else:
+                self._kv_pool_setup(sts_all[:1] if verify else sts_all, kv_pool_blocks, kv_block_size, block_tables)
             if packed:  # the tail core's page list holds up to two tail tiles
                 self.kv_max_n = max(self.kv_max_n, 2)
         else:
@@ -970,6 +1000,12 @@ class ResidentModel:
         if groups > 1:
             self.tok_pos_off = -(-(self.rope_off + 3 * 2048 * LR) // 64) * 64
             self.tok_words = (self.tok_pos_off + -(-4 * LR // 64) * 64) // 4
+        # verify rows: per row its user's ring step, GDN slot and prev at tok_ver_off + 128 * k (k = 0, 1, 2; a word per
+        # row, active_rows.hpp)
+        self.tok_ver_off = 0
+        if self.vrows:
+            self.tok_ver_off = self.tok_words * 4
+            self.tok_words += 3 * 32
         if tok is None:
             tok = dram_t(torch.zeros(1, self.tok_words, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep)
         assert tok.shape[-1] == self.tok_words
@@ -1017,7 +1053,7 @@ class ResidentModel:
             assert (
                 lm_head and (B == 1 or verify or rows) and (n_sub == 1 or rows)
             ), "the hub feeds batch 1, verify or rows"
-            assert (feed_peer is not None) == verify
+            assert (feed_peer is not None) == (verify and not rows)  # (verify rows: the rows-mode feed)
             self.embed, self.feed_peer = embed, feed_peer
             fed_rows = LR if rows else 2 if verify else 1  # tokens per launch (mlp_hub.cpp kCandWords)
             self._cand_words = 2 * TOP_K * fed_rows if self.sample else max(4, 2 * fed_rows)  # per chip
@@ -1225,10 +1261,10 @@ class ResidentModel:
                 aliased(19, 24, CONV_K * blk_tiles),
                 aliased(20, 25, groups * (CONV_K - 1) * blk_tiles),
                 *([T(21, self.o_in_t)] if groups == 1 else []),
-                cb(30, grid, groups * (3 if R == 2 or self.rows else 1) * blk_tiles * B // TILE),
+                cb(30, grid, groups * (3 if R == 2 or (self.rows and not self.vrows) else 1) * blk_tiles * B // TILE),
             ]
             if self.verify:
-                cbs.append(cb(36, grid, 3 if R == 2 else 9))
+                cbs.append(cb(36, grid, 3 if R == 2 else n_shift))
             # hub: slots (2 parities x chips) and their sum x (32x32 views), fabric packet headers (2 parities x
             # packets x 2 directions) and a word
             hub_headers = 4 * -(-HIDDEN * 2 * B // packet_bytes)
@@ -1366,7 +1402,8 @@ class ResidentModel:
                 cb(10, work_grid, 1, ttnn.uint32, 1088 if packed or groups > 1 else (640 if self.rows else 256)),
                 *(
                     [cb(23, attn_grid, slots_per_node * (Dt + 1))]
-                    if groups == 1
+                    # (verify rows: unpipelined, kLeadPipelined off — the workers write the one set of slots)
+                    if groups == 1 or self.vrows
                     # (row groups: the leader's slots hold two iterations, attn_common.hpp kLeadPipelined)
                     else [
                         cb(23, work_grid, slots_per_node * (Dt + 1)),
@@ -1381,9 +1418,10 @@ class ResidentModel:
                 cb(
                     17,
                     prep_grid,
-                    3 * LR + (3 * attn_users + 3 if packed else 0)
+                    # (verify rows: per pass its q rope, per user its tail's k rope, attn_common.hpp kRopePages)
+                    3 * LR + ((3 * attn_users + 3) * groups if packed else 0)
                     # (row groups: the leader's q-pass rope tiles / the tail core's per-row rope tiles)
-                    + (max(3, 3 * -(-LR // (TILE // heads_a))) if groups > 1 else 0),
+                    + (max(3, 3 * -(-LR // (TILE // heads_a))) if groups > 1 and not self.vrows else 0),
                 ),
                 T(29, mean_t),
                 # leader
@@ -1401,13 +1439,13 @@ class ResidentModel:
                 *([cb(42, lead_grid, 2 * Dt)] if groups > 1 else []),
                 # tail core
                 cb(11, tail_grid, Dt),
-                cb(12, tail_grid, 4 if packed else 2 * LR),
+                cb(12, tail_grid, 4 * groups if packed else 2 * LR),
                 cb(16, tail_grid, Dt),
                 cb(18, tail_grid, Dt),
                 cb(19, tail_grid, (2 if packed else 1) * Dt),
                 cb(20, tail_grid, (2 if packed else 1) * Dt),
                 cb(21, tail_grid, Dt),
-                cb(22, tail_grid, 2 * attn_users if packed else LR),
+                cb(22, tail_grid, 2 * attn_users * groups if packed else LR),
                 cb(28, tail_grid, (4 if packed else 2) * Dt, ttnn.bfloat8_b, kv_page),
                 cb(31, tail_grid, (4 if packed else 2) * Dt, ttnn.bfloat8_b, kv_page),
             ]
@@ -1451,6 +1489,7 @@ class ResidentModel:
                 ("row_tiles", row_w // TILE),
                 ("o_tiles", d.gv // TILE),  # the streamers' o_in tiles per row group (gdn_head_writer.cpp)
                 ("tok_pos_off", self.tok_pos_off),  # the rows' positions with row groups (active_rows.hpp)
+                ("tok_ver_off", self.tok_ver_off),  # verify rows: per-row ring / slot / prev words (active_rows.hpp)
                 ("sem_raddr", SEM_RADDR),
                 ("attn_tails", self.attn_tails),  # (attn_common.hpp kTails)
             ]
@@ -1628,7 +1667,7 @@ class ResidentModel:
                 hub_ct = [n, chip, HIDDEN * 2 * B, packet_bytes, rounds, S, SEM_GATHER, SEM_SLOTS]
                 hub_ct += [SEM_FLAG, int(lm_head), 1, 1, SEM_ADDR]
                 hub_ct += [int(self.feed), sts[0].max_pos, self.tok_words * 4, self.rope_off, 3 * 2048]
-                feed_kind = (2 if self.fc else 1) if self.feed and verify else 0
+                feed_kind = (2 if self.fc else 1) if self.feed and verify and not self.rows else 0
                 hub_ct += [feed_kind, TOK_X0 + (1 if self.fc else 2) * d.Ht * 64 * B, HIDDEN * 2, int(self.sample)]
                 # taps: the hub round holding x after the tap's decoder layer
                 rounds_of = [2 * l + 1 + int(self.fc) for l, _ in self.taps]
@@ -1658,6 +1697,8 @@ class ResidentModel:
                 for hc, c in enumerate(heads):
                     hh, gi = divmod(hc, G)
                     nu = B // G
+                    # (the core's rows: u0 .. u0 + nu of every group; verify rows: all of group gi, u0 = gi, nu = B)
+                    u0_arg, nu_arg = (gi, B) if self.vrows else (gi * nu, nu)
                     kh = hh // group
                     a_col, b_col = d.a0 + hh, d.b0 + hh
                     gates = []
@@ -1683,13 +1724,13 @@ class ResidentModel:
                             hh,
                         ]
                         + gates
-                        + [gdn_io_ts, gi * nu, nu, row_writes[hc], tok_addr]
+                        + [gdn_io_ts, u0_arg, nu_arg, row_writes[hc], tok_addr]
                     )
                     col = head_p[hh * G]
                     hw[c.x][c.y] = (
                         [sub["state"].buffer_address(), o_in_addr, hh]
                         + peers
-                        + [gdn_io_ts, gi * nu, nu, G, col.x, col.y, tok_addr]
+                        + [gdn_io_ts, u0_arg, nu_arg, G, col.x, col.y, tok_addr]
                     )
                 head_ct = [4, 4, self.n_gdn, gdn_copies, S]
                 # (runtime arg 0: the debug per-step timeline, 0 = off)
@@ -1894,6 +1935,26 @@ class ResidentModel:
             x0[u], pos[u] = v.reshape(-1).float(), int(p)
         return self._token_state(x0, pos, None, active=[u in rows for u in range(LR)], preserve=preserve)
 
+    def token_state_vrows(self, x0, pos, ring, slot, prev=None, active=None):
+        """verify rows: the host token state of a step of every user's R rows. Per user g (row group g): x0 [R, HIDDEN]
+        (x0: [groups, R, HIDDEN]), its row 0's position pos[g] (row r at pos[g] + r), its conv ring step ring[g] and
+        GDN slot slot[g] (after a step at (k, s) with a drafts accepted the next continues at k + 1 + a, (s + a) % R),
+        prev[g] the previous step's accepted drafts (None: none, the committed state; the chunked GDN's word, kept
+        for it), active[g] (default all): an inactive user's rows do not run."""
+        assert self.vrows
+        U, R, LR = self.groups, self.R, self.launch_rows
+        act = [True] * U if active is None else [bool(a) for a in active]
+        prev = [None] * U if prev is None else list(prev)
+        x0 = x0.reshape(LR, HIDDEN)
+        rows_pos = [int(pos[g]) + r for g in range(U) for r in range(R)]
+        words, base = {}, self.tok_ver_off // 4
+        for row in range(LR):
+            g = row // R
+            words[base + row] = int(ring[g])
+            words[base + 32 + row] = int(slot[g]) % R
+            words[base + 64 + row] = 0xFFFFFFFF if prev[g] is None else int(prev[g])
+        return self._token_state(x0, rows_pos, None, extra=words, active=[act[r // R] for r in range(LR)])
+
     def out_tensor(self, launch=0):
         """the device out tensor of a launch's fed tokens (rows mode: 4 words per row, see fed_token)"""
         return self.subs[launch]["out"]
@@ -2086,6 +2147,16 @@ class ResidentModel:
         32 batch x 32 tiles; the ring slot of age a (0 = oldest) at ring step s is (s * uses + a) % 3 (see
         conv_step in streamer_common.hpp; ring: by default the position at batch 1, else 0)"""
         sts = sts if isinstance(sts, (list, tuple)) else [sts]
+        if self.vrows and len(sts) == self.launch_rows:
+            # verify rows: group g's ring (user g's histories at its ring step, ring: per user or one for all) after
+            # the S x copies rows of the groups before it
+            b, n = self.batch, self.d.n
+            rings = list(ring) if isinstance(ring, (list, tuple)) else [ring or 0] * self.groups
+            per = [
+                self._hist_host_rows(sts[g * b], rings[g]).reshape(n, self._S * self._gdn_copies, -1)
+                for g in range(self.groups)
+            ]
+            return torch.cat(per, dim=1).reshape(n * self.groups * self._S * self._gdn_copies, -1)
         if self.R > 2:
             return self._hist_host_rows(sts[0], ring or 0)
         if self.groups > 1 and len(sts) == self.launch_rows:

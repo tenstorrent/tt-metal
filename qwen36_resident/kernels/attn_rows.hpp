@@ -23,16 +23,21 @@ FORCE_INLINE void build_packed_rope(uint32_t base) {
         noc_async_read(get_noc_addr(from), to, kFaceRow);
         noc_async_read(get_noc_addr(from + kFace), to + kFace, kFaceRow);
     };
+    // (verify rows: pass ug = gr * users + g of user gr takes rows gr * batch + g * group_rows + r; user gr's tail
+    // rope at kRopeK + 3 gr)
     for (uint32_t k = 0; k < 3; k++) {
-        for (uint32_t g = 0; g < users; g++) {
+        for (uint32_t ug = 0; ug < kUsers; ug++) {
+            const uint32_t gr = ug / users, g = ug % users;
             for (uint32_t r = 0; r < group_rows; r++) {
                 for (uint32_t h = 0; h < heads; h++) {
-                    copy_row(3 * (g * group_rows + r) + k, kRopeQ + 3 * g + k, r * heads + h);
+                    copy_row(3 * (gr * batch + g * group_rows + r) + k, kRopeQ + 3 * ug + k, r * heads + h);
                 }
             }
         }
-        for (uint32_t r = 0; r < batch; r++) {
-            copy_row(3 * r + k, kRopeK + k, r);
+        for (uint32_t gr = 0; gr < groups; gr++) {
+            for (uint32_t r = 0; r < batch; r++) {
+                copy_row(3 * (gr * batch + r) + k, kRopeK + 3 * gr + k, r);
+            }
         }
     }
     noc_async_read_barrier();

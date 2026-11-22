@@ -407,8 +407,9 @@ __attribute__((noinline)) void add_residual(uint32_t nd, uint32_t pout_off) {
 FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
     // row groups: q|k|v|z, its output and the history slots per group (block gr at gr * kBlk tiny tiles / gr *
     // kBlkViews views; history and the shifted history 3 slots per group); the conv taps are the layer's, shared
-    static_assert(groups == 1 || (!verify_rows && !verify_pair), "verify runs one group");
-    constexpr uint32_t hist_slots = verify_pair || rows_mode ? 3 : 1;
+    // (verify rows: per group its S_j y, H_j,b and history blocks, streamer_common.hpp kVRows; y alone goes out)
+    static_assert(groups == 1 || ((!verify_rows || kVRows) && !verify_pair), "verify of row groups: verify rows");
+    constexpr uint32_t hist_slots = verify_rows ? 1 : (verify_pair || rows_mode ? 3 : 1);
     cb_wait_front(cb_qkvz, groups * kBlk);
     cb_reserve_back(cb_qkvz_out, groups * kBlk);
     if (gdn) {
@@ -432,13 +433,15 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
                     reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_qkvz_full);
                     matmul_init(cb_shift, cb_qkvz_full);
                     for (uint32_t j = 0; j < 3; j++) {
-                        matmul_tiles(cb_shift, cb_qkvz_full, j, v, 2 + 2 * j);
+                        matmul_tiles(cb_shift, cb_qkvz_full, j, oq + v, 2 + 2 * j);
                     }
                     reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_conv_hist_full);
                     matmul_init(cb_shift, cb_conv_hist_full);
+                    const uint32_t hsel = 3 + (kVRows ? 6 * gr : 0);
                     for (uint32_t j = 0; j < 3; j++) {
                         for (uint32_t b = 0; b < 2; b++) {
-                            matmul_tiles(cb_shift, cb_conv_hist_full, 3 + 2 * j + b, b * kBlkViews + v, 2 + 2 * j);
+                            matmul_tiles(
+                                cb_shift, cb_conv_hist_full, hsel + 2 * j + b, oh + b * kBlkViews + v, 2 + 2 * j);
                         }
                     }
                     reconfig_full_operand(cb_qkvz_full, cb_qkvz_full);
@@ -477,12 +480,12 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
                 if constexpr (verify_pair) {
                     pack_tile<true>(6, cb_hist_out, v);
                     pack_tile<true>(0, cb_hist_out, kBlkViews + v);
-                } else if constexpr (rows_mode) {
+                } else if constexpr (rows_mode && !verify_rows) {
                     pack_tile<true>(4, cb_hist_out, oo + v);
                     pack_tile<true>(6, cb_hist_out, oo + kBlkViews + v);
                     pack_tile<true>(0, cb_hist_out, oo + 2 * kBlkViews + v);
                 } else {
-                    pack_tile<true>(0, cb_hist_out, v);
+                    pack_tile<true>(0, cb_hist_out, oo + v);
                 }
                 tile_regs_release();
                 if constexpr (verify_pair) {
@@ -590,7 +593,7 @@ void kernel_main() {
         cb_wait_front(cb_eye, 1);
     }
     if constexpr (verify) {
-        cb_wait_front(cb_shift, verify_rows ? 9 : 3);
+        cb_wait_front(cb_shift, verify_rows ? kShiftTiles : 3);
     }
 
     static_assert(!fc_in || groups == 1, "the MTP draft layer (fc_in) runs one group");

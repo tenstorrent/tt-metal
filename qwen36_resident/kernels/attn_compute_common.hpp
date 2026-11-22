@@ -330,7 +330,8 @@ FORCE_INLINE void update_tail(uint32_t sel = 0) {
 // packed: the n_tail tail tiles (cb_tail8: k of each tile, then v of each) with every row's new k / v row (rows
 // 0 .. batch - 1 of cb_knew / cb_vraw) at its position: tail (x) keep + P @ new, per tile the keep mask and the
 // placement matrix P at tiles 2 j + 1, 2 j of cb_rowsel (exact: 0/1 products)
-FORCE_INLINE void update_tail_rows(uint32_t n_tail) {
+// (verify rows: the user's placement / keep tiles from sel0 of cb_rowsel)
+FORCE_INLINE void update_tail_rows(uint32_t n_tail, uint32_t sel0 = 0) {
     cb_wait_front(cb_tail8, 2 * n_tail * Dt);
     cb_wait_front(cb_knew, Dt);
     cb_wait_front(cb_vraw, Dt);
@@ -345,12 +346,12 @@ FORCE_INLINE void update_tail_rows(uint32_t n_tail) {
                 reconfig_data_format(cb_tail8, cb_rowsel);
                 mul_init(cb_tail8, cb_rowsel, false);
                 for (uint32_t i = 0; i < kBatch; i++) {
-                    mul_tiles(cb_tail8, cb_rowsel, (kv * n_tail + j) * Dt + d0 + i, 2 * j + 1, i);
+                    mul_tiles(cb_tail8, cb_rowsel, (kv * n_tail + j) * Dt + d0 + i, sel0 + 2 * j + 1, i);
                 }
                 reconfig_data_format(row_cb, cb_rowsel);
                 matmul_init(cb_rowsel, row_cb, 0);
                 for (uint32_t i = 0; i < kBatch; i++) {
-                    matmul_tiles(cb_rowsel, row_cb, 2 * j, d0 + i, i);
+                    matmul_tiles(cb_rowsel, row_cb, sel0 + 2 * j, d0 + i, i);
                 }
                 tile_regs_commit();
                 tile_regs_wait();

@@ -24,6 +24,9 @@
 // norms, decay * k, beta) into row 0 of the per-user tiles and spreads its decay over a full fp32 tile (one user
 // ahead of compute), gathers each user's o (row 0 of cb_o) into row k of cb_o_b and writes its state back; compute's
 // output then holds the n users in rows 0 .. n - 1 of cb_out; the layer's last state write-back follows the output.
+// Verify rows (kVRows, see the reader): this core runs group u0's rows (one user; core g of the head = group g, the
+// collector group 0's); row u writes slot g * batch + (cur + u) % batch; write-backs are acked eagerly (the reader
+// chains row u + 1 from the state once it is stored).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -47,6 +50,7 @@ constexpr uint32_t kBf16Tile = 2048, kF32Tile = 4096, kFaceBytes = 512, kFaceRow
 constexpr uint32_t kRowTile = 64 * batch;
 // row groups (gdn_head_compute.cpp kBatched)
 constexpr bool kBatched = groups > 1;
+constexpr bool kVRows = verify && groups > 1;
 constexpr uint32_t cb_o = 25, cb_o_b = 39, cb_qn = 13, cb_kn = 14, cb_decay = 15, cb_beta_row0 = 19;
 constexpr uint32_t cb_decay_b = 32, cb_betam_b = 33, cb_kdec_b = 35, cb_qn_u = 36, cb_kn_u = 37, cb_kdec_u = 38;
 constexpr uint32_t kF32Row = 64, kF32Face = 1024;
@@ -119,8 +123,15 @@ void kernel_main() {
         cur = *slot_sem - 1;
     }
 
-    // the stage rows of users r0 .. r0 + nu of every group, zeroed
+    // the stage rows of users r0 .. r0 + nu of every group, zeroed (verify rows: every row of group r0)
     auto zero_rows = [&](uint32_t r0) {
+        if constexpr (kVRows) {
+            volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + r0 * Vt * kRowTile);
+            for (uint32_t w = 0; w < Vt * kRowTile / 4; w++) {
+                p[w] = 0;
+            }
+            return;
+        }
         for (uint32_t t = 0; t < groups * Vt; t++) {
             for (uint32_t f = 0; f < 2; f++) {
                 volatile tt_l1_ptr uint32_t* p =
@@ -150,20 +161,24 @@ void kernel_main() {
             if (collector) {
                 busy = 0;
                 for (uint32_t g = 1; g < cores; g++) {  // core g of the head takes users g nu .. (g + 1) nu
-                    bool any = false;                   // (in any row group)
+                    bool any = false;                   // (in any row group; verify rows: group g's rows)
                     for (uint32_t gr = 0; gr < groups; gr++) {
-                        any |= ((mask >> (gr * batch + g * nu)) & ((1u << nu) - 1)) != 0;
+                        if (kVRows) {
+                            any |= gr == g && ((mask >> (gr * batch)) & ((1u << batch) - 1)) != 0;
+                        } else {
+                            any |= ((mask >> (gr * batch + g * nu)) & ((1u << nu) - 1)) != 0;
+                        }
                     }
                     if (any) {
                         busy++;
                     } else {
-                        zero_rows(g * nu);
+                        zero_rows(kVRows ? g : g * nu);
                     }
                 }
             }
         }
-        for (uint32_t gr = 0; gr < groups; gr++) {
-            for (uint32_t u = u0; u < u0 + nu; u++) {
+        for (uint32_t gr = kVRows ? u0 : 0; gr < (kVRows ? u0 + 1 : groups); gr++) {
+            for (uint32_t u = kVRows ? 0 : u0; u < (kVRows ? nu : u0 + nu); u++) {
                 if ((mask >> (gr * batch + u)) & 1) {
                     act[n++] = gr * batch + u;
                 }
@@ -175,7 +190,15 @@ void kernel_main() {
     // after the core's last user of layer l: its rows to the head's collector, or (collector) the head's output
     // into every streamer
     auto layer_out = [&](uint32_t l) {
-        if (!collector) {
+        if (!collector && kVRows) {
+            // group u0's block, every row
+            if (ag.has(u0)) {
+                const uint32_t off = u0 * Vt * kRowTile;
+                noc_async_write(stage + off, get_noc_addr(cx, cy, stage + off), Vt * kRowTile);
+            }
+            noc_async_write_barrier();
+            noc_semaphore_inc(get_noc_addr(cx, cy, get_semaphore(sem_group)), 1);
+        } else if (!collector) {
             // users u0 .. u0 + nu are contiguous face rows of every tile (of every group's block)
             for (uint32_t t = 0; t < groups * Vt; t++) {
                 for (uint32_t f = 0; ag.has(t / Vt) && f < 2; f++) {
@@ -212,10 +235,11 @@ void kernel_main() {
     // (kBatched) state write-back i (user r) to DRAM. A write-back is acked lazily (before the next one is issued, so
     // its latency stays off compute's path): sem_state counts the landed ones for the reader, which re-reads a copy's
     // state only after its write-back; eager when the reader's next state may be the one just written (copies x n = 1).
-    const bool eager = copies * n <= 1;
+    const bool eager = copies * n <= 1 || verify;
     uint32_t landed = 0;
     auto write_state = [&](uint32_t i, uint32_t r) {
-        const uint32_t first = ((i / n % copies * num_heads + head) * kUsers + r) * st;
+        const uint32_t slot = kVRows ? (r / batch) * batch + (cur + r % batch) % batch : r;
+        const uint32_t first = ((i / n % copies * num_heads + head) * kUsers + slot) * st;
         cb_wait_front(cb_s_new_out, st);
         if (landed < i) {
             noc_async_write_barrier();

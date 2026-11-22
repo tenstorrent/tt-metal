@@ -30,6 +30,10 @@
 // tile set, a / b in rows 0 .. n - 1 (every column) of one fp32 tile each, the norm weight once; per user the reader
 // places its v in row 0 and streams the states one user ahead with no wait on compute (the writer extracts the other
 // per-user tiles from compute's batched results).
+// Verify rows (kVRows: verify with row groups, DB1): group g is one user's verify of batch rows. Core g of a value head
+// runs group g's rows (runtime u0 = g, nu = batch; the chain stays on one core): row 0 reads the user's slot cur (its
+// token-state slot word, active_rows.hpp) of the group's batch slots, row u > 0 takes row u - 1's updated state from
+// the writer's CB once the writer has stored it (sem_state, acked eagerly under verify) instead of a DRAM read.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -63,6 +67,7 @@ constexpr uint32_t kBf16Tile = 2048, kF32Tile = 4096, kFaceBytes = 512, kFaceRow
 constexpr uint32_t kRowTile = 64 * batch;  // a batch x 32 bf16 tile of the row buffer
 // row groups (gdn_head_compute.cpp kBatched): compute's batched results and the per-user row-0 tiles
 constexpr bool kBatched = groups > 1;
+constexpr bool kVRows = verify && groups > 1;
 constexpr uint32_t kF32Row = 64, kF32Face = 1024;
 
 inline uint32_t row0_offset(uint32_t c) { return c < 16 ? c : 256 + (c - 16); }
@@ -184,7 +189,14 @@ void kernel_main() {
     }
     cb_push_back(cb_row_mask, 1);
     uint32_t cur = 0;
-    if constexpr (verify) {
+    if constexpr (kVRows) {
+        // the user's slot word (every row of the group holds it; one user per core), for this RISC and the writer
+        const uint32_t scratch = get_write_ptr(cb_s_in);
+        noc_async_read(get_noc_addr_from_bank_id<true>(0, tok_addr + tok_ver_off + kTokVerSlot), scratch, 128);
+        noc_async_read_barrier();
+        cur = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[u0 * batch] % batch;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_slot)) = cur + 1;
+    } else if constexpr (verify) {
         // the slot word lands in the state CB, unused until the first state read
         const uint32_t scratch = get_write_ptr(cb_s_in);
         noc_async_read(get_noc_addr_from_bank_id<true>(0, tok_addr), scratch, 4 * (kTokSlot + 1) > 32 ? 64 : 32);
@@ -202,8 +214,9 @@ void kernel_main() {
             noc_async_read_barrier();
             mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[kTokActive];
         }
-        for (uint32_t gr = 0; gr < groups; gr++) {
-            for (uint32_t u = u0; u < u0 + nu; u++) {
+        // (verify rows: group u0's rows; else rows u0 .. u0 + nu of every group)
+        for (uint32_t gr = kVRows ? u0 : 0; gr < (kVRows ? u0 + 1 : groups); gr++) {
+            for (uint32_t u = kVRows ? 0 : u0; u < (kVRows ? nu : u0 + nu); u++) {
                 if ((mask >> (gr * batch + u)) & 1) {
                     act[n++] = gr * batch + u;
                 }
@@ -229,21 +242,36 @@ void kernel_main() {
     };
     // element c of user u in a row tile
     auto elem = [](uint32_t c, uint32_t u) { return (c / 16) * 16 * batch + u * 16 + c % 16; };
-    // (kBatched) state i (user act[i % n] of GDN layer i / n) into the state CBs: the DRAM read, then the local copy
+    // (kBatched) state i (user act[i % n] of GDN layer i / n) into the state CBs: the DRAM read, then the local copy.
+    // Verify rows: row u > 0 continues from row u - 1's updated state, iteration i - 1's push into the writer's CB
+    // (two states: at half (i - 1) % 2), copied once the writer has stored it (compute packs into that half again
+    // only after the state pushed here)
+    const uint32_t s_new_states = s_new_iface.fifo_size / (st * kF32Tile);
     auto load_state = [&](uint32_t i) {
         const uint32_t l = i / n, r = act[i % n];
         if (l >= copies) {
             noc_semaphore_wait_min(state_sem, i - copies * n + 1);
         }
         cb_reserve_back(cb_s_in, st);
-        const uint32_t first = (((l % copies) * num_heads + head) * kUsers + r) * st;
+        if (kVRows && r % batch > 0) {
+            noc_semaphore_wait_min(state_sem, i);
+            const uint32_t src = s_new + ((i - 1) % s_new_states) * st * kF32Tile;
+            cb_reserve_back(cb_s_mm, st);
+            noc_async_read(get_noc_addr(src), get_write_ptr(cb_s_mm), st * kF32Tile);
+            noc_async_read(get_noc_addr(src), get_write_ptr(cb_s_in), st * kF32Tile);
+            noc_async_read_barrier();
+            cb_push_back(cb_s_mm, st);
+            cb_push_back(cb_s_in, st);
+            return;
+        }
+        const uint32_t slot = kVRows ? (r / batch) * batch + cur : r;
+        const uint32_t first = (((l % copies) * num_heads + head) * kUsers + slot) * st;
         const uint32_t s_mm_at = get_write_ptr(cb_s_mm);
         push_pages(cb_s_mm, state_dram, first, st, kF32Tile);
         noc_async_read(get_noc_addr(s_mm_at), get_write_ptr(cb_s_in), st * kF32Tile);
         noc_async_read_barrier();
         cb_push_back(cb_s_in, st);
     };
-    static_assert(!kBatched || !verify, "row groups run without verify");
     if (kBatched && n) {
         load_state(0);
     }

@@ -173,6 +173,13 @@ constexpr uint32_t kRingSlots = 16;
 static_assert(!verify_rows || (kRingSlots % batch == 0 && batch + 3 <= kRingSlots), "ring of single-row slots");
 // conv history slots per (streamer, GDN copy) row (verify_rows: blocks of batch single-row slots)
 constexpr uint32_t kHistSlots = verify_rows ? kRingSlots / batch : (verify ? 4 : 3);
+// verify rows (DB1, row groups; active_rows.hpp): group gr is one user's verify of batch rows with its own ring step
+// (token-state word, read by the reader; the writer takes it from the reader's copy at cb_dout + kVRingCopy): its
+// history rows at gr * num_streamers * gdn_copies further, its row selections H_j,b at cb_shift tiles 3 + 6 gr + 2 j +
+// b (the S_j at 0 .. 2 are shared)
+constexpr bool kVRows = verify_rows && groups > 1;
+constexpr uint32_t kShiftTiles = kVRows ? 3 + 6 * groups : 9;
+constexpr uint32_t kVRingCopy = 64;
 constexpr uint32_t gdn_layers = layers - (attn_interval > 0 ? layers / attn_interval : 0);
 constexpr bool fc_in = get_compile_time_arg_val(60) != 0;
 constexpr bool sample = get_compile_time_arg_val(61) != 0;

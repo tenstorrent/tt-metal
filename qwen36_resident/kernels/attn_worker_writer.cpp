@@ -86,7 +86,7 @@ void kernel_main() {
         if constexpr (groups == 1) {
             noc_async_read(tok.get_noc_addr(0), get_write_ptr(cb_flush), 4 * (1 + batch));
         } else {
-            noc_async_read(tok.get_noc_addr(0, tok_pos_off), get_write_ptr(cb_flush), (4 * kUsers + 31) & ~31u);
+            noc_async_read(tok.get_noc_addr(0, tok_pos_off), get_write_ptr(cb_flush), (4 * kRows + 31) & ~31u);
         }
         noc_async_read_barrier();
         for (uint32_t u = 0; u < kRows; u++) {
@@ -111,11 +111,12 @@ void kernel_main() {
             }
         }
     }
-    // packed: the tail tiles (row 0's tile, and the next one if a row reaches it)
-    const uint32_t n_tail =
-        packed && role == 2 && tail_row[batch - 1] * banks + tail_bank[batch - 1] != tail_row[0] * banks + tail_bank[0]
-            ? 2
-            : 1;
+    // packed: the tail tiles (row 0's tile, and the next one if a row reaches it; verify rows: per user gr, its rows
+    // gr * batch ..)
+    auto tile_of = [&](uint32_t r) { return tail_row[r] * banks + tail_bank[r]; };
+    auto n_tail_of = [&](uint32_t gr) -> uint32_t {
+        return packed && role == 2 && tile_of(gr * batch + batch - 1) != tile_of(gr * batch) ? 2 : 1;
+    };
     for (uint32_t i = 0; i < layers * n_act; i++) {
         const uint32_t l = i / n_act, u = act.row[i % n_act];
         const bool has_chunk = chunk_of_user[u];
@@ -154,17 +155,18 @@ void kernel_main() {
         if (ts_addr) {
             ts[l * 4 + 3] = *clk;
         }
-        if (packed && role == 2 && u + 1 == users) {
-            // the layer's tail tiles, once all passes have used them: k of each tile, then v
+        if (packed && role == 2 && u % users == users - 1) {
+            // the layer's tail tiles, once all passes have used them: k of each tile, then v (verify rows: the user's,
+            // through its last pass's page list)
             const uint32_t copy_stride = get_arg_val<uint32_t>(tail_args + 2);
-            const uint32_t tp0 = tail_row[0] * banks + tail_bank[0];
+            const uint32_t tp0 = tile_of((u / users) * batch), n_tail = n_tail_of(u / users);
             cb_wait_front(cb_flush, 2 * n_tail * Dt);
             for (uint32_t kv = 0; kv < 2; kv++) {
                 for (uint32_t j = 0; j < n_tail; j++) {
                     const uint32_t t = tp0 + j;
                     uint64_t dst;
                     if constexpr (kv_paged) {
-                        const uint32_t page = (l % copies) * kv_copy_pages + page_list(0)[j];
+                        const uint32_t page = (l % copies) * kv_copy_pages + page_list(kVRows ? u : 0)[j];
                         dst = page_noc_addr(get_arg_val<uint32_t>(tail_args + kv), page);
                     } else {
                         const uint32_t addr =
