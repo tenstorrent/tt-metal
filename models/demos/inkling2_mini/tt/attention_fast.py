@@ -50,8 +50,9 @@ from models.demos.inkling2_mini.tt.attention import (
     AttentionState,
     DecodePositions,
     Inkling2Attention,
+    _DramShardedLinear,
 )
-from models.demos.inkling2_mini.tt.fused.attn import AttnOut, AttnPrep
+from models.demos.inkling2_mini.tt.fused.attn import AttnOut, AttnPrep, AttnWindow
 
 V_WIDTH = 160  # v(128) + mass column block
 KV_WIDTH = V_WIDTH + HEAD_DIM  # 288
@@ -206,6 +207,10 @@ class Inkling2AttentionFast(Inkling2Attention):
             conv_scale=self.conv_scale,
         )
         self.out = AttnOut(self.device, self.w_o.act_mem)
+        # the prefetcher's projection takes an interleaved input: keep the op-by-op window there
+        self.window = (
+            AttnWindow(self.device, self.w_all.act_mem) if isinstance(self.w_all, _DramShardedLinear) else None
+        )
 
     def new_state(self, max_ctx, cache_dtype=ttnn.bfloat16):
         if self.is_global and max_ctx % FAR_CHUNK:
@@ -289,13 +294,15 @@ class Inkling2AttentionFast(Inkling2Attention):
         xv = xq if xv is None else xv
         if not self.FUSED:
             return self._decode_ops(xq, state, positions, xk, xv)
-        proj, mode = self._window(state, xq, xk, xv)
+        if self.window is None:
+            proj, mode = self._window(state, xq, xk, xv)
+        else:
+            mode = "single" if (xk is xq and xv is xq) else "triple"
+            act = self.window(state.x_hist, [xq] if mode == "single" else [xq, xk, xv])
+            proj = self.w_all(act, ttnn.bfloat16, self.mm_cfg)
         rows = ROWS[mode]
-        q, mask, sink_t = self.prep(proj, positions, {"q": 0, "k": rows["k"], "v": rows["v"]})
-        ttnn.experimental.paged_update_cache(state.k_ring, self.prep.k_row, update_idxs_tensor=positions.ring)
-        ttnn.experimental.paged_update_cache(state.v_ring, self.prep.v_row, update_idxs_tensor=positions.ring)
+        q, mask, sink_t = self.prep(proj, positions, {"q": 0, "k": rows["k"], "v": rows["v"]}, state)
         if self.is_global:
-            ttnn.experimental.paged_update_cache(state.kv_full, self.prep.kv_row, update_idxs_tensor=positions.pos)
             sink = ttnn.reshape(ttnn.slice(sink_t, [0, 0], [N_HEADS, 1]), [1, N_KV, GROUPS, 1])
             attn = self._global(q, ttnn.reshape(mask, [1, N_KV, GROUPS, WINDOW]), sink, state, positions, masked=True)
             attn = ttnn.reshape(attn, [1, 1, N_HEADS, HEAD_DIM])

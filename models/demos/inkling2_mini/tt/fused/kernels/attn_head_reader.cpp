@@ -3,7 +3,8 @@
 //
 // Fused attention glue, head role, reader. Per item (one head): nlag rows of 128 projection columns -> dense bf16
 // pages (cb_x), their taps / scale (dense fp32 pages, cb_t), and with `dyn` the per-token taps of global layers as
-// dense fp32 pages filled with d_l (cb_d). Plus the reduce scaler and (has_tau) the tau tile.
+// dense fp32 pages filled with d_l (cb_d). Plus the reduce scaler, (has_tau) the tau tile and (mass) the
+// far-cache mass page.
 #include "attn_io.hpp"
 
 void kernel_main() {
@@ -11,7 +12,8 @@ void kernel_main() {
     constexpr uint32_t nlag = get_named_compile_time_arg_val("nlag");
     constexpr uint32_t dyn = get_named_compile_time_arg_val("dyn");
     constexpr uint32_t has_tau = get_named_compile_time_arg_val("has_tau");
-    constexpr uint32_t cb_x = 0, cb_t = 1, cb_d = 2, cb_scaler = 3, cb_tau = 4, cb_stage = 24;
+    constexpr uint32_t mass = get_named_compile_time_arg_val("mass");  // far-cache mass chunk page (cb_mass)
+    constexpr uint32_t cb_x = 0, cb_t = 1, cb_d = 2, cb_scaler = 3, cb_tau = 4, cb_mass = 5, cb_stage = 24;
     constexpr uint32_t n = nitems * nlag;
 
     uint32_t a = 0;
@@ -19,6 +21,7 @@ void kernel_main() {
     const uint32_t taps = get_arg_val<uint32_t>(a++);
     const uint32_t scaler = get_arg_val<uint32_t>(a++);
     const uint32_t tau = get_arg_val<uint32_t>(a++);
+    const uint32_t mass_addr = get_arg_val<uint32_t>(a++);
     const uint32_t stage = align_power_of_2(get_write_ptr(cb_stage), attnio::ALIGN);
 
     cb_reserve_back(cb_scaler, 1);
@@ -26,6 +29,10 @@ void kernel_main() {
     if constexpr (has_tau) {
         cb_reserve_back(cb_tau, 1);
         attnio::read_pages(tau, 4096, 0, 1, get_write_ptr(cb_tau));
+    }
+    if constexpr (mass) {
+        cb_reserve_back(cb_mass, 1);
+        attnio::read_pages(mass_addr, 4096, 0, 1, get_write_ptr(cb_mass));
     }
     cb_reserve_back(cb_t, n);
     cb_reserve_back(cb_x, n);
@@ -63,6 +70,9 @@ void kernel_main() {
     cb_push_back(cb_scaler, 1);
     if constexpr (has_tau) {
         cb_push_back(cb_tau, 1);
+    }
+    if constexpr (mass) {
+        cb_push_back(cb_mass, 1);
     }
     cb_push_back(cb_t, n);
     cb_push_back(cb_x, n);

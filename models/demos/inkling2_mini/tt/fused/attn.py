@@ -5,8 +5,8 @@
 `AttnPrep`: one program from the fused q/k/v projection (the conv window [1, 1, 32, N] bf16) to the sdpa inputs,
 replacing ~45 ttnn ops per layer application:
 - head role, 24 cores: per kv head the k / v short conv (+ dynamic taps on global layers), k L2 clip and v RMS
-  norm, rows written straight into the paged-update input shards (and the global far-cache row); per GQA group the
-  q pre-scale + L2 clip (+ tau) -> q [1, 1, 24, 128].
+  norm, rows written straight into the ring caches (and the global far cache), bf16 or bfp8, in place of
+  paged_update_cache; per GQA group the q pre-scale + L2 clip (+ tau) -> q [1, 1, 24, 128].
 - bias role, 8 cores x 4 slot tiles: rel clip (+ tau) and the relative bias rel @ proj[:, dist(slot)] + near mask
   -> mask [1, 1, 24, 1024] bf16; the first core also builds the sink tile [24, 32].
 `AttnOut`: attention output * sigmoid(gate) -> row 0 of the o-projection's L1 input shards (8 cores).
@@ -116,46 +116,28 @@ class AttnPrep:
         self.q = zeros([1, 1, N_HEADS, HEAD_DIM])
         self.mask = zeros([1, 1, N_HEADS, WINDOW])
         self.sink = zeros([N_HEADS, 32])
-        one = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-        self.row_core = device.worker_core_from_logical_core(ttnn.CoreCoord(0, 0))
-
-        def shard(width):
-            return ttnn.create_sharded_memory_config(
-                shape=(32, width),
-                core_grid=one,
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-        self.k_row = zeros([1, 1, N_KV, HEAD_DIM], shard(HEAD_DIM))
-        self.v_row = zeros([1, 1, N_KV, HEAD_DIM], shard(HEAD_DIM))
-        self.kv_row = None
-        if dyn:  # far-cache row [v | 1, 0 x 31 | k]; the mass column is written once here
-            r = torch.zeros(1, 1, N_KV, 288)
-            r[..., HEAD_DIM] = 1.0
-            self.kv_row = ttnn.from_torch(
-                r, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=shard(288)
-            )
+        mass = torch.zeros(1, HEAD_DIM)
+        mass[0, 0] = 1.0  # far-cache mass chunk [1, 0 x 15] (+ a zero chunk), packed like the v row
+        self.mass = F.dense_tensor(device, mass)
 
         cores, _ = F.core_list(device, 3 * N_KV + N_KV, first_row=1)
         self.q_cores, self.k_cores = cores[:N_KV], cores[N_KV : 2 * N_KV]
         self.v_cores, self.b_cores = cores[2 * N_KV : 3 * N_KV], cores[3 * N_KV :]
         self.cache = {}
 
-    def _head_group(self, cores, proj, kind, mode_rows, tau):
+    def _head_group(self, cores, proj, kind, mode_rows, tau, state, positions):
         """kind: q / k / v. Returns (kernels, cbs) for one group of 8 cores."""
         q = kind == "q"
         nitems, nlag = (GROUPS, 1) if q else (1, TAPS)
         dyn = int(self.dyn and not q)
         has_tau = int(self.dyn and q)
-        rx, ry = self.row_core.x, self.row_core.y
+        mass = int(self.dyn and kind == "v")
         r_rt, w_rt = [], []
         for g, _ in enumerate(cores):
             r = [proj.buffer_address(), (self.q_taps if q else self.kv_taps[kind]).buffer_address()]
-            r += [self.scaler.buffer_address(), tau.buffer_address() if has_tau else 0]
-            w = []
+            r += [self.scaler.buffer_address(), tau.buffer_address() if has_tau else 0, self.mass.buffer_address()]
             if q:
+                w = []
                 for i in range(GROUPS):
                     h = g * GROUPS + i
                     r += [h * HEAD_DIM // 32, mode_rows["q"], h]
@@ -165,14 +147,16 @@ class AttnPrep:
                 r += [c0 // 32, mode_rows[kind], g * TAPS]
                 if dyn:
                     r += [self.kv0 + 2 * N_KV * HEAD_DIM + (0 if kind == "k" else N_KV * TAPS) + g * TAPS]
-                row = self.k_row if kind == "k" else self.v_row
-                w += [row.buffer_address(), 1, rx, ry, 0, g]
-                if self.kv_row is not None:
-                    w += [self.kv_row.buffer_address(), 1, rx, ry, 5 if kind == "k" else 0, g]
+                ring = state.k_ring if kind == "k" else state.v_ring
+                w = [g, ring.buffer_address(), WINDOW // 32, HEAD_DIM // 32, 0, positions.ring.buffer_address()]
+                if self.dyn:
+                    full = state.kv_full
+                    seq = full.padded_shape[-2] // 32
+                    w += [full.buffer_address(), seq, full.padded_shape[-1] // 32, 5 if kind == "k" else 0]
+                    w += [positions.pos.buffer_address()]
             r_rt.append(r)
             w_rt.append(w)
-        named = dict(nitems=nitems, nlag=nlag, dyn=dyn, has_tau=has_tau)
-        ndst = 1 if (q or self.kv_row is None) else 2
+        named = dict(nitems=nitems, nlag=nlag, dyn=dyn, has_tau=has_tau, mass=mass)
         c_named = dict(
             named,
             norm=int(kind == "v"),
@@ -182,10 +166,22 @@ class AttnPrep:
         )
         crs = _crs(cores)
         n = nitems * nlag
+        if q:
+            writer = _kernel(
+                "attn_head_writer.cpp", cores, dict(nitems=nitems, ndst=1), w_rt, ttnn.WriterConfigDescriptor()
+            )
+            out_dtype = ttnn.bfloat16
+        else:
+            out_dtype = state.k_ring.dtype
+            assert out_dtype in (ttnn.bfloat16, ttnn.bfloat8_b), out_dtype
+            assert not self.dyn or state.kv_full.dtype == out_dtype
+            named_w = dict(ndst=1 + int(self.dyn), bfp8=int(out_dtype == ttnn.bfloat8_b), mass=mass)
+            writer = _kernel("attn_kv_writer.cpp", cores, named_w, w_rt, ttnn.WriterConfigDescriptor())
+        out_page = 1088 if out_dtype == ttnn.bfloat8_b else 2048
         kernels = [
             _kernel("attn_head_reader.cpp", cores, named, r_rt, ttnn.ReaderConfigDescriptor()),
-            _kernel("attn_head_writer.cpp", cores, dict(nitems=nitems, ndst=ndst), w_rt, ttnn.WriterConfigDescriptor()),
-            _kernel("attn_head_compute.cpp", cores, c_named, [[]] * len(cores), _compute_config([1, 2, 4])),
+            writer,
+            _kernel("attn_head_compute.cpp", cores, c_named, [[]] * len(cores), _compute_config([1, 2, 4, 5])),
         ]
         cbs = [
             _cb(0, ttnn.bfloat16, n, crs),
@@ -193,11 +189,14 @@ class AttnPrep:
             _cb(2, ttnn.float32, TAPS, crs),
             _cb(3, ttnn.float32, 1, crs),
             _cb(4, ttnn.float32, 1, crs),
+            _cb(5, ttnn.float32, 1, crs),
             _cb(16, ttnn.float32, 1, crs),
             _cb(17, ttnn.float32, 1, crs),
             _cb(18, ttnn.float32, 1, crs),
-            _cb(19, ttnn.bfloat16, 1, crs),
+            _cb(19, out_dtype, 1, crs, page=out_page),
+            _cb(20, out_dtype, 1, crs, page=out_page),
             _stage(24, crs),
+            _stage(25, crs, 256),
         ]
         return kernels, cbs
 
@@ -255,23 +254,23 @@ class AttnPrep:
         ]
         return kernels, cbs
 
-    def __call__(self, proj, positions, mode_rows):
-        """proj: [1, 1, 32, N] bf16 TILE DRAM (conv window projection). Returns (q, mask, sink); k_row / v_row
-        (and kv_row) hold this step's cache rows."""
+    def __call__(self, proj, positions, mode_rows, state):
+        """proj: [1, 1, 32, N] bf16 TILE DRAM (conv window projection). Writes this step's k / v rows into the
+        state's caches (ring slot, and the far cache at pos on global layers). Returns (q, mask, sink)."""
         F.check_row_input(proj)
         assert proj.dtype == ttnn.bfloat16
         tau = positions.tau
         kernels, cbs = [], []
         for cores, kind in ((self.q_cores, "q"), (self.k_cores, "k"), (self.v_cores, "v")):
-            k, c = self._head_group(cores, proj, kind, mode_rows, tau)
+            k, c = self._head_group(cores, proj, kind, mode_rows, tau, state, positions)
             kernels += k
             cbs += c
         k, c = self._bias_group(proj, positions, tau)
         kernels += k
         cbs += c
         io = [proj, self.q_taps, self.kv_taps["k"], self.kv_taps["v"], self.scaler, tau, self.rel_scale, self.g]
-        io += [positions.near_mask, positions.ring, self.table, self.k_row, self.v_row, self.sink, self.mask]
-        io += [self.kv_row] if self.kv_row is not None else []
+        io += [positions.near_mask, positions.ring, positions.pos, self.table, self.mass, self.sink, self.mask]
+        io += [state.k_ring, state.v_ring] + ([state.kv_full] if self.dyn else [])
         io += [self.q]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
         return self.q, self.mask, self.sink
@@ -314,4 +313,33 @@ class AttnOut:
         cbs = [_cb(0, ttnn.bfloat16, 1, crs), _cb(1, ttnn.bfloat16, 1, crs), _cb(16, ttnn.bfloat16, 1, crs)]
         cbs.append(_stage(24, crs))
         ttnn.generic_op([attn, proj, self.act], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
+        return self.act
+
+
+class AttnWindow:
+    """Conv window update straight into the projection input: one data-movement program on the 8 cores of the
+    projection's input shards (`act_mem`, width sharded, 9 tiles each). Writes the shifted window back to the
+    state (x_hist) and into a persistent L1 input; replaces the shift matmul, 1-3 row adds and the copy to L1."""
+
+    def __init__(self, device, act_mem, c=2304):
+        self.device = device
+        self.act = _shared_l1(device, "qkv_in", c, act_mem)
+        self.cores = [ttnn.CoreCoord(i, 0) for i in range(N_KV)]  # act_mem grid: CoreGrid(x=8, y=1)
+        self.ntiles = c // 32 // len(self.cores)
+
+    def __call__(self, hist, xs):
+        """hist: window state [1, 1, 32, C] bf16 TILE DRAM; xs: [x] (single) or [xq, xk, xv] rows [1, 1, 1, C] bf16.
+        Returns the projection input (self.act)."""
+        for t in [hist, *xs]:
+            F.check_row_input(t)
+            assert t.dtype == ttnn.bfloat16, t.dtype
+        xq, xk, xv = xs if len(xs) == 3 else xs * 3
+        n = self.ntiles
+        rt = [[hist.buffer_address(), self.act.buffer_address(), i * n] for i in range(len(self.cores))]
+        rt = [r + [xq.buffer_address(), xk.buffer_address(), xv.buffer_address()] for r in rt]
+        crs = _crs(self.cores)
+        named = dict(ntiles=n, ngroups=1 if len(xs) == 1 else 2)
+        kernels = [_kernel("attn_window.cpp", self.cores, named, rt, ttnn.ReaderConfigDescriptor())]
+        cbs = [_cb(0, ttnn.bfloat16, n, crs), _cb(1, ttnn.bfloat16, n, crs), _stage(24, crs, n * 384 + 128)]
+        ttnn.generic_op([hist, *xs, self.act], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
         return self.act

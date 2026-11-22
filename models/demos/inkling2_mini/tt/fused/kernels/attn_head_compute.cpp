@@ -5,7 +5,8 @@
 //   y = sum_l x_l * (t_l [+ cs * d_l])          q: nlag = 1, t = q pre-scale; k / v: short conv
 //   s = sum(y^2)                                  (reduce, scalar at [0, 0])
 //   norm 0 (L2 clip): f = rsqrt(max(s * inv, 1)) [* tau];   norm 1 (RMS): f = rsqrt(s * inv + eps)
-//   out = y * f -> bf16
+//   out = y * f -> cb_out (bf16, or the cache's bfp8: packed per 16-element face row like the cache tiles)
+// mass: also pack the far-cache mass page (cb_massin) into cb_mass in the cache format.
 #include <cstdint>
 
 #include "api/compute/bcast.h"
@@ -22,8 +23,8 @@
 #include "api/compute/tile_move_copy.h"
 
 namespace {
-constexpr uint32_t cb_x = 0, cb_t = 1, cb_d = 2, cb_scaler = 3, cb_tau = 4;
-constexpr uint32_t cb_y = 16, cb_sq = 17, cb_f = 18, cb_out = 19;
+constexpr uint32_t cb_x = 0, cb_t = 1, cb_d = 2, cb_scaler = 3, cb_tau = 4, cb_massin = 5;
+constexpr uint32_t cb_y = 16, cb_sq = 17, cb_f = 18, cb_out = 19, cb_mass = 20;
 
 FORCE_INLINE void load(uint32_t cb, uint32_t tile, uint32_t dst) {
     reconfig_data_format_srca(cb);
@@ -43,6 +44,7 @@ void kernel_main() {
     constexpr uint32_t nlag = get_named_compile_time_arg_val("nlag");
     constexpr uint32_t dyn = get_named_compile_time_arg_val("dyn");
     constexpr uint32_t has_tau = get_named_compile_time_arg_val("has_tau");
+    constexpr uint32_t mass = get_named_compile_time_arg_val("mass");
     constexpr uint32_t norm = get_named_compile_time_arg_val("norm");
     constexpr uint32_t inv = get_named_compile_time_arg_val("inv");  // fp32 bits
     constexpr uint32_t eps = get_named_compile_time_arg_val("eps");  // fp32 bits
@@ -131,5 +133,15 @@ void kernel_main() {
         tile_regs_release();
         cb_pop_front(cb_y, 1);
         cb_pop_front(cb_f, 1);
+    }
+    if constexpr (mass) {
+        cb_wait_front(cb_massin, 1);
+        tile_regs_acquire();
+        load(cb_massin, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        put(0, cb_mass);
+        tile_regs_release();
+        cb_pop_front(cb_massin, 1);
     }
 }
