@@ -11,7 +11,7 @@
 void kernel_main() {
     constexpr uint32_t kt = get_named_compile_time_arg_val("kt");
     constexpr uint32_t chunks = get_named_compile_time_arg_val("chunks");
-    constexpr uint32_t cb_in_scores = 0, cb_in_bias = 1, cb_out_weights = 2, cb_sigmoid = 4, cb_biased = 5;
+    constexpr uint32_t cb_in_bias = 1, cb_out_weights = 2, cb_sigmoid = 4, cb_biased = 5;
     constexpr uint32_t cb_x = 6, cb_w = 7, cb_mm = 8, cb_parts = 9;
     constexpr uint32_t cb_reduce_intermediate = 15, cb_ones = 17, cb_eps = 18, cb_scale = 19, cb_normalized = 20;
     constexpr uint32_t cb_recip = 21, cb_gathered = 22;
@@ -37,28 +37,41 @@ void kernel_main() {
         return;
     }
 
-    // logits = p0 + p1 + ... + p8 (dense pages, expert e at element e)
+    // logits = p0 + p1 + ... + p8 (dense pages, expert e at element e), then moe_grouped_topk's sigmoid + bias
+    // block, in one DEST pass: the same SFPU ops in the same order as the op chain (sum, sigmoid, fp32 bias add),
+    // without packing the logits to cb_in_scores and unpacking them again (fp32 both ways: exact). SFPU work on
+    // faces 0, 1 only (VectorMode::R): the 128 experts are elements 0..127 = face 0; faces 2, 3 are never read.
     cb_wait_front(cb_parts, chunks);
+    cb_wait_front(cb_in_bias, 1);
     reconfig_data_format_srca(cb_parts);
-    pack_reconfig_data_format(cb_in_scores);
     copy_init(cb_parts);
     add_binary_tile_init();
     tile_regs_acquire();
     copy_tile(cb_parts, 0, 0);
     for (uint32_t c = 1; c < chunks; ++c) {
         copy_tile(cb_parts, c, 1);
-        add_binary_tile(0, 1, 0);
+        add_binary_tile(0, 1, 0, VectorMode::R);
     }
+    reconfig_data_format_srca(cb_parts, cb_in_bias);
+    copy_init(cb_in_bias);
+    copy_tile(cb_in_bias, 0, 1);
+    sigmoid_tile_init();
+    sigmoid_tile<VectorMode::R>(0);
+    add_binary_tile_init();
+    add_binary_tile(0, 1, 1, VectorMode::R);
     tile_regs_commit();
-    cb_reserve_back(cb_in_scores, 1);
-    tile_regs_wait();
-    pack_tile(0, cb_in_scores);
-    tile_regs_release();
-    cb_push_back(cb_in_scores, 1);
     cb_pop_front(cb_parts, chunks);
+    cb_pop_front(cb_in_bias, 1);
+    cb_reserve_back(cb_sigmoid, 1);
+    cb_reserve_back(cb_biased, 1);
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_sigmoid);
+    pack_tile(0, cb_sigmoid);
+    pack_tile(1, cb_biased);
+    tile_regs_release();
+    cb_push_back(cb_sigmoid, 1);
+    cb_push_back(cb_biased, 1);
 
-    blocks::apply_score_func_add_bias<blocks::SCORE_FUNC_SIGMOID, false>(
-        cb_in_scores, cb_in_bias, cb_sigmoid, cb_biased, 1);
     blocks::normalize_scores(cb_gathered, cb_ones, cb_reduce_intermediate, cb_recip, cb_eps, cb_normalized);
     blocks::scale(cb_normalized, cb_scale, cb_out_weights);
 }
