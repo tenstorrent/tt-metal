@@ -52,8 +52,7 @@ from models.demos.inkling2_mini.tt.attention import (
     Inkling2Attention,
     _DramShardedLinear,
 )
-from models.demos.inkling2_mini.tt.fused.attn import AttnOut, AttnPrep, AttnWindow
-from models.demos.inkling2_mini.tt.fused.near_softmax import NearSoftmax
+from models.demos.inkling2_mini.tt.fused.attn import AttnNear, AttnOut, AttnPrep, AttnWindow
 
 V_WIDTH = 160  # v(128) + mass column block
 KV_WIDTH = V_WIDTH + HEAD_DIM  # 288
@@ -177,8 +176,6 @@ class Inkling2AttentionFast(Inkling2Attention):
         mass[..., 0] = 1.0
         self.mass_col = put(mass)
         self.q_pad = put(torch.zeros(1, 1, N_HEADS, V_WIDTH))
-        # global near softmax in one program (tt/fused/near_softmax.py); INKLING_NEAR_FUSED=0: the ops in _near_ops
-        self.near_sm = NearSoftmax(device) if os.environ.get("INKLING_NEAR_FUSED", "1") != "0" else None
         self.far_cfg = sdpa_cfg(FAR_CHUNK)
         self.kv_full_shard = ttnn.create_sharded_memory_config(
             shape=(32, KV_WIDTH),
@@ -198,12 +195,13 @@ class Inkling2AttentionFast(Inkling2Attention):
             w = torch_of(f"{kv}_conv").view(TAPS, width).clone()
             w[0] += 1.0
             taps[kv] = w * self.conv_scale
+        rel_proj = torch_of("rel_proj").view(D_REL, WINDOW)
         # q leaves the fused prep pre-scaled by SCALE (both layer types), clip threshold scaled to match
         self.prep = AttnPrep(
             self.device,
             torch_of("q_clip_scale").view(N_HEADS, HEAD_DIM) * SCALE,
             torch_of("rel_clip_scale").view(N_HEADS, D_REL),
-            torch_of("rel_proj").view(D_REL, WINDOW),
+            rel_proj,
             taps,
             q_inv=QK_CLIP**-2 / SCALE**2,
             k_inv=QK_CLIP**-2,
@@ -214,6 +212,7 @@ class Inkling2AttentionFast(Inkling2Attention):
             conv_scale=self.conv_scale,
         )
         self.out = AttnOut(self.device, self.w_o.act_mem)
+        self.near = AttnNear(self.device) if self.is_global else None
         # the prefetcher's projection takes an interleaved input: keep the op-by-op window there
         self.window = (
             AttnWindow(self.device, self.w_all.act_mem) if isinstance(self.w_all, _DramShardedLinear) else None
@@ -248,32 +247,13 @@ class Inkling2AttentionFast(Inkling2Attention):
             compute_kernel_config=self.hifi4,
         )  # [1,1,24,128] bf16
 
-    def _global(self, q, bias, sink_blk, state, positions, u=SCALE, merge=True):
-        """Near + sink partial, far partial, exact merge (module doc). sink_blk [1,8,3,32] fp32: col 0 = sink logit,
-        others masked. u: score scale still to apply (SCALE; 1 when q is pre-scaled, then `bias` already holds the
-        near mask). merge=False returns the partials (far out [1,1,24,160] bf16, o_near, r, far_valid)."""
+    def _global(self, q, bias, sink_blk, state, positions):
+        """Op-by-op global core: near + sink partial, far partial, exact merge (module doc). sink_blk [1,8,3,32]
+        fp32: col 0 = sink logit, others masked. The fused path runs the same math in AttnNear / AttnOut."""
         # near + sink partial: normalized output and log-sum-exp
         qg = ttnn.reshape(q, [1, N_KV, GROUPS, HEAD_DIM])
-        near = ttnn.matmul(
-            qg,
-            state.k_ring,
-            transpose_b=True,
-            dtype=ttnn.float32,
-            compute_kernel_config=self.hifi4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        if u == 1.0 and self.near_sm is not None:  # fused path: `bias` is the prep mask [1, 1, 24, 1024]
-            p_near, lse = self.near_sm(near, bias, sink_blk)
-            o_near = ttnn.matmul(p_near, state.v_ring, dtype=ttnn.float32, compute_kernel_config=self.hifi4)
-        else:
-            o_near, lse = self._near_ops(near, bias, sink_blk, state, positions, u)
-        return self._far(q, o_near, lse, state, positions, u, merge)
-
-    def _near_ops(self, near, bias, sink_blk, state, positions, u):
-        if u != 1.0:
-            near = ttnn.add(ttnn.add(ttnn.multiply(near, u), bias), positions.near_mask)
-        else:
-            near = ttnn.add(near, bias)
+        near = ttnn.matmul(qg, state.k_ring, transpose_b=True, dtype=ttnn.float32, compute_kernel_config=self.hifi4)
+        near = ttnn.add(ttnn.add(ttnn.multiply(near, SCALE), bias), positions.near_mask)
         logits = ttnn.concat([near, sink_blk], dim=-1)
         # softmax and log-sum-exp from one exp pass
         m = ttnn.max(logits, dim=-1, keepdim=True)
@@ -283,15 +263,13 @@ class Inkling2AttentionFast(Inkling2Attention):
         p_near = ttnn.multiply(e_near, ttnn.reciprocal(z), dtype=ttnn.bfloat16)
         o_near = ttnn.matmul(p_near, state.v_ring, dtype=ttnn.float32, compute_kernel_config=self.hifi4)
         lse = ttnn.add(m, ttnn.log(z))
-        return o_near, lse
 
-    def _far(self, q, o_near, lse, state, positions, u, merge):
         # far partial with the near mass as its sink: sdpa `attention_sink` [24, 32] bf16 in raw q.k units
         far_pos, valid = positions.far
-        raw = lse if u == 1.0 else ttnn.multiply(lse, 1.0 / u)
-        sink_t = ttnn.multiply(ttnn.reshape(raw, [1, 1, N_HEADS, 1]), self.sink_cols, dtype=ttnn.bfloat16)
+        raw = ttnn.reshape(ttnn.multiply(lse, 1.0 / SCALE), [1, 1, N_HEADS, 1])
+        sink_t = ttnn.multiply(raw, self.sink_cols, dtype=ttnn.bfloat16)
         s_hat = ttnn.typecast(ttnn.slice(sink_t, [0, 0, 0, 0], [1, 1, N_HEADS, 1]), ttnn.float32)
-        s_hat = ttnn.reshape(s_hat if u == 1.0 else ttnn.multiply(s_hat, u), [1, N_KV, GROUPS, 1])
+        s_hat = ttnn.reshape(ttnn.multiply(s_hat, SCALE), [1, N_KV, GROUPS, 1])
         r = ttnn.exp(ttnn.subtract(s_hat, lse))  # undoes the bf16 rounding of the sink
         out = ttnn.transformer.flash_multi_latent_attention_decode(
             ttnn.concat([self.q_pad, q], dim=-1),  # [1,1,24,288], zeros meet the v / mass columns
@@ -300,12 +278,10 @@ class Inkling2AttentionFast(Inkling2Attention):
             is_causal=True,
             cur_pos_tensor=far_pos,
             attention_sink=ttnn.reshape(sink_t, [N_HEADS, 32]),
-            scale=u,
+            scale=SCALE,
             program_config=self.far_cfg,
             compute_kernel_config=self.hifi4,
         )
-        if not merge:
-            return out, o_near, r, valid
         out = ttnn.multiply(ttnn.reshape(ttnn.typecast(out, ttnn.float32), [1, N_KV, GROUPS, V_WIDTH]), valid)
         A = ttnn.slice(out, [0, 0, 0, 0], [1, N_KV, GROUPS, HEAD_DIM])
         a = ttnn.slice(out, [0, 0, 0, HEAD_DIM], [1, N_KV, GROUPS, HEAD_DIM + 1])
@@ -331,22 +307,32 @@ class Inkling2AttentionFast(Inkling2Attention):
             proj = self.w_all(act, ttnn.bfloat16, self.mm_cfg)
         rows = ROWS[mode]
         q, mask, sink_t = self.prep(proj, positions, {"q": 0, "k": rows["k"], "v": rows["v"]}, state)
-        if self.is_global:  # q pre-scaled, mask holds bias + near mask, sink_t is the sink block
-            bias = mask if self.near_sm is not None else ttnn.reshape(mask, [1, N_KV, GROUPS, WINDOW])
-            far, o_near, r, valid = self._global(q, bias, sink_t, state, positions, u=1.0, merge=False)
-            return self.w_o(self.out(far, proj, (o_near, r, valid)), ttnn.bfloat16, self.mm_cfg)
-        else:
-            attn = ttnn.transformer.scaled_dot_product_attention_decode(
-                q,
-                state.k_ring,
-                state.v_ring,
-                is_causal=False,
-                attn_mask=mask,
-                attention_sink=sink_t,
+        if self.is_global:  # q pre-scaled; prep's mask (bias + near mask) and q_grp are in kv-group layout
+            o_near, r, sink_far = self.near(self.prep.q_grp, mask, sink_t, state.k_ring, state.v_ring)
+            far_pos, valid = positions.far
+            far = ttnn.transformer.flash_multi_latent_attention_decode(
+                ttnn.concat([self.q_pad, q], dim=-1),  # [1,1,24,288], zeros meet the v / mass columns
+                state.kv_full,
+                head_dim_v=V_WIDTH,
+                is_causal=True,
+                cur_pos_tensor=far_pos,
+                attention_sink=sink_far,
                 scale=1.0,
-                program_config=self.local_cfg,
+                program_config=self.far_cfg,
                 compute_kernel_config=self.hifi4,
             )
+            return self.w_o(self.out(far, proj, (o_near, r, valid)), ttnn.bfloat16, self.mm_cfg)
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            q,
+            state.k_ring,
+            state.v_ring,
+            is_causal=False,
+            attn_mask=mask,
+            attention_sink=sink_t,
+            scale=1.0,
+            program_config=self.local_cfg,
+            compute_kernel_config=self.hifi4,
+        )
         return self.w_o(self.out(attn, proj), ttnn.bfloat16, self.mm_cfg)
 
     def _decode_ops(self, xq, state, positions, xk, xv):

@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 // SPDX-License-Identifier: Apache-2.0
 //
-// Fused attention glue, bias role, writer: mask tiles j0 .. j0 + nj - 1 -> mask [1, 1, 24, 1024] bf16 (DRAM).
+// Fused attention glue, bias role, writer: mask tiles j0 .. j0 + nj - 1 -> mask [1, 1, 24, 1024] bf16 (DRAM), or
+// with grp the same rows in kv-group layout [1, 8, 32, 1024] (rows 0..2 of each group).
 // has_sink: also the sdpa sink tile [24, 32] bf16, row h = sink logit h (projection row 0, 24 columns), and
 // with sink_blk (global layers) the sink logit block [1, 8, 3, 32] fp32 of the near softmax: col 0 = sink logit,
 // cols 1..31 = neg (rows 3..31 of each tile stay as allocated, zero).
@@ -13,6 +14,7 @@ void kernel_main() {
     constexpr uint32_t sink_tile = get_named_compile_time_arg_val("sink_tile");  // projection tile of sink col 0
     constexpr uint32_t sink_blk = get_named_compile_time_arg_val("sink_blk");
     constexpr uint32_t neg = get_named_compile_time_arg_val("neg");  // fp32 bits
+    constexpr uint32_t grp = get_named_compile_time_arg_val("grp");  // mask in kv-group layout (global layers)
     constexpr uint32_t cb_mask = 21, cb_sink = 6, cb_blk = 7, cb_stage = 25;
 
     const uint32_t mask = get_arg_val<uint32_t>(0);
@@ -60,7 +62,20 @@ void kernel_main() {
     const InterleavedAddrGen<true> dst = {.bank_base_address = mask, .page_size = 2048};
     for (uint32_t j = 0; j < nj; ++j) {
         cb_wait_front(cb_mask, 1);
-        noc_async_write(get_read_ptr(cb_mask), dst.get_noc_addr(j0 + j), 2048);
+        const uint32_t src = get_read_ptr(cb_mask);
+        if constexpr (grp) {  // [1, 8, 32, 1024]: head h -> row h % 3 of kv group h / 3 (other rows stay zero)
+            for (uint32_t h = 0; h < 24; ++h) {
+                const uint32_t g = h / 3, k = h % 3, f0 = (h >> 4) * 2, r = h & 15;
+                for (uint32_t f = 0; f < 2; ++f) {
+                    noc_async_write(
+                        src + ((f0 + f) * 256 + r * 16) * 2,
+                        dst.get_noc_addr(g * 32 + j0 + j, (f * 256 + k * 16) * 2),
+                        32);
+                }
+            }
+        } else {
+            noc_async_write(src, dst.get_noc_addr(j0 + j), 2048);
+        }
         noc_async_write_barrier();
         cb_pop_front(cb_mask, 1);
     }
