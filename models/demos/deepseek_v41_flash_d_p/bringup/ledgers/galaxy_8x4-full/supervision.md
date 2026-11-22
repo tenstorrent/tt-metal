@@ -689,3 +689,4 @@
   67.3k -> 63.4k (-5.7 %). QUEUED MB.7: re-measure 262144 / 393216 / 524288 block vs plain, set INDEXER_BLOCK_SELECT_MIN so no
   rung regresses; gate 5120 ladder + cold no-rebuild.
 - 03:08 heartbeat: MB.7 agent active; watch armed.
+- 03:15 MB.7 ACCEPTED: the 262k dip was real (block path device -0.4..-1.0 ms but host +12 launches: wall +1.8..+2.7 ms at 262144 / 393216 positions; -0.5 at 524288). INDEXER_BLOCK_SELECT_MIN 131072 -> 262144 keys (~524k context). Ladder: no rung slower than off (262k 66.7k vs 67.3k; 1M 61.8k vs 59.2k). model_bringup ready to push.
