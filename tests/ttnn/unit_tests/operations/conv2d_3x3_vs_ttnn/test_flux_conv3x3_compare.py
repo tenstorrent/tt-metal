@@ -7,6 +7,8 @@ Cases:
   - "bh2x4": the decoder's per-device convs on the Blackhole (2, 4) preset: rows split 2 ways (mesh axis 0),
     channels split 4 ways (axis 1), the conv sees H/2 + 2 rows (neighbor_pad halo) with padding (0, 0, 1, 1).
   - "bh2x2": the same on the Blackhole (2, 2) preset (FLUX.2's QuietBox CI config): channels split 2 ways.
+  - "bh4x8": the same on the Blackhole (4, 8) preset (FLUX.2's Galaxy CI config). Its axes are the other way
+    round: channels split 4 ways (axis 0), rows split 8 ways (axis 1), so the conv sees H/8 + 2 rows.
 
 ttnn.conv2d runs exactly as models/tt_dit/layers/conv2d.py runs it: bf16 TILE DRAM-interleaved NHWC input,
 bf16 weights through prepare_conv_weights / prepare_conv_bias, HiFi4 + fp32 DEST, act_block_h_override 32,
@@ -20,7 +22,7 @@ Each op's PCC is against its own torch reference, on bands of output rows (top, 
 2048² references stay cheap. Failures of either op (unsupported, OOM, error) are recorded, not raised.
 
 Per-call device time comes from tracy signposts `cmp|<case>|<op>|<i>`; run with `scripts/run_safe_pytest.sh
---profile --run-all` and select cases with FLUX_CMP_CASES (indices) or FLUX_CMP_GROUP (1x1 / bh2x4 / bh2x2).
+--profile --run-all` and select cases with FLUX_CMP_CASES (indices) or FLUX_CMP_GROUP (1x1 / bh2x4 / bh2x2 / bh4x8).
 FLUX_CMP_SKIP_TTNN=1 / FLUX_CMP_SKIP_NEW=1 skip the ttnn.conv2d / conv2d_3x3 side. FLUX_CMP_LAYOUT=RM gives both ops
 ROW_MAJOR input (the single-device convs after the decoder's upsamplers get it in the model).
 """
@@ -121,6 +123,10 @@ def _build_cases():
             dev, _ = _per_device(conv, h_factor=2, tp_factor=2)
             name, h, w, c_in, c_out, stride, pad, _ = dev
             add("bh2x2", (h, w, c_in, c_out, stride, pad), name, image, f"dec{image}", (conv[3], conv[4]))
+        for conv in _decoder_convs(image):
+            dev, _ = _per_device(conv, h_factor=8, tp_factor=4)
+            name, h, w, c_in, c_out, stride, pad, _ = dev
+            add("bh4x8", (h, w, c_in, c_out, stride, pad), name, image, f"dec{image}", (conv[3], conv[4]))
 
     out = []
     for (group, (h, w, c_in, c_out, stride, pad)), case in cases.items():
@@ -138,7 +144,7 @@ def _build_cases():
                 "model_channels": case["model_channels"],
             }
         )
-    groups = ("1x1", "bh2x4", "bh2x2")
+    groups = ("1x1", "bh2x4", "bh2x2", "bh4x8")
     out.sort(key=lambda c: (groups.index(c["group"]), c["H"] * c["W"] * c["c_in"] * c["c_out"]))
     for c in out:
         c["id"] = (
@@ -250,7 +256,7 @@ def test_flux_conv3x3_compare(device, idx):
     bias = (0.1 * torch.randn(c_out)).to(torch.bfloat16)
 
     # --- ttnn.conv2d, as models/tt_dit/layers/conv2d.py calls it ---
-    mesh_shape = {"1x1": (1, 1), "bh2x4": (2, 4), "bh2x2": (2, 2)}[case["group"]]
+    mesh_shape = {"1x1": (1, 1), "bh2x4": (2, 4), "bh2x2": (2, 2), "bh4x8": (4, 8)}[case["group"]]
     slice_table = TtDitConv2d.slice_params.get(mesh_shape, TtDitConv2d.slice_default)
     num_slices = slice_table.get((H, W, *case["model_channels"]))
     record["ttnn_num_slices"] = num_slices
@@ -262,7 +268,7 @@ def test_flux_conv3x3_compare(device, idx):
     # On a mesh, VaeConv2d hands the conv the ROW_MAJOR output of its neighbor_pad halo exchange, so the per-device
     # (bh2x4) convs run on ROW_MAJOR input; FLUX_CMP_BH_LAYOUT=TILE measures them on TILE instead. On one device the
     # conv after each decoder upsampler gets the upsample's ROW_MAJOR output; FLUX_CMP_LAYOUT=RM measures that.
-    bh_rm = case["group"] in ("bh2x4", "bh2x2") and os.environ.get("FLUX_CMP_BH_LAYOUT", "RM") == "RM"
+    bh_rm = case["group"] in ("bh2x4", "bh2x2", "bh4x8") and os.environ.get("FLUX_CMP_BH_LAYOUT", "RM") == "RM"
     rm_input = c_in < C_IN_GRANULE or bh_rm or os.environ.get("FLUX_CMP_LAYOUT") == "RM"
     record["input_layout"] = "ROW_MAJOR" if rm_input else "TILE"
     in_layout = ttnn.ROW_MAJOR_LAYOUT if rm_input else ttnn.TILE_LAYOUT
