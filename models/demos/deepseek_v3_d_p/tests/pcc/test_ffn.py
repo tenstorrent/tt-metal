@@ -363,11 +363,18 @@ def test_ffn_fused_rows_position_invariant(mesh_device, device_params, num_links
     x = torch.randn(rows, emb_dim, dtype=torch.float32).to(torch.bfloat16)
     shift = PREFILL_CHUNK_TOKENS_PER_CHIP
     base = run(x)
+    # The down projection must take the plan the regression lived in, or this test covers nothing.
+    plan = dict(ttnn._ttnn.operations.experimental.ccl_experimental._matmul_reduce_scatter_prefill_last_plan())
+    assert (
+        plan["schedule"] == "ring_balanced" and plan["xblock"] == "stream" and min(plan["grid"]) >= 2
+    ), f"down projection plan changed, the test no longer covers a streamed balanced-ring plan: {plan}"
+    assert plan["half_split"] == "n", f"a row-dependent half split makes rows round by position: {plan}"
     rolled = run(torch.roll(x, shifts=shift, dims=0))
     for device, (a, b) in enumerate(zip(base, rolled)):
         b = torch.roll(b, shifts=-shift, dims=-2)
-        diff = (a.float() - b.float()).abs()
-        assert torch.equal(a, b), (
-            f"device {device}: {int((diff != 0).sum())} elements differ after moving rows by one chunk "
-            f"(max |diff| {diff.max().item():.3e}): the fused FFN's result depends on a row's position"
-        )
+        if not torch.equal(a, b):
+            diff = (a.float() - b.float()).abs()
+            pytest.fail(
+                f"device {device}: {int((diff != 0).sum())} elements differ after moving rows by one chunk "
+                f"(max |diff| {diff.max().item():.3e}): the fused FFN's result depends on a row's position"
+            )
