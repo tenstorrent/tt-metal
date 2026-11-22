@@ -4351,7 +4351,7 @@ class Qwen38TTNNQSA:
             kv_format=ttnn.transformer.SparseKVFormat.BF16,
             scale=HEAD_DIM**-0.5,
             k_chunk_size=ttnn.TILE_SIZE,
-            compute_kernel_config=self.compute_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,  # FP32 state (was HiFi4, FP32 DEST)
         )
         _deallocate(sparse_query)
         local = ttnn.slice(
@@ -4801,7 +4801,7 @@ class Qwen38TTNNQSA:
             kv_format=ttnn.transformer.SparseKVFormat.BF16,
             scale=HEAD_DIM**-0.5,
             k_chunk_size=ttnn.TILE_SIZE,
-            compute_kernel_config=self.compute_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,  # FP32 state (was HiFi4, FP32 DEST)
         )
         _deallocate(sparse_query)
         attention_ws = self._post_attention_fused(
@@ -5818,7 +5818,7 @@ class Qwen38TTNNQSA:
             kv_format=ttnn.transformer.SparseKVFormat.BF16,
             scale=HEAD_DIM**-0.5,
             k_chunk_size=ttnn.TILE_SIZE,
-            compute_kernel_config=self.compute_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,  # FP32 state (was HiFi4, FP32 DEST)
         )
         _deallocate(sparse_query)
         if qg_ws is not None:
