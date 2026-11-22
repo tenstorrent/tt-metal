@@ -1111,9 +1111,15 @@ struct SenderKernelTrafficConfig {
 
         setup_credit_update_noc_state(*conn, get_fabric_worker_noc());
 
-        // Phase 2: Steady state — credit-only sends with stateful NOC
+        // Phase 2: Steady state — credit-only sends with stateful NOC. Every slot already holds a header, so a
+        // send is the adapter's slot wait and credit update alone (send_one_packet's steady-state arm), kept in
+        // locals so the loop costs the worker no more than the adapter calls.
         for (uint32_t pkt = warmup_end; pkt < num_packets; pkt++) {
-            this->template send_one_packet<BENCHMARK_MODE, true>();
+            conn->wait_for_empty_write_slot();
+            fabric_detail::update_credits_and_slots<true>(conn);
+        }
+        if (num_packets > warmup_end) {
+            num_packets_processed += num_packets - warmup_end;
         }
     }
 
