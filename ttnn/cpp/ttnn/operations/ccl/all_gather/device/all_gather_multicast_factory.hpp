@@ -13,9 +13,6 @@
 namespace ttnn::operations::ccl {
 
 struct AllGatherMulticastFactory {
-    // Run each range's per-coordinate programs as one program with per-device runtime args where they differ only in
-    // runtime-arg values (ttnn/per_device_program_merge.hpp); otherwise one program per coordinate, as before.
-    static constexpr bool merge_per_device_programs = true;
     // Workload-scoped semaphores; one ProgramDescriptor per coord; tensor addresses are Buffer* bindings.
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const AllGatherParams& operation_attributes,
