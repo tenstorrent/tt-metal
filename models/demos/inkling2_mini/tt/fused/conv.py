@@ -41,14 +41,14 @@ class FusedShortConv:
         """x: row at position t, phase = t % 4. Writes fp32 x into ring[phase]; returns the output row in x's dtype."""
         return self.conv_add(x, ring, phase)
 
-    def conv_add(self, x, ring, phase, resid=None, out_dtype=None):
+    def conv_add(self, x, ring, phase, resid=None, out_dtype=None, row_out=True):
         """out = conv(x) rounded to x's dtype, plus resid (fp32 add) if given, in out_dtype (default: x's dtype;
         with resid: resid's dtype)."""
         F.check_row_input(x)
         if resid is not None:
             F.check_row_input(resid)
         out_dtype = out_dtype or (resid.dtype if resid is not None else x.dtype)
-        out = self.out.get(("conv", out_dtype), 1, self.c, out_dtype)
+        out, out_dense = self.out.get_twin(("conv", out_dtype), 1, self.c, out_dtype)
         T, ntc = self.T, self.c // 32
         stage2 = int(resid is not None or out_dtype != x.dtype)
         slots = [ring[(phase - k) % 4] for k in range(4)]
@@ -57,32 +57,42 @@ class FusedShortConv:
             "conv_reader.cpp",
             ttnn.ReaderConfigDescriptor(),
             dict(ntc=ntc, pages=T, has_resid=int(resid is not None)),
-            [x.buffer_address(), F.tile_bytes(x.dtype), F.ES[x.dtype]]
+            F.input_args(x)
             + [s.buffer_address() for s in slots[1:]]
-            + [self.taps.buffer_address(), res.buffer_address(), F.tile_bytes(res.dtype), F.ES[res.dtype]],
+            + [self.taps.buffer_address()]
+            + F.input_args(res),
         )
         cb_out = 17
         writer = F.kernel(
             "conv_writer.cpp",
             ttnn.WriterConfigDescriptor(),
-            dict(ntc=ntc, pages=T, cb_out=cb_out),
-            [slots[0].buffer_address(), out.buffer_address(), F.tile_bytes(out_dtype), F.ES[out_dtype]],
+            dict(ntc=ntc, pages=T, cb_out=cb_out, row_out=int(row_out)),  # 0: dense twin only (fused consumers)
+            [
+                slots[0].buffer_address(),
+                out.buffer_address(),
+                F.tile_bytes(out_dtype),
+                F.ES[out_dtype],
+                out_dense.buffer_address(),
+            ],
         )
-        fp32_cbs = [1, 2, 16] + ([0] if x.dtype == ttnn.float32 else []) + ([3] if res.dtype == ttnn.float32 else [])
+        x_in, res_in = F.input_dtype(x), F.input_dtype(res)
+        fp32_cbs = [1, 2, 16] + ([0] if x_in == ttnn.float32 else []) + ([3] if res_in == ttnn.float32 else [])
         compute = F.kernel(
             "conv_compute.cpp",
             F.compute_config(fp32_cbs + ([18] if x.dtype == ttnn.float32 else [])),
             dict(pages=T, has_resid=int(resid is not None), stage2=stage2),
         )
         cbs = [
-            F.cb(0, x.dtype, T),
+            F.cb(0, x_in, T),
             F.cb(1, ttnn.float32, 3 * T),
             F.cb(2, ttnn.float32, 4 * T),
-            F.cb(3, res.dtype, T),
+            F.cb(3, res_in, T),
             F.cb(16, ttnn.float32, T),
             F.cb(17, out_dtype, T),
             F.cb(18, x.dtype, T),
             F.stage_cb(24, ntc),
         ]
-        io = [x, res, self.taps, *slots, out]
-        return F.run(io, [reader, writer, compute], cbs)
+        tws = [t[0] for t in (F.twin(x), F.twin(res)) if t is not None]
+        io = [x, res, *tws, self.taps, *slots, out_dense, out]
+        F.run(io, [reader, writer, compute], cbs)
+        return out  # the cached object itself: its dense twin is keyed by identity

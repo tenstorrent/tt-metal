@@ -26,8 +26,10 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/debug/kernel_profiler.hpp"
 
 namespace {
+constexpr VectorMode SCALAR = VectorMode::None;
 constexpr uint32_t cb_p = 0, cb_q = 1, cb_s = 2, cb_scaler = 3, cb_wt = 4, cb_np = 16, cb_out = 17;
 constexpr uint32_t cb_sq = 25, cb_inv = 26, cb_prod = 27, cb_w = 28;
 
@@ -71,67 +73,71 @@ void kernel_main() {
     cb_wait_front(cb_scaler, 1);
     cb_wait_front(cb_p, T);
 
-    // ---- inv = rsqrt(mean(p^2) + eps)
-    tile_regs_acquire();
-    reconfig_data_format(cb_p, cb_p);
-    mul_init(cb_p, cb_p);
-    for (uint32_t t = 0; t < T; ++t) {
-        mul_tiles(cb_p, cb_p, t, t, t);
-    }
-    sum_dst(T);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_sq);
-    put(0, cb_sq);
-    tile_regs_release();
-
-    cb_wait_front(cb_sq, 1);
-    tile_regs_acquire();
-    reduce_scalars(cb_sq, 0, 1, cb_inv);
-    binop_with_scalar_tile_init();
-    mul_unary_tile(0, inv_c);
-    add_unary_tile(0, eps);
-    rsqrt_tile_init();
-    rsqrt_tile(0);
-    tile_regs_commit();
-    tile_regs_wait();
-    put(0, cb_inv);
-    tile_regs_release();
-    cb_pop_front(cb_sq, 1);
-
-    // ---- n = p * inv
-    cb_wait_front(cb_inv, 1);
-    tile_regs_acquire();
-    reconfig_data_format(cb_p, cb_inv);
-    mul_bcast_scalar_init(cb_p, cb_inv);
-    for (uint32_t t = 0; t < T; ++t) {
-        mul_tiles_bcast_scalar(cb_p, cb_inv, t, 0, t);
-    }
-    if constexpr (has_weight) {  // n *= weight (SFPU, fp32; weight copied unrounded)
-        cb_wait_front(cb_wt, T);
-        reconfig_data_format_srca(cb_wt);
-        copy_init(cb_wt);
+    {  // profiler zone
+        DeviceZoneScopedN("C_inv");
+        // ---- inv = rsqrt(mean(p^2) + eps)
+        tile_regs_acquire();
+        reconfig_data_format(cb_p, cb_p);
+        mul_init(cb_p, cb_p);
         for (uint32_t t = 0; t < T; ++t) {
-            copy_tile(cb_wt, t, T + t);
+            mul_tiles(cb_p, cb_p, t, t, t);
         }
-        mul_binary_tile_init();
-        for (uint32_t t = 0; t < T; ++t) {
-            mul_binary_tile(t, T + t, t);
-        }
-    }
-    tile_regs_commit();
-    tile_regs_wait();
-    cb_reserve_back(cb_np, T);
-    pack_reconfig_data_format(cb_np);  // bf16 for the gate prep (rounds like HF's cast to down_proj dtype)
-    for (uint32_t t = 0; t < T; ++t) {
-        pack_tile(t, cb_np);
-    }
-    cb_push_back(cb_np, T);
-    tile_regs_release();
-    pack_reconfig_data_format(cb_prod);
-    cb_pop_front(cb_inv, 1);
-    cb_pop_front(cb_p, T);
+        sum_dst(T);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_sq);
+        put(0, cb_sq);
+        tile_regs_release();
 
+        cb_wait_front(cb_sq, 1);
+        tile_regs_acquire();
+        reduce_scalars(cb_sq, 0, 1, cb_inv);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, inv_c, SCALAR);  // scalars sit at [0, 0]: SFPU on face 0 only
+        add_unary_tile(0, eps, SCALAR);
+        rsqrt_tile_init();
+        rsqrt_tile(0, SCALAR);
+        tile_regs_commit();
+        tile_regs_wait();
+        put(0, cb_inv);
+        tile_regs_release();
+        cb_pop_front(cb_sq, 1);
+    }
+    {
+        DeviceZoneScopedN("C_n");
+        // ---- n = p * inv
+        cb_wait_front(cb_inv, 1);
+        tile_regs_acquire();
+        reconfig_data_format(cb_p, cb_inv);
+        mul_bcast_scalar_init(cb_p, cb_inv);
+        for (uint32_t t = 0; t < T; ++t) {
+            mul_tiles_bcast_scalar(cb_p, cb_inv, t, 0, t);
+        }
+        if constexpr (has_weight) {  // n *= weight (SFPU, fp32; weight copied unrounded)
+            cb_wait_front(cb_wt, T);
+            reconfig_data_format_srca(cb_wt);
+            copy_init(cb_wt);
+            for (uint32_t t = 0; t < T; ++t) {
+                copy_tile(cb_wt, t, T + t);
+            }
+            mul_binary_tile_init();
+            for (uint32_t t = 0; t < T; ++t) {
+                mul_binary_tile(t, T + t, t);
+            }
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        cb_reserve_back(cb_np, T);
+        pack_reconfig_data_format(cb_np);  // bf16 for the gate prep (rounds like HF's cast to down_proj dtype)
+        for (uint32_t t = 0; t < T; ++t) {
+            pack_tile(t, cb_np);
+        }
+        cb_push_back(cb_np, T);
+        tile_regs_release();
+        pack_reconfig_data_format(cb_prod);
+        cb_pop_front(cb_inv, 1);
+        cb_pop_front(cb_p, T);
+    }
     if constexpr (nq == 0) {
         return;
     }
@@ -142,93 +148,102 @@ void kernel_main() {
         cb_wait_front(cb_s, k * T);
     }
 
-    // ---- elementwise products q_i * s_j, summed over the T pages: one tile per (i, j)
-    for (uint32_t i = 0; i < nq; ++i) {
-        for (uint32_t j = 0; j < d; ++j) {
-            const uint32_t scb = j < k ? cb_s : cb_np;
-            const uint32_t sbase = j < k ? j * T : 0;
-            tile_regs_acquire();
-            reconfig_data_format(cb_q, scb);
-            mul_init(cb_q, scb);
-            for (uint32_t t = 0; t < T; ++t) {
-                mul_tiles(cb_q, scb, i * T + t, sbase + t, t);
-            }
-            sum_dst(T);
-            tile_regs_commit();
-            tile_regs_wait();
-            put(0, cb_prod);
-            tile_regs_release();
-        }
-    }
-
-    // ---- logits and softmax over depth, per query
-    cb_wait_front(cb_prod, nq * d);
-    for (uint32_t i = 0; i < nq; ++i) {
-        tile_regs_acquire();
-        reduce_scalars(cb_prod, i * d, d, cb_w);
-        if constexpr (d > 1) {
-            constexpr uint32_t m = 7, s = 6;
-            binary_max_tile_init();
-            binary_max_tile(0, 1, m);
-            for (uint32_t j = 2; j < d; ++j) {
-                binary_max_tile(m, j, m);
-            }
-            sub_binary_tile_init();
+    {
+        DeviceZoneScopedN("C_prod");
+        // ---- elementwise products q_i * s_j, summed over the T pages: one tile per (i, j)
+        for (uint32_t i = 0; i < nq; ++i) {
             for (uint32_t j = 0; j < d; ++j) {
-                sub_binary_tile(j, m, j);
-            }
-            exp_tile_init();
-            for (uint32_t j = 0; j < d; ++j) {
-                exp_tile(j);
-            }
-            add_binary_tile_init();
-            add_binary_tile(0, 1, s);
-            for (uint32_t j = 2; j < d; ++j) {
-                add_binary_tile(s, j, s);
-            }
-            recip_tile_init();
-            recip_tile(s);
-            mul_binary_tile_init();
-            for (uint32_t j = 0; j < d; ++j) {
-                mul_binary_tile(j, s, j);
-            }
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        cb_reserve_back(cb_w, d);
-        for (uint32_t j = 0; j < d; ++j) {
-            pack_tile(j, cb_w);
-        }
-        cb_push_back(cb_w, d);
-        tile_regs_release();
-    }
-    cb_pop_front(cb_prod, nq * d);
-
-    // ---- out_i = sum_j w_ij * s_j  (d == 1: w = 1, out = n)
-    cb_wait_front(cb_w, nq * d);
-    cb_reserve_back(cb_out, nq * T);
-    for (uint32_t i = 0; i < nq; ++i) {
-        for (uint32_t t = 0; t < T; ++t) {
-            tile_regs_acquire();
-            if constexpr (d == 1) {
-                reconfig_data_format_srca(cb_np);
-                copy_init(cb_np);
-                copy_tile(cb_np, t, 0);
-            } else {
-                for (uint32_t j = 0; j < d; ++j) {
-                    const uint32_t scb = j < k ? cb_s : cb_np;
-                    const uint32_t sidx = j < k ? j * T + t : t;
-                    reconfig_data_format(scb, cb_w);
-                    mul_bcast_scalar_init(scb, cb_w);
-                    mul_tiles_bcast_scalar(scb, cb_w, sidx, i * d + j, j);
+                const uint32_t scb = j < k ? cb_s : cb_np;
+                const uint32_t sbase = j < k ? j * T : 0;
+                tile_regs_acquire();
+                reconfig_data_format(cb_q, scb);
+                mul_init(cb_q, scb);
+                for (uint32_t t = 0; t < T; ++t) {
+                    mul_tiles(cb_q, scb, i * T + t, sbase + t, t);
                 }
-                sum_dst(d);
+                sum_dst(T);
+                tile_regs_commit();
+                tile_regs_wait();
+                put(0, cb_prod);
+                tile_regs_release();
+            }
+        }
+    }
+    {
+        DeviceZoneScopedN("C_soft");
+        // ---- logits and softmax over depth, per query
+        cb_wait_front(cb_prod, nq * d);
+        for (uint32_t i = 0; i < nq; ++i) {
+            tile_regs_acquire();
+            reduce_scalars(cb_prod, i * d, d, cb_w);
+            if constexpr (d > 1) {
+                constexpr uint32_t m = 7, s = 6;
+                binary_max_tile_init();
+                binary_max_tile(0, 1, m, SCALAR);
+                for (uint32_t j = 2; j < d; ++j) {
+                    binary_max_tile(m, j, m, SCALAR);
+                }
+                sub_binary_tile_init();
+                for (uint32_t j = 0; j < d; ++j) {
+                    sub_binary_tile(j, m, j, SCALAR);
+                }
+                exp_tile_init();
+                for (uint32_t j = 0; j < d; ++j) {
+                    exp_tile(j, SCALAR);
+                }
+                add_binary_tile_init();
+                add_binary_tile(0, 1, s, SCALAR);
+                for (uint32_t j = 2; j < d; ++j) {
+                    add_binary_tile(s, j, s, SCALAR);
+                }
+                recip_tile_init();
+                recip_tile(s, SCALAR);
+                mul_binary_tile_init();
+                for (uint32_t j = 0; j < d; ++j) {
+                    mul_binary_tile(j, s, j, SCALAR);
+                }
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, cb_out);
+            cb_reserve_back(cb_w, d);
+            for (uint32_t j = 0; j < d; ++j) {
+                pack_tile(j, cb_w);
+            }
+            cb_push_back(cb_w, d);
             tile_regs_release();
         }
+        cb_pop_front(cb_prod, nq * d);
     }
-    cb_push_back(cb_out, nq * T);
+    {
+        DeviceZoneScopedN("C_out");
+        // ---- out_i = sum_j w_ij * s_j  (d == 1: w = 1, out = n)
+        cb_wait_front(cb_w, nq * d);
+        cb_reserve_back(cb_out, nq * T);
+        for (uint32_t i = 0; i < nq; ++i) {
+            for (uint32_t t = 0; t < T; ++t) {
+                tile_regs_acquire();
+                if constexpr (d == 1) {
+                    reconfig_data_format_srca(cb_np);
+                    copy_init(cb_np);
+                    copy_tile(cb_np, t, 0);
+                } else {
+                    // FPU products into dst[j], then SFPU sum (an FPU write may not follow an SFPU read of the same
+                    // dst tile inside one acquire: no stall orders them)
+                    for (uint32_t j = 0; j < d; ++j) {
+                        const uint32_t scb = j < k ? cb_s : cb_np;
+                        const uint32_t sidx = j < k ? j * T + t : t;
+                        reconfig_data_format(scb, cb_w);
+                        mul_bcast_scalar_init(scb, cb_w);
+                        mul_tiles_bcast_scalar(scb, cb_w, sidx, i * d + j, j);
+                    }
+                    sum_dst(d);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_out);
+                tile_regs_release();
+            }
+        }
+        cb_push_back(cb_out, nq * T);
+    }
 }

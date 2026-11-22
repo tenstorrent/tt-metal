@@ -12,8 +12,11 @@ void kernel_main() {
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t col0 = get_arg_val<uint32_t>(1);
+    const uint32_t dense_addr = get_arg_val<uint32_t>(2);  // dense twin (E10c): vector r = pages r*T .., fp32
+    constexpr uint32_t T = get_named_compile_time_arg_val("pages");
 
     const InterleavedAddrGen<true> dst = {.bank_base_address = out_addr, .page_size = 4096};
+    const InterleavedAddrGen<true> dd = {.bank_base_address = dense_addr, .page_size = 4096};
     cb_wait_front(cb_out, nt);
     const uint32_t src = get_read_ptr(cb_out);
     for (uint32_t j = 0; j < nt; ++j) {
@@ -21,6 +24,10 @@ void kernel_main() {
             const uint32_t off = rowio::row_offset(r, 4);
             noc_async_write(src + j * 4096 + off, dst.get_noc_addr(col0 + j, off), 64);
             noc_async_write(src + j * 4096 + off + 1024, dst.get_noc_addr(col0 + j, off + 1024), 64);
+            const uint32_t e = 32 * (col0 + j);  // first element of this tile column in vector r
+            const uint64_t d = dd.get_noc_addr(r * T + e / 1024, (e % 1024) * 4);
+            noc_async_write(src + j * 4096 + off, d, 64);
+            noc_async_write(src + j * 4096 + off + 1024, d + 64, 64);
         }
     }
     noc_async_write_barrier();

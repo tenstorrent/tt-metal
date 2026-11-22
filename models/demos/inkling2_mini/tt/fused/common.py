@@ -118,6 +118,43 @@ def run(io_tensors, kernels, cbs):
     return ttnn.generic_op(io_tensors, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
 
 
+# Dense twins (E10c): every row-form output of a fused kernel also gets a dense copy (a few page writes). A fused
+# kernel given that same tensor object as input reads the twin's pages instead of gathering the row (2 x 72 small
+# NOC reads, ~6 us). Keyed by object identity, so a tensor that passed through any other op has no twin.
+_TWIN = {}
+
+
+def set_twin(row, dense, nvec):
+    _TWIN[id(row)] = (row, dense, nvec)
+
+
+def twin(t):
+    """(dense tensor, number of vectors) of a fused-kernel output, else None."""
+    e = _TWIN.get(id(t))
+    return (e[1], e[2]) if e is not None and e[0] is t else None
+
+
+def input_args(t, row=0):
+    """Reader runtime args (addr, page bytes, elem bytes, row / first page, is_dense) of a row-form input t:
+    its dense twin when it has one."""
+    tw = twin(t)
+    if tw is not None:
+        dense, nvec = tw
+        return [
+            dense.buffer_address(),
+            tile_bytes(dense.dtype),
+            ES[dense.dtype],
+            min(row, nvec - 1) * pages(t.shape[-1]),
+            1,
+        ]
+    return [t.buffer_address(), tile_bytes(t.dtype), ES[t.dtype], row, 0]
+
+
+def input_dtype(t):
+    tw = twin(t)
+    return tw[0].dtype if tw is not None else t.dtype
+
+
 class OutCache:
     """Per-module zeroed output buffers: an output stays valid until the same module is called again with the
     same key. First use must be eager (it writes zeros from host), as the model and tests do before capture."""
@@ -130,3 +167,13 @@ class OutCache:
         if key not in self.bufs:
             self.bufs[key] = zeros_row_form(self.device, rows, c, dtype)
         return self.bufs[key]
+
+    def get_twin(self, key, rows, c, dtype, nvec=None):
+        """Row-form output buffer plus its dense twin (nvec vectors, default rows)."""
+        out = self.get(key, rows, c, dtype)
+        tkey = ("twin", key)
+        if tkey not in self.bufs:
+            nvec = nvec or rows
+            self.bufs[tkey] = dense_tensor(self.device, torch.zeros(nvec, c), dtype)
+            set_twin(out, self.bufs[tkey], nvec)
+        return out, self.bufs[tkey]

@@ -13,6 +13,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/debug/kernel_profiler.hpp"
 
 namespace {
 FORCE_INLINE void load(uint32_t cb, uint32_t tile, uint32_t dst) {
@@ -38,31 +39,34 @@ void kernel_main() {
     cb_wait_front(cb_x, T);
     cb_wait_front(cb_taps, 4 * T);
     cb_wait_front(cb_ring, 3 * T);
-    for (uint32_t t = 0; t < T; ++t) {
-        tile_regs_acquire();
-        load(cb_x, t, 0);
-        load(cb_taps, t, 1);
-        mul_binary_tile_init();
-        mul_binary_tile(0, 1, 1);
-        for (uint32_t k = 1; k < 4; ++k) {
-            load(cb_ring, (k - 1) * T + t, 2);
-            load(cb_taps, k * T + t, 3);
+    {
+        DeviceZoneScopedN("C_conv");
+        for (uint32_t t = 0; t < T; ++t) {
+            tile_regs_acquire();
+            load(cb_x, t, 0);
+            load(cb_taps, t, 1);
             mul_binary_tile_init();
-            mul_binary_tile(2, 3, 2);
-            add_binary_tile_init();
-            add_binary_tile(1, 2, 1);
+            mul_binary_tile(0, 1, 1);
+            for (uint32_t k = 1; k < 4; ++k) {
+                load(cb_ring, (k - 1) * T + t, 2);
+                load(cb_taps, k * T + t, 3);
+                mul_binary_tile_init();
+                mul_binary_tile(2, 3, 2);
+                add_binary_tile_init();
+                add_binary_tile(1, 2, 1);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            put(0, cb_xf);
+            put(1, stage2 ? cb_yr : cb_y);
+            tile_regs_release();
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        put(0, cb_xf);
-        put(1, stage2 ? cb_yr : cb_y);
-        tile_regs_release();
+        cb_pop_front(cb_x, T);
+        cb_pop_front(cb_taps, 4 * T);
+        cb_pop_front(cb_ring, 3 * T);
     }
-    cb_pop_front(cb_x, T);
-    cb_pop_front(cb_taps, 4 * T);
-    cb_pop_front(cb_ring, 3 * T);
-
     if constexpr (stage2) {
+        DeviceZoneScopedN("C_stage2");
         cb_wait_front(cb_yr, T);
         if constexpr (has_resid) {
             cb_wait_front(cb_resid, T);

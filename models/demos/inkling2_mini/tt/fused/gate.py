@@ -62,23 +62,30 @@ class _FusedGate:
         self.nt = self.ntc // n
         self.prep_cores = F.core_list(device, 2 * rows)
         self.comb_cores = F.core_list(device, n)
+        assert 2 * rows <= R.SPLIT
+        self.z_cores = F.core_list(device, R.SPLIT)
+        self.eye = ttnn.from_torch(
+            torch.eye(32)[None, None], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.fused_z = True  # E10c: down_proj + split-K sum in one program (False: ttnn matmul + sum)
 
-    def _prep(self, h, m):
+    def _prep(self, h, m, build_only=False):
+        """build_only: return the prep's per-core args / CBs (on the split cores) for _prep_z instead of running."""
         T = F.pages(self.c)
         cores, crs = self.prep_cores
+        if build_only:
+            crs = self.z_cores[1]
         rd, wr = {}, {}
+        # one CB format for all prep cores: read dense twins only when h and m then share a dtype
+        use_twin = F.input_dtype(h) == F.input_dtype(m)
+        in_dtype = F.input_dtype(h) if use_twin else h.dtype
         for v, core in enumerate(cores):
             src, r = (h, v) if v < self.rows else (m, v - self.rows)
-            rd[core] = [
-                src.buffer_address(),
-                F.tile_bytes(src.dtype),
-                F.ES[src.dtype],
-                0,
-                0,
-                self.scaler.buffer_address(),
-                r,
-                0,
-            ]
+            if use_twin:
+                args = F.input_args(src, r)
+            else:
+                args = [src.buffer_address(), F.tile_bytes(src.dtype), F.ES[src.dtype], r, 0]
+            rd[core] = [*args, 0, 0, self.scaler.buffer_address(), 0]
             wr[core] = [self.xs.buffer_address(), r, 0 if v < self.rows else self.ntc]
         named = dict(ntc=self.ntc, pages=T, nq=0, k=0, has_weight=0)
         assert h.dtype == m.dtype
@@ -95,7 +102,7 @@ class _FusedGate:
         ]
         f32 = ttnn.float32
         cbs = [
-            F.cb(0, h.dtype, T, cores=crs),
+            F.cb(0, in_dtype, T, cores=crs),
             F.cb(1, f32, 1, cores=crs),
             F.cb(2, f32, 1, cores=crs),
             F.cb(3, f32, 1, cores=crs),
@@ -107,11 +114,57 @@ class _FusedGate:
             F.cb(27, f32, 1, cores=crs),
             F.cb(28, f32, 1, cores=crs),
         ]
-        F.run([h, m, self.scaler, self.xs], kernels, cbs)
+        tws = [t[0] for t in (F.twin(h), F.twin(m)) if t is not None]
+        io = [h, m, *tws, self.scaler, self.xs]
+        if build_only:
+            cnamed = dict(pages=T, nq=0, k=0, has_weight=0, inv_c=f32_bits(1.0 / self.c), eps=f32_bits(self.eps))
+            return dict(
+                rd=[rd[c] for c in cores], wr=[wr[c] for c in cores], named=named, cnamed=cnamed, cbs=cbs, io=io
+            )
+        F.run(io, kernels, cbs)
+
+    def _prep_z(self, h, m):
+        """Gate prep + z = sum_s xs[s] @ down[s] in one program: one core per split; the first 2 R cores also run
+        the prep (bf16 rms rows -> xs) and signal every split core; partials summed on core 0.
+        Returns z ([1, 1, R, 64 g] fp32)."""
+        prep = self._prep(h, m, build_only=True)
+        cores, crs = self.z_cores
+        n_prep = len(prep["rd"])  # the prep cores are the first split cores
+        z = self.out.get("z", self.rows, self.kz * 32, ttnn.float32)
+        virt = [self.device.worker_core_from_logical_core(c) for c in cores]
+        xy = [v for c in virt for v in (c.x, c.y)]
+        kt = self.xs.shape[-1] // 32
+        rd, cp, wr = {}, {}, {}
+        for s, core in enumerate(cores):
+            is_prep = int(s < n_prep)
+            prd, pwr = (prep["rd"][s], prep["wr"][s]) if is_prep else ([0] * 9, [0] * 3)
+            x = self.xs.buffer_address()
+            rd[core] = [*prd, x, self.down.buffer_address(), s, self.eye.buffer_address(), is_prep]
+            cp[core] = [s, is_prep]
+            wr[core] = [*pwr, z.buffer_address(), s, is_prep, *xy]
+        named = dict(prep["named"], kt=kt, kz=self.kz, n_split=len(cores), n_prep=n_prep, sem_x=0, sem_z=1)
+        cnamed = dict(prep["cnamed"], kt=kt, kz=self.kz, n_split=len(cores))
+        kernels = [
+            F.kernel("gatez_reader.cpp", ttnn.ReaderConfigDescriptor(), named, rd, crs),
+            F.kernel("gatez_writer.cpp", ttnn.WriterConfigDescriptor(), named, wr, crs),
+            F.kernel("gatez_compute.cpp", F.compute_config([]), cnamed, cp, crs),
+        ]
+        f32 = ttnn.float32
+        cbs = [c for c in prep["cbs"]] + [
+            F.cb(5, ttnn.bfloat16, kt, cores=crs),
+            F.cb(6, ttnn.bfloat16, kt * self.kz, cores=crs),
+            F.cb(7, f32, (len(cores) - 1) * self.kz, cores=crs),
+            F.cb(8, f32, 1, cores=crs),
+            F.cb(9, f32, 1, cores=crs),
+            F.cb(18, f32, self.kz, cores=crs),
+        ]
+        sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=crs, initial_value=0) for i in (0, 1)]
+        io = prep["io"] + [self.down, self.eye, z]
+        return ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=sems))
 
     def _combine(self, z, h, m):
         cores, crs = self.comb_cores
-        out = self.out.get("out", self.rows, self.c, ttnn.float32)
+        out, out_dense = self.out.get_twin("out", self.rows, self.c, ttnn.float32)
         has_mask = int(self.mask is not None)
         rd, wr = {}, {}
         for i, core in enumerate(cores):
@@ -125,9 +178,15 @@ class _FusedGate:
                 m.buffer_address(),
                 col0,
             ]
-            wr[core] = [out.buffer_address(), col0]
+            wr[core] = [out.buffer_address(), col0, out_dense.buffer_address()]
         named = dict(
-            kz=self.kz, nt=self.nt, nct=self.ntc, has_mask=has_mask, h_tile=F.tile_bytes(h.dtype), rows=self.rows
+            kz=self.kz,
+            nt=self.nt,
+            nct=self.ntc,
+            has_mask=has_mask,
+            h_tile=F.tile_bytes(h.dtype),
+            rows=self.rows,
+            pages=F.pages(self.c),
         )
         fp32_cbs = [0, 1] + ([4, 5] if h.dtype == ttnn.float32 else [])
         kernels = [
@@ -146,8 +205,9 @@ class _FusedGate:
             F.cb(16, ttnn.bfloat16, self.kz, cores=crs),
             F.cb(17, f32, self.nt, cores=crs),
         ]
-        io = [z, h, m, self.f, self.g] + ([self.mask] if has_mask else []) + [out]
-        return F.run(io, kernels, cbs)
+        io = [z, h, m, self.f, self.g] + ([self.mask] if has_mask else []) + [out_dense, out]
+        F.run(io, kernels, cbs)
+        return out  # the cached object itself: its dense twin is keyed by identity
 
     def __call__(self, h, m):
         """h, m: [1,1,R,C] row-form DRAM tensors of one dtype (fp32 or bf16). Returns fp32 [1,1,R,C]."""
@@ -156,10 +216,13 @@ class _FusedGate:
         if h.dtype != m.dtype:
             h, m = R._f32(h), R._f32(m)
         assert h.shape[-2] == self.rows and m.shape[-2] == self.rows, (h.shape, m.shape, self.rows)
-        self._prep(h, m)
-        z = ttnn.sum(
-            ttnn.matmul(self.xs, self.down, dtype=ttnn.float32, compute_kernel_config=self.ckc), dim=1, keepdim=True
-        )
+        if self.fused_z:
+            z = self._prep_z(h, m)
+        else:
+            self._prep(h, m)
+            z = ttnn.sum(
+                ttnn.matmul(self.xs, self.down, dtype=ttnn.float32, compute_kernel_config=self.ckc), dim=1, keepdim=True
+            )
         return self._combine(z, h, m)
 
 

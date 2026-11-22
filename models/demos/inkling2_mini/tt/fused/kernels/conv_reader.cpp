@@ -3,6 +3,7 @@
 //
 // Fused short conv, reader: x row -> dense, taps + 3 previous ring slots (dense pages), optional residual row.
 #include "rowio.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t ntc = get_named_compile_time_arg_val("ntc");  // C / 32
@@ -14,6 +15,8 @@ void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(a++);
     const uint32_t x_tile = get_arg_val<uint32_t>(a++);
     const uint32_t x_es = get_arg_val<uint32_t>(a++);
+    const uint32_t x_row = get_arg_val<uint32_t>(a++);
+    const uint32_t x_dense = get_arg_val<uint32_t>(a++);
     const uint32_t r1 = get_arg_val<uint32_t>(a++);  // ring slots at lag 1, 2, 3
     const uint32_t r2 = get_arg_val<uint32_t>(a++);
     const uint32_t r3 = get_arg_val<uint32_t>(a++);
@@ -21,27 +24,47 @@ void kernel_main() {
     const uint32_t res_addr = get_arg_val<uint32_t>(a++);
     const uint32_t res_tile = get_arg_val<uint32_t>(a++);
     const uint32_t res_es = get_arg_val<uint32_t>(a++);
+    const uint32_t res_row = get_arg_val<uint32_t>(a++);
+    const uint32_t res_dense = get_arg_val<uint32_t>(a++);
 
     const uint32_t stage = align_power_of_2(get_write_ptr(cb_stage), rowio::DRAM_RD_ALIGN);
 
-    cb_reserve_back(cb_x, T);
-    rowio::gather_row(x_addr, x_tile, x_es, ntc, 0, get_write_ptr(cb_x), T * 1024 * x_es, stage);
-    cb_push_back(cb_x, T);
+    {
+        DeviceZoneScopedN("R_x");
+        cb_reserve_back(cb_x, T);
+        if (x_dense) {
+            rowio::read_pages(x_addr, x_tile, x_row, T, get_write_ptr(cb_x));
+            noc_async_read_barrier();
+        } else {
+            rowio::gather_row(x_addr, x_tile, x_es, ntc, x_row, get_write_ptr(cb_x), T * 1024 * x_es, stage);
+        }
+        cb_push_back(cb_x, T);
+    }
+    {
+        DeviceZoneScopedN("R_pages");
 
-    cb_reserve_back(cb_taps, 4 * T);
-    rowio::read_pages(taps, 4096, 0, 4 * T, get_write_ptr(cb_taps));
-    cb_reserve_back(cb_ring, 3 * T);
-    const uint32_t ring = get_write_ptr(cb_ring);
-    rowio::read_pages(r1, 4096, 0, T, ring);
-    rowio::read_pages(r2, 4096, 0, T, ring + T * 4096);
-    rowio::read_pages(r3, 4096, 0, T, ring + 2 * T * 4096);
-    noc_async_read_barrier();
-    cb_push_back(cb_taps, 4 * T);
-    cb_push_back(cb_ring, 3 * T);
+        cb_reserve_back(cb_taps, 4 * T);
+        rowio::read_pages(taps, 4096, 0, 4 * T, get_write_ptr(cb_taps));
+        cb_reserve_back(cb_ring, 3 * T);
+        const uint32_t ring = get_write_ptr(cb_ring);
+        rowio::read_pages(r1, 4096, 0, T, ring);
+        rowio::read_pages(r2, 4096, 0, T, ring + T * 4096);
+        rowio::read_pages(r3, 4096, 0, T, ring + 2 * T * 4096);
+        noc_async_read_barrier();
+        cb_push_back(cb_taps, 4 * T);
+        cb_push_back(cb_ring, 3 * T);
+    }
 
     if constexpr (has_resid) {
+        DeviceZoneScopedN("R_res");
         cb_reserve_back(cb_resid, T);
-        rowio::gather_row(res_addr, res_tile, res_es, ntc, 0, get_write_ptr(cb_resid), T * 1024 * res_es, stage);
+        if (res_dense) {
+            rowio::read_pages(res_addr, res_tile, res_row, T, get_write_ptr(cb_resid));
+            noc_async_read_barrier();
+        } else {
+            rowio::gather_row(
+                res_addr, res_tile, res_es, ntc, res_row, get_write_ptr(cb_resid), T * 1024 * res_es, stage);
+        }
         cb_push_back(cb_resid, T);
     }
 }

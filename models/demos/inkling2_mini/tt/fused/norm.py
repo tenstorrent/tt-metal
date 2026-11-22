@@ -37,16 +37,7 @@ class FusedRowNorm:
         rd, wr = {}, {}
         for i, core in enumerate(cores):
             w = self.w[min(i, len(self.w) - 1)]
-            rd[core] = [
-                x.buffer_address(),
-                F.tile_bytes(x.dtype),
-                F.ES[x.dtype],
-                0,
-                0,
-                self.scaler.buffer_address(),
-                i,
-                w.buffer_address(),
-            ]
+            rd[core] = [*F.input_args(x, i), 0, 0, self.scaler.buffer_address(), w.buffer_address()]
             wr[core] = [outs[i].buffer_address(), F.tile_bytes(self.out_dtype), F.ES[self.out_dtype]]
         named = dict(ntc=ntc, pages=T, nq=0, k=0, has_weight=1)
         kernels = [
@@ -61,8 +52,13 @@ class FusedRowNorm:
             ),
         ]
         f32 = ttnn.float32
-        cbs = [F.cb(0, x.dtype, T, cores=crs), F.cb(4, f32, T, cores=crs), F.cb(16, self.out_dtype, T, cores=crs)]
+        cbs = [
+            F.cb(0, F.input_dtype(x), T, cores=crs),
+            F.cb(4, f32, T, cores=crs),
+            F.cb(16, self.out_dtype, T, cores=crs),
+        ]
         cbs += [F.cb(i, f32, 1, cores=crs) for i in (1, 2, 3, 17, 25, 26, 27, 28)]
         cbs.append(F.stage_cb(24, ntc, crs))
-        F.run([x, self.scaler, *self.w, *outs], kernels, cbs)
+        tw = F.twin(x)
+        F.run([x, *([tw[0]] if tw else []), self.scaler, *self.w, *outs], kernels, cbs)
         return outs

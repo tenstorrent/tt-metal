@@ -47,23 +47,20 @@ class FusedRowOps:
             self.run(h, k)
         return self.stack
 
-    def run(self, partial, k, q=None, nq=0, out=None, out_rows=None):
+    def run(self, partial, k, q=None, nq=0, out=None, out_rows=None, out_dense=None):
         F.check_row_input(partial)
         T, ntc, d = self.T, self.c // 32, k + 1
         assert 0 <= k < MAX_DEPTH and self.c % 32 == 0
-        named = dict(ntc=ntc, pages=T, nq=nq, k=k, has_weight=0, out_rows=out_rows or nq)
+        named = dict(ntc=ntc, pages=T, nq=nq, k=k, has_weight=0, out_rows=nq if out_rows is None else out_rows)
         reader = F.kernel(
             "attnres_reader.cpp",
             ttnn.ReaderConfigDescriptor(),
             named,
             [
-                partial.buffer_address(),
-                F.tile_bytes(partial.dtype),
-                F.ES[partial.dtype],
+                *F.input_args(partial),
                 q.buffer_address() if q is not None else 0,
                 self.stack.buffer_address(),
                 self.scaler.buffer_address(),
-                0,  # row of the partial
                 0,  # no rms weight
             ],
         )
@@ -71,7 +68,11 @@ class FusedRowOps:
             "attnres_writer.cpp",
             ttnn.WriterConfigDescriptor(),
             named,
-            [self.stack.buffer_address(), out.buffer_address() if out is not None else 0],
+            [
+                self.stack.buffer_address(),
+                out.buffer_address() if out is not None else 0,
+                out_dense.buffer_address() if out_dense is not None else 0,
+            ],
         )
         compute = F.kernel(
             "attnres_compute.cpp",
@@ -80,7 +81,7 @@ class FusedRowOps:
         )
         f32 = ttnn.float32
         cbs = [
-            F.cb(0, partial.dtype, T),
+            F.cb(0, F.input_dtype(partial), T),
             F.cb(1, f32, max(1, nq * T)),
             F.cb(2, f32, max(1, k * T)),
             F.cb(3, f32, 1),
@@ -92,7 +93,9 @@ class FusedRowOps:
             F.cb(27, f32, max(1, nq * d)),
             F.cb(28, f32, max(1, nq * d)),
         ]
-        io = [partial, self.scaler] + ([q] if q is not None else []) + [self.stack] + ([out] if out is not None else [])
+        tw = F.twin(partial)
+        io = [partial] + ([tw[0]] if tw else []) + [self.scaler] + ([q] if q is not None else []) + [self.stack]
+        io += ([out_dense] if out_dense is not None else []) + ([out] if out is not None else [])
         F.run(io, [reader, writer, compute], cbs)
         self.fresh[k] = partial
         return out
@@ -110,14 +113,16 @@ class FusedAttnRes:
         self.q = F.dense_tensor(rows.device, q * q.shape[-1] ** -0.5)  # 1/sqrt(C) folded into q
         self.out = F.OutCache(rows.device)
 
-    def __call__(self, stack, partial, depth: int, split=True, repeat_rows=None):
+    def __call__(self, stack, partial, depth: int, split=True, repeat_rows=None, row_out=True):
         """stack: ignored (rows.stack is used; rows 0..depth-2 sealed). partial: row. Returns a list of
         num_queries fp32 rows (split=False: one [1,1,num_queries,C] tensor). repeat_rows=3 with 1 query: the
         output in rows 0..2 (replaces the model's ttnn.repeat before the q/k/v message gates)."""
         r = self.rows
         n_out = repeat_rows or self.nq
-        out = self.out.get(("out", n_out), n_out, r.c, ttnn.float32)
-        out = r.run(partial, depth - 1, self.q, self.nq, out, n_out)
+        out, out_dense = self.out.get_twin(("out", n_out), n_out, r.c, ttnn.float32, nvec=self.nq)
+        # row_out=False: only the dense twin is written (E10c); the returned tensor is then valid only as the input
+        # of another fused kernel (which reads the twin), never for a ttnn op.
+        out = r.run(partial, depth - 1, self.q, self.nq, out, n_out if row_out else 0, out_dense)
         if not split:
             return out
         return [out] if self.nq == 1 else [ttnn.slice(out, [0, 0, j, 0], [1, 1, j + 1, r.c]) for j in range(self.nq)]
