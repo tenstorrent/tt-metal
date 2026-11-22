@@ -19,7 +19,6 @@ void kernel_main() {
 
     const uint32_t z_addr = get_arg_val<uint32_t>(0);
     const uint32_t f_addr = get_arg_val<uint32_t>(2);
-    const uint32_t g_addr = get_arg_val<uint32_t>(3);
     const uint32_t h_addr = get_arg_val<uint32_t>(4);
     const uint32_t m_addr = get_arg_val<uint32_t>(5);
     const uint32_t col0 = get_arg_val<uint32_t>(6);
@@ -30,12 +29,10 @@ void kernel_main() {
 
     DeviceZoneScopedN("R_all");
     // bulk weights first
-    cb_reserve_back(cb_f, kz * nt);
-    cb_reserve_back(cb_g, kz * nt);
-    const uint32_t f = get_write_ptr(cb_f), g = get_write_ptr(cb_g);
+    cb_reserve_back(cb_f, kz * nt);  // G: read by the writer (the other NOC), in parallel
+    const uint32_t f = get_write_ptr(cb_f);
     for (uint32_t kt = 0; kt < kz; ++kt) {
         rowio::read_pages(f_addr, 4096, kt * nct + col0, nt, f + kt * nt * 4096);
-        rowio::read_pages(g_addr, 4096, kt * nct + col0, nt, g + kt * nt * 4096);
     }
     // z: only rows 0..rows-1 matter (output rows >= rows are never written; matmul rows are independent). With
     // the block mask, row i keeps z tiles 2i, 2i+1 (gate i) and the rest of the row is zeroed.
@@ -81,7 +78,6 @@ void kernel_main() {
     noc_async_read_barrier();
     cb_push_back(cb_z, kz);
     cb_push_back(cb_f, kz * nt);
-    cb_push_back(cb_g, kz * nt);
     cb_push_back(cb_h, nt);
     cb_push_back(cb_m, nt);
 }

@@ -194,7 +194,7 @@ class _FusedGate:
             col0 = i * self.nt
             rd[core] = [z.buffer_address(), 0, self.f.buffer_address(), self.g.buffer_address(), h_a, m_a, col0]
             rd[core] += [h_d, m_d, h_n, m_n]
-            wr[core] = [out.buffer_address(), col0, out_dense.buffer_address()]
+            wr[core] = [out.buffer_address(), col0, out_dense.buffer_address(), self.g.buffer_address()]
         named = dict(
             kz=self.kz,
             nt=self.nt,

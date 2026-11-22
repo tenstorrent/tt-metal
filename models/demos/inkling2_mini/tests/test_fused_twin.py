@@ -82,7 +82,7 @@ def test_twin_app(device, kind):
             x = qkv(x, msgs[0])
         qkv_rows = norm(x)
         resid = ca.conv_add(A, ring_a, 1, h, ttnn.float32, row_out=not skip_rows)
-        m = mlp(None, resid, 3)[0]
+        m = mlp(None, resid, 3, row_out=not (skip_rows and with_msg))[0]  # with messages: only the gate reads m
         if with_msg:
             m = mg(m, msgs[1])
         out = cm.conv_add(Y, ring_m, 1, resid, ttnn.bfloat16)
