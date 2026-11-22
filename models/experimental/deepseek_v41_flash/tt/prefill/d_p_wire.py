@@ -8,6 +8,8 @@ A message is an 8-byte big-endian header length, a JSON header, then the raw blo
 (byte counts, in order). A connection carries one request at a time; requests:
 
 * ``{"op": "ping"}`` -> ``{"pong": true}``.
+* ``{"op": "stats"}`` -> ``{"requests", "tokens", "seconds": {stage: seconds}}``: the server's per-stage profile
+  summed over every request it served (stages: ``demo/prefill_server.py`` ``PrefillService``).
 * ``{"op": "info"}`` -> ``{"version", "max_seq", "chunk", "align", "layers", "kv_sources", "window", "vocab",
   "mesh", "cache_slots"}`` (``kv_sources``: layer -> compression ratio; ``cache_slots``: the server's prefix-cache
   slots).
@@ -194,6 +196,12 @@ class PrefillClient:
 
     def ping(self) -> bool:
         return bool(self._call({"op": "ping"})[0].get("pong"))
+
+    def stats(self) -> dict:
+        """The server's per-stage seconds summed over every request it served (``stats``)."""
+        header, _ = self._call({"op": "stats"})
+        header.pop("blobs", None)
+        return header
 
     def prefill(
         self,

@@ -332,7 +332,6 @@ def test_remote_prefiller_push_reserves_pushes_and_finishes():
         try:
             assert prefiller.ring_layers == [0, 1, 2]
             user = _push_user(sid=5)
-            assert prefiller.start(user, list(range(256))) is None  # nothing sent ahead
             seen = []
             prefiller.run(user, list(range(256)), on_progress=seen.append)
             assert seen == [128, 256]
@@ -400,6 +399,80 @@ def test_remote_prefiller_push_holds_a_cancellation_until_the_reply():
             prefiller.close()
 
 
+def test_remote_prefiller_push_ahead_reserves_at_start_and_run_finishes():
+    hold = threading.Event()
+    with _MockPrefillServer(hold=hold, chunk=128) as srv:
+        engine, committed = _fake_engine(num_layers=4)
+        prefiller = _RemotePrefiller(engine, srv.url, push=True)
+        try:
+            wake = threading.Condition()
+            user = _push_user(sid=8)
+            job = prefiller.start(user, list(range(256)), wake=wake)
+            # Reserved on the calling (scheduler) thread, sent from the job's own.
+            assert engine.model.in_flight == {8: (0, 256, [0, 1, 2])} and engine.model.resets == [8]
+            assert _wait_until(lambda: len(srv.pushes) == 1)
+            assert not job.done()
+            hold.set()
+            with wake:
+                assert wake.wait_for(job.done, timeout=5)
+            prefiller.run(user, list(range(256)))
+            assert engine.model.finished == [(8, 0, list(range(256)))]
+            assert len(srv.pushes) == 1 and not committed and not engine.model.in_flight
+            assert user.pos == 256
+        finally:
+            prefiller.close()
+
+
+def test_remote_prefiller_forgotten_push_keeps_its_pages_until_the_reply():
+    hold = threading.Event()
+    with _MockPrefillServer(hold=hold) as srv:
+        engine, _ = _fake_engine(num_layers=4)
+        prefiller = _RemotePrefiller(engine, srv.url, push=True)
+        try:
+            user = _push_user(sid=9)
+            job = prefiller.start(user, list(range(256)))
+            assert _wait_until(lambda: len(srv.pushes) == 1)
+            prefiller.forget(user, job)  # the turn ended before loading it
+            prefiller.reap()
+            assert 9 in engine.model.in_flight and not engine.model.aborted  # its writes may still land
+            hold.set()
+            prefiller.reap(block=True)
+            assert engine.model.aborted == [9] and not engine.model.in_flight and not engine.model.finished
+            assert user.resets == 1 and not prefiller._orphans
+            # The connection stayed in sync: the next push on it works.
+            user = _push_user(sid=9)
+            prefiller.run(user, list(range(256)))
+            assert engine.model.finished == [(9, 0, list(range(256)))]
+        finally:
+            prefiller.close()
+
+
+def test_remote_prefiller_push_ahead_holds_a_cancellation_until_the_reply():
+    with _MockPrefillServer(chunk=128) as srv:
+        engine, _ = _fake_engine(num_layers=4)
+        prefiller = _RemotePrefiller(engine, srv.url, push=True)
+        try:
+            user = _push_user(sid=4)
+            seen = []
+
+            def progress(end: int) -> None:
+                seen.append(end)
+                raise _PromptStopped()
+
+            job = prefiller.start(user, list(range(384)), progress)
+            job.wait()
+            assert seen == [128] and job.aborted
+            try:
+                prefiller.run(user, list(range(384)))
+            except _PromptStopped:
+                pass
+            else:
+                raise AssertionError("the cancellation was dropped")
+            assert engine.model.aborted == [4] and not engine.model.finished and user.resets == 1
+        finally:
+            prefiller.close()
+
+
 def test_remote_prefiller_start_runs_off_thread_and_run_loads_it():
     hold = threading.Event()
     with _MockPrefillServer(hold=hold) as srv:
@@ -450,7 +523,7 @@ def test_prefill_first_decodes_while_a_prompt_is_at_the_prefill_server(monkeypat
     fetching = _T(_Turn.PREFILL, fetch)
 
     sched = _PrefillFirst.__new__(_PrefillFirst)
-    sched.server = SimpleNamespace(pool=SimpleNamespace(max_running=8))
+    sched.server = SimpleNamespace(pool=SimpleNamespace(max_running=8), prefiller=None)
     sched._new, sched._chores, sched._stop = deque(), deque(), False
     sched._wake = threading.Condition()
     sched._inflight, sched._posted = deque(), deque()

@@ -133,9 +133,11 @@ As written (`d_p_push.push(d_p, targets, slot)`; no `DPPrefill` method):
   `from_torch`, replicated: 2.5 MiB for 20 layers).
 * Sender assignment: KV pages by their owner chip (dedup: chip-linear owner); key blocks and ring tiles by one of the
   chips holding them, rotated by destination chip so the replicas share the load.
-* One kernel a sending chip (core (0, 0)): a DRAM work table of 16-byte entries (source | destination << 8, source
-  page, destination buffer, destination page), `K` = 32 a NoC batch, a destination table (fabric chip, mesh, bank
-  table) read into L1 once. One connection: a remote mesh's route is the route to this mesh's exit chip
+* One kernel a sending chip (core (0, 0)): a DRAM work table of 16-byte runs (source | count << 8 | destination <<
+  16, first source page, destination buffer, first destination page), one a decode cache block (KV: the block's
+  entries within one owner stripe, so up to 64 rows; keys: the block's 8 tiles; a ring: its 64 tiles), read `K` = 32
+  at a time, a run's pages staged `K` at a time; a destination table (fabric chip, mesh, bank table) read into L1
+  once. (Phase 2 had one entry a page: 11.8M at 1M tokens, 3.24 s of host planning.) One connection: a remote mesh's route is the route to this mesh's exit chip
   (`fabric_set_unicast_route`), so every decode chip is behind the same first hop (the host checks it with
   `get_eth_forwarding_direction`); the route is rewritten when the destination changes.
 * `PrefillService.prefill_push`: same lock / prefix-cache flow as `prefill`, then the push instead of
@@ -224,11 +226,32 @@ The push is synchronous, so it blocks the scheduler where TCP sends ahead; async
 ### Phase 4: production
 
 1. Async remote prefill on decode (other users keep decoding; a turn waits in a "remote prefill" state).
+   Written: `_RemotePrefiller.start` reserves the pages at admission (scheduler thread) and sends `prefill_push` from
+   a thread of its own (`_RemoteFetch` with `targets`), the way the TCP backend sends ahead; `run` only calls
+   `finish_remote_commit`. A stop is held until the reply (the connection is not cut). A push whose turn ended is
+   an orphan until its reply is in: `reap` (each scheduler round; blocking before an admission, which may reset or
+   evict its slot) then aborts its commit and resets the user. Only users of one instance gain (each instance has
+   its own scheduler): the check runs `--instances 1 --num-users 2`, one user streaming while another's long prompt
+   is pushed.
 2. Prefix cache: `have > 0` pushes entries from `have` on (key blocks rewritten whole from the block holding `have /
    ratio`); `start > 0` sessions (`commit_prefill_state(start=...)` semantics).
 3. Arrival counters (5.4).
 4. Bandwidth: per-link accounting from the route map, spreading destinations over exit chips, larger packets for KV
-   (several 1 KiB rows a packet when destination pages are contiguous within a block).
+   (several 1 KiB rows a packet when destination pages are contiguous within a block). Written: the work table in
+   runs of a cache block (section 5.3) instead of pages, ~64x fewer entries; byte-exact at 16k (210 MiB, plan 11 ms,
+   device 743 ms); 1M to do.
+5. The push as a C++ op, a launch per prefill chunk:
+   `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/kv_fabric_push` (`KvFabricPush`, driven by
+   `FabricPush` in `tt/prefill/d_p_push.py`). `begin` takes the request's layout (sources, destinations, per layer
+   the owner stripes, decode block rows and pools); `push(end, last)` after each chunk is enqueued plans the runs that
+   chunk completed in C++ (entries below `end / ratio`, key blocks whose 64 rows are all written; the last launch the
+   rest, the partial key block and the rings), enqueues one program a chip on the prefill command queue and streams
+   each chip's runs into an H2D socket (DEVICE_PULL: the FIFO in pinned host memory, the kernel pulls a 512 B page
+   of 32 runs at a time). A launch is a header page (runs, destination-table bytes), the destination table, then the
+   runs; nothing a launch moves is in the program, so every launch hits the program cache. The kernel reads metal_2's
+   ND-sharded slabs in place through runtime-configured accessors (no slices) and tilizes the index-key blocks in L1
+   (no device tilize). Next (option B): one persistent kernel on a reserved core, gated per chunk by a semaphore,
+   several packets in flight and multi-page packets.
 
 ## 7. Separate track: prefill state correctness
 

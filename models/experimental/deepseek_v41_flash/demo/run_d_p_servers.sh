@@ -18,6 +18,8 @@
 # Prefill logs are tagged [1,0]<stdout>, decode's [1,1]<stdout>. The decode server listens on host 41 (default
 # port 8000); the prefill server on host 40 at --prefill-port. Decode args for the disaggregated prefill with the KV
 # pushed over the fabric: -- --prefill-url 10.82.97.40:9041 --prefill-push (--no-prefill-push: the KV over TCP).
+# The prefill server logs a per-stage profile of every request; DEEPSEEK_V41_PREFILL_PROFILE_CHUNKS=1 makes its
+# prefill split exact (it waits for the device after every chunk).
 set -euo pipefail
 
 SCRIPT=models/experimental/deepseek_v41_flash/demo/run_d_p_servers.sh

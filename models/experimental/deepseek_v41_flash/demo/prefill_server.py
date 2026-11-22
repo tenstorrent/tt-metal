@@ -35,7 +35,7 @@ import time
 import torch
 from loguru import logger
 
-from models.experimental.deepseek_v41_flash.tt.prefill.d_p_push import push
+from models.experimental.deepseek_v41_flash.tt.prefill.d_p_push import FabricPush
 from models.experimental.deepseek_v41_flash.tt.prefill.d_p_wire import VERSION, recv_msg, send_msg, send_states
 
 # Decode commits whole 128-token units (its ALIGNMENT); the prompt's remainder is replayed by decode.
@@ -84,11 +84,46 @@ class PrefixCache:
         self.used[slot] = self.clock
 
 
-class PrefillService:
-    """The device side: one :class:`DPPrefill` and its prefix cache, one prefill at a time (``lock``)."""
+class StageTotals:
+    """Seconds per stage of every request served so far (the ``stats`` op), and how many requests."""
 
-    def __init__(self, d_p):
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.requests = 0
+        self.tokens = 0
+        self.seconds: dict[str, float] = {}
+
+    def add(self, tokens: int, stages: dict[str, float]) -> None:
+        with self.lock:
+            self.requests += 1
+            self.tokens += tokens
+            for stage, s in stages.items():
+                self.seconds[stage] = self.seconds.get(stage, 0.0) + s
+
+    def snapshot(self) -> dict:
+        with self.lock:
+            return {"requests": self.requests, "tokens": self.tokens, "seconds": dict(self.seconds)}
+
+
+class PrefillService:
+    """The device side: one :class:`DPPrefill` and its prefix cache, one prefill at a time (``lock``).
+
+    Every request is profiled by stage (seconds, logged one line a request and summed in :attr:`totals`):
+    ``queued`` waiting for the device, ``lookup`` the prefix cache, ``prefill.input`` / ``prefill.enqueue`` building
+    and issuing the chunks' programs on the host, ``prefill.drain`` waiting for the device to finish them (all of it
+    after the last chunk unless ``sync_chunks``, which waits after every chunk so the split is exact), then
+    ``readback.*`` (TCP: reading the states to the host) or ``push.*`` (the fabric push, a launch after every chunk
+    and one after the last, ``FabricPush``: ``begin`` mapping the targets, then summed over the launches ``plan``
+    building the runs, ``enqueue`` dispatching the programs, ``stream`` writing the runs into the H2D sockets (the
+    per-chunk launches happen during the prefill, outside ``prefill.*``), ``window`` reading and staging the rings,
+    ``device`` waiting for the last launch), and ``reply`` sending the answer. ``total`` is from taking the request to
+    the reply sent."""
+
+    def __init__(self, d_p, sync_chunks: bool = False):
         self.d_p = d_p
+        self.sync_chunks = sync_chunks
+        self.pusher: FabricPush | None = None  # made by the first prefill_push (it holds an H2D socket a chip)
+        self.totals = StageTotals()
         self.lock = threading.Lock()
         self.cache = PrefixCache(len(d_p.slots))
         cfg = d_p.cfg
@@ -139,39 +174,74 @@ class PrefillService:
 
         n = ids.numel()
         t_wait = time.perf_counter()
+        stages: dict[str, float] = {}
         with self.lock:
-            queued = time.perf_counter() - t_wait
-            slot, start = self.cache.lookup(self.d_p, ids) if use_cache else (self.cache.victim(), 0)
             t0 = time.perf_counter()
+            stages["queued"] = t0 - t_wait
+            slot, start = self.cache.lookup(self.d_p, ids) if use_cache else (self.cache.victim(), 0)
+            t1 = time.perf_counter()
+            stages["lookup"] = t1 - t0
+            on_chunk = progress
+            if targets is not None:
+                if self.pusher is None:
+                    self.pusher = FabricPush(self.d_p)
+                self.pusher.begin(targets, slot=slot)
+
+                def on_chunk(s, end, seconds):
+                    self.pusher.chunk(end)
+                    progress(s, end, seconds)
+
+            prefill_times: dict = {}
             if start < n:
                 self.cache.keep(slot, None)  # (until the slot holds all of ids)
-                self.d_p.prefill(ids.tolist(), on_chunk=progress, slot=slot, start=start)
+                self.d_p.prefill(
+                    ids.tolist(),
+                    on_chunk=on_chunk,
+                    slot=slot,
+                    start=start,
+                    times=prefill_times,
+                    sync_chunks=self.sync_chunks,
+                )
                 self.cache.keep(slot, ids)
             else:  # the slot holds the whole prompt already (it may hold more: what it keeps stays)
                 self.cache.touch(slot)
-            seconds = time.perf_counter() - t0
+            chunks = prefill_times.pop("chunks", 0)
+            stages.update({f"prefill.{k}": v for k, v in prefill_times.items()})
+            t2 = time.perf_counter()
+            seconds = t2 - t1
             parts: dict = {}
             if targets is None:
                 host = self.d_p.host_states(n, parts, slot=slot, base=have)
             else:
-                pushed = push(self.d_p, targets, slot=slot, times=parts)
-            readback = time.perf_counter() - t0 - seconds
+                pushed = self.pusher.finish(parts)
+            readback = time.perf_counter() - t2
+            moved_stage = "readback" if targets is None else "push"
+            stages.update({f"{moved_stage}.{k}": v for k, v in parts.items()})
         if gone:
             raise ConnectionError(f"{peer} hung up during the prefill: {gone[0]}")
-        t0 = time.perf_counter()
+        t3 = time.perf_counter()
         if targets is None:
-            send_states(conn, host, seconds, queued, cached=start)
+            send_states(conn, host, seconds, stages["queued"], cached=start)
             moved = f"entries from {have} read back in {readback:.2f} s"
         else:
-            reply = {"seq_len": n, "base": have, "cached": start, "seconds": seconds, "queued": queued}
+            reply = {"seq_len": n, "base": have, "cached": start, "seconds": seconds, "queued": stages["queued"]}
             send_msg(conn, {**reply, "bytes": pushed["bytes"], "pages": pushed["pages"], "push_seconds": readback})
-            moved = f"entries from {have} pushed ({pushed['bytes'] / 2**20:.1f} MiB) in {readback:.2f} s"
+            moved = (
+                f"entries from {have} pushed ({pushed['bytes'] / 2**20:.1f} MiB, {pushed['runs']} runs) in "
+                f"{readback:.2f} s"
+            )
+        t4 = time.perf_counter()
+        stages["reply"] = t4 - t3
+        stages["total"] = t4 - t_wait
+        self.totals.add(n - start, stages)
         rate = f"{(n - start) / seconds:.0f} tok/s" if seconds > 0 and start < n else "nothing to compute"
         logger.info(
             f"{peer}: {n} tokens, {'hit' if start else 'miss'} in slot {slot} ({start} cached), {n - start} prefilled "
-            f"in {seconds:.2f} s ({rate}), waited {queued:.2f} s, {moved} ("
-            + ", ".join(f"{k} {v:.2f} s" for k, v in parts.items())
-            + f"), replied in {time.perf_counter() - t0:.2f} s"
+            f"in {seconds:.2f} s ({chunks} chunks, {rate}), waited {stages['queued']:.2f} s, {moved}"
+        )
+        logger.info(
+            f"{peer}: profile (ms{', chunks synced' if self.sync_chunks else ''}): "
+            + ", ".join(f"{k} {1e3 * v:.1f}" for k, v in stages.items())
         )
 
 
@@ -188,6 +258,8 @@ def _serve_connection(conn: socket.socket, peer: str, service: PrefillService) -
                     send_msg(conn, {"pong": True})
                 elif op == "info":
                     send_msg(conn, service.info)
+                elif op == "stats":
+                    send_msg(conn, service.totals.snapshot())
                 elif op in ("prefill", "prefill_push"):
                     if len(blobs) != 1 or len(blobs[0]) % 4:
                         raise ValueError(f"{op} takes one blob of int32 token ids")
@@ -243,6 +315,14 @@ def main(argv: list[str] | None = None) -> int:
         help="DRAM a chip left free after the cache slots, for the chunks' working buffers (default 4 GiB); "
         "fewer slots than --cache-slots are made when they would not leave it",
     )
+    p.add_argument(
+        "--profile-chunks",
+        action=argparse.BooleanOptionalAction,
+        default=os.environ.get("DEEPSEEK_V41_PREFILL_PROFILE_CHUNKS") == "1",
+        help="wait for the device after every chunk, so the profile splits host enqueue from device time exactly "
+        "(slower: the host no longer runs ahead of the device); env DEEPSEEK_V41_PREFILL_PROFILE_CHUNKS=1 (tt-run "
+        "forwards it to the ranks)",
+    )
     args = p.parse_args(argv)
     if not os.environ.get("BRINGUP_SPEC"):
         print("set BRINGUP_SPEC (metal_2's galaxy_8x4-full spec) and BRINGUP_HF", file=sys.stderr)
@@ -262,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
             slots=args.cache_slots,
             dram_reserve=int(args.cache_reserve_gb * 2**30),
         )
-        service = PrefillService(d_p)
+        service = PrefillService(d_p, sync_chunks=args.profile_chunks)
         warm = min(args.warm_len if args.warm_len is not None else d_p.max_seq, d_p.max_seq)
         if warm > 0:
             # Random ids: a constant prompt routes every token to the same experts and leaves most MoE programs cold.

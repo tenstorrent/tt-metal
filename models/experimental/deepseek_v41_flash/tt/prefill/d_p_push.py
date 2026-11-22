@@ -13,8 +13,10 @@ pages and key blocks live on every decode chip) and writes, from the 8 x 4 prefi
 * the window rings (the last ``window`` rows of each layer, read on the host from the chips owning those ring blocks
   and tilized there: 128 KiB a layer) from a staging tensor every chip holds, the tiles spread over every chip.
 
-Every sending chip runs one core: a work list in DRAM of (source, source page, destination chip, destination buffer,
-destination page) entries, ``K`` at a time, the pages staged in L1 and sent as fabric unicast writes. A remote mesh
+Every sending chip runs one core: a work list in DRAM of (source, page count, destination chip, first source page,
+destination buffer, first destination page) runs, one a KV cache block (or the part of one in an owner stripe), a
+key block or a ring, read ``K`` at a time; a run's pages are staged in L1 ``K`` at a time and sent as fabric unicast
+writes. A remote mesh
 is reached through this mesh's exit chip, so one connection a chip carries every destination: the route is rewritten
 when the destination changes. A destination page goes to its interleaved bank (``page % banks``) at the bank's
 offset from the targets' bank table.
@@ -30,9 +32,11 @@ import torch
 import ttnn
 
 CORE = ttnn.CoreCoord(0, 0)
-K = 32  # work-list entries a table page, and pages read into L1 a NoC barrier
+K = 32  # work-list runs a table page, and pages read into L1 a NoC barrier
 SLOT = 2048  # L1 bytes a staged page (the largest page: a tile)
-ENTRY_WORDS = 4  # (source | destination << 8, source page, destination buffer, destination page)
+ENTRY_WORDS = (
+    4  # (source | count << 8 | destination << 16, first source page, destination buffer, first destination page)
+)
 
 _KERNEL = r"""
 #include <cstdint>
@@ -80,29 +84,35 @@ void kernel_main() {
     uint32_t cur = 0xffffffffu;
 
     for (uint32_t i0 = 0; i0 < n; i0 += K) {
-        const uint32_t nb = (n - i0) < K ? (n - i0) : K;
+        const uint32_t nr = (n - i0) < K ? (n - i0) : K;
         noc_async_read(table.get_noc_addr(i0 / K), tbuf, K * 16);
         noc_async_read_barrier();
-        for (uint32_t k = 0; k < nb; ++k) {
-            const uint32_t s = t[4 * k] & 0xff;
-            const auto src = TensorAccessor(args, src_addr[s], src_page[s]);
-            noc_async_read(src.get_noc_addr(t[4 * k + 1]), buf + k * SLOT, src_page[s]);
-        }
-        noc_async_read_barrier();
-        for (uint32_t k = 0; k < nb; ++k) {
-            const uint32_t page = src_page[t[4 * k] & 0xff], j = t[4 * k] >> 8;
-            const uint32_t base = t[4 * k + 2], p = t[4 * k + 3];
+        for (uint32_t r = 0; r < nr; ++r) {
+            const uint32_t w = t[4 * r], s = w & 0xff, count = (w >> 8) & 0xff, j = w >> 16;
+            const uint32_t sp = t[4 * r + 1], base = t[4 * r + 2], dp = t[4 * r + 3];
+            const uint32_t page = src_page[s];
+            const auto src = TensorAccessor(args, src_addr[s], page);
             volatile tt_l1_ptr uint32_t* dst = d + j * DST_WORDS;
             if (j != cur) {
                 fabric_set_unicast_route(hdr, dst[0], dst[1]);
                 cur = j;
             }
-            const uint32_t bank = p % NB;
-            const uint64_t addr =
-                get_noc_addr(dst[2 + 3 * bank], dst[3 + 3 * bank], dst[4 + 3 * bank] + base + (p / NB) * page);
-            fabric_unicast_noc_unicast_write<decltype(slot.sender), false>(
-                &slot.sender, hdr, dst[0], dst[1], buf + k * SLOT, page, tt::tt_fabric::NocUnicastCommandHeader{addr});
-            noc_async_writes_flushed();  // the header and the staged page left L1 before either is rewritten
+            for (uint32_t q0 = 0; q0 < count; q0 += K) {
+                const uint32_t m = (count - q0) < K ? (count - q0) : K;
+                for (uint32_t q = 0; q < m; ++q) {
+                    noc_async_read(src.get_noc_addr(sp + q0 + q), buf + q * SLOT, page);
+                }
+                noc_async_read_barrier();
+                for (uint32_t q = 0; q < m; ++q) {
+                    const uint32_t p = dp + q0 + q, bank = p % NB;
+                    const uint64_t addr =
+                        get_noc_addr(dst[2 + 3 * bank], dst[3 + 3 * bank], dst[4 + 3 * bank] + base + (p / NB) * page);
+                    fabric_unicast_noc_unicast_write<decltype(slot.sender), false>(
+                        &slot.sender, hdr, dst[0], dst[1], buf + q * SLOT, page,
+                        tt::tt_fabric::NocUnicastCommandHeader{addr});
+                    noc_async_writes_flushed();  // the header and the staged page left L1 before either is rewritten
+                }
+            }
         }
     }
     close_connections(conn);
@@ -168,14 +178,17 @@ def push(d_p, targets: dict, slot: int = 0, times: Optional[dict] = None) -> dic
     nb = banks.pop()
 
     sources: list[tuple[ttnn.Tensor, int]] = []  # (DRAM interleaved buffer, page bytes); a work entry's source index
-    # (sender, source, source page, destination, destination buffer, destination page) columns, int64
+    # (sender, source, first source page, count, destination, destination buffer, first destination page) columns
     work: list[torch.Tensor] = []
     free = []
 
-    def add(sender: torch.Tensor, dst: int, base: int, src_page: torch.Tensor, page: torch.Tensor) -> None:
-        """Pages ``src_page`` of the newest source to pages ``page`` of buffer ``base`` on decode chip ``dst``."""
+    def add(
+        sender: torch.Tensor, dst: int, base: int, src_page: torch.Tensor, count: torch.Tensor, page: torch.Tensor
+    ) -> None:
+        """Runs of ``count`` pages of the newest source from ``src_page`` on to pages ``page`` on of buffer ``base``
+        on decode chip ``dst``."""
         full = torch.ones_like(page)
-        work.append(torch.stack([sender, full * (len(sources) - 1), src_page, full * dst, full * base, page]))
+        work.append(torch.stack([sender, full * (len(sources) - 1), src_page, count, full * dst, full * base, page]))
 
     for source in targets["sources"]:
         layer, ratio, e0 = int(source["layer"]), int(source["ratio"]), int(source["first_entry"])
@@ -203,11 +216,15 @@ def push(d_p, targets: dict, slot: int = 0, times: Optional[dict] = None) -> dic
         if int(sl.shape[-1]) * 2 != targets["page_bytes"]["kv"]:
             raise ValueError(f"source {layer}: {sl.shape[-1]}-wide entries, decode pages of {targets['page_bytes']}")
         sources.append((sl, int(sl.shape[-1]) * 2))
+        # A run is the entries of one cache block within one owner stripe: consecutive pages on both sides.
         e = torch.arange(e0, n, dtype=torch.int64)
+        e = e[(e % block == 0) | (e % hs == 0) | (e == e0)]
+        count = torch.diff(e, append=torch.tensor([n]))
         owner, local = (e % period) // hs, (e // period - b0) * hs + e % hs
         page = row[e // block] * block + e % block
+        run = torch.arange(e.numel(), dtype=torch.int64)
         for dst, pool in pools:
-            add(_owner_chips(c, owner, e + dst, cols), dst, int(pool["kv"]), local, page)
+            add(_owner_chips(c, owner, run + dst, cols), dst, int(pool["kv"]), local, count, page)
 
         c = comp.index_k
         if c.fp8:
@@ -227,12 +244,12 @@ def push(d_p, targets: dict, slot: int = 0, times: Optional[dict] = None) -> dic
         b = torch.arange(e0 // block, -(-n // block), dtype=torch.int64)
         eb = b * block
         owner, local = (eb % period) // hs, (eb // period - b0) * hs + eb % hs
-        tile = torch.arange(per_block, dtype=torch.int64)
-        src_page = (((local // ttnn.TILE_SIZE) * tile_cols)[:, None] + tile).reshape(-1)
-        page = ((row[b] * per_block)[:, None] + tile).reshape(-1)
+        # A block's 64 rows are block / 32 whole tile rows of the tilized slab: per_block consecutive tiles.
+        src_page = (local // ttnn.TILE_SIZE) * tile_cols
+        page = row[b] * per_block
+        count = torch.full_like(b, per_block)
         for dst, pool in pools:
-            sender = _owner_chips(c, owner, b + dst, cols).repeat_interleave(per_block)
-            add(sender, dst, int(pool["keys"]), src_page, page)
+            add(_owner_chips(c, owner, b + dst, cols), dst, int(pool["keys"]), src_page, count, page)
     t1 = time.perf_counter()
     times["compressed"] = times.get("compressed", 0.0) + t1 - t0
 
@@ -254,32 +271,36 @@ def push(d_p, targets: dict, slot: int = 0, times: Optional[dict] = None) -> dic
         free.append(staged)
         sources.append((staged, targets["page_bytes"]["ring"]))
         per_layer = window * cfg.head_dim // (ttnn.TILE_SIZE * ttnn.TILE_SIZE)
-        first = int(targets["slot"]) * per_layer
-        tile = torch.arange(per_layer, dtype=torch.int64)
+        first = torch.tensor([int(targets["slot"]) * per_layer])
+        count = torch.tensor([per_layer])
         index = {li: k for k, li in enumerate(ring_layers)}
         for stage in targets["stages"]:
             for ring in stage["rings"]:
-                src_page = index[int(ring["layer"])] * per_layer + tile
+                k_layer = index[int(ring["layer"])]
+                src_page = torch.tensor([k_layer * per_layer])
                 for k in range(len(stage["chips"])):
                     dst = first_dst[stage["stage"]] + k
-                    add((src_page + dst) % chips, dst, int(ring["addr"]), src_page, first + tile)
+                    add(torch.tensor([(k_layer + dst) % chips]), dst, int(ring["addr"]), src_page, count, first)
     t2 = time.perf_counter()
     times["window"] = times.get("window", 0.0) + t2 - t1
-    if len(sources) > 255 or len(dests) > 2**24:
-        raise ValueError(f"{len(sources)} sources / {len(dests)} destinations: past the work entry's fields")
+    sender, src, src_page, count, dst, base, page = torch.cat(work, dim=1)
+    if len(sources) > 255 or len(dests) > 2**16 or int(count.max()) > 255:
+        raise ValueError(
+            f"{len(sources)} sources / {len(dests)} destinations / runs of {int(count.max())} pages: past the work "
+            f"entry's fields"
+        )
     for t, _ in sources:
         mc = t.memory_config()
         assert mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED and mc.buffer_type == ttnn.BufferType.DRAM, mc
 
-    sender, src, src_page, dst, base, page = torch.cat(work, dim=1)
     order = torch.argsort(sender, stable=True)
-    sender, src, src_page, dst, base, page = (x[order] for x in (sender, src, src_page, dst, base, page))
-    counts = torch.bincount(sender, minlength=chips)
-    offsets = torch.cumsum(counts, 0) - counts
+    sender, src, src_page, count, dst, base, page = (x[order] for x in (sender, src, src_page, count, dst, base, page))
+    runs = torch.bincount(sender, minlength=chips)
+    offsets = torch.cumsum(runs, 0) - runs
     rank = torch.arange(sender.numel(), dtype=torch.int64) - offsets[sender]
-    n_tbl = max(1, -(-int(counts.max()) // K))
+    n_tbl = max(1, -(-int(runs.max()) // K))
     table = torch.zeros(chips, n_tbl * K, ENTRY_WORDS, dtype=torch.int32)
-    table[sender, rank] = _int32(torch.stack([src | (dst << 8), src_page, base, page], dim=1))
+    table[sender, rank] = _int32(torch.stack([src | (count << 8) | (dst << 16), src_page, base, page], dim=1))
     table_t = ttnn.from_torch(
         table.reshape(rows_m, cols, n_tbl, K * ENTRY_WORDS),
         dtype=ttnn.uint32,
@@ -312,7 +333,7 @@ def push(d_p, targets: dict, slot: int = 0, times: Optional[dict] = None) -> dic
     size = K * SLOT + K * 16 + int(dst_table.numel()) * 4 + 64
     md = ttnn.MeshProgramDescriptor()
     for linear in range(chips):
-        n = int(counts[linear])
+        n = int(runs[linear])
         if not n:
             continue
         coord = ttnn.MeshCoordinate(*divmod(linear, cols))
@@ -352,8 +373,174 @@ def push(d_p, targets: dict, slot: int = 0, times: Optional[dict] = None) -> dic
     ttnn.generic_op([*(t for t, _ in sources), table_t, dst_t], md)
     ttnn.synchronize_device(mesh)
     seconds = time.perf_counter() - t3
+    times["device"] = times.get("device", 0.0) + seconds
     page_of = torch.tensor([p for _, p in sources], dtype=torch.int64)
-    nbytes = int(page_of[src].sum())
+    nbytes = int((page_of[src] * count).sum())
     for t in free:
         dealloc(t)
-    return {"bytes": nbytes, "pages": int(sender.numel()), "seconds": seconds}
+    return {"bytes": nbytes, "pages": int(count.sum()), "runs": int(sender.numel()), "seconds": seconds}
+
+
+class FabricPush:
+    """The push as the ``KvFabricPush`` C++ op, a launch per prefill chunk: :meth:`begin` with a request's targets
+    before its prefill, :meth:`chunk` after each chunk is enqueued (pushes the entries it completed while the device
+    runs the next), :meth:`finish` after the last (the rest, and the window rings). The op reads metal_2's slabs in
+    place (no slices, the index keys tilized in its kernel) and takes each launch's runs from an H2D socket a chip, so
+    planning and streaming them overlaps the device. One per :class:`~.d_p_bridge.DPPrefill` (it holds the sockets)."""
+
+    def __init__(self, d_p, fifo_bytes: int = 1 << 20):
+        from ttnn._ttnn.operations.experimental import KvFabricPush
+
+        self.d_p = d_p
+        self.op = KvFabricPush(d_p.mesh_device, fifo_bytes)
+        self.targets: Optional[dict] = None
+        self.slot = 0
+        self.times: dict = {}
+        self.stats = {"bytes": 0, "pages": 0, "runs": 0, "launches": 0}
+
+    def _launch(self, end: int, last: bool, rings=None, ring_runs=()) -> None:
+        r = self.op.push(end, last, rings, list(ring_runs))
+        for k in ("bytes", "pages", "runs"):
+            self.stats[k] += int(getattr(r, k))
+        self.stats["launches"] += 1
+        for k in ("plan", "enqueue", "stream"):
+            self.times[k] = self.times.get(k, 0.0) + float(getattr(r, f"{k}_seconds"))
+
+    def begin(self, targets: dict, slot: int = 0) -> None:
+        """A request: decode's ``remote_commit_targets`` for cache slot ``slot`` of ``d_p`` (the prompt goes in from
+        ``targets["start"]``, whatever the prefill resumes from: entries before it are in the slot already)."""
+        from ttnn._ttnn.operations.experimental import KvPushCache, KvPushLayer
+
+        t0 = time.perf_counter()
+        d_p, cfg = self.d_p, self.d_p.cfg
+        T, start, block, window = (int(targets[k]) for k in ("seq_len", "start", "block", "window"))
+        if window != cfg.window:
+            raise ValueError(f"decode's {window}-row window is not this prefill's {cfg.window}")
+        payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+        if max(targets["page_bytes"].values()) > payload:
+            raise ValueError(f"pages of {targets['page_bytes']} B exceed the {payload} B fabric payload")
+        st = d_p.runtime.state(d_p.slots[slot], 0)
+        rows_of = {int(r["ratio"]): [int(b) for b in r["blocks"]] for r in targets["page_rows"]}
+        dests, first_dst = [], {}
+        for stage in targets["stages"]:
+            first_dst[stage["stage"]] = len(dests)
+            dests += stage["chips"]
+
+        sources: list = []
+        index: dict = {}
+
+        def cache(c, n: int, width_bytes: int) -> KvPushCache:
+            """The op's view of metal_2's served cache ``c`` for ``n`` entries (its slab's tensor a source)."""
+            slab = c.slab if c.slab is not None else c.served
+            hs = c.stripe // c.ratio
+            if -(-n // (c.owners * hs)) * hs > c.crows:
+                raise ValueError(f"{n} entries of {hs}-row owner stripes: past the cache's {c.crows} local rows")
+            if slab.width * 2 != width_bytes:
+                raise ValueError(f"{slab.width}-wide rows for {width_bytes} B decode pages")
+            key = int(slab.tensor.buffer_address())
+            if key not in index:
+                index[key] = len(sources)
+                sources.append(slab.tensor)
+            v = KvPushCache()
+            v.source, v.first_page, v.stripe_rows, v.owners = index[key], slab.batch * slab.rows, hs, c.owners
+            v.owners_are_chips = c.tp_axis is not None
+            return v
+
+        layers = []
+        for source in targets["sources"]:
+            li, ratio, e0 = int(source["layer"]), int(source["ratio"]), int(source["first_entry"])
+            if e0 != start // ratio:
+                raise ValueError(f"source {li}: first entry {e0} for a commit from position {start}")
+            comp = st.compress[li]
+            if comp.index_k.fp8:
+                raise ValueError("index keys in fp8_row192: the push needs DS41_INDEX_K_SERVED=bf16")
+            layer = KvPushLayer()
+            layer.ratio, layer.first_entry = ratio, e0
+            layer.kv = cache(comp.ckv, T // ratio, int(targets["page_bytes"]["kv"]))
+            keys = comp.index_k.slab if comp.index_k.slab is not None else comp.index_k.served
+            layer.keys = cache(comp.index_k, T // ratio, keys.width * 2)
+            layer.key_tile_cols = keys.width // ttnn.TILE_SIZE
+            layer.blocks = rows_of[ratio]
+            layer.pools = [
+                (first_dst[stage["stage"]] + k, int(pool["kv"]), int(pool["keys"]))
+                for stage in targets["stages"]
+                for pool in stage["pools"]
+                if int(pool["source"]) == li
+                for k in range(len(stage["chips"]))
+            ]
+            layers.append(layer)
+        self.op.begin(
+            sources,
+            int(targets["mesh_id"]),
+            [int(chip["chip_id"]) for chip in dests],
+            [[int(v) for bank in chip["banks"] for v in bank] for chip in dests],
+            block,
+            layers,
+        )
+        self.targets, self.slot = targets, slot
+        self.times = {"begin": time.perf_counter() - t0}
+        self.stats = {"bytes": 0, "pages": 0, "runs": 0, "launches": 0}
+
+    def chunk(self, end: int) -> None:
+        """After the prefill chunk ending at position ``end`` is enqueued: push what it completed."""
+        if end < int(self.targets["seq_len"]):
+            self._launch(end, False)
+
+    def finish(self, times: Optional[dict] = None) -> dict:
+        """After the prefill: push the rest and the window rings (read from the chips owning the last ``window``
+        rows: this waits for the prefill), then wait until the writes have left this mesh. Returns ``{"bytes",
+        "pages", "runs", "launches", "seconds"}`` (``seconds``: from here until the device is done); ``times``:
+        host seconds per part, added up."""
+        from ttnn._ttnn.operations.experimental import KvPushRing
+        from models.demos.deepseek_v41_flash_d_p.tt.served import dealloc
+
+        from .d_p_bridge import _window_rows
+
+        t0 = time.perf_counter()
+        d_p, cfg, targets = self.d_p, self.d_p.cfg, self.targets
+        mesh = d_p.mesh_device
+        T, window = int(targets["seq_len"]), int(targets["window"])
+        st = d_p.runtime.state(d_p.slots[self.slot], 0)
+        skipped = set(d_p.runtime.model.decoder)
+        ring_layers = sorted({int(r["layer"]) for stage in targets["stages"] for r in stage["rings"]})
+        staged, ring_runs = None, []
+        if ring_layers:
+            p0 = max(0, T - window)
+            tails = torch.zeros(len(ring_layers), window, cfg.head_dim, dtype=torch.bfloat16)
+            for k, li in enumerate(ring_layers):
+                if li not in skipped:
+                    tails[k, window - (T - p0) :] = _window_rows(st.window[li], p0, T)
+            staged = ttnn.from_torch(
+                tails.reshape(1, 1, -1, cfg.head_dim),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+            per_layer = window * cfg.head_dim // (ttnn.TILE_SIZE * ttnn.TILE_SIZE)
+            k_of = {li: k for k, li in enumerate(ring_layers)}
+            dst = 0
+            for stage in targets["stages"]:
+                for ring in stage["rings"]:
+                    for k in range(len(stage["chips"])):
+                        r = KvPushRing()
+                        r.destination, r.addr = dst + k, int(ring["addr"])
+                        r.first_source_page, r.pages = k_of[int(ring["layer"])] * per_layer, per_layer
+                        r.first_page = int(targets["slot"]) * per_layer
+                        ring_runs.append(r)
+                dst += len(stage["chips"])
+        t1 = time.perf_counter()
+        self.times["window"] = self.times.get("window", 0.0) + t1 - t0
+        self._launch(T, True, staged, ring_runs)
+        t2 = time.perf_counter()
+        ttnn.synchronize_device(mesh)
+        t3 = time.perf_counter()
+        self.times["device"] = self.times.get("device", 0.0) + t3 - t2
+        if staged is not None:
+            dealloc(staged)
+        if times is not None:
+            for k, v in self.times.items():
+                times[k] = times.get(k, 0.0) + v
+        self.targets = None
+        return {**self.stats, "seconds": t3 - t0}

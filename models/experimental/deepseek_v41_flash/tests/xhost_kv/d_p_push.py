@@ -5,9 +5,10 @@
 into a decode session over TT-Fabric (``tt/prefill/d_p_push.py``), checked against the host path. Two ranks of one
 ``tt-run`` job, as the servers will run:
 
-* rank 0 (host 40, prefill): ``DPPrefill`` over the 8 x 4 mesh, a seeded random prompt of ``--tokens`` prefilled
-  into slot 0; on the decode side's targets it pushes the slot into session A, then replies with the same slot's
-  ``host_states`` (the host path's input) over TCP.
+* rank 0 (host 40, prefill): ``DPPrefill`` over the 8 x 4 mesh; on the decode side's targets it prefills a seeded
+  random prompt of ``--tokens`` into slot 0 and pushes the slot into session A (``--impl op``: the ``KvFabricPush``
+  C++ op, a launch after the prefill or, ``--per-chunk``, one after every chunk as the server does; ``--impl
+  python``: the generic_op push), then replies with the same slot's ``host_states`` (the host path's input) over TCP.
 * rank 1 (host 41, decode): ``DeepSeekV41Model`` (layers 0-20 by default), two sessions; sends session A's
   ``remote_commit_targets``, runs ``finish_remote_commit`` on the reply, commits the host states into session B
   through ``commit_host_prefill_state`` and compares A with the states and with B byte for byte on every chip of
@@ -22,7 +23,8 @@ Launch from the repo root on host 40 (host 41 has the same checkout at the same 
         --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0.1 --bind-to none --tag-output" \\
       bash -c 'cd $TT_METAL_HOME && export PYTHONPATH=$TT_METAL_HOME LD_LIBRARY_PATH=$TT_METAL_HOME/build/lib \\
         BRINGUP_SPEC=models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml BRINGUP_HF=... && \\
-        exec python_env/bin/python models/experimental/deepseek_v41_flash/tests/xhost_kv/d_p_push.py --tokens 16384'
+        exec python_env/bin/python models/experimental/deepseek_v41_flash/tests/xhost_kv/d_p_push.py --tokens 16384 \\
+        --per-chunk --model-dir /big_home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4.1-Flash-1017'
 
 (``BRINGUP_*`` are not forwarded by ``tt-run``: set them inside the rank.) Rank 1 exits non-zero on a mismatch.
 """
@@ -55,18 +57,16 @@ from models.experimental.deepseek_v41_flash.tt.prefill.d_p_wire import _states, 
 def run_prefill(args) -> int:
     from models.demos.common.bringup.testing.harness import close_mesh, open_mesh
     from models.experimental.deepseek_v41_flash.tt.prefill.d_p_bridge import DPPrefill
-    from models.experimental.deepseek_v41_flash.tt.prefill.d_p_push import push
+    from models.experimental.deepseek_v41_flash.tt.prefill.d_p_push import FabricPush, push
 
     init_rank(SENDER_RANK, "prefill")
     mesh, fab = open_mesh()
     try:
         log("prefill", f"mesh {tuple(mesh.shape)} open, packet payload {ttnn.get_tt_fabric_max_payload_size_bytes()} B")
         d_p = DPPrefill(mesh, max_seq=args.tokens, slots=1)
+        pusher = FabricPush(d_p) if args.impl == "op" else None
         gen = torch.Generator().manual_seed(args.seed)
         ids = torch.randint(0, d_p.cfg.vocab_size, (args.tokens,), generator=gen).tolist()
-        t0 = time.perf_counter()
-        d_p.prefill(ids)
-        log("prefill", f"{args.tokens} tokens prefilled in {time.perf_counter() - t0:.1f} s")
         with socket.create_server(("0.0.0.0", args.port)) as listener:
             sock, _ = listener.accept()
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -75,9 +75,20 @@ def run_prefill(args) -> int:
             targets = req["targets"]
             if targets["seq_len"] != args.tokens:
                 sys.exit(f"prefill: decode wants {targets['seq_len']} tokens, the slot holds {args.tokens}")
+            per_chunk = pusher is not None and args.per_chunk
+            if per_chunk:
+                pusher.begin(targets)
+            t0 = time.perf_counter()
+            d_p.prefill(ids, on_chunk=(lambda _s, end, _t: pusher.chunk(end)) if per_chunk else None)
+            log("prefill", f"{args.tokens} tokens prefilled in {time.perf_counter() - t0:.1f} s")
             times = {}
             t0 = time.perf_counter()
-            done = push(d_p, targets, times=times)
+            if pusher is None:
+                done = push(d_p, targets, times=times)
+            else:
+                if not per_chunk:
+                    pusher.begin(targets)
+                done = pusher.finish(times)
             done["total"] = time.perf_counter() - t0
             done["times"] = times
             send_msg(sock, {"done": True, **done})
@@ -168,6 +179,12 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--model-dir", default=str(DEFAULT_MODEL_DIR), help="the decode model's checkpoint (rank 1)")
     parser.add_argument("--l1-small-size", type=int, default=10240, help="as the decode server's default")
+    parser.add_argument(
+        "--impl", choices=("op", "python"), default="op", help="the KvFabricPush C++ op, or the Python generic_op push"
+    )
+    parser.add_argument(
+        "--per-chunk", action="store_true", help="(op) a launch per prefill chunk, as the server pushes, not one after"
+    )
     args = parser.parse_args()
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()

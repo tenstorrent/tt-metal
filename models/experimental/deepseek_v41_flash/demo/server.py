@@ -1631,6 +1631,9 @@ class _PrefillFirst(_Scheduler):
     """
 
     def _admit(self, turn: _Turn) -> None:
+        if isinstance(self.server.prefiller, _RemotePrefiller):
+            # Admission may reset or evict the slot of a push whose turn ended: let its writes land first.
+            self.server.prefiller.reap(block=True)
         super()._admit(turn)
         if turn in self._active:
             if self.server.prefiller is not None and getattr(self.server, "prefix_cache", None) is not None:
@@ -1881,6 +1884,8 @@ class _PrefillFirst(_Scheduler):
                 self._abort_all(exc)
 
     def _round_turns(self) -> None:
+        if isinstance(self.server.prefiller, _RemotePrefiller):
+            self.server.prefiller.reap()
         fetching = [turn for turn in self._active if self._fetching(turn)]
         for turn in fetching:
             if turn.cancelled.is_set():
@@ -3407,13 +3412,24 @@ class _RemoteFetch:
 
     The scheduler keeps decoding the other turns meanwhile; :meth:`_RemotePrefiller.run` takes :meth:`result` and
     only the KV load touches the device. ``wake`` (the scheduler's condition) is notified when the reply is in.
+
+    With push ``targets`` (pages :meth:`DeepSeekV41Model.remote_commit_targets` reserved) the server writes the KV
+    into decode's DRAM itself, and its writes may land until it replies: a stop (``on_progress`` raising
+    :class:`_PromptStopped`, or :meth:`abort`) is then held until the reply, and the connection is not cut.
     """
 
     def __init__(
-        self, prefiller: _RemotePrefiller, ids: list[int], have: int, on_progress, wake: threading.Condition | None
+        self,
+        prefiller: _RemotePrefiller,
+        ids: list[int],
+        have: int,
+        on_progress,
+        wake: threading.Condition | None,
+        targets: dict | None = None,
     ):
         self.ids = list(ids)  # the whole prompt from position 0
         self.have = have
+        self.targets = targets
         self.t0 = time.perf_counter()
         self.t_done = 0.0
         self.aborted = False
@@ -3428,7 +3444,7 @@ class _RemoteFetch:
 
     def _run(self) -> None:
         try:
-            self._states = self._prefiller._fetch(self.ids, self.have, self._on_progress, self)
+            self._states = self._prefiller._fetch(self.ids, self.have, self._progress, self, self.targets)
         except BaseException as exc:  # noqa: BLE001 - re-raised on the scheduler thread by result()
             self._error = exc
         finally:
@@ -3438,15 +3454,28 @@ class _RemoteFetch:
                 with self._wake:
                     self._wake.notify_all()
 
+    def _progress(self, end: int) -> None:
+        if self._on_progress is None or self.aborted:
+            return
+        try:
+            self._on_progress(end)
+        except _PromptStopped:
+            if self.targets is None:
+                raise
+            self.aborted = True
+
     def done(self) -> bool:
         return self._done.is_set()
 
+    def wait(self) -> None:
+        self._done.wait()
+
     def abort(self) -> None:
         """Stop waiting for the reply: the connection is shut down, so the thread ends and :meth:`result` raises
-        :class:`_PromptStopped`."""
+        :class:`_PromptStopped`. A push is only marked: its reply is still awaited."""
         self.aborted = True
         client = self.client
-        if client is not None and not self.done():
+        if self.targets is None and client is not None and not self.done():
             with contextlib.suppress(OSError):
                 client.sock.shutdown(socket.SHUT_RDWR)
 
@@ -3501,6 +3530,8 @@ class _RemotePrefiller:
         self._idle: list[PrefillClient] = []
         self._closed = False
         self._fetches: dict[int, _RemoteFetch] = {}  # user index -> its prompt in flight (start)
+        # Pushes whose turn ended before loading them, until the server replied (reap); scheduler thread only.
+        self._orphans: list[tuple[UserSession, _RemoteFetch]] = []
         deadline = time.monotonic() + connect_wait
         while True:
             try:
@@ -3677,24 +3708,56 @@ class _RemotePrefiller:
 
     def start(self, user: UserSession, ids: list[int], on_progress=None, wake: threading.Condition | None = None):
         """Send ``ids`` (``user``'s prompt from its position on) now, from a thread of its own; :meth:`run` for the
-        same user and ids loads the reply. Replaces (aborts) a prompt of ``user``'s still in flight. Nothing is sent
-        ahead in push mode (None): the push's pages are reserved on the device, on the scheduler thread."""
-        if self.push:
-            return None
+        same user and ids loads the reply. Replaces (aborts) a prompt of ``user``'s still in flight.
+
+        In push mode this runs on the scheduler thread: it reserves ``user``'s pages (a fresh prompt rewinds the
+        session first) before sending. None when they cannot be reserved: :meth:`run` then pushes synchronously
+        and reports the error to the turn."""
         whole, have = self._whole(user, ids)
-        job = _RemoteFetch(self, whole, have, on_progress, wake)
         with self._lock:
-            old, self._fetches[user.index] = self._fetches.get(user.index), job
+            old = self._fetches.pop(user.index, None)
         if old is not None:
-            old.abort()
+            self.forget(user, old)
+        targets = None
+        if self.push:
+            self.reap(block=True)
+            model = self.engine.model
+            try:
+                if not have:
+                    model.reset_session(user.sid)
+                targets = model.remote_commit_targets(user.sid, len(whole), self.ring_layers, start=have)
+            except Exception as exc:  # noqa: BLE001 - run() retries and reports it to the turn
+                logger.warning(f"user {user.index}: not pushed ahead ({type(exc).__name__}: {exc})")
+                return None
+        job = _RemoteFetch(self, whole, have, on_progress, wake, targets)
+        with self._lock:
+            self._fetches[user.index] = job
         return job
 
     def forget(self, user: UserSession, job: _RemoteFetch) -> None:
-        """Abort ``job``, ``user``'s prompt sent by :meth:`start` (its turn ended before loading it)."""
+        """Abort ``job``, ``user``'s prompt sent by :meth:`start` (its turn ended before loading it). A push's
+        reservation is given up once the server has replied (:meth:`reap`)."""
         with self._lock:
             if self._fetches.get(user.index) is job:
                 del self._fetches[user.index]
         job.abort()
+        if job.targets is not None:
+            self._orphans.append((user, job))
+            self.reap()
+
+    def reap(self, block: bool = False) -> None:
+        """Rewind the sessions of forgotten pushes the server has replied to (``block``: wait for every one), so
+        their pages go back to the pools only once no write of theirs can land. Scheduler thread only."""
+        pending = []
+        for user, job in self._orphans:
+            if block:
+                job.wait()
+            if job.done():
+                self.engine.model.abort_remote_commit(user.sid)
+                user.reset()
+            else:
+                pending.append((user, job))
+        self._orphans = pending
 
     def _push(self, user: UserSession, whole: list[int], have: int, on_progress) -> dict:
         """Prefill ``whole`` on the server, which writes the entries from ``have`` on into ``user``'s pages over
@@ -3702,6 +3765,7 @@ class _RemotePrefiller:
         reserved: a cancellation (``on_progress`` raising) is held until then, and an error reply rewinds the
         session to 0."""
         model = self.engine.model
+        self.reap(block=True)
         if not have:
             model.reset_session(user.sid)
             model.reset_static_caches()
@@ -3760,7 +3824,14 @@ class _RemotePrefiller:
         with self._lock:
             job = self._fetches.pop(user.index, None)
         if job is not None and (job.ids != whole or job.have != have):
-            job.abort()
+            self.forget(user, job)
+            if job.targets is not None:
+                # Its commit rewinds the session (reap), so this prompt's have no longer holds.
+                self.reap(block=True)
+                raise RuntimeError(
+                    f"user {user.index}: the prompt pushed ahead ({len(job.ids)} tokens from {job.have}) is not "
+                    f"the one to load ({len(whole)} tokens from {have})"
+                )
             job = None
         t_wait = time.perf_counter()
         if job is None:
@@ -3776,7 +3847,14 @@ class _RemotePrefiller:
                 states = self._fetch(whole, have, on_progress)
         else:
             t0 = job.t0
-            states = job.result()
+            try:
+                states = job.result()
+            except BaseException:
+                if job.targets is not None:
+                    model.abort_remote_commit(user.sid)
+                    with contextlib.suppress(Exception):
+                        user.reset()
+                raise
         self.t_prefill_out = time.perf_counter()
         # A prompt sent ahead may have been back a while before the scheduler came to load it.
         net_seconds = (job.t_done if job is not None else self.t_prefill_out) - t0
