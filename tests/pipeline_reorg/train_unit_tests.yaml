@@ -82,8 +82,9 @@
   budget_type: unit
 
 - name: tt-train python unit tests
+  # tt-train/tests/python/experimental runs once, in its own leg below.
   cmd: |
-    python -m pytest tt-train/tests/python
+    python -m pytest tt-train/tests/python --ignore=tt-train/tests/python/experimental
   skus:
     bh_p100:
       timeout: 35
@@ -97,10 +98,22 @@
   cmd: |
     # Workaround for hang in QB2 https://github.com/tenstorrent/tt-metal/issues/55957
     export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
-    python -m pytest tt-train/tests/python
+    python -m pytest tt-train/tests/python --ignore=tt-train/tests/python/experimental
   skus:
     bh_quietbox_2:
       timeout: 25
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  budget_type: unit
+
+- name: tt-train python experimental tests
+  # Single-chip only: a test that needs a bigger mesh skips here and runs nowhere. 45 s on a warm p150b, almost all
+  # of it the SST-2 LoRA recipe test; the rest of the timeout is for a cold JIT cache.
+  cmd: |
+    python -m pytest tt-train/tests/python/experimental
+  skus:
+    bh_p150b_civ2:
+      timeout: 5
   owner_id: U07K00A281X # Kevin Wu
   team: train
   budget_type: unit

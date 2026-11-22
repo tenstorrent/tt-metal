@@ -4,6 +4,7 @@
 
 """The Llama 3.2 1B Instruct SST-2 LoRA recipe, run as ``python -m ttml.experimental.trainer`` runs it, for two steps:
 it trains, validates, logs the metrics of both, and saves PEFT adapter checkpoints that rotate and load back.
+The runs read only the first examples of each SST-2 split, so validation is a few batches, not 872 examples.
 
 Downloads ``meta-llama/Llama-3.2-1B-Instruct``, a gated repo (``HF_TOKEN``), and SST-2 unless they are cached.
 """
@@ -20,6 +21,7 @@ import pytest
 
 import ttml
 import ttml.experimental
+from ttml.experimental.datasets.provider.sft import SST2Provider
 from ttml.experimental.models.utils.checkpoint import ADAPTER_CONFIG, ADAPTER_WEIGHTS, read_adapter
 from ttml.experimental.models.utils.hub import load_hf_config
 from ttml.experimental.trainer.__main__ import main
@@ -30,14 +32,22 @@ from ttml.experimental.trainer.utils import TRAINER_STATE
 
 RECIPE = Path(ttml.experimental.__file__).parent / "training_configs" / "llama_3_2_1b_instruct_sst2_lora.yaml"
 STEPS = 2
+# The examples read of each split: enough train batches that every run stays in epoch 0.
+SPLIT_SIZES = {"train": 256, "validation": 64}
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.slow]
 
 
 def run_recipe(overrides: list[str]) -> SimpleNamespace:
-    """Run the recipe with ``--set`` overrides; return the ``(metrics, step)`` it logged and the messages it logged."""
+    """Run the recipe with ``--set`` overrides, on the first ``SPLIT_SIZES`` examples of each split; return the
+    ``(metrics, step)`` it logged and the messages it logged."""
     logged = SimpleNamespace(metrics=[], messages=[])
     log_metrics, info = TrainingLogger.log_metrics, TrainingLogger.info
+    load_raw_dataset = SST2Provider._load_raw_dataset
+
+    def load_head(self):
+        raw = load_raw_dataset(self)
+        return raw.select(range(min(len(raw), SPLIT_SIZES[self.split])))
 
     def record_metrics(self, metrics, step=None, commit=True):
         if metrics:
@@ -54,6 +64,7 @@ def run_recipe(overrides: list[str]) -> SimpleNamespace:
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(TrainingLogger, "log_metrics", record_metrics)
             patch.setattr(TrainingLogger, "info", record_message)
+            patch.setattr(SST2Provider, "_load_raw_dataset", load_head)
             main(["--config", str(RECIPE), *(arg for override in overrides for arg in ("--set", override))])
     finally:
         gc.collect()
