@@ -1883,6 +1883,21 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             cb_ids.windowed_k_range = allocate_cb(16, 2, tt::DataFormat::Int32);
         }
     }
+    // Windowed rel_logits, block-float K / V: an L1 cache of whole K + V chunks for the reader. A core's consecutive
+    // Q chunks see K ranges that overlap in all but one chunk, so most chunks come from L1 instead of DRAM (same
+    // bytes). Slots: the most K chunks one Q chunk's range can touch, plus one.
+    uint32_t kv_cache_cb = sdpa_cb::CBIds::inactive;
+    uint32_t kv_cache_slots = 0;
+    uint32_t kv_cache_slot_bytes = 0;
+    const bool block_float_kv_cache =
+        (k_df == tt::DataFormat::Bfp8_b || k_df == tt::DataFormat::Bfp4_b) && v_df == k_df;
+    if (use_rel_bias && operation_attributes.rel_skewed && has_sliding_window && !is_chunked && !use_mla &&
+        block_float_kv_cache) {
+        const uint32_t kc = Sk_chunk_t * TILE_HEIGHT;
+        kv_cache_slots = (Sq_chunk_t * TILE_HEIGHT + sliding_window_size.value() - 1) / kc + 2;
+        kv_cache_slot_bytes = Sk_chunk_t * DHt * k_tile_size + Sk_chunk_t * vDHt * v_tile_size;
+        kv_cache_cb = allocate_cb(kv_cache_slot_bytes, kv_cache_slots, k_df);
+    }
     if (flexible_chunked) {
         constexpr uint32_t chunk_start_idx_page_size = 32;
         cb_ids.chunk_start_idx_compute = allocate_cb(chunk_start_idx_page_size, 1, tt::DataFormat::Int32);
@@ -2042,6 +2057,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_desc.core_ranges = core_grid;
     reader_desc.compile_time_args = reader_compile_time_args;
     reader_desc.defines = defines;
+    if (kv_cache_cb != sdpa_cb::CBIds::inactive) {
+        reader_desc.defines.emplace_back("SDPA_KV_CACHE_CB", std::to_string(kv_cache_cb));
+        reader_desc.defines.emplace_back("SDPA_KV_CACHE_SLOTS", std::to_string(kv_cache_slots));
+        reader_desc.defines.emplace_back("SDPA_KV_CACHE_SLOT_BYTES", std::to_string(kv_cache_slot_bytes));
+    }
     reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer_desc;

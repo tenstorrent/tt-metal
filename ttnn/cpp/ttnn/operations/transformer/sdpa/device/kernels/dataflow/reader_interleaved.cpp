@@ -290,6 +290,64 @@ FORCE_INLINE void rel_fill_tile(
 }
 #endif
 
+#ifdef SDPA_KV_CACHE_CB
+// K / V chunk cache in L1 (windowed rel_logits): consecutive Q chunks of a core see K ranges that overlap in all but
+// one chunk. Slot k_chunk % SDPA_KV_CACHE_SLOTS keeps the CB image (K then V) of the last full chunk read into it,
+// tagged by (batch, kv head, chunk); a hit copies it into the CB instead of reading DRAM. Same bytes either way.
+FORCE_INLINE uint32_t kv_cache_tag(uint32_t nb, uint32_t head, uint32_t k_chunk) {
+    return ((nb * 256 + head) << 16) + k_chunk + 1;
+}
+template <uint32_t tile_bytes, typename ReaderType>
+FORCE_INLINE void kv_cache_read(
+    const ReaderType& reader,
+    uint32_t cb_id,
+    uint32_t chunk_tiles,
+    uint32_t start_tile_id,
+    uint32_t src_rows,
+    uint32_t src_cols,
+    uint32_t dst_rows,
+    uint32_t dst_cols,
+    uint32_t barrier_threshold,
+    bool transpose,
+    uint32_t skip_src_cols,
+    bool full,
+    uint32_t tag,
+    uint32_t k_chunk,
+    uint32_t cache_base,
+    uint32_t slot_offset,
+    uint32_t* tags) {
+    constexpr uint32_t slot_bytes = SDPA_KV_CACHE_SLOT_BYTES;
+    const uint32_t slot = k_chunk % SDPA_KV_CACHE_SLOTS;
+    const uint32_t cache_addr = cache_base + slot * slot_bytes + slot_offset;
+    const uint32_t bytes = chunk_tiles * tile_bytes;
+    CircularBuffer cb(cb_id);
+    if (full && tags[slot] == tag) {
+        cb.reserve_back(chunk_tiles);
+        noc_async_read(get_noc_addr(cache_addr), cb.get_write_ptr(), bytes);
+        noc_async_read_barrier();
+        cb.push_back(chunk_tiles);
+        return;
+    }
+    read_chunk_with_padding<tile_bytes, ReaderType, false>(
+        reader,
+        cb_id,
+        start_tile_id,
+        src_rows,
+        src_cols,
+        dst_rows,
+        dst_cols,
+        barrier_threshold,
+        transpose,
+        skip_src_cols);
+    if (full) {
+        noc_async_read(get_noc_addr(cb.get_write_ptr()), cache_addr, bytes);
+        noc_async_read_barrier();
+        tags[slot] = tag;
+    }
+    cb.push_back(chunk_tiles);
+}
+#endif
+
 void kernel_main() {
     Noc noc;
 
@@ -485,6 +543,14 @@ void kernel_main() {
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
+#ifdef SDPA_KV_CACHE_CB
+    const uint32_t kv_cache_base = CircularBuffer(SDPA_KV_CACHE_CB).get_write_ptr();
+    uint32_t kv_cache_k_tags[SDPA_KV_CACHE_SLOTS];
+    uint32_t kv_cache_v_tags[SDPA_KV_CACHE_SLOTS];
+    for (uint32_t i = 0; i < SDPA_KV_CACHE_SLOTS; ++i) {
+        kv_cache_k_tags[i] = kv_cache_v_tags[i] = 0;
+    }
+#endif
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 4);
     constexpr uint32_t cb_id_page_table = get_compile_time_arg_val(cb_arg_offset + 5);
@@ -1013,6 +1079,26 @@ void kernel_main() {
                                 Sk_chunk_t,
                                 DHt);
                         } else {
+#ifdef SDPA_KV_CACHE_CB
+                            kv_cache_read<k_tile_bytes>(
+                                k_reader,
+                                cb_k_in,
+                                k_chunk_tiles,
+                                k_start_tile_id,
+                                kv_row_tile_count,
+                                DHt,
+                                Sk_chunk_t,
+                                DHt,
+                                barrier_threshold,
+                                true,
+                                0,
+                                kv_row_tile_count == Sk_chunk_t,
+                                kv_cache_tag(nb, k_head, k_chunk),
+                                k_chunk,
+                                kv_cache_base,
+                                0,
+                                kv_cache_k_tags);
+#else
                             read_chunk_with_padding<k_tile_bytes>(
                                 k_reader,
                                 cb_k_in,
@@ -1024,6 +1110,7 @@ void kernel_main() {
                                 barrier_threshold,
                                 true  // transpose=true for K reads
                             );
+#endif
                         }
                     }
                 }
@@ -1298,6 +1385,26 @@ void kernel_main() {
                                 vDHt,
                                 skip_src_cols);
                         } else {
+#ifdef SDPA_KV_CACHE_CB
+                            kv_cache_read<v_tile_bytes>(
+                                v_reader,
+                                cb_v_in,
+                                v_chunk_tiles,
+                                v_start_tile_id,
+                                kv_row_tile_count,
+                                vDHt,
+                                Sk_chunk_t,
+                                vDHt,
+                                barrier_threshold,
+                                false,
+                                skip_src_cols,
+                                kv_row_tile_count == Sk_chunk_t,
+                                kv_cache_tag(nb, v_head, k_chunk),
+                                k_chunk,
+                                kv_cache_base,
+                                k_chunk_tiles * k_tile_bytes,
+                                kv_cache_v_tags);
+#else
                             read_chunk_with_padding<v_tile_bytes>(
                                 v_reader,
                                 cb_v_in,
@@ -1309,6 +1416,7 @@ void kernel_main() {
                                 barrier_threshold,
                                 false,
                                 skip_src_cols);
+#endif
                         }
                     }
                 }
