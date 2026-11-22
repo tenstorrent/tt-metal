@@ -1,51 +1,48 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tensor-prefetcher linear for Inkling-2-Mini decode on 1x Blackhole p100a (E8 prototype).
+"""Tensor-prefetcher linear for Inkling-2-Mini decode on 1x Blackhole p100a.
 
 The DRAM cores' DRISC senders stream a weight's K-blocks into L1 pipes on a 7 x R receiver ring
 while earlier ops still run; an mcast-in0 1D matmul on the ring then reads them in place.
-Measured (perf/E8-report.md): k/v 37 -> 17 us, o 64 -> 40 us; q (2304 x 6560) gets no faster.
+Measured: k/v 37 -> 17 us, o 64 -> 40 us; q (2304 x 6560) gets no faster.
 
 Usage (one object per device, shared by every prefetched weight):
     pf = PrefetchedLinear(device, recv_rows=3, ring_kb=768)
     w = pf.weight(host_w)          # torch [1,1,K,N] -> K-row-major bank-sharded bfp8, N padded
     pf.start()                     # once, before the decode trace is captured
     y = pf(x, w)                   # inside the trace; y [1,1,32,N] interleaved (DRAM) bf16
-    pf.stop()                      # before close / before any op that needs the ring's L1
+    pf.stop()                      # before ttnn.close_device / before any op that needs the ring's L1
+
+The caller must stop() a started prefetcher before it closes the device. When the device cannot run the
+prefetcher (Blackhole firmware older than 19.12, or the streaming profiler on), ``supported`` is False:
+``linear()`` then returns the plain DRAM-sharded linear and start()/stop() do nothing, so a model built with
+the prefetcher still runs, without the speedup.
 
 shortcut: one pipe set for all weights, sized to the largest K-block; per-weight rings are
 the upgrade if L1 gets tight.
 """
 
 import torch
+from loguru import logger
 
 import ttnn
+from models.demos.inkling2_mini.tt.attention import _DramShardedLinear
 
 TILE = 32
-_RUNNING = {}  # device id -> started PrefetchedLinear
-_close_device = ttnn.close_device
-
-
-def _close_stopping_prefetcher(device, *a, **k):
-    # shortcut: callers (harness, golden_check, tests) close the device directly; stop a running prefetcher
-    # first so its DRISC senders are idle. Upgrade: a model.close() that every caller uses.
-    pf = _RUNNING.get(device.id())
-    if pf is not None:
-        pf.stop()
-    return _close_device(device, *a, **k)
-
-
-ttnn.close_device = _close_stopping_prefetcher
 BFP8_TILE_BYTES = 1088
 
 
 class PrefetchedLinear:
     def __init__(self, device, recv_rows=3, ring_kb=768, dtype=ttnn.bfloat8_b):
-        if not ttnn.experimental.is_tensor_prefetcher_supported(device):
-            raise RuntimeError("tensor prefetcher unsupported (needs Blackhole fw >= 19.12, no streaming profiler)")
         self.device = device
         self.dtype = dtype
+        self._running = False
+        self.supported = ttnn.experimental.is_tensor_prefetcher_supported(device)
+        if not self.supported:
+            logger.warning("tensor prefetcher unsupported (needs Blackhole fw >= 19.12, no streaming profiler); "
+                           "using the plain DRAM-sharded linear")  # fmt: skip
+            return
         self.banks = device.dram_grid_size().x
         self.rows = recv_rows
         self.ring = self.banks * recv_rows
@@ -81,7 +78,6 @@ class PrefetchedLinear:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self._running = False
 
     def padded_n(self, n):
         m = TILE * self.ring
@@ -129,21 +125,21 @@ class PrefetchedLinear:
 
     def linear(self, w):
         """Callable with `_DramShardedLinear`'s signature (x, dtype, ckc, memory_config) for torch w [K, N]."""
+        if not self.supported:
+            return _DramShardedLinear(self.device, w, self.dtype)
         wn = self.weight(w)
         return lambda x, dtype, ckc=None, memory_config=None: self(x, wn, dtype=dtype)
 
     def start(self):
-        if not self._running:
+        if self.supported and not self._running:
             ttnn.experimental.start_tensor_prefetcher(self.device)
             self._running = True
-            _RUNNING[self.device.id()] = self
 
     def stop(self):
         if self._running:
             ttnn.experimental.stop_tensor_prefetcher(self.device)
             ttnn.synchronize_device(self.device)
             self._running = False
-            _RUNNING.pop(self.device.id(), None)
 
     def __call__(self, x, wn, dtype=ttnn.bfloat16, interleaved=True):
         """x [1,1,32,K] bf16 interleaved; returns [1,1,32,N_true] (sliced if N was padded)."""

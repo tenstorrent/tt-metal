@@ -13,7 +13,7 @@ import torch
 
 import ttnn
 
-KDIR = "models/demos/inkling2_mini/tt/fused/kernels"
+KDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels")  # not cwd-relative
 PAGE = 1024  # elements per dense page
 CORE = ttnn.CoreCoord(0, 0)
 CORES = ttnn.CoreRangeSet([ttnn.CoreRange(CORE, CORE)])
