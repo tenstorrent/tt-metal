@@ -33,8 +33,10 @@ _STREAMS = "bank_"  # bank_linear_*, moe_bank_*: weight streams
 # one piece may fill there. Keyed by (sorted kernel basenames, core count). Sized from the M3 device profiles (4K,
 # integrate c99577bf5b7): ~7.5 KB/us per core (2 KB x 1 read in flight on each RISC) x the program's time, then cut
 # where the profile showed the host stretched more than the staged bytes saved. Measured and left out: attn_bias
-# (32 cores, 14.5 us: 90 KB stretched it to 20.2 us), attn_near / attn_comb (global layers), the router (its cores
-# overlap w_all's staging block).
+# (32 cores, 14.5 us: 90 KB stretched it to 20.2 us; 30 KB at budget 0.8: +0.08 ms), attn_near / attn_comb (global
+# layers; +0.02 ms). The router (rows 2..5, DRAM idle while its collector runs) takes the largest piece: with it,
+# budget 0.8 on all hosts is best (router 150 KB x budget, j14: 16.70 ms vs 16.93 without; 1.0: 16.98, 0.75 and
+# router 180-200 KB worse).
 HOST_KB = {
     ("conv_compute", "conv_reader", "conv_writer", 1): 89,  # 10.6 us -> 11.5 with a fill
     ("attnres_compute", "attnres_reader", "attnres_writer", 1): 89,  # 10.8 -> 13.3
@@ -44,7 +46,9 @@ HOST_KB = {
     ("attn_window", 8): 30,  # 5.4 -> 5.9
     ("attn_out_compute", "attn_out_reader", "attn_out_writer", 8): 33,  # 6.6 -> 7.1
     ("gatez_compute", "gatez_reader", "gatez_writer", 18): 60,  # 14.3 -> 16.1 (mlp gate 8.7, QKV gate 18.8)
+    ("router_compute", "router_reader", "router_writer", 36): 150,
 }
+BUDGET = 0.8
 
 
 def host_key(prog, n_cores):
@@ -102,7 +106,7 @@ class Overlap:
         split=3,
         exclude_rows=(0, 1, 2, 3, 4, 5),
         gates=None,
-        budget=1.0,
+        budget=BUDGET,
         host_kb=None,
         host_scale=None,
     ):
@@ -110,7 +114,7 @@ class Overlap:
         idle; wider small programs are short, so a fill piece makes them longer instead of hiding). gates: also stage
         the message gates' F / G (tt/mk/gate_stage.py) on their combine cores outside row 0 and outside the
         projections' staging cores; default INKLING_STAGE_GATES (off).
-        budget: None = M2 mode (single-core hosts, ``parts`` equal pieces). A number (default 1.0) = budget mode:
+        budget: None = M2 mode (single-core hosts, ``parts`` equal pieces). A number (default BUDGET) = budget mode:
         every program in ``host_kb`` (default HOST_KB) carries fill bytes up to budget x its KB per core, oldest
         queued item first, then the next items on cores disjoint from the ones it filled."""
         self.parts, self.max_cores = parts, max_cores

@@ -122,7 +122,10 @@ class Inkling2MoE:
         self.router_bias = ttnn.from_torch(
             bias, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
         )
-        self.router = FusedRouter(device, self.router_w, bias, TOP_K, ROUTE_SCALE, 1e-20) if fused_router else None
+        # rows 2..5: off the w_all staging block (rows 6..9, tt/mk/overlap.py), so the router can carry fill pieces
+        self.router = (
+            FusedRouter(device, self.router_w, bias, TOP_K, ROUTE_SCALE, 1e-20, first_row=2) if fused_router else None
+        )
         gu = weights["experts.w_gate_up"]
         if layout != "PF":
             self.w_down = ttnn.to_device(weights["experts.w_down"], device, dram)
