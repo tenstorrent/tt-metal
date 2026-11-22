@@ -140,18 +140,24 @@ serve_profiles:
         prefill_gang_tokens: 2048        # prefill gangs; 0 = the interleaved (TTFT-first) policy
         sample_on_device_mode: decode_only   # the rows-mode hub feed
   - name: batch-spec
-    description: 1-8 concurrent requests with lossless DFlash2 speculative decoding (greedy only), up to 32K context each. All users verify in one launch (8 users x 4 verify rows, 3 drafts per verify). Phase 1 of DFlash2 in the batch engine.
+    description: 1-8 concurrent requests with DFlash2 speculative decoding (greedy only), up to 256K context each. All users verify in one launch (8 users x 4 verify rows, 3 drafts per verify) on one shared KV pool. Phase 1 of DFlash2 in the batch engine.
     max_num_seqs: 8                      # one launch: 8 users x 4 verify rows
-    max_model_len: 32768                 # phase 1: the drafter's KV is still sized per user to max_model_len
     env:
       TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=qwen36_resident.vllm_spec_rows:Qwen36ResidentSpecRowsForCausalLM"
       DFLASH_WEIGHTS: incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4
       # the verify-rows build's core split: 28 attention workers leave the free cores its 4 GDN head groups need
       RESIDENT_ATTN_WORKERS: "28"
+      # KV pool = 22,000 blocks x 64 (as batch): the 256K build leaves 13.25 GB a chip with a 1,000-block pool
+      # (tests/spec_rows_mem.py, 2026-11-23); the drafter's KV is a 2,176-token ring per user (D-ring)
+      RESIDENT_MAX_TOKENS_ALL_USERS: "1408000"
+      RESIDENT_PREFILL_CHUNKS: "256,512,1024"
     # replaces serve.args (no --async-scheduling: the verify / propose steps run synchronously). The drafter is the
-    # model's own (vllm-tt-plugin runner-model spec contract: custom_class + the model_owned_drafter sentinel); K = 3
+    # model's own (vllm-tt-plugin runner-model spec contract: custom_class + the model_owned_drafter sentinel); K = 3.
+    # --max-num-batched-tokens: with a speculative_config vLLM pins max_num_scheduled_tokens at the 2048 default before
+    # the TT platform raises max_num_batched_tokens to max_model_len, and a longer prompt is never scheduled
     args:
       - ["--speculative-config", '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 3}']
+      - ["--max-num-batched-tokens", "262144"]
 default_profile: batch                   # user decision 2026-11-21: one engine for 1-32 users
 
 card:
