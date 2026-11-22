@@ -83,7 +83,12 @@ def main(argv=None):
     ap.add_argument("--dst", type=Path, required=True, help="new cache to write")
     ap.add_argument("--dtypes", default="BFP4", help="comma list of BFP4, BFP8")
     ap.add_argument("--layout", choices=("stick", "bank"), default="stick", help="bank: tt/fused/moe_bank.py layout")
-    ap.add_argument("--n-banks", type=int, default=N_BANKS)
+    ap.add_argument(
+        "--n-banks",
+        type=int,
+        default=N_BANKS,
+        help=f"DRAM banks of the target card (default {N_BANKS}, p100a); the loader refuses a cache made for another count",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--check", action="store_true", help="only re-verify an existing --dst")
     args = ap.parse_args(argv)

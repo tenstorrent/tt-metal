@@ -53,6 +53,17 @@ A rerun converts only the units (global, L00 ... L23) whose settings changed; th
 whose manifest is not complete. The chunked prefill reads the experts as tiles: convert a second cache
 without `--stick-experts` for it.
 
+The stick cache can also be made from a tile cache in a second step, which costs disk only for the rewritten
+expert tensors (every other file is hard-linked) and checks each rewritten tensor against its source:
+
+```
+python -m models.demos.inkling2_mini.convert --ckpt $INKLING_CKPT --out $INKLING_TILE_CACHE
+python -m models.demos.inkling2_mini.convert.relayout_sticks --src $INKLING_TILE_CACHE --dst $INKLING_CACHE --dtypes BFP4
+```
+
+Sticks are laid out for the card's DRAM bank count, 7 on a p100a (`convert/stick.py` `N_BANKS`). The loader
+refuses a stick cache made for another count; for a p150 (8 banks) use `relayout_sticks --n-banks 8`.
+
 ttnn opens the card even for host-side tensor conversions. To convert or run the host-only tests without
 the card, point it at a mock cluster:
 

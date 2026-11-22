@@ -28,7 +28,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.demos.inkling2_mini.convert.source import Checkpoint, deinterleave_gate_up, dequant_experts
-from models.demos.inkling2_mini.convert.stick import write_sticks
+from models.demos.inkling2_mini.convert.stick import N_BANKS, write_sticks
 
 P = "model.llm."
 # Bump when a change to this file changes what any unit writes: every unit's key changes, so a rerun reconverts.
@@ -425,7 +425,9 @@ def main(argv=None):
     ap.add_argument(
         "--stick-experts",
         default="",
-        help="dtypes (BFP4,BFP8): layers whose gate_up and down dtypes are both listed get the stick expert layout",
+        help="dtypes (BFP4,BFP8): layers whose gate_up and down dtypes are both listed get the stick expert layout. "
+        f"Sticks are laid out for {N_BANKS} DRAM banks (p100a); for another card convert without this flag and "
+        "run relayout_sticks --n-banks",
     )
     ap.add_argument(
         "--bf16-store",
