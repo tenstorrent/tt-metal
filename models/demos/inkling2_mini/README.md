@@ -55,7 +55,8 @@ refuses a cache whose manifest is not complete.
 The second step rewrites the expert tensors of every layer (BFP4, BFP8 and mixed) in the bank layout, where each
 expert column lives in one DRAM bank and the decode MoE (`tt/fused/moe_bank.py`) reads it from its own bank. It
 costs disk only for the rewritten tensors (every other file is hard-linked) and checks each one against its
-source. It is ~1.9 ms/token faster than the stick layout (`--layout stick`, read by the older fused kernel). Both layouts sum the down projection expert by expert, a different order than the tile path:
+source. It is ~1.9 ms/token faster than the stick layout (`--layout stick`, read by the older fused kernel).
+Both layouts sum the down projection expert by expert, a different order than the tile path:
 the BFP8 layers round differently (token-only 127 -> 125 on the short gate), with equal code1500 results.
 
 Sticks and bank layouts are laid out for the card's DRAM bank count, 7 on a p100a (`convert/stick.py`
