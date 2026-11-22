@@ -71,7 +71,9 @@ def emit(res):
 
 
 try:
-    m = Inkling2Model(dev, max_ctx=4096 if EAGER else 131072, log=lambda s: None)
+    m = Inkling2Model(
+        dev, max_ctx=4096 if EAGER else 131072, log=print if os.environ.get("M3_LOG") else (lambda s: None)
+    )
     m.set_inputs(0, 2048 if EAGER else 0)
     m.step()
     ttnn.synchronize_device(dev)
