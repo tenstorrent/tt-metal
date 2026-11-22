@@ -290,9 +290,7 @@ class GroupedMoE:
         xg_arg = len(rca)
         rca += self.xg_noc
         phys_arg = len(rca)
-        g = self.mesh.compute_with_storage_grid_size()
-        rca += [self.mesh.worker_core_from_logical_core(ttnn.CoreCoord(x, 0)).x for x in range(g.x)]
-        rca += [self.mesh.worker_core_from_logical_core(ttnn.CoreCoord(0, y)).y for y in range(g.y)]
+        rca += self._grid_nocs()
         # (512 / 1024-row passes: units of one GROUP-slot group of an expert x one column tile, balanced over the cores
         # by cost (gmoe_common.hpp fine units), each group's rows of X_g loaded once per core instead of an expert's
         # rows reloaded per unit: gate|up 4.1 -> 8.1 ms per pass at 512 rows otherwise)
@@ -335,6 +333,13 @@ class GroupedMoE:
         sems = [ttnn.SemaphoreDescriptor(0, ttnn.CoreType.WORKER, cores, 0)] if mcast else []
         ttnn.generic_op(io + [self.ag], ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
 
+    def _grid_nocs(self):
+        """The core grid's NOC x per column, then NOC y per row (the readers' multicast, gmoe_mcast.hpp)."""
+        g = self.mesh.compute_with_storage_grid_size()
+        return [self.mesh.worker_core_from_logical_core(ttnn.CoreCoord(x, 0)).x for x in range(g.x)] + [
+            self.mesh.worker_core_from_logical_core(ttnn.CoreCoord(0, y)).y for y in range(g.y)
+        ]
+
     def down(self, li):
         """Y_g = A_g's slots x their expert's down rows (self.yg; its last slot the route op's down bias rows)."""
         L = self.layers[li]
@@ -374,6 +379,8 @@ class GroupedMoE:
             self._cb(cb_w, ttnn.bfloat4_b, 576, DN_DEPTH * self.ku, cores),
             self._cb(cb_out, ttnn.bfloat8_b, 1088, 8, cores),
         ]
+        # (the gate|up's in0 multicast for the down's A_g blocks: 29.03 -> 29.09 ms per round at 128 users; its blocks are
+        # small, the leader's write barrier costs more than the contention it saves)
         ttnn.generic_op(io + [yg], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
 
     def combine(self):

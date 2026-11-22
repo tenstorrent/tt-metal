@@ -8,11 +8,9 @@
 // banks, alternating NOCs), and the two column tiles of the 32-row gate / up bias; GMOE_DEPTH units buffered, their
 // reads in flight together (dynamic NOC mode).
 //
-// GMOE_GU_MCAST: a slot group's (expert units: a small expert's) in0 block is read once per run of cores starting their
-// units in it, not once per core: the lowest of those cores (the leader) reads it from X_g and multicasts it into the
-// others' cb_x (at its base: the CB holds exactly one block, and it is their first) with semaphore 0 set after it; the
-// others wait on the semaphore (the leader waits on no one). A core's later blocks are read as before. 120 cores
-// reading their blocks at once from X_g's 80 cores took ~80k cycles each (NOC contention; ~36k with 1 core in 8).
+// GMOE_GU_MCAST: a core's first in0 block (a slot group's; expert units: a small expert's) multicast by the first core
+// of the run of cores starting with it (gmoe_mcast.hpp) instead of every core reading it from X_g; later blocks are read
+// as before.
 //
 // common runtime args: [plan table, xg, gate_up (relaid), gate_bias, up_bias, (GMOE_XG_ARG:) X_g's grid NOC x per
 // column, NOC y per row, (GMOE_PHYS_ARG, GMOE_GU_MCAST:) the core grid's NOC x per column (GX), NOC y per row]
@@ -23,6 +21,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "gmoe_common.hpp"
+#include "gmoe_mcast.hpp"
 
 void kernel_main() {
     const uint32_t table_addr = get_common_arg_val<uint32_t>(0);
@@ -91,25 +90,23 @@ void kernel_main() {
     }
 
 #ifdef GMOE_GU_MCAST
-    // this core's first block: received from its run's leader (mc_key, !mc_lead), or read and multicast to the cores
-    // [mc_f0, mc_f1] (mc_lead). Fine units: the block of the first unit's slot group (key e * 64 + g); expert units:
-    // the first routed expert's block if it has at most GROUP slots (key e; a larger expert's blocks are read per unit)
-    constexpr uint32_t GY = NC / GX;
-    uint32_t mc_key = 0xFFFFFFFFu, mc_f0 = 0, mc_f1 = 0;
-    bool mc_lead = false;
-    const uint32_t sem_addr = get_semaphore(0);
-    volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+    // this core's first block by multicast (gmoe_mcast.hpp; mc_key: its key). Fine units: the block of the first unit's
+    // slot group (key e * 64 + g); expert units: the first routed expert's block if it has at most GROUP slots (key e;
+    // a larger expert's blocks are read per unit)
+    uint32_t mc_key = 0xFFFFFFFFu;
+    gmoe::McastRole mc;
 #ifdef GMOE_GU_GMAJOR
     if (u0 < u1) {
         uint32_t e, g, j;
         gmoe::fine_unit(p, NU, u0, e, g, j);
         const uint32_t ug0 = u0 - j, ug1 = ug0 + NU;  // the group's fine units (j fastest)
-        const uint32_t key = e * 64 + g;
-        auto first_in = [&](uint32_t k) {  // core k's units start in the group
+        mc = gmoe::mcast_role(c, NC, [&](uint32_t k) {  // core k's units start in the group
             uint32_t a, b;
             gmoe::unit_range_fine(p, NU, WC, CC, k, NC, a, b);
             return a < b && a >= ug0 && a < ug1;
-        };
+        });
+        mc_key = e * 64 + g;
+    }
 #else
     // core k's first routed unit's expert (E: none)
     auto first_expert = [&](uint32_t k) {
@@ -124,49 +121,13 @@ void kernel_main() {
     };
     const uint32_t e0 = first_expert(c);
     if (e0 < gmoe::E && p.tiles[e0] <= GROUP) {
-        const uint32_t key = e0;
-        auto first_in = [&](uint32_t k) { return first_expert(k) == e0; };
-#endif
-        uint32_t lo = c, hi = c;
-        while (lo > 0 && first_in(lo - 1)) {
-            --lo;
-        }
-        while (hi + 1 < NC && first_in(hi + 1)) {
-            ++hi;
-        }
-        if (hi > lo) {
-            mc_key = key;
-            mc_lead = lo == c;
-            mc_f0 = c + 1;
-            mc_f1 = hi;
-        }
+        mc = gmoe::mcast_role(c, NC, [&](uint32_t k) { return first_expert(k) == e0; });
+        mc_key = e0;
     }
-    // the block at l1 (bytes) to the cores [mc_f0, mc_f1] (row-major core indices: up to 3 rectangles), then their
-    // semaphore
-    auto mc_send = [&](uint32_t l1, uint32_t bytes) {
-        *sem_ptr = 1;
-        auto rect = [&](uint32_t x0, uint32_t x1, uint32_t y0, uint32_t y1) {
-            const uint32_t px0 = get_common_arg_val<uint32_t>(GMOE_PHYS_ARG + x0);
-            const uint32_t px1 = get_common_arg_val<uint32_t>(GMOE_PHYS_ARG + x1);
-            const uint32_t py0 = get_common_arg_val<uint32_t>(GMOE_PHYS_ARG + GX + y0);
-            const uint32_t py1 = get_common_arg_val<uint32_t>(GMOE_PHYS_ARG + GX + y1);
-            const uint32_t nd = (x1 - x0 + 1) * (y1 - y0 + 1);
-            noc_async_write_multicast(l1, get_noc_multicast_addr(px0, py0, px1, py1, l1), bytes, nd, true);
-            noc_semaphore_set_multicast(sem_addr, get_noc_multicast_addr(px0, py0, px1, py1, sem_addr), nd);
-        };
-        const uint32_t ya = mc_f0 / GX, yb = mc_f1 / GX;
-        if (ya == yb) {
-            rect(mc_f0 % GX, mc_f1 % GX, ya, ya);
-        } else {
-            rect(mc_f0 % GX, GX - 1, ya, ya);
-            if (yb > ya + 1) {
-                rect(0, GX - 1, ya + 1, yb - 1);
-            }
-            rect(0, mc_f1 % GX, yb, yb);
-        }
-        noc_async_write_barrier();  // (the block is overwritten only after the multicast has left)
-        static_assert(GY * GX == NC);
-    };
+#endif
+    if (!mc.lead && !mc.follow) {
+        mc_key = 0xFFFFFFFFu;
+    }
 #endif
     // one in0 block = GROUP slots' K tiles (fixed size: the CB holds whole blocks, never one straddling its end)
     constexpr uint32_t X_TRID = DEPTH + 1;
@@ -201,7 +162,7 @@ void kernel_main() {
         noc_async_read_set_trid(0, 1);
 #ifdef GMOE_GU_MCAST
         if (send) {
-            mc_send(l1, n * KT * x_tile);
+            gmoe::mcast_send<GX>(mc, GMOE_PHYS_ARG, l1, n * KT * x_tile);
         }
 #endif
         cb_push_back(cb_x, GROUP * KT);
@@ -225,11 +186,8 @@ void kernel_main() {
         const uint32_t key = e * 64 + g;
         if (key != loaded_key) {
 #ifdef GMOE_GU_MCAST
-            if (key == mc_key && !mc_lead) {  // multicast by the run's leader
-                cb_reserve_back(cb_x, GROUP * KT);
-                noc_semaphore_wait(sem_ptr, 1);
-                noc_semaphore_set(sem_ptr, 0);
-                cb_push_back(cb_x, GROUP * KT);
+            if (key == mc_key && mc.follow) {
+                gmoe::mcast_receive(cb_x, GROUP * KT);
             } else {
                 load_x(p.base[e] + g * GROUP, gmoe::group_slots(p.tiles[e], g), key == mc_key);
             }
@@ -253,11 +211,8 @@ void kernel_main() {
         // for the compute to finish the first, which needs these weights)
         if (m <= GROUP && e != loaded) {
 #ifdef GMOE_GU_MCAST
-            if (e == mc_key && !mc_lead) {  // multicast by the run's leader
-                cb_reserve_back(cb_x, GROUP * KT);
-                noc_semaphore_wait(sem_ptr, 1);
-                noc_semaphore_set(sem_ptr, 0);
-                cb_push_back(cb_x, GROUP * KT);
+            if (e == mc_key && mc.follow) {
+                gmoe::mcast_receive(cb_x, GROUP * KT);
             } else {
                 load_x(p.base[e], m, e == mc_key);
             }
