@@ -135,7 +135,7 @@ class StagedBankLinear:
                 ttnn.Shape([1, 1, len(self.ranges), words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, dev, mem
             )
         else:
-            assert cores_of(stage.memory_config().shard_spec.grid) == self.cores, "shared staging: other cores"
+            assert self.cores <= cores_of(stage.memory_config().shard_spec.grid), "shared staging: other cores"
             assert stage.shape[-1] * 4 >= self.staged, (stage.shape, self.staged)
         self.stage = stage
         self.fill_io = [bl.weight, self.stage]

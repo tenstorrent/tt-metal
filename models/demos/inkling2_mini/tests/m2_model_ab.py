@@ -64,7 +64,7 @@ try:
             xr = tuple(range(int(f[5]) + 1)) if len(f) > 5 else (0,)
             import models.demos.inkling2_mini.tt.mk.stage as STG
 
-            STG.FILL = tuple(int(t) for t in f[6].split("/")) if len(f) > 6 else (16384, 4)
+            STG.FILL = tuple(int(t) for t in f[6].split("/")) if len(f) > 6 else STG.FILL
             ov = install(
                 m,
                 weights=tuple(f[0].split("+")),
@@ -89,7 +89,7 @@ try:
         xr = tuple(range(int(f[5]) + 1)) if len(f) > 5 else (0,)
         import models.demos.inkling2_mini.tt.mk.stage as STG
 
-        STG.FILL = tuple(int(t) for t in f[6].split("/")) if len(f) > 6 else (16384, 4)
+        STG.FILL = tuple(int(t) for t in f[6].split("/")) if len(f) > 6 else STG.FILL
         ov = install(
             m,
             weights=tuple(ws.split("+")),

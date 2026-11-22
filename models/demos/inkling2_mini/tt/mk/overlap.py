@@ -19,7 +19,7 @@ App order: model.APPS (one pointer per projection, advanced by every call): deco
 
 import ttnn
 from models.demos.inkling2_mini.tt import model as MD
-from models.demos.inkling2_mini.tt.mk.stage import StagedBankLinear, program_cores, range_bytes, resplit
+from models.demos.inkling2_mini.tt.mk.stage import StagedBankLinear, coalesce, program_cores, range_bytes, resplit
 
 _orig_generic_op = ttnn.generic_op
 _STREAMS = "bank_"  # bank_linear_*, moe_bank_*: weight streams
@@ -46,21 +46,23 @@ class _Track:
         self.lins = {L: getattr(lay.attn, name) for L, lay in enumerate(model.layers)}
         self.orig = {L: lin.bank for L, lin in self.lins.items()}
         assert all(b is not None for b in self.orig.values()), f"{name}: needs the bank-streamed projection"
-        banks = {L: resplit(b, split, exclude) for L, b in self.orig.items()}
-        top = max(range_bytes(b) for b in banks.values())
-        staged = top if staged_kb is None else min(staged_kb << 10, top)
-        big = max(banks, key=lambda L: range_bytes(banks[L]))
-        self.stage = StagedBankLinear(banks[big], staged).stage  # shared by every layer
-        self.proxies = {L: _Proxy(self, L, StagedBankLinear(b, staged, stage=self.stage)) for L, b in banks.items()}
-        self.cores = set(self.proxies[0].st.cores)
+        self.banks = {L: resplit(b, split, exclude) for L, b in self.orig.items()}
+        top = max(range_bytes(b) for b in self.banks.values())
+        self.staged = top if staged_kb is None else min(staged_kb << 10, top)
+        self.cores = {c for c, _ in self.banks[0].cores}
         self.ptr, self.filled, self.filled_for, self.n, self.staged_sum = 0, 0, None, 0, 0
+
+    def bind(self, stage):
+        """Proxies over the shared staging tensor (this track's cores are a subset of its grid)."""
+        self.proxies = {
+            L: _Proxy(self, L, StagedBankLinear(b, self.staged, stage=stage)) for L, b in self.banks.items()
+        }
         for L, lin in self.lins.items():
             lin.bank = self.proxies[L]
 
     def restore(self):
         for L, lin in self.lins.items():
             lin.bank = self.orig[L]
-        ttnn.deallocate(self.stage)
 
 
 class Overlap:
@@ -72,12 +74,28 @@ class Overlap:
         self.parts, self.max_cores = parts, max_cores
         self.order = [L for L, _ in MD.APPS]
         gx = model.device.compute_with_storage_grid_size().x
-        excl = [(x, y) for y in exclude_rows for x in range(gx)]  # the small programs' cores (core_list from (0, 0))
         # "w_all@480": stage at most 480 KB per core of that projection (the staging tensors take their L1 range on
         # EVERY core: the L1 allocator is lock-step), else staged_kb
         specs = [(w.split("@")[0], int(w.split("@")[1]) if "@" in w else staged_kb) for w in weights]
-        self.tracks = [_Track(self, model, w, split, excl, kb) for w, kb in specs]
-        self.stage_cores = set().union(*(t.cores for t in self.tracks))
+        # each projection on its own block of cores, so ONE staging tensor (one L1 address range, the allocator is
+        # lock-step) holds all of them: the first outside exclude_rows, the next ones on rows 1.. not used yet
+        self.tracks, taken = [], set()
+        for i, (w, kb) in enumerate(specs):
+            rows = set(exclude_rows) if i == 0 else {0} | {y for _, y in taken}
+            ex = [(x, y) for y in rows for x in range(gx)] + sorted(taken)
+            t = _Track(self, model, w, split, ex, kb)
+            assert not (t.cores & taken)
+            taken |= t.cores
+            self.tracks.append(t)
+        self.stage_cores = taken
+        words = max(t.staged for t in self.tracks) // 4
+        spec = ttnn.ShardSpec(coalesce(sorted(taken)), (1, words), ttnn.ShardOrientation.ROW_MAJOR)
+        self.stage = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, len(taken), words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, model.device,
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec),
+        )  # fmt: skip
+        for t in self.tracks:
+            t.bind(self.stage)
         self.queue = []  # [(proxy, part index)]: pieces still to attach, oldest first
         self.in_own = False
         self.seen = {"programs": 0, "too_wide": 0, "clash": 0, "attached": 0}
@@ -87,6 +105,7 @@ class Overlap:
         ttnn.generic_op = _orig_generic_op
         for t in self.tracks:
             t.restore()
+        ttnn.deallocate(self.stage)
 
     def consume(self, proxy, x, out):
         t = proxy.track
@@ -133,7 +152,7 @@ class Overlap:
         out = dict(self.seen)
         for t in self.tracks:
             out[t.name] = {"calls": t.n, "staged_kb_avg": round(t.staged_sum / max(1, t.n) / 1024, 1),
-                           "staged_kb_max": t.proxies[0].st.staged // 1024, "cores": len(t.cores)}  # fmt: skip
+                           "staged_kb_max": t.staged // 1024, "cores": len(t.cores)}  # fmt: skip
         return out
 
 
