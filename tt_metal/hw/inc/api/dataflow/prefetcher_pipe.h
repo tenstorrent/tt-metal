@@ -201,6 +201,11 @@ struct DramSenderConfigPage {
     uint32_t config_page_addr = 0;
 };
 
+// Names a receiver's config page for the unbound receiver constructor.
+struct ReceiverConfigPage {
+    uint32_t config_page_addr = 0;
+};
+
 class PrefetcherPipe {
 public:
     FORCE_INLINE explicit PrefetcherPipe(uint8_t prefetcher_pipe_id) : prefetcher_pipe_id_(prefetcher_pipe_id) {
@@ -232,6 +237,13 @@ public:
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page.config_page_addr), REMOTE_DFB_CFG_IS_SENDER)));
         init</*known_sender=*/true>(
             page.config_page_addr, entry_size, pack_prefetcher_pipe_slot_relay_word(RELAY_DFB_INVALID, 1));
+    }
+
+    // Receiver without a Program binding (e.g. a ttnn.generic_op kernel): the host passes the pipe's
+    // receiver config page address (PrefetcherPipe.config_address(), one address on every receiver)
+    // as a runtime arg. `entry_size` is the block size the sender pushes. Single credit lane, no relay.
+    FORCE_INLINE PrefetcherPipe(ReceiverConfigPage page, uint32_t entry_size) {
+        init(page.config_page_addr, entry_size, pack_prefetcher_pipe_slot_relay_word(RELAY_DFB_INVALID, 1));
     }
 
     // Metal 2.0: construct from a `pipe::<accessor>` token (kernel_bindings_generated.h). The
@@ -903,6 +915,9 @@ public:
     FORCE_INLINE uint32_t ring_entries() const {
         return usable_offset(interface_.sender) / interface_.sender.fifo_page_size;
     }
+
+    // Receiver: L1 address of the oldest entry not yet popped.
+    FORCE_INLINE uint32_t get_read_ptr() const { return interface_.receiver.fifo_rd_ptr; }
 
     // True while the sender has published entries this receiver has not yet popped. Reads this
     // receiver's slot in each credit block -- the same two counters wait_front() compares -- so
