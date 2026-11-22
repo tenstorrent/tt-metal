@@ -7408,3 +7408,85 @@ tasks:
       packed_fallback_chunks*: == 0
       steady_tok_s_p*: '> 0'
       ladder_lanes4x2k_tok_s_p*: '> 0'
+- id: PB.FBM
+  title: 'OWNER 2026-11-22: indexer block maxima computed in the score''s COMPUTE kernel (not the writer core), so block-select
+    pays on packed chunks and at shorter histories; exact'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - PB.GAP
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/drafts
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9G_ladder.md
+  - models/demos/deepseek_v41_flash_d_p/reference
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.HG_ladder.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.BM_ladder.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.FBM_ladder.md
+  ab:
+    env:
+      INDEXER_BMAX_COMPUTE: 'off'
+    change:
+      INDEXER_BMAX_COMPUTE: 'on'
+  ab_mode: full
+  ab_rungs:
+  - last
+  brief:
+    prior_work: 'PB.BM (e821084f82f): block-select (top-512 blocks of 32 keys by block max, then top-512 keys) is exact; its
+      block maxima come from indexer_score''s block_max_out, a scalar compare on the WRITER core: score op single ring 1.33
+      -> 1.67 ms (139264), 9.60 -> 12.72 (1M); glued lane_ranges ring 1.60 -> 2.92 (139264), 12.01 -> 14.57 (1M). So block-select
+      is on only for the single path above INDEXER_BLOCK_SELECT_MIN (131072 keys at 8192; 262144 at 5120, MB.7) and OFF on
+      packed (INDEXER_BLOCK_SELECT_MIN_PACKED = 2^30). PB.GAP: at 1M the packed chunk''s plain top-k costs +6.8 ms device
+      net over the single''s block path. PB.BM''s notes describe what an exact FPU block max needs. Fork: ttnn/ttnn/bringup/indexer_score
+      (compute_indexer_score.cpp, writer, README / CHANGELOG / tests).'
+    details: 'OWNER 2026-11-22: compute the per-query block maxima (32-key blocks) in the score''s compute kernel, from the
+      scores still in DEST / the output tiles (row-wise max over the 32 columns of each key tile = one block of 32 keys: a
+      tile-row reduce), written as a small bf16 tensor next to the scores; exact (the same maxima as the writer path, byte-compared
+      in the fork''s test). Behind INDEXER_BMAX_COMPUTE=on|off (call-time; fork option off by default in the fork). Then re-measure
+      the crossovers and set INDEXER_BLOCK_SELECT_MIN (single 8192) and INDEXER_BLOCK_SELECT_MIN_PACKED from measurements
+      (no rung slower than block-select off). Exact selection (the selection-set test, 0 mismatches), packed oracle 0. Ladder
+      (PB.9C''s method) at 139264 / 524288 / 1024000 for single 8192 and chip-aligned 4x2k, before / after, the indexer split
+      (score / block max / top-k / gather); cold strict no-rebuild. Every new program prepared; rule 20. Report in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.FBM_ladder.md.
+      Read models/demos/deepseek_v41_flash_d_p/bringup/PACKED_RULES.md and rule 20 of models/demos/common/bringup/agents/bringup-engineer.md.'
+  gate:
+    cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_MHC_POST_V2=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_fast_tier.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_indexer_block_select.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode SKIP_POS=139264,524288,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode LADDER_POS=139264,524288,1024000
+      LADDER_CASES=4x2k scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
+      && NO_REBUILD_PACKED_STRICT=1 BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on
+      DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on
+      DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    metrics:
+      packed_alone_vs_today_max_abs_diff: == 0
+      packed_lane_equiv_max_abs_diff: == 0
+      packed_slot_digest_mismatches: == 0
+      packed_determinism_max_abs_diff: == 0
+      no_rebuild_pass_*: == 1
+      program_builds_after_warmup_*: == 0
+      ids_uploads_per_chunk*: == 0
+      packed_fallback_chunks*: == 0
+      steady_tok_s_p*: '> 0'
+      ladder_lanes4x2k_tok_s_p*: '> 0'
+      idx_block_select_set_mismatches*: == 0
