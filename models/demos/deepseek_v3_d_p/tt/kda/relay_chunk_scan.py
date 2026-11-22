@@ -67,9 +67,6 @@ class OutputNorm:
     gate_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
 
 
-# The relay's persistent counters (relay_semaphores in relay_chunk_scan_device_operation_types.hpp).
-_RELAY_SEMAPHORES = 4
-
 # A sender core's count semaphores, one per head it serves (relay_chunk_scan_max_heads_per_link).
 _MAX_HEADS_PER_LINK = 14
 
@@ -219,8 +216,8 @@ class RelayChunkScan:
         )
         self._landing_shape = ttnn.Shape([relay_count * landing_rows, key_dim])
         self._landing = None
-        # A peer can bump the entry, final and carry arrival counters before this rank's call starts.
-        self.semaphores = persistent_semaphores(mesh_device, _RELAY_SEMAPHORES)
+        # A peer can bump the entry and final (or carry) arrival counters before this rank's call starts.
+        self.semaphores = persistent_semaphores(mesh_device, 2)
         # The hop's, the correction's and the norm's products run at math_fidelity, accumulating in an FP32 DST.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=math_fidelity, math_approx_mode=False, fp32_dest_acc_en=True

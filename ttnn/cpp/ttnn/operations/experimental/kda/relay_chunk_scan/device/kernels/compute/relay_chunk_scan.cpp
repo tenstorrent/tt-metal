@@ -22,7 +22,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/compute/gate_matmul.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/correction_core.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -36,35 +35,26 @@ constexpr uint32_t cb_diff = get_compile_time_arg_val(5);
 constexpr uint32_t cb_out = get_compile_time_arg_val(6);
 constexpr uint32_t core_chunks = get_compile_time_arg_val(7);
 constexpr bool streamed = get_compile_time_arg_val(8);
-// The cores' layout (correction_core.hpp).
-constexpr uint32_t cores_per_head = get_compile_time_arg_val(9);
-constexpr uint32_t heads_per_column = get_compile_time_arg_val(10);
-constexpr uint32_t first_row = get_compile_time_arg_val(11);
 // The gated output norm of each chunk row x: x / sqrt(mean(x^2) + epsilon) * g with g = sigmoid(gate) * weight. The
 // squares, the mean's scaler, 1 / rms, the gate rows (FP32, all of the core's chunks), the weight (row 0 of its tiles)
 // and broadcast down every row, each chunk's g (all in place, one streamed), and the result.
-constexpr uint32_t cb_square = get_compile_time_arg_val(12);
-constexpr uint32_t cb_scaler = get_compile_time_arg_val(13);
-constexpr uint32_t cb_inv_rms = get_compile_time_arg_val(14);
-constexpr uint32_t cb_gate = get_compile_time_arg_val(15);
-constexpr uint32_t cb_weight = get_compile_time_arg_val(16);
-constexpr uint32_t cb_weight_rows = get_compile_time_arg_val(17);
-constexpr uint32_t cb_norm = get_compile_time_arg_val(18);
-constexpr uint32_t cb_gate_factor = get_compile_time_arg_val(19);
-constexpr uint32_t epsilon_bits = get_compile_time_arg_val(20);
+constexpr uint32_t cb_square = get_compile_time_arg_val(9);
+constexpr uint32_t cb_scaler = get_compile_time_arg_val(10);
+constexpr uint32_t cb_inv_rms = get_compile_time_arg_val(11);
+constexpr uint32_t cb_gate = get_compile_time_arg_val(12);
+constexpr uint32_t cb_weight = get_compile_time_arg_val(13);
+constexpr uint32_t cb_weight_rows = get_compile_time_arg_val(14);
+constexpr uint32_t cb_norm = get_compile_time_arg_val(15);
+constexpr uint32_t cb_gate_factor = get_compile_time_arg_val(16);
+constexpr uint32_t epsilon_bits = get_compile_time_arg_val(17);
 // An FP32 output takes the FP32-accurate sigmoid; a BF16 one needs only the BF16-accurate exp and one reciprocal step.
-constexpr bool fp32_output = get_compile_time_arg_val(21);
+constexpr bool fp32_output = get_compile_time_arg_val(18);
 // The output gate x @ W of the core's chunks: K blocks of x and of W, at gate_fidelity.
-constexpr uint32_t cb_gin0 = get_compile_time_arg_val(22);
-constexpr uint32_t cb_gin1 = get_compile_time_arg_val(23);
-constexpr uint32_t gate_kb = get_compile_time_arg_val(24);
-constexpr uint32_t gate_blocks = get_compile_time_arg_val(25);
-constexpr auto gate_fidelity = static_cast<ckernel::MathFidelity>(get_compile_time_arg_val(26));
-// With gate_ways 2 the heads pair up, h with h ^ 1, each core forming both over its head's half of K: the partial sums
-// of the pair's other head, and the pair's core's of this core's head (gate_matmul.hpp).
-constexpr uint32_t cb_gate_pair = get_compile_time_arg_val(27);
-constexpr uint32_t cb_gate_partial = get_compile_time_arg_val(28);
-constexpr uint32_t gate_ways = get_compile_time_arg_val(29);
+constexpr uint32_t cb_gin0 = get_compile_time_arg_val(19);
+constexpr uint32_t cb_gin1 = get_compile_time_arg_val(20);
+constexpr uint32_t gate_kb = get_compile_time_arg_val(21);
+constexpr uint32_t gate_blocks = get_compile_time_arg_val(22);
+constexpr auto gate_fidelity = static_cast<ckernel::MathFidelity>(get_compile_time_arg_val(23));
 constexpr uint32_t state_tiles = kt * kt;
 // A chunk row of the outputs is formed in one DST pass (the op checks K against the DST).
 static_assert(kt <= compute_kernel_lib::DEST_AUTO_LIMIT);
@@ -234,27 +224,13 @@ void correct(uint32_t begin, uint32_t end, uint32_t seed) {
 
 // Every correction core forms its chunks' gate rows, then corrects and normalizes its chunks once their seeds land.
 void kernel_main() {
-    const uint32_t head = kda_relay::correction_core<heads_per_column, first_row, cores_per_head>().head;
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_terms, cb_seed, cb_out);
     cb_wait_front(cb_ctl, 1);
     const uint32_t chunks = read_tile_value(cb_ctl, 0, 0);
     const uint32_t group_chunks = read_tile_value(cb_ctl, 0, 1);
     cb_pop_front(cb_ctl, 1);
 
-    kda_gate::matmul<gate_fidelity>(
-        cb_gin0,
-        cb_gin1,
-        cb_gate,
-        cb_gate_pair,
-        gate_ways == 1 || head % 2 == 0,
-        gate_ways,
-        core_chunks,
-        kt,
-        gate_kb,
-        gate_blocks);
-    if constexpr (gate_ways == 2) {
-        kda_gate::add_pair(cb_gate_partial, cb_gate, core_chunks * kt);
-    }
+    kda_gate::matmul<gate_fidelity>(cb_gin0, cb_gin1, cb_gate, core_chunks, kt, gate_kb, gate_blocks);
     // The norm's weight rows.
     if (chunks != 0) {
         cb_wait_front(cb_scaler, 1);

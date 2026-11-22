@@ -81,7 +81,7 @@ class _ProjectedInputs:
     # until the last of them is read. With sequence parallelism the relay forms the output gate itself.
     projected: ttnn.Tensor
     decay_rank_offset: int
-    output_gate_offset: int
+    output_gate_offset: int | None
     beta_offset: int
 
 
@@ -568,7 +568,7 @@ class ttKDA:
         return _ProjectedInputs(
             projected=projected,
             decay_rank_offset=self._convolution_width,
-            output_gate_offset=beta_offset + beta_columns(config, 1),
+            output_gate_offset=None if self._is_sequence_parallel else beta_offset + beta_columns(config, 1),
             beta_offset=beta_offset,
         )
 
