@@ -1050,8 +1050,12 @@ class TestRunPhase1GenerateRankBindings:
         fsd_path.touch()
         output_dir = temp_dir / "run"
         monkeypatch.setattr(ttrun_module, "find_generate_rank_bindings_executable", lambda: executable)
+        monkeypatch.setenv("TT_METAL_HOME", str(temp_dir))
+        monkeypatch.delenv("TT_METAL_RUNTIME_ROOT", raising=False)
 
-        def mock_run(cmd, cwd=None, **kwargs):
+        def mock_run(cmd, cwd=None, env=None, **kwargs):
+            assert env["TT_METAL_HOME"] == str(temp_dir)
+            assert env["TT_METAL_RUNTIME_ROOT"] == str(temp_dir)
             assert cmd == [
                 str(executable.resolve()),
                 "--offline",

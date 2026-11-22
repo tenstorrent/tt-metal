@@ -1099,18 +1099,21 @@ def build_generate_rank_bindings_mpi_cmd(
     return cmd
 
 
-def run_generate_rank_bindings(cmd: List[str], cwd: Path, subprocess_run=subprocess.run) -> int:
+def run_generate_rank_bindings(
+    cmd: List[str], cwd: Path, subprocess_run=subprocess.run, env: Optional[Dict[str, str]] = None
+) -> int:
     """Run generate_rank_bindings command via subprocess.
 
     Args:
         cmd: Command to run (from build_generate_rank_bindings_mpi_cmd)
         cwd: Working directory for the command
         subprocess_run: Subprocess run function (injectable for testing)
+        env: Environment for the command; None inherits this process's
 
     Returns:
         Exit code from the subprocess
     """
-    result = subprocess_run(cmd, cwd=cwd)
+    result = subprocess_run(cmd, cwd=cwd, env=env)
     return result.returncode if hasattr(result, "returncode") else result
 
 
@@ -1182,12 +1185,20 @@ def run_phase1_generate_rank_bindings(
         RuntimeError: If Phase 1 fails or outputs are missing
     """
     executable = find_generate_rank_bindings_executable()
+    env = None
     if offline:
         if factory_system_descriptor is None:
             raise ValueError("offline requires factory_system_descriptor")
         cmd = build_generate_rank_bindings_offline_cmd(
             executable, mgd_path, factory_system_descriptor, output_dir, mgd_is_mapping_yaml=mgd_is_mapping_yaml
         )
+        # No mpirun here to pass the rank environment, so set the runtime root as get_rank_environment does.
+        tt_metal_home = os.environ.get("TT_METAL_HOME", str(ORIGINAL_CWD))
+        env = {
+            **os.environ,
+            "TT_METAL_HOME": tt_metal_home,
+            "TT_METAL_RUNTIME_ROOT": os.environ.get("TT_METAL_RUNTIME_ROOT", tt_metal_home),
+        }
     else:
         cmd = build_generate_rank_bindings_mpi_cmd(
             executable,
@@ -1204,7 +1215,7 @@ def run_phase1_generate_rank_bindings(
     logger.debug(f"{TT_RUN_PREFIX} Phase 1 command: {' '.join(cmd)}")
 
     # generate_rank_bindings writes to output_dir (passed via --output-dir)
-    exit_code = run_generate_rank_bindings(cmd, cwd=ORIGINAL_CWD, subprocess_run=subprocess_run)
+    exit_code = run_generate_rank_bindings(cmd, cwd=ORIGINAL_CWD, subprocess_run=subprocess_run, env=env)
 
     if exit_code != 0:
         raise RuntimeError(f"generate_rank_bindings failed with exit code {exit_code}. " f"Command: {' '.join(cmd)}")
