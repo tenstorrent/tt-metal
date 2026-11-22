@@ -8,14 +8,20 @@ must return exactly the rows the top-k names. Index patterns are synthetic edge 
 packet packing, masking, and the prefix/remainder split; real GLM-5.3 top-k runs in the nightly sparse SDPA push test.
 """
 
+import os
+import statistics
 import zlib
+from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged
 
 # The ops' compact layout (pages_per_packet, banks), exported for tests to lay out reference buffers.
 packet_shape = ttnn._ttnn.operations.experimental._sparse_kv_push_packet_shape
@@ -24,6 +30,8 @@ SENTINEL = 0xFFFFFFFF
 FILL = 0x5A5A5A5A
 N_DEV = 32
 TOPK = 2048
+# The mesh axis the cache's blocks stripe along first; the xy4 test sets it (and N_DEV) for its 4x4 mesh.
+SP_AXIS = 0
 
 
 def _device_params():
@@ -61,12 +69,22 @@ def _row_words(rows, slot, width):
     return words.astype(np.int32)
 
 
+def _owner_of_rank(mesh_device, sp_axis):
+    """Owner index (the stripe a chip holds) of each chip, in row-major rank order: the chip at position s on the SP
+    axis and t on the other holds stripe s * tp + t."""
+    rows, cols = mesh_device.shape[0], mesh_device.shape[1]
+    ranks = np.arange(rows * cols)
+    return ranks if sp_axis == 0 else (ranks % cols) * rows + ranks // cols
+
+
 def _cache(mesh_device, slots, max_rows, sc, width):
-    """Block-cyclic cache: global row n lives on chip (n / sc) % N at local row (n / sc / N) * sc + n % sc."""
+    """Block-cyclic cache: global row n lives on owner (n / sc) % N at local row (n / sc / N) * sc + n % sc, and the
+    owner's chip is the one holding that stripe (see _owner_of_rank)."""
     per_chip = max_rows // N_DEV
     p = np.arange(max_rows)
-    chip, local = p // per_chip, p % per_chip
-    global_row = ((local // sc) * N_DEV + chip) * sc + local % sc
+    rank, local = p // per_chip, p % per_chip
+    owner = _owner_of_rank(mesh_device, SP_AXIS)[rank]
+    global_row = ((local // sc) * N_DEV + owner) * sc + local % sc
     host = np.stack([_row_words(global_row, s, width) for s in range(slots)])[:, None]
     return ttnn.from_torch(
         torch.from_numpy(host),
@@ -163,6 +181,7 @@ class Push:
             max_rows=self.max_rows,
             part=part,
             num_links=self.links,
+            sp_axis=SP_AXIS,
             ready_semaphore=self.sems[0],
             done_semaphore=self.sems[1],
             **slot,
@@ -222,8 +241,10 @@ def _lay_out(row_sets, queries, rng):
     return idx
 
 
-def _pattern(name, rng, *, sc, end, start):
-    """Row sets per chip for the synthetic pattern `name`; rows are below `end` (the populated cache)."""
+def _pattern(name, rng, *, sc, end, start, owner_of_rank=None):
+    """Row sets per chip (in row-major rank order) for the synthetic pattern `name`; rows are below `end` (the populated
+    cache). `owner_of_rank` maps a rank to the stripe its chip holds (the rank itself when omitted)."""
+    owner_of_rank = np.arange(N_DEV) if owner_of_rank is None else owner_of_rank
     pick = lambda pool, k: rng.choice(pool, size=min(k, len(pool)), replace=False)
     if name == "random":
         return [pick(np.arange(end), 3000) for _ in range(N_DEV)]
@@ -231,9 +252,9 @@ def _pattern(name, rng, *, sc, end, start):
         centers = rng.integers(0, end, size=(N_DEV, 8))
         return [np.unique((c[:, None] + np.arange(400)) % end) for c in centers]
     if name == "one_owner":
-        return [pick(_owner_rows((d + 1) % N_DEV, sc, end), 3000) for d in range(N_DEV)]
+        return [pick(_owner_rows((owner_of_rank[d] + 1) % N_DEV, sc, end), 3000) for d in range(N_DEV)]
     if name == "local_only":
-        return [pick(_owner_rows(d, sc, end), 3000) for d in range(N_DEV)]
+        return [pick(_owner_rows(owner_of_rank[d], sc, end), 3000) for d in range(N_DEV)]
     if name == "routing_ties":
         # The chip opposite on both rings of the 8x4 torus: both directions are equally short on each axis.
         opposite = lambda d: ((d // 4 + 4) % 8) * 4 + (d % 4 + 2) % 4
@@ -363,6 +384,145 @@ def test_sparse_kv_push_configs(mesh_device, page_bytes, sc, links, slot_tensor)
         else dict(batch_index=3)
     )
     _run_parts(mesh_device, push, slot=3, chunk_start=start, tag=f"{page_bytes}B sc{sc} {links}L", **slot_args)
+
+
+# The 4x4 mesh runs only on a Galaxy carved to 16 chips (`SUBTORUS_4X4_ENV` in the AttnRes model harness); on the
+# unnarrowed 8x4 box the exact-box requirement skips it before the mesh opens.
+@pytest.mark.parametrize(
+    "device_params", [{**_device_params(), "require_exact_physical_num_devices": True}], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [(4, 4)], ids=["xy4"], indirect=True)
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp0", "sp1"])
+@pytest.mark.parametrize("pattern", ["random", "one_owner", "local_only", "run_lengths", "edges"])
+def test_sparse_kv_push_xy4(mesh_device, monkeypatch, sp_axis, pattern):
+    """A 4x4 [RING, RING] mesh, with the cache striped SP-major along either axis. The chip at SP position s and TP
+    position t holds stripe s * tp + t, so with SP on axis 1 the owner index is not the row-major rank."""
+    module = globals()
+    monkeypatch.setitem(module, "N_DEV", 16)
+    monkeypatch.setitem(module, "SP_AXIS", sp_axis)
+    sc, page_bytes, max_rows = 160, 704, 92160
+    rng = np.random.default_rng(zlib.crc32(f"{pattern}{sp_axis}".encode()))
+    start = max_rows - sc * 16
+    rows = _pattern(pattern, rng, sc=sc, end=max_rows, start=start, owner_of_rank=_owner_of_rank(mesh_device, sp_axis))
+    idx = _mask(_lay_out(rows, sc, rng), rng)
+    cache = _cache(mesh_device, 2, max_rows, sc, page_bytes // 4)
+    push = Push(mesh_device, cache, idx, max_rows=max_rows, sc=sc, page_bytes=page_bytes, chunk_start=start)
+    _run_parts(mesh_device, push, slot=1, chunk_start=start, tag=f"xy4 sp{sp_axis} {pattern}", batch_index=1)
+
+
+# The GLM-5.3 1M-token cache of a 4x4 stage: 2560-token chunks, 160 rows per stripe, 704 B scaled-FP8 rows.
+_STAGE_CACHE_ROWS = 1_041_920
+_STAGE_CHUNK_START = 1_039_360
+_GLM_1M_TRACE = Path(
+    os.environ.get(
+        "GLM53_1M_TRACE", "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120"
+    )
+)
+_PERF_STEPS = {
+    "plan": "/sparse_kv_push/plan/",
+    "table gather": "/high_bw_all_gather/",
+    "push": "/sparse_kv_push/push/",
+}
+_PERF_SAMPLES = 7
+
+_RING_RING_4X4_PERF_DEVICE_PARAMS = {**_device_params(), "require_exact_physical_num_devices": True}
+
+
+def _stage_topk(source):
+    """[16, 160, TOPK] indices into the stage cache: the synthetic "random" pattern, or one layer of the staged GLM-5.3
+    1M top-k (the first 2560 of the trace's 5120 query rows, whose rows all lie below the chunk's end)."""
+    sc = 160
+    if source == "random":
+        rng = np.random.default_rng(7)
+        return _lay_out(_pattern("random", rng, sc=sc, end=_STAGE_CACHE_ROWS, start=_STAGE_CHUNK_START), sc, rng)
+    from safetensors.numpy import load_file
+
+    f = _GLM_1M_TRACE / "dsa" / f"dsa_topk_indices_layer_{source}" / "rows_00000000_00005120.safetensors"
+    if not f.exists():
+        pytest.skip(f"1M GLM-5.3 top-k not staged: {f}")
+    rows = next(iter(load_file(str(f)).values())).astype(np.int64)
+    return rows.reshape(-1, TOPK)[: N_DEV * sc].reshape(N_DEV, sc, TOPK)
+
+
+def _device_ns_by_step(mesh_device, run):
+    """Critical-path device time of each step's programs (max over chips per program, summed per step), for one `run`."""
+    _, per_program = profile_realtime_program_merged(mesh_device, run)
+    totals = {step: 0.0 for step in _PERF_STEPS}
+    for entry in per_program.values():
+        sources = [source.replace("\\", "/") for source in entry["kernel_sources"]]
+        for step, marker in _PERF_STEPS.items():
+            if any(marker in source for source in sources):
+                totals[step] += entry["duration_ns"]
+    return totals
+
+
+# Per top-k source and step: the slowest median over three runs on three 14 kW runners (GLM chunked perf leg, 7 samples
+# each) plus 10%, rounded up, in us. The table gather is short and noisy (samples 48-98 us); its median stays within
+# 70-78 us. These ceilings do not tell the [RING, RING] carve from a [LINE, RING] one: that comparison is the all-gather
+# floors' job.
+_RING_RING_4X4_PERF_CEILING_US = {
+    "random": {"plan": 318, "table gather": 79, "push all rows": 353, "push prefix": 354, "push rest": 104},
+    "14": {"plan": 221, "table gather": 81, "push all rows": 452, "push prefix": 436, "push rest": 125},
+    "62": {"plan": 231, "table gather": 85, "push all rows": 1284, "push prefix": 1270, "push rest": 125},
+}
+
+
+def _stage_push_perf(mesh_device, monkeypatch, sp_axis, source, ceilings_us):
+    monkeypatch.setitem(globals(), "N_DEV", 16)
+    monkeypatch.setitem(globals(), "SP_AXIS", sp_axis)
+    sc, page_bytes = 160, 704
+    idx = _stage_topk(source)
+    cache = _cache(mesh_device, 2, _STAGE_CACHE_ROWS, sc, page_bytes // 4)
+    push = Push(
+        mesh_device,
+        cache,
+        idx,
+        max_rows=_STAGE_CACHE_ROWS,
+        sc=sc,
+        page_bytes=page_bytes,
+        chunk_start=_STAGE_CHUNK_START,
+    )
+    out = _filled_buffer(mesh_device, push.rows, push.width)
+    parts = {"push all rows": Part.ALL, "push prefix": Part.PREFIX, "push rest": Part.REST}
+
+    push.plan()
+    for part in parts.values():
+        push.push(out, part, batch_index=1)
+    ttnn.synchronize_device(mesh_device)
+
+    samples = {name: [] for name in ["plan", "table gather", *parts]}
+    for _ in range(_PERF_SAMPLES):
+        planned = _device_ns_by_step(mesh_device, push.plan)
+        samples["plan"].append(planned["plan"])
+        samples["table gather"].append(planned["table gather"])
+        for name, part in parts.items():
+            samples[name].append(_device_ns_by_step(mesh_device, lambda: push.push(out, part, batch_index=1))["push"])
+    for name, values in samples.items():
+        print(
+            f"SPARSE_KV_PUSH_PERF mesh={tuple(mesh_device.shape)} sp_axis={sp_axis} topk={source} step={name} "
+            f"median={statistics.median(values) / 1e3:.1f}us min={min(values) / 1e3:.1f}us max={max(values) / 1e3:.1f}us "
+            f"samples_us={[round(v / 1e3, 1) for v in values]}"
+        )
+    assert all(statistics.median(v) > 0 for v in samples.values()), "a step recorded no device program"
+    over = {
+        name: (round(statistics.median(v) / 1e3, 1), ceilings_us[name])
+        for name, v in samples.items()
+        if statistics.median(v) / 1e3 > ceilings_us[name]
+    }
+    assert_perf_gate(not over, f"{source} steps over their ceiling (median, ceiling us): {over}")
+
+
+_STAGE_PUSH_SOURCES = pytest.mark.parametrize("source", ["random", "14", "62"], ids=["random", "glm_l14", "glm_l62"])
+
+
+@pytest.mark.parametrize("device_params", [_RING_RING_4X4_PERF_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 4)], ids=["4x4"], indirect=True)
+@_STAGE_PUSH_SOURCES
+def test_sparse_kv_push_ring_ring_4x4_perf(mesh_device, monkeypatch, source):
+    """Device time of the plan, its table all-gather and the push (all rows, prefix, rest) at a 4x4 stage's 1M cache with
+    SP on axis 1, on the 16-chip [RING, RING] carve, each step gated by its ceiling."""
+    require_high_power("[RING, RING] 4x4 sparse KV push perf")
+    _stage_push_perf(mesh_device, monkeypatch, 1, source, _RING_RING_4X4_PERF_CEILING_US[source])
 
 
 @galaxy

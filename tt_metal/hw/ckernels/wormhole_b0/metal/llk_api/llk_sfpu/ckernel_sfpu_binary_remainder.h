@@ -307,7 +307,9 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     // Sign correction: remainder must match the sign of b (or be zero).
     // XOR of the float bit-patterns detects sign mismatch via the MSB,
     // avoiding a compound conditional with four comparisons and an OR.
-    v_if(result != sfpi::vFloat(0.0f)) {
+    // SFPSETCC compares the raw bits, so -0.0 (0x80000000) counts as nonzero and a bare compare
+    // adds b to an answer that is already correct. SFPABS clears the sign bit.
+    v_if(sfpi::abs(result) != sfpi::vFloat(0.0f)) {
         sfpi::vInt signs = sfpi::as<sfpi::vInt>(result) ^ sfpi::as<sfpi::vInt>(b);
         v_and(signs < 0);
         result += b;

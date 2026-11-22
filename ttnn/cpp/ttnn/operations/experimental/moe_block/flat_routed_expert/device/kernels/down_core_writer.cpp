@@ -128,6 +128,11 @@ void kernel_main() {
             write_trid(h_all + off, succ_hall + off, piece_bytes, 1 + h_iss % link_depth);
             ++h_iss;
         }
+        // (the write command buffer drained first, as gate_up_x_forwarder does: a transaction id's outstanding count
+        // only covers requests the NIU has taken - polled right after issuing, the last write can still sit in the
+        // command buffer and the id reads "done" before its data has landed, so the successor would read a partial h)
+        while (h_fwd < h_iss && !noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
+        }
         while (h_fwd < h_iss &&
                ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, 1 + h_fwd % link_depth)) {
             noc_semaphore_inc(succ_harr, 1);

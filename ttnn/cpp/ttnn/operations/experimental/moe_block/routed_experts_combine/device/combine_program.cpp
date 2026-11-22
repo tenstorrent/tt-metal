@@ -599,10 +599,13 @@ CombineHandles add_combine_program(
     }
     const auto& accs = plan.accumulator_cores.at(ch);
     // ports apart: every port-or-accumulator core runs both roles' binaries (plan.port_or_accumulator_cores;
-    // combine_port_or_accumulator_reader / _writer.cpp)
+    // combine_port_or_accumulator_reader / _writer.cpp). Accumulators on the ports: every chip's accumulators are the
+    // same cores, which hold every chip's ports, so the BRISC there runs both writers' binary
+    // (combine_port_or_accumulator_writer.cpp) and every chip builds the same program.
     const bool dual = !plan.accumulators_on_ports;
-    const auto pset = dual ? cores_of(plan.port_or_accumulator_cores) : cores_of(port_cores),
-               aset = dual ? cores_of(plan.port_or_accumulator_cores) : cores_of(accs);
+    // (the ports' and the accumulators' kernels run on the same cores in both layouts)
+    const auto aset = dual ? cores_of(plan.port_or_accumulator_cores) : cores_of(accs);
+    const auto& pset = aset;
     auto is_acc = [&](const CoreCoord& c) {
         return std::any_of(accs.begin(), accs.end(), [&](const CoreCoord& x) { return same_core(x, c); });
     };
@@ -675,8 +678,9 @@ CombineHandles add_combine_program(
     // the RISC split: the sender (and the accumulator writer) on RISCV_0 / NoC1, the port reader on RISCV_1 / NoC0
     constexpr bool s_riscv0 = true, r_riscv0 = false;
     constexpr uint32_t s_slot = 0, r_slot = 1;  // (bar call-count slots per RISC)
-    // (dual: each role's kernel is recorded - its compile-time args, named args and each core's args - and the cores'
-    // two binaries composed after the accumulators)
+    // (each two-role kernel's roles are recorded - their compile-time args, named args and each core's args - and the
+    // cores' two binaries composed after the accumulators: both RISCs' with ports apart, the BRISC's with accumulators
+    // on the ports)
     struct Pend {
         std::vector<uint32_t> ct;
         NamedArgs named;
@@ -702,7 +706,7 @@ CombineHandles add_combine_program(
                     std::vector<uint32_t> ct,
                     bool riscv0,
                     NamedArgs named) -> tt::tt_metal::KernelHandle {
-        if (dual) {
+        if (dual || role == R_PW || role == R_AW) {
             pend[role].ct = std::move(ct);
             pend[role].named = std::move(named);
             return kPend + role;
@@ -869,8 +873,8 @@ CombineHandles add_combine_program(
             }
             put(k, p.core, a);
         }
-        if (dual) {  // (the template of a core's port block where the core is no port of this chip: its buffers at a
-                     // sender's args)
+        {  // (the template of a core's port block where the core is no port of this chip: its buffers at a sender's
+           // args)
             Args a;
             a.buf(CombineBuf::Arena);
             a.lits({plan.mesh_id, idx(ch), kIdlePort});
@@ -889,6 +893,10 @@ CombineHandles add_combine_program(
             }
             a.lits(std::vector<uint32_t>(2 * N, 0u));
             a.buf(CombineBuf::Hcache);
+            if (plan.accumulators_on_ports) {  // (the link word, the fabric connection, then the hand-off's output)
+                a.lits(std::vector<uint32_t>(1 + 3 + 3, 0u));
+                a.buf(CombineBuf::Out);
+            }
             pend[R_PW].args[{SIZE_MAX, SIZE_MAX}] = a;
         }
     }
@@ -950,12 +958,6 @@ CombineHandles add_combine_program(
         compute_kernel.config = tt::tt_metal::ComputeConfigDescriptor{
             .math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .fp32_dest_acc_en = true, .unpack_to_dest_mode = u2d};
         add_kernel(program, std::move(compute_kernel));
-        std::vector<CoreCoord> accumulator_writer_cores;
-        for (const auto& c : accs) {
-            if (!plan.accumulators_on_ports || !is_port(c)) {
-                accumulator_writer_cores.push_back(c);
-            }
-        }
         // (positional compile-time args: the output's accessor args, past the sender's in a two-role kernel)
         std::vector<uint32_t> aw_ct;
         NamedArgs aw_named = {
@@ -968,17 +970,10 @@ CombineHandles add_combine_program(
             aw_named,
             names::kAccumulatorWriterOutputAccessorFirstArg,
             *bufs[CombineBuf::Out],
-            dual ? static_cast<uint32_t>(pend[R_PW].ct.size()) : 0u);
-        std::optional<tt::tt_metal::KernelHandle> aw;
-        if (!accumulator_writer_cores.empty()) {
-            aw = kern(
-                R_AW,
-                "dataflow/accumulator_writer.cpp",
-                cores_of(accumulator_writer_cores),
-                std::move(aw_ct),
-                s_riscv0,
-                std::move(aw_named));
-        }
+            static_cast<uint32_t>(pend[R_PW].ct.size()));
+        // (the two-role writer holds this role even where no core of this chip runs it)
+        const auto aw =
+            kern(R_AW, "dataflow/accumulator_writer.cpp", aset, std::move(aw_ct), s_riscv0, std::move(aw_named));
         for (uint32_t i = 0; i < A; ++i) {
             const auto& core = accs[i];
             const uint32_t n_tok = i < plan.home_tokens ? (plan.home_tokens - i + A - 1) / A : 0;
@@ -1015,19 +1010,20 @@ CombineHandles add_combine_program(
                 Args w;
                 w.buf(CombineBuf::Out);
                 w.lits({n_tok, i});
-                put(*aw, core, w);
+                put(aw, core, w);
             }
         }
         // (a port-or-accumulator core that is no accumulator of this chip: its reader's first meta page is 0 - the
         // compute returns)
     }
 
-    // (dual) the port-or-accumulator cores' binaries: the NCRISC's port reader + accumulator reader, the BRISC's sender
+    // the two-role cores' binaries: the NCRISC's port reader + accumulator reader (ports apart), the BRISC's sender
     // + accumulator writer (combine_port_or_accumulator_reader / _writer.cpp). A core's args: its role (0 none, 1 port,
     // 2 accumulator), the accumulator block (padded to one length on every chip), the port block - a block not this
     // chip's role holds a template with the buffers at a real block's args, so every chip's address args sit at the
-    // same args and the host's cache-hit rewrite keeps every chip's right (one program for the mesh)
-    if (dual) {
+    // same args and the host's cache-hit rewrite keeps every chip's right (one program for the mesh). Accumulators on
+    // the ports: the BRISC's binary only (each accumulator runs the accumulator reader), on the accumulator cores.
+    {
         auto append = [](Args& to, const Args& b) { to.v.insert(to.v.end(), b.v.begin(), b.v.end()); };
         auto pad = [](Args& a, size_t n) {
             TT_FATAL(a.v.size() <= n, "routed_experts_combine: a role block of {} args over its {}", a.v.size(), n);
@@ -1053,19 +1049,22 @@ CombineHandles add_combine_program(
         constexpr size_t awmax = 3;
         // reader: the port reader's compile-time args, then the accumulator reader's (its accessor first arg already
         // past the port reader's); the roles' named args merged
-        std::vector<uint32_t> r_ct = pend[R_PR].ct;
-        r_ct.insert(r_ct.end(), pend[R_AR].ct.begin(), pend[R_AR].ct.end());
-        NamedArgs r_named = pend[R_PR].named;
-        merge_named(r_named, pend[R_AR].named);
-        r_named.emplace_back(names::kPortRoleFirstRuntimeArg, static_cast<uint32_t>(1 + amax));
-        const auto rk = dm_kernel(
-            program,
-            "dataflow/combine_port_or_accumulator_reader.cpp",
-            pset,
-            std::move(r_ct),
-            r_riscv0,
-            std::move(r_named),
-            options);
+        std::optional<tt::tt_metal::KernelHandle> rk;
+        if (dual) {
+            std::vector<uint32_t> r_ct = pend[R_PR].ct;
+            r_ct.insert(r_ct.end(), pend[R_AR].ct.begin(), pend[R_AR].ct.end());
+            NamedArgs r_named = pend[R_PR].named;
+            merge_named(r_named, pend[R_AR].named);
+            r_named.emplace_back(names::kPortRoleFirstRuntimeArg, static_cast<uint32_t>(1 + amax));
+            rk = dm_kernel(
+                program,
+                "dataflow/combine_port_or_accumulator_reader.cpp",
+                pset,
+                std::move(r_ct),
+                r_riscv0,
+                std::move(r_named),
+                options);
+        }
         // writer: the sender's, then the accumulator writer's
         std::vector<uint32_t> w_ct = pend[R_PW].ct;
         w_ct.insert(w_ct.end(), pend[R_AW].ct.begin(), pend[R_AW].ct.end());
@@ -1080,15 +1079,19 @@ CombineHandles add_combine_program(
             s_riscv0,
             std::move(w_named),
             options);
-        for (const auto& c : plan.port_or_accumulator_cores) {
+        for (const auto& c : dual ? plan.port_or_accumulator_cores : accs) {
             const std::pair<size_t, size_t> key{c.x, c.y};
             const uint32_t role = is_port(c) ? 1u : is_acc(c) ? 2u : 0u;
-            Args r, w;
-            r.lit(role);
-            Args ab = role == 2 ? pend[R_AR].args.at(key) : ar_t;
-            pad(ab, amax);
-            append(r, ab);
-            append(r, role == 1 ? pend[R_PR].args.at(key) : pr_t);
+            if (rk) {
+                Args r;
+                r.lit(role);
+                Args ab = role == 2 ? pend[R_AR].args.at(key) : ar_t;
+                pad(ab, amax);
+                append(r, ab);
+                append(r, role == 1 ? pend[R_PR].args.at(key) : pr_t);
+                set_args(program, *rk, c, r, bufs, h);
+            }
+            Args w;
             w.lit(role);
             Args wb = role == 2 ? pend[R_AW].args.at(key) : aw_t;
             pad(wb, awmax);
@@ -1100,7 +1103,6 @@ CombineHandles add_combine_program(
                     w.fabric = std::pair<uint32_t, uint32_t>{1 + awmax + pb.fabric->first, pb.fabric->second};
                 }
             }
-            set_args(program, rk, c, r, bufs, h);
             set_args(program, wk, c, w, bufs, h);
         }
     }

@@ -128,8 +128,6 @@ target_include_directories(
     PUBLIC
         ${PROJECT_SOURCE_DIR}/tt_metal
         .
-        debug
-        profiler
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         # internal/profiler/perf_counters.hpp includes the shared tt-llk counter headers
         ${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tools/include

@@ -84,6 +84,15 @@ TensorReturnValue filter_tensor_shards(
         tensor_return_value);
 }
 
+// Every Tensor leaf of `tensor_args`, in reflection order.
+template <typename TensorArgs>
+std::vector<std::reference_wrapper<const Tensor>> collect_tensors(const TensorArgs& tensor_args) {
+    std::vector<std::reference_wrapper<const Tensor>> tensors;
+    ttsl::reflection::visit_object_of_type<Tensor>(
+        [&tensors](const Tensor& t) { tensors.push_back(std::cref(t)); }, tensor_args);
+    return tensors;
+}
+
 // Verifies all tensors span the same set of coordinates, and returns them in a vector.
 // If no tensors are found, returns zero coordinate.
 // This template extracts tensors and delegates to the non-template implementation
@@ -91,10 +100,7 @@ TensorReturnValue filter_tensor_shards(
 template <typename TensorArgs>
 std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(
     const TensorArgs& tensor_args, ttnn::MeshDevice* mesh_device = nullptr) {
-    std::vector<std::reference_wrapper<const Tensor>> tensors;
-    ttsl::reflection::visit_object_of_type<Tensor>(
-        [&tensors](const Tensor& t) { tensors.push_back(std::cref(t)); }, tensor_args);
-    return ttnn::device_operation::detail::extract_tensor_coordinates_impl(tensors, mesh_device);
+    return ttnn::device_operation::detail::extract_tensor_coordinates_impl(collect_tensors(tensor_args), mesh_device);
 }
 
 // Tracks all programs in `workload` and returns true if any program was hooked.

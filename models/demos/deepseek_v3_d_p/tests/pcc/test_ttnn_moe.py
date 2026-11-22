@@ -1086,6 +1086,14 @@ _NOT_IN_CI = pytest.mark.skipif(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-x-4x4-sp1",
         ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(DeepSeekV3Config)),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -1197,8 +1205,8 @@ def _run_moe_case(
 ):
     """Resolve topology from the fabric config, then run_model. Keyword-only: run_model takes 16
     positional arguments, and a reordering slip in them is silent, so the per-variant entrypoints
-    pass names and this is the only place that maps them onto the positional call. test_ds_moe and
-    test_kimi_k3_moe still call run_model directly; converting them is a separate cleanup."""
+    pass names and this is the only place that maps them onto the positional call. test_ds_moe
+    still calls run_model directly; converting it is a separate cleanup."""
     run_model(
         variant,
         config_only,
@@ -1324,147 +1332,6 @@ def test_kimi_moe_fabric2d(variant, config_only, mesh_device, device_params, num
         moe_transport="fabric2d",
         dispatch_fwd_vc_pages=KimiK27Config.MOE_FWD_VC_PAGES,
         combine_fwd_vc_pages=KimiK27Config.MOE_FWD_VC_PAGES,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Kimi-K3 LatentMoE
-# ---------------------------------------------------------------------------
-#
-# Capacity factor 5 carries over from Kimi-K2.6: K3 halves the row width (7168 -> 3584 latent) and
-# doubles the token slots (top-8 -> top-16), so per-chip dispatch bytes are roughly unchanged.
-@pytest.mark.parametrize(
-    (
-        "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
-        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
-    ),
-    [
-        # fmt: off
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-5k-perf"),
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-5k-pcc"),
-        # fmt: on
-    ],
-)
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, sp_axis",
-    [
-        # Loudbox proxy for local bring-up; no pipeline selects it. TP stays 4 as on the 8x4 anchor:
-        # at TP=1 the shared expert is unsharded and its gate matmul's CBs exceed L1.
-        pytest.param(
-            (2, 4),
-            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(KimiK3Config)),
-            2,
-            0,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-mesh-2x4",
-        ),
-        # The same Loudbox transposed: SP on mesh axis 1 and TP=4 on axis 0, the layout of the 4x4
-        # prefill stages. Weights, caches and every collective follow sp_axis.
-        pytest.param(
-            (4, 2),
-            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(KimiK3Config)),
-            2,
-            1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="fabric2d-mesh-4x2-sp1",
-        ),
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(KimiK3Config)),
-            2,
-            0,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4",
-        ),
-        # Galaxy with an SP=4 ring on mesh axis 1 (8 dispatch groups) and TP=8 on axis 0.
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(KimiK3Config)),
-            2,
-            1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4-sp1",
-        ),
-        # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring (4 dispatch groups), TP=4
-        # on the axis-0 line.
-        pytest.param(
-            (4, 4),
-            torus_x_device_params(fabric_payload_size=moe_fabric_payload(KimiK3Config)),
-            2,
-            1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-            id="torus-x-4x4-sp1",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["kimi_k3"])
-def test_kimi_k3_moe(
-    variant,
-    config_only,
-    mesh_device,
-    device_params,
-    sp_axis,
-    seq_len_per_chip,
-    emb_dim,
-    hidden_dim,
-    num_routed_experts,
-    num_experts_per_tok,
-    dispatch_buffer_capacity_factor,
-    run_pcc_check,
-    num_links,
-    gate_fallback_mode,
-    request,
-):
-    """Kimi-K3 MoE: 896 experts / top-16 with the LatentMoE projections around the routed side.
-
-    Both expert kinds run the checkpoint's SiTU-GLU on device, each matched by a SiTU torch
-    reference: the routed side through the fused kernel (``RoutedExpertActivation.SituGlu``), the
-    shared side through TtSharedExpert's composed softcap/sigmoid/multiply. This is also the only
-    test that reaches that composed path's sub_core_grids branch -- the shared expert runs on a
-    sub-device here, overlapped with the dispatch, which test_shared_expert does not set up.
-
-    One deliberate limit remains from the bring-up scope:
-
-      * **Seeded random weights, not the checkpoint.** Everything routed is MXFP4 and no dequantizer
-        exists yet, so device-vs-torch parity is checked on identical seeded weights. That is the same
-        thing ``test_kimi_moe`` and ``test_ds_moe`` do -- the ``"realistic"`` cache cohort means
-        *seeded* rather than *placeholder*, not *from a checkpoint*. The router is the one MoE tensor
-        group K3 leaves unquantized, and real-weight gate coverage lives in
-        ``tests/pcc/test_moe_gate_prefill2d.py``.
-
-    Expect to relax ``moe_pcc_threshold`` below K2.6's 0.971: top-16 doubles the combine accumulation
-    depth and it accumulates in the 3584 latent space at bf8, with the latent RMSNorm immediately
-    after the sum. The failure mode to avoid is hunting a kernel defect that is really accumulation
-    error.
-    """
-    topology = per_axis_topology(device_params["fabric_config"])
-    run_model(
-        variant,
-        config_only,
-        mesh_device,
-        device_params,
-        seq_len_per_chip,
-        emb_dim,
-        hidden_dim,
-        num_routed_experts,
-        num_experts_per_tok,
-        dispatch_buffer_capacity_factor,
-        run_pcc_check,
-        num_links,
-        topology,
-        gate_fallback_mode,
-        request,
-        routed_emb_dim=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
-        shared_hidden_dim=KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
-        latent_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
-        rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
-        final_output_pcc=0.965,
-        routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
-        shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
-        dispatch_fwd_vc_pages=64,
-        combine_fwd_vc_pages=64,
-        sp_axis=sp_axis,
     )
 
 
