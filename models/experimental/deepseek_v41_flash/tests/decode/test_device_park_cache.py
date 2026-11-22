@@ -308,3 +308,81 @@ def test_parse_args_pipeline_256_slots_keeps_kv_pool_size():
     assert args.instances == 1
     assert args.num_users == 256
     assert args.total_context == 40 * 204800
+
+
+class _PrefixModel:
+    """A model whose prefix snapshots stay "on device": the pools hold ``free`` tokens, a snapshot ``held``."""
+
+    def __init__(self, free: int):
+        self.config = SimpleNamespace(vocab_size=1000)
+        self.free, self.calls = free, []
+
+    def capture_device_prefix(self, sid):
+        self.calls.append(("capture", sid))
+        return SimpleNamespace(pos=self.pos, nbytes=8, held=self.pos)
+
+    def import_device_prefix(self, sid, snapshot):
+        self.calls.append(("import", sid, snapshot.pos))
+
+    def free_device_park(self, snapshot):
+        self.calls.append(("free", snapshot.pos))
+
+    def export_device_park(self, snapshot):
+        self.calls.append(("export", snapshot.pos))
+        self.free += snapshot.held
+        return SimpleNamespace(pos=snapshot.pos, nbytes=8)
+
+    def reset_session(self, sid):
+        self.calls.append(("reset", sid))
+
+
+def _prefix_scheduler(model, users):
+    from collections import deque
+
+    from models.experimental.deepseek_v4_flash.demo.server import _PrefixCache
+    from models.experimental.deepseek_v41_flash.demo.server import _DevicePrefixCache, _V41Scheduler
+
+    scheduler = _V41Scheduler.__new__(_V41Scheduler)
+    scheduler._posted, scheduler._inflight = deque(), deque()
+    scheduler._device_prefixes = _DevicePrefixCache()
+    pool = SimpleNamespace(
+        _cv=threading.Condition(), device_parked=[], _busy=[True] * len(users), _closing=False, _used_at=[0.0]
+    )
+    scheduler.server = SimpleNamespace(prefix_cache=_PrefixCache(1 << 20), prefiller=None, pool=pool)
+    scheduler.engine = SimpleNamespace(model=model, users=users, tokens_left=lambda: model.free)
+    return scheduler
+
+
+def test_prefix_capture_stays_on_device_and_a_hit_shares_it():
+    from models.experimental.deepseek_v4_flash.demo.server import _Turn
+
+    model = _PrefixModel(free=1 << 20)
+    user = SimpleNamespace(pos=4, sid=0, tokens=[10, 11, 12, 13], index=0)
+    other = SimpleNamespace(pos=0, sid=1, tokens=[], index=1)
+    scheduler = _prefix_scheduler(model, [user, other])
+    model.pos = 4
+    scheduler._capture_prefix(user)
+    assert len(scheduler._device_prefixes) == 1 and len(scheduler.server.prefix_cache) == 0
+    scheduler._capture_prefix(user)  # the same prefix again replaces (and frees) the first snapshot
+    assert model.calls == [("capture", 0), ("capture", 0), ("free", 4)]
+
+    turn = _Turn("bob", 1, {"messages": [{"role": "user", "content": "hi"}]}, None, 8)
+    turn.ids = [10, 11, 12, 13, 14, 15]
+    assert scheduler._share_decoded_prefix(other, turn)
+    assert model.calls[-1] == ("import", 1, 4)
+    assert other.pos == 4 and other.tokens == [10, 11, 12, 13] and turn.ids == [14, 15]
+
+
+def test_full_pools_move_the_least_recently_used_prefix_to_host():
+    model = _PrefixModel(free=0)
+    user = SimpleNamespace(pos=6, sid=0, tokens=[1, 2, 3, 4, 5, 6], index=0)
+    scheduler = _prefix_scheduler(model, [user])
+    model.pos = 6
+    scheduler._capture_prefix(user)
+    user.pos, user.tokens, model.pos = 3, [7, 8, 9], 3
+    scheduler._capture_prefix(user)
+    scheduler._make_room(5, keep=0)
+    # The older prefix (6 tokens) went to host RAM, which freed enough; the newer one stays on device.
+    assert ("export", 6) in model.calls and ("export", 3) not in model.calls
+    assert len(scheduler._device_prefixes) == 1
+    assert scheduler.server.prefix_cache.lookup([1, 2, 3, 4, 5, 6, 7], vocab=1000)[0] == 6

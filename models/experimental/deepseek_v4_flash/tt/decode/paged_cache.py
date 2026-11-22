@@ -451,6 +451,74 @@ class PagedKVManager:
             self.pools[name].share(blocks)
             session.rows[name][: len(blocks)] = blocks
 
+    def share_prefix_rows(self, sid: int, pos: int) -> tuple[dict[str, list[int]], list[tuple[str, int, int]]]:
+        """Page rows of session ``sid``'s first ``pos`` positions that outlive the session, in the
+        :meth:`detach_session_rows` form: the whole blocks of its entries are shared (counted once more each),
+        and the block its entries end part-way through, which the session goes on appending to, is a fresh
+        block. Returns the rows and the ``(group, from_block, to_block)`` copies that fill the fresh blocks, for
+        the caller to run on device. :meth:`free_detached_rows` releases the rows. Changes nothing when it
+        raises :class:`PagedCacheFull`."""
+        session = self._sessions[sid]
+        plan = {}
+        for name, g in self.groups.items():
+            if g.ring_blocks:
+                raise ValueError(f"{name} pages a sliding ring, which a prefix cannot share")
+            entries = 0 if g.compress_rate is None else pos // g.compress_rate
+            whole, part = divmod(entries, g.block_size)
+            blocks = session.rows[name][: whole + bool(part)]
+            if ZERO_BLOCK in blocks:
+                raise ValueError(f"session {sid} holds no {name} entries up to position {pos}")
+            plan[name] = (blocks[:whole], blocks[whole:])
+        return self._own_rows(plan)
+
+    def attach_prefix_rows(self, sid: int, rows: dict[str, list[int]], pos: int) -> list[tuple[str, int, int]]:
+        """Start session ``sid`` (holding no compressed blocks) from ``rows`` of :meth:`share_prefix_rows` taken
+        at ``pos``: their whole blocks shared, the part-filled one copied into a fresh block of ``sid``'s own,
+        which it appends to. Returns the copies to run on device. Changes nothing when it raises."""
+        session = self._sessions[sid]
+        plan = {}
+        for name, g in self.groups.items():
+            if any(b != ZERO_BLOCK for b in session.rows[name][g.ring_blocks :]):
+                raise ValueError(f"session {sid} already holds {name} blocks")
+            entries = 0 if g.compress_rate is None else pos // g.compress_rate
+            whole, part = divmod(entries, g.block_size)
+            plan[name] = (rows[name][:whole], rows[name][whole : whole + bool(part)])
+        owned, copies = self._own_rows(plan)
+        for name, g in self.groups.items():
+            session.rows[name][g.ring_blocks :] = owned[name]
+        return copies
+
+    def _own_rows(self, plan: dict) -> tuple[dict[str, list[int]], list[tuple[str, int, int]]]:
+        """Rows of ``plan``'s ``group -> (blocks to share, blocks to copy)``: the first shared, the rest
+        replaced by fresh blocks (all or nothing), as compressed tails padded with ``ZERO_BLOCK``."""
+        rows, copies, held = {}, [], []
+        try:
+            for name, (shared, copied) in plan.items():
+                fresh = self.pools[name].alloc(len(copied)) if copied else []
+                self.pools[name].share(shared)
+                held.append((name, fresh + list(shared)))
+                copies += [(name, a, b) for a, b in zip(copied, fresh)]
+                g = self.groups[name]
+                rows[name] = list(shared) + fresh + [ZERO_BLOCK] * (g.compressed_blocks - len(shared) - len(fresh))
+        except PagedCacheFull:
+            for name, blocks in held:
+                self.pools[name].free(blocks)
+            raise
+        return rows, copies
+
+    def unshare_block(self, sid: int, group: str, index: int) -> tuple[int, int] | None:
+        """Give session ``sid`` a block of its own in place of the shared one at logical block ``index`` of
+        ``group`` (copy on write). Returns ``(from_block, to_block)`` for the caller to copy on device, or ``None``
+        when the block is not shared."""
+        row = self._sessions[sid].rows[group]
+        old = row[index]
+        if self.pools[group].refs(old) <= 1:
+            return None
+        (new,) = self.pools[group].alloc(1)
+        row[index] = new
+        self.pools[group].free([old])
+        return old, new
+
     def block_refs(self, sid: int, group: str) -> list[int]:
         """How many session rows map each of session ``sid``'s logical blocks of ``group``."""
         return [self.pools[group].refs(b) for b in self._sessions[sid].rows[group]]

@@ -266,6 +266,7 @@ from models.experimental.deepseek_v4_flash.demo.server import (
     _Lease,
     _normalized_messages,
     _PrefixCache,
+    _PrefixEntry,
     _Prefiller,
     _PromptStopped,
     _Scheduler,
@@ -1025,6 +1026,33 @@ class _DeviceParkedConversation:
     used_at: float
 
 
+class _DevicePrefixCache(_PrefixCache):
+    """The prefixes one instance keeps in its own device RAM (``capture_device_prefix`` snapshots, which share the
+    capturing session's KV blocks), ahead of the host :class:`_PrefixCache` all instances share. Nothing bounds it
+    but the pools: :meth:`_SlotReuse._make_room` moves the least recently used to host RAM when they are full.
+    ``nbytes`` counts only a snapshot's host part, so ``max_bytes`` never evicts."""
+
+    def __init__(self):
+        super().__init__(max_bytes=1 << 62)
+
+    def keep(self, tokens: list[int], snapshot) -> list:
+        """Add ``snapshot`` as the prefix ``tokens``; returns the snapshots it replaces, for the caller to free."""
+        key = tuple(tokens)
+        with self._lock:
+            replaced = [entry.snapshot for entry in self._entries if entry.tokens == key]
+            self._entries = [entry for entry in self._entries if entry.tokens != key]
+            self._entries.append(_PrefixEntry(key, snapshot, time.perf_counter()))
+        return replaced
+
+    def oldest(self) -> _PrefixEntry | None:
+        with self._lock:
+            return min(self._entries, key=lambda entry: entry.used, default=None)
+
+    def remove(self, entry: _PrefixEntry) -> None:
+        with self._lock:
+            self._entries.remove(entry)
+
+
 class _V41SlotPool(_SlotPool):
     """:class:`_SlotPool` that, when no slot continues a request's conversation, hands it the parked slot whose cache
     the request shares the longest start with and differs from only in the cache's last :data:`_SLOT_REUSE_TOKENS`
@@ -1208,11 +1236,15 @@ class _SlotReuse:
     rebuilt by replaying the ``replay_window`` cached tokens before the cut (SWA bounded replay), and the rest of the
     request prefilled from there, as :meth:`_Scheduler._resume` does from a turn mark. The slot's old conversation is
     not offloaded to host RAM: the request supersedes it. A slot whose tokens differ by more is admitted as the new
-    conversation it is."""
+    conversation it is.
+
+    The prefix cache's snapshots stay in device RAM (:class:`_DevicePrefixCache`), sharing the KV blocks of the
+    session that reached them, and go to the host :class:`_PrefixCache` only when the pools need their blocks."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._reuse: dict[int, _Rewind] = {}  # slot -> the rewind its turn being admitted takes
+        self._device_prefixes = _DevicePrefixCache()
 
     def _admit(self, turn: _Turn) -> None:
         pool = self.server.pool
@@ -1350,6 +1382,89 @@ class _SlotReuse:
             self.engine.model.free_device_park(oldest_dev.snapshot)
         logger.debug(f"evicted device-parked user {oldest_dev.owner!r} ({reason}): {self._pool_summary()}")
 
+    def _evict_device_prefix_to_host(self, entry: _PrefixEntry, reason: str) -> None:
+        """Move one device prefix to the host prefix cache, freeing the device blocks only it held."""
+        model, t0 = self.engine.model, time.perf_counter()
+        try:
+            snapshot = model.export_device_park(entry.snapshot)  # frees the device blocks itself
+        except Exception as e:  # noqa: BLE001 - the prefix is only a cache
+            logger.warning(f"prefix cache: could not move a {entry.snapshot.pos}-token prefix to host RAM: {e}")
+            model.free_device_park(entry.snapshot)
+            return
+        kept = self.server.prefix_cache.store(list(entry.tokens), snapshot)
+        logger.info(
+            f"prefix cache: {snapshot.pos}-token prefix moved from device to host RAM {reason} in "
+            f"{time.perf_counter() - t0:.2f}s ({snapshot.nbytes / 2**30:.2f} GiB, "
+            f"{'kept' if kept else 'over --host-cache-gb, dropped'}; {len(self._device_prefixes)} left on device)"
+        )
+
+    def _capture_prefix(self, user: UserSession) -> None:
+        """Keep ``user``'s token prefix in device RAM (:class:`_DevicePrefixCache`) rather than copying it out."""
+        model = self.engine.model
+        if not hasattr(model, "capture_device_prefix"):
+            return super()._capture_prefix(user)
+        if (
+            getattr(self.server, "prefix_cache", None) is None
+            or not user.pos
+            or len(user.tokens) != user.pos
+            or self._posted
+            or self._inflight
+        ):
+            return
+        vocab = getattr(getattr(model, "config", None), "vocab_size", 0) or 0
+        tokens = user.tokens[: user.pos]
+        if vocab <= 0 or any(token >= vocab for token in tokens):
+            return
+        t0 = time.perf_counter()
+        try:
+            snapshot = model.capture_device_prefix(user.sid)
+        except Exception as e:  # noqa: BLE001 - the next prompt replays this prefix
+            logger.warning(f"user {user.index}: prefix of {user.pos} tokens was not cached: {type(e).__name__}: {e}")
+            return
+        if snapshot.pos != user.pos:  # a verify block left the session past its rejected drafts
+            model.free_device_park(snapshot)
+            return
+        for replaced in self._device_prefixes.keep(tokens, snapshot):
+            model.free_device_park(replaced)
+        logger.info(
+            f"prefix cache: {user.pos} tokens kept in device RAM in {1e3 * (time.perf_counter() - t0):.0f} ms "
+            f"({len(self._device_prefixes)} on device, {len(self.server.prefix_cache)} in host RAM)"
+        )
+
+    def _share_decoded_prefix(self, user: UserSession, turn: _Turn) -> bool:
+        """Start ``user`` from the longest cached prefix of ``turn.ids``: one in device RAM when it is at least as
+        long as the host cache's (its blocks shared, no copy), else the host one (``import_session``)."""
+        model = self.engine.model
+        cache = getattr(self.server, "prefix_cache", None)
+        vocab = getattr(getattr(model, "config", None), "vocab_size", 0) or 0
+        if cache is None or not hasattr(model, "import_device_prefix"):
+            return super()._share_decoded_prefix(user, turn)
+        hit = self._device_prefixes.lookup(turn.ids, vocab)
+        host = cache.lookup(turn.ids, vocab)
+        if hit is None or (host is not None and host[0] > hit[0]):
+            return super()._share_decoded_prefix(user, turn)
+        pos, snapshot = hit
+        t0 = time.perf_counter()
+        try:
+            model.import_device_prefix(user.sid, snapshot)
+        except Exception as e:  # noqa: BLE001 - the host cache, or a replay from 0
+            logger.warning(f"user {turn.user_key!r}: device prefix of {pos} tokens did not load: {type(e).__name__}: {e}")
+            with contextlib.suppress(Exception):
+                model.reset_session(user.sid)
+            return super()._share_decoded_prefix(user, turn)
+        full = list(turn.ids)
+        turn.from_prefix_cache = True
+        turn.resumed_from = pos
+        user.pos = pos
+        user.tokens = full[:pos]
+        turn.ids = full[pos:]
+        logger.info(
+            f"user {turn.user_key!r}: starting from a {pos}-token prefix in device RAM "
+            f"({1e3 * (time.perf_counter() - t0):.0f} ms) of the {len(full)}-token prompt; replaying the last "
+            f"{len(turn.ids)} through decode"
+        )
+        return True
+
     def _offload(self, slot: int, owner: str | None) -> None:
         if slot in self._reuse:
             return
@@ -1414,10 +1529,13 @@ class _SlotReuse:
         return super()._restore(user, turn)
 
     def _make_room(self, n_tokens: int, keep: int) -> None:
-        """Evict the user with the oldest last request across device-parked conversations and parked slots
-        to host RAM (freeing its device KV blocks) until ``n_tokens`` fit the page table/pool."""
+        """Evict the least recently used of the device-parked conversations, parked slots and device prefixes to
+        host RAM (freeing their device KV blocks) until ``n_tokens`` fit the page table/pool."""
         pool = self.server.pool
         while n_tokens > self.engine.tokens_left():
+            prefix = self._device_prefixes.oldest()
+            # (prefix entries are stamped with perf_counter, the pool with wall time)
+            prefix_at = None if prefix is None else time.time() - (time.perf_counter() - prefix.used)
             with pool._cv:
                 oldest_dev = min(pool.device_parked, key=lambda c: c.used_at, default=None)
                 parked_slots = [
@@ -1426,17 +1544,24 @@ class _SlotReuse:
                     if not pool._busy[i] and i != keep and u.pos and not pool._closing
                 ]
                 oldest_slot = min(parked_slots, key=lambda i: pool._used_at[i], default=None)
-                if oldest_dev is None and oldest_slot is None:
+                ages = {
+                    "prefix": prefix_at,
+                    "dev": None if oldest_dev is None else oldest_dev.used_at,
+                    "slot": None if oldest_slot is None else pool._used_at[oldest_slot],
+                }
+                ages = {kind: at for kind, at in ages.items() if at is not None}
+                if not ages:
                     return
-                evict_dev = oldest_dev is not None and (
-                    oldest_slot is None or oldest_dev.used_at <= pool._used_at[oldest_slot]
-                )
-                if evict_dev:
+                evict = min(ages, key=ages.get)
+                if evict == "dev":
                     pool.device_parked.remove(oldest_dev)
-                else:
+                elif evict == "slot":
                     pool._busy[oldest_slot] = True
                     slot_owner = pool.owner[oldest_slot]
-            if evict_dev:
+            if evict == "prefix":
+                self._device_prefixes.remove(prefix)
+                self._evict_device_prefix_to_host(prefix, f"for {n_tokens} tokens")
+            elif evict == "dev":
                 self._evict_device_parked_to_host(oldest_dev, f"for {n_tokens} tokens")
             else:
                 try:
@@ -1705,10 +1830,11 @@ class _PrefillFirst(_Scheduler):
         if user.pos or prefiller is None or cache is None or not hasattr(self.engine.model, "import_session"):
             return False
         vocab = getattr(getattr(self.engine.model, "config", None), "vocab_size", 0) or 0
-        hit = cache.lookup(turn.ids, vocab)
-        if hit is None:
+        tiers = (cache, getattr(self, "_device_prefixes", None))
+        hits = [tier.lookup(turn.ids, vocab) for tier in tiers if tier is not None]
+        pos = max((hit[0] for hit in hits if hit is not None), default=0)
+        if not pos:
             return False
-        pos, _ = hit
         tail = len(turn.ids) - pos
         n_whole = prefiller.aligned(len(turn.ids))
         # Prefer the unpolluted block-replay rate (excludes import_session and prefix-capture exports) when available.
