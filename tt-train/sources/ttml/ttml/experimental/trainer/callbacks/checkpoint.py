@@ -82,7 +82,9 @@ class CheckpointCallback(Callback):
             return
         if global_step == self._total_steps:
             path = self._save(trainer)
-            trainer.logger.log_artifact(path, artifact_type="model", name=os.path.basename(path))
+            trainer.logger.log_artifact(
+                path, artifact_type="model", name="model", metadata={"checkpoint": os.path.basename(path)}
+            )
         elif self.manager.should_save_checkpoint(global_step):
             self._save(trainer)
 

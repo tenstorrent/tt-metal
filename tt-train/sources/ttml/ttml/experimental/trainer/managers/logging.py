@@ -27,7 +27,7 @@ class TrainingLogger:
         self._run = None
 
         self.std_logger = logging.getLogger(config.wandb_run_name)
-        level = getattr(logging, config.log_level.upper())
+        level = getattr(logging, config.log_level)
         self.std_logger.setLevel(level)
         self.std_logger.handlers.clear()
         self.std_logger.propagate = False
@@ -95,12 +95,19 @@ class TrainingLogger:
             except Exception as e:  # noqa: BLE001
                 self.std_logger.warning(f"Failed to log model info to W&B: {e}")
 
-    def log_artifact(self, path: str, artifact_type: str = "model", name: Optional[str] = None) -> None:
-        """Upload a file or directory to W&B; a no-op without W&B."""
+    def log_artifact(
+        self,
+        path: str,
+        artifact_type: str = "model",
+        name: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Upload a file or directory to W&B; a no-op without W&B. Artifacts logged under one name are versions of
+        it, so ``<name>:latest`` is the newest."""
         if not self._use_wandb:
             return
         try:
-            artifact = self._wandb.Artifact(name or os.path.basename(path), type=artifact_type)
+            artifact = self._wandb.Artifact(name or os.path.basename(path), type=artifact_type, metadata=metadata)
             if os.path.isdir(path):
                 artifact.add_dir(path)
             else:

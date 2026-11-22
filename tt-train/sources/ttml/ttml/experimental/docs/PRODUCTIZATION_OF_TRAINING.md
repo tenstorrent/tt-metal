@@ -162,7 +162,7 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 | `seed` | `0` | Seeds initialization, LoRA dropout and data shuffling. |
 | `stopping_criteria` | `type: epoch`, `limit: 1` | When the run ends; see [Stopping criteria](#stopping-criteria). |
 | `metrics` | | Two sections, `train` and `validation`, each with `frequency` and `metric_names`; see [Metrics and validation](#metrics-and-validation). |
-| `logging` | | `log_level` (`INFO`), `use_wandb` (false), `wandb_project`, `wandb_run_name`, `wandb_tags`. |
+| `logging` | | `log_level` (`INFO`; one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`, case-insensitive), `use_wandb` (false), `wandb_project`, `wandb_run_name`, `wandb_tags`. |
 | `checkpoint` | | See [Checkpoints](#checkpoints). |
 
 ### Stopping criteria
@@ -321,7 +321,8 @@ Rotation never deletes the checkpoint just saved, and only deletes checkpoints o
 same `project_dir`, such as the one a run started from, are kept. `<project_dir>/checkpoints/checkpoint_history.json`
 lists the run's checkpoints that are kept, oldest first, with their path, step, epoch and metrics; a run replaces an
 earlier run's list on its first save. So its last entry is the checkpoint of the run's last step, which is also logged
-as the run's `model` artifact. A checkpoint is written to a staging directory and moved into place when complete, so a
+as the run's `model` artifact. Every run logs a new version of that one artifact, so `model:latest` is the newest
+trained model; the checkpoint's directory name is in the artifact's `checkpoint` metadata. A checkpoint is written to a staging directory and moved into place when complete, so a
 failed save leaves the previous one intact.
 
 ### Starting from a checkpoint
