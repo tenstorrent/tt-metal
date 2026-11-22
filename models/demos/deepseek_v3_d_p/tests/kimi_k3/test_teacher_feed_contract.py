@@ -1354,3 +1354,71 @@ def test_quantile_by_hand_and_beyond_torch_quantile_size():
     assert quantile(torch.empty(0), 0.5) != quantile(torch.empty(0), 0.5)  # NaN
     big = torch.arange(2**24 + 1).flip(0)
     assert quantile(big, 0.5) == 2**23
+
+
+# --- KDA-precision arms of the chain (kda_vllm_emulation.py, fp64_chain --kda-precision) --------------------------
+
+
+def test_kda_flashkda_emulation_without_rounding_is_the_reference():
+    """With rounding off and FP64 arithmetic, the chunked (WY, chunk 16) emulation is the token-ordered FP64 KDA
+    reference to <= 1e-12 (output, recurrent and convolution state), across two calls whose split (21 rows) is not a
+    chunk multiple and a last chunk shorter than 16. With bf16 rounding on, it moves the output at bf16 level and
+    carries an fp32 recurrent state."""
+    from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+    from models.demos.deepseek_v3_d_p.reference.kda.layer import kda_forward_reference
+    from models.demos.deepseek_v3_d_p.reference.kda.tests.helpers import random_weights
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_vllm_emulation import kda_flashkda_emulation
+
+    cfg = KDAConfig(64, 2, 32, 32, 4, 1e-5, use_full_rank_gate=True, gate_lower_bound=-5.0)
+    w = {n: v.double() for n, v in random_weights(cfg).items()}
+    x = torch.randn(1, 53, 64, dtype=torch.float64, generator=torch.Generator().manual_seed(1))
+    want, want_state = kda_forward_reference(x, w, cfg, dtype=torch.float64)
+    exact = dict(low=lambda t: t, dtype=torch.float64)
+    a, state = kda_flashkda_emulation(x[:, :21], w, cfg, **exact)
+    b, state = kda_flashkda_emulation(x[:, 21:], w, cfg, state, **exact)
+    assert _rel(torch.cat([a, b], 1), want) <= 1e-12
+    for name in ("recurrent", "q_convolution", "k_convolution", "v_convolution"):
+        assert _rel(getattr(state, name), getattr(want_state, name)) <= 1e-12, name
+    got, state = kda_flashkda_emulation(x, w, cfg)
+    assert got.dtype == torch.float32 and state.recurrent.dtype == torch.float32
+    assert 1e-4 < _rel(got.double(), want) < 3e-2
+
+
+def test_chain_kda_precision_arm_scores_as_a_candidate_against_the_fp64_chain(tmp_path: Path, expect_error):
+    """A chain whose KDA layers run the vLLM emulation records its precision in the manifest (the FP64 golden's
+    model identity is unchanged), and its products score against the FP64 chain through ``ChainStreams``: the FP64
+    chain scored as its own candidate is exact (recall 1, NRMSE 0); the emulated arm differs at bf16 level; only the
+    rows the candidate holds are scored; a candidate on another segment grid is refused."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import chain_vs_trace, fp64_chain
+
+    rows = 10
+    ids = torch.randint(0, 50, (rows,), generator=torch.Generator().manual_seed(4))
+    identity = {"checkpoint": "c", "token_source": f"vllm trace t metadata token_ids[:{rows}]"}
+    runs = {}
+    for precision, segment, count in (("fp64", 4, rows), ("vllm", 4, 8), ("fp32", 2, rows)):
+        model, _ = _tiny_chain()
+        model.kda_precision = precision
+        runs[precision] = tmp_path / precision
+        with torch.no_grad():
+            fp64_chain.run_chain(
+                run_dir=runs[precision],
+                model=model,
+                token_ids=ids[:count],
+                segment=segment,
+                sampled=[3],
+                identity={**identity, "token_source": f"vllm trace t metadata token_ids[:{count}]"},
+            )
+    manifests = {p: json.loads((r / MANIFEST).read_text()) for p, r in runs.items()}
+    assert "kda_precision" not in manifests["fp64"]["model"] and manifests["vllm"]["model"]["kda_precision"] == "vllm"
+    chain = runs["fp64"]
+    o = chain_vs_trace.summarize(
+        chain_vs_trace.score_landed(chain, chain_vs_trace.ChainStreams(chain), tmp_path / "score-self"), window=4
+    )["overall"]
+    assert o["routing_1_recall_mean"] == 1.0 and o["routing_2_set_equal"] == 1.0 and o["topk_recall_mean"] == 1.0
+    assert o["latent_nrmse"] == 0.0 and o["index_key_nrmse"] == 0.0
+    results = chain_vs_trace.score_landed(chain, chain_vs_trace.ChainStreams(runs["vllm"]), tmp_path / "score-vllm")
+    assert [r["end"] for r in results] == [4, 8]
+    o = chain_vs_trace.summarize(results, window=4)["overall"]
+    assert 1e-4 < o["latent_nrmse"] < 0.1 and o["routing_3_sampled_rows"] == 0
+    with expect_error(ValueError, "segment"):
+        chain_vs_trace.score_landed(chain, chain_vs_trace.ChainStreams(runs["fp32"]), tmp_path / "score-fp32")

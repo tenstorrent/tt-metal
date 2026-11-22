@@ -29,7 +29,12 @@ direction (``DIRECTION``), the others (FP64 properties: margins, the cut gap) ha
 The score directory records the chain's identity (path, producer version, model digest, token digest), the trace and
 ``SCORER_VERSION``, and refuses to mix scores of another; bump ``SCORER_VERSION`` when a per-segment measure changes.
 
+In place of the trace, ``--candidate`` scores another chain run's products (``ChainStreams``: e.g. a chain whose
+KDA layers emulate the GPU's precision, ``fp64_chain --kda-precision``) against the FP64 chain, on the rows the
+candidate holds. The layer 3 sampled routing (a trace cross-check) is then left out.
+
     nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.chain_vs_trace --chain G --trace T --out S
+    nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.chain_vs_trace --chain G --candidate E --out S
 """
 
 from __future__ import annotations
@@ -43,7 +48,7 @@ from pathlib import Path
 import torch
 
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, atomic_save, segment_path
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import DSA_LAYER, MOE_LAYERS, state_path
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import DSA_LAYER, MOE_LAYERS, load_products, state_path
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import Trace, missed_keys, topk_recall
 
 SHARE_BINS = 100  # spread-share histogram bins over [0, 1]
@@ -74,6 +79,42 @@ def direction(key: str) -> int | None:
     """``DIRECTION`` of metric ``key`` (the longest matching suffix), or None."""
     hits = [s for s in DIRECTION if key.endswith(s)]
     return DIRECTION[max(hits, key=len)] if hits else None
+
+
+def model_sha256(manifest: dict) -> str:
+    return hashlib.sha256(json.dumps(manifest["model"], sort_keys=True).encode()).hexdigest()
+
+
+class ChainStreams:
+    """A chain run's products read as the trace streams ``score_segment`` scores: routing ids as
+    ``expert_ids_layer_L``, [latent | k_pe] as ``kv_post_transform_layer_3``, the index key as ``indexer_k_layer_3``
+    and the top-k as ``dsa_topk_indices_layer_3``. ``prompt_len``: the rows the run holds so far."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.manifest = json.loads((self.path / MANIFEST).read_text())
+
+    @property
+    def prompt_len(self) -> int:
+        return self.manifest["segments"][-1]["end"] if self.manifest["segments"] else 0
+
+    @property
+    def identity(self) -> dict:
+        m = self.manifest
+        return {"candidate": str(self.path), "producer_version": m["producer_version"], "model_sha256": model_sha256(m)}
+
+    def rows(self, key: str, start: int, end: int) -> torch.Tensor:
+        if key.startswith("expert_ids_layer_"):
+            name = f"routing_ids_{int(key.removeprefix('expert_ids_layer_'))}"
+            return load_products(self.path, [name], start, end)[name]
+        if key == f"kv_post_transform_layer_{DSA_LAYER}":
+            p = load_products(self.path, ["latent", "kpe"], start, end)
+            return torch.cat([p["latent"], p["kpe"]], dim=1)
+        if key == f"indexer_k_layer_{DSA_LAYER}":
+            return load_products(self.path, ["index_key"], start, end)["index_key"]
+        if key == f"dsa_topk_indices_layer_{DSA_LAYER}":
+            return load_products(self.path, ["topk_indices_3"], start, end)["topk_indices_3"]
+        raise KeyError(f"{key}: no chain product stands for this trace stream")
 
 
 def key_sums(got: torch.Tensor, want: torch.Tensor) -> torch.Tensor:
@@ -143,16 +184,37 @@ def score_segment(chain: Path, index: int, trace: Trace, checks: dict) -> dict:
     return out
 
 
-def score_landed(chain: Path, trace: Trace, out: Path, log=print) -> list[dict]:
-    """Score (or read from ``out``'s cache) every segment the chain's manifest lists as complete."""
+def check_comparable(chain: dict, candidate: dict) -> None:
+    """A candidate chain is scored only on the chain's token prefix, segment grid and checkpoint: the manifests
+    store whole-run token digests, so the prefix is pinned by the token source (``fp64_chain`` writes
+    ``... token_ids[:count]`` of a named trace), the checkpoint path and the weight digests."""
+    a, b = chain["identity"], candidate["identity"]
+    source = lambda i: i["token_source"].rsplit("[:", 1)[0]  # noqa: E731
+    same = {
+        "token source": source(a) == source(b),
+        "checkpoint": a["checkpoint"] == b["checkpoint"],
+        "weights": chain["model"]["weights_sha256"] == candidate["model"]["weights_sha256"],
+        "segment": chain["segment"] == candidate["segment"],
+        "rows": candidate["count"] <= chain["count"],
+    }
+    if not all(same.values()):
+        raise ValueError(f"candidate chain differs from the chain in {[k for k, v in same.items() if not v]}")
+
+
+def score_landed(chain: Path, trace: Trace | ChainStreams, out: Path, log=print) -> list[dict]:
+    """Score (or read from ``out``'s cache) every segment the chain's manifest lists as complete and ``trace`` (a
+    trace, or a candidate chain) holds."""
     manifest = json.loads((chain / MANIFEST).read_text())
     out.mkdir(parents=True, exist_ok=True)
+    candidate = isinstance(trace, ChainStreams)
+    if candidate:
+        check_comparable(manifest, trace.manifest)
     identity = {
         "chain": str(chain),
         "chain_producer_version": manifest["producer_version"],
-        "chain_model_sha256": hashlib.sha256(json.dumps(manifest["model"], sort_keys=True).encode()).hexdigest(),
+        "chain_model_sha256": model_sha256(manifest),
         "chain_token_ids_sha256": manifest["token_ids_sha256"],
-        "trace": str(trace.path),
+        "trace": trace.identity if candidate else str(trace.path),
         "scorer_version": SCORER_VERSION,
     }
     id_path = out / "identity.json"
@@ -161,12 +223,14 @@ def score_landed(chain: Path, trace: Trace, out: Path, log=print) -> list[dict]:
     id_path.write_text(json.dumps(identity, indent=1))
     results = []
     for index, entry in enumerate(manifest["segments"]):
+        if entry["end"] > trace.prompt_len:
+            break
         cached = out / f"segment_{index:06d}.pt"
         if cached.is_file():
             results.append(torch.load(cached, weights_only=True))
             continue
         began = time.perf_counter()
-        r = score_segment(chain, index, trace, entry.get("checks", {}))
+        r = score_segment(chain, index, trace, {} if candidate else entry.get("checks", {}))
         atomic_save(r, cached)
         results.append(r)
         log(
@@ -270,7 +334,9 @@ def write_summary(out: Path, summary: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--chain", type=Path, required=True, help="an fp64_chain run directory (complete or running)")
-    parser.add_argument("--trace", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--trace", type=Path, help="the vLLM trace to score")
+    source.add_argument("--candidate", type=Path, help="a chain run to score in place of a trace (ChainStreams)")
     parser.add_argument("--out", type=Path, required=True, help="score directory (per-segment cache and summaries)")
     parser.add_argument("--window", type=int, default=65536)
     parser.add_argument("--threads", type=int, default=8)
@@ -280,7 +346,8 @@ def main() -> None:
     def log(msg: str) -> None:
         print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}", flush=True)
 
-    results = score_landed(args.chain, Trace(args.trace), args.out, log)
+    scored = Trace(args.trace) if args.trace else ChainStreams(args.candidate)
+    results = score_landed(args.chain, scored, args.out, log)
     summary = summarize(results, args.window)
     write_summary(args.out, summary)
     log(f"summarized {summary['count']} rows in {len(summary['windows'])} windows -> {args.out}")

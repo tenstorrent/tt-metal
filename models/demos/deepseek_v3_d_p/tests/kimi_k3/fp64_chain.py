@@ -31,6 +31,11 @@ except the token embedding, which must equal the trace's ``decoder_input_layer_0
 and FFN outputs, routing recall of layers 1-2 (and 3 on sampled rows, whose FFN read only needs those rows'
 attention), layer 3 keys (PCC, NRMSE) and top-k recall. The results go into the manifest's segment entries.
 
+``--kda-precision fp32|vllm`` runs KDA layers 0-2 at another precision (fp32 reference; or vLLM's FlashKDA rounding
+points, ``kda_vllm_emulation``) with everything else FP64, recorded in the manifest's model identity; scoring such a
+run against the FP64 chain (``chain_vs_trace --candidate``) isolates what that KDA precision does to the products
+over long context.
+
     nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain run --trace T --count N --out G
 """
 
@@ -64,6 +69,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
     write_manifest,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_fp64_golden as dsa
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_vllm_emulation import kda_flashkda_emulation
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import Trace, checkpoint_tensors, missed_keys, topk_recall
 
 C = KimiK31Config
@@ -76,9 +82,27 @@ PRODUCER_VERSION = 2  # 2: buffered indexer blocks of 4096 keys (FP64 summation 
 # blocks (16 threads, logs/indexer-buffers-probe-*). The rate is then the FP64 matmul's.
 KEY_BLOCK = 4096
 QUERY_BLOCK = 16  # query rows per indexer block
+# Precision of the KDA layers 0-2; everything else stays FP64. "fp64" is the golden. "fp32" runs the same reference
+# in fp32 (fp32 state); "vllm" emulates vLLM's FlashKDA rounding points (``kda_vllm_emulation``). The non-golden arms
+# measure how a KDA precision alone moves the chain's products over long context.
+KDA_PRECISIONS = ("fp64", "fp32", "vllm")
 
 
 # --- math, FP64 ----------------------------------------------------------------------------------------------------
+
+
+def kda_layer(precision: str, hidden: torch.Tensor, weights: dict, config: KDAConfig, state: KDAReferenceState | None):
+    """One KDA layer over ``hidden`` ``[1, T, d]`` at ``precision`` (``KDA_PRECISIONS``); the output in FP64 and the
+    carried state in the arm's own dtypes."""
+    if precision == "fp64":
+        return kda_forward_reference(hidden, weights, config, state, dtype=F64)
+    if precision == "fp32":
+        out, state = kda_forward_reference(hidden, weights, config, state, dtype=torch.float32)
+    elif precision == "vllm":
+        out, state = kda_flashkda_emulation(hidden, weights, config, state)
+    else:
+        raise ValueError(f"KDA precision {precision!r} not in {KDA_PRECISIONS}")
+    return out.to(F64), state
 
 
 rms64 = dsa.rms64  # RMSNorm in FP64: x rsqrt(mean(x^2) + eps) weight
@@ -199,6 +223,7 @@ class ChainModel:
     block_size: int = C.ATTN_RES_BLOCK_SIZE
     top_k: int = C.NUM_EXPERTS_PER_TOKEN
     digests: dict[str, str] = field(default_factory=dict)
+    kda_precision: str = "fp64"
 
     @classmethod
     def from_checkpoint(cls, checkpoint: Path, threads: int = 16, log: Callable[[str], None] = print) -> "ChainModel":
@@ -250,13 +275,16 @@ class ChainModel:
         return cls(embedding, layers, kda_config, dsa.Dims(eps=eps), eps, digests=digests)
 
     def identity(self) -> dict:
-        return {
+        identity = {
             "kda_config": asdict(self.kda_config),
             "dsa_dims": asdict(self.dsa_dims),
             "eps": self.eps,
             "block_size": self.block_size,
             "weights_sha256": dict(sorted(self.digests.items())),
         }
+        if self.kda_precision != "fp64":  # absent for the golden, so existing FP64 runs keep their identity
+            identity["kda_precision"] = self.kda_precision
+        return identity
 
 
 MoE_NON_ROUTED = (
@@ -347,8 +375,8 @@ def chain_segment(
         hidden = rms64(hidden, L["input_layernorm"], eps)
         if l % model.block_size == 0:
             sealed, live = torch.cat([sealed, live.unsqueeze(1)], dim=1), None
-        attn, carried.kda[l] = kda_forward_reference(
-            hidden.unsqueeze(0), L["kda"], model.kda_config, carried.kda[l], dtype=F64
+        attn, carried.kda[l] = kda_layer(
+            model.kda_precision, hidden.unsqueeze(0), L["kda"], model.kda_config, carried.kda[l]
         )
         attn = attn[0]
         live = attn if live is None else live + attn
@@ -623,6 +651,7 @@ def main() -> None:
         ),
     )
     parser.add_argument("--no-checks", action="store_true", help="skip the per-segment trace cross-checks")
+    parser.add_argument("--kda-precision", choices=KDA_PRECISIONS, default="fp64", help="KDA layers 0-2 only")
     args = parser.parse_args()
     torch.set_num_threads(args.threads)
 
@@ -636,6 +665,7 @@ def main() -> None:
         raise ValueError(f"{trace.path} has {token_ids.numel()} prompt tokens, fewer than --count {count}")
     log(f"loading weights from {args.checkpoint}")
     model = ChainModel.from_checkpoint(args.checkpoint, args.threads, log)
+    model.kda_precision = args.kda_precision
     log(f"weights loaded; rss {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20:.1f} GB")
     identity = {
         "model": "Kimi-K3.1",
