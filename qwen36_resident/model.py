@@ -2191,7 +2191,7 @@ class ResidentModel:
                     out.append((pool, pp, staging, sp, cnt, KV_ROW) if save else (staging, sp, pool, pp, cnt, KV_ROW))
         return out
 
-    def snapshot_slot(self, s, n_tokens=0):
+    def snapshot_slot(self, s, n_tokens=0, table=None):
         """rows mode: slot s's recurrent state as device staging tensors {state: its GDN states (per chip copies x
         heads x 16 fp32 tiles), hist: its conv history row (per chip copies x 3 x K compact 64 B pages)} and, with
         n_tokens (paged KV), {kv: its K / V pages of positions < n_tokens (per chip 2 x attention copies x tiles pages
@@ -2201,23 +2201,10 @@ class ResidentModel:
         d, mesh, G = self.d, self.mesh, self._gdn_copies
         k, r = divmod(s, self.launch_rows)
         K = len(self.hist_index()[0])
-        shard = ttnn.ShardTensorToMesh(mesh, dim=0)
-        state = ttnn.from_torch(
-            torch.zeros(d.n * G * d.nv * 16 * TILE, TILE),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=shard,
-        )
-        hist = ttnn.from_torch(
-            torch.zeros(d.n * G * (CONV_K - 1) * K, TILE),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=shard,
-        )
+        # (staging allocated on device, no upload: every byte is written by the copies below; per chip its own shard)
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        state = ttnn.empty([G * d.nv * 16 * TILE, TILE], ttnn.float32, ttnn.TILE_LAYOUT, mesh, dram)
+        hist = ttnn.empty([G * (CONV_K - 1) * K, TILE], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh, dram)
         LR, sub = self.launch_rows, self.subs[k]
         self._page_copy(
             [
@@ -2231,19 +2218,15 @@ class ResidentModel:
         if n_tokens:
             assert self.kv_paged
             n_tiles = -(-n_tokens // TILE)
-            kv = ttnn.from_torch(
-                torch.zeros(d.n * 2 * self._attn_copies * n_tiles, KV_ROW // 4, dtype=torch.int32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=mesh,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=shard,
+            kv = ttnn.empty(
+                [2 * self._attn_copies * n_tiles, KV_ROW // 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, dram
             )
-            self._page_copy(self._kv_copies(self.block_tables[s], n_tiles, kv, save=True))
+            tbl = self.block_tables[s] if table is None else table
+            self._page_copy(self._kv_copies(tbl, n_tiles, kv, save=True))
             snap.update(kv=kv, n_tokens=n_tokens)
         return snap
 
-    def restore_slot(self, s, snap):
+    def restore_slot(self, s, snap, table=None):
         """rows mode: a snapshot_slot result into slot s (its GDN states and conv history row, and the snapshot's KV
         pages into slot s's own blocks — set its block table first; other slots untouched)"""
         assert self.rows
@@ -2260,7 +2243,8 @@ class ResidentModel:
         self._hist_row(s, snap["hist"], gather=False)
         if snap.get("n_tokens"):
             n_tiles = -(-snap["n_tokens"] // TILE)
-            self._page_copy(self._kv_copies(self.block_tables[s], n_tiles, snap["kv"], save=False))
+            tbl = self.block_tables[s] if table is None else table
+            self._page_copy(self._kv_copies(tbl, n_tiles, snap["kv"], save=False))
 
     SNAP_TENSORS = ("state", "hist", "kv")
 

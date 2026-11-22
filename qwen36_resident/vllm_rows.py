@@ -45,6 +45,18 @@ SCHED_TRACE = os.environ.get("RESIDENT_SCHED_TRACE")
 FIRST_TOKEN_BATCH = os.environ.get("RESIDENT_FIRST_TOKEN_BATCH", "1") == "1"
 # 0: one PP pass per whole prompt (A/B) even where the PP prefill streams several through one pass (run_batch)
 PP_BATCH = os.environ.get("RESIDENT_PP_BATCH", "1") == "1"
+# Strata S1 option C: host memory (GB) for the whole prompts' prefix cache (RowsEngine._prefill_cached); 0 = off
+PREFIX_CACHE_GB = float(os.environ.get("RESIDENT_PREFIX_CACHE_GB", "0"))
+# (the least a new boundary must extend a hit by to be stored on the way: storing stops the prefill there for a
+# handoff, a snapshot and a reload, ~0.3 s at 14K — not worth it for a chat turn's few hundred tokens)
+PREFIX_CACHE_STEP = int(os.environ.get("RESIDENT_PREFIX_CACHE_STEP", "4096"))
+
+
+def _host_bytes(snap):
+    """bytes of a snapshot_to_host result's tensors (every chip's)"""
+    return sum(int(v.volume() * v.element_size()) for k, v in snap.items() if k != "n_tokens")
+
+
 BLOCK = 64  # KV block (positions): the engine's page
 # (prefix caching, S1: vLLM's hybrid KV cache gives the attention group blocks of PAGES_PER_BLOCK engine pages — 13 for
 # Qwen3.8, 832 tokens; its block b is engine pages b * PAGES_PER_BLOCK .. + PAGES_PER_BLOCK - 1. 1 = vLLM's block is the
@@ -531,6 +543,13 @@ class RowsEngine:
 
     def __init__(self, model, pp, emb, vocab, vocab_chip, n_slots, chunk_unit, mesh=None):
         self.model, self.pp, self.emb = model, pp, emb
+        # Strata S1 option C (RESIDENT_PREFIX_CACHE_GB > 0, default off): whole prompts' prefixes at 1,024-token
+        # boundaries cached in host memory (prefix_cache.PrefixCache), restored instead of prefilled
+        self.prefix_cache = None
+        if PREFIX_CACHE_GB > 0 and hasattr(model, "snapshot_slot") and hasattr(pp, "load_prefix"):
+            from qwen36_resident.prefix_cache import PrefixCache
+
+            self.prefix_cache = PrefixCache(int(PREFIX_CACHE_GB * 1e9))
         self.vocab, self.vocab_chip, self.n_slots = vocab, vocab_chip, n_slots
         self.launch_rows = int(getattr(model, "launch_rows", ROWS))  # users per launch (8 * row groups)
         self.chunk = chunk_unit
@@ -572,14 +591,75 @@ class RowsEngine:
         return self.pp.pick_chunk(n_tokens)
 
     def prefill_whole(self, ids, r, blocks, chunk):
+        if self.prefix_cache is not None:
+            return self._prefill_cached(ids, r, blocks, chunk)
         self.pp.reset()
         self.pp.run(torch.as_tensor(ids), chunk=chunk)
         self.pp.handoff(self.model, len(ids), block_table=blocks, slot=r)
 
+    def _prefill_cached(self, ids, r, blocks, chunk):
+        """prefill_whole through the host-tier prefix cache: the longest cached prefix h (a multiple of its block)
+        restored into slot r (restore_slot through the request's blocks), the pipeline loaded from it and run from h;
+        a prompt's last whole block H past h is snapshotted on the way (its prefill stops at H, hands off, the
+        snapshot goes to host, the pipeline resumes from the slot) — then the usual handoff of the whole prompt"""
+        pc, model, pp = self.prefix_cache, self.model, self.pp
+        laps = getattr(self, "prefix_laps", None)  # (diagnostics: a list -> (part, seconds), synchronized)
+        t_lap = [time.perf_counter()]
+
+        def lap(name):
+            if laps is not None:
+                self.sync()
+                now = time.perf_counter()
+                laps.append((name, now - t_lap[0]))
+                t_lap[0] = now
+
+        ids = [int(t) for t in ids]
+        n, ids_t = len(ids), torch.as_tensor(ids)
+        h, snap = pc.lookup(ids)
+        H = max(pc.boundaries(n), default=0)
+        if h and H - h < PREFIX_CACHE_STEP:
+            H = 0
+        if h:
+            dev = model.snapshot_from_host(snap)
+            lap("restore: host -> device")
+            model.restore_slot(r, dev, table=blocks)
+            lap("restore: into the slot")
+        if H > h and H < n:
+            if h:  # (the cached prefix, then on to the new boundary)
+                pp.load_prefix(model, h, slot=r, block_table=blocks)
+                lap("load_prefix (hit)")
+                pp.run_from(ids_t[:H], h, chunk=chunk)
+            else:
+                pp.reset()
+                pp.run(ids_t[:H], chunk=chunk)
+            lap("prefill to the new boundary")
+            pp.handoff(model, H, block_table=blocks, slot=r)
+            lap("handoff at the boundary")
+            dev = model.snapshot_slot(r, n_tokens=H, table=blocks)
+            lap("snapshot: slot -> staging")
+            host = model.snapshot_to_host(dev)
+            lap("snapshot: device -> host")
+            pc.insert(ids, H, host, _host_bytes(host))
+            h = H
+        if h:
+            pp.load_prefix(model, h, slot=r, block_table=blocks)
+            lap("load_prefix")
+            pp.run_from(ids_t, h, chunk=chunk)
+        else:
+            pp.reset()
+            pp.run(ids_t, chunk=chunk)
+        lap("prefill of the rest")
+        pp.handoff(model, n, block_table=blocks, slot=r)
+        lap("handoff")
+        if H and H == n and H > h:  # (a prompt of whole blocks: its handed-off state is the boundary's)
+            host = model.snapshot_to_host(model.snapshot_slot(r, n_tokens=H, table=blocks))
+            pc.insert(ids, H, host, _host_bytes(host))
+
     @property
     def can_batch(self):
-        """whether the PP prefill streams several whole prompts through one pass (PPPrefill.run_batch)"""
-        return PP_BATCH and hasattr(self.pp, "run_batch")
+        """whether the PP prefill streams several whole prompts through one pass (PPPrefill.run_batch; not with the
+        prefix cache, which runs each whole prompt through prefill_whole)"""
+        return PP_BATCH and hasattr(self.pp, "run_batch") and self.prefix_cache is None
 
     def prefill_batch(self, items, chunk):
         """items [(prompt ids but the last, block table, slot)] at one PP chunk: one PP pass, each prompt handed off
