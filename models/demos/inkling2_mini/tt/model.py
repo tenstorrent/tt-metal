@@ -34,14 +34,7 @@ from models.demos.inkling2_mini.tt.fused.messages import FusedMessages
 from models.demos.inkling2_mini.tt.fused.norm import FusedRowNorm
 from models.demos.inkling2_mini.tt.moe import Inkling2MoE
 from models.demos.inkling2_mini.tt.prefetch import PrefetchedLinear
-from models.demos.inkling2_mini.tt.residual import (
-    RowOps,
-    _torch,
-    cache_index,
-    split_k_matmul,
-    split_k_weight,
-    to_device,
-)
+from models.demos.inkling2_mini.tt.residual import RowOps, cache_index
 
 HIDDEN = 2304
 N_LAYERS = 24
@@ -81,36 +74,6 @@ def golden_app_inputs(hiddens, embed):
         prev = pass_first[p - 1]
         msg_keys[p] = (inputs[prev + (12 - LOOP_START)], hiddens[prev + (LOOP_END - 1 - LOOP_START)])
     return inputs, msg_keys
-
-
-class _QKVGate:
-    """The q, k, v `MessageGate`s of one loop layer in one call: row i of the inputs goes through gate i
-    (same math as residual.MessageGate; the down outputs are block-masked so each row only sees its own gate)."""
-
-    def __init__(self, rows, w, rank=64):
-        d = rows.device
-        g3 = ("q", "k", "v")
-        down = torch.cat([_torch(w[f"msg_gate.{g}.down"]).reshape(2 * HIDDEN, rank) for g in g3], -1)
-        self.down = split_k_weight(down, d)  # [2C, 3*rank]
-        self.forget = to_device(
-            torch.cat([_torch(w[f"msg_gate.{g}.forget"]).reshape(rank, HIDDEN) for g in g3]).float(), d
-        )
-        self.gain = to_device(torch.cat([_torch(w[f"msg_gate.{g}.gain"]).reshape(rank, HIDDEN) for g in g3]).float(), d)
-        mask = torch.zeros(3, 3 * rank)
-        for i in range(3):
-            mask[i, i * rank : (i + 1) * rank] = 1
-        self.mask = to_device(mask, d)
-        self.rows = rows
-
-    def __call__(self, h, m):
-        """h, m: fp32 [1,1,3,C], rows = (q, k, v) inputs / messages. Returns fp32 [1,1,3,C]."""
-        r = self.rows
-        x = ttnn.concat([r.rms(h, eps=EPS, dtype=ttnn.bfloat16), r.rms(m, eps=EPS, dtype=ttnn.bfloat16)], dim=-1)
-        z = ttnn.typecast(split_k_matmul(x, self.down, r.ckc), ttnn.bfloat16)  # HF: bf16 down_proj output
-        z = ttnn.multiply(z, self.mask, dtype=ttnn.float32)  # bf16 * 0/1: exact
-        f = ttnn.tanh(r.mm(z, self.forget))
-        g = ttnn.tanh(r.mm(z, self.gain))
-        return ttnn.addcmul(ttnn.addcmul(h, f, h, value=-1.0), g, m)  # h - f*h + g*m, fp32
 
 
 class _Layer:

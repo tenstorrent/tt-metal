@@ -11,7 +11,7 @@ import os
 import time
 
 import ttnn
-from models.demos.inkling2_mini.tt.residual import ShortConv
+from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv as ShortConv
 
 # Weight staging (tt/mk/overlap.py) from capture() to release(); INKLING_OVERLAP=0 turns it off (A/B runs).
 # Decode only: its staging tensor holds ~535 KB of L1 on every core, which prefill programs need, so a session that

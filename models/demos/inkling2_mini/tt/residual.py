@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-"""Inkling-2-Mini residual-path ops for batch-1 decode on one card: block attention residual, cross-pass
-messages, message gate and the static k=4 short convolution. All on device, no host reads, static shapes:
-trace-safe.
+"""Inkling-2-Mini residual-path helpers for batch-1 decode on one card: row ops (RMS norms, block-state
+stacks, depth attention), the cross-pass messages (MessageAttnRes) and HF cache indexing. All on device, no host
+reads, static shapes: trace-safe. The per-layer block attention residual, message gates and short convs run as
+the fused kernels in tt/fused/.
 
 Row form (review-r5 #8b): a per-token vector is a [1, 1, 1, C] TILE tensor ("row"); r vectors = [1, 1, r, C].
 RMS norms run width-sharded over 18 cores (~10 us incl. reshards vs 25 us on one core).
@@ -11,14 +12,10 @@ Block-state stacks are kept already RMS-normalised and split along C into SPLIT 
 row k of every chunk = state k (rows >= depth zero). The C-long dot products of attention over depth then run as
 SPLIT small batched matmuls + one sum (review-r5 #5: no fp32 0/1 row-move matmuls, no single-core K=C matmul).
 
-Module ctors take a weights dict keyed by design.md §4 names (torch or host ttnn tensors, §4 shapes):
-    attn_res_q / mlp_res_q / final_res_q  [1,1,32,C] fp32, rows = queries
+MessageAttnRes takes a weights dict keyed by cache names (torch or host ttnn tensors):
     msg_q                                 [1,12,32,C] fp32, rows 0-3 of loop layer l = q, k, v, mlp
-    msg_gate.{q,k,v,mlp}.down             [1,1,2C,64] bf16; .forget / .gain [1,1,64,C] fp32
-    post_attn_conv / post_mlp_conv        [1,1,4,C] fp32, row r = tap at lag r
 """
 
-import math
 
 import torch
 
@@ -176,27 +173,6 @@ class RowOps:
         return ttnn.reshape(out, [1, 1, nq, self.c])
 
 
-class AttnRes:
-    """Inkling2LoopBlockAttentionResidual: softmax_depth(q . rms(S)^T / sqrt(C)) . rms(S) over
-    S = [block states..., partial]. name = attn_res_q (1 query, or 3 = q,k,v in global layers),
-    mlp_res_q or final_res_q."""
-
-    def __init__(self, rows: RowOps, weights, name, num_queries=1):
-        q = _torch(weights[name]).float().reshape(-1, _torch(weights[name]).shape[-1])[:num_queries]
-        self.rows = rows
-        self.nq = num_queries
-        self.q = to_device(split_rows(q * q.shape[-1] ** -0.5), rows.device)  # 1/sqrt(C) folded into q
-
-    def __call__(self, stack, partial, depth: int, split=True):
-        """stack: split stack of depth-1 sealed states (None at depth 1). partial: row. Returns a list of
-        num_queries fp32 rows (split=False: one [1,1,num_queries,C] tensor)."""
-        r = self.rows
-        out = r.attend(self.q, r.seal(stack, partial, depth - 1), r.depth_mask[depth], self.nq)
-        if not split:
-            return out
-        return [out] if self.nq == 1 else [ttnn.slice(out, [0, 0, j, 0], [1, 1, j + 1, r.c]) for j in range(self.nq)]
-
-
 class MessageAttnRes:
     """Inkling2LoopMessageAttentionResidual for one whole pass. Keys = [input of L12 (block state), output of
     L17] of the previous pass, shared by all 12 loop layers: one [48, C] query attend per pass."""
@@ -221,68 +197,3 @@ class MessageAttnRes:
         """Rows of the previous pass -> [1,1,48,C] fp32, row 4l+j = message j (q, k, v, mlp) of loop layer l."""
         r = self.rows
         return r.attend(self.q, r.seal(r.seal(None, h12_in, 0), h17_out, 1), self.mask, self.nq)
-
-    def messages_for_pass(self, h12_in, h17_out):
-        """Rows of the previous pass -> [12][q, k, v, mlp] fp32 message rows."""
-        out = self.all_messages(h12_in, h17_out)
-        sel = [self.rows.selector(1, self.nq, [(0, i)]) for i in range(self.nq)]
-        return [[self.rows.mm(sel[4 * l + j], out) for j in range(4)] for l in range(NUM_LOOP_LAYERS)]
-
-
-class MessageGate:
-    """Inkling2LoopMessageGate: (1 - tanh(F z)) * h + tanh(G z) * m with z = down(cat(rms h, rms m)).
-    which = q, k, v or mlp."""
-
-    def __init__(self, rows: RowOps, weights, which, eps=1e-6):
-        d = rows.device
-        p = f"msg_gate.{which}."
-        w = {k: _torch(weights[p + k]) for k in ("down", "forget", "gain")}
-        self.rows = rows
-        self.eps = eps
-        self.down = split_k_weight(w["down"].reshape(w["down"].shape[-2:]), d)
-        self.forget = to_device(w["forget"].reshape(w["forget"].shape[-2:]).float(), d)
-        self.gain = to_device(w["gain"].reshape(w["gain"].shape[-2:]).float(), d)
-
-    def __call__(self, h, m):
-        """h, m: [1,1,r,C] (fp32 or bf16), row-wise. Returns fp32."""
-        r = self.rows
-        h, m = _f32(h), _f32(m)
-        # HF casts cat(rms h, rms m) to the down_proj dtype: cast in the norm's reshard
-        nh = r.rms(h, eps=self.eps, dtype=ttnn.bfloat16)
-        nm = r.rms(m, eps=self.eps, dtype=ttnn.bfloat16)
-        x = ttnn.concat([nh, nm], dim=-1)
-        z = ttnn.typecast(split_k_matmul(x, self.down, r.ckc), ttnn.bfloat16)  # HF: bf16 down_proj output
-        f = ttnn.tanh(r.mm(z, self.forget))
-        g = ttnn.tanh(r.mm(z, self.gain))
-        return ttnn.addcmul(ttnn.addcmul(h, f, h, value=-1.0), g, m)  # h - f*h + g*m, fp32
-
-
-class ShortConv:
-    """Inkling2LoopShortConvolution (static): (conv_k4(x) + x) / sqrt(5) in fp32, one decode step.
-    name = post_attn_conv or post_mlp_conv. The dynamic k/v conv (/sqrt(9)) lives in attention (T3).
-
-    State = ring of 4 fp32 rows; the input of position t lives in slot t % 4. The slot roles depend on t % 4 only,
-    so a decode step is traced once per phase (see Generator): no row moves, no copies but the slot write."""
-
-    PHASES = 4
-
-    def __init__(self, rows: RowOps, weights, name):
-        t = _torch(weights[name]).float().reshape(4, -1).clone()
-        t[0] += 1  # fold the residual into the lag-0 tap
-        t /= math.sqrt(5)
-        self.rows = rows
-        self.c = t.shape[-1]
-        self.taps = [to_device(t[k].view(1, 1, 1, -1), rows.device) for k in range(4)]  # lag k
-
-    def alloc_state(self, c):
-        """Zero ring [4 x [1,1,1,C] fp32] for HF cache index c (see cache_index)."""
-        assert 0 <= c < NUM_CACHE_SETS, c
-        return [to_device(torch.zeros(1, self.c), self.rows.device) for _ in range(self.PHASES)]
-
-    def __call__(self, x, ring, phase):
-        """x: row at position t, phase = t % 4. Writes x into the ring; returns the output row in x's dtype."""
-        ttnn.typecast(x, ttnn.float32, output_tensor=ring[phase])
-        y = ttnn.multiply(ring[phase], self.taps[0], dtype=ttnn.float32)
-        for k in (1, 2, 3):
-            y = ttnn.addcmul(y, ring[(phase - k) % 4], self.taps[k])
-        return y if x.dtype == ttnn.float32 else ttnn.typecast(y, x.dtype)
