@@ -66,11 +66,11 @@ inline uint32_t word_owner(uint32_t word) { return (word % kWordResidues) * kWor
 // cache. Bucket (worker, to) holds the rows `worker` hands to word owner `to`, at buckets + (worker * kWorkers + to) *
 // bucket_cap; bucketed[worker * kWorkers + to] gets its length.
 inline void bucket(
-    const uint32_t* idx,
+    const uint32_t* __restrict__ idx,
     uint32_t max_rows,
     uint32_t begin,
     uint32_t end,
-    uint32_t* buckets,
+    uint32_t* __restrict__ buckets,
     uint32_t bucket_cap,
     uint32_t* bucketed,
     uint32_t worker) {
@@ -79,7 +79,23 @@ inline void bucket(
     for (uint32_t to = 0; to < kWorkers; ++to) {
         bucket_end[to] = first + to * bucket_cap;
     }
-    for (uint32_t i = begin; i < end; ++i) {
+    // Loads kLoadBatch rows before storing any, so their L1 latencies overlap.
+    constexpr uint32_t kLoadBatch = 8;
+    uint32_t i = begin;
+    for (; i + kLoadBatch <= end; i += kLoadBatch) {
+        uint32_t rows[kLoadBatch];
+#pragma GCC unroll 8
+        for (uint32_t k = 0; k < kLoadBatch; ++k) {
+            rows[k] = idx[i + k];
+        }
+#pragma GCC unroll 8
+        for (uint32_t k = 0; k < kLoadBatch; ++k) {
+            if (rows[k] < max_rows) {
+                *bucket_end[word_owner(rows[k] / kRowsPerWord)]++ = rows[k];
+            }
+        }
+    }
+    for (; i < end; ++i) {
         const uint32_t row = idx[i];
         if (row < max_rows) {
             *bucket_end[word_owner(row / kRowsPerWord)]++ = row;
@@ -107,8 +123,17 @@ inline uint32_t scatter(
     for (uint32_t from = 0; from < kWorkers; ++from) {
         const uint32_t* rows = buckets + (from * kWorkers + worker) * bucket_cap;
         const uint32_t count = bucketed[from * kWorkers + worker];
+        // Rows loaded kLoadBatch at a time ahead of the bit updates, so their L1 latencies overlap.
+        constexpr uint32_t kLoadBatch = 8;
+        uint32_t batch[kLoadBatch];
         for (uint32_t i = 0; i < count; ++i) {
-            const uint32_t row = rows[i];
+            if (i % kLoadBatch == 0) {
+#pragma GCC unroll 8
+                for (uint32_t k = 0; k < kLoadBatch; ++k) {
+                    batch[k] = rows[i + k];  // may read past count, inside the bucket's padded capacity
+                }
+            }
+            const uint32_t row = batch[i % kLoadBatch];
             const uint32_t row_word = row / kRowsPerWord;
             if (row_word != word) {
                 if (word != kSentinel) {
@@ -305,6 +330,38 @@ inline void rewrite(
     const uint32_t* __restrict__ range_offsets,
     const uint32_t* __restrict__ run_bases,
     bool dense) {
+    constexpr uint32_t kLoadBatch = 4;
+    if (!dense) {
+        // kLoadBatch indices at a time: their rows, then their bitmap words and word ranks, then the arithmetic.
+        uint32_t i = begin;
+        for (; i + kLoadBatch <= end; i += kLoadBatch) {
+            uint32_t rows[kLoadBatch], bits[kLoadBatch], ranks[kLoadBatch];
+#pragma GCC unroll 4
+            for (uint32_t k = 0; k < kLoadBatch; ++k) {
+                rows[k] = idx[i + k];
+            }
+#pragma GCC unroll 4
+            for (uint32_t k = 0; k < kLoadBatch; ++k) {
+                const uint32_t word = rows[k] < max_rows ? rows[k] / kRowsPerWord : 0;
+                bits[k] = bitmap[word];
+                ranks[k] = word_ranks[word];
+            }
+#pragma GCC unroll 4
+            for (uint32_t k = 0; k < kLoadBatch; ++k) {
+                const uint32_t row = rows[k];
+                if (row >= max_rows) {
+                    idx[i + k] = kSentinel;
+                    continue;
+                }
+                const uint32_t block = row / stripe_chunk;
+                const uint32_t owner = block % num_devices;
+                const uint32_t rank = range_offsets[(block / range_blocks) * owner_stride(num_devices) + owner] +
+                                      ranks[k] + __builtin_popcount(bits[k] & ((1u << (row % kRowsPerWord)) - 1u));
+                idx[i + k] = sparse_push::compact_page<pages_per_packet, banks>(run_bases[owner], rank);
+            }
+        }
+        begin = i;
+    }
 #pragma GCC unroll 2  // tuning knob
     for (uint32_t i = begin; i < end; ++i) {
         const uint32_t row = idx[i];
