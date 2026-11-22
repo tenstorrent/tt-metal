@@ -15,8 +15,8 @@ plain pytest; this module runs each of them whole, in a tt-run world of its own,
 every one of their tests.
 """
 
+import json
 import os
-import re
 import socket
 import sys
 
@@ -213,31 +213,30 @@ DUAL_RANK_MGD = "tests/ttnn/distributed/config/bh_1x4_dual_rank_mesh_graph_descr
 TWO_MESH_MGD = os.path.join(HERE, "bh_two_1x2_meshes_one_host.textproto")
 # A tt-run module runs its two-rank tests in one world; on a QuietBox 2 each module takes under three minutes.
 MODULE_TIMEOUT_S = 600
-ANSI = re.compile(r"\x1b\[[0-9;]*m")
-# The summary pytest -q prints on one rank, as tt-run's --tag-output prefixes it.
-RANK_SUMMARY = re.compile(r"^\[\d+,(\d+)\]<stdout>:\s*(.*\b\d+ (passed|failed|skipped|errors?)\b.*)$")
 
 
-def _run_module_on_two_ranks(module: str, mgd: str, env: dict) -> None:
+def _run_module_on_two_ranks(module: str, mgd: str, env: dict, results: str) -> None:
     """Run the tt-run test module ``module`` whole on two ranks of this host, and require every one of its tests to
-    pass on both ranks: none may fail or skip."""
+    pass on both ranks: none may fail or skip. Each rank reports its outcome in a file in ``results`` (the
+    ``pytest_sessionfinish`` of this directory's conftest), since tt-run can interleave the ranks' output lines."""
     if TT_RUN is None:
         pytest.skip("tt-run is not installed")
     if not os.path.isfile(mgd):
         pytest.skip(f"no descriptor {mgd}")
-    env = dict(env)
+    os.makedirs(results, exist_ok=True)
+    env = dict(env, DCP_RANK_RESULTS_DIR=results)
     env.pop("TT_MESH_GRAPH_DESC_PATH", None)
     command = [sys.executable, "-m", "pytest", "-q", "--color=no", "-p", "no:cacheprovider", os.path.join(HERE, module)]
     proc = run_world(tt_run_command(mgd, socket.gethostname(), command), env, MODULE_TIMEOUT_S)
-    lines = [ANSI.sub("", line) for line in output_lines(proc)]
-    summaries = {m.group(1): m.group(2) for m in map(RANK_SUMMARY.match, lines) if m}
-    tail = "\n".join(lines[-60:])
-    assert proc.returncode == 0 and set(summaries) == {"0", "1"}, f"{module}: exit {proc.returncode}:\n{tail}"
-    for rank, summary in sorted(summaries.items()):
-        print(f"{module} rank {rank}: {summary}")
-        assert re.search(r"\d+ passed", summary) and not re.search(
-            r"failed|error|skipped", summary
-        ), f"{module} rank {rank}: {summary}\n{tail}"
+    tail = "\n".join(output_lines(proc)[-60:])
+    for rank in (0, 1):
+        path = os.path.join(results, f"rank-{rank}.json")
+        assert os.path.isfile(path), f"{module}: rank {rank} reported no outcome (exit {proc.returncode}):\n{tail}"
+        with open(path) as f:
+            outcome = json.load(f)
+        print(f"{module} rank {rank}: {outcome}")
+        bad = {k: outcome[k] for k in ("failed", "error", "skipped", "xfailed", "xpassed") if outcome[k]}
+        assert outcome["exitstatus"] == 0 and outcome["passed"] and not bad, f"{module} rank {rank}: {outcome}\n{tail}"
 
 
 @pytest.mark.timeout(MODULE_TIMEOUT_S + 2 * CHILD_TIMEOUT_S + 60)
@@ -249,28 +248,29 @@ def test_two_ranks_on_one_mesh_load_on_one_process(tmp_path, release_metal_env, 
     skip_if_host_too_small((4,), "the dual-rank module")
     release_metal_env()
     mgd = os.path.join(os.environ.get("TT_METAL_HOME", os.getcwd()), DUAL_RANK_MGD)
-    _run_module_on_two_ranks("test_dcp_multirank.py", mgd, dict(os.environ, DCP_CROSS_WORLD_DIR=str(tmp_path)))
+    env = dict(os.environ, DCP_CROSS_WORLD_DIR=str(tmp_path))
+    _run_module_on_two_ranks("test_dcp_multirank.py", mgd, env, str(tmp_path / "results"))
     assert os.path.isfile(tmp_path / "shards_1.npz"), "the source test wrote no shards"
     out = _run(["load-tp-block", "--dir", str(tmp_path), "--mesh", "1x1", "--axes", "dp,tp"], "load")
     assert "RESULT: OK" in out, out.splitlines()[-5:]
 
 
 @pytest.mark.timeout(MODULE_TIMEOUT_S + 60)
-def test_the_two_mesh_module_passes_on_two_ranks(release_metal_env, skip_if_host_too_small):
+def test_the_two_mesh_module_passes_on_two_ranks(tmp_path, release_metal_env, skip_if_host_too_small):
     """The test_dcp_multimesh module, whole: two ranks with one [1, 2] mesh each, every test passing on both."""
     skip_if_host_too_small((4,), "the two-mesh module")
     release_metal_env()
-    _run_module_on_two_ranks("test_dcp_multimesh.py", TWO_MESH_MGD, dict(os.environ))
+    _run_module_on_two_ranks("test_dcp_multimesh.py", TWO_MESH_MGD, dict(os.environ), str(tmp_path))
 
 
 @pytest.mark.timeout(MODULE_TIMEOUT_S + 60)
-def test_the_uneven_load_failure_module_passes_on_two_ranks(release_metal_env, skip_if_host_too_small):
+def test_the_uneven_load_failure_module_passes_on_two_ranks(tmp_path, release_metal_env, skip_if_host_too_small):
     """The test_dcp_multirank_uneven_failure module: its load leaves the two ranks' device allocations out of step, so
     it runs in a tt-run world of its own, where nothing runs after it."""
     skip_if_host_too_small((4,), "the uneven-failure module")
     release_metal_env()
     mgd = os.path.join(os.environ.get("TT_METAL_HOME", os.getcwd()), DUAL_RANK_MGD)
-    _run_module_on_two_ranks("test_dcp_multirank_uneven_failure.py", mgd, dict(os.environ))
+    _run_module_on_two_ranks("test_dcp_multirank_uneven_failure.py", mgd, dict(os.environ), str(tmp_path))
 
 
 def test_non_finite_values_fail_the_comparison_on_either_side():

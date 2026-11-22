@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Makes this directory's helper (``dcp_oracle``) importable whether pytest collects this directory alone or the whole
-``tt-train/tests/python`` tree, and puts the process-wide generators back after every test here, since these tests
-reseed and restore them."""
+``tt-train/tests/python`` tree, puts the process-wide generators back after every test here, since these tests reseed
+and restore them, and lets each rank of a tt-run module report its outcome to the cross-world module."""
 
+import json
 import os
 import random
 import sys
@@ -41,3 +42,20 @@ def _restore_process_generators():
     ttml.init.set_rng_state(saved[3])
     if torch is not None:
         torch.set_rng_state(saved[4])
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """With ``DCP_RANK_RESULTS_DIR`` set (``test_dcp_cross_world`` sets it when it runs a tt-run module), every rank
+    writes ``rank-<MPI world rank>.json`` there: its exit status and how many tests passed, failed, errored or were
+    skipped. The cross-world module reads these files rather than the ranks' output, whose lines tt-run can
+    interleave."""
+    out = os.environ.get("DCP_RANK_RESULTS_DIR")
+    if not out:
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    stats = reporter.stats if reporter is not None else {}
+    outcome = {"exitstatus": int(exitstatus)}
+    outcome.update({k: len(stats.get(k, [])) for k in ("passed", "failed", "error", "skipped", "xfailed", "xpassed")})
+    rank = os.environ.get("OMPI_COMM_WORLD_RANK", os.environ.get("PMIX_RANK", "0"))
+    with open(os.path.join(out, f"rank-{rank}.json"), "w") as f:
+        json.dump(outcome, f)
