@@ -63,6 +63,7 @@ from models.demos.inkling2_mini.tt.fused.pf_conv import PfConv
 from models.demos.inkling2_mini.tt.fused.pf_gate import PfGateTail
 from models.demos.inkling2_mini.tt.fused.pf_gateout import PfGateOut
 from models.demos.inkling2_mini.tt.fused.pf_heads import PfHeads, half_proj, half_scale_rows, scale_rows
+from models.demos.inkling2_mini.tt.fused.pf_rel import PfRel, skew_proj
 from models.demos.inkling2_mini.tt.fused.pf_route import PfRoute
 from models.demos.inkling2_mini.tt.model import APPS, HIDDEN, LOOP_END, LOOP_START, SOFTCAP, VOCAB_REAL
 from models.demos.inkling2_mini.tt.moe import INTER, NUM_EXPERTS, RMS_EPS, ROUTE_SCALE, TOP_K, softcapped_swiglu
@@ -327,6 +328,8 @@ class _LayerPF:
         if pf._pfheads is not None and pf.r3:  # PfHeads' 16-wide rel heads (each in its half of a tile)
             self.rel_scale_half = put(half_scale_rows(_host(w["attn.rel_clip_scale"]).view(N_HEADS, D_REL)))
             self.rel_proj_half = put(half_proj(rel_p), ttnn.bfloat16)
+            if pf._pfrel is not None:  # the same projection, skewed per row phase (tt/fused/pf_rel.py)
+                self.rel_bsk = put(skew_proj(half_proj(rel_p).view(32, WINDOW)), ttnn.bfloat16)
         self.bu = None if pf.r3 else put(_band_matrix(rel_p, lay.is_global), ttnn.bfloat16)
         # k/v conv taps per lag (fp32). Local: residual and 1/sqrt(K+1) folded in; global: static taps, the
         # residual and 1/sqrt(2K+1) are applied after adding the dynamic taps.
@@ -427,6 +430,9 @@ class Inkling2Prefill:
         self._pfconv = PfConv(dev) if fused_glue else None
         self._pfheads = PfHeads(dev) if fused_heads else None
         self._pfgate = PfGateOut(dev) if fused_heads else None
+        # skewed rel bias (PfRel + scaled_dot_product_attention(rel_skewed=True)): needs a build with rel_skewed
+        skew = fused_heads and "rel_skewed" in (ttnn.transformer.scaled_dot_product_attention.__doc__ or "")
+        self._pfrel = PfRel(dev) if skew else None
         self.ckc = model.rows.ckc  # HiFi4, fp32 acc
         self.hifi4 = model.hifi4
         self.mm_cfg = model.mm_cfg
@@ -704,9 +710,13 @@ class Inkling2Prefill:
         last t keys: local keys = [ring rotated to position order ++ chunk] (only the s valid slots while s < 1024),
         global keys =
         kv_full rows [0, s + t) (the chunk is written there first)."""
-        proj = lp.rel_proj_half if rel.shape[-1] == 32 else lp.rel_proj  # PfHeads rel: [proj; proj] (see half_proj)
-        rl = ttnn.matmul(rel, proj, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4)  # [1,24,t,1024]
-        rl = ttnn.to_layout(rl, ttnn.ROW_MAJOR_LAYOUT)
+        skewed = self._pfrel is not None and rel.shape[-1] == 32
+        if skewed:  # [1,24,t,1056] rows in the SDPA's skewed layout, built in one program
+            rl = self._pfrel(ttnn.to_layout(rel, ttnn.ROW_MAJOR_LAYOUT), lp.rel_bsk)
+        else:
+            proj = lp.rel_proj_half if rel.shape[-1] == 32 else lp.rel_proj  # PfHeads rel: [proj; proj] (half_proj)
+            rl = ttnn.matmul(rel, proj, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4)  # [1,24,t,1024]
+            rl = ttnn.to_layout(rl, ttnn.ROW_MAJOR_LAYOUT)
         if lp.lay.is_global:
             if s == 0:
                 kk, vv = k_c, v_c
@@ -734,6 +744,7 @@ class Inkling2Prefill:
             scale=1.0,
             sliding_window_size=window,
             rel_logits=rl,
+            rel_skewed=skewed,
             attention_sink=_bf16(sink),
             program_config=self._sdpa_cfg(*self.r3_chunks),
             compute_kernel_config=self.sdpa_ckc,
