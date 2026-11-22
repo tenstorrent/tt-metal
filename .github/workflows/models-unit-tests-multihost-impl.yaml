@@ -107,8 +107,6 @@ jobs:
         # Keep runtime compilation and tt-run working directory on a single source root.
         working-directory: /home/user/tt-metal
         run: |
-          # Test code must not be able to request OIDC tokens.
-          unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
           # Store command safely using heredoc
           CMD=$(cat << 'EOF'
           ${{ matrix.test-group.cmd }}
@@ -117,7 +115,10 @@ jobs:
 
           echo "Running: ${{ matrix.test-group.name }}"
           echo "$CMD"
-          eval "$CMD"
+          # Replace this shell (exec) with one that has no OIDC request variables, so the
+          # test processes cannot read them from the parent's /proc/<pid>/environ.
+          exec env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            CMD="$CMD" bash -eo pipefail -c 'eval "$CMD"'
 
       - name: Prepare artifacts for upload
         if: always()

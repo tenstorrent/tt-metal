@@ -45,7 +45,7 @@ on:
         description: "Filtered matrix of exabox multihost legs that ran."
         value: ${{ jobs.load-test-matrix.outputs.matrix_multihost }}
 
-# Default to read-only. Only the multihost job needs id-token, which it grants on the job itself.
+# Default to read-only. The jobs that need id-token (Hugging Face OIDC token) grant it on the job itself.
 # Single-host legs pull the dev container image, so packages: read is the default.
 permissions:
   contents: read
@@ -137,6 +137,12 @@ jobs:
   models-unit-tests:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    # id-token: write is for the Hugging Face OIDC exchange (hf-oidc-token). The caller must
+    # grant it too. A job-level block replaces the workflow default, so restate the reads.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -221,7 +227,8 @@ jobs:
         with:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: |
-            # Test code must not be able to request OIDC tokens.
+            # Best effort: tests do not inherit the OIDC request variables. The wrapper shell
+            # (run-with-log) keeps them in its own environment.
             unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
             mkdir -p generated/test_reports
             ${{ matrix.test-group.cmd }}
