@@ -1163,7 +1163,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Whether the kernels run their own causal paths (lightweight causal mask, zigzag balancing, causal K
     // bound, chain-forwarding exclusion). Off for windowed causal, which the windowed K range and mask
     // generator realize instead.
-    const bool use_causal_kernel = operation_attributes.is_causal && !is_windowed;
+    // rel_logits: causal by construction, but the mask (bias, window, causal) is built by the reader and applied
+    // through the provided-mask path with the reader's K-range narrowing.
+    const bool use_rel_bias = tensor_args.rel_logits.has_value();
+    const bool use_causal_kernel = operation_attributes.is_causal && !is_windowed && !use_rel_bias;
     const auto& chunk_start_idx = operation_attributes.chunk_start_idx;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     const auto& program_config = operation_attributes.program_config;
@@ -1268,9 +1271,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
     const uint32_t q_num_chunks = padded_Sq / q_chunk_size;
     const uint32_t k_num_chunks = padded_Sk / k_chunk_size;
-    const bool use_provided_mask = attn_mask.has_value();
-    const bool broadcast_provided_mask_batch = use_provided_mask ? (attn_mask.value().logical_shape()[0] == 1) : false;
-    const bool broadcast_provided_mask_heads = use_provided_mask ? (attn_mask.value().logical_shape()[1] == 1) : false;
+    const bool use_provided_mask = attn_mask.has_value() || use_rel_bias;
+    const bool broadcast_provided_mask_batch = attn_mask.has_value() && attn_mask.value().logical_shape()[0] == 1;
+    const bool broadcast_provided_mask_heads = attn_mask.has_value() && attn_mask.value().logical_shape()[1] == 1;
     // Windowed mode synthesizes the mask in the writer; the compute consumes it through the provided-mask
     // path even though there is no attn_mask tensor (and the reader does not read one).
     const bool compute_use_provided_mask = use_provided_mask || is_windowed;
@@ -1278,7 +1281,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // positions outside the final boundary, so the generic generated-padding-mask paths must stay disabled.
     const bool generated_padding_mask = use_padded_mask && !is_windowed;
     const bool use_mask_block_map = tensor_args.attn_mask_block_map.has_value();
-    const bool use_k_range_ctrl = is_windowed || use_mask_block_map;
+    const bool use_k_range_ctrl = is_windowed || use_mask_block_map || use_rel_bias;
+    // rel_logits: one 64 B aligned row segment of Sk_chunk + 64 elements per query row of a mask tile row.
+    const uint32_t rel_row_bytes = tt::round_up(Sk_chunk_t * TILE_WIDTH * 2 + 128, 64);
 
     // log_debug all of the above
     log_debug(tt::LogOp, "B: {}", B);
@@ -1395,7 +1400,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t fp32_tile_bytes = tt::tile_size(tt::DataFormat::Float32);
     const uint32_t l1_budget_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
+    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en) && !use_rel_bias;
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
@@ -1422,7 +1427,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         use_causal_kernel,
         device->arch() == tt::ARCH::BLACKHOLE,
         causal_chains_pay(num_cores, DHt, input_tensor_k.dtype() == DataType::BFLOAT16, fp32_dest_acc_en),
-        !is_chunked && !has_sliding_window && !is_windowed,
+        !is_chunked && !has_sliding_window && !is_windowed && !use_rel_bias,
         kv_retain != 0,
         global_q_pair_distribute && !use_provided_mask,
         fp32_dest_acc_en && !use_streaming_compute && block_float_kv,
@@ -1661,13 +1666,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         static_cast<uint32_t>(use_provided_mask),
         static_cast<uint32_t>(generated_padding_mask),
         static_cast<uint32_t>(is_chunked),
-        sliding_window_size.value_or(0),
-        static_cast<uint32_t>(lightweight_mask),       // arg 16: lightweight mask
-        static_cast<uint32_t>(use_streaming_compute),  // arg 17: row-grouped cb_out drain
-        out_out_subblock_h,                            // arg 18: drain group height
-        k_partial_col,                                 // arg 19: K partial-tile col (0 = no partial)
-        static_cast<uint32_t>(use_zigzag_balancing),   // arg 20
-        static_cast<uint32_t>(windowed_mode),          // arg 21: windowed block-diagonal mask generation
+        use_rel_bias ? 0u : sliding_window_size.value_or(0),  // rel_logits: the reader masks the window
+        static_cast<uint32_t>(lightweight_mask),              // arg 16: lightweight mask
+        static_cast<uint32_t>(use_streaming_compute),         // arg 17: row-grouped cb_out drain
+        out_out_subblock_h,                                   // arg 18: drain group height
+        k_partial_col,                                        // arg 19: K partial-tile col (0 = no partial)
+        static_cast<uint32_t>(use_zigzag_balancing),          // arg 20
+        static_cast<uint32_t>(windowed_mode),                 // arg 21: windowed block-diagonal mask generation
         static_cast<uint32_t>(operation_attributes.output_concat_heads),  // arg 22: concat-heads output layout
         sender_semaphore_id,           // arg 23: causal chains, the writer forwards K/V
         receiver_semaphore_id,         // arg 24
@@ -1710,7 +1715,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         static_cast<uint32_t>(generated_padding_mask),
         static_cast<uint32_t>(is_chunked),
         scale_packed,
-        sliding_window_size.value_or(0),
+        use_rel_bias ? 0u : sliding_window_size.value_or(0),  // rel_logits: the reader masks the window
         static_cast<std::uint32_t>(use_attention_sink),
         static_cast<std::uint32_t>(use_streaming_compute),  // arg 26
         valid_Skt,                                    // arg 27: unpadded K tile count for streaming padded_k_tiles
@@ -1726,6 +1731,18 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (use_rel_bias) {
+        // Reader-only: band width W, query row 0's position (Sk - Sq), row bytes of the scratch, and a per-query sink.
+        const auto& rel_shape = tensor_args.rel_logits->logical_shape();
+        defines_map["SDPA_REL_BIAS"] = "1";
+        defines_map["SDPA_REL_W"] = std::to_string(rel_shape[3]);
+        defines_map["SDPA_REL_Q_OFF"] = std::to_string(k_shape[2] - q_shape[2]);
+        defines_map["SDPA_REL_ROW_BYTES"] = std::to_string(rel_row_bytes);
+        if (attention_sink.has_value() && attention_sink->logical_shape()[2] == q_shape[2]) {
+            defines_map["SDPA_PER_QUERY_SINK"] = "1";
+            defines_map["SDPA_SINK_B"] = std::to_string(attention_sink->logical_shape()[0]);
+        }
+    }
     if (fp32_dest_acc_en) {
         // Matches the fp32 max CBs allocated below. Other factories sharing compute_common.hpp keep
         // bf16 max CBs, and ring-joint kernels have no kernel-config-buffer room for the SFPU row max.
@@ -1750,8 +1767,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
     // Windowed mask is generated on-device. Float16_b so it works on both the streaming path (which does
     // not decode block-float masks) and the standard path; windowed_mask_gen.hpp fills the right format.
-    tt::DataFormat mask_df =
-        is_windowed ? tt::DataFormat::Float16_b : select_mask_dataformat(attn_mask, use_streaming_compute);
+    tt::DataFormat mask_df = (is_windowed || use_rel_bias) ? tt::DataFormat::Float16_b
+                                                           : select_mask_dataformat(attn_mask, use_streaming_compute);
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -1845,6 +1862,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         cb_ids.page_table = allocate_cb(page_table_stick_size, 1, page_table_df);
     }
     const uint32_t block_map_stick_size = allocate_mask_block_map_cb(tensor_args, cb_ids, allocate_cb);
+    if (use_rel_bias) {
+        cb_ids.rel_scratch = allocate_cb(rel_row_bytes * TILE_HEIGHT + 64, 1, tt::DataFormat::Float16_b);
+        if (cb_ids.windowed_k_range == cb_ids.q_in) {
+            cb_ids.windowed_k_range = allocate_cb(16, 2, tt::DataFormat::Int32);
+        }
+    }
     if (flexible_chunked) {
         constexpr uint32_t chunk_start_idx_page_size = 32;
         cb_ids.chunk_start_idx_compute = allocate_cb(chunk_start_idx_page_size, 1, tt::DataFormat::Int32);
@@ -1881,6 +1904,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const auto compute_cb_compile_time_args = cb_ids.compute_compile_time_args();
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
+    if (use_rel_bias) {
+        TensorAccessorArgs(tensor_args.rel_logits->buffer()).append_to(reader_compile_time_args);
+    }
     writer_compile_time_args.insert(
         writer_compile_time_args.end(), writer_cb_compile_time_args.begin(), writer_cb_compile_time_args.end());
     compute_compile_time_args.insert(
@@ -2091,6 +2117,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             reader_args.push_back(chain.prev_seg_global_start);
             reader_args.push_back(chain.prev_seg_count);
             reader_args.push_back(chain.next_seg_global_start);
+        }
+        if (use_rel_bias) {
+            reader_args.push_back(tensor_args.rel_logits->buffer());
         }
 
         reader_desc.emplace_runtime_args(core, reader_args);

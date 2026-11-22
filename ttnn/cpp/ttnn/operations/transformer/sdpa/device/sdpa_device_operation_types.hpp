@@ -54,6 +54,9 @@ struct SDPAInputs {
     std::optional<Tensor> windowed_q_token_offset_tensor;
     // [Bm, Hm, q chunks, k chunks] int32 or uint32, nonzero where that block of the dense attn_mask is not all masked.
     std::optional<Tensor> attn_mask_block_map;
+    // Banded relative bias [B, NQH, Sq, W] bf16 ROW_MAJOR: rel_logits[b, h, i, d] is added to the logit of
+    // query row i and the key at distance d = (i + Sk - Sq) - j, for 0 <= d < W. The reader builds the mask.
+    std::optional<Tensor> rel_logits;
 };
 
 }  // namespace ttnn::prim

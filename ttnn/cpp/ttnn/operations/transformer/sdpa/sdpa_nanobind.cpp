@@ -408,6 +408,7 @@ void bind_sdpa(nb::module_& mod) {
             windowed_q_token_offset_tensor (ttnn.Tensor, optional): Defaults to `None`. Windowed mode only. The per-device form of `windowed_q_token_offset`: a 1-element int32/uint32 ROW_MAJOR on-device tensor holding the same global row index; when provided it overrides the scalar. Every device runs the same cached program, so a scalar cannot differ across a mesh -- shard this tensor on the sequence-parallel mesh axis (e.g. `arange(sp) * local_seq_len`) so each device reads its own shard's origin. The scalar's constraints apply to each device's value (a multiple of TILE_HEIGHT; `offset + Sq <= Sk`) but cannot be validated host-side -- they are the caller's responsibility.
             output_concat_heads (bool): Defaults to `False`. Write the heads side by side as [b x 1 x s x nqh*dh] (what `nlp_concat_heads` produces from the default layout) without that op. Plain SDPA only.
             attn_mask_block_map (ttnn.Tensor, optional): Defaults to `None`. Non causal with `attn_mask` only. [Bm x Hm x ceil(Sq / q_chunk) x ceil(Sk / k_chunk)] int32/uint32 ROW_MAJOR with the mask's batch and head dims, nonzero where a (q chunk, k chunk) block of the mask has a visible entry. Blocks flagged 0 are not read or computed; rows whose every block is 0 are unspecified. Heads whose K/V chunks are forwarded between their cores keep those chains, and stream every block, while fewer than 40 percent of the blocks in a sample of the map's rows are masked; skipping blocks pays only past that.
+            rel_logits (ttnn.Tensor, optional): Defaults to `None`. Banded relative bias [b x nqh x sq x w], bf16 ROW_MAJOR in DRAM, with `w` a multiple of 32. Needs `is_causal=True` and no `attn_mask`. Query row `i` sits at position `i + sk - sq` (the queries are the last `sq` keys); `rel_logits[b, h, i, d]` is added to its logit for the key at distance `d = i + sk - sq - j` when `0 <= d < w`. Keys at `d < 0` are masked; keys at `d >= w` are visible without bias, or masked when `sliding_window_size` is set and `d >= sliding_window_size`. Like `attn_mask`, the bias is added unscaled. The mask is built in the kernel, one tile at a time, and K chunks outside the window are skipped. With `rel_logits`, `attention_sink` may also be per query: [b or 1 x nqh x sq x 1] TILE. Needs `fp32_dest_acc_en=True` (the non streaming kernel), `sq` and `sk` multiples of 32.
 
 
         Grouped-query attention (non-causal, `nqh > nkh`) is scheduled automatically. Cores working on the query
@@ -443,7 +444,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("windowed_q_token_offset") = 0,
         nb::arg("windowed_q_token_offset_tensor") = nb::none(),
         nb::arg("output_concat_heads") = false,
-        nb::arg("attn_mask_block_map") = nb::none());
+        nb::arg("attn_mask_block_map") = nb::none(),
+        nb::arg("rel_logits") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,

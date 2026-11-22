@@ -66,6 +66,88 @@ FORCE_INLINE void post_kv_forward(CircularBuffer& cb_kv_fwd, uint32_t address, u
     cb_kv_fwd.push_back(1);
 }
 
+#ifdef SDPA_REL_BIAS
+// Banded relative bias (rel_logits): one mask tile row of Sk_chunk_t tiles, built from the bias rows instead of read.
+// Query row q (absolute position q + SDPA_REL_Q_OFF) and key k are at distance d = q + SDPA_REL_Q_OFF - k:
+// d < 0 masked, 0 <= d < W bias rel[q, d], d >= W visible without bias, unless a sliding window masks d >= window.
+// Masked logits get a large finite negative (not -inf): a row can be fully masked inside one K chunk.
+constexpr uint16_t kRelMasked = 0xCE6E;  // bf16 -1.0e9
+constexpr uint32_t kRelW = SDPA_REL_W;
+constexpr uint32_t kRelQOff = SDPA_REL_Q_OFF;
+constexpr uint32_t kRelRowBytes = SDPA_REL_ROW_BYTES;
+
+// Read, for the 32 query rows of global Q tile row q_tile, the bias elements any key of K chunk [k0, k0 + kc) needs
+// into the scratch (row r at r * kRelRowBytes); returns per row the first element index held (64 B aligned).
+template <uint32_t kc_elems, typename Reader>
+FORCE_INLINE void rel_read_rows(
+    Noc& noc,
+    const Reader& rel_reader,
+    uint32_t rel_page0,
+    uint32_t q_tile,
+    uint32_t k0,
+    uint32_t scratch,
+    uint32_t* row_base) {
+    for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+        const int32_t p = static_cast<int32_t>(q_tile * tt::constants::TILE_HEIGHT + r + kRelQOff);
+        int32_t lo = p - static_cast<int32_t>(k0 + kc_elems) + 1;
+        int32_t hi = p - static_cast<int32_t>(k0);
+        lo = lo < 0 ? 0 : lo;
+        hi = hi >= static_cast<int32_t>(kRelW) ? static_cast<int32_t>(kRelW) - 1 : hi;
+        if (lo > hi) {
+            row_base[r] = 0;
+            continue;
+        }
+        const uint32_t a_lo = (static_cast<uint32_t>(lo) * 2) & ~63u;
+        const uint32_t a_hi = (static_cast<uint32_t>(hi) * 2 + 2 + 63) & ~63u;
+        row_base[r] = a_lo / 2;
+        noc.async_read(
+            rel_reader,
+            CoreLocalMem<uint32_t>(scratch + r * kRelRowBytes),
+            a_hi - a_lo,
+            {.page_id = rel_page0 + q_tile * tt::constants::TILE_HEIGHT + r, .offset_bytes = a_lo},
+            {});
+    }
+    noc.async_read_barrier();
+}
+
+// Fill one bf16 mask tile at `tile` for global Q tile q_tile and K tile k_tile.
+template <uint32_t window>
+FORCE_INLINE void rel_fill_tile(
+    uint32_t tile, uint32_t q_tile, uint32_t k_tile, uint32_t scratch, const uint32_t* row_base) {
+    volatile tt_l1_ptr uint16_t* t = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile);
+    const int32_t D0 = static_cast<int32_t>(q_tile * 32 + kRelQOff) - static_cast<int32_t>(k_tile * 32);
+    const int32_t dmax = D0 + 31, dmin = D0 - 31;
+    const bool all_masked = dmax < 0 || (window > 0 && dmin >= static_cast<int32_t>(window));
+    const bool all_zero = dmin >= static_cast<int32_t>(kRelW) && (window == 0 || dmax < static_cast<int32_t>(window));
+    if (all_masked || all_zero) {
+        const uint32_t v = all_masked ? (uint32_t{kRelMasked} << 16 | kRelMasked) : 0u;
+        volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile);
+        for (uint32_t i = 0; i < 512; ++i) {
+            w[i] = v;
+        }
+        return;
+    }
+    for (uint32_t r = 0; r < 32; ++r) {
+        const int32_t D = D0 + static_cast<int32_t>(r);  // d at column c is D - c
+        const volatile tt_l1_ptr uint16_t* src =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch + r * kRelRowBytes) - row_base[r];
+        volatile tt_l1_ptr uint16_t* dst = t + (r >> 4) * 512 + (r & 15) * 16;
+        for (uint32_t c = 0; c < 32; ++c) {
+            const int32_t d = D - static_cast<int32_t>(c);
+            uint16_t v;
+            if (d < 0 || (window > 0 && d >= static_cast<int32_t>(window))) {
+                v = kRelMasked;
+            } else if (d >= static_cast<int32_t>(kRelW)) {
+                v = 0;
+            } else {
+                v = src[d];
+            }
+            dst[(c >> 4) * 256 + (c & 15)] = v;
+        }
+    }
+}
+#endif
+
 void kernel_main() {
     Noc noc;
 
@@ -123,6 +205,11 @@ void kernel_main() {
     // read, received or pushed again. Host-gated to calls with one K chunk. A non-causal chain member gets its copy on
     // the first Q chunk of its segment and forwards it once; causal prefix chains are off under retention.
     constexpr uint32_t kv_retain_group = get_compile_time_arg_val(38);
+#ifdef SDPA_REL_BIAS
+    constexpr bool use_rel_bias = true;
+#else
+    constexpr bool use_rel_bias = false;
+#endif
     static_assert(!(causal_chain && kv_retain_group != 0), "causal K/V chains do not combine with K/V retention");
 
     constexpr auto q_args = TensorAccessorArgs<39>();
@@ -226,7 +313,7 @@ void kernel_main() {
         cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset_addr = get_arg_val<uint32_t>(argidx++);
-    } else if constexpr (use_mask_block_map || causal_chain) {
+    } else if constexpr (use_mask_block_map || causal_chain || use_rel_bias) {
         argidx += 4;
     }
     // Feature tails, sent only when the feature is on (never both: chains need a plain K/V stream).
@@ -241,6 +328,9 @@ void kernel_main() {
         prev_seg_count = get_arg_val<uint32_t>(argidx++);
         next_seg_global_start = get_arg_val<uint32_t>(argidx++);
     }
+#ifdef SDPA_REL_BIAS
+    const uint32_t rel_addr = get_arg_val<uint32_t>(argidx++);
+#endif
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
     // valid_Skt_bound = min(offset_tiles + valid_Sqt, valid_Skt); cap at valid_Skt for callers that pass
@@ -265,6 +355,12 @@ void kernel_main() {
     constexpr uint32_t cb_id_mask_block_map = get_compile_time_arg_val(cb_arg_offset + 10);
     // Causal chains: reader -> writer forward requests, {address, bytes} per entry.
     constexpr uint32_t cb_id_kv_fwd_ctrl = get_compile_time_arg_val(cb_arg_offset + 11);
+#ifdef SDPA_REL_BIAS
+    constexpr uint32_t cb_id_rel_scratch = get_compile_time_arg_val(cb_arg_offset + 12);
+    constexpr auto rel_args = TensorAccessorArgs<cb_arg_offset + 13>();
+    const auto rel_reader = TensorAccessor(rel_args, rel_addr);
+    uint32_t rel_row_base[tt::constants::TILE_HEIGHT];
+#endif
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -460,7 +556,42 @@ void kernel_main() {
                 prev_nb = decoded.nb;
                 prev_segment_key = segment_key;
             }
+#ifdef SDPA_PER_QUERY_SINK
             if constexpr (use_attention_sink) {
+                // [SDPA_SINK_B, NQH, Sq, 1] TILE: column 0 holds each query row's sink, the other columns become -inf.
+                cb_attn_sink.reserve_back(Sq_chunk_t);
+                uint32_t sink_ptr = cb_attn_sink.get_write_ptr();
+                const auto sink_shape = TensorTileShape(SDPA_SINK_B, NQH, valid_Sqt, 1);
+                for (uint32_t t = 0; t < Sq_chunk_t; ++t) {
+                    const uint32_t q_tile = decoded.q_chunk * Sq_chunk_t + t;
+                    volatile tt_l1_ptr uint16_t* st =
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sink_ptr + t * attention_sink_tile_bytes);
+                    if (q_tile < valid_Sqt) {
+                        noc.async_read(
+                            attention_sink_reader,
+                            CoreLocalMem<uint32_t>(sink_ptr + t * attention_sink_tile_bytes),
+                            attention_sink_tile_bytes,
+                            {.page_id = sink_shape.id_of(SDPA_SINK_B == 1 ? 0 : decoded.nb, decoded.nq, q_tile, 0)},
+                            {});
+                        noc.async_read_barrier();
+                    } else {
+                        for (uint32_t i = 0; i < 1024; ++i) {
+                            st[i] = kRelMasked;
+                        }
+                    }
+                    for (uint32_t i = 0; i < 1024; ++i) {
+                        const uint32_t col = ((i >> 8) & 1) * 16 + (i & 15);
+                        if (col != 0) {
+                            st[i] = 0xFF80;
+                        }
+                    }
+                }
+                cb_attn_sink.push_back(Sq_chunk_t);
+            }
+            if constexpr (false) {
+#else
+            if constexpr (use_attention_sink) {
+#endif
                 constexpr uint32_t sink_tiles = use_streaming_compute ? 1 : Sq_chunk_t;
                 cb_attn_sink.reserve_back(sink_tiles);
                 uint32_t attention_sink_write_ptr = cb_attn_sink.get_write_ptr();
@@ -546,7 +677,20 @@ void kernel_main() {
             if constexpr (use_mask_block_map) {
                 windowed_k_hi = block_map_active;
             }
-            if constexpr (use_windowed_narrowing || use_mask_block_map) {
+#ifdef SDPA_REL_BIAS
+            {
+                // Keys any row of this Q chunk sees: positions [p0 - (window - 1), p1] (no lower bound without a
+                // window).
+                const uint32_t p0 = q_chunk * Sq_chunk_t * tt::constants::TILE_HEIGHT + kRelQOff;
+                const uint32_t p1 = p0 + Sq_chunk_t * tt::constants::TILE_HEIGHT - 1;
+                constexpr uint32_t kc = Sk_chunk_t * tt::constants::TILE_HEIGHT;
+                windowed_k_lo =
+                    (sliding_window_size > 0 && p0 + 1 > sliding_window_size) ? (p0 + 1 - sliding_window_size) / kc : 0;
+                windowed_k_hi = p1 / kc + 1;
+                windowed_k_hi = windowed_k_hi > k_num_chunks ? k_num_chunks : windowed_k_hi;
+            }
+#endif
+            if constexpr (use_windowed_narrowing || use_mask_block_map || use_rel_bias) {
                 CircularBuffer cb_k_range(cb_id_windowed_k_range);
                 cb_k_range.reserve_back(1);
                 volatile tt_l1_ptr uint32_t* k_range_ptr =
@@ -599,7 +743,7 @@ void kernel_main() {
                     q_high_idx = window_high_unclamped < Skt ? window_high_unclamped : Skt;
                 }
             }
-            if constexpr (use_windowed_narrowing) {
+            if constexpr (use_windowed_narrowing || use_rel_bias) {
                 // Must match what this reader pushed to compute and what the writer self-computes.
                 k_loop_start = windowed_k_lo;
                 q_high_idx = windowed_k_hi * Sk_chunk_t;
@@ -841,6 +985,38 @@ void kernel_main() {
                         const bool q_valid = !use_padded_mask || (global_q_tile < valid_Sqt);
                         cb_mask.reserve_back(Sk_chunk_t);
                         uint32_t mask_write_ptr = cb_mask.get_write_ptr();
+#ifdef SDPA_REL_BIAS
+                        if (q_valid) {
+                            const uint32_t scratch = (CircularBuffer(cb_id_rel_scratch).get_write_ptr() + 63) & ~63u;
+                            rel_read_rows<Sk_chunk_t * tt::constants::TILE_HEIGHT>(
+                                noc,
+                                rel_reader,
+                                (nb * NQH + nq) * valid_Sqt * tt::constants::TILE_HEIGHT,
+                                global_q_tile,
+                                k_chunk * Sk_chunk_t * tt::constants::TILE_HEIGHT,
+                                scratch,
+                                rel_row_base);
+                            for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
+                                const uint32_t global_k_tile = k_chunk * Sk_chunk_t + col;
+                                if (global_k_tile < valid_Skt) {
+                                    rel_fill_tile<sliding_window_size>(
+                                        mask_write_ptr + col * mask_tile_bytes,
+                                        global_q_tile,
+                                        global_k_tile,
+                                        scratch,
+                                        rel_row_base);
+                                } else {
+                                    fill_neginf_tile<mask_tile_bytes>(cb_mask_in, col);
+                                }
+                            }
+                        } else {
+                            for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
+                                fill_neginf_tile<mask_tile_bytes>(cb_mask_in, col);
+                            }
+                        }
+                        cb_mask.push_back(Sk_chunk_t);
+                        continue;
+#endif
                         uint32_t barrier_count = 0;
                         for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
                             const uint32_t global_k_tile = k_chunk * Sk_chunk_t + col;

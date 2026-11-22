@@ -48,7 +48,8 @@ ttnn::Tensor scaled_dot_product_attention(
     uint32_t windowed_q_token_offset,
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
     bool output_concat_heads,
-    const std::optional<ttnn::Tensor>& attn_mask_block_map) {
+    const std::optional<ttnn::Tensor>& attn_mask_block_map,
+    const std::optional<ttnn::Tensor>& rel_logits) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -75,6 +76,15 @@ ttnn::Tensor scaled_dot_product_attention(
             effective_mask = ttnn::multiply(attn_mask.value(), 1.0f / effective_scale);
         }
     }
+    // The banded bias is a mask too: added unscaled, so it gets the same 1/scale.
+    std::optional<ttnn::Tensor> effective_rel = rel_logits;
+    if (rel_logits.has_value()) {
+        const float effective_scale =
+            scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
+        if (effective_scale != 1.0f) {
+            effective_rel = ttnn::multiply(rel_logits.value(), 1.0f / effective_scale);
+        }
+    }
 
     return ttnn::prim::sdpa(
         input_tensor_q,
@@ -98,7 +108,8 @@ ttnn::Tensor scaled_dot_product_attention(
         windowed_q_token_offset_tensor,
         std::nullopt,  // paged_cache_geometry
         output_concat_heads,
-        attn_mask_block_map);
+        attn_mask_block_map,
+        effective_rel);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).

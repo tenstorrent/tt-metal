@@ -439,8 +439,10 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
+            // In place, each row's tiles are popped, so the row starts at the front; otherwise index the block.
+            const uint32_t in0_row_tile = write_result_inplace ? 0 : i * cols + u * dst_tiles;
             for (uint32_t j = 0; j < dst_tiles; ++j) {
-                sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+                sub_tiles_bcast_cols(in0_cb, in1_cb, in0_row_tile + j, i, j);
                 // A 32x32 tile has four 16x16 faces, each requiring eight SFPU iterations.
                 // None visits the full tile in 32 iterations; R/C traverse faces with eight each.
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;

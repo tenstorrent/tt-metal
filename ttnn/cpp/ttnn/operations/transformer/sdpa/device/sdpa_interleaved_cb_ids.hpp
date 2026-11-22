@@ -38,7 +38,9 @@ struct CBIds {
     uint32_t windowed_cu_reader = inactive;  // windowed narrowing only: the reader's own cu_window copy
     uint32_t windowed_k_range = inactive;    // windowed narrowing or mask block map: per-Q-chunk {k_lo, k_hi}
     uint32_t mask_block_map = inactive;      // mask block map only: the reader's scratch for one row of block flags
-    uint32_t kv_fwd_ctrl = inactive;         // causal chains only: {address, bytes} forward requests, reader -> writer
+    uint32_t kv_fwd_ctrl = inactive;
+    uint32_t rel_scratch = inactive;  // rel_logits only: the reader's rows of the banded bias for one mask tile row //
+                                      // causal chains only: {address, bytes} forward requests, reader -> writer
 
     std::vector<uint32_t> reader_compile_time_args() const {
         return {
@@ -53,7 +55,8 @@ struct CBIds {
             windowed_cu_reader,
             windowed_k_range,
             mask_block_map,
-            kv_fwd_ctrl};
+            kv_fwd_ctrl,
+            rel_scratch};
     }
 
     std::vector<uint32_t> writer_compile_time_args() const {

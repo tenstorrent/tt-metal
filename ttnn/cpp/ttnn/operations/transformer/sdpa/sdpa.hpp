@@ -43,7 +43,11 @@ ttnn::Tensor scaled_dot_product_attention(
     bool output_concat_heads = false,
     /// Non causal with attn_mask only. [Bm, Hm, ceil(Sq / q_chunk), ceil(Sk / k_chunk)] int32/uint32 ROW_MAJOR, nonzero
     /// where a (q chunk, k chunk) block of the mask has a visible entry; the other blocks are skipped.
-    const std::optional<ttnn::Tensor>& attn_mask_block_map = std::nullopt);
+    const std::optional<ttnn::Tensor>& attn_mask_block_map = std::nullopt,
+    /// Banded relative bias [B, NQH, Sq, W] bf16 ROW_MAJOR (requires is_causal, no attn_mask). Query row i sits at
+    /// position i + Sk - Sq; rel_logits[b, h, i, d] is added to its logit for the key at distance d, 0 <= d < W.
+    /// attention_sink may then be per query: [B or 1, NQH, Sq, 1].
+    const std::optional<ttnn::Tensor>& rel_logits = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).

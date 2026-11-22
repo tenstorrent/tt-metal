@@ -71,7 +71,8 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         const auto Sk = k_shape[2];
         // Windowed causal is exempt: its diagonal is at global positions (windowed_q_token_offset + Q row),
         // so a sequence-parallel Q shard with Sq < Sk is well defined; validate_windowed_mode bounds it.
-        if (attrs.is_causal && !is_windowed_mode(attrs.windowed_mode)) {
+        // rel_logits places the queries at the last Sq key positions, so Sk >= Sq is checked there instead.
+        if (attrs.is_causal && !is_windowed_mode(attrs.windowed_mode) && !tensors.rel_logits.has_value()) {
             TT_FATAL(
                 Sq == Sk, "Causal SDPA requires Q and K to have the same sequence length. Got Q: {}, K: {}", Sq, Sk);
         }
@@ -461,14 +462,26 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
 
             // Attention sink must have shape [1, NH, 1, 1] - single value per head, broadcast across batch and tile
             // dims
-            TT_FATAL(sink_shape[0] == 1, "Attention sink batch dimension must be 1. Got {}", sink_shape[0]);
+            // With rel_logits the sink may also be per query: [1 or B, NH, Sq, 1].
+            const bool per_query = tensors.rel_logits.has_value() && sink_shape[2] == q_shape[2] && q_shape[2] > 1;
+            TT_FATAL(
+                sink_shape[0] == 1 || (per_query && sink_shape[0] == q_shape[0]),
+                "Attention sink batch dimension must be 1 (or Q batch for a per-query sink). Got {}",
+                sink_shape[0]);
             TT_FATAL(
                 sink_shape[1] == q_shape[1],
                 "Attention sink num_heads must match Q num_heads. Got sink: {}, Q: {}",
                 sink_shape[1],
                 q_shape[1]);
-            TT_FATAL(sink_shape[2] == 1, "Attention sink sequence dimension must be 1. Got {}", sink_shape[2]);
+            TT_FATAL(
+                sink_shape[2] == 1 || per_query,
+                "Attention sink sequence dimension must be 1 (or Sq with rel_logits). Got {}",
+                sink_shape[2]);
             TT_FATAL(sink_shape[3] == 1, "Attention sink hidden dimension must be 1. Got {}", sink_shape[3]);
+            TT_FATAL(
+                !per_query || attention_sink.dtype() == DataType::BFLOAT16,
+                "A per-query attention sink must be BFLOAT16, got {}",
+                attention_sink.dtype());
         }
     };
 
@@ -573,6 +586,46 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         !tensors.attn_mask_block_map.has_value() ||
             (!is_windowed_mode(attrs.windowed_mode) && !is_chunked_mode && attrs.sliding_window_size.value_or(0) == 0),
         "attn_mask_block_map cannot be combined with cu_window_seqlens, sliding_window_size or chunked prefill");
+
+    if (tensors.rel_logits.has_value()) {
+        const auto& rel = tensors.rel_logits.value();
+        const auto q_shape = q.logical_shape();
+        const auto k_shape = k.logical_shape();
+        const auto& rel_shape = rel.logical_shape();
+        TT_FATAL(
+            attrs.is_causal && !tensors.attn_mask.has_value() && !tensors.attn_mask_block_map.has_value(),
+            "rel_logits needs is_causal=True and no attn_mask / attn_mask_block_map");
+        TT_FATAL(
+            !is_windowed_mode(attrs.windowed_mode) && !is_chunked_mode && !attrs.use_mla,
+            "rel_logits cannot be combined with cu_window_seqlens, chunked prefill or MLA");
+        TT_FATAL(
+            get_fp32_dest_acc_en(attrs.compute_kernel_config),
+            "rel_logits needs fp32_dest_acc_en=True (it runs on the non streaming SDPA kernel)");
+        TT_FATAL(
+            rel.storage_type() == StorageType::DEVICE && rel.device() == q.device(),
+            "rel_logits must be on the device of Q");
+        TT_FATAL(
+            rel.layout() == Layout::ROW_MAJOR && rel.dtype() == DataType::BFLOAT16,
+            "rel_logits must be a bfloat16 ROW_MAJOR tensor, got {} {}",
+            rel.dtype(),
+            rel.layout());
+        TT_FATAL(
+            rel.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                rel.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "rel_logits must be DRAM interleaved");
+        TT_FATAL(
+            rel_shape.rank() == 4 && rel_shape[0] == q_shape[0] && rel_shape[1] == q_shape[1] &&
+                rel_shape[2] == q_shape[2] && rel_shape[3] > 0 && rel_shape[3] % tt::constants::TILE_WIDTH == 0,
+            "rel_logits must be [B, NQH, Sq, W] with W a multiple of 32; got {} for Q {}",
+            rel_shape,
+            q_shape);
+        TT_FATAL(
+            q_shape[2] % tt::constants::TILE_HEIGHT == 0 && k_shape[2] % tt::constants::TILE_HEIGHT == 0 &&
+                k_shape[2] >= q_shape[2],
+            "rel_logits needs Sq and Sk multiples of 32 and Sk >= Sq; got Sq {} Sk {}",
+            q_shape[2],
+            k_shape[2]);
+    }
 
     if (is_windowed_mode(attrs.windowed_mode)) {
         validate_windowed_mode();
@@ -714,7 +767,8 @@ Tensor sdpa(
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     bool output_concat_heads,
-    const std::optional<Tensor>& attn_mask_block_map) {
+    const std::optional<Tensor>& attn_mask_block_map,
+    const std::optional<Tensor>& rel_logits) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -747,6 +801,7 @@ Tensor sdpa(
             .cu_window_seqlens = cu_window_seqlens,
             .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
             .attn_mask_block_map = attn_mask_block_map,
+            .rel_logits = rel_logits,
         });
 }
 }  // namespace ttnn::prim
