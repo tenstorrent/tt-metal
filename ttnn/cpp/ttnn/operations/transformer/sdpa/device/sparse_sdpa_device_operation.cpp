@@ -292,7 +292,9 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         plan.num_used,
         plan.passes,
         plan.fused,
-        plan.group);
+        plan.group,
+        plan.q_rm_rows,
+        plan.k_rm_rows);
 }
 
 Tensor sparse_sdpa(

@@ -164,6 +164,8 @@ enum : uint32_t {
     FUSED_DEQUANT,  // scaled KV without sink: compute fuses tilize x scale (FP16 scale tiles)
     Q_TILES,        // Q tile rows per head pass (with padding rows)
     PASSES,         // head passes per token
+    K_STAGE_ROWS,   // unscaled KV: key rows per gather (k_chunk, or fewer to shrink cb_k_rm at the L1 floor)
+    Q_VIA_K_RM,     // Q rows go through cb_k_rm (same row format; no cb_q_rm), ahead of the token's K rows
     END,
 };
 }  // namespace reader_ct_arg

@@ -27,10 +27,12 @@ struct SparseSDPAOperation {
         // The split-K and L1 choices depend on the free L1, so compute_program_hash hashes them.
         struct Plan {
             bool split_k = false;
-            uint32_t num_used = 0;  // cores that get work
-            uint32_t passes = 1;    // head passes per token (the Q tile rows that fit L1 at once)
-            bool fused = true;      // fused recipe chunks (their CBs fit L1)
-            uint32_t group = 1;     // gathered chunks per recipe step (sparse_step_group)
+            uint32_t num_used = 0;   // cores that get work
+            uint32_t passes = 1;     // head passes per token (the Q tile rows that fit L1 at once)
+            bool fused = true;       // fused recipe chunks (their CBs fit L1)
+            uint32_t group = 1;      // gathered chunks per recipe step (sparse_step_group)
+            uint32_t q_rm_rows = 2;  // Q tile rows the reader stages (2: one ahead of compute's tilize; 1: L1 floor)
+            uint32_t k_rm_rows = 0;  // cb_k_rm rows (0: one chunk / scaled two slabs; < one chunk: 32-row gathers)
         };
         static Plan select_plan(const operation_attributes_t& attrs, const tensor_args_t& t);
 
