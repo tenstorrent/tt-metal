@@ -53,6 +53,7 @@ from models.demos.inkling2_mini.tt.attention import (
     _DramShardedLinear,
 )
 from models.demos.inkling2_mini.tt.fused.attn import AttnOut, AttnPrep, AttnWindow
+from models.demos.inkling2_mini.tt.fused.near_softmax import NearSoftmax
 
 V_WIDTH = 160  # v(128) + mass column block
 KV_WIDTH = V_WIDTH + HEAD_DIM  # 288
@@ -176,6 +177,8 @@ class Inkling2AttentionFast(Inkling2Attention):
         mass[..., 0] = 1.0
         self.mass_col = put(mass)
         self.q_pad = put(torch.zeros(1, 1, N_HEADS, V_WIDTH))
+        # global near softmax in one program (tt/fused/near_softmax.py); INKLING_NEAR_FUSED=0: the ops in _near_ops
+        self.near_sm = NearSoftmax(device) if os.environ.get("INKLING_NEAR_FUSED", "1") != "0" else None
         self.far_cfg = sdpa_cfg(FAR_CHUNK)
         self.kv_full_shard = ttnn.create_sharded_memory_config(
             shape=(32, KV_WIDTH),
@@ -251,7 +254,22 @@ class Inkling2AttentionFast(Inkling2Attention):
         near mask). merge=False returns the partials (far out [1,1,24,160] bf16, o_near, r, far_valid)."""
         # near + sink partial: normalized output and log-sum-exp
         qg = ttnn.reshape(q, [1, N_KV, GROUPS, HEAD_DIM])
-        near = ttnn.matmul(qg, state.k_ring, transpose_b=True, dtype=ttnn.float32, compute_kernel_config=self.hifi4)
+        near = ttnn.matmul(
+            qg,
+            state.k_ring,
+            transpose_b=True,
+            dtype=ttnn.float32,
+            compute_kernel_config=self.hifi4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if u == 1.0 and self.near_sm is not None:  # fused path: `bias` is the prep mask [1, 1, 24, 1024]
+            p_near, lse = self.near_sm(near, bias, sink_blk)
+            o_near = ttnn.matmul(p_near, state.v_ring, dtype=ttnn.float32, compute_kernel_config=self.hifi4)
+        else:
+            o_near, lse = self._near_ops(near, bias, sink_blk, state, positions, u)
+        return self._far(q, o_near, lse, state, positions, u, merge)
+
+    def _near_ops(self, near, bias, sink_blk, state, positions, u):
         if u != 1.0:
             near = ttnn.add(ttnn.add(ttnn.multiply(near, u), bias), positions.near_mask)
         else:
@@ -265,7 +283,9 @@ class Inkling2AttentionFast(Inkling2Attention):
         p_near = ttnn.multiply(e_near, ttnn.reciprocal(z), dtype=ttnn.bfloat16)
         o_near = ttnn.matmul(p_near, state.v_ring, dtype=ttnn.float32, compute_kernel_config=self.hifi4)
         lse = ttnn.add(m, ttnn.log(z))
+        return o_near, lse
 
+    def _far(self, q, o_near, lse, state, positions, u, merge):
         # far partial with the near mass as its sink: sdpa `attention_sink` [24, 32] bf16 in raw q.k units
         far_pos, valid = positions.far
         raw = lse if u == 1.0 else ttnn.multiply(lse, 1.0 / u)
@@ -312,7 +332,7 @@ class Inkling2AttentionFast(Inkling2Attention):
         rows = ROWS[mode]
         q, mask, sink_t = self.prep(proj, positions, {"q": 0, "k": rows["k"], "v": rows["v"]}, state)
         if self.is_global:  # q pre-scaled, mask holds bias + near mask, sink_t is the sink block
-            bias = ttnn.reshape(mask, [1, N_KV, GROUPS, WINDOW])
+            bias = mask if self.near_sm is not None else ttnn.reshape(mask, [1, N_KV, GROUPS, WINDOW])
             far, o_near, r, valid = self._global(q, bias, sink_t, state, positions, u=1.0, merge=False)
             return self.w_o(self.out(far, proj, (o_near, r, valid)), ttnn.bfloat16, self.mm_cfg)
         else:
