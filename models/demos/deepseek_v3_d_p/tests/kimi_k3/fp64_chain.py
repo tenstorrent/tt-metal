@@ -630,7 +630,7 @@ def run_chain(
         manifest["segments"].append(entry)
         write_manifest(run_dir, manifest)
         log(
-            f"segment {index + 1}/{segments} done {entry['seconds']:.1f} s ({(end - start) / entry['seconds']:.1f} rows/s) "
+            f"segment {index + 1}/{segments} done {entry['seconds']:.1f} s ({(end - start) / max(entry['seconds'], 0.1):.1f} rows/s) "
             f"rss {entry['max_rss_gb']} GB " + json.dumps(entry.get("checks", {}))
         )
     return manifest

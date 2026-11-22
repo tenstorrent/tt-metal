@@ -1507,7 +1507,11 @@ def _deep_reference_walk(model, layers, refs, token_ids, monkeypatch) -> dict:
         def attn_fn(h, L=L, l=l):
             x = norm(L["input_layernorm"])(h)
             if "kda" in L:
-                return kda_forward_reference(x[None], L["kda"], model.kda_config, dtype=torch.float64)[0][0]
+                out, got[f"kda_state_{l}"] = kda_forward_reference(
+                    x[None], L["kda"], model.kda_config, dtype=torch.float64
+                )
+                got[f"kda_input_{l}"], got[f"attn_output_{l}"] = h, out[0]
+                return out[0]
             got[f"dsa_input_{l}"] = h
             keys = golden.layer_keys(x, L["dsa"], SMALL)
             q = golden.layer_queries(x, L["dsa"], SMALL)
@@ -1564,6 +1568,19 @@ def test_fp64_deep_chain_matches_a_one_shot_walk_and_fp64_chain_and_resumes(
         assert _rel(p[f"moe_input_{l}"], want[f"moe_input_{l}"]) <= 1e-7, l
         assert _rel(p[f"moe_output_{l}"], want[f"moe_output_{l}"]) <= 1e-7, l
         assert torch.equal(p[f"routing_ids_{l}"].long().sort(1).values, want[f"routing_ids_{l}"].sort(1).values), l
+    p = fp64_deep_chain.load_deep(out, 0, "ffn", ["dense_input_0", "dense_output_0"])
+    assert (
+        _rel(p["dense_input_0"], want["moe_input_0"]) <= 1e-7
+        and _rel(p["dense_output_0"], want["moe_output_0"]) <= 1e-7
+    )
+    for l in (0, 1, 2, 4, 5, 6):
+        p = fp64_deep_chain.load_deep(out, l, "attn", [f"kda_input_{l}", f"attn_output_{l}"])
+        assert _rel(p[f"kda_input_{l}"], want[f"kda_input_{l}"]) <= 1e-7, l
+        assert _rel(p[f"attn_output_{l}"], want[f"attn_output_{l}"]) <= 1e-7, l
+        last = torch.load(fp64_deep_chain.pass_dir(out, l, "attn") / "segment_000002.pt", weights_only=True)
+        for f in fp64_deep_chain.KDA_STATE:  # the state after the last row is the one-shot run's final state
+            v = last[f"kda_state_{l}_{f}"]
+            assert v.dtype == torch.float64 and _rel(v, getattr(want[f"kda_state_{l}"], f)[0]) <= 1e-12, (l, f)
     for l in (3, 7):
         names = ["latent", "kpe", "index_key", f"dsa_input_{l}", f"topk_indices_{l}", f"attn_output_{l}"]
         p = fp64_deep_chain.load_deep(out, l, "attn", names)
@@ -1610,6 +1627,90 @@ def test_fp64_deep_chain_matches_a_one_shot_walk_and_fp64_chain_and_resumes(
             ), (f, k)
     with expect_error(ValueError, "different run"):
         _run_deep(model, layers, (ids + 1) % 50, again)
+
+
+def test_fp64_deep_chain_backfill_brings_a_version_1_run_to_version_2(tmp_path: Path, expect_error):
+    """A version-1 run (the KDA and dense passes' products stripped, the manifest at version 1) backfilled equals the
+    version-2 run on every KDA / dense product to the fp32 rounding of the replayed outputs (<= 1e-6), with each
+    replayed pass's reconstructed input within 1e-6 of its stored one and the DSA / MoE files untouched; a backfill
+    interrupted in its third rerun pass resumes to byte-identical files; another token sequence is refused."""
+    import shutil
+
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import fp64_deep_chain
+
+    model, layers, _ = _tiny_deep()
+    ids = torch.randint(0, 50, (10,), generator=torch.Generator().manual_seed(4))
+    full = tmp_path / "v2"
+    _run_deep(model, layers, ids, full)
+    rerun = [(l, s) for l, s in fp64_deep_chain.passes(8) if DEEP_KINDS[l][0 if s == "attn" else 1] in ("kda", "dense")]
+
+    def make_v1(path: Path) -> None:
+        shutil.copytree(full, path)
+        for l, s in rerun:
+            for f in fp64_deep_chain.pass_dir(path, l, s).glob("segment_*.pt"):
+                d = torch.load(f, weights_only=True)
+                torch.save({"start": d["start"], "end": d["end"]}, f)
+        m = json.loads((path / MANIFEST).read_text())
+        (path / MANIFEST).write_text(json.dumps({**m, "producer_version": 1}))
+
+    def load(l, kind):
+        if kind == "norms":
+            return {
+                k: v
+                for k, v in layers[l].items()
+                if k in ("input_layernorm", "attn_res", "mlp_res", "post_attention_layernorm")
+            }, {}
+        return layers[l], {f"layers.{l}": kind}
+
+    def run(path, load=load, token_ids=ids):
+        with torch.no_grad():
+            return fp64_deep_chain.backfill(
+                run_dir=path, load=load, embedding=model.embedding, token_ids=token_ids, kda_config=model.kda_config
+            )
+
+    one = tmp_path / "one"
+    make_v1(one)
+    m = run(one)["backfill"]
+    assert m["complete"] and len(m["passes"]) == 16 and m["live_rel"] <= 1e-6
+    assert all(p["input_rel"] <= 1e-6 for p in m["passes"] if "input_rel" in p)
+    for f in sorted(full.rglob("segment_*.pt")):
+        a, b = torch.load(f, weights_only=True), torch.load(one / f.relative_to(full), weights_only=True)
+        assert a.keys() == b.keys(), f
+        for k in a:
+            if not torch.is_tensor(a[k]):
+                assert a[k] == b[k]
+            elif (int(f.parent.name[1]), f.parent.name[3:]) in rerun:
+                assert _rel(b[k], a[k]) <= 1e-6, (f, k)
+            else:
+                assert torch.equal(a[k], b[k]) or (a[k].isnan() == b[k].isnan()).all(), (f, k)
+    two = tmp_path / "two"
+    make_v1(two)
+    calls = []
+
+    def failing(l, kind):
+        calls.append(kind) if kind in ("kda", "dense") else None
+        if len(calls) == 3:
+            raise RuntimeError("interrupted")
+        return load(l, kind)
+
+    with expect_error(RuntimeError, "interrupted"):
+        run(two, load=failing)
+    assert (
+        len(json.loads((two / MANIFEST).read_text())["backfill"]["passes"]) == 2
+    )  # L0 attn and L0 ffn rerun; L1 attn interrupted
+    run(two)
+    for f in sorted(one.rglob("segment_*.pt")):
+        a, b = torch.load(f, weights_only=True), torch.load(two / f.relative_to(one), weights_only=True)
+        for k in a:
+            assert (
+                (torch.equal(a[k], b[k]) or (a[k].isnan() == b[k].isnan()).all())
+                if torch.is_tensor(a[k])
+                else a[k] == b[k]
+            ), (f, k)
+    three = tmp_path / "three"
+    make_v1(three)
+    with expect_error(ValueError, "other tokens"):
+        run(three, token_ids=(ids + 1) % 50)
 
 
 def test_fp64_deep_chain_scores_hand_made_differences(tmp_path: Path):
