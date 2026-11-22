@@ -67,6 +67,16 @@ def is_4x4_subtorus() -> bool:
     return set(topologies) == {("4", "4", "RING", "RING")}
 
 
+def kimi_k3_model_device_params(mesh_shape: tuple[int, int]) -> dict:
+    """The device the Kimi-K3 model opens (tests/kimi_k3/test_prefill_perf.py): kda_device_params' fabric with K3's
+    L1_SMALL and the MoE block's fabric payload, so a layer measured here sees the model's L1 and relay packets."""
+    from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_device_params
+
+    return moe_block_device_params(
+        KimiK3Config, kda_device_params(mesh_shape, l1_small_size=KimiK3Config.L1_SMALL_SIZE)
+    )
+
+
 def kda_device_params(mesh_shape: tuple[int, int], wrap_both_axes: bool = False, **overrides) -> dict:
     """The fabric a KDA test opens on ``mesh_shape``: a 2D fabric, as Kimi-K3 runs on, with K3's fabric payload.
 

@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     deallocate_state,
     is_4x4_subtorus,
     kda_device_params,
+    kimi_k3_model_device_params,
     make_kimi_k3_device_case,
     make_synthetic_kimi_k3_test_case,
     upload_slab,
@@ -223,7 +224,7 @@ def _trace_wall_samples_ms(
         pytest.param(
             (8, 4),
             1,
-            kda_device_params((8, 4), l1_small_size=_L1_SMALL_SIZE),
+            kimi_k3_model_device_params((8, 4)),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),

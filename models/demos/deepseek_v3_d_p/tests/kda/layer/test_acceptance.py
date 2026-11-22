@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     check_kimi_k3_accuracy,
     collect_mesh_accuracy_and_determinism_results,
     kda_device_params,
+    kimi_k3_model_device_params,
     make_kimi_k3_device_case,
     make_kimi_k3_test_case,
     make_synthetic_kimi_k3_test_case,
@@ -93,7 +94,7 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
         pytest.param(
             (8, 4),
             1,
-            kda_device_params((8, 4)),
+            kimi_k3_model_device_params((8, 4)),
             PREFILL_CHUNK_TOKENS,
             None,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
