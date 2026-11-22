@@ -2532,7 +2532,8 @@
   sp_config: sc1
 
 # K3.1 mirror of the leg above: the same launcher and layout -- sc4's first two [4,4] stages, one per tray
-# half, 12 layers each, depth 24 (ends on a DSA layer) -- at the 96 slots measured for the first 4x4 stage.
+# half, 12 layers each, depth 24 (ends on a DSA layer) -- at sc4's 88 slots. 96 fit the first two stages but
+# ran stages 4-6 (more AttnRes history) out of DRAM by ~16 MB on the first chunk (run 45061518673).
 # K3's 1M request at 2.5k chunks; its golden is an 8192-token vLLM prompt, so the golden's 8k is PCC'd and the
 # rest of the 1M timed, as K3 does at 55k of 1M. No perf baseline yet, so throughput is reported, not gated.
 - name: "(Kimi-K3.1) disaggregated prefill L24 2x[4,4] KV accuracy 8k@2.5k + perf 1M@2.5k, SC1"

@@ -20,6 +20,7 @@ from models.demos.common.prefill.runners.runner_utils import compute_layer_split
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_stage import (
     CHUNK_4X4,
+    MANIFEST_4X4_USERS,
     MAX_SEQ_LEN,
     MESH_4X4,
     NUM_STAGES,
@@ -133,5 +134,6 @@ def test_kimi_k3_1_manifest_deploys_k31_as_k3_is_deployed(monkeypatch):
 
     # The context must be whole 2560-token chunks.
     assert int(k31["PREFILL_MAX_SEQ_LEN"]) == MAX_SEQ_LEN and MAX_SEQ_LEN % CHUNK_4X4 == 0
-    # The slots allocated are the measured maximum, as for the 8x4 stage (PP4_MAX_USERS, which the *_8x4 configs keep).
-    assert int(k31["PREFILL_NUM_USERS"]) == STAGE0_4X4_MAX_USERS > PP4_MAX_USERS
+    # The 4x4 slots sit below stage 0's measured maximum, which stages 4-6 of SC4 do not reach (MANIFEST_4X4_USERS).
+    assert int(k31["PREFILL_NUM_USERS"]) == MANIFEST_4X4_USERS < STAGE0_4X4_MAX_USERS
+    assert MANIFEST_4X4_USERS > PP4_MAX_USERS
