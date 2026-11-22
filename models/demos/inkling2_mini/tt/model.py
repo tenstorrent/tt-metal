@@ -16,12 +16,15 @@ residual.py split stacks (review-r5 #8b).
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
 from models.demos.inkling2_mini.convert import cache as wcache
 from models.demos.inkling2_mini.tt.attention_fast import DecodePositionsFast as DecodePositions
 from models.demos.inkling2_mini.tt.attention_fast import Inkling2AttentionFast as Inkling2Attention
+from models.demos.inkling2_mini.tt.dram_sharded import DramShardedLinear
 from models.demos.inkling2_mini.tt.fused.attnres import FusedAttnRes, FusedRowOps
 from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv
 from models.demos.inkling2_mini.tt.fused.gate import FusedMessageGate, FusedQKVGate
@@ -46,6 +49,7 @@ BOUNDARY_LAYERS = {0, 6, 12, 18}
 VOCAB_PAD = 200064
 VOCAB_REAL = 200058
 SOFTCAP = 30.0
+UNEMBED_CHUNK = 14336  # columns per DRAM-sharded unembed matmul (7 banks x 64 tiles; fp32 out fits L1)
 EPS = 1e-6
 
 # (layer, pass) of each of the 48 applications, in call order (= golden hidden_XX order)
@@ -168,7 +172,21 @@ class Inkling2Model:
         self.embed = ttnn.to_device(ttnn.reshape(emb, [emb.shape[-2], emb.shape[-1]]), device, memory_config=dram)
         self.embed_norm = ttnn.to_device(g["embed_norm"], device, memory_config=dram)
         self.final_norm = ttnn.to_device(g["final_norm"], device, memory_config=dram)
-        self.unembed = ttnn.to_device(g["unembed"], device, memory_config=dram)
+        # Unembed: DRAM WIDTH_SHARDED column chunks, bank-local readers (tt/dram_sharded.py); 3.9 -> 2.5 ms head (E7).
+        # INKLING_HEAD_DS=0: the v1 interleaved linear (A/B runs).
+        if os.environ.get("INKLING_HEAD_DS", "1") != "0":
+            self.unembed = DramShardedLinear(
+                device,
+                g["unembed"],
+                dtype=g["unembed"].dtype,
+                chunk=UNEMBED_CHUNK,
+                workers=3,
+                out_dtype=ttnn.float32,
+                compute_kernel_config=self.mm_cfg,
+            )
+        else:
+            w = ttnn.to_device(g["unembed"], device, memory_config=dram)
+            self.unembed = lambda x: ttnn.linear(x, w, dtype=ttnn.float32, compute_kernel_config=self.mm_cfg)
         self.final_res = FusedAttnRes(self.frows, g, "final_res_q", 1)
         self.msg = MessageAttnRes(self.rows, g, "msg_q")
         mask = torch.zeros(1, 1, 1, VOCAB_PAD)
@@ -314,7 +332,7 @@ class Inkling2Model:
 
         x = self.final_res(stack, h, n + 1)[0]
         x = self._rms(x, self.final_norm)
-        logits = ttnn.linear(x, self.unembed, dtype=ttnn.float32, compute_kernel_config=self.mm_cfg)
+        logits = self.unembed(x)
         logits = ttnn.multiply(ttnn.tanh(ttnn.multiply(logits, 1.0 / SOFTCAP)), SOFTCAP)
         logits = ttnn.add(logits, self.vocab_mask)
         res["logits"] = logits

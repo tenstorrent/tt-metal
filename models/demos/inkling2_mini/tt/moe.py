@@ -22,6 +22,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.inkling2_mini.tt.dram_sharded import BankLocalExperts
 
 HIDDEN = 2304
 INTER = 1152
@@ -33,6 +34,11 @@ UP_SOFTCAP = 25.0
 
 RMS_EPS = 1e-6
 ROUTER_SPLIT = 9  # K chunks of the router GEMM (256 each)
+
+# Bank-local gate_up (tt/dram_sharded.py): each worker reads its columns of a selected expert from its own DRAM bank
+# in one run; 101 -> 77 us for BFP4 (E7). down stays on sparse_matmul (bank-local was no faster: 54 vs 55 us).
+# INKLING_MOE_BANK=0 turns it off (A/B runs).
+BANK_LOCAL = os.environ.get("INKLING_MOE_BANK", "1") != "0"
 
 WEIGHT_NAMES = ("mlp_norm", "router.w", "router.bias", "experts.w_gate_up", "experts.w_down")
 
@@ -93,7 +99,12 @@ class Inkling2MoE:
         self.router_bias = ttnn.from_torch(
             bias, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
         )
-        self.w_gate_up = ttnn.to_device(weights["experts.w_gate_up"], device, dram)
+        gu = weights["experts.w_gate_up"]
+        self.bank_local = BANK_LOCAL and gu.dtype == ttnn.bfloat4_b  # BFP8 layers keep the measured v1 path
+        if self.bank_local:  # re-layout on load; the section-4 cache files are unchanged
+            self.bank_gate_up = BankLocalExperts(device, gu, dtype=gu.dtype, slots=TOP_K)
+        else:
+            self.w_gate_up = ttnn.to_device(gu, device, dram)
         self.w_down = ttnn.to_device(weights["experts.w_down"], device, dram)
         # Indexed sparse_matmul still takes a sparsity operand but never reads it.
         self.sparsity = ttnn.from_torch(
@@ -182,7 +193,12 @@ class Inkling2MoE:
     def expert_matmuls(self, x, indices):
         """The two indexed sparse_matmuls + SwiGLU: x [1,1,1,H] -> compact per-slot outputs [1,8,1,H]."""
         ids = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        gu = ttnn.reshape(self._sparse(x, self.w_gate_up, self.gate_up_config, False, ids), (1, TOP_K, 1, 2 * INTER))
+        if self.bank_local:
+            gu = self.bank_gate_up(x, ids)
+        else:
+            gu = ttnn.reshape(
+                self._sparse(x, self.w_gate_up, self.gate_up_config, False, ids), (1, TOP_K, 1, 2 * INTER)
+            )
         hidden = softcapped_swiglu(gu[..., :INTER], gu[..., INTER:])
         ttnn.deallocate(gu)
         down = ttnn.reshape(self._sparse(hidden, self.w_down, self.down_config, True, ids), (1, TOP_K, 1, HIDDEN))
