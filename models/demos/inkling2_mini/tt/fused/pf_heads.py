@@ -35,6 +35,22 @@ def scale_rows(scale):
     return s.view(1, 1, 32, -1)
 
 
+def half_scale_rows(scale):
+    """16-wide heads: scale [n, 16] -> [1, 1, 32, n * 32] fp32, tile h row 0 = scale[h] in the half of its tile
+    where head h sits (columns 16 (h % 2) ..), zeros elsewhere (they mask the other head)."""
+    n = scale.shape[0]
+    s = torch.zeros(32, n, 32)
+    for h in range(n):
+        s[0, h, 16 * (h % 2) : 16 * (h % 2) + 16] = scale[h].float()
+    return s.view(1, 1, 32, n * 32)
+
+
+def half_proj(proj):
+    """16-wide heads: proj [16, W] -> [1, 1, 32, W] = [proj; proj]: a head's states sit in one half of its tile
+    with zeros in the other, so one matmul serves both halves."""
+    return torch.cat([proj, proj]).float().view(1, 1, 32, -1)
+
+
 class PfHeads:
     def __init__(self, device):
         self.device = device
@@ -43,15 +59,18 @@ class PfHeads:
         m[..., 16, :] = 1.0
         self.scaler = ttnn.from_torch(m, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    def __call__(self, x, n, col0=0, norm="l2", thr=1.0, eps=1e-6, scale=None, tau=None, mult=1.0):
-        """x [1,1,T,W] bf16 TILE DRAM; heads h = 0..n-1 are columns [col0 + 128 h, col0 + 128 h + 128). norm: "l2"
+    def __call__(self, x, n, col0=0, norm="l2", thr=1.0, eps=1e-6, scale=None, tau=None, mult=1.0, hd=HEAD_DIM):
+        """x [1,1,T,W] bf16 TILE DRAM; heads h = 0..n-1 are columns [col0 + hd h, col0 + hd h + hd). norm: "l2"
         (clip to L2 norm thr) or "rms". scale: [1,1,32,n*128] fp32 device tensor (scale_rows). tau: [1,1,T,1] fp32.
-        Returns [1, n, T, 128] bf16."""
+        Returns [1, n, T, 128] bf16. hd 16: two heads per tile, scale (half_scale_rows) required; returns
+        [1, n, T, 32] with head h's states in columns 16 (h % 2) .. (zeros elsewhere; see half_proj)."""
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT, (x.dtype, x.layout)
         t, w = x.shape[-2], x.padded_shape[-1]  # tile row stride from the padded width
-        assert t % 32 == 0 and col0 % 32 == 0 and col0 + n * HEAD_DIM <= w, (x.shape, col0, n)
+        assert t % 32 == 0 and col0 % 32 == 0 and col0 + n * hd <= w, (x.shape, col0, n)
+        assert hd == HEAD_DIM or (hd == 16 and scale is not None), hd
+        tph = hd // 32 if hd == HEAD_DIM else 1
         dram = ttnn.DRAM_MEMORY_CONFIG
-        out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, n, t, HEAD_DIM]), ttnn.bfloat16, ttnn.TILE_LAYOUT,
+        out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, n, t, 32 * tph]), ttnn.bfloat16, ttnn.TILE_LAYOUT,
                                              self.device, dram)  # fmt: skip
         rt = t // 32
         units = [(r, h) for h in range(n) for r in range(rt)]
@@ -67,9 +86,10 @@ class PfHeads:
             r_args[core] = [x.buffer_address(), sc, ta, self.scaler.buffer_address(), len(us)] + flat
             w_args[core] = [out.buffer_address(), len(us)] + flat
             c_args[core] = [len(us)]
-        inv = 1.0 / (thr * thr) if norm == "l2" else 1.0 / HEAD_DIM
+        inv = 1.0 / (thr * thr) if norm == "l2" else 1.0 / hd
         named = dict(wt=w // 32, c0=col0 // 32, rt=rt, has_scale=int(scale is not None), has_tau=int(tau is not None),
-                     norm=0 if norm == "l2" else 1, inv=_bits(inv), eps=_bits(eps), mult=_bits(mult))  # fmt: skip
+                     norm=0 if norm == "l2" else 1, inv=_bits(inv), eps=_bits(eps), mult=_bits(mult), tph=tph,
+                     half=int(hd != HEAD_DIM))  # fmt: skip
         named = F.fixed_rt(named, r_args, w_args, c_args)
         kernels = [
             F.kernel("pf_heads_reader.cpp", ttnn.ReaderConfigDescriptor(), named, r_args, crs),

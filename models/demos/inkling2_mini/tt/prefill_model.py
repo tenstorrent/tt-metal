@@ -62,7 +62,7 @@ from models.demos.inkling2_mini.tt.fused.pf_attnres import PfAttnRes
 from models.demos.inkling2_mini.tt.fused.pf_conv import PfConv
 from models.demos.inkling2_mini.tt.fused.pf_gate import PfGateTail
 from models.demos.inkling2_mini.tt.fused.pf_gateout import PfGateOut
-from models.demos.inkling2_mini.tt.fused.pf_heads import PfHeads, scale_rows
+from models.demos.inkling2_mini.tt.fused.pf_heads import PfHeads, half_proj, half_scale_rows, scale_rows
 from models.demos.inkling2_mini.tt.model import APPS, HIDDEN, LOOP_END, LOOP_START, SOFTCAP, VOCAB_REAL
 from models.demos.inkling2_mini.tt.moe import INTER, NUM_EXPERTS, RMS_EPS, ROUTE_SCALE, TOP_K, softcapped_swiglu
 from models.demos.inkling2_mini.tt.residual import cache_index
@@ -323,6 +323,9 @@ class _LayerPF:
         self.rel_scale = put(_host(w["attn.rel_clip_scale"]).view(1, N_HEADS, 1, D_REL))
         rel_p = _host(w["attn.rel_proj"]).view(D_REL, WINDOW)
         self.rel_proj = put(rel_p.view(1, 1, D_REL, WINDOW), ttnn.bfloat16)
+        if pf._pfheads is not None and pf.r3:  # PfHeads' 16-wide rel heads (each in its half of a tile)
+            self.rel_scale_half = put(half_scale_rows(_host(w["attn.rel_clip_scale"]).view(N_HEADS, D_REL)))
+            self.rel_proj_half = put(half_proj(rel_p), ttnn.bfloat16)
         self.bu = None if pf.r3 else put(_band_matrix(rel_p, lay.is_global), ttnn.bfloat16)
         # k/v conv taps per lag (fp32). Local: residual and 1/sqrt(K+1) folded in; global: static taps, the
         # residual and 1/sqrt(2K+1) are applied after adding the dynamic taps.
@@ -468,6 +471,7 @@ class Inkling2Prefill:
         self.debug = debug
         self.profile = profile
         self.trace = trace
+        self.fused_rel = True  # PfHeads for the 16-wide rel heads (needs _pfheads and r3)
         self._traces, self._warm, self._in = {}, set(), {}
         self._cap = self._cur = self._mem = None
         self.n_dropped = 0  # times the traces were dropped (memory use changed between calls)
@@ -651,7 +655,10 @@ class Inkling2Prefill:
             qs = self._pfheads(qgrs, N_HEADS, 0, "l2", QK_CLIP, scale=lp.q_scale_rows, tau=tau_g, mult=SCALE)
         else:
             q = self._scaled_clip(_heads(_cols(qgrs, 0, 3072), N_HEADS, HEAD_DIM), lp.q_scale, QK_CLIP, tau_g)
-        rel = self._scaled_clip(_heads(_cols(qgrs, 6144, 6528), N_HEADS, D_REL), lp.rel_scale, REL_CLIP, tau_g)
+        if self._pfheads is not None and self.r3 and self.fused_rel:  # [1,24,T,32]: head h in columns 16 (h % 2) ..
+            rel = self._pfheads(qgrs, N_HEADS, 6144, "l2", REL_CLIP, scale=lp.rel_scale_half, tau=tau_g, hd=D_REL)
+        else:
+            rel = self._scaled_clip(_heads(_cols(qgrs, 6144, 6528), N_HEADS, D_REL), lp.rel_scale, REL_CLIP, tau_g)
         sink = ttnn.permute(_cols(qgrs, 6528, 6552), (0, 3, 2, 1))  # [1,24,T,1]
 
         self._tick("a.q_rel_prep")
@@ -693,7 +700,8 @@ class Inkling2Prefill:
         last t keys: local keys = [ring rotated to position order ++ chunk] (only the s valid slots while s < 1024),
         global keys =
         kv_full rows [0, s + t) (the chunk is written there first)."""
-        rl = ttnn.matmul(rel, lp.rel_proj, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4)  # [1,24,t,1024]
+        proj = lp.rel_proj_half if rel.shape[-1] == 32 else lp.rel_proj  # PfHeads rel: [proj; proj] (see half_proj)
+        rl = ttnn.matmul(rel, proj, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4)  # [1,24,t,1024]
         rl = ttnn.to_layout(rl, ttnn.ROW_MAJOR_LAYOUT)
         if lp.lay.is_global:
             if s == 0:

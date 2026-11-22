@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 // SPDX-License-Identifier: Apache-2.0
 //
-// Prefill per-head norm, reader. Unit = (tile row R, head h). Per unit: x tiles (R, c0 + 4 h + c), c = 0..3
-// (bf16, x is [T, W] with WT tile columns); (has_scale) scale tiles 4 h + c (fp32, row 0 = the column scales);
+// Prefill per-head norm, reader. Unit = (tile row R, head h). Per unit: x tiles (R, c0 + TPH h + c), c < TPH
+// (bf16, x is [T, W] with WT tile columns; half: 16-wide heads, tile (R, c0 + h / 2)); (has_scale) scale tiles
+// TPH h + c (fp32, row 0 = the column scales);
 // (has_tau) tau tile R (fp32 [T, 1] column). Plus once: the reduce scaler tile (fp32).
 // Runtime args: x, scale, tau, scaler, n_units, (R, h) per unit.
 #include <cstdint>
@@ -14,6 +15,8 @@ void kernel_main() {
     constexpr uint32_t C0 = get_named_compile_time_arg_val("c0");
     constexpr uint32_t has_scale = get_named_compile_time_arg_val("has_scale");
     constexpr uint32_t has_tau = get_named_compile_time_arg_val("has_tau");
+    constexpr uint32_t TPH = get_named_compile_time_arg_val("tph");
+    constexpr uint32_t HALF = get_named_compile_time_arg_val("half");
     constexpr uint32_t cb_x = 0, cb_scale = 1, cb_tau = 2, cb_scaler = 3;
     const uint32_t x = get_arg_val<uint32_t>(0), scale = get_arg_val<uint32_t>(1);
     const uint32_t tau = get_arg_val<uint32_t>(2), scaler = get_arg_val<uint32_t>(3);
@@ -29,15 +32,15 @@ void kernel_main() {
     cb_push_back(cb_scaler, 1);
     for (uint32_t u = 0; u < n_units; ++u) {
         const uint32_t R = get_arg_val<uint32_t>(5 + 2 * u), h = get_arg_val<uint32_t>(6 + 2 * u);
-        cb_reserve_back(cb_x, 4);
-        const uint32_t base = R * WT + C0 + 4 * h;
-        for (uint32_t c = 0; c < 4; ++c) {
+        cb_reserve_back(cb_x, TPH);
+        const uint32_t base = R * WT + C0 + (HALF ? h / 2 : TPH * h);
+        for (uint32_t c = 0; c < TPH; ++c) {
             noc_async_read(xa.get_noc_addr(base + c), get_write_ptr(cb_x) + c * 2048, 2048);
         }
         if constexpr (has_scale) {
-            cb_reserve_back(cb_scale, 4);
-            for (uint32_t c = 0; c < 4; ++c) {
-                noc_async_read(sa.get_noc_addr(4 * h + c), get_write_ptr(cb_scale) + c * 4096, 4096);
+            cb_reserve_back(cb_scale, TPH);
+            for (uint32_t c = 0; c < TPH; ++c) {
+                noc_async_read(sa.get_noc_addr(TPH * h + c), get_write_ptr(cb_scale) + c * 4096, 4096);
             }
         }
         if constexpr (has_tau) {
@@ -45,9 +48,9 @@ void kernel_main() {
             noc_async_read(ta.get_noc_addr(R), get_write_ptr(cb_tau), 4096);
         }
         noc_async_read_barrier();
-        cb_push_back(cb_x, 4);
+        cb_push_back(cb_x, TPH);
         if constexpr (has_scale) {
-            cb_push_back(cb_scale, 4);
+            cb_push_back(cb_scale, TPH);
         }
         if constexpr (has_tau) {
             cb_push_back(cb_tau, 1);

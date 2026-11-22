@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 // SPDX-License-Identifier: Apache-2.0
 //
-// Prefill per-head norm, compute. Per unit (tile row R, head h), over the head's 4 column tiles c:
+// Prefill per-head norm, compute. Per unit (tile row R, head h), over the head's TPH column tiles c (16-wide heads:
+// one tile, the scale tile is zero outside the head's half, so the sums only see the head):
 //   y_c = x_c [* scale_c (row 0 broadcast down)]          fp32 SFPU
 //   q = sum_c y_c^2 (fp32 SFPU), hi = bf16(q), lo = q - hi; s = row sums of hi + row sums of lo (reduce row, column 0
 //   of the f tile: the FPU reads both parts exactly, a plain fp32 reduce would truncate q)
@@ -60,17 +61,18 @@ void kernel_main() {
     constexpr uint32_t inv = get_named_compile_time_arg_val("inv");    // fp32 bits
     constexpr uint32_t eps = get_named_compile_time_arg_val("eps");    // fp32 bits
     constexpr uint32_t mult = get_named_compile_time_arg_val("mult");  // fp32 bits
+    constexpr uint32_t TPH = get_named_compile_time_arg_val("tph");    // tiles per head (4, or 1: 16-wide heads)
     constexpr uint32_t one = 0x3f800000u;
     const uint32_t n_units = get_arg_val<uint32_t>(0);
 
     compute_kernel_hw_startup(cb_x, cb_y);
     cb_wait_front(cb_scaler, 1);
     for (uint32_t u = 0; u < n_units; ++u) {
-        cb_wait_front(cb_x, 4);
+        cb_wait_front(cb_x, TPH);
         if constexpr (has_scale) {
-            cb_wait_front(cb_scale, 4);
+            cb_wait_front(cb_scale, TPH);
         }
-        for (uint32_t c = 0; c < 4; ++c) {
+        for (uint32_t c = 0; c < TPH; ++c) {
             tile_regs_acquire();
             load(cb_x, c, 0);
             if constexpr (has_scale) {
@@ -86,15 +88,15 @@ void kernel_main() {
             put(1, cb_sq);
             tile_regs_release();
         }
-        cb_pop_front(cb_x, 4);
+        cb_pop_front(cb_x, TPH);
         if constexpr (has_scale) {
-            cb_pop_front(cb_scale, 4);
+            cb_pop_front(cb_scale, TPH);
         }
 
-        cb_wait_front(cb_sq, 4);
+        cb_wait_front(cb_sq, TPH);
         tile_regs_acquire();
         load(cb_sq, 0, 0);
-        for (uint32_t c = 1; c < 4; ++c) {
+        for (uint32_t c = 1; c < TPH; ++c) {
             load(cb_sq, c, 1);
             add_binary_tile_init();
             add_binary_tile(0, 1, 0);
@@ -110,7 +112,7 @@ void kernel_main() {
         put(1, cb_hl);
         put(0, cb_hl);
         tile_regs_release();
-        cb_pop_front(cb_sq, 4);
+        cb_pop_front(cb_sq, TPH);
 
         cb_wait_front(cb_hl, 2);
         tile_regs_acquire();
@@ -135,12 +137,12 @@ void kernel_main() {
         tile_regs_release();
         cb_pop_front(cb_hl, 2);
 
-        cb_wait_front(cb_y, 4);
+        cb_wait_front(cb_y, TPH);
         cb_wait_front(cb_f, 1);
         if constexpr (has_tau) {
             cb_wait_front(cb_tau, 1);
         }
-        for (uint32_t c = 0; c < 4; ++c) {
+        for (uint32_t c = 0; c < TPH; ++c) {
             tile_regs_acquire();
             load(cb_y, c, 0);
             bcast<BroadcastType::COL>(cb_f, 0, 1);
@@ -163,7 +165,7 @@ void kernel_main() {
             put(0, cb_out);
             tile_regs_release();
         }
-        cb_pop_front(cb_y, 4);
+        cb_pop_front(cb_y, TPH);
         cb_pop_front(cb_f, 1);
         if constexpr (has_tau) {
             cb_pop_front(cb_tau, 1);
