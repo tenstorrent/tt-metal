@@ -28,7 +28,7 @@ WINDOW = 1024
 TAPS = 4
 TABLE_ROWS = WINDOW + 34  # wrap rows so a 1088-byte aligned read never runs past the end
 NJ = 4  # bias slot tiles per core
-TILE_BYTES = 2048  # bf16 tile
+NEG = -1.0e9  # masked logit (attention.py)
 
 
 def f32_bits(x):
@@ -116,6 +116,11 @@ class AttnPrep:
         self.q = zeros([1, 1, N_HEADS, HEAD_DIM])
         self.mask = zeros([1, 1, N_HEADS, WINDOW])
         self.sink = zeros([N_HEADS, 32])
+        self.sink_blk = None
+        if dyn:
+            self.sink_blk = ttnn.from_torch(
+                torch.zeros(1, N_KV, GROUPS, 32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+            )
         mass = torch.zeros(1, HEAD_DIM)
         mass[0, 0] = 1.0  # far-cache mass chunk [1, 0 x 15] (+ a zero chunk), packed like the v row
         self.mass = F.dense_tensor(device, mass)
@@ -218,10 +223,11 @@ class AttnPrep:
                     i * NJ,
                 ]
             )
-            w_rt.append([self.mask.buffer_address(), i * NJ, proj.buffer_address(), self.sink.buffer_address()])
+            blk = self.sink_blk.buffer_address() if self.dyn else 0
+            w_rt.append([self.mask.buffer_address(), i * NJ, proj.buffer_address(), self.sink.buffer_address(), blk])
         crs = _crs(cores)
         sink_core, rest = cores[:1], cores[1:]
-        w_named = dict(nj=NJ, sink_tile=6528 // 32)
+        w_named = dict(nj=NJ, sink_tile=6528 // 32, sink_blk=int(self.dyn), neg=f32_bits(NEG))
         kernels = [
             _kernel("attn_bias_reader.cpp", cores, named, r_rt, ttnn.ReaderConfigDescriptor()),
             _kernel(
@@ -244,6 +250,7 @@ class AttnPrep:
             _cb(4, ttnn.bfloat16, NJ, crs),
             _cb(5, ttnn.float32, NJ, crs),
             _cb(6, ttnn.bfloat16, 1, crs),
+            _cb(7, ttnn.float32, 1, crs, page=24 * 128),
             _cb(16, ttnn.float32, 1, crs),
             _cb(17, ttnn.float32, 1, crs),
             _cb(19, ttnn.bfloat16, 1, crs),
@@ -256,7 +263,8 @@ class AttnPrep:
 
     def __call__(self, proj, positions, mode_rows, state):
         """proj: [1, 1, 32, N] bf16 TILE DRAM (conv window projection). Writes this step's k / v rows into the
-        state's caches (ring slot, and the far cache at pos on global layers). Returns (q, mask, sink)."""
+        state's caches (ring slot, and the far cache at pos on global layers). Returns (q, mask, sink): sink is the
+        sdpa sink tile [24, 32] bf16 (local) or the near-softmax sink block [1, 8, 3, 32] fp32 (global)."""
         F.check_row_input(proj)
         assert proj.dtype == ttnn.bfloat16
         tau = positions.tau
@@ -270,15 +278,16 @@ class AttnPrep:
         cbs += c
         io = [proj, self.q_taps, self.kv_taps["k"], self.kv_taps["v"], self.scaler, tau, self.rel_scale, self.g]
         io += [positions.near_mask, positions.ring, positions.pos, self.table, self.mass, self.sink, self.mask]
-        io += [state.k_ring, state.v_ring] + ([state.kv_full] if self.dyn else [])
+        io += [state.k_ring, state.v_ring] + ([state.kv_full, self.sink_blk] if self.dyn else [])
         io += [self.q]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
-        return self.q, self.mask, self.sink
+        return self.q, self.mask, self.sink_blk if self.dyn else self.sink
 
 
 class AttnOut:
     """gated = bf16(attn * sigmoid(gate)) into row 0 of a persistent o-projection input [1, 1, 32, 3072] (L1, width
-    sharded over 8 cores x 3 heads as `act_mem`). Rows 1..31 stay zero."""
+    sharded over 8 cores x 3 heads = one kv group each, as `act_mem`). Rows 1..31 stay zero. Global layers pass
+    the far and near partials and the merge runs here too."""
 
     GATE_COL = 3072
 
@@ -287,18 +296,32 @@ class AttnOut:
         self.act = _shared_l1(device, "o_in", N_HEADS * HEAD_DIM, act_mem)
         self.cores = [ttnn.CoreCoord(i, 0) for i in range(N_KV)]  # act_mem grid: CoreGrid(x=8, y=1)
 
-    def __call__(self, attn, proj):
-        """attn [1, 1, 24, 128] bf16 TILE DRAM, proj as AttnPrep. Returns the o-projection input (self.act)."""
+    def __call__(self, attn, proj, merge=None):
+        """attn: [1, 1, 24, 128] bf16 TILE DRAM, or with merge = (o_near [1, 8, 3, 128] fp32, r [1, 8, 3, 1] fp32,
+        far_valid [1, 1, 1, 1] fp32) the far partial [1, 1, 24, 160] bf16. proj as AttnPrep. Returns self.act."""
         F.check_row_input(attn)
-        assert attn.dtype == ttnn.bfloat16 and tuple(attn.padded_shape)[-2:] == (32, HEAD_DIM), attn.padded_shape
+        width = HEAD_DIM if merge is None else HEAD_DIM + 32
+        assert attn.dtype == ttnn.bfloat16 and tuple(attn.padded_shape)[-2:] == (32, width), attn.padded_shape
         crs = _crs(self.cores)
         nh = N_HEADS // len(self.cores)
+        rt = [[attn.buffer_address(), proj.buffer_address(), i * nh] for i in range(len(self.cores))]
+        io = [attn, proj]
+        if merge is not None:
+            for t in merge:
+                F.check_row_input(t)
+                assert t.dtype == ttnn.float32, t.dtype
+            o_near, r, valid = merge
+            rt = [
+                a + [o_near.buffer_address(), r.buffer_address(), valid.buffer_address(), i] for i, a in enumerate(rt)
+            ]
+            io += list(merge)
+        flag = int(merge is not None)
         kernels = [
             _kernel(
                 "attn_out_reader.cpp",
                 self.cores,
-                dict(nh=nh, gate_tile=self.GATE_COL // 32),
-                [[attn.buffer_address(), proj.buffer_address(), i * nh] for i in range(len(self.cores))],
+                dict(nh=nh, gate_tile=self.GATE_COL // 32, merge=flag),
+                rt,
                 ttnn.ReaderConfigDescriptor(),
             ),
             _kernel(
@@ -308,11 +331,18 @@ class AttnOut:
                 [[self.act.buffer_address()]] * len(self.cores),
                 ttnn.WriterConfigDescriptor(),
             ),
-            _kernel("attn_out_compute.cpp", self.cores, {}, [[]] * len(self.cores), _compute_config([])),
+            _kernel(
+                "attn_out_compute.cpp",
+                self.cores,
+                dict(merge=flag),
+                [[]] * len(self.cores),
+                F.compute_config([2, 3, 4], full_sync=True),
+            ),
         ]
         cbs = [_cb(0, ttnn.bfloat16, 1, crs), _cb(1, ttnn.bfloat16, 1, crs), _cb(16, ttnn.bfloat16, 1, crs)]
+        cbs += [_cb(i, ttnn.float32, 1, crs) for i in (2, 3, 4)] if merge is not None else []
         cbs.append(_stage(24, crs))
-        ttnn.generic_op([attn, proj, self.act], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
+        ttnn.generic_op(io + [self.act], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
         return self.act
 
 

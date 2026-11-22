@@ -128,8 +128,9 @@ class FastAttentionState(AttentionState):
 class Inkling2AttentionFast(Inkling2Attention):
     """`Inkling2Attention` with the scores / softmax on sdpa_decode (module doc).
 
-    FUSED: the glue between the projections and the attention core runs as two multi-core programs
-    (tt/fused/attn.py) instead of ~50 ttnn ops; False keeps the op-by-op path (reference / A-B timing)."""
+    FUSED: the glue around the projections and the attention core runs as multi-core programs (tt/fused/attn.py:
+    conv window, q/k/v prep with the cache writes, output gate with the global merge) instead of ~50 ttnn ops;
+    False keeps the op-by-op path (reference / A-B timing)."""
 
     FUSED = True
 
@@ -187,18 +188,14 @@ class Inkling2AttentionFast(Inkling2Attention):
             w = torch_of(f"{kv}_conv").view(TAPS, width).clone()
             w[0] += 1.0
             taps[kv] = w * self.conv_scale
-        q_scale = torch_of("q_clip_scale").view(N_HEADS, HEAD_DIM)
-        q_inv = QK_CLIP**-2
-        if not self.is_global:  # local core runs at scale=1 (see below)
-            q_scale = q_scale * SCALE
-            q_inv = QK_CLIP**-2 / SCALE**2
+        # q leaves the fused prep pre-scaled by SCALE (both layer types), clip threshold scaled to match
         self.prep = AttnPrep(
             self.device,
-            q_scale,
+            torch_of("q_clip_scale").view(N_HEADS, HEAD_DIM) * SCALE,
             torch_of("rel_clip_scale").view(N_HEADS, D_REL),
             torch_of("rel_proj").view(D_REL, WINDOW),
             taps,
-            q_inv=q_inv,
+            q_inv=QK_CLIP**-2 / SCALE**2,
             k_inv=QK_CLIP**-2,
             rel_inv=REL_CLIP**-2,
             eps=EPS,
@@ -225,11 +222,6 @@ class Inkling2AttentionFast(Inkling2Attention):
         bias = ttnn.matmul(rel, prof, transpose_b=True, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4)
         return ttnn.reshape(bias, [1, N_KV, GROUPS, WINDOW])
 
-    def _sink_tile(self, logit):
-        """Per-head logit [1,8,3,1] fp32 -> sdpa `attention_sink` [24, 32] bf16 in raw q.k units."""
-        raw = ttnn.multiply(ttnn.reshape(ttnn.multiply(logit, 1.0 / SCALE), [1, 1, N_HEADS, 1]), self.sink_cols)
-        return ttnn.typecast(raw, ttnn.bfloat16)
-
     def _local(self, q, bias, sink, state, positions):
         # q pre-scaled and scale=1: mask and sink are then plain logits (bias, sink are bf16 already)
         mask = ttnn.add(bias, positions.near_mask, dtype=ttnn.bfloat16)
@@ -246,15 +238,18 @@ class Inkling2AttentionFast(Inkling2Attention):
             compute_kernel_config=self.hifi4,
         )  # [1,1,24,128] bf16
 
-    def _global(self, q, bias, sink, state, positions, masked=False):
-        """masked: `bias` already holds the near mask (fused prep)."""
+    def _global(self, q, bias, sink_blk, state, positions, u=SCALE, merge=True):
+        """Near + sink partial, far partial, exact merge (module doc). sink_blk [1,8,3,32] fp32: col 0 = sink logit,
+        others masked. u: score scale still to apply (SCALE; 1 when q is pre-scaled, then `bias` already holds the
+        near mask). merge=False returns the partials (far out [1,1,24,160] bf16, o_near, r, far_valid)."""
         # near + sink partial: normalized output and log-sum-exp
         qg = ttnn.reshape(q, [1, N_KV, GROUPS, HEAD_DIM])
         near = ttnn.matmul(qg, state.k_ring, transpose_b=True, dtype=ttnn.float32, compute_kernel_config=self.hifi4)
-        near = ttnn.add(ttnn.multiply(near, SCALE), bias)
-        if not masked:
-            near = ttnn.add(near, positions.near_mask)
-        logits = ttnn.concat([near, ttnn.add(self.sink_pad, ttnn.typecast(sink, ttnn.float32))], dim=-1)
+        if u != 1.0:
+            near = ttnn.add(ttnn.add(ttnn.multiply(near, u), bias), positions.near_mask)
+        else:
+            near = ttnn.add(near, bias)
+        logits = ttnn.concat([near, sink_blk], dim=-1)
         # softmax and log-sum-exp from one exp pass
         m = ttnn.max(logits, dim=-1, keepdim=True)
         e = ttnn.exp(ttnn.subtract(logits, m))
@@ -264,11 +259,13 @@ class Inkling2AttentionFast(Inkling2Attention):
         o_near = ttnn.matmul(p_near, state.v_ring, dtype=ttnn.float32, compute_kernel_config=self.hifi4)
         lse = ttnn.add(m, ttnn.log(z))
 
-        # far partial with the near mass as its sink
+        # far partial with the near mass as its sink: sdpa `attention_sink` [24, 32] bf16 in raw q.k units
         far_pos, valid = positions.far
-        sink_t = self._sink_tile(lse)
+        raw = lse if u == 1.0 else ttnn.multiply(lse, 1.0 / u)
+        sink_t = ttnn.multiply(ttnn.reshape(raw, [1, 1, N_HEADS, 1]), self.sink_cols, dtype=ttnn.bfloat16)
         s_hat = ttnn.typecast(ttnn.slice(sink_t, [0, 0, 0, 0], [1, 1, N_HEADS, 1]), ttnn.float32)
-        r = ttnn.exp(ttnn.subtract(ttnn.reshape(ttnn.multiply(s_hat, SCALE), [1, N_KV, GROUPS, 1]), lse))
+        s_hat = ttnn.reshape(s_hat if u == 1.0 else ttnn.multiply(s_hat, u), [1, N_KV, GROUPS, 1])
+        r = ttnn.exp(ttnn.subtract(s_hat, lse))  # undoes the bf16 rounding of the sink
         out = ttnn.transformer.flash_multi_latent_attention_decode(
             ttnn.concat([self.q_pad, q], dim=-1),  # [1,1,24,288], zeros meet the v / mass columns
             state.kv_full,
@@ -276,10 +273,12 @@ class Inkling2AttentionFast(Inkling2Attention):
             is_causal=True,
             cur_pos_tensor=far_pos,
             attention_sink=ttnn.reshape(sink_t, [N_HEADS, 32]),
-            scale=SCALE,
+            scale=u,
             program_config=self.far_cfg,
             compute_kernel_config=self.hifi4,
         )
+        if not merge:
+            return out, o_near, r, valid
         out = ttnn.multiply(ttnn.reshape(ttnn.typecast(out, ttnn.float32), [1, N_KV, GROUPS, V_WIDTH]), valid)
         A = ttnn.slice(out, [0, 0, 0, 0], [1, N_KV, GROUPS, HEAD_DIM])
         a = ttnn.slice(out, [0, 0, 0, HEAD_DIM], [1, N_KV, GROUPS, HEAD_DIM + 1])
@@ -305,10 +304,10 @@ class Inkling2AttentionFast(Inkling2Attention):
             proj = self.w_all(act, ttnn.bfloat16, self.mm_cfg)
         rows = ROWS[mode]
         q, mask, sink_t = self.prep(proj, positions, {"q": 0, "k": rows["k"], "v": rows["v"]}, state)
-        if self.is_global:
-            sink = ttnn.reshape(ttnn.slice(sink_t, [0, 0], [N_HEADS, 1]), [1, N_KV, GROUPS, 1])
-            attn = self._global(q, ttnn.reshape(mask, [1, N_KV, GROUPS, WINDOW]), sink, state, positions, masked=True)
-            attn = ttnn.reshape(attn, [1, 1, N_HEADS, HEAD_DIM])
+        if self.is_global:  # q pre-scaled, mask holds bias + near mask, sink_t is the sink block
+            bias = ttnn.reshape(mask, [1, N_KV, GROUPS, WINDOW])
+            far, o_near, r, valid = self._global(q, bias, sink_t, state, positions, u=1.0, merge=False)
+            return self.w_o(self.out(far, proj, (o_near, r, valid)), ttnn.bfloat16, self.mm_cfg)
         else:
             attn = ttnn.transformer.scaled_dot_product_attention_decode(
                 q,
@@ -341,7 +340,10 @@ class Inkling2AttentionFast(Inkling2Attention):
             ttnn.experimental.paged_update_cache(state.kv_full, row, update_idxs_tensor=positions.pos)
 
         bias = self._rel_bias(rel, positions)
-        core = self._global if self.is_global else self._local
-        attn = ttnn.reshape(core(q, bias, sink, state, positions), [1, 1, 1, N_HEADS * HEAD_DIM])
+        if self.is_global:
+            attn = self._global(q, bias, ttnn.add(self.sink_pad, ttnn.typecast(sink, ttnn.float32)), state, positions)
+        else:
+            attn = self._local(q, bias, sink, state, positions)
+        attn = ttnn.reshape(attn, [1, 1, 1, N_HEADS * HEAD_DIM])
         gated = ttnn.multiply(ttnn.typecast(attn, ttnn.float32), ttnn.sigmoid(ttnn.typecast(gate, ttnn.float32)))
         return self.w_o(ttnn.typecast(gated, ttnn.bfloat16), ttnn.bfloat16, self.mm_cfg)
