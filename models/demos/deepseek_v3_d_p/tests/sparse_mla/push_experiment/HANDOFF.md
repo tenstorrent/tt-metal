@@ -122,6 +122,9 @@ crossovers: layer 3 ~256k, 15 ~307k, 7 ~512k, 19 ~614k, 11 ~666k -> `_K31_FULL_P
 family, detected by `mla_use_output_gate`; unmeasured DSA layers 614,400). The CI L24 leg keeps its env table, tuned
 to its repeated prompt.
 
+- GLM full-depth sweep (1M request): shared-layer dense threshold 15,360 / 30,720 (default) / 61,440 and full-layer
+  cutoff 153,600 / 204,800 (default) all land at 87,287-87,339 ms: flat optimum, defaults kept.
+
 ### 0.4 Harness (`tools/`, also see tools/README.md)
 
 - `run_local.patch`: local copy of `run_multirank_pcc.sh` with `LOCAL_NUM_LAYERS/LOCAL_REQUEST_LEN/LOCAL_CHECK_PCC/
