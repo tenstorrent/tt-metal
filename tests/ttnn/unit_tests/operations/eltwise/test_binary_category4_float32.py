@@ -30,7 +30,7 @@ Category 4: composite binary math
 | 2  | ttnn.logaddexp / logaddexp_   | log(exp(a) + exp(b))   | ULP ≤ 1 for abs(golden) ≥ 1, else abs ≤ 2^-23  |
 | 3  | ttnn.logaddexp2 / logaddexp2_ | log2(2**a + 2**b)      | ULP ≤ 1 for abs(golden) ≥ 1, else abs ≤ 2^-22  |
 | 4  | ttnn.squared_difference / _   | (a - b)**2             | exact vs torch float32                         |
-| 5  | ttnn.xlogy                    | a * log(b)             | abs ≤ abs(a) * 2e-6 (log as accurate as log) |
+| 5  | ttnn.xlogy                    | a * log(b)             | abs ≤ abs(a) * (2e-6 + 4 ulp of log b)       |
 | 6  | ttnn.hypot                    | sqrt(a**2 + b**2)      | ULP ≤ 1 where neither square under/overflows   |
 | 7  | ttnn.bias_gelu / bias_gelu_   | gelu(a + b)            | x = a + b: ULP ≤ 3 (x ≥ 0), ULP ≤ 5            |
 |    |                               |                        | (-1 < x < 0), abs ≤ 1e-6 (x ≤ -1); and bitwise |
@@ -387,7 +387,7 @@ def test_xlogy(device):
 
     | Case              | float32 behavior                                   | Check                    |
     |-------------------|----------------------------------------------------|--------------------------|
-    | all b > 0         | log(b) carries ~2e-6 absolute error at every b     | abs ≤ abs(a) * 2e-6      |
+    | all b > 0         | log(b) carries ~2e-6 absolute error at every b     | abs ≤ abs(a) * (2e-6 + 4 ulp of log b) |
     | b = 1             | log(1) is exactly 0: xlogy(x, 1) = 0               | same bound               |
     | b far from 1      | up to a few ULP relative for b ∉ [0.25, 4]        | same bound               |
     | product < 2^-126  | flushed to 0                                       | + 2^-126 in the bound    |
@@ -441,18 +441,14 @@ def test_xlogy_y_equals_one_is_zero(device):
 
     The kernel used to evaluate log with its own bfloat16-grade cubic rather
     than the log implementation ttnn.log uses, so log(1) came back near
-    1.00005e-3 and the product carried that offset out to every magnitude:
-    xlogy(1e38, 1) returned 1.00005e+35. The test pins the identity across
+    4.4e-4 and the product carried that offset out to every magnitude:
+    xlogy(1e38, 1) returned 4.4e+34. The test pins the identity across
     the whole exponent range, which is where the old error showed up as a
-    fixed 1.00005e-3 ratio.
+    fixed 4.4e-4 ratio.
 
-    | x       | y | expected            |
-    |---------|---|---------------------|
-    | 1.0     | 1 | 0                   |
-    | 1e20     | 1 | 0                   |
-    | 1e38     | 1 | 0                   |
-    | 1e-38    | 1 | 0                   |
-    | -1e30    | 1 | -0                  |
+    | x                                   | y | expected         |
+    |-------------------------------------|---|------------------|
+    | +-2^e, e in -126, -30, ..., 30, 37  | 1 | +-0 (sign of x)  |
     """
     exponents = [-126, -30, -10, -1, 0, 1, 10, 30, 37]
     values_x = torch.tensor(

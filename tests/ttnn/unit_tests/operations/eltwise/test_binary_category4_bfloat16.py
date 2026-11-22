@@ -451,16 +451,13 @@ def test_xlogy_y_equals_one_is_zero(device):
     """log(1) must be exactly 0, so xlogy(x, 1) must be exactly 0 for every x.
 
     The kernel used to evaluate log with its own coarse cubic, so log(1) came
-    back near 1.00005e-3 and the product carried that offset out to every
+    back near 4.4e-4 and the product carried that offset out to every
     magnitude. Spanning the exponents covers the whole range where that fixed
     ratio showed up.
 
-    | x       | y | expected   |
-    |---------|---|------------|
-    | 1.0     | 1 | 0          |
-    | 1e30     | 1 | 0         |
-    | 1e-30    | 1 | 0         |
-    | -1e30    | 1 | -0        |
+    | x                                 | y | expected         |
+    |-----------------------------------|---|------------------|
+    | +-2^e, e in -30, -10, ..., 10, 30 | 1 | +-0 (sign of x)  |
     """
     exponents = [-30, -10, -1, 0, 1, 10, 30]
     values_x = torch.tensor(
