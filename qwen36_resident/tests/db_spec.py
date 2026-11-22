@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--corpus", default=CORPUS)
     ap.add_argument("--json", default=None)
     ap.add_argument("--gaps", action="store_true", help="log logits; at each divergence the top-2 gaps")
+    ap.add_argument("--prefill", action="store_true", help="prompts through the PP prefill (handoff + drafter fill)")
     a = ap.parse_args()
     ids = torch.load(a.corpus)["ids"]
     stride = (len(ids) - a.prompt_len - 101) // a.users  # (distinct corpus slices that fit, 8 users included)
@@ -43,12 +44,21 @@ def main():
     try:
         ck = Q.Checkpoint(Q.checkpoint_dir())
         t0 = time.time()
-        eng = ResidentDFlashRows(mesh, ck, users=a.users, max_pos=a.prompt_len + a.new + 256, R=a.rows)
+        eng = ResidentDFlashRows(
+            mesh, ck, users=a.users, max_pos=a.prompt_len + a.new + 256, R=a.rows, prefill=a.prefill
+        )
         print(f"engine: {a.users} users x {eng.R} verify rows + drafter, built in {time.time() - t0:.0f} s", flush=True)
         t0 = time.time()
         eng.logit_log = {} if a.gaps else None
         ref = eng.greedy(prompts, a.new)
         print(f"greedy reference: {a.users} x {a.new} tokens in {time.time() - t0:.1f} s", flush=True)
+        if a.prefill:  # (the handoff: the same greedy with the prompts through verify steps instead of the PP prefill)
+            pp, eng.pp = eng.pp, None
+            nopp = eng.greedy(prompts, a.new)
+            eng.pp = pp
+            pre = [next((i for i, (x, y) in enumerate(zip(g, r)) if x != y), a.new) for g, r in zip(ref, nopp)]
+            out["pp_vs_verify_prefix"] = pre
+            print(f"PP-prefilled greedy vs verify-step prompts: equal prefix per user {pre} of {a.new}", flush=True)
         gen, stats = eng.generate(prompts, a.new)
         same = [sum(1 for x, y in zip(g, r) if x == y) for g, r in zip(gen, ref)]
         first_diff = [next((i for i, (x, y) in enumerate(zip(g, r)) if x != y), None) for g, r in zip(gen, ref)]

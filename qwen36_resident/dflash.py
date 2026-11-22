@@ -268,7 +268,7 @@ class ResidentDFlash:
         self._last_row = k - 1
         return g[k - 1]
 
-    def _fill_context(self, n_tokens, host=False):
+    def _fill_context(self, n_tokens, host=False, phys=0):
         """the drafter's context (its window) from the last prefill's taps of positions < n_tokens, one fill of
         fill_rows rows from s0 = the window's first block. On device: each tap's rows masked to the chip that holds
         them, one reduce-scatter -> the taps dim-fractured as the drafter reads them. host: through the host
@@ -300,7 +300,7 @@ class ResidentDFlash:
             )
             dev = [ttnn.slice(fr, (0, 0, t * rows, 0), (1, 1, (t + 1) * rows, fr.shape[-1])) for t in range(nt)]
             ttnn.deallocate(fr)
-        self.drafter.fill_context(dev, s0, valid_len=n_tokens - s0)
+        self.drafter.fill_context(dev, s0, phys=phys, valid_len=n_tokens - s0)  # (phys: the drafter slot, multi-user)
         for t in dev:
             ttnn.deallocate(t)
         if FILL_SYNC:
@@ -449,7 +449,9 @@ class ResidentDFlashRows:
     continues from its row a (ring + 1 + a, slot + a). Prompts go through the same verify steps (R tokens per step,
     every user's prompt the same length here)."""
 
-    def __init__(self, mesh, ck, users=4, max_pos=4096, R=8, weights_dir=None, block_size=64):
+    def __init__(
+        self, mesh, ck, users=4, max_pos=4096, R=8, weights_dir=None, block_size=64, prefill=False, window=2048
+    ):
         from qwen36_resident.model import Dims, ResidentModel, State, is_attn
 
         cfg = ck.config
@@ -463,6 +465,37 @@ class ResidentDFlashRows:
         from models.demos.blackhole.qwen36.tt.dflash2 import load_config
 
         tap_layers = list(load_config(weights_dir)["taps"])
+        # (prefill: the pipeline-parallel prefill with the drafter's taps, as ResidentDFlash's: each user's prompt but
+        # its last token prefilled, handed off into its first state slot, its drafter context filled from the taps)
+        self.pp, self.window = None, window
+        if prefill:
+            from qwen36_resident.prefill.pp_prefill import PPPrefill
+
+            C = max(ResidentDFlash.PREFILL_CHUNKS)
+            max_len = -(-max_pos // C) * C
+            max_pos = max_len + 64
+            self.pp = PPPrefill(
+                mesh,
+                ck,
+                layers,
+                interval,
+                chunk=list(ResidentDFlash.PREFILL_CHUNKS),
+                max_len=max_len,
+                taps=tap_layers,
+                tap_window=window,
+            )
+            self.fill_rows = window + 64
+            n, Ls = mesh.get_num_devices(), layers // mesh.get_num_devices()
+            self.tap_masks = [
+                ttnn.from_torch(
+                    torch.eye(n)[L // Ls].reshape(n, 1, 1, 1),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh,
+                    mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+                )
+                for L in tap_layers
+            ]
         self.taps = tap_buffers(mesh, len(tap_layers), users * R)
         embed = ttnn.from_torch(
             emb.bfloat16(),
@@ -501,9 +534,16 @@ class ResidentDFlashRows:
         self.drafter.extend_context([0] * users, [0] * users, traced=False)
         self.drafter.draft([0] * users, [1] * users, traced=False)
         ttnn.synchronize_device(mesh)
+        if self.pp is not None:  # (the prefill's programs before any trace: a fill, a capture, a handoff)
+            self._fill_context(1, phys=0)
+            self.pp.capture()
+            self.pp.handoff(self.m, 1, slot=0, block_table=self.m.block_tables[0])
         self.m.reset()
         self.m.capture_trace()
         self.drafter.arm_traces()
+
+    def _fill_context(self, n_tokens, phys=0):
+        ResidentDFlash._fill_context(self, n_tokens, phys=phys)
 
     def _reset_ptrs(self):
         U = self.U
@@ -531,7 +571,18 @@ class ResidentDFlashRows:
         assert all(len(p) == P for p in prompts), "the prototype takes prompts of one length"
         self.m.reset()
         self._reset_ptrs()
-        for p0 in range(0, P, R):
+        start = 0
+        if self.pp is not None and P > 1:
+            # each user's prompt but its last token: PP prefill, handoff into the user's first state slot (u R), its
+            # drafter context (slot u) from the prefill's taps; the last tokens then go through one verify step
+            start = P - 1
+            for u, ids in enumerate(prompts):
+                self.pp.reset()
+                self.pp.run(torch.as_tensor(ids[:start]))
+                self.pp.handoff(self.m, start, slot=u * R, block_table=self.m.block_tables[u * R])
+                if draft_context:
+                    self._fill_context(start, phys=u)
+        for p0 in range(start, P, R):
             k = min(R, P - p0)
             self._step([list(ids[p0 : p0 + k]) + [ids[p0 + k - 1]] * (R - k) for ids in prompts], [p0] * U)
             if draft_context:

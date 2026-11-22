@@ -1741,6 +1741,66 @@ class PPPrefill:
             )
         return self._ho["sel"][key]
 
+    def _ho_hist_vrows(self, model, packed, row, target, hrows, hcols, K, copies, G, lap):
+        """(verify rows) the conv histories of a user whose first row is `row`: age j (0 = oldest) into ring slot j,
+        i.e. block 0 of the group's 16 / R blocks, tile row row % batch + j (kernels/streamer_common.hpp kVRows)"""
+        d, mesh, n = model.d, self.mesh, self.n
+        b, R = model.batch, model.R
+        gr, u = divmod(row, b)
+        tiles = (hcols[::TILE] // TILE).tolist()
+        pairs = [v for k in range(K) for v in (int(hrows[k]) + gr * model._S, tiles[k])]
+        grid = mesh.compute_with_storage_grid_size()
+        cores = min(G, grid.x * grid.y)
+        coords = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(cores)]
+        all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
+        for age in range(CONV_K - 1):
+            compact_t = ttnn.from_torch(
+                packed[:, :, age : age + 1].contiguous().reshape(d.n * G * K, TILE),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            rt, first = ttnn.RuntimeArgs(), 0
+            for i, c in enumerate(coords):
+                cnt = G // cores + (i < G % cores)
+                rt[c.x][c.y] = (
+                    [compact_t.buffer_address(), target["hist"].buffer_address(), first, cnt] + pairs + [u + age]
+                )
+                first += cnt
+            program = ttnn.ProgramDescriptor(
+                kernels=[
+                    ttnn.KernelDescriptor(
+                        kernel_source=KDIR + "hist_scatter.cpp",
+                        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                        core_ranges=all_cores,
+                        # (rows per tile = the batch; 16 / R blocks per row; slot 0 (block 0) written; one target row)
+                        compile_time_args=[K, copies, b, 16 // R, model._blk * TILE * b, 1, 1, 0],
+                        runtime_args=rt,
+                        config=ttnn.DataMovementConfigDescriptor(
+                            processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+                        ),
+                    )
+                ],
+                semaphores=[],
+                cbs=[
+                    ttnn.CBDescriptor(
+                        total_size=K * 64,
+                        core_ranges=all_cores,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=64)
+                        ],
+                    )
+                ],
+            )
+            hist_pd = ttnn.MeshProgramDescriptor()
+            hist_pd[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, n - 1))] = program
+            ttnn.generic_op([compact_t, target["hist"]], hist_pd)
+            ttnn.synchronize_device(mesh)
+            ttnn.deallocate(compact_t)
+        lap("hist_write")
+
     def _ho_target(self, model, slot):
         """(rows mode, slot, row, the slot's launch tensors) of a handoff into `model` (row groups: the row of the launch,
         group row // batch, tile row row % batch)"""
@@ -1910,6 +1970,10 @@ class PPPrefill:
         verify = getattr(model, "verify", False)
         R = getattr(model, "R", 0)
         written = CONV_K - 1  # compact slots per GDN copy
+        if getattr(model, "vrows", False):
+            # verify rows: the user (slot = its first row k R of the launch) gets its ring at step 0 — history row j in
+            # ring slot j: block 0, tile row (k R) % batch + j of its group's tiles; one one-row write per age
+            return self._ho_hist_vrows(model, packed, row, target, hrows, hcols, K, copies, G, lap)
         if R > 2:
             # the ring of single-row slots at ring step 0 (streamer_common.hpp): history rows 0..2 are rows 0..2 of the
             # first block's R-row tiles (one slot written per copy)
