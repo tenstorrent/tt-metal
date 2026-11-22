@@ -437,3 +437,170 @@ class ResidentDFlash:
             self._commit(0)
             p += 1
         return (gen, gaps) if other is not None else gen
+
+
+class ResidentDFlashRows:
+    """Greedy DFlash2 speculative decode of U users in one launch (DB1 prototype, host driven): the target runs the
+    verify rows of ResidentModel(verify=R, rows=True, groups=U) — row group u is user u's verify of R rows — and the
+    drafter runs one U x R layout over U context slots (DFlash2DrafterTP.alloc with U page-table rows). The verify
+    rows' hubs write user u's taps into rows u R .. of the tap tiles, the drafter's user-major rows. Per iteration:
+    every user drafts R - 1 tokens from its pending token, the U users' rows verify in one step, each user accepts its
+    longest matching prefix (the device's per-row greedy, fed_token), extends its context by its accepted rows and
+    continues from its row a (ring + 1 + a, slot + a). Prompts go through the same verify steps (R tokens per step,
+    every user's prompt the same length here)."""
+
+    def __init__(self, mesh, ck, users=4, max_pos=4096, R=8, weights_dir=None, block_size=64):
+        from qwen36_resident.model import Dims, ResidentModel, State, is_attn
+
+        cfg = ck.config
+        layers, interval = cfg["num_hidden_layers"], cfg["full_attention_interval"]
+        self.mesh, self.R, self.U, self.vocab = mesh, R, users, cfg["vocab_size"]
+        d = self.d = Dims(mesh.get_num_devices(), mesh.dram_grid_size().x, vocab=self.vocab)
+        n_attn = sum(is_attn(l, interval) for l in range(layers))
+        emb = Q.embedding(ck)
+        self.emb = emb.float()
+        weights_dir = weights_dir or os.environ.get("DFLASH_WEIGHTS", DRAFTER_WEIGHTS)
+        from models.demos.blackhole.qwen36.tt.dflash2 import load_config
+
+        tap_layers = list(load_config(weights_dir)["taps"])
+        self.taps = tap_buffers(mesh, len(tap_layers), users * R)
+        embed = ttnn.from_torch(
+            emb.bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        nb = -(-max_pos // block_size)
+        sts = [State(d, layers - n_attn, n_attn, 0, max_pos, zero=True, kv=False) for _ in range(users)]
+        self.m = ResidentModel(
+            mesh,
+            d,
+            Q.load(ck, d, layers, interval),
+            sts,
+            layers,
+            interval,
+            lm_head=True,
+            embed=embed,
+            kv_pool_blocks=users * nb,
+            block_tables=[list(range(u * nb, (u + 1) * nb)) for u in range(users)],
+            kv_block_size=block_size,
+            rows=True,
+            groups=users,
+            verify=R,
+            taps=list(zip(tap_layers, self.taps)),
+        )
+        self.drafter = build_drafter(mesh, ck, weights_dir, embed=emb, block=R)
+        self.drafter.alloc(torch.arange(users * nb, dtype=torch.int32).reshape(users, nb), block_size, self.taps)
+        self.max_pos = max_pos
+        self._reset_ptrs()
+        # every program once, eagerly, then the target's trace (the drafter's on their first armed calls)
+        self._step([[0] * R] * users, [0] * users)
+        self.greedy_rows()
+        self.drafter.extend_context([0] * users, [0] * users, traced=False)
+        self.drafter.draft([0] * users, [1] * users, traced=False)
+        ttnn.synchronize_device(mesh)
+        self.m.reset()
+        self.m.capture_trace()
+        self.drafter.arm_traces()
+
+    def _reset_ptrs(self):
+        U = self.U
+        self.ring, self.slot, self.prev = [0] * U, [0] * U, [None] * U
+
+    def _step(self, toks, pos):
+        """one verify step: toks[u] = user u's R tokens at pos[u] .. pos[u] + R - 1"""
+        x0 = torch.stack([self.emb[list(t)] for t in toks])
+        self.m.step(self.m.token_state_vrows(x0, pos, self.ring, self.slot, self.prev))
+
+    def greedy_rows(self):
+        """the device's greedy token of every row ([U][R], the hub's argmax)"""
+        fed = self.m.fed_token()
+        return [[fed[u * self.R + r][0] for r in range(self.R)] for u in range(self.U)]
+
+    def _commit(self, accepts):
+        R = self.R
+        for u, a in enumerate(accepts):
+            self.ring[u], self.slot[u], self.prev[u] = self.ring[u] + 1 + a, (self.slot[u] + a) % R, a
+
+    def _prompt(self, prompts, draft_context=True):
+        """the users' prompts (one length) through verify steps, R tokens each, all accepted: the first generated
+        token per user"""
+        P, R, U = len(prompts[0]), self.R, self.U
+        assert all(len(p) == P for p in prompts), "the prototype takes prompts of one length"
+        self.m.reset()
+        self._reset_ptrs()
+        for p0 in range(0, P, R):
+            k = min(R, P - p0)
+            self._step([list(ids[p0 : p0 + k]) + [ids[p0 + k - 1]] * (R - k) for ids in prompts], [p0] * U)
+            if draft_context:
+                self.drafter.extend_context([p0] * U, [k] * U)
+            g = self.greedy_rows()
+            self._commit([k - 1] * U)
+        return [g[u][k - 1] for u in range(U)]
+
+    def generate(self, prompts, n_new):
+        """greedy spec decode of the U users: (per user n_new tokens, stats)"""
+        prompts = [[int(t) for t in p] for p in prompts]
+        U, R, P = self.U, self.R, len(prompts[0])
+        assert P + n_new + 2 * R + 64 <= self.max_pos
+        t0 = time.perf_counter()
+        t = self._prompt(prompts)
+        t_first = time.perf_counter() - t0
+        gen = [[t[u]] for u in range(U)]
+        p, accepts, parts = [P] * U, [], dict(draft=[], verify=[], extend=[])
+        t1 = time.perf_counter()
+        while min(len(g) for g in gen) < n_new:
+            ts = time.perf_counter()
+            drafts = self.drafter.draft(list(t), list(p))
+            tv = time.perf_counter()
+            self._step([[t[u]] + drafts[u] for u in range(U)], p)
+            g = self.greedy_rows()
+            te = time.perf_counter()
+            acc = []
+            for u in range(U):
+                a = 0
+                while a < R - 1 and drafts[u][a] == g[u][a]:
+                    a += 1
+                gen[u] += drafts[u][:a] + [g[u][a]]
+                acc.append(a)
+            accepts.append(acc)
+            self.drafter.extend_context(list(p), [a + 1 for a in acc])
+            ttnn.synchronize_device(self.mesh)
+            parts["draft"].append(tv - ts)
+            parts["verify"].append(te - tv)
+            parts["extend"].append(time.perf_counter() - te)
+            self._commit(acc)
+            p = [p[u] + acc[u] + 1 for u in range(U)]
+            t = [g[u][acc[u]] for u in range(U)]
+        dt = time.perf_counter() - t1
+        flat = [a for acc in accepts for a in acc]
+        med = lambda xs: 1e3 * sorted(xs)[len(xs) // 2]  # noqa: E731
+        stats = dict(
+            first_token_s=t_first,
+            iterations=len(accepts),
+            mean_accept=sum(flat) / len(flat),
+            tokens_per_iter=sum(len(g) - 1 for g in gen) / len(accepts) / U,
+            tok_s_per_user=sum(len(g) - 1 for g in gen) / U / dt,
+            tok_s_total=sum(len(g) - 1 for g in gen) / dt,
+            ms_per_iter=1e3 * dt / len(accepts),
+            **{f"{k}_ms": med(v) for k, v in parts.items()},
+        )
+        return [g_[:n_new] for g_ in gen], stats
+
+    def greedy(self, prompts, n_new):
+        """the verify model's own greedy tokens of the U users, one token per step (row 0; spec decode reproduces it)"""
+        prompts = [[int(t) for t in p] for p in prompts]
+        U, R = self.U, self.R
+        t = self._prompt(prompts, draft_context=False)
+        gen, p = [[t[u]] for u in range(U)], [len(prompts[0])] * U
+        while len(gen[0]) < n_new:
+            self._step([[t[u]] * R for u in range(U)], p)
+            g = self.greedy_rows()
+            t = [g[u][0] for u in range(U)]
+            for u in range(U):
+                gen[u].append(t[u])
+            self._commit([0] * U)
+            p = [x + 1 for x in p]
+        return gen
