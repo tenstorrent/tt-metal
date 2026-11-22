@@ -307,13 +307,9 @@ def test_ffn_pcc(
 )
 @pytest.mark.parametrize("forward_chunks", [2, 4], ids=["f2", "f4"])
 def test_ffn_fused_rows_position_invariant(mesh_device, device_params, num_links, tp_axis, forward_chunks):
-    """The fused dense FFN (Kimi-K3's layer 0) must give a row the same bits wherever the row sits in the call.
+    """The fused dense FFN must give a row the same bits wherever it sits, as packed forwards require.
 
-    A packed forward holds forward_chunks chunks of PREFILL_CHUNK_TOKENS_PER_CHIP rows back to back, and its tests
-    hold a chunk's result bit-exact against the same chunk alone at position 0. Rolling the input by one chunk moves
-    every row to another chunk position; the output rolled back must be bit-identical. The balanced ring's two halves
-    sum a block's TP partials in opposite orders, so a half split along M (matmul_reduce_scatter_prefill's streamed
-    plans used to split row-major) broke this for the second chunk.
+    Rolling the input by one chunk and the output back must be bit-identical.
     """
     if not is_blackhole():
         pytest.skip("the fused TP collectives need a core column free of the matmul grid (Blackhole)")
