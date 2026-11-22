@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 """Fused residual-path kernels (tt/fused) vs the HF Inkling2Loop modules: test_residual.py's cases and bar
-(PCC >= 0.9995, eager + traced, two replays bit-equal), plus before/after replay time against the unfused
-tt/residual.py ops.
+(PCC >= 0.9995, eager + traced, two replays bit-equal), plus replay times.
 
 Reference: the one test_residual.py makes (skips without it); timings go to INKLING_FUSED_RESULTS (jsonl) if set.
 """
@@ -100,14 +99,7 @@ def test_fused_short_conv(device, rows, ref, channels):
     assert torch.equal(first, second), "trace replays differ"
     p = pcc(first, case["out"])
 
-    # before: the unfused ShortConv, same input, replay time
-    old = R.ShortConv(rows, w, "post_attn_conv")
-    ring = old.alloc_state(0)
-    old(x, ring, 0)
-    tid, _ = capture(device, lambda: old(x, ring, 0))
-    us_old = replay_us(device, [tid])
-    ttnn.release_trace(device, tid)
-    record(f"short_conv_c{channels}", pcc=p, pcc_eager=pcc(eager, case["out"]), us=us, us_unfused=us_old)
+    record(f"short_conv_c{channels}", pcc=p, pcc_eager=pcc(eager, case["out"]), us=us)
     assert finite_min([p, pcc(eager, case["out"])]) >= PCC_MIN, p
 
 
@@ -168,30 +160,13 @@ def test_fused_attn_res(device, rows, ref, nq, depth):
     eager, traced, us = traced_twice(device, lambda: attn(stack, partial, depth, split=False))
     per_q = [pcc(traced[j], case["out"][j]) for j in range(nq)]
     p_eager = min(pcc(eager[j], case["out"][j]) for j in range(nq))
-    # seal of a fresh tensor (one program) vs the unfused seal (4 ops)
+    # seal of a fresh tensor (one program)
     _, _, us_seal = traced_twice(
         device, lambda: (frows.fresh.clear(), frows.seal(stack, block[0] if block else partial, 0), partial)[2]
     )
 
-    # before: the unfused AttnRes (seal of the partial + attend), same inputs
-    old = R.AttnRes(rows, w, "attn_res_q", nq)
-    st = None
-    for k in range(depth - 1):
-        st = rows.seal(st, block[k], k)
-    _, old_out, us_old = traced_twice(device, lambda: old(st, partial, depth, split=False))
-    _, _, us_seal_old = traced_twice(
-        device, lambda: rows.seal(st, partial, depth - 1) if depth > 1 else rows.seal(None, partial, 0)
-    )
     record(
-        f"block_attn_res_nq{nq}",
-        depth=depth,
-        pcc_min_query=min(per_q),
-        pcc_eager_min=p_eager,
-        us=us,
-        us_unfused=us_old,
-        us_seal=us_seal,
-        us_seal_unfused=us_seal_old,
-        max_abs_vs_unfused=(traced - old_out).abs().max().item(),
+        f"block_attn_res_nq{nq}", depth=depth, pcc_min_query=min(per_q), pcc_eager_min=p_eager, us=us, us_seal=us_seal
     )
     assert finite_min(per_q + [p_eager]) >= PCC_MIN, per_q
 
@@ -216,15 +191,7 @@ def test_fused_message_gate(device, rows, ref):
     h, m = row(case["h"], device), row(case["m"], device)  # rows 0-3: four hidden-state scales
     eager, traced, us = traced_twice(device, lambda: gate(h, m))
     per_row = [pcc(traced[i], case["out"][i]) for i in range(4)]
-    old = R.MessageGate(rows, w, "k")
-    _, old_out, us_old = traced_twice(device, lambda: old(h, m))
-    record(
-        "message_gate",
-        pcc_min_row=min(per_row),
-        us=us,
-        us_unfused=us_old,
-        max_abs_vs_unfused=(traced - old_out).abs().max().item(),
-    )
+    record("message_gate", pcc_min_row=min(per_row), us=us)
     assert finite_min(per_row + [pcc(eager[i], case["out"][i]) for i in range(4)]) >= PCC_MIN, per_row
 
 
@@ -232,7 +199,6 @@ def test_fused_message_gate(device, rows, ref):
 def test_fused_qkv_gate(device, rows, ref):
     """Rows 0/1/2 through gates q/k/v (same HF weights for all three, so row i must equal HF row i)."""
     from models.demos.inkling2_mini.tt.fused.gate import FusedQKVGate
-    from models.demos.inkling2_mini.tt.model import _QKVGate
 
     case = ref["gate"]
     w = gate_weights(case, ["q", "k", "v"])
@@ -240,15 +206,7 @@ def test_fused_qkv_gate(device, rows, ref):
     h, m = row(case["h"][:3], device), row(case["m"][:3], device)
     eager, traced, us = traced_twice(device, lambda: gate(h, m))
     per_row = [pcc(traced[i], case["out"][i]) for i in range(3)]
-    old = _QKVGate(rows, w)
-    _, old_out, us_old = traced_twice(device, lambda: old(h, m))
-    record(
-        "qkv_gate",
-        pcc_min_row=min(per_row),
-        us=us,
-        us_unfused=us_old,
-        max_abs_vs_unfused=(traced - old_out).abs().max().item(),
-    )
+    record("qkv_gate", pcc_min_row=min(per_row), us=us)
     assert finite_min(per_row + [pcc(eager[i], case["out"][i]) for i in range(3)]) >= PCC_MIN, per_row
 
 

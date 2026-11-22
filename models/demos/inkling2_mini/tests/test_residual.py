@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-"""Inkling-2-Mini residual ops on TT vs the HF Inkling2Loop modules, random weights, batch-1 decode.
+"""HF Inkling2Loop residual-path references (random weights, batch-1 decode) and the cross-pass messages on TT.
 
-Each op runs eagerly, then under trace twice: both replays must match bit for bit and reach PCC >= 0.9995.
+The reference cases (block attention residual, messages, message gate, short conv) also feed tests/test_fused.py,
+which checks the fused kernels the model runs. Here: MessageAttnRes.all_messages eagerly, then under trace twice:
+both replays must match bit for bit and reach PCC >= 0.9995.
 
 The HF reference needs transformers >= 5.24 (see tests/hf_ref.py), so this file doubles as the reference
 generator, run with that python:
@@ -92,15 +94,7 @@ import pytest
 
 import ttnn
 from models.demos.inkling2_mini.tests import hf_ref
-from models.demos.inkling2_mini.tt.residual import (
-    TILE,
-    AttnRes,
-    MessageAttnRes,
-    MessageGate,
-    RowOps,
-    ShortConv,
-    cache_index,
-)
+from models.demos.inkling2_mini.tt.residual import TILE, MessageAttnRes, RowOps, cache_index
 
 TRACE_PARAMS = [{"trace_region_size": 8 * 1024 * 1024}]
 
@@ -137,11 +131,9 @@ def cache_tensor(t, dtype):
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
 
-def tok(vecs, device, dtype=ttnn.float32):
-    """[r, C] -> [1,1,32,C] device tensor with rows 0..r-1."""
-    t = torch.zeros(TILE, vecs.shape[-1])
-    t[: vecs.shape[0]] = vecs.reshape(-1, vecs.shape[-1])
-    return ttnn.from_torch(t[None, None], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+def row(vec, device, dtype=ttnn.bfloat16):
+    """[C] -> [1,1,1,C] row-form device tensor (the model's per-token form)."""
+    return ttnn.from_torch(vec.reshape(1, 1, 1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
 def host(t):
@@ -178,93 +170,19 @@ def traced_twice(device, fn):
 
 
 @pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
-@pytest.mark.parametrize("depth", DEPTHS)
-@pytest.mark.parametrize("nq", [1, 3])
-def test_block_attn_res(device, rows, ref, nq, depth):
-    case = ref[f"block_nq{nq}_d{depth}"]
-    weights = {
-        "attn_res_q": cache_tensor(
-            torch.nn.functional.pad(case["query"], (0, 0, 0, TILE - nq))[None, None], ttnn.float32
-        )
-    }
-    attn = AttnRes(rows, weights, "attn_res_q", nq)
-    stack = None
-    for k in range(depth - 1):  # sealed states arrive as bf16 layer inputs
-        stack = rows.seal(stack, tok(case["block"][k : k + 1], device, ttnn.bfloat16), k)
-    partial = tok(case["partial"][None], device)
-    eager, traced, us = traced_twice(device, lambda: attn(stack, partial, depth))
-    per_q = [pcc(traced[j, 0], case["out"][j]) for j in range(nq)]
-    p = pcc(traced[:, 0], case["out"])
-    record(f"block_attn_res_nq{nq}", depth=depth, pcc=p, pcc_min_query=min(per_q), trace_us=us)
-    assert hf_ref.finite_min(per_q + [p, pcc(eager[:, 0], case["out"])]) >= PCC_MIN, (p, per_q)
-
-
-@pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
-def test_messages_for_pass(device, rows, ref):
+def test_all_messages(device, rows, ref):
+    """MessageAttnRes.all_messages, as the model calls it: row-form bf16 keys (input of L12, output of L17) ->
+    [1,1,48,C] fp32, row 4l+j = message j (q, k, v, mlp) of loop layer l."""
     case = ref["msg"]
     msg_q = torch.nn.functional.pad(case["query"], (0, 0, 0, TILE - 4))[None]  # cache form [1,12,32,C]
     mod = MessageAttnRes(rows, {"msg_q": cache_tensor(msg_q, ttnn.float32)})
-    h12, h17 = tok(case["h12"][None], device, ttnn.bfloat16), tok(case["h17"][None], device, ttnn.bfloat16)
-    eager, traced, us = traced_twice(device, lambda: [m for layer in mod.messages_for_pass(h12, h17) for m in layer])
-    got = traced[:, 0].reshape(12, 4, -1)
+    h12, h17 = row(case["h12"], device), row(case["h17"], device)
+    eager, traced, us = traced_twice(device, lambda: [mod.all_messages(h12, h17)])
+    got = traced[0].reshape(12, 4, -1)
     per = [pcc(got[l, j], case["out"][l, j]) for l in range(12) for j in range(4)]
     p = pcc(got, case["out"])
-    record("messages_for_pass", depth=2, pcc=p, pcc_min_message=min(per), trace_us=us)
-    assert hf_ref.finite_min(per + [p, pcc(eager[:, 0].reshape(12, 4, -1), case["out"])]) >= PCC_MIN, (p, min(per))
-
-
-@pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
-def test_message_gate(device, rows, ref):
-    case = ref["gate"]
-    weights = {  # cache form: down [1,1,2C,64] bf16, forget / gain [1,1,64,C] fp32 ([in, out])
-        "msg_gate.k.down": cache_tensor(case["down"].T[None, None].contiguous(), ttnn.bfloat16),
-        "msg_gate.k.forget": cache_tensor(case["forget"].T[None, None].contiguous(), ttnn.float32),
-        "msg_gate.k.gain": cache_tensor(case["gain"].T[None, None].contiguous(), ttnn.float32),
-    }
-    gate = MessageGate(rows, weights, "k")
-    h, m = tok(case["h"], device), tok(case["m"], device)  # rows 0-3: four hidden-state scales
-    eager, traced, us = traced_twice(device, lambda: [gate(h, m)])
-    per_row = [pcc(traced[0, i], case["out"][i]) for i in range(4)]
-    record("message_gate", pcc=pcc(traced[0, :4], case["out"]), pcc_min_row=min(per_row), trace_us=us)
-    assert hf_ref.finite_min(per_row + [pcc(eager[0, :4], case["out"])]) >= PCC_MIN, per_row
-
-
-@pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
-@pytest.mark.parametrize("channels", [2304, 1024])
-def test_short_conv(device, rows, ref, channels):
-    case = ref[f"conv_c{channels}"]
-    taps = case["weight"].flip(-1).T[None, None].contiguous()  # cache form [1,1,4,C], row r = lag r
-    conv = ShortConv(rows, {"post_attn_conv": cache_tensor(taps, ttnn.float32)}, "post_attn_conv")
-    state = conv.alloc_state(cache_index(17, loop_pass=3))
-    zero = ttnn.from_torch(torch.zeros(1, 1, TILE, channels), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    x = tok(case["x"][:1], device, ttnn.bfloat16)
-
-    def run_sequence(step):
-        ttnn.copy_host_to_device_tensor(zero, state)
-        outs = []
-        for t in range(CONV_STEPS):
-            xt = torch.zeros(1, 1, TILE, channels)
-            xt[0, 0, 0] = case["x"][t]
-            ttnn.copy_host_to_device_tensor(ttnn.from_torch(xt, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), x)
-            outs.append(host(step())[0])
-        return torch.stack(outs)
-
-    eager = run_sequence(lambda: conv(x, state))
-    tid = ttnn.begin_trace_capture(device, cq_id=0)
-    out = conv(x, state)
-    ttnn.end_trace_capture(device, tid, cq_id=0)
-
-    def replay():
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-        return out
-
-    first, second = run_sequence(replay), run_sequence(replay)
-    us = time_trace(device, tid)
-    ttnn.release_trace(device, tid)
-    assert torch.equal(first, second), "trace replays differ"
-    p = pcc(first, case["out"])
-    record(f"short_conv_c{channels}", pcc=p, steps=CONV_STEPS, trace_us=us)
-    assert hf_ref.finite_min([p, pcc(eager, case["out"])]) >= PCC_MIN, p
+    record("all_messages", pcc=p, pcc_min_message=min(per), trace_us=us)
+    assert hf_ref.finite_min(per + [p, pcc(eager[0].reshape(12, 4, -1), case["out"])]) >= PCC_MIN, (p, min(per))
 
 
 def test_cache_index():
