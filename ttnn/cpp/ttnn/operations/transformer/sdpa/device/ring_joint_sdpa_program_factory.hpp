@@ -15,6 +15,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
+#include "ttnn/per_device_program_merge.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -35,7 +36,9 @@ struct RingJointSDPADescriptorAdapterOperation {
 
 }  // namespace detail
 
+// No padding: where per-device args differ in length (the ends of a Linear ring), the programs stay per device.
 struct RingJointSDPAProgramFactory {
+    static constexpr bool merge_per_device_programs = true;
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const RingJointSDPAParams& args,
         const RingJointSDPAInputs& tensor_args,
