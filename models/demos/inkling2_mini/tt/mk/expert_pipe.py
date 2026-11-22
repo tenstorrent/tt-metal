@@ -46,11 +46,12 @@ class ExpertPipe:
             self.space, [(b, _crs(cs)) for b, cs in rc.items()], support_multi_receiver_shards=True
         )
         self.ring_bytes = self.space.ring_size()
-        order = {}
+        # receiver r of a bank, counted over that bank's pipes in order, gets the bank's slab r
+        order = {b: [] for b in rc}
         for p in self.pipes:
             cs = _core_list(p.receiver_cores())
-            b = next(b for b, v in rc.items() if set(v) == set(cs))
-            order[b] = cs
+            b = next(b for b, v in rc.items() if set(cs) <= set(v))
+            order[b] += cs
         for ex in experts:
             ex.set_ring(order, self.space.config_address(), self.space.buffer_address(), self.ring_bytes)
         self.running = False

@@ -52,20 +52,22 @@ class _Signal:
 
 class ExpertOverlap:
     def __init__(self, model, ring_kb=300, guesses=None, release="w_all", dynamic=True):
-        """guesses: {dtype pair: n_guess} override, e.g. {"BFP8/BFP8": 2}; default 2 for BFP8 gate_up, else 3."""
+        """guesses: {gate_up dtype: n_guess} override, e.g. {"BFP4": 3}; default 2 (4K: 1 -> 18.01 ms, 2 -> 17.81,
+        BFP4 3 -> 17.86, BFP4 4 -> 18.39). release: "w_all" (17.81 ms), "w_o" (18.48: too late), "moe" (18.26)."""
         from models.demos.inkling2_mini.tt import model as MD
 
         self.apps = list(MD.APPS)
         dev = self.device = model.device
-        assert release in ("w_all", "moe"), release
+        assert release in ("w_all", "w_o", "moe"), release
         self.release = release
+        self.proj = {"w_all": "w_all", "w_o": "wo"}.get(release)  # the attention projection that releases a request
         self.dynamic = dynamic  # False: the seed masks stay (no guess_out writes; for tests)
         layers = sorted({L for L, _ in self.apps})
         self.orig = {L: model.layers[L].moe.fused for L in layers}
         assert all(getattr(e, "pf", False) for e in self.orig.values()), "needs a PF-layout cache"
         self.ep = ExpertPipe(dev, list(self.orig.values()), ring_kb << 10)
         b8 = ttnn.bfloat8_b
-        g = {"BFP8": 2, "BFP4": 3, **(guesses or {})}
+        g = {"BFP8": 2, "BFP4": 2, **(guesses or {})}
         self.n_guess = {}
         for L, e in self.orig.items():
             self.n_guess[L] = min(g["BFP8" if e.w_gate_up.dtype == b8 else "BFP4"], self.ep.max_guesses(e))
@@ -88,16 +90,16 @@ class ExpertOverlap:
         self._request(0)
         for L in layers:
             model.layers[L].moe.fused = _Proxy(self, L, self.orig[L])
-        self.w_all = {}
-        if release == "w_all":
+        self.wrapped = {}  # L -> the projection wrapped with the release signal
+        if self.proj:
             for L in layers:
                 a = model.layers[L].attn
-                self.w_all[L] = a.w_all
-                a.w_all = _Signal(self, a.w_all)
+                self.wrapped[L] = getattr(a, self.proj)
+                setattr(a, self.proj, _Signal(self, self.wrapped[L]))
 
     def _request(self, a):
         L = self.apps[a][0]
-        if self.release == "w_all":  # pairs with app a's w_all signal, which comes after this request in program order
+        if self.proj:  # pairs with app a's w_all / w_o signal, which comes after this request in program order
             ttnn.experimental.queue_tensor_prefetcher_wait_for_signal(self.device, 0, capture_into_trace=True)
         self.ep.request(self.orig[L], self.masks[self.src[a]], capture=True)
 
@@ -127,8 +129,8 @@ class ExpertOverlap:
                             memory_config=l1)  # fmt: skip
         ids = ttnn.from_torch(torch.arange(8, dtype=torch.int32).reshape(1, 1, 1, 8), dtype=ttnn.uint16,
                               layout=ttnn.TILE_LAYOUT, device=dev, memory_config=l1)  # fmt: skip
-        if self.release == "w_all":
-            ttnn.experimental.signal_tensor_prefetcher(dev, 0)  # the queued request waits for app 0's w_all
+        if self.proj:
+            ttnn.experimental.signal_tensor_prefetcher(dev, 0)  # the queued request waits for app 0's w_all / w_o
             ttnn.deallocate(ex(x, w, ids, guess=self.masks[self.src[0]]))
         else:
             ttnn.deallocate(ex(x, w, ids, guess=self.masks[self.src[0]], signal=self.ep.signal))
@@ -140,8 +142,8 @@ class ExpertOverlap:
         for L, e in self.orig.items():
             model.layers[L].moe.fused = e
             e.ring = None
-        for L, lin in self.w_all.items():
-            model.layers[L].attn.w_all = lin
+        for L, lin in self.wrapped.items():
+            setattr(model.layers[L].attn, self.proj, lin)
         for t in self.masks:
             ttnn.deallocate(t)
         self.ep.release()
