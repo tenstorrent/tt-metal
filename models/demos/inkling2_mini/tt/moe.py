@@ -24,6 +24,7 @@ import torch
 import ttnn
 from models.demos.inkling2_mini.tt.dram_sharded import BankLocalExperts
 from models.demos.inkling2_mini.tt.fused.moe_expert import FusedMoeExperts
+from models.demos.inkling2_mini.tt.fused.router_topk import FusedRouterTopk
 
 HIDDEN = 2304
 INTER = 1152
@@ -44,6 +45,9 @@ BANK_LOCAL = os.environ.get("INKLING_MOE_BANK", "1") != "0"
 FUSED_EXPERTS = os.environ.get("INKLING_MOE_FUSED", "1") != "0"
 # Workers on rows 3..9 and collector (10, 9): clear of the tensor prefetcher's receiver ring (cores 0..6, 0..2).
 FUSED_PLACEMENT = dict(origin=(0, 3), shape=(11, 7), collector=(10, 9))
+# Router top-k as one scalar-top-k program (tt/fused/router_topk.py), bit-equal to moe_grouped_topk;
+# INKLING_ROUTER_FUSED=0 calls the op (A/B runs).
+FUSED_ROUTER = os.environ.get("INKLING_ROUTER_FUSED", "1") != "0"
 
 WEIGHT_NAMES = ("mlp_norm", "router.w", "router.bias", "experts.w_gate_up", "experts.w_down")
 
@@ -104,6 +108,7 @@ class Inkling2MoE:
         self.router_bias = ttnn.from_torch(
             bias, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
         )
+        self.topk = FusedRouterTopk(device, self.router_bias, TOP_K, ROUTE_SCALE, 1e-20) if FUSED_ROUTER else None
         gu = weights["experts.w_gate_up"]
         self.w_down = ttnn.to_device(weights["experts.w_down"], device, dram)
         # The whole expert step (gate_up + SwiGLU + down + weighted sum) is one fused program.
@@ -175,6 +180,10 @@ class Inkling2MoE:
         )
         logits = ttnn.sum(partial, dim=1, keepdim=True)
         ttnn.deallocate(partial)
+        if self.topk is not None:
+            weights, indices = self.topk(logits)
+            ttnn.deallocate(logits)
+            return weights, indices
         weights, indices = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
             logits,
             self.router_bias,
