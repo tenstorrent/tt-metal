@@ -7,7 +7,7 @@ continues at pos = len(prompt):
 - attention (per HF cache index c): 1024-slot ring (slot = pos % 1024), global full cache, k/v conv inputs at lag 0-2;
 - post-attn / post-mlp ShortConv state rows 0-3 = inputs at lag 0-3 (fp32).
 
-A chunk is T tokens (default 8192; T divides 1024 or is a multiple of it; the last chunk is rounded up to 128). Pad
+A chunk is T tokens (default 12288: one chunk up to 12K tokens, each chunk has a large fixed cost; T divides 1024 or is a multiple of it; the last chunk is rounded up to 128). Pad
 rows (positions >= len(prompt)) keep the old ring slots, but kv_full gets all T rows: decode writes position P before
 any read of it, so those rows are never read. Per application, everything is a [1,1,T,C] sequence tensor:
 - block / message attn-res: per-token softmax over depth (no cross-token mixing);
@@ -385,7 +385,7 @@ class Inkling2Prefill:
         self,
         model,
         root=wcache.DEFAULT_ROOT,
-        chunk=8192,
+        chunk=12288,
         r3=None,
         r2=None,
         slot_rows=64,
