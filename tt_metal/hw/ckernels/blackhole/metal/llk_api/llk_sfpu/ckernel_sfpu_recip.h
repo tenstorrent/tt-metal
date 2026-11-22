@@ -399,7 +399,7 @@ void recip_init() {
     // SFPU replay slots 0-5. Reinitialize another SFPU macro/replay owner before using it again.
     // Scalar/first-column sfpu_reciprocal_iter callers only need generic unary SFPU init plus
     // sfpu_reciprocal_init; they must not pay for or clobber state with this full-tile setup.
-    // Common SFPU init inlined (SFPU config register + counter reset), then the
+    // Common SFPU init (SFPU config register + counter reset), then the
     // op-specific reciprocal setup below -- one self-contained init, matching exp_init.
     // SDPA runs reciprocal in its softmax after matmul/exp, so the general SFPU state is re-established
     // here, not just reset. Reciprocal uses ADDR_MOD_6 (dest incr 2) on Blackhole, at its invariant.

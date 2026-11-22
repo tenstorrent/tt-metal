@@ -83,7 +83,7 @@ inline void calculate_snake_beta(uint dst_index_x, uint dst_index_alpha, uint ds
 
 template <bool APPROXIMATE>
 inline void snake_beta_init() {
-    // Common SFPU init inlined (SFPU config register + counter reset), then the op-specific
+    // Common SFPU init (SFPU config register + counter reset), then the op-specific
     // reciprocal setup below -- one self-contained init, matching exp_init. snake_beta uses only
     // ADDR_MOD_7, at its zero-advance invariant.
     sfpu::_init_sfpu_config_reg();

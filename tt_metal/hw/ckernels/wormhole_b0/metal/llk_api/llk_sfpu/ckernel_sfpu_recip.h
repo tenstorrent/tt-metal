@@ -169,7 +169,7 @@ inline void calculate_reciprocal() {
 // is_fp32_dest_acc_en even when their reciprocal intermediate is FP32.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /*maybe_unused*/, bool round_to_bf16 = false>
 void recip_init() {
-    // Common SFPU init inlined (SFPU config register + counter reset), then the op-specific
+    // Common SFPU init (SFPU config register + counter reset), then the op-specific
     // reciprocal setup below -- one self-contained init, matching exp_init. SDPA runs reciprocal in its
     // softmax after matmul/exp, so the general SFPU state is re-established here, not just reset.
     // Reciprocal uses ADDR_MOD_7 on Wormhole at its zero-advance invariant.

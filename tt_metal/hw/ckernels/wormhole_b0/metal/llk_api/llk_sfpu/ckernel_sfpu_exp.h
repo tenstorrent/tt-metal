@@ -730,7 +730,7 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
 // Inlined into the init, which would otherwise call this cold callee off its straight path.
 template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
 inline __attribute__((always_inline)) void exp_init() {
-    // Common SFPU init inlined (SFPU config register + counter reset), then the op-specific
+    // Common SFPU init (SFPU config register + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
     // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses ADDR_MOD_6 and ADDR_MOD_7 at their invariants).
     sfpu::_init_sfpu_config_reg();
