@@ -62,6 +62,25 @@ inline void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config = cker
 }
 
 /**
+ * @brief Enables or disables packer L1 accumulation for the selected packer.
+ *
+ * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1>
+ * @param l1_acc_en: True to enable L1 accumulation, false to disable.
+ */
+template <std::uint32_t PACK_SEL>
+inline void _llk_pack_set_l1_acc_(const bool l1_acc_en)
+{
+    if constexpr (PACK_SEL == p_pacr::PACK0)
+    {
+        cfg_rmw(THCON_PACKER0_REG0_L1_ACC_RMW, l1_acc_en);
+    }
+    else
+    {
+        cfg_rmw(THCON_PACKER1_REG0_L1_ACC_RMW, l1_acc_en);
+    }
+}
+
+/**
  * @brief Programs the packer input data format (THCON) for the selected packer and the packer ReLU (mode and threshold).
  *
  * L1 output encoding is not programmed here: it lives in buffer descriptors, which op inits
@@ -91,6 +110,7 @@ inline void _llk_pack_hw_configure_(const DataFormat pack_src_format, const cker
         cfg_rmw(THCON_PACKER1_REG0_IN_DATA_FORMAT_RMW, static_cast<std::uint8_t>(pack_src_format));
     }
     _llk_pack_relu_config_<PACK_SEL, EN_32BIT_DEST>(relu_config);
+    _llk_pack_set_l1_acc_<PACK_SEL>(false /*l1_acc_en*/);
 }
 
 /**
@@ -236,25 +256,6 @@ inline void _llk_pack_reduce_mask_clear_()
     cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
     cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
     cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
-}
-
-/**
- * @brief Enables or disables packer L1 accumulation for the selected packer.
- *
- * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1>
- * @param l1_acc_en: True to enable L1 accumulation, false to disable.
- */
-template <std::uint32_t PACK_SEL>
-inline void _llk_pack_set_l1_acc_(const bool l1_acc_en)
-{
-    if constexpr (PACK_SEL == p_pacr::PACK0)
-    {
-        cfg_rmw(THCON_PACKER0_REG0_L1_ACC_RMW, l1_acc_en);
-    }
-    else
-    {
-        cfg_rmw(THCON_PACKER1_REG0_L1_ACC_RMW, l1_acc_en);
-    }
 }
 
 /**
