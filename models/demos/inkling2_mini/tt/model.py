@@ -297,7 +297,8 @@ class Inkling2Model:
             x = h
         else:
             rep = 3 if (msgs is not None and not lay.is_global) else None  # same input in rows 0..2
-            x = lay.attn_res(stack, h, n_sealed + 1, split=False, repeat_rows=rep)
+            # row_out=False (E10c): x feeds only fused ops (FusedQKVGate or FusedRowNorm), which read its dense twin
+            x = lay.attn_res(stack, h, n_sealed + 1, split=False, repeat_rows=rep, row_out=False)
         if msgs is not None:
             x = lay.qkv_gate(x, msgs[0])
         xs = lay.norm(x)  # one bf16 row per input row (row i uses norm min(i, n_norms - 1))
@@ -307,11 +308,13 @@ class Inkling2Model:
         if lay.boundary:
             stack = self.frows.seal(stack, h, n_sealed)  # free: the attn-res above left rms(h) in that row
             n_sealed += 1
-            resid = lay.conv_attn.conv_add(a, conv_a, self.phase, out_dtype=ttnn.float32)
-        else:
-            resid = lay.conv_attn.conv_add(a, conv_a, self.phase, h, ttnn.float32)  # h + bf16(conv(a)), fp32
+            resid = lay.conv_attn.conv_add(a, conv_a, self.phase, out_dtype=ttnn.float32, row_out=False)
+        else:  # h + bf16(conv(a)), fp32
+            resid = lay.conv_attn.conv_add(a, conv_a, self.phase, h, ttnn.float32, row_out=False)
+        # resid feeds only fused ops (mlp attn-res, conv_mlp's resid), hence no row form (row_out=False above)
 
-        m = lay.mlp_res(stack, resid, n_sealed + 1)[0]
+        # with messages m feeds only FusedMessageGate (no row form); otherwise the MoE reads its rows
+        m = lay.mlp_res(stack, resid, n_sealed + 1, row_out=msgs is None)[0]
         if msgs is not None:
             m = lay.mlp_gate(m, msgs[1])
         y, _ = lay.moe(m)  # bf16 row (L1)
