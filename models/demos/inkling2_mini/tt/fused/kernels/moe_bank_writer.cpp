@@ -58,6 +58,10 @@ void kernel_main() {
     constexpr auto ids_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     const auto out = TensorAccessor(out_args, out_addr);
     const auto ids = TensorAccessor(ids_args, ids_addr);
+#ifdef DENSE_OUT  // dense twin of the output row (tt/fused/common.py): value e at page e / 1024, byte (e % 1024) * 2
+    constexpr auto dense_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
+    const auto dense = TensorAccessor(dense_args, get_arg_val<uint32_t>(a++));
+#endif
 
     const uint32_t hid_base = get_write_ptr(cb_hid);
 #ifdef X_MCAST
@@ -139,6 +143,9 @@ void kernel_main() {
             zp[128 + i] = o[8 + i];  // cols 16..31 -> face 1 row 0
         }
         noc_async_write(z, out.get_noc_addr(n), 2048);
+#ifdef DENSE_OUT  // the 32 values of column tile n, contiguous in cb_o's 1x32 tile
+        noc_async_write(get_read_ptr(cb_o), dense.get_noc_addr((32 * n) / 1024) + ((32 * n) % 1024) * 2, 64);
+#endif
         noc_async_write_barrier();
         cb_pop_front(cb_o, 1);
     }

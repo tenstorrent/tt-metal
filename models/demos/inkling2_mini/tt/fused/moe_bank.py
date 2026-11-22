@@ -31,10 +31,13 @@ Fewer readers per bank (gate and up of a pair on one core, 6 per bank) read slow
 any other row for a bank.
 """
 
+import os
+
 import torch
 
 import ttnn
 from models.demos.inkling2_mini.convert import bank_layout as BL
+from models.demos.inkling2_mini.tt.fused import common as F
 from models.demos.inkling2_mini.tt.fused.moe_expert import (
     CB_G,
     CB_G32,
@@ -63,6 +66,9 @@ from models.demos.inkling2_mini.tt.fused.moe_expert import (
 )
 
 F_GU, F_GATE, F_EXTRA, F_DN = 1, 2, 4, 8  # worker flags (moe_bank_*.cpp)
+# The output row also goes to a dense twin (tt/fused/common.py set_twin): the fused residual consumer (conv_mlp)
+# reads 3 pages instead of gathering the row. INKLING_MOE_TWIN=0: row only (A/B runs).
+DENSE_OUT = os.environ.get("INKLING_MOE_TWIN", "1") != "0"
 SEM_X = 3  # x multicast done (X_MCAST)
 NOC1_BANKS = (0,)  # banks whose workers read on NOC1 (module doc)
 X_LO = 2  # convert/bank_layout.extra_bank: first bank holding extra pairs
@@ -112,12 +118,14 @@ def row_placement(device, per_bank):
 class BankMoeExperts:
     def __init__(
         self, device, w_gate_up, w_down, sbk=18, nbuf=3, bfp8_fidelity=ttnn.MathFidelity.HiFi2, x_mcast=True,
-        noc1_banks=NOC1_BANKS,
+        noc1_banks=NOC1_BANKS, dense_out=None,
     ):  # fmt: skip
         """``w_gate_up`` / ``w_down``: bank-layout DRAM tensors (``bank_weights`` or the bank cache), BFP4 or BFP8
         (each its own). Placement and flags: module doc. x_mcast: the collector reads x once and multicasts it
         (otherwise every gate_up core reads it). noc1_banks: banks whose workers read on NOC1 (writer on NOC0)."""
         self.x_mcast, self.noc1_banks = x_mcast, tuple(noc1_banks)
+        self.dense_out = DENSE_OUT if dense_out is None else dense_out
+        self.dense, self._last = None, None  # the twin (one per instance) and the row tensor it is registered for
         nb = device.dram_grid_size().x
         assert nb == BL.N_BANKS, nb
         assert (2 * KT_GU) % sbk == 0 and HID_TILES % sbk == 0, sbk
@@ -236,6 +244,8 @@ class BankMoeExperts:
             "cb_ws16": CB_WS16, "cb_h16": CB_H16, "cb_hid": CB_HID, "cb_o": CB_O, "sbk": self.sbk, "kt_gu": KT_GU,
             **common,
         }  # fmt: skip
+        if self.dense_out and self.dense is None:  # first call is eager (from host: zeros, pad stays zero)
+            self.dense = F.dense_tensor(self.device, torch.zeros(1, HIDDEN), ttnn.bfloat16)
         cx, cy = self.noc[self.collector]
         r_args, w_args, c_args = [], [], []
         for c, f, b, k, j, off, dslot, n, gate in self.workers_info:
@@ -243,7 +253,8 @@ class BankMoeExperts:
             px, py = self.noc[gate]
             r_args.append((core, [x.buffer_address(), weights.buffer_address(), indices.buffer_address(),
                                   self.w_gate_up.buffer_address(), self.w_down.buffer_address(), f, b, k, off, dslot]))  # fmt: skip
-            w_args.append((core, [f, j, px, py, cx, cy, out.buffer_address(), n, indices.buffer_address(), b]))
+            w_args.append((core, [f, j, px, py, cx, cy, out.buffer_address(), n, indices.buffer_address(), b]
+                           + ([self.dense.buffer_address()] if self.dense_out else [])))  # fmt: skip
             c_args.append((core, [f]))
         (x0, y0), (x1, y1) = self.mcast_rect
         dm = ttnn.DataMovementConfigDescriptor
@@ -268,9 +279,9 @@ class BankMoeExperts:
                 ttnn.KernelDescriptor(
                     kernel_source=f"{KDIR}/moe_bank_writer.cpp",
                     core_ranges=_range_set(cores),
-                    compile_time_args=acc(out) + acc(indices),
+                    compile_time_args=acc(out) + acc(indices) + (acc(self.dense) if self.dense_out else []),
                     named_compile_time_args=list(w_named.items()),
-                    defines=xdef,
+                    defines=xdef + [("DENSE_OUT", "1")] * self.dense_out,
                     runtime_args=pick(w_args),
                     config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=wnoc),
                 ),
@@ -310,4 +321,11 @@ class BankMoeExperts:
             for i in (SEM_U, SEM_G, SEM_R, SEM_X)
         ]
         prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=self.cbs)
-        return ttnn.generic_op([x, weights, indices, self.w_gate_up, self.w_down, out], prog)
+        io = [x, weights, indices, self.w_gate_up, self.w_down] + ([self.dense] if self.dense_out else []) + [out]
+        y = ttnn.generic_op(io, prog)
+        if self.dense_out:  # register the twin for this output; drop the previous output's entry (no leak)
+            if self._last is not None:
+                F._TWIN.pop(id(self._last), None)
+            F.set_twin(y, self.dense, 1)
+            self._last = y
+        return y

@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 # M2 model A/B in ONE process (one 128K load): baseline, then tt/mk/overlap.py variants.
+# A variant prefixed 'twin0,' / 'twin1,' first sets the MoE output's dense twin off / on (moe_bank DENSE_OUT); a
+# variant that is only 'twin1' runs without the overlap.
 # Per variant: trace capture, 6 traced positions' logits (bit-equal vs baseline, replay), median ms of 3 x 10 steps at
 # pos 2048 and 122880, overlap stats. DRAM-busy fraction = GB per step (P3: 4.864 / 7.230) / (ms * 443 GB/s).
 # usage: python models/demos/inkling2_mini/tests/m2_model_ab.py <out.jsonl> [variant ...]   variant = weights:split:staged_kb:parts:max_cores
@@ -14,6 +16,7 @@ import time
 import torch
 
 import ttnn
+from models.demos.inkling2_mini.tt.fused import common as F
 from models.demos.inkling2_mini.tt.generator import Generator
 from models.demos.inkling2_mini.tt.mk.overlap import install
 from models.demos.inkling2_mini.tt.model import Inkling2Model
@@ -58,8 +61,26 @@ try:
     m.set_inputs(0, 0)
     m.step()
     ttnn.synchronize_device(dev)
+
+    def set_twin(on):
+        for lay in m.layers:
+            f = lay.moe.fused
+            if hasattr(f, "dense_out"):
+                f.dense_out = on
+                if not on and f._last is not None:
+                    F._TWIN.pop(id(f._last), None)
+                    f._last = None
+
     if os.environ.get("M2_EAGER_ONLY"):  # mockwarm: compile every program of an eager step per variant, no traces
         for v in VARIANTS:
+            if v.startswith("twin"):
+                tw, _, v = v.partition(",")
+                set_twin(tw == "twin1")
+                m.step()
+                m.step()
+                print("M2EAGER", tw, flush=True)
+                if not v:
+                    continue
             f = v.split(":")
             xr = tuple(range(int(f[5]) + 1)) if len(f) > 5 else (0,)
             import models.demos.inkling2_mini.tt.mk.stage as STG
@@ -79,11 +100,30 @@ try:
             print("M2EAGER", v, json.dumps(ov.stats()), flush=True)
             ov.uninstall(m)
         sys.exit(0)
-    base, ref = run(m, "base")
+    TWIN0 = os.environ.get("M2_BASE_TWIN", "0") == "1"
+    set_twin(TWIN0)
+    m.step()
+    m.step()
+    ttnn.synchronize_device(dev)
+    base, ref = run(m, "base" + (" twin1" if TWIN0 else " twin0"))
     print("M2MODEL", json.dumps(base), flush=True)
     with open(OUT, "a") as f:
         f.write(json.dumps(base) + "\n")
     for v in VARIANTS:
+        if v.startswith("twin"):
+            tw, _, v = v.partition(",")
+            set_twin(tw == "twin1")
+            if not v:  # twin only, no overlap
+                m.step()
+                m.step()
+                ttnn.synchronize_device(dev)
+                res, got = run(m, tw)
+                res["logits_bit_equal_vs_base"] = bool(torch.equal(got, ref))
+                res["saved_ms"] = {p: round(base["ms"][p] - res["ms"][p], 2) for p in res["ms"]}
+                print("M2MODEL", json.dumps(res), flush=True)
+                with open(OUT, "a") as fo:
+                    fo.write(json.dumps(res) + "\n")
+                continue
         f = v.split(":")
         ws, split, kb, parts, mc = f[0], int(f[1]), int(f[2]), int(f[3]), int(f[4])
         xr = tuple(range(int(f[5]) + 1)) if len(f) > 5 else (0,)
