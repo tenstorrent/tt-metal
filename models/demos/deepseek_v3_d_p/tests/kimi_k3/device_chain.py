@@ -35,13 +35,14 @@ import torch
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_state_dict, required_kda_weight_names
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import TokenErrorAccumulator, golden_floor, pcc
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
     MANIFEST,
     atomic_save,
     segment_path,
     token_ids_sha256,
 )
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.chain_vs_trace import key_sums, pcc_nrmse
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.chain_vs_trace import CUT_GAP_RANKS, key_sums, pcc_nrmse
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import (
     F64,
     ChainModel,
@@ -51,12 +52,15 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import (
     tensor_digest,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_chain_feed import rebuilt_manifest, rebuilt_path, rel
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed import routing_window
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     Trace,
     checkpoint_tensors,
     chunk_path,
     complete_run,
+    missed_keys,
     quantile,
+    topk_recall,
 )
 
 GOLDEN = Path(os.environ.get("K31_GOLDEN_DIR", "/mnt/weka/model-cache/scratch/mvasilijevic/k31/golden"))
@@ -346,14 +350,249 @@ def rebuild_deep(
         )
 
 
+def rows_of(directory: Path, names: list[str], start: int, end: int, path=rebuilt_path) -> dict:
+    """Rows ``[start, end)`` of ``names`` from per-segment files ``path(directory, i)`` that hold ``start`` / ``end``
+    (a KDA rebuild's ``rebuilt_<i>.pt``)."""
+    seg_rows = json.loads((directory / MANIFEST).read_text())["segment_rows"]
+    segment = seg_rows[0][1] - seg_rows[0][0]
+    parts: dict[str, list[torch.Tensor]] = {n: [] for n in names}
+    for index in range(start // segment, -(-end // segment)):
+        d = torch.load(path(directory, index), weights_only=True, mmap=True)
+        a, b = max(start, d["start"]) - d["start"], min(end, d["end"]) - d["start"]
+        for n in names:
+            parts[n].append(d[n][a:b])
+    return {n: torch.cat(v) for n, v in parts.items()}
+
+
+def deep_references(
+    *, chain: Path, rebuilt_1m: Path, rebuilt: Path, weights: dict, eps: float, emb: torch.Tensor, lo: int, hi: int
+) -> dict:
+    """The FP64 value of every tap of a layers 0-7 run over rows ``[lo, hi)``.
+
+    The live residual after layer l (``live_l``): after layers 0-1 the 1M rebuild's live sums before layers 1-2, then
+    each later layer's attention and FFN outputs added (KDA: the 1M rebuild for layer 2, ``rebuild_deep`` for layers
+    4-6; DSA and MoE: the deep chain). The KDA inputs are recomputed from it as the chains compute them; the MoE
+    inputs, DSA reads and every MoE / DSA product are the deep chain's."""
+    r1 = rows_of(rebuilt_1m, ["live_1", "live_2", "kda_output_1", "kda_output_2"], lo, hi)
+    want = {"kda_output_1": r1["kda_output_1"], "kda_output_2": r1["kda_output_2"]}
+    want.update(rows_of(rebuilt, [f"kda_output_{l}" for l in DEEP_KDA], lo, hi))
+    sealed = emb.unsqueeze(1)
+    live = {0: r1["live_1"].double(), 1: r1["live_2"].double()}
+    for l in range(1, 8):
+        L = weights[l]
+        if f"kda_output_{l}" in want:
+            read = attn_res64(live[l - 1], sealed, L["attn_res"], eps)
+            want[f"kda_input_{l}"] = rms64(read, L["input_layernorm"], eps)
+            attn = want[f"kda_output_{l}"]
+        else:
+            names = [f"dsa_input_{l}", f"attn_output_{l}", f"topk_indices_{l}", f"topk_scores_{l}"]
+            d = deep_products(chain, l, "attn", [*names, "latent", "kpe", "index_key"], lo, hi)
+            want.update({n: d[n] for n in names})
+            want.update({f"{k}_{l}": d[k] for k in ("latent", "kpe", "index_key")})
+            attn = d[f"attn_output_{l}"]
+        names = [f"moe_input_{l}", f"moe_output_{l}", f"routing_ids_{l}", f"routing_weights_{l}"]
+        want.update(deep_products(chain, l, "ffn", names, lo, hi))
+        if l >= 2:
+            live[l] = live[l - 1] + attn.double() + want[f"moe_output_{l}"].double()
+    want.update({f"live_{l}": v for l, v in live.items() if l < 7})
+    return want
+
+
+def score_deep(
+    *,
+    run: Path,
+    chain: Path,
+    rebuilt_1m: Path,
+    rebuilt: Path,
+    trace: Trace,
+    weights: dict,
+    embedding: torch.Tensor,
+    eps: float,
+    window: int,
+    log=print,
+) -> dict:
+    """Score a layers 0-7 device-chain run in ``run`` against the deep chain per ``window`` rows; writes each tap's
+    ``metrics.json`` and returns ``{tap: metrics}``.
+
+    The per-row definitions are the teacher-feed scorers': the stream and the KDA outputs by pooled PCC / NRMSE
+    (``key_sums``) and per-row NRMSE; the MoE output by per-row NRMSE floored at 1% of the median reference row norm
+    and its routing by ``routing_window`` against the FP64 ids, best first (so a miss's rank is its FP64 rank); the
+    DSA attention output (every row: the deep chain attends every row) as the MoE output, its top-k by recall on rows
+    >= k with each miss's FP64 rank (``missed_keys``) and the FP64 cut gap (``chain_vs_trace.CUT_GAP_RANKS``), its
+    caches by PCC; the KDA carry by relative L2 against the 1M chain's state (layers 0-2) or ``rebuild_deep``'s
+    (layers 4-6). The GPU trace's routing and top-k recall of the same FP64 reference sit beside the device's."""
+    spec = chain_taps(chain)
+    stream = complete_run(run / "stream")
+    count, chunk = stream["count"], stream["chunk"]
+    m = deep_complete(chain)
+    topk = int(m["dsa_dims"]["topk"])
+    chain_1m = Path(rebuilt_manifest(rebuilt_1m, count)["chain"]["chain"])
+    token_ids = load_token_ids(trace.path, count)
+    kda_fed = tuple(l for l in spec.kda if l)
+    pooled = [*spec.stream_keys, *(f"kda_{l}" for l in kda_fed)]  # scored by key_sums and per-row NRMSE
+    sums, rows = {k: [] for k in pooled}, {k: [] for k in pooled}
+    moe_err = {l: TokenErrorAccumulator() for l in spec.moe}
+    dsa_err = {l: TokenErrorAccumulator() for l in spec.dsa}
+    per_row = {f"{k}_{l}": [] for l in spec.moe for k in ("recall", "dropped", "weight_err", "gpu")}
+    per_row.update({f"{k}_{l}": [] for l in spec.dsa for k in ("topk", "topk_gpu", "cut_gap")})
+    misses = {f"moe_{l}": [] for l in spec.moe} | {f"dsa_{l}": [] for l in spec.dsa}
+
+    def keep_misses(name: str, miss: dict, lo: int) -> None:
+        miss["row"] = miss["row"] + lo
+        misses[name].append({k: v if k == "spread_share" else v.int() for k, v in miss.items()})
+
+    for c in range(-(-count // chunk)):
+        began = time.perf_counter()
+        s = torch.load(chunk_path(run / "stream", c), weights_only=True)
+        lo, hi = s["start"], s["end"]
+        emb = embedding[token_ids[lo:hi]].to(F64)
+        want = deep_references(
+            chain=chain, rebuilt_1m=rebuilt_1m, rebuilt=rebuilt, weights=weights, eps=eps, emb=emb, lo=lo, hi=hi
+        )
+        got = {k: s[k] for k in spec.stream_keys}
+        for l in kda_fed:
+            got[f"kda_{l}"] = torch.load(chunk_path(run / f"kda-l{l}", c), weights_only=True)["attn_out"]
+            want[f"kda_{l}"] = want[f"kda_output_{l}"]
+        for k in pooled:
+            g, w = got[k].double(), want[k].double()
+            sums[k].append(key_sums(g, w))
+            rows[k].append(((g - w).norm(dim=1) / w.norm(dim=1)).float())
+        for l in spec.moe:
+            p = torch.load(chunk_path(run / f"moe-l{l}", c), weights_only=True)
+            moe_err[l].update(want[f"moe_output_{l}"], p["moe_out"])
+            ids = want[f"routing_ids_{l}"].long()
+            fp64_order = -torch.arange(ids.shape[1], dtype=torch.float32).expand(ids.shape)
+            r = routing_window(
+                p["expert_ids"].long(), p["expert_weights"], ids, want[f"routing_weights_{l}"], fp64_order
+            )
+            for k in ("recall", "dropped", "weight_err"):
+                per_row[f"{k}_{l}"].append(r[k].float())
+            per_row[f"gpu_{l}"].append(topk_recall(trace.rows(f"expert_ids_layer_{l}", lo, hi).long(), ids).float())
+            keep_misses(f"moe_{l}", r["misses"], lo)
+        for l in spec.dsa:
+            p = torch.load(chunk_path(run / f"dsa-l{l}", c), weights_only=True)
+            dsa_err[l].update(want[f"attn_output_{l}"], p["attn_out"])
+            sel, scores = want[f"topk_indices_{l}"].long(), want[f"topk_scores_{l}"].float()
+            per_row[f"topk_{l}"].append(topk_recall(p["topk"].long(), sel).float())
+            gpu = trace.rows(f"dsa_topk_indices_layer_{l}", lo, hi).long()
+            per_row[f"topk_gpu_{l}"].append(topk_recall(gpu, sel).float())
+            ordered = scores.double().sort(dim=1, descending=True).values
+            gap = ordered[:, topk - 1 - min(CUT_GAP_RANKS, topk - 1)] - ordered[:, topk - 1]
+            per_row[f"cut_gap_{l}"].append(gap.float())
+            keep_misses(f"dsa_{l}", missed_keys(p["topk"].long(), sel, scores), lo)
+        log(f"scored chunk {c + 1} rows [{lo}, {hi}) {time.perf_counter() - began:.1f} s")
+    sums = {k: torch.cat(v) for k, v in sums.items()}
+    rows = {k: torch.cat(v) for k, v in rows.items()}
+    per_row = {k: torch.cat(v) for k, v in per_row.items()}
+    misses = {name: {k: torch.cat([x[k] for x in v]) for k in v[0]} for name, v in misses.items()}
+    moe_rows = {l: e.token_nrmse(golden_floor(e.expected_norms())) for l, e in moe_err.items()}
+    dsa_rows = {l: e.token_nrmse(golden_floor(e.expected_norms())) for l, e in dsa_err.items()}
+    caches, keys = {}, {}
+    for l in spec.dsa:
+        caches[l] = torch.load(run / f"dsa-l{l}" / "caches.pt", weights_only=True)
+        k = deep_products(chain, l, "attn", ["latent", "kpe", "index_key"], 0, count)
+        keys[l] = (torch.cat([k["latent"], k["kpe"]], -1), k["index_key"], k["latent"].shape[1])
+    nan = float("nan")
+
+    def miss_measures(name: str, lo: int, hi: int) -> dict:
+        mm = misses[name]
+        inside = (mm["row"] >= lo) & (mm["row"] < hi)
+        rank, selected = mm["rank"][inside].float(), mm["selected"][inside].float()
+        return {
+            "misses": int(rank.numel()),
+            "miss_rank_median": quantile(rank, 0.5),
+            "miss_top_half_fraction": float((2 * rank < selected).float().mean()) if rank.numel() else nan,
+        }
+
+    def window_measures(tap: str, lo: int, hi: int) -> dict:
+        w = {"start": lo, "end": hi}
+        if tap == "stream":
+            for k in spec.stream_keys:
+                w[f"{k}_pcc"], w[f"{k}_nrmse"] = pcc_nrmse(sums[k][lo:hi])
+                w[f"{k}_row_nrmse_p99"] = quantile(rows[k][lo:hi], 0.99)
+            return w
+        l = int(tap.split("-l")[1])
+        if tap.startswith("kda"):
+            if l:
+                w["kda_pcc"], w["kda_nrmse"] = pcc_nrmse(sums[f"kda_{l}"][lo:hi])
+                w["kda_row_nrmse_median"] = quantile(rows[f"kda_{l}"][lo:hi], 0.5)
+                w["kda_row_nrmse_p99"] = quantile(rows[f"kda_{l}"][lo:hi], 0.99)
+            return w
+        if tap.startswith("moe"):
+            recall = per_row[f"recall_{l}"][lo:hi]
+            w.update(
+                moe_nrmse_median=quantile(moe_rows[l][lo:hi], 0.5),
+                moe_nrmse_p99=quantile(moe_rows[l][lo:hi], 0.99),
+                recall_vs_reference_mean=float(recall.mean()),
+                set_equal_vs_reference=float((recall == 1).float().mean()),
+                dropped_reference_weight_mean=float(per_row[f"dropped_{l}"][lo:hi].mean()),
+                dropped_reference_weight_p99=quantile(per_row[f"dropped_{l}"][lo:hi], 0.99),
+                weight_err_median=quantile(per_row[f"weight_err_{l}"][lo:hi], 0.5),
+                recall_gpu_vs_reference_mean=float(per_row[f"gpu_{l}"][lo:hi].mean()),
+                **miss_measures(f"moe_{l}", lo, hi),
+            )
+            return w
+        kv, index_key, lora = keys[l]
+        gated = slice(max(lo, topk), hi)  # rows < top-k select every causal key on both sides
+        full = hi > topk
+        w.update(
+            attn_nrmse_median=quantile(dsa_rows[l][lo:hi], 0.5),
+            attn_nrmse_p99=quantile(dsa_rows[l][lo:hi], 0.99),
+            kv_latent_pcc=pcc(kv[lo:hi, :lora], caches[l]["kvpe"][lo:hi, :lora]),
+            kv_rope_pcc=pcc(kv[lo:hi, lora:], caches[l]["kvpe"][lo:hi, lora:]),
+            index_key_pcc=pcc(index_key[lo:hi], caches[l]["index"][lo:hi]),
+            recall_mean=float(per_row[f"topk_{l}"][gated].mean()) if full else nan,
+            recall_p05=quantile(per_row[f"topk_{l}"][gated], 0.05),
+            recall_gpu_vs_reference_mean=float(per_row[f"topk_gpu_{l}"][gated].mean()) if full else nan,
+            cut_gap_median=quantile(per_row[f"cut_gap_{l}"][gated], 0.5),
+            **miss_measures(f"dsa_{l}", lo, hi),
+        )
+        return w
+
+    def states(tap: str) -> list[dict]:
+        l, segment, out = int(tap.split("-l")[1]), m["segment"], []
+        for entry in complete_run(run / tap).get("states", []):
+            row = entry["row"]
+            if row % segment:
+                continue
+            source = (
+                deep_state_path(rebuilt, row // segment - 1)
+                if l in DEEP_KDA
+                else state_path(chain_1m, row // segment - 1)
+            )
+            ref = torch.load(source, weights_only=True, mmap=True)["kda"][l]
+            dev = torch.load(run / tap / entry["file"], weights_only=True)
+            conv = max(rel(dev[f"{x}_convolution"], ref[f"{x}_convolution"]) for x in "qkv")
+            out.append({"row": row, "recurrent_rel": rel(dev["recurrent"], ref["recurrent"]), "conv_rel": conv})
+        return out
+
+    results = {}
+    for tap in spec.dirs(run):
+        result = {
+            "tap": tap,
+            "count": count,
+            "window": window,
+            "reference": {"chain": str(chain), "rebuilt_1m": str(rebuilt_1m), "rebuilt": str(rebuilt)},
+            "run": str(run),
+            "overall": window_measures(tap, 0, count),
+            "windows": [window_measures(tap, lo, min(lo + window, count)) for lo in range(0, count, window)],
+        }
+        if tap.startswith("kda"):
+            result["states"] = states(tap)
+        (run / tap / "metrics.json").write_text(json.dumps(result, indent=1))
+        results[tap] = result
+    return results
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["score", "rebuild-deep"])
+    parser.add_argument("command", choices=["score", "rebuild-deep", "score-deep"])
     parser.add_argument("--run", type=Path)
     parser.add_argument("--rebuilt", type=Path, default=REBUILT)
     parser.add_argument("--trace", type=Path, default=TRACE)
     parser.add_argument("--chain", type=Path, default=DEEP, help="rebuild-deep: the deep chain")
     parser.add_argument("--out", type=Path, default=DEEP_REBUILT, help="rebuild-deep: the rebuild's directory")
+    parser.add_argument("--deep-rebuilt", type=Path, default=DEEP_REBUILT, help="score-deep: rebuild_deep's directory")
     parser.add_argument("--window", type=int, default=65536)
     parser.add_argument("--threads", type=int, default=8)
     args = parser.parse_args()
@@ -386,6 +625,27 @@ def main() -> None:
             token_ids=token_ids,
             log=log,
         )
+        return
+    if args.command == "score-deep":
+        m = deep_complete(args.chain)
+        checkpoint = Path(m["identity"]["checkpoint"])
+        config = json.loads((checkpoint / "config.json").read_text())
+        embedding = checkpoint_tensors(checkpoint, None, ["embed_tokens.weight"])["embed_tokens.weight"]
+        weights = {l: block_weights(checkpoint, l, None) for l in range(1, len(m["kinds"]))}
+        log(f"loaded the norms and AttnRes queries of layers 1-{len(m['kinds']) - 1}; scoring {args.run}")
+        results = score_deep(
+            run=args.run,
+            chain=args.chain,
+            rebuilt_1m=args.rebuilt,
+            rebuilt=args.deep_rebuilt,
+            trace=Trace(args.trace),
+            weights=weights,
+            embedding=embedding,
+            eps=float(config.get("text_config", config)["rms_norm_eps"]),
+            window=args.window,
+            log=log,
+        )
+        print(json.dumps({tap: r["overall"] for tap, r in results.items()}, indent=1))
         return
 
     chain = Path(json.loads((args.rebuilt / MANIFEST).read_text())["chain"]["chain"])
