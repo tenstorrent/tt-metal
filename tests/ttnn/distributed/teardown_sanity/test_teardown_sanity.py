@@ -12,7 +12,7 @@ thread, a TT_FATAL raised in Python, an uncaught C++ exception), and signals at 
 expected end is the graceful one: the job is stopped (SIGTERM to every rank), every rank still alive closes its mesh,
 and tt-run names the rank that failed and returns its code. tt-run alone cannot give that end: a failing rank has to
 stop the job itself, and the others have to close on the SIGTERM, which is the DistributedContext's job stop
-(#64546). Until it lands each such row is a strict xfail naming what happens instead, so the lane stays green and the
+(https://github.com/tenstorrent/tt-metal/pull/64546). Until it lands each such row is a strict xfail naming what happens instead, so the lane stays green and the
 row turns red (XPASS) when the fix makes it pass. Ctrl-Z needs nothing from the ranks and is a gate.
 
 Run: pytest tests/ttnn/distributed/teardown_sanity -v   (from the repository root, with a built tree and the python
@@ -41,8 +41,8 @@ from sanity_common import clean, ended, fault_delivered, run_case  # noqa: E402
 # exception unwinding into MPI_Finalize) are killed at the deadline and fail, so it is kept short.
 DEADLINE = float(os.environ.get("TT_SANITY_DEADLINE_EXCEPTION", "45"))
 
-# What the job stop of #64546 fixes; every row below fails without it.
-NEEDS_RANK_STOP = "#64546 (the DistributedContext job stop)"
+# TODO(https://github.com/tenstorrent/tt-metal/pull/64546): what its job stop fixes; every xfail row below fails without it and turns red (XPASS) with it.
+NEEDS_RANK_STOP = "https://github.com/tenstorrent/tt-metal/pull/64546 (the DistributedContext job stop)"
 
 
 def closed(r, ranks=(0, 1)) -> None:

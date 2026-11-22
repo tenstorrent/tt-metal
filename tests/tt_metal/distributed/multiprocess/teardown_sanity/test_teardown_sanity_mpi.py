@@ -112,7 +112,7 @@ def test_ttrun_mpi_args_timeout_is_prrtes_own():
 @pytest.mark.xfail(
     reason="P1 for a raw MPI program: a rank that calls exit(1) runs its own atexit MPI_Finalize, which is collective "
     "and waits on the peers in their barrier, so the job rides the --timeout wall clock (241). Neither tt-run nor its "
-    "rank wrapper can end a rank that is still alive; a tt-metal rank stops the job from its exit instead (#64546).",
+    "rank wrapper can end a rank that is still alive; a tt-metal rank stops the job from its exit instead (https://github.com/tenstorrent/tt-metal/pull/64546).",
     strict=True,
 )
 def test_ttrun_error_exit_fails_fast_not_hang():

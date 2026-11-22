@@ -15,7 +15,7 @@ What tt-run does for every way a job ends. A stop is SIGTERM to every rank on ev
 (PMIx), sent by tt-run itself (`tt-run-rank --uri … --signal N`) or, for a rank that died or failed, by that rank's wrapper
 (`tt-run-rank`, which tt-run starts every rank in); never the launcher's own kill path (SIGTERM, SIGKILL 250 ms later).
 This suite checks that the stop reaches the ranks and that each rank detects the SIGTERM (`caught signal 15` from every
-rank); how a tt-metal rank then closes its devices is the rank side, in #64546.
+rank); how a tt-metal rank then closes its devices is the rank side, in [#64546](https://github.com/tenstorrent/tt-metal/pull/64546).
 
 | ending | what tt-run does | tt-run returns | rows |
 |---|---|---|---|
@@ -53,7 +53,7 @@ Slurm that signals the whole cgroup, `pkill -TERM -u`, a container stop) does no
 A raw MPI program that exits non-zero while still inside `MPI_Finalize` cannot be seen by the wrapper
 (`test_ttrun_error_exit_fails_fast_not_hang`, a strict xfail).
 
-Left to the rank side (#64546), each a strict xfail in `tests/ttnn/distributed/teardown_sanity/test_teardown_sanity.py`
+TODO([#64546](https://github.com/tenstorrent/tt-metal/pull/64546)): left to the rank side, each a strict xfail in `tests/ttnn/distributed/teardown_sanity/test_teardown_sanity.py`
 that turns red (XPASS) when it is fixed:
 - a failing rank stops the job itself (a Python exception, `sys.exit(1)`, a worker thread's exception, a TT_FATAL
   raised in Python, an uncaught C++ exception), and every other rank closes its mesh on the SIGTERM;
