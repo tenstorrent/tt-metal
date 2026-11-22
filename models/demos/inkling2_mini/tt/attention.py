@@ -194,7 +194,8 @@ class AttentionState:
 class Inkling2Attention:
     """One attention layer. `weights` maps §4 names (without `attn.`) to host tensors."""
 
-    def __init__(self, device, weights, is_global):
+    def __init__(self, device, weights, is_global, prefetcher=None):
+        """prefetcher: optional tt.prefetch.PrefetchedLinear; the fused q/k/v projection then streams through it."""
         self.device = device
         self.is_global = is_global
         dram = ttnn.DRAM_MEMORY_CONFIG
@@ -230,7 +231,10 @@ class Inkling2Attention:
             pieces += [w_k[:, width:], w_v[:, width:]]
         w_all = torch.cat(pieces, dim=-1)
         self.n_kv = w_all.shape[-1] - KV0
-        self.w_all = _DramShardedLinear(device, w_all, weights["w_qgrs"].dtype)
+        if prefetcher is not None:  # E8: -0.11 ms @4K for w_all; w_o through it was slower (+0.27), so not used
+            self.w_all = prefetcher.linear(w_all)
+        else:
+            self.w_all = _DramShardedLinear(device, w_all, weights["w_qgrs"].dtype)
 
         # conv taps per (window row, channel), fp32. The residual and 1/sqrt(K+1) (local) or 1/sqrt(2K+1)
         # (global, static + dynamic taps) are folded in.

@@ -22,13 +22,15 @@ import ttnn
 from models.demos.inkling2_mini.convert import cache as wcache
 from models.demos.inkling2_mini.tt.attention_fast import DecodePositionsFast as DecodePositions
 from models.demos.inkling2_mini.tt.attention_fast import Inkling2AttentionFast as Inkling2Attention
+from models.demos.inkling2_mini.tt.fused.attnres import FusedAttnRes, FusedRowOps
+from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv
+from models.demos.inkling2_mini.tt.fused.gate import FusedMessageGate, FusedQKVGate
+from models.demos.inkling2_mini.tt.fused.norm import FusedRowNorm
 from models.demos.inkling2_mini.tt.moe import Inkling2MoE
+from models.demos.inkling2_mini.tt.prefetch import PrefetchedLinear
 from models.demos.inkling2_mini.tt.residual import (
-    AttnRes,
     MessageAttnRes,
-    MessageGate,
     RowOps,
-    ShortConv,
     _torch,
     cache_index,
     split_k_matmul,
@@ -107,33 +109,44 @@ class _QKVGate:
 class _Layer:
     """Weights of one decoder layer (shared by its loop passes)."""
 
-    def __init__(self, device, rows, L, w):
+    def __init__(self, device, rows, frows, L, w, prefetcher=None):
         self.L = L
         self.is_global = L in GLOBAL_LAYERS
         self.is_loop = LOOP_START <= L < LOOP_END
         self.boundary = L in BOUNDARY_LAYERS
         attn_w = {k[len("attn.") :]: v for k, v in w.items() if k.startswith("attn.")}
-        self.attn = Inkling2Attention(device, attn_w, self.is_global)
+        self.attn = Inkling2Attention(device, attn_w, self.is_global, prefetcher)
         self.moe = Inkling2MoE(device, w)
-        self.attn_res = AttnRes(rows, w, "attn_res_q", 3 if self.is_global else 1) if L > 0 else None
-        self.mlp_res = AttnRes(rows, w, "mlp_res_q", 1)
-        self.conv_attn = ShortConv(rows, w, "post_attn_conv")
-        self.conv_mlp = ShortConv(rows, w, "post_mlp_conv")
+        # residual path: E10 fused kernels (one program each); frows holds the in-place block-state stack
+        self.attn_res = FusedAttnRes(frows, w, "attn_res_q", 3 if self.is_global else 1) if L > 0 else None
+        self.mlp_res = FusedAttnRes(frows, w, "mlp_res_q", 1)
+        self.conv_attn = FusedShortConv(rows, w, "post_attn_conv")
+        self.conv_mlp = FusedShortConv(rows, w, "post_mlp_conv")
         dram = ttnn.DRAM_MEMORY_CONFIG
         names = ("q_input_norm", "k_input_norm", "v_input_norm") if self.is_global else ("attn_norm",)
-        self.norms = [ttnn.to_device(w[n], device, memory_config=dram) for n in names]
-        self.qkv_gate = _QKVGate(rows, w) if self.is_loop else None
-        self.mlp_gate = MessageGate(rows, w, "mlp") if self.is_loop else None
+        self.norm = FusedRowNorm(device, [ttnn.to_device(w[n], device, memory_config=dram) for n in names])
+        self.qkv_gate = FusedQKVGate(rows, w) if self.is_loop else None
+        self.mlp_gate = FusedMessageGate(rows, w, "mlp") if self.is_loop else None
 
 
 class Inkling2Model:
     def __init__(
-        self, device, root=wcache.DEFAULT_ROOT, max_ctx=2048, kv_dtype=ttnn.bfloat8_b, log=print, layer_roots=None
+        self,
+        device,
+        root=wcache.DEFAULT_ROOT,
+        max_ctx=2048,
+        kv_dtype=ttnn.bfloat8_b,
+        log=print,
+        layer_roots=None,
+        prefetch=True,
     ):
         """layer_roots: optional {layer: cache root} override (e.g. BFP8-expert cache for kernel-vs-quant checks)."""
         self.device = device
         self.max_ctx = max_ctx
+        # E8 tensor prefetcher: its L1 pipes must be carved before any program runs on the ring cores
+        self.prefetcher = PrefetchedLinear(device, recv_rows=3, ring_kb=768) if prefetch else None
         self.rows = RowOps(device)
+        self.frows = FusedRowOps(device)
         dram = ttnn.DRAM_MEMORY_CONFIG
         self.hifi4 = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -156,7 +169,7 @@ class Inkling2Model:
         self.embed_norm = ttnn.to_device(g["embed_norm"], device, memory_config=dram)
         self.final_norm = ttnn.to_device(g["final_norm"], device, memory_config=dram)
         self.unembed = ttnn.to_device(g["unembed"], device, memory_config=dram)
-        self.final_res = AttnRes(self.rows, g, "final_res_q", 1)
+        self.final_res = FusedAttnRes(self.frows, g, "final_res_q", 1)
         self.msg = MessageAttnRes(self.rows, g, "msg_q")
         mask = torch.zeros(1, 1, 1, VOCAB_PAD)
         mask[..., VOCAB_REAL:] = -1.0e4
@@ -168,7 +181,7 @@ class Inkling2Model:
             w = wcache.load_layer(
                 (layer_roots or {}).get(L, root), L, None
             )  # host tensors; modules move them (review-r4 #8)
-            self.layers.append(_Layer(device, self.rows, L, w))
+            self.layers.append(_Layer(device, self.rows, self.frows, L, w, self.prefetcher))
             del w
             log(f"layer {L} on device")
 
@@ -190,12 +203,10 @@ class Inkling2Model:
         self.phase = 0
         # allocate the zero sources now: a buffer allocated after a trace capture can alias trace scratch
         self.reset()
+        if self.prefetcher is not None:
+            self.prefetcher.start()  # stopped by ttnn.close_device (tt.prefetch)
 
     # ------------------------------------------------------------ helpers
-    @staticmethod
-    def _row(x, i=0):
-        return ttnn.slice(x, [0, 0, i, 0], [1, 1, i + 1, x.shape[-1]])
-
     def _messages(self, h12_in, h17_out):
         """Cross-pass messages for all 12 loop layers: [(qkv [1,1,3,C], mlp row)] (MessageAttnRes math)."""
         r, q = self.rows, self.msg
@@ -221,7 +232,7 @@ class Inkling2Model:
     def set_inputs(self, token, pos):
         """Host writes before a step (outside any trace). Also sets the conv ring phase: a traced step only
         replays correctly at positions with the phase it was captured at."""
-        self.phase = pos % ShortConv.PHASES
+        self.phase = pos % FusedShortConv.PHASES
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(torch.tensor([[token]], dtype=torch.int32), dtype=ttnn.uint32), self.tokens
         )
@@ -234,39 +245,32 @@ class Inkling2Model:
         lay = self.layers[L]
         attn_st, conv_a, conv_m = self.states[cache_index(L, p)]
 
-        # attention inputs. Multi-row tensors: row 0/1/2 = q/k/v input.
+        # attention inputs. Multi-row tensors: row 0/1/2 = q/k/v input. The fused modules use frows.stack
+        # (`stack` is only passed through); outputs are per-module buffers, valid until that module runs again.
         if lay.attn_res is None:
             x = h
         else:
-            x = lay.attn_res(stack, h, n_sealed + 1, split=False)
+            rep = 3 if (msgs is not None and not lay.is_global) else None  # same input in rows 0..2
+            x = lay.attn_res(stack, h, n_sealed + 1, split=False, repeat_rows=rep)
         if msgs is not None:
-            if not lay.is_global:
-                x = ttnn.repeat(x, ttnn.Shape([1, 1, 3, 1]))  # same input in rows 0..2
             x = lay.qkv_gate(x, msgs[0])
-        if lay.is_global:
-            qn, kn, vn = (self._rms(self._row(x, i), w) for i, w in enumerate(lay.norms))
-        elif msgs is None:
-            qn = kn = vn = self._rms(x, lay.norms[0])
-        else:
-            xn = self._rms(x, lay.norms[0])
-            qn, kn, vn = (self._row(xn, i) for i in range(3))
+        xs = lay.norm(x)  # one bf16 row per input row (row i uses norm min(i, n_norms - 1))
+        qn, kn, vn = xs if len(xs) == 3 else xs * 3
 
         a = lay.attn.decode(qn, attn_st, self.positions, kn, vn)  # bf16 row
-        a = ttnn.typecast(lay.conv_attn(a, conv_a, self.phase), ttnn.float32)  # conv returns bf16 (HF .to(input))
-
         if lay.boundary:
-            stack = self.rows.seal(stack, h, n_sealed)
+            stack = self.frows.seal(stack, h, n_sealed)  # free: the attn-res above left rms(h) in that row
             n_sealed += 1
-            resid = a
+            resid = lay.conv_attn.conv_add(a, conv_a, self.phase, out_dtype=ttnn.float32)
         else:
-            resid = ttnn.add(ttnn.typecast(h, ttnn.float32), a, dtype=ttnn.float32)
+            resid = lay.conv_attn.conv_add(a, conv_a, self.phase, h, ttnn.float32)  # h + bf16(conv(a)), fp32
 
         m = lay.mlp_res(stack, resid, n_sealed + 1)[0]
         if msgs is not None:
             m = lay.mlp_gate(m, msgs[1])
-        y, _ = lay.moe(m)  # bf16 row
-        y = lay.conv_mlp(y, conv_m, self.phase)  # bf16 row
-        out = ttnn.add(resid, ttnn.typecast(y, ttnn.float32), dtype=ttnn.bfloat16)  # fp32 add, bf16 out
+        y, _ = lay.moe(m)  # bf16 row (L1)
+        y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)  # fused kernels read DRAM rows only
+        out = lay.conv_mlp.conv_add(y, conv_m, self.phase, resid, ttnn.bfloat16)  # fp32 add, bf16 out
         return out, stack, n_sealed
 
     # ------------------------------------------------------------ one token
@@ -306,7 +310,7 @@ class Inkling2Model:
             msgs = all_msgs[L - LOOP_START] if (LOOP_START <= L < LOOP_END and p > 1) else None
             h, stack, n = self._app(L, p, h, stack, n, msgs)
             if collect:
-                res["apps"].append(h)
+                res["apps"].append(ttnn.clone(h))  # h is a module buffer: later loop passes overwrite it
 
         x = self.final_res(stack, h, n + 1)[0]
         x = self._rms(x, self.final_norm)

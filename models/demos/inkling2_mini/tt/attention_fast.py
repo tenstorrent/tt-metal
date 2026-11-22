@@ -117,8 +117,8 @@ class FastAttentionState(AttentionState):
 class Inkling2AttentionFast(Inkling2Attention):
     """`Inkling2Attention` with the scores / softmax on sdpa_decode (module doc)."""
 
-    def __init__(self, device, weights, is_global):
-        super().__init__(device, weights, is_global)
+    def __init__(self, device, weights, is_global, prefetcher=None):
+        super().__init__(device, weights, is_global, prefetcher)
         dram = ttnn.DRAM_MEMORY_CONFIG
 
         def put(t, dtype=ttnn.bfloat16):
