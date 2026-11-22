@@ -87,10 +87,11 @@ def rebuild(bl, ckc, **kw):
 
 
 class PipeStage:
-    def __init__(self, device, banks, entry_tiles=32):
+    def __init__(self, device, banks, entry_tiles=32, dual=False):
         """banks: {key: BankLinear}, all on the same cores with the same bank per core and the same dtype
         (tt/mk/stage.resplit copies). entry_tiles: tiles per entry (the reader starts on a block once its entries
-        landed; every key's per-core range is padded to whole entries)."""
+        landed; every key's per-core range is padded to whole entries). dual: split each bank's ring cores between
+        its two prefetcher senders (else one sender per bank)."""
         self.device = device
         self.banks = banks
         b0 = next(iter(banks.values()))
@@ -111,25 +112,24 @@ class PipeStage:
         R = len(per_bank[0])
         assert all(len(v) == R for v in per_bank.values()), {b: len(v) for b, v in per_bank.items()}
         self.R = R
-        crs = lambda cs: ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cs]
-        )  # noqa: E731
+        crs = lambda cs: ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cs])
         self.space = ttnn.experimental.create_prefetcher_pipe_space(
             device, sender_cores=ttnn.CoreRangeSet(set()), receiver_domain=crs(list(cbank)),
             ring_size=self.ring_bytes, max_receivers_per_pipe=R, num_dram_senders=2 * self.nb,
         )  # fmt: skip
-        # one pipe (sender) per bank, so receiver r of a pipe is bank-local slab r
         self.pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
-            self.space, [(b, crs(per_bank[b])) for b in range(self.nb)], support_multi_receiver_shards=True
+            self.space, [(b, crs(per_bank[b])) for b in range(self.nb)], support_multi_receiver_shards=not dual
         )
         assert self.space.ring_size() == self.ring_bytes, (self.space.ring_size(), self.ring_bytes)
-        # ring position of every core: receiver r of bank b's pipe gets bank-local slab r = shard b + r * nb
-        self.pos = {}
+        # ring position of every core: receiver r of a bank's pipes, counted over its pipes in order, gets bank-local
+        # slab r = shard b + r * nb
+        self.pos, seen = {}, {}
         for p in self.pipes:
             rc = _core_list(p.receiver_cores())
-            b = next(b for b, v in per_bank.items() if set(v) == set(rc))
-            for r, c in enumerate(rc):
-                self.pos[c] = b + r * self.nb
+            b = next(b for b, v in per_bank.items() if set(rc) <= set(v))
+            for c in rc:
+                self.pos[c] = b + seen.get(b, 0) * self.nb
+                seen[b] = seen.get(b, 0) + 1
         assert sorted(self.pos.values()) == list(range(self.nb * R)), self.pos
         self.ring, self.cfg = self.space.buffer_address(), self.space.config_address()
         self.copies = {k: self._copy(k, bl) for k, bl in banks.items()}
@@ -294,8 +294,7 @@ class PipeOverlap:
         ov = PipeOverlap(model)   # before capture, then two eager steps; ov.uninstall(model)
     """
 
-    def __init__(self, model, wo=False, split=3, exclude_rows=(0, 1, 2, 3, 4, 5), entry_tiles=32, mpfe=None,
-                 wo_pass_cols=2, wo_split=None):  # fmt: skip
+    def __init__(self, model, wo=False, split=3, exclude_rows=(0, 1, 2, 3, 4, 5), entry_tiles=32, mpfe=None,wo_pass_cols=2, wo_split=None, dual=False):  # fmt: skip
         from models.demos.inkling2_mini.tt import model as MD
         from models.demos.inkling2_mini.tt.mk.stage import resplit
 
@@ -311,11 +310,12 @@ class PipeOverlap:
             self.orig_wo = {L: a.wo for L, a in self.attn.items()}
             assert all(w is not None for w in self.orig_wo.values()), "w_o: needs the fused o-projection program"
             for L, a in self.attn.items():
-                nb = rebuild(a.w_o.bank, a.w_o.bank_ckc, cores_per_bank=2, pass_cols=wo_pass_cols)
-                banks[("w_o", L)] = place_like(
-                    resplit(nb, wo_split or split, ex), banks[("w_all", L)]
-                )  # its own DRAM weight stays: the program binds it
-        self.ps = PipeStage(model.device, banks, entry_tiles)
+                # wo_pass_cols=None: the o-projection as is (its 14 cores, a bigger ring)
+                nb = a.w_o.bank
+                if wo_pass_cols:  # its own DRAM weight stays: the program binds it
+                    nb = rebuild(nb, a.w_o.bank_ckc, cores_per_bank=2, pass_cols=wo_pass_cols)
+                banks[("w_o", L)] = place_like(resplit(nb, wo_split or split, ex), banks[("w_all", L)])
+        self.ps = PipeStage(model.device, banks, entry_tiles, dual)
         self.order = []
         for L in self.apps:
             self.order += [("w_all", L)] + ([("w_o", L)] if wo else [])

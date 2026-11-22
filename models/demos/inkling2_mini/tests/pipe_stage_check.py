@@ -88,8 +88,18 @@ try:
             from models.demos.inkling2_mini.tt.mk.pipe_stage import place_like
 
             bls[L] = place_like(bls[L], bls[0])
-    ps = PipeStage(dev, bls)
-    log(KN=[K, N], pc=pc, split=sp, cores=len(bls[0].cores), entries=ps.n_entries, ring_kb=ps.ring_bytes // 1024)
+    ps = PipeStage(
+        dev, bls, int(os.environ.get("PIPECHK_ENTRY", "32")), dual=bool(int(os.environ.get("PIPECHK_DUAL", "0")))
+    )
+    log(
+        KN=[K, N],
+        pc=pc,
+        split=sp,
+        dual=ps.pipes is not None and len(ps.pipes),
+        cores=len(bls[0].cores),
+        entries=ps.n_entries,
+        ring_kb=ps.ring_bytes // 1024,
+    )
     ps.start()
     order = [0, 1, 0, 1, 1]
     ps.request(order)
