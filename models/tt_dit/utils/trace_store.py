@@ -36,9 +36,10 @@ import ttnn
 _VERSION = 1
 _context = ""
 _build_id: str | None = None
+_build_parts: dict[str, str] = {}
 # This process's entries: key -> "restored" | "captured".
 _used: dict[str, str] = {}
-_key_parts: dict[str, dict[str, str]] = {}
+_key_parts: dict[str, dict[str, Any]] = {}
 stats = {"restored": 0, "stored": 0, "captured": 0, "refused": {}, "restore_s": 0.0, "dump_s": 0.0}
 
 # Environment variables that change nothing a trace holds (logging, this switch, the device broker's
@@ -47,10 +48,22 @@ stats = {"restored": 0, "stored": 0, "captured": 0, "refused": {}, "restore_s": 
 _ENV_IGNORED_WORDS = ("SCRATCH", "LOG", "TOKEN", "KEY", "SECRET")
 _HEX_ID = re.compile(r"at 0x[0-9a-fA-F]+")
 _ENV_IGNORED = ("TT_DIT_TRACE_STORE", "TT_LOGGER_", "TT_METAL_LOGGER_", "TT_DEVICE_MCP_")
+# Set when this start's buffer layout differs from a warm start's (off_for_start): no store, no restore.
+_off_reason: str | None = None
 
 
 def enabled() -> bool:
-    return os.environ.get("TT_DIT_TRACE_STORE", "0") == "1" and hasattr(ttnn, "load_trace")
+    return (
+        _off_reason is None and os.environ.get("TT_DIT_TRACE_STORE", "0") == "1" and hasattr(ttnn, "load_trace")
+    )
+
+
+def off_for_start(reason: str) -> None:
+    """Store and restore nothing in this process: its buffers are laid out unlike a warm start's."""
+    global _off_reason
+    if _off_reason is None and os.environ.get("TT_DIT_TRACE_STORE", "0") == "1":
+        _refuse(f"off for this start: {reason}")
+    _off_reason = _off_reason or reason
 
 
 def set_context(text: str) -> None:
@@ -89,8 +102,14 @@ def _build() -> str:
             if k.startswith(("TT_", "TTNN_", "LTX_", "ARCH_NAME"))
             and not k.startswith(_ENV_IGNORED)
             and not any(w in k for w in _ENV_IGNORED_WORDS)
+            # A path names a place, not what a program does (the code is in head and libs), and some
+            # are per start: TT_METAL_KERNEL_PREWARM_STOP_FILE is <dir>/<pid>-<time>.
+            and not v.startswith("/")
         )
         _build_id = json.dumps({"head": head, "libs": parts, "env": env})
+        # Per-part digests for key.json: a build mismatch between two starts names its variable.
+        _build_parts.update({"head": head[:12], "libs": _digest(parts)[:16]})
+        _build_parts.update({f"env:{k}": _digest(v)[:12] for k, v in env})
     return _build_id
 
 
@@ -181,7 +200,10 @@ def key_for(tracer: Any, device: ttnn.MeshDevice, cq_id: int, pre: list[tuple[in
     }
     key = _digest(parts)[:40]
     # Digest of each part, stored with the entry: two starts that should share a key can be compared.
-    _key_parts[key] = {k: _digest(v)[:16] for k, v in parts.items()} | {"fn_name": name}
+    _key_parts[key] = (
+        {k: _digest(v)[:16] for k, v in parts.items()}
+        | {"fn_name": name, "npre": len(pre), "build_parts": dict(_build_parts)}
+    )
     return key
 
 

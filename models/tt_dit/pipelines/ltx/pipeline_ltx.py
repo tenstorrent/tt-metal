@@ -47,7 +47,7 @@ from ...models.vae.vae_ltx import (
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
-from ...utils import walltime
+from ...utils import trace_store, walltime
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.fuse_loras import LoraSpec, fuse_loras_into
 from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
@@ -473,6 +473,10 @@ class LTXPipeline:
                 # supported path rather than an AttributeError.
                 _kp = ttnn._ttnn.device
                 _cold = getattr(_kp, "kernel_prewarm_cold_start_needed", lambda: False)()
+                if _cold:
+                    # A start that compiles its kernels allocates in another order than a warm one, so
+                    # its traces could never be restored by a warm start, nor a warm start's here.
+                    trace_store.off_for_start("cold build_key: this start compiles its kernels")
                 # The capture pass runs the pipeline once capture-only (no dispatch) to record the
                 # kernel manifest, then batch-compiles it off-device. A weight-evicting tier
                 # (dynamic_load / TT_DIT_HOST_WEIGHT_CACHE) frees the DiT weights during that pass, but
