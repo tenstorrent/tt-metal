@@ -32,9 +32,8 @@ inline void _llk_math_hw_cleanup_init_dest_sync_()
 /**
  * @brief Zero the transient math/unpack-style ADDR_MOD_0..5 so stale increments cannot survive.
  *
- * ADDR_MOD_6/7 keep their @ref _llk_math_hw_configure_ invariants (dest += 2 / zero advance):
- * the reconfig a following op runs sets formats only, and the SFPU ops after it assume the
- * invariants, so zeroing slot 6 would make them store every iteration to the same rows.
+ * ADDR_MOD_6/7 are left at their @ref _llk_math_hw_configure_ invariants (dest += 2 / zero advance),
+ * which the SFPU ops after cleanup assume.
  */
 inline void _llk_math_hw_cleanup_poison_addr_mods_()
 {

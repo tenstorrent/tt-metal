@@ -436,8 +436,7 @@ inline void _sfpu_unary_power_fp32_(const std::uint32_t exponent) {
 }
 
 inline void power_init() {
-    // The paired store's ADDR_MOD_6 stride is owned by calculate_unary_power_iterative (set and
-    // restored there, also in MM_THROTTLE builds); this init never touches the slot.
+    // calculate_unary_power_iterative sets and restores the paired store's ADDR_MOD_6 stride.
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
@@ -492,9 +491,9 @@ sfpi_inline void _sfpu_unary_power_iterative_two_rows_(const std::uint32_t exp_m
  * @tparam APPROXIMATION_MODE Unused; the result is exact repeated multiplication in both modes.
  * @tparam ITERATIONS Number of Dest rows to process; must be even, since rows are processed in pairs.
  * @param exponent Non-negative integer exponent value
- * @note Call @ref power_init first. The paired store's ADDR_MOD_6 stride is owned here: set at
- *       entry and restored to the dest += 2 invariant at exit, also in MM_THROTTLE builds (the
- *       throttled matmul restores the same invariant at its own exit, so interleaving is safe).
+ * @note Call @ref power_init first. The paired store's ADDR_MOD_6 stride is set at entry and
+ *       restored to the dest += 2 invariant at exit, as the throttled matmul does, so the two can
+ *       be interleaved.
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_power_iterative(const std::uint32_t exponent) {

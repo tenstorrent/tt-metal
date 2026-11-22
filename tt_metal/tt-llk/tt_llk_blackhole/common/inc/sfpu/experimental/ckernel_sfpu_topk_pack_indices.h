@@ -14,8 +14,8 @@ namespace ckernel::sfpu
 /**
  * @brief Configure the advancing output store for supplied-index packing.
  * @note Call after shared SFPU initialization and operand copy initialization, before
- *       @ref _topk_xl_pack_supplied_indices_. No address modifier to program: the store
- *       advances through the ADDR_MOD_6 dest += 2 invariant that hw_configure establishes.
+ *       @ref _topk_xl_pack_supplied_indices_. The store advances through the ADDR_MOD_6
+ *       dest += 2 invariant that hw_configure establishes.
  */
 inline void _topk_xl_pack_supplied_indices_init_()
 {

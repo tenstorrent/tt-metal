@@ -32,8 +32,8 @@ struct I0Series {
 /**
  * @brief Programs the state calculate_i0 reads: vConstFloatPrgm0-2 = I0Series::A5, A4, A3.
  * @note Run it after any other SFPU op's init and before calculate_i0: the programmable
- *       constant registers are shared with other ops' inits. ADDR_MOD_6 is owned by
- *       calculate_i0 itself (set and restored there), not by this init.
+ *       constant registers are shared with other ops' inits. calculate_i0 sets and
+ *       restores ADDR_MOD_6 itself.
  */
 inline void i0_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -48,9 +48,8 @@ inline void i0_init() {
  *        A11..A9 stay in LREGs across the loop, A5..A3 come from vConstFloatPrgm0-2.
  * @tparam ITERATIONS: Dest rows to process; must be even.
  * @note Call i0_init first; this reads vConstFloatPrgm0-2 as it programs them. The paired store's
- *       ADDR_MOD_6 stride is owned here: set at entry and restored to the dest += 2 invariant at
- *       exit, also in MM_THROTTLE builds (the throttled matmul restores the same invariant at its
- *       own exit, so interleaving is safe).
+ *       ADDR_MOD_6 stride is set at entry and restored to the dest += 2 invariant at exit, as the
+ *       throttled matmul does, so the two can be interleaved.
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_i0() {

@@ -11,6 +11,7 @@
 #include "sanitizer/api.h"
 
 namespace ckernel {
+
 // Kernel-invariant SFPU init (SFPU config register; ADDR_MOD_7 is set by hw_configure). Used by the
 // standalone tt-llk SFPU test harness, which bypasses the metal "full init" entry points and runs this itself.
 inline void llk_math_sfpu_init_once() {
