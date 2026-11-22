@@ -69,6 +69,10 @@ inline constexpr const char* kTpSize = "tp_size";
 inline constexpr const char* kXGatherHandoffBytes = "x_gather_handoff_bytes";
 inline constexpr const char* kLatentChunkBytes = "latent_chunk_bytes";
 inline constexpr const char* kReduceScatterPasses = "reduce_scatter_passes";
+// 1: the reduce-scatter by columns without a latent (MoEBlockConfig.shared_scatter_columns): a block is a column block
+inline constexpr const char* kReduceScatterColumns = "reduce_scatter_columns";
+// 1: the router sums the logits partials in chip order (MoEBlockConfig.router_canonical_sum)
+inline constexpr const char* kRouterCanonicalSum = "router_canonical_sum";
 inline constexpr const char* kRouterLogitsFirst = "router_logits_first";  // 1: the logits go ahead of the x gather
 
 // ---- the routing exchange and planner (routing_planner.hpp, router_fabric_sends.hpp) ----

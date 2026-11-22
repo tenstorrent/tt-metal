@@ -17,8 +17,13 @@ void kernel_main() {
     constexpr auto o_args = TensorAccessorArgs<3>();
     const uint32_t tile_bytes = get_tile_size(cb_out);
     const auto out = TensorAccessor(o_args, get_common_arg_val<uint32_t>(0), tile_bytes);
+#ifdef UNPACK_COMMON_VALUES  // (option common_values: common args 1, 2)
+    const uint32_t out_page0 = get_common_arg_val<uint32_t>(1);
+    const uint32_t nbands = get_common_arg_val<uint32_t>(2);
+#else
     const uint32_t out_page0 = get_arg_val<uint32_t>(0);
     const uint32_t nbands = get_arg_val<uint32_t>(1);
+#endif
     const uint32_t c = static_cast<uint32_t>(get_absolute_logical_y()) * GX + get_absolute_logical_x();
     const uint32_t per = nbands / NCORES, extra = nbands % NCORES;
     const uint32_t count = per + (c < extra ? 1u : 0u);

@@ -120,6 +120,8 @@ void bind_config(nb::module_& mod) {
     def_kwargs_init(cfg);
     cfg.def_rw("combine_snap", &MoEBlockConfig::combine_snap)
         .def_rw("head_router_iterations", &MoEBlockConfig::head_router_iterations)
+        .def_rw("shared_scatter_columns", &MoEBlockConfig::shared_scatter_columns)
+        .def_rw("router_canonical_sum", &MoEBlockConfig::router_canonical_sum)
         .def_rw("num_links", &MoEBlockConfig::num_links)
         .def_rw("sp_axis", &MoEBlockConfig::sp_axis)
         .def_rw("chunk_tokens", &MoEBlockConfig::chunk_tokens)

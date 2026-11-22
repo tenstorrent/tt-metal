@@ -553,6 +553,11 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         finally:
             misses_allowed(mesh, True)
         metrics.record("chunk_wall_cache_hits_only", int(w["entries"][0] is not None))
+        # F294 (owner 2026-11-20): this wall re-runs ONE chunk at ONE position after a warm-up at that position, so a
+        # program keyed on a per-chunk value (a position, a slot, a layout) is built in the warm-up and never seen here:
+        # a best case. Serving never rebuilds (skill); a number counts only from a fresh-traffic wall (new positions /
+        # slots / layouts every timed chunk, program builds after warm-up counted == 0). Labelled on every record.
+        metrics.record("chunk_wall_fresh", 0)
         kept = sorted(walls)
         med = kept[len(kept) // 2]
         metrics.record("chunk_wall_ms", med)
@@ -563,7 +568,8 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         print(
             f"PROFILE wall (device profiler off, gap uploads excluded): warm after {len(w['walls'])} runs "
             f"(program cache {w['entries'][0]} -> {w['entries'][-1]} entries; warm-up walls {w['walls']} ms); "
-            f"{len(walls)} timed runs, cache misses refused: {walls} ms, median {med}; gap uploads "
+            f"{len(walls)} timed runs, cache misses refused: {walls} ms, median {med} (WARM, REPEATED POSITION: a best case, "
+            f"F294); gap uploads "
             f"{sorted(gaps)[len(gaps) // 2]} ms"
         )
         if os.environ.get(HOST_ENV) == "1":  # F230: warm, after the timed runs

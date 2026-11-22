@@ -722,6 +722,91 @@ class TtEngramRows:
         times["upload"] = (time.perf_counter() - t0) * 1e3
         return times
 
+    def fill_tp_glued(self, dev, segs: list, chunk: int, threads=None) -> dict:
+        """Worker thread, PB.7 (PACKED_GLUED=on): ``fill_tp`` of a glued chunk (tt/packed.GluedChunk). ``segs``: per
+        segment (model row offset, its ids [rows], its slot's tail, the tail it leaves or None), rows back to back from
+        row 0, every offset and row count whole tiles (32). A segment's rows may start inside a chip's share and run
+        over several chips: the staging's shares are cut into tile rows (a share's bytes are its tile rows in order:
+        TILE layout, tiles row-major), and each segment's job (fill_tp's own branch: ENGRAM_HOST_IMPL=cpp's C++ job, or
+        numba's hash + tile_rows_chips; ENGRAM_TABLE=mmap: host_bfp8's rows as tile bytes) writes its tile rows only,
+        hashed with its own tail; the tail pad's tile rows are written zero (no valid row). Then one upload, as
+        ``fill_tp``."""
+        from . import engram_host_cpp
+        from .engram_bfp8 import tile_bytes
+        from .engram_host_cpp import fill_job
+
+        resident = self._packed is not None
+        cpp = resident and settings.get("ENGRAM_HOST_IMPL") == "cpp"
+        times = {}
+        t0 = time.perf_counter()
+        n_chips = int(self.mesh.get_num_devices())
+        q = chunk // n_chips
+        p = len(dev) if isinstance(dev, list) else 1
+        host, views, outs = self._staging_tp(q, p)
+        qp = q // p
+        assert qp % 32 == 0, (q, p)
+        key = (id(outs), "tilerows")
+        hit = self._lane_outs.get(key)
+        if hit is None or hit[0] is not outs:  # (every tile row of the chunk, model order: made once a staging)
+            per = qp // 32
+            rows = tuple(o[j * (o.size // per) : (j + 1) * (o.size // per)] for o in outs for j in range(per))
+            hit = self._lane_outs[key] = (outs, rows)
+        tiles = hit[1]
+        assert len(tiles) * 32 == chunk, (len(tiles), chunk)
+        packed = self.packed if resident else None
+        agg = {}
+        jobs = list(segs)
+        used = sum(len(ids) for _, ids, *_ in segs)
+        if used < chunk:  # (the tail pad: zero rows)
+            pad = torch.full((chunk - used,), 0, dtype=torch.int64)
+            jobs.append((used, pad, self.new_tail().long().contiguous(), None, 0))
+        for job in jobs:
+            off, ids, tail, want = job[:4]
+            valid = job[4] if len(job) > 4 else None
+            n = int(ids.numel())
+            if n == 0:
+                continue
+            assert off % 32 == 0 and n % 32 == 0, (off, n)
+            sub = tiles[off // 32 : (off + n) // 32]
+            v = n if valid is None else int(valid)
+            if cpp:
+                _, t = fill_job(
+                    self.hasher, self.layer, ids.contiguous(), tail, packed, sub, 32, threads or self.threads, v, want
+                )
+                engram_host_cpp._OUTS.pop(id(sub), None)  # (a tuple of this call only)
+                for k2, x in t.items():
+                    agg[k2] = agg.get(k2, 0.0) + x
+                continue
+            if not resident:  # (mmap: host_bfp8's rows, as fill_tp_lanes, copied tile row by tile row)
+                if v:
+                    exps, mags, new_tail = self.host_bfp8(ids, tail, v, None, threads=threads, fast=True)
+                    b = tile_bytes(exps, mags).numpy()
+                    tr = b.size // len(sub)
+                    for j, dst in enumerate(sub):
+                        dst[:] = b[j * tr : (j + 1) * tr]
+                else:
+                    new_tail = tail.clone()
+                    for dst in sub:
+                        dst[:] = 0
+                assert want is None or torch.equal(new_tail.long(), want.long()), (self.layer, new_tail, want)
+                continue
+            if v:
+                h, new_tail = self._hashes(ids[:v], tail, fast=True, threads=threads)
+            else:
+                h, new_tail = torch.empty(0, self.width // self.table.dim, dtype=torch.int64), tail.clone()
+            _host_impl().tile_rows_chips(packed, h, v, sub, 32, threads or self.threads)
+            assert want is None or torch.equal(new_tail.long(), want.long()), (self.layer, new_tail, want)
+        times.update(build_wait=0.0, **agg)
+        times["fill"] = (time.perf_counter() - t0) * 1e3
+        t0 = time.perf_counter()
+        if p == 1:
+            _COPY_TO_DEVICE(host, dev)
+        else:
+            for h_, d in zip(host, dev):
+                _COPY_TO_DEVICE(h_, d)
+        times["upload"] = (time.perf_counter() - t0) * 1e3
+        return times
+
     def __call__(self, tokens: torch.Tensor, tail: torch.Tensor, valid: int | None = None):
         """begin_chunk work for this layer: (device rows [1, 1, S/SP, width] in ENGRAM_ROWS' format, new tail)."""
         if self._packed is not None:

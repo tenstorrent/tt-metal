@@ -31,7 +31,11 @@ void kernel_main() {
     constexpr uint32_t GX = get_compile_time_arg_val(3);
     constexpr uint32_t NCORES = get_compile_time_arg_val(4);
     constexpr uint32_t SC = 4;  // the scale's DEST tile
+#ifdef UNPACK_COMMON_VALUES     // (option common_values: common arg 0)
+    const uint32_t nbands = get_common_arg_val<uint32_t>(0);
+#else
     const uint32_t nbands = get_arg_val<uint32_t>(0);
+#endif
     const uint32_t c = static_cast<uint32_t>(get_absolute_logical_y()) * GX + get_absolute_logical_x();
     const uint32_t count = nbands / NCORES + (c < nbands % NCORES ? 1u : 0u);
     if (count == 0) {

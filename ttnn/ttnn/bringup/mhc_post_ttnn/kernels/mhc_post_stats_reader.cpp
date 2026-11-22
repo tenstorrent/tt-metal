@@ -95,6 +95,21 @@ void kernel_main() {
     const uint32_t peers_arg0 = 7 + n_rooted;
 #endif
     volatile tt_l1_ptr uint32_t* w_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(MHC_POST_WSHARE));
+#ifdef MHC_POST_WMCAST
+    // PB.8 (v2): the block's RT cores are one NoC column segment (after the peer list: its first and last core); my
+    // share goes to the other RT - 1 in one multicast a tile (the sender is inside the rectangle, not a destination)
+    uint32_t m_sx = get_arg_val<uint32_t>(peers_arg0 + rt) >> 16,
+             m_sy = get_arg_val<uint32_t>(peers_arg0 + rt) & 0xFFFFu;
+    uint32_t m_ex = get_arg_val<uint32_t>(peers_arg0 + rt + 1) >> 16;
+    uint32_t m_ey = get_arg_val<uint32_t>(peers_arg0 + rt + 1) & 0xFFFFu;
+    if (noc_index == 1) {  // (NoC 1 walks the rectangle from the other corner)
+        const uint32_t tx = m_sx, ty = m_sy;
+        m_sx = m_ex;
+        m_sy = m_ey;
+        m_ex = tx;
+        m_ey = ty;
+    }
+#endif
 #endif
     for (uint32_t u = start; u < start + count; ++u) {
         const mhc_stats::Unit U = mhc_stats::unit_of(u, rt, bw, ct);
@@ -162,6 +177,10 @@ void kernel_main() {
                 }
                 ++mine;
                 const uint32_t off = ((i / U.valid) * bw + i % U.valid) * page;
+#ifdef MHC_POST_WMCAST
+                noc_async_write_multicast(
+                    w_base + off, get_noc_multicast_addr(m_sx, m_sy, m_ex, m_ey, w_base + off), page, rt - 1);
+#else
                 for (uint32_t p = 0; p < rt; ++p) {
                     if (p == U.r) {
                         continue;
@@ -169,6 +188,7 @@ void kernel_main() {
                     const uint32_t xy = get_arg_val<uint32_t>(peers_arg0 + p);
                     noc_async_write(w_base + off, get_noc_addr(xy >> 16, xy & 0xFFFFu, w_base + off), page);
                 }
+#endif
             }
             noc_async_write_barrier();
             for (uint32_t p = 0; p < rt; ++p) {

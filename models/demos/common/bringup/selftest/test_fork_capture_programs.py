@@ -88,3 +88,14 @@ def test_every_capture_file_the_gate_names_is_a_gate_output(tmp_path):
     cmd = "BRINGUP_CAPTURE_FORKS=r/fork_calls.json x && DS41_MOE_IMPL=block BRINGUP_CAPTURE_FORKS=r/fork_calls_block.json y"
     got = {p.name for p in outputs_in(tmp_path, {"id": "O.1", "step": "optests", "gate": {"cmd": cmd}})}
     assert {"fork_calls.json", "fork_calls_block.json"} <= got
+
+
+def test_a_tests_markdown_table_is_a_gate_output(tmp_path):
+    """F292: results/<task>_<name>.md written by a gate's test is the task's own output (allowed for its agent,
+    deleted before and committed with the gate), as results/<task>_*.json is (F55); another task's is not."""
+    from models.demos.common.bringup.core.gate import outputs_in
+
+    for n in ("PB.6L_packed_walls.md", "PB.6L.json", "PB.7_glued_walls.md", "PB.6Lx_other.md"):
+        (tmp_path / n).write_text("x")
+    names = [p.name for p in outputs_in(tmp_path, {"id": "PB.6L"})]
+    assert "PB.6L_packed_walls.md" in names and "PB.7_glued_walls.md" not in names and "PB.6Lx_other.md" not in names

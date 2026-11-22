@@ -59,12 +59,15 @@ No host work in ``__call__`` / ``write``: the per-chunk inputs are integers (sta
 
 from __future__ import annotations
 
+import importlib as _importlib
 import math
 
 import torch
 
 import ttnn
 
+# DS41-311 (PB.HG): the package attribute fresh after a runner reload
+_importlib.import_module(__package__ + ".history_gather")
 from . import ccl, cores, history_gather, host_alloc, index_keys
 from . import mm_configs as mm
 from .ccl import dealloc
@@ -72,11 +75,13 @@ from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, bf16_activation
 from .cores import from_torch, max_grid, sub_cores, sub_cores_tiled, to_rm
 from .norm import TtDistributedRmsNorm
 from .rope import (
+    GluedStarts,
     LaneStarts,
     PairPerm,
     RowsMemo,
     deinterleave_perm,
     glue,
+    glued_slices,
     indexer_glue,
     lane_slices,
     pair_table,
@@ -143,19 +148,36 @@ class CompressRope:
 
     def _rows(self, g0: int, n: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         sp = self.mesh.shape[SP_AXIS]
+        from .page_copy import dyn
+
+        if (
+            dyn("rows") and not isinstance(g0, (GluedStarts, LaneStarts)) and n % (32 * sp) == 0
+        ):  # PB.7C / MB.2: one start is one glued piece (the slice's start would key a program on the position)
+            g0 = GluedStarts(((int(g0), int(n)),))
+        glued = isinstance(g0, GluedStarts)  # PB.7B: the glued chunk's pieces (tt/packed_glued.py)
         packed = isinstance(g0, LaneStarts)  # PB.3A: each lane its own first group (tt/packed_onecall.py)
-        if packed:
+        if glued:
+            assert g0.rows == n and n % (32 * sp) == 0 and all(s + k <= self.rows_max for s, k in g0), (g0, n)
+        elif packed:
             lr = n // len(g0)
             assert lr * len(g0) == n and n % (32 * sp) == 0 and max(g0) + lr <= self.rows_max, (g0, n, self.rows_max)
         else:
             assert n % (32 * sp) == 0 and g0 + n <= self.rows_max, (g0, n, sp, self.rows_max)
         out = []
         fast = packed and settings.get("PACKED_HOST_FAST") == "on"  # PB.3K: each chip its rows (tt/lane_rows.py)
+        if glued and dyn("rows"):  # PB.7C: the glued pieces as runtime values
+            fast = True
         for t in (self.cos, self.sin):
-            if fast:
+            if fast and glued:
+                from .lane_rows import glued_rows
+
+                sl = glued_rows(t, g0, n)
+            elif fast:
                 from .lane_rows import lane_rows
 
                 sl = lane_rows(t, g0, n)
+            elif glued:
+                sl = glued_slices(t, g0, self.width)
             elif packed:
                 sl = lane_slices(t, g0, lr, self.width)
             else:
@@ -1069,7 +1091,8 @@ class TtCompressor:
     def __call__(self, x: ttnn.Tensor, start: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         r = self.ratio
         rows = x.shape[-2]
-        lanes = isinstance(start, LaneStarts)  # PB.3A (tt/packed_onecall.py): each lane its own start, rope only
+        # PB.3A (tt/packed_onecall.py) / PB.7B (tt/packed_glued.py): each lane / glued piece its own start, rope only
+        lanes = isinstance(start, (LaneStarts, GluedStarts))
         assert (lanes or start % 32 == 0) and rows % r == 0, (start, rows, r)
         if self.full_rows:  # ATTN_SP32=on (P.10): the chip's rows' whole sum, gathered over TP (a data move)
             part = self._mm(x, self.proj_w, dtype=ttnn.float32)
@@ -1268,11 +1291,18 @@ class TtCompressor:
         if src is not g and rm is not src:
             dealloc(src)
         n, w, off = rm.shape[-2], rm.shape[-1], (lo - start) // r
-        head = ttnn.slice(rm, [0, 0, off, 0], [1, 1, n, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
-        tail = ttnn.slice(rm, [0, 0, 0, 0], [1, 1, off, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
-        rot = ttnn.concat([head, tail], dim=2, memory_config=DRAM, sub_core_grids=sub_cores(head))
-        for x in (head, tail):
-            dealloc(x)
+        from .page_copy import dyn, page_copy
+
+        if dyn("replay"):  # MB.2: the rotation as two page copies (the replay offset a runtime value)
+            rot = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, n, w]), rm.dtype, rm.layout, rm.device(), DRAM)
+            page_copy(rm, rot, off, 0, n - off)
+            page_copy(rm, rot, 0, n - off, off)
+        else:
+            head = ttnn.slice(rm, [0, 0, off, 0], [1, 1, n, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
+            tail = ttnn.slice(rm, [0, 0, 0, 0], [1, 1, off, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
+            rot = ttnn.concat([head, tail], dim=2, memory_config=DRAM, sub_core_grids=sub_cores(head))
+            for x in (head, tail):
+                dealloc(x)
         if rm is not g:
             dealloc(rm)
         if g is not t and g is not pre:

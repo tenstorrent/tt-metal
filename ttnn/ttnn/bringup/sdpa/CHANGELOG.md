@@ -568,3 +568,47 @@ Build fixes after fork_op.py (no behaviour change):
   unit test on the 8x4 (brief).
 - Files: device/sparse_sdpa_lanes_device_operation.hpp, device/sparse_sdpa_lanes_device_operation.cpp,
   sparse_sdpa.hpp, sparse_sdpa.cpp, sdpa_nanobind.cpp, sources.cmake, README.md
+
+### PB.7B (deepseek_v41_flash_d_p, 2026-11-20): sparse_sdpa kv_lane_rows, each query row its own lane's kv
+- What: opt-in `ttnn.bringup.sparse_sdpa(..., kv_lanes=, kv_lane_of_chip=, kv_lane_rows=None)`: per device up to 8 row
+  ranges [n, end_0, lane_0, ..] (17 words a device, row-major chip order); the reader and writer (define
+  SPARSE_SDPA_KV_ROWS) take each token's kv address from per-core runtime args after (tok_start, tok_count):
+  [n, (token end, kv address) x 8], appended by the lanes factory at creation and rewritten by its cache-hit override
+  every call (the map and the lane addresses are runtime values; the program hash adds only "on"). Tokens past the
+  last end read the device's kv (kv_lane_of_chip's). The per-token arithmetic is the source's: a row's output is the
+  same bytes as with its lane's kv as the device's kv.
+- Why: deepseek_v41_flash_d_p PB.7B (glued packing v2, PACKED_GLUED_ONECALL=on): a chip holding rows of two segments
+  ran sparse_sdpa twice (the second with the other rows on their window keys only) plus a row copy: 12.6 ms of a
+  5 x 1600 glued chunk's 125.8 ms device at 139k.
+- Default: off (None): the kv_lanes programs, their hash and kernels unchanged.
+- Run: the model's glued oracle on the 8x4 (tests/packed/test_glued_oracle.py, PACKED_GLUED_ONECALL=on: glued vs the
+  segment alone, bit-identical) and walls; no fork unit test on the 8x4 (PACKED_RULES: no fork suites on the 8x4).
+- Files: device/sparse_sdpa_lanes_device_operation.hpp, device/sparse_sdpa_lanes_device_operation.cpp,
+  device/kernels/dataflow/sparse_sdpa_reader.cpp, device/kernels/dataflow/sparse_sdpa_writer.cpp, sparse_sdpa.hpp,
+  sparse_sdpa.cpp, sdpa_nanobind.cpp, README.md
+
+### PB.7C (deepseek_v41_flash_d_p, 2026-11-20): kv_lane_rows calls do not hash kv_lane_of_chip
+- What: `SparseSDPALanesOperation::compute_program_hash` leaves `lane_of_chip` out when `kv_lane_rows` is given (the
+  per-token kv addresses are per-core runtime args set every call, and the override re-binds each device's base kv to
+  `kv_lanes[kv_lane_of_chip[chip]]` on every call; the source program's key holds no kv rows, as before for a lane's
+  rows). Without kv_lane_rows the map stays hashed (one program a map, unchanged).
+- Why: deepseek_v41_flash_d_p PB.7C (PACKED_GLUED_DYNAMIC): a glued chunk's layout (which segment's history each chip
+  reads first) changes every chunk in serving; no program a layout.
+- Default: unchanged for every call without kv_lane_rows (same hash).
+- Run: the model's glued oracle (tests/packed/test_glued_oracle.py, PACKED_GLUED_DYNAMIC=on, 8x4); no fork suite on
+  the 8x4 (PACKED_RULES).
+- Files: device/sparse_sdpa_lanes_device_operation.cpp, README.md
+
+### PB.9G (deepseek_v41_flash_d_p, 2026-11-21): kv_lane_map_runtime (kv_lanes without hashing the lane map)
+- What: new option `kv_lane_map_runtime` (bool, default False): with `kv_lanes` and no `kv_lane_rows`,
+  `SparseSDPALanesOperation::compute_program_hash` leaves `lane_of_chip` out (the override already re-binds each
+  device's kv to `kv_lanes[kv_lane_of_chip[chip]]` every call; the source program's key holds no kv rows, the
+  assumption PB.7C made for kv_lane_rows).
+- Why: deepseek_v41_flash_d_p PB.9G (chip-aligned lanes, owner 2026-11-21): every chip holds one segment, so the
+  per-token row ranges of kv_lane_rows (their per-core arg patching, ~0.27 ms of host a call more, PB.9X) are not
+  needed, but a hashed map would build a program for every layout serving sends.
+- Default: unchanged (False: the map is hashed as before; kv_lane_rows calls unchanged).
+- Run: the model's packed oracle (tests/packed/test_packed_oracle.py, PACKED_CHIPS=on, 8x4) and test_no_rebuild; no
+  fork suite on the 8x4 (PACKED_RULES).
+- Files: device/sparse_sdpa_lanes_device_operation.hpp, device/sparse_sdpa_lanes_device_operation.cpp,
+  sparse_sdpa.hpp, sparse_sdpa.cpp, sdpa_nanobind.cpp, README.md

@@ -1,0 +1,128 @@
+{
+ "used": [
+  {
+   "id": "DS41-328",
+   "how": "the glued indexer calls group segments by key capacity (the lanes ring is wrong over unequal capacities)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-326",
+   "how": "the per-chip lane maps (kv_lane_of_chip, lane_buffer) stay hashed in the forks; a new map is a new program",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-286",
+   "how": "top-k ties follow the row split by core count: led to DS41-342 (top-k rows rolled to their alone chip row)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-324",
+   "how": "one glued window send a layer (own semaphore), carries read in place from the snapshot like LaneSend",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-316",
+   "how": "a mesh-only op test before the model load in one runner process left the model's first chunk failing (mhc_post input not allocated): ran the oracle in a fresh process",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-311",
+   "how": "edits to tt/packed_glued.py picked up through the lazy import inside PackedChunk (no from-import of the module at load)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-339",
+   "how": "MOE_HEAD_ORDER=free kept: glued rows at any TP column stay bit-identical",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-341",
+   "how": "as DS41-339 (router canonical sum) for rows on other chips",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-333",
+   "how": "a cross-lane row split changes top-k ties: confirmed it is the chip ROW that matters (DS41-342), the top-k inputs rolled per chip",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "topk_large_indices' result order for a row depends on the row's index inside the chip (split rows), not only on its values (now DS41-342)",
+  "which ops of the attention are not row-position invariant inside a chip (only the top-k's split rows were, sparse_sdpa / ring score / matmuls were not)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding between glued segments; per-row arguments through passes and per-chip tables, no zero-padded work"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "decisions marked DECIDED in BREADCRUMBS PPB.7B (passes over the existing per-chip fork options first, C++ follow-ups after measuring)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "every oracle rung on the gate's 40-layer load with DS41_PACKED_LAYERS only (call-time); walls on the gate's walls env"
+  }
+ ],
+ "cited_only": [
+  "DS41-342"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.7B",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T15:46:59",
+  "head": "437e310b596",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.7B.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.7B_glued_walls.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.7B.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_ops.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_v2_phases.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_v2_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_glued.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_onecall.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/indexer_score/CHANGELOG.md",
+   "ttnn/ttnn/bringup/indexer_score/README.md",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/ring_indexer_score_dsa_program_factory.cpp",
+   "ttnn/ttnn/bringup/indexer_score/indexer_score_nanobind.cpp",
+   "ttnn/ttnn/bringup/sdpa/CHANGELOG.md",
+   "ttnn/ttnn/bringup/sdpa/README.md",
+   "ttnn/ttnn/bringup/sdpa/device/kernels/dataflow/sparse_sdpa_reader.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/kernels/dataflow/sparse_sdpa_writer.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_lanes_device_operation.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_lanes_device_operation.hpp",
+   "ttnn/ttnn/bringup/sdpa/sdpa_nanobind.cpp",
+   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.cpp",
+   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.hpp"
+  ]
+ }
+}

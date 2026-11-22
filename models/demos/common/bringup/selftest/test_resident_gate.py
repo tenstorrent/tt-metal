@@ -252,6 +252,9 @@ def test_the_ab_says_fail_when_a_side_of_its_test_failed(monkeypatch):
         ab_determinism_failing=lambda *a: [],
     )
     o.ab_failed_runs = lambda task, rec: Orchestrator.ab_failed_runs(o, task, rec)
+    o._gate_on = lambda *a: Orchestrator._gate_on(o, *a)
+    o.spec = None
+    monkeypatch.setattr("models.demos.common.bringup.core.gate.unit_states", lambda spec, led, tid: {})
     rec = {"tests": {"test_skip_positions": {"old": {"rc": 1}, "new": {"rc": 1}}}, "positions": {}}
     monkeypatch.setattr("models.demos.common.bringup.orchestrator.gate_limits", lambda task, tasks: {})
     got = Orchestrator.gate_on(o, {"id": "P.84"}, rec, Path("/nonexistent"))
@@ -261,6 +264,24 @@ def test_the_ab_says_fail_when_a_side_of_its_test_failed(monkeypatch):
     rec["tests"]["test_skip_positions"]["new"]["rc"] = 0
     rec["positions"]["p145408"] = {"new": {"rc": 0}}
     assert Orchestrator.gate_on(o, {"id": "P.84"}, rec, Path("/nonexistent"))["ok"]
+
+
+def test_the_ab_says_fail_when_a_gate_unit_of_the_task_failed(monkeypatch):
+    """F293 (PB.7): the quick A/B side passed, but the agent's own gate run had test_glued_oracle FAIL; the answer
+    'would the gate pass' must say no and name the unit."""
+    from types import SimpleNamespace
+
+    from models.demos.common.bringup.orchestrator import Orchestrator
+
+    o = SimpleNamespace(spec=None, led=None, _gate_on=lambda *a: {"ok": True, "failing": [], "partial": True})
+    monkeypatch.setattr(
+        "models.demos.common.bringup.core.gate.unit_states",
+        lambda spec, led, tid: {"PB.7#test_glued_oracle": "FAIL", "PB.7#test_packed_oracle": "PASS"},
+    )
+    got = Orchestrator.gate_on(o, {"id": "PB.7"}, {}, Path("/nonexistent"))
+    assert not got["ok"] and got["failing"] == ["PB.7#test_glued_oracle: FAIL in the task's last gate run"]
+    monkeypatch.setattr("models.demos.common.bringup.core.gate.unit_states", lambda spec, led, tid: {"u": "PASS"})
+    assert Orchestrator.gate_on(o, {"id": "PB.7"}, {}, Path("/nonexistent"))["ok"]
 
 
 def test_task_accounting_counts_safe_runner_processes_and_runner_restarts(tmp_path):
@@ -367,3 +388,29 @@ def test_a_plans_model_is_loaded_for_its_furthest_declared_position(tmp_path, mo
         {"env": {"SKIP_POS": "145408,1024000,2000000"}, "args": ["models/x/tests/test_pts.py"]},  # (past deploy)
     ]
     assert B.hints(runs, spec)[B.MAX_SEQ_ENV] == str(1024000 + 5120)
+
+
+def test_a_plans_model_is_loaded_for_a_declared_max_seq(tmp_path, monkeypatch):
+    """PB.T: a test declaring BATCH_MAX_SEQ gets a load covering it (a test without position variables too), never past
+    deploy.seq; a plan without such a test gets no hint from it."""
+    from types import SimpleNamespace
+
+    for name, body in (
+        ("test_iso.py", "BATCH_SHARED = True\nBATCH_MAX_SEQ = 114688\n"),
+        ("test_plain.py", "BATCH_SHARED = True\n"),
+    ):
+        t = tmp_path / "models/x/tests" / name
+        t.parent.mkdir(parents=True, exist_ok=True)
+        t.write_text(body)
+    monkeypatch.setattr(B, "_REPO", tmp_path)
+    spec = SimpleNamespace(
+        get=lambda k, d=None: {"target.chunk": 8192, "target.seq": 56320, "deploy.seq": 1044480}.get(k, d)
+    )
+    iso = {"env": {}, "args": ["models/x/tests/test_iso.py"]}
+    plain = {"env": {}, "args": ["models/x/tests/test_plain.py"]}
+    assert B.declared_max_seq("models/x/tests/test_iso.py") == 114688
+    assert B.hints([plain, iso], spec)[B.MAX_SEQ_ENV] == "114688"
+    assert B.hints([iso], spec)[B.MAX_SEQ_ENV] == "114688"
+    assert B.hints([plain, plain], spec)[B.MAX_SEQ_ENV] == "56320"
+    small = SimpleNamespace(get=lambda k, d=None: {"target.chunk": 8192, "deploy.seq": 65536}.get(k, d))
+    assert B.MAX_SEQ_ENV not in B.hints([iso], small)

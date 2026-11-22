@@ -36,3 +36,17 @@ fork_op.py markers (a new op, not a fork), as on Marko's branch.
   generic_op). The option-off regression (tests/test_prepared_program.py) has only 2x2 cases: skipped on the 8x4
   Galaxy (2 skipped, as before); the option-off users (fabric_reduce_scatter prepared, TailA2A prepared) run in the
   model's ladder.
+
+### common value slots (2026-11-21)
+- What: `prepare_program(desc, io, value_slots=[(kernel, 1 << 31 | i)])`: a runtime-arg index with bit 31 set names
+  COMMON runtime arg i of that kernel as a per-run value (ValueSlot.common; Prepared.cval): written once a program
+  (create_descriptor / override_runtime_arguments: GetCommonRuntimeArgs), never matched to an io address, a marker in
+  the cache key instead of its value. Per-core value slots and a prepare without common slots: unchanged (the same
+  cache key and patches).
+- Why: deepseek_v41_flash_d_p PB.9X: a whole-grid program whose per-run values are the same on every core
+  (ttnn.bringup.unpack_fp8_rows) paid one patch a core a chip (~0.33 ms of host a call on the 8x4).
+- Tests: ../fp8_rows_ttnn/tests/unit/test_unpack_fp8_rows.py::test_unpack_fp8_rows_common_values (a caller's bytes
+  equal to the per-core form); this op has no unit tests of its own (README).
+- Needed by: deepseek_v41_flash_d_p PB.9X (ttnn.bringup.unpack_fp8_rows common_values)
+- Files: prepared_program.hpp, prepared_program.cpp, device/prepared_program_device_operation.cpp,
+  prepared_program_nanobind.cpp, README.md

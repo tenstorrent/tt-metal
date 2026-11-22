@@ -1,0 +1,654 @@
+{
+ "metrics": {
+  "determinism_chunk_max_abs_diff_code": {
+   "t": "2026-11-21T07:12:39",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunk_max_abs_diff_novel": {
+   "t": "2026-11-21T07:12:39",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunks": {
+   "t": "2026-11-21T07:12:39",
+   "value": 4
+  },
+  "determinism_elements_differ": {
+   "t": "2026-11-21T07:12:39",
+   "value": 0
+  },
+  "determinism_max_abs_diff": {
+   "t": "2026-11-21T07:12:39",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_code": {
+   "t": "2026-11-21T07:12:39",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_novel": {
+   "t": "2026-11-21T07:12:39",
+   "value": 0.0
+  },
+  "determinism_rows_code": {
+   "t": "2026-11-21T07:12:39",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_rows_novel": {
+   "t": "2026-11-21T07:12:39",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_runs": {
+   "t": "2026-11-21T07:12:39",
+   "value": 3
+  },
+  "determinism_s": {
+   "t": "2026-11-21T07:12:39",
+   "value": 91.4
+  },
+  "determinism_state_max_abs_diff": {
+   "t": "2026-11-21T07:12:39",
+   "value": 0.0
+  },
+  "gate_model_loads": {
+   "t": "2026-11-21T07:12:45",
+   "value": 2
+  },
+  "ids_uploads_per_chunk": {
+   "t": "2026-11-21T07:16:06",
+   "value": 0.0
+  },
+  "ids_uploads_per_chunk_tagentic_cc": {
+   "t": "2026-11-21T07:16:06",
+   "value": 0.0
+  },
+  "model_loads": {
+   "by": "run0",
+   "ns": 1795245066594473105,
+   "pid": 1194677,
+   "t": "2026-11-21T07:11:06",
+   "total": 1,
+   "value": 1
+  },
+  "model_loads_tagentic_cc": {
+   "by": "run0",
+   "ns": 1795245321418671411,
+   "pid": 1209233,
+   "t": "2026-11-21T07:15:21",
+   "total": 2,
+   "value": 1
+  },
+  "model_shared": {
+   "t": "2026-11-21T07:11:06",
+   "value": 0
+  },
+  "model_shared_tagentic_cc": {
+   "t": "2026-11-21T07:15:21",
+   "value": 0
+  },
+  "no_rebuild_cache_entries_tagentic_cc": {
+   "t": "2026-11-21T07:16:06",
+   "value": 0
+  },
+  "no_rebuild_chunks_tagentic_cc": {
+   "t": "2026-11-21T07:16:06",
+   "value": 16
+  },
+  "no_rebuild_on_off_max_abs_diff_tagentic_cc": {
+   "t": "2026-11-21T07:16:08",
+   "value": 0.0
+  },
+  "no_rebuild_pass_glued4x2k": {
+   "t": "2026-11-21T07:07:42",
+   "value": 0
+  },
+  "no_rebuild_pass_glued4x2k_tagentic_cc": {
+   "t": "2026-11-21T07:07:42",
+   "value": 0
+  },
+  "no_rebuild_pass_glued5x1600": {
+   "t": "2026-11-21T07:07:43",
+   "value": 0
+  },
+  "no_rebuild_pass_glued5x1600_tagentic_cc": {
+   "t": "2026-11-21T07:07:43",
+   "value": 0
+  },
+  "no_rebuild_pass_lanes4x2k": {
+   "t": "2026-11-21T07:07:45",
+   "value": 0
+  },
+  "no_rebuild_pass_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T07:07:45",
+   "value": 0
+  },
+  "no_rebuild_pass_single5120": {
+   "t": "2026-11-21T07:16:06",
+   "value": 1
+  },
+  "no_rebuild_pass_single5120_tagentic_cc": {
+   "t": "2026-11-21T07:16:06",
+   "value": 1
+  },
+  "no_rebuild_pass_single8192": {
+   "t": "2026-11-21T07:07:40",
+   "value": 1
+  },
+  "no_rebuild_pass_single8192_tagentic_cc": {
+   "t": "2026-11-21T07:07:40",
+   "value": 1
+  },
+  "no_rebuild_prepares_tagentic_cc": {
+   "t": "2026-11-21T07:16:06",
+   "value": 0
+  },
+  "no_rebuild_probe_glued4x2k_tagentic_cc": {
+   "t": "2026-11-21T07:07:42",
+   "value": [
+    "slice x5 [slice_end, slice_start, (first call at this site); slice_end: [2] 2048 -> 8192] @ packed_device.py:213:_rows",
+    "concat x3 [tensors, (first call at this site); tensors: (('T', (1, 1, 6144, 5120), 'DataType.BFLOAT16... -> (('T', (1, 1, 4096, 5120), 'DataType.BFLOAT16...] @ packed_device.py:224:to_row0",
+    "bringup.run_prepared x1 [arg0, arg1, arg2; arg0: [1] 7686910066105126854 -> -8162735995344135386] @ packed_glued.py:822:__call__",
+    "experimental.high_bw_all_gather x1 [(first call at this site)] @ ccl.py:272:all_gather",
+    "experimental.high_bw_all_gather x1 [(first call at this site)] @ ccl.py:272:all_gather",
+    "slice x1 [(first call at this site)] @ packed_device.py:213:_rows",
+    "mesh_partition x1 [(first call at this site)] @ packed_device.py:132:partition",
+    "mesh_partition x1 [(first call at this site)] @ packed_device.py:133:partition",
+    "concat x1 [(first call at this site)] @ packed_device.py:258:assemble",
+    "prepare_program x1 (1 ms) @ packed_glued.py:805:__call__"
+   ]
+  },
+  "no_rebuild_probe_glued5x1600_tagentic_cc": {
+   "t": "2026-11-21T07:07:43",
+   "value": [
+    "slice x7 [slice_end, slice_start, (first call at this site); slice_end: [2] 1600 -> 8192] @ packed_device.py:213:_rows",
+    "concat x4 [tensors, (first call at this site); tensors: (('T', (1, 1, 6592, 5120), 'DataType.BFLOAT16... -> (('T', (1, 1, 4992, 5120), 'DataType.BFLOAT16...] @ packed_device.py:224:to_row0",
+    "slice x1 [(first call at this site)] @ packed_device.py:213:_rows",
+    "concat x1 [(first call at this site)] @ packed_device.py:258:assemble"
+   ]
+  },
+  "no_rebuild_probe_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T07:07:45",
+   "value": [
+    "slice x45 [slice_end, slice_start, (first call at this site); slice_end: [0] 37 -> 58, [2] 3840 -> 512] @ served.py:162:slice_rows",
+    "slice x33 [slice_end, slice_start, (first call at this site); slice_end: [0] 43 -> 58, [2] 6144 -> 2048] @ served.py:162:slice_rows",
+    "slice x23 [slice_end, slice_start, (first call at this site); slice_end: [0] 7421 -> 627] @ served.py:218:_pick",
+    "slice x16 [slice_end, slice_start, (first call at this site); slice_end: [0] 7357 -> 563] @ served.py:218:_pick",
+    "slice x13 [slice_end, slice_start, (first call at this site); slice_end: [2] 3840 -> 512] @ history_gather.py:407:_tail_part",
+    "slice x6 [input, slice_end, slice_start, (first call at this site); input: tensor shape (1, 1, 4096, 512) -> (1, 1, 4096, 128)] @ packed_onecall.py:897:_roll",
+    "slice x6 [input, slice_end, (first call at this site); input: tensor shape (1, 1, 4096, 512) -> (1, 1, 4096, 128)] @ packed_onecall.py:898:_roll",
+    "concat x6 [tensors, (first call at this site); tensors: (('T', (1, 1, 3072, 512), 'DataType.BFLOAT16'... -> (('T', (1, 1, 3072, 128), 'DataType.BFLOAT16'...] @ packed_onecall.py:899:_roll",
+    "slice x6 [input, slice_end, slice_start, (first call at this site); input: tensor shape (1, 1, 8192, 512) -> (1, 1, 8192, 128)] @ packed_onecall.py:897:_roll",
+    "slice x6 [input, slice_end, (first call at this site); input: tensor shape (1, 1, 8192, 512) -> (1, 1, 8192, 128)] @ packed_onecall.py:898:_roll",
+    "concat x6 [tensors, (first call at this site); tensors: (('T', (1, 1, 6144, 512), 'DataType.BFLOAT16'... -> (('T', (1, 1, 6144, 128), 'DataType.BFLOAT16'...] @ packed_onecall.py:899:_roll",
+    "bringup.run_prepared x4 [arg0, arg2, (first call at this site); arg0: [1] -2627234378702964152 -> 4454402054410681643] @ snapshot_send.py:761:__call__",
+    "slice x4 [slice_end, slice_start, (first call at this site); slice_end: [2] 256 -> 512] @ history_gather.py:680:tails_finish",
+    "slice x4 [input, slice_end, (first call at this site), slice_start; input: tensor shape (1, 1, 4096, 512) -> (1, 1, 4096, 128)] @ compressor.py:1298:_write_from",
+    "slice x4 [input, slice_end, (first call at this site); input: tensor shape (1, 1, 4096, 512) -> (1, 1, 4096, 128)] @ compressor.py:1299:_write_from",
+    "concat x4 [tensors, (first call at this site); tensors: (('T', (1, 1, 4032, 512), 'DataType.BFLOAT16'... -> (('T', (1, 1, 4032, 128), 'DataType.BFLOAT16'...] @ compressor.py:1300:_write_from",
+    "slice x4 [slice_end, slice_start, (first call at this site); slice_end: [2] 255 -> 55] @ attention.py:488:srv_row",
+    "bringup.run_prepared x3 [arg0, arg1, (first call at this site); arg0: [1] 2142924582374479311 -> -5838622260948827488] @ history_gather.py:332:_pack",
+    "bringup.run_prepared x2 [(first call at this site), arg0, arg1, arg2; arg0: [1] 9154430860263435779 -> 5848166008956159760] @ packed_onecall.py:741:__call__",
+    "bringup.run_prepared x2 [(first call at this site), arg0, arg2; arg0: [1] -5628715943004570655 -> -674360988587294868] @ index_keys.py:130:_decode",
+    "prepare_program x4 (0 ms) @ snapshot_send.py:753:__call__",
+    "prepare_program x3 (0 ms) @ history_gather.py:332:_pack",
+    "prepare_program x2 (1 ms) @ packed_onecall.py:726:__call__",
+    "prepare_program x2 (0 ms) @ index_keys.py:130:_decode"
+   ]
+  },
+  "no_rebuild_probe_tagentic_cc": {
+   "t": "2026-11-21T07:16:06",
+   "value": []
+  },
+  "no_rebuild_rows_glued4x2k_tagentic_cc": {
+   "t": "2026-11-21T07:07:42",
+   "value": [
+    {
+     "builds": 1,
+     "histories": [
+      385728,
+      435200,
+      273920,
+      19008
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 1,
+     "slots": [
+      18,
+      12,
+      16,
+      17
+     ]
+    },
+    {
+     "builds": 14,
+     "histories": [
+      185024,
+      54656,
+      111936,
+      296768
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      11,
+      14,
+      19,
+      18
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      70336,
+      638592,
+      244800,
+      20160
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      15,
+      11,
+      16,
+      19
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_glued5x1600_tagentic_cc": {
+   "t": "2026-11-21T07:07:43",
+   "value": [
+    {
+     "builds": 0,
+     "histories": [
+      222080,
+      364864,
+      129600,
+      8896,
+      704960
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      18,
+      19,
+      16,
+      11,
+      13
+     ]
+    },
+    {
+     "builds": 13,
+     "histories": [
+      460992,
+      306048,
+      46528,
+      74560,
+      872576
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      16,
+      13,
+      18,
+      11,
+      15
+     ]
+    },
+    {
+     "builds": 0,
+     "histories": [
+      233728,
+      46848,
+      825408,
+      52032,
+      290304
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      13,
+      12,
+      18,
+      16,
+      19
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T07:07:45",
+   "value": [
+    {
+     "builds": 63,
+     "histories": [
+      237440,
+      20032,
+      286080,
+      24128
+     ],
+     "ids_uploads": 10,
+     "kind": "steady",
+     "prepared": 15,
+     "slots": [
+      12,
+      19,
+      14,
+      13
+     ]
+    },
+    {
+     "builds": 98,
+     "histories": [
+      114496,
+      329280,
+      76992,
+      80704
+     ],
+     "ids_uploads": 6,
+     "kind": "resumed",
+     "prepared": 0,
+     "slots": [
+      17,
+      15,
+      11,
+      13
+     ]
+    },
+    {
+     "builds": 48,
+     "histories": [
+      90880,
+      214400,
+      32704,
+      299648
+     ],
+     "ids_uploads": 10,
+     "kind": "steady",
+     "prepared": 0,
+     "slots": [
+      16,
+      13,
+      15,
+      17
+     ]
+    }
+   ]
+  },
+  "no_rebuild_rows_tagentic_cc": {
+   "t": "2026-11-21T07:16:06",
+   "value": [
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       97280,
+       102400,
+       null
+      ],
+      [
+       102400,
+       107520,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "aligned",
+     "prepared": 0,
+     "slot": 1
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       23232,
+       28352,
+       null
+      ],
+      [
+       28352,
+       33472,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slot": 2
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       528768,
+       533888,
+       null
+      ],
+      [
+       533888,
+       539008,
+       534016
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "resumed",
+     "prepared": 0,
+     "slot": 3
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       264384,
+       269504,
+       null
+      ],
+      [
+       269504,
+       269604,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "partial",
+     "prepared": 0,
+     "slot": 4
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       114432,
+       119552,
+       null
+      ],
+      [
+       116736,
+       121843,
+       119552
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "pulled",
+     "prepared": 0,
+     "slot": 5
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       82560,
+       87680,
+       null
+      ],
+      [
+       87680,
+       87700,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "acks_only",
+     "prepared": 0,
+     "slot": 6
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       223552,
+       228672,
+       null
+      ],
+      [
+       228672,
+       233792,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "steady",
+     "prepared": 0,
+     "slot": 7
+    },
+    {
+     "builds": 0,
+     "chunks": [
+      [
+       9408,
+       14528,
+       null
+      ],
+      [
+       14528,
+       19276,
+       null
+      ]
+     ],
+     "ids_uploads": 0,
+     "kind": "partial",
+     "prepared": 0,
+     "slot": 8
+    }
+   ]
+  },
+  "packed_ids_uploads_glued4x2k_tagentic_cc": {
+   "t": "2026-11-21T07:07:42",
+   "value": 0.0
+  },
+  "packed_ids_uploads_glued5x1600_tagentic_cc": {
+   "t": "2026-11-21T07:07:43",
+   "value": 0.0
+  },
+  "packed_ids_uploads_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T07:07:45",
+   "value": 4.333
+  },
+  "program_builds_after_warmup_glued4x2k": {
+   "t": "2026-11-21T07:07:42",
+   "value": 16
+  },
+  "program_builds_after_warmup_glued4x2k_tagentic_cc": {
+   "t": "2026-11-21T07:07:42",
+   "value": 16
+  },
+  "program_builds_after_warmup_glued5x1600": {
+   "t": "2026-11-21T07:07:43",
+   "value": 13
+  },
+  "program_builds_after_warmup_glued5x1600_tagentic_cc": {
+   "t": "2026-11-21T07:07:43",
+   "value": 13
+  },
+  "program_builds_after_warmup_lanes4x2k": {
+   "t": "2026-11-21T07:07:45",
+   "value": 224
+  },
+  "program_builds_after_warmup_lanes4x2k_tagentic_cc": {
+   "t": "2026-11-21T07:07:45",
+   "value": 224
+  },
+  "program_builds_after_warmup_serving": {
+   "t": "2026-11-21T07:16:06",
+   "value": 0
+  },
+  "program_builds_after_warmup_serving_tagentic_cc": {
+   "t": "2026-11-21T07:16:06",
+   "value": 0
+  },
+  "program_builds_after_warmup_single5120": {
+   "t": "2026-11-21T07:16:06",
+   "value": 0
+  },
+  "program_builds_after_warmup_single5120_tagentic_cc": {
+   "t": "2026-11-21T07:16:06",
+   "value": 0
+  },
+  "program_builds_after_warmup_single8192": {
+   "t": "2026-11-21T07:07:40",
+   "value": 0
+  },
+  "program_builds_after_warmup_single8192_tagentic_cc": {
+   "t": "2026-11-21T07:07:40",
+   "value": 0
+  },
+  "resident_first_chunk_s": {
+   "t": "2026-11-21T07:12:40",
+   "value": 157.7
+  },
+  "resident_first_chunk_s_tagentic_cc": {
+   "t": "2026-11-21T07:16:09",
+   "value": 100.72
+  },
+  "resident_model_loaded": {
+   "t": "2026-11-21T07:12:40",
+   "value": 1
+  },
+  "resident_model_loaded_tagentic_cc": {
+   "t": "2026-11-21T07:16:09",
+   "value": 1
+  },
+  "resident_model_s": {
+   "t": "2026-11-21T07:12:40",
+   "value": 156.6
+  },
+  "resident_model_s_tagentic_cc": {
+   "t": "2026-11-21T07:16:09",
+   "value": 99.6
+  },
+  "resident_request_first_chunk_s": {
+   "t": "2026-11-21T07:12:40",
+   "value": 157.86
+  },
+  "resident_request_first_chunk_s_tagentic_cc": {
+   "t": "2026-11-21T07:16:09",
+   "value": 100.87
+  }
+ },
+ "task": "PB.NR"
+}

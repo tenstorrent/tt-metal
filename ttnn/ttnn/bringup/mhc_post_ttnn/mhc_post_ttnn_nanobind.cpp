@@ -133,6 +133,10 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
                 column at a time; each W block read from DRAM once and shared through L1 when every core has one
                 unit; cheaper coefficient / transpose copies). Not bit-identical: the sum of squares (stats column
                 n (n + 2), so the hc) is summed in another fp32 order.
+            v2 (bool, optional; default False = off; deepseek_v41_flash_d_p PB.8, MHC_POST_V2): needs fast. The feed's
+                other-chip y tiles land straight in the port cores' L1 (no DRAM staging) when the landing fits; with
+                one unit a core a W block's cores sit in one grid column and share W by NoC multicast; a root's hc
+                transposes run on its SFPU. Bit-identical to fast.
 
         Returns:
             ttnn.Tensor: X' (..., T, n*C), the residual's dtype, TILE, DRAM interleaved; with stats_weight the tuple
@@ -168,7 +172,8 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
         nb::arg("feed_semaphores") = nb::none(),
         nb::arg("feed_num_links") = 1,
         nb::arg("feed_cluster_axis") = 1,
-        nb::arg("fast") = false);
+        nb::arg("fast") = false,
+        nb::arg("v2") = false);
 
     mod.def(
         "_mhc_post_ttnn_program_descriptor",

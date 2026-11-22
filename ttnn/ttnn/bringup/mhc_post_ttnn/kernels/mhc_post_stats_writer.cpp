@@ -257,6 +257,58 @@ void kernel_main() {
     const uint32_t me = ftab.me;
     const uint32_t feed_arg0 = root_arg0 + count;  // per unit: its feed word
     const uint32_t sem_feed = get_semaphore(sem_feed_id);
+#ifdef MHC_POST_LAND
+    // PB.8 (v2): the other chips' tiles go straight into the ports' landing (cb_feed there, one slot of P tiles a
+    // packet, in the order the port's sender walks them: mhc_post_feed_common.hpp); its address from port 0's landing
+    // word (written by its reader at its start; 0 until then at every launch), asked once
+    constexpr uint32_t lx0 = f_args.next_compile_time_args_offset();
+    constexpr uint32_t P = get_compile_time_arg_val(lx0);
+    constexpr uint32_t sem_land_id = get_compile_time_arg_val(lx0 + 1);
+    constexpr uint32_t land_slots = get_compile_time_arg_val(lx0 + 2);  // the flag page follows the packet slots
+    uint32_t land = 0;
+    auto land_base = [&]() -> uint32_t {
+        volatile tt_l1_ptr uint32_t* word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_land_id));
+        const uint32_t xy = ftab.port_xy(0);
+        const uint64_t src = get_noc_addr(xy >> 16, xy & 0xFFFFu, get_semaphore(sem_land_id));
+        for (uint32_t tries = 0; tries < (1u << 22) && land == 0; ++tries) {  // (bounded: the port starts with us)
+            noc_async_read(src, reinterpret_cast<uint32_t>(word), 4);
+            noc_async_read_barrier();
+            land = *word;
+        }
+        return land;
+    };
+    // unit u's stream on target t: the port, the slots of the port's earlier targets, the stream's tiles, the index of
+    // the unit's first tile in it, and the unit's first column in block t
+    struct Stream {
+        uint32_t xy, base, n, i0, c0, ord;  // ord: the unit's flag word on the port (its place in the port's units)
+    };
+    auto stream_of = [&](uint32_t u, uint32_t t) {
+        const uint32_t links = ftab.L, lo = ftab.u_lo(t), l = (u - lo) % links, d = ftab.side(me, t);
+        Stream st;
+        st.xy = ftab.port_xy(d * links + l);
+        st.base = 0;
+        st.ord = (u - lo - l) / links;
+        for (uint32_t t2 = 0; t2 < t; ++t2) {
+            if (t2 != me && ftab.side(me, t2) == d) {
+                st.base += mhc_feed::stream_packets(
+                    mhc_feed::count_tiles(t2, ftab.u_lo(t2), ftab.u_hi(t2), l, links, rt, bw, ct, cpt), P);
+                st.ord += mhc_feed::stream_units(ftab.u_lo(t2), ftab.u_hi(t2), l, links);
+            }
+        }
+        st.n = mhc_feed::count_tiles(t, lo, ftab.u_hi(t), l, links, rt, bw, ct, cpt);
+        const uint32_t k_lo = t * cpt, k_hi = k_lo + cpt;
+        st.i0 = 0;
+        for (uint32_t v = lo + l; v < u; v += links) {
+            const mhc_stats::Unit V = mhc_stats::unit_of(v, rt, bw, ct);
+            const uint32_t c0 = V.col0 < k_lo ? k_lo - V.col0 : 0;
+            const uint32_t c1 = V.col0 + V.valid > k_hi ? k_hi - V.col0 : V.valid;
+            st.i0 += c1 > c0 ? c1 - c0 : 0;
+        }
+        const mhc_stats::Unit U = mhc_stats::unit_of(u, rt, bw, ct);
+        st.c0 = U.col0 < k_lo ? k_lo - U.col0 : 0;
+        return st;
+    };
+#endif
 #endif
 
 #ifdef MHC_POST_FAST
@@ -415,6 +467,13 @@ void kernel_main() {
     auto hc_out = [&](uint32_t r) {
         cb_wait_front(cb_hsoa_out, 1);
         MaybeDeviceZoneScope("wr_hc");
+#ifdef MHC_POST_HCT
+        // PB.8 (v2): the compute's hc tile is row-major already (columns n (n + 2).. zero): straight to hc page r
+        noc_async_write_page(r, hc_acc, get_read_ptr(cb_hsoa_out));
+        noc_async_writes_flushed();
+        cb_pop_front(cb_hsoa_out, 1);
+        return;
+#endif
         noc_async_write_barrier();  // the previous row's hc write has left the stage
 #ifdef MHC_POST_FAST
         soa_to_cols_fast<hc_cols>(
@@ -431,7 +490,7 @@ void kernel_main() {
         cb_wait_front(cb_fin, 1);
         MaybeDeviceZoneScope("wr_fin");
         noc_async_write_page(r, st_acc, get_read_ptr(cb_fin));
-#ifdef MHC_POST_COLLAPSE
+#if defined(MHC_POST_COLLAPSE) && !defined(MHC_POST_HCT)  // (PB.8 HCT: the compute transposes the row itself)
         cb_reserve_back(cb_hsoa, 1);
 #ifdef MHC_POST_FAST  // P.83: the hc reads columns 0 .. n (n + 2) (the mixes and sum x^2) only
         cols_to_soa_fast<hc_cols + 1>(
@@ -457,11 +516,36 @@ void kernel_main() {
         cb_wait_front(cb_yn, bw);
         MaybeDeviceZoneScope("wr_yn");
         const uint32_t src = get_read_ptr(cb_yn);
+#ifdef MHC_POST_LAND
+        uint32_t st_t = 0xFFFFFFFFu;
+        Stream st{};
+        if (land == 0) {
+            land_base();
+        }
+#endif
         for (uint32_t c = 0; c < U.valid; ++c) {
 #ifdef MHC_POST_FEED
             const uint32_t k = U.col0 + c;
             if (k / cpt == me) {
                 noc_async_write_page((me * rt + U.r) * cpt + (k - me * cpt), f_acc, src + c * o_page);
+                continue;
+            }
+#endif
+#ifdef MHC_POST_LAND
+            {
+                const uint32_t t = k / cpt;
+                if (t != st_t) {
+                    st = stream_of(u, t);
+                    st_t = t;
+                }
+                const mhc_feed::SlotPos sp = mhc_feed::stream_pos(st.i0 + (c - st.c0), st.n, P);
+                if (land != 0) {
+                    noc_async_write(
+                        src + c * o_page,
+                        get_noc_addr(
+                            st.xy >> 16, st.xy & 0xFFFFu, land + ((st.base + sp.packet) * P + sp.offset) * o_page),
+                        o_page);
+                }
                 continue;
             }
 #endif
@@ -482,6 +566,16 @@ void kernel_main() {
                 noc_async_write_barrier();  // the staged tiles have landed before the port reads them
                 fenced = true;
             }
+#ifdef MHC_POST_LAND
+            {  // PB.8: my flag on the port (its reader pushes the packets holding my tiles once it is set)
+                const Stream fs = stream_of(u, t);
+                if (land != 0) {
+                    noc_inline_dw_write(
+                        get_noc_addr(fs.xy >> 16, fs.xy & 0xFFFFu, land + land_slots * P * o_page + 4 * fs.ord), 1);
+                }
+                continue;
+            }
+#endif
             const uint32_t xy = ftab.port_xy(ftab.side(me, t) * ftab.L + l);
             noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFFu, sem_feed), 1);
         }

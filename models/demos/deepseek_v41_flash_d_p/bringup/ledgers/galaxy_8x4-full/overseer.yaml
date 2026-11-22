@@ -655,6 +655,114 @@ notes:
     position), and the one-ring indexer path is the one measured in every case incl. mixed. Keep the per-segment-ring fallback
     for unequal capacities (correct, tested), but it is not the serving path. If one capacity at 1M for 4 slots does not
     fit next to the model, record the DRAM numbers and use the largest capacity that fits for all 4 (say which).'
+- id: OV-63
+  tasks:
+  - PB.5C
+  status: open
+  t: '2026-11-20T08:00:20'
+  text: 'The overseer stopped attempt 2 (perf): Overseer: attempt 1 failed only on the path check for results/PB.5C_packed_walls.md,
+    which my brief told the walls test to write: my error. That file is now an allowed path. Your work in the tree stands;
+    do not redo passed runs: finish (fix DS41-335 test_dram AttributeError if not yet), run the gate''s walls once, exit.'
+- id: OV-64
+  tasks:
+  - PB.6L
+  status: open
+  t: '2026-11-20T11:01:42'
+  text: 'The overseer stopped attempt 2 (perf): Overseer: attempt 1 failed only on the path check for results/PB.6L_packed_walls.md,
+    which the walls test writes by design: a framework gap, fixed (F292: a task may write its own results/<task>_* files).
+    Your attempt-1 work and its gate run stand (every metric ok: 1M exposed 0.163, 4x2k 75.0k, mixed 65.7k). Do not redo
+    anything; exit.'
+- id: OV-65
+  tasks:
+  - PB.7
+  status: open
+  t: '2026-11-20T12:04:07'
+  text: 'OVERSEER 12:05 (DECIDED): DS41-339 is a real bit-exactness bug, not v2 work: a segment''s MoE-head shared-expert
+    reduce-scatter adds in an order that depends on its rows'' destination TP chip, so a glued segment off row 0 differs
+    from alone by 1 bf16 ulp at layer 0 and grows. Fix it in THIS task at the cause: an order-free shared-expert reduce
+    in the moe_head fork (as DS41-128 fixed tp_sum: column blocks / fp32 or int32-snap partials, behind the fork''s option
+    pattern), with an op-level regression test that reproduces it first (rows moved across TP chips give bit-identical rows).
+    It also changes the lane and single-request paths'' numerics: keep them deterministic and bit-identical between packed
+    and alone, the 8192 reference within limits (test_chunk8192_reference); the 5120 accept units run in PB.8''s gate. The
+    glued attention loop''s speed is NOT this task''s: v2 (per-row segment args, one call) is queued as PB.7B; correctness
+    of path (b) is enough here. Never loosen the oracle.'
+- id: OV-66
+  tasks:
+  - PB.7C
+  status: open
+  t: '2026-11-20T16:59:47'
+  text: 'The overseer stopped attempt 1 (perf): Overseer: started before PB.8''s reject was applied (PB.8''s uncommitted
+    mhc_post change was still in the tree). Stopped at once; PB.8 is reverted first. Start clean on the next attempt.'
+- id: OV-67
+  tasks:
+  - PB.7C
+  - PB.9*
+  - PB.T
+  status: open
+  t: '2026-11-20T19:34:05'
+  text: 'OWNER 2026-11-20 19:50 (binding, no shortcuts): NOTHING is built on the host per chunk beyond what tt-d-gen sends:
+    the token ids + the chunk descriptor (per segment: slot, start, length, write_start: a few ints), written in ONE upload.
+    Every other per-chunk table (window index lists, row positions, valid lengths, top-k lengths, MoE pad words, piece tables,
+    lane maps, served-write indices) is derived ON THE DEVICE from the descriptor by prepared programs. No per-descriptor
+    host caches standing in for this. Measure it: glued_new_layout_ms (host ms a new layout costs over a repeated one) <=
+    ~1 ms, reported per path; fresh-layout walls only.'
+- id: OV-68
+  tasks:
+  - PB.9F*
+  - PB.9X*
+  status: open
+  t: '2026-11-20T19:49:49'
+  text: 'Overseer audit 2026-11-20 (single-request 5120 path, HEAD code, read-only): programs BUILT in serving: adapter.compile()
+    warms only a full chunk at start 0 (runners/adapter.py:347-356). ttnn.slice hashes slice_start/end: (1) rope.py:439
+    RoPE cos/sin slice begin=start (via attention.py:1541, kv.py:80, indexer.py:344); (2) compressor.py:169 compressed-row
+    RoPE begin=start//r; (3) served.py:210/215 DeviceScalars.at slices k=start//32 and ceil(end/32) of a last chunk (ARBITRARY)
+    and slot (via compressor.py:718-720); (4) history_gather.py:323 -> served.py:155 slab.slice_rows begin [slot x layers
+    + row, start-derived] (slots x source layers x starts) and history_gather.py:355 ttnn.slice(rec,[0,0,h,0]); (5) compressor.py:1278-1280
+    replay offsets (write_start-start)/r (arbitrary); bounded: SnapshotSend owner patterns at last-chunk caps (snapshot_send.py:399-412,
+    ~160), unpack_fp8_rows ncores (fp8_rows.py, ~22), partial-chunk masks (attention.py:401-411, compressor.py:1170-1190:
+    first partial chunk), srv_row (attention.py:477-490), ring carry / pin slices. Already runtime (no build): update_padded_kv_cache,
+    ring_indexer_score_dsa start / kv_len, topk_large_indices valid_length, high_bw_all_gather. PB.9F / F5: measure these
+    (fresh starts AND fresh slots AND real partial last chunks AND a replay). PB.9X: make every one of them a runtime value
+    (prepared-program values / page copies / runtime-arg slices), and warm-up must be a finite enumerable set (no build
+    in serving).'
+- id: OV-69
+  tasks:
+  - PB.9X*
+  status: open
+  t: '2026-11-20T19:55:06'
+  text: 'OWNER 2026-11-20 20:20: no second upload of the token ids. Today the host reads the engine''s ids back (needed:
+    the engram hash, engrams stay on the host by owner decision) and then re-uploads them in natural order for the embedding
+    (model.py:2151 from_torch; adapter.py:247-260 server_rows reorder). Do the reorder ON THE DEVICE from the engine''s
+    input tensor (one prepared gather / page copy into natural order, positions from the descriptor), the embedding reads
+    that; the host keeps only the readback for the engram job. Applies to the single-request, lane and glued paths. Record
+    ids_uploads_per_chunk (== 0) next to the builds count; bit-identical.'
+- id: OV-70
+  tasks:
+  - PB.8RP
+  status: closed
+  t: '2026-11-21T05:04:09'
+  text: 'The overseer stopped attempt 1 (fix): gate failure was the one-load rule (F283) refusing test_packed_walls in a
+    shared process: a gate configuration issue (overseer), not the model; no agent work needed'
+  closed: '2026-11-21T05:04:56'
+  why_closed: abort reason only; no agent work needed
+- id: OV-71
+  tasks:
+  - PB.8RP
+  status: closed
+  t: '2026-11-21T05:05:03'
+  text: 'The overseer stopped attempt 2 (fix): duplicate: classified framework, resume runs the remaining units'
+  closed: '2026-11-21T05:05:13'
+  why_closed: abort reason only
+- id: OV-72
+  tasks:
+  - PB.9C
+  status: open
+  t: '2026-11-21T06:47:16'
+  text: 'tests/test_no_rebuild.py: the single-request check always asserts (0 builds). The packed paths (glued4x2k, glued5x1600,
+    lanes4x2k) RECORD no_rebuild_pass_<path> + program_builds_after_warmup_<path> and assert only when NO_REBUILD_PACKED_STRICT=1
+    (declare it in BATCH_ITEM_VARS; the glued fix task PB.9G, PB.T and PB.9H set it). The gate''s re-run showed glued5x1600
+    FAIL too (16 builds on glued4x2k incl. resumed rows) - report both glued paths as FAIL in packed_ladder_20261121.md
+    (only the single-request ladder counts today) and name each op that built. Change nothing else.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -1424,3 +1532,7 @@ classified:
     kind: framework
     why: ''
     t: '2026-11-18T21:54:34'
+  PB.8RP:
+    kind: framework
+    why: ''
+    t: '2026-11-21T05:05:14'

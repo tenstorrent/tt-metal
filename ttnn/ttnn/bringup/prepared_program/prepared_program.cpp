@@ -28,7 +28,8 @@ int Prepared::program_of(const ttnn::MeshCoordinate& coord) const {
 size_t Prepared::patch_count() const {
     size_t n = 0;
     for (size_t i = 0; i < rt.size(); ++i) {
-        n += rt[i].size() + crt[i].size() + cbs[i].size() + (i < val.size() ? val[i].size() : 0);
+        n += rt[i].size() + crt[i].size() + cbs[i].size() + (i < val.size() ? val[i].size() : 0) +
+             (i < cval.size() ? cval[i].size() : 0);
     }
     return n;
 }
@@ -46,7 +47,15 @@ std::shared_ptr<const Prepared> prepare(
     }
     auto value_slot_of = [&](uint32_t k, uint32_t i) -> int {
         for (const auto& v : value_slots) {
-            if (v.kernel == k && v.arg == i) {
+            if (!v.common && v.kernel == k && v.arg == i) {
+                return static_cast<int>(v.slot);
+            }
+        }
+        return -1;
+    };
+    auto common_slot_of = [&](uint32_t k, uint32_t i) -> int {
+        for (const auto& v : value_slots) {
+            if (v.common && v.kernel == k && v.arg == i) {
                 return static_cast<int>(v.slot);
             }
         }
@@ -89,6 +98,7 @@ std::shared_ptr<const Prepared> prepare(
     p->crt.resize(np);
     p->cbs.resize(np);
     p->val.resize(np);
+    p->cval.resize(np);
     for (size_t pi = 0; pi < np; ++pi) {
         const auto& pd = desc.mesh_programs[pi].second;
         for (uint32_t k = 0; k < pd.kernels.size(); ++k) {
@@ -117,6 +127,10 @@ std::shared_ptr<const Prepared> prepare(
                 }
             }
             for (uint32_t i = 0; i < kd.common_runtime_args.size(); ++i) {
+                if (const int s = common_slot_of(k, i); s >= 0) {  // (a common value slot: never an io address)
+                    p->cval[pi].push_back(CommonValPatch{.kernel = k, .arg = i, .slot = static_cast<uint32_t>(s)});
+                    continue;
+                }
                 const int j =
                     io_at(kd.common_runtime_args[i], [&] { return fmt::format("kernel {} common arg {}", k, i); });
                 if (j >= 0) {
@@ -186,6 +200,11 @@ std::shared_ptr<const Prepared> prepare(
                         break;
                     }
                 }
+                if (const int s = common_slot_of(k, i); s >= 0) {  // (its marker, never its value)
+                    ttsl::hash::hash_combine(h, 3u);
+                    ttsl::hash::hash_combine(h, static_cast<uint32_t>(s));
+                    continue;
+                }
                 slot(cp != nullptr, cp != nullptr ? cp->io : pd.kernels[k].common_runtime_args[i]);
             }
         }
@@ -207,6 +226,9 @@ std::shared_ptr<const Prepared> prepare(
         ttsl::hash::hash_combine(h, p->n_values);
         size_t nv = 0;
         for (const auto& v : p->val) {
+            nv += v.size();
+        }
+        for (const auto& v : p->cval) {
             nv += v.size();
         }
         TT_FATAL(nv > 0, "prepared_program: value_slots match no runtime arg");

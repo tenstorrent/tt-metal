@@ -63,7 +63,11 @@ def boundary_rows(model, h, desc, lane: int, n: int) -> torch.Tensor:
     """A layer boundary (DevH) -> lane ``lane``'s first ``n`` rows as the reference packs them [n, 4H + 4] (the
     streams, then the 4 used columns of the pre: TtDS41Model.to_host)."""
     from models.demos.deepseek_v41_flash_d_p.tt.layout import HC
+    from models.demos.deepseek_v41_flash_d_p.tt.packed_device import as_run_desc, seg_index
 
+    rd = as_run_desc(desc, model.mesh)
+    if getattr(rd, "glued", False):  # PB.9G: the chunk ran as its glued chunk (chip-aligned lanes): the segment's rows
+        return glued_boundary_rows(model, h, rd.lane_off(seg_index(desc, lane)), n)
     return torch.cat([lane_rows(model, h.streams, desc, lane, n), lane_rows(model, h.pre, desc, lane, n, HC)], dim=-1)
 
 
@@ -113,3 +117,28 @@ def served_digests(state, layers, length: int) -> dict:
         if getattr(c, "snap", None) is not None:  # (WINDOW_KV_KEEP=snapshot128: the served 128-row snapshot)
             out[(i, "snapshot")] = digest(torch.cat([x.reshape(-1) for x in c.snapshot_host()]))
     return out
+
+
+# ---------------------------------------------------------------------------------------------- PB.7 glued chunks
+def glued(value: str):
+    """PACKED_GLUED=value for the calls inside (switch)."""
+    return switch("PACKED_GLUED", value)
+
+
+def model_rows(model, t, off: int, n: int, width: int | None = None) -> torch.Tensor:
+    """Model rows [off, off + n) of an OWN_ROWS tensor (each chip its own rows [q R, (q + 1) R), chip-linear) -> host
+    float32 [n, width] (only the chips holding them are read)."""
+    dev = ttnn.get_device_tensors(t)
+    w = t.shape[-1]
+    per = int(t.shape[-2])
+    q0, q1 = off // per, max(off // per, (off + n - 1) // per)
+    parts = [ttnn.to_torch(dev[q]).reshape(-1, w) for q in range(q0, q1 + 1)]
+    out = torch.cat(parts, dim=0)[off - q0 * per : off - q0 * per + n].float()
+    return out if width is None else out[:, :width]
+
+
+def glued_boundary_rows(model, h, off: int, n: int) -> torch.Tensor:
+    """boundary_rows for a glued chunk's segment at model rows [off, off + n)."""
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import HC
+
+    return torch.cat([model_rows(model, h.streams, off, n), model_rows(model, h.pre, off, n, HC)], dim=-1)

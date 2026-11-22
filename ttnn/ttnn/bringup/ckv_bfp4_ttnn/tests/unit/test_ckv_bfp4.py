@@ -265,3 +265,27 @@ def test_ckv_bfp4_compact_rounded(device, n, prepared):
     if prepared:
         mod = importlib.import_module("ttnn.bringup.ckv_bfp4_ttnn.ckv_bfp4")
         assert list(mod._PREPARED.values())[-1][1] is not None, "the program could not be prepared (patch count)"
+
+
+@pytest.mark.parametrize("n", [320, 1024])
+def test_ckv_bfp4_dynamic_row0(device, n):
+    """Option dynamic_row0 (prepared + compact, row0 a common value slot; deepseek_v41_flash_d_p PB.9X): the same
+    records as the default prepared path at several row0 values, rows outside untouched, one program for every row0."""
+    rows_n = 4096
+    shape = [1, 1, rows_n, 320]
+
+    def table():
+        return ttnn.from_torch(torch.full(shape, FILL, dtype=torch.uint8), dtype=ttnn.uint8, device=device)
+
+    mod = importlib.import_module("ttnn.bringup.ckv_bfp4_ttnn.ckv_bfp4")
+    before = len(mod._PREPARED)
+    for k, row0 in enumerate((0, 32, 1056, rows_n - n)):
+        x = _inputs(n, 5 * n + row0)
+        ckv = ttnn.from_torch(x.reshape(1, 1, -1, 512), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        a, b = table(), table()
+        ttnn.bringup.ckv_bfp4(ckv, a, row0, prepared=True)
+        ttnn.bringup.ckv_bfp4(ckv, b, row0, prepared=True, compact=True, dynamic_row0=True)
+        ga, gb = (ttnn.to_torch(t).view(torch.uint8).reshape(-1, 320) for t in (a, b))
+        assert torch.equal(ga, gb), f"row0 {row0}: dynamic_row0 != the default prepared path"
+        assert (gb[:row0] == FILL).all() and (gb[row0 + n :] == FILL).all(), "rows outside written"
+    assert len(mod._PREPARED) - before == 2, "one default and one dynamic_row0 program for every row0"

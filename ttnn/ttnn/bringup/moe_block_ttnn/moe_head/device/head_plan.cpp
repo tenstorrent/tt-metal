@@ -434,7 +434,8 @@ HeadSized head_size(const HeadShape& shape, const HeadLayout& layout, int64_t ar
             shape.reduce_scatter_dim(),
             shape.links,
             kDestTiles / layout.row_tiles_per_core,
-            layout.compact_reduce_scatter_zones);
+            layout.compact_reduce_scatter_zones,
+            shape.scatter_columns);
         SharedExpertArgs sizing_args;
         sizing_args.rows = shape.rows;
         sizing_args.hidden_dim = shape.hidden_dim;

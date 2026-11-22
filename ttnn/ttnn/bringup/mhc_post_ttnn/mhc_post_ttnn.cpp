@@ -263,7 +263,8 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
     const std::optional<std::vector<uint32_t>>& feed_semaphores,
     int64_t feed_num_links,
     int64_t feed_cluster_axis,
-    bool fast) {
+    bool fast,
+    bool v2) {
     // the stats_weight checks first (the same refusals), then the collapse's own
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     check_supported(input_tensor, residual, cfg);
@@ -387,7 +388,8 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> mhc_post_with_collapse(
         .feed_semaphores = feed_semaphores.value_or(std::vector<uint32_t>{}),
         .feed_links = static_cast<uint32_t>(feed_num_links),
         .feed_axis = static_cast<uint32_t>(feed_cluster_axis),
-        .fast = fast};
+        .fast = fast,
+        .v2 = v2};
     auto out = ttnn::prim::bringup::mhc_post_stats(
         input_tensor,
         residual,
@@ -435,7 +437,8 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>, std::tuple<Tensor, Tensor, Tens
     const std::optional<std::vector<uint32_t>>& feed_semaphores,
     int64_t feed_num_links,
     int64_t feed_cluster_axis,
-    bool fast) {
+    bool fast,
+    bool v2) {
     if (collapse_pre.has_value()) {  // P.34
         if (!stats_weight.has_value() || !hc_scale.has_value() || !hc_base.has_value()) {
             throw ValueErrorCpp("mhc_post: collapse_pre needs stats_weight, hc_scale and hc_base");
@@ -469,12 +472,14 @@ std::variant<Tensor, std::tuple<Tensor, Tensor>, std::tuple<Tensor, Tensor, Tens
             feed_semaphores,
             feed_num_links,
             feed_cluster_axis,
-            fast);
+            fast,
+            v2);
     }
     if (hc_output.has_value() || y_output.has_value() || hc_scale.has_value() || hc_base.has_value() ||
-        norm_weight.has_value() || feed_output.has_value() || fast) {
+        norm_weight.has_value() || feed_output.has_value() || fast || v2) {
         throw ValueErrorCpp(
-            "mhc_post: hc_scale / hc_base / hc_output / y_output / norm_weight / feed_output / fast need collapse_pre");
+            "mhc_post: hc_scale / hc_base / hc_output / y_output / norm_weight / feed_output / fast / v2 need "
+            "collapse_pre");
     }
     if (stats_weight.has_value()) {
         return mhc_post_with_stats(

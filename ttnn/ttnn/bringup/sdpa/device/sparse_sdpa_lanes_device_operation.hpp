@@ -14,9 +14,16 @@
 
 namespace ttnn::prim::bringup {
 
+// PB.7B kv_lane_rows: words a device in the row map ([n, (end, lane) x KV_ROWS_MAX]); the kernels' per-core runtime
+// args after (tok_start, tok_count) are [n, (token end, kv address) x KV_ROWS_MAX] (sparse_sdpa_common.hpp).
+constexpr uint32_t KV_ROWS_MAX = 8;
+constexpr uint32_t KV_ROWS_WORDS = 1 + 2 * KV_ROWS_MAX;
+
 struct SparseSDPALanesParams {
     SparseSDPAParams base;
     std::vector<uint32_t> lane_of_chip;  // row-major chip index -> index into kv_lanes. Hashed.
+    std::vector<uint32_t> lane_rows;     // PB.7B: per device KV_ROWS_WORDS (empty: off). Runtime: only "on" hashed.
+    bool lane_map_runtime = false;       // PB.9G: lane_of_chip not hashed (each device's kv re-bound every call)
 };
 
 struct SparseSDPALanesInputs {
@@ -62,6 +69,8 @@ Tensor sparse_sdpa_lanes(
     const Tensor& q,
     const std::vector<Tensor>& kv_lanes,
     const std::vector<uint32_t>& lane_of_chip,
+    const std::vector<uint32_t>& lane_rows,
+    bool lane_map_runtime,
     const Tensor& indices,
     const SparseSDPAParams& base,
     const std::optional<Tensor>& attention_sink,

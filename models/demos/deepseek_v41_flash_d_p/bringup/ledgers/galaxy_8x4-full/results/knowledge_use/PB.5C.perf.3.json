@@ -1,0 +1,53 @@
+{
+ "used": [
+  {
+   "id": "DS41-335",
+   "how": "confirmed test_packed_walls._Unloaded walks each block (_dram_tensors) instead of test_dram._routed, so no AttributeError on TtMoEBlockV2Layer; mixed judged over several processes",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "test-only change; nothing padded to fit a kernel"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "no stop: re-ran the gate once on attempt 1's tree; mixed miss DECIDED as process noise (BREADCRUMBS PPB.5C)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "walls run on the gate's single 21-layer, 8192 load; no load-time env in the test"
+  },
+  {
+   "id": "OV-63",
+   "answer": "done",
+   "evidence": "did not redo passed runs; test_dram AttributeError already fixed (test_packed_walls.py _weights/_state use _dram_tensors); ran gate PB.5C --check once"
+  }
+ ],
+ "cited_only": [
+  "DS41-334"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.5C",
+  "role": "perf",
+  "attempt": 3,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T08:06:51",
+  "head": "3fdcbf5dbbc",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.5C.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.5C_packed_walls.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.5C.perf.3.json"
+  ]
+ }
+}

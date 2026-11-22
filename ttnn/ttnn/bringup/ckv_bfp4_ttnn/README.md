@@ -35,9 +35,16 @@ rounded values as a new bf16 TILE tensor (`rounded=True`).
   its flattened rows (a key table appended per chunk). Every core, blocks of up to 16 tiles.
 - `prefix` (ckv_bfp4, default None; not with `rounded`): a second bf16 TILE input `[1, 1, m, 512]` (m % 32 == 0)
   whose rows go first: one call writes `[prefix | ckv]` at `[row0, row0 + m + n)`, the same records as two calls.
+- `dynamic_row0` (ckv_bfp4, default False; with prepared and compact, 2026-11-21): row0 a per-run common value slot
+  (prepare_program's common value slots): compact's host cost without a program per row0 (deepseek_v41_flash_d_p PB.9X).
 - `compact` (ckv_bfp4 and bfp_round, default False): merged core ranges and no per-core runtime args (the kernels
   split the work by their core index, `kernels/ckv_share.hpp`); row0 / page0 is frozen in the program (with
   `prepared`, one prepared program per row0: for call sites with a fixed row0). Same records and values.
+- `ttnn.bringup.ckv_bfp4_rows(src, rows, src_row0, n, row0, max_grid=None)` (deepseek_v41_flash_d_p MB.4): the records of
+  rows [src_row0, src_row0 + n) of a bf16 ROW_MAJOR [.., 512] row tensor (one row a page, interleaved or ND-sharded:
+  a served cache slab) at [row0, row0 + n) of `rows`; each core reads its bands' 32 rows, tilizes them on the core
+  (cb 18) and packs as ckv_bfp4. Always prepared, one program per (mesh, src / rows geometry, max_grid): src_row0, n and
+  row0 are per-run values (no program a row count or offset); every core of the grid, idle past the band count.
 - The SFPU round: the group max exponent (two loads, three lane rotations), then |x| + M - M with M = 2^23 x the
   group's LSB (the SFPU adder rounds to nearest even), clamped at the largest code. Equal to the host rule for bf16
   inputs (its alignment shift drops only zero bits).
@@ -64,6 +71,10 @@ rounded values as a new bf16 TILE tensor (`rounded=True`).
 - A block page's gap bytes (between its exponent sections and values) are never written: they hold stale L1 and differ
   between programs; compare pages with `tests/reference.encode_blocks`' mask (DS41-144).
 
+- ckv_bfp4_rows (MB.4, 8x4, deepseek_v41_flash_d_p's history pack, 3 KV sources a chunk, ~8000 rows a chip at a
+  1,024,000-token history): see the model's BREADCRUMBS MB.4 for the per-chunk device / host numbers vs the page copy
+  + tilize + ckv_bfp4 pieces it replaces.
+
 ## Consider it instead of
 - `ttnn.typecast(x, ttnn.bfloat4_b)` / any op with a bfloat4_b output where round-to-nearest matters (they truncate in
   effect), followed by a tile -> row-record reshuffle.
@@ -72,7 +83,7 @@ rounded values as a new bf16 TILE tensor (`rounded=True`).
 - A 16-value group whose max is below 2^-124 comes out 0 (the host rule would keep it).
 - ckv must be bf16 TILE `[1, 1, n, 512]` with n % 32 == 0; rows uint8 ROW_MAJOR `[1, 1, R, 320]`, row0 + n <= R. On a
   mesh the same program runs on every chip (row0 is the same everywhere).
-- `compact=True`: row0 / page0 is part of the program; a call site whose row0 changes every call builds a new program
+- `compact=True`: row0 / page0 is part of the program (ckv_bfp4: unless `dynamic_row0`); a call site whose row0 changes every call builds a new program
   each time (keep compact off there, e.g. a growing table).
 - `prepared=True`: the program cache is keyed on (mesh.id(), n, rounded, memory configs), LRU 64 entries; any other
   change (a new shape) builds and prepares a new program (~ms, once).
@@ -94,7 +105,13 @@ rule on the defined bytes. test_ckv_bfp4_compact_rounded: compact + rounded on b
 the rest untouched, deterministic, the refusals; compact == the default path (new and in place).
 The device rounding facts: `models/demos/deepseek_v41_flash_d_p/tests/test_bfp_packer_rounding.py`.
 
+`tests/unit/test_ckv_bfp4_rows.py` (the bring-up mesh, BATCH_SHARED; run through
+`models/demos/deepseek_v41_flash_d_p/tests/test_ckv_bfp4_rows.py` on the resident runner): ckv_bfp4_rows == the host
+rule and == the tile path, interleaved and ND-sharded sources, one prepared program, deterministic, refusals.
+
 ## Used by
+deepseek_v41_flash_d_p MB.4 / PB.MB4 (POS_DYNAMIC or PACKED_GLUED_DYNAMIC on: single-request and every packed segment's pack): tt/history_gather._pack_rows, the history pack and tail pack of the
+4-bit history gather (HISTORY_FORMAT=bfp4), straight from the served slab.
 deepseek_v41_flash_d_p (CKV_FORMAT=bfp4_rows: the compressed-KV attention table; prepared=True under
 CKV_BFP4_PREPARED=on, P.7; lowbit phase 1, not wired yet: WINDOW_KV_FORMAT=bfp8_rows (bfloat8_b records),
 INDEX_K_FORMAT / INDEX_Q_FORMAT=bfp4 (bfp_round)). Under LOWBIT_HOST=on (P.12): the window blocks' carry + chunk in

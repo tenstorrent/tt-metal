@@ -2853,3 +2853,60 @@ test_model_settings.py::test_lint_skips_committed_env_reads_in_hooks_but_not_in_
 has stalled for 6 hours because of some stupid rule." overseer.MAX_ABORTS = inf: an abort always leads to the next
 attempt with its note. Attempt budgets stay in defaults.yaml but the overseer launches long unattended runs with
 `--attempts <large>` and overrides any cap tripped by failures that are not the agent's (skill, standing decisions).
+
+## F291 (DeepSeek-V4.1 PB.5C, 2026-11-20): a torn read of a chunked store killed the orchestrator
+After PB.5C's gate commit the orchestrator died in decided_picks -> Ledger.state() with "history_state.chunks: key
+'W.1' in both 0002.json and 0003.json"; seconds later the store read cleanly (no duplicate on disk). ChunkedJson.write
+replaces the chunk files one by one, so a reader between two replaces (another process, e.g. a decide / status call or
+the dashboard export) sees a key that moved chunks in both. read() now retries a torn view (duplicate key, a file gone
+mid-replace, half-written JSON) for ~5 s before raising; a duplicate that persists is still an error. Selftest:
+test_ledger_chunks.py::test_a_torn_view_mid_write_is_retried_not_an_error. Not done: a write that is atomic across
+files (a generation directory swapped in one rename).
+
+## F292 (DeepSeek-V4.1 PB.5C / PB.6L, 2026-11-20): a gate test's markdown table is the task's own output
+PB.5C attempt 1 and PB.6L attempt 1 failed only on the path check for results/<task>_packed_walls.md, which the packed
+walls test writes next to results/<task>.json. core.gate.outputs_in (F55: results/<task>.json and <task>_*.json are the
+gate's outputs: allowed for the agent, deleted before the gate, committed with it) now also lists results/<task>_*.md.
+Selftest: test_fork_capture_programs.py::test_a_tests_markdown_table_is_a_gate_output.
+
+## F293 (DeepSeek-V4.1 PB.7, 2026-11-20): "the gate would PASS" with a gate unit FAILED
+PB.7 stopped WAITING with "the gate with the change on would PASS" while its agent's own gate run had test_glued_oracle
+FAIL (glued_segment_equiv_max_abs_diff 1024, 684 slot digest mismatches): Orchestrator.gate_on judged only the quick A/B
+side (a task without an `ab` switch measures the change on only). gate_on now also fails on any unit whose last verdict
+in the task's gate is FAIL (core.gate.unit_states), naming it. Selftest:
+test_resident_gate.py::test_the_ab_says_fail_when_a_gate_unit_of_the_task_failed.
+
+## F294 (owner 2026-11-20): perf walls hid per-chunk program builds
+Every wall (testing/profile.py's clean wall, the model's skip-position / packed walls) re-runs one chunk at one position
+after a warm-up at that position, with program-cache misses refused (F196): proven warm for THAT position, so a program
+keyed on a per-chunk value (the chunk start, a slot, a segment layout) is built in the warm-up and never counted. In
+serving every chunk brings new values: a rebuild on the request path. Found 2026-11-20 by PB.7C (glued fresh layouts:
+0 builds after its fix; fixed lanes 21 builds over 10 fresh chunks). Rule (skill): serving never rebuilds; a perf number
+counts only from a fresh-traffic wall with program_builds_after_warmup == 0. The clean wall now records
+chunk_wall_fresh = 0 and prints "WARM, REPEATED POSITION: a best case". The fresh walls (WALLS_FRESH=1) and the
+per-path fixes are DeepSeek-V4.1 PB.9F / PB.9X; the fast tier of every accept gate carries the 0-builds check (PB.T).
+Not done: a generic fresh-traffic driver in the framework (each model's test still draws its own positions).
+
+## F296 (2026-11-21, DeepSeek-V4.1 PB.MB / PB.9X): the added determinism check keeps the gate's chunk
+The determinism unit FIX.25 adds takes the gate's first accuracy unit's configuration (F285), minus per-run variables.
+Those were ITEM_VARS plus every BATCH_ITEM_VARS any parsed test file declared (a global set), so test_no_rebuild's
+BRINGUP_CHUNK made the chunk "per-run" for every unit: an 8192 gate's determinism check loaded the 5120 model and F283
+refused the 8192 oracles in that process (PB.MB: one extra --check; PB.9X: the accept gate FAILED on it). Now only the
+unit's own tests' declarations count (core/batch._config_of). Selftest: selftest/test_determinism_geometry.py.
+
+## F297 (2026-11-21, DeepSeek-V4.1 PB.9C): build counters need a cold program cache
+test_no_rebuild FAILED in a fresh process (fixed lanes 153 builds, glued 4x2k 16), then PASSED in 18 s in the held
+resident process on the same code: its fixed-seed draws found the previous run's programs cached. A test that counts
+program builds after its own warm-up declares ``BATCH_COLD = True``: core/batch runs it in a fresh process (the
+resident runner's fresh request, as the determinism check) and first in its batch after the determinism check, so no
+other run's traffic warms what it must find cold. Selftest: selftest/test_cold_runs.py. Every no-rebuild PASS that ran
+in a held process after an earlier run of the same draws is suspect until re-run cold.
+
+## F298 (2026-11-21, DeepSeek-V4.1 PB.T): a test declares the positions its load must reach (BATCH_MAX_SEQ)
+The PB.T isolation tiers drive the serving runtime on the gate's accuracy load. Its warm-up (runtime.compile ->
+warm_glued_chunks) needs slots of >= ~112k positions, but the accuracy load's tables reached only 64512: target.seq
+56320 + chunk, from whichever test loads first, here the determinism check. Below 112k the warm-up raises (DS41-372).
+A model test file may now declare ``BATCH_MAX_SEQ = <int>``. core/batch.hints loads the plan's model for at least that
+(never past deploy.seq), so the determinism check, whichever unit loads first, loads it once at that length (F283's one
+load). Selftest: selftest/test_resident_gate.py::test_a_plans_model_is_loaded_for_a_declared_max_seq. Cost: RoPE tables
+of 114688 positions instead of 64512 on the accuracy load of a gate that holds such a test.

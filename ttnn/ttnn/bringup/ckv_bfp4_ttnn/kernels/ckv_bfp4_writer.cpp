@@ -12,7 +12,16 @@
 #include "ckv_share.hpp"
 
 void kernel_main() {
-#ifdef CKV_COMMON_GX  // (option compact: common [rows, per, extra, row0[, rounded]], no per-core args)
+#if defined(CKV_ROWS_IN)  // (ckv_bfp4_rows, MB.4: common [rows, nb, row0], nb and row0 per-run values; the split as
+                          // ckv_share)
+    const uint32_t rows_addr = get_common_arg_val<uint32_t>(0);
+    uint32_t band0, n_bands;
+    {
+        const uint32_t nb = get_common_arg_val<uint32_t>(1);
+        ckv_share(nb / CKV_ROWS_NC, nb % CKV_ROWS_NC, CKV_ROWS_GX, band0, n_bands);
+    }
+    const uint32_t row0 = get_common_arg_val<uint32_t>(2);
+#elif defined(CKV_COMMON_GX)  // (option compact: common [rows, per, extra, row0[, rounded]], no per-core args)
     const uint32_t rows_addr = get_common_arg_val<uint32_t>(0);
     uint32_t band0, n_bands;
     ckv_share(get_common_arg_val<uint32_t>(1), get_common_arg_val<uint32_t>(2), CKV_COMMON_GX, band0, n_bands);

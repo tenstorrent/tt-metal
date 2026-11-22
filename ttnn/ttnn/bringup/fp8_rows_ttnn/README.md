@@ -26,6 +26,10 @@ shape, memory configs and grid; the three addresses patched a call, OV-23).
 - `memory_config` (default None = DRAM interleaved): the allocated output's memory config.
 - `max_grid` (ttnn.CoreCoord or (x, y), default None = the whole compute grid): the cores inside (0, 0) ..
   (max_grid - 1) (a Galaxy's 110-core cap, agent rule 18).
+- unpack_fp8_rows `whole_grid` (default False): every call on the whole grid, one program for every row count (MB.2).
+- unpack_fp8_rows `common_values` (default False): the per-run values as common runtime args (prepare_program's
+  common value slots): five patched words a program, not five a core (PB.9X; ~0.33 ms of host a whole-grid call on
+  the 8x4 before).
 Realistic (use by default): every option (no arithmetic).
 
 ## Measured
@@ -67,6 +71,8 @@ The inverse reader, onto the device's own 8-bit format:
 - Options: `row_lo`, `row_hi`, `out_row0` (default row_lo; multiples of 32), `batch` (default 0: the leading index,
   page = batch x R + row), `max_grid` (as pack_fp8_rows'). Always prepared: one program per (shapes, memory configs,
   core count), the range 5 value slots a core; cores = min(grid, bands) (the per-core slots cost host time a core).
+  `whole_grid` (default False; MB.2): every call on the whole grid, one program for every row count (idle cores past
+  the band count; a small range then pays the whole grid's per-core value slots in host time, as a large one does).
   Realistic (use by default): the only path.
 - Measured (8x4, tests/unit, warm): exact vs float64 RNE on 65536 rows a chip x 32 chips (ttnn's host bfloat8_b
   packer differs on 1.1e-4 of the rows: it rounds an fp32 value just above a tie as a tie). Host a call: 0.096 ms
@@ -74,7 +80,8 @@ The inverse reader, onto the device's own 8-bit format:
   0.41 ms for 65536 rows a chip (device <= ~0.4 ms: ~19 bands a core). pack_fp8_rows 640 rows: 0.070 ms host.
 - Limits: whole tile rows (32) only; width 128 and one fp32 scale a row; zero scale or zero values decode to 0; a
   16-value group whose max is below 2^-120 comes out 0 (the round's limit).
-- Used by: deepseek_v41_flash_d_p `tt/index_keys.py` (INDEX_K_SOURCE=served, P.76).
+- Used by: deepseek_v41_flash_d_p `tt/index_keys.py` (INDEX_K_SOURCE=served, P.76; whole_grid under POS_DYNAMIC=on,
+  MB.2).
 
 ## History
 CHANGELOG.md

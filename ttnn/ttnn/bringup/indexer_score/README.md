@@ -88,8 +88,21 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
   offsets. Runtime values (no new program).
 - `lane_rows`, `lane_starts`, `lane_kv_lens`, `lane_buffer`, `k_extra`, `k_local_extra` (ring op, fork, opt-in,
   default 0 / empty; PB.3A): ONE fused ring over the lanes of a packed chunk: each device its lane's start, kv_len and
-  key buffer; the all-gather moves every lane buffer's k_local (up to 4 inputs, no partial readiness); kv_len is the
+  key buffer; the all-gather moves every lane buffer's k_local (up to 8 inputs since PB.7B, no partial readiness); kv_len is the
   largest lane's. Starts / kv_lens are runtime values; lane_buffer is hashed (one program a lane -> buffer map).
+- `lane_own_extent` (ring op, fork, opt-in, default False; PB.3M): with `lane_rows`, each lane buffer is gathered only
+  to its own lanes' largest kv_len instead of the call's kv_len (a mixed packed chunk: 61k / 139k / 308k / 547k moved
+  4 x the 547k lane's keys). Same scores. Hashed; the extents are runtime values.
+- `lane_ranges` (ring op, fork, opt-in, default empty; PB.7C): ONE fused ring where a device holds query rows of
+  several segments (a glued packed chunk): per device (chip-linear r TP + c) 41 words [n, (row_lo, row_hi, buffer,
+  start, kv_len) x 8]; each group of q rows (whole q chunks: q_chunk_size 32 for 32-row ranges) looks up its range
+  (`kernels/indexer_score_ranges.hpp`) for its key buffers, kv_len and causal geometry (natural blocks, start + row
+  offset; the block epilogue's chunk start too). Every value, the range -> buffer map included, is a runtime value:
+  the reader binds every buffer's gathered and local address in its common args, the tables are the last common args
+  of the reader / writer / compute and re-patched every call; only the presence is hashed. Each buffer is gathered to
+  the largest kv_len of the ranges reading it (one slab when none reads it). The key multicast down a core column is
+  off in this mode (a column's groups may read different buffers): every core reads its own keys and gates on the
+  ring itself. Rows no range covers are not written.
 
 ## Limits
 - fp32 DEST: DSA only (not MSA, not block pooling); `dst_full_sync_en` must stay False.
@@ -101,6 +114,9 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
 - Source multi-device tests are not carried (they open FABRIC_1D / torus meshes); the ring op is covered by the
   fork's own 2x2 FABRIC_2D tests. `tests/unit/test_key_stride_ring.py` has a 2x4 case skipped on a 2x2 box.
 - Known source-test divergence: `test_indexer_score_rejects_fp32_dest_acc` fails on the fork by design (`tests/source.yaml`).
+- `lane_ranges`: fused ring + natural_query_blocks, no lane_rows / natural_query_lane / cache slot / metadata
+  tensors; every buffer one capacity (k's / k_local's shape, as the lanes ring: DS41-328); ranges whole q chunks; key
+  multicast off (each core reads its keys: ~8 x the K DRAM reads of a 8-row column at 8x4, small next to the gather).
 
 ## How to call
 ```python
@@ -129,7 +145,9 @@ Tests: `tests/test_indexer_score.py` (model cases, `tests/cases.py`), `tests/uni
   keys with `natural_query_rows`.
   P.40: INDEX_K_FORMAT=bfp8 scores bfloat8_b keys (k_local and the ring buffer) against the bfloat4_b query.
   PB.3A (PACKED_ATTN_ONECALL=on, `tt/packed_onecall.py`): `natural_query_lane` (a segment's ring call) and the lanes
-  ring (one call over a packed chunk).
+  ring (one call over a packed chunk); PB.3M (PACKED_LANE_BALANCE=on): `lane_own_extent`. PB.7C
+  (PACKED_GLUED_DYNAMIC=on, `tt/packed_glued.GluedCall._index_dynamic`): `lane_ranges` at q_chunk 32, one call a
+  layer over a glued chunk's segments (6 key buffers: the unused ones gather one slab).
 
 ## History
 CHANGELOG.md

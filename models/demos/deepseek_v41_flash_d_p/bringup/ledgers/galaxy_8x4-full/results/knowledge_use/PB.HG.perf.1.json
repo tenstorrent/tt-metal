@@ -1,0 +1,84 @@
+{
+ "used": [
+  {
+   "id": "DS41-311",
+   "how": "the runner's purge left tt.history_gather stale (fast tier: 'no attribute owned_on' twice); every top-level importer of history_gather now refreshes it with importlib.import_module first",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-286",
+   "how": "the owned send's cores sit in the gather column (sub-device 1) and were timed there against the four gathers, not only serially on the whole grid",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-290",
+   "how": "one history buffer a source is the source's own (rows, layer) buffer, no new buffer shape; owned mode simply never acquires the lane buffers",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-316",
+   "how": "the mesh-only op test ran on the runner knowing it may cost a device open while a model is held; kept to 4 short runs",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how a same-mesh 2D fabric multicast is rooted (at the sender; dst_dev_id only across meshes): now DS41-375",
+  "how a worker picks the fabric connection for a multi-hop unicast (decode the root action from the header): now DS41-376",
+  "the Galaxy fabric has 2 routing planes a direction (4 eth channels): a worker-built send uses 2 links"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work: each chip receives exactly its own segment's rows; idle chips take segment 0's history only because the sdpa's lane map reads lane 0 there (bit-identical pad rows), one history like every chip"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; DECIDED lines in BREADCRUMBS (unicast design, idle chips -> segment 0); no push, no tt-smi -r, all device work through the resident runner / gate"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "no new load-time env in any gate test; the new switch is call-time (batch_call_settings + batch_call_apply); the gate ran one accuracy load and one perf load (+ the cold no-rebuild)"
+  }
+ ],
+ "cited_only": [
+  "DS41-375",
+  "DS41-376"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.HG",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T16:40:56",
+  "head": "2fca7818e1a",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.HG.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.HG_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.HG.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_owned_send_ops.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/gather_hide.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/history_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/owned_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_glued.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py"
+  ]
+ }
+}

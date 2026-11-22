@@ -754,6 +754,18 @@ TABLE = {
         "179.7 -> 141.0 us. X', y, the feed bit-identical; stats column 24 (sum x'^2) in another fp32 order (rel "
         "<= 1e-5), so the hc within 2.4e-7. False = the P.36 program",
     ),
+    "MHC_POST_V2": Setting(
+        True,
+        (True, False),
+        "PB.8 (OWNER 2026-11-20: two ideas from a colleague's mhc_post op in OUR fork + the hc transposes). True = every "
+        "mhc_post(collapse_pre=, fast=True) call also takes the fork's v2: (1) attn_residual's feed: the other TP chips' "
+        "y tiles land straight in the port cores' L1 (cb_feed as the landing, one slot a packet; no y_output DRAM "
+        "staging, no port DRAM re-read) when the landing fits the port; (2) with one unit a core (the 5120 own-rows "
+        "split) a W block's RT cores sit in one grid column and each core's W share reaches the others in ONE NoC "
+        "multicast (was RT - 1 unicasts, ~10 MB of L1-L1 traffic a call); (3) a root's hc row transposes run on its "
+        "SFPU (lane mask + subvector rotation, exact) instead of BRISC word copies (6.4 + 5.4 us). Read per call (one "
+        "load serves both values). Bit-identical to False. False = the P.83 program",
+    ),
     "ATTN_ROOFLINE": Setting(
         True,
         (True, False),
@@ -1394,6 +1406,16 @@ TABLE = {
         "query; off = PB.3A (the prefetches serial at the first engram wait, the tails serial at the source layer). Same "
         "bytes at the same rows (a data move). Default off (the task's: on = the change; the gate sets it)",
     ),
+    "PACKED_LANE_BALANCE": Setting(
+        "off",
+        ("off", "on"),
+        "PB.3M (OWNER 2026-11-19, overseer 2026-11-20 06:35), read per chunk (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings). A mixed packed chunk (lanes at different history positions) is bounded by its longest "
+        "lane: on = the one-ring indexer's all-gather moves each lane's key buffer only to that lane's own extent "
+        "(ring_indexer_score_dsa lane_own_extent), not every buffer to the longest lane's (4 x the 547k lane's keys "
+        "around the ring for 61k / 139k / 308k / 547k); off = PB.3K. The same scores (no lane reads past its "
+        "kv_len). Default off (the task's: on = the change; the gate sets it)",
+    ),
     "PACKED_HOST_FAST": Setting(
         "off",
         ("off", "on"),
@@ -1406,6 +1428,128 @@ TABLE = {
         "cost), the chunk's id reads are enqueued back to back with one wait, every lane's rope rows come from one "
         "prepared copy program (tt/lane_rows.py); off = PB.3H. The same bytes at the same rows (data moves, row-local "
         "ops). Default off (the task's: on = the change; the gate sets it)",
+    ),
+    "PACKED_GLUED": Setting(
+        "off",
+        ("off", "on"),
+        "PB.7 (OWNER 2026-11-20 09:00), read per chunk (CALL-TIME, listed in bringup/hooks.py batch_call_settings). With "
+        "PACKED=on: on = a chunk is a glued chunk (tt/packed.GluedChunk): up to 6 segments back to back in the chunk's "
+        "8192 rows, any lengths, no lane alignment or padding between them (only the chunk's tail is pad), a request "
+        "that does not fit split at a kv block and continued in a later chunk; the engine sends the segments' ids back "
+        "to back (drafts/tt_d_gen_packed_ask.md) and the model computes each segment's rows [start, cap) back to back "
+        "(model rows). A glued chunk that is a lane chunk (every segment at row k 2048, <= 2048 rows: GluedChunk.as_lanes) "
+        "runs the accepted lane path (every PACKED_* switch as set); any other glued chunk runs its token-wise work once "
+        "and each segment's attention steps on its rows moved to rows [0, n) (tt/packed_device.GluedMover: today's "
+        "steps, PB.3's v1 loop with row moves). off = the accepted 4-lane path (ChunkDescriptor). Default off (the "
+        "task's: on = the change; the gate sets it)",
+    ),
+    "PACKED_GLUED_ONECALL": Setting(
+        "off",
+        ("off", "on"),
+        "PB.7B (OWNER 2026-11-20, overseer 11:40), read per chunk (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings). With PACKED=on, PACKED_GLUED=on and PACKED_ATTN_ONECALL=on: on = a glued chunk that is "
+        "not a lane chunk runs its attention ONCE a layer with per-ROW segment arguments (tt/packed_glued.py: glued "
+        "rope rows, a glued window region with each segment's carry block and per-row index lists, the compressor's "
+        "served writes per segment row range, the indexer ring and top-k in per-chip passes with rolled rows, "
+        "sparse_sdpa kv_lanes per pass), no row moves; off = PB.7's path (b) (each segment's rows moved to rows [0, n), "
+        "today's steps per segment). Bit-identical to path (b) (tests/packed/test_glued_oracle.py). Default off (the "
+        "task's: off = PB.7's path (b); the gate sets it)",
+    ),
+    "PACKED_GLUED_DYNAMIC": Setting(
+        "off",
+        ("off", "on"),
+        "PB.7C (OWNER 2026-11-20 16:00 / 16:10), read per chunk (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings). With PACKED_GLUED_ONECALL=on: on = a glued chunk's layout costs no program build and its "
+        "indexer runs ONE ring call a layer: ring_indexer_score_dsa takes per-device query-row ranges (row range, key "
+        "buffer, start, kv_len as runtime args; the lane -> buffer map not hashed) so a chip holding two segments scores "
+        "both in the one call (no second pass, no rolled query copies); every other layout value (rope pieces, served "
+        "index rows, valid lengths, window classes) is a runtime value or a table of the chunk's one descriptor upload. "
+        "off = PB.7B's per-pass ring calls. Bit-identical to off (tests/packed/test_glued_oracle.py). Default off (the "
+        "task's: on = the change; the gate sets it)",
+    ),
+    "PACKED_WARM_CONT1": Setting(
+        "on",
+        ("on", "off"),
+        "PB.FX (OWNER 2026-11-21, DS41-373), read per runtime.compile call (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings). on = the engine's packed warm-up (tt/packed_device.warm_glued_chunks) also runs a "
+        "one-segment request split in two chunks of one slot, the second at a continuing, non-chunk-aligned start "
+        "after a partial (non-whole) chunk: a lone segment runs today's single path (PackedChunk.trivial), whose window "
+        "carry is then read from the slot's ring (attention._ring_carry_pages: to_layout, the owner gather, page "
+        "copies, untilize, slice_write into the kept tail); no other kind reached it, so its 6 programs were built on "
+        "the request path. off = the warm-up before PB.FX (the A/B's previous side). Warm-up only: no forward changes",
+    ),
+    "PACKED_HIST_OWNED": Setting(
+        "on",
+        ("on", "off"),
+        "PB.HG (OWNER 2026-11-21), read per chunk (CALL-TIME, listed in bringup/hooks.py batch_call_settings and "
+        "refreshed in batch_call_apply). A chip-aligned packed chunk (PACKED_CHIPS=on) with its gathers hidden "
+        "(PACKED_GATHER_HIDE=on): on = each segment's compressed history (every KV source's prefetch, pieces and tail) "
+        "goes ONLY to the chips that segment owns (an idle chip: segment 0's, as the sdpa's lane map reads), every chip "
+        "receiving exactly one history into ONE buffer a source (the source's own; no lane buffers): every source chip "
+        "sends its records of every segment to that segment's chips in ONE program a source (tt/owned_gather.py: "
+        "fabric unicasts routed by the fabric's tables, the destination chips, row ranges and record buffers runtime "
+        "values from the chunk header; no program a layout); the tail lands in place (no tail buffer, no slice_write). "
+        "off = PB.9G / PB.MB4: every segment's history all-gathered to all chips into its lane's buffer. The same "
+        "bytes at the same rows of every chip's table (data moves)",
+    ),
+    "HIST_OWNED_LINKS": Setting(
+        "2",
+        ("2", "1"),
+        "PB.HG (PACKED_HIST_OWNED=on, tt/owned_gather.py): fabric links (port cores) a direction of the owned history "
+        "send (1 + 4 x links cores in the gather column; 2: 9 of the Galaxy's 10). Load-time (the sender's programs)",
+    ),
+    "PACKED_CHIPS": Setting(
+        "on",
+        ("on", "off"),
+        "PB.9G (OWNER 2026-11-21: chip-aligned lanes), read per chunk (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings). With PACKED=on and PACKED_GLUED=on every packed chunk (a tt/packed.GluedChunk, or a "
+        "fixed-lane header as the glued chunk of its live segments) runs the one-call glued path (tt/packed_glued.py, "
+        "per-chunk tables derived on the device from the chunk header). on = chip-aligned lanes: rows of two requests "
+        "never share a chip; each segment owns a contiguous run of whole chips (starts and lengths multiples of the rows "
+        "a chip, chunk / (SP TP) = 256 on the 8x4; its last chip padded; splits on chip boundaries; tt/packed.GluedChunk "
+        "align); engine rows = model rows. off = PB.9X's back-to-back glued layout (rows of two segments may share a "
+        "chip), the A/B's previous side. Replay (encoder) segments run in the one call either way; the fixed 2048-row "
+        "lanes and path (b) (per-segment moves) are removed: a chunk the one call cannot run raises. Default on",
+    ),
+    "COMMON_VALUE_SLOTS": Setting(
+        "on",
+        ("on", "off"),
+        "PB.9X, read per call (CALL-TIME, listed in bringup/hooks.py batch_call_settings). With POS_DYNAMIC=on: on = two "
+        "whole-grid prepared programs take their per-run values as COMMON runtime args (prepare_program's common value "
+        "slots: one patch a program instead of one a core a chip): ttnn.bringup.unpack_fp8_rows (fork option "
+        "common_values: the index-key decodes, ~0.33 -> ~0.06 ms of host a call on the 8x4, 24 calls a packed chunk) "
+        "and the glued RoPE rows' program (tt/lane_rows.GluedRows: the pieces, ~0.39 ms of host a call before). "
+        "The same bytes. off = per-core value slots (MB.2's). (The history pack, PB.MB4: ttnn.bringup.ckv_bfp4_rows, "
+        "always common value slots, either side)",
+    ),
+    "MOE_HEAD_ORDER": Setting(
+        "free",
+        ("free", "source"),
+        "PB.7 attempt 2 (overseer OV-65, DS41-339 / DS41-341; load-time: the MoE block's head plan). MOE_IMPL=block, "
+        "MOE_BLOCK_SRC=block, OWN_ROWS=on only. free = the fused moe_head's cross-TP sums in an order that does not "
+        "depend on which TP chip owns a token row (fork options MoEBlockConfig.shared_scatter_columns and "
+        "router_canonical_sum): the shared expert reduced by COLUMNS (y [S/SP, H/TP], each column's partials added in "
+        "its column block's ring order, the ring halves by matmul core column; then one TP all_to_all into the chip's "
+        "owner rows before the y_own + se add, tt/moe_block_v2_adapter, +~0.1 ms device a layer) and the router's "
+        "logits partials summed in chip order (0 + 1 + .. once every one is in). A glued segment then gives the same "
+        "bits wherever it lands in the chunk. A block whose chunk needs splits / row blocks / padding rows (the block's "
+        "own tail) falls back to source. source = the fork's source order (the rows scatter: a row's adds in its "
+        "destination chip's ring order, 1 bf16 ulp across TP chips; the router: the owner's partial first)",
+    ),
+    "PACKED_LONG_HIDE": Setting(
+        "off",
+        ("off", "on"),
+        "PB.6L (OWNER 2026-11-19 20:55, overseer 2026-11-20 08:25), read per chunk (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings). With PACKED_GATHER_HIDE=on: the per-segment history gathers hidden at ~1M histories too. "
+        "on = (a) a lane's index-key history decodes on the whole compute grid when it is long (>= "
+        "index_keys.DECODE_WIDE_ROWS rows a chip; shorter ones stay on PB.3K's 4 x 2 rectangle: their host cost); (b) "
+        "every history item gathered in pieces of <= gather_hide.PIECE_ROWS rows an owner (ttnn.bringup."
+        "high_bw_all_gather gathered_dim_start: an owner's row range into its fixed slot), each item packed into a "
+        "record buffer of its own for the chunk; (c) the pieces planned over every cover region before their source's "
+        "reader by estimated ms (attention phases, the decodes one step a segment, and the index top-k of the "
+        "source layers, a region too), earliest source first; off = PB.3H's plan (whole items, the most urgent source's "
+        "items over the attention phases before its reader). The same bytes at the same rows (data moves, row-local "
+        "decodes, the top-k on its own 110 cores). Default off (the task's: on = the change; the gate sets it)",
     ),
     "PREFILL_END": Setting(
         "cap",
@@ -1502,6 +1646,22 @@ TABLE = {
         "(PSU di/dt). 0 = the full grid (120 on the Galaxy). MAX_WORKER_CORES still caps the matmul program configs "
         "(worker_grid), the bring-up forks (max_grid, incl. the MoE block) and the forks given a sub_core_grids "
         "(mm_cores). 110 = the behaviour before",
+    ),
+    "POS_DYNAMIC": Setting(
+        "on",
+        ("on", "off"),
+        "MB.2 (OWNER 2026-11-20, rule 20: serving never rebuilds): read per call (a call-time switch, hooks."
+        "batch_call_settings). on = every per-chunk value of the single-request path is a runtime value: the RoPE / "
+        "compressed-RoPE rows (one start = one glued piece: PB.7C's GluedRows), DeviceScalars, the served slab's history "
+        "rows, the history tail and the server-order row are prepared page copies (tt/page_copy.py: page offsets and "
+        "counts are value slots, one program a geometry; page_copy.dyn: the same parts PACKED_GLUED_DYNAMIC turns on for "
+        "glued chunks, PB.MB), the "
+        "window snapshot's block pattern is a value (one program for every last-chunk cap), the replay rotation is two "
+        "page copies, the history pack and tail move fixed row counts, unpack_fp8_rows runs on the whole of its grid; the "
+        "engine's ids are put into natural order ON THE DEVICE (tt/page_copy.IdsReorder: no second upload; the host "
+        "keeps its readback for the engram hash); adapter.compile warms the finite set of shapes (a cold chunk, a "
+        "continued one, a pulled-back partial last chunk with a replay). Bit-identical to off. off = the slices (one "
+        "program a position / slot / history length) and the host ids re-upload",
     ),
 }
 

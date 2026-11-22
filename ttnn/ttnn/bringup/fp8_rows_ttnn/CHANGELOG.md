@@ -35,3 +35,31 @@ layout), deepseek_v41_flash_d_p P.39 (INDEX_K_SERVED=fp8_row192, owner 2026-11-0
   the fp32 CB needs reconfig_data_format_srca, else the scale tile is read in the fp8 format (garbage).
 - Files: fp8_rows.py, __init__.py, kernels/unpack_fp8_rows_{reader,compute,writer}.cpp,
   tests/unit/test_unpack_fp8_rows.py, README.md; ../__init__.py (PYTHON_OPS), ../INDEX.md
+
+### unpack_fp8_rows `whole_grid` (2026-11-20)
+- What: `unpack_fp8_rows(..., whole_grid=False)`: True runs every call on the whole grid (max_grid's cores; cores past
+  the band count take 0 bands and return, as the kernels already handle), so ONE prepared program serves every row
+  count. Default False keeps the behaviour before (cores = min(grid, bands): one program a band count below the grid).
+  Python only (no kernel change).
+- Why: deepseek_v41_flash_d_p MB.2 (OWNER 2026-11-20, rule 20: serving never builds a program after warm-up): the
+  history prefetch decodes [0, c wr) rows, a band count that grows with the request's position, so short histories
+  prepared a new program per band count on fresh traffic.
+- Tests: tests/unit/test_unpack_fp8_rows.py::test_unpack_fp8_rows_whole_grid (1 / 3 / 37 bands, bytes equal to the
+  default's, one whole-grid program of the current mesh). 8x4 (2026-11-20): the fork's suite (pack + unpack, option
+  off) 10 passed as before; the new case passed (its first version counted the precompile pass's mesh too: fixed).
+- Needed by: deepseek_v41_flash_d_p MB.2 (tt/index_keys.py `_decode`, under POS_DYNAMIC=on)
+- Files: fp8_rows.py, tests/unit/test_unpack_fp8_rows.py, README.md, ../INDEX.md
+
+### unpack_fp8_rows `common_values` (2026-11-21)
+- What: `unpack_fp8_rows(..., common_values=False)`: True passes the per-run values (first row page, bands, out page)
+  as COMMON runtime args (reader / writer args 1, 2; compute arg 0; kernel define UNPACK_COMMON_VALUES, no per-core
+  args) through prepare_program's new common value slots, so a run patches five words a program instead of five a
+  core. Default False keeps the behaviour (and the program) before. The same bytes.
+- Why: deepseek_v41_flash_d_p PB.9X: under POS_DYNAMIC the index-key decodes run on the whole grid (whole_grid, MB.2);
+  110 cores x 5 value slots x 32 chips cost ~0.33-0.36 ms of host a call (24 calls a packed chunk: ~8 ms of a
+  host-bound glued chunk's enqueue, tests/packed/test_onecall_host.py PB3A_PROBE_OPNAMES).
+- Tests: tests/unit/test_unpack_fp8_rows.py::test_unpack_fp8_rows_common_values (1 / 3 / 37 / 300 bands, bytes equal
+  to the default's, one program; host ms a call printed).
+- Needed by: deepseek_v41_flash_d_p PB.9X (tt/index_keys.py `_decode`, setting COMMON_VALUE_SLOTS)
+- Files: fp8_rows.py, kernels/unpack_fp8_rows_{reader,writer,compute}.cpp, tests/unit/test_unpack_fp8_rows.py,
+  README.md, ../INDEX.md; needs ../prepared_program's common value slots (same date)

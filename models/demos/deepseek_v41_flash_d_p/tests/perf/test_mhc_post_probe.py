@@ -13,7 +13,9 @@ the program span and every device zone of the kernels (start / end offsets from 
 over cores): where the call's time goes.
 
   MHCP_SITES=ffn,attn      the calls (ffn: norm, no feed; attn: norm + feed, 2 links)
-  MHCP_FAST=0|1|both       the fork's `fast` option (P.83): both = run both and check them against each other
+  MHCP_FAST=0|1|both|v2|v2both  the fork's `fast` option (P.83): both = run both and check them against each other;
+                           v2 = fast + v2 (PB.8, MHC_POST_V2); v2both = fast and fast + v2, checked against each other
+  MHCP_T=160               rows a chip, comma-separated for several (PB.8: 160 = 5120 / 32 chips, 256 = 8192)
   MHCP_CALLS=4             profiled calls a site (after 2 warm-ups)
   MHCP_ZONES=1             print the zone table (0: spans only)
 """
@@ -76,7 +78,7 @@ def _dev(t, mesh, dtype=ttnn.float32, shard=True):
     )
 
 
-def _inputs(mesh, seed):
+def _inputs(mesh, seed, T=T):
     nd = mesh.get_num_devices()
     g = torch.Generator().manual_seed(seed)
     f = _dev(torch.randn(nd, 1, T, C, generator=g), mesh, ttnn.bfloat16)
@@ -96,7 +98,7 @@ def _inputs(mesh, seed):
     return f, x, _dev(mix, mesh), _dev(w, mesh, shard=False), hc, gamma
 
 
-def _call(mesh, ins, *, feed=None, fast=False):
+def _call(mesh, ins, *, feed=None, fast=False, v2=False):
     f, x, md, wd, hc, gamma = ins
     cfg = ttnn.ComputeConfigDescriptor(**CFG)
     kw = dict(stats_weight=wd, compute_kernel_config=cfg, post_col=N, comb_col=2 * N, max_grid=_grid(mesh))
@@ -104,6 +106,8 @@ def _call(mesh, ins, *, feed=None, fast=False):
         kw.update(feed_output=feed, feed_semaphores=_sems(mesh), feed_num_links=2, feed_cluster_axis=1)
     if fast:
         kw.update(fast=True)
+    if v2:
+        kw.update(v2=True)
     return ttnn.bringup.mhc_post(f, x, md, md, collapse_pre=md, norm_weight=gamma, norm_eps=1e-6, **kw, **hc)
 
 
@@ -194,7 +198,12 @@ def test_mhc_post_probe():
     """Profiled calls first; the device CSV is complete only once the mesh is closed, so the zones are read after."""
     sites = os.environ.get("MHCP_SITES", "ffn,attn").split(",")
     fast_env = os.environ.get("MHCP_FAST", "0")
-    fasts = [False, True] if fast_env == "both" else [fast_env == "1"]
+    variants = {
+        "both": [(False, False), (True, False)],
+        "v2": [(True, True)],
+        "v2both": [(True, False), (True, True)],
+    }.get(fast_env, [(fast_env == "1", False)])
+    rows = [int(v) for v in os.environ.get("MHCP_T", str(T)).split(",")]
     calls = int(os.environ.get("MHCP_CALLS", "4"))
     zones = os.environ.get("MHCP_ZONES", "1") == "1"
     if os.path.exists(_CSV):
@@ -202,21 +211,22 @@ def test_mhc_post_probe():
     labels, results = [], {}
     mesh = _open()
     try:
-        ins = _inputs(mesh, 5)
         nd = mesh.get_num_devices()
-        feed = _dev(torch.zeros(nd, 1, 4 * T, C // 4), mesh, ttnn.bfloat16)
-        for site in sites:
-            for fast in fasts:
-                kw = dict(feed=feed if site == "attn" else None, fast=fast)
-                for k in range(2 + calls):
-                    out = _call(mesh, ins, **kw)
-                    labels.append((f"{site} fast={int(fast)}", k >= 2))
-                ttnn.synchronize_device(mesh)
-                got = [_chips(t) for t in out]
-                if site == "attn":
-                    got.append(_chips(feed))
-                results[(site, fast)] = got
-                ttnn.ReadDeviceProfiler(mesh)
+        for tr in rows:
+            ins = _inputs(mesh, 5, tr)
+            feed = _dev(torch.zeros(nd, 1, 4 * tr, C // 4), mesh, ttnn.bfloat16)
+            for site in sites:
+                for fast, v2 in variants:
+                    kw = dict(feed=feed if site == "attn" else None, fast=fast, v2=v2)
+                    for k in range(2 + calls):
+                        out = _call(mesh, ins, **kw)
+                        labels.append((f"T{tr} {site} fast={int(fast)} v2={int(v2)}", k >= 2))
+                    ttnn.synchronize_device(mesh)
+                    got = [_chips(t) for t in out]
+                    if site == "attn":
+                        got.append(_chips(feed))
+                    results[(tr, site, fast, v2)] = got
+                    ttnn.ReadDeviceProfiler(mesh)
     finally:
         _close(mesh)
     launches, ns = _calls()
@@ -228,10 +238,12 @@ def test_mhc_post_probe():
     for label, s in spans.items():
         print(f"[{label}] spans (slowest chip, us): {[round(v, 1) for v in s]}  median {statistics.median(s):.1f}")
     names = ["x_out", "stats", "hc", "y", "feed"]
-    for site in sites:
-        if (site, False) in results and (site, True) in results:
-            a, b = results[(site, False)], results[(site, True)]
-            for i, (ta, tb) in enumerate(zip(a, b)):
-                diff = sum(int((_bits(p) != _bits(q)).sum()) for p, q in zip(ta, tb))
-                mx = max(float((p.float() - q.float()).abs().max()) for p, q in zip(ta, tb))
-                print(f"[{site}] {names[i]}: differing elements {diff} (max abs {mx:.3g})")
+    if len(variants) == 2:
+        (fa, va), (fb, vb) = variants
+        for tr in rows:
+            for site in sites:
+                a, b = results[(tr, site, fa, va)], results[(tr, site, fb, vb)]
+                for i, (ta, tb) in enumerate(zip(a, b)):
+                    diff = sum(int((_bits(p) != _bits(q)).sum()) for p, q in zip(ta, tb))
+                    mx = max(float((p.float() - q.float()).abs().max()) for p, q in zip(ta, tb))
+                    print(f"[T{tr} {site}] {names[i]}: differing elements {diff} (max abs {mx:.3g})")

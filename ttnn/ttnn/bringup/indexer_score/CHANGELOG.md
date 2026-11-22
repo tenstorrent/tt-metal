@@ -257,3 +257,59 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   device/indexer_score_device_operation.cpp, device/indexer_score_device_operation.hpp,
   device/ring_indexer_score_dsa_program_factory.cpp, device/ring_indexer_score_dsa_program_factory.hpp,
   indexer_score_nanobind.cpp, README.md
+
+### PB.3M (deepseek_v41_flash_d_p, 2026-11-20): lane_own_extent, each lane buffer gathered to its own lanes' extent
+- What: opt-in `ring_indexer_score_dsa(lane_own_extent=False)` (with `lane_rows`): the lanes ring's all-gather moves
+  each lane buffer only to the largest kv_len of the lanes that read it (`lane_buffer_valid_height_tiles`, the per-input
+  valid-pages field of the ring_attention all-gather, re-patched every cache-hit call), not every buffer to the call's
+  kv_len (the largest lane's). The consumer is unchanged: a lane reads its own buffer up to its own kv_len only, which
+  its buffer's extent still covers. The first call of a program (cache miss) gathers the call's extent (correct, as
+  before); every later call its own lanes'. Hashed (one program a value).
+- Why: deepseek_v41_flash_d_p PB.3M (PACKED_LANE_BALANCE): a mixed packed chunk (61k / 139k / 308k / 547k) moved 4 x
+  the 547k lane's index keys around the SP ring; the lanes' own extents are ~1.9 x it.
+- Default: off (false): the program, its hash and the gather unchanged.
+- Run: the model's packed oracle / walls on the 8x4 (no fork unit test on the 8x4: brief).
+- Files: device/indexer_score_device_operation_types.hpp, device/indexer_score_device_operation.cpp,
+  device/indexer_score_device_operation.hpp, device/ring_indexer_score_dsa_program_factory.cpp,
+  indexer_score_nanobind.cpp, README.md
+
+### PB.7B (deepseek_v41_flash_d_p, 2026-11-20): the lanes ring takes up to 8 key buffers (was 4)
+- What: `ring_indexer_score_dsa(lane_rows=...)` accepts up to 7 `k_extra` / `k_local_extra` (8 key buffers, one
+  all-gather input each); only the validation limit changed (the ring_attention all-gather and the per-device lane
+  programs already handle any input count: one descriptor block an input).
+- Why: deepseek_v41_flash_d_p PB.7B (glued packing v2, PACKED_GLUED_ONECALL): a glued chunk holds up to 6 segments and
+  its indexer runs with each chip its own lane (lane_rows = rows a chip); with 4 buffers a pass of 5-6 segments took two
+  ring calls.
+- Default: unchanged for every call with <= 4 buffers (same programs, same hash).
+- Run: the model's glued oracle on the 8x4 (tests/packed/test_glued_oracle.py, PACKED_GLUED_ONECALL=on: glued vs the
+  segment alone, bit-identical) and walls; no fork unit test on the 8x4 (PACKED_RULES: no fork suites on the 8x4).
+- Files: device/indexer_score_device_operation.cpp, device/indexer_score_device_operation_types.hpp,
+  device/ring_indexer_score_dsa_program_factory.cpp, indexer_score_nanobind.cpp, README.md
+
+### PB.7C (deepseek_v41_flash_d_p, 2026-11-20): lane_ranges, several query-row ranges a device in ONE ring call
+- What: opt-in `ring_indexer_score_dsa(lane_ranges=[...])` (with k_extra / k_local_extra): per device up to 8
+  (row_lo, row_hi, buffer, start, kv_len) ranges of its query rows. Kernels (define INDEXER_SCORE_RANGES, named arg
+  ranges_base): the reader, compute and writer look up each group's range in their common args
+  (`kernels/indexer_score_ranges.hpp`): the reader its key buffers (every buffer's gathered and local address bound in
+  its common args) and kv_len, compute its kv_len and causal geometry (chunk_start_tiles = start / 32 - row_lo / 32,
+  natural blocks: no straddle), the writer its kv_len and the block epilogue's chunk start. Host: one program a device
+  with the call's tensors; the table is built from the call's ranges at creation and re-patched every call in the
+  override (the last words of each kernel's common args); every buffer gathered to the largest kv_len of the ranges
+  reading it (one slab when none reads it); key multicast off in this mode; partial readiness off (several inputs).
+  Only the presence is hashed: no program a range map (the lanes ring hashes its lane -> buffer map).
+- Why: deepseek_v41_flash_d_p PB.7C (owner 2026-11-20 16:10, PACKED_GLUED_DYNAMIC): a glued chunk's indexer in ONE
+  ring call (PB.7B made a second call for chips holding two segments: 5.6 ms at 139k, 15.8 ms on a 35k-444k mix) and no
+  program a layout (fresh AgentX layouts every chunk in serving).
+- Default: off (empty): the programs and their hashes unchanged (the new define, named arg, common args and the
+  multicast switch are only in the lane_ranges program).
+- Run: the model's op test `models/demos/deepseek_v41_flash_d_p/tests/packed/test_ring_ranges_ops.py` (8x4, random
+  data, the model's indexer settings): 1128 (chip, range) pairs bit-identical to PB.7B's per-chip lanes calls on
+  host-rolled rows (q_chunk 64), scores and the candidate layer's block maxes; two segments meeting inside a chip at
+  every tile-row offset, a fresh segment at position 0 mid-chip, short / long histories, six segments in one ring;
+  every key buffer scrambled before each call and every call repeated (bit-identical). No fork regression suite on
+  the 8x4 (PACKED_RULES).
+- Files: device/kernels/indexer_score_ranges.hpp (new), device/kernels/reader_indexer_score.cpp,
+  device/kernels/compute_indexer_score.cpp, device/kernels/writer_indexer_score.cpp,
+  device/ring_indexer_score_dsa_program_factory.cpp, device/indexer_score_device_operation.cpp,
+  device/indexer_score_device_operation.hpp, device/indexer_score_device_operation_types.hpp,
+  indexer_score_nanobind.cpp, README.md

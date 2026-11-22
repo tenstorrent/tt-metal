@@ -1,0 +1,94 @@
+{
+ "used": [
+  {
+   "id": "DS41-328",
+   "how": "kept one key capacity for the lanes ring; the new option changes only per-input gather extents, never buffer shapes (the case DS41-328 found wrong)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-286",
+   "how": "ruled out a partial top-k + merge / cross-lane query moves for the 547k lane: topk_large_indices tie order follows its row split, so not bit-identical to PB.3K",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-326",
+   "how": "the lane -> buffer map stays hashed; lane_own_extent is hashed too and its extents are patched per call in the override",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-325",
+   "how": "probe and walls run with DS41_ENGRAM_TABLE=resident (the gate's walls cmd sets it)",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-316",
+   "how": "expected the runner restart after the C++ build / python reload; linted with the pre-commit cache's pyflakes before submits",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the one-ring indexer's all-gather extent: every lane buffer moved to the longest lane's kv_len (PB.3A CHANGELOG said so, no known_issues entry gave its cost on a mixed chunk): DS41-333 now",
+  "a per-op, per-mesh-row device-time probe for packed lanes (which ops follow the longest lane): tests/packed/test_lane_balance_probe.py now"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "nothing padded or inflated: the option moves fewer pages (each lane buffer to its own extent)"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; item 1 (split the longest lane's score) DECIDED not built with numbers in BREADCRUMBS PPB.3M / known_issues_detail DS41-333; oracle checks measured (probe digests 0 / 200, gate oracle)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "the new probe test uses the walls' performance load (BATCH_SHARED, BATCH_LAYERS executed, max_seq raised to the one slot capacity as the walls); no load-time env in a test"
+  },
+  {
+   "id": "OV-62",
+   "answer": "done",
+   "evidence": "the probe allocates every slot at the walls' one capacity (_cap), so the one-ring path is the one measured in mixed"
+  }
+ ],
+ "cited_only": [
+  "DS41-333"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.3M",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T07:12:38",
+  "head": "bb6caaebe84",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.3M.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.3M.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_lane_balance_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_onecall.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/indexer_score/CHANGELOG.md",
+   "ttnn/ttnn/bringup/indexer_score/README.md",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/ring_indexer_score_dsa_program_factory.cpp",
+   "ttnn/ttnn/bringup/indexer_score/indexer_score_nanobind.cpp"
+  ]
+ }
+}

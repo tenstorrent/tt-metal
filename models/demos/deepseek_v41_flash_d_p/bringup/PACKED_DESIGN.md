@@ -39,6 +39,89 @@ between two lanes of one SP row stay routed). Verified lane-equivalent by constr
 (`tests/packed/test_packed_moe_block.py`: permuted / different / hot companions, other lanes, pad lanes routed or
 not: A's rows bit-identical) and by the oracle with PACKED_MOE=on.
 
+PB.7 (PACKED_GLUED=on, `tt/packed.GluedChunk`): up to 6 segments back to back in the chunk's rows, any lengths (only the
+tail is pad); model rows = each segment's computed rows [start, cap) back to back (whole tiles under block-aligned
+starts); a request that does not fit is split at the last kv block (`GluedChunk.fill` / `split`). A glued chunk that is
+a lane chunk (`as_lanes`, e.g. 4 x 2048) runs the lane path above, bit for bit; any other runs the token-wise work once
+and each segment's attention on its rows moved to rows [0, n) (`packed_device.GluedMover`, v1: one attention call and
+two whole-chunk gathers a segment a layer: 5 x 1600 at 139k 496 ms vs 2 lane chunks 203 ms). Engram rows: tile-row
+views of the staging (`TtEngramRows.fill_tp_glued`). Not row-position invariant yet (DS41-339): the fused MoE head's
+shared-expert reduce-scatter adds in an order that depends on the row's TP chip. v2 (per-row segment arguments in the
+window / sparse_sdpa / indexer / top-k ops, no moves) is what makes glued faster than lanes.
+
+PB.7B (PACKED_GLUED_ONECALL=on, `tt/packed_glued.GluedCall`): v2 for glued chunks, no row moves. Every per-chip lane
+argument of the one-call path becomes a per-row one: rope rows from `rope.GluedStarts` (each segment's rows at its own
+positions); a glued window region a layer [carry 128 | own rows R | one 128-row carry block per segment] written by ONE
+prepared program (`GluedSend`: own rows, every chip's last 128 rows to the next chip, each continuing segment's slot
+carry into its block, each segment's ring pieces into its ring) and per-row index lists (host, `GluedGeo.region_lists`:
+own rows, the previous chip's rows, or the segment's carry block; today's lists mapped); the compressor once, each
+segment's served writes through `(server rows + off) mod S`; the indexer ring and the sparse_sdpa table in per-chip
+PASSES (pass p = each chip's p-th segment; on 8x4 at most 2 for segments >= 256 rows): the indexer's lanes ring with
+lane_rows = R (each chip its own lane, <= 4 key buffers a call, one capacity), a chip whose pass segment starts inside it
+scoring its query / gate / bias rows rolled to row 0 (so its lane start is that row's position, never negative), each
+call's scores rolled per chip to the segment's alone chip row before the top-k (DS41-342: the top-k's tie order follows
+a row's chip row) and its top-k / candidate pool copied back to the segment's rows (`ChipRows`, one prepared row-piece
+copy with a per-chip table uploaded once a chunk; the ring takes up to 8 key buffers, PB.7B fork change); sparse_sdpa
+ONCE a layer with the sdpa fork's `kv_lane_rows` (each query row its own segment's history buffer; without the option:
+kv_lanes once a pass, the other rows on their window keys only, pass outputs copied onto pass 0's). Chunks it does not
+take keep path (b) (`glued_call_ok`: a replay segment, PREFILL_END=end, < 128 rows a chip).
+
+PB.7C (PACKED_GLUED_DYNAMIC=on, owner 2026-11-20 16:00 / 16:10): serving sends a new layout nearly every chunk, so a
+layout builds no program. (1) The indexer in ONE ring call a layer: ring_indexer_score_dsa `lane_ranges` (fork): per
+device up to 8 (row range, key buffer, start, kv_len) entries as runtime args (the buffer map too), each q chunk's group
+looks up its range in the kernels; GLUED_SEGS key buffers always (distinct scratch shards pad: DS41-343); then per pass
+its top-k at the alone chip rows (DS41-342's phase copies) with each chip's own valid length. (2) Every other place a
+layout or a position keyed a program is a runtime value: glued rope rows (`lane_rows.GluedRows`, the pieces as
+prepared-program values), served scalars / server rows / ring carry / history pack and tail rows by prepared page copies
+(`tt/page_copy.py`), each segment's served write on its own (fixed shapes), sparse_sdpa kv_lane_rows without the lane map
+in its hash, the window snapshot broadcast with the block owners as values (each chip derives its tree role). (3) The
+walls time fresh AgentX layouts (tests/packed/test_glued_walls.py: a new mix every timed run, the builds after warm-up
+recorded, the host ms a new layout costs). (4) Attempt 3 (OV-67, owner 19:50): no per-chunk host table. The chunk
+header (tt-d-gen's G1 fields: n, then slot / actual_start / actual_end / global_write_start a segment; 32 uint32 words)
+rides after every SP row's ids in the engine input (`[SP, 1, W + 32]`, ONE upload a chunk; tt/packed_device.make_input),
+and prepared programs (`tt/glued_derive.py`, one kernel source, a section a program, the chip index baked in, the
+header's offset a per-run value) derive every per-chunk table from it into persistent outputs: the keep rows and the MoE
+head's end words, the window index lists (a per-run mask for masked carries), the compressed keep, per pass the top-k /
+candidate valid lengths and candidate caps, the ChipRows piece tables at fixed slots, the served writes' server-order
+rows. No per-descriptor host cache is left on the glued path; the host keeps only what decides the op sequence (passes,
+calls, which segments write) and the per-call runtime args of the kernels (lane ranges, kv lane rows, ring pieces,
+snapshot owners: dispatched with the launch, no upload). A run_chunk without the engine input (tests driving host ids)
+uploads the header alone.
+
+PB.9G (OWNER 2026-11-21, PACKED_CHIPS=on, the shipped value): CHIP-ALIGNED LANES are the one packed path. Rows of two
+requests never share a chip: a packed chunk is a list of segments, each owning a contiguous run of whole chips
+(R = chunk / (SP TP) rows a chip: 256 on the 8x4, 512 on 4x4, 1024 on 2x4, 2048 on 2x2): segment k's rows (engine
+and model alike) are [off_k, off_k + ext_k), off_k = the extents before it, ext_k = its length rounded up to R (at
+least one chip: a 1-token or an idle segment owns one chip, its rows past cap are pad), 1..chunk / R chips a segment;
+a request that does not fit the chips left is split on a kv block inside them (``GluedChunk.fill(align=R)``; the rest
+continues in a later chunk). tt/packed.GluedChunk(align = R) describes it; ``as_run_desc`` turns every packed header
+(a back-to-back GluedChunk, a fixed-lane ChunkDescriptor) into it. It runs the one-call path of tt/packed_glued.py
+(GluedCall) with PB.7C's device-derived tables: on whole-chip segments each chip holds one segment from its row 0, so
+every per-row quantity of that path is a per-chip one (packed_onecall's per-chip design): one pass, the ring's lane
+ranges one a chip, no phase rolls / keep copies, the history read by kv_lanes with the lane map a runtime value (sdpa
+fork kv_lane_map_runtime), the engine ids are the model ids (GluedIdsReorder reads its own mesh row only). The derive
+kernels (tt/glued_derive.py, ALIGN_ROWS) and the ids reorder (page_copy, ALIGN) compute the chip-aligned offsets from
+the header; keep / compressed keep / MoE end words are segment membership (a chip's pad rows masked as today's pad
+rows past cap). Encoder replay segments (write_start > start) run in the one call: their window carry class 0 (the
+region mask) and their served writes from write_start (the server order of write_start, the segment's rows from
+write_start - start on: the derive's srv rows; TtCompressor._write_from's shift as index rows). Removed: path (b)
+(per-segment moves, PackedChunk._glued_attention / GluedMover), the fixed 2048-row lanes (LaneMover, OneCall on a
+ChunkDescriptor, PACKED_ROUTE=lanes): a chunk the one call cannot run raises (``glued_call_ok``), never falls back.
+PACKED_CHIPS=off keeps PB.9X's back-to-back layout through the same one call (the A/B's previous side; its per-row
+pieces: passes, ChipRows, kv_lane_rows). The window send (GluedSend) orders its carry tensors by accessor kind (the
+served snapshot first, then ring-carry temps, then scratch; an anchor snapshot when none carries): one program for
+every carry mix (DS41-360). Every segment's served window snapshot of a layer goes in ONE prepared program
+(tt/snapshot_send.SnapshotSend.multi: the dynamic broadcast looped over the segments, an arrival counter a (segment,
+block); 20 launches a 4-segment chunk instead of 80, DS41-364).
+
+**Proposed contract change (tt-d-gen, drafts/tt_d_gen_packed_ask.md G1):** the chunk header keeps tt-d-gen's fields
+(n, then slot / actual_start / actual_end / global_write_start a segment, 32 words after each SP row's ids, one
+upload); the packer places segment k's ids at engine row off_k = sum of ceil(max(1, length_j) / R) x R over the
+segments before it (R = chunk / (SP x TP), the server's mesh: 256 on the 8x4), pads each segment's last chip with
+PAD_ID, starts every segment at a 32-aligned position (as today) and splits a request that does not fit the chips
+left at a kv block inside them (the continuation starts there, its own write_start); at most GLUED_SEGS (6) segments
+and chunk / R chips a chunk. The model derives off_k itself from the header (lengths), so no new field is needed.
+
 Contents: 1 geometry and the key fact, 2 the descriptor, 3 per-chunk quantities, 4 non-row-local ops, 5 attention and
 the cross-chip pieces, 6 pipelining and hiding per-segment costs, 7 DRAM at 1M, 8 8192 on today's tree, 9 test plan,
 10 projected time, 11 owner decisions, 12 PB.2-PB.4 estimates.
@@ -229,6 +312,14 @@ Design rules (from the start, not as a later optimization):
    not reached by its source's table is gathered there serially. Bit-identical (the oracle's packed3 case, histories
    of whole chunks). Measured (walls, device clock stamps: the real-time profiler cannot show two sub-devices at
    once): exposed / serial gather time 0.113 at 4 x 2k @ 139k, 0.177 mixed (BREADCRUMBS PPB.3H).
+   At ~1M histories (PB.6L, PACKED_LONG_HIDE=on): a 1M item takes ~2.8 ms on the gather column, longer than any
+   attention phase (~1.8 ms), so whole items were exposed (11.9 of 12.7 ms). Now, when an item is longer than one
+   attention phase hides: every item in pieces (ttnn.bringup.high_bw_all_gather gathered_dim_start: an owner's row
+   range into its fixed slot) sized to each region's cover (the attention phases, the index-key decodes, the index
+   top-k of the source layers), the rest gathered serially at the table (faster there than on the gather column); the
+   items' packs as compute steps of earlier regions. 2.4 of 12.8 ms exposed at 4 x 2k @ ~1M (BREADCRUMBS PPB.6L).
+   The index-key history decodes (12 a chunk) run on the whole compute grid when long (>= 16384 rows a chip): at 1M
+   they were 45 ms of the chunk on 4 x 2 cores (DS41-336).
 4. **Batch per-segment launches.** The 4 segments' served writes of a source (compressed KV + index keys) go in one
    prepared program (per-lane slot / start / valid runtime args); the 4 snapshot writes of a layer in one
    snapshot_send program (P.65's tree, 4 owners); the per-lane carry reads folded into window_send's program. Target:

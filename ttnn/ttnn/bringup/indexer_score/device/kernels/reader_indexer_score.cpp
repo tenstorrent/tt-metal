@@ -26,6 +26,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"  // block-max-pool: calculate_and_prepare_reduce_scaler
 
 #include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
+#include "indexer_score_ranges.hpp"  // bring-up fork (PB.7C): per-device query-row ranges
 
 // Ring-fused indexer: the fused all-gather producer signals per-slab arrival into two direction semaphores;
 // the reader gates each band on ONLY the SP-shards that band's tiles land in (fine-grained overlap, see the
@@ -568,13 +569,28 @@ struct FusedRingGate {
         uint32_t midpoint_tiles,
         const McastDir& k_dir,
         uint32_t k_batch_page_offset) const {
+        read_k_from(
+            noc, k_acc, k_local_acc, physical_tile_start, k_tiles_in_unit, midpoint_tiles, k_dir, k_batch_page_offset);
+    }
+
+    // (PB.7C lane_ranges: the group's own local-key buffer instead of the common one)
+    template <typename KAcc, typename KLAcc>
+    void read_k_from(
+        Noc noc,
+        const KAcc& k_acc,
+        const KLAcc& kl_acc,
+        uint32_t physical_tile_start,
+        uint32_t k_tiles_in_unit,
+        uint32_t midpoint_tiles,
+        const McastDir& k_dir,
+        uint32_t k_batch_page_offset) const {
         if (k_mcast_on == 0 || k_dir.role == iscore::mcast_role_sender) {
             gate_shard(physical_tile_start, k_tiles_in_unit, midpoint_tiles);
         }
         read_k_chunk_fused(
             noc,
             k_acc,
-            k_local_acc,
+            kl_acc,
             ring_index,
             tiles_per_shard,
             physical_tile_start,
@@ -732,6 +748,24 @@ void kernel_main() {
                 schedule_rotate>(band0);
             const uint32_t group = row_group0 + phase * group_stride;
             const uint32_t q_row_start = group * q_tiles_per_unit;
+#ifdef INDEXER_SCORE_RANGES
+            // PB.7C: this group's range: its key buffers and kv_len (runtime common args; the group's rows are one
+            // range: the host keeps every range a whole number of q chunks)
+            constexpr uint32_t ranges_base = get_named_compile_time_arg_val("ranges_base");
+            const auto range = indexer_ranges::find(
+                [](uint32_t i) { return get_common_arg_val<uint32_t>(i); }, ranges_base, q_row_start);
+            kv_len_tiles = range.kv_len_tiles;
+            shard_span.set_valid_k_len_tiles(kv_len_tiles);
+            const auto k_acc_g = TensorAccessor(
+                k_args,
+                get_common_arg_val<uint32_t>(ranges_base + indexer_ranges::kTableWords + range.buffer),
+                k_tile_bytes);
+            const auto kl_acc_g = TensorAccessor(
+                kl_args,
+                get_common_arg_val<uint32_t>(
+                    ranges_base + indexer_ranges::kTableWords + indexer_ranges::kBuffersMax + range.buffer),
+                k_tile_bytes);
+#endif
             if constexpr (fuse_single) {
                 read_q_rows(noc, q_acc, q_row_start, q_dir);
                 read_w_group(noc, w_acc, q_row_start, q_dir);
@@ -777,8 +811,20 @@ void kernel_main() {
                     // KEEP IN SYNC with the AG writer's row-aligned midpoint_prefix_pages() and the host's
                     // gather_valid_height_tiles(). Units crossing this boundary wait for completion.
                     const uint32_t midpoint_tiles = (gathered_shard_tiles + 1) / 2;
+#ifdef INDEXER_SCORE_RANGES
+                    gate->read_k_from(
+                        noc,
+                        k_acc_g,
+                        kl_acc_g,
+                        physical_start,
+                        k_tiles_in_unit,
+                        midpoint_tiles,
+                        k_dir,
+                        k_batch_page_offset);
+#else
                     gate->read_k(
                         noc, k_acc, physical_start, k_tiles_in_unit, midpoint_tiles, k_dir, k_batch_page_offset);
+#endif
                 } else {
                     const uint32_t band = band_i;
                     const bool real_band = band < num_bands;

@@ -307,7 +307,8 @@ ReduceScatterPlan::ReduceScatterPlan(
     int scatter_,
     uint32_t links_,
     uint32_t max_pass_width_,
-    bool compact_reduce_scatter_zones_) :
+    bool compact_reduce_scatter_zones_,
+    bool column_halves_) :
     tp_size(tp_size_),
     engine_columns(engine_columns_),
     engine_rows(engine_rows_),
@@ -319,6 +320,7 @@ ReduceScatterPlan::ReduceScatterPlan(
     num_cores(engine_columns_ * engine_rows_),
     scatter(scatter_),
     compact_reduce_scatter_zones(compact_reduce_scatter_zones_),
+    column_halves(column_halves_ && scatter_ == -1),
     kind(reduce_scatter_kind(tp_size_, ring)),
     transport(plan_transport(tp_size_, kind)) {
     if (scatter == -1) {
@@ -348,15 +350,18 @@ ReduceScatterPlan::ReduceScatterPlan(
         core_block_tiles = row_tiles_per_core * max_of(column_widths);
     }
     pass_major = scatter == -2;
-    if (scatter == -2 && kind == ReduceScatterKind::RingBalanced && engine_columns > 1) {
+    if ((scatter == -2 || column_halves) && kind == ReduceScatterKind::RingBalanced && engine_columns > 1) {
+        // (the columns' widths: the rows scatter's whole columns, the columns scatter's block columns - column_halves)
+        const std::vector<uint32_t>& widths = scatter == -2 ? column_widths : block_column_widths;
+        const int64_t total_tiles = scatter == -2 ? int64_t(hidden_tiles) : int64_t(block_columns);
         uint32_t best = 0;
         int64_t best_imbalance = -1;
         for (uint32_t i = 0; i + 1 < engine_columns; ++i) {
             int64_t prefix_tiles = 0;
             for (uint32_t column = 0; column <= i; ++column) {
-                prefix_tiles += column_widths[column];
+                prefix_tiles += widths[column];
             }
-            int64_t imbalance = std::abs(2 * prefix_tiles - int64_t(hidden_tiles));
+            int64_t imbalance = std::abs(2 * prefix_tiles - total_tiles);
             if (best_imbalance < 0 || imbalance < best_imbalance) {
                 best_imbalance = imbalance;
                 best = i;
@@ -369,6 +374,9 @@ ReduceScatterPlan::ReduceScatterPlan(
 uint32_t ReduceScatterPlan::half(uint32_t core) const {
     if (half_split_column) {
         return core % engine_columns < *half_split_column ? 0 : 1;
+    }
+    if (column_halves) {  // (one matmul core column: one half - never a split by core row)
+        return 0;
     }
     return core < ceil_div(num_cores, 2) ? 0 : 1;
 }

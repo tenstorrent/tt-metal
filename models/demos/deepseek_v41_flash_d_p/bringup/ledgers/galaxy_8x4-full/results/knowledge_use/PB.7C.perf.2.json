@@ -1,0 +1,121 @@
+{
+ "used": [
+  {
+   "id": "DS41-342",
+   "how": "kept the per-pass top-k at each row's alone chip row (phase copies) after the single ring call: tt/packed_glued._index_dynamic",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-328",
+   "how": "the one ring call asserts one key capacity a chunk; the fork's lane_ranges refuses unequal buffer shapes",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-316",
+   "how": "the op test tests/packed/test_ring_ranges_ops.py shares the held model (its indexer objects) instead of a mesh-only request",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-286",
+   "how": "reasoned the top-k tie order follows the row split by core count; kept the model's top-k at its core count and moved rows instead",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-277",
+   "how": "PageCopy programs keyed on the TensorAccessor compile-time args (an ND-sharded slab's geometry), not the shape",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a descriptor op's runtime-arg buffer bindings are resolved once at program creation: passing one tensor twice in a tensor list makes later calls with another repeat pattern read the wrong buffer (now DS41-343)",
+  "which TTNN ops key their program on slice starts / positions (ttnn.slice of a ROW_MAJOR tensor keys on the start; high_bw_all_gather's gathered_dim_size and slice_write's starts are runtime): needed to find every layout-dependent build",
+  "the resident runner records a python file's fingerprint at import: an edit during a running request can be missed by the next request's reload (seen: a stale compressor.py in a later request)",
+  "a model module that reads an op's binding docstring at import (fork option detection) is fooled by a test that wraps the op before the module's first import (seen: gate #2's walls ran path (b) everywhere)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padded work on the critical path: the served writes keep PB.7B's one gather at the real segment count (padding it to 6 was built and reverted); the history tail gather keeps a fixed buffer but moves only the plans' rows (gathered_dim_size); the only padding left is the ring's unused key buffers (distinct scratch shards, one slab each gathered: ~35 KB a shard, needed so the program key does not follow the segment count)"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; decisions marked DECIDED in BREADCRUMBS PPB.7C (served writes, ring padding, the one-upload table left as the next step)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "every device test of the gate runs the gate's load configs (accuracy 40 layers, walls 0-20 decode); the new diagnostics (test_glued_dynamic_probe, test_ring_ranges_ops, test_glued_dyn_bisect) share the held model and are not gated"
+  },
+  {
+   "id": "OV-66",
+   "answer": "done",
+   "evidence": "attempt 2 started on a tree with no model code changes (git status: ledger files only)"
+  }
+ ],
+ "cited_only": [
+  "DS41-343",
+  "DS41-344"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.7C",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T19:42:52",
+  "head": "f784d776036",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.7C.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.7C_glued_walls.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.7C.perf.2.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_dyn_bisect.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_dynamic_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_walls.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_ring_ranges_ops.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_snapshot_dyn_host.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/gather_hide.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/history_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/lane_rows.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_glued.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_onecall.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/page_copy.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/served.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/snapshot_send.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/indexer_score/CHANGELOG.md",
+   "ttnn/ttnn/bringup/indexer_score/README.md",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/kernels/compute_indexer_score.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/kernels/indexer_score_ranges.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/kernels/reader_indexer_score.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/kernels/writer_indexer_score.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/ring_indexer_score_dsa_program_factory.cpp",
+   "ttnn/ttnn/bringup/indexer_score/indexer_score_nanobind.cpp",
+   "ttnn/ttnn/bringup/sdpa/CHANGELOG.md",
+   "ttnn/ttnn/bringup/sdpa/README.md",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_lanes_device_operation.cpp"
+  ]
+ }
+}

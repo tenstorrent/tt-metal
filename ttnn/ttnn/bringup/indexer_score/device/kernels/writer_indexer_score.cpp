@@ -18,6 +18,7 @@
 
 #include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
 #include "indexer_score_metadata.hpp"
+#include "indexer_score_ranges.hpp"  // bring-up fork (PB.7C): per-device query-row ranges
 
 constexpr bool fused_ring_enabled = get_compile_time_arg_val(num_common_ct_args) != 0;
 constexpr uint32_t page_bytes = get_compile_time_arg_val(num_common_ct_args + 1);  // row-major page = T*2 bytes
@@ -482,7 +483,7 @@ void kernel_main() {
     const auto out_acc = TensorAccessor(out_args, out_addr, page_bytes);
 #ifdef INDEXER_SCORE_BLOCK_EPILOGUE
     // bring-up fork: the epilogue tensors' addresses follow the shard order in the common args
-    const EpCtx ep{
+    EpCtx ep{
         TensorAccessor(
             ep_bias_args,
             get_common_arg_val<uint32_t>(indexer_common::writer::Count + shard_physical_sp),
@@ -515,6 +516,17 @@ void kernel_main() {
             for_lane<shard_physical_sp, k_len_tiles, k_tiles_per_unit, schedule_blocks, schedule_cols, schedule_rotate>(
                 band0);
         const uint32_t group = row_group0 + phase * group_stride;
+#ifdef INDEXER_SCORE_RANGES
+        {  // PB.7C: this group's range: the columns it wrote (kv_len) and its causal geometry for the epilogue
+            constexpr uint32_t ranges_base = get_named_compile_time_arg_val("ranges_base");
+            const auto range = indexer_ranges::find(
+                [](uint32_t i) { return get_common_arg_val<uint32_t>(i); }, ranges_base, group * q_tiles_per_unit);
+            shard_span.set_valid_k_len_tiles(range.kv_len_tiles);
+#ifdef INDEXER_SCORE_BLOCK_EPILOGUE
+            ep.chunk_start_keys = range.chunk_start_tiles * tt::constants::TILE_WIDTH;
+#endif
+        }
+#endif
         for (uint32_t band_i = 0; band_i < num_bands; ++band_i) {
             uint32_t band = band_i;
             uint32_t k_tile0 = 0;

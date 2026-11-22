@@ -94,6 +94,9 @@ class HistoryBuffer:
         self.pre = None  # P.75: (id(cache), start, version, h) of a prefetched history (rows [q R, q R + h))
         self.view = None  # P.75: [1, owners, rows / owners, WIDTH], a view of ``tensor`` (the slice_write's operand)
         self.ready = None  # PB.3H: (id(cache), start, version, rows) of a gather completed ahead of its ``gather`` call
+        # PB.HG (PACKED_HIST_OWNED=on): id(cache) -> (kind "pre" | "ready", start, version, rows) of every segment's
+        # cache whose rows this buffer holds on that segment's chips (one buffer a source for every segment)
+        self.own: dict = {}
         if owners is not None:
             assert self.rows % owners == 0, (self.rows, owners)
             self.view = ttnn.reshape(self.tensor, [1, owners, self.rows // owners, self.width])
@@ -240,6 +243,9 @@ def gather(ckv_cache, local_rows: int, start: int) -> tuple[ttnn.Tensor, int]:
         f"HISTORY_GATHER=rows: no history buffer {_key(ckv_cache)} (acquired by tt/compressor.TtServedRows; "
         f"held: {list((_BUF.get(id(mesh)) or (None, {}))[1])})"
     )
+    if owned_active(ckv_cache):  # PB.HG: this segment's rows on its own chips only
+        _owned_complete(ckv_cache, buf, local_rows, start)
+        return buf.tensor, R
     ready, buf.ready = buf.ready, None
     if ready is not None and ready == (id(ckv_cache), start, ckv_cache.version, local_rows):
         buf.pre = None  # PB.3H: completed ahead (tail_finish: the same rows as the tail path below)
@@ -320,6 +326,10 @@ def _pack(ckv_cache, lo: int, hi: int, loc: HistoryBuffer | None = None) -> ttnn
     a = lo // 32 * 32
     b = min(-(-hi // (PACK_BUCKET if a == 0 else 32)) * (PACK_BUCKET if a == 0 else 32), R)
     assert 0 <= a < b <= R and (b - a) % 32 == 0, (lo, hi, a, b, R)
+    from .page_copy import dyn
+
+    if dyn("hist"):  # MB.4: one call, the rows runtime values (no program a history length): see _pack_rows
+        return _pack_rows(ckv_cache, loc, a, -(-hi // 32) * 32)
     rows = slab.slice_rows(a, b)  # [1, 1, b - a, 512] bf16 ROW_MAJOR DRAM
     tl = to_tile(rows, memory_config=DRAM)
     if tl is not rows:
@@ -332,9 +342,31 @@ def _pack(ckv_cache, lo: int, hi: int, loc: HistoryBuffer | None = None) -> ttnn
     return loc.tensor
 
 
+def _pack_rows(ckv_cache, loc: HistoryBuffer, a: int, b: int) -> ttnn.Tensor:
+    """POS_DYNAMIC=on / PACKED_GLUED_DYNAMIC=on (MB.4; dyn("hist"): every single-request and every packed segment's
+    pack, prefetch and tail): ``_pack``'s rows [a, b) in ONE fork call, ttnn.bringup.ckv_bfp4_rows: each core reads its
+    bands' slab rows straight from the served slab (page slab.batch R + row), tilizes them on the core and packs their
+    records at rows [a, b) of the local record buffer; the source row, the record row and the band count are per-run
+    values, so one program serves every history length, slot and layer (rule 20), with no slice, no tilize op and no
+    per-piece dispatches (MB.2's PACK_BUCKET pieces: a page copy on 4 cores + tilize + ckv_bfp4 a 2048 rows, which grew
+    with the history: +2 ms device, +5.5 ms host a chunk at 1M, MB.4). The records are a function of each row alone:
+    the same bytes as the off path's slice + tilize + ckv_bfp4."""
+    slab = ckv_cache.slab
+    ttnn.bringup.ckv_bfp4_rows(slab.tensor, loc.tensor, slab.batch * slab.rows + a, b - a, a, max_grid=max_grid())
+    loc.tensor.update_tensor_topology(slab.tensor.tensor_topology())
+    return loc.tensor
+
+
 def _tail(ckv_cache, buf: HistoryBuffer, h: int, local_rows: int, owners: int, axis) -> None:
     """P.75: every owner's local rows [h, local_rows) -> rows [q R + h, q R + local_rows) of ``buf`` (its rows below h
-    prefetched): a slice of the slab, one gather into the small buffer of that size, one slice_write."""
+    prefetched): a slice of the slab, one gather into the small buffer of that size, one slice_write.
+    POS_DYNAMIC=on (MB.2): always the largest tail (2 hs rows: h moved down to local_rows - 2 hs; rows the prefetch
+    gathered already, the same bytes again), as page copies: one shape for every chunk."""
+    from .page_copy import dyn
+
+    tails = tuple(getattr(ckv_cache, "_history_tails", ()) or ())
+    if dyn("hist") and tails and local_rows - h < max(tails) <= local_rows:
+        h = local_rows - max(tails)
     m = local_rows - h
     small = _buffer(buf.mesh, ("tail", owners * m) + (("bfp4",) if buf.bfp4 else ()))
     assert small is not None and buf.view is not None, ("P.75: no tail buffer", owners, m)
@@ -350,9 +382,19 @@ def _tail(ckv_cache, buf: HistoryBuffer, h: int, local_rows: int, owners: int, a
 def _tail_part(ckv_cache, buf: HistoryBuffer, h: int, local_rows: int, loc: HistoryBuffer | None = None):
     """The tail's input: the chip's own rows [h, local_rows) (bfp4: packed into ``loc`` / the shared record buffer
     first, then sliced) as a full-mesh gather input (the slab's topology)."""
+    from .page_copy import dyn, pages_of
+
     if buf.bfp4:  # P.77: the chunk's own rows packed on their chip first, their records gathered
         rec = _pack(ckv_cache, h, local_rows, loc)
-        part = ttnn.slice(rec, [0, 0, h, 0], [1, 1, local_rows, REC], memory_config=DRAM, sub_core_grids=sub_cores(rec))
+        if dyn("hist"):  # PB.7C / MB.2: a page copy (the slice is keyed on h)
+            part = pages_of(rec, h, local_rows - h, [1, 1, local_rows - h, REC])
+        else:
+            part = ttnn.slice(
+                rec, [0, 0, h, 0], [1, 1, local_rows, REC], memory_config=DRAM, sub_core_grids=sub_cores(rec)
+            )
+    elif dyn("hist"):
+        slab = ckv_cache.slab
+        part = pages_of(slab.tensor, slab.batch * slab.rows + h, local_rows - h, [1, 1, local_rows - h, slab.width])
     else:
         part = ckv_cache.slab.slice_rows(h, local_rows)  # [1, 1, m, 512] ROW_MAJOR DRAM interleaved
     # (host metadata only: the slice's own topology is not the slab's dim-2 sharding the full-mesh gather checks)
@@ -386,6 +428,8 @@ def new_chunk() -> None:
         for b in bufs.values():
             b.pre = None
             b.ready = None
+            b.own.clear()
+    owned_end()
 
 
 def prefetch(ckv_cache, start: int, chunk: int) -> bool:
@@ -397,6 +441,8 @@ def prefetch(ckv_cache, start: int, chunk: int) -> bool:
     owners, axis = owners_and_axis(ckv_cache.mesh, ckv_cache.tp_axis is not None)
     buf = _buffer(ckv_cache.mesh, ckv_cache.history_key)
     assert buf is not None, ("P.75: the source's buffer", ckv_cache.history_key)
+    if owned_active(ckv_cache):  # PB.HG without the gather sub-device: this segment's history to its chips, serially
+        return _owned_prefetch_one(ckv_cache, buf, int(start), int(chunk))
     buf.pre = None
     h = (int(start) // int(chunk)) * (ckv_cache.stripe // ckv_cache.ratio)
     if h == 0:
@@ -441,6 +487,44 @@ def prefetch_gather(plan, sub: dict | None = None) -> None:
     STATS["prefetch"] += 1
 
 
+def prefetch_mark(plan) -> None:
+    """PACKED_LONG_HIDE=on (PB.6L): the prefetch marker of a ``prefetch_prepare`` plan set at its pack (host only),
+    before its pieces are gathered: the tail (``tail_prepare`` / ``gather``) then moves only the chunk's own periods,
+    rows the pieces never write. Every piece is gathered before the source's reader (gather_hide.Hide.flush at the
+    table, after the regions' joins)."""
+    ckv_cache, buf, src, h, owners, axis, start = plan
+    buf.owner = None  # (rows [0, h) only until ``gather`` completes it)
+    buf.pre = (id(ckv_cache), start, ckv_cache.version, h)
+    STATS["prefetch"] += 1
+
+
+def prefetch_gather_range(plan, a: int, b: int, sub: dict | None = None) -> None:
+    """PACKED_LONG_HIDE=on (PB.6L): rows [a, b) of every owner of a ``prefetch_prepare`` plan's packed records into
+    the same rows of each owner's fixed slot of the source's buffer (ttnn.bringup.high_bw_all_gather
+    gathered_dim_start; a = 0: the prefix, as ``prefetch_gather``). A bf16 plan (no records) moves its whole history
+    at once. ``sub``: the gather sub-device's arguments."""
+    ckv_cache, buf, src, h, owners, axis, start = plan
+    assert 0 <= a < b <= h, (a, b, h)
+    if src is None:
+        assert (a, b) == (0, h), "PB.6L: pieces of a bf16 history (the slab is ND-sharded: no range gather)"
+        _gather_full(ckv_cache, buf, src, h, owners, axis, sub)
+        return
+    s0, s1 = ccl._sems(buf.mesh, axis)
+    with _Traced("gather", ckv_cache):
+        ttnn.bringup.high_bw_all_gather(
+            src,
+            2,
+            buf.tensor,
+            cluster_axis=axis,
+            num_links=ccl.AG_LINKS,
+            gathered_dim_size=owners * (b - a),
+            gathered_dim_start=a if a > 0 else None,
+            ready_semaphore=s0,
+            data_valid_semaphore=s1,
+            **dict(sub or {}),
+        )
+
+
 def tail_prepare(ckv_cache, start: int, local_rows: int, loc: HistoryBuffer | None = None):
     """PB.3H: the tail of ``gather(ckv_cache, local_rows, start)`` ahead of its call, up to its gather (pack + slice).
     None when ``gather`` would not take the tail path (no matching prefetch: it then gathers in full itself)."""
@@ -456,9 +540,18 @@ def tail_prepare(ckv_cache, start: int, local_rows: int, loc: HistoryBuffer | No
     ):
         return None
     owners, axis = owners_and_axis(ckv_cache.mesh, ckv_cache.tp_axis is not None)
+    h = pre[3]
+    from .page_copy import dyn
+
+    tails = tuple(getattr(ckv_cache, "_history_tails", ()) or ())
+    if dyn("hist") and tails and local_rows - h < max(tails) <= local_rows:
+        # PB.9X (as _tail, MB.2): always the largest tail (h moved down; rows the prefetch gathered already, the same
+        # bytes again): the tails' copy / slice_write shapes do not follow the history length (PB.9X probe: a build at
+        # history 8192, tails_finish's slice_write input [1, 32, 128, 320] -> [1, 32, 256, 320])
+        h = local_rows - max(tails)
     with _Traced("pack", ckv_cache):
-        part = _tail_part(ckv_cache, buf, pre[3], local_rows, loc)
-    return (ckv_cache, buf, part, pre[3], int(local_rows), owners, axis, int(start))
+        part = _tail_part(ckv_cache, buf, h, local_rows, loc)
+    return (ckv_cache, buf, part, h, int(local_rows), owners, axis, int(start))
 
 
 def tail_gather(plan, small: HistoryBuffer, sub: dict | None = None) -> None:
@@ -480,16 +573,43 @@ def tail_finish(plan, small: HistoryBuffer) -> None:
     STATS["tail"] += 1
 
 
+def tails_max_rows(plans: list) -> int:
+    """PB.7C (PACKED_GLUED_DYNAMIC=on): the combined tail gather's fixed rows an owner: every segment's tail at its
+    largest (two periods of the source's stripe a segment, GLUED_SEGS segments): one gather program for every layout;
+    only the plans' rows move (high_bw_all_gather's gathered_dim_size, a runtime value)."""
+    from .packed import GLUED_MAX
+
+    ckv = plans[0][0]
+    return 2 * GLUED_MAX * (ckv.stripe // ckv.ratio)
+
+
 def tails_input(plans: list):
     """PB.3H: several tail plans' inputs (each chip's own rows of each) concatenated on dim 2 in plan order: one
     full-mesh gather input (consumes the parts). Every plan of one gather geometry (owners, axis, record width)."""
     parts = [p[2] for p in plans]
     first = plans[0]
     assert all(p[5:7] == first[5:7] and p[1].bfp4 == first[1].bfp4 for p in plans), "tails_input: one geometry"
-    if len(parts) == 1:
+    from .page_copy import dyn, page_copy
+
+    if len(parts) == 1 and not dyn("hist"):
         return parts[0]
     with _Traced("pack", first[0], -1):
-        x = ttnn.concat(parts, dim=2, memory_config=DRAM, sub_core_grids=sub_cores(parts[0]))
+        if dyn("hist"):  # PB.7C: page copies into the fixed-size input (the concat is keyed on every part's rows)
+            m_max = tails_max_rows(plans)
+            assert sum(int(t.shape[-2]) for t in parts) <= m_max, ([t.shape for t in parts], m_max)
+            x = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, m_max, int(parts[0].shape[-1])]),
+                parts[0].dtype,
+                parts[0].layout,
+                parts[0].device(),
+                DRAM,
+            )
+            o = 0
+            for t in parts:
+                page_copy(t, x, 0, o, int(t.shape[-2]))
+                o += int(t.shape[-2])
+        else:
+            x = ttnn.concat(parts, dim=2, memory_config=DRAM, sub_core_grids=sub_cores(parts[0]))
     for t in parts:
         dealloc(t)
     x.update_tensor_topology(first[0].slab.tensor.tensor_topology())  # (host metadata, as _tail_part)
@@ -501,13 +621,21 @@ def tails_gather(plans: list, x, small: HistoryBuffer, sub: dict | None = None) 
     block holds every plan's rows in plan order): ONE gather for every segment's tail. Consumes ``x``."""
     first = plans[0]
     M = sum(p[4] - p[3] for p in plans)
-    assert small.rows == first[5] * M and small.view is not None and small.bfp4 == first[1].bfp4
+    from .page_copy import dyn
+
+    kw = {}
+    if dyn("hist"):  # PB.7C: fixed shapes; only each owner's first M rows move (a runtime extent)
+        assert small.rows == first[5] * tails_max_rows(plans) and small.view is not None, (small.rows, M)
+        kw = dict(gathered_dim_size=first[5] * M)
+    else:
+        assert small.rows == first[5] * M and small.view is not None and small.bfp4 == first[1].bfp4
     s0, s1 = ccl._sems(small.mesh, first[6])
     with _Traced("tail", first[0], -1):
         ttnn.experimental.high_bw_all_gather(
             x,
             2,
             small.tensor,
+            **kw,
             cluster_axis=first[6],
             num_links=ccl.AG_LINKS,
             ready_semaphore=s0,
@@ -520,11 +648,24 @@ def tails_gather(plans: list, x, small: HistoryBuffer, sub: dict | None = None) 
 def tails_finish(plans: list, small: HistoryBuffer) -> None:
     """Each plan's rows of ``small`` (its owner-block offset) slice_written into its source buffer (as tail_finish)."""
     o = 0
+    from .page_copy import dyn, page_copy
+
+    dy = dyn("hist")
+    M = tails_max_rows(plans) if dy else sum(p[4] - p[3] for p in plans)  # (an owner's block of ``small``)
     for ckv_cache, buf, part, h, local_rows, owners, axis, start in plans:
         m = local_rows - h
         with _Traced("write", ckv_cache):
             sl = small.view
-            if len(plans) > 1:
+            if dy:  # PB.7C: owner q's rows [o, o + m) of its block (M_max rows), one strided copy
+                sl = ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([1, owners, m, buf.width]),
+                    small.view.dtype,
+                    small.view.layout,
+                    small.view.device(),
+                    DRAM,
+                )
+                page_copy(small.view, sl, o, 0, m, owners, M, m)
+            elif len(plans) > 1:
                 sl = ttnn.slice(
                     small.view,
                     [0, 0, o, 0],
@@ -547,4 +688,239 @@ def holds(ckv_cache, start: int) -> bool:
     """The buffer of ``ckv_cache``'s size still holds its rows of this start and write version (a memo hit is
     valid: no other source of that size gathered since)."""
     buf = _buffer(ckv_cache.mesh, _key(ckv_cache))
+    if buf is not None and owned_active(ckv_cache):  # PB.HG: per segment's cache
+        st = buf.own.get(id(ckv_cache))
+        return st is not None and st[0] == "ready" and st[1:3] == (start, ckv_cache.version)
     return buf is not None and buf.owner == (id(ckv_cache), start, ckv_cache.version)
+
+
+# ---------------------------------------------------------------------------------------------- PB.HG owned histories
+# (tt/owned_gather.py: the program; tests/packed/test_owned_send_ops.py: its bytes on every layout, mesh only)
+# PACKED_HIST_OWNED=on (OWNER 2026-11-21): in a chip-aligned packed chunk every segment's history of a KV source goes only
+# to the chips that segment owns (tt/owned_gather.py), into the source's ONE buffer (no lane buffers): chip d's rows
+# q R + [0, local rows) are its own segment's, the bytes the lane buffer held there (the same packs, the same rows).
+_OWN_LOGGED: list = []
+_OWN: dict = {}  # the chunk's context: mesh, segs (SegRun, chip order of their entries), chip -> segment index
+
+
+def owned_on() -> bool:
+    """PACKED_HIST_OWNED=on (call-time; a chip-aligned chunk with HISTORY_FORMAT=bfp4 only)."""
+    from .settings import settings as _s
+
+    return _s.get("PACKED_HIST_OWNED") == "on" and bfp4_on()
+
+
+def owned_begin(mesh, segs: list, chip_seg: list) -> None:
+    """A chip-aligned packed chunk starts (tt/packed_glued.GluedCall): ``segs`` its computing segments, ``chip_seg``
+    per chip (chip-linear) the index of the segment it holds (idle chips: 0, the lane the sdpa's map reads there)."""
+    _OWN.clear()
+    ids = {}
+    for r in segs:
+        for i, c in r.state.compress.items():
+            if i in r.state.shared_compress or getattr(c.ckv, "history_rows", None) is None:
+                continue
+            if not isinstance(getattr(c.ckv, "history_key", None), tuple):
+                continue
+            ids[id(c.ckv)] = (i, r)
+    _OWN.update(mesh=mesh, segs=list(segs), chip=list(chip_seg), ids=ids)
+    if not _OWN_LOGGED:  # (once a process: the history DRAM a chip, for the report)
+        _OWN_LOGGED.append(1)
+        from loguru import logger
+
+        keys = sorted({c.ckv.history_key for r in segs for i, c in r.state.compress.items() if id(c.ckv) in ids})
+        mib = {
+            k: _buffer(mesh, k).rows * _buffer(mesh, k).width / 2**20 for k in keys if _buffer(mesh, k) is not None
+        }
+        logger.info(
+            f"PB.HG owned histories: one buffer a source {{(rows, layer): MiB a chip}} {mib}, total "
+            f"{sum(mib.values()):.1f} MiB a chip (off: the same a lane, x up to {len(segs)} lanes here)"
+        )
+
+
+def owned_end() -> None:
+    _OWN.clear()
+
+
+def owned_active(ckv_cache) -> bool:
+    return bool(_OWN) and id(ckv_cache) in _OWN["ids"]
+
+
+class OwnedGroup:
+    """PB.HG: every segment's compressed cache of KV source ``s`` in an owned chunk: one gather item
+    (tt/gather_hide.Hide), ``ckvs`` / ``starts`` in segment order, ``dest`` per chip its entry index."""
+
+    def __init__(self, s: int, ckvs: list, starts: list, dest: list):
+        self.s, self.ckvs, self.starts, self.dest = int(s), list(ckvs), [int(v) for v in starts], list(dest)
+        c0 = self.ckvs[0]
+        self.mesh, self.slab, self.stripe, self.ratio = c0.mesh, c0.slab, c0.stripe, c0.ratio
+        self.owners, self.tp_axis, self.history_key = c0.owners, c0.tp_axis, c0.history_key
+        self.version = c0.version
+
+
+class OwnedRun:
+    """The item's stand-in SegRun (gather_hide reads .start: the group's latest, its largest history; .lane)."""
+
+    def __init__(self, start: int):
+        self.start, self.lane = int(start), -1
+
+
+def owned_group(s: int) -> "OwnedGroup | None":
+    """Source s's group of the chunk (None: no owned cache of s)."""
+    if not _OWN:
+        return None
+    ckvs, starts, idx = [], [], {}
+    for r in _OWN["segs"]:
+        c = r.state.compress.get(s)
+        if c is None or id(c.ckv) not in _OWN["ids"]:
+            continue
+        if id(c.ckv) not in idx:
+            idx[id(c.ckv)] = len(ckvs)
+            ckvs.append(c.ckv)
+            starts.append(int(r.start))
+    if not ckvs:
+        return None
+    dest = []
+    for j in _OWN["chip"]:
+        c = _OWN["segs"][j].state.compress.get(s)
+        dest.append(idx.get(id(c.ckv)) if c is not None else None)
+    return OwnedGroup(s, ckvs, starts, dest)
+
+
+def _owned_axis(ckv) -> int:
+    _, axis = owners_and_axis(ckv.mesh, ckv.tp_axis is not None)
+    return 0 if axis is None else 1
+
+
+def _owned_send(buf: HistoryBuffer, R: int, ckv0, entries: list, dest: list, sub: dict | None = None) -> None:
+    from .owned_gather import sender
+
+    ents = [(t.tensor if isinstance(t, HistoryBuffer) else t, lo, hi) for t, lo, hi in entries]
+    with _Traced("gather", ckv0, -1):
+        sender(buf.mesh)(buf.tensor, R, _owned_axis(ckv0), ents, dest)
+
+
+class OwnedPlan:
+    """A group's prefetch: every entry's records [0, h) packed into its own record buffer."""
+
+    def __init__(self, group, buf, entries, owners):
+        self.group, self.buf, self.entries, self.owners = group, buf, entries, owners  # entries [(ckv, loc, h, start)]
+        self.h = max(e[2] for e in entries)
+
+
+def owned_prepare(group: OwnedGroup, chunk: int, locs: list) -> "OwnedPlan | None":
+    """``prefetch_prepare`` of a group: every entry's history [0, c hs) packed into ``locs[e]``; None when no entry has
+    a history (every segment's first chunk)."""
+    buf = _buffer(group.mesh, group.history_key)
+    assert buf is not None and buf.bfp4, ("PB.HG: the source's record buffer", group.history_key)
+    entries = []
+    for ckv, st, loc in zip(group.ckvs, group.starts, locs):
+        h = (int(st) // int(chunk)) * (ckv.stripe // ckv.ratio)
+        assert h <= ckv.slab.rows, (h, ckv.slab.rows)
+        buf.own.pop(id(ckv), None)
+        if h > 0:
+            with _Traced("pack", ckv, -1):
+                _pack(ckv, 0, h, loc)
+        entries.append((ckv, loc, h, int(st)))
+    if all(e[2] == 0 for e in entries):
+        return None
+    return OwnedPlan(group, buf, entries, int(group.owners))
+
+
+def owned_mark(plan: OwnedPlan) -> None:
+    """The prefetch markers (host only): each entry's rows [0, h) are (or will be, before its reader) in the buffer."""
+    for ckv, loc, h, st in plan.entries:
+        if h > 0:
+            plan.buf.own[id(ckv)] = ("pre", st, ckv.version, h)
+    plan.buf.owner = None
+    STATS["prefetch"] += 1
+
+
+def owned_range(plan: OwnedPlan, a: int, b: int | None = None, sub: dict | None = None) -> None:
+    """Rows [a, b) of every entry's history (clipped to its own [0, h)) to its segment's chips: ONE program."""
+    b = plan.h if b is None else b
+    ents = [(loc, min(a, h), min(b, h)) for ckv, loc, h, st in plan.entries]
+    R = int(plan.group.slab.rows)
+    _owned_send(plan.buf, R, plan.group.ckvs[0], ents, plan.group.dest, sub)
+
+
+def owned_prefetch(group: OwnedGroup, chunk: int, locs: list) -> bool:
+    """Serially (a flush): the group's whole prefetch."""
+    plan = owned_prepare(group, chunk, locs)
+    if plan is None:
+        return False
+    owned_range(plan, 0)
+    owned_mark(plan)
+    return True
+
+
+def owned_tails_prepare(group: OwnedGroup, chunk: int, locs: list):
+    """At the source layer, after its compressor's writes: every entry's rows past its prefetch [h, local rows) (all
+    of [0, local rows) when nothing was prefetched) packed into ``locs[e]``; returns the plan ``owned_tails_send``
+    takes (None: nothing to move)."""
+    buf = _buffer(group.mesh, group.history_key)
+    assert buf is not None and buf.bfp4, ("PB.HG: the source's record buffer", group.history_key)
+    ents = []
+    for ckv, st, loc in zip(group.ckvs, group.starts, locs):
+        nb = -(-(int(st) + int(chunk)) // int(chunk))
+        local_rows = nb * ckv.stripe // ckv.ratio
+        assert 0 < local_rows <= ckv.slab.rows, (local_rows, ckv.slab.rows)
+        pre = buf.own.get(id(ckv))
+        h = 0
+        if pre is not None and pre[0] == "pre" and pre[1] == st and 0 <= ckv.version - pre[2] <= 1:
+            h = pre[3]
+        if h < local_rows:
+            with _Traced("pack", ckv, -1):
+                _pack(ckv, h, local_rows, loc)
+        ents.append((ckv, loc, h, local_rows, st))
+    return (group, buf, ents)
+
+
+def owned_tails_send(plan, sub: dict | None = None) -> None:
+    """Every entry's rows [h, local rows) to its chips (ONE program), then its markers ready."""
+    group, buf, ents = plan
+    R = int(group.slab.rows)
+    _owned_send(buf, R, group.ckvs[0], [(loc, h, lr) for ckv, loc, h, lr, st in ents], group.dest, sub)
+    for ckv, loc, h, lr, st in ents:
+        buf.own[id(ckv)] = ("ready", st, ckv.version, lr)
+        STATS["tail"] += 1
+    buf.owner = None
+
+
+def _owned_one(ckv, buf: HistoryBuffer, lo: int, hi: int) -> None:
+    """Rows [lo, hi) of one owned cache (packed into the shared local record buffer) to its own chips."""
+    s, _ = _OWN["ids"][id(ckv)]
+    group = owned_group(s)
+    e = next(i for i, c in enumerate(group.ckvs) if c is ckv)
+    R = int(ckv.slab.rows)
+    loc = _buffer(ckv.mesh, ("loc", R))
+    with _Traced("pack", ckv, -1):
+        _pack(ckv, lo, hi, loc)
+    dest = [e if d == e else None for d in group.dest]
+    ents = [(loc, lo, hi) if i == e else (None, 0, 0) for i in range(len(group.ckvs))]
+    _owned_send(buf, R, ckv, ents, dest)
+
+
+def _owned_prefetch_one(ckv, buf: HistoryBuffer, start: int, chunk: int) -> bool:
+    h = (start // chunk) * (ckv.stripe // ckv.ratio)
+    buf.own.pop(id(ckv), None)
+    if h == 0:
+        return False
+    assert h <= ckv.slab.rows, (h, ckv.slab.rows)
+    _owned_one(ckv, buf, 0, h)
+    buf.own[id(ckv)] = ("pre", start, ckv.version, h)
+    STATS["prefetch"] += 1
+    return True
+
+
+def _owned_complete(ckv, buf: HistoryBuffer, local_rows: int, start: int) -> None:
+    """``gather`` of an owned cache: done when its rows are ready, else moved now (its own chips only)."""
+    st = buf.own.get(id(ckv))
+    if st is not None and st[0] == "ready" and st[1:] == (start, ckv.version, local_rows):
+        STATS["ready"] += 1
+        return
+    h = 0
+    if st is not None and st[0] == "pre" and st[1] == start and 0 <= ckv.version - st[2] <= 1 and st[3] < local_rows:
+        h = st[3]
+    _owned_one(ckv, buf, h, local_rows)
+    buf.own[id(ckv)] = ("ready", start, ckv.version, local_rows)
+    STATS["tail" if h else "full"] += 1

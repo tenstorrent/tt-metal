@@ -82,3 +82,57 @@ Nothing changes for a request sent alone: a chunk with one segment is today's ch
   chunk: its lane is pad, its snapshot is rewritten at cap and it is acked.
 - One readback of the input a chunk (the engram host step's ids), as today; P4 (host ids in the header) would remove
   it for every segment at once.
+
+## Revision 2026-11-20 (PB.7): GLUED chunks, up to 6 variable-length segments (replaces the 4 x 2048 lanes of P1 / P2)
+
+Why: fixed 2048-row lanes pad real AgentX turns (at p50 ~78 % of a lane chunk's rows are real) and cap a segment at
+2048. Glued: segments back to back, any lengths, only the chunk's tail may be padding.
+
+### Ask G1: the header (replaces P1)
+
+- `{n_segments (1..6), segments[6]}`, each `{slot_id, actual_start, actual_end, global_write_start}` (16 B each,
+  100 B in all), in row order. Segment i's ids occupy chunk rows `[row_i, row_i + (actual_end_i - actual_start_i))`,
+  `row_0 = 0`, `row_{i+1} = row_i + actual_end_i - actual_start_i`: **back to back, no alignment, no padding between
+  segments**; rows past the last segment are PAD_ID. `sum(actual_end - actual_start) <= 8192`.
+- Rules per segment (as today): `actual_start` on a kv block (64; 32-aligned at least); one slot at most once a chunk;
+  `global_write_start` missing = `actual_start`. No per-segment length cap other than the chunk.
+- A request that does not fit the rows left is **split**: its first part ends at the last kv-block boundary that fits
+  (`actual_end = (actual_start + rows_left) // 64 * 64`, so the part is a non-last chunk of the request: computed in
+  full, cap = end) and the rest is a segment of a later chunk starting there (same slot, same `global_write_start`), as
+  today's chunked prefill continues a long prompt. <= 63 tail rows of the chunk may stay pad. The model does not
+  know the next chunk and keeps no state between the two parts beyond the slot's served caches.
+- One segment over the whole chunk is today's chunk, bit for bit (the model's oracle checks it).
+
+### Ask G2: the device ids (replaces P2)
+
+- The same uint32 `[SP, 1, 8192 / SP]` tensor (sharded over mesh rows) in **natural order of the glued rows** (row r of
+  the chunk = mesh row r // (8192 / SP), column r % (8192 / SP)): segment i's ids at rows `[row_i, row_i + len_i)`.
+  No reshuffle. The model reads the header and lays the computed rows out itself (each segment's `[actual_start, cap)`
+  back to back: decode's cap drops `[cap, actual_end)`, which today's chunk never computes either).
+- With ask 2 of 2026-11-18 (host ids per segment `[start - 3, end)`): the same per segment; removes the ids readback.
+- PB.7C (2026-11-20, owner: one upload a chunk): the G1 header as 32 uint32 words (`n`, then `slot, actual_start,
+  actual_end, global_write_start` per segment, zeros after) appended to every mesh row's ids: the tensor is
+  `[SP, 1, 8192 / SP + 32]`, written in the same H2D transfer. The model derives every per-chunk table on the device
+  from these words (tt/glued_derive.py); the host header stays as today (the model's host still reads it).
+
+### Ask G3: acks (as P3)
+
+- Each served layer acked once per segment in row order, after the layer's writes of every segment are in DRAM.
+  A segment with `cap <= actual_start` computes nothing and still gets its snapshot rewrite and its acks.
+
+### Ask G4: the scheduler
+
+- Fill a chunk in arrival order (or first-fit) with up to 6 pending segments back to back; split the one that does
+  not fit (G1). Resident slots: 6 per chunk (+ the split request's slot, which stays in flight).
+- DRAM (model side, measured `glued_dram_headroom_gb_6x_p1m`): six slots' history buffers at ~1M resident at once.
+
+### Model side today (PB.7)
+
+- `tt/packed.GluedChunk` (descriptor, engine rows vs model rows, `fill` / `split`), `prefill_packed(input, kv_cache,
+  GluedChunk)` with `PACKED_GLUED=on` (call-time switch; off = the 4-lane path of P1 / P2).
+- A glued chunk whose segments sit at rows k x 2048 (e.g. 4 x 2048) runs the lane path (one attention call a layer);
+  any other glued chunk runs each segment's attention after moving its rows to row 0 (v1; one attention call per
+  segment). v2 (per-row segment arguments in the attention forks) is the model's next step; nothing in G1-G4 changes.
+- Tests: `tests/packed/test_glued_cpu.py`, `test_glued_oracle.py` (a segment's outputs and slot writes identical
+  whatever it is glued with and wherever it lands, a split request == the same request chunked alone),
+  `test_glued_reference.py`, `test_glued_walls.py`.

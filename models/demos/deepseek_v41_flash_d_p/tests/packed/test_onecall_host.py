@@ -55,7 +55,10 @@ def test_onecall_host(mesh_device, monkeypatch):
     pos = [int(v) for v in os.environ.get("PB3A_PROBE_POS", "139264,139264,139264,139264").split(",")]
     top = max(pos)
     layers = batch.run_layers(S, list(S.layers()), last_chunk=False)
-    monkeypatch.setitem(S.data["target"], "seq", max(top + CHUNK, int(S.data["target"]["seq"])))
+    from models.demos.deepseek_v41_flash_d_p.tests.packed.test_packed_walls import _cap
+
+    deploy = int(S.get("deploy.seq") or S.get("target.seq"))  # (PB.9G: the walls' one load, no second model)
+    monkeypatch.setitem(S.data["target"], "seq", max(top + CHUNK, int(S.data["target"]["seq"]), _cap(deploy)))
     model = batch.device_model(S, mesh_device, layers, lm_head=False)
     if model.skip_mode != "decode":
         model.use_decoder_skip("decode")

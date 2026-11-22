@@ -480,9 +480,18 @@ class WindowTables:
         hit = self._srv_row
         if hit is not None and hit[0] == k:
             return hit[1]
-        idx = ttnn.slice(
-            self.srv, [0, 0, k, 0], [1, 1, k + 1, self.geo.w], memory_config=DRAM, sub_core_grids=sub_cores(self.srv)
-        )
+        from .page_copy import dyn, pages_of
+
+        if dyn("pages"):  # PB.7C / MB.2: row k's page copied (k a runtime value: no program a position)
+            idx = pages_of(self.srv, k, 1, [1, 1, 1, self.geo.w])
+        else:
+            idx = ttnn.slice(
+                self.srv,
+                [0, 0, k, 0],
+                [1, 1, k + 1, self.geo.w],
+                memory_config=DRAM,
+                sub_core_grids=sub_cores(self.srv),
+            )
         if self.fold:
             if hit is not None:
                 dealloc(hit[1])
@@ -1036,6 +1045,10 @@ class TtWindowCache:
                 f"{[p for p in ring.pos if p is not None]}, last write ending at {ring.end}); begin_chunk truncates the "
                 "window at such a start under DECODER_SKIP=exact / replay128 and refuses it under off"
             )
+        from .page_copy import dyn
+
+        if dyn("pages"):
+            return self._ring_carry_pages(ring, start, n, p0)
         pieces, p = [], p0
         while p < start:  # (the ring rows in position order: one or two slices, the wrap)
             slot = p % RING
@@ -1104,6 +1117,48 @@ class TtWindowCache:
         dealloc(out)
         return res
 
+    def _ring_carry_pages(self, ring, start: int, n: int, p0: int) -> ttnn.Tensor:
+        """PACKED_GLUED_DYNAMIC=on (PB.7C): ``_ring_carry``'s bytes by page copies (tt/page_copy.py) at fixed shapes:
+        the slices and concats there are keyed on the ring slot and the owners' rows (a program a position)."""
+        from .page_copy import page_copy
+
+        W = self.WIDTH
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, n, W]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, DRAM
+        )
+        p, d = p0, 0
+        while p < start:  # (the ring rows in position order: one or two runs, the wrap; a ROW_MAJOR page is a row)
+            slot = p % RING
+            take = min(RING - slot, start - p)
+            page_copy(ring.t, out, slot, d, take)
+            p += take
+            d += take
+        owners = [ring.own[(q // 32) % ring.BLOCKS] for q in range(p0, start, 32)]
+        if any(o is not None for o in owners):
+            tl = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(out))
+            dealloc(out)
+            gat = self._gather_all(tl)  # [1, 1, N n, 512], chip-linear
+            if gat is not tl:
+                dealloc(tl)
+            mine = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, n, W]), gat.dtype, ttnn.TILE_LAYOUT, self.mesh, DRAM
+            )
+            wt = W // 32  # (tiles a tile row)
+            for k, o in enumerate(owners):  # (block k of owner o: its tile row of o's rows; None: chip 0's copy)
+                page_copy(gat, mine, ((o or 0) * n // 32 + k) * wt, k * wt, wt)
+            dealloc(gat)
+            out = to_rm(mine, memory_config=DRAM)
+            dealloc(mine)
+        if n == WINDOW:
+            return out
+        res = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, WINDOW, W]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, DRAM
+        )
+        page_copy(self.tables.zero_carry, res, 0, 0, WINDOW - n)
+        page_copy(out, res, 0, WINDOW - n, n)
+        dealloc(out)
+        return res
+
     def served_bytes(self) -> int:
         """Window KV bytes a chip this slot keeps (WINDOW_KV_KEEP: full the served slab, ring its ring, none 0: the
         shared working ring is the model's, not the slot's; snapshot128 its ring + the served 128-row snapshot)."""
@@ -1114,7 +1169,7 @@ class TtWindowCache:
         return (self.ring.nbytes if self.ring_owned else 0) + snap + pin
 
     # ------------------------------------------------------------------ WINDOW_KV_KEEP=snapshot128 (P.42)
-    def write_snapshot(self, end: int, src: "TtWindowCache | None" = None, send: int = 0) -> None:
+    def write_snapshot(self, end: int, src: "TtWindowCache | None" = None, send: int = 0, batch=None) -> None:
         """The served snapshot after a chunk ending at ``end`` (device ops only; after the layer's window write, before
         its ack): position p at row p % 128 for p in [cap - 128, cap), cap = snapshot_cap(end), read from the ring
         (``_snapshot_rows``: blocks held by one chip gathered from it, so every chip holds the same bytes); rows of no
@@ -1125,7 +1180,9 @@ class TtWindowCache:
         ``src`` (P.43, SKIP_TAIL_START=cap): the cache whose ring holds the rows, when not this one: DECODER_SKIP=
         replay128's decoder tail (the tail state's window cache of this layer, written by the tail's chunk; its ring
         is the tail model's working ring, the same [1, 1, 192, 512] shape); this cache's gather buffers and slab.
-        ``send`` (PB.3): the snapshot broadcast instance (WindowTables.snapshot_send)."""
+        ``send`` (PB.3): the snapshot broadcast instance (WindowTables.snapshot_send). ``batch`` (PB.9G, a list): the
+        broadcast's (instance, ring, slab, page0, blocks) appended instead of sent (the caller sends a layer's
+        snapshots of every segment in one program: SnapshotSend.multi)."""
         src = self if src is None else src
         assert src.ring is not None, "write_snapshot: the source cache keeps no ring"
         assert src is self or src.keep != "none" or src.ring.writer is src, "the tail ring was written by another cache"
@@ -1146,7 +1203,10 @@ class TtWindowCache:
                     o = ring.own[(p // 32) % ring.BLOCKS]
                     blocks.append(("local" if o is None else int(o), p % RING))
             snap = self.snap
-            send(ring.t, snap.tensor, snap.batch * snap.rows, blocks)
+            if batch is not None:
+                batch.append((send, ring.t, snap.tensor, snap.batch * snap.rows, blocks))
+            else:
+                send(ring.t, snap.tensor, snap.batch * snap.rows, blocks)
             self.snap_cap = cap
             return
         rows = self._snapshot_rows(cap, lo, src.ring) if lo < cap else self.tables.zero_carry

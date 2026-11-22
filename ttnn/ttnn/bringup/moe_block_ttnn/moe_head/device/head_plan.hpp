@@ -48,6 +48,10 @@ struct HeadShape {
     uint32_t router_candidates = 0;  // router candidates (num_experts x fold)
     uint32_t top_k = 0;
     std::optional<uint32_t> latent;
+    // MoEBlockConfig.shared_scatter_columns: the columns scatter without a latent, its ring halves by core column
+    bool scatter_columns = false;
+    // MoEBlockConfig.router_canonical_sum: the router's logits partials summed in chip order
+    bool router_canonical_sum = false;
     uint32_t fold = 1;
     uint32_t links = 2;
     bool ring = false;  // the TP axis wraps
@@ -73,7 +77,7 @@ struct HeadShape {
     // forward_chunks rows back to back
     uint32_t forward_chunks = 1;
 
-    int reduce_scatter_dim() const { return latent ? -1 : -2; }
+    int reduce_scatter_dim() const { return latent || scatter_columns ? -1 : -2; }
     uint32_t num_chips() const { return sp_rows * tp_size; }
     uint32_t tokens_per_chip() const { return rows / tp_size; }
     uint32_t tokens_per_chip_all_blocks() const {

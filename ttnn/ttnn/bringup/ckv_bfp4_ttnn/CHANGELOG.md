@@ -102,3 +102,46 @@ Source: none (new op), deepseek_v41_flash_d_p 4-bit compressed KV (owner 2026-10
 - Measured: 8x4 Galaxy, one 5120-token chunk (ckv_bfp4 / bfp_round): 120 -> 110 cores a chip (tests/perf/test_core_audit.py in deepseek_v41_flash_d_p); per-op device time in that model's BREADCRUMBS FIX.15.
 - Needed by: deepseek_v41_flash_d_p FIX.15
 - Files: ckv_bfp4.py
+
+### ckv_bfp4 `dynamic_row0` (2026-11-21)
+- What: `ckv_bfp4(..., prepared=True, compact=True, dynamic_row0=True)`: the compact program's row0 (the writer's
+  common arg 3) is a per-run COMMON value slot (prepare_program's common value slots, same date) instead of frozen:
+  one program for every row0 with compact's host cost. Default False: the behaviour (and programs) before. The same
+  bytes (compact's cores / splits, row0 written as before).
+- Why: deepseek_v41_flash_d_p PB.9X: the history pack (tt/history_gather._pack_fixed, POS_DYNAMIC) packs fixed-size
+  pieces at a per-chunk row0; prepared non-compact cost ~0.10-0.12 ms of host a call (36 calls a packed glued chunk),
+  compact froze row0 (a program per row0: a build on fresh traffic).
+- Tests: tests/unit/test_ckv_bfp4.py::test_ckv_bfp4_dynamic_row0 (single device: not run on the 8x4 Galaxy, agent rule
+  19); on the 8x4 mesh: models/demos/deepseek_v41_flash_d_p/tests/packed/test_common_values_ops.py (bytes equal to
+  the default prepared path at several row0, one program).
+- Needed by: deepseek_v41_flash_d_p PB.9X (tt/history_gather._pack_fixed, setting COMMON_VALUE_SLOTS)
+- Files: ckv_bfp4.py, tests/unit/test_ckv_bfp4.py, README.md, ../INDEX.md
+
+### ckv_bfp4_rows: records straight from a ROW_MAJOR row tensor, runtime rows (deepseek_v41_flash_d_p MB.4)
+- What: new entry point `ttnn.bringup.ckv_bfp4_rows(src, rows, src_row0, n, row0, max_grid=None)`: rows [src_row0,
+  src_row0 + n) of a bf16 ROW_MAJOR [.., 512] tensor (one row a page; interleaved or ND-sharded, e.g. a served cache
+  slab, its (slot, layer) b at row b R) -> bfloat4_b row records [row0, row0 + n). New reader
+  kernels/ckv_bfp4_rows_reader.cpp (a band's 32 rows into cb 0); compute and writer behind the define CKV_ROWS_IN
+  (compute: the band tilized into cb 18 by tilize_block, with the packer reconfigured to bf16 first and BH's DEST remap
+  off around the tilize, then the existing copy / SFPU round / row-record pack; writer: per-core [rows, nb, row0]).
+  Always prepared: one program per (mesh, src geometry incl. an ND-sharded shape, rows geometry, max_grid); src_row0,
+  the band count and row0 are value slots (the same on every core), the bands split by the core index as ckv_share
+  does, cores past the band count idle. ckv_bfp4 / bfp_round programs, kernels and args are unchanged without the
+  define (the default path's sources compile as before).
+- Why: deepseek_v41_flash_d_p MB.4 (owner 2026-11-21): the shipped POS_DYNAMIC=on history pack (MB.2) moved the
+  served slab's rows by 4-core page copies + tilize + ckv_bfp4 in 2048-row pieces (no program a history length); at a
+  1,024,000-token history +1.95 ms device and +5.45 ms host a chunk vs the slice path, growing with the history. One
+  call a source reads, tilizes and packs in one program with no per-call build.
+- Exactness: tests/unit/test_ckv_bfp4_rows.py (8x4 mesh, both chips checked): records == the host rule byte for byte
+  for (src_row0, n, row0) = (0, 32, 0), (2112, 640, 96), (4096, 8192, 0), (1024, 4096, 4096), interleaved and
+  ND-sharded sources ([1, 1, 16, 512] shards round-robin over the DRAM banks, as tt/served.alloc_served); == ckv_bfp4
+  of to_layout(slice) (the tile path); rows outside untouched; one prepared program for all four calls; deterministic.
+- Regression: the fork's tests/unit (test_ckv_bfp4.py, test_bfp_round.py) use the single-device `device` fixture and
+  were not run on the Galaxy (agent rule 19: no single-card job on a mesh box); the default path's code is unchanged
+  (new define only). Its model use (the compressed-KV pack of tt/compressor, P.11 / P.77) ran in MB.4's ladder.
+- Cores: max_grid (110 a Galaxy chip; a data-movement + SFPU op, no matmul).
+- Needed by: deepseek_v41_flash_d_p MB.4; brought to the batching branch by PB.MB4 (2026-11-21: every history pack,
+  single-request and every packed segment's, through it; the common value slots there are prepared_program's PB.9X
+  ones, the same `(k, 1 << 31 | i)` encoding, so no prepared_program change on that branch)
+- Files: ckv_bfp4.py, __init__.py, kernels/ckv_bfp4_rows_reader.cpp, kernels/ckv_bfp4_compute.cpp,
+  kernels/ckv_bfp4_writer.cpp, tests/unit/test_ckv_bfp4_rows.py, README.md; ttnn/ttnn/bringup/__init__.py (PYTHON_OPS)

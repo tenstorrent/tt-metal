@@ -324,3 +324,54 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_post` on
 - Files: `mhc_post_ttnn.{hpp,cpp}`, `mhc_post_ttnn_nanobind.cpp`, `device/mhc_post_stats_device_operation.{hpp,cpp}`,
   `device/mhc_post_stats_program_factory.cpp`, `kernels/mhc_post_stats_{reader,writer,compute}.cpp`,
   `kernels/mhc_post_feed_{reader,sender}.cpp`, `tests/unit/test_mhc_post_fast.py` (new).
+
+### v2: feed landing in the ports' L1, W segments + multicast, SFPU hc transposes (deepseek_v41_flash_d_p PB.8)
+- What: opt-in `v2=True` (needs `fast`; default False: every program, CT / RT arg, define and hash as before). Owner
+  2026-11-20: two ideas from a colleague's mhc_post op (git f1bdc1a4c93: feed L1 landing; slice-sharing placement +
+  fused SFPU mix), built into this fork (not ported), plus the pending hc transposes step.
+  - Feed landing (define MHC_POST_LAND, writer / port reader / sender; semaphore 6 over workers + ports): cb_feed on the
+    ports is the landing: one slot of P tiles per packet of the busiest port (host max_port_packets over every chip,
+    side and link) + one page of flag words. The port reader zeroes the flags, then writes cb_feed's address into its
+    landing word (0 at every launch); a worker reads port 0's word once (bounded poll) before its first landing write,
+    writes each other-chip y tile to (port, slot, offset) of its stream position (mhc_post_feed_common.hpp stream_pos:
+    P a packet, the stream's last tile alone, as the sender walks it), fences, then sets its flag word (stream order of
+    the port's units) with an inline write. The port reader pushes each packet once the flags of every unit up to the
+    packet's last tile are set; the sender is unchanged but for its slot count (land + 1) and 8 headers (a flush every
+    8). No y_output staging writes, no port DRAM re-reads. Fits when (land + 1) x P tiles <= min(1 MB, the workers'
+    CB bytes); else the staging path.
+  - W segments (host) + multicast (define MHC_POST_WMCAST, reader): with one unit a core, block b's RT units on a
+    vertical segment of RT cores (column-major segments, none holding a port; the feed's ports move to the grid's last
+    column, bottom up); each core's W share goes to the block's other RT - 1 cores in one NoC multicast a tile (reader
+    args: the segment's first / last core after the peer list) when every segment is one NoC column. The forward
+    semaphore protocol is unchanged.
+  - hc transposes (define MHC_POST_HCT, with the norm; writer / compute): the root's compute turns the summed row
+    coefficient-major in the root window (rows_to_soa, DEST 0 -> 2, packed to cb_hsoa) and the Sinkhorn's hc back to
+    row-major (soa_to_rows, DEST 0 -> 1, columns 24.. zero) on the SFPU: per output vector, 8 source vectors masked to
+    one lane of each 8-lane subvector, rotated (subvec_shflror1) and ORed in (Horner), exact bit moves; the column
+    parity is a dst_reg base shift (one code copy for both). The writer writes cb_fin and the hc tile as they come (no
+    cols_to_soa / soa_to_cols, 6.4 + 5.4 us of BRISC word copies on the 8x4).
+  - Compute (define MHC_POST_V2): the bottom half's coefficient tiles are built 16 vectors on (q + 16, inside the CF
+    tiles) and its mix runs the top half's code after 16 dst_reg++ (mix_top / mix_bottom): -3 KB of trisc1 text; v2 with
+    the device profiler's zones fit the 70 688 B kernel-config buffer only with it (72 960 B before).
+- Why: the op probe on the 8x4 ([160, 5120] a chip, P.83 fast): the ffn call's end was the root's hc path (BRISC
+  transposes 6.4 + 5.4 us after the Sinkhorn), the attn call's the feed (port DRAM re-reads of the staged y 24-34 us
+  after the last unit, then the sends).
+- Precision: bit-identical to `fast` on every output (X', stats incl. column 24, hc, y without the feed, feed_output):
+  the same values move, every sum keeps its order.
+- Measured (8x4 Galaxy, FABRIC_2D_TORUS_XY, 110-core cap, device profiler, slowest chip, median of 4-6 calls; fast /
+  v2, us): [160, 5120] no feed 111.1 / 102.6, feed 143-150 / 138.4; [256, 5120] no feed 161.8 / 158.2, feed 249.6 /
+  240.6. The multicast W share did not move the units' phase measurably (column reads + mix bound it: slowest partial
+  ~87 us); 8 sender headers alone: no change (the sends are link / packet bound: P = 2 bf16 tiles a 4352 B packet,
+  ~30-35 us for the busy port's ~200 tiles); streaming the packets by flags: ~-2 us over the whole-wave push.
+- Tests: `tests/unit/test_mhc_post_v2.py` (v2 vs fast, every output bit-identical, 3 repeated v2 calls: [64, 640]
+  ragged with / without the feed, [160, 5120] with / without, [256, 5120] with / without, [640, 1280] feed, [1280, 5120]
+  (landing too big: staging); refusal), run on the model's resident mesh through
+  models/demos/deepseek_v41_flash_d_p/tests/test_mhc_post_v2.py: 8 / 8. Fork regression not run on the 8x4 (owner
+  PACKED_RULES: no fork suites on the 8x4); v2=False is the P.83 program (its kernels change only inside v2 defines;
+  the port reader's extra CT args are appended only with the landing).
+- Cores: unchanged counts (units + spare-core roots + 2 L ports: 109 of the 110 cap at [160, 5120] with the feed); no
+  matmul program config (rule 18 caps matmuls only).
+- Needed by: deepseek_v41_flash_d_p PB.8 (setting MHC_POST_V2, tt/mhc.py collapse_kwargs).
+- Files: `mhc_post_ttnn.{hpp,cpp}`, `mhc_post_ttnn_nanobind.cpp`, `device/mhc_post_stats_device_operation.{hpp,cpp}`,
+  `device/mhc_post_stats_program_factory.cpp`, `kernels/mhc_post_stats_{reader,writer,compute}.cpp`,
+  `kernels/mhc_post_feed_{common.hpp,reader.cpp,sender.cpp}`, `tests/unit/test_mhc_post_v2.py` (new).

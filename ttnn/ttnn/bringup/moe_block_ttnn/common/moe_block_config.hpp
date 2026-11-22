@@ -85,6 +85,18 @@ struct MoEBlockConfig {
     // the MoE head's router iterations (HeadLayout.router_iterations): 0 the planner's (by cost, each layout with the
     // fewest that fit), n at least n (tests: the iterated router where the planner would not pick it)
     uint32_t head_router_iterations = 0;
+    // The shared expert's reduce-scatter by columns without a latent (bring-up fork option, deepseek_v41_flash_d_p
+    // PB.7): the head's y is [rows, H / TP] (as with a latent) and its ring halves split by matmul core column, so a
+    // row's adds run in the order of its columns' ring, never of the TP chip that owns the row - the same row gives the
+    // same bits wherever it lands in the chunk (the rows scatter adds in its destination chip's ring order). The
+    // caller turns y into owner rows (a TP all-to-all) itself; MoEBlock's tail takes the rows scatter only. false: the
+    // source's rows scatter.
+    bool shared_scatter_columns = false;
+    // The router's logits: the TP partials summed in chip order (chip 0's + chip 1's + ...) whatever chip owns the
+    // token (bring-up fork option, deepseek_v41_flash_d_p PB.7). false: the source's - the owner's own partial first,
+    // then the others in its predicted landing order (an fp32 sum whose order depends on the owner chip: a token's
+    // logits, so its gate weights and near-tied picks, can differ in the last bits with the chip that owns it).
+    bool router_canonical_sum = false;
 
     // Geometry inputs that are not derived
     // links per direction, the same on every axis: 2 (check() rejects 1: the head spreads tokens over both links and

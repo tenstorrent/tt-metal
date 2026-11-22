@@ -98,4 +98,24 @@ inline uint32_t packet_size(uint32_t left, uint32_t p) {
     return left > 1 ? left - 1 : 1;
 }
 
+// PB.8 (v2): the packets of a stream of n tiles (packet_size's split: P a packet, the last tile alone)
+inline uint32_t stream_packets(uint32_t n, uint32_t p) { return n <= 1 ? n : (n - 1 + p - 1) / p + 1; }
+
+// PB.8 (v2, the landing): where tile i of a stream of n tiles sits: packet i / P at i mod P, the last tile (n > 1)
+// alone in the packet after the others
+struct SlotPos {
+    uint32_t packet, offset;
+};
+inline SlotPos stream_pos(uint32_t i, uint32_t n, uint32_t p) {
+    if (n > 1 && i == n - 1) {
+        return {(n - 1 + p - 1) / p, 0};
+    }
+    return {i / p, i % p};
+}
+
+// PB.8 (v2): the units of target t's stream on link l (u in [u_lo + l, u_hi) step links)
+inline uint32_t stream_units(uint32_t u_lo, uint32_t u_hi, uint32_t l, uint32_t links) {
+    return u_lo + l < u_hi ? (u_hi - u_lo - l + links - 1) / links : 0;
+}
+
 }  // namespace mhc_feed

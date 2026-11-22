@@ -107,6 +107,15 @@ ITEM_MARK = re.compile(r"^BATCH_ITEM_VARS\s*=\s*\(([^)]*)\)", re.M)
 # the chunk starts it measures (comma-separated) with ``BATCH_POS_VARS = ("SKIP_POS",)``; a plan's model is loaded
 # for the furthest of them (``hints``), never past deploy.seq (where such a test stops itself)
 POS_MARK = re.compile(r"^BATCH_POS_VARS\s*=\s*\(([^)]*)\)", re.M)
+# PB.T (2026-11-21, DeepSeek-V4.1: the serving runtime's warm-up, runtime.compile, needs slots of >= 112k positions and
+# the accuracy load's tables reached 64512): a model test file names the positions its own load-time tables must reach
+# with ``BATCH_MAX_SEQ = <int>``; a plan's model is loaded for at least that (``hints``), never past deploy.seq
+SEQ_MARK = re.compile(r"^BATCH_MAX_SEQ\s*=\s*(\d+)\b", re.M)
+# F297 (2026-11-21, DeepSeek-V4.1 PB.9C: test_no_rebuild FAILED with 153 / 16 builds in a fresh process, then PASSED in 18 s
+# in the held resident process on the same code: the earlier run's programs were still cached): a test that counts
+# program builds after its own warm-up declares ``BATCH_COLD = True``; it runs in a fresh process (a cold program cache)
+# and first in its batch after the determinism check, so no other run's traffic warms programs it must find cold
+COLD_MARK = re.compile(r"^BATCH_COLD\s*=\s*True\b", re.M)
 DECLARED_ITEM_VARS: set = set()
 SAFE_RUN = re.compile(r"^((?:\w+=\S*\s+)*)scripts/run_safe_pytest\.sh\s+(.+)$", re.S)
 ASSIGN = re.compile(r"^(\w+)=(\S*)$")
@@ -156,6 +165,15 @@ def declared_pos_vars(test: str, repo: Path | None = None) -> set:
     return set(re.findall(r"[\"']([A-Z0-9_]+)[\"']", m.group(1))) if m else set()
 
 
+def declared_max_seq(test: str, repo: Path | None = None) -> int:
+    """PB.T: the positions a model test file needs its load to cover (``BATCH_MAX_SEQ = <int>``; 0 = none declared)."""
+    try:
+        m = SEQ_MARK.search(((repo or _REPO) / test.split("::")[0]).read_text(errors="replace"))
+    except OSError:
+        return 0
+    return int(m.group(1)) if m else 0
+
+
 def declared_item_vars(test: str, repo: Path | None = None) -> set:
     """F279: the per-run variables a model test file declares (``BATCH_ITEM_VARS = (...)``)."""
     try:
@@ -189,6 +207,17 @@ def parse_all(cmd: str) -> list[dict] | None:
     """Every segment of ``cmd`` as a batch run, or None if any cannot share a process."""
     runs = [parse(s) for s in cmd.split("&&") if s.strip()]
     return runs if runs and all(runs) else None
+
+
+def cold(run: dict, repo: Path | None = None) -> bool:
+    """F297: a run of a test file that declares ``BATCH_COLD = True`` (it needs a cold program cache)."""
+    for t in run["args"]:
+        try:
+            if COLD_MARK.search(((repo or _REPO) / t.split("::")[0]).read_text(errors="replace")):
+                return True
+        except OSError:
+            pass
+    return False
 
 
 def phase(run: dict) -> int:
@@ -229,6 +258,8 @@ def hints(runs: list[dict], spec) -> dict:
     need = pos or starts or any(t.endswith("test_positions.py") for t in tests)
     chunk = int(spec.get("target.chunk")) if need else 0  # (only then: FIX.25's determinism run needs no hint)
     seqs = [p + chunk for p in pos] + [p + chunk for p in starts if deploy is None or p + chunk <= deploy]
+    # PB.T: what a test declares its load must cover (BATCH_MAX_SEQ), at most the deployment's length
+    seqs += [n for r in runs for t in r["args"] for n in [declared_max_seq(t)] if n and (deploy is None or n <= deploy)]
     if len(runs) > 1:  # (a process of one run loads what it needs)
         seqs += [int(spec.get("target.seq", 0) or 0)]
         seqs += [int(r.get("seq", 0) or 0) for key in ("ladder", "scaled.ladder") for r in (spec.get(key) or [])]
@@ -440,7 +471,11 @@ def _config_of(units: list[tuple[str, str]], parsed: dict | None = None) -> dict
     for u, c in units:
         runs = parsed[u] if parsed is not None else parse_all(launch_form(c)[0])
         if runs and not _determinism_only(runs) and unit_class(runs) == "full":
-            item = ITEM_VARS | DECLARED_ITEM_VARS | call_vars(runs[0]["env"])
+            # F296: only the unit's OWN tests' declared per-run variables: another test's declaration (test_no_rebuild's
+            # BRINGUP_CHUNK) is that test's business; for this unit it is the model's geometry (an 8192 gate's
+            # determinism check otherwise loaded the 5120 model and F283 refused the 8192 oracles: PB.MB, PB.9X)
+            own = set().union(*(declared_item_vars(t) for r in runs for t in r["args"]))
+            item = ITEM_VARS | own | call_vars(runs[0]["env"])
             return {k: v for k, v in runs[0]["env"].items() if k not in item}
     return {}
 
@@ -474,7 +509,8 @@ def gate_entries(group: list[tuple[str, str]], env: dict, unit_env: dict, logs: 
                     key=model_key({**env, **r["env"]}, names),
                 )
             )
-    entries.sort(key=lambda e: -1 if phase(e) == -1 else 0)  # (stable: the gate's order otherwise)
+    # (stable: the gate's order otherwise; F297: a cold run right after the determinism check)
+    entries.sort(key=lambda e: -2 if phase(e) == -1 else (-1 if cold(e) else 0))
     return entries
 
 
@@ -558,8 +594,10 @@ def _drive_resident(d: Path, plan: Path, env: dict, echo) -> int:
             e["log"] = f"{plan}.{e['name']}.log"
             own.append(e["log"])
     plan.write_text(json.dumps(data, indent=1) + "\n")
-    fresh = any(phase(e) == -1 for e in data["entries"])
-    echo(f"# F281: the plan runs on the resident runner ({d}){' in a fresh process (determinism)' if fresh else ''}\n")
+    fresh = any(phase(e) == -1 or cold(e) for e in data["entries"])  # F297: a cold run too
+    echo(
+        f"# F281: the plan runs on the resident runner ({d}){' in a fresh process (determinism / cold, F297)' if fresh else ''}\n"
+    )
     r = resident.submit_plan(d, plan, {**env, **(data.get("hints") or {})}, fresh=fresh)
     for log in own:
         if Path(log).exists():

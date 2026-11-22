@@ -59,6 +59,8 @@ import torch
 import ttnn
 from models.demos.common.bringup.reference.interface import Ctx, run_block
 
+# DS41-311 (PB.HG): the package attribute fresh after a runner reload
+importlib.import_module(__package__ + ".history_gather")
 from . import ccl, ffn_feed, history_gather, host_alloc, index_keys, lean
 from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights, snapshot_cap, window_keep
 from .ccl import dealloc
@@ -1190,6 +1192,9 @@ class TtDS41Model:
         self.max_seq, self.chunk = int(max_seq), int(chunk)
         self.sp, self.tp = mesh.shape[SP_AXIS], mesh.shape[TP_AXIS]
         assert self.chunk % (32 * self.sp * self.tp) == 0, (self.chunk, tuple(mesh.shape))
+        from . import packed_device as _pd
+
+        _pd.CHIP_ROWS[0] = self.chunk // (self.sp * self.tp)  # PB.9G: chip-aligned lanes' rows a chip (as_run_desc)
         self.fused = settings.get("MHC_FUSED") == "on"  # P.14
         self.own = own_rows()  # OWN_ROWS (P.23): the streams on each chip's own S/(SP TP) rows, whole hidden
         self.rows = self.chunk // (self.sp * self.tp if self.own else self.sp)  # the streams' rows a chip
@@ -1890,7 +1895,7 @@ class TtDS41Model:
         self._hide_trigger = None if first is None else first + self._hide_defer
 
     # ------------------------------------------------------------------ PACKED=on (PB.3, tt/packed_device.py)
-    def begin_packed(self, desc, tokens: torch.Tensor, states: list, last: bool | None = None) -> None:
+    def begin_packed(self, desc, tokens: torch.Tensor, states: list, last: bool | None = None, inp=None) -> None:
         """PB.3 (PACKED=on): begin a packed chunk. ``desc``: tt/packed.ChunkDescriptor (lanes of desc.lane_rows rows);
         ``tokens``: the chunk's natural-order ids [chunk] (each lane its segment's ids, PAD_ID elsewhere: past a
         segment's end and in empty lanes); ``states``: per lane the segment's slot state (None for an empty lane).
@@ -1909,7 +1914,11 @@ class TtDS41Model:
         self.wait_engram()  # (a job of the last chunk whose layer did not run)
         ids = tokens.reshape(-1).long()
         assert ids.numel() == self.chunk, (ids.numel(), self.chunk)
-        lr = desc.lane_rows
+        glued = getattr(desc, "glued", False)  # PB.7 (PACKED_GLUED=on): segments back to back (tt/packed.GluedChunk)
+        if glued:
+            assert desc.prefill_end == settings.get("PREFILL_END"), (desc.prefill_end, settings.get("PREFILL_END"))
+            assert desc.tile_aligned(), "PACKED_GLUED: every segment's model rows whole tiles (block-aligned starts)"
+        lr = None if glued else desc.lane_rows
         segs, idle = [], []
         for lane, s in desc.live():
             st = states[lane]
@@ -1918,19 +1927,26 @@ class TtDS41Model:
             if run_end <= s.start:  # (PREFILL_END=cap: nothing below cap: its snapshot at cap and its acks only)
                 idle.append(SegRun(lane, s, st, run_end))
                 continue
-            off = lane * lr
-            st.note_tokens(ids[off : off + lr], s.start, run_end)
+            off = desc.lane_off(lane) if glued else lane * lr
+            st.note_tokens(ids[off : off + (run_end - s.start if glued else lr)], s.start, run_end)
             self.state = st
             self.begin_chunk(None, s.start, last=last, write_start=s.gws, engram=False)
             segs.append(SegRun(lane, s, st, run_end, {f: getattr(self, f) for f in FIELDS}))
         assert segs or idle, "an empty packed chunk"
-        pk = PackedChunk(self, desc, segs, idle)
+        self._packed_inp = inp  # (PB.7C: the engine input, whose tail carries a glued chunk's header)
+        try:
+            pk = PackedChunk(self, desc, segs, idle)
+        finally:
+            self._packed_inp = None
         pk.bind()
         self._packed = pk
         if segs:
             pk.enter(segs[0])
         if self.engram and segs:
-            self._begin_engram_packed(ids, desc, segs)
+            if glued:
+                self._begin_engram_glued(ids, desc, segs)
+            else:
+                self._begin_engram_packed(ids, desc, segs)
 
     def end_packed(self) -> None:
         """PB.3: the packed chunk is over (the slot caches' buffer keys back to today's)."""
@@ -1974,6 +1990,42 @@ class TtDS41Model:
                 self._engram_pending[i] = job
         self._hide_trigger = None if first is None else first + self._hide_defer
 
+    def _begin_engram_glued(self, ids: torch.Tensor, desc, segs: list) -> None:
+        """PB.7 (PACKED_GLUED=on): _begin_engram_packed for a glued chunk: every engram layer's rows in one host job
+        (TtEngramRows.fill_tp_glued: each segment hashed with its own slot's tail over its own model rows, which may
+        start inside a chip's share; the tail pad zero)."""
+        assert self._engram_pool is not None and self._host_hide, "PACKED=on: ENGRAM_ASYNC=on with HOST_HIDE=on"
+        assert all(i in self._engram_full for i in self.engram), "PACKED=on: the TP-sharded engram rows (HOST_HIDE)"
+        by_lane = {r.lane: r for r in segs}
+        first = None
+        for i, rows in self.engram.items():
+            jobs = []
+            for k in range(desc.lanes):
+                r = by_lane.get(k)
+                off, v = desc.lane_off(k), (0 if r is None else r.run_end - r.start)
+                if r is not None:
+                    lid = ids[off : off + v].contiguous()
+                    tail = rows.new_tail() if r.start == 0 else r.state.tail[i]
+                    tail = tail.long().clone().contiguous()
+                    new_tail = rows.next_tail(lid, tail, v)
+                    r.state.tail[i] = new_tail
+                    jobs.append((off, lid, tail, new_tail.long().contiguous()))
+                pad = (desc.ext(k) - v) if getattr(desc, "align", 0) else 0
+                if pad:  # (PB.9G: a segment's last chip past its rows, an idle segment's chip: zero rows, as the tail)
+                    jobs.append(
+                        (off + v, torch.zeros(pad, dtype=torch.int64), rows.new_tail().long().contiguous(), None, 0)
+                    )
+            _free(self._engram_dev.pop(i, None))
+            dev = rows.allocate_tp(ids.numel(), rows.upload_pieces(ids.numel()))
+            self._engram_dev[i] = dev
+            job = (rows.fill_tp_glued, dev, jobs, self.chunk, self._hide_threads)
+            if first is None:
+                first = i
+                self._engram_jobs[i] = self._engram_pool.submit(*job)
+            else:
+                self._engram_pending[i] = job
+        self._hide_trigger = None if first is None else first + self._hide_defer
+
     def layer_packed(self, i: int, h):
         """PB.3: layer i of the packed chunk (begin_packed): the token-wise steps once over every row, the attention
         steps per segment (TtDS41Block.packed), then each segment's served window snapshot; DECODER_SKIP=decode's
@@ -1991,14 +2043,26 @@ class TtDS41Model:
         if i in self._deep_set:
             raise AssertionError("PACKED=on: DEEP_LAYERS=tail is not packed")
         out = self.blocks[i].packed(h, pk) if segs else h
-        for j, r in enumerate(segs):  # (each its own broadcast instance: back-to-back sends, DS41-324)
+        # PB.9G (PACKED_CHIPS=on): every segment's snapshot of the layer in ONE program (SnapshotSend.multi; one
+        # arrival counter a (segment, block)); off: each its own broadcast instance (back-to-back sends, DS41-324)
+        from .packed_device import chips_on
+
+        batch = [] if (chips_on() and not pk.trivial) else None
+        for j, r in enumerate(segs):
             pk.enter(r)
-            self._snapshot(i, r.start, r.state, r.run_end, send=j)
+            self._snapshot(i, r.start, r.state, r.run_end, send=j, batch=batch)
             pk.leave(r)
         for j, r in enumerate(pk.idle, len(segs)):  # (PREFILL_END=cap, cap <= start: the snapshot at cap, _acks_only)
             c = r.state.window[i]
             if c.snap is not None and not (self.skip_mode == "decode" and i in self.decoder):
-                c.write_snapshot(r.run_end, send=j)
+                c.write_snapshot(r.run_end, send=j, batch=batch)
+        if batch:
+            items = [b[1:] for b in batch]
+            if batch[0][0].multi_ok(items):
+                batch[0][0].multi(items)
+            else:  # (one snapshot, or slabs / rings of different geometries: one program each)
+                for snd, *it in batch:
+                    snd(*it)
         if segs:
             pk.enter(segs[0])
         return out
@@ -2093,10 +2157,14 @@ class TtDS41Model:
         dealloc(t)
         return out
 
-    def embed(self, tokens: torch.Tensor, start: int = 0) -> DevH:
+    def embed(self, tokens: torch.Tensor, start: int = 0, dev_ids=None) -> DevH:
         """Natural-order ids of one chunk (PAD_ID past actual_end clamped into the vocabulary, K-72: those rows are pad
-        and never reach a cache) -> layer 0's input: the embedding on all 4 streams, the pending pre one-hot."""
-        if self._emb_ids is not None:  # P.87 (ENGRAM_DEVICE=on): the lookup's natural-order device ids (pinned)
+        and never reach a cache) -> layer 0's input: the embedding on all 4 streams, the pending pre one-hot.
+        ``dev_ids`` (POS_DYNAMIC=on, MB.2): those ids already on the device ([1, W] uint32 a chip, ``reorder_ids``;
+        consumed): no upload."""
+        if dev_ids is not None:
+            pass
+        elif self._emb_ids is not None:  # P.87 (ENGRAM_DEVICE=on): the lookup's natural-order device ids (pinned)
             dev_ids = self._emb_ids
         else:
             dev_ids = self._host_emb_ids(tokens)
@@ -2105,6 +2173,16 @@ class TtDS41Model:
         )
         dealloc(dev_ids)
         return self._embed_rest(e)
+
+    def reorder_ids(self, inp, start: int, valid: int):
+        """POS_DYNAMIC=on (MB.2): the engine's device input (uint32 [SP, 1, W], the server's order) -> each chip's
+        natural-order embedding ids [1, W] on the device (tt/page_copy.IdsReorder; positions >= ``valid`` and ids past
+        the vocabulary -> vocab - 1, as ``_host_emb_ids``). A new tensor (``embed(dev_ids=)`` consumes it)."""
+        if getattr(self, "_ids_reorder", None) is None:
+            from .page_copy import IdsReorder
+
+            self._ids_reorder = IdsReorder(self.mesh, self.chunk, self.vocab)
+        return self._ids_reorder(inp, start, valid)
 
     def _host_emb_ids(self, tokens: torch.Tensor):
         ids = tokens.reshape(-1).long().clamp(0, self.vocab - 1).to(torch.int32)
@@ -2182,13 +2260,15 @@ class TtDS41Model:
             return SKIPPED
         return out
 
-    def _snapshot(self, i: int, start: int, state: DS41DeviceState, end: int | None, src=None, send: int = 0) -> None:
+    def _snapshot(
+        self, i: int, start: int, state: DS41DeviceState, end: int | None, src=None, send: int = 0, batch=None
+    ) -> None:
         """WINDOW_KV_KEEP=snapshot128 (P.42): layer i's served window snapshot after its window write of the chunk
         [start, end) (device ops; before the layer's ack), unless the caller marked the chunk not the request's last.
         ``src`` (P.43, replay128's tail): the window cache whose ring holds the rows (the tail state's)."""
         c = state.window[i]
         if c.snap is not None and self._snap:
-            c.write_snapshot(start + self.chunk if end is None else int(end), src=src, send=send)
+            c.write_snapshot(start + self.chunk if end is None else int(end), src=src, send=send, batch=batch)
 
     def _tail_layer(self, i: int, h, start: int, state: DS41DeviceState, end: int | None) -> TailH:
         """DECODER_SKIP=replay128 (P.31), the request's last chunk [start, end). The first decoder layer (20): its KV

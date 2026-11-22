@@ -183,6 +183,15 @@ NUM_CB_SLOTS = 64  # (ComputeConfigDescriptor.unpack_to_dest_mode's length)
 K_READER, K_WRITER, K_COMPUTE = 0, 1, 2
 # value slots (prepare_program): reader src_page0, nbands; writer out_page0, nbands; compute nbands
 _UNPACK_SLOTS = [(K_READER, 0), (K_READER, 1), (K_WRITER, 0), (K_WRITER, 1), (K_COMPUTE, 0)]
+COMMON_ARG = 1 << 31  # (prepare_program: a runtime-arg index with bit 31 names a COMMON runtime arg)
+# option common_values: the same five values as common args (reader / writer 1, 2; compute 0), one patch a program
+_UNPACK_COMMON_SLOTS = [
+    (K_READER, COMMON_ARG | 1),
+    (K_READER, COMMON_ARG | 2),
+    (K_WRITER, COMMON_ARG | 1),
+    (K_WRITER, COMMON_ARG | 2),
+    (K_COMPUTE, COMMON_ARG | 0),
+]
 
 
 def _unpack_cores(device, nbands: int, max_grid=None) -> int:
@@ -192,10 +201,14 @@ def _unpack_cores(device, nbands: int, max_grid=None) -> int:
     return max(1, min(gx * gy, nbands))
 
 
-def unpack_program(rows: ttnn.Tensor, out: ttnn.Tensor, ncores: int, max_grid=None) -> ttnn.ProgramDescriptor:
+def unpack_program(
+    rows: ttnn.Tensor, out: ttnn.Tensor, ncores: int, max_grid=None, common_values: bool = False
+) -> ttnn.ProgramDescriptor:
     """One program for every call of this (rows, out) spec and core count: the work (src_page0, out_page0, nbands) is
     a value slot on every core (the same values on every core and chip; each core takes its share of the bands by its
-    index, cores y GX + x < ncores of the grid)."""
+    index, cores y GX + x < ncores of the grid). ``common_values``: the values are COMMON runtime args (reader / writer
+    args 1, 2, compute arg 0; no per-core args), one patch a program instead of one a core (prepare_program's common
+    value slots)."""
     gx, gy = _grid(rows.device(), max_grid)
     assert 1 <= ncores <= gx * gy, (ncores, gx, gy)
     cores = [(i % gx, i // gx) for i in range(ncores)]
@@ -219,10 +232,13 @@ def unpack_program(rows: ttnn.Tensor, out: ttnn.Tensor, ncores: int, max_grid=No
         cb(CB_RSTAGE, ttnn.uint8, stage, 1),
     ]
     rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-    for cx, cy in cores:  # (value slots: placeholders, written by every run)
-        rd[cx][cy] = [0, 0]
-        wr[cx][cy] = [0, 0]
-        cp[cx][cy] = [0]
+    if not common_values:
+        for cx, cy in cores:  # (value slots: placeholders, written by every run)
+            rd[cx][cy] = [0, 0]
+            wr[cx][cy] = [0, 0]
+            cp[cx][cy] = [0]
+    vals = [0, 0] if common_values else []  # (common value slots: placeholders, written by every run)
+    defs = [("UNPACK_COMMON_VALUES", "1")] if common_values else []
     cfg = ttnn.ComputeConfigDescriptor(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         fp32_dest_acc_en=True,
@@ -240,7 +256,8 @@ def unpack_program(rows: ttnn.Tensor, out: ttnn.Tensor, ncores: int, max_grid=No
             compile_time_args=[CB_E, CB_S, CB_RSTAGE, gx, ncores]
             + list(ttnn.TensorAccessorArgs(rows).get_compile_time_args()),
             runtime_args=rd,
-            common_runtime_args=[rows.buffer_address()],
+            common_runtime_args=[rows.buffer_address()] + vals,
+            defines=defs,
             config=ttnn.ReaderConfigDescriptor(),
         ),
         ttnn.KernelDescriptor(
@@ -248,7 +265,8 @@ def unpack_program(rows: ttnn.Tensor, out: ttnn.Tensor, ncores: int, max_grid=No
             core_ranges=crs,
             compile_time_args=[CB_OUT, gx, ncores] + list(ttnn.TensorAccessorArgs(out).get_compile_time_args()),
             runtime_args=wr,
-            common_runtime_args=[out.buffer_address()],
+            common_runtime_args=[out.buffer_address()] + vals,
+            defines=defs,
             config=ttnn.WriterConfigDescriptor(),
         ),
         ttnn.KernelDescriptor(
@@ -256,16 +274,17 @@ def unpack_program(rows: ttnn.Tensor, out: ttnn.Tensor, ncores: int, max_grid=No
             core_ranges=crs,
             compile_time_args=[CB_E, CB_S, CB_OUT, gx, ncores],
             runtime_args=cp,
-            common_runtime_args=[],
+            common_runtime_args=[0] if common_values else [],
+            defines=defs,
             config=cfg,
         ),
     ]
     return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
 
 
-def _prepared_unpack(rows: ttnn.Tensor, out: ttnn.Tensor, ncores: int, max_grid=None):
+def _prepared_unpack(rows: ttnn.Tensor, out: ttnn.Tensor, ncores: int, max_grid=None, common_values: bool = False):
     """The program for this (mesh, shapes, memory configs, grid), built and prepared once: the two addresses patched,
-    the work a value slot."""
+    the work a value slot (``common_values``: common value slots)."""
     mesh = rows.device()
     key = (
         "unpack",
@@ -276,17 +295,20 @@ def _prepared_unpack(rows: ttnn.Tensor, out: ttnn.Tensor, ncores: int, max_grid=
         str(out.memory_config()),
         ncores,
         _mg_key(max_grid),
+        bool(common_values),
     )
     hit = _PREPARED.get(key)
     if hit is not None:
         _PREPARED.move_to_end(key)
         return hit[1]
-    desc = unpack_program(rows, out, ncores, max_grid)
+    desc = unpack_program(rows, out, ncores, max_grid, common_values)
     shape = mesh.shape
     md = ttnn.MeshProgramDescriptor()
     md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(shape[0] - 1, shape[1] - 1))] = desc
-    pp = ttnn.bringup.prepare_program(md, [rows, out], _UNPACK_SLOTS)
-    want = 2 + ncores * len(_UNPACK_SLOTS)  # (the two common addresses + every core's value slots)
+    slots = _UNPACK_COMMON_SLOTS if common_values else _UNPACK_SLOTS
+    pp = ttnn.bringup.prepare_program(md, [rows, out], slots)
+    # (the two common addresses + every core's value slots, or the common value slots once)
+    want = 2 + (len(slots) if common_values else ncores * len(slots))
     assert (
         pp.patch_count == want
     ), f"unpack_fp8_rows: {pp.patch_count} patched slots, not {want} (a frozen arg equals an io address)"
@@ -305,6 +327,8 @@ def unpack_fp8_rows(
     batch: int = 0,
     out_row0: int | None = None,
     max_grid=None,
+    whole_grid: bool = False,
+    common_values: bool = False,
 ) -> ttnn.Tensor:
     """The inverse of pack_fp8_rows, onto the bfloat8_b grid: rows [row_lo, row_hi) of batch ``batch`` of ``rows``
     ([B, .., R, 192] UINT8 ROW_MAJOR in DRAM, interleaved or ND-sharded: one 192-byte row a page; [e4m3 x 128 | fp32
@@ -315,7 +339,13 @@ def unpack_fp8_rows(
     prepared program (OV-23): built once per (shapes, memory configs, grid), the addresses patched and the rows a
     value slot, so every range of at least the grid's bands runs one program (a smaller range: one program per band
     count, a core a band: the per-core value slots cost host time a core). ``max_grid``: as pack_fp8_rows' (the cores
-    inside it; each core its share of the 32-row bands). Returns ``out``."""
+    inside it; each core its share of the 32-row bands). ``whole_grid`` (default False: the behaviour before): every
+    call on the whole grid, cores past the band count idle, so ONE program serves every row count (no prepare a band
+    count; deepseek_v41_flash_d_p MB.2, POS_DYNAMIC: serving never builds a program after warm-up). ``common_values``
+    (default False: the behaviour before): the per-run values (first page, bands, out page) are common runtime args
+    (prepare_program's common value slots), so a run patches five words a program instead of five a core (the
+    whole grid's 110 cores x 32 chips cost ~0.33 ms of host a call; deepseek_v41_flash_d_p PB.9X). The same bytes.
+    Returns ``out``."""
     assert (
         rows.dtype == ttnn.uint8 and rows.layout == ttnn.ROW_MAJOR_LAYOUT and rows.shape[-1] == ROW_BYTES
     ), f"unpack_fp8_rows: rows must be uint8 ROW_MAJOR [.., {ROW_BYTES}], got {rows.dtype} {rows.layout} {rows.shape}"
@@ -341,6 +371,8 @@ def unpack_fp8_rows(
     if n == 0:
         return out
     nb = n // 32
-    pp = _prepared_unpack(rows, out, _unpack_cores(rows.device(), nb, max_grid), max_grid)
+    gx, gy = _grid(rows.device(), max_grid)
+    ncores = gx * gy if whole_grid else _unpack_cores(rows.device(), nb, max_grid)
+    pp = _prepared_unpack(rows, out, ncores, max_grid, common_values)
     ttnn.bringup.run_prepared(pp, [rows, out], [batch * r + row_lo, nb, out_row0 // 32 * (VALUES // 32), nb, nb])
     return out

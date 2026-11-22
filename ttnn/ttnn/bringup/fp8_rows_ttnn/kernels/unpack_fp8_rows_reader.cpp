@@ -8,8 +8,8 @@
 //         2 (i / 16) + j % 2, face row i % 16): word copies only
 //   cb_s: one FLOAT32 tile, every element of row i = the row's scale (the SFPU multiply's per-row operand)
 // compile-time: cb_e, cb_s, cb_stage, GX, rows accessor. common: rows address. per core (value slots, the same on
-// every core): src_page0 (the first row's page: batch x rows + row_lo), nbands. Core i = y GX + x takes bands
-// [i per + min(i, extra), + per + (i < extra)) of nbands = per x cores + extra.
+// every core): src_page0 (the first row's page: batch x rows + row_lo), nbands (UNPACK_COMMON_VALUES: common args 1,
+// 2). Core i = y GX + x takes bands [i per + min(i, extra), + per + (i < extra)) of nbands = per x cores + extra.
 
 #include <cstdint>
 
@@ -24,8 +24,13 @@ void kernel_main() {
     constexpr uint32_t ROW_BYTES = 192;
     constexpr auto r_args = TensorAccessorArgs<5>();
     const auto rows = TensorAccessor(r_args, get_common_arg_val<uint32_t>(0), ROW_BYTES);
+#ifdef UNPACK_COMMON_VALUES  // (option common_values: the per-run values as common args, no per-core args)
+    const uint32_t src_page0 = get_common_arg_val<uint32_t>(1);
+    const uint32_t nbands = get_common_arg_val<uint32_t>(2);
+#else
     const uint32_t src_page0 = get_arg_val<uint32_t>(0);
     const uint32_t nbands = get_arg_val<uint32_t>(1);
+#endif
     const uint32_t c = static_cast<uint32_t>(get_absolute_logical_y()) * GX + get_absolute_logical_x();
     const uint32_t per = nbands / NCORES, extra = nbands % NCORES;
     const uint32_t count = per + (c < extra ? 1u : 0u);

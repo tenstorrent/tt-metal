@@ -39,6 +39,9 @@ struct CommonRtPatch {  // common runtime arg `arg` of kernel `kernel` := addres
 struct ValPatch {  // runtime arg `arg` of kernel `kernel` on core (x, y) := run value `slot` (value_slots option)
     uint32_t kernel = 0, x = 0, y = 0, arg = 0, slot = 0;
 };
+struct CommonValPatch {  // common runtime arg `arg` of kernel `kernel` := run value `slot` (common value slots)
+    uint32_t kernel = 0, arg = 0, slot = 0;
+};
 struct CbPatch {  // CB `cb` (descriptor order) onto io tensor `io`'s buffer, its descriptor's address offset kept
     uint32_t cb = 0, io = 0;
 };
@@ -49,7 +52,8 @@ struct Prepared {
     std::vector<std::vector<RtPatch>> rt;
     std::vector<std::vector<CommonRtPatch>> crt;
     std::vector<std::vector<CbPatch>> cbs;
-    std::vector<std::vector<ValPatch>> val;  // (value_slots: empty unless prepared with value slots)
+    std::vector<std::vector<ValPatch>> val;         // (value_slots: empty unless prepared with value slots)
+    std::vector<std::vector<CommonValPatch>> cval;  // (common value slots: empty unless named)
     // per mesh program, per io tensor: its rt / crt patches (indices); a hit rewrites an io tensor's slots only when
     // the first of them does not already hold its address (they are always written together)
     std::vector<std::vector<std::vector<uint32_t>>> rt_of_io, crt_of_io;
@@ -67,6 +71,7 @@ struct Prepared {
 // of the cache key (a scalar that changes every call, e.g. a write offset, without a new prepare).
 struct ValueSlot {
     uint32_t kernel = 0, arg = 0, slot = 0;
+    bool common = false;  // (common runtime arg `arg` of kernel `kernel`: one patch a program, not one a core)
 };
 
 // Records the patches from the descriptor and the io tensors it was built against (see the contract above).

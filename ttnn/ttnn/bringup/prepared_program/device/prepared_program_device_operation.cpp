@@ -57,6 +57,9 @@ tt::tt_metal::ProgramDescriptor PreparedProgramFactory::create_descriptor(
             }
         }
     }
+    for (const auto& v : p.cval[pi]) {
+        desc.kernels[v.kernel].common_runtime_args[v.arg] = attributes.values[v.slot];
+    }
     return desc;
 }
 
@@ -101,6 +104,9 @@ void PreparedProgramFactory::override_runtime_arguments(
     }
     for (const auto& v : p.val[pi]) {  // (value_slots option: every run)
         tt::tt_metal::GetRuntimeArgs(program, v.kernel, CoreCoord(v.x, v.y))[v.arg] = attributes.values[v.slot];
+    }
+    for (const auto& v : p.cval[pi]) {  // (common value slots: one write a program)
+        tt::tt_metal::GetCommonRuntimeArgs(program, v.kernel)[v.arg] = attributes.values[v.slot];
     }
     if (!p.cbs[pi].empty()) {
         const auto program_cbs = program.circular_buffers();

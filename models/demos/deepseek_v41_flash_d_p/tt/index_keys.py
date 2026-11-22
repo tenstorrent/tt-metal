@@ -104,15 +104,45 @@ def _span(cache, start: int) -> tuple[int, int]:
 # slots (5 a core, 3 kernels: ~250-340 us a call on 110 cores of 32 chips, PB.3K census); its device time is small
 # (a 192 B -> 128 B row map, ~4352 rows a chip at 139k). Each row decodes on its own: the same bytes on any cores.
 DECODE_GRID = (4, 2)
+# PACKED_LONG_HIDE=on (PB.6L): a decode of at least this many rows a chip runs on the whole compute grid (max_grid):
+# at 1M a history decode is 65,024 rows a chip, 3.95 ms on 4 x 2 cores vs ~0.8 on 11 x 10 (PB.6L bench); at 139k
+# (8,704 rows) the small rectangle's lower host cost wins
+DECODE_WIDE_ROWS = 16384
 
 
 def _decode(cache, buf: KeyBuffer, lo: int, hi: int) -> None:
     s = cache.served
+    from .page_copy import dyn
+
     grid = max_grid()
-    if settings.get("PACKED_HOST_FAST") == "on":  # (every box's grid holds 4 x 4; None: the uncapped whole grid)
+    # MB.2 ("decode": POS_DYNAMIC=on): every range on the whole grid (cores past the band count idle): ONE program, not
+    # one a band count. PB.MB: not PB.6L's small rectangle below DECODE_WIDE_ROWS either: that grid choice depends on
+    # the history length, so the wide grid's program was first prepared on a long fresh history after warm-up
+    # (test_no_rebuild 8192, resumed at 525k: 1 build, DS41-350)
+    whole = dyn("decode")
+    wide = settings.get("PACKED_LONG_HIDE") == "on" and hi - lo >= DECODE_WIDE_ROWS
+    if settings.get("PACKED_HOST_FAST") == "on" and not wide and not whole:  # (every box's grid holds 4 x 4)
         gx, gy = (grid.x, grid.y) if grid is not None else DECODE_GRID
         grid = ttnn.CoreCoord(min(gx, DECODE_GRID[0]), min(gy, DECODE_GRID[1]))
-    ttnn.bringup.unpack_fp8_rows(s.tensor, buf.tensor, row_lo=lo, row_hi=hi, batch=s.batch, max_grid=grid)
+    # PB.9X (COMMON_VALUE_SLOTS=on): the whole grid's per-run values as common runtime args (one patch a program,
+    # not one a core: 0.335 -> 0.063 ms of host a call on the 8x4, 24 calls a packed chunk); the same bytes
+    cv = whole and settings.get("COMMON_VALUE_SLOTS") == "on" and _has_common_values()
+    ttnn.bringup.unpack_fp8_rows(
+        s.tensor,
+        buf.tensor,
+        row_lo=lo,
+        row_hi=hi,
+        batch=s.batch,
+        max_grid=grid,
+        whole_grid=whole,
+        **({"common_values": True} if cv else {}),
+    )
+
+
+def _has_common_values() -> bool:
+    """The fp8_rows fork's common_values option (and prepare_program's common value slots) is built (its docstring
+    names it: the registered op's wrapper hides the signature)."""
+    return "common_values" in (getattr(ttnn.bringup.unpack_fp8_rows, "__doc__", "") or "")
 
 
 def prefetch(cache, start: int) -> bool:

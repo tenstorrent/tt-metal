@@ -63,6 +63,19 @@ padding tokens get no routes: the planner (`routing_planner::plan`) counts, stag
 a token with no rows. The shared expert still computes every row (its padding rows are discarded downstream). Without
 the scalars the programs are the unpadded ones (a padded and an unpadded call hash apart).
 
+## Columns scatter without a latent (bring-up option)
+
+`MoEBlockConfig.shared_scatter_columns` (default false): the shared expert's down + reduce-scatter by columns (y
+`[rows, H / TP]`, the latent path's layout) for a model without a latent, the ring's halves split by matmul core column.
+A row's partials are then added in its column block's ring order, never in the order of the TP chip that owns the row:
+the same token row gives the same bits wherever it lands in the chunk (the rows scatter differs by 1 bf16 ulp across
+TP chips: deepseek_v41_flash_d_p DS41-339). The caller turns y into owner rows (a TP all-to-all); MoEBlock's tail
+takes the rows scatter only. `MoEBlockConfig.router_canonical_sum` (default false): the router sums a token's TP logits
+partials in chip order (0 + 1 + ..) once all are in, instead of the owner's partial first and the arrivals as they come
+(an order that depends on the owner chip: last-bit logits differences, now and then a flipped gate weight). Test:
+`tests/test_shared_scatter_columns.py` (rows moved across TP chips -> bit-identical shared-expert and routing rows;
+determinism; a padded chunk's real rows; PCC). Used by: deepseek_v41_flash_d_p (MOE_HEAD_ORDER=free: both options).
+
 ## Row blocks
 
 A call whose rows do not fit the head's L1 at once runs as k row blocks: one launch whose kernels loop over k blocks of

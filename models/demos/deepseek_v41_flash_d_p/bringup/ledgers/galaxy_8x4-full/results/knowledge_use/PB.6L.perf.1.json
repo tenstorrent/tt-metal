@@ -1,0 +1,138 @@
+{
+ "used": [
+  {
+   "id": "DS41-334",
+   "how": "starting point: 4x2k_p1m gathers 11.94 of 12.67 ms exposed; its Fix updated to PB.6L's",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-286",
+   "how": "kept the gather sub-device on column 11 (the 11 x 10 matmul grid cannot move) and the top-k region on its own 110 cores (top-k ties follow the core count); explains the column-11 gather's slowness the plan sizes pieces for",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-331",
+   "how": "measured region exposure with the device clock stamps (gather_hide.Stamps), not the real-time profiler's sections, which charged the decodes to 'attention'",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-295",
+   "how": "the per-item pack (~0.4 ms floor) made a compute step of an earlier region instead of serial prep",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-216",
+   "how": "the fork test uses the model's one semaphore pair per gather axis (ccl._sems), never one pair for two axes",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-335",
+   "how": "judged 139k / mixed by an off/on A/B alternated in one process (test_long_hide_probe PB6L_PROBE_AB), not across processes",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-316",
+   "how": "expected a runner restart per python change / mesh-only test and wrote each load reason before it",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-333",
+   "how": "kept PACKED_LANE_BALANCE on in every run; the mixed indexer stays bounded by its longest lane (not this task's)",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-334",
+   "evidence": "Fix said 'none yet (a perf pick: gather split across layers or 4-bit history at 1M)'; the history is already 4-bit (P.77) and the split is PB.6L: tt/gather_hide.Hide._long_plan + ttnn.bringup.high_bw_all_gather gathered_dim_start, walls 4x2k_p1m exposed 2.38 of 12.78 ms. It also left the attention section's 97 ms unexplained: 45 ms of it were index-key decodes (DS41-336, test_long_hide_probe op profile)",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the index-key history decodes (index_keys._decode on PB.3K's 4 x 2 rectangle) scale with the history: 45 ms a chunk at 1M, charged to the attention section through the dec region (now DS41-336)",
+  "a history gather's time on the gather column vs serial vs beside DRAM-bound steps, by size (now DS41-337)",
+  "fork_op.py copies a using-alias into the source's namespace that does not build (now DS41-338)",
+  "only test files under models/ may share the resident runner's process (core/batch.shareable): a fork's own tests need a wrapper there"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: the pieces move exactly the rows of the stock prefix gather, split by rows (the fork's range option instead of a slice + slice_write)"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; DECIDED lines in BREADCRUMBS PPB.6L (oracle never reaches the piece plan: bit-identity checked by the probe's 201 digests at 1M; no pieces in the 0.27 ms tails regions); the oracle checks measured through the gate"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "no load-time switch in any new test: test_long_hide_probe and test_range_gather_fork run on the walls' one performance load (max_seq raised as test_packed_walls does), PACKED_LONG_HIDE is call-time (hooks.batch_call_settings)"
+  }
+ ],
+ "cited_only": [
+  "DS41-336",
+  "DS41-337",
+  "DS41-338"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.6L",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T11:01:13",
+  "head": "6db7958e210",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.6L.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.6L_packed_walls.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.6L.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_long_hide_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_range_gather_fork.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/gather_hide.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/history_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/index_keys.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_onecall.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/bringup_nanobind.cpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/CMakeLists.txt",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/README.md",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/device/high_bw_all_gather_device_operation.cpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/device/high_bw_all_gather_device_operation.hpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/device/high_bw_all_gather_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/device/high_bw_all_gather_fabric_factory.cpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/device/high_bw_all_gather_fabric_factory.hpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/device/kernels/fabric/fabric_all_gather_chunk_walk.hpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/device/kernels/fabric/fabric_all_gather_common.hpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/device/kernels/fabric/fabric_all_gather_copy_writer.cpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/device/kernels/fabric/fabric_all_gather_reader.cpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/device/kernels/fabric/fabric_all_gather_sender.cpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/high_bw_all_gather.cpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/high_bw_all_gather.hpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/high_bw_all_gather_nanobind.cpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/high_bw_all_gather_nanobind.hpp",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/sources.cmake",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/tests/__init__.py",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/tests/source.yaml",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/tests/unit/__init__.py",
+   "ttnn/ttnn/bringup/high_bw_all_gather_ttnn/tests/unit/test_range_gather.py"
+  ]
+ }
+}

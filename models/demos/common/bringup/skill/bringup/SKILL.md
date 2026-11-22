@@ -423,6 +423,36 @@ session's private memory (owner, said many times; 2026-10-30): memory stays on o
 next overseer never sees it.
 
 Standing owner decisions (moved here from private memory, 2026-10-30):
+- No infeasible shortcuts, checked BEFORE accepting (owner, 2026-11-20): before accepting any serving-path task, the
+  overseer checks the deliverable itself for host-side per-chunk derivation (tables, indices, masks built in Python),
+  per-layout / per-position program builds, caches that only repeated test traffic hits, and inputs tt-d-gen would not
+  send; a result that depends on one is rejected and reported as a shortcut, never accepted or quoted as a number
+  (DeepSeek-V4.1 PB.7 / PB.7B: glued numbers accepted while the host built per-layout tables and programs rebuilt).
+- Every accept / perf gate of DeepSeek-V4.1 galaxy_8x4 carries tests/test_no_rebuild.py (from MB.2 on; owner 2026-11-20:
+  'cover this with tests that ensure nothing in serving is being rebuilt'): program_builds_after_warmup_serving == 0.
+- Performance is the context-length ladder; the no-rebuild check is PASS/FAIL (owner, 2026-11-21, DeepSeek-V4.1): the
+  no-rebuild check (tests/test_no_rebuild.py, the fresh-traffic build counting) is a gate unit, PASS / FAIL only (0
+  program builds after warm-up on fresh starts / slots / last chunks / replays), never a throughput number. The
+  performance number is the standard ladder (method and table of results/agentx_ladder_20261119.md: agentic_cc text,
+  steady chunk, DECODER_SKIP=decode, layers 0-20 on the resident runner, REAL fixed histories 51200, 131072, 139264
+  (AgentX p50), 262144, 524288, 786432, 1024000 (every segment of a packed chunk at that same history; no "mixed
+  history" cases, owner 2026-11-21); columns steady wall ms, tok/s, resumed wall ms, device ms, exposed host ms), one table per path,
+  and it counts only when the no-rebuild check passes on the same code. AgentX-mix walls are a diagnostic, never a
+  headline.
+- No slow fallback in serving (owner, 2026-11-21, DeepSeek-V4.1): a serving path that cannot run a case the server sends
+  (e.g. prefix-hit / replay segments) is not useful; an unsupported case raises, never falls back to a slower path, and
+  every accept gate measures that case (resumed chunks next to steady). Before accepting a serving-path change, check
+  which request kinds its walls covered (DeepSeek-V4.1 PB.9X: glued routing accepted on steady walls only; prefix-hit
+  chunks ran 3.4x slower through a fallback).
+- Serving never rebuilds (owner, 2026-11-20): every program a server can need is built once at startup from a finite
+  set (chunk size, segment counts, the accepted switches, layer kinds); after warm-up nothing builds on the request
+  path: positions, history lengths, slots, segment boundaries and table contents are runtime args / device data, never
+  part of a program-cache key. A perf number counts only if measured with fresh positions / slots / layouts every timed
+  chunk and 0 program builds after warm-up (repeated-position walls are a best case and must be labelled so).
+- No minimum-gain line (owner, 2026-11-20): a perf pick that passes its gate, keeps every accuracy limit (or is
+  bit-identical) and wins on the device profile is accepted whatever its size; never reject a verified device win
+  against a "keep only at >= N ms" bar (DeepSeek-V4.1 PB.8: a bit-identical -0.6 ms mhc_post win was rejected against
+  ">= ~1 ms" and had to be re-applied). Walls alone (noisy) never decide.
 - Procedural limits never stall progress (owner, 2026-11-19): an attempt cap, the abort cap (MAX_ABORTS), a retry or
   escalation rule that trips on failures that are not the agent's (a framework false violation, an overseer abort, a
   bogus check; anything but the hardware) is overridden at once (`orchestrator resume --attempts <n>`, a fresh

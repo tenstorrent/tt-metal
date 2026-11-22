@@ -40,6 +40,9 @@ constexpr bool iterating = router_iterations > 1;
 constexpr uint32_t router_row_tiles_per_iteration = get_named_compile_time_arg_val(names::kRouterRowTilesPerIteration);
 // (a padded forward: an all-padding row tile computes no sums, top-K, rows or route words)
 constexpr bool padded_chunk = get_named_compile_time_arg_val(names::kPaddedChunk) != 0;
+// (MoEBlockConfig.router_canonical_sum: the TP partials summed in chip order once every one is in, whatever chip owns
+// the token - else the owner's first, then the arrivals as they come in the reader's order)
+constexpr bool router_canonical_sum = get_named_compile_time_arg_val(names::kRouterCanonicalSum) != 0;
 constexpr uint32_t router_math_sync_offset = get_named_compile_time_arg_val(names::kRouterMathSyncOffset);
 constexpr uint32_t router_score_stride = get_named_compile_time_arg_val(names::kRouterScoreStride);
 
@@ -205,7 +208,7 @@ void process_row_block(const RouterComputeArgs& args) {
                     last_slot = slot;
                     break;
                 }
-                if (!live) {
+                if (!live || router_canonical_sum) {  // (canonical: every term in the pass below, chip order)
                     continue;
                 }
                 for (uint32_t first = 0; first < expert_tiles; first += 2) {
@@ -248,16 +251,34 @@ void process_row_block(const RouterComputeArgs& args) {
             // the picks' weights exactly; the key's low bits are the id)
             for (uint32_t tile = 0; tile < expert_tiles && live; ++tile) {
                 tile_regs_acquire();
-                reconfig_data_format_srca(cb_logits);
-                copy_init(cb_logits);
-                copy_tile(cb_logits, owner_block * expert_tiles + tile, 0);
-                if (arrivals) {  // (+ the last source's partial)
-                    reconfig_data_format_srca(cb_logits, cb_arrivals);
-                    copy_init(cb_arrivals);
-                    copy_tile(cb_arrivals, last_slot * expert_tiles + tile, 2);
-                    add_binary_tile_init();
-                    add_binary_tile(0, 2, 0);
-                }
+                if (router_canonical_sum && arrivals + 1 == tp_size) {
+                    // ((chip 0's + chip 1's) + ...) at fp32 in DEST: the owner's own partial (cb_logits) at its chip's
+                    // turn, chip c's arrival in slot c < owner ? c : c - 1 (head_gather_program.cpp kLogitsUnitSlot)
+                    for (uint32_t chip = 0; chip < tp_size; ++chip) {
+                        const bool own = chip == owner_block;
+                        const uint32_t source_cb = own ? cb_logits : cb_arrivals;
+                        const uint32_t source_tile =
+                            (own ? owner_block : (chip < owner_block ? chip : chip - 1)) * expert_tiles + tile;
+                        reconfig_data_format_srca(source_cb);
+                        copy_init(source_cb);
+                        copy_tile(source_cb, source_tile, chip == 0 ? 0 : 2);
+                        if (chip > 0) {
+                            add_binary_tile_init();
+                            add_binary_tile(0, 2, 0);
+                        }
+                    }
+                } else {
+                    reconfig_data_format_srca(cb_logits);
+                    copy_init(cb_logits);
+                    copy_tile(cb_logits, owner_block * expert_tiles + tile, 0);
+                    if (arrivals) {  // (+ the last source's partial)
+                        reconfig_data_format_srca(cb_logits, cb_arrivals);
+                        copy_init(cb_arrivals);
+                        copy_tile(cb_arrivals, last_slot * expert_tiles + tile, 2);
+                        add_binary_tile_init();
+                        add_binary_tile(0, 2, 0);
+                    }
+                }  // (the source's order)
                 {  // the owner: scores = sigmoid(logits) (ROUTER_SQRTSOFTPLUS: sqrt(softplus)), biased = scores + bias
                    // (bias^T: per row)
 #ifdef ROUTER_SQRTSOFTPLUS
