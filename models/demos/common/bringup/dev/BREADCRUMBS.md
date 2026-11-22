@@ -2910,3 +2910,12 @@ A model test file may now declare ``BATCH_MAX_SEQ = <int>``. core/batch.hints lo
 (never past deploy.seq), so the determinism check, whichever unit loads first, loads it once at that length (F283's one
 load). Selftest: selftest/test_resident_gate.py::test_a_plans_model_is_loaded_for_a_declared_max_seq. Cost: RoPE tables
 of 114688 positions instead of 64512 on the accuracy load of a gate that holds such a test.
+
+## OPEN (2026-11-22, DeepSeek-V4.1 PB.BM): an all-kept final gate reported its accuracy metrics MISSING
+The accept gate reused all 7 units (0 s) and failed with MISSING on the oracle / determinism / selection-set metrics,
+though results/PB.BM.json held them at 23:48 and every unit had passed (the agent's gate --check at 23:35). A kept unit
+merges delta[u]["metrics"] (core/gate.py, the _kept branch); the inference is that the accuracy units' delta records
+lacked metrics at 23:50, cause not established: `gate --continue --rerun <the 4 units>` re-recorded them (then PASS)
+and overwrote the evidence. No blanket guard: 51 legitimate PASS records carry no metrics (contract tests). NEXT TIME:
+copy runs/<run>/delta/<task>.json (and results/<task>.json) before any re-run, then compare the records' metrics with
+the MISSING list.
