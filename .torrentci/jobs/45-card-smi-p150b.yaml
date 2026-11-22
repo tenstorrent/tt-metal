@@ -1,0 +1,69 @@
+---
+# torrentci#3023 C0: tt-smi -s on one p150b through the VM path, plus the
+# guest's view of the card's PCI BARs. Same tt-smi fetch as
+# 40-card-smi-n150.yaml (see its header). The BAR evidence is `lspci -vv`
+# and each Tenstorrent function's sysfs `resource` file; the step fails if
+# lspci lists nothing or any resource file is empty or unreadable. The CPU
+# address sizes and vendor are recorded beside them. Run it by hand.
+jobs:
+  - id: card-smi-p150b
+    checkout: false
+    description: "C0 canary: tt-smi -s and PCI BAR evidence on one p150b (VM path, vfio-vm)"
+    timeout: 20m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        accelerator: {type: p150b, count: 1}
+        resources:
+          requests: {cpu: '4', memory: 8Gi, ephemeral-storage: 20Gi}
+          limits: {cpu: '4', memory: 8Gi, ephemeral-storage: 20Gi}
+    env:
+      - {name: HOME, value: /tmp/home}
+      - {name: TT_SMI_VERSION, value: 6.7.0}
+      - {name: TT_SMI_SHA256, value: 13ba3d41c77254c733b8dd70a53323fcc6da20f7869b2326b04be180f23f7942}
+    steps:
+      - id: devices
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$HOME"
+            - ls -l /dev/tenstorrent/
+      - id: pci-bars
+        kind: shell
+        shell:
+          run:
+            - "lspci -d 1e52: -vv > /tmp/lspci.txt"
+            - cat /tmp/lspci.txt
+            - test -s /tmp/lspci.txt || { echo "lspci lists no 1e52 function" >&2; exit 1; }
+            - found=0
+            - >-
+              for dev in /sys/bus/pci/devices/*; do
+              [ "$(cat "$dev/vendor")" = 0x1e52 ] || continue;
+              found=$((found + 1));
+              resource=$(cat "$dev/resource") || { echo "$dev/resource unreadable" >&2; exit 1; };
+              [ -n "$resource" ] || { echo "$dev/resource empty" >&2; exit 1; };
+              echo "$dev/resource:"; echo "$resource";
+              done
+            - test "$found" -gt 0 || { echo "sysfs lists no 1e52 function" >&2; exit 1; }
+            - grep -m1 'address sizes' /proc/cpuinfo
+            - grep -m1 vendor_id /proc/cpuinfo
+      - id: fetch-tt-smi
+        kind: shell
+        shell:
+          run:
+            - >-
+              curl -fsSL --proto =https -o /tmp/tt-smi
+              "https://github.com/tenstorrent/tt-smi/releases/download/v${TT_SMI_VERSION}/tt-smi-${TT_SMI_VERSION}-ubuntu-24.04"
+            - echo "${TT_SMI_SHA256}  /tmp/tt-smi" | sha256sum -c -
+            - chmod +x /tmp/tt-smi
+            - /tmp/tt-smi --version
+      - id: tt-smi
+        kind: shell
+        shell:
+          run:
+            # --local: local chips only and no ETH training wait. timeout makes
+            # a hang fail fast instead of eating the job's 20 m.
+            - timeout 300 /tmp/tt-smi --local -ls
+            - timeout 300 /tmp/tt-smi --local -s

@@ -1,12 +1,14 @@
 ---
-# Placement probe: can TorrentCI on civ2-prod place and run a job on one
-# blackhole p150b card? Group 1/2 of PR Gate's llk-smoke-tests on the
-# bh_p150b_civ2_viommu SKU, otherwise the same as 50-llk-smoke-n150.yaml
-# (see its header for the platform differences). Manual job: not in gates,
-# not a dashboard member.
+# PR Gate's llk-smoke-tests blackhole groups (llk_pr_gate_tests.yaml
+# "llk_smoke_blackhole group N/3", bh_p150b_civ2_viommu) on one p150b each
+# through the VM path. Otherwise the same as 50-llk-smoke-n150.yaml (see its
+# header for the platform differences and the 32 GiB memory). GitHub feeds
+# least_duration a .test_durations file from main's last push run; without
+# one the groups cover the same tests, only the balance differs. Run them by
+# hand.
 jobs:
 - id: llk-smoke-p150b-g1
-  description: Run PR Gate LLK smoke tests group 1/2 on one p150b (placement probe) (VM path, vfio-vm)
+  description: Run PR Gate LLK smoke tests group 1/3 on one p150b (VM path, vfio-vm)
   timeout: 90m
   runs-on:
     kubernetes:
@@ -15,8 +17,8 @@ jobs:
       image: {from-job: ci-build-image, image: ci-build}
       accelerator: {type: p150b, count: 1}
       resources:
-        requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
-        limits: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
+        requests: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+        limits: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
   env:
   - {name: HOME, value: /tmp/home}
   - {name: CHIP_ARCH, value: blackhole}
@@ -34,4 +36,64 @@ jobs:
     kind: shell
     shell:
       run: ['ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests && rc=0; timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal -m "$PYTEST_MARKERS"
-          --splits 2 --group 1 --timeout=60 --durations=25 --junitxml=pytest-report-blackhole-1.xml . >/tmp/pytest-1.log 2>&1 || rc=$?; tail -c 12000 /tmp/pytest-1.log; exit $rc']
+          --splits 3 --group 1 --splitting-algorithm least_duration --timeout=60 --durations=25 --junitxml=pytest-report-blackhole-1.xml . >/tmp/pytest-1.log 2>&1 || rc=$?; tail -c 12000 /tmp/pytest-1.log; exit $rc']
+- id: llk-smoke-p150b-g2
+  description: Run PR Gate LLK smoke tests group 2/3 on one p150b (VM path, vfio-vm)
+  timeout: 90m
+  runs-on:
+    kubernetes:
+      os: linux
+      arch: amd64
+      image: {from-job: ci-build-image, image: ci-build}
+      accelerator: {type: p150b, count: 1}
+      resources:
+        requests: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+        limits: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+  env:
+  - {name: HOME, value: /tmp/home}
+  - {name: CHIP_ARCH, value: blackhole}
+  - {name: PYTEST_MARKERS, value: not perf and not nightly and not quasar and not accuracy}
+  steps:
+  - id: setup
+    kind: shell
+    shell:
+      run: [mkdir -p "$HOME", ls -l /dev/tenstorrent/, nproc; grep -m1 'model name' /proc/cpuinfo; grep -m1 -o -w -E 'avx512f|avx2' /proc/cpuinfo | sort -u | tr '\n' ' '; echo, 'free -g; df -hT . /tmp;
+          grep -E '' (/|/tmp|/workspace[^ ]*) '' /proc/mounts || true', 'python3 -c ''import os; print("cpu_count", os.cpu_count(), "affinity", len(os.sched_getaffinity(0)))''', python3 -m venv /tmp/uv
+          && /tmp/uv/bin/pip install -q uv, /tmp/uv/bin/uv venv -q --python 3.10 /tmp/venv, /tmp/uv/bin/uv pip install -q --python /tmp/venv/bin/python --index-strategy unsafe-best-match -r tt_metal/tt-llk/tests/requirements.txt,
+        'mkdir -p /tmp/ws && t0=$(date +%s) && tar -C "$PWD" --exclude=./.git -cf - . | tar -C /tmp/ws -xf - && echo "copy-in seconds: $(( $(date +%s) - t0 ))"', du -sh /tmp/ws, . /tmp/venv/bin/activate
+          && cd /tmp/ws/tt_metal/tt-llk/tests && ./setup_testing_env.sh]
+  - id: group-2
+    kind: shell
+    shell:
+      run: ['ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests && rc=0; timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal -m "$PYTEST_MARKERS"
+          --splits 3 --group 2 --splitting-algorithm least_duration --timeout=60 --durations=25 --junitxml=pytest-report-blackhole-2.xml . >/tmp/pytest-2.log 2>&1 || rc=$?; tail -c 12000 /tmp/pytest-2.log; exit $rc']
+- id: llk-smoke-p150b-g3
+  description: Run PR Gate LLK smoke tests group 3/3 on one p150b (VM path, vfio-vm)
+  timeout: 90m
+  runs-on:
+    kubernetes:
+      os: linux
+      arch: amd64
+      image: {from-job: ci-build-image, image: ci-build}
+      accelerator: {type: p150b, count: 1}
+      resources:
+        requests: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+        limits: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+  env:
+  - {name: HOME, value: /tmp/home}
+  - {name: CHIP_ARCH, value: blackhole}
+  - {name: PYTEST_MARKERS, value: not perf and not nightly and not quasar and not accuracy}
+  steps:
+  - id: setup
+    kind: shell
+    shell:
+      run: [mkdir -p "$HOME", ls -l /dev/tenstorrent/, nproc; grep -m1 'model name' /proc/cpuinfo; grep -m1 -o -w -E 'avx512f|avx2' /proc/cpuinfo | sort -u | tr '\n' ' '; echo, 'free -g; df -hT . /tmp;
+          grep -E '' (/|/tmp|/workspace[^ ]*) '' /proc/mounts || true', 'python3 -c ''import os; print("cpu_count", os.cpu_count(), "affinity", len(os.sched_getaffinity(0)))''', python3 -m venv /tmp/uv
+          && /tmp/uv/bin/pip install -q uv, /tmp/uv/bin/uv venv -q --python 3.10 /tmp/venv, /tmp/uv/bin/uv pip install -q --python /tmp/venv/bin/python --index-strategy unsafe-best-match -r tt_metal/tt-llk/tests/requirements.txt,
+        'mkdir -p /tmp/ws && t0=$(date +%s) && tar -C "$PWD" --exclude=./.git -cf - . | tar -C /tmp/ws -xf - && echo "copy-in seconds: $(( $(date +%s) - t0 ))"', du -sh /tmp/ws, . /tmp/venv/bin/activate
+          && cd /tmp/ws/tt_metal/tt-llk/tests && ./setup_testing_env.sh]
+  - id: group-3
+    kind: shell
+    shell:
+      run: ['ulimit -n 4096; . /tmp/venv/bin/activate && cd /tmp/ws/tt_metal/tt-llk/tests/python_tests && rc=0; timeout 60m pytest -q --override-ini=log_cli=false -n auto -x --dist=worksteal -m "$PYTEST_MARKERS"
+          --splits 3 --group 3 --splitting-algorithm least_duration --timeout=60 --durations=25 --junitxml=pytest-report-blackhole-3.xml . >/tmp/pytest-3.log 2>&1 || rc=$?; tail -c 12000 /tmp/pytest-3.log; exit $rc']
