@@ -377,6 +377,11 @@ void kernel_main() {
         // base and index it by the compact slot (the loop counter) each iteration.
         [[maybe_unused]] const uint32_t out_base_tile_id = out_tensor_start_tile_id;
 
+        // Indexed mode, interleaved in1, one K block and one output block per group: consecutive groups with
+        // the same id (sorted indices) reuse the weight block already in L1 (a local copy, no DRAM read).
+        [[maybe_unused]] uint32_t prev_group_id = 0xFFFFFFFF;
+        [[maybe_unused]] uint32_t prev_in1_address = 0;
+        [[maybe_unused]] uint32_t cur_group_id = 0xFFFFFFFF;
         for (uint32_t bB = 0; bB < batch_loop_lim; ++bB) {
 #ifdef BIAS_PER_GROUP
             // Per-group fused bias (sparse matmul, indexed mode): tile row `group_id` of the bias tensor,
@@ -388,6 +393,7 @@ void kernel_main() {
                 // Gather: jump straight to group indices[bB]'s weight block, scatter its result to
                 // compact output slot bB. Every iterated group is active, so nothing is skipped.
                 const uint32_t group_id = read_sparsity(bB);
+                cur_group_id = group_id;
 #ifdef BIAS_PER_GROUP
                 in3_group_tile_offset = group_id * out_tensor_stride_h;
 #endif
@@ -537,19 +543,39 @@ void kernel_main() {
                         in1_start_address =
                             dfb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
 
-                        // Copy in1 block into the buffer, as the default kernel
-                        read_in1_block<
-                            in1_block_h,
-                            in1_block_w,
-                            in1_tensor_stride_w,
-                            in1_tensor_stride_h,
-                            in1_single_tile_size_bytes,
-                            in1_aligned_tile_size_bytes>(
-                            noc,
-                            s1,
-                            static_cast<uint32_t>(in1_start_address),
-                            in1_tensor_current_inner_dim_block_start_tile_id,
-                            bw < num_blocks_w_dim - 1 ? in1_block_w : last_block_w);
+                        constexpr bool in1_group_reuse =
+                            use_indices && num_blocks_inner_dim == 1 && num_blocks_h_dim == 1 && num_blocks_w_dim == 1;
+                        if (in1_group_reuse && cur_group_id == prev_group_id) {
+                            // Same weights as the previous group: still intact in its CB slot (the slot is only
+                            // rewritten two groups later), so copy it locally instead of reading DRAM.
+                            if (prev_in1_address != static_cast<uint32_t>(in1_start_address)) {
+                                const UnicastEndpoint self_ep;
+                                noc.async_read(
+                                    self_ep,
+                                    CoreLocalMem<uint32_t>(static_cast<uint32_t>(in1_start_address)),
+                                    in1_block_num_tiles * in1_aligned_tile_size_bytes,
+                                    {.noc_x = static_cast<uint32_t>(my_x[noc.get_noc_id()]),
+                                     .noc_y = static_cast<uint32_t>(my_y[noc.get_noc_id()]),
+                                     .addr = prev_in1_address},
+                                    {});
+                            }
+                        } else {
+                            // Copy in1 block into the buffer, as the default kernel
+                            read_in1_block<
+                                in1_block_h,
+                                in1_block_w,
+                                in1_tensor_stride_w,
+                                in1_tensor_stride_h,
+                                in1_single_tile_size_bytes,
+                                in1_aligned_tile_size_bytes>(
+                                noc,
+                                s1,
+                                static_cast<uint32_t>(in1_start_address),
+                                in1_tensor_current_inner_dim_block_start_tile_id,
+                                bw < num_blocks_w_dim - 1 ? in1_block_w : last_block_w);
+                        }
+                        prev_group_id = cur_group_id;
+                        prev_in1_address = static_cast<uint32_t>(in1_start_address);
                         in1_tensor_current_inner_dim_block_start_tile_id += in1_tensor_next_block_stride;
 
                         // Barrier! make sure the reads are done

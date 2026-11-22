@@ -311,15 +311,42 @@ def test_indices_rejects_wrong_dtype(device, expect_error):
         _run_indexed(in0_t, in1_t, sparsity_t, indices_t, pc)
 
 
-def test_indices_rejects_more_than_num_groups(device, expect_error):
-    """num_active must be <= the number of sparse groups in B, which is B's group axis (not the
-    product of A's and B's batch lengths)."""
-    in0_t, in1_t, sparsity_t, _, pc, dims = _contract_inputs(device)
-    num_experts = dims[3]
-    indices_t = _make_indices(list(range(num_experts)) + [0], device)
-
-    with expect_error(RuntimeError, "must be <= the number of sparse groups"):
-        _run_indexed(in0_t, in1_t, sparsity_t, indices_t, pc)
+@pytest.mark.parametrize("full_k_block", [True, False], ids=["k_once", "k_blocks"])
+def test_indices_repeat_sorted_beyond_num_groups(device, full_k_block):
+    """Sorted ids with repeats, more of them than B has groups (row slots of one expert). With the whole K in one
+    block the in1 reader reuses a repeated group's weights from L1; the output must not change."""
+    torch.manual_seed(7)
+    num_experts, m, k, n = 16, 32, 256, 256
+    active_ids = sorted([0] * 9 + [3] * 2 + [5] + [9] * 17 + [15] * 11)  # 40 slots > 16 groups
+    num_active = len(active_ids)
+    a = torch.randn((1, num_active, m, k), dtype=torch.bfloat16)
+    in1_t = ttnn.from_torch(
+        torch.randn((1, num_experts, k, n), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    pc = _sparse_pc(m, n, 32, 32)
+    if full_k_block:
+        pc.in0_block_w = k // 32
+    out_t = ttnn.sparse_matmul(
+        ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        in1_t,
+        sparsity=_make_sparsity(sorted(set(active_ids)), num_experts, device),
+        indices=_make_indices(active_ids, device),
+        is_input_a_sparse=True,
+        is_input_b_sparse=True,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        program_config=pc,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
+        ),
+    )
+    out = ttnn.to_torch(out_t).float().reshape(num_active, m, n)
+    w = ttnn.to_torch(in1_t).float()[0]  # the bfp8 weights as the kernel sees them
+    ref = torch.stack([a[0, i].float() @ w[e] for i, e in enumerate(active_ids)])
+    passed, pcc = comp_pcc(ref, out, 0.9999)
+    assert passed, f"PCC {pcc}"
 
 
 def test_indices_rejects_nnz(device, expect_error):

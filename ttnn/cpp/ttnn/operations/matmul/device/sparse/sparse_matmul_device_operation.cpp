@@ -419,11 +419,9 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
             batch_length_B,
             b_shape_padded[-3],
             b_shape_padded);
-        TT_FATAL(
-            indices.logical_volume() <= batch_length_B,
-            "indices length / num_active ({}) must be <= the number of sparse groups in input B ({})",
-            indices.logical_volume(),
-            batch_length_B);
+        // num_active may exceed the group count: ids can repeat (several row slots of one group; sorted ids let
+        // the in1 reader keep a group's weights across consecutive slots).
+        TT_FATAL(indices.logical_volume() > 0, "indices must not be empty");
         indexed_num_active = static_cast<uint32_t>(indices.logical_volume());
     }
     // Per-group fused bias validation. `bias` (optional_input_tensors[1]) is a TILE tensor whose tile
