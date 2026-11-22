@@ -38,6 +38,27 @@ def host_route(ids, n, t):  # prefill_model.Inkling2Prefill._route_unified on id
     return off, counts, xri, back.reshape(-1), dest
 
 
+def host_slots(ids, n, t, gm, nslot):  # prefill_model.Inkling2Prefill._route_host, sparse slots
+    flat = ids[:n].reshape(-1).astype(np.int64)
+    counts = np.bincount(flat, minlength=NE)
+    per = -(-counts // gm)
+    used = int(per.sum())
+    slot0 = np.concatenate([[0], np.cumsum(per)[:-1]])
+    eid = np.empty(nslot, dtype=np.int64)
+    eid[:used] = np.repeat(np.arange(NE), per)
+    eid[used:] = eid[used - 1]
+    order = np.argsort(flat, kind="stable")
+    starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    rank = np.empty_like(order)
+    rank[order] = np.arange(order.size) - starts[flat[order]]
+    dest = slot0[flat] * gm + rank
+    gidx = np.zeros(nslot * gm, dtype=np.int64)
+    gidx[dest] = np.arange(flat.size) // K
+    back = np.zeros((K, t), dtype=np.int64)
+    back[:, :n] = dest.reshape(n, K).T
+    return eid, gidx, back.reshape(-1), dest
+
+
 def make_ids(t, skew, g):
     if skew:  # most pairs on 3 experts (one expert can take most tokens of a chunk)
         p = torch.full((NE,), 0.1 / (NE - 3))
@@ -76,3 +97,27 @@ def test_pf_route(device, t, n, skew):
             mod(idx, nreal, hist, off, cnt, xri, back, nrows - 32, K)
         ttnn.synchronize_device(dev)
         print(f"PF_ROUTE_MS t={t} {(time.perf_counter() - t0) / 10 * 1e3:.3f}")
+
+
+@pytest.mark.parametrize("t,n,skew", [(256, 200, True), (8192, 8192, False), (8192, 8100, True)])
+def test_pf_route_slots(device, t, n, skew):
+    """Sparse-matmul slots (64 rows per slot, expert per slot) vs the host routing."""
+    dev, gm = device, 64
+    nslot = -(-(-(-t * K // gm) + NE) // 32) * 32  # prefill_model._nslot
+    g = torch.Generator().manual_seed(t + n + 1)
+    ids = make_ids(t, skew, g)
+    rm, dram = ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG
+    put = lambda a, dt, lay=rm: ttnn.from_torch(a, dtype=dt, layout=lay, device=dev, memory_config=dram)  # noqa: E731
+    idx = put(torch.from_numpy(ids.astype(np.int32)).view(1, 1, t, K), ttnn.uint16, ttnn.TILE_LAYOUT)
+    nreal = put(torch.tensor([[n] + [0] * 15], dtype=torch.int32), ttnn.uint32)
+    gi = put(torch.zeros(1, nslot * gm, dtype=torch.int32), ttnn.uint32)
+    back = put(torch.zeros(1, K * t, dtype=torch.int32), ttnn.uint32)
+    eid = put(torch.zeros(1, 1, 1, nslot, dtype=torch.int32), ttnn.uint16)
+    mod = PfRoute(dev)
+    mod(idx, nreal, mod.hist_buffer(t, NE), None, None, gi, back, 0, K, align=gm, eid=eid)
+    r_eid, r_gi, r_back, dest = host_slots(ids, n, t, gm, nslot)
+    d = lambda x: ttnn.to_torch(x).reshape(-1).to(torch.int64).numpy()  # noqa: E731
+    ok = dict(eid=np.array_equal(d(eid), r_eid), back=np.array_equal(d(back), r_back),
+              gidx=np.array_equal(d(gi)[dest], r_gi[dest]))  # fmt: skip
+    print(f"PF_ROUTE_SLOTS t={t} n={n} skew={skew} {ok}")
+    assert all(ok.values()), ok

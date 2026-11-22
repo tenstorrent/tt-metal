@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Prefill MoE routing, pass 2 (per core, after pass 1 on every core). From all cores' histograms:
-//   cnt[e] = sum over cores, off[e] = sum over e' < e of cnt[e'] rounded up to 32 (expert e's buffer region),
+//   cnt[e] = sum over cores, off[e] = sum over e' < e of cnt[e'] rounded up to ALIGN (expert e's buffer region:
+//   tile rows for the unified expert op, GM-row slots for the grouped sparse matmul),
 //   pair (tok, k) with expert e is buffer row off[e] + (pairs of e on cores < c) + (its rank among this
 //   core's pairs of e, pair order tok * K + k) -- the same rows as a stable sort of all pairs by expert.
 // Writes back[k, tok] = buffer row of (tok, k) for this core's tokens (tokens >= n: the spare row), the row
-// index xri[row] = tok (one contiguous run per expert), and (core 0) off and cnt.
-// Runtime args: idx, nreal, hist, off, cnt, xri, back, R0, R1, c, n_cores.
+// index xri[row] = tok (one contiguous run per expert), and (core 0) off and cnt (when their addresses are not 0)
+// and, slot mode, the expert of each of the nslot GM-row slots (unused slots repeat the last used expert).
+// Runtime args: idx, nreal, hist, off, cnt, xri, back, R0, R1, c, n_cores, eid, nslot.
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -21,11 +23,13 @@ void kernel_main() {
     constexpr uint32_t T = get_named_compile_time_arg_val("t");
     constexpr uint32_t SPARE = get_named_compile_time_arg_val("spare");  // zeroed spare buffer row
     constexpr bool idx_dram = get_named_compile_time_arg_val("idx_dram");
-    constexpr uint32_t cb_idx = 0, cb_hist = 1, cb_n = 2, cb_back = 3, cb_xri = 4, cb_tab = 5;
+    constexpr uint32_t ALIGN = get_named_compile_time_arg_val("align");
+    constexpr uint32_t cb_idx = 0, cb_hist = 1, cb_n = 2, cb_back = 3, cb_xri = 4, cb_tab = 5, cb_eid = 6;
     const uint32_t idx = get_arg_val<uint32_t>(0), nreal = get_arg_val<uint32_t>(1), hist = get_arg_val<uint32_t>(2);
     const uint32_t off = get_arg_val<uint32_t>(3), cnt = get_arg_val<uint32_t>(4), xri = get_arg_val<uint32_t>(5);
     const uint32_t back = get_arg_val<uint32_t>(6), R0 = get_arg_val<uint32_t>(7), R1 = get_arg_val<uint32_t>(8);
     const uint32_t c = get_arg_val<uint32_t>(9), NC = get_arg_val<uint32_t>(10);
+    const uint32_t eid = get_arg_val<uint32_t>(11), nslot = get_arg_val<uint32_t>(12);
     const InterleavedAddrGen<idx_dram> ia = {.bank_base_address = idx, .page_size = 2048};
     const InterleavedAddrGen<true> one_n = {.bank_base_address = nreal, .page_size = 64};
     const InterleavedAddrGen<true> one_h = {.bank_base_address = hist, .page_size = 64};
@@ -62,13 +66,32 @@ void kernel_main() {
         tab[2 * NE + e] = run + before;
         tab[3 * NE + e] = loc;
         loc += h[c * NE + e];
-        run += (tot + 31) & ~31u;
+        run += (tot + ALIGN - 1) / ALIGN * ALIGN;
     }
-    if (c == 0) {
+    if (c == 0 && off != 0) {
         noc_async_write(reinterpret_cast<uint32_t>(tab), one_c.get_noc_addr(0), NE * 4);
         noc_async_write(reinterpret_cast<uint32_t>(tab + NE), one_o.get_noc_addr(0), NE * 4);
     }
 
+    if (c == 0 && eid != 0) {  // slot experts, uint16, one ROW_MAJOR page
+        volatile tt_l1_ptr uint16_t* es = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(al64(get_write_ptr(cb_eid)));
+        uint32_t s = 0;
+        uint16_t last = 0;
+        for (uint32_t e = 0; e < NE; ++e) {
+            const uint32_t per = (tab[e] + ALIGN - 1) / ALIGN;
+            for (uint32_t i = 0; i < per && s < nslot; ++i) {
+                es[s++] = static_cast<uint16_t>(e);
+            }
+            if (per) {
+                last = static_cast<uint16_t>(e);
+            }
+        }
+        for (; s < nslot; ++s) {
+            es[s] = last;
+        }
+        const InterleavedAddrGen<true> one_e = {.bank_base_address = eid, .page_size = 64};
+        noc_async_write(reinterpret_cast<uint32_t>(es), one_e.get_noc_addr(0), nslot * 2);
+    }
     volatile tt_l1_ptr uint16_t* ids = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ib);
     volatile tt_l1_ptr uint32_t* bk = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(al64(get_write_ptr(cb_back)));
     // xs: this core's tokens grouped by expert, run of expert e at local slots [loc_e, loc_e + h[c][e])

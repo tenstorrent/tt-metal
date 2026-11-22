@@ -443,11 +443,12 @@ class Inkling2Prefill:
         if experts == "auto":
             experts = "unified" if _has_unified(dev, self.layers[0].w_gate_up, self.layers[0].w_down) else "sparse"
         self.unified = experts == "unified"
-        # unified experts: routing buffers built on the device (tt/fused/pf_route.py), no host round trip
-        self._pfroute = PfRoute(dev) if self.unified else None
+        # routing buffers built on the device (tt/fused/pf_route.py), no host round trip; the sparse path needs
+        # one slot-expert buffer per chunk (R2 sparse_matmul takes all slots in one call)
+        self._pfroute = PfRoute(dev) if (self.unified or self.r2) else None
         # unified experts: gather + weight + sum of the k expert rows in one program (tt/fused/pf_combine.py)
         self._pfcomb = PfCombine(dev) if self.unified else None
-        self.dev_route = self.unified
+        self.dev_route = self._pfroute is not None
         # fp32 DEST: the op's precise mode (fp32 partials, bf16 activations; bf8 activations miss the gate)
         self.unified_ckc = ttnn.init_device_compute_kernel_config(
             dev.arch(), math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=True
@@ -1035,8 +1036,13 @@ class Inkling2Prefill:
         device work so far is one segment: close it, run it, route, open the next. dev_route: on the device."""
         if self.dev_route:
             b = self._cur
-            self._pfroute(indices, b["nreal"], b["hist"], b["u_off"], b["u_cnt"], b["u_xri"], b["bi"],
-                          b["u_rows"] - 32, TOP_K)  # fmt: skip
+            if self.unified:
+                self._pfroute(indices, b["nreal"], b["hist"], b["u_off"], b["u_cnt"], b["u_xri"], b["bi"],
+                              b["u_rows"] - 32, TOP_K)  # fmt: skip
+            else:  # GM-row slots; pad tokens read buffer row 0 with weight 0 (as the host routing)
+                assert len(b["ei"]) == 1, len(b["ei"])
+                self._pfroute(indices, b["nreal"], b["hist"], None, None, b["gi"], b["bi"], 0, TOP_K, align=self.gm,
+                              eid=b["ei"][0])  # fmt: skip
             return b
         if self._cap is not None:
             self._cap["routes"].append(indices)
@@ -1229,9 +1235,10 @@ class Inkling2Prefill:
             "ei": [put(i32(1, 1, 1, min(self.r2_step, ns - g0)), ttnn.uint16, rm) for g0 in range(0, ns, self.r2_step)],
             "bi": put(i32(1, TOP_K * t), ttnn.uint32, rm),
         }
-        if self.unified:
+        if self._pfroute is not None:
             b["nreal"] = put(i32(1, 16), ttnn.uint32, rm)
             b["hist"] = self._pfroute.hist_buffer(t, NUM_EXPERTS)
+        if self.unified:
             b["u_rows"] = self._urows(t)
             b["u_off"] = put(i32(1, NUM_EXPERTS), ttnn.uint32, rm)
             b["u_cnt"] = put(i32(1, NUM_EXPERTS), ttnn.uint32, rm)
@@ -1280,7 +1287,7 @@ class Inkling2Prefill:
         self._write(b["tok"], torch.tensor(ids, dtype=torch.int32).view(1, t), ttnn.uint32)
         tau = torch.tensor([log_scale(p) for p in range(s, s + t)], dtype=torch.float32).view(1, 1, t, 1)
         self._write(b["tau"], tau, ttnn.float32, ttnn.TILE_LAYOUT)
-        if self.unified:
+        if "nreal" in b:
             self._write(b["nreal"], torch.tensor([[n] + [0] * 15], dtype=torch.int32), ttnn.uint32)
         if n < t:
             self._write(b["valid"], (torch.arange(t) < n).float().view(1, 1, t, 1), ttnn.bfloat16, ttnn.TILE_LAYOUT)

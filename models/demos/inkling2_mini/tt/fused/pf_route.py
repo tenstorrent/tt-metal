@@ -28,10 +28,14 @@ class PfRoute:
         return ttnn.allocate_tensor_on_device(ttnn.Shape([1, nc * ne]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT,
                                               self.device, ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
 
-    def __call__(self, indices, nreal, hist, off, cnt, xri, back, spare, k):
+    def __call__(self, indices, nreal, hist, off, cnt, xri, back, spare, k, ne=128, align=32, eid=None):
         """indices [1,1,T,k] uint16 TILE; nreal [1,16] uint32 (word 0 = real rows n); hist from hist_buffer;
-        off, cnt [1, ne] uint32; xri [1, rows] uint32; back [1, k T] uint32 (all ROW_MAJOR DRAM)."""
-        t, ne = indices.shape[-2], off.shape[-1]
+        off, cnt [1, ne] uint32 or None; xri [1, rows] uint32; back [1, k T] uint32 (all ROW_MAJOR DRAM).
+        align: expert region rounding (32: unified expert op; GM: sparse matmul slots, then eid [1,1,1,nslot]
+        uint16 gets the expert of each slot). spare: back row of tokens >= n."""
+        t = indices.shape[-2]
+        addr = lambda x: 0 if x is None else x.buffer_address()  # noqa: E731
+        nslot = 0 if eid is None else eid.shape[-1]
         assert indices.dtype == ttnn.uint16 and indices.layout == ttnn.TILE_LAYOUT and t % 32 == 0, indices
         assert indices.padded_shape[-1] == 32 and k <= 16, indices.padded_shape
         rt = t // 32
@@ -48,9 +52,9 @@ class PfRoute:
         cbs = [F.cb(0, u32, 1, per * 1024 + 64, crs), F.cb(1, u32, 1, ne * 4 + 64, crs), F.cb(2, u32, 1, 128, crs)]
         F.run([indices, nreal, hist], [F.kernel("pf_route_count.cpp", cfg, named, a_args, crs)], cbs)
         ntok = per * 32
-        named = dict(named, spare=spare)
-        b_args = {c: [indices.buffer_address(), nreal.buffer_address(), hist.buffer_address(), off.buffer_address(),
-                      cnt.buffer_address(), xri.buffer_address(), back.buffer_address(), r0, r1, i, nc]
+        named = dict(named, spare=spare, align=align)
+        b_args = {c: [indices.buffer_address(), nreal.buffer_address(), hist.buffer_address(), addr(off), addr(cnt),
+                      xri.buffer_address(), back.buffer_address(), r0, r1, i, nc, addr(eid), nslot]
                   for i, (c, (r0, r1)) in enumerate(zip(cores, rng))}  # fmt: skip
         cbs = [
             F.cb(0, u32, 1, per * 1024 + 64, crs),
@@ -59,7 +63,8 @@ class PfRoute:
             F.cb(3, u32, 1, k * ntok * 4 + 64, crs),
             F.cb(4, u32, 1, (2 * k * ntok + 16 * ne) * 4 + 64, crs),  # xs + xri staging (64-byte slots)
             F.cb(5, u32, 1, 4 * ne * 4 + 64, crs),
+            F.cb(6, u32, 1, nslot * 2 + 128, crs),
         ]
-        F.run([indices, nreal, hist, off, cnt, xri, back],
+        F.run([x for x in (indices, nreal, hist, off, cnt, xri, back, eid) if x is not None],
               [F.kernel("pf_route_scatter.cpp", cfg, named, b_args, crs)], cbs)  # fmt: skip
         return back
