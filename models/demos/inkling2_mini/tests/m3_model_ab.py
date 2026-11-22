@@ -7,6 +7,7 @@
 # PCC, argmax), replay bit-equal, median ms of 3 x 10 steps at pos 2048 and 122880, overlap stats. DRAM-busy fraction
 # = GB per step (P3: 4.864 / 7.230) / (ms * 443 GB/s).
 # usage: python models/demos/inkling2_mini/tests/m3_model_ab.py <out.jsonl> '<variant json>' ...
+# "experts": {tt/mk/expert_overlap.ExpertOverlap kwargs} (guessed experts streamed ahead; needs a PF-layout cache).
 # "hold": KB (L1 probe): one extra lock-step L1 tensor of that many KB per core on the expert step's worker cores.
 # M3_EAGER_ONLY=1 (mockwarm): two eager steps per variant, no traces, no numbers.
 import json
@@ -20,6 +21,7 @@ import torch
 import models.demos.inkling2_mini.tt.mk.moe_norm as MN
 import ttnn
 from models.demos.inkling2_mini.tt.generator import Generator
+from models.demos.inkling2_mini.tt.mk.expert_overlap import ExpertOverlap
 from models.demos.inkling2_mini.tt.mk.overlap import install
 from models.demos.inkling2_mini.tt.mk.pipe_stage import PipeOverlap
 from models.demos.inkling2_mini.tt.model import Inkling2Model
@@ -31,7 +33,7 @@ EAGER = bool(os.environ.get("M3_EAGER_ONLY"))
 dev = ttnn.open_device(device_id=0, trace_region_size=512 << 20)
 
 
-def run(m, tag, ov=None):
+def run(m, tag, ov=None, eo=None):
     g = Generator(m, overlap=False)  # this script installs its own variants
     g.capture()
     toks = [200005, 17, 4000, 123, 9, 77]
@@ -56,6 +58,8 @@ def run(m, tag, ov=None):
         res["dram_busy"][pos] = round(GB[pos] / (res["ms"][pos] * 1e-3) / 443, 3)
     if ov is not None:
         res["overlap"] = ov.stats()
+    if eo is not None:
+        res["experts"] = eo.stats()
     g.release()
     return res, a1
 
@@ -80,6 +84,7 @@ try:
         if v.get("pipe") is not None:
             assert ov is None, "pipe and tile-fill staging both wrap w_all"
             ov = PipeOverlap(m, **v["pipe"])
+        eo = ExpertOverlap(m, **v["experts"]) if v.get("experts") is not None else None
         hold = None
         if v.get("hold"):
             from models.demos.inkling2_mini.tt.mk.stage import coalesce
@@ -99,10 +104,12 @@ try:
             if EAGER:
                 print("M3EAGER", v["tag"], json.dumps(ov.stats() if ov else None), flush=True)
                 continue
-            res, got = run(m, v["tag"], ov)
+            res, got = run(m, v["tag"], ov, eo)
         finally:
             if ov is not None:
                 ov.uninstall(m)
+            if eo is not None:
+                eo.uninstall(m)
             if hold is not None:
                 ttnn.deallocate(hold)
         res["variant"] = v
