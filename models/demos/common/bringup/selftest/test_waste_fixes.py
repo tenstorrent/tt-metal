@@ -325,3 +325,21 @@ def test_an_agent_making_progress_is_never_stopped_only_a_stalled_one(tmp_path):
     assert not agent_stalled(log, os.getpid(), 5400, now)  # active transcript
     os.utime(log, (now - 9000, now - 9000))
     assert agent_stalled(log, 999999, 5400, now)  # quiet and nothing of its own running (no such group)
+
+
+def test_an_agents_report_survives_the_gate_a_tests_own_report_is_rewritten(sandbox):
+    """F300 (DeepSeek-V4.1 PB.9G / PB.GAP): results/<task>_*.md are gate outputs (F292: a test's report table), so the
+    gate deleted the agent's report written before the final gate. A report the gate does not write again survives as
+    it was; one the gate's test writes is the test's."""
+    root, run = _unit(sandbox)
+    led = sandbox.tasks(task("X.4", run("a"), metrics={"pcc_*": ">= 0.99"}, paths=["src"]))
+    rep = led.results_dir / "X.4_report.md"
+    rep.parent.mkdir(parents=True, exist_ok=True)
+    rep.write_text("the agent's table\n")
+    assert run_gate(sandbox.spec, led, "X.4").verdict == "PASS"
+    assert rep.read_text() == "the agent's table\n"
+    writes = f"{run('b')} && echo 'the test table' > {rep}"
+    led = sandbox.tasks(task("X.4", writes, metrics={"pcc_*": ">= 0.99"}, paths=["src"]))
+    rep.write_text("the agent's table\n")
+    assert run_gate(sandbox.spec, led, "X.4").verdict == "PASS"
+    assert rep.read_text() == "the test table\n"

@@ -1407,10 +1407,13 @@ def run_gate(
     # to a scratch dir: the zero stub's rel 1.0 overwrote the task's real results (DeepSeek-V4.1 C.swa.shared_expert)
     results_dir = ledger.results_dir if (record or check) else spec.run_dir(run_name(ledger)) / "validation" / tid
     M.reset(tid, results_dir)
+    saved_reports: dict[Path, bytes] = {}  # F300: an agent's report table the gate does not rewrite survives it
     for out in (
         gate_outputs(ledger, task) if results_dir == ledger.results_dir else ()
     ):  # F55: only what this gate writes now counts
         if out.name != f"{tid}.json":
+            if out.suffix == ".md" and out.exists():
+                saved_reports[out] = out.read_bytes()
             out.unlink(missing_ok=True)
     if record:
         ledger.update(tid, status="RUNNING", started=now())
@@ -1474,6 +1477,12 @@ def run_gate(
     if record and reuse is None and verdict != "PASS":  # F169: where the gate stopped, for --continue and the overseer
         head += progress_lines(spec, ledger, tid)
     head = head + [task_accounting_line(spec, log.parent, tid)]  # F286
+    # F300 (DeepSeek-V4.1 PB.9G / PB.GAP, 2026-11-22): F292 made results/<task>_*.md gate outputs (a test's report table),
+    # so the gate deleted the agent's own report written before the final gate (two reports lost). A report the gate's
+    # tests did not write again is put back as it was; one they rewrote is theirs
+    for p, b in saved_reports.items():
+        if not p.exists():
+            p.write_bytes(b)
     res = GateResult(tid, verdict, rc, head + lines + [f"  MISSING artifact {a}" for a in missing], log, None, dur)
     res.reused = reused
     if record or check:  # FIX.31: the supervisor's watch wakes on a gate's result, whoever ran it
