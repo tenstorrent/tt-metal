@@ -33,6 +33,7 @@ def main():
     ap.add_argument("--steps", type=int, default=6)
     ap.add_argument("--max-pos", type=int, default=512)
     ap.add_argument("--share-table", action="store_true")
+    ap.add_argument("--via-host", action="store_true", help="the snapshot through host memory (device copies freed)")
     a = ap.parse_args()
     mesh = open_mesh()
     ok = False
@@ -69,6 +70,17 @@ def main():
             ref.append(step({A}, {A: x})[A])
             pos[A] += 1
         others = {u: m.read_slot(u) for u in range(8) if u not in (A, B)}
+        if a.via_host:
+            import time
+
+            t0 = time.perf_counter()
+            host = m.snapshot_to_host(snap)
+            t1 = time.perf_counter()
+            snap = m.snapshot_from_host(host)
+            ttnn.synchronize_device(mesh)
+            t2 = time.perf_counter()
+            mb = sum(int(host[k].volume() * host[k].element_size()) for k in m.SNAP_TENSORS if k in host) / 1e6
+            print(f"via host: {mb:.1f} MB (all chips) out {1e3 * (t1 - t0):.1f} ms, in {1e3 * (t2 - t1):.1f} ms")
         m.restore_slot(B, snap)
         if a.share_table:
             tbl = [list(t) for t in m.block_tables]

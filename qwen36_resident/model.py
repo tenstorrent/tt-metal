@@ -2262,6 +2262,26 @@ class ResidentModel:
             n_tiles = -(-snap["n_tokens"] // TILE)
             self._page_copy(self._kv_copies(self.block_tables[s], n_tiles, snap["kv"], save=False))
 
+    SNAP_TENSORS = ("state", "hist", "kv")
+
+    def snapshot_to_host(self, snap):
+        """a snapshot's staging tensors to host memory (ttnn host tensors, one shard per chip), the device copies freed
+        — the host tier of a prefix cache entry / a swapped-out user (Strata S1 / S3)"""
+        out = {"n_tokens": snap.get("n_tokens", 0)}
+        for k in self.SNAP_TENSORS:
+            if k in snap:
+                out[k] = ttnn.from_device(snap[k])
+                ttnn.deallocate(snap[k])
+        return out
+
+    def snapshot_from_host(self, host):
+        """a snapshot_to_host result back into device staging tensors (for restore_slot)"""
+        snap = {"n_tokens": host.get("n_tokens", 0)}
+        for k in self.SNAP_TENSORS:
+            if k in host:
+                snap[k] = ttnn.to_device(host[k], self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return snap
+
     def _token_state(self, x0, pos, ring, slot=0, extra=None, active=None, preserve=False):
         B = self.launch_rows
         x0 = x0.reshape(B, -1)
