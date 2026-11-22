@@ -65,16 +65,32 @@ void kernel_main() {
             }
         }
         noc_async_read_barrier();
-        noc_semaphore_wait(sp, n_split - 1);
+        {
+            DeviceZoneScopedN("W_semz");
+            noc_semaphore_wait(sp, n_split - 1);
+        }
         noc_semaphore_set(sp, 0);
         cb_reserve_back(cb_recv, nb * kz);
         cb_push_back(cb_recv, nb * kz);
-        cb_wait_front(cb_z, kz);
+        {
+            DeviceZoneScopedN("W_zwait");
+            cb_wait_front(cb_z, kz);
+        }
         if constexpr (get_named_compile_time_arg_val("fused")) {
-            // z + combine in one program: the kz z tiles as they are into the combine cores' cb 31 (same L1
-            // address there; they take rows 0..rows-1), then set their sem_zl. Args after the prep input args:
-            // the number of combine rectangles, then per rectangle its virtual start x, y, end x, y, core count.
-            const uint32_t zl = get_read_ptr(cb_z), land = get_write_ptr(31);
+            DeviceZoneScopedN("W_mc");
+            // z + combine in one program: z in compact form (rows 0..rows-1 only, block (t, r) = 128 B at
+            // (t * rows + r) * 128) into the combine cores' cb 31 (same L1 address there), then set their sem_zl.
+            // Args after the prep input args: the number of combine rectangles, then per rectangle its virtual
+            // start x, y, end x, y, core count.
+            const uint32_t zt = get_read_ptr(cb_z), zl = get_write_ptr(31), land = zl;
+            for (uint32_t t = 0; t < kz; ++t) {
+                for (uint32_t r = 0; r < rows; ++r) {
+                    const uint32_t so = zt + t * 4096 + rowio::row_offset(r, 4), d = zl + (t * rows + r) * 128;
+                    noc_async_read(get_noc_addr(so), d, 64);
+                    noc_async_read(get_noc_addr(so + 1024), d + 64, 64);
+                }
+            }
+            noc_async_read_barrier();
             const uint32_t b = A + 3 + 2 * n_split + 5;
             const uint32_t n_rect = get_arg_val<uint32_t>(b);
             const uint32_t sem_zl = get_semaphore(get_named_compile_time_arg_val("sem_zl"));
@@ -86,9 +102,12 @@ void kernel_main() {
                 const uint32_t q = b + 1 + 5 * r;
                 const uint32_t x0 = get_arg_val<uint32_t>(q), y0 = get_arg_val<uint32_t>(q + 1);
                 const uint32_t x1 = get_arg_val<uint32_t>(q + 2), y1 = get_arg_val<uint32_t>(q + 3);
-                noc_async_write_multicast(zl, mc(x0, y0, x1, y1, land), kz * 4096, get_arg_val<uint32_t>(q + 4));
+                noc_async_write_multicast(zl, mc(x0, y0, x1, y1, land), kz * rows * 128, get_arg_val<uint32_t>(q + 4));
             }
-            noc_async_write_barrier();
+            {
+                DeviceZoneScopedN("W_mcbar");
+                noc_async_write_barrier();
+            }
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_zl) = 1;
             for (uint32_t r = 0; r < n_rect; ++r) {
                 const uint32_t q = b + 1 + 5 * r;

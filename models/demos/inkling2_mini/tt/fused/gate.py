@@ -202,8 +202,8 @@ class _FusedGate:
             F.cb(9, f32, 1, cores=crs),
             F.cb(18, f32, self.kz, cores=crs),
             F.cb(29, ttnn.bfloat16, 1, 32, cores=crs),
-            # root: compact z rows (fused: where the z tiles land on the combine cores; one address everywhere)
-            F.cb(31, f32, self.kz if self.fused else 1, cores=self.all_cores if self.fused else crs),
+            # root: compact z rows (fused: also where they land on the combine cores; one address everywhere)
+            F.cb(31, f32, 1, cores=self.all_cores if self.fused else crs),
             F.stage_cb(30, self.ntc, crs),  # prep writer -> reader: second half of the row landed
         ]
         sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=crs, initial_value=0) for i in (0, 1)]

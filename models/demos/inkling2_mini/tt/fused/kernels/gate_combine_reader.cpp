@@ -88,15 +88,9 @@ void kernel_main() {
         for (uint32_t t = 0; t < kz; ++t) {
             const uint32_t d = zl + t * 4096 + off;
             if (!block || t / 2 == r) {
-                if constexpr (get_named_compile_time_arg_val("fused")) {  // landed z tiles (row form)
-                    const uint64_t a = get_noc_addr(zst + t * 4096 + off);
-                    noc_async_read(a, d, 64);
-                    noc_async_read(a + 1024, d + 1024, 64);
-                } else {  // compact z rows
-                    const uint64_t a = get_noc_addr(zst + (t * rows + r) * 128);
-                    noc_async_read(a, d, 64);
-                    noc_async_read(a + 64, d + 1024, 64);
-                }
+                const uint64_t a = get_noc_addr(zst + (t * rows + r) * 128);  // compact z rows
+                noc_async_read(a, d, 64);
+                noc_async_read(a + 64, d + 1024, 64);
             } else {
                 rowio::zero_words(d, 64);
                 rowio::zero_words(d + 1024, 64);
