@@ -59,7 +59,6 @@ Gemma4SlidingRingSDPAResult gemma4_sliding_ring_sdpa(
     bool is_balanced = false,
     bool is_cross = false,
     std::optional<float> scale = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_actual_isl = std::nullopt,
@@ -74,6 +73,8 @@ Gemma4SlidingRingSDPAResult gemma4_sliding_ring_sdpa(
     // When set, the logical_n / logical_l params above are worst-case placeholders (see Gemma4SlidingRingSDPAInputs).
     const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& logical_l_tensor = std::nullopt,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt,
+    // The precision recipe; STANDARD when unset (ttnn.SDPAPrecision; ACCURATE for FP32 accumulation).
+    std::optional<ttnn::operations::transformer::SDPAPrecision> precision = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -43,6 +43,8 @@ ttnn::Tensor sliding_ring_sdpa(
     const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
-    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    // The precision recipe; STANDARD when unset. compute_kernel_config is ignored (deprecated) with a warning.
+    std::optional<ttnn::operations::transformer::SDPAPrecision> precision = std::nullopt);
 
 }  // namespace ttnn::experimental::gemma4

@@ -23,6 +23,7 @@
 #include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/sliding_ring_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/sliding_ring_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_program.hpp"
 #include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
@@ -526,36 +527,8 @@ void Gemma4SlidingRingSDPADeviceOperation::validate_on_program_cache_miss(
             "logical_l as a tensor is incompatible with the slot_id / kv_actual_isl metadata path");
     }
 
-    if (tensor_args.attention_sink.has_value()) {
-        const auto& attention_sink = tensor_args.attention_sink.value();
-        TT_FATAL(args.is_causal, "Gemma4SlidingRingSDPA attention_sink is supported only for causal attention");
-        TT_FATAL(!has_joint_tensors, "Gemma4SlidingRingSDPA attention_sink does not support joint attention tensors");
-        TT_FATAL(!has_latent_v, "Gemma4SlidingRingSDPA attention_sink does not support latent-V / Ring-MLA attention");
-        TT_FATAL(attention_sink.storage_type() == StorageType::DEVICE, "Attention sink tensor must be on device");
-        TT_FATAL(attention_sink.is_allocated(), "Attention sink tensor must be allocated on device");
-        TT_FATAL(
-            input_tensor_q.device() == attention_sink.device(),
-            "Attention sink must be on the same mesh device as Q/K/V");
-        TT_FATAL(attention_sink.layout() == Layout::TILE, "Attention sink must be tilized");
-        TT_FATAL(attention_sink.dtype() == DataType::BFLOAT16, "GPT-OSS attention sink must be BF16");
-        TT_FATAL(
-            attention_sink.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Attention sink must be in DRAM");
-
-        const auto& sink_shape = attention_sink.logical_shape();
-        const auto& q_shape = input_tensor_q.logical_shape();
-        TT_FATAL(sink_shape.rank() == 4, "Attention sink must have rank 4, got rank {}", sink_shape.rank());
-        TT_FATAL(sink_shape[0] == 1, "Attention sink batch dimension must be 1, got {}", sink_shape[0]);
-        TT_FATAL(
-            sink_shape[1] == q_shape[1],
-            "Attention sink local num_heads must match Q. Got sink: {}, Q: {}",
-            sink_shape[1],
-            q_shape[1]);
-        TT_FATAL(sink_shape[2] == 1, "Attention sink sequence dimension must be 1, got {}", sink_shape[2]);
-        TT_FATAL(sink_shape[3] == 1, "Attention sink hidden dimension must be 1, got {}", sink_shape[3]);
-        TT_FATAL(
-            !get_fp32_dest_acc_en(args.compute_kernel_config),
-            "Gemma4SlidingRingSDPA attention_sink requires streaming compute; set fp32_dest_acc_en=false");
-    }
+    // ttnn.experimental.gemma4.sliding_ring_sdpa passes no attention sink, and the kernels read none.
+    TT_FATAL(!tensor_args.attention_sink.has_value(), "Gemma4SlidingRingSDPA does not take an attention sink");
 
     std::vector<Tensor> sdpa_input_tensors = {input_tensor_q, gathered_input_tensor_k};
     if (has_gathered_v) {
@@ -711,10 +684,11 @@ void Gemma4SlidingRingSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!args.is_balanced, "Chunked ring sliding-window attention requires is_balanced=false");
         TT_FATAL(!args.is_cross, "Ring sliding-window attention does not support cross attention");
         TT_FATAL(L == 0, "Ring sliding-window attention does not support joint tokens");
-        // The fp32_dest_acc_en compute path has no sliding window and is not built into this op's kernels.
-        TT_FATAL(
-            !get_fp32_dest_acc_en(args.compute_kernel_config),
-            "Ring sliding-window attention requires streaming compute; set fp32_dest_acc_en=false");
+        // The precision recipe: a supported scale and tile-aligned chunks (RingJointSDPA's rules).
+        namespace recipes = ttnn::operations::transformer::sdpa::detail;
+        recipes::resolve_recipe_policy(
+            input_tensor_q, gathered_input_tensor_k, args.precision, args.scale, args.program_config);
+        recipes::validate_recipe_geometry(recipes::RecipeOp::Ring, q_chunk_size, k_chunk_size, DH);
         const uint32_t halo_tokens = sliding_halo_token_count(window_size, k_chunk_size);
         TT_FATAL(halo_tokens > 0, "Chunked sliding attention requires sliding_window_size > 1, got {}", window_size);
         TT_FATAL(
@@ -1169,7 +1143,7 @@ ttsl::hash::hash_t Gemma4SlidingRingSDPADeviceOperation::compute_program_hash(
         args.logical_l,
         tensor_args.joint_is_sharded(),
         args.ring_size,
-        args.compute_kernel_config,
+        args.precision,
         args.program_config,
         args.ccl_core_grid_offset,
         args.kv_cache_batch_idx.has_value(),
@@ -1235,10 +1209,9 @@ Gemma4SlidingRingSDPADeviceOperation::create_op_performance_model(
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
-    // QK^T and softmax @ V dominate the modeled cycles, so use their fidelity when it is overridden.
-    const auto matmul_fidelity =
-        args.program_config.has_value() ? args.program_config->matmul_math_fidelity : std::nullopt;
-    tt::tt_metal::MathFidelity fidelity = matmul_fidelity.value_or(ttnn::get_math_fidelity(args.compute_kernel_config));
+    // QK^T and softmax @ V dominate the modeled cycles: the recipe's matmul fidelity.
+    const tt::tt_metal::MathFidelity fidelity = ttnn::operations::transformer::sdpa::detail::recipe_math_fidelity(
+        args.precision, tensor_args.gathered_k.dtype());
 
     const uint32_t B = q_shape[0] * tensor_args.num_lanes();
     const uint32_t NQH = q_shape[1];
@@ -1319,7 +1292,6 @@ Gemma4SlidingRingSDPAResult gemma4_sliding_ring_sdpa(
     const bool is_balanced,
     const bool is_cross,
     const std::optional<float> scale,
-    const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     const std::optional<uint32_t> kv_cache_batch_idx,
     const std::optional<uint32_t> kv_actual_isl,
@@ -1333,11 +1305,9 @@ Gemma4SlidingRingSDPAResult gemma4_sliding_ring_sdpa(
     const bool circular_kv_cache,
     const std::optional<ttnn::Tensor>& logical_n_tensor,
     const std::optional<ttnn::Tensor>& logical_l_tensor,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
+    const std::optional<ttnn::operations::transformer::SDPAPrecision> precision) {
     using OperationType = ttnn::prim::Gemma4SlidingRingSDPADeviceOperation;
-
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
     log_debug(
         tt::LogOp,
@@ -1467,7 +1437,6 @@ Gemma4SlidingRingSDPAResult gemma4_sliding_ring_sdpa(
         num_devices,
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         std::move(program_config),
-        kernel_config_val,
         std::move(all_gather_operation_attributes),
         std::move(all_gather_tensor_args),
         ccl_core_grid_offset,
@@ -1477,7 +1446,8 @@ Gemma4SlidingRingSDPAResult gemma4_sliding_ring_sdpa(
         kv_cache_num_layers,
         kv_cache_layer_idx,
         sliding_window_size,
-        circular_kv_cache);
+        circular_kv_cache,
+        precision.value_or(ttnn::operations::transformer::SDPAPrecision::STANDARD));
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

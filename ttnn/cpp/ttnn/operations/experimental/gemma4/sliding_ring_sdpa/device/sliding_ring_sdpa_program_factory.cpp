@@ -5,12 +5,12 @@
 #include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/sliding_ring_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/chunked_q_mapping.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sliding_halo_layout.hpp"
 #include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/kernels/sliding_ring_sdpa_derived_slots.hpp"
-#include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/recipe_ring_cbs.hpp"
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_program.hpp"
 #include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/sliding_halo_exchange.hpp"
 
 #include <algorithm>
@@ -24,6 +24,7 @@
 #include <cmath>
 #include <string>
 #include <limits>
+#include <mutex>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -917,45 +918,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         "Compact sliding K/V buffer has {} tile rows but requires at least {}",
         gathered_padded_Nt,
         chunked_sliding_halo_layout.halo_tile_rows);
-    const bool diag_tile_enabled = (args.is_causal || kernel_chunked) && !has_sliding_window;
-
-    // Lightweight mask: needed when any K/joint dimension has padding, or when causal/chunked
-    // masking is active.
-    const bool local_n_has_padding = (kv_local_padded_Nt % Sk_chunk_t) != 0;
-    // Placeholder attributes already worst-case every size derivation below, except partial-column tile
-    // presence -- CB geometry is fixed at program creation, so force those tiles whenever a tensor is
-    // present (see partial_tile_present); the kernels stamp the live column.
+    // Placeholder lengths: KV-pad rotation patches the logical length per dispatch, so it stays out of the kernels'
+    // compile-time args.
     const bool has_logical_n_tensor = tensor_args.has_logical_n_tensor();
     const bool has_logical_l_tensor = tensor_args.has_logical_l_tensor();
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
     const uint32_t compile_time_logical_n = kv_pad_rotation_enabled ? 0 : static_cast<uint32_t>(args.logical_n);
     const uint32_t compile_time_logical_nt = kv_pad_rotation_enabled ? 0 : logical_nt;
     const uint32_t compile_time_global_n_partial_col = kv_pad_rotation_enabled ? 0 : global_n_partial_col;
-
-    const bool global_n_has_padding = (compile_time_logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
-    // Joint masking mirrors spatial's TWO independent enable flags (local_n AND global_n), not just
-    // global_n. The first term is the local_n analogue: when the K-chunk is wider than the per-device
-    // joint shard (Lt_local % Sk_chunk_t != 0) every chunk carries fully-padded trailing tiles that
-    // must be generated/masked (e.g. wadada Lt_local=2, Sk_chunk_t=16 -> 14 pad tiles per shard).
-    // Omitting it — keying only off the logical tail — was the wadada PCC regression. The second term
-    // is the global_n analogue: real joint tokens do not fill the last real shard's chunk, covering
-    // fully-padded trailing tiles and a sub-tile partial column (logical_l=63, L_local=32: 63 % 32 != 0).
-    const bool joint_has_padding =
-        L > 0 && (((Lt_local % Sk_chunk_t) != 0) || ((logical_l % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0));
-    const bool needs_lightweight_mask = (local_n_has_padding || global_n_has_padding || joint_has_padding) ||
-                                        diag_tile_enabled || has_sliding_window || has_logical_n_tensor ||
-                                        has_logical_l_tensor;
-
-    // Partial tile support when the joint padding boundary falls inside a tile. Uses the true
-    // logical length (logical_l % TILE_HEIGHT), mirroring global_n_partial_col = logical_n % TILE.
     const uint32_t joint_l_partial_col = logical_l % tt::constants::TILE_HEIGHT;
-    const bool has_global_n_partial_tile =
-        ring_joint::partial_tile_present(compile_time_global_n_partial_col, has_logical_n_tensor);
-    const bool has_joint_l_partial_tile = ring_joint::partial_tile_present(joint_l_partial_col, has_logical_l_tensor);
-    const uint32_t partial_mask_tiles = (has_global_n_partial_tile ? 1 : 0) + (has_joint_l_partial_tile ? 1 : 0);
-    const uint32_t edge_mask_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : (diag_tile_enabled ? 1 : 0);
-    // Single CB holds neginf, either the causal diagonal or sliding edge palette, and partial masks.
-    const uint32_t total_lightweight_mask_tiles = 1 + edge_mask_tiles + partial_mask_tiles;
 
     const uint32_t num_local_q_chunks = tt::div_up(q_local_padded_N, q_chunk_size);
     // Q chunking uses L_local (per-device shard on sharded path, full L on replicated).
@@ -999,15 +970,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     MeshDevice* device = input_tensor_q.device();
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
+    // The precision recipe owns the numerics (transformer/sdpa/device/recipe/sdpa_precision_policy.hpp).
+    namespace recipes = ttnn::operations::transformer::sdpa::detail;
+    const recipes::PrecisionPolicy policy =
+        recipes::resolve_recipe_policy(input_tensor_q, gathered_input_tensor_k, args.precision, scale, args.program_config);
 
     CoreCoord grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                           : mesh_device->compute_with_storage_grid_size();
-    bool exp_approx_mode =
-        args.program_config.has_value()
-            ? (args.program_config->exp_approx_mode.has_value() ? args.program_config->exp_approx_mode.value() : true)
-            : true;
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet core_grid_set(core_grid);
@@ -1065,233 +1034,28 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
      */
     const uint32_t all_heads_num_q_chunks = B * NH * num_q_chunks;
     const uint32_t max_q_per_core = tt::div_up(all_heads_num_q_chunks, num_cores);
-
-    const uint32_t q_buffer_factor = (max_q_per_core > 1) ? 2 : 1;
-
     log_debug(tt::LogOp, "max_q_per_core: {}", max_q_per_core);
 
-    // In-place latent-V optimization: when the Q chunk is a single tile (Sq_chunk_t==1) the
-    // second matmul (softmax@V) is data-movement bound, so instead of materializing V from K^T
-    // (an L1->L1 transfer) we read the first vDHt rows of K^T directly. V is never produced and the
-    // phase-2 matmul consumes one V column tile per issue (out_subblock_w=1). The kernels derive the
-    // same predicate from their compile-time args via the shared kt_inplace_v_enabled() helper.
-    const bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
-
-    // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
-    // Latent-V keeps the K CB triple-buffered. With V rematerialized, the 3rd slot let the reader
-    // build the next V while compute consumed the current one; with in-place latent V (kt_inplace_v)
-    // there is no V entry, but the 3rd K^T slot still buys prefetch slack that hides the reader's
-    // NoC latency tail — measured ~+3pt math util on the dv512 q32 shape vs double-buffering.
-    uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : 2);
-    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
-    uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
-    uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
-    uint32_t out_im_tiles = Sq_chunk_t * vDHt;
-    uint32_t out0_t = Sq_chunk_t * vDHt;
-    uint32_t scale_tiles = 1;
-    uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
-
-    // log all values
-    log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
-    log_debug(tt::LogOp, "k_tiles: {}", k_tiles);
-    log_debug(tt::LogOp, "v_tiles: {}", v_tiles);
-    log_debug(tt::LogOp, "mask_tiles: {}", mask_tiles);
-    log_debug(tt::LogOp, "qk_tiles: {}", qk_tiles);
-    log_debug(tt::LogOp, "out0_t: {}", out0_t);
-    log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
-    log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
-
-    // Host code is responsible for determining matmul configuration
-    const uint32_t dst_size = ttnn::get_dest_reg_count(args.compute_kernel_config);
-    const uint32_t qk_in0_block_w = DHt;
-    auto [qk_out_subblock_h, qk_out_subblock_w] =
-        detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
-
-    TT_FATAL(
-        Sq_chunk_t % qk_out_subblock_h == 0,
-        "Sq_chunk_t ({}) must be divisible by qk_out_subblock_h ({})",
-        Sq_chunk_t,
-        qk_out_subblock_h);
-    const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
-    const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
-
-    // now for out0
-    const uint32_t out_in0_block_w = Sk_chunk_t;
-
-    // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path, which has
-    // no sliding window and is not built into this op's kernels.
-    const bool use_streaming_compute = !fp32_dest_acc_en;
-    TT_FATAL(
-        use_streaming_compute,
-        "Sliding attention requires the ring-joint streaming compute path; set fp32_dest_acc_en=false.");
-    TT_FATAL(
-        !kv_pad_rotation_enabled || use_streaming_compute,
-        "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
-        "fp32_dest_acc_en=true is not supported.");
-
-    // Sharded joint with a padded tail (logical_l < padded L) needs the reader to skip joint K chunks
-    // beyond the real tail. That skip is mirrored only in the streaming compute path (sdpa_ring_v2);
-    // the legacy fp32 path (sdpa_ring/sdpa_inner_loop) would leave compute waiting on K/V chunks the
-    // reader never pushed. Require streaming rather than risk a deadlock.
-    TT_FATAL(
-        !(joint_is_sharded && logical_l < L) || use_streaming_compute,
-        "Sharded joint with a padded joint tail (logical_l {} < padded L {}) requires the streaming compute "
-        "path (set fp32_dest_acc_en=false)",
-        logical_l,
-        L);
-    TT_FATAL(
-        use_streaming_compute || !v_shares_k_buffer,
-        "Latent-V ring attention is implemented only for streaming compute (fp32_dest_acc_en must be false)");
-    log_debug(
-        tt::LogOp,
-        "use_streaming_compute: {} (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",
-        use_streaming_compute,
-        args.is_causal,
-        Sq_chunk_t,
-        Sk_chunk_t,
-        qk_out_subblock_h,
-        qk_out_subblock_w);
-
-    // Keep the host phase-2 layout at one column for in-place latent V. The compute helper
-    // independently batches strided K^T rows into DST, including a short final batch.
-    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(
-        Sq_chunk_t,
-        vDHt,
-        dst_size,
-        /*max_subblock_h=*/use_streaming_compute ? 2 : UINT32_MAX,
-        /*max_subblock_w=*/kt_inplace_v ? 1u : UINT32_MAX);
-    // Streaming compute may widen the QKT@V row group beyond the host matmul subblock
-    // height for odd Q chunks. The writer must drain cb_out with the same row-group
-    // cadence that compute pushes, otherwise deferred-save rows can be popped and
-    // reused before the matching grouped write has safely landed.
-    const uint32_t writer_out_row_group_h =
-        use_streaming_compute
-            ? ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t)
-            : out_out_subblock_h;
-    // K split and segmented accumulation apply only to chunked calls; others ignore them, so one config serves every
-    // chunk. Both need one Q chunk per core and whole output row groups (static_assert in ring_joint_sdpa.cpp).
-    // Returns why this call cannot apply them, or "".
-    const auto single_q_chunk_blocker = [&]() -> std::string {
-        if (args.is_balanced) {
-            return "is_balanced is set";
-        }
-        if (!use_streaming_compute) {
-            return "fp32_dest_acc_en is set";
-        }
-        if (B != 1) {
-            return fmt::format("the batch is {}", B);
-        }
-        if (L != 0) {
-            return fmt::format("there is a joint sequence of {} rows", L);
-        }
-        if (max_q_per_core > 1) {
-            return fmt::format("{} Q chunks share {} cores", all_heads_num_q_chunks, num_cores);
-        }
-        if (Sq_chunk_t % writer_out_row_group_h != 0) {
-            return fmt::format(
-                "the {}-tile Q chunk is not a whole number of {}-tile row groups", Sq_chunk_t, writer_out_row_group_h);
-        }
-        return {};
-    };
-
-    // K split: when the (head, Q chunk) units leave the grid idle, the rows are divided into bands that each hold
-    // every unit once and attend to a slice of every ring iteration's K chunks; the last band merges. Bands are whole
-    // rows so each row still consumes one K sequence through its multicast. See kernels/ring_joint_ksplit.hpp.
-    uint32_t ksplit_count = 1;
-    uint32_t ksplit_rows_per_split = 0;
-    const uint32_t ksplit_requested = args.program_config.has_value() ? args.program_config->k_splits : 1;
-    if (ksplit_requested > 1 && kernel_chunked) {
-        const std::string blocker = single_q_chunk_blocker();
-        TT_FATAL(blocker.empty(), "k_splits={} cannot be applied: {}. Set k_splits=1.", ksplit_requested, blocker);
-        ksplit_rows_per_split = tt::div_up(all_heads_num_q_chunks, grid_size.x);
-        uint32_t max_ksplit = std::min(uint32_t(grid_size.y) / ksplit_rows_per_split, ring_joint::kKSplitMaxCount);
-        // Every sliding band needs two K chunks: the oldest halo chunk can mask a Q chunk's later rows entirely.
-        const uint32_t sliding_cap = std::max(
-            1u,
-            ring_joint::chunked_sliding_halo_tile_rows(sliding_window_size, tt::constants::TILE_HEIGHT, Sk_chunk_t) /
-                Sk_chunk_t / 2);
-        max_ksplit = std::min(max_ksplit, sliding_cap);
-        const std::string sliding_limit =
-            fmt::format(", sliding window {} allows {}", sliding_window_size, sliding_cap);
-        TT_FATAL(
-            ksplit_requested <= max_ksplit,
-            "k_splits={}, but at most {} can be applied: {} (head, Q chunk) units take {} rows per band of the "
-            "{}x{} grid; the kernel caps it at {}{}.",
-            ksplit_requested,
-            max_ksplit,
-            all_heads_num_q_chunks,
-            ksplit_rows_per_split,
-            grid_size.x,
-            grid_size.y,
-            ring_joint::kKSplitMaxCount,
-            sliding_limit);
-        ksplit_count = ksplit_requested;
+    // The recipe's matmul subblock height: one Q tile row per group for the FP32 recipes, two for the paired BF16
+    // recipes (an odd Q chunk ends with a single row; the reader then pushes Q one row at a time).
+    const uint32_t qk_out_subblock_h = policy.fp32_destination ? 1 : 2;
+    // The writer drains the output in the rows compute packs (one per row); pairs of rows when the Q chunk is a whole
+    // number of them, so a pair never straddles the output CB's wrap.
+    const uint32_t writer_out_row_group_h = Sq_chunk_t % 2 == 0 ? 2 : 1;
+    // K split is not applied (as RingJointSDPA's sliding path): the recipes run every Q chunk's K chunks on its own core.
+    // Lanes still reject it (validate_on_program_cache_miss). Segmented accumulation is dense-only.
+    if (args.program_config.has_value() && args.program_config->k_splits > 1) {
+        static std::once_flag ignored_once;
+        std::call_once(ignored_once, [] {
+            log_warning(
+                tt::LogOp,
+                "Gemma4SlidingRingSDPA ignores SDPAProgramConfig k_splits: the precision recipes run every Q chunk's "
+                "K chunks on its own core.");
+        });
     }
-    log_debug(tt::LogOp, "ring_joint K split: {}", ksplit_count);
-    // Segmented accumulation (the shared op's per-ring-iteration accumulators) is dense-only: sliding attention folds
-    // every K/V range into one pass per Q.
     TT_FATAL(
         !(args.program_config.has_value() && args.program_config->segmented_accumulation),
         "segmented_accumulation is not supported with a sliding window. Turn segmented_accumulation off.");
-
-    const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
-    const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
-
-    // Streaming: shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp), unless either:
-    //  - Phase-2's save_to_staging branch can fire (packs at offset qktv_h*vDHt, overruns the
-    //    2*qktv_h*vDHt buffer on the 2nd Q chunk): gated by ring_size==1 || max_q_per_core==1.
-    //  - the full Sq_chunk_t*vDHt output doesn't fit in 2 row groups: Phase-2 reserves it in a
-    //    single reserve_back, which then blocks forever (deadlock seen at q_chunk=256 causal).
-    // Otherwise keep the full-size cb_out (the default path).
-    const bool streaming_shrink_fits = Sq_chunk_t <= 2 * writer_out_row_group_h;
-    const bool streaming_shrink_safe = use_streaming_compute &&
-                                       (args.all_gather_operation_attributes.ring_size == 1 || max_q_per_core == 1) &&
-                                       streaming_shrink_fits;
-    if (streaming_shrink_safe) {
-        out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
-        TT_FATAL(
-            Sq_chunk_t % out_out_subblock_h == 0,
-            "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
-            Sq_chunk_t,
-            out_out_subblock_h);
-    }
-    log_debug(tt::LogOp, "streaming_shrink_safe={} out0_t={}", streaming_shrink_safe, out0_t);
-
-    // log all values
-    log_debug(tt::LogOp, "dst_size: {}", dst_size);
-    log_debug(tt::LogOp, "qk_in0_block_w: {}", qk_in0_block_w);
-    log_debug(tt::LogOp, "qk_out_subblock_w: {}", qk_out_subblock_w);
-    log_debug(tt::LogOp, "qk_out_subblock_h: {}", qk_out_subblock_h);
-    log_debug(tt::LogOp, "qk_in0_num_subblocks: {}", qk_in0_num_subblocks);
-    log_debug(tt::LogOp, "qk_in1_num_subblocks: {}", qk_in1_num_subblocks);
-    log_debug(tt::LogOp, "out_in0_block_w: {}", out_in0_block_w);
-    log_debug(tt::LogOp, "out_out_subblock_w: {}", out_out_subblock_w);
-    log_debug(tt::LogOp, "out_out_subblock_h: {}", out_out_subblock_h);
-    log_debug(tt::LogOp, "out_in0_num_subblocks: {}", out_in0_num_subblocks);
-    log_debug(tt::LogOp, "out_in1_num_subblocks: {}", out_in1_num_subblocks);
-
-    // Determine granularity for statistics computation
-    // Each granularity must evenly divide its tile count to avoid dropping tiles
-    const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
-    const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
-    // DHT_GRANULARITY is used in the kernel with both DHt and vDHt as the cols parameter,
-    // so the granularity must evenly divide both to avoid dropping tiles.
-    uint32_t dht_granularity = std::min({DHt, vDHt, dst_size});
-    while (dht_granularity > 1 && (DHt % dht_granularity != 0 || vDHt % dht_granularity != 0)) {
-        dht_granularity--;
-    }
-    const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
-
-    // Log these
-    log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
-    log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
-    log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
-    log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
-
-    // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
-    class bfloat16 bfloat_identity_scalar(1.0f);
-    uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
     const float scale_value = scale.value_or(1.0f);
     const uint32_t scale_packed = std::bit_cast<uint32_t>(scale_value);
@@ -1438,12 +1202,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        packed_identity_scalar,
+        0u,  // slot 16: reserved (the writer generates the recipe's identities)
         scale_packed,
         args.all_gather_operation_attributes.ring_size,
         compile_time_global_n_partial_col,
         joint_l_partial_col,
-        static_cast<std::uint32_t>(use_streaming_compute),
+        0u,  // slot 21: reserved
         kernel_is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
@@ -1503,18 +1267,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         num_joint_k_chunks,
         num_q_chunks,
         args.all_gather_operation_attributes.ring_size,
-        qk_in0_block_w,
-        qk_out_subblock_w,
-        qk_out_subblock_h,
-        qk_in0_num_subblocks,
-        qk_in1_num_subblocks,
-        out_in0_block_w,
-        out_out_subblock_w,
-        out_out_subblock_h,
-        out_in0_num_subblocks,
-        out_in1_num_subblocks,
+        // Slots 16-25: reserved (the recipe sets its own matmul subblocks).
+        0u,
+        0u,
+        0u,
+        0u,
+        0u,
+        0u,
+        0u,
+        0u,
+        0u,
+        0u,
         scale_packed,
-        static_cast<std::uint32_t>(use_streaming_compute),
+        0u,  // slot 27: reserved
         compile_time_global_n_partial_col,
         joint_l_partial_col,
         kernel_is_causal,
@@ -1544,186 +1309,119 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // build_sliding_q_work_plan so it stays in lockstep with the reader.
         circular_kv_slab_count,
         // Slots 47-48: logical-length transport. Compute cannot NoC-read DRAM, so it takes the live values
-        // from cb_kv_pad_derived, which the reader fills. CB block starts at 49.
+        // from cb_kv_pad_derived, which the reader fills.
         static_cast<uint32_t>(has_logical_n_tensor),
         static_cast<uint32_t>(has_logical_l_tensor)};
 
-    std::map<std::string, std::string> defines;
-    // Split-KV source grouping (the shared op's latent-V packed K^T streams) needs kv_stripe_split > 1; sliding
-    // attention never stripes KV, so every source is consumed on its own.
-    defines["GROUPED_KV_SOURCE_COUNT"] = "1";
-    defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
-    defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
-        TT_FATAL(
-            use_streaming_compute, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
-        defines["SDPA_MATMUL_FIDELITY"] =
-            std::to_string(static_cast<uint32_t>(*args.program_config->matmul_math_fidelity));
-    }
-    // MATH_FIDELITY is not defined on the unpack TRISC, and all three must agree on how P.V is set up.
-    if (math_fidelity == MathFidelity::LoFi) {
-        defines["SDPA_COMPUTE_LOFI"] = "1";
-    }
-    defines["SLIDING_HALO_SLOT_COUNT"] = std::to_string(chunked_sliding_halo_layout.halo_slot_count);
+    // Sliding work plans: the compact halo's predecessor slots, the most source ranges a Q chunk's plan holds, and
+    // whether the local slab goes first (only for a multi-hop halo, whose exchange is long enough to hide; a one-hop
+    // halo keeps the oldest-first order).
+    const uint32_t sliding_halo_slot_count = chunked_sliding_halo_layout.halo_slot_count;
     const uint32_t sliding_halo_hops =
         ring_joint::chunked_sliding_halo_hop_count(chunked_sliding_halo_layout.halo_tile_rows, q_local_padded_Nt);
-    defines["SLIDING_MAX_SOURCE_RANGES"] = std::to_string(
-        ring_joint::sliding_q_work_plan_source_ranges(sliding_halo_hops, chunked_sliding_halo_layout.halo_slot_count));
-    // Local slab first (so it computes while the halo is in flight) only for a multi-hop halo, where the exchange
-    // is long enough to hide; a one-hop halo keeps the oldest-first accumulation order.
-    defines["SLIDING_LOCAL_FIRST"] = sliding_halo_hops > 1 ? "1" : "0";
+    const uint32_t sliding_max_source_ranges =
+        ring_joint::sliding_q_work_plan_source_ranges(sliding_halo_hops, chunked_sliding_halo_layout.halo_slot_count);
+    const uint32_t sliding_local_first = sliding_halo_hops > 1 ? 1 : 0;
 
-    // Create circular buffers
-
-    tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
-    tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
-    tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
-
-    // Lightweight mask: both causal and non-causal paths use Float16_b
-    // to support L1-accumulation and avoid Bfp4_b precision loss.
-    tt::DataFormat mask_df = tt::DataFormat::Float16_b;
-    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df =
-        (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat im_df =
-        tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
-    tt::DataFormat stats_df = im_df;
-    // Use fp32 precision for cb_sum_A/B when fp32 accumulation is enabled so
-    // the running softmax denominator doesn't lose precision with K-iter rounding.
-    tt::DataFormat sum_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    // Use fp32 precision for cb_qk_im when fp32 accumulation is enabled so operations on QK retain precision.
-    tt::DataFormat qk_im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-
-    uint32_t q_tile_size = tt::tile_size(q_df);
-    uint32_t k_tile_size = tt::tile_size(k_df);
-    uint32_t v_tile_size = tt::tile_size(v_df);
-    uint32_t mask_tile_size = tt::tile_size(mask_df);
-    uint32_t out_tile_size = tt::tile_size(out_df);
-    uint32_t scalar_tile_size = tt::tile_size(scalar_df);
-    uint32_t im_tile_size = tt::tile_size(im_df);
-    uint32_t stats_tile_size = tt::tile_size(stats_df);
-    uint32_t sum_tile_size = tt::tile_size(sum_df);
-    uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
-
-    log_debug(tt::LogOp, "q_data_format: {}", q_df);
-    log_debug(tt::LogOp, "k_data_format: {}", k_df);
-    log_debug(tt::LogOp, "v_data_format: {}", v_df);
-    log_debug(tt::LogOp, "mask_data_format: {}", mask_df);
-    log_debug(tt::LogOp, "out_data_format: {}", out_df);
-    log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
-    log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
-    log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
-    log_debug(tt::LogOp, "sum_data_format: {}", sum_df);
-    log_debug(tt::LogOp, "qk_im_data_format: {}", qk_im_df);
-
-    uint32_t next_cb_index = 0;
-    const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
-        const uint32_t cb_index = next_cb_index++;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = page_size_bytes * num_pages,
-            .core_ranges = core_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_index),
-                .data_format = data_format,
-                .page_size = page_size_bytes,
-            }}},
-        });
-        return cb_index;
-    };
-    const auto allocate_tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) -> uint32_t {
-        return allocate_cb(tile_size, num_tiles, data_format);
-    };
-
-    const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
-    const uint32_t cb_k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
-    const uint32_t cb_v_in = v_shares_k_buffer ? cb_k_in : allocate_tile_cb(v_tiles, v_tile_size, v_df);
-
-    // Lightweight mask CB: holds neginf + optional causal diagonal + optional partial tiles.
-    // Used for both causal (ring_iter 0) and padding (ring_iter > 0) masking.
-    constexpr uint32_t inactive_cb = std::numeric_limits<uint32_t>::max();
-    const uint32_t cb_mask_in =
-        needs_lightweight_mask ? allocate_tile_cb(total_lightweight_mask_tiles, mask_tile_size, mask_df) : inactive_cb;
-
-    // Streaming normalization broadcasts the per-head sink scalar directly.
-    // Alias a valid CB while disabled so compile-time tile-size queries remain valid;
-    // sink producer/consumer code is removed by if constexpr in that specialization.
-    const uint32_t cb_attention_sink = [&]() {
-        if (!use_attention_sink) {
-            return cb_q_in;
+    // Circular buffers: the recipe compute layout (recipe_compute_program, CBs 0-16 and 29-31; recipe_ring_cbs.hpp),
+    // then the reader's derived lengths (RingJointSDPA's sliding layout less its checkpoint and sink CBs: a sliding Q
+    // chunk normalizes in one pass and this op takes no sink). Every CB spans the whole worker grid.
+    const tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
+    const tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
+    const tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
+    const uint32_t q_tile_size = tt::tile_size(q_df);
+    const uint32_t k_tile_size = tt::tile_size(k_df);
+    const uint32_t v_tile_size = tt::tile_size(v_df);
+    const auto v_storage = recipes::recipe_kv_storage(gathered_input_tensor_v.dtype());
+    tt::tt_metal::ProgramDescriptor recipe_program = recipes::recipe_compute_program(
+        policy,
+        core_grid_set,
+        1,
+        Sq_chunk_t,
+        Sk_chunk_t,
+        DHt,
+        scale,
+        vDHt,
+        v_storage != policy.selection.kv_storage ? std::optional<recipes::KVStorage>(v_storage) : std::nullopt,
+        q_df);
+    auto& compute_recipe_kernel = recipe_program.kernels.front();
+    desc.cbs = std::move(recipe_program.cbs);
+    for (auto& cb : desc.cbs) {
+        auto& format = cb.format_descriptors.front();
+        if (format.buffer_index == recipe_ring_cb::q) {
+            // Q double-buffered only when a core runs several Q chunks.
+            cb.total_size = Sq_chunk_t * DHt * (max_q_per_core > 1 ? 2 : 1) * q_tile_size;
+        } else if (format.buffer_index == recipe_ring_cb::k) {
+            cb.total_size = Sk_chunk_t * DHt * 2 * k_tile_size;
+        } else if (format.buffer_index == recipe_ring_cb::v) {
+            cb.total_size = Sk_chunk_t * vDHt * 2 * v_tile_size;
+        } else if (format.buffer_index == recipe_ring_cb::out) {
+            // The output tensor is BF16 whatever Q's type.
+            const uint32_t tiles = cb.total_size / format.page_size;
+            format.data_format = tt::DataFormat::Float16_b;
+            format.page_size = tt::tile_size(tt::DataFormat::Float16_b);
+            cb.total_size = tiles * format.page_size;
         }
-        const tt::DataFormat sink_df = tt::tt_metal::datatype_to_dataformat_converter(attention_sink.value().dtype());
-        return allocate_tile_cb(1, tt::tile_size(sink_df), sink_df);
-    }();
+    }
+    // Reader-to-compute mailbox for the metadata-derived logical geometry (lanes: one record per lane).
+    const uint32_t derived_page_bytes = num_lanes > 1 ? ring_joint::kDerivedLanePageBytes : 64;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = derived_page_bytes,
+        .core_ranges = core_grid_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(recipe_ring_cb::derived),
+            .data_format = tt::DataFormat::UInt32,
+            .page_size = derived_page_bytes}}},
+    });
+    // Fit L1 as RingJointSDPA does: first give up Q prefetch, then output staging beyond one row group, then the fused
+    // chunks' CBs (every K chunk then runs on the reduce path, slower than either).
+    const uint64_t l1_available = recipes::recipe_free_l1(*device);
+    uint64_t cb_bytes = recipes::recipe_cb_bytes(desc);
+    if (cb_bytes > l1_available && max_q_per_core > 1) {
+        for (auto& cb : desc.cbs) {
+            if (cb.format_descriptors.front().buffer_index == recipe_ring_cb::q) {
+                cb.total_size /= 2;
+            }
+        }
+        cb_bytes = recipes::recipe_cb_bytes(desc);
+        log_debug(tt::LogOp, "Gemma4SlidingRingSDPA recipe: single-slot Q to fit L1");
+    }
+    for (const uint32_t rows : {2u, 1u}) {
+        if (cb_bytes <= l1_available || rows < std::min(Sq_chunk_t, 2u)) {
+            break;
+        }
+        for (auto& cb : desc.cbs) {
+            if (cb.format_descriptors.front().buffer_index == recipe_ring_cb::out) {
+                cb.total_size = std::min<uint32_t>(cb.total_size, rows * vDHt * cb.format_descriptors.front().page_size);
+            }
+        }
+        cb_bytes = recipes::recipe_cb_bytes(desc);
+        log_debug(tt::LogOp, "Gemma4SlidingRingSDPA recipe: output staged in {} row(s) to fit L1", rows);
+    }
+    if (cb_bytes > l1_available) {
+        cb_bytes -= recipes::recipe_drop_fused(desc.cbs, compute_recipe_kernel.named_compile_time_args, Sq_chunk_t);
+        log_debug(tt::LogOp, "Gemma4SlidingRingSDPA recipe: unfused chunks to fit L1");
+    }
+    TT_FATAL(
+        cb_bytes <= l1_available,
+        "Gemma4SlidingRingSDPA recipe needs {} bytes of L1 per core at Q{}/K{}, but only {} are available; use a smaller "
+        "Q or K chunk",
+        cb_bytes,
+        Sq_chunk_t * tt::constants::TILE_HEIGHT,
+        Sk_chunk_t * tt::constants::TILE_HEIGHT,
+        l1_available);
+    if (device->arch() == tt::ARCH::WORMHOLE_B0 &&
+        recipes::named_arg(compute_recipe_kernel.named_compile_time_args, "recipe_fused") != 0) {
+        // Wormhole runs every ring K chunk on the reduce path, as RingJointSDPA (its fused chunks deadlock in the ring's
+        // one-chunk segments; open item there).
+        desc.cbs.erase(std::remove_if(desc.cbs.begin(), desc.cbs.end(), recipes::recipe_fused_cb), desc.cbs.end());
+        recipes::set_named_arg(compute_recipe_kernel.named_compile_time_args, "recipe_fused", 0);
+    }
 
-    const uint32_t cb_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-    const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-    const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-
-    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
-    const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-
-    const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df);
-
-    // These CBs carry the K-split reducer's partial results from the other bands. Unsplit sliding attention folds
-    // every K/V range into one pass per Q and needs none, so it aliases them to existing CBs to keep the compile-time
-    // ABI without reserving L1.
-    const bool needs_accumulator_staging_cbs = ksplit_count > 1;
-    const uint32_t cb_stats_in =
-        needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_A;
-    const uint32_t cb_prev_out =
-        needs_accumulator_staging_cbs ? allocate_tile_cb(out_im_tiles, out_tile_size, out_df) : cb_out;
-    const uint32_t cb_stats_out =
-        needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_B;
-
-    // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
-    // cb_scale_in is live in ring joint, so streaming uses a dedicated scratch CB.
-    const uint32_t cb_recip_scratch = use_streaming_compute ? allocate_tile_cb(1, im_tile_size, im_df) : inactive_cb;
-
-    // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
-    // cb_sum_out = compute pushes sum for writer to save to DRAM.
-    // cb_sum_in = writer pushes restored sum from DRAM for compute to read.
-    const uint32_t cb_sum_out =
-        use_streaming_compute
-            ? (needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_A)
-            : inactive_cb;
-    const uint32_t cb_sum_in =
-        use_streaming_compute
-            ? (needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_B)
-            : inactive_cb;
-
-    // Signal CB: compute signals writer when last K-chunk starts.
-    // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
-    constexpr uint32_t signal_page_size = 16;
-    const uint32_t cb_signal =
-        use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
-    // Reader-to-compute mailbox for the metadata-derived logical geometry.
-    const uint32_t cb_kv_pad_derived =
-        allocate_cb(num_lanes > 1 ? ring_joint::kDerivedLanePageBytes : 64, 1, tt::DataFormat::UInt32);
-
-    const std::vector<uint32_t> cb_compile_time_args = {
-        cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
-        cb_stats_in, cb_prev_out, cb_col_identity, cb_recip_scratch, cb_sum_out,      cb_sum_in,
-        cb_signal,   cb_out,      cb_stats_out,    cb_qk_im,         cb_out_im_A,     cb_out_im_B,
-        cb_max_A,    cb_max_B,    cb_sum_A,        cb_sum_B,         cb_exp_max_diff, cb_kv_pad_derived};
     const std::vector<uint32_t> reader_cb_compile_time_args = {
-        cb_q_in, cb_k_in, cb_v_in, cb_attention_sink, cb_kv_pad_derived};
+        recipe_ring_cb::q, recipe_ring_cb::k, recipe_ring_cb::v, recipe_ring_cb::q, recipe_ring_cb::derived};
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
-    writer_compile_time_args.insert(
-        writer_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
-    auto compute_cb_compile_time_args = cb_compile_time_args;
-    compute_cb_compile_time_args.push_back(cb_attention_sink);
-    compute_compile_time_args.insert(
-        compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
 
     auto* const q_buf = input_tensor_q.buffer();
     auto* const k_buf = input_tensor_k.buffer();
@@ -1765,27 +1463,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     uint32_t next_global_chunk = 0;
 
-    // K split: core (x, y) is in band y / rows_per_split and owns unit (y % rows_per_split) * grid.x + x. Idle cores
-    // of rows past the last band report band 0; they own no unit.
-    auto ksplit_band = [&](uint32_t core_idx) {
-        const uint32_t band = core_idx / grid_size.x / ksplit_rows_per_split;
-        return band < ksplit_count ? band : 0;
-    };
-    auto ksplit_core = [&](uint32_t band, uint32_t core_idx) {
-        const uint32_t local_row = core_idx / grid_size.x % ksplit_rows_per_split;
-        return (band * ksplit_rows_per_split + local_row) * grid_size.x + core_idx % grid_size.x;
-    };
-    for (uint32_t i = 0; ksplit_count > 1 && i < num_cores; ++i) {
-        const uint32_t x = i % grid_size.x;
-        const uint32_t y = i / grid_size.x;
-        const uint32_t unit = (y % ksplit_rows_per_split) * grid_size.x + x;
-        const bool owns_unit = y / ksplit_rows_per_split < ksplit_count && unit < total_q_chunks;
-        auto& work = core_work.at(i);
-        work.physical_core = device->worker_core_from_logical_core(CoreCoord{x, y});
-        work.global_q_start = owns_unit ? unit : total_q_chunks;
-        work.global_q_count = owns_unit ? 1 : 0;
-    }
-    for (uint32_t i = 0; ksplit_count == 1 && i < num_cores; ++i) {
+    for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         uint32_t chunk_count = base_chunks_per_core + ((i < cores_doing_extra_work) ? extra_chunks_per_core : 0);
         if (next_global_chunk >= total_q_chunks) {
@@ -1810,28 +1488,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     for (auto* args : {&reader_compile_time_args, &writer_compile_time_args, &compute_compile_time_args}) {
         args->push_back(rotated_max_slots_ct);
     }
-    // Reducer's ready semaphore: one bit per sender, set once its state is staged.
-    uint32_t ksplit_sem_id = 0;
-    if (ksplit_count > 1) {
-        ksplit_sem_id = static_cast<uint32_t>(desc.semaphores.size());
-        TT_FATAL(
-            ksplit_sem_id < 16, "ring_joint K split needs a semaphore, but {} are already allocated", ksplit_sem_id);
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = ksplit_sem_id,
-            .core_type = tt::CoreType::WORKER,
-            .core_ranges = core_grid_set,
-            .initial_value = 0,
-        });
-    }
     const std::array<size_t, 3> ct_arg_sizes_with_rotated_last = {
         reader_compile_time_args.size(), writer_compile_time_args.size(), compute_compile_time_args.size()};
-
-    if (tensor_args.has_kv_valid_end()) {
-        defines["KV_VALID_END"] = "1";
-    }
-
-    // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
-    KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
 
     // Build kernel descriptors locally so we can append per-core runtime args
     // before pushing them into desc.kernels at the end.
@@ -1857,7 +1515,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compute_compile_time_args.size());
 
     reader_kernel.compile_time_args = reader_compile_time_args;
-    reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
     // Layout: metadata block first (when present), then the logical-length pair, so the kernel's base index
     // is ring_joint::kReaderMetadataCommonArgCount (or kWriterMetadataCommonArgCount) when its metadata block
@@ -1904,7 +1561,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel.core_ranges = core_grid_set;
     writer_kernel.compile_time_args = writer_compile_time_args;
-    writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
     if (kv_pad_from_metadata || has_logical_length_tensor) {
         KernelDescriptor::RTArgList writer_common_args;
@@ -1926,35 +1582,39 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     compute_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel.core_ranges = core_grid_set;
     compute_kernel.compile_time_args = compute_compile_time_args;
-    // The shared op's dense-only switches stay in the named-arg ABI, pinned off: no dense causal K skip, no
-    // segmented accumulation, one KV stripe (kv_stripe_split is a divisor, so off is 1), and no padded multicast
-    // Q slots.
-    const KernelDescriptor::NamedCompileTimeArgs ksplit_named_args = {
-        {"ksplit_count", ksplit_count},
-        {"ksplit_sem_id", ksplit_sem_id},
-        {"dense_causal_skip", 0u},
-        {"seg_accum", 0u},
-        {"kv_stripe_split", 1u},
-        {"num_lanes", num_lanes},
-    };
+    // One KV stripe (kv_stripe_split is a divisor, so off is 1). The recipe's named arguments (after the L1 fallbacks
+    // above) on every kernel; the ring continuation without checkpoints (every sliding Q chunk normalizes in its one
+    // pass) and the sequence-frame positional masks (recipe/recipe_config.hpp).
+    auto recipe_args = recipes::recipe_named_args(compute_recipe_kernel.named_compile_time_args);
+    recipes::set_named_arg(recipe_args, "recipe_ring", 1);
+    recipes::set_named_arg(recipe_args, "recipe_ring_stream_state", 0);
+    recipes::set_named_arg(recipe_args, "recipe_ring_mask", 2);
+    recipes::set_named_arg(recipe_args, "recipe_ring_window", sliding_window_size);
+    recipes::set_named_arg(recipe_args, "recipe_ring_rotation", kv_pad_rotation_enabled ? 1 : 0);
+    recipes::set_named_arg(recipe_args, "recipe_ring_circular", circular_kv_slab_count > 1 ? 1 : 0);
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
-        kernel->named_compile_time_args = ksplit_named_args;
+        kernel->named_compile_time_args = {
+            {"kv_stripe_split", 1u},
+            {"num_lanes", num_lanes},
+            {"kv_valid_end", tensor_args.has_kv_valid_end() ? 1u : 0u},
+            {"sliding_halo_slot_count", sliding_halo_slot_count},
+            {"sliding_max_source_ranges", sliding_max_source_ranges},
+            {"sliding_local_first", sliding_local_first},
+        };
+        kernel->named_compile_time_args.insert(
+            kernel->named_compile_time_args.end(), recipe_args.begin(), recipe_args.end());
     }
-    compute_kernel.named_compile_time_args.emplace_back("padded_q_slots", 0u);
     reader_kernel.named_compile_time_args.emplace_back(
         "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
-    compute_kernel.defines = kernel_defines;
-    compute_kernel.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .math_approx_mode = math_approx_mode,
-    };
-    if (ksplit_count > 1) {
-        // Code size, not correctness: at O3 the merge epilogue grows the q128 compute binaries past the 70,656 B
-        // kernel config buffer ("Program size too large"). O2 cuts the three TRISC binaries by ~30%.
-        compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
+    // The recipe's compute config (fidelity, FP32 DEST and unpack-to-dest modes) and defines.
+    compute_kernel.defines = compute_recipe_kernel.defines;
+    compute_kernel.config = compute_recipe_kernel.config;
+    // Code size, as RingJointSDPA's masked rings: Blackhole unpack and pack at -O2 (math is -O2 in the kernel).
+    // Wormhole keeps the default: its link-time inlining needs it (the math LLK's address-mode setup takes constants).
+    if (device->arch() != tt::ARCH::WORMHOLE_B0) {
+        compute_kernel.opt_level = recipes::recipe_opt_level(tt::tt_metal::KernelBuildOptLevel::O2);
     }
 
     // Set reader rt args
@@ -2004,10 +1664,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<uint32_t> reader_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_signaler_args);
         reader_args.append(reader_signaler_args);
-
-        if (ksplit_count > 1) {
-            reader_args.push_back(ksplit_band(i));
-        }
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
         // Writer args
@@ -2027,21 +1683,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
-        if (ksplit_count > 1) {
-            // [band], then a sender's reducer core or a reducer's sender cores (physical x, y).
-            const uint32_t band = ksplit_band(i);
-            writer_args.push_back(band);
-            if (work.global_q_count > 0) {
-                for (uint32_t peer = 0; peer < ksplit_count; ++peer) {
-                    const bool is_peer = band + 1 < ksplit_count ? peer == ksplit_count - 1 : peer != band;
-                    if (is_peer) {
-                        const auto& phys = core_work.at(ksplit_core(peer, i)).physical_core;
-                        writer_args.push_back(phys.x);
-                        writer_args.push_back(phys.y);
-                    }
-                }
-            }
-        }
         writer_kernel.emplace_runtime_args(core, writer_args.args);
 
         // Compute args
@@ -2073,9 +1714,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
         // The shared op's static multicast loop count. Without multicast padding it is this core's own Q count.
         compute_args.push_back(global_q_end - global_q_start);
-        if (ksplit_count > 1) {
-            compute_args.push_back(ksplit_band(i));
-        }
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 

@@ -11,7 +11,6 @@
 
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"
@@ -29,7 +28,6 @@ struct Gemma4SlidingRingSDPAParams {
     std::size_t ring_size = 0;
     tt::tt_metal::MemoryConfig output_memory_config;
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
-    DeviceComputeKernelConfig compute_kernel_config;
     experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes;
     experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args;
     CoreCoord ccl_core_grid_offset;
@@ -45,6 +43,9 @@ struct Gemma4SlidingRingSDPAParams {
     // callers only opt in. false = unbounded cache (byte-identical to the pre-existing behavior).
     // Requires chunked sliding + kv_actual_isl.
     bool circular_kv_cache = false;
+    // The precision recipe (transformer/sdpa/device/recipe/sdpa_precision_policy.hpp) that owns the numerics; STANDARD
+    // unless the caller names one.
+    ttnn::operations::transformer::SDPAPrecision precision = ttnn::operations::transformer::SDPAPrecision::STANDARD;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     Gemma4SlidingRingSDPAParams(
@@ -58,7 +59,6 @@ struct Gemma4SlidingRingSDPAParams {
         std::size_t ring_size,
         tt::tt_metal::MemoryConfig output_memory_config,
         std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-        DeviceComputeKernelConfig compute_kernel_config,
         experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes,
         experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args,
         CoreCoord ccl_core_grid_offset,
@@ -68,7 +68,8 @@ struct Gemma4SlidingRingSDPAParams {
         uint32_t kv_cache_num_layers = 1,
         uint32_t kv_cache_layer_idx = 0,
         std::optional<uint32_t> sliding_window_size = std::nullopt,
-        bool circular_kv_cache = false) :
+        bool circular_kv_cache = false,
+        ttnn::operations::transformer::SDPAPrecision precision = ttnn::operations::transformer::SDPAPrecision::STANDARD) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -79,7 +80,6 @@ struct Gemma4SlidingRingSDPAParams {
         ring_size(ring_size),
         output_memory_config(std::move(output_memory_config)),
         program_config(std::move(program_config)),
-        compute_kernel_config(compute_kernel_config),
         all_gather_operation_attributes(std::move(all_gather_operation_attributes)),
         all_gather_tensor_args(std::move(all_gather_tensor_args)),
         ccl_core_grid_offset(ccl_core_grid_offset),
@@ -89,7 +89,8 @@ struct Gemma4SlidingRingSDPAParams {
         kv_cache_num_layers(kv_cache_num_layers),
         kv_cache_layer_idx(kv_cache_layer_idx),
         sliding_window_size(sliding_window_size),
-        circular_kv_cache(circular_kv_cache) {}
+        circular_kv_cache(circular_kv_cache),
+        precision(precision) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -117,7 +118,7 @@ struct Gemma4SlidingRingSDPAParams {
         "logical_n",
         "logical_l",
         "ring_size",
-        "compute_kernel_config",
+        "precision",
         "program_config",
         "ccl_core_grid_offset",
         "has_kv_cache_batch_idx",
@@ -138,7 +139,7 @@ struct Gemma4SlidingRingSDPAParams {
             std::cref(logical_n),
             std::cref(logical_l),
             std::cref(ring_size),
-            std::cref(compute_kernel_config),
+            std::cref(precision),
             std::cref(program_config),
             std::cref(ccl_core_grid_offset),
             kv_cache_batch_idx.has_value(),
