@@ -1,0 +1,66 @@
+---
+# PR Gate ttnn-examples (pr-gate.yaml ttnn-examples, sdk-examples.yaml with product
+# tt-nn; the wh_n150_civ2 entry in tests/pipeline_reorg/ttnn_examples_pr_gate_tests.yaml):
+# tests/scripts/run_sdk_examples.sh on one n150 against asan-build's
+# packages, installed in the guest by apt before the first step. It checks
+# that the installed SDK exports no internal include dirs, then builds each
+# example under /usr/share/tt-nn/examples with ASan/UBSan flags against
+# the installed -dev packages and runs it on the card. Same shape as
+# 41-smoke-n150-asan.yaml, plus the checkout for tests/scripts.
+#
+# Differences from the GitHub job, all forced by the platform:
+# - No per-suite prebuilt image: the packages come straight from asan-build's
+#   tar onto the ci-build chain image (GitHub builds build-*-examples-image).
+# - No libprotobuf-dev install: distro packages in the card VM wait on
+#   torrentci#1849 P3.
+# - No hugepages (vIOMMU guest) and no remote kernel ccache (the VM path
+#   allows no compiler-cache), so kernel JIT runs cold: 8 vCPUs and a 45 m
+#   test timeout instead of GitHub's 15 m.
+# Run it by hand. asan-build is an implicit dependency.
+jobs:
+  - id: ttnn-examples-n150-asan
+    description: "Build and run the PR Gate tt-nn SDK examples on one n150 with the ASan packages"
+    timeout: 1h30m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        accelerator: {type: n150, count: 1}
+        resources:
+          requests: {cpu: '8', memory: 16Gi, ephemeral-storage: 30Gi}
+          limits: {cpu: '8', memory: 16Gi, ephemeral-storage: 30Gi}
+    packages:
+      artifacts:
+        - from-job: asan-build
+          name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
+          install: [tt-metalium, tt-metalium-dev, tt-nn, tt-nn-dev, tt-nn-examples]
+    env:
+      - {name: HOME, value: /tmp/home}
+      - {name: TT_METAL_CACHE, value: /tmp/tt-metal-cache}
+      - {name: PRODUCT, value: tt-nn}
+      - {name: ASAN_BUILD, value: 'true'}
+      - {name: ASAN_OPTIONS, value: "detect_leaks=0:color=always"}
+      - {name: LSAN_OPTIONS, value: "suppressions=/usr/share/tt-metalium/lsan.supp"}
+      - {name: TT_METAL_HOME, value: /usr/libexec/tt-metalium}
+      - {name: TT_METAL_WATCHER, value: '5'}
+      - {name: TT_METAL_WATCHER_TEST_MODE, value: '1'}
+      - {name: CC, value: clang-20}
+      - {name: CXX, value: clang++-20}
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '8'}
+    steps:
+      - id: examples
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$HOME" "$TT_METAL_CACHE"
+            - dpkg -s tt-metalium tt-metalium-dev tt-nn tt-nn-dev tt-nn-examples | grep -e '^Package' -e '^Version'
+            - ls -l /dev/tenstorrent/ "/usr/share/$PRODUCT/examples"
+            # The ASan runtime directory, as sdk-examples.yaml sets it. Log to
+            # a file and print the tail, as smoke-n150-asan does.
+            - >-
+              export LD_LIBRARY_PATH="$(clang-20 -print-resource-dir)/lib/linux${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}";
+              ulimit -n 4096; rc=0; timeout 45m ./tests/scripts/run_sdk_examples.sh
+              >/tmp/examples.log 2>&1 || rc=$?;
+              grep -e '::error::' -e '::warning::' /tmp/examples.log || true;
+              tail -c 20000 /tmp/examples.log; exit $rc
