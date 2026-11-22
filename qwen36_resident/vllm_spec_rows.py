@@ -24,6 +24,9 @@ from qwen36_resident.vllm_rows import ResidentRowsAdapter, expand_blocks
 
 SPEC_R = int(os.environ.get("RESIDENT_SPEC_ROWS", "4"))  # verify rows per user (4: up to 8 users per launch)
 SPEC_USERS = 32 // SPEC_R
+# offer no drafts (num_valid 0): every verify commits row 0's greedy token, the same engine's plain greedy decode
+# (the served reference a speculative run's texts must equal)
+NO_DRAFTS = os.environ.get("RESIDENT_SPEC_NO_DRAFTS", "0") == "1"
 
 
 class Qwen36ResidentSpecRowsForCausalLM(ResidentRowsAdapter):
@@ -212,7 +215,7 @@ class Qwen36ResidentSpecRowsForCausalLM(ResidentRowsAdapter):
         valid = torch.zeros(B, dtype=torch.int32)
         for i, u in row_user.items():
             ids[i] = torch.tensor(drafts[u][:K], dtype=torch.int32)
-            valid[i] = K
+            valid[i] = 0 if NO_DRAFTS else K
         return DraftOutput(draft_token_ids=ids, num_valid=valid)
 
 

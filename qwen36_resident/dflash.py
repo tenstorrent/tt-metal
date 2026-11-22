@@ -485,7 +485,12 @@ class ResidentDFlashRows:
         if prefill:
             from qwen36_resident.prefill.pp_prefill import PPPrefill
 
-            C = max(ResidentDFlash.PREFILL_CHUNKS)
+            # (RESIDENT_PREFILL_CHUNKS as the batch profile's: without the 128 chunk, whose buffers a full-context build
+            # cannot spare)
+            chunks = [int(c) for c in os.environ.get("RESIDENT_PREFILL_CHUNKS", "").split(",") if c] or list(
+                ResidentDFlash.PREFILL_CHUNKS
+            )
+            C = max(chunks)
             max_len = -(-max_pos // C) * C
             max_pos = max_len + 64
             self.pp = PPPrefill(
@@ -493,7 +498,7 @@ class ResidentDFlashRows:
                 ck,
                 layers,
                 interval,
-                chunk=list(ResidentDFlash.PREFILL_CHUNKS),
+                chunk=chunks,
                 max_len=max_len,
                 taps=tap_layers,
                 tap_window=window,
@@ -511,13 +516,18 @@ class ResidentDFlashRows:
                 for L in tap_layers
             ]
         self.taps = tap_buffers(mesh, len(tap_layers), users * R)
-        embed = ttnn.from_torch(
-            emb.bfloat16(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        # the hub's embedding table: the PP prefill's where there is one (a second replicated copy is 2.5 GB a chip)
+        embed = (
+            self.pp.embed
+            if self.pp is not None
+            else ttnn.from_torch(
+                emb.bfloat16(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
         )
         nb = -(-max_pos // block_size)
         sts = [State(d, layers - n_attn, n_attn, 0, max_pos, zero=True, kv=False) for _ in range(users)]
