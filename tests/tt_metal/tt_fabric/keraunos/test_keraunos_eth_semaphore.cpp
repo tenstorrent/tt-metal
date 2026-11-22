@@ -124,6 +124,9 @@ uint32_t read_word(distributed::MeshDevice& mesh, const EthCore& core, uint32_t 
 // Each chip claims its own Metal DRAM cores, none shared, and opens with DRAM banks.
 TEST(KeraunosSocDesc, MetalDramCoresPerChip) {
     auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Keraunos chips only";
+    }
     std::vector<std::set<CoreCoord>> per_chip;
     for (ChipId chip : cluster.all_chip_ids()) {
         const auto cores = cluster.get_soc_desc(chip).get_metal_dram_cores(tt::CoordSystem::NOC0);
@@ -154,9 +157,11 @@ TEST(KeraunosSocDesc, MetalDramCoresPerChip) {
 // CreateSemaphore on every Keraunos core of chip 0, one kernel per core so each HAL slot
 // (ACTIVE_ETH, IDLE_ETH) gets a program config. The address must lie in that slot's KERNEL_CONFIG.
 TEST(KeraunosEthSemaphore, CreateSemaphoreOnIdleAndActiveEth) {
+    if (MetalContext::instance().get_cluster().arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Keraunos chips only";
+    }
     auto mesh = distributed::MeshDevice::create_unit_mesh(0);
     IDevice* device = &slow_dispatch::physical_device_from_unit_mesh(*mesh);
-    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
     const auto cores = keraunos_eth_cores(device);
     ASSERT_FALSE(cores.empty()) << "Chip 0's descriptor lists no Keraunos cores.";
 
@@ -205,10 +210,12 @@ TEST_P(KeraunosCrossTileSemaphore, IncrementPeerCounter) {
     constexpr uint32_t kCounterInitial = 100;
     constexpr uint32_t kProbeBase = 0x5EED0000;
     constexpr auto kTimeout = std::chrono::minutes(10);
+    if (MetalContext::instance().get_cluster().arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Keraunos chips only";
+    }
 
     auto mesh = distributed::MeshDevice::create_unit_mesh(0);
     IDevice* device = &slow_dispatch::physical_device_from_unit_mesh(*mesh);
-    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
     const auto cores = keraunos_eth_cores(device);
     ASSERT_GE(cores.size(), 2u) << "Chip 0's descriptor lists fewer than two Keraunos cores.";
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
@@ -509,6 +516,9 @@ TEST(KeraunosTileCounter, CrossTileAdds) {
 // relaunches routers that terminated.
 TEST(KeraunosFabric, RouterTerminatesOnCloseAndReopens) {
     constexpr auto kTerminateTimeout = std::chrono::minutes(10);
+    if (MetalContext::instance().get_cluster().arch() != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Keraunos chips only";
+    }
     for (int open = 0; open < 2; open++) {
         BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
         ASSERT_EQ(BaseFabricFixture::devices_.size(), 2u) << "open " << open;
