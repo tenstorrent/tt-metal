@@ -34,8 +34,10 @@ t1=$(date +%s.%N)
 ccache -z >/dev/null 2>&1 || true
 build_exit=0
 if [ -n "$shard" ]; then
-  ninja -C .build/clang-tidy -f build-Debug.ninja -n all all_verify_interface_header_sets \
-    | sed -n -e 's/.*Building CXX object //p' -e 's/.*Building C object //p' | sort >"$out/$label-all-objects.txt"
+  # Every object the full preset builds; a dry run (-n) stops at CMake's
+  # glob re-check, so read the command closure instead.
+  ninja -C .build/clang-tidy -f build-Debug.ninja -t commands all all_verify_interface_header_sets \
+    | grep -o -E ' -o [^ ]+\.o( |$)' | awk '{print $2}' | sort -u >"$out/$label-all-objects.txt"
   awk -v s="$shard" -v n="$shards" '(NR - 1) % n == s' "$out/$label-all-objects.txt" >"$out/$label-objects.txt"
   echo "shard $shard/$shards: $(wc -l <"$out/$label-objects.txt") of $(wc -l <"$out/$label-all-objects.txt") compile edges"
   [ -s "$out/$label-objects.txt" ] || { echo "no compile edges found for the shard"; exit 1; }
