@@ -4,7 +4,7 @@
 
 // Streaming SDPA compute helpers.
 // Included by the recipe compute kernels for the explicit numerical recipes (Blackhole and Wormhole B0).
-// Depends on primitives from compute_common.hpp (must be included first).
+// Depends on the compute API and helpers of recipe_block_ops.hpp (must be included first).
 
 #pragma once
 

@@ -48,8 +48,7 @@ constexpr uint32_t kLogicalLengthCommonArgCount = 2;   // logical_n addr, logica
 // (addresses, metadata block, logical-length pair, kv_valid_end), and all three kernels rebuild the per-chip
 // geometry from it with derive_local_n_geometry below. The compile-time slots that carry that geometry on the
 // static path (the kernels' *_ct values) are placeholders on the dynamic path: q/kv_local_padded_Nt,
-// num_local_q/k_chunks and chunk_size_t are 0, and num_q_chunks holds only the joint chunk count. sdpa_ring_v2 in
-// compute_streaming.hpp reads a 0 template length the same way.
+// num_local_q/k_chunks and chunk_size_t are 0, and num_q_chunks holds only the joint chunk count.
 constexpr uint32_t dynamic_local_n_reader_common_arg(
     bool has_joint_inputs,
     bool has_gathered_joint_k,

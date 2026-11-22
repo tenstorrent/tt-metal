@@ -29,7 +29,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/tile_constants.h"
-#include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/compute/recipe/recipe_block_ops.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/recipe/recipe_tail.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/recipe/recipe_sfpu.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/recipe/recipe_streaming.hpp"

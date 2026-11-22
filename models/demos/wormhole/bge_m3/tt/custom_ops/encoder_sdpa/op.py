@@ -28,14 +28,14 @@ WRITER_KERNEL = f"{KERNEL_ROOT}/writer.cpp"
 COMPUTE_KERNEL = f"{KERNEL_ROOT}/compute.cpp"
 
 # The locally-copied kernel bodies keep the production relative includes
-# (dataflow_common.hpp, windowed_mask_gen.hpp, compute_common.hpp,
-# compute_streaming.hpp). Point the JIT compiler at the production kernel dirs
-# so those headers resolve from the model-local copies.
+# (dataflow_common.hpp, windowed_mask_gen.hpp). Point the JIT compiler at the
+# production kernel dirs so those headers resolve. compute_common.hpp is the
+# model's own copy (production SDPA no longer has one).
 _SDPA_KERNEL_DIR = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels"
 DATAFLOW_INCLUDE_PATHS = [f"{_SDPA_KERNEL_DIR}/dataflow"]
-# KERNEL_ROOT is prepended so the LOCAL compute_common.hpp / compute_streaming.hpp
-# copies (which carry the F4 aliased-K/V handshake hooks) win over the production
-# headers of the same name. Falls back to production for all other includes.
+# KERNEL_ROOT is prepended so the LOCAL compute_common.hpp (which carries the F4
+# aliased-K/V handshake hooks) resolves first. Falls back to production for all
+# other includes.
 COMPUTE_INCLUDE_PATHS = [
     "models/demos/wormhole/bge_m3/tt/custom_ops/encoder_sdpa/kernels",
     f"{_SDPA_KERNEL_DIR}/compute",

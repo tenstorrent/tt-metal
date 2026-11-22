@@ -7,7 +7,7 @@
 #include <cstdint>
 
 // Single source of truth for Phase-2 V-matmul subblock height. Host-side cb_out sizing
-// (streaming_cb_out_tiles) and the kernel (compute_streaming.hpp Phase 2) MUST use the
+// (streaming_cb_out_tiles) and the kernel (recipe/recipe_step.inc Phase 2) MUST use the
 // same value — a mismatch silently undersizes cb_out and the V matmul packs past
 // fifo_limit. constexpr so it can be used in both host code and kernel templates.
 namespace ttnn::transformer::sdpa {

@@ -4,6 +4,9 @@
 
 // SDPA block primitives on circular buffers (matmul_blocks, reduce_c, sub_exp_block*, mul_block*, move_block,
 // correction_block, ...). Owned by SDPA decode; also used by ccl reduce_to_root and model-local decode kernels.
+// A few non-template helpers here have no decode caller (max_block_sfpi, zero_block, copy_block, sub_block, log_block,
+// sigmoid_sub, logsigmoid_sub, ...): they stay because removing them reorders the LTO-built decode and reduce_to_root
+// images (not byte-identical to the images built with them).
 
 #pragma once
 
@@ -28,8 +31,6 @@
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
 #include "api/dataflow/circular_buffer.h"
-#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
-#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
@@ -45,36 +46,6 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transp
           BroadcastType::NONE,
           false,  // is_int_fpu_en
           PackMode::Default>(cbid)));
-}
-
-/**
- * in0_cb = max(in0_cb, in1_cb)
- */
-template <uint32_t num_tiles>
-void max_block_inplace(uint32_t in0, uint32_t in1) {
-    CircularBuffer cb_in0(in0);
-    CircularBuffer cb_in1(in1);
-    // inputs come in full, outputs go out full
-    copy_init(in0);
-    copy_init(in1);
-    binary_max_tile_init();
-    constexpr uint32_t dst_reg_0 = 0;
-    constexpr uint32_t dst_reg_1 = 1;
-    cb_in0.wait_front(num_tiles);
-    cb_in1.wait_front(num_tiles);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        tile_regs_acquire();
-        copy_tile(in0, i, dst_reg_0);
-        copy_tile(in1, i, dst_reg_1);
-        binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, VectorMode::C);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst_reg_0, in0);
-        tile_regs_release();
-    }
-    cb_in0.pop_front(num_tiles);
-    cb_in0.reserve_back(num_tiles);
-    cb_in0.push_back(num_tiles);
 }
 
 #ifdef TRISC_MATH
@@ -300,57 +271,6 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(reduce_dst_idx, out_cb);
-        tile_regs_release();
-    }
-
-    cb_out.push_back(rows);
-}
-
-/**
- * out_cb = max(in0_cb, dim=-1), and eltwise_max(prev_cb, ...) if do_eltwise_max.
- *
- * The FPU max reduce keeps only 8 significant bits, so for an fp32 in0_cb its row max can miss the
- * row's peak by far more than exp's range once scaled. This folds and reduces on the SFPU instead, so
- * the max equals the peak as the FPU later reads it from in0_cb and (in0 - max) peaks at exactly 0.
- * out_cb gets the max in column 0 of each tile, as reduce_c does.
- */
-template <uint32_t in0_cb, uint32_t rows>
-void reduce_max_row_fp32(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
-    CircularBuffer cb_in0(in0_cb);
-    CircularBuffer cb_out(out_cb);
-    // Precondition: in0_cb has rows*cols produced, in row-major order
-    // Precondition: out_cb has rows free
-    // Precondition: if do_eltwise_max, prev_cb has rows produced
-    // Postcondition: in0_cb has rows*cols produced
-    // Postcondition: out_cb has rows produced
-    cb_in0.wait_front(rows * cols);
-    cb_out.reserve_back(rows);
-    pack_reconfig_data_format(out_cb);
-
-    constexpr uint32_t max_dst_idx = 0;
-    constexpr uint32_t in_dst_idx = 1;
-    for (uint32_t i = 0; i < rows; i++) {
-        tile_regs_acquire();
-        reconfig_data_format_srca(in0_cb);
-        copy_init(in0_cb);
-        binary_max_tile_init();
-        copy_tile(in0_cb, i * cols, max_dst_idx);
-        for (uint32_t j = 1; j < cols; j++) {
-            copy_tile(in0_cb, i * cols + j, in_dst_idx);
-            binary_max_tile(max_dst_idx, in_dst_idx, max_dst_idx);
-        }
-        sfpu_reduce_init<PoolType::MAX, DataFormat::Float32>();
-        sfpu_reduce<PoolType::MAX, DataFormat::Float32, ReduceDim::REDUCE_ROW>(max_dst_idx);
-        if (do_eltwise_max) {
-            reconfig_data_format_srca(prev_cb);
-            copy_init(prev_cb);
-            copy_tile(prev_cb, i, in_dst_idx);
-            binary_max_tile_init();
-            binary_max_tile(max_dst_idx, in_dst_idx, max_dst_idx, VectorMode::C);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(max_dst_idx, out_cb);
         tile_regs_release();
     }
 
@@ -641,46 +561,6 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     }
     cb_in1.pop_front(rows);
     reconfig_data_format_srcb(in0_cb);
-}
-
-template <uint32_t in1_scalar_cb, uint32_t num_tiles>
-void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
-    CircularBuffer cb_in0(in0_cb);
-    CircularBuffer cb_in1_scalar(in1_scalar_cb);
-    // Precondition: in0_cb has num_tiles produced
-    // Precondition: in1_scalar_cb has 1 produced
-    // Postcondition: in0_cb has num_tiles produced
-    // Postcondition: in1_scalar_cb has 1 produced
-
-#ifdef STATS_GRANULARITY
-    constexpr uint32_t dst_tiles = STATS_GRANULARITY;
-    constexpr uint32_t granularity = num_tiles / STATS_GRANULARITY;
-#else
-    constexpr uint32_t dst_tiles = 1;
-    constexpr uint32_t granularity = num_tiles;
-#endif
-
-    reconfig_data_format(in0_cb, in1_scalar_cb);
-    mul_bcast_scalar_init(in0_cb, in1_scalar_cb);
-    cb_in0.wait_front(num_tiles);
-    cb_in1_scalar.wait_front(1);
-    uint32_t in0_index = 0;
-    for (uint32_t g = 0; g < granularity; ++g) {
-        tile_regs_acquire();
-        for (uint32_t i = 0; i < dst_tiles; ++i) {
-            mul_tiles_bcast_scalar(in0_cb, in1_scalar_cb, in0_index, 0, i);
-            in0_index++;
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < dst_tiles; ++i) {
-            pack_tile(i, in0_cb);
-        }
-        tile_regs_release();
-    }
-    cb_in0.pop_front(num_tiles);
-    cb_in0.reserve_back(num_tiles);
-    cb_in0.push_back(num_tiles);
 }
 
 /**
@@ -1209,58 +1089,3 @@ ALWI void matmul_blocks(
     cb_in1.pop_front(K * N);
 }
 
-template <uint32_t M>
-void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
-    CircularBuffer cb_in1(in1_cb);
-    CircularBuffer cb_out(out_cb);
-    // precondition: in0_cb has M*K produced
-    // precondition: in1_cb has K*N produced
-    // postcondition: in0_cb is full, in1_cb is empty
-    // postcondition: out_cb has M*N produced
-
-    constexpr uint32_t N = 1;  // Result of reduce is 1 column
-    constexpr uint32_t in0_block_w = N;
-    constexpr uint32_t subblock_w = N;
-    // Reuse the Sq_chunk_t granularity chosen for sub_exp_block
-#ifdef STATS_GRANULARITY
-    constexpr uint32_t subblock_h = STATS_GRANULARITY;
-    constexpr uint32_t in0_num_subblocks = M / STATS_GRANULARITY;
-#else
-    constexpr uint32_t subblock_h = 1;
-    constexpr uint32_t in0_num_subblocks = M;
-#endif
-
-    /**
-     * Use matmul on Mx1 input to reduce rows within tile to produce Mx1 output.
-     */
-
-    // matmul_block_init validates the live reverse-order unpacker setup
-    // (in1_cb -> SrcA, out_cb -> SrcB), so establish it before init.
-    reconfig_data_format(in1_cb, out_cb);
-    matmul_block_init(
-        out_cb, in1_cb, 0 /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
-
-    pack_reconfig_data_format(out_cb);
-    cb_in1.wait_front(N);
-    cb_out.wait_front(M);
-
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        tile_regs_acquire();
-
-        uint32_t dst_index = 0;
-        uint32_t in0_index = 0;
-        uint32_t in1_index = 0;
-
-        matmul_block(out_cb, in1_cb, in0_index, in1_index, dst_index, 0, subblock_w, subblock_h, in0_block_w);
-
-        tile_regs_commit();
-        cb_out.pop_front(subblock_h);
-
-        tile_regs_wait();
-        for (uint32_t i = 0; i < subblock_h; i++) {
-            pack_tile(i, out_cb);
-        }
-        tile_regs_release();
-        cb_out.push_back(subblock_h);
-    }
-}

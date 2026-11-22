@@ -36,7 +36,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/tile_constants.h"
-#include "compute_common.hpp"
+#include "recipe/recipe_block_ops.hpp"
 #include "recipe/recipe_tail.hpp"
 #include "recipe/recipe_sfpu.hpp"
 #include "recipe/recipe_streaming.hpp"
