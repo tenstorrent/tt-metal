@@ -63,6 +63,7 @@ from models.demos.inkling2_mini.tt.fused.pf_conv import PfConv
 from models.demos.inkling2_mini.tt.fused.pf_gate import PfGateTail
 from models.demos.inkling2_mini.tt.fused.pf_gateout import PfGateOut
 from models.demos.inkling2_mini.tt.fused.pf_heads import PfHeads, half_proj, half_scale_rows, scale_rows
+from models.demos.inkling2_mini.tt.fused.pf_route import PfRoute
 from models.demos.inkling2_mini.tt.model import APPS, HIDDEN, LOOP_END, LOOP_START, SOFTCAP, VOCAB_REAL
 from models.demos.inkling2_mini.tt.moe import INTER, NUM_EXPERTS, RMS_EPS, ROUTE_SCALE, TOP_K, softcapped_swiglu
 from models.demos.inkling2_mini.tt.residual import cache_index
@@ -433,6 +434,9 @@ class Inkling2Prefill:
         if experts == "auto":
             experts = "unified" if _has_unified(dev, self.layers[0].w_gate_up, self.layers[0].w_down) else "sparse"
         self.unified = experts == "unified"
+        # unified experts: routing buffers built on the device (tt/fused/pf_route.py), no host round trip
+        self._pfroute = PfRoute(dev) if self.unified else None
+        self.dev_route = self.unified
         # fp32 DEST: the op's precise mode (fp32 partials, bf16 activations; bf8 activations miss the gate)
         self.unified_ckc = ttnn.init_device_compute_kernel_config(
             dev.arch(), math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=True
@@ -1003,7 +1007,12 @@ class Inkling2Prefill:
 
     def _route(self, indices, n, t):
         """Host routing of one MoE application into the chunk's routing buffers (self._cur). While capturing, the
-        device work so far is one segment: close it, run it, route, open the next."""
+        device work so far is one segment: close it, run it, route, open the next. dev_route: on the device."""
+        if self.dev_route:
+            b = self._cur
+            self._pfroute(indices, b["nreal"], b["hist"], b["u_off"], b["u_cnt"], b["u_xri"], b["bi"],
+                          b["u_rows"] - 32, TOP_K)  # fmt: skip
+            return b
         if self._cap is not None:
             self._cap["routes"].append(indices)
             self._seg_close()
@@ -1193,6 +1202,8 @@ class Inkling2Prefill:
             "bi": put(i32(1, TOP_K * t), ttnn.uint32, rm),
         }
         if self.unified:
+            b["nreal"] = put(i32(1, 16), ttnn.uint32, rm)
+            b["hist"] = self._pfroute.hist_buffer(t, NUM_EXPERTS)
             b["u_rows"] = self._urows(t)
             b["u_off"] = put(i32(1, NUM_EXPERTS), ttnn.uint32, rm)
             b["u_cnt"] = put(i32(1, NUM_EXPERTS), ttnn.uint32, rm)
@@ -1241,6 +1252,8 @@ class Inkling2Prefill:
         self._write(b["tok"], torch.tensor(ids, dtype=torch.int32).view(1, t), ttnn.uint32)
         tau = torch.tensor([log_scale(p) for p in range(s, s + t)], dtype=torch.float32).view(1, 1, t, 1)
         self._write(b["tau"], tau, ttnn.float32, ttnn.TILE_LAYOUT)
+        if self.unified:
+            self._write(b["nreal"], torch.tensor([[n] + [0] * 15], dtype=torch.int32), ttnn.uint32)
         if n < t:
             self._write(b["valid"], (torch.arange(t) < n).float().view(1, 1, t, 1), ttnn.bfloat16, ttnn.TILE_LAYOUT)
         if b["ringm"]:
